@@ -422,6 +422,24 @@ mod inject_unix_terminal_env_tests {
 /// Attempts made before a PTY spawn is reported as failed.
 pub(crate) const PTY_SPAWN_ATTEMPTS: usize = 3;
 
+/// The `PtySize` every session spawn opens its PTY with: the requested grid
+/// plus a pixel size derived from the default cell metrics
+/// (`DEFAULT_CELL_{WIDTH,HEIGHT}_PX`). The real pixel size arrives with the
+/// first frontend resize; until then a non-zero `TIOCGWINSZ` pixel size lets
+/// inline-image tools (Kitty/Sixel/iTerm2 graphics, `timg`, `chafa`) size their
+/// output instead of bailing out on 0x0. Shared by every spawn site — desktop
+/// `create_pty`/`create_pty_with_worktree`, `agent::spawn_agent`, HTTP
+/// `POST /sessions` and `POST /sessions/agent` — so none of them can drift back
+/// to a 0 px start.
+pub(crate) fn initial_pty_size(rows: u16, cols: u16) -> PtySize {
+    PtySize {
+        rows,
+        cols,
+        pixel_width: cols.saturating_mul(crate::terminal_grid::DEFAULT_CELL_WIDTH_PX),
+        pixel_height: rows.saturating_mul(crate::terminal_grid::DEFAULT_CELL_HEIGHT_PX),
+    }
+}
+
 /// Open a PTY pair and spawn a command into it, retrying transient allocation failures.
 ///
 /// Story 059 added this retry to `create_pty` after a spawn regression, but the

@@ -8,7 +8,6 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use futures_util::{SinkExt, StreamExt};
 use parking_lot::Mutex;
-use portable_pty::PtySize;
 use std::io::Write;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -846,14 +845,8 @@ pub(super) fn spawn_pty_session(
         Some(id) if !id.is_empty() && !state.session_maps.sessions.contains_key(&id) => id,
         _ => Uuid::new_v4().to_string(),
     };
-    let (pair, child) = crate::pty::spawn_pty_pair_with_retry(
-        PtySize {
-            rows,
-            cols,
-            pixel_width: 0,
-            pixel_height: 0,
-        },
-        || {
+    let (pair, child) =
+        crate::pty::spawn_pty_pair_with_retry(crate::pty::initial_pty_size(rows, cols), || {
             let mut cmd = build_shell_command(&shell);
             if let Some(ref dir) = cwd {
                 let dir = crate::cli::expand_tilde(dir);
@@ -869,14 +862,13 @@ pub(super) fn spawn_pty_session(
             crate::pty::inject_worktree_env(&mut cmd, cwd.as_deref());
             apply_extra_env(&mut cmd, &requested.extra_env);
             cmd
-        },
-    )
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e})),
-        )
-    })?;
+        })
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e})),
+            )
+        })?;
 
     let writer = pair.master.take_writer().map_err(|e| {
         (
@@ -4917,6 +4909,44 @@ mod tests {
         crate::pty::close_pty_core(&state, &session_id, false);
     }
 
+    /// Dropped-items #31: an HTTP-spawned session's PTY must start with a
+    /// non-zero pixel size (default cell metrics x grid), so inline-image tools
+    /// reading `TIOCGWINSZ` before the first client resize don't see 0x0.
+    #[tokio::test]
+    async fn spawn_pty_session_starts_with_default_cell_pixel_size() {
+        let state = super::super::tests::test_state();
+        let (shell, _) = crate::test_support::host_shell();
+        let session_id = spawn_pty_session(
+            state.clone(),
+            shell.into(),
+            None,
+            24,
+            80,
+            None,
+            RequestedIdentity::default(),
+        )
+        .expect("spawn PTY");
+        let size = state
+            .session_maps
+            .sessions
+            .get(&session_id)
+            .expect("registered session")
+            .lock()
+            .master
+            .get_size()
+            .expect("TIOCGWINSZ");
+        crate::pty::close_pty_core(&state, &session_id, false);
+        assert_eq!((size.rows, size.cols), (24, 80));
+        assert_eq!(
+            (size.pixel_width, size.pixel_height),
+            (
+                80 * crate::terminal_grid::DEFAULT_CELL_WIDTH_PX,
+                24 * crate::terminal_grid::DEFAULT_CELL_HEIGHT_PX
+            ),
+            "the PTY must report the default-cell pixel size before any resize"
+        );
+    }
+
     /// Verifies that spawn_pty_session registers a grid_watch channel for the session,
     /// so that handle_ws_grid_session can subscribe to it (regression for BUG-2).
     #[tokio::test]
@@ -5033,7 +5063,7 @@ mod tests {
         );
 
         let pty_system = portable_pty::native_pty_system();
-        let pair = match pty_system.openpty(PtySize {
+        let pair = match pty_system.openpty(portable_pty::PtySize {
             rows: 24,
             cols: 80,
             pixel_width: 0,

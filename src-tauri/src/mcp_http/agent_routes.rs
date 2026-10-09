@@ -5,7 +5,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
 use parking_lot::Mutex;
-use portable_pty::{CommandBuilder, PtySize};
+use portable_pty::CommandBuilder;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -339,12 +339,7 @@ pub(super) async fn spawn_agent_session(
         .clone()
         .unwrap_or_else(|| "claude".to_string());
     let (pair, child) = match crate::pty::spawn_pty_pair_with_retry_async(
-        PtySize {
-            rows,
-            cols,
-            pixel_width: 0,
-            pixel_height: 0,
-        },
+        crate::pty::initial_pty_size(rows, cols),
         move || {
             let mut cmd = CommandBuilder::new(&spawn_binary_path);
             crate::pty::sanitize_pty_parent_env(&mut cmd);
@@ -1307,6 +1302,48 @@ mod tests {
         assert!(
             body.get("prompt_delivery").is_none(),
             "print-mode spawns must never defer, so this field must be absent: {body}"
+        );
+    }
+
+    /// Dropped-items #31: `POST /sessions/agent` must open its PTY with the
+    /// default-cell pixel size, not 0x0, so inline-image protocols work before
+    /// the first client resize.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn spawn_agent_session_starts_with_default_cell_pixel_size() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let mut request = spawn_request();
+        request.binary_path = Some(LONG_LIVED_TEST_BINARY.to_string());
+        request.args = Some(vec![]);
+
+        let response = spawn_agent_session(
+            State(state.clone()),
+            ConnectInfo(loopback()),
+            None,
+            Json(request),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let body = response_json(response).await;
+        let session_id = body["session_id"].as_str().expect("session_id").to_string();
+
+        let size = state
+            .session_maps
+            .sessions
+            .get(&session_id)
+            .expect("registered session")
+            .lock()
+            .master
+            .get_size()
+            .expect("TIOCGWINSZ");
+        crate::pty::close_pty_core(&state, &session_id, false);
+        assert_eq!((size.rows, size.cols), (24, 80));
+        assert_eq!(
+            (size.pixel_width, size.pixel_height),
+            (
+                80 * crate::terminal_grid::DEFAULT_CELL_WIDTH_PX,
+                24 * crate::terminal_grid::DEFAULT_CELL_HEIGHT_PX
+            ),
         );
     }
 
