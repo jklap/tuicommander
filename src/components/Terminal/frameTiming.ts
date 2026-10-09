@@ -71,7 +71,7 @@ function statsFor(ring: number[]): MetricStats {
 	if (ring.length === 0) {
 		return { count: 0, p50: 0, p95: 0, max: 0 };
 	}
-	const sorted = [...ring].sort((a, b) => a - b);
+	const sorted = ring.toSorted((a, b) => a - b);
 	return {
 		count: sorted.length,
 		p50: percentile(sorted, 50),
