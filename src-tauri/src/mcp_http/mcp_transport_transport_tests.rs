@@ -1212,7 +1212,7 @@ async fn session_submit_returns_acknowledged_receipt_in_the_same_call() {
     );
     assert_eq!(
         bytes.lock().unwrap().as_slice(),
-        b"\x15inspect the repository\r"
+        b"inspect the repository\r"
     );
     assert_eq!(
         state
@@ -1280,7 +1280,7 @@ async fn mobile_http_reply_reaches_only_the_asking_confident_session_once() {
     let receipt: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(receipt["submitted"], true);
     assert_eq!(receipt["acknowledged"], true);
-    assert_eq!(asking.lock().unwrap().as_slice(), b"\x15Approve once\r");
+    assert_eq!(asking.lock().unwrap().as_slice(), b"Approve once\r");
     assert!(other.lock().unwrap().is_empty());
 }
 
@@ -1305,7 +1305,7 @@ async fn session_submit_write_only_cannot_false_positive_and_times_out() {
     )
     .await;
 
-    assert_eq!(bytes.lock().unwrap().as_slice(), b"\x15no child output\r");
+    assert_eq!(bytes.lock().unwrap().as_slice(), b"no child output\r");
     assert_eq!(
         state
             .session_maps
@@ -1444,7 +1444,7 @@ async fn session_submit_slash_clear_uses_the_same_receipt_and_fsm() {
 
     assert_eq!(response["status"], "acknowledged");
     assert_eq!(response["turn_epoch"], 1);
-    assert_eq!(bytes.lock().unwrap().as_slice(), b"\x15/clear\r");
+    assert_eq!(bytes.lock().unwrap().as_slice(), b"/clear\r");
     assert!(
         !state
             .session_maps
@@ -5447,7 +5447,7 @@ fn provider_recovery_force_retry_targets_only_recovering_ego() {
     let result = handle_session(&state, &args, None);
     assert_eq!(result["submitted"], true, "{result}");
     let written = bytes.lock().unwrap();
-    assert_eq!(written.as_slice(), b"\x15/retry\r");
+    assert_eq!(written.as_slice(), b"/retry\r");
 }
 
 // Catches: published settings mutations and readback selecting different owner state by transport.

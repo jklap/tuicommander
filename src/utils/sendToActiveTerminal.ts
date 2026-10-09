@@ -6,7 +6,7 @@ import { getShellFamily, sendCommand } from "./sendCommand";
 
 /** Send text to a specific PTY session as a command, routed through the
  *  canonical `sendCommand` (agent-aware split Enter for Ink raw mode,
- *  bracketed-paste for multi-line, Windows-native Ctrl-U skip).
+ *  bracketed-paste for multi-line; text is appended, never preceded by Ctrl-U).
  *
  *  Uses the smart `invoke` wrapper so it works in both Tauri and browser modes.
  *  Bypassing `sendCommand` (raw `write_pty` text + "\r") submits in browser
