@@ -13,7 +13,7 @@ import { toastsStore } from "../../stores/toasts";
 import { uiStore } from "../../stores/ui";
 import { isTauri } from "../../transport";
 import { getSessionConnection } from "../../transportRuntime";
-import { findBlockAtViewport, foldRange } from "../../utils/blockFold";
+import { findBlockAtViewport, findFoldTargetAtViewport, foldRange } from "../../utils/blockFold";
 import { pickBlock } from "../../utils/blockNav";
 import { filterMatchesToBlock, resolveScopedBlock } from "../../utils/blockSearchFilter";
 import { writeClipboard, writeClipboardAsync } from "../../utils/clipboard";
@@ -3073,8 +3073,23 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				props.onCwdChange?.(props.terminalId, cwd);
 			});
 			await transport.onEvent("osc133", (payload) => {
-				const { marker, line, exit_code } = payload as { marker: string; line: number; exit_code: number | null };
-				terminalsStore.handleOsc133(props.terminalId, marker, line, exit_code ?? undefined);
+				const { marker, line, exit_code, on_alt_screen } = payload as {
+					marker: string;
+					line: number;
+					exit_code: number | null;
+					on_alt_screen?: boolean;
+				};
+				// `on_alt_screen` is captured with `line` in the backend's OSC 133 handler:
+				// a marker recorded on the alternate screen has no valid scrollback row, so
+				// its block must be skipped by every row-anchored consumer (rowAnchoredBlocks).
+				terminalsStore.handleOsc133(
+					props.terminalId,
+					marker,
+					line,
+					exit_code ?? undefined,
+					null,
+					on_alt_screen === true,
+				);
 			});
 			// Lines assembled by the Rust reader, carrying the ids it already
 			// matched. No raw stream is scanned here any more.
@@ -4352,7 +4367,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			const blocks = rowAnchoredBlocks(
 				[...term.commandBlocks, term.activeBlock].filter(Boolean) as import("../../stores/terminals").CommandBlock[],
 			);
-			const current = findBlockAtViewport(blocks, viewTop, lastResizeRows >> 1);
+			const current = findFoldTargetAtViewport(blocks, currentFrame.historyBase, viewTop, lastResizeRows >> 1);
 			if (!current) return;
 			toggleFoldForBlock(current);
 		}

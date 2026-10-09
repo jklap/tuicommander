@@ -45,3 +45,25 @@ export function findBlockAtViewport<T extends { promptLine: number; endLine: num
 ): T | undefined {
 	return blocks.find((b) => b.promptLine <= viewTop + halfViewportRows && (b.endLine ?? Infinity) > viewTop);
 }
+
+/**
+ * The block `Cmd+Shift+.` (fold at viewport) targets: `findBlockAtViewport`
+ * over only the blocks whose header row is still in the buffer. Block lines
+ * are eviction-stable all-time rows; a block whose `promptLine` is below
+ * `historyBase` has been evicted — its header can no longer be shown — so it
+ * must never be the target, even when its (open or long) output still spans
+ * the viewport top. Same filter `scrollToBlock` applies, and the one main's
+ * original global implementation (`useAppShortcutHandlers.ts`) had.
+ */
+export function findFoldTargetAtViewport<T extends { promptLine: number; endLine: number | null }>(
+	blocks: readonly T[],
+	historyBase: number,
+	viewTop: number,
+	halfViewportRows: number,
+): T | undefined {
+	return findBlockAtViewport(
+		blocks.filter((b) => b.promptLine >= historyBase),
+		viewTop,
+		halfViewportRows,
+	);
+}
