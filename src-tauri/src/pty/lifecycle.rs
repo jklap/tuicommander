@@ -4204,13 +4204,26 @@ fn flush_open_intent_before_session_removal(session_id: &str, state: &AppState) 
     }
 }
 
-fn remove_live_session_state(session_id: &str, state: &AppState) {
+pub(super) fn remove_live_session_state(session_id: &str, state: &AppState) {
     flush_open_intent_before_session_removal(session_id, state);
     if let Err(error) = crate::stories::StoryStore::release_closed_session(session_id) {
         tracing::warn!(session_id = %session_id, error = %error, "Could not release story claim for closed session");
     }
     state.suspend_metadata.remove(session_id);
     state.session_maps.attachment_launch_dirs.remove(session_id);
+    // Reverse-map removal keeps this O(1) instead of scanning
+    // `claude_session_map` for a matching value. Only drop the forward entry
+    // (and the Session Diff "first edit announced" mark) while this session
+    // still owns it: a second tab that resumed the same Claude session owns
+    // both now.
+    if let Some((_, claude_session_id)) = state.tuic_to_claude_session.remove(session_id)
+        && state
+            .claude_session_map
+            .remove_if(&claude_session_id, |_, owner| owner == session_id)
+            .is_some()
+    {
+        state.announced_edit_sessions.remove(&claude_session_id);
+    }
     state.ws_clients.remove(session_id);
     // Drop the per-session PTY event channel alongside ws_clients. Any final
     // SessionClosed already emitted stays buffered for live subscribers (broadcast

@@ -13,6 +13,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/** Builds the `&ignoreLeadingWs=true&...` query-string suffix `mcp_http/types.rs`'s
+ *  `PathQuery::diff_options`/`FileQuery::diff_options` expect, from a `DiffOptions`
+ *  object (or nothing, when every option is absent/false — the default diff). Shared
+ *  by `get_git_diff`, `get_file_diff` and `get_session_review`. */
+export function diffOptionsQueryString(options: unknown): string {
+	if (!isRecord(options)) return "";
+	const flags = ["ignoreLeadingWs", "ignoreTrailingWs", "ignoreWsAmount", "ignoreCase"];
+	let suffix = "";
+	for (const flag of flags) {
+		if (options[flag]) suffix += `&${flag}=true`;
+	}
+	return suffix;
+}
+
 /** Args accessor + URL encoder, bound to a specific command invocation */
 type ArgEncoder = (key: string) => string;
 
@@ -1154,6 +1168,7 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		map: (args, p) => {
 			let diffUrl = `/repo/diff?path=${p("path")}`;
 			if (args?.scope) diffUrl += `&scope=${encodeURIComponent(String(args.scope))}`;
+			diffUrl += diffOptionsQueryString(args?.options);
 			return {
 				method: "GET",
 				path: diffUrl,
@@ -1172,6 +1187,7 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			let diffUrl = `/repo/file-diff?path=${p("path")}&file=${p("file")}`;
 			if (args?.scope) diffUrl += `&scope=${encodeURIComponent(String(args.scope))}`;
 			if (args?.untracked) diffUrl += `&untracked=true`;
+			diffUrl += diffOptionsQueryString(args?.options);
 			return { method: "GET", path: diffUrl };
 		},
 	},
@@ -1187,8 +1203,23 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		map: (args, p) => {
 			let url = `/repo/session-review?path=${p("repoPath")}&session_id=${p("sessionId")}`;
 			if (args?.includeSubagents === false) url += `&include_subagents=false`;
+			url += diffOptionsQueryString(args?.options);
 			return { method: "GET", path: url };
 		},
+	},
+	watch_session_review: {
+		map: (args) => ({
+			method: "POST",
+			path: "/repo/session-review/watch",
+			body: { path: args.repoPath, session_id: args.sessionId },
+		}),
+	},
+	unwatch_session_review: {
+		map: (args) => ({
+			method: "POST",
+			path: "/repo/session-review/unwatch",
+			body: { path: args.repoPath, session_id: args.sessionId },
+		}),
 	},
 	revert_session_step: {
 		map: (args) => ({

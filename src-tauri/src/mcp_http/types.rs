@@ -185,6 +185,27 @@ pub(super) struct PathQuery {
     /// per-file equivalent.
     #[serde(default)]
     pub scope: Option<String>,
+    /// Whitespace/case diff options — only consumed by `repo_diff`. See
+    /// `FileQuery`'s identical fields for the per-file equivalent.
+    #[serde(default, rename = "ignoreLeadingWs")]
+    pub ignore_leading_ws: bool,
+    #[serde(default, rename = "ignoreTrailingWs")]
+    pub ignore_trailing_ws: bool,
+    #[serde(default, rename = "ignoreWsAmount")]
+    pub ignore_ws_amount: bool,
+    #[serde(default, rename = "ignoreCase")]
+    pub ignore_case: bool,
+}
+
+impl PathQuery {
+    pub fn diff_options(&self) -> crate::diff_options::DiffOptions {
+        crate::diff_options::DiffOptions {
+            ignore_leading_ws: self.ignore_leading_ws,
+            ignore_trailing_ws: self.ignore_trailing_ws,
+            ignore_ws_amount: self.ignore_ws_amount,
+            ignore_case: self.ignore_case,
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -377,6 +398,25 @@ pub(super) struct FileQuery {
     pub file: String,
     pub scope: Option<String>,
     pub untracked: Option<bool>,
+    #[serde(default, rename = "ignoreLeadingWs")]
+    pub ignore_leading_ws: bool,
+    #[serde(default, rename = "ignoreTrailingWs")]
+    pub ignore_trailing_ws: bool,
+    #[serde(default, rename = "ignoreWsAmount")]
+    pub ignore_ws_amount: bool,
+    #[serde(default, rename = "ignoreCase")]
+    pub ignore_case: bool,
+}
+
+impl FileQuery {
+    pub fn diff_options(&self) -> crate::diff_options::DiffOptions {
+        crate::diff_options::DiffOptions {
+            ignore_leading_ws: self.ignore_leading_ws,
+            ignore_trailing_ws: self.ignore_trailing_ws,
+            ignore_ws_amount: self.ignore_ws_amount,
+            ignore_case: self.ignore_case,
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -1211,6 +1251,32 @@ pub(super) struct SessionReviewQuery {
     pub path: String,
     pub session_id: String,
     pub include_subagents: Option<bool>,
+    /// Whitespace/case diff options — see `PathQuery`'s identical fields.
+    #[serde(default, rename = "ignoreLeadingWs")]
+    pub ignore_leading_ws: bool,
+    #[serde(default, rename = "ignoreTrailingWs")]
+    pub ignore_trailing_ws: bool,
+    #[serde(default, rename = "ignoreWsAmount")]
+    pub ignore_ws_amount: bool,
+    #[serde(default, rename = "ignoreCase")]
+    pub ignore_case: bool,
+}
+
+impl SessionReviewQuery {
+    pub fn diff_options(&self) -> crate::diff_options::DiffOptions {
+        crate::diff_options::DiffOptions {
+            ignore_leading_ws: self.ignore_leading_ws,
+            ignore_trailing_ws: self.ignore_trailing_ws,
+            ignore_ws_amount: self.ignore_ws_amount,
+            ignore_case: self.ignore_case,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+pub(super) struct SessionReviewWatchRequest {
+    pub path: String,
+    pub session_id: String,
 }
 
 #[derive(Deserialize)]

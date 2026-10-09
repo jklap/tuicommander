@@ -1,5 +1,11 @@
 import { render } from "@solidjs/testing-library";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+// Mocks `@tauri-apps/api/event`'s `listen` (and friends) to a no-op resolved
+// stub — SessionDiffTab now subscribes to `session-review-changed`/
+// `review-sessions-changed` on mount; without this, `listen()` falls through
+// to invoke.ts's browser-mode SSE branch and tries to open a real
+// EventSource in happy-dom.
+import "../mocks/tauri";
 
 // DiffViewer needs a real Canvas that jsdom/happy-dom don't provide (see
 // DiffTab.test.tsx's note) — stubbed so these tests exercise only
@@ -24,7 +30,7 @@ vi.mock("../../components/SessionDiffTab/SessionDiffList", () => ({
 			| {
 					kind: "file";
 					group: { abs_path: string; display_path: string };
-					steps: Array<{ tool_use_id: string; rel_path: string | null; abs_path: string }>;
+					steps: Array<{ step: { tool_use_id: string; rel_path: string | null; abs_path: string } }>;
 					expanded: boolean;
 			  }
 			| { kind: "step"; step: { tool_use_id: string; rel_path: string | null; abs_path: string } }
@@ -35,49 +41,81 @@ vi.mock("../../components/SessionDiffTab/SessionDiffList", () => ({
 		onCopyStep: (step: never) => void;
 		onCopyFile: (group: never) => void;
 		onToggleExpanded: (absPath: string) => void;
-	}) => (
-		<div data-testid="stub-list">
-			{props.rows.map((row) =>
-				row.kind === "file" ? (
-					<div>
-						<span>{row.group.display_path}</span>
-						<button type="button" title="Toggle expanded" onClick={() => props.onToggleExpanded(row.group.abs_path)}>
-							{row.expanded ? "collapse" : "expand"}
-						</button>
-						<button
-							type="button"
-							title="Revert this file to its session-start content"
-							onClick={() => props.onRevertFile(row.group as never)}
-						>
-							revert file
-						</button>
-						<button type="button" title="Copy this file's diff" onClick={() => props.onCopyFile(row.group as never)}>
-							copy file
-						</button>
-						<button type="button" onClick={() => props.onOpenFile(row.group.abs_path)}>
-							open file
-						</button>
-						{row.expanded &&
-							row.steps.map((step) => (
-								<div>
-									<span data-testid="step-path">{step.rel_path ?? step.abs_path}</span>
-									<button type="button" title="Revert just this step" onClick={() => props.onRevertStep(step as never)}>
-										revert step
-									</button>
-								</div>
-							))}
-					</div>
-				) : (
-					<div>
-						<span>{row.step.rel_path ?? row.step.abs_path}</span>
-						<button type="button" title="Revert just this step" onClick={() => props.onRevertStep(row.step as never)}>
-							revert step
-						</button>
-					</div>
-				),
-			)}
-		</div>
-	),
+		onJumpToAgent?: () => void;
+		wrap?: boolean;
+		maxLines?: number;
+		flashKeys?: ReadonlySet<string>;
+		ref?: (handle: {
+			scrollToIndex: (i: number) => void;
+			currentIndex: () => number;
+			rowCount: () => number;
+			visibleIndices: () => ReadonlySet<number>;
+		}) => void;
+	}) => {
+		props.ref?.({
+			scrollToIndex: h.navScrollToIndex,
+			currentIndex: () => h.navCurrentIndex,
+			rowCount: () => h.navRowCount,
+			visibleIndices: () => h.navVisibleIndices,
+		});
+		return (
+			<div
+				data-testid="stub-list"
+				data-wrap={String(props.wrap ?? false)}
+				data-max-lines={String(props.maxLines ?? 0)}
+				data-flash-keys={[...(props.flashKeys ?? [])].join(",")}
+			>
+				{props.onJumpToAgent && (
+					<button type="button" data-testid="jump-to-agent" onClick={() => props.onJumpToAgent?.()}>
+						jump to agent
+					</button>
+				)}
+				{props.rows.map((row) =>
+					row.kind === "file" ? (
+						<div>
+							<span>{row.group.display_path}</span>
+							<button type="button" title="Toggle expanded" onClick={() => props.onToggleExpanded(row.group.abs_path)}>
+								{row.expanded ? "collapse" : "expand"}
+							</button>
+							<button
+								type="button"
+								title="Revert this file to its session-start content"
+								onClick={() => props.onRevertFile(row.group as never)}
+							>
+								revert file
+							</button>
+							<button type="button" title="Copy this file's diff" onClick={() => props.onCopyFile(row.group as never)}>
+								copy file
+							</button>
+							<button type="button" onClick={() => props.onOpenFile(row.group.abs_path)}>
+								open file
+							</button>
+							{row.expanded &&
+								row.steps.map((entry) => (
+									<div>
+										<span data-testid="step-path">{entry.step.rel_path ?? entry.step.abs_path}</span>
+										<button
+											type="button"
+											title="Revert just this step"
+											onClick={() => props.onRevertStep(entry.step as never)}
+										>
+											revert step
+										</button>
+									</div>
+								))}
+						</div>
+					) : (
+						<div>
+							<span>{row.step.rel_path ?? row.step.abs_path}</span>
+							<button type="button" title="Revert just this step" onClick={() => props.onRevertStep(row.step as never)}>
+								revert step
+							</button>
+						</div>
+					),
+				)}
+			</div>
+		);
+	},
 }));
 
 const h = vi.hoisted(() => ({
@@ -85,6 +123,12 @@ const h = vi.hoisted(() => ({
 	getSessionReview: vi.fn(),
 	revertSessionStep: vi.fn(),
 	revertFileToSessionStart: vi.fn(),
+	watchSessionReview: vi.fn().mockResolvedValue(true),
+	unwatchSessionReview: vi.fn().mockResolvedValue(undefined),
+	navScrollToIndex: vi.fn(),
+	navCurrentIndex: 0,
+	navRowCount: 0,
+	navVisibleIndices: new Set<number>() as ReadonlySet<number>,
 }));
 vi.mock("../../hooks/useRepository", () => ({
 	useRepository: () => ({
@@ -92,14 +136,29 @@ vi.mock("../../hooks/useRepository", () => ({
 		getSessionReview: h.getSessionReview,
 		revertSessionStep: h.revertSessionStep,
 		revertFileToSessionStart: h.revertFileToSessionStart,
+		watchSessionReview: h.watchSessionReview,
+		unwatchSessionReview: h.unwatchSessionReview,
 	}),
 }));
 
+/** `getSessionReview`'s 4th argument is the whitespace/case `DiffOptions`
+ *  built from `settingsStore.state` (all-false by default — this file
+ *  doesn't touch those settings, so every call site gets this same object). */
+const DEFAULT_DIFF_OPTIONS = {
+	ignoreLeadingWs: false,
+	ignoreTrailingWs: false,
+	ignoreWsAmount: false,
+	ignoreCase: false,
+};
+
+import { listen as tauriListen } from "@tauri-apps/api/event";
 import { SessionDiffTab } from "../../components/SessionDiffTab/SessionDiffTab";
 import { diffTabsStore } from "../../stores/diffTabs";
 import { repositoriesStore } from "../../stores/repositories";
+import { settingsStore } from "../../stores/settings";
 import { terminalsStore } from "../../stores/terminals";
 import { toastsStore } from "../../stores/toasts";
+import { uiStore } from "../../stores/ui";
 import type { EditStep, FileReview, SessionReview, SessionSummary } from "../../types/sessionDiff";
 import { writeClipboard } from "../../utils/clipboard";
 import { makeTerminal } from "../helpers/store";
@@ -120,6 +179,7 @@ function summary(overrides: Partial<SessionSummary> = {}): SessionSummary {
 		edit_count: 1,
 		file_count: 1,
 		has_subagents: false,
+		tuic_session_id: null,
 		...overrides,
 	};
 }
@@ -140,6 +200,11 @@ function step(overrides: Partial<EditStep> = {}): EditStep {
 		agent_name: null,
 		user_modified: false,
 		replace_all: false,
+		turn_index: 0,
+		turn_started_at: null,
+		prompt_preview: null,
+		agent_id: null,
+		agent_display_name: null,
 		...overrides,
 	};
 }
@@ -159,6 +224,7 @@ function fileGroup(overrides: Partial<FileReview> = {}): FileReview {
 		drifted_from_disk: false,
 		backup_available: true,
 		is_binary: false,
+		revision: "rev1",
 		...overrides,
 	};
 }
@@ -175,11 +241,26 @@ function review(overrides: Partial<SessionReview> = {}): SessionReview {
 		files: [fileGroup()],
 		warnings: [],
 		included_subagents: true,
+		tuic_session_id: null,
+		turns: [],
 		...overrides,
 	};
 }
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+/** Captures every `listen(event, handler)` registration SessionDiffTab makes
+ *  (via `../../invoke`'s `listen`, which calls the mocked `@tauri-apps/api/event`
+ *  `listen` directly with the same handler) so a test can fire a specific
+ *  event by name instead of the mock's default no-op. */
+function captureListenHandlers(): Map<string, (event: { payload: unknown }) => void> {
+	const handlers = new Map<string, (event: { payload: unknown }) => void>();
+	vi.mocked(tauriListen).mockImplementation(((event: string, handler: (e: { payload: unknown }) => void) => {
+		handlers.set(event, handler);
+		return Promise.resolve(vi.fn());
+	}) as unknown as typeof tauriListen);
+	return handlers;
+}
 
 describe("SessionDiffTab", () => {
 	let tabId: string;
@@ -189,6 +270,13 @@ describe("SessionDiffTab", () => {
 		h.getSessionReview.mockReset().mockResolvedValue(review());
 		h.revertSessionStep.mockReset();
 		h.revertFileToSessionStart.mockReset();
+		h.navScrollToIndex.mockReset();
+		h.navCurrentIndex = 0;
+		h.navRowCount = 0;
+		h.navVisibleIndices = new Set();
+		h.watchSessionReview.mockClear();
+		h.unwatchSessionReview.mockClear();
+		vi.mocked(tauriListen).mockReset().mockResolvedValue(vi.fn());
 		diffTabsStore.clearAll();
 		tabId = diffTabsStore.addSessionReview(REPO);
 	});
@@ -197,7 +285,7 @@ describe("SessionDiffTab", () => {
 		render(() => <SessionDiffTab tabId={tabId} repoPath={REPO} />);
 		await settle();
 		expect(h.listReviewSessions).toHaveBeenCalledWith(REPO, 20, true);
-		expect(h.getSessionReview).toHaveBeenCalledWith(REPO, "sess-1", true);
+		expect(h.getSessionReview).toHaveBeenCalledWith(REPO, "sess-1", true, DEFAULT_DIFF_OPTIONS);
 	});
 
 	it("defaults to the focused terminal's live agentSessionId over the newest listed session", async () => {
@@ -207,7 +295,7 @@ describe("SessionDiffTab", () => {
 
 		render(() => <SessionDiffTab tabId={tabId} repoPath={REPO} />);
 		await settle();
-		expect(h.getSessionReview).toHaveBeenCalledWith(REPO, "sess-live", true);
+		expect(h.getSessionReview).toHaveBeenCalledWith(REPO, "sess-live", true, DEFAULT_DIFF_OPTIONS);
 	});
 
 	it("toggling to chronological view renders a flat list instead of grouped-by-file", async () => {
@@ -328,7 +416,7 @@ describe("SessionDiffTab", () => {
 		expect(h.getSessionReview.mock.calls.length).toBe(initial);
 	});
 
-	it("the live session refetches once for a burst of revision bumps (debounced)", async () => {
+	it("the live session refetches once for a burst of revision bumps (debounced, slow event-transport-down fallback)", async () => {
 		vi.useFakeTimers();
 		try {
 			const termId = terminalsStore.add(makeTerminal({ agentSessionId: "sess-1" }));
@@ -338,12 +426,15 @@ describe("SessionDiffTab", () => {
 			await vi.advanceTimersByTimeAsync(0);
 			const initial = h.getSessionReview.mock.calls.length;
 
+			// This revision-bump poll is now a slow (10s) fallback for when the
+			// dedicated `session-review-changed` event doesn't arrive — see
+			// REVIEW_REFRESH_DEBOUNCE_MS's own doc comment.
 			repositoriesStore.bumpRevision(REPO);
 			await vi.advanceTimersByTimeAsync(100);
 			repositoriesStore.bumpRevision(REPO);
 			await vi.advanceTimersByTimeAsync(100);
 			repositoriesStore.bumpRevision(REPO);
-			await vi.advanceTimersByTimeAsync(2100);
+			await vi.advanceTimersByTimeAsync(10_100);
 
 			expect(h.getSessionReview.mock.calls.length).toBe(initial + 1);
 		} finally {
@@ -367,10 +458,10 @@ describe("SessionDiffTab", () => {
 			await vi.advanceTimersByTimeAsync(0);
 			expect(() => getByText("a.ts", { selector: "[data-testid=step-path]" })).toThrow();
 
-			// Simulate the live session's debounced poll refresh — same
+			// Simulate the live session's debounced fallback poll refresh — same
 			// session, same file, review() updates again.
 			repositoriesStore.bumpRevision(REPO);
-			await vi.advanceTimersByTimeAsync(2100);
+			await vi.advanceTimersByTimeAsync(10_100);
 
 			// Must still be collapsed — a fresh `review()` for the same
 			// session must not force it back open.
@@ -412,7 +503,9 @@ describe("SessionDiffTab", () => {
 		// one resolves.
 		expect(queryAllByText("a.ts").length).toBe(0);
 
-		resolveSecond(review({ session_id: "sess-2", files: [fileGroup({ abs_path: "/repo/z.ts", display_path: "z.ts" })] }));
+		resolveSecond(
+			review({ session_id: "sess-2", files: [fileGroup({ abs_path: "/repo/z.ts", display_path: "z.ts" })] }),
+		);
 		await settle();
 		expect(getByText("z.ts")).toBeTruthy();
 	});
@@ -420,12 +513,12 @@ describe("SessionDiffTab", () => {
 	it("toggling 'include subagents' re-fetches the review with the new flag", async () => {
 		const { getByRole } = render(() => <SessionDiffTab tabId={tabId} repoPath={REPO} />);
 		await settle();
-		expect(h.getSessionReview).toHaveBeenCalledWith(REPO, "sess-1", true);
+		expect(h.getSessionReview).toHaveBeenCalledWith(REPO, "sess-1", true, DEFAULT_DIFF_OPTIONS);
 
 		const checkbox = getByRole("checkbox") as HTMLInputElement;
 		checkbox.click();
 		await settle();
-		expect(h.getSessionReview).toHaveBeenCalledWith(REPO, "sess-1", false);
+		expect(h.getSessionReview).toHaveBeenCalledWith(REPO, "sess-1", false, DEFAULT_DIFF_OPTIONS);
 	});
 
 	it("'Copy all' copies every file's cumulative patch joined together", async () => {
@@ -480,5 +573,390 @@ describe("SessionDiffTab", () => {
 		action?.onClick();
 		await settle();
 		expect(h.revertFileToSessionStart).toHaveBeenCalledWith(REPO, "sess-1", "/repo/a.ts", true);
+	});
+
+	describe("jump to agent (review().tuic_session_id -> terminal tab)", () => {
+		it("passes onJumpToAgent to the list when tuic_session_id resolves to a live terminal, and clicking it activates that terminal", async () => {
+			const termId = terminalsStore.add(makeTerminal({ sessionId: "tuic-sess-1" }));
+			h.getSessionReview.mockResolvedValue(review({ tuic_session_id: "tuic-sess-1" }));
+
+			const { getByTestId } = render(() => <SessionDiffTab tabId={tabId} repoPath={REPO} />);
+			await settle();
+
+			getByTestId("jump-to-agent").click();
+			expect(terminalsStore.state.activeId).toBe(termId);
+		});
+
+		it("does not pass onJumpToAgent when tuic_session_id is null or matches no live terminal", async () => {
+			h.getSessionReview.mockResolvedValue(review({ tuic_session_id: null }));
+			const { queryByTestId } = render(() => <SessionDiffTab tabId={tabId} repoPath={REPO} />);
+			await settle();
+			expect(queryByTestId("jump-to-agent")).toBeNull();
+		});
+
+		it("does not pass onJumpToAgent when tuic_session_id points at a terminal that no longer exists", async () => {
+			h.getSessionReview.mockResolvedValue(review({ tuic_session_id: "tuic-sess-gone" }));
+			const { queryByTestId } = render(() => <SessionDiffTab tabId={tabId} repoPath={REPO} />);
+			await settle();
+			expect(queryByTestId("jump-to-agent")).toBeNull();
+		});
+	});
+
+	describe("navigation: </> buttons and the turn picker", () => {
+		it("the turn picker is shown only in chronological mode", async () => {
+			const { getByText, queryByText } = render(() => <SessionDiffTab tabId={tabId} repoPath={REPO} />);
+			await settle();
+			expect(queryByText(/^Turns \(/)).toBeNull();
+
+			getByText("Chronological").click();
+			expect(getByText(/^Turns \(/)).toBeTruthy();
+
+			getByText("By file").click();
+			expect(queryByText(/^Turns \(/)).toBeNull();
+		});
+
+		it("clicking '>' calls the list's scrollToIndex with currentIndex + 1, clamped to the last row", async () => {
+			h.getSessionReview.mockResolvedValue(
+				review({ files: [fileGroup({ abs_path: "/repo/a.ts" }), fileGroup({ abs_path: "/repo/b.ts" })] }),
+			);
+			h.navCurrentIndex = 0;
+			const { getByTitle } = render(() => <SessionDiffTab tabId={tabId} repoPath={REPO} />);
+			await settle();
+
+			getByTitle("Next file").click();
+			expect(h.navScrollToIndex).toHaveBeenCalledWith(1, { align: "center" });
+
+			h.navScrollToIndex.mockClear();
+			h.navCurrentIndex = 999; // past the end — clamp to rows().length - 1 (2 files here).
+			getByTitle("Next file").click();
+			expect(h.navScrollToIndex).toHaveBeenCalledWith(1, { align: "center" });
+		});
+
+		it("clicking '<' calls scrollToIndex with currentIndex - 1, clamped to 0", async () => {
+			// currentIndex starts at 1 (not 0) — a currentIndex of 0 disables the
+			// "Previous file" button, and a disabled real <button> never fires
+			// its click handler at all, which isn't what this test is about.
+			h.getSessionReview.mockResolvedValue(
+				review({ files: [fileGroup({ abs_path: "/repo/a.ts" }), fileGroup({ abs_path: "/repo/b.ts" })] }),
+			);
+			h.navCurrentIndex = 1;
+			const { getByTitle } = render(() => <SessionDiffTab tabId={tabId} repoPath={REPO} />);
+			await settle();
+
+			getByTitle("Previous file").click();
+			expect(h.navScrollToIndex).toHaveBeenCalledWith(0, { align: "center" });
+		});
+
+		it("selecting a turn in the picker resolves its first step_index to a row and jumps to it", async () => {
+			h.getSessionReview.mockResolvedValue(
+				review({
+					steps: [step({ step_index: 0, tool_use_id: "toolu_a" }), step({ step_index: 3, tool_use_id: "toolu_b" })],
+					turns: [
+						{
+							turn_index: 0,
+							started_at: null,
+							prompt_preview: "First turn",
+							step_indices: [0],
+							additions: 1,
+							deletions: 1,
+							files: ["a.ts"],
+						},
+						{
+							turn_index: 1,
+							started_at: null,
+							prompt_preview: "Second turn",
+							step_indices: [3],
+							additions: 1,
+							deletions: 1,
+							files: ["b.ts"],
+						},
+					],
+				}),
+			);
+			const { getByText } = render(() => <SessionDiffTab tabId={tabId} repoPath={REPO} />);
+			await settle();
+
+			getByText("Chronological").click();
+			getByText("Turns (2)").click();
+			getByText("b.ts").closest("button")?.click();
+
+			// step_index 3 is chronological row 1 (steps sorted by step_index: [0, 3]).
+			expect(h.navScrollToIndex).toHaveBeenCalledWith(1, { align: "center" });
+		});
+	});
+
+	describe("live updates", () => {
+		it("watches the selected session on mount, moves the watch on a session switch, and unwatches on unmount", async () => {
+			h.listReviewSessions.mockResolvedValue([
+				summary({ session_id: "sess-1", title: "First session" }),
+				summary({ session_id: "sess-2", title: "Second session" }),
+			]);
+			h.getSessionReview.mockImplementation((_repo: string, sessionId: string) =>
+				Promise.resolve(review({ session_id: sessionId })),
+			);
+			const { getByTitle, getByText, unmount } = render(() => <SessionDiffTab tabId={tabId} repoPath={REPO} />);
+			await settle();
+			expect(h.watchSessionReview).toHaveBeenCalledWith(REPO, "sess-1");
+			expect(h.unwatchSessionReview).not.toHaveBeenCalled();
+
+			getByTitle("Choose which Claude Code session to review").click();
+			await settle();
+			getByText((content) => content.startsWith("Second session")).click();
+			await settle();
+			expect(h.unwatchSessionReview).toHaveBeenCalledWith(REPO, "sess-1");
+			expect(h.watchSessionReview).toHaveBeenCalledWith(REPO, "sess-2");
+
+			unmount();
+			await settle();
+			expect(h.unwatchSessionReview).toHaveBeenCalledWith(REPO, "sess-2");
+		});
+
+		// A refused watch took no backend ref; unwatching it would drop the ref
+		// of another tab watching the same session.
+		it("never unwatches a session whose watch the backend refused", async () => {
+			h.watchSessionReview.mockResolvedValueOnce(false);
+			const { unmount } = render(() => <SessionDiffTab tabId={tabId} repoPath={REPO} />);
+			await settle();
+			expect(h.watchSessionReview).toHaveBeenCalledWith(REPO, "sess-1");
+
+			unmount();
+			await settle();
+			expect(h.unwatchSessionReview).not.toHaveBeenCalled();
+		});
+
+		it("a review-sessions-changed event for this repo refreshes the session dropdown", async () => {
+			const handlers = captureListenHandlers();
+			render(() => <SessionDiffTab tabId={tabId} repoPath={REPO} />);
+			await settle();
+			const initial = h.listReviewSessions.mock.calls.length;
+
+			handlers.get("review-sessions-changed")?.({ payload: { repo_path: "/some/other/repo" } });
+			await settle();
+			expect(h.listReviewSessions.mock.calls.length).toBe(initial); // different repo — ignored
+
+			handlers.get("review-sessions-changed")?.({ payload: { repo_path: REPO } });
+			await settle();
+			expect(h.listReviewSessions.mock.calls.length).toBe(initial + 1);
+		});
+
+		it("a session-review-changed event for a different repo or session is ignored", async () => {
+			const handlers = captureListenHandlers();
+			render(() => <SessionDiffTab tabId={tabId} repoPath={REPO} />);
+			await settle();
+			const initial = h.getSessionReview.mock.calls.length;
+
+			handlers.get("session-review-changed")?.({ payload: { repo_path: REPO, session_id: "sess-other" } });
+			await settle();
+			handlers.get("session-review-changed")?.({ payload: { repo_path: "/other/repo", session_id: "sess-1" } });
+			await settle();
+			expect(h.getSessionReview.mock.calls.length).toBe(initial);
+		});
+
+		it("chronological mode, Follow on (default): a new step applies and auto-scrolls to the last row", async () => {
+			const handlers = captureListenHandlers();
+			const initialReview = review({
+				steps: [step({ step_index: 0, tool_use_id: "toolu_a" })],
+				files: [fileGroup({ step_indices: [0] })],
+			});
+			h.getSessionReview.mockResolvedValue(initialReview);
+			const { getByText } = render(() => <SessionDiffTab tabId={tabId} repoPath={REPO} />);
+			await settle();
+			getByText("Chronological").click();
+
+			h.getSessionReview.mockResolvedValue(
+				review({
+					steps: [step({ step_index: 0, tool_use_id: "toolu_a" }), step({ step_index: 1, tool_use_id: "toolu_b" })],
+					files: [fileGroup({ step_indices: [0, 1] })],
+				}),
+			);
+			handlers.get("session-review-changed")?.({ payload: { repo_path: REPO, session_id: "sess-1" } });
+			await settle();
+
+			expect(h.navScrollToIndex).toHaveBeenCalledWith(1, { align: "end" }); // 2 rows -> last index 1
+		});
+
+		it("chronological mode, Follow off: a new step shows an 'N new changes' pill instead of auto-scrolling, and clicking it jumps to the first unseen step", async () => {
+			const handlers = captureListenHandlers();
+			h.getSessionReview.mockResolvedValue(
+				review({
+					steps: [step({ step_index: 0, tool_use_id: "toolu_a" })],
+					files: [fileGroup({ step_indices: [0] })],
+				}),
+			);
+			const { getByText } = render(() => <SessionDiffTab tabId={tabId} repoPath={REPO} />);
+			await settle();
+			getByText("Chronological").click();
+
+			// Two checkboxes render in chronological mode ("Follow" and "Subagent
+			// edits") — find the Follow-labeled one specifically and turn it off.
+			const followLabel = Array.from(document.querySelectorAll("label")).find((l) => l.textContent?.includes("Follow"));
+			const followInput = followLabel?.querySelector("input");
+			if (!followInput) throw new Error("Follow checkbox not found");
+			followInput.click();
+			await settle();
+
+			h.navScrollToIndex.mockClear();
+			h.getSessionReview.mockResolvedValue(
+				review({
+					steps: [step({ step_index: 0, tool_use_id: "toolu_a" }), step({ step_index: 1, tool_use_id: "toolu_b" })],
+					files: [fileGroup({ step_indices: [0, 1] })],
+				}),
+			);
+			handlers.get("session-review-changed")?.({ payload: { repo_path: REPO, session_id: "sess-1" } });
+			await settle();
+
+			expect(h.navScrollToIndex).not.toHaveBeenCalled(); // Follow is off — no auto-scroll
+			const pill = getByText("1 new change");
+			expect(pill).toBeTruthy();
+			pill.click();
+			expect(h.navScrollToIndex).toHaveBeenCalledWith(1, { align: "center" }); // toolu_b is chronological row 1
+		});
+
+		it("file mode: a new file appended below the current scroll position shows 'New content below', which scrolls to it on click", async () => {
+			const handlers = captureListenHandlers();
+			h.getSessionReview.mockResolvedValue(review({ files: [fileGroup({ abs_path: "/repo/a.ts", revision: "r1" })] }));
+			const { getByText } = render(() => <SessionDiffTab tabId={tabId} repoPath={REPO} />);
+			await settle();
+			// `nearBottom()` compares against the CURRENT (pre-update) row count —
+			// a big list with the reviewer scrolled near the top is clearly not
+			// "at the bottom", so the new file below should be flagged.
+			h.navRowCount = 5;
+			h.navCurrentIndex = 0;
+
+			h.getSessionReview.mockResolvedValue(
+				review({
+					files: [
+						fileGroup({ abs_path: "/repo/a.ts", revision: "r1" }),
+						fileGroup({ abs_path: "/repo/b.ts", rel_path: "b.ts", display_path: "b.ts", revision: "r-new" }),
+					],
+				}),
+			);
+			handlers.get("session-review-changed")?.({ payload: { repo_path: REPO, session_id: "sess-1" } });
+			await settle();
+
+			const pill = getByText("New content below");
+			expect(pill).toBeTruthy();
+			pill.click();
+			expect(h.navScrollToIndex).toHaveBeenCalledWith(1, { align: "end" });
+		});
+
+		it("file mode: a changed file that's currently visible applies immediately and flashes, fading after ~1.5s", async () => {
+			vi.useFakeTimers();
+			try {
+				const handlers = captureListenHandlers();
+				h.getSessionReview.mockResolvedValue(
+					review({ files: [fileGroup({ abs_path: "/repo/a.ts", revision: "r1" })] }),
+				);
+				const { getByTestId } = render(() => <SessionDiffTab tabId={tabId} repoPath={REPO} />);
+				await vi.advanceTimersByTimeAsync(0);
+				h.navVisibleIndices = new Set([0]); // the only row is on screen
+
+				h.getSessionReview.mockResolvedValue(
+					review({ files: [fileGroup({ abs_path: "/repo/a.ts", revision: "r2", cumulative_patch: "changed" })] }),
+				);
+				handlers.get("session-review-changed")?.({ payload: { repo_path: REPO, session_id: "sess-1" } });
+				await vi.advanceTimersByTimeAsync(0);
+
+				expect(getByTestId("stub-list").dataset.flashKeys).toBe("/repo/a.ts");
+				await vi.advanceTimersByTimeAsync(1600);
+				expect(getByTestId("stub-list").dataset.flashKeys).toBe("");
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it("unmounting mid-flash clears the pending fade timer instead of leaking it", async () => {
+			vi.useFakeTimers();
+			try {
+				const handlers = captureListenHandlers();
+				h.getSessionReview.mockResolvedValue(
+					review({ files: [fileGroup({ abs_path: "/repo/a.ts", revision: "r1" })] }),
+				);
+				const { unmount } = render(() => <SessionDiffTab tabId={tabId} repoPath={REPO} />);
+				await vi.advanceTimersByTimeAsync(0);
+				h.navVisibleIndices = new Set([0]);
+
+				h.getSessionReview.mockResolvedValue(
+					review({ files: [fileGroup({ abs_path: "/repo/a.ts", revision: "r2", cumulative_patch: "changed" })] }),
+				);
+				handlers.get("session-review-changed")?.({ payload: { repo_path: REPO, session_id: "sess-1" } });
+				await vi.advanceTimersByTimeAsync(0);
+
+				const pendingTimers = vi.getTimerCount();
+				expect(pendingTimers).toBeGreaterThan(0);
+				unmount();
+				// Every timer flashFiles() scheduled must be cleared on unmount, not
+				// just the component's own reactive roots torn down — a fade timer
+				// left running would call setFlashKeys on a disposed signal.
+				expect(vi.getTimerCount()).toBeLessThan(pendingTimers);
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it("file mode: a changed file that's off-screen is held behind a 'Refresh (N)' pill until clicked", async () => {
+			const handlers = captureListenHandlers();
+			h.getSessionReview.mockResolvedValue(review({ files: [fileGroup({ abs_path: "/repo/a.ts", revision: "r1" })] }));
+			const { getAllByText, getByText, queryByText } = render(() => <SessionDiffTab tabId={tabId} repoPath={REPO} />);
+			await settle();
+			h.navVisibleIndices = new Set(); // the file is off-screen
+
+			h.getSessionReview.mockResolvedValue(
+				review({ files: [fileGroup({ abs_path: "/repo/a.ts", revision: "r2", cumulative_patch: "changed" })] }),
+			);
+			handlers.get("session-review-changed")?.({ payload: { repo_path: REPO, session_id: "sess-1" } });
+			await settle();
+
+			// Held back — old content still shown (both the file row's own path
+			// and its nested step's path render "a.ts"), not flashed.
+			expect(getAllByText("a.ts").length).toBeGreaterThan(0);
+			const refreshPill = getByText("Refresh (1)");
+			expect(refreshPill).toBeTruthy();
+
+			refreshPill.click();
+			await settle();
+			expect(queryByText("Refresh (1)")).toBeNull();
+		});
+
+		it("mounts the shared diff-options popover in its toolbar", async () => {
+			const { getByTestId } = render(() => <SessionDiffTab tabId={tabId} repoPath={REPO} />);
+			await settle();
+			expect(getByTestId("diff-options-trigger")).toBeTruthy();
+		});
+
+		it("passes soft-wrap and the truncate-lines setting through to the list", async () => {
+			uiStore.setDiffSoftWrap(true);
+			settingsStore.setSessionDiffTruncateLines(150);
+			try {
+				const { getByTestId } = render(() => <SessionDiffTab tabId={tabId} repoPath={REPO} />);
+				await settle();
+				expect(getByTestId("stub-list").dataset.wrap).toBe("true");
+				expect(getByTestId("stub-list").dataset.maxLines).toBe("150");
+			} finally {
+				uiStore.setDiffSoftWrap(false);
+				settingsStore.setSessionDiffTruncateLines(300);
+				uiStore._testCancelPendingSave();
+				settingsStore._testCancelPendingSave();
+			}
+		});
+
+		it("re-fetches the review when a whitespace/case diff option changes", async () => {
+			render(() => <SessionDiffTab tabId={tabId} repoPath={REPO} />);
+			await settle();
+			const initial = h.getSessionReview.mock.calls.length;
+
+			settingsStore.setDiffIgnoreCase(true);
+			try {
+				await settle();
+				expect(h.getSessionReview.mock.calls.length).toBe(initial + 1);
+				expect(h.getSessionReview).toHaveBeenLastCalledWith(REPO, "sess-1", true, {
+					...DEFAULT_DIFF_OPTIONS,
+					ignoreCase: true,
+				});
+			} finally {
+				settingsStore.setDiffIgnoreCase(false);
+				settingsStore._testCancelPendingSave();
+			}
+		});
 	});
 });

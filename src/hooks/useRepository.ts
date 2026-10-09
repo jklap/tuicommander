@@ -4,6 +4,7 @@ import { appLogger } from "../stores/appLogger";
 import type { GitOpKind } from "../stores/repositories";
 import type { WorkspaceLifecycleStatus } from "../stores/workspaceIdentity";
 import type { RepoInfo } from "../types";
+import type { DiffOptions } from "../types/diffOptions";
 import type { RevertResult, SessionReview, SessionSummary } from "../types/sessionDiff";
 import type { OrphanAssessment } from "./git/createRepositoryRefreshCoordinator";
 
@@ -106,9 +107,11 @@ export function useRepository() {
 		return await invoke<RepoInfo>("get_repo_info", { path });
 	}
 
-	/** Get git diff for a repository */
-	async function getDiff(path: string, scope?: string): Promise<string> {
-		return await invoke<string>("get_git_diff", { path, scope });
+	/** Get git diff for a repository. `options` defaults to the ordinary
+	 *  byte-exact diff when omitted — every existing call site keeps compiling
+	 *  and behaving unchanged. */
+	async function getDiff(path: string, scope?: string, options?: DiffOptions): Promise<string> {
+		return await invoke<string>("get_git_diff", { path, scope, options });
 	}
 
 	/** Open a path in an application, optionally at a specific line/col */
@@ -228,10 +231,24 @@ export function useRepository() {
 		}
 	}
 
-	/** Get diff for a single file */
-	async function getFileDiff(path: string, file: string, scope?: string, untracked?: boolean): Promise<string> {
+	/** Get diff for a single file. `options` defaults to the ordinary byte-exact
+	 *  diff when omitted — every existing call site keeps compiling and
+	 *  behaving unchanged. */
+	async function getFileDiff(
+		path: string,
+		file: string,
+		scope?: string,
+		untracked?: boolean,
+		options?: DiffOptions,
+	): Promise<string> {
 		try {
-			return await invoke<string>("get_file_diff", { path, file, scope, untracked: untracked || undefined });
+			return await invoke<string>("get_file_diff", {
+				path,
+				file,
+				scope,
+				untracked: untracked || undefined,
+				options,
+			});
 		} catch (err) {
 			appLogger.error("git", "Failed to get file diff", err);
 			return "";
@@ -260,8 +277,39 @@ export function useRepository() {
 		repoPath: string,
 		sessionId: string,
 		includeSubagents?: boolean,
+		options?: DiffOptions,
 	): Promise<SessionReview> {
-		return await invoke<SessionReview>("get_session_review", { repoPath, sessionId, includeSubagents });
+		return await invoke<SessionReview>("get_session_review", { repoPath, sessionId, includeSubagents, options });
+	}
+
+	/** Start (or add a subscriber to) a live watch on this session's transcript
+	 *  and subagent files — the backend emits `session-review-changed`/
+	 *  `agent-edit-observed` while it's watched. Best-effort: a failure (e.g.
+	 *  the project directory doesn't exist yet) only means live updates won't
+	 *  arrive, not that the review itself is unavailable, so this swallows
+	 *  rather than throws, matching `listReviewSessions`. */
+	/** Resolves `true` only when the backend took a ref — a refused watch (no
+	 *  project dir yet, or a watcher cap) holds none, so its caller must not
+	 *  `unwatchSessionReview` for it. */
+	async function watchSessionReview(repoPath: string, sessionId: string): Promise<boolean> {
+		try {
+			await invoke<void>("watch_session_review", { repoPath, sessionId });
+			return true;
+		} catch (err) {
+			appLogger.error("git", "Failed to watch session review", err);
+			return false;
+		}
+	}
+
+	/** Drop this subscriber's watch — call exactly once per successful
+	 *  `watchSessionReview` for the same repoPath/sessionId, when the
+	 *  subscriber goes away (e.g. the tab closes or the session changes). */
+	async function unwatchSessionReview(repoPath: string, sessionId: string): Promise<void> {
+		try {
+			await invoke<void>("unwatch_session_review", { repoPath, sessionId });
+		} catch (err) {
+			appLogger.error("git", "Failed to unwatch session review", err);
+		}
 	}
 
 	/** Undo one step, keeping every later step. Throws — the caller surfaces the failure. */
@@ -632,6 +680,8 @@ export function useRepository() {
 		getRecentCommits,
 		listReviewSessions,
 		getSessionReview,
+		watchSessionReview,
+		unwatchSessionReview,
 		revertSessionStep,
 		revertFileToSessionStart,
 	};
