@@ -284,12 +284,29 @@ struct TokenResponse {
 mod tests {
     use super::*;
 
-    // Catches hashing the encoded digest or retaining base64 padding in S256.
+    // Catches wrong S256 encoding and generating a challenge for another verifier.
     #[test]
     fn pkce_s256_matches_rfc7636_appendix_b() {
         assert_eq!(
             pkce_s256("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"),
             "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+        );
+
+        use base64ct::{Base64UrlUnpadded, Encoding as _};
+
+        let pair = TokenManager::generate_pkce();
+        assert_eq!(pair.method, "S256");
+        assert!((43..=128).contains(&pair.verifier.len()));
+        assert!(
+            pair.verifier
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"-._~".contains(&b))
+        );
+        // Use independent primitives, not pkce_s256 or its SHA/base64 helpers.
+        let digest = ring::digest::digest(&ring::digest::SHA256, pair.verifier.as_bytes());
+        assert_eq!(
+            pair.challenge,
+            Base64UrlUnpadded::encode_string(digest.as_ref())
         );
     }
 

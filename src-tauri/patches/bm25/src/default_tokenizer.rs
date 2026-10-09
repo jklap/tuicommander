@@ -423,45 +423,31 @@ mod tests {
 
     use insta::assert_debug_snapshot;
 
-    // Catches FIFO eviction and conflating normalized and original stopwords.
+    // Catches cached stopwords leaking across languages or normalization settings.
     #[test]
-    fn stopword_lru_keeps_recent_hits_and_normalization_separate() {
-        let mut cache = StopwordCache::default();
-        let languages = [
-            Language::Arabic,
-            Language::Danish,
-            Language::Dutch,
-            Language::English,
-            Language::French,
-            Language::German,
-            Language::Greek,
-            Language::Hungarian,
-            Language::Italian,
-            Language::Norwegian,
-            Language::Portuguese,
-            Language::Romanian,
-            Language::Russian,
-            Language::Spanish,
-            Language::Swedish,
-            Language::Tamil,
+    fn alternating_languages_and_normalization_keep_their_own_stopwords() {
+        // The shipped English lists contain "the"; French contains "été", not "ete".
+        // Literal expected tokens must not be derived from the cache or dictionary helper.
+        let cases = [
+            (Language::French, false, vec!["the", "ete", "nebula"]),
+            (Language::English, true, vec!["ete", "ete", "nebula"]),
+            (Language::French, true, vec!["the", "nebula"]),
+            (Language::English, false, vec!["été", "ete", "nebula"]),
         ];
-        for language in &languages {
-            cache.insert(language.clone(), false, HashSet::from(["original".into()]));
+        for _ in 0..2 {
+            for (language, normalization, expected) in &cases {
+                let tokenizer = DefaultTokenizer::builder()
+                    .language_mode(language.clone())
+                    .normalization(*normalization)
+                    .stemming(false)
+                    .build();
+                assert_eq!(
+                    Tokenizer::tokenize(&tokenizer, "the été ete nebula"),
+                    *expected,
+                    "language={language:?}, normalization={normalization}"
+                );
+            }
         }
-        assert!(cache.get(&Language::Arabic, false).is_some());
-        cache.insert(Language::Turkish, false, HashSet::new());
-        assert!(cache.get(&Language::Danish, false).is_none());
-        assert!(cache.get(&Language::Arabic, false).is_some());
-        cache.insert(Language::Arabic, true, HashSet::from(["normalized".into()]));
-        assert_eq!(
-            cache.get(&Language::Arabic, false).unwrap(),
-            HashSet::from(["original".into()])
-        );
-        assert_eq!(
-            cache.get(&Language::Arabic, true).unwrap(),
-            HashSet::from(["normalized".into()])
-        );
-        assert_eq!(cache.0.len(), 16);
     }
 
     fn tokenize_recipes(recipe_file: &str, language_mode: LanguageMode) -> Vec<Vec<String>> {
