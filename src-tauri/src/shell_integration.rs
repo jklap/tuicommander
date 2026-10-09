@@ -74,8 +74,10 @@
 //! - `skip` leaves the function alone (a fingerprint-less `skip`, set from
 //!   Settings, applies to any function).
 //! - `ask` (undecided) leaves the function alone AND emits OSC 7770
-//!   `userwrap=<agent>:<fingerprint>` (handled in `pty.rs`, which validates
-//!   both halves and calls `agent_wrap_prompt::request`) so the user is asked
+//!   `userwrap=<agent>:<fingerprint>:<$TUIC_SESSION>` (handled in `pty.rs` via
+//!   `agent_wrap_prompt::bound_userwrap_payload`, which validates every part and
+//!   accepts it only when the session token is the receiving PTY's own identity,
+//!   so output forging the sequence cannot open the dialog) so the user is asked
 //!   once; the answer is persisted together with that fingerprint.
 //! - unset (the script sourced by hand outside TUIC) behaves as `skip`.
 //!
@@ -184,9 +186,12 @@ if [[ -n "$TUIC_SESSION" ]]; then
   }
   # claude/codex/goose: a user's own function is wrapped ONLY with recorded
   # consent for its exact fingerprint; otherwise it is left alone, and the
-  # app is asked (OSC 7770 userwrap=<agent>:<fingerprint>) when undecided.
-  # The agent names below are literals and the fingerprint is digits and '-'
-  # only, so nothing user-controlled is interpolated into code or the OSC.
+  # app is asked (OSC 7770 userwrap=<agent>:<fingerprint>:<session>) when undecided.
+  # The agent names below are literals, the fingerprint is digits and '-'
+  # only, and $TUIC_SESSION is sent only when it is [A-Za-z0-9-] (the app's own
+  # UUID), so nothing user-controlled is interpolated into code or the OSC. The
+  # session token binds the request to THIS terminal: a program's output that
+  # forges the sequence cannot know it (pty.rs drops a mismatch).
   if (( $+functions[claude] )); then
     __tuic_user_fn_fp claude; __tuic_fp=$REPLY
     __tuic_user_fn_mode "$TUIC_WRAP_USER_FN_CLAUDE" "$TUIC_WRAP_USER_FN_CLAUDE_HASH" "$__tuic_fp"
@@ -195,7 +200,7 @@ if [[ -n "$TUIC_SESSION" ]]; then
         functions[__tuic_user_claude]=$functions[claude]
         claude() { __tuic_inject_claude __tuic_user_claude "$@"; }
         ;;
-      ask) [[ -n "$TUIC_CLAUDE_SETTINGS" && -n "$__tuic_fp" ]] && printf '\e]7770;userwrap=claude:%s\a' "$__tuic_fp";;
+      ask) [[ -n "$TUIC_CLAUDE_SETTINGS" && -n "$__tuic_fp" && -n "$TUIC_SESSION" && "$TUIC_SESSION" != *[^A-Za-z0-9-]* ]] && printf '\e]7770;userwrap=claude:%s:%s\a' "$__tuic_fp" "$TUIC_SESSION";;
     esac
   else
     __tuic_real_claude() { command claude "$@"; }
@@ -209,7 +214,7 @@ if [[ -n "$TUIC_SESSION" ]]; then
         functions[__tuic_user_codex]=$functions[codex]
         codex() { __tuic_inject_codex __tuic_user_codex "$@"; }
         ;;
-      ask) [[ -n "$TUIC_CODEX_NOTIFY" && -n "$__tuic_fp" ]] && printf '\e]7770;userwrap=codex:%s\a' "$__tuic_fp";;
+      ask) [[ -n "$TUIC_CODEX_NOTIFY" && -n "$__tuic_fp" && -n "$TUIC_SESSION" && "$TUIC_SESSION" != *[^A-Za-z0-9-]* ]] && printf '\e]7770;userwrap=codex:%s:%s\a' "$__tuic_fp" "$TUIC_SESSION";;
     esac
   else
     __tuic_real_codex() { command codex "$@"; }
@@ -224,7 +229,7 @@ if [[ -n "$TUIC_SESSION" ]]; then
         goose() { __tuic_inject_goose __tuic_user_goose "$@"; }
         ;;
       # --name injection has no separate settings gate, so this always asks.
-      ask) [[ -n "$__tuic_fp" ]] && printf '\e]7770;userwrap=goose:%s\a' "$__tuic_fp";;
+      ask) [[ -n "$__tuic_fp" && -n "$TUIC_SESSION" && "$TUIC_SESSION" != *[^A-Za-z0-9-]* ]] && printf '\e]7770;userwrap=goose:%s:%s\a' "$__tuic_fp" "$TUIC_SESSION";;
     esac
   else
     __tuic_real_goose() { command goose "$@"; }
@@ -2616,6 +2621,51 @@ mod tests {
         }
     }
 
+    /// Batch 36 review: no test drove a hostile path through the generated
+    /// `.zshenv`. The app-data dir is user-controlled (an instance's config
+    /// dir) and lands inside zsh source text, so a path holding quotes,
+    /// `$(...)`, backticks, `;` and spaces must be taken literally — sourced,
+    /// never executed.
+    #[cfg(unix)]
+    #[test]
+    #[serial_test::serial]
+    fn a_hostile_app_data_path_is_quoted_in_the_generated_zshenv() {
+        let config_dir = tempfile::tempdir().unwrap();
+        let _guard = crate::config::set_config_dir_override(config_dir.path().to_path_buf());
+        let root = tempfile::tempdir().unwrap();
+        let canary = root.path().join("PWNED");
+        let hostile = root.path().join(format!(
+            "it's $(touch {c}) `touch {c}` ;touch {c}; \"$HOME\"",
+            c = canary.display()
+        ));
+        std::fs::create_dir_all(&hostile).unwrap();
+        let home = root.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+
+        let mut cmd = portable_pty::CommandBuilder::new("/bin/zsh");
+        super::inject_zsh(&hostile, &mut cmd);
+        let zdotdir = hostile.join("zdotdir");
+        assert!(zdotdir.join(".zshenv").is_file(), "the .zshenv was written");
+
+        let out = std::process::Command::new("zsh")
+            .arg("-c")
+            .arg("print -r -- \"SOURCED:${+functions[__tuic_precmd]}\"")
+            .env_clear()
+            .env("HOME", &home)
+            .env("PATH", "/usr/bin:/bin")
+            .env("ZDOTDIR", &zdotdir)
+            .current_dir(root.path())
+            .output()
+            .expect("zsh must be installed (scripts/install-launch-shells.sh)");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stdout.contains("SOURCED:1"),
+            "the eager script must be sourced from the hostile path: {stdout:?} {stderr:?}"
+        );
+        assert!(!canary.exists(), "path text must never run as code");
+    }
+
     /// The consent rule for a user's OWN `claude`/`codex`/`goose` function,
     /// exercised by sourcing the real deferred script in `zsh -f -c` with the
     /// exact env `inject_zsh` exports. No PTY needed: the decision logic runs
@@ -2680,11 +2730,33 @@ mod tests {
         }
 
         /// The fingerprint the shell reported in its `userwrap` OSC, if any.
+        /// The payload is `<fingerprint>:<$TUIC_SESSION>` after the agent: the
+        /// session token must be the shell's own (`run` sets `consent-test`).
         fn asked_fingerprint(out: &str) -> Option<String> {
             let start =
                 out.find("\u{1b}]7770;userwrap=claude:")? + "\u{1b}]7770;userwrap=claude:".len();
             let end = out[start..].find('\u{7}')? + start;
-            Some(out[start..end].to_string())
+            let (fingerprint, session) = out[start..end].split_once(':')?;
+            assert_eq!(session, "consent-test", "the OSC must carry $TUIC_SESSION");
+            Some(fingerprint.to_string())
+        }
+
+        /// B2.6: the session token is interpolated into the OSC, so a value
+        /// outside `[A-Za-z0-9-]` must suppress the request rather than be sent.
+        #[test]
+        fn a_malformed_tuic_session_suppresses_the_request() {
+            let out = run(
+                USER_FN,
+                &[
+                    ("TUIC_WRAP_USER_FN_CLAUDE", "ask"),
+                    ("TUIC_SESSION", "x\u{7};y"),
+                ],
+            );
+            assert!(out.contains("USER:--model opus\n"), "{out:?}");
+            assert!(
+                !out.contains("userwrap="),
+                "a malformed session token must not reach the OSC: {out:?}"
+            );
         }
 
         fn ask_env() -> [(&'static str, &'static str); 1] {

@@ -21,13 +21,35 @@
 //! the answer either, so there's no oneshot channel and no timeout.
 
 use crate::state::{AppEvent, AppState};
+use std::time::{Duration, Instant};
 
-/// One pending prompt: the id clients answer with, and the fingerprint of the
-/// user function it asks about (persisted with the answer).
+/// How long a pending prompt holds its agent's single slot. Only one prompt
+/// per agent can be pending, so without an expiry a prompt nobody answers —
+/// including one opened by forged terminal output — would block the genuine
+/// one for the whole app run. After this, a fresh detection replaces it (the
+/// old dialog is dismissed) and an answer to the old id is a no-op.
+pub(crate) const PENDING_WRAP_PROMPT_TTL: Duration = Duration::from_secs(10 * 60);
+
+/// One pending prompt: the id clients answer with, the fingerprint of the
+/// user function it asks about (persisted with the answer), and when it was
+/// opened (`PENDING_WRAP_PROMPT_TTL`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PendingWrapPrompt {
     pub(crate) request_id: String,
     pub(crate) fingerprint: String,
+    pub(crate) opened_at: Instant,
+}
+
+impl PendingWrapPrompt {
+    fn expired(&self) -> bool {
+        self.opened_at.elapsed() >= PENDING_WRAP_PROMPT_TTL
+    }
+}
+
+/// Error `resolve` returns for an agent outside the allow-list — a caller
+/// mistake (HTTP 400), as opposed to a failed save (500).
+pub(crate) fn unsupported_agent_error(agent_type: &str) -> String {
+    format!("wrapping a user-defined shell function is unsupported for '{agent_type}'")
 }
 
 /// Whether `agent_type` may have a user function wrapped at all — the one
@@ -63,6 +85,39 @@ fn decided_for(agent_type: &str, fingerprint: &str) -> bool {
 /// Callers have already validated `agent_type` and `fingerprint` (the OSC
 /// verb is untrusted terminal output); both are re-checked here so a future
 /// call site cannot skip that.
+/// Parse a `userwrap` OSC payload, `<agent>:<fingerprint>:<tuic_session>`, read
+/// from PTY `session_id`'s output, and accept it only when every part is valid
+/// AND the session token is this PTY's own identity (its key, or the
+/// `$TUIC_SESSION` bound to it). Terminal output is untrusted: any program can
+/// print the sequence — and, by also forging `133;D` first, get past the
+/// "a foreground command is running" filter — but it cannot know this terminal's
+/// identity, so a forged request is dropped instead of opening the consent
+/// dialog. A payload without the token (an older integration script) is
+/// refused too; the script is rewritten on every spawn.
+pub(crate) fn bound_userwrap_payload<'a>(
+    state: &AppState,
+    session_id: &str,
+    payload: &'a str,
+) -> Option<(&'a str, &'a str)> {
+    let mut parts = payload.splitn(3, ':');
+    let agent = parts.next()?;
+    let fingerprint = parts.next()?;
+    let owner = parts.next()?;
+    if !is_wrappable_agent(agent)
+        || !crate::shell_integration::is_user_function_fingerprint(fingerprint)
+        || owner.is_empty()
+        || owner.len() > 128
+        || !owner
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+    {
+        return None;
+    }
+    let bound =
+        owner == session_id || state.live_pty_for_peer(owner).as_deref() == Some(session_id);
+    bound.then_some((agent, fingerprint))
+}
+
 pub(crate) fn request(state: &AppState, agent_type: &str, fingerprint: &str) {
     if !is_wrappable_agent(agent_type)
         || !crate::shell_integration::is_user_function_fingerprint(fingerprint)
@@ -77,7 +132,18 @@ pub(crate) fn request(state: &AppState, agent_type: &str, fingerprint: &str) {
     if state.agent_wrap_snoozed.contains(agent_type) {
         return;
     }
-    // Already pending from another tab's detection.
+    // Already pending from another tab's detection — unless it has expired,
+    // in which case its dialog is dismissed and this detection replaces it.
+    if let Some((_, stale)) = state
+        .agent_wrap_pending
+        .remove_if(agent_type, |_, pending| pending.expired())
+    {
+        state.emit_dual(AppEvent::AgentWrapPromptResolved {
+            request_id: stale.request_id,
+            agent_type: agent_type.to_string(),
+            decision: None,
+        });
+    }
     if state.agent_wrap_pending.contains_key(agent_type) {
         return;
     }
@@ -93,6 +159,7 @@ pub(crate) fn request(state: &AppState, agent_type: &str, fingerprint: &str) {
         PendingWrapPrompt {
             request_id: request_id.clone(),
             fingerprint: fingerprint.to_string(),
+            opened_at: Instant::now(),
         },
     );
     state.emit_dual(AppEvent::AgentWrapPrompt {
@@ -127,9 +194,7 @@ pub(crate) fn resolve(
     // Belt-and-suspenders: `agent_wrap_pending` is only ever populated by
     // `request`, which validates against this same allow-list.
     if !is_wrappable_agent(agent_type) {
-        return Err(format!(
-            "wrapping a user-defined shell function is unsupported for '{agent_type}'"
-        ));
+        return Err(unsupported_agent_error(agent_type));
     }
     let Some((_, pending)) = state
         .agent_wrap_pending
@@ -137,6 +202,17 @@ pub(crate) fn resolve(
     else {
         return Ok(());
     };
+    // An answer that arrives after the prompt's TTL persists nothing: the
+    // dialog may have been opened by forged output long ago, and a fresh
+    // detection will ask again. It is still taken down below.
+    if pending.expired() {
+        state.emit_dual(AppEvent::AgentWrapPromptResolved {
+            request_id: request_id.to_string(),
+            agent_type: agent_type.to_string(),
+            decision: None,
+        });
+        return Ok(());
+    }
 
     let save_result = match decision {
         Some(value) => {
@@ -315,6 +391,57 @@ mod tests {
         );
     }
 
+    /// Item #21 check: after a dismiss (snooze), choosing "Wrap" in Settings
+    /// must let the next shell's detection prompt again — otherwise Settings
+    /// says "Wrap" and nothing is ever wrapped until the app restarts. The
+    /// Settings save stores no fingerprint (the prompt does), so the prompt is
+    /// the only way to the actual wrap.
+    #[test]
+    #[serial_test::serial]
+    fn a_settings_wrap_choice_lifts_the_snooze_so_detection_prompts_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = tuic_core::config_dir::set_override(dir.path().to_path_buf());
+        let state = test_state();
+        request(&state, "claude", FP);
+        let id = pending_id(&state, "claude");
+        resolve(&state, &id, "claude", None).unwrap();
+        assert!(state.agent_wrap_snoozed.contains("claude"));
+
+        crate::agent_hook_commands::apply_agent_wrap_user_function(
+            &state,
+            "claude".to_string(),
+            Some(true),
+        )
+        .unwrap();
+
+        assert!(!state.agent_wrap_snoozed.contains("claude"));
+        assert_eq!(stored("claude"), (Some(true), None));
+        request(&state, "claude", FP);
+        assert!(
+            state.agent_wrap_pending.contains_key("claude"),
+            "a Settings Wrap choice must reopen the consent prompt this run"
+        );
+    }
+
+    /// An unsupported agent is refused and leaves any snooze alone.
+    #[test]
+    #[serial_test::serial]
+    fn a_rejected_settings_choice_keeps_the_snooze() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = tuic_core::config_dir::set_override(dir.path().to_path_buf());
+        let state = test_state();
+        state.agent_wrap_snoozed.insert("aider".to_string());
+        assert!(
+            crate::agent_hook_commands::apply_agent_wrap_user_function(
+                &state,
+                "aider".to_string(),
+                Some(true),
+            )
+            .is_err()
+        );
+        assert!(state.agent_wrap_snoozed.contains("aider"));
+    }
+
     #[test]
     #[serial_test::serial]
     fn resolve_true_persists_with_the_fingerprint_and_clears_pending() {
@@ -390,6 +517,47 @@ mod tests {
         // Still removed from pending — a failed persist must not leave the
         // prompt stuck open forever with no way to retry.
         assert!(state.agent_wrap_pending.is_empty());
+    }
+
+    fn age_pending(state: &AppState, agent: &str) {
+        let mut entry = state.agent_wrap_pending.get_mut(agent).unwrap();
+        entry.opened_at = Instant::now()
+            .checked_sub(PENDING_WRAP_PROMPT_TTL + Duration::from_secs(1))
+            .unwrap();
+    }
+
+    /// A prompt nobody answered (e.g. one opened by forged output) must not
+    /// hold its agent's slot forever: after the TTL a fresh detection
+    /// replaces it.
+    #[test]
+    #[serial_test::serial]
+    fn an_expired_pending_prompt_is_replaced_by_a_fresh_detection() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = tuic_core::config_dir::set_override(dir.path().to_path_buf());
+        let state = test_state();
+        request(&state, "claude", "111-1");
+        let stale_id = pending_id(&state, "claude");
+        age_pending(&state, "claude");
+
+        request(&state, "claude", FP);
+        let fresh = state.agent_wrap_pending.get("claude").unwrap().clone();
+        assert_ne!(fresh.request_id, stale_id);
+        assert_eq!(fresh.fingerprint, FP);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn an_answer_after_the_ttl_persists_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = tuic_core::config_dir::set_override(dir.path().to_path_buf());
+        let state = test_state();
+        request(&state, "claude", FP);
+        let id = pending_id(&state, "claude");
+        age_pending(&state, "claude");
+
+        resolve(&state, &id, "claude", Some(true)).unwrap();
+        assert!(state.agent_wrap_pending.is_empty());
+        assert_eq!(stored("claude"), (None, None));
     }
 
     #[test]
