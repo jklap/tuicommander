@@ -1,5 +1,5 @@
 use parking_lot::Mutex;
-use portable_pty::{CommandBuilder, PtySize};
+use portable_pty::CommandBuilder;
 use serde::Serialize;
 use std::process::Command;
 use std::sync::Arc;
@@ -1444,12 +1444,7 @@ pub(crate) async fn spawn_agent(
     let launch_receipt = Arc::new(Mutex::new(None));
     let captured_receipt = Arc::clone(&launch_receipt);
     let (pair, child) = crate::pty::spawn_pty_pair_with_retry_async(
-        PtySize {
-            rows: pty_config.rows,
-            cols: pty_config.cols,
-            pixel_width: 0,
-            pixel_height: 0,
-        },
+        crate::pty::initial_pty_size(pty_config.rows, pty_config.cols),
         move || {
             // Build agent command
             let mut cmd = CommandBuilder::new(&spawn_binary_path);
