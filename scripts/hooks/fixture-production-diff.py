@@ -14,11 +14,107 @@ def read_git(ref):
 def lexical_code(source):
     """Hide comments and literals, retaining offsets for balanced Rust item bodies."""
     chars = list(source)
+    for start, end, _kind in lexical_spans(source):
+        for i in range(start, min(end, len(chars))):
+            if chars[i] != "\n":
+                chars[i] = " "
+    return "".join(chars)
+
+
+def normalized(source):
+    """The code with formatting removed: what rustfmt may change, and nothing else.
+
+    Comments are dropped (the gate ignores them anyway). String and char literals
+    are kept byte for byte, whitespace included. Outside literals, whitespace is
+    dropped except one space between two identifier characters, so `pub fn` never
+    reads as `pubfn`. A trailing comma is dropped before `]` or `}`, and before
+    `)` only when that group has another top-level comma, so `(x,)` (a 1-tuple)
+    and `(x)` stay different while `f(a, b,)` equals `f(a, b)`.
+    """
+    items = []  # single code characters, or ("lit", text) for a literal
+    pos = 0
+
+    def code(chunk):
+        for ch in chunk:
+            if ch.isspace():
+                if items and items[-1] != " ":
+                    items.append(" ")
+            else:
+                items.append(ch)
+
+    for start, end, kind in lexical_spans(source):
+        code(source[pos:start])
+        if kind == "literal":
+            items.append(("lit", string_value_form(source[start:end])))
+        else:
+            code(" ")
+        pos = end
+    code(source[pos:])
+
+    def word(item):
+        return isinstance(item, str) and (item.isalnum() or item == "_")
+
+    squeezed = []
+    for i, item in enumerate(items):
+        if item == " ":
+            if squeezed and i + 1 < len(items) and word(squeezed[-1]) and word(items[i + 1]):
+                squeezed.append(" ")
+            continue
+        squeezed.append(item)
+
+    out, groups = [], []  # groups: [opener, top-level commas, index of a trailing comma]
+    for item in squeezed:
+        if item in ("(", "[", "{"):
+            groups.append([item, 0, None])
+        elif item in (")", "]", "}"):
+            if groups:
+                _opener, commas, trailing = groups.pop()
+                if trailing is not None and trailing == len(out) - 1 and (item != ")" or commas >= 2):
+                    out.pop()
+        out.append(item)
+        if groups:
+            if item == ",":
+                groups[-1][1] += 1
+                groups[-1][2] = len(out) - 1
+    return out
+
+
+def string_value_form(literal):
+    """A literal with its string-continuation indentation removed.
+
+    In a non-raw string, `\\` + newline skips every following whitespace character,
+    so rustfmt re-indenting a continuation line does not change the value. Only that
+    whitespace is dropped; `\\\\` (an escaped backslash) before a newline is content
+    and is kept, as is every byte of a raw string or char literal.
+    """
+    if not literal.startswith(('"', 'b"')):
+        return literal
+    out, i = [], 0
+    while i < len(literal):
+        ch = literal[i]
+        if ch == "\\" and i + 1 < len(literal):
+            if literal[i + 1] == "\n":
+                out.append("\\\n")
+                i += 2
+                while i < len(literal) and literal[i] in " \t\r\n":
+                    i += 1
+                continue
+            out.append(literal[i:i + 2])
+            i += 2
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def lexical_spans(source):
+    """Yield (start, end, kind) for every comment ("comment") and literal ("literal")."""
     pattern = re.compile(r'//[^\n]*|/\*|(?:br|r)\#*"|b?"|(?:b)?\'(?:\\.|[^\'\\\n])\'')
     pos = 0
     while match := pattern.search(source, pos):
         start, end = match.span()
         token = match.group()
+        kind = "comment" if token.startswith(("//", "/*")) else "literal"
         if token.startswith("//"):
             pass
         elif token == "/*":
@@ -46,41 +142,119 @@ def lexical_code(source):
                         break
                     else:
                         end += 1
-        for i in range(start, min(end, len(chars))):
-            if chars[i] != "\n":
-                chars[i] = " "
+        end = min(end, len(source))
+        yield start, end, kind
         pos = end
-    return "".join(chars)
 
 
-def production(source):
+TEST_ATTR = re.compile(r'#\s*\[\s*(?:cfg\s*\(\s*test\s*\)|(?:\w+::)?test(?:\s*\([^]]*\))?)\s*\]')
+# Optional attributes, then a `mod`/`fn` declaration; group "kw" starts at the keyword.
+ITEM = re.compile(r'(?P<attrs>(?:#\s*\[[^\]]*\]\s*)*)(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(?:unsafe\s+)?'
+                  r'(?P<kw>(?:mod|fn)\s+\w+)')
+
+
+BODY_START = re.compile(r"[{;\[\]()]")
+
+
+def item_end(code, match):
+    """Offset just past the item's `;` or balanced `{...}` body, or None if unclosed."""
+    body = None
+    nesting = 0  # a `;` inside `[u8; 4]` or `(..)` does not end the item
+    for found in BODY_START.finditer(code, match.end()):
+        token = found.group()
+        if token in "[(":
+            nesting += 1
+        elif token in "])":
+            nesting = max(0, nesting - 1)
+        elif not nesting:
+            body = found
+            break
+    if body is None:
+        return None
+    end = body.end()
+    if body.group() == "{":
+        depth = 1
+        while depth and end < len(code):
+            depth += (code[end] == "{") - (code[end] == "}")
+            end += 1
+        if depth:
+            return None
+    return end
+
+
+def own_lines(code, start, end):
+    """True when the item shares neither its first nor its last line with other code."""
+    line_end = code.find("\n", end)
+    return (not code[code.rfind("\n", 0, start) + 1:start].strip()
+            and not code[end:line_end if line_end >= 0 else len(code)].strip())
+
+
+def items(source):
+    """Classify every `mod`/`fn` item: (start, end, is_test, text from the keyword on).
+
+    `text` is the original source (literals and comments included) from the `mod`/`fn`
+    keyword to the end of the body, so it is identical whether or not test attributes
+    precede it.
+    """
     code = lexical_code(source)
-    item = re.compile(r'(?:#\s*\[[^\]]*\]\s*)+(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(?:unsafe\s+)?(?:mod|fn)\s+\w+')
-    excluded = set()
-    for match in item.finditer(code):
-        attrs = match.group()
-        if not re.search(r'#\s*\[\s*(?:cfg\s*\(\s*test\s*\)|(?:\w+::)?test(?:\s*\([^]]*\))?)\s*\]', attrs):
-            continue
-        body = re.search(r"[{;]", code[match.end():])
-        if body is None:
-            continue
-        end = match.end() + body.end()
-        if body.group() == "{":
-            depth = 1
-            while depth and end < len(code):
-                depth += (code[end] == "{") - (code[end] == "}")
-                end += 1
-            if depth:
+    found = []
+    for match in ITEM.finditer(code):
+        is_test = bool(TEST_ATTR.search(match.group("attrs")))
+        end = item_end(code, match)
+        if end is None:
+            if is_test:
                 raise ValueError("unclosed test item; refusing to classify the staged diff")
-        first = source.count("\n", 0, match.start())
-        last = source.count("\n", 0, end)
-        # Preserve production sharing the declaration/end line (e.g. one-line test modules).
-        if code[code.rfind("\n", 0, match.start()) + 1:match.start()].strip():
+            continue
+        if is_test and code[code.rfind("\n", 0, match.start()) + 1:match.start()].strip():
             raise ValueError("mixed production/test declaration line")
-        if code[end:code.find("\n", end) if "\n" in code[end:] else len(code)].strip():
+        if is_test and not own_lines(code, match.start(), end):
             raise ValueError("mixed production/test closing line")
-        excluded.update(range(first, last + 1))
+        found.append((match.start(), end, is_test, source[match.start("kw"):end]))
+    return code, found
+
+
+def production(source, exempt=None):
+    """Source lines outside test items.
+
+    `exempt` maps an item's text (see `items`) to how many attribute-less items with
+    exactly that text are also test-only. The caller computes it from the other view of
+    the same file: an item whose text is unchanged but which became a test item (e.g. a
+    test function that was missing its `#[test]`) is test code in both views.
+    """
+    code, found = items(source)
+    exempt = dict(exempt or {})
+    excluded = set()
+    for start, end, is_test, text in found:
+        if not is_test:
+            if exempt.get(text, 0) <= 0 or not own_lines(code, start, end):
+                continue
+            exempt[text] -= 1
+        excluded.update(range(source.count("\n", 0, start), source.count("\n", 0, end) + 1))
     return [line for n, line in enumerate(source.splitlines(True)) if n not in excluded]
+
+
+def became_tests(old, new):
+    """Texts of items that are production-shaped in `old` and verbatim test items in `new`.
+
+    Counted, so an item is exempted only as many times as it newly appears as a test AND
+    disappears as a production item: keeping the production copy while adding a test copy
+    exempts nothing, and any edit to the body (beyond its attributes) exempts nothing.
+    """
+    def counts(source):
+        test, prod = {}, {}
+        for _start, _end, is_test, text in items(source)[1]:
+            bucket = test if is_test else prod
+            bucket[text] = bucket.get(text, 0) + 1
+        return test, prod
+
+    old_test, old_prod = counts(old)
+    new_test, new_prod = counts(new)
+    exempt = {}
+    for text, n in new_test.items():
+        allowance = min(n - old_test.get(text, 0), old_prod.get(text, 0) - new_prod.get(text, 0))
+        if allowance > 0:
+            exempt[text] = allowance
+    return exempt
 
 
 def recorded_capture_staged():
@@ -119,8 +293,13 @@ if __name__ == "__main__":
     new = read_git(":" + path)
     if old == new:
         sys.exit(0)
-    before = production(old.decode())
+    before = production(old.decode(), became_tests(old.decode(), new.decode()))
     after = production(new.decode())
+    # A formatting-only change (rustfmt: whitespace, line breaks, trailing commas) to
+    # production code is not a detection change. Any other byte of code or of a
+    # literal still differs here and falls through to the line diff below.
+    if normalized("".join(before)) == normalized("".join(after)):
+        sys.exit(0)
     # Give each production hunk its enclosing function, matching git's Rust hunk context.
     for group in difflib.SequenceMatcher(None, before, after).get_grouped_opcodes(0):
         first = group[0]
