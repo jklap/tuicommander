@@ -46,6 +46,7 @@ impl DefinitionStore {
             {
                 return Err("Automation id already exists".into());
             }
+            definition.validate_schedule_at(chrono::Utc::now())?;
             latest.definitions.push(definition);
             Ok(((), true))
         })
@@ -65,6 +66,12 @@ impl DefinitionStore {
                 .find(|item| item.id == id)
                 .ok_or("Automation not found")?;
             let changed = *item != definition;
+            if item.cron != definition.cron
+                || item.once_local != definition.once_local
+                || item.timezone != definition.timezone
+            {
+                definition.validate_schedule_at(chrono::Utc::now())?;
+            }
             *item = definition;
             Ok(((), changed))
         })
