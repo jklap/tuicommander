@@ -1720,9 +1720,10 @@ async fn handle_ws_session(
                                 crate::state::AppEvent::PtyDescriptionChanged { session_id: sid, description } => {
                                     serde_json::json!({"type": "pty-description", "session_id": sid, "description": description})
                                 }
-                                crate::state::AppEvent::SessionRenamed { session_id: sid, name, is_custom } => {
-                                    serde_json::json!({"type": "renamed", "session_id": sid, "name": name, "is_custom": is_custom})
-                                }
+                                // No `renamed` frame: no WS consumer reads one.
+                                // Browser/PWA clients get `session-renamed` live
+                                // over `/events` SSE (dual-emitted), the same
+                                // listener the desktop uses.
                                 _ => continue,
                             };
                             if ws_sender.text(&payload.to_string()).await.is_err() {
@@ -2002,13 +2003,9 @@ fn grid_ws_frame(event: &crate::state::AppEvent) -> Option<serde_json::Value> {
         } => {
             serde_json::json!({"type": "pty-description", "session_id": sid, "description": description})
         }
-        crate::state::AppEvent::SessionRenamed {
-            session_id: sid,
-            name,
-            is_custom,
-        } => {
-            serde_json::json!({"type": "renamed", "session_id": sid, "name": name, "is_custom": is_custom})
-        }
+        // `session-renamed` is not a grid frame: `CanvasTerminal` has no
+        // `renamed` handler, and every client already receives it over `/events`
+        // SSE (dual-emitted) via `useAppInit`'s listener.
         // Mirrors the desktop `Osc133Event` field for field — see the shape
         // contract above. Without this a browser/PWA client had no command
         // blocks, no gutter marks and no Cmd+Up/Down navigation.
@@ -4975,6 +4972,21 @@ mod tests {
             "same-size resize must not preserve a stale 220-column floor"
         );
         crate::pty::close_pty_core(&state, &session_id, false);
+    }
+
+    /// Dropped-items #23: the grid WS carries no `renamed` frame — nothing in
+    /// the client reads one; `session-renamed` reaches browser clients over
+    /// `/events` SSE like every other dual-emitted event.
+    #[test]
+    fn grid_ws_frame_does_not_carry_session_renamed() {
+        assert!(
+            grid_ws_frame(&crate::state::AppEvent::SessionRenamed {
+                session_id: "s".to_string(),
+                name: Some("n".to_string()),
+                is_custom: true,
+            })
+            .is_none()
+        );
     }
 
     /// Dropped-items #31: an HTTP-spawned session's PTY must start with a

@@ -900,7 +900,12 @@ pub(crate) async fn rename_pane(
 ) -> impl IntoResponse {
     let label = label_of(&q);
     let live = live_session_ids(&state);
-    let tuic_session_id = {
+    // `select-pane` with no `-T` (plain focus) sends no title: it must leave
+    // both the pane record and the tab name alone, as real tmux does.
+    let Some(title) = body.title else {
+        return (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response();
+    };
+    let (tuic_session_id, previous_title) = {
         let Some(mut topology) = state.tmux_servers.get_mut(&label) else {
             return not_found("pane").into_response();
         };
@@ -908,16 +913,42 @@ pub(crate) async fn rename_pane(
         let Some(pane) = topology.find_pane_mut(&pane_id) else {
             return not_found("pane").into_response();
         };
-        pane.title = body.title.clone();
-        pane.tuic_session_id.clone()
+        let previous = pane.title.take();
+        pane.title = Some(title.clone()).filter(|title| !title.is_empty());
+        (pane.tuic_session_id.clone(), previous)
     };
+    let Some(tuic_id) = tuic_session_id else {
+        return (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response();
+    };
+    // `select-pane -T ""` clears the title. Clear the tab's name only when it is
+    // still the title this shim gave it (custom + equal), so a user's own
+    // rename is never wiped. Clearing drops the custom flag (OSC titles may
+    // name the tab again) and emits `session-renamed {name: null}` live to
+    // every client (dropped-items #23).
+    if title.is_empty() {
+        let shows_previous_title = previous_title
+            .as_deref()
+            .filter(|previous| !previous.is_empty())
+            .is_some_and(|previous| {
+                state
+                    .session_maps
+                    .sessions
+                    .get(&tuic_id)
+                    .is_some_and(|entry| {
+                        let session = entry.lock();
+                        session.display_name.as_deref() == Some(previous)
+                            && session.display_name_is_custom
+                    })
+            });
+        if shows_previous_title {
+            state.clear_session_name_from_backend(&tuic_id);
+        }
+        return (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response();
+    }
     // A tmux rename starts in the backend, so it goes through
-    // `rename_session_from_backend` (which emits `session-renamed` to every UI)
-    // rather than the frontend-originated `PUT /sessions/{id}/name`, which by
-    // design never emits. Agents' status tickers repeat `select-pane -T` with an
-    // unchanged title on every repaint, so an unchanged title is a no-op.
-    if let Some(tuic_id) = tuic_session_id
-        && let Some(title) = body.title.filter(|title| !title.is_empty())
+    // `rename_session_from_backend` (which emits `session-renamed` to every
+    // UI). Agents' status tickers repeat `select-pane -T` with an unchanged
+    // title on every repaint, so an unchanged title is a no-op.
     {
         let unchanged = state
             .session_maps
@@ -1257,6 +1288,161 @@ mod tests {
             Some(initial_pane_id.as_str()),
             "active_pane must be reassigned to a pane that still exists, not left dangling"
         );
+    }
+
+    /// A tmux session with one pane, materialized to a live TUIC session and
+    /// titled `title` by `select-pane -T`. Returns (state, label, pane_id, tuic_id).
+    async fn materialized_titled_pane(label: &str, title: &str) -> (Arc<AppState>, String, String) {
+        let state = super::super::tests::test_state();
+        let created = create_tmux_session(
+            State(state.clone()),
+            Json(CreateTmuxSessionRequest {
+                label: Some(label.to_string()),
+                name: "s".to_string(),
+                window_name: None,
+                cwd: None,
+                cwd_session_id: None,
+                fallback_cwd: None,
+            }),
+        )
+        .await
+        .into_response();
+        let body = axum::body::to_bytes(created.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let pane_id = created["pane_id"].as_str().unwrap().to_string();
+        let materialized = materialize_pane(
+            State(state.clone()),
+            Path(pane_id.clone()),
+            label_query(label),
+            Json(MaterializePaneRequest {
+                cwd: None,
+                origin_session_id: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(materialized.status(), StatusCode::OK);
+        let _ = rename_pane(
+            State(state.clone()),
+            Path(pane_id.clone()),
+            label_query(label),
+            Json(RenamePaneRequest {
+                title: Some(title.to_string()),
+            }),
+        )
+        .await;
+        (state, pane_id, label.to_string())
+    }
+
+    fn pane_session(state: &AppState, label: &str, pane_id: &str) -> (Option<String>, String) {
+        let topology = state.tmux_servers.get(label).unwrap();
+        let pane = topology
+            .sessions
+            .iter()
+            .flat_map(|s| s.windows.iter())
+            .flat_map(|w| w.panes.iter())
+            .find(|p| p.id == pane_id)
+            .unwrap();
+        (pane.title.clone(), pane.tuic_session_id.clone().unwrap())
+    }
+
+    fn renames(
+        rx: &mut tokio::sync::broadcast::Receiver<crate::state::AppEvent>,
+    ) -> Vec<(Option<String>, bool)> {
+        std::iter::from_fn(|| rx.try_recv().ok())
+            .filter_map(|event| match event {
+                crate::state::AppEvent::SessionRenamed {
+                    name, is_custom, ..
+                } => Some((name, is_custom)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Dropped-items #23: `select-pane -T ""` clears the tab name this shim
+    /// gave it and tells every client live (`session-renamed {name: null}`).
+    #[tokio::test]
+    async fn select_pane_empty_title_clears_the_tab_name_and_emits() {
+        let (state, pane_id, label) =
+            materialized_titled_pane("test-rename-pane-clear", "build").await;
+        let (_, tuic_id) = pane_session(&state, &label, &pane_id);
+        let mut rx = state.event_bus.subscribe();
+
+        let _ = rename_pane(
+            State(state.clone()),
+            Path(pane_id.clone()),
+            label_query(&label),
+            Json(RenamePaneRequest {
+                title: Some(String::new()),
+            }),
+        )
+        .await;
+
+        assert_eq!(renames(&mut rx), vec![(None, false)]);
+        let entry = state.session_maps.sessions.get(&tuic_id).unwrap();
+        let session = entry.lock();
+        assert_eq!(session.display_name, None);
+        assert!(!session.display_name_is_custom);
+        drop(session);
+        drop(entry);
+        assert_eq!(pane_session(&state, &label, &pane_id).0, None);
+        crate::pty::close_pty_core(&state, &tuic_id, false);
+    }
+
+    /// An empty `-T` must never wipe a name the user gave the tab afterwards.
+    #[tokio::test]
+    async fn select_pane_empty_title_keeps_a_users_own_rename() {
+        let (state, pane_id, label) =
+            materialized_titled_pane("test-rename-pane-clear-user", "build").await;
+        let (_, tuic_id) = pane_session(&state, &label, &pane_id);
+        state.rename_session_from_frontend(&tuic_id, Some("mine".to_string()), true);
+        let mut rx = state.event_bus.subscribe();
+
+        let _ = rename_pane(
+            State(state.clone()),
+            Path(pane_id.clone()),
+            label_query(&label),
+            Json(RenamePaneRequest {
+                title: Some(String::new()),
+            }),
+        )
+        .await;
+
+        assert!(renames(&mut rx).is_empty());
+        let entry = state.session_maps.sessions.get(&tuic_id).unwrap();
+        assert_eq!(entry.lock().display_name.as_deref(), Some("mine"));
+        drop(entry);
+        crate::pty::close_pty_core(&state, &tuic_id, false);
+    }
+
+    /// A plain `select-pane -t X` (focus, no `-T`) sends no title and must
+    /// leave both the pane's recorded title and the tab name alone.
+    #[tokio::test]
+    async fn select_pane_without_a_title_changes_nothing() {
+        let (state, pane_id, label) =
+            materialized_titled_pane("test-rename-pane-focus", "build").await;
+        let (_, tuic_id) = pane_session(&state, &label, &pane_id);
+        let mut rx = state.event_bus.subscribe();
+
+        let _ = rename_pane(
+            State(state.clone()),
+            Path(pane_id.clone()),
+            label_query(&label),
+            Json(RenamePaneRequest { title: None }),
+        )
+        .await;
+
+        assert!(renames(&mut rx).is_empty());
+        assert_eq!(
+            pane_session(&state, &label, &pane_id).0.as_deref(),
+            Some("build")
+        );
+        let entry = state.session_maps.sessions.get(&tuic_id).unwrap();
+        assert_eq!(entry.lock().display_name.as_deref(), Some("build"));
+        drop(entry);
+        crate::pty::close_pty_core(&state, &tuic_id, false);
     }
 
     /// Regression for the tab-name-flapping bug: `select-pane -T` (this route)
