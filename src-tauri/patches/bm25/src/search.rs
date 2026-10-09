@@ -1,8 +1,8 @@
 use crate::DefaultTokenizer;
 use crate::{
+    Tokenizer,
     embedder::{DefaultTokenEmbedder, Embedder, EmbedderBuilder, TokenEmbedder},
     scorer::{ScoredDocument, Scorer},
-    Tokenizer,
 };
 use std::{
     collections::HashMap,
@@ -299,8 +299,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        test_data_loader::tests::{read_recipes, Recipe},
         Language, LanguageMode,
+        test_data_loader::tests::{Recipe, read_recipes},
     };
 
     impl From<Recipe> for Document<String> {
@@ -421,9 +421,11 @@ mod tests {
 
         // At least 5 recipes contain the word "vegetable"
         assert_eq!(results.len(), 5);
-        assert!(results
-            .iter()
-            .all(|result| result.document.contents.contains("vegetable")));
+        assert!(
+            results
+                .iter()
+                .all(|result| result.document.contents.contains("vegetable"))
+        );
     }
 
     #[test]
@@ -433,9 +435,11 @@ mod tests {
         let results = search_engine.search("chicken", 1000);
 
         assert!(!results.is_empty());
-        assert!(results
-            .windows(2)
-            .all(|result_pair| { result_pair[0].score >= result_pair[1].score }));
+        assert!(
+            results
+                .windows(2)
+                .all(|result_pair| { result_pair[0].score >= result_pair[1].score })
+        );
     }
 
     #[test]
