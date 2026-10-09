@@ -8967,7 +8967,7 @@ branch refs/heads/feat
             WorkspaceCommitStatus::Unmerged
         );
         git_cmd(&repo)
-            .args(["merge", branch, "--no-edit"])
+            .args(["merge", "--no-ff", branch, "--no-edit"])
             .run()
             .unwrap();
         std::fs::write(path.join("dirty.txt"), "keep me").unwrap();
@@ -9233,7 +9233,7 @@ branch refs/heads/feat
         commit_file(&worktree, "feature.txt", "feature\n");
         commit_file(&repo, "base.txt", "base changed\n");
         git_cmd(&worktree)
-            .args(["merge", "main", "--no-edit"])
+            .args(["merge", "--no-ff", "main", "--no-edit"])
             .run()
             .unwrap();
         let local_tip = rev_at(&worktree, "HEAD").unwrap();
