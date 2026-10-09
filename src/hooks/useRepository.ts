@@ -81,6 +81,8 @@ export interface WorkspaceWorktree {
 	branch: string;
 	path: string;
 	kind: "worktree";
+	/** tuic-git `warm_status`, attached by every worktree list (absent from older backends). */
+	warm_artifacts?: import("./git/warmStateSeed").WarmArtifactsStatus;
 }
 
 /** Repository hook for git operations */
