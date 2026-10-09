@@ -239,7 +239,7 @@ Search within terminal output with `Cmd+F`:
 5. Match counter shows "N of M" results
 6. Press `Escape` to close the search and refocus the terminal
 
-In **CLI**, search is integrated directly with the terminal grid for accurate match highlighting. In **Chat**, **Cmd/Ctrl+F** opens the transcript search: enter text and press **Enter** / **Shift+Enter**, or use **Next** / **Previous**, to select and scroll to matches. **Escape** closes search. Switching CLI/Chat closes the search and clears its highlight.
+In **CLI**, search is integrated directly with the terminal grid for accurate match highlighting. In **Chat**, **Cmd/Ctrl+F** opens the transcript search: enter text and press **Enter** / **Shift+Enter**, or use **Next** / **Previous**, to select and scroll to matches. Matches span inline Markdown formatting within a paragraph; collapsed thinking bodies are skipped until opened. **Escape** closes search, including after clicking the navigation buttons. Switching CLI/Chat closes the search and clears its highlight.
 
 ## Cross-Terminal Search
 
