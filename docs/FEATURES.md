@@ -11,6 +11,10 @@ Published story workflows can start in Plans and Stories through the owning daem
 **Last verified:** 2026-09-16  
 **Recent feature delta:** See the [Unreleased](https://github.com/sstraus/tuicommander/blob/main/CHANGELOG.md#unreleased) and [1.7.7](https://github.com/sstraus/tuicommander/blob/main/CHANGELOG.md#177---2026-09-16) changelog sections for what changed recently. Keep this page focused on the current state; do not duplicate the full changelog here.
 
+Desktop AI Chat uses the terminal composer’s pin and blue play buttons. The pin highlights a parked draft; tooltips identify Park, Restore, Swap, Send and Queue.
+
+AI Chat image paste discovers capabilities on first use and shares clipboard precedence with Ideas and terminal Compose: Finder image filenames allow attachments, while substantive text takes priority.
+
 ## ego Perimeter Settings
 
 - Settings > AI Chat edits ego roots, root access, read allowlists, writable
@@ -86,7 +90,7 @@ per cell and the configured history limit still apply.
 
 - **Remote replay health** — Stream failure, unreadable frames and initial replay stalls show a persistent error toast. Reconnect success requires a delivered frame; healthy idle terminals have no output-silence deadline.
 
-- **CLI / Chat view** — Claude terminals switch between the grid and a conversation view with docked Compose input, built from the agent's session file (including older prompts, replies, folded tool cards, image/PDF markers and model-change cards). The grid is hidden, never unmounted.
+- **CLI / Chat view** — Claude terminals switch between the grid and a conversation view with docked Compose input, built from the agent's session file (including older prompts, human text/image follow-ups queued while Claude is busy, replies, folded tool cards, image/PDF markers and model-change cards). The grid is hidden, never unmounted.
 - **Chat transcript presentation** — Harness notices use compact system notes, image placeholders use attachment chips, adjacent thinking blocks share a disclosure, and TUIC answers retain the CLI highlight. Historical tool cards show status without fabricated execution timing.
 
 ### 1.2 Tab Bar
@@ -159,7 +163,7 @@ per cell and the configured history limit still apply.
 
 ### 1.8 Find in Content
 - `Cmd+F` opens search overlay — context-aware: routes to terminal, markdown tab, or diff tab based on active view
-- **Terminal:** incremental search with highlight decorations
+- **Terminal:** CLI incremental search with highlight decorations; Chat searches the visible transcript across inline Markdown, skips collapsed thinking bodies, and selects matches with next/previous navigation. Switching views closes search and clears highlights.
 - **Markdown viewer:** DOM-based search with cross-element matching (finds text spanning inline tags)
 - **Diff viewer:** DOM-based search via SearchBar + DomSearchEngine (same engine as markdown viewer)
 - Yellow highlight for matches, orange for active match
@@ -2714,3 +2718,17 @@ Rich merged linked worktrees with no sessions and verified lifecycle facts use a
 Rich parent terminal rows show N agents in each other repository containing live children. Clicking reveals the child group, repository and workspace, then selects a child through existing terminal navigation. Session placement and same-branch nesting stay intact; closed children disappear from summaries.
 
 Browser Add Repository provides a server-side directory picker using the existing filesystem routes. Root HTML navigation offers form login; touch-capable iPad Safari selects the mobile interface even with its desktop Mac user agent. API authentication is unchanged.
+
+### Automation Once schedules (Rust foundation)
+
+Definitions can schedule one wall-clock date-time in an IANA zone. Rust rejects
+past instants on creation and spring gaps, resolves folds to the earlier instant,
+and keeps consumed Once definitions for inspection. The backend supplies one
+preview instant and completed schedule state. Public automation controls arrive
+with the scheduler API and dialog.
+### Automations dialog (backend integration pending)
+
+Machine-local scheduled-run editor with search, backend cadence/zone preview,
+prechecks, workspace and duration controls, pause/resume, Run now, confirmed
+delete and recent status history. Open **Automations** from the command palette.
+Step 8 API integration is required before use; see [Automations](user-guide/automations.md).

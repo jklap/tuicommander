@@ -427,7 +427,8 @@ export function createAcpChat(
 
 		capabilities: () => connection()?.capabilities ?? null,
 		ensureStarted: async () => {
-			if (!pair()) await start();
+			const current = pair();
+			return current ? current.session : ((await start())?.sessionId ?? null);
 		},
 		configOptions: (): AcpSessionConfigOption[] => attachment()?.configOptions ?? [],
 		gap: () => {

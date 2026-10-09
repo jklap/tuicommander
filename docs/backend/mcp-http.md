@@ -80,11 +80,19 @@ Cargo target cleanup, mbx view refreshes and app upgrades therefore cannot remov
 the configured executable. Failed installation leaves agent configs unchanged.
 Startup migrates TUIC bridge commands from cargo/mbx targets and its installed
 revision directory, while preserving custom working commands and transports.
+Claude migration covers `~/.claude.json`, an existing
+`~/.claude-private/.claude.json`, inherited `CLAUDE_CONFIG_DIR`, and the Claude
+agent's environment flags and saved run-config environment roots. Override roots
+use `<CLAUDE_CONFIG_DIR>/.claude.json`; canonical paths are deduplicated. Relative
+overrides cannot be resolved before a launch working directory is known and emit
+a warning. Disabled integrations and custom transports remain unchanged. A missing
+or non-executable configured absolute bridge command emits a warning naming the
+config and command even when no adjacent bridge is available to repair it.
 Secondary-instance ownership rules still apply. An explicit Settings > Agents
 Install can install under user authority. Manual setup snippets only inspect
 installed copies and never create them; without a copy they report the bare
 `tuic-bridge` command. Revision cleanup is deferred until every agent config root,
-including private Claude and `CLAUDE_CONFIG_DIR` roots, can be discovered.
+including profiles used only by external shell launchers, can be discovered.
 
 ## Activation
 
@@ -2090,3 +2098,22 @@ There is no Tauri command or `COMMAND_TABLE` entry: window IPC has no managed
 agent caller binding. Its push event is dual-emitted over Tauri and `/events` SSE,
 and session-list response fields are identical over IPC and HTTP. Schema and
 serialization regressions cover these shared contracts.
+
+### MCP Tool: `automations`
+
+The native `automations` tool supports `list`, `get`, `create`, `update`, `pause`,
+`resume`, and `delete`. Pass `action` at the top level. `get`, `update`, `pause`,
+`resume`, and `delete` require `id`; `create` and `update` require a complete
+`definition` with the stored snake_case fields. `list` returns an array, `get`
+returns one definition, and mutations return `{ "ok": true }`. Errors use
+`{ "error": "..." }` with the shared DefinitionStore validation text.
+
+Creation requires a bound agent session. The host sets `created_by_session`;
+input cannot impersonate a creator, and updates preserve the original creator.
+Pause/resume edit only `enabled` under the store lock. Deleting a definition does
+not touch the separate run ledger. Existing definitions without provenance remain
+readable. These actions manage definitions; they do not launch runs.
+
+The shared entry point is `automations::actions::execute(store, action,
+creator_session)`, using `DefinitionAction`. Plan Step 8 owns HTTP/IPC/CLI wiring
+and the Route Parity Gate. The MCP endpoint is `POST /mcp`.

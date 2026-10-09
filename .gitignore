@@ -47,7 +47,6 @@ ideas
 .claude
 .aider*
 benchmarks
-CLAUDE.md
 .mdkb
 scripts/*
 !scripts/agent_capture/

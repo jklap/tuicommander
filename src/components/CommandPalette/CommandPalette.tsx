@@ -90,6 +90,7 @@ const BROWSER_ACTION_IDS = new Set([
 	"toggle-compose-panel",
 	"toggle-hands-free",
 	"progress",
+	"automations",
 	"reset-panel-sizes",
 	"search-terminals",
 	"search-files",
