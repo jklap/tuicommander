@@ -11,6 +11,10 @@ Published story workflows can start in Plans and Stories through the owning daem
 **Last verified:** 2026-09-16  
 **Recent feature delta:** See the [Unreleased](https://github.com/sstraus/tuicommander/blob/main/CHANGELOG.md#unreleased) and [1.7.7](https://github.com/sstraus/tuicommander/blob/main/CHANGELOG.md#177---2026-09-16) changelog sections for what changed recently. Keep this page focused on the current state; do not duplicate the full changelog here.
 
+Desktop AI Chat uses the terminal composer’s pin and blue play buttons. The pin highlights a parked draft; tooltips identify Park, Restore, Swap, Send and Queue.
+
+AI Chat image paste discovers capabilities on first use and shares clipboard precedence with Ideas and terminal Compose: Finder image filenames allow attachments, while substantive text takes priority.
+
 ## ego Perimeter Settings
 
 - Settings > AI Chat edits ego roots, root access, read allowlists, writable
@@ -159,7 +163,7 @@ per cell and the configured history limit still apply.
 
 ### 1.8 Find in Content
 - `Cmd+F` opens search overlay — context-aware: routes to terminal, markdown tab, or diff tab based on active view
-- **Terminal:** incremental search with highlight decorations
+- **Terminal:** CLI incremental search with highlight decorations; Chat searches the visible transcript across inline Markdown, skips collapsed thinking bodies, and selects matches with next/previous navigation. Switching views closes search and clears highlights.
 - **Markdown viewer:** DOM-based search with cross-element matching (finds text spanning inline tags)
 - **Diff viewer:** DOM-based search via SearchBar + DomSearchEngine (same engine as markdown viewer)
 - Yellow highlight for matches, orange for active match
