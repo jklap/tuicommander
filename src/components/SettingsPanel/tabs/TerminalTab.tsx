@@ -6,7 +6,7 @@ import type { BlockTimestampMode, CustomEnvVarEntry, FontType } from "../../../s
 import { FONT_FAMILIES, settingsStore } from "../../../stores/settings";
 import { getTerminalTheme, getThemeNames } from "../../../themes";
 import { writeClipboard } from "../../../utils/clipboard";
-import { isValidEnvVarKey } from "../../../utils/envVars";
+import { isReservedEnvVarKey, isValidEnvVarKey } from "../../../utils/envVars";
 import type { LinkActivation } from "../../Terminal/canvasTerminalLinks";
 import { Button } from "../../ui/Button";
 import { Input } from "../../ui/Input";
@@ -344,6 +344,15 @@ export const TerminalTab: Component = () => {
 			);
 			return;
 		}
+		if (isReservedEnvVarKey(key)) {
+			setEnvKeyError(
+				t(
+					"terminal.customEnv.reservedKey",
+					"Reserved: TUIC_* variables, ZDOTDIR and dynamic-loader variables (LD_*, DYLD_*) cannot be set here",
+				),
+			);
+			return;
+		}
 		// Case-insensitive: Windows env var names collide case-insensitively at
 		// the OS level even though this UI (and Unix) would otherwise treat
 		// "PATH" and "Path" as two distinct entries, silently discarding one at
@@ -620,61 +629,63 @@ export const TerminalTab: Component = () => {
 					</Button>
 				</div>
 			</SectionCard>
-			<SectionCard title={t("terminal.heading.customEnv", "Custom Environment Variables")}>
-				<label>{t("terminal.label.customEnv", "Environment Variables")}</label>
-				<p class={s.hint}>
-					{t(
-						"terminal.hint.customEnv",
-						"Applied to every spawned terminal — shell tabs and agents alike. Overrides anything else that sets the same variable, including PATH — setting PATH here replaces it entirely rather than prepending to it.",
-					)}
-				</p>
-
-				<For each={customPtyEnv()}>
-					{(entry) => (
-						<div class={s.envVarRow}>
-							<span class={`${s.copyPathText} ${s.envVarKey}`}>{entry.key}</span>
-							<span class={s.envVarEquals}>=</span>
-							<span class={`${s.copyPathText} ${s.envVarValue}`}>{entry.value}</span>
-							<Button data-setting-id="app.custom_pty_env" onClick={() => removeCustomEnvVar(entry.key)}>
-								{t("terminal.customEnv.remove", "Remove")}
-							</Button>
-						</div>
-					)}
-				</For>
-
-				<div class={s.envVarRow}>
-					<Input
-						data-setting-id="app.custom_pty_env"
-						type="text"
-						class={`${s.envVarKey} ${s.mono}`}
-						placeholder="KEY"
-						value={newEnvKey()}
-						onInput={(e) => {
-							setNewEnvKey(e.currentTarget.value);
-							setEnvKeyError(null);
-						}}
-						onKeyDown={(e) => e.key === "Enter" && addCustomEnvVar()}
-					/>
-					<span class={s.envVarEquals}>=</span>
-					<Input
-						data-setting-id="app.custom_pty_env"
-						type="text"
-						class={`${s.envVarValue} ${s.mono}`}
-						placeholder={t("terminal.customEnv.valuePlaceholder", "value")}
-						value={newEnvValue()}
-						onInput={(e) => setNewEnvValue(e.currentTarget.value)}
-						onKeyDown={(e) => e.key === "Enter" && addCustomEnvVar()}
-					/>
-					<Button data-setting-id="app.custom_pty_env" onClick={addCustomEnvVar} disabled={!newEnvKey().trim()}>
-						{t("terminal.customEnv.add", "Add")}
-					</Button>
-				</div>
-				<Show when={envKeyError()}>
-					<p class={s.hint} style={{ color: "var(--error)" }}>
-						{envKeyError()}
+			<ExpertSetting configKey="app.custom_pty_env" value={customPtyEnv()}>
+				<SectionCard title={t("terminal.heading.customEnv", "Custom Environment Variables")}>
+					<label>{t("terminal.label.customEnv", "Environment Variables")}</label>
+					<p class={s.hint}>
+						{t(
+							"terminal.hint.customEnv",
+							"Applied to every spawned terminal — shell tabs and agents alike. Overrides anything else that sets the same variable, including PATH — setting PATH here replaces it entirely rather than prepending to it.",
+						)}
 					</p>
-				</Show>
-			</SectionCard>
+
+					<For each={customPtyEnv()}>
+						{(entry) => (
+							<div class={s.envVarRow}>
+								<span class={`${s.copyPathText} ${s.envVarKey}`}>{entry.key}</span>
+								<span class={s.envVarEquals}>=</span>
+								<span class={`${s.copyPathText} ${s.envVarValue}`}>{entry.value}</span>
+								<Button data-setting-id="app.custom_pty_env" onClick={() => removeCustomEnvVar(entry.key)}>
+									{t("terminal.customEnv.remove", "Remove")}
+								</Button>
+							</div>
+						)}
+					</For>
+
+					<div class={s.envVarRow}>
+						<Input
+							data-setting-id="app.custom_pty_env"
+							type="text"
+							class={`${s.envVarKey} ${s.mono}`}
+							placeholder="KEY"
+							value={newEnvKey()}
+							onInput={(e) => {
+								setNewEnvKey(e.currentTarget.value);
+								setEnvKeyError(null);
+							}}
+							onKeyDown={(e) => e.key === "Enter" && addCustomEnvVar()}
+						/>
+						<span class={s.envVarEquals}>=</span>
+						<Input
+							data-setting-id="app.custom_pty_env"
+							type="text"
+							class={`${s.envVarValue} ${s.mono}`}
+							placeholder={t("terminal.customEnv.valuePlaceholder", "value")}
+							value={newEnvValue()}
+							onInput={(e) => setNewEnvValue(e.currentTarget.value)}
+							onKeyDown={(e) => e.key === "Enter" && addCustomEnvVar()}
+						/>
+						<Button data-setting-id="app.custom_pty_env" onClick={addCustomEnvVar} disabled={!newEnvKey().trim()}>
+							{t("terminal.customEnv.add", "Add")}
+						</Button>
+					</div>
+					<Show when={envKeyError()}>
+						<p class={s.hint} style={{ color: "var(--error)" }}>
+							{envKeyError()}
+						</p>
+					</Show>
+				</SectionCard>
+			</ExpertSetting>
 			<SectionCard title={t("terminal.heading.sessionRestore", "Session Restore")}>
 				<SettingToggle
 					checked={settingsStore.state.restoreShellTerminals}

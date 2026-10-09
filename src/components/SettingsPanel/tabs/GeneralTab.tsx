@@ -936,10 +936,7 @@ export const GeneralTab: Component<{ onOpenAiChat?: () => void }> = (props) => {
 						checked={settingsStore.state.experimentalFeaturesEnabled}
 						onChange={(enabled) => settingsStore.setExperimentalFeaturesEnabled(enabled)}
 						label={t("general.toggle.experimentalFeatures", "Enable experimental features")}
-						hint={t(
-							"general.hint.experimentalFeatures",
-							"Opt in to features under active development: the AI Chat panel and SSH Tunnels.",
-						)}
+						hint={t("general.hint.experimentalFeatures", "Opt in to features under active development: the AI Chat panel.")}
 					/>
 				</div>
 			</SectionCard>
