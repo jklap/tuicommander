@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Fixed
+- Keep browser GitHub add-account polling separate from default login; emit declared plugin state changes, deliver SDK host messages, close panels on unload, and reject HTTP plugin manifests without allowed URLs.
 
 - Preserve the next unsent Compose draft when a send or queue completes after leaving terminal Chat, including when the editor has already reopened (#1599-db8a).
 
