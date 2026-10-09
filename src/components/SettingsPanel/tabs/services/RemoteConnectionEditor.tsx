@@ -33,7 +33,7 @@ export interface RemoteConnectionEditorProps {
 }
 
 /** New-SSH defaults. `strict_host_key_checking` is a tunnel profile's default;
- * a Remote Server kind always saves `AcceptNew` (see `hostKeyFor`). */
+ * a new Remote Server starts at `AcceptNew` until the user picks (see `hostKeyFor`). */
 export function defaultSsh(): SshConnectionParams {
 	return {
 		host: "",
@@ -60,19 +60,24 @@ export function prefillFromDiscoveredHost(host: DiscoveredSshHost): ConnectionPr
 	return { name: host.host, ssh: { host: host.host, port: host.port ?? 22, user: host.user ?? "" } };
 }
 
-/**
- * The host-key policy a saved connection of this kind actually runs with. The
- * tunnel TUIC opens for a Remote Server is created on the user's behalf and
- * always uses accept-new (`remote_runtime::ssh_profile`), so a saved Remote
- * Server says what runs; a tunnel profile keeps what the user picked.
- */
 /** What `tuic-remote --instance` accepts: a lowercase DNS label other than "default". */
 export function isRemoteInstanceId(id: string): boolean {
 	return id !== "default" && id.length <= 63 && /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(id);
 }
 
-export function hostKeyFor(kind: ConnectionKind, picked: SshConnectionParams["strict_host_key_checking"]) {
-	return kind === "SshTunnel" ? picked : "AcceptNew";
+/**
+ * The host-key policy the form shows and saves. Both kinds honour the stored
+ * value at runtime (`remote_runtime::ssh_profile` keeps it), so whatever the
+ * user picked — or what an edited item already stores — wins. Until a NEW
+ * connection's user picks, the kind's own default applies: `Yes` for a tunnel
+ * profile, `AcceptNew` for a Remote Server (`RemoteConnection::new_ssh`), whose
+ * first Connect would otherwise fail on any host not yet in known_hosts.
+ */
+export function hostKeyFor(
+	kind: ConnectionKind,
+	picked: SshConnectionParams["strict_host_key_checking"] | null,
+): SshConnectionParams["strict_host_key_checking"] {
+	return picked ?? (kind === "SshTunnel" ? "Yes" : "AcceptNew");
 }
 
 function initialKind(target: EditorTarget): ConnectionKind {
@@ -136,6 +141,15 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 	const [kind, setKind] = createSignal<ConnectionKind>(initialKind(target));
 	const [name, setName] = createSignal(initialName(target));
 	const [ssh, setSsh] = createSignal<SshConnectionParams>(initialSsh(target));
+	// The host-key policy the user (or the stored item) chose; `null` on a new
+	// connection until the select changes, so the kind's default applies.
+	const [pickedHostKey, setPickedHostKey] = createSignal<SshConnectionParams["strict_host_key_checking"] | null>(
+		isEdit ? initialSsh(target).strict_host_key_checking : null,
+	);
+	const shownSsh = (): SshConnectionParams => ({
+		...ssh(),
+		strict_host_key_checking: hostKeyFor(kind(), pickedHostKey()),
+	});
 	const [forwards, setForwards] = createSignal<ForwardSpec[]>(
 		target.kind === "edit-tunnel" ? target.profile.forwards : [],
 	);
@@ -190,14 +204,17 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 		}
 	});
 
-	const patchSsh = (patch: Partial<SshConnectionParams>) => setSsh((cur) => ({ ...cur, ...patch }));
+	const patchSsh = (patch: Partial<SshConnectionParams>) => {
+		if (patch.strict_host_key_checking) setPickedHostKey(patch.strict_host_key_checking);
+		setSsh((cur) => ({ ...cur, ...patch }));
+	};
 
 	const trimmedSsh = (): SshConnectionParams => ({
 		...ssh(),
 		host: ssh().host.trim(),
 		user: ssh().user.trim(),
 		identity_file: ssh().identity_file?.trim() || null,
-		strict_host_key_checking: hostKeyFor(kind(), ssh().strict_host_key_checking),
+		strict_host_key_checking: hostKeyFor(kind(), pickedHostKey()),
 	});
 
 	/** Build the `RemoteTransport` the current form describes, for both Save
@@ -405,7 +422,7 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 				</div>
 
 				<Show when={kind() === "SshTunnel"}>
-					<SshConnectionFields value={ssh()} onChange={patchSsh} />
+					<SshConnectionFields value={shownSsh()} onChange={patchSsh} />
 					<PortForwardsEditor forwards={forwards()} onChange={setForwards} defaultRemoteHost={ssh().host.trim()} />
 					<label class={s.toggle}>
 						<input type="checkbox" checked={autoConnect()} onChange={(e) => setAutoConnect(e.currentTarget.checked)} />
@@ -414,7 +431,12 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 				</Show>
 
 				<Show when={kind() === "RemoteSsh"}>
-					<SshConnectionFields value={ssh()} onChange={patchSsh} hostKeyChecking="enforced-accept-new" />
+					<SshConnectionFields value={shownSsh()} onChange={patchSsh} />
+					<p class={s.hint} style={{ margin: 0 }}>
+						StrictHostKeyChecking applies to every SSH command run for this server (Connect's tunnel, Test Connection,
+						deploy). AcceptNew pins a new host's key on first contact and refuses a changed one; Yes refuses any host
+						whose key is not already in ~/.ssh/known_hosts — connect once with plain ssh first.
+					</p>
 					<div class={s.group}>
 						<label>Remote daemon port</label>
 						<input

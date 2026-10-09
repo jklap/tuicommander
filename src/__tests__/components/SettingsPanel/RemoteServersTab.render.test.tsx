@@ -243,19 +243,33 @@ describe("RemoteServersTab", () => {
 		// No username typed: saved as `null`, never `""` (the backend sends an
 		// empty one, which every daemon refuses).
 		expect(saved.auth_username).toBeNull();
-		// The runtime always opens a remote server's tunnel with accept-new.
+		// A new Remote Server defaults to accept-new (`RemoteConnection::new_ssh`).
 		expect(saved.transport.ssh.strict_host_key_checking).toBe("AcceptNew");
 	});
 
-	it("a Remote Server never offers StrictHostKeyChecking=Yes, which its runtime would ignore", async () => {
+	it("a Remote Server offers StrictHostKeyChecking=Yes and saves it, since its runtime honours it", async () => {
+		mockInvoke.mockImplementation((cmd: string) =>
+			cmd === "save_remote_connection" ? Promise.resolve() : baseInvoke(cmd),
+		);
 		const { container, getByText } = await openEditor("RemoteSsh");
 		const label = Array.from(container.querySelectorAll("label")).find(
 			(el) => el.textContent === "StrictHostKeyChecking",
 		);
 		const select = label?.parentElement?.querySelector("select") as HTMLSelectElement;
-		expect(select.disabled).toBe(true);
-		expect(Array.from(select.options).map((o) => o.value)).toEqual(["AcceptNew"]);
-		expect(getByText(/always accepts a new host's key/)).toBeTruthy();
+		expect(select.disabled).toBe(false);
+		expect(select.value).toBe("AcceptNew");
+		expect(Array.from(select.options).map((o) => o.value)).toEqual(["AcceptNew", "Yes"]);
+		expect(getByText(/not already in ~\/\.ssh\/known_hosts/)).toBeTruthy();
+
+		fireEvent.input(getFieldInput(container, "Name"), { target: { value: "strict" } });
+		fireEvent.input(getFieldInput(container, "Host"), { target: { value: "10.0.0.6" } });
+		fireEvent.input(getFieldInput(container, "User"), { target: { value: "deploy" } });
+		fireEvent.change(select, { target: { value: "Yes" } });
+		fireEvent.click(getByText("Save"));
+		await flushMicrotasks();
+
+		const saved = mockInvoke.mock.calls.find((c) => c[0] === "save_remote_connection")?.[1]?.connection;
+		expect(saved.transport.ssh.strict_host_key_checking).toBe("Yes");
 	});
 
 	it("an SSH Tunnel keeps both host-key choices", async () => {

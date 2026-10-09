@@ -185,7 +185,7 @@ Extracted from `TunnelsPanel.tsx` so it renders identically in two places: the `
 ### RemoteConnectionEditor (the merged connection editor)
 
 One form — Name + a Kind dropdown (SSH Tunnel / Remote Server — SSH / Remote Server — Direct / Remote Server — Local) — used for both tunnel profiles and remote-server connections. For Kind "SSH Tunnel":
-- Name, then the shared `SshConnectionFields` component (host with `~/.ssh/config` autocomplete, port, user, identity file with Browse, live agent detection including each key's fingerprint, ServerAliveInterval, ServerAliveCountMax, StrictHostKeyChecking — fixed to AcceptNew with a hint for a Remote Server kind, whose runtime always uses it — and the compression toggle; Browse is desktop-only)
+- Name, then the shared `SshConnectionFields` component (host with `~/.ssh/config` autocomplete, port, user, identity file with Browse, live agent detection including each key's fingerprint, ServerAliveInterval, ServerAliveCountMax, StrictHostKeyChecking — Yes/AcceptNew for both kinds; a new Remote Server defaults to AcceptNew — and the compression toggle; Browse is desktop-only)
 - `PortForwardsEditor` (extracted from the old `TunnelEditorModal`): add/remove and type-aware endpoint fields — Local forwards save `remote_host`/`remote_port`, Remote forwards save `local_host`/`local_port`
 - "Connect automatically on startup" checkbox
 - A Test Connection button (one-shot SSH connectivity check, no forwards, before Save)
@@ -204,7 +204,7 @@ The old standalone `TunnelEditorModal.tsx` is gone (nothing in the live app open
 
 ## Integration with Remote Servers
 
-When a "Remote Server — SSH" connection (`RemoteConnection` with `RemoteTransport::Ssh`) connects, the runtime creates a tunnel profile from the connection's own SSH settings (StrictHostKeyChecking forced to accept-new) to forward the daemon port. The tunnel supervisor manages the SSH connection, and the remote connection routes API calls through the forwarded port.
+When a "Remote Server — SSH" connection (`RemoteConnection` with `RemoteTransport::Ssh`) connects, the runtime creates a tunnel profile from the connection's own SSH settings (StrictHostKeyChecking included, as stored) to forward the daemon port. The tunnel supervisor manages the SSH connection, and the remote connection routes API calls through the forwarded port.
 
 A failed connect can carry a confirmed provisioning offer (`provision_offer`, built in `remote_runtime.rs`, executed by `ssh_provision.rs` only after the user accepts the exact plan — see [Remote Access](../user-guide/remote-access.md)). The **Set remote password** offer appears only for a daemon with no credentials configured at all, never for a wrong password. That distinction does not rely on the 401 body alone: `mcp_http/auth.rs`'s `validate_basic_auth` returns the same "Scan the QR code…" body for `AuthResult::NotConfigured` and `AuthResult::MissingHeader`, so an unauthenticated request could not tell "no password set" from "a password is set, none was sent". `remote_connection::request_session_token` therefore ALWAYS sends a Basic header, and `validate_basic_auth` checks for an empty configured username/hash before it looks at the header — so on this path the body can only be `NotConfigured`'s ("Scan the QR code…" → `REMOTE_PASSWORD_NOT_CONFIGURED`) or `Invalid`'s ("Invalid credentials" → a plain rejection); `MissingHeader` is unreachable. `remote_runtime::password_offer` acts only on `REMOTE_PASSWORD_NOT_CONFIGURED`.
 
