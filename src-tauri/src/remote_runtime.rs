@@ -1556,7 +1556,7 @@ async fn resolve_base_url(
             // The connection's own SSH settings, unchanged — host-key policy
             // and `Compression` (what keeps the terminal stream small on this
             // exact link) included; only the forward is added here.
-            let tunnel_id = state.tunnel_manager.start(profile).await?;
+            let tunnel_id = start_connection_tunnel(state, profile).await?;
             update(state, &connection.id, |e| {
                 e.tunnel_id = Some(tunnel_id.clone())
             });
@@ -1638,6 +1638,30 @@ async fn resolve_direct_base_url(
     }
 }
 
+/// Start the tunnel a Remote Server's Connect opens. Tests swap the `ssh`
+/// binary for a fake one (`tests::with_fake_ssh`); production always runs
+/// the real `ssh` on `PATH`.
+async fn start_connection_tunnel(
+    state: &Arc<AppState>,
+    profile: crate::tunnels::profile::TunnelProfile,
+) -> Result<String, String> {
+    #[cfg(test)]
+    let fake_ssh = TEST_SSH_BINARY.lock().unwrap().clone();
+    #[cfg(test)]
+    if let Some(ssh) = fake_ssh {
+        return state
+            .tunnel_manager
+            .start_with_binary_for_test(profile, ssh)
+            .await;
+    }
+    state.tunnel_manager.start(profile).await
+}
+
+/// The fake `ssh` a test's Connect runs instead of the real one. Process-wide:
+/// nextest runs every test in its own process.
+#[cfg(test)]
+static TEST_SSH_BINARY: std::sync::Mutex<Option<std::path::PathBuf>> = std::sync::Mutex::new(None);
+
 pub(crate) fn ssh_profile(
     connection: &RemoteConnection,
 ) -> Option<crate::tunnels::profile::TunnelProfile> {
@@ -1659,8 +1683,18 @@ pub(crate) fn ssh_profile(
 }
 
 async fn wait_for_tunnel(state: &Arc<AppState>, tunnel_id: &str) -> Result<(), String> {
+    wait_for_tunnel_within(state, tunnel_id, TUNNEL_CONNECT_TIMEOUT).await
+}
+
+/// [`wait_for_tunnel`] with an explicit deadline, so a test can drive the
+/// "never connects" path without waiting the full [`TUNNEL_CONNECT_TIMEOUT`].
+async fn wait_for_tunnel_within(
+    state: &Arc<AppState>,
+    tunnel_id: &str,
+    timeout: Duration,
+) -> Result<(), String> {
     use crate::tunnels::supervisor::TunnelStatus;
-    let deadline = std::time::Instant::now() + TUNNEL_CONNECT_TIMEOUT;
+    let deadline = std::time::Instant::now() + timeout;
     loop {
         match state.tunnel_manager.get_status(tunnel_id) {
             Some(TunnelStatus::Connected) => return Ok(()),
@@ -3562,6 +3596,332 @@ mod tests {
             }
         }
         seen
+    }
+
+    // -----------------------------------------------------------------------
+    // SSH transport end to end, through a fake `ssh` (dropped-items-review #11:
+    // the Rust side of wip's 8 dropped frontend connect-flow tests).
+    // -----------------------------------------------------------------------
+
+    /// Points every Connect's tunnel at `path` instead of the real `ssh`, for
+    /// as long as the guard lives.
+    pub(super) struct FakeSsh;
+
+    pub(super) fn with_fake_ssh(path: std::path::PathBuf) -> FakeSsh {
+        *TEST_SSH_BINARY.lock().unwrap() = Some(path);
+        FakeSsh
+    }
+
+    impl Drop for FakeSsh {
+        fn drop(&mut self) {
+            *TEST_SSH_BINARY.lock().unwrap() = None;
+        }
+    }
+
+    fn ssh_connection(state: &Arc<AppState>, remote_daemon_port: u16) -> String {
+        let mut connection = RemoteConnection::new_ssh("vps", "example.invalid", "boss");
+        if let RemoteTransport::Ssh {
+            remote_daemon_port: port,
+            ..
+        } = &mut connection.transport
+        {
+            *port = remote_daemon_port;
+        }
+        let id = connection.id.clone();
+        let mut connections = RemoteConnectionStore::load(&state.data_dir).unwrap_or_default();
+        connections.push(connection);
+        RemoteConnectionStore::save(&state.data_dir, &connections).unwrap();
+        id
+    }
+
+    /// The `-L <bind>:<host>:<port>` value a fake ssh recorded in `args_file`.
+    async fn recorded_local_forward(args_file: &std::path::Path) -> String {
+        let deadline = std::time::Instant::now() + Duration::from_secs(15);
+        loop {
+            if let Ok(args) = std::fs::read_to_string(args_file) {
+                let words: Vec<&str> = args.split_whitespace().collect();
+                if let Some(at) = words.iter().position(|w| *w == "-L") {
+                    return words[at + 1].to_string();
+                }
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the fake ssh was never started with a -L forward"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
+    /// Catches: a Remote Server — SSH Connect not forwarding a local port to
+    /// the remote daemon's port, not waiting for the tunnel, or not routing
+    /// through it; and Disconnect leaving the tunnel (and its ssh) running.
+    /// wip's "creates a tunnel profile, starts it, waits for connected, then
+    /// sets baseUrl and starts health polling" + "disconnect stops AND deletes
+    /// the auto-created tunnel profile".
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_ssh_connect_forwards_the_daemon_port_and_routes_through_the_tunnel() {
+        let mut server = mockito::Server::new_async().await;
+        let _health = server
+            .mock("GET", "/health")
+            .with_body("{}")
+            .create_async()
+            .await;
+        let _token = server
+            .mock("GET", "/api/auth/session-token")
+            .with_body(r#"{"token":"tok-1"}"#)
+            .create_async()
+            .await;
+        let _probe = server
+            .mock("GET", "/api/version")
+            .match_query(mockito::Matcher::Any)
+            .with_body("{}")
+            .create_async()
+            .await;
+        let scratch = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let args_file = scratch.path().join("ssh-args");
+        let pid_file = scratch.path().join("ssh.pid");
+        let script = crate::test_support::fake_ssh_script(
+            "remote_runtime_ssh_connect_routes_through_the_tunnel",
+            &format!(
+                "echo $$ > '{}'; echo \"$@\" > '{}'; exec sleep 3600",
+                pid_file.display(),
+                args_file.display()
+            ),
+            "exit /b 1",
+        );
+        let state = test_state();
+        let id = ssh_connection(&state, 4242);
+        crate::remote_connection::set_connection_password(&id, "s3cret").unwrap();
+        let _ssh = with_fake_ssh(script);
+
+        let connecting = tokio::spawn({
+            let (state, id) = (Arc::clone(&state), id.clone());
+            async move { connect(&state, &id).await }
+        });
+        // Play the ssh process's part: listen on the forward's local port and
+        // carry each connection to the "remote" daemon.
+        let forward = recorded_local_forward(&args_file).await;
+        let (bind, target) = forward.split_once(':').unwrap();
+        assert_eq!(
+            target, "127.0.0.1:4242",
+            "the forward goes to the daemon port"
+        );
+        let bind_port: u16 = bind.parse().unwrap();
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", bind_port))
+            .await
+            .unwrap();
+        let upstream = server.host_with_port();
+        tokio::spawn(async move {
+            while let Ok((mut inbound, _)) = listener.accept().await {
+                let upstream = upstream.clone();
+                tokio::spawn(async move {
+                    if let Ok(mut outbound) = tokio::net::TcpStream::connect(upstream).await {
+                        let _ = tokio::io::copy_bidirectional(&mut inbound, &mut outbound).await;
+                    }
+                });
+            }
+        });
+
+        tokio::time::timeout(Duration::from_secs(45), connecting)
+            .await
+            .expect("connect finished")
+            .unwrap()
+            .expect("an SSH connect through a working tunnel succeeds");
+        assert_eq!(state.remote.status_of(&id), RemoteStatus::Connected);
+        let route = format!("http://127.0.0.1:{bind_port}");
+        assert_eq!(state.remote.base_url(&id).as_deref(), Some(route.as_str()));
+        assert_eq!(state.tunnel_manager.list().len(), 1);
+        let pids = crate::test_support::fake_ssh_processes(&pid_file);
+
+        disconnect(&state, &id);
+
+        assert!(
+            state.tunnel_manager.list().is_empty(),
+            "disconnect left the tunnel running: {:?}",
+            state.tunnel_manager.list()
+        );
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while pids.iter().any(|pid| unsafe { libc::kill(*pid, 0) == 0 })
+            && std::time::Instant::now() < deadline
+        {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        crate::test_support::assert_fake_ssh_stopped(pids);
+    }
+
+    /// Catches: a tunnel that fails (here: ssh refuses the key) leaving Connect
+    /// hanging, reporting success, or leaving the tunnel behind. wip's "also
+    /// fails cleanly when the tunnel reaches a terminal 'error' status".
+    #[tokio::test]
+    async fn an_ssh_connect_whose_tunnel_fails_says_so_and_leaves_no_tunnel() {
+        let script = crate::test_support::fake_ssh_script(
+            "remote_runtime_ssh_connect_tunnel_fails",
+            r#"echo "Permission denied (publickey)." >&2; exit 255"#,
+            "echo Permission denied ^(publickey^). 1>&2 & exit /b 255",
+        );
+        let state = test_state();
+        let id = ssh_connection(&state, 9877);
+        let _ssh = with_fake_ssh(script);
+
+        let error = tokio::time::timeout(Duration::from_secs(45), connect(&state, &id))
+            .await
+            .expect("connect finished")
+            .expect_err("a failed tunnel fails the connect");
+
+        assert!(
+            error.contains("SSH tunnel") && !error.contains("in time"),
+            "the tunnel's own failure, not the connect deadline: {error}"
+        );
+        assert_eq!(state.remote.status_of(&id), RemoteStatus::Error);
+        assert!(state.remote.base_url(&id).is_none());
+        assert!(
+            state.tunnel_manager.list().is_empty(),
+            "{:?}",
+            state.tunnel_manager.list()
+        );
+    }
+
+    /// Catches: a tunnel that never connects stalling Connect forever instead
+    /// of failing at the deadline. wip's "fails with 'SSH tunnel failed to
+    /// connect' when the tunnel never reaches connected".
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_tunnel_that_never_connects_fails_at_the_deadline() {
+        let scratch = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let pid_file = scratch.path().join("ssh.pid");
+        let script = crate::test_support::fake_ssh_script(
+            "remote_runtime_tunnel_never_connects",
+            &format!("echo $$ > '{}'; exec sleep 3600", pid_file.display()),
+            "exit /b 1",
+        );
+        let state = test_state();
+        let mut profile = crate::tunnels::profile::TunnelProfile::new(
+            "remote connection vps",
+            "example.invalid",
+            "boss",
+        );
+        profile.forwards = vec![crate::tunnels::profile::ForwardSpec::Local {
+            // Nothing will ever listen here, so the tunnel stays `Starting`.
+            bind_port: crate::tunnels::port::find_free_port().await.unwrap(),
+            remote_host: "127.0.0.1".to_string(),
+            remote_port: 9877,
+        }];
+        let tunnel_id = state
+            .tunnel_manager
+            .start_with_binary_for_test(profile, script)
+            .await
+            .unwrap();
+
+        let started = std::time::Instant::now();
+        let error = wait_for_tunnel_within(&state, &tunnel_id, Duration::from_millis(800))
+            .await
+            .expect_err("a tunnel that never connects must not be waited on forever");
+        assert_eq!(error, "SSH tunnel did not connect in time");
+        assert!(started.elapsed() < Duration::from_secs(5));
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !pid_file.exists() && std::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let pids = crate::test_support::fake_ssh_processes(&pid_file);
+        state.tunnel_manager.stop(&tunnel_id).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while pids.iter().any(|pid| unsafe { libc::kill(*pid, 0) == 0 })
+            && std::time::Instant::now() < deadline
+        {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        crate::test_support::assert_fake_ssh_stopped(pids);
+    }
+
+    /// Catches: Disconnect of a connected SSH connection leaving its tunnel
+    /// running (the delete route's test covers the same teardown via HTTP).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn disconnecting_a_connected_ssh_connection_stops_its_tunnel() {
+        let state = test_state();
+        let id = ssh_connection(&state, 9877);
+        // A live ssh: one that cannot spawn leaves the manager on its own.
+        let script = crate::test_support::fake_ssh_script(
+            "remote_runtime_disconnect_stops_its_tunnel",
+            "exec sleep 3600",
+            "exit /b 1",
+        );
+        let tunnel_id = state
+            .tunnel_manager
+            .start_with_binary_for_test(
+                crate::tunnels::profile::TunnelProfile::new(
+                    "remote connection vps",
+                    "example.invalid",
+                    "boss",
+                ),
+                script,
+            )
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(state.tunnel_manager.list().len(), 1, "the tunnel is up");
+        state
+            .remote
+            .force_connected_for_test(&id, "http://127.0.0.1:1", Some("tok"));
+        state.remote.adopt_tunnel_for_test(&id, &tunnel_id);
+
+        disconnect(&state, &id);
+
+        assert!(state.tunnel_manager.list().is_empty());
+        assert_eq!(state.remote.status_of(&id), RemoteStatus::Disconnected);
+    }
+
+    /// Catches: Disconnect giving up half-way when stopping the tunnel fails
+    /// (it is already gone), leaving a route and a token behind. wip's
+    /// "disconnect still resets connection state even when the tunnel
+    /// stop/delete calls fail".
+    #[tokio::test]
+    async fn disconnecting_still_resets_when_its_tunnel_is_already_gone() {
+        let state = test_state();
+        let id = ssh_connection(&state, 9877);
+        state
+            .remote
+            .force_connected_for_test(&id, "http://127.0.0.1:1", Some("tok"));
+        state.remote.adopt_tunnel_for_test(&id, "no-such-tunnel");
+        assert!(state.tunnel_manager.stop("no-such-tunnel").is_err());
+
+        disconnect(&state, &id);
+
+        assert_eq!(state.remote.status_of(&id), RemoteStatus::Disconnected);
+        assert!(state.remote.base_url(&id).is_none());
+        assert!(state.remote.token(&id).is_none());
+        assert!(state.remote.snapshot().is_empty());
+    }
+
+    /// Catches: a later poll answered with a non-OK status not turning the
+    /// connection into an error that names the status. wip's "a non-ok
+    /// response on a later poll transitions status to error with the HTTP
+    /// status" (the unreachable case is
+    /// `a_poll_that_cannot_reach_the_daemon_is_an_error_not_a_rejection`).
+    #[tokio::test]
+    async fn a_poll_answered_with_a_server_error_is_an_error_naming_the_status() {
+        let mut server = mockito::Server::new_async().await;
+        let _probe = server
+            .mock("GET", "/api/version")
+            .match_query(mockito::Matcher::Any)
+            .with_status(500)
+            .create_async()
+            .await;
+        let state = test_state();
+        let id = direct_connection(&state, &server.url());
+        update(&state, &id, |e| {
+            e.status = Some(RemoteStatus::Connected);
+            e.base_url = Some(server.url());
+            e.token = Some("tok-1".into());
+        });
+
+        poll_once(&state, &id).await;
+
+        assert_eq!(state.remote.status_of(&id), RemoteStatus::Error);
+        let error = state.remote.snapshot()[0].error.clone().unwrap_or_default();
+        assert!(error.contains("500"), "{error}");
     }
 
     /// Put a real tunnel in the manager without needing one that works.
