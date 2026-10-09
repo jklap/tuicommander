@@ -531,8 +531,6 @@ pub(super) const NATIVE_TOOL_SUMMARIES: &[(&str, &str)] = &[
     ),
 ];
 
-/// Full MCP tool definitions — the one native tool family.
-
 /// Build the `agent` tool's MCP definition. The strategic framing text (the
 /// opening paragraph and the numbered orchestration walkthrough) is the part
 /// that steers a model toward calling `spawn`/`register`/`list_peers`/`send`/
@@ -573,14 +571,14 @@ pub(super) fn agent_tool_definition(
         (false, true) => {
             "AI agent messaging + peer administration. There is no separate swarm \
             action. This host has its own native subagent/team spawning — prefer that over \
-            `spawn` here. Use these primitives to message and coordinate peers once they exist, \
+            `spawn`/`launch` here. Use these primitives to message and coordinate peers once they exist, \
             or to spawn one only when it specifically needs its own independently observable \
             TUICommander pane."
         }
         (false, false) => {
             "AI agent peer administration. There is no separate swarm action. \
             This host has its own native subagent/team spawning and cross-agent messaging — \
-            prefer those over `spawn`/`register`/`list_peers`/`send`/`inbox` here. Use this \
+            prefer those over `spawn`/`launch`/`register`/`list_peers`/`send`/`inbox` here. Use this \
             tool's spawn/messaging actions only when a peer specifically needs its own \
             independently observable, messageable TUICommander pane, not as the default \
             multi-agent path."
@@ -679,6 +677,7 @@ const AGENT_STEP_LIFECYCLE: &str = "Lifecycle notifications carry state only. Ev
 /// The per-action bullets of the `agent` description, identical for every
 /// Prefer TUICommander combination (see [`agent_tool_definition`]).
 const AGENT_ACTIONS_DESCRIPTION: &str = "- launch: One durable idempotent managed launch (localhost only). Requires idempotency_key, parent_session_id (registered peer), stable name, keep_open, workspace={existing_path} or {repo_path,branch,base_ref?}, and spawn={prompt,...spawn options}. Read a receipt with launch_id alone, or retry the identical request after a lost reply: the same launch_id/session_id returns, never another checkout or PTY. Conflicting key reuse errors explicitly. Receipt status=created|prompt_delivered|ready|blocked, prompt_delivery=queued|delivered|unknown and warm_artifacts are separate. Delivered proves argv handoff or PTY submission, not model acceptance; ready also requires native Ready-screen evidence. Interrupted uncertain creation blocks rather than spawning again; retain the handle and inspect the named resources. Model/account/brief policy remains caller-owned. Also POST /agents/launch and managed_agent_launch IPC, with identical validation.\n- spawn: Launch agent in new PTY (localhost only). Optional name is assigned before prompt delivery. Returns {session_id, name, task_id, poll_interval_ms, server_ts, parent_session_id?}.\n- task_get: Read a task_id owned by the spawning caller. Returns {task_id, status, status_message?, result?, error_detail?, poll_interval_ms}; optional fields are omitted. Status is working|input_required|completed|failed|cancelled; the last three are immutable. Poll no faster than poll_interval_ms. Outcomes survive client reconnects for up to 24h within this server process.\n- task_cancel: Mark an owned task_id cancelled (localhost only). Does NOT kill the PTY; use session action=kill for that. Already-final tasks return their unchanged status with cancelled=false.\n- wait: Block until new inbox mail. Not byte-bounded: byte_budget/continuation are rejected before mail consumption; use inbox for bounded payloads. Omit `since` — the server resumes from your last read position; pass it only to override (since=0 replays everything). Success inlines every retained fresh message (up to the 100-message inbox capacity) in chronological order. Every response carries next_since, timeout included. An active wait suppresses terminal wake.\n- register: Bind an external/headerless caller, or rename/set the repository path of an auto-bound managed peer. tuic_session is optional; omission generates a stable identity for this MCP connection. Reconnecting under a NEW uuid? Pass `replaces=<old_uuid>` or its inbox is stranded — the response reports superseded_identity, mail_migrated, and mail_stranded + identity_warning when the old identity still owns a live PTY (its mail is left alone). Check `terminal` in the response: false means no PTY notice can be typed into you; a subscribed ACP inbox can still notify you or wake idle ego. Otherwise consume mail with wait/inbox. Declare the orchestrator role with orchestrator=true and remove it with false; spawning a child never infers it, and omitting the field preserves the current role. The response reports mail_wake=managed_pty_lifecycle when a wake can reach you; external/headerless peers without a subscribed ACP inbox stay wait/inbox-only.\n- list_peers: Optional to scopes a recipient through the same resolver as send; compact=true returns identity, state (unknown if absent), activity_age_ms (null if absent), and omitted_fields. List peers across the desktop mail hub and connected daemons. address is connection/peer_id (local/peer_id on the hub); connection_id selects one daemon. Returns tuic_session, name, orchestrator, plus alias and session_id for a peer that owns a live terminal. Optional: path filter. Absent fields are omitted.\n- send: Message any local or remote peer (requires to, message). Use to=connection/peer_id or connection_id with a daemon-local address. The owning daemon performs inbox delivery and wake; replies return through the desktop hub. `to` accepts the peer's tuic_session, PTY id, or terminal alias. `urgency` is normal (default) or urgent; use urgent when the recipient must change course before its next step. Urgent keeps the body in the inbox and writes only a notice to a safe busy Claude/Codex/ego composer. `urgent_delivered` reports a PTY notice, subscribed ACP inbox update, inbox read, or waiter; false adds `urgent_fallback_reason` for queued mail. It does not prove model action or interrupt a tool. `delivered` and `delivery_path` describe the routing path; `recipient_state` appears only for a managed PTY. Opt-in urgency=interrupt sends Esc to a safe working Claude Code, Codex or ego, waits up to 10 seconds for confirmed idle, then submits the full message as one new input (including for an orchestrator). An already idle recipient needs no Esc. A dialog/approval or draft blocks both Esc and payload. Unsupported agents, no PTY and idle timeout use the existing urgent notice/inbox fallback. The result adds interrupt_delivered and interrupt_fallback_reason; delivery_path=interrupt_payload_and_inbox means the full input was written, not that the model acted. Interrupted tools can leave partial work; child processes may continue. An active waiter owns delivery and needs no interrupt.\n- inbox: Optional byte_budget=1024..65536 returns JSON-text chunks; the budget includes the compact page envelope, not MCP framing. Concatenate chunk values then parse JSON; continue with the opaque continuation and same action. Snapshots expire after 300s or cache eviction; errors require a fresh read. The server cursor advances only on the final chunk. Read up to 100 retained messages in FIFO order. Returns next_since and has_more; repeat while has_more is true. Optional: limit (default 100, max 100), since (omit to resume from the server-side cursor). On FIFO eviction, missed_count reports unread messages lost since the last inbox read.\n- subscribe: Create or resume a durable independent reader with subscription_id (1..64 ASCII letters/digits/_/-) and filter=actionable (default), all, exit or failure. Actionable excludes routine system lifecycle/idle traffic, not peer mail. A subscription does not consume legacy inbox or another reader.\n- inbox/wait with subscription_id: Return up to limit (1..100) matching journal messages, cursor, acknowledged_cursor, missed_count and has_more. No byte_budget/continuation; ACK then read has_more batches. Reads do not acknowledge. An unacknowledged batch is replayed unchanged while retained. wait returns only for matching mail or matching retention loss; routine traffic stays inside the server. For continuous event-driven delivery use GET /agent/subscriptions/{id}/events with your Mcp-Session-Id header, or over ACP subscribe to resource tuic://inbox/subscriptions/{id}.\n- ack: Acknowledge a processed subscription batch with subscription_id and its cursor. Acknowledged results never replay on reconnect under the same peer identity and subscription_id. Lost replies before ack can replay: deduplicate side effects by message id. Journal retains the newest 1000 messages per peer across restarts; missed_count counts matching unacknowledged evictions, not routine filtered events. since is legacy-only.\n- unsubscribe: Delete one subscription cursor; retained mail and other readers are unchanged.";
+/// Full MCP tool definitions — the one native tool family.
 ///
 /// This returns the unfiltered schema list. Public listing/search paths MUST
 /// route through [`filtered_native_tools`] to honour `mcp_capabilities`
@@ -965,6 +964,9 @@ fn compact_native_description(name: &str) -> Option<&'static str> {
 /// untouched; otherwise a redirect to the host's own native mechanism follows
 /// the "no separate swarm action" sentence. As in [`agent_tool_definition`],
 /// "prefer" means "don't recommend", never "disable": every action stays listed.
+/// Both creation actions (`spawn`, `launch`) are redirected together, and with
+/// messaging off the "report with send" duty is dropped: it would tell a worker
+/// to use exactly the mailbox the note just steered away from.
 fn compact_agent_description(
     compact: &str,
     prefer_spawning: bool,
@@ -976,11 +978,17 @@ fn compact_agent_description(
             "This host has its own native cross-agent messaging — prefer that over `register`/`list_peers`/`send`/`inbox` here."
         }
         (false, true) => {
-            "This host has its own native subagent/team spawning — prefer that over `spawn` here; spawn only when a peer needs its own observable TUICommander pane."
+            "This host has its own native subagent/team spawning — prefer that over `spawn`/`launch` here; use them only when a peer needs its own observable TUICommander pane."
         }
         (false, false) => {
-            "This host has its own native subagent/team spawning and cross-agent messaging — prefer those over `spawn`/`register`/`list_peers`/`send`/`inbox` here; use them only when a peer needs its own observable, messageable TUICommander pane."
+            "This host has its own native subagent/team spawning and cross-agent messaging — prefer those over `spawn`/`launch`/`register`/`list_peers`/`send`/`inbox` here; use them only when a peer needs its own observable, messageable TUICommander pane."
         }
+    };
+    const REPORT_WITH_SEND: &str = " Every worker must report task output or blockers with send.";
+    let compact = if prefer_messaging {
+        compact.to_string()
+    } else {
+        compact.replacen(REPORT_WITH_SEND, "", 1)
     };
     const SWARM: &str = "There is no separate swarm action.";
     match compact.find(SWARM) {

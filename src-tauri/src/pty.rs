@@ -1552,6 +1552,11 @@ struct ChunkProcessor {
     masked_data: Option<String>,
     /// An explicit idle marker asks the reader to flush after publishing this chunk.
     queued_idle_flush: bool,
+    /// A foreground command is running: set by OSC 133 `C`, cleared by `D`
+    /// (finished) and `A` (prompt). The `userwrap` verb is honoured only while
+    /// this is false — the zsh integration sends it from precmd, at the
+    /// prompt, never while a command such as `cat` or `ssh` is printing.
+    foreground_command_running: bool,
     parser: OutputParser,
     intent_break_parser: vte::Parser,
     /// Dedup: only emit StatusLine when task_name actually changes *within a
@@ -1753,6 +1758,7 @@ impl ChunkProcessor {
             queued_idle_flush: false,
             secret_mask: crate::secrets::StreamMask::default(),
             masked_data: None,
+            foreground_command_running: false,
             parser: OutputParser::new(),
             intent_break_parser: vte::Parser::new(),
             last_status_task: None,
@@ -2734,6 +2740,11 @@ impl ChunkProcessor {
                             .has_osc133_integration
                             .insert(session_id.to_string(), ());
                         self.handle_osc133_event(command, &params, session_id, state);
+                        match command {
+                            'C' => self.foreground_command_running = true,
+                            'A' | 'D' => self.foreground_command_running = false,
+                            _ => {}
+                        }
                         // Dual-emitted: there is no bus→window forwarder, so the
                         // desktop event and the bus push are two separate writes of
                         // one signal. The bus copy is what gives a browser/PWA
@@ -3079,10 +3090,24 @@ impl ChunkProcessor {
                             // (agent allow-list, digits-and-dash fingerprint)
                             // before use. Even a forged verb can only open the
                             // consent dialog — wrapping still needs the user's
-                            // explicit answer.
-                            if let Some((agent, fingerprint)) = payload.split_once(':')
-                                && crate::agent_wrap_prompt::is_wrappable_agent(agent)
-                                && crate::shell_integration::is_user_function_fingerprint(fingerprint)
+                            // explicit answer. The shell only ever sends it from
+                            // precmd, so while OSC 133 says a foreground command
+                            // runs (between `C` and `D`/`A`) it is output from
+                            // that command — `cat` of a file, remote SSH output —
+                            // and is dropped. A sender that also forges `133;D`
+                            // first is stopped by the session binding:
+                            // `bound_userwrap_payload` accepts the payload only
+                            // when it carries this PTY's own `$TUIC_SESSION`.
+                            if self.foreground_command_running {
+                                tracing::debug!(
+                                    source = "pty",
+                                    session_id,
+                                    "ignoring userwrap while a foreground command runs"
+                                );
+                            } else if let Some((agent, fingerprint)) =
+                                crate::agent_wrap_prompt::bound_userwrap_payload(
+                                    state, session_id, &payload,
+                                )
                             {
                                 crate::agent_wrap_prompt::request(state, agent, fingerprint);
                             }
