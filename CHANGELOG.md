@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Fixed
+- Remove clean worktrees whose ignored directories lack owner search permission, without changing permissions on symlink targets (#1607-0733).
 
 - Preserve the next unsent Compose draft when a send or queue completes after leaving terminal Chat, including when the editor has already reopened (#1599-db8a).
 
