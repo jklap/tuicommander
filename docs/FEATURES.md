@@ -2105,6 +2105,7 @@ Phone-optimized progressive web app for monitoring AI agents remotely. Separate 
 - HTTP detection: shows "Push requires HTTPS (enable Tailscale)" when not on HTTPS
 
 ### 18.9 Notification Sounds
+- Session notification sounds play only while the Sessions list and PWA document are visible; session detail, Chat, Files, Progress, Activity, and Settings remain silent. Muted transitions are tracked without replay, and deferred completions recheck visibility before playback.
 - Audio playback via Rust `rodio` crate (Tauri command `play_notification_sound`), replacing the previous Web Audio API approach
 - Eliminates AudioContext suspend issues on WebKit and works in headless/remote modes
 - Native tones end on an exact zero-amplitude sample and keep the output stream alive for a 100 ms silent tail, avoiding end-of-chime clicks when CoreAudio releases a short-lived stream
