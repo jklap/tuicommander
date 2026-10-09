@@ -56,6 +56,10 @@ describe("remote PTY metadata", () => {
 			expect(activity).not.toHaveBeenCalled();
 			Socket.last.frame({ type: "activity" });
 			expect(activity).toHaveBeenCalledTimes(1);
+			// A cleared name (`name: null`, another client's set_session_name with
+			// no name) still reaches the tab so it can drop the custom flag.
+			Socket.last.frame({ type: "renamed", session_id: "remote-1", name: null, is_custom: false });
+			expect(renamed.mock.calls.at(-1)).toEqual([null, false]);
 			// The exit restore precedes the exit frame on the same socket.
 			Socket.last.frame({ type: "renamed", session_id: "remote-1", name: "shell", is_custom: false });
 			Socket.last.frame({ type: "exit" });

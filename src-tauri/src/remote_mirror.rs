@@ -379,13 +379,19 @@ fn patch_presentation(
     };
     match event {
         "session-renamed" => {
-            if let Some(name) = payload.get("name").and_then(|v| v.as_str()) {
-                row.display_name = Some(name.to_string());
-                row.display_name_is_custom = payload
-                    .get("is_custom")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false);
-            }
+            // `name: null` is a cleared name (a frontend `set_session_name`
+            // with no name): the daemon's own row now has no display name, so
+            // the mirrored row drops it too and keeps only `is_custom`.
+            let name = match payload.get("name") {
+                Some(serde_json::Value::String(name)) => Some(name.clone()),
+                Some(serde_json::Value::Null) => None,
+                _ => return,
+            };
+            row.display_name = name;
+            row.display_name_is_custom = payload
+                .get("is_custom")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
         }
         _ => {
             row.accent_color = payload
@@ -1053,6 +1059,25 @@ mod tests {
         assert_eq!(row.display_name.as_deref(), Some("Claude Code"));
         assert!(!row.display_name_is_custom);
         assert_eq!(row.accent_color.as_deref(), Some("#ff0000"));
+        drop(rows);
+
+        // A cleared name (`name: null`, frontend `set_session_name` with no
+        // name) clears the mirrored row's name instead of being ignored.
+        apply_frame(
+            &state,
+            "vps",
+            &Frame {
+                event: "session-renamed".into(),
+                data: r#"{"session_id":"pty-1","name":null,"is_custom":false}"#.into(),
+            },
+        );
+        let AppEvent::RemoteMirrored { event, payload, .. } = rx.try_recv().unwrap() else {
+            panic!("missing mirrored cleared rename");
+        };
+        assert_eq!(event, "session-renamed");
+        assert!(payload["name"].is_null());
+        let rows = state.remote_sessions.by_connection.get("vps").unwrap();
+        assert_eq!(rows.get("pty-1").unwrap().display_name, None);
     }
 
     // Catches: mcp-toast is excluded from the window, loses its sound/level,

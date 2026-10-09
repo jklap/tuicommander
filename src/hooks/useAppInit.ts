@@ -1130,12 +1130,14 @@ export async function initApp(deps: AppInitDeps) {
 		if (termId) terminalsStore.setPtyDescription(termId, event.payload.description ?? null);
 	}).catch((err) => appLogger.error("app", "Failed to register pty-description listener", err));
 
-	// A backend rename (MCP, tmux, OSC title) is applied here without an IPC
-	// echo; even an echo could not loop, since `set_session_name` never emits.
-	listen<{ session_id: string; name: string; is_custom: boolean }>("session-renamed", (event) => {
-		// Backend-originated (OSC title via osc_title.rs, tmux, MCP) and never
-		// echoed back — a `session-renamed` payload IS the backend's
-		// authoritative state. See `applyBackendRename`'s doc comment.
+	// A backend rename (MCP, tmux, OSC title) or another window's rename is
+	// applied here without an IPC echo; `set_session_name` emits only on a real
+	// change, so even an echo could not loop.
+	listen<{ session_id: string; name: string | null; is_custom: boolean }>("session-renamed", (event) => {
+		// Never echoed back to the backend — a `session-renamed` payload IS the
+		// backend's authoritative state. Carries backend renames (MCP, tmux, OSC
+		// titles) AND renames made in another window/client; `name: null` is a
+		// cleared name. See `applyBackendRename`'s doc comment.
 		const { session_id, name, is_custom } = event.payload;
 		terminalsStore.applyBackendRename(session_id, name, is_custom);
 	}).catch((err) => appLogger.error("app", "Failed to register session-renamed listener", err));
