@@ -164,8 +164,12 @@ jobs:
       # cancellation) with meson and ninja, which no runner image ships. pip
       # rather than apt so every leg gets the same version: Ubuntu 22.04
       # packages meson 0.61, which is older than the abseil wrap expects.
+      # Not pinned to an exact version: CI has never run on this repo, so no
+      # meson/ninja release has been verified against this build yet. The floor
+      # is the one webrtc-audio-processing's meson.build declares (>= 0.63).
+      # Pin exact versions once a real run proves a pair.
       - name: Install meson and ninja
-        run: python -m pip install --upgrade meson ninja
+        run: python -m pip install --upgrade 'meson>=0.63' ninja
 
       # shell_integration.rs launches the claude/codex wrappers in bash, zsh
       # AND fish. fish is on none of the runner images, and the tests used to
@@ -394,9 +398,13 @@ jobs:
       # cancellation) with meson and ninja, which no runner image ships. pip
       # rather than apt/brew/choco so every leg gets the same version: Ubuntu
       # 22.04 packages meson 0.61, which is older than the abseil wrap expects.
+      # Not pinned to an exact version: CI has never run on this repo, so no
+      # meson/ninja release has been verified against this build yet. The floor
+      # is the one webrtc-audio-processing's meson.build declares (>= 0.63).
+      # Pin exact versions once a real run proves a pair.
       - name: Install meson and ninja
         shell: bash
-        run: python -m pip install --upgrade meson ninja
+        run: python -m pip install --upgrade 'meson>=0.63' ninja
 
       # The launch matrix is #[cfg(unix)], so only the macOS leg needs it.
       - name: Install launch-matrix shells
