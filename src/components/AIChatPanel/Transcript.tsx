@@ -7,7 +7,18 @@
  * only the shape each kind takes on screen.
  */
 
-import { type Component, createEffect, createMemo, createSignal, For, type JSX, Match, Show, Switch } from "solid-js";
+import {
+	type Component,
+	createEffect,
+	createMemo,
+	createSignal,
+	For,
+	type JSX,
+	Match,
+	onCleanup,
+	Show,
+	Switch,
+} from "solid-js";
 import type { AcpNoticeAction, AcpTranscriptEntry } from "../../stores/acpTranscript";
 import { appLogger } from "../../stores/appLogger";
 import type { AcpToolCall, AcpToolCallContent } from "../../types/acp";
@@ -203,7 +214,14 @@ function activityRows(
 	return { visible, calls, refusals, thoughts };
 }
 
+export interface TranscriptSearchRef {
+	open: () => void;
+	close: () => void;
+}
+
 export interface TranscriptProps {
+	/** Lets a containing terminal route its Find action to this transcript. */
+	onSearchRef?: (ref: TranscriptSearchRef | undefined) => void;
 	/** Constrain intrinsic content to the phone viewport. */
 	mobile?: boolean;
 	entries: () => AcpTranscriptEntry[];
@@ -392,7 +410,31 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 		}
 		props.onNoticeAction?.(action);
 	};
-	const findNext = () => {
+	const clearSearchSelection = () => {
+		const selection = window.getSelection();
+		if (container && selection?.rangeCount && container.contains(selection.getRangeAt(0).commonAncestorContainer)) {
+			selection.removeAllRanges();
+		}
+	};
+	const openSearch = () => {
+		setFinding(true);
+		queueMicrotask(() => {
+			if (!finding() || !searchInput?.isConnected) return;
+			searchInput.focus();
+			searchInput.select();
+		});
+	};
+	const closeSearch = () => {
+		clearSearchSelection();
+		setFinding(false);
+		matchIndex = -1;
+	};
+	props.onSearchRef?.({ open: openSearch, close: closeSearch });
+	onCleanup(() => {
+		clearSearchSelection();
+		props.onSearchRef?.(undefined);
+	});
+	const findNext = (direction = 1) => {
 		if (!container || !query()) return;
 		const needle = query().toLocaleLowerCase();
 		const matches: Range[] = [];
@@ -408,8 +450,15 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 				matches.push(range);
 			}
 		}
+		clearSearchSelection();
 		if (!matches.length) return;
-		matchIndex = (matchIndex + 1) % matches.length;
+		matchIndex =
+			matchIndex < 0
+				? direction < 0
+					? matches.length - 1
+					: 0
+				: (matchIndex + direction + matches.length) % matches.length;
+		stickToBottom = false;
 		const selection = window.getSelection();
 		selection?.removeAllRanges();
 		selection?.addRange(matches[matchIndex]);
@@ -437,8 +486,7 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 		} else if (key === "f") {
 			event.preventDefault();
 			event.stopPropagation();
-			setFinding(true);
-			queueMicrotask(() => searchInput?.focus());
+			openSearch();
 		} else if (key === "k") {
 			event.preventDefault();
 			event.stopPropagation();
@@ -461,21 +509,30 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 						aria-label="Find in chat"
 						value={query()}
 						onInput={(event) => {
+							clearSearchSelection();
 							setQuery(event.currentTarget.value);
 							matchIndex = -1;
 						}}
 						onKeyDown={(event) => {
 							if (event.key === "Enter") {
 								event.preventDefault();
-								findNext();
+								event.stopPropagation();
+								findNext(event.shiftKey ? -1 : 1);
 							}
-							if (event.key === "Escape") setFinding(false);
+							if (event.key === "Escape") {
+								event.preventDefault();
+								event.stopPropagation();
+								closeSearch();
+							}
 						}}
 					/>
-					<button type="button" onClick={findNext}>
+					<button type="button" onClick={() => findNext(-1)}>
+						Previous
+					</button>
+					<button type="button" onClick={() => findNext()}>
 						Next
 					</button>
-					<button type="button" aria-label="Close chat search" onClick={() => setFinding(false)}>
+					<button type="button" aria-label="Close chat search" onClick={closeSearch}>
 						<svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
 							<path d="M2.8 2l3.2 3.2L9.2 2l.8.8L6.8 6l3.2 3.2-.8.8L6 6.8 2.8 10l-.8-.8L5.2 6 2 2.8z" />
 						</svg>
