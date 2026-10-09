@@ -31,6 +31,7 @@ pub struct AutomationDefinition {
     pub repository: String,
     pub workspace: Workspace,
     pub cron: String,
+    #[serde(default)]
     pub timezone: String,
     pub enabled: bool,
     pub grace_secs: u64,
@@ -83,7 +84,7 @@ impl AutomationsConfig {
 }
 
 impl AutomationDefinition {
-    /// Validate storage invariants without interpreting schedules or launching agents.
+    /// Validate storage and scheduling invariants without launching agents.
     pub fn validate(&self) -> Result<(), String> {
         for (name, value) in [
             ("id", &self.id),
@@ -111,8 +112,7 @@ impl AutomationDefinition {
         {
             return Err("Automation precheck needs a command and positive timeout".into());
         }
-        // DEFERRED (2026-10-09) — Step 2 validates cron and the IANA zone and
-        // supplies the local-zone creation default before any scheduler exists.
+        super::schedule::Schedule::parse(&self.cron, &self.timezone)?;
         Ok(())
     }
 }
