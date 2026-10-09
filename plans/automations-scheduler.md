@@ -27,9 +27,20 @@ started_at: "2026-10-09T16:15:32.401Z"
 
 ## Research Findings
 
+- Orca source `89ba9682`: `src/shared/automations-types.ts`, `automation-cron-occurrence.ts`, `src/main/automations/{service,headless-dispatch}.ts`; see [source analysis](../ideas/automations-scheduler.md).
+
 - No Orca implementation code is incorporated. RRULE, multi-host ownership, external managers and estimated token spend are out of scope.
 - [croner](https://docs.rs/croner/latest/croner/) offers next/previous zone-aware occurrence APIs; [chrono-tz](https://docs.rs/chrono-tz/latest/chrono_tz/) supplies IANA TimeZone implementations. Verify pinned APIs in Step 2.
 - Strict ConfigFile loading preserves malformed JSON by moving it aside. Semantic/schema failures must abort writes and leave the original available for recovery.
+
+## OpenClaw reference
+
+- Checked 2026-10-09: [source commit 476ce032](https://github.com/openclaw/openclaw/tree/476ce032f4f01e2d95c2316a219c8fea8f5f09ba), [cron schedules](https://docs.openclaw.ai/automation/cron-jobs/schedules), [heartbeat/wake](https://docs.openclaw.ai/gateway/heartbeat), [result delivery](https://docs.openclaw.ai/automation/cron-jobs/delivery). Read `src/cron/service/{timer-scheduler,timer-job-runner}.ts` and `src/cron/isolated-agent/run.ts`; no code copied.
+- Better single-user fit than Orca (product judgment): explicit result destinations/inspection links, separate execution and delivery outcomes, quiet no-change reports and bounded wakes.
+- **Adopt, Steps 3/10/11:** saved output is the canonical report; notices link the run/session. Persist notification attempted/confirmed/unknown separately; deduplicate by run/transition/channel. Notification failures cannot change execution success. Do not replay ambiguous sends or historical notices on boot.
+- **Adopt, Steps 4/7:** bounded wake reconciliation, reserve before execution, finite duration and completion provenance. Keep TUIC's simple 30s tick.
+- **Adopt, Step 11:** precheck skips remain quiet; notify failure/needs-you through existing native/push/Telegram preferences. Completed output remains in history.
+- **Reject:** model heartbeats (cost/context coupling); session reuse/result injection into replacement conversations (fixed exclusion); stream watchers, one-shot/interval/pacing and webhook/channel routing (YAGNI); automatic execution retries/restart dispatch (fixed no-retry decision); implicit last-conversation recipient (use run/session ownership).
 
 ## Security Considerations
 
@@ -73,31 +84,27 @@ started_at: "2026-10-09T16:15:32.401Z"
 | 14 | 1623-8b2a | 1615-57cf, 1619-b84d |
 | 15 | 1624-c5f5 | 1614-7e8f, 1615-57cf |
 
+- Acceptance criteria and concrete test cases for each step are recorded in the linked story files.
+
 ## Steps
 
 
+### Phase 1 — Rust core
+
 ### Step 1: Definition storage
 
-- **Phase:** Phase 1 — Rust core
 - **Files:** `automations/{mod,model,definitions}.rs (new)`
-- **Depends on:** None
-- **Test contract:**
-  - Persist typed automation definitions in automations.json through ConfigFile<T>, with per-id locked mutations that preserve unrelated definitions and global settings.
 - **Constraint:** Strict storage preserves corruption; per-id mutations avoid array replacement races. Definitions contain literal prompts; Smart Prompt variable expansion is not available headless.
-- **Validation:** test(automations::definitions::tests)
+- **Validation:** test(automations::tests)
 
 ```rust
 let file = ConfigFile::<AutomationsConfig>::new("automations.json");
-file.update_with_strict(|latest| { latest.definitions.insert(id, definition); Ok(((), true)) })
+file.update_with_strict(|latest| { latest.definitions.push(definition); Ok(((), true)) })
 ```
 
 ### Step 2: Cron and timezone semantics
 
-- **Phase:** Phase 1 — Rust core
 - **Files:** `automations/schedule.rs (new), src-tauri/Cargo.toml, Cargo.lock`
-- **Depends on:** Step 1
-- **Test contract:**
-  - Accept exactly five-field Vixie cron with day-of-month/day-of-week OR semantics; reject malformed and impossible schedules with bounded errors.
 - **Constraint:** Use croner with chrono support plus chrono-tz; verify exact pinned API and DST policy against its source before adding it. No custom cron parser or RRULE in phase 1.
 - **Validation:** test(automations::schedule::tests)
 
@@ -109,11 +116,7 @@ let next = cron.find_next_occurrence(&zoned_now, false)?;
 
 ### Step 3: Durable run ledger
 
-- **Phase:** Phase 1 — Rust core
 - **Files:** `automations/{run,store}.rs (new)`
-- **Depends on:** Step 1
-- **Test contract:**
-  - Create versioned automation_runs.sqlite3 using workflows/run owner-lock, WAL/busy-timeout and transaction patterns; fail closed on unsupported schemas.
 - **Constraint:** Record before dispatch. A database owner lock prevents desktop and remote sharing one config directory from dispatching twice; follow existing WorkflowRuntime ownership.
 - **Validation:** test(automations::store::tests)
 
@@ -125,11 +128,7 @@ tx.commit()?;
 
 ### Step 4: Scheduler admission and catch-up
 
-- **Phase:** Phase 1 — Rust core
 - **Files:** `automations/scheduler.rs (new)`
-- **Depends on:** Step 2, Step 3
-- **Test contract:**
-  - Implement a deterministic tick against the real ledger: latest due occurrence only, grace-inclusive run-once catch-up, older skipped_missed and no replay backlog.
 - **Constraint:** One 30s tick, no minute-by-minute wake replay. Do not launch a runtime with an unimplemented dispatcher; Step 6 wires boot after real dispatch exists.
 - **Validation:** test(automations::scheduler::tests)
 
@@ -141,11 +140,7 @@ for due in latest_due(now, &definitions)? {
 
 ### Step 5: Bounded precheck execution
 
-- **Phase:** Phase 1 — Rust core
 - **Files:** `automations/precheck.rs (new), src-tauri/src/smart_prompt.rs`
-- **Depends on:** Step 1
-- **Test contract:**
-  - Execute optional precheck in the resolved workspace with the existing clean shell/environment and bounded subprocess pattern; exit 0 proceeds, nonzero/timeout records skipped_precheck.
 - **Constraint:** Use test_support host shell helpers; no freshly executed per-test script. Precheck context injection is phase 3.
 - **Validation:** test(automations::precheck::tests)
 
@@ -156,11 +151,7 @@ if result.exit_code != Some(0) { store.skip_precheck(run_id, result)?; }
 
 ### Step 6: Dispatch and shared runtime boot
 
-- **Phase:** Phase 1 — Rust core
 - **Files:** `automations/{dispatcher,runtime}.rs (new), src-tauri/src/mcp_http/mcp_transport.rs, src-tauri/src/lib.rs`
-- **Depends on:** Step 3, Step 4, Step 5
-- **Test contract:**
-  - Create a worktree per run or use the existing repository workspace; reuse create_daemon_workflow_worktree and common launch assembly behind launch_daemon_workflow_agent.
 - **Constraint:** No desktop launch in agents. This helper currently creates from HEAD; pass the explicit configured base branch through the shared worktree API, preserving existing workflow behavior.
 - **Validation:** test(automations::dispatcher::tests) | test(automations::runtime::tests)
 
@@ -172,11 +163,7 @@ store.bind_launch(run_id, launch)?;
 
 ### Step 7: Completion and maximum duration
 
-- **Phase:** Phase 1 — Rust core
 - **Files:** `automations/completion.rs (new), automations/runtime.rs`
-- **Depends on:** Step 6
-- **Test contract:**
-  - Consume task/PTy/progress signals for completed/failed/needs_you; idle alone is insufficient evidence of success. Handle broadcast lag by reconciling task/session state.
 - **Constraint:** Do not equate agent idle with completed; unsupported detection must remain honest. Maximum-duration cancellation cannot target another task.
 - **Validation:** test(automations::completion::tests)
 
@@ -190,11 +177,7 @@ match evidence {
 
 ### Step 8: HTTP and IPC parity
 
-- **Phase:** Phase 1 — Rust core
 - **Files:** `automations/api.rs (new), src-tauri/src/mcp_http/mod.rs, src-tauri/src/lib.rs, src/transport.ts, src/__tests__/transport.test.ts`
-- **Depends on:** Step 2, Step 4, Step 6, Step 7
-- **Test contract:**
-  - Expose list/get/create/update/delete/run_now/list_runs, pause via update, schedule preview/presets and run aggregates through identical HTTP and Tauri shapes.
 - **Constraint:** All runtime decisions remain Rust. Low-frequency changes use SSE and desktop emit; remote ownership must be explicit, never dispatch onto the wrong machine.
 - **Validation:** targeted automations API nextest + transport.test.ts + pnpm exec tsc --noEmit
 
@@ -205,15 +188,13 @@ async fn automation_action(input: AutomationAction, state: State<AppState>) -> R
 }
 ```
 
+### Phase 2 — UI
+
 ### Step 9: Automations dialog
 
-- **Phase:** Phase 2 — UI
 - **Files:** `src/components/AutomationsDialog/ (new), src/stores/automations.ts (new), src/actions/actionRegistry.ts, src/components/CommandPalette/CommandPalette.tsx`
-- **Depends on:** Step 8
-- **Test contract:**
-  - Add list, search, editor, cadence presets, cron/timezone preview, detail history, Run Now, pause/resume and delete with clear errors and empty states.
 - **Constraint:** Visual verification required. No schedule computations or process orchestration in TypeScript. Browser/PWA use the same commands.
-- **Validation:** targeted dialog/store Vitest + pnpm exec tsc --noEmit + screenshot after every visual change
+- **Validation:** dialog/store Vitest; tsc; screenshots
 
 ```rust
 const preview = await invoke("automation_action", { input: { action: "preview", cron, timezone } });
@@ -221,13 +202,9 @@ const preview = await invoke("automation_action", { input: { action: "preview", 
 
 ### Step 10: Runs view and output navigation
 
-- **Phase:** Phase 2 — UI
 - **Files:** `src/components/AutomationsDialog/RunsView.tsx (new), src/stores/automations.ts`
-- **Depends on:** Step 9
-- **Test contract:**
-  - Render backend 24h/7d counts and paginated run history with needs_you/unknown/interrupted visible as distinct states.
 - **Constraint:** Visual verification required. UTC windows are elapsed durations, and the backend owns aggregates.
-- **Validation:** targeted runs-view Vitest + pnpm exec tsc --noEmit + screenshot
+- **Validation:** runs-view Vitest; tsc; screenshots
 
 ```rust
 const summary = await invoke("automation_action", { input: { action: "summary", window: "7d" } });
@@ -235,25 +212,19 @@ const summary = await invoke("automation_action", { input: { action: "summary", 
 
 ### Step 11: Needs-you and failure notifications
 
-- **Phase:** Phase 2 — UI
 - **Files:** `automations/notifications.rs (new), existing native/web-push/Telegram adapters, AutomationsDialog`
-- **Depends on:** Step 7, Step 9
-- **Test contract:**
-  - Notify once per run transition to needs_you or failed using existing channels/preferences; link the run and its owning session.
 - **Constraint:** Visual verification required for bell changes. No vendor traffic fixtures invented; reuse internal envelope fault models and record limits.
-- **Validation:** targeted notification nextest/Vitest + pnpm exec tsc --noEmit if frontend touched
+- **Validation:** notification nextest/Vitest; tsc for frontend
 
 ```rust
 if store.claim_notification(run_id, transition)? { notifications.publish(run_notice).await?; }
 ```
 
+### Phase 3 — not started
+
 ### Step 12: MCP automation tool
 
-- **Phase:** Phase 3 — not started
 - **Files:** `src-tauri/src/mcp_http/mcp_transport.rs, CLI HTTP adapter`
-- **Depends on:** Step 8
-- **Test contract:**
-  - Phase 3 only: expose automation actions through MCP and CLI using the Step 8 core and identical validated shapes; add docs and protocol tests.
 - **Constraint:** Not started. Requires explicit phase-3 authorization.
 - **Validation:** targeted MCP/CLI parity tests
 
@@ -263,11 +234,7 @@ automation_api::execute(input, state).await
 
 ### Step 13: Built-in templates
 
-- **Phase:** Phase 3 — not started
 - **Files:** `automations/templates.rs (new), AutomationsDialog`
-- **Depends on:** Step 9
-- **Test contract:**
-  - Phase 3 only: backend templates populate drafts with user-selected repo/run config and local zone, disabled until saved; no hidden automatic execution.
 - **Constraint:** Not started. Requires explicit phase-3 authorization.
 - **Validation:** targeted template tests + frontend tsc
 
@@ -277,11 +244,7 @@ let draft = templates::daily_review(repository, run_config, local_zone)?;
 
 ### Step 14: Worktree provenance and cleanup
 
-- **Phase:** Phase 3 — not started
 - **Files:** `automations/worktrees.rs (new), shared worktree lifecycle adapter`
-- **Depends on:** Step 6, Step 10
-- **Test contract:**
-  - Phase 3 only: persist automation/run provenance and offer cleanup through existing integration/safety proof, preserving dirty/unmerged/unarchived worktrees and live sessions.
 - **Constraint:** Not started. Requires explicit phase-3 authorization; never raw recursive deletion.
 - **Validation:** targeted provenance/lifecycle tests
 
@@ -292,11 +255,7 @@ if safety.removal_safe { worktrees.remove(&run.workspace)?; }
 
 ### Step 15: Precheck output as context
 
-- **Phase:** Phase 3 — not started
 - **Files:** `automations/precheck.rs, dispatcher.rs`
-- **Depends on:** Step 5, Step 6
-- **Test contract:**
-  - Phase 3 only: explicitly opt in to bounded precheck stdout as prompt context with clear delimiters and exact original prompt preservation; cover empty/truncated/invalid output.
 - **Constraint:** Not started. Requires explicit phase-3 authorization. Session reuse remains outside this plan.
 - **Validation:** targeted precheck-context tests
 

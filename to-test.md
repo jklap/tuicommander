@@ -1,3 +1,7 @@
+## Automations definition storage (1610-ac85) — Rust restart required
+
+- [ ] After landing and Boss's next planned `make dev` restart or `make build`, verify the selected instance's `automations.json` through the Automations commands once plan Step 8 lands: create/edit/delete a definition, retain a second definition and the global concurrency setting, and reject invalid edits. Step 1 supplies storage only; it does not yet register commands or run a scheduler. Rust does not hot-reload. This lane did not launch or restart a desktop instance.
+
 ## Plugin host phase 0 — backend restart required
 
 - [ ] After Boss's planned `make dev` restart or `make build`, verify browser Add account creates a named GitHub account while the default login stays unchanged. Also verify a plugin declaring `net:http` with no `allowedUrls` is rejected. The Rust HTTP handler and manifest validator are not hot-reloaded. No desktop instance was launched by the peer.

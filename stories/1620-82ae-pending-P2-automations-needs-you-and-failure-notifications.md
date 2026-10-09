@@ -32,3 +32,5 @@ Implement needs-you and failure notifications for the approved Automations sched
 
 ## Work Log
 
+### 2026-10-09T16:19:10.890Z - OpenClaw reference addition: notices link to canonical run/session, remain quiet for precheck skips, never alter successful execution on delivery failure, deduplicate per run/transition/channel and never replay ambiguous sends or historical notices on boot. No heartbeat/model polling or new routing framework.
+

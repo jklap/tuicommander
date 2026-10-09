@@ -34,3 +34,5 @@ Implement durable run ledger for the approved Automations scheduler. See the lin
 
 ## Work Log
 
+### 2026-10-09T16:19:10.674Z - OpenClaw reference addition: preserve notification attempted/confirmed/unknown separately from execution status; canonical saved output remains the result report. See plan OpenClaw reference; no new delivery framework.
+

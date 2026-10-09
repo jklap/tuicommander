@@ -1157,3 +1157,39 @@ repository delta under the existing cross-process lock. Frontend saves retain
 it. Existing saved terminal records are moved to the declared workspace without
 changing their actual shell cwd. The association survives backend restart; it
 does not turn an externally created worktree into a disposable PTY-owned one.
+
+## Automation Definitions
+
+The Rust definition store (`automations/definitions.rs`) uses the selected
+instance's `automations.json`. This is the storage foundation for the
+[Automations scheduler plan](../../plans/automations-scheduler.md); scheduler
+execution and public commands are not available in this step.
+
+The version-1 document contains `version`, `max_concurrent_runs` (default `2`)
+and a `definitions` array (default empty). Missing files return these defaults
+without creating a JSON document. Reading can create its directory and `.lock`
+file. Edits use `ConfigFile<T>::update_with_strict`: load fresh state under the
+in-process and cross-process locks, mutate one id or the global limit, and
+atomically persist. No-op edits do not rewrite the document.
+
+Each definition stores:
+
+| Field | Meaning |
+|---|---|
+| `id`, `name`, `prompt` | Stable id, display name and literal agent prompt |
+| `run_config`, `repository` | Agent run-config name and repository workspace |
+| `workspace` | `{ "mode": "existing" }` or `{ "mode": "new_per_run", "base_branch": "main" }` |
+| `cron`, `timezone` | Five-field schedule text and the per-automation IANA zone |
+| `enabled` | Whether scheduled admission is enabled |
+| `grace_secs`, `max_duration_secs` | Positive grace and execution bounds in seconds |
+| `overlap` | `"skip"`; session reuse and queued overlap are unsupported |
+| `precheck` | Optional `{ "command": "...", "timeout_secs": 30 }` |
+
+Required strings must not be blank. Limits must be positive. Duplicate ids,
+identity changes, missing edit/delete targets and unsupported schema versions
+return errors before writing. Unknown fields or malformed JSON cause the strict
+ConfigFile loader to preserve the original bytes in `.corrupt-<uuid>` recovery
+files and abort that operation. Semantic errors leave the original document in
+place. No independent unattended-permission flag exists: the run config owns
+permissions. Step 2 adds cron/IANA validation and the local-zone creation default;
+the storage foundation alone does not make a schedule executable.
