@@ -12819,7 +12819,7 @@ mod tests {
         );
         assert_eq!(
             bytes.lock().unwrap().as_slice(),
-            b"\x15inspect the repository\r"
+            b"inspect the repository\r"
         );
         assert_eq!(
             state
@@ -12887,7 +12887,7 @@ mod tests {
         let receipt: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(receipt["submitted"], true);
         assert_eq!(receipt["acknowledged"], true);
-        assert_eq!(asking.lock().unwrap().as_slice(), b"\x15Approve once\r");
+        assert_eq!(asking.lock().unwrap().as_slice(), b"Approve once\r");
         assert!(other.lock().unwrap().is_empty());
     }
 
@@ -12957,7 +12957,7 @@ mod tests {
         let receipt: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(receipt["submitted"], true);
         assert_eq!(receipt["acknowledged"], true);
-        assert_eq!(bytes.lock().unwrap().as_slice(), b"\x15Boss answer\r");
+        assert_eq!(bytes.lock().unwrap().as_slice(), b"Boss answer\r");
         assert_eq!(state.pending_injections.get(session_id).unwrap().len(), 1);
     }
 
@@ -12982,7 +12982,7 @@ mod tests {
         )
         .await;
 
-        assert_eq!(bytes.lock().unwrap().as_slice(), b"\x15no child output\r");
+        assert_eq!(bytes.lock().unwrap().as_slice(), b"no child output\r");
         assert_eq!(
             state
                 .session_maps
@@ -13114,7 +13114,7 @@ mod tests {
 
         assert_eq!(response["status"], "acknowledged");
         assert_eq!(response["turn_epoch"], 1);
-        assert_eq!(bytes.lock().unwrap().as_slice(), b"\x15/clear\r");
+        assert_eq!(bytes.lock().unwrap().as_slice(), b"/clear\r");
         assert!(
             !state
                 .session_maps

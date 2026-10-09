@@ -321,7 +321,7 @@ turn never enters it and never reorders it. Parking speech there until idle
 measured a median delay of 103 s, max 594 s.
 
 The write is the framed path every injection uses (`run_claimed_injection`:
-Ctrl-U, the text, then a separate Enter), never raw text plus `\r`. An idle
+the text, then a separate Enter; no Ctrl-U), never raw text plus `\r`. An idle
 agent is claimed IDLE→BUSY like any injection, without the confirmed-idle
 requirement. A busy agent is claimed without touching its BUSY atom, and a
 write that does not start never reports the agent idle.
@@ -331,7 +331,7 @@ Two holds remain, and they are the reason this is not a raw write:
 | Hold (`pty::VoiceHold`) | Why |
 |---|---|
 | `Question` | a confident question or permission dialog owns the composer; speech must never answer it |
-| `Draft` | the user has text in the composer; the opening Ctrl-U would erase it |
+| `Draft` | the user has text in the composer; the spoken turn would be merged into (and submitted with) it |
 | `InFlight` | another write holds the composer, or an earlier one is uncertain |
 | `WriteNotStarted` | the PTY refused the first byte |
 

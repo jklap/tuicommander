@@ -3353,7 +3353,7 @@ mod tests {
         let terminal = wait_for_typed(&typed, "run the tests (reply in Italian)\r");
         let accepted_in = started.elapsed();
         assert_eq!(
-            terminal, "\u{15}run the tests (reply in Italian)\r",
+            terminal, "run the tests (reply in Italian)\r",
             "the phrase addresses the tool and may not reach the model, and the language the \
              user spoke it in must"
         );
@@ -3467,7 +3467,7 @@ mod tests {
         // phrase, segments it, transcribes it, waits out the hold-back and
         // types it on its own — into an agent that is still working.
         let terminal = wait_for_typed(&typed, "run the tests (reply in Italian)\r");
-        assert_eq!(terminal, "\u{15}run the tests (reply in Italian)\r");
+        assert_eq!(terminal, "run the tests (reply in Italian)\r");
 
         let status = hands_free_status(&dictation);
         assert_eq!(status.session_id.as_deref(), Some("voice-e2e"));
@@ -5416,7 +5416,7 @@ mod tests {
 
         let terminal = String::from_utf8_lossy(&typed.lock().expect("recorder")).to_string();
         assert!(
-            terminal.ends_with(&format!("\u{15}{}\r", continuous::MODE_EXIT_HINT)),
+            terminal.ends_with(&format!("{}\r", continuous::MODE_EXIT_HINT)),
             "the end notice is typed into the session the mode was bound to by the time \
              disarm returns; the terminal holds {terminal:?}"
         );

@@ -615,12 +615,13 @@ payload raw (`tauri::ipc::Response`), and `rpcImpl` decides between
 `arrayBuffer()` and `json()` on the content-type alone. An empty body means "no
 such session or range" — a valid empty chunk, not an error.
 
-`shell-family` classifies the session's shell so the client picks the right control
-sequences (Ctrl-U is line-kill under POSIX readline, a literal character on
-`cmd.exe`/PowerShell). It answers the bare value, **not** a `{field}` wrapper,
+`shell-family` classifies the session's shell (`posix`, `windows-native`,
+`unknown`). It is informational: it used to decide whether `sendCommand` skipped
+its Ctrl-U prefix on `cmd.exe`/PowerShell, and TUICommander no longer sends a
+Ctrl-U at all. It answers the bare value, **not** a `{field}` wrapper,
 because `get_session_shell_family` returns `Option<ShellFamily>` bare over IPC and
 `src/utils/sendCommand.ts` reads both transports with the same code. An unknown
-session is `null`, which is the same "fall back to the host default" answer.
+session is `null`.
 
 Read-only PTY/terminal state mirroring the desktop Tauri commands (story 062). The
 `{field}`-wrapped responses are unwrapped by the frontend transport to match the

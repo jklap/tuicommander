@@ -11264,11 +11264,11 @@ fn write_submission_to_pty(
 /// multiline text merely PREFILLS codex/claude without submitting (verified
 /// live, story 091).
 ///
-/// The Ctrl-U that clears pending input is NOT part of it: it goes out
-/// `INJECT_ENTER_GAP` earlier, in its own read. Claude Code (verified live on
-/// v2.1.280) treats a long chunk as a paste, strips a Ctrl-U inside it as an
-/// invisible character and then refuses the Enter — a 584-char submission
-/// stayed unsent even with a 500ms Enter gap.
+/// No Ctrl-U is ever sent before it (user decision, dropped-items #16): the
+/// text is appended to whatever the input line already holds. (Main used to
+/// send a Ctrl-U `INJECT_ENTER_GAP` earlier in its own read, because Claude Code
+/// — verified live on v2.1.280 — strips a Ctrl-U bundled inside a long chunk as
+/// an invisible character and then refuses the Enter. Never bundle one.)
 fn injection_payload(text: &str) -> String {
     if text.contains('\n') {
         bracketed_payload(text)
@@ -11321,14 +11321,14 @@ pub(crate) fn prefill_agent_input(
 /// with "Removed 1 invisible character"; 50ms submits).
 /// 50ms clears the child's read-scheduling latency for every verified agent.
 /// An agent TUICommander cannot identify, or has not verified, keeps a 200ms gap
-/// and the plain payload; Ctrl-U is a control key before those characters.
+/// and the plain payload.
 ///
 /// This comment used to claim the frontend `sendCommand.ts` recipe "gets this
 /// gap for free — its two `writeFn` calls are separate IPC round-trips". It does
 /// NOT: a Tauri IPC round-trip completes well inside the child's read latency,
 /// so both writes land in one `read()` and a clicked suggestion renders as a
-/// newline instead of submitting. `sendCommand.ts` waits 50ms after Ctrl-U
-/// and before non-Codex Enter. Keep both frontend
+/// newline instead of submitting. `sendCommand.ts` waits 50ms before the
+/// Enter. Keep both frontend
 /// timing rules in step — separate flushes never guaranteed separate reads.
 const INJECT_ENTER_GAP: std::time::Duration = std::time::Duration::from_millis(50);
 const UNVERIFIED_ENTER_GAP: std::time::Duration = std::time::Duration::from_millis(200);
@@ -11342,7 +11342,9 @@ const DELAYED_AGENT_QUEUED_SUBMISSION_CONFIRMATION: std::time::Duration =
 /// confirms the turn started. One table for every injection path.
 ///
 /// Measured live 2026-10-02 in a PTY driven with the exact injection bytes
-/// (Ctrl-U, 50ms, payload, gap, CR). `ok` = the turn started on the first Enter.
+/// (then: Ctrl-U, 50ms, payload, gap, CR; Ctrl-U has since been dropped, and it
+/// typed nothing, so the payload/gap/CR results stand). `ok` = the turn started
+/// on the first Enter.
 ///
 /// | agent    | version | plain, short (<= 200 chars) | plain, 1000-2000 chars | bracketed paste |
 /// |----------|---------|-----------------------------|------------------------|-----------------|
@@ -11547,19 +11549,11 @@ fn write_agent_command_with_boundary(
     // splicing bytes into the command while the child is allowed to consume the
     // payload as a separate read.
     let mut writer = writer.lock();
-    // Ctrl-U first, alone: see `injection_payload`. It types nothing, so a
-    // failure before the first text byte cannot make a retry type the command
-    // twice — hence it reports `NotStarted` and the text write counts from zero.
-    if let Err((_, error)) = write_all_with_progress(writer.as_mut(), b"\x15", 0) {
-        return (InjectionOutcome::NotStarted(error), 0);
-    }
-    if let Err(error) = writer.flush() {
-        return (
-            InjectionOutcome::NotStarted(format!("Flush failed: {error}")),
-            0,
-        );
-    }
-    std::thread::sleep(INJECT_ENTER_GAP);
+    // No leading Ctrl-U: injected text is APPENDED to whatever the composer or
+    // shell line already holds, never replaces it (user decision, dropped-items
+    // #16). Automated submits that must not merge into a half-typed line are
+    // refused up front by `agent_composer_rejection` ("partial_composer"), not
+    // cleared here.
     if let Err((written, error)) = write_all_with_progress(writer.as_mut(), payload.as_bytes(), 0) {
         return (
             if written == 0 {
@@ -12253,7 +12247,7 @@ pub(crate) enum ForcedPromptOutcome {
 /// (or was swallowed), `note_submitted_input` still recorded a submitted turn, so
 /// the session sits on that Protocol-rank busy latch until `PROTOCOL_STALE_TIMEOUT`
 /// and nothing retries — the documented 500+ s hang. This is the retry: one direct
-/// write, under the same writer lock and Ctrl-U boundary every forced write uses,
+/// write, under the same writer lock and Enter boundary every forced write uses,
 /// refused when typing could clobber the user's draft or answer an open dialog.
 pub(crate) fn force_type_deferred_prompt(
     state: &AppState,
@@ -12816,7 +12810,7 @@ pub use tuic_dictation::continuous::{VoiceHold, VoiceWrite};
 /// Two holds remain, and they are the reason this is not a raw write: a
 /// confident question (speech must never answer a permission dialog) and a
 /// draft in the composer. A held turn stays with the caller. The write itself
-/// is the framed path every injection uses (Ctrl-U, text, a separate Enter).
+/// is the framed path every injection uses (text, then a separate Enter).
 #[cfg(feature = "dictation")]
 pub(crate) fn write_voice_turn(
     state: &AppState,

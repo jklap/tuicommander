@@ -2945,7 +2945,7 @@ mod tests {
             }
         }
         assert!(crate::pty::list_queued_commands(&state, sid).is_empty());
-        assert_eq!(*bytes.lock().unwrap(), b"\x15BG DONE\r");
+        assert_eq!(*bytes.lock().unwrap(), b"BG DONE\r");
     }
 
     /// A silent agent may use the full confirmation window, but the async

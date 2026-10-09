@@ -287,16 +287,17 @@ after a `Buffered` line. The CLI validates this current report contract through
 `message_id`, `delivered`, and `delivery_path`; it does not require the removed
 `accepted` compatibility field.
 
-`tuic agent type` goes through the backend's `session action=submit`: the
-Ctrl-U (clear), the text and the Enter are written inside **one** writer-lock
-section — nothing else can splice bytes in between — as separate PTY reads a
-short gap apart, because a raw-mode Ink TUI treats a combined `text\r` as a
-prefill and leaves it unsent, and Claude Code strips a Ctrl-U bundled into the
-text as an invisible character. It is **refused** (exit 1, nothing typed, the
-reason printed) when the agent's input box already holds text, so it never wipes
-a half-typed prompt, and for a plain shell. `--no-clear` skips all of that: the
-text and the Enter go as two plain PTY writes, with no Ctrl-U, no lock across
-them and no composer check. `tuic send` does none of this.
+`tuic agent type` goes through the backend's `session action=submit`: the text
+and the Enter are written inside **one** writer-lock section — nothing else can
+splice bytes in between — as separate PTY reads a short gap apart, because a
+raw-mode Ink TUI treats a combined `text\r` as a prefill and leaves it unsent.
+Nothing is cleared first (TUICommander never sends Ctrl-U). It is **refused**
+(exit 1, nothing typed, the reason printed) when the agent's input box already
+holds text, so your half-typed prompt is never merged into or submitted with it,
+and for a plain shell. `--no-clear` skips the check: the text and the Enter go as
+two plain PTY writes, with no lock across them, **appended** to whatever the
+input box holds. (The flag name predates the removal of Ctrl-U; it is kept so
+existing scripts keep working.) `tuic send` does none of this.
 
 `tuic agent send` uses `$TUIC_SESSION` when it runs inside a TUICommander
 session. Outside one, it registers a headerless external caller for the MCP

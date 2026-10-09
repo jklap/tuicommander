@@ -275,17 +275,20 @@ enum AgentAction {
     /// Type a prompt into an agent's PTY and submit it (no peer routing).
     ///
     /// Goes through the backend's `session action=submit`: one writer-lock
-    /// section for clear + text + Enter (nothing can splice in between), the
+    /// section for text + Enter (nothing can splice in between), the
     /// agent-safe framing (text and Enter as separate reads), and it is refused
     /// — exit 1, nothing typed — while the agent's input box already holds
-    /// text, so a half-typed prompt of yours is never wiped.
+    /// text, so your half-typed prompt is never merged into or submitted with
+    /// it. Nothing is ever cleared: TUIC no longer sends Ctrl-U.
     Type {
         /// Agent session ID or name
         target: String,
         /// Prompt text
         message: String,
-        /// Don't clear the input box first: send just the text and the Enter
-        /// as two plain PTY writes (not atomic, no busy/composer check).
+        /// Skip the backend's busy/composer check: type the text and the Enter
+        /// as two plain PTY writes (not atomic), APPENDED to whatever the input
+        /// box already holds. (The name predates the removal of Ctrl-U: the
+        /// default never clears either; kept so existing scripts keep working.)
         #[arg(long)]
         no_clear: bool,
     },
@@ -1288,13 +1291,14 @@ fn cmd_repo(action: RepoAction) -> Result<(), String> {
 }
 
 /// The MCP `session` calls `tuic agent type` makes. By default ONE `submit`:
-/// the backend writes Ctrl-U, the framed text and the Enter inside a single
+/// the backend writes the framed text and the Enter inside a single
 /// writer-lock section (`write_agent_command_with_boundary`) and refuses a
-/// non-empty composer instead of wiping it. `--no-clear`: just the framed text
-/// and the Enter as two `input` writes — no Ctrl-U at all.
+/// non-empty composer. `--no-clear`: the framed text and the Enter as two
+/// `input` writes with no composer check, appended to what is there. Neither
+/// path sends a Ctrl-U (dropped-items #16).
 fn agent_type_calls(message: &str, no_clear: bool) -> Vec<(&'static str, serde_json::Value)> {
     if no_clear {
-        let (_, payload, enter) = agent_send_parts(message);
+        let (payload, enter) = agent_send_parts(message);
         vec![
             ("input", serde_json::json!({ "input": payload })),
             ("input", serde_json::json!({ "input": enter })),
@@ -1325,17 +1329,16 @@ fn submit_outcome(receipt: &serde_json::Value) -> Result<(), String> {
     Err(format!("not submitted ({reason}){detail}"))
 }
 
-/// The three writes of `tuic agent type`: Ctrl-U (clear pending input), the
-/// text (multiline rides in a bracketed paste), and Enter — each sent as its own
-/// PTY write a gap apart. The Ctrl-U is never bundled with the text: see the
-/// `AgentAction::Type` arm.
-fn agent_send_parts(message: &str) -> (&'static str, String, &'static str) {
+/// The two writes of `tuic agent type --no-clear`: the text (multiline rides
+/// in a bracketed paste) and Enter, each its own PTY write a gap apart. No
+/// Ctrl-U: the text is appended to whatever the input box holds.
+fn agent_send_parts(message: &str) -> (String, &'static str) {
     let payload = if message.contains('\n') {
         format!("\x1b[200~{message}\x1b[201~")
     } else {
         message.to_string()
     };
-    ("\x15", payload, "\r")
+    (payload, "\r")
 }
 
 fn cmd_status() -> Result<(), String> {
@@ -2402,7 +2405,8 @@ mod tests {
 
     /// Batch 45/46 review: the old three `input` calls had no writer lock (a
     /// concurrent write could splice between them) and an unconditional
-    /// Ctrl-U wiped half-typed text. The default is now one atomic `submit`.
+    /// Ctrl-U wiped half-typed text. The default is now one atomic `submit`
+    /// (and the backend no longer sends a Ctrl-U at all, dropped-items #16).
     #[test]
     fn agent_type_defaults_to_a_single_atomic_submit() {
         let calls = agent_type_calls("fix the tests", false);
@@ -2449,8 +2453,7 @@ mod tests {
 
     #[test]
     fn agent_send_separates_framed_payload_from_enter() {
-        let (clear, payload, enter) = agent_send_parts("report complete");
-        assert_eq!(clear, "\x15");
+        let (payload, enter) = agent_send_parts("report complete");
         assert_eq!(payload, "report complete");
         assert!(!payload.contains('\r'));
         assert_eq!(enter, "\r");
@@ -2458,20 +2461,20 @@ mod tests {
 
     #[test]
     fn agent_send_bracket_pastes_multiline_before_separate_enter() {
-        let (clear, payload, enter) = agent_send_parts("line one\nline two");
-        assert_eq!(clear, "\x15");
+        let (payload, enter) = agent_send_parts("line one\nline two");
         assert_eq!(payload, "\x1b[200~line one\nline two\x1b[201~");
         assert_eq!(enter, "\r");
     }
 
-    /// Claude Code strips a Ctrl-U that arrives inside the text chunk as an
-    /// "invisible character" and then refuses the Enter, so the clear must
-    /// never ride in the same write as the text.
+    /// Dropped-items #16: text is appended, never cleared first — and Claude
+    /// Code strips a Ctrl-U bundled inside the text chunk, so none may ride in
+    /// the text either.
     #[test]
-    fn agent_send_never_bundles_ctrl_u_with_the_text() {
+    fn agent_send_never_sends_ctrl_u() {
         for message in ["report complete", "line one\nline two"] {
-            let (_, payload, _) = agent_send_parts(message);
+            let (payload, enter) = agent_send_parts(message);
             assert!(!payload.contains('\x15'), "{message:?}: {payload:?}");
+            assert!(!enter.contains('\x15'));
         }
     }
 

@@ -11248,7 +11248,7 @@ fn a_prompt_that_lands_after_the_warning_closes_the_loop() {
 
     std::thread::scope(|scope| {
         scope.spawn(|| flush_pending_injections_blocking(&state, child_id));
-        for expected in [b"\x15".as_slice(), b"review the draft", b"\r"] {
+        for expected in [b"review the draft".as_slice(), b"\r"] {
             assert_eq!(
                 received
                     .recv_timeout(std::time::Duration::from_secs(5))
@@ -12283,7 +12283,7 @@ fn agent_submission_claim_prevents_concurrent_peer_splicing() {
     assert_eq!(peer, PtyDelivery::Queued);
     assert_eq!(
         String::from_utf8(bytes.lock().unwrap().clone()).unwrap(),
-        "\u{15}atomic command\r",
+        "atomic command\r",
         "the peer payload must not land between the split payload and Enter"
     );
     assert_eq!(
@@ -12327,7 +12327,7 @@ fn agent_submission_writer_lock_prevents_raw_input_splicing() {
     assert!(matches!(submitted, AgentSubmissionWrite::Complete { .. }));
     assert_eq!(
         String::from_utf8(bytes.lock().unwrap().clone()).unwrap(),
-        "\u{15}atomic command\rraw input",
+        "atomic command\rraw input",
         "a raw writer may follow the submission but cannot land before its Enter"
     );
 }
@@ -12370,7 +12370,7 @@ fn flush_hands_the_enter_gap_to_the_injection_worker_not_the_caller() {
     }
     assert_eq!(
         String::from_utf8(bytes.lock().unwrap().clone()).unwrap(),
-        "\u{15}wake up\r",
+        "wake up\r",
         "the deferred injection must be byte-identical to the inline one"
     );
     assert_eq!(
@@ -12751,7 +12751,7 @@ async fn queued_codex_command_submits_when_ready_confirms_after_shell_idle() {
     tokio::task::yield_now().await;
     running.store(false, Ordering::Release);
 
-    for expected in [b"\x15".as_slice(), b"resume queued work", b"\r"] {
+    for expected in [b"resume queued work".as_slice(), b"\r"] {
         let actual = received
             .recv_timeout(std::time::Duration::from_secs(15))
             .expect("ready confirmation must submit queued command without a new shell edge");
@@ -13127,7 +13127,7 @@ fn captured_codex_stale_working_screen_does_not_confirm_queued_enter() {
 
     std::thread::scope(|scope| {
         scope.spawn(|| enqueue_user_command(&state, sid, "wake the agent", None).unwrap());
-        for expected in [b"\x15".as_slice(), b"wake the agent", b"\r"] {
+        for expected in [b"wake the agent".as_slice(), b"\r"] {
             assert_eq!(
                 received
                     .recv_timeout(std::time::Duration::from_secs(5))
@@ -13205,7 +13205,7 @@ fn queued_codex_stop_hook_accepts_working_screen_three_seconds_after_enter() {
 
     std::thread::scope(|scope| {
         scope.spawn(|| enqueue_user_command(&state, sid, "wake the agent", None).unwrap());
-        for expected in [b"\x15".as_slice(), b"wake the agent", b"\r"] {
+        for expected in [b"wake the agent".as_slice(), b"\r"] {
             assert_eq!(
                 received
                     .recv_timeout(std::time::Duration::from_secs(5))
@@ -13241,7 +13241,7 @@ fn queued_codex_stop_hook_accepts_working_screen_three_seconds_after_enter() {
 }
 
 /// Drive one queued Codex delivery whose first Enter draws `screen_after_enter`
-/// (Ctrl-U, text and Enter are consumed first) and report every write the PTY
+/// (text and Enter are consumed first) and report every write the PTY
 /// saw plus whether the delivery ended uncertain. `after_retry` runs once a
 /// second Enter arrives, to draw the agent's reaction.
 #[cfg(unix)]
@@ -13283,7 +13283,7 @@ fn run_codex_queued_delivery(
 
     std::thread::scope(|scope| {
         scope.spawn(|| enqueue_user_command(&state, sid, "wake the agent", None).unwrap());
-        for expected in [b"\x15".as_slice(), b"wake the agent", b"\r"] {
+        for expected in [b"wake the agent".as_slice(), b"\r"] {
             let write = received
                 .recv_timeout(std::time::Duration::from_secs(5))
                 .unwrap();
@@ -13405,7 +13405,7 @@ fn swallowed_enter_on_a_long_codex_brief_is_retried_from_the_paste_placeholder()
 
     std::thread::scope(|scope| {
         scope.spawn(|| enqueue_user_command(&state, sid, &brief, None).unwrap());
-        for expected in [b"\x15".as_slice(), framed_brief.as_bytes(), b"\r"] {
+        for expected in [framed_brief.as_bytes(), b"\r"] {
             let write = received
                 .recv_timeout(std::time::Duration::from_secs(5))
                 .unwrap();
@@ -13581,7 +13581,7 @@ fn queued_claude_hook_busy_four_seconds_after_enter_confirms_submission() {
 
     std::thread::scope(|scope| {
         scope.spawn(|| enqueue_user_command(&state, sid, "wake the agent", None).unwrap());
-        for expected in [b"\x15".as_slice(), b"wake the agent", b"\r"] {
+        for expected in [b"wake the agent".as_slice(), b"\r"] {
             assert_eq!(
                 received
                     .recv_timeout(std::time::Duration::from_secs(15))
@@ -13653,7 +13653,7 @@ fn queued_codex_accepts_ready_then_working_after_enter() {
 
     std::thread::scope(|scope| {
         scope.spawn(|| enqueue_user_command(&state, sid, "wake the agent", None).unwrap());
-        for expected in [b"\x15".as_slice(), b"wake the agent", b"\r"] {
+        for expected in [b"wake the agent".as_slice(), b"\r"] {
             assert_eq!(
                 received
                     .recv_timeout(std::time::Duration::from_secs(5))
@@ -13731,7 +13731,7 @@ fn queued_prompt_disappearing_after_enter_confirms_gemini_and_aider() {
 
         std::thread::scope(|scope| {
             scope.spawn(|| enqueue_user_command(&state, &sid, "check status", None).unwrap());
-            for expected in [b"\x15".as_slice(), b"check status", b"\r"] {
+            for expected in [b"check status".as_slice(), b"\r"] {
                 assert_eq!(
                     received
                         .recv_timeout(std::time::Duration::from_secs(5))
@@ -13808,7 +13808,7 @@ fn a_voice_turn_to_a_busy_agent_is_written_immediately_and_never_queued() {
 
     assert_eq!(
         String::from_utf8(bytes.lock().unwrap().clone()).unwrap(),
-        "\u{15}check the logs\r",
+        "check the logs\r",
         "the same framed write every delivery uses, never raw text"
     );
     assert_eq!(queued_command_count(&state, "voice-now"), 0);
@@ -13834,7 +13834,7 @@ fn a_voice_turn_to_an_idle_agent_is_written_and_starts_a_turn() {
     );
     assert_eq!(
         String::from_utf8(bytes.lock().unwrap().clone()).unwrap(),
-        "\u{15}hello\r"
+        "hello\r"
     );
     assert_eq!(shell_state_of(&state, "voice-idle"), SHELL_BUSY);
 }
@@ -13861,8 +13861,8 @@ fn a_voice_turn_is_held_by_a_confident_question() {
     );
 }
 
-/// A draft in the composer holds the turn: the Ctrl-U that opens every write
-/// would erase what the user is typing.
+/// A draft in the composer holds the turn: the spoken text would otherwise be
+/// merged into what the user is typing.
 #[cfg(all(unix, feature = "dictation"))]
 #[test]
 fn a_voice_turn_is_held_by_partial_input() {
@@ -13903,7 +13903,7 @@ fn a_voice_turn_leaves_the_compose_queue_alone() {
 
     assert_eq!(
         String::from_utf8(bytes.lock().unwrap().clone()).unwrap(),
-        "\u{15}spoken\r"
+        "spoken\r"
     );
     assert_eq!(
         list_queued_commands(&state, "voice-compose")
@@ -14077,7 +14077,7 @@ fn list_and_remove_expose_every_parked_entry() {
 }
 
 /// The idle path, end to end against a real PTY: an idle agent gets the text
-/// typed and submitted at once (Ctrl-U prefix, CR in a separate write), so
+/// typed and submitted at once (no Ctrl-U prefix, CR in a separate write), so
 /// enqueueing costs nothing when there is no turn to protect.
 #[cfg(unix)]
 #[test]
@@ -14090,7 +14090,7 @@ fn enqueue_types_immediately_when_agent_is_idle() {
     assert_eq!((outcome.typed, outcome.queued), (true, 0));
     assert_eq!(
         String::from_utf8(bytes.lock().unwrap().clone()).unwrap(),
-        "\u{15}ship it\r"
+        "ship it\r"
     );
 }
 
@@ -14113,7 +14113,7 @@ fn enqueue_never_overtakes_a_command_already_waiting() {
     assert_eq!((outcome.typed, outcome.queued), (false, 1));
     assert_eq!(
         String::from_utf8(bytes.lock().unwrap().clone()).unwrap(),
-        "\u{15}first\r",
+        "first\r",
         "the older command is the one that reached the composer"
     );
     assert_eq!(
@@ -14828,27 +14828,26 @@ impl std::io::Write for FailsAtWrite {
     }
 }
 
-/// Ctrl-U types nothing, and a claim requires an empty composer, so a text
-/// write that fails before its first byte left the composer as it was: the
-/// submission is retry-safe. Counting the text's progress from the Ctrl-U byte
-/// would silently turn this into `Uncertain` and forbid the retry.
+/// A claim requires an empty composer, so a text write that fails before its
+/// first byte left the composer as it was: the submission is retry-safe. (The
+/// text is the FIRST write: no Ctrl-U precedes it any more, dropped-items #16.)
 #[cfg(unix)]
 #[test]
-fn text_write_failing_after_ctrl_u_is_a_clean_failure_and_releases_the_claim() {
+fn text_write_failing_before_its_first_byte_is_a_clean_failure_and_releases_the_claim() {
     let state = crate::state::tests_support::make_test_app_state();
-    agent_session(&state, "ctrl-u-then-fail", SHELL_IDLE);
+    agent_session(&state, "text-write-fails", SHELL_IDLE);
     insert_session_with_writer(
         &state,
-        "ctrl-u-then-fail",
+        "text-write-fails",
         Box::new(FailsAtWrite {
             calls: 0,
-            fail_at: 1,
+            fail_at: 0,
             partial: false,
         }),
         TtyMode::Raw,
     );
 
-    let outcome = write_agent_submission_to_pty(&state, "ctrl-u-then-fail", "retry me");
+    let outcome = write_agent_submission_to_pty(&state, "text-write-fails", "retry me");
 
     assert!(
         matches!(outcome, AgentSubmissionWrite::Failed(ref e) if e.contains("injected PTY failure")),
@@ -14858,7 +14857,7 @@ fn text_write_failing_after_ctrl_u_is_a_clean_failure_and_releases_the_claim() {
         state
             .session_maps
             .shell_states
-            .get("ctrl-u-then-fail")
+            .get("text-write-fails")
             .map(|value| value.load(Ordering::Acquire)),
         Some(SHELL_IDLE),
         "a clean failure must hand the idle composer back for the retry"
@@ -14868,21 +14867,21 @@ fn text_write_failing_after_ctrl_u_is_a_clean_failure_and_releases_the_claim() {
 /// Part of the text reached the composer: a retry would type it twice.
 #[cfg(unix)]
 #[test]
-fn partial_text_write_after_ctrl_u_is_uncertain() {
+fn partial_text_write_is_uncertain() {
     let state = crate::state::tests_support::make_test_app_state();
-    agent_session(&state, "ctrl-u-then-partial", SHELL_IDLE);
+    agent_session(&state, "text-write-partial", SHELL_IDLE);
     insert_session_with_writer(
         &state,
-        "ctrl-u-then-partial",
+        "text-write-partial",
         Box::new(FailsAtWrite {
             calls: 0,
-            fail_at: 1,
+            fail_at: 0,
             partial: true,
         }),
         TtyMode::Raw,
     );
 
-    let outcome = write_agent_submission_to_pty(&state, "ctrl-u-then-partial", "retry me");
+    let outcome = write_agent_submission_to_pty(&state, "text-write-partial", "retry me");
 
     assert!(
         matches!(outcome, AgentSubmissionWrite::Uncertain(_)),
@@ -14892,7 +14891,7 @@ fn partial_text_write_after_ctrl_u_is_uncertain() {
         state
             .session_maps
             .shell_states
-            .get("ctrl-u-then-partial")
+            .get("text-write-partial")
             .map(|value| value.load(Ordering::Acquire)),
         Some(SHELL_BUSY),
         "an uncertain delivery keeps the claim"
@@ -15289,7 +15288,7 @@ fn flush_keeps_pending_while_question_confident() {
 
 #[test]
 fn injection_payload_single_line_is_the_text_alone() {
-    // Single-line: no paste wrapper, and no Ctrl-U — that travels in its own write.
+    // Single-line: no paste wrapper, and never a Ctrl-U (dropped-items #16).
     assert_eq!(injection_payload("hello"), "hello");
 }
 
@@ -15318,12 +15317,9 @@ impl std::io::Write for TimedWriter {
     }
 }
 
-/// Claude Code (verified live on v2.1.280) treats a long input chunk as a
-/// paste. A Ctrl-U inside it is stripped as an invisible character, and Claude
-/// then refuses the Enter that follows ("review and press Enter to send") —
-/// a 584-char submission stayed unsent even with a 500ms Enter gap. Ctrl-U
-/// must reach the child in its own read, so it goes out a real gap before the
-/// text, and the text a real gap before the Enter.
+/// No Ctrl-U precedes the text (dropped-items #16: injected text is appended,
+/// never replaces what the user typed), and the text goes out a real gap
+/// before the Enter, so the CR reaches the child in its own read.
 ///
 /// Codex is the other half of the same defect (story 1163): it ingests a long
 /// plain write as a paste burst and swallows an Enter that lands inside it
@@ -15332,7 +15328,7 @@ impl std::io::Write for TimedWriter {
 /// outlast a length-dependent ingestion time.
 #[cfg(unix)]
 #[test]
-fn agent_submission_keeps_ctrl_u_gap_and_brackets_a_long_single_line_codex_wake() {
+fn agent_submission_sends_no_ctrl_u_keeps_the_enter_gap_and_brackets_a_long_codex_wake() {
     let state = crate::state::tests_support::make_test_app_state();
     let writes = Arc::new(std::sync::Mutex::new(Vec::new()));
     insert_session_with_writer(
@@ -15359,16 +15355,9 @@ fn agent_submission_keeps_ctrl_u_gap_and_brackets_a_long_single_line_codex_wake(
 
     let writes = writes.lock().unwrap();
     let chunks: Vec<&[u8]> = writes.iter().map(|(_, bytes)| bytes.as_slice()).collect();
-    assert_eq!(
-        chunks,
-        vec![b"\x15".as_slice(), framed.as_bytes(), b"\r".as_slice()]
-    );
+    assert_eq!(chunks, vec![framed.as_bytes(), b"\r".as_slice()]);
     assert!(
         writes[1].0 - writes[0].0 >= std::time::Duration::from_millis(45),
-        "Ctrl-U and the text must not share a read"
-    );
-    assert!(
-        writes[2].0 - writes[1].0 >= std::time::Duration::from_millis(45),
         "the CR must not share a read with the paste"
     );
 
@@ -15411,14 +15400,10 @@ fn agent_submission_with_unrecognized_type_keeps_the_unverified_gap_and_plain_pa
             .iter()
             .map(|(_, bytes)| bytes.as_slice())
             .collect::<Vec<_>>(),
-        vec![
-            b"\x15".as_slice(),
-            b"review this".as_slice(),
-            b"\r".as_slice()
-        ]
+        vec![b"review this".as_slice(), b"\r".as_slice()]
     );
     assert!(
-        writes[2].0 - writes[1].0 >= std::time::Duration::from_millis(195),
+        writes[1].0 - writes[0].0 >= std::time::Duration::from_millis(195),
         "an unverified agent keeps the long Enter gap"
     );
 }
@@ -18834,7 +18819,7 @@ async fn queued_command_drains_after_a_captured_opencode_mini_turn() {
     }
     assert_eq!(
         String::from_utf8(bytes.lock().unwrap()[replayed..].to_vec()).unwrap(),
-        "\u{15}resume queued work\r",
+        "resume queued work\r",
         "the Ready screen must release the queue into the composer"
     );
 }
@@ -24607,7 +24592,7 @@ fn configured_agent_is_submittable_during_shell_startup_before_first_observation
         write_agent_submission_to_pty(&state, sid, "start task"),
         AgentSubmissionWrite::Complete { .. }
     ));
-    assert_eq!(*probe.bytes.lock().unwrap(), b"\x15start task\r");
+    assert_eq!(*probe.bytes.lock().unwrap(), b"start task\r");
 }
 
 /// Catches: a configured preset stays permanently armed after its agent was
