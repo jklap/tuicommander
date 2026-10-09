@@ -149,24 +149,58 @@ fn redact(text: &str, secret: &str) -> String {
     }
 }
 
+/// Per-process key for [`secret_fingerprint`]. Random at startup, never stored:
+/// a plan's digest only has to survive from plan to execute in the same run.
+static PLAN_SECRET_KEY: std::sync::LazyLock<[u8; 32]> = std::sync::LazyLock::new(|| {
+    let mut key = [0u8; 32];
+    rand::fill(&mut key);
+    key
+});
+
+/// A keyed fingerprint of a secret, so the digest changes when the saved
+/// password does without the digest (which `GET .../plan` returns) being an
+/// offline-guessable hash of it.
+fn secret_fingerprint(secret: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(*PLAN_SECRET_KEY);
+    hasher.update(secret.as_bytes());
+    hex::encode(hasher.finalize())
+}
+
+/// SHA-256 over the displayed plan AND every stored input that changes what
+/// runs or where: the whole transport (host, port, user, `identity_file`,
+/// keepalive, compression, host-key policy, daemon port, instance, the
+/// start/leave-running flags), the deploy mode, `survive_secs`, the Auth
+/// username, and — for SetPassword — a keyed fingerprint of the saved password
+/// (Batch 32 review #2). Swapping the key file or the password between plan and
+/// execute is therefore a changed plan, not a silent substitution.
 fn digest_of(
-    connection_id: &str,
+    connection: &RemoteConnection,
     action: ProvisionAction,
     destination: &str,
     summary: &str,
     steps: &[ProvisionStep],
+    password_fingerprint: Option<&str>,
 ) -> String {
-    let body = serde_json::to_vec(&(connection_id, action, destination, summary, steps))
+    let inputs = serde_json::json!({
+        "transport": connection.transport,
+        "deploy": connection.deploy,
+        "survive_secs": connection.survive_secs,
+        "auth_username": connection.auth_username,
+        "password": password_fingerprint,
+    });
+    let body = serde_json::to_vec(&(&connection.id, action, destination, summary, steps, inputs))
         .expect("plan parts always serialize");
     hex::encode(Sha256::digest(&body))
 }
 
-/// Build the plan for one stored connection. Pure: nothing is contacted and no
-/// secret is read.
+/// Build the plan for one stored connection. Pure: nothing is contacted. The
+/// saved password (SetPassword only) is passed in by the caller and only its
+/// keyed fingerprint enters the digest; it never appears in the plan.
 pub(crate) fn build_plan(
     connection: &RemoteConnection,
     action: ProvisionAction,
-    password_saved: bool,
+    saved_password: Option<&str>,
 ) -> Result<ProvisionPlan, String> {
     connection.validate()?;
     let target = ssh_target(connection)?;
@@ -233,7 +267,7 @@ pub(crate) fn build_plan(
                 .as_deref()
                 .filter(|u| !u.is_empty())
                 .ok_or("this connection has no Auth username to set")?;
-            if !password_saved {
+            if saved_password.is_none_or(str::is_empty) {
                 return Err("this connection has no saved password to set".to_string());
             }
             (
@@ -255,7 +289,18 @@ pub(crate) fn build_plan(
             )
         }
     };
-    let digest = digest_of(&connection.id, action, &destination, &summary, &steps);
+    let password_fingerprint = match action {
+        ProvisionAction::SetPassword => saved_password.map(secret_fingerprint),
+        ProvisionAction::Start => None,
+    };
+    let digest = digest_of(
+        connection,
+        action,
+        &destination,
+        &summary,
+        &steps,
+        password_fingerprint.as_deref(),
+    );
     Ok(ProvisionPlan {
         connection_id: connection.id.clone(),
         connection_name: connection.name.clone(),
@@ -285,11 +330,15 @@ pub(crate) fn plan_for(
     action: ProvisionAction,
 ) -> Result<ProvisionPlan, String> {
     let connection = crate::remote_runtime::load_connection(state, id)?;
-    let password_saved = match action {
-        ProvisionAction::SetPassword => crate::remote_connection::connection_password_exists(id)?,
-        ProvisionAction::Start => false,
+    let saved_password = match action {
+        ProvisionAction::SetPassword => saved_password(id)?,
+        ProvisionAction::Start => None,
     };
-    build_plan(&connection, action, password_saved)
+    build_plan(&connection, action, saved_password.as_deref())
+}
+
+fn saved_password(id: &str) -> Result<Option<String>, String> {
+    crate::credentials::get(crate::credentials::Credential::RemoteConnection(id))
 }
 
 /// Run an accepted Start plan, then connect.
@@ -301,8 +350,9 @@ pub(crate) async fn start_daemon(
     id: &str,
     plan_digest: &str,
 ) -> Result<(), String> {
+    let daemon_ops = state.remote.lock_daemon_ops(id).await;
     let connection = crate::remote_runtime::load_connection(state, id)?;
-    let plan = build_plan(&connection, ProvisionAction::Start, false)?;
+    let plan = build_plan(&connection, ProvisionAction::Start, None)?;
     check_digest(&plan, plan_digest)?;
     let target = ssh_target(&connection)?;
     let profile = crate::remote_runtime::ssh_profile(&connection)
@@ -323,6 +373,9 @@ pub(crate) async fn start_daemon(
     .await
     .map_err(|e| redact(&format!("Starting the remote daemon failed: {e}"), &token))?;
     state.remote.mark_provisioned(id);
+    // Connecting is not a daemon operation: an Update it may trigger must be
+    // able to take the lock.
+    drop(daemon_ops);
     crate::remote_runtime::connect(state, id)
         .await
         .map_err(|e| format!("The remote daemon started, but connecting failed: {e}"))
@@ -334,14 +387,14 @@ pub(crate) async fn configure_password(
     id: &str,
     plan_digest: &str,
 ) -> Result<String, String> {
+    let _daemon_ops = state.remote.lock_daemon_ops(id).await;
     let connection = crate::remote_runtime::load_connection(state, id)?;
-    let password_saved = crate::remote_connection::connection_password_exists(id)?;
-    let plan = build_plan(&connection, ProvisionAction::SetPassword, password_saved)?;
+    // Read once: the digest binds THIS value, and it is the one sent.
+    let password = saved_password(id)?.ok_or("this connection has no saved password to set")?;
+    let plan = build_plan(&connection, ProvisionAction::SetPassword, Some(&password))?;
     check_digest(&plan, plan_digest)?;
     let target = ssh_target(&connection)?;
     let username = connection.auth_username.clone().unwrap_or_default();
-    let password = crate::credentials::get(crate::credentials::Credential::RemoteConnection(id))?
-        .ok_or("this connection has no saved password to set")?;
     let stdin = set_password_stdin(&username, &password)?;
     let command = set_password_command(target.instance_id)?;
     let profile = crate::remote_runtime::ssh_profile(&connection)
@@ -386,10 +439,24 @@ fn classify_set_password_failure(detail: &str, password: &str) -> String {
     )
 }
 
+/// Refusal of [`stop_daemon`] for a daemon this app did not start in this run.
+pub(crate) const NOT_STARTED_HERE: &str = "This app did not start this connection's remote daemon in this run; nothing was stopped. Stop it on the remote host itself.";
+
 /// Stop a daemon this app started for a connection, PID-verified. `Ok(true)`
 /// when a `tuic-remote` was signalled.
+///
+/// Only a daemon THIS app started through a confirmed Start plan in this run
+/// (the same "ours" mark Disconnect uses): the route takes no digest, so
+/// without this any authorised caller could stop any stored SSH connection's
+/// daemon — including one somebody else started that runs their sessions
+/// (Batch 32 review #4). A daemon this app did not start is refused before
+/// anything is dialled.
 pub(crate) async fn stop_daemon(state: &Arc<AppState>, id: &str) -> Result<bool, String> {
+    let _daemon_ops = state.remote.lock_daemon_ops(id).await;
     let connection = crate::remote_runtime::load_connection(state, id)?;
+    if !state.remote.is_provisioned(id) {
+        return Err(NOT_STARTED_HERE.to_string());
+    }
     let target = ssh_target(&connection)?;
     let profile = crate::remote_runtime::ssh_profile(&connection)
         .ok_or("remote daemon provisioning needs an SSH connection")?;
@@ -401,46 +468,95 @@ pub(crate) async fn stop_daemon(state: &Arc<AppState>, id: &str) -> Result<bool,
 }
 
 /// Whether Disconnect stops the daemon: only one this app started through a
-/// confirmed Start plan in this run, and only when the connection does not ask
-/// to leave it running. A daemon somebody else started is never touched.
-pub(crate) fn should_stop_on_disconnect(started_here: bool, leave_running: bool) -> bool {
-    started_here && !leave_running
+/// confirmed Start plan in this run, only when the connection does not ask to
+/// leave it running, and only when it has NO live sessions (Batch 32 review
+/// #3). A daemon somebody else started is never touched, and stopping one that
+/// still runs terminals or agents would kill them with no warning — so it is
+/// left running instead (it exits by itself `survive_secs` after its last
+/// client leaves). Conservative on purpose: the cost of the wrong answer here
+/// is a daemon idling until its survive timer, not lost work.
+pub(crate) fn should_stop_on_disconnect(
+    started_here: bool,
+    leave_running: bool,
+    live_sessions: usize,
+) -> bool {
+    started_here && !leave_running && live_sessions == 0
 }
 
-/// Called by Disconnect and delete before the runtime is torn down: forget the
-/// "started here" mark and, when [`should_stop_on_disconnect`] says so, stop
-/// the daemon in the background (bounded by `remote_deploy::STOP_TIMEOUT`).
-pub(crate) fn stop_after_disconnect(state: &Arc<AppState>, id: &str) {
-    if !state.remote.take_provisioned(id) {
-        return;
+/// What [`stop_after_disconnect`] stops, if anything, and the mark it updates:
+/// the mark is forgotten when the daemon is stopped or the user asked to leave
+/// it running, and KEPT when live sessions held the stop back, so a later
+/// Disconnect (or the stop route) can still stop the daemon this app started.
+///
+/// `connection` is the stored record (`None` when it could not be read): the
+/// Disconnect path loads it, the settings-store removal path hands over the
+/// removed record itself.
+fn disconnect_stop_target(
+    state: &Arc<AppState>,
+    id: &str,
+    connection: Option<&RemoteConnection>,
+) -> Option<(crate::tunnels::profile::TunnelProfile, Option<String>)> {
+    if !state.remote.is_provisioned(id) {
+        return None;
     }
-    let Ok(connection) = crate::remote_runtime::load_connection(state, id) else {
-        return;
-    };
-    stop_started_daemon(&connection);
+    let live_sessions = crate::remote_mirror::live_session_count(state, id);
+    let target = connection.and_then(|connection| {
+        let target = ssh_target(connection).ok()?;
+        let leave_running = target.leave_running_on_disconnect;
+        let instance = target.instance_id.map(str::to_string);
+        let profile = crate::remote_runtime::ssh_profile(connection)?;
+        Some((leave_running, profile, instance))
+    });
+    match target {
+        Some((leave_running, profile, instance)) => {
+            if should_stop_on_disconnect(true, leave_running, live_sessions) {
+                state.remote.forget_provisioned(id);
+                Some((profile, instance))
+            } else {
+                if !leave_running {
+                    tracing::warn!(
+                        source = "remote",
+                        connection = id,
+                        live_sessions,
+                        "Leaving the remote daemon this app started running: it still has live sessions"
+                    );
+                } else {
+                    state.remote.forget_provisioned(id);
+                }
+                None
+            }
+        }
+        None => {
+            state.remote.forget_provisioned(id);
+            None
+        }
+    }
+}
+
+/// Called by Disconnect and delete before the runtime is torn down: when
+/// [`should_stop_on_disconnect`] says so, stop the daemon this app started in
+/// the background (bounded by `remote_deploy::STOP_TIMEOUT`).
+pub(crate) fn stop_after_disconnect(state: &Arc<AppState>, id: &str) {
+    let connection = crate::remote_runtime::load_connection(state, id).ok();
+    if let Some(target) = disconnect_stop_target(state, id, connection.as_ref()) {
+        spawn_stop(id, target);
+    }
 }
 
 /// [`stop_after_disconnect`] for a record that is no longer on disk — the
 /// settings-store removal path hands over the removed record itself.
 pub(crate) fn stop_after_delete(state: &Arc<AppState>, connection: &RemoteConnection) {
-    if state.remote.take_provisioned(&connection.id) {
-        stop_started_daemon(connection);
+    if let Some(target) = disconnect_stop_target(state, &connection.id, Some(connection)) {
+        spawn_stop(&connection.id, target);
     }
 }
 
-fn stop_started_daemon(connection: &RemoteConnection) {
-    let started_here = true;
-    let id = connection.id.as_str();
-    let Ok(target) = ssh_target(connection) else {
-        return;
-    };
-    if !should_stop_on_disconnect(started_here, target.leave_running_on_disconnect) {
-        return;
-    }
-    let instance = target.instance_id.map(str::to_string);
-    let Some(profile) = crate::remote_runtime::ssh_profile(connection) else {
-        return;
-    };
+/// Stop the daemon this app started in the background (bounded by
+/// `remote_deploy::STOP_TIMEOUT`).
+fn spawn_stop(
+    id: &str,
+    (profile, instance): (crate::tunnels::profile::TunnelProfile, Option<String>),
+) {
     let id = id.to_string();
     tokio::spawn(async move {
         match crate::remote_deploy::stop_ephemeral_for(&profile, instance.as_deref()).await {
@@ -527,7 +643,7 @@ mod tests {
     fn the_start_plan_shows_exactly_the_commands_remote_deploy_sends() {
         let mut connection = provisioned_connection();
         set_instance(&mut connection, "dev-box");
-        let plan = build_plan(&connection, ProvisionAction::Start, false).unwrap();
+        let plan = build_plan(&connection, ProvisionAction::Start, None).unwrap();
         let commands: Vec<&str> = plan
             .steps
             .iter()
@@ -550,15 +666,15 @@ mod tests {
     #[test]
     fn start_needs_the_connection_to_opt_in() {
         let connection = RemoteConnection::new_ssh("box", "h", "u");
-        let err = build_plan(&connection, ProvisionAction::Start, false).unwrap_err();
+        let err = build_plan(&connection, ProvisionAction::Start, None).unwrap_err();
         assert!(err.contains("Start remote daemon if not running"), "{err}");
     }
 
     #[test]
     fn non_ssh_connections_have_no_plan() {
         let connection = RemoteConnection::new_direct("d", "http://h:9877", "u");
-        assert!(build_plan(&connection, ProvisionAction::Start, false).is_err());
-        assert!(build_plan(&connection, ProvisionAction::SetPassword, true).is_err());
+        assert!(build_plan(&connection, ProvisionAction::Start, None).is_err());
+        assert!(build_plan(&connection, ProvisionAction::SetPassword, Some("pw")).is_err());
     }
 
     /// The digest binds an accept to one plan: any stored field that changes
@@ -566,12 +682,12 @@ mod tests {
     #[test]
     fn the_digest_follows_every_field_that_changes_what_runs() {
         let base = provisioned_connection();
-        let digest = build_plan(&base, ProvisionAction::Start, false)
+        let digest = build_plan(&base, ProvisionAction::Start, None)
             .unwrap()
             .digest;
         assert_eq!(
             digest,
-            build_plan(&base, ProvisionAction::Start, false)
+            build_plan(&base, ProvisionAction::Start, None)
                 .unwrap()
                 .digest,
             "stable for an unchanged connection"
@@ -596,11 +712,65 @@ mod tests {
         let mut c = base.clone();
         c.survive_secs = 60;
         changed.push(c);
+        // Batch 32 review #2: fields that change HOW it runs, not just where.
+        type SshEdit = fn(&mut crate::ssh_connection::SshConnectionParams);
+        let ssh_edits: [SshEdit; 5] = [
+            |ssh| ssh.identity_file = Some("/home/boss/.ssh/other_key".into()),
+            |ssh| ssh.server_alive_interval = 99,
+            |ssh| ssh.server_alive_count_max = 9,
+            |ssh| ssh.compression = !ssh.compression,
+            |ssh| {
+                use crate::ssh_connection::StrictHostKeyChecking::{AcceptNew, Yes};
+                ssh.strict_host_key_checking = match ssh.strict_host_key_checking {
+                    Yes => AcceptNew,
+                    AcceptNew => Yes,
+                }
+            },
+        ];
+        for edit in ssh_edits {
+            let mut c = base.clone();
+            if let RemoteTransport::Ssh { ssh, .. } = &mut c.transport {
+                edit(ssh);
+            }
+            changed.push(c);
+        }
+        let mut c = base.clone();
+        c.deploy = crate::remote_connection::DeployMode::Installed;
+        changed.push(c);
+        let mut c = base.clone();
+        if let RemoteTransport::Ssh {
+            leave_running_on_disconnect,
+            ..
+        } = &mut c.transport
+        {
+            *leave_running_on_disconnect = true;
+        }
+        changed.push(c);
         for c in changed {
-            let plan = build_plan(&c, ProvisionAction::Start, false).unwrap();
+            let plan = build_plan(&c, ProvisionAction::Start, None).unwrap();
             assert_ne!(plan.digest, digest);
             assert_eq!(check_digest(&plan, &digest).unwrap_err(), PLAN_CHANGED);
         }
+    }
+
+    /// A different saved password (or Auth username) is a different
+    /// SetPassword plan, and the digest is not a plain hash of the password.
+    #[test]
+    fn the_set_password_digest_binds_the_saved_secret_without_exposing_it() {
+        let mut connection = provisioned_connection();
+        connection.auth_username = Some("boss".into());
+        let plan = build_plan(&connection, ProvisionAction::SetPassword, Some("pw-one")).unwrap();
+        let other = build_plan(&connection, ProvisionAction::SetPassword, Some("pw-two")).unwrap();
+        assert_ne!(plan.digest, other.digest);
+        assert_eq!(
+            check_digest(&other, &plan.digest).unwrap_err(),
+            PLAN_CHANGED
+        );
+        assert_ne!(plan.digest, hex::encode(Sha256::digest(b"pw-one")));
+        connection.auth_username = Some("someone-else".into());
+        let renamed =
+            build_plan(&connection, ProvisionAction::SetPassword, Some("pw-one")).unwrap();
+        assert_ne!(plan.digest, renamed.digest);
     }
 
     #[test]
@@ -608,7 +778,7 @@ mod tests {
         for hostile in ["a; reboot", "$(id)", "a`id`", "A", "default", "a b"] {
             let mut connection = provisioned_connection();
             set_instance(&mut connection, hostile);
-            assert!(build_plan(&connection, ProvisionAction::Start, false).is_err());
+            assert!(build_plan(&connection, ProvisionAction::Start, None).is_err());
             assert!(set_password_command(Some(hostile)).is_err());
         }
     }
@@ -626,7 +796,7 @@ mod tests {
     fn the_set_password_plan_carries_no_secret() {
         let mut connection = provisioned_connection();
         connection.auth_username = Some("boss".into());
-        let plan = build_plan(&connection, ProvisionAction::SetPassword, true).unwrap();
+        let plan = build_plan(&connection, ProvisionAction::SetPassword, Some("pw")).unwrap();
         let text = serde_json::to_string(&plan).unwrap();
         assert!(text.contains("--set-password-if-unset"));
         assert!(text.contains("\\\"boss\\\""));
@@ -637,12 +807,12 @@ mod tests {
     fn set_password_needs_a_username_and_a_saved_password() {
         let mut connection = provisioned_connection();
         connection.auth_username = None;
-        assert!(build_plan(&connection, ProvisionAction::SetPassword, true).is_err());
+        assert!(build_plan(&connection, ProvisionAction::SetPassword, Some("pw")).is_err());
         connection.auth_username = Some(String::new());
-        assert!(build_plan(&connection, ProvisionAction::SetPassword, true).is_err());
+        assert!(build_plan(&connection, ProvisionAction::SetPassword, Some("pw")).is_err());
         connection.auth_username = Some("boss".into());
-        assert!(build_plan(&connection, ProvisionAction::SetPassword, false).is_err());
-        assert!(build_plan(&connection, ProvisionAction::SetPassword, true).is_ok());
+        assert!(build_plan(&connection, ProvisionAction::SetPassword, None).is_err());
+        assert!(build_plan(&connection, ProvisionAction::SetPassword, Some("pw")).is_ok());
     }
 
     #[test]
@@ -702,10 +872,41 @@ mod tests {
 
     #[test]
     fn disconnect_stops_only_a_daemon_started_here_unless_asked_to_leave_it() {
-        assert!(should_stop_on_disconnect(true, false));
-        assert!(!should_stop_on_disconnect(true, true));
-        assert!(!should_stop_on_disconnect(false, false));
-        assert!(!should_stop_on_disconnect(false, true));
+        assert!(should_stop_on_disconnect(true, false, 0));
+        assert!(!should_stop_on_disconnect(true, true, 0));
+        assert!(!should_stop_on_disconnect(false, false, 0));
+        assert!(!should_stop_on_disconnect(false, true, 0));
+        assert!(!should_stop_on_disconnect(true, false, 1));
+    }
+
+    /// Batch 32 review #3: Disconnect stopped a daemon this app started even
+    /// while it ran live remote sessions, killing them with no warning. It is
+    /// now left running (and stays "ours" for a later stop); with no sessions
+    /// it is stopped as before, under the connection's own instance.
+    #[tokio::test]
+    async fn disconnect_leaves_a_daemon_with_live_sessions_running() {
+        let mut connection = provisioned_connection();
+        set_instance(&mut connection, "dev-box");
+        let (state, _dir) = state_with(&connection);
+        let id = connection.id.clone();
+        state.remote.mark_provisioned(&id);
+        crate::remote_mirror::store_seed_for_test(
+            &state,
+            &id,
+            vec![crate::mcp_http::types::SessionInfo {
+                session_id: "remote-1".into(),
+                ..Default::default()
+            }],
+        );
+
+        assert!(disconnect_stop_target(&state, &id, Some(&connection)).is_none());
+        assert!(state.remote.is_provisioned(&id), "still ours to stop later");
+
+        crate::remote_mirror::store_seed_for_test(&state, &id, Vec::new());
+        let (_, instance) =
+            disconnect_stop_target(&state, &id, Some(&connection)).expect("no sessions: stop");
+        assert_eq!(instance.as_deref(), Some("dev-box"));
+        assert!(!state.remote.is_provisioned(&id));
     }
 
     fn state_with(connection: &RemoteConnection) -> (Arc<AppState>, ()) {
@@ -733,7 +934,49 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(err, PLAN_CHANGED);
-        assert!(!state.remote.take_provisioned(&connection.id));
+        assert!(!state.remote.is_provisioned(&connection.id));
+    }
+
+    /// Batch 32 review #5b: concurrent Start/Stop/Update/configure-password
+    /// for the SAME connection interleaved. Every one of them now waits for
+    /// that connection's daemon lock; another connection's never does.
+    #[tokio::test]
+    async fn daemon_operations_on_one_connection_serialize() {
+        // An unknown id fails instantly once it gets the lock, so a call
+        // that has not returned within the window can only be waiting for it.
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let held = state.remote.lock_daemon_ops("c1").await;
+
+        let blocked =
+            tokio::time::timeout(Duration::from_millis(300), stop_daemon(&state, "c1")).await;
+        assert!(blocked.is_err(), "stop must wait for the held lock");
+        let other =
+            tokio::time::timeout(Duration::from_millis(300), stop_daemon(&state, "c2")).await;
+        assert!(
+            matches!(other, Ok(Err(_))),
+            "another connection never waits: {other:?}"
+        );
+
+        drop(held);
+        let unblocked = tokio::time::timeout(Duration::from_secs(5), stop_daemon(&state, "c1"))
+            .await
+            .expect("runs once the lock is free");
+        assert!(unblocked.is_err(), "unknown id");
+    }
+
+    /// A daemon this app did not start in this run is never stopped, and
+    /// the stored host is not even dialled (closed port: dialling it would
+    /// have produced an SSH error instead of the refusal).
+    #[tokio::test]
+    async fn stop_refuses_a_daemon_this_app_did_not_start() {
+        let mut connection = provisioned_connection();
+        if let RemoteTransport::Ssh { ssh, .. } = &mut connection.transport {
+            ssh.host = "127.0.0.1".into();
+            ssh.port = 1;
+        }
+        let (state, _dir) = state_with(&connection);
+        let err = stop_daemon(&state, &connection.id).await.unwrap_err();
+        assert_eq!(err, NOT_STARTED_HERE);
     }
 
     #[tokio::test]

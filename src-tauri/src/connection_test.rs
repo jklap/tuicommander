@@ -11,6 +11,11 @@
 //!   (`tunnels::exec::ssh_check`, args from `tunnels::command::build_ssh_test_args`
 //!   — the same options a real tunnel uses, off any multiplexed master),
 //!   classified through the existing `tunnels::classifier::classify_exit`.
+//! - **Direct, `https://`:** the certificate is judged first, the way Connect
+//!   judges it (`direct_proxy::probe_direct_tls`): a pinned certificate that
+//!   still matches is tested through a one-shot pinned relay; an unpinned
+//!   certificate nobody vouches for, or a pin the server no longer matches,
+//!   reports `Unreachable` before any request (or credential) is sent.
 //! - **Direct / Local:** a single `GET <base>/health` via a short-lived
 //!   `reqwest::Client` that follows no redirects, with Basic Auth attached when
 //!   a username or password was given. Classified by status code and, for a
@@ -28,7 +33,10 @@
 //!
 //! A password with no username is sent as Basic `:<password>`, exactly like
 //! Connect's token exchange: a daemon refuses it (`AuthFailed`) rather than the
-//! check quietly testing without credentials.
+//! check quietly testing without credentials. With nothing typed at all an
+//! empty Basic header (`:`) is still sent, so a password-protected daemon
+//! reports `PasswordRequired` instead of being mistaken for an unconfigured one
+//! (the two share a 401 body only when no header arrives).
 //!
 //! **Known limitation, not fixed here:** a headless `tuic-remote` daemon's
 //! `/health` route (`mcp_http::build_remote_router`) is deliberately public —
@@ -59,14 +67,25 @@ pub(crate) enum ConnectionTestResult {
     /// Reached the target, but credentials were rejected (SSH: `Permission
     /// denied`; Direct/Local: a 401 whose body is "Invalid credentials").
     AuthFailed,
-    /// Direct/Local only: the daemon is reachable, but no credentials were
-    /// presented or it has none configured (`AuthResult::NotConfigured` /
-    /// `::MissingHeader` share one 401 body). Distinct from `AuthFailed` so the
-    /// UI can say "reachable, not configured" instead of "wrong password".
+    /// Direct/Local only: the daemon is reachable and has no credentials
+    /// configured (`AuthResult::NotConfigured`). A Basic header is always sent,
+    /// so the 401 body this shares with `::MissingHeader` can only mean this.
+    /// Distinct from `AuthFailed` so the UI can say "reachable, not
+    /// configured" instead of "wrong password".
     NotConfigured,
+    /// Direct/Local only: the daemon is reachable and protected, and the
+    /// request carried no username or password to test. Not "not configured":
+    /// a password-protected daemon was misreported that way when nothing was
+    /// typed (tunnel-session-review R2).
+    PasswordRequired,
     /// Local only, `instance_id` set: no on-disk instance config directory
     /// exists for that id.
     InstanceNotFound,
+    /// SSH (Remote Server) only: SSH itself works — connected, authenticated,
+    /// ran `true` — but no TUICommander daemon answered on the remote host's
+    /// `127.0.0.1:<remote_daemon_port>`. Kept apart from `Unreachable` so the
+    /// UI can say which half failed (tunnel-session-review R5).
+    DaemonUnreachable { reason: String },
     /// Everything else: network failure, timeout, an unreadable Local
     /// instance config, an SSH host-key mismatch, an unexpected status, etc.
     /// Carries a short human-readable reason that never includes the URL (so
@@ -105,13 +124,24 @@ pub(crate) async fn test_connection_impl(request: &TestConnectionRequest) -> Con
     let username = request.auth_username.as_deref();
     let password = request.password.as_deref();
     match &request.transport {
-        RemoteTransport::Ssh { ssh, .. } => {
-            classify_ssh_result(crate::tunnels::exec::ssh_check(ssh, SSH_TEST_TIMEOUT).await)
+        RemoteTransport::Ssh {
+            ssh,
+            remote_daemon_port,
+            ..
+        } => {
+            test_ssh(
+                ssh,
+                *remote_daemon_port,
+                username,
+                password,
+                std::path::Path::new("ssh"),
+            )
+            .await
         }
-        // A pinned self-signed certificate is honoured by Connect (the pinned
-        // relay in `direct_proxy`), not here: such a target reports
-        // Unreachable with the TLS error, exactly as before pinning existed.
-        RemoteTransport::Direct { url, .. } => test_http_health(url, username, password).await,
+        RemoteTransport::Direct {
+            url,
+            tls_fingerprint,
+        } => test_direct(url, tls_fingerprint.as_deref(), username, password).await,
         // A relay path has no URL to probe before Connect opens the end-to-end
         // channel; the editor does not offer Test Connection for it.
         RemoteTransport::Relay => ConnectionTestResult::Unreachable {
@@ -164,6 +194,97 @@ async fn verify_local_target(url: &str, instance_id: Option<&str>) -> Result<(),
 }
 
 // ---------------------------------------------------------------------------
+// Direct (certificate trust first, then the HTTP health check)
+// ---------------------------------------------------------------------------
+
+/// Direct: decide whether the URL's certificate can be trusted exactly the way
+/// Connect does (`remote_runtime::resolve_direct_base_url`), and only then send
+/// the health request — and the credentials with it.
+///
+/// * `http://`, or `https://` the OS trusts: the URL itself.
+/// * `https://` pinned and still presenting the pin: through a one-shot pinned
+///   relay (`direct_proxy::DirectProxies`), the same verifier and the same
+///   loopback base URL Connect hands out — so a pinned self-signed daemon tests
+///   as reachable instead of failing on the system trust store.
+/// * Fails closed, before anything is sent: an `https://` certificate nobody
+///   vouches for and nothing pins, a pin the server no longer matches, or a
+///   garbled pin.
+async fn test_direct(
+    url: &str,
+    tls_fingerprint: Option<&str>,
+    username: Option<&str>,
+    password: Option<&str>,
+) -> ConnectionTestResult {
+    use crate::direct_proxy::{ProbeResult, https_target, normalize_fingerprint, probe_direct_tls};
+    let url = url.trim().trim_end_matches('/');
+    let target = match https_target(url) {
+        Ok(Some(target)) => target,
+        Ok(None) => return test_http_health(url, username, password).await,
+        Err(reason) => return ConnectionTestResult::Unreachable { reason },
+    };
+    let probe = match probe_direct_tls(url, tls_fingerprint).await {
+        Ok(probe) => probe,
+        Err(reason) => {
+            let reason = reason
+                .strip_prefix("Unreachable: ")
+                .map(str::to_string)
+                .unwrap_or(reason);
+            return ConnectionTestResult::Unreachable { reason };
+        }
+    };
+    match probe {
+        ProbeResult::NoTlsNeeded | ProbeResult::Trusted => {
+            test_http_health(url, username, password).await
+        }
+        ProbeResult::NeedsConfirmation { fingerprint } => ConnectionTestResult::Unreachable {
+            reason: format!(
+                "certificate not trusted by this system (SHA-256 {fingerprint}); \
+                 Connect lets you compare and pin it. Nothing was sent to the server."
+            ),
+        },
+        ProbeResult::PinnedMismatch {
+            presented_fingerprint,
+        } => ConnectionTestResult::Unreachable {
+            reason: format!(
+                "certificate changed: pinned SHA-256 {}, the server now presents \
+                 {presented_fingerprint}. Nothing was sent to the server.",
+                tls_fingerprint.unwrap_or_default()
+            ),
+        },
+        ProbeResult::PinnedMatch => {
+            let Some(pin) = tls_fingerprint.and_then(normalize_fingerprint) else {
+                return ConnectionTestResult::Unreachable {
+                    reason: "stored certificate pin is not a SHA-256 fingerprint".to_string(),
+                };
+            };
+            let relay = OneShotRelay::default();
+            let port = match relay.0.start(OneShotRelay::ID, target, &pin).await {
+                Ok(port) => port,
+                Err(reason) => return ConnectionTestResult::Unreachable { reason },
+            };
+            // The bare relay origin, exactly what `resolve_direct_base_url`
+            // hands Connect, so the test sees what Connect will see.
+            test_http_health(&format!("http://127.0.0.1:{port}"), username, password).await
+        }
+    }
+}
+
+/// A pinned relay that lives exactly as long as one Test Connection call —
+/// stopped on drop, so a cancelled request cannot leave its accept loop behind.
+#[derive(Default)]
+struct OneShotRelay(crate::direct_proxy::DirectProxies);
+
+impl OneShotRelay {
+    const ID: &'static str = "test-connection";
+}
+
+impl Drop for OneShotRelay {
+    fn drop(&mut self) {
+        self.0.stop(Self::ID);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // SSH
 // ---------------------------------------------------------------------------
 
@@ -172,6 +293,107 @@ async fn verify_local_target(url: &str, instance_id: Option<&str>) -> Result<(),
 /// a safety net against ssh itself hanging (e.g. a misbehaving `ProxyCommand`)
 /// — strictly larger than the ConnectTimeout it wraps.
 const SSH_TEST_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// SSH: the one-shot `true` check, then — for a Remote Server, whose
+/// `remote_daemon_port` is set (an SSH tunnel profile sends 0: it has no
+/// daemon) — the daemon itself: one `GET /health` through ssh's stdio
+/// forwarding to the remote host's own `127.0.0.1:<port>`, the port Connect's
+/// tunnel forwards to. The answer is judged like Connect judges it
+/// (`remote_runtime::health_from_json`) and, for a 401, like the Direct/Local
+/// check (always a Basic header, so "not configured" cannot be invented).
+async fn test_ssh(
+    ssh: &crate::ssh_connection::SshConnectionParams,
+    remote_daemon_port: u16,
+    username: Option<&str>,
+    password: Option<&str>,
+    ssh_binary: &std::path::Path,
+) -> ConnectionTestResult {
+    let checked =
+        crate::tunnels::exec::ssh_check_with_binary(ssh, SSH_TEST_TIMEOUT, ssh_binary).await;
+    if checked.is_err() || remote_daemon_port == 0 {
+        return classify_ssh_result(checked);
+    }
+    let username = username.unwrap_or_default();
+    let password = password.filter(|p| !p.is_empty());
+    let credentials_given = !username.is_empty() || password.is_some();
+    let request = health_request(remote_daemon_port, username, password.unwrap_or_default());
+    match crate::tunnels::exec::ssh_daemon_request_with_binary(
+        ssh,
+        remote_daemon_port,
+        request.as_bytes(),
+        SSH_TEST_TIMEOUT,
+        ssh_binary,
+    )
+    .await
+    {
+        Ok(output) => classify_raw_health(&output.stdout, remote_daemon_port, credentials_given),
+        Err(reason) => ConnectionTestResult::DaemonUnreachable {
+            reason: match reason {
+                ExitReason::ConnectionRefused => format!(
+                    "SSH works, but nothing listens on the remote host's port \
+                     {remote_daemon_port} — is the daemon running?"
+                ),
+                ExitReason::Timeout => format!(
+                    "SSH works, but the daemon on remote port {remote_daemon_port} did not answer in time"
+                ),
+                other => format!(
+                    "SSH works, but the daemon on remote port {remote_daemon_port} \
+                     could not be reached: {other:?}"
+                ),
+            },
+        },
+    }
+}
+
+/// The raw HTTP/1.0 `/health` request sent through the stdio forward, always
+/// with a Basic header (see `test_http_health`). HTTP/1.0 + `Connection:
+/// close` so the daemon closes the connection after answering, which is what
+/// ends ssh's forward.
+fn health_request(port: u16, username: &str, password: &str) -> String {
+    use base64::Engine as _;
+    let basic = base64::engine::general_purpose::STANDARD.encode(format!("{username}:{password}"));
+    format!(
+        "GET /health HTTP/1.0\r\nHost: 127.0.0.1:{port}\r\nAuthorization: Basic {basic}\r\n\
+         Connection: close\r\n\r\n"
+    )
+}
+
+/// Classify a raw HTTP response read off the stdio forward.
+fn classify_raw_health(raw: &str, port: u16, credentials_given: bool) -> ConnectionTestResult {
+    let not_a_daemon = || ConnectionTestResult::DaemonUnreachable {
+        reason: format!(
+            "SSH works, but what answers on the remote host's port {port} is not a TUICommander daemon"
+        ),
+    };
+    let (head, body) = raw.split_once("\r\n\r\n").unwrap_or((raw, ""));
+    let Some(status) = head
+        .lines()
+        .next()
+        .filter(|line| line.starts_with("HTTP/"))
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|code| code.parse::<u16>().ok())
+    else {
+        return not_a_daemon();
+    };
+    match status {
+        200..=299 => match serde_json::from_str::<serde_json::Value>(body) {
+            Ok(json)
+                if crate::remote_runtime::health_from_json(&json)
+                    .protocol_version
+                    .is_some() =>
+            {
+                ConnectionTestResult::Reachable
+            }
+            _ => not_a_daemon(),
+        },
+        401 => classify_401_body(body, credentials_given),
+        other => ConnectionTestResult::DaemonUnreachable {
+            reason: format!(
+                "SSH works, but the daemon on remote port {port} answered HTTP {other}"
+            ),
+        },
+    }
+}
 
 /// Map the runner's result onto `ConnectionTestResult`. `AuthFailed` has its
 /// own variant; every other `ExitReason` becomes `Unreachable` carrying the
@@ -223,18 +445,41 @@ async fn test_http_health(
     };
 
     let url = format!("{}/health", base_url.trim_end_matches('/'));
-    let mut req = client.get(&url);
     let username = auth_username.unwrap_or_default();
     let password = password.filter(|p| !p.is_empty());
-    if !username.is_empty() || password.is_some() {
-        req = req.basic_auth(username, password);
-    }
+    let credentials_given = !username.is_empty() || password.is_some();
+    // ALWAYS a Basic header, even an empty `:` one when nothing was typed —
+    // the rule `remote_connection::request_session_token` follows. A daemon
+    // answers `MissingHeader` and `NotConfigured` with the same 401 body, so
+    // without a header a password-protected daemon would read as "not
+    // configured"; with one, that body can only mean NotConfigured and a
+    // protected daemon answers "Invalid credentials".
+    let req = client.get(&url).basic_auth(username, password);
 
     match req.send().await {
-        Ok(resp) => classify_http_response(resp).await,
+        Ok(resp) => match classify_http_response(resp).await {
+            ConnectionTestResult::AuthFailed if !credentials_given => {
+                ConnectionTestResult::PasswordRequired
+            }
+            result => result,
+        },
         Err(e) => ConnectionTestResult::Unreachable {
             reason: describe_reqwest_error(e),
         },
+    }
+}
+
+/// A 401 from the daemon's auth middleware. A Basic header is always sent, so
+/// the shared MissingHeader/NotConfigured body can only mean NotConfigured; a
+/// rejection with nothing typed is `PasswordRequired`.
+fn classify_401_body(body: &str, credentials_given: bool) -> ConnectionTestResult {
+    if !body.contains(AUTH_INVALID_BODY) {
+        // `AuthResult::NotConfigured`: nothing to authenticate against yet.
+        ConnectionTestResult::NotConfigured
+    } else if credentials_given {
+        ConnectionTestResult::AuthFailed
+    } else {
+        ConnectionTestResult::PasswordRequired
     }
 }
 
@@ -245,13 +490,7 @@ async fn classify_http_response(resp: reqwest::Response) -> ConnectionTestResult
     }
     if status == reqwest::StatusCode::UNAUTHORIZED {
         let body = resp.text().await.unwrap_or_default();
-        return if body.contains(AUTH_INVALID_BODY) {
-            ConnectionTestResult::AuthFailed
-        } else {
-            // `AuthResult::NotConfigured` or `::MissingHeader` — same body,
-            // same meaning from here: nothing to authenticate against yet.
-            ConnectionTestResult::NotConfigured
-        };
+        return classify_401_body(&body, true);
     }
     ConnectionTestResult::Unreachable {
         reason: format!("unexpected HTTP status {status}"),
@@ -394,6 +633,164 @@ mod tests {
         );
     }
 
+    // --- SSH: the daemon behind the SSH connection ---
+
+    /// A fake ssh: `true` (the SSH check) exits 0; the `-W` daemon check logs
+    /// its argv and the request it received, then answers `-W`'s branch.
+    #[cfg(unix)]
+    fn daemon_ssh(name: &str, on_forward: &str) -> std::path::PathBuf {
+        let posix = format!(
+            "case \" $* \" in *\" -W \"*)\n\
+             printf '%s\\n' \"$@\" > \"$0.args\"\n\
+             : > \"$0.req\"\n\
+             while IFS= read -r line; do printf '%s\\n' \"$line\" >> \"$0.req\"; [ ${{#line}} -le 1 ] && break; done\n\
+             {on_forward}\n;;\nesac\nexit 0"
+        );
+        let ssh = fake_ssh_script(name, &posix, "exit /b 0");
+        let _ = std::fs::remove_file(format!("{}.args", ssh.display()));
+        let _ = std::fs::remove_file(format!("{}.req", ssh.display()));
+        ssh
+    }
+
+    #[cfg(unix)]
+    fn answer(status_line: &str, body: &str) -> String {
+        format!("printf '{status_line}\\r\\nConnection: close\\r\\n\\r\\n{body}'; exit 0")
+    }
+
+    #[cfg(unix)]
+    async fn test_remote_ssh(
+        ssh_binary: &std::path::Path,
+        port: u16,
+        username: Option<&str>,
+        password: Option<&str>,
+    ) -> ConnectionTestResult {
+        test_ssh(
+            &SshConnectionParams::new("example.com", "alice"),
+            port,
+            username,
+            password,
+            ssh_binary,
+        )
+        .await
+    }
+
+    /// Catches: an SSH Test Connection reporting Reachable while it never
+    /// looked at the daemon at all.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_ssh_remote_server_checks_the_daemon_through_a_stdio_forward() {
+        let ssh = daemon_ssh(
+            "connection_test_daemon_ok",
+            &answer("HTTP/1.1 200 OK", r#"{"protocol_version":1}"#),
+        );
+        assert_eq!(
+            test_remote_ssh(&ssh, 9877, Some("boss"), Some("pw")).await,
+            ConnectionTestResult::Reachable
+        );
+        let args = std::fs::read_to_string(format!("{}.args", ssh.display()))
+            .expect("the daemon check ran ssh -W");
+        let args: Vec<&str> = args.lines().collect();
+        assert!(
+            args.windows(4)
+                .any(|w| w == ["-W", "127.0.0.1:9877", "--", "alice@example.com"]),
+            "{args:?}"
+        );
+        let request = std::fs::read_to_string(format!("{}.req", ssh.display())).unwrap();
+        assert!(request.starts_with("GET /health HTTP/1.0"), "{request}");
+        // boss:pw
+        assert!(
+            request.contains("Authorization: Basic Ym9zczpwdw=="),
+            "{request}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn ssh_ok_but_no_daemon_listening_is_daemon_unreachable() {
+        let ssh = daemon_ssh(
+            "connection_test_daemon_refused",
+            "echo 'channel 0: open failed: connect failed: Connection refused' >&2; echo 'stdio forwarding failed' >&2; exit 255",
+        );
+        match test_remote_ssh(&ssh, 9877, None, None).await {
+            ConnectionTestResult::DaemonUnreachable { reason } => {
+                assert!(reason.contains("nothing listens"), "{reason}");
+                assert!(reason.contains("9877"), "{reason}");
+            }
+            other => panic!("expected DaemonUnreachable, got {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_protected_daemon_behind_ssh_with_nothing_typed_needs_a_password() {
+        let ssh = daemon_ssh(
+            "connection_test_daemon_protected",
+            &answer("HTTP/1.1 401 Unauthorized", AUTH_INVALID_BODY),
+        );
+        assert_eq!(
+            test_remote_ssh(&ssh, 9877, None, None).await,
+            ConnectionTestResult::PasswordRequired
+        );
+        let request = std::fs::read_to_string(format!("{}.req", ssh.display())).unwrap();
+        // ":" — empty but present, so "not configured" cannot be invented.
+        assert!(request.contains("Authorization: Basic Og=="), "{request}");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn something_else_on_the_daemon_port_is_not_a_daemon() {
+        let ssh = daemon_ssh(
+            "connection_test_daemon_impostor",
+            &answer("HTTP/1.1 200 OK", "<html>hello</html>"),
+        );
+        match test_remote_ssh(&ssh, 9877, None, None).await {
+            ConnectionTestResult::DaemonUnreachable { reason } => {
+                assert!(reason.contains("not a TUICommander daemon"), "{reason}");
+            }
+            other => panic!("expected DaemonUnreachable, got {other:?}"),
+        }
+    }
+
+    /// An SSH tunnel profile (port 0) has no daemon: only SSH is checked.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_ssh_tunnel_profile_checks_ssh_only() {
+        let ssh = daemon_ssh("connection_test_tunnel_only", "exit 99");
+        assert_eq!(
+            test_remote_ssh(&ssh, 0, None, None).await,
+            ConnectionTestResult::Reachable
+        );
+        assert!(!std::path::Path::new(&format!("{}.args", ssh.display())).exists());
+    }
+
+    #[test]
+    fn a_raw_health_answer_is_classified_like_connect_reads_it() {
+        assert_eq!(
+            classify_raw_health(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\r\n{\"protocol_version\":2}",
+                9877,
+                false
+            ),
+            ConnectionTestResult::Reachable
+        );
+        assert_eq!(
+            classify_raw_health(
+                "HTTP/1.1 401 Unauthorized\r\n\r\nScan the QR code or authenticate with Basic Auth",
+                9877,
+                false
+            ),
+            ConnectionTestResult::NotConfigured
+        );
+        assert!(matches!(
+            classify_raw_health("", 9877, false),
+            ConnectionTestResult::DaemonUnreachable { .. }
+        ));
+        assert!(matches!(
+            classify_raw_health("HTTP/1.1 500 Oops\r\n\r\n", 9877, true),
+            ConnectionTestResult::DaemonUnreachable { ref reason } if reason.contains("500")
+        ));
+    }
+
     // --- classify_http_response ---
 
     async fn health_response(status: usize, body: &str) -> reqwest::Response {
@@ -451,13 +848,73 @@ mod tests {
         let mut server = mockito::Server::new_async().await;
         let _mock = server
             .mock("GET", "/health")
-            .match_header("authorization", mockito::Matcher::Missing)
+            .match_header("authorization", "Basic Og==") // ":" — empty, but present
             .with_status(200)
             .create_async()
             .await;
 
         let result = test_http_health(&server.url(), None, None).await;
         assert_eq!(result, ConnectionTestResult::Reachable);
+    }
+
+    /// The real auth middleware, not a mock: one daemon with credentials, one
+    /// without, both tested with nothing typed.
+    async fn auth_daemon(username: &str, password: &str) -> String {
+        let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
+        {
+            let mut config = state.config.write();
+            config.services.auth.username = username.to_string();
+            config.services.auth.password_hash = if password.is_empty() {
+                String::new()
+            } else {
+                bcrypt::hash(password, 4).unwrap()
+            };
+        }
+        let router = axum::Router::new()
+            .route("/health", axum::routing::get(|| async { "ok" }))
+            .layer(axum::middleware::from_fn_with_state(
+                state,
+                crate::mcp_http::auth::basic_auth_middleware,
+            ));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(
+                listener,
+                router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .await
+            .unwrap();
+        });
+        format!("http://{addr}")
+    }
+
+    /// Catches: a password-protected daemon tested with nothing typed being
+    /// reported "not configured yet" (no header => the MissingHeader body).
+    #[tokio::test]
+    async fn a_protected_daemon_tested_without_credentials_needs_a_password() {
+        let url = auth_daemon("boss", "hunter2").await;
+        assert_eq!(
+            test_http_health(&url, None, None).await,
+            ConnectionTestResult::PasswordRequired
+        );
+        assert_eq!(
+            test_http_health(&url, Some("boss"), Some("wrong")).await,
+            ConnectionTestResult::AuthFailed
+        );
+        assert_eq!(
+            test_http_health(&url, Some("boss"), Some("hunter2")).await,
+            ConnectionTestResult::Reachable
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unconfigured_daemon_is_still_not_configured_without_credentials() {
+        let url = auth_daemon("", "").await;
+        assert_eq!(
+            test_http_health(&url, None, None).await,
+            ConnectionTestResult::NotConfigured
+        );
     }
 
     #[tokio::test]
@@ -661,6 +1118,161 @@ mod tests {
             other => panic!("expected Unreachable, got {other:?}"),
         }
         with_credential.assert_async().await;
+    }
+
+    // --- test_connection_impl: Direct over https with a self-signed cert ---
+
+    /// An HTTPS `/health` server on 127.0.0.1 presenting a throwaway
+    /// self-signed certificate (what a daemon's `selfsigned.rs` serves). It
+    /// answers 200 to every request and records each request's head, so a
+    /// test can prove whether — and with which credential — anything was sent.
+    struct SelfSignedHealthServer {
+        url: String,
+        fingerprint: String,
+        requests: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+        task: tokio::task::JoinHandle<()>,
+    }
+
+    impl Drop for SelfSignedHealthServer {
+        fn drop(&mut self) {
+            self.task.abort();
+        }
+    }
+
+    impl SelfSignedHealthServer {
+        fn requests(&self) -> Vec<String> {
+            self.requests.lock().unwrap().clone()
+        }
+    }
+
+    async fn start_self_signed_health_server() -> SelfSignedHealthServer {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let rcgen::CertifiedKey { cert, signing_key } =
+            rcgen::generate_simple_self_signed(vec!["127.0.0.1".to_string()]).unwrap();
+        let fingerprint = crate::direct_proxy::cert_fingerprint_sha256(cert.der());
+        let key = rustls::pki_types::PrivateKeyDer::Pkcs8(signing_key.serialize_der().into());
+        let config = rustls::ServerConfig::builder_with_provider(std::sync::Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_no_client_auth()
+        .with_single_cert(vec![cert.der().clone()], key)
+        .unwrap();
+        let acceptor = tokio_rustls::TlsAcceptor::from(std::sync::Arc::new(config));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let requests = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded = requests.clone();
+        let task = tokio::spawn(async move {
+            loop {
+                let Ok((stream, _)) = listener.accept().await else {
+                    continue;
+                };
+                let acceptor = acceptor.clone();
+                let recorded = recorded.clone();
+                tokio::spawn(async move {
+                    let Ok(mut tls) = acceptor.accept(stream).await else {
+                        return;
+                    };
+                    let mut head = Vec::new();
+                    let mut buf = [0u8; 1024];
+                    while !head.windows(4).any(|w| w == b"\r\n\r\n") {
+                        match tls.read(&mut buf).await {
+                            Ok(0) | Err(_) => return,
+                            Ok(n) => head.extend_from_slice(&buf[..n]),
+                        }
+                    }
+                    recorded
+                        .lock()
+                        .unwrap()
+                        .push(String::from_utf8_lossy(&head).into_owned());
+                    let _ = tls
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\nok",
+                        )
+                        .await;
+                    let _ = tls.shutdown().await;
+                });
+            }
+        });
+        SelfSignedHealthServer {
+            url: format!("https://{addr}"),
+            fingerprint,
+            requests,
+            task,
+        }
+    }
+
+    fn direct(url: &str, pin: Option<&str>) -> TestConnectionRequest {
+        TestConnectionRequest {
+            transport: RemoteTransport::Direct {
+                url: url.to_string(),
+                tls_fingerprint: pin.map(str::to_string),
+            },
+            auth_username: Some("boss".to_string()),
+            password: Some("vault-secret".to_string()),
+        }
+    }
+
+    /// Catches: Test Connection ignoring the pin and judging a pinned
+    /// self-signed daemon by the system trust store (always "TLS error").
+    #[tokio::test]
+    async fn a_pinned_self_signed_daemon_is_reachable_through_the_pin() {
+        let server = start_self_signed_health_server().await;
+        let pin = server.fingerprint.to_ascii_uppercase();
+        assert_eq!(
+            test_connection_impl(&direct(&server.url, Some(&pin))).await,
+            ConnectionTestResult::Reachable
+        );
+        let requests = server.requests();
+        assert_eq!(requests.len(), 1, "{requests:?}");
+        assert!(requests[0].starts_with("GET /health "), "{requests:?}");
+    }
+
+    /// A pin the server no longer matches fails closed: a clear "certificate
+    /// changed" naming both fingerprints, and not one byte of HTTP is sent.
+    #[tokio::test]
+    async fn a_pin_mismatch_is_reported_as_changed_and_sends_nothing() {
+        let server = start_self_signed_health_server().await;
+        let wrong = "0".repeat(64);
+        match test_connection_impl(&direct(&server.url, Some(&wrong))).await {
+            ConnectionTestResult::Unreachable { reason } => {
+                assert!(reason.starts_with("certificate changed"), "{reason}");
+                assert!(reason.contains(&wrong), "{reason}");
+                assert!(reason.contains(&server.fingerprint), "{reason}");
+                assert!(!reason.contains("vault-secret"), "{reason}");
+            }
+            other => panic!("expected Unreachable, got {other:?}"),
+        }
+        assert!(server.requests().is_empty(), "{:?}", server.requests());
+    }
+
+    /// Unpinned self-signed: reported as not trusted, with the fingerprint to
+    /// compare, and no request (so no credential) reaches the server.
+    #[tokio::test]
+    async fn an_unpinned_self_signed_daemon_is_untrusted_and_gets_nothing() {
+        let server = start_self_signed_health_server().await;
+        match test_connection_impl(&direct(&server.url, None)).await {
+            ConnectionTestResult::Unreachable { reason } => {
+                assert!(reason.contains("not trusted"), "{reason}");
+                assert!(reason.contains(&server.fingerprint), "{reason}");
+            }
+            other => panic!("expected Unreachable, got {other:?}"),
+        }
+        assert!(server.requests().is_empty(), "{:?}", server.requests());
+    }
+
+    #[tokio::test]
+    async fn a_garbled_pin_fails_closed_instead_of_falling_back_to_first_use() {
+        let server = start_self_signed_health_server().await;
+        match test_connection_impl(&direct(&server.url, Some("not-a-pin"))).await {
+            ConnectionTestResult::Unreachable { reason } => {
+                assert!(reason.contains("not a SHA-256 fingerprint"), "{reason}");
+            }
+            other => panic!("expected Unreachable, got {other:?}"),
+        }
+        assert!(server.requests().is_empty(), "{:?}", server.requests());
     }
 
     // --- test_connection_impl: Direct dispatch ---

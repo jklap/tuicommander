@@ -1939,13 +1939,31 @@ may not be saved yet and persists nothing. Body:
 `{ "transport": {...}, "auth_username": "alice" | null, "password": "..." | null }`
 — the password is plaintext for this one call only: never stored, never logged,
 never echoed. Answers 200 with
-`{ "type": "Reachable" | "AuthFailed" | "NotConfigured" | "InstanceNotFound" }` or
-`{ "type": "Unreachable", "reason": "..." }` (the reason never contains the URL
+`{ "type": "Reachable" | "AuthFailed" | "NotConfigured" | "PasswordRequired" | "InstanceNotFound" }` or
+`{ "type": "Unreachable" | "DaemonUnreachable", "reason": "..." }` (the reason never contains the URL
 or the password). SSH runs a one-shot `ssh … -- user@host true` with the tunnel's
 options, `ConnectTimeout=5` and `ControlPath=none` (so it never rides a live
-multiplexed master); Direct/Local send one `GET <base>/health` that follows no
-redirects, with Basic Auth when a username or password is given (a password with
-no username is sent as `:<password>` and refused, like Connect). `Local` resolves
+multiplexed master); for a Remote Server (`remote_daemon_port` non-zero — an SSH
+tunnel profile sends 0 and stops there) it then sends one raw HTTP/1.0
+`GET /health` with the same always-present Basic header through
+`ssh … -W 127.0.0.1:<remote_daemon_port> -- user@host` (stdio forwarding, stdin
+held open until the daemon closes the connection) and judges the answer like
+Connect does: a `/health` JSON with `protocol_version` is `Reachable`, a 401 is
+classified as below, and anything else — nothing listening, another server, a
+timeout — is `{ "type": "DaemonUnreachable", "reason": "SSH works, but …" }`; a Direct `https://` URL first has its certificate judged
+like Connect does (`direct_proxy::probe_direct_tls` with the request's
+`transport.tls_fingerprint`): a matching pin is tested through a one-shot pinned
+loopback relay, while an unpinned untrusted certificate (`certificate not trusted
+… SHA-256 …`), a changed one (`certificate changed: …`) or a garbled pin is
+`Unreachable` before any request or credential is sent. Direct/Local send one
+`GET <base>/health` that follows no
+redirects, always with a Basic Auth header (a password with no username is sent
+as `:<password>` and refused, like Connect; with nothing typed an empty `:`
+header is sent). Because a header is always present, the daemon's "Scan the QR
+code" 401 body can only mean it has no credentials (`NotConfigured`); a
+protected daemon tested with nothing typed reports `PasswordRequired`, never
+`NotConfigured`. That probe counts as one failed attempt against the daemon's
+auth rate limit, like any wrong password. `Local` resolves
 `instance_id` from that instance's `config.json` first. Guarded by
 `require_local_or_auth` (403 from a public address without credentials) because
 it makes this machine dial an arbitrary host. Against a headless `tuic-remote`,
@@ -2005,7 +2023,11 @@ calls. A missing id answers 404 (the vault entries are cleared either way).
 accepting a connection's `provision_offer` would run:
 `{ connection_id, connection_name, action, destination: "user@host:port", summary, steps: [{ description, command? }], digest }`
 — `command` is the exact remote shell command, `digest` a SHA-256 over the
-whole plan. It contacts nothing. `POST /config/ssh-daemon/{id}/start` and
+whole plan plus every stored input that changes what runs (the full SSH
+settings incl. `identity_file`, keepalive, compression and host-key policy, the
+daemon port, instance, flags, deploy mode, `survive_secs`, the Auth username,
+and for `set_password` a per-process keyed fingerprint of the saved password —
+never a plain hash of it). It contacts nothing. `POST /config/ssh-daemon/{id}/start` and
 `POST /config/remote-connections/{id}/configure-ssh-password` take
 `{ "plan_digest": "<digest>" }` and nothing else: the plan is rebuilt from the
 STORED connection and a different digest is refused (502, "nothing was run")
@@ -2017,10 +2039,15 @@ on stdin to `tuic-remote [--instance <id>] --set-password-if-unset`, which
 refuses when the daemon already has credentials (a password is never
 overwritten, never sent over HTTP, never in a command line or response), and
 answers the follow-up message as a JSON string. `POST /config/ssh-daemon/{id}/stop`
-stops the ephemeral daemon only when its PID file names a running `tuic-remote`,
-answering `true` when one was signalled. All four are guarded by
+stops only a daemon THIS app started through a confirmed Start plan in this run
+(anything else is refused with 502 before any SSH: it takes no digest, so it may
+not stop a daemon somebody else started), and only when its PID file names a
+running `tuic-remote`, answering `true` when one was signalled. All four are guarded by
 `require_local_or_auth` (403 from a public address before the store is read) and
-answer 502 for any failure. There is no route that takes a caller-supplied host,
+answer 502 for any failure. Start, stop and set-password — like service
+install/uninstall and Update — hold a per-connection lock for the whole remote
+operation, so two of them never interleave on the same connection's daemon
+(they queue; different connections never wait on each other). There is no route that takes a caller-supplied host,
 user or credential.
 
 ### Remote Connection Runtime
@@ -2051,7 +2078,8 @@ connection that is not connected has no such answer.
 `POST .../connect` brings a connection up and `DELETE .../connect` takes it
 down; taking it down also stops a daemon this app started through a confirmed
 Start plan in this run, PID-file verified, unless `leave_running_on_disconnect`
-is set. Neither returns the new status: every transition is pushed as a
+is set or the daemon still advertises live sessions (it is then left running
+and stays stoppable by a later disconnect or `.../stop`). Neither returns the new status: every transition is pushed as a
 `remote-connection-status` event on `/events` SSE (and to the desktop window),
 so one client connecting is visible to all of them.
 
@@ -3453,6 +3481,9 @@ GET /streamdock/devices  -> [ { "product_name": "StreamDock M18", "serial_number
 
 Enumerates currently-connected StreamDock-family devices, independent of whether the
 integration is enabled — listing should work while still deciding whether to turn it on.
+Requires loopback or an authenticated caller (`require_local_or_auth`, 403 otherwise): USB
+serial numbers are hardware identifiers. `GET /streamdock/status` names only the product and
+keeps the router's own auth.
 
 ## Tauri-Only Commands (No HTTP Route)
 
