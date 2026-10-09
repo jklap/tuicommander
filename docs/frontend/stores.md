@@ -720,3 +720,12 @@ Keeps pending ACP permissions and elicitations scoped to their owning daemon.
 Only interaction, ready, and settled notices advance snapshot revisions; unrelated
 card notices leave in-flight permission refreshes valid. Settlement and disconnect
 invalidate obsolete responses before removing their pending requests.
+
+### automations
+
+`src/stores/automations.ts` exposes `automationsUi` for dialog visibility and
+`createAutomationsStore(adapter)` for dialog-scoped state. It keeps failed-write
+drafts, ignores obsolete previews and history replies, and reports Run now
+receipts without claiming that a skipped run started. Pause saves the stored
+definition rather than an unsaved prompt. The backend owns validation, cron,
+capacity, execution and durable history; the adapter owns transport.
