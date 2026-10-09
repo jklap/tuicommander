@@ -26,6 +26,9 @@ impl Schedule {
         // Croner also supports Quartz extensions. Admit only Vixie tokens and let
         // its parser own field ranges, lists and steps (including named aliases).
         for (index, field) in expression.split_whitespace().enumerate() {
+            if field.split(',').any(str::is_empty) {
+                return Err("Automation cron lists must not contain empty entries".into());
+            }
             let mut field = field.to_ascii_uppercase();
             let aliases: &[&str] = match index {
                 3 => &[
