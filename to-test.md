@@ -4826,3 +4826,5 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 ## Headless GitHub account login validation
 
 - [ ] After landing and rebuilding `tuic-remote`, verify browser add-account device-flow login resolves and stores the named account. The shared helper now compiles without desktop. Rust changes require a manual restart to load; no desktop instance was launched.
+
+- [ ] Automations run ledger (#1612-70d1): after the scheduler runtime is wired and Boss restarts `make dev` (or rebuilds release), verify saved history survives definition deletion and restarting interrupts open runs without retry. This Rust storage change does not hot-reload; no scheduler runtime is launched by this step.
