@@ -15,8 +15,8 @@ it.each(["switch", "clear", "park", "start"])("keeps startup-delayed paste owner
 	aiChatDraft.reset();
 	const [sessionId, setSessionId] = createSignal(action === "start" ? "" : "original-chat");
 	let connected = false;
-	let finishStart!: () => void;
-	const starting = new Promise<void>((resolve) => {
+	let finishStart!: (session: string) => void;
+	const starting = new Promise<string>((resolve) => {
 		finishStart = resolve;
 	});
 	const chat = {
@@ -46,7 +46,7 @@ it.each(["switch", "clear", "park", "start"])("keeps startup-delayed paste owner
 	}
 	if (action === "start") setSessionId("created-chat");
 	connected = true;
-	finishStart();
+	finishStart(action === "start" ? "created-chat" : "original-chat");
 	await starting;
 	await Promise.resolve();
 	await Promise.resolve();

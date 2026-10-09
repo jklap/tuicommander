@@ -68,13 +68,18 @@ export const Composer: Component<{
 		void props.chat.send(text, images, files);
 	};
 
-	const stageImage = async (file: File): Promise<string | null> => {
+	const stageImages = async (files: File[]): Promise<string | null> => {
 		const ownsDraft = aiChatDraft.captureOwnership();
 		try {
 			// An unstarted conversation has no capabilities yet, not an image refusal.
-			if (!props.chat.capabilities()) await props.chat.ensureStarted();
-			if (!ownsDraft(props.chat.sessionId() ?? "")) return null;
-			return await aiChatDraft.stageImage(file, props.chat.capabilities()?.promptImage === true);
+			const startedSession = !props.chat.capabilities() ? await props.chat.ensureStarted() : props.chat.sessionId();
+			for (const file of files) {
+				if (!ownsDraft(startedSession ?? "")) return null;
+				const error = await aiChatDraft.stageImage(file, props.chat.capabilities()?.promptImage === true);
+				if (!ownsDraft(startedSession ?? "")) return null;
+				if (error) return error;
+			}
+			return null;
 		} catch (error) {
 			return error instanceof Error ? error.message : String(error);
 		}
@@ -83,7 +88,7 @@ export const Composer: Component<{
 	const attachFile = async (file: File) => {
 		setPasteError(null);
 		if (file.type.startsWith("image/")) {
-			setPasteError(await stageImage(file));
+			setPasteError(await stageImages([file]));
 			return;
 		}
 		setUploading(true);
@@ -124,15 +129,9 @@ export const Composer: Component<{
 		}
 		event.preventDefault();
 		setPasteError(null);
-		void (async () => {
-			for (const file of files) {
-				const error = await stageImage(file);
-				if (error) {
-					setPasteError(error);
-					break;
-				}
-			}
-		})();
+		void stageImages(files).then((error) => {
+			if (error) setPasteError(error);
+		});
 	};
 
 	const onKeyDown = (event: KeyboardEvent) => {

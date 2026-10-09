@@ -194,7 +194,8 @@ export const aiChatDraft = {
 		const atRevision = revision;
 		const session = activeSession;
 		return (startedSession) =>
-			revision === atRevision || (!session && revision === atRevision + 1 && activeSession === startedSession);
+			revision === atRevision ||
+			(!!startedSession && !session && revision === atRevision + 1 && activeSession === startedSession);
 	},
 
 	/** Validate bytes before FileReader expands them into base64. */
