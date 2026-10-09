@@ -197,12 +197,12 @@ describe("useTerminalContextMenus", () => {
 		const warnSpy = vi.spyOn(appLogger, "warn").mockImplementation(() => {});
 		mockTerminals.state.activeId = "term-1";
 		mockTerminals.get.mockReturnValue({
+			historyBase: 0,
 			commandBlocks: [{ executionLine: 10, endLine: 13 }],
 			ref: {
 				getBufferLines: vi.fn().mockImplementation(() => {
 					throw new Error("buffer gone");
 				}),
-				getHistoryBase: () => 0,
 			},
 		});
 		const items = useTerminalContextMenus(createOptions() as never).getContextMenuItems();
