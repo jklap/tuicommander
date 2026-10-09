@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Use the terminal composer pin and play icon buttons in desktop AI Chat, with named Queue and parked-draft states (#1636-0d08).
 
+- Accept pasted images in AI Chat before ego connects, and share Finder/text clipboard rules with Ideas and terminal Compose (#1639-f474).
+
 ### Fixed
 - Keep mobile AI Chat within the phone width and use the session composer styles with labelled icon actions (#1625-c04f).
 - Give the mobile update banner AA text contrast in both themes and place it below the header, away from the status edge (#1626-9529).

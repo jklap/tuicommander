@@ -3413,3 +3413,91 @@ describe("desktop composer icon controls", () => {
 		expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SESSION, "Queue this", [], ROOT);
 	});
 });
+
+describe("AI Chat shared image paste", () => {
+	it("connects before checking image support when a PNG is pasted into an unstarted chat", async () => {
+		// Catches: absent pre-connection capabilities are mistaken for explicit image refusal.
+		supportsImages = true;
+		const { container } = renderIdlePanel();
+		await settle();
+		expect(client.connect).not.toHaveBeenCalled();
+		const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+		const event = pasteFile(
+			textarea,
+			new File([Uint8Array.from(atob(PNG_1X1), (byte) => byte.charCodeAt(0))], "clip.png", { type: "image/png" }),
+		);
+		expect(event.defaultPrevented).toBe(true);
+		await vi.waitFor(() => expect(container.querySelector('img[alt="Pasted image"]')).not.toBeNull());
+		expect(client.connect).toHaveBeenCalled();
+		(container.querySelector('button[aria-label="Send"]') as HTMLButtonElement).click();
+		await settle();
+		expect(client.prompt).toHaveBeenCalledWith(
+			CONNECTION,
+			SESSION,
+			"",
+			[{ type: "image", mimeType: "image/png", data: PNG_1X1 }],
+			ROOT,
+		);
+	});
+});
+
+describe("AI Chat clipboard precedence", () => {
+	function mixedPaste(textarea: HTMLTextAreaElement, text: string): Event {
+		const file = new File([Uint8Array.from(atob(PNG_1X1), (byte) => byte.charCodeAt(0))], "clip.png", {
+			type: "image/png",
+		});
+		const event = new Event("paste", { bubbles: true, cancelable: true });
+		Object.defineProperty(event, "clipboardData", {
+			value: {
+				items: [
+					{ type: "text/plain", getAsFile: () => null },
+					{ type: "image/png", getAsFile: () => file },
+				],
+				getData: (type: string) => (type === "text/plain" ? text : ""),
+			},
+		});
+		textarea.dispatchEvent(event);
+		return event;
+	}
+
+	it("attaches Finder image copies instead of sending their file-name text", async () => {
+		// Catches: shared text precedence rejects a Finder file-name plus image clipboard.
+		supportsImages = true;
+		const { container } = await renderPanel();
+		const event = mixedPaste(
+			container.querySelector("textarea") as HTMLTextAreaElement,
+			"/Users/Boss/Pictures/clip.png",
+		);
+		expect(event.defaultPrevented).toBe(true);
+		await vi.waitFor(() => expect(container.querySelector('img[alt="Pasted image"]')).not.toBeNull());
+		(container.querySelector('button[aria-label="Send"]') as HTMLButtonElement).click();
+		await settle();
+		expect(client.prompt).toHaveBeenCalledWith(
+			CONNECTION,
+			SESSION,
+			"",
+			[{ type: "image", mimeType: "image/png", data: PNG_1X1 }],
+			ROOT,
+		);
+	});
+
+	it("preserves normal text paste and gives substantive mixed clipboard text precedence", async () => {
+		// Catches: an incidental rendered image swallows spreadsheet text or bypasses compact-paste handling.
+		supportsImages = true;
+		const { container } = await renderPanel();
+		const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+		const event = mixedPaste(textarea, "copied spreadsheet cells");
+		expect(event.defaultPrevented).toBe(false);
+		await settle();
+		expect(container.querySelector('img[alt="Pasted image"]')).toBeNull();
+		const longText = Array.from({ length: 201 }, (_, index) => `word${index}`).join(" ");
+		const longPaste = new Event("paste", { bubbles: true, cancelable: true });
+		Object.defineProperty(longPaste, "clipboardData", { value: { items: [], getData: () => longText } });
+		textarea.dispatchEvent(longPaste);
+		expect(longPaste.defaultPrevented).toBe(true);
+		expect(textarea.value).toBe("[Pasted text #1 +201 words]");
+		(container.querySelector('button[aria-label="Send"]') as HTMLButtonElement).click();
+		await settle();
+		expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SESSION, longText, [], ROOT);
+	});
+});

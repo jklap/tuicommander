@@ -9,6 +9,7 @@
 import { type Component, createEffect, createSignal, For, Show } from "solid-js";
 import mobileInput from "../../mobile/components/CommandInput.module.css";
 import { uploadAttachment } from "../../services/uploadAttachment";
+import { pastedImageFiles } from "../../utils/pastedImage";
 import { ComposePinIcon, ComposeSendIcon } from "../shared/ComposeActionIcons";
 import actions from "../shared/ComposeActions.module.css";
 import s from "./AIChatPanel.module.css";
@@ -67,10 +68,20 @@ export const Composer: Component<{
 		void props.chat.send(text, images, files);
 	};
 
+	const stageImage = async (file: File): Promise<string | null> => {
+		try {
+			// An unstarted conversation has no capabilities yet, not an image refusal.
+			if (!props.chat.capabilities()) await props.chat.ensureStarted();
+			return await aiChatDraft.stageImage(file, props.chat.capabilities()?.promptImage === true);
+		} catch (error) {
+			return error instanceof Error ? error.message : String(error);
+		}
+	};
+
 	const attachFile = async (file: File) => {
 		setPasteError(null);
 		if (file.type.startsWith("image/")) {
-			setPasteError(await aiChatDraft.stageImage(file, props.chat.capabilities()?.promptImage === true));
+			setPasteError(await stageImage(file));
 			return;
 		}
 		setUploading(true);
@@ -96,10 +107,7 @@ export const Composer: Component<{
 
 	const onPaste = (event: ClipboardEvent) => {
 		// DEFERRED (2026-09-28) — image drop needs Boss's explicit approval for drag/drop handlers.
-		const files = [...(event.clipboardData?.items ?? [])]
-			.filter((item) => item.type.startsWith("image/"))
-			.map((item) => item.getAsFile())
-			.filter((file): file is File => file !== null);
+		const files = pastedImageFiles(event);
 		if (files.length === 0) {
 			const value = event.clipboardData?.getData("text/plain") ?? "";
 			if (!textarea) return;
@@ -116,7 +124,7 @@ export const Composer: Component<{
 		setPasteError(null);
 		void (async () => {
 			for (const file of files) {
-				const error = await aiChatDraft.stageImage(file, props.chat.capabilities()?.promptImage === true);
+				const error = await stageImage(file);
 				if (error) {
 					setPasteError(error);
 					break;
