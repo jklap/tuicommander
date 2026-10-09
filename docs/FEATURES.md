@@ -2722,3 +2722,9 @@ past instants on creation and spring gaps, resolves folds to the earlier instant
 and keeps consumed Once definitions for inspection. The backend supplies one
 preview instant and completed schedule state. Public automation controls arrive
 with the scheduler API and dialog.
+### Automations dialog (backend integration pending)
+
+Machine-local scheduled-run editor with search, backend cadence/zone preview,
+prechecks, workspace and duration controls, pause/resume, Run now, confirmed
+delete and recent status history. Open **Automations** from the command palette.
+Step 8 API integration is required before use; see [Automations](user-guide/automations.md).
