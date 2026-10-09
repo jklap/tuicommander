@@ -75,6 +75,16 @@ pub(crate) fn mirrored_rows(state: &AppState) -> Vec<SessionInfo> {
         .collect()
 }
 
+/// How many sessions a connection's daemon advertised in its last report —
+/// the live work a stop of that daemon would kill.
+pub(crate) fn live_session_count(state: &AppState, connection_id: &str) -> usize {
+    state
+        .remote_sessions
+        .by_connection
+        .get(connection_id)
+        .map_or(0, |rows| rows.len())
+}
+
 /// The daemon that owns a mirrored PTY, if the session is still advertised.
 pub(crate) fn owner_connection(state: &AppState, session_id: &str) -> Option<String> {
     state

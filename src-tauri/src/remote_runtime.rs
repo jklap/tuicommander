@@ -279,6 +279,12 @@ pub(crate) struct RemoteRuntime {
     /// stop (`ssh_provision::stop_after_disconnect`). Never persisted: after a
     /// restart nothing here is "ours" any more.
     provisioned: DashMap<String, ()>,
+    /// One async mutex per connection id, serialising every operation that
+    /// starts, stops, replaces or reconfigures that connection's remote daemon
+    /// over SSH: provisioning Start/Stop/configure-password, service
+    /// install/uninstall and Update. Two of them interleaving on one host could
+    /// stop the daemon the other just launched, or race on its PID file.
+    provision_locks: DashMap<String, Arc<tokio::sync::Mutex<()>>>,
 }
 
 impl Default for RemoteRuntime {
@@ -297,6 +303,7 @@ impl Default for RemoteRuntime {
             identity: crate::app_instance::instance_identity().to_owned(),
             direct_proxies: Default::default(),
             provisioned: DashMap::new(),
+            provision_locks: DashMap::new(),
         }
     }
 }
@@ -312,9 +319,21 @@ impl RemoteRuntime {
         self.provisioned.insert(id.to_string(), ());
     }
 
-    /// Forget the mark, returning whether it was there.
-    pub(crate) fn take_provisioned(&self, id: &str) -> bool {
-        self.provisioned.remove(id).is_some()
+    /// Wait for exclusive use of `id`'s remote daemon (see `provision_locks`).
+    /// Held for the whole remote operation; operations on OTHER connections
+    /// never wait on it.
+    pub(crate) async fn lock_daemon_ops(&self, id: &str) -> tokio::sync::OwnedMutexGuard<()> {
+        let lock = self
+            .provision_locks
+            .entry(id.to_string())
+            .or_default()
+            .clone();
+        lock.lock_owned().await
+    }
+
+    /// Whether this app started `id`'s daemon in this run, without forgetting it.
+    pub(crate) fn is_provisioned(&self, id: &str) -> bool {
+        self.provisioned.contains_key(id)
     }
 
     pub(crate) fn forget_provisioned(&self, id: &str) {
@@ -981,7 +1000,14 @@ async fn parse_health_response(
         .json()
         .await
         .map_err(|e| format!("Malformed health response: {}", e.without_url()))?;
-    Ok(Health {
+    Ok(health_from_json(&body))
+}
+
+/// The fields Connect reads from a `/health` body. Shared with Test
+/// Connection's SSH daemon check, which reads the same body over a stdio
+/// forward instead of a tunnel.
+pub(crate) fn health_from_json(body: &serde_json::Value) -> Health {
+    Health {
         protocol_version: body
             .get("protocol_version")
             .and_then(serde_json::Value::as_u64),
@@ -1000,7 +1026,7 @@ async fn parse_health_response(
             .get("socket_path")
             .and_then(serde_json::Value::as_str)
             .map(str::to_string),
-    })
+    }
 }
 
 async fn read_direct_health_with_lookup<F, Fut>(
@@ -2155,26 +2181,66 @@ pub(crate) fn teardown_deleted(state: &Arc<AppState>, id: &str) {
 /// Settings removal retains this record across persistence instead of rereading a deleted row.
 pub(crate) fn teardown_deleted_record(state: &Arc<AppState>, connection: &RemoteConnection) {
     crate::ssh_provision::stop_after_delete(state, connection);
-    stop_deleted_ephemeral(connection);
+    // A daemon left running for its live sessions stays "ours" on Disconnect;
+    // a deleted connection has nothing left to stop it later.
+    state.remote.forget_provisioned(&connection.id);
+    stop_deleted_ephemeral(state, connection);
     teardown(state, &connection.id);
     state.remote.attempted_updates.remove(&connection.id);
 }
 
-fn stop_deleted_ephemeral(connection: &RemoteConnection) {
-    let Some(profile) = delete_stop_profile(connection) else {
+fn stop_deleted_ephemeral(state: &AppState, connection: &RemoteConnection) {
+    let Some((profile, instance)) = deleted_ephemeral_stop_target(state, connection) else {
         return;
     };
     tokio::spawn(async move {
-        let _ = crate::remote_deploy::stop_ephemeral(&profile).await;
+        let _ = crate::remote_deploy::stop_ephemeral_for(&profile, instance.as_deref()).await;
     });
 }
 
-fn delete_stop_profile(
+/// [`delete_stop_target`] behind the live-session guard Disconnect honours
+/// (`ssh_provision::should_stop_on_disconnect`): stopping a daemon that still
+/// runs terminals or agents would kill them with no warning, so it is left
+/// running instead and exits by itself `survive_secs` after its last client
+/// leaves. Must run before [`teardown`], which drops the mirrored rows.
+fn deleted_ephemeral_stop_target(
+    state: &AppState,
     connection: &RemoteConnection,
-) -> Option<crate::tunnels::profile::TunnelProfile> {
+) -> Option<(crate::tunnels::profile::TunnelProfile, Option<String>)> {
+    let target = delete_stop_target(connection)?;
+    let live_sessions = crate::remote_mirror::live_session_count(state, &connection.id);
+    if live_sessions > 0 {
+        tracing::warn!(
+            source = "remote",
+            connection = %connection.id,
+            live_sessions,
+            "Leaving the deleted connection's ephemeral daemon running: it still has live sessions"
+        );
+        return None;
+    }
+    Some(target)
+}
+
+/// What deleting an OnConnect SSH connection stops: its profile and the
+/// `--instance` its ephemeral daemon runs under. Each instance has its own PID
+/// file, so stopping the default one instead would leak this connection's
+/// daemon and signal whatever other connection owns the default on that host.
+fn delete_stop_target(
+    connection: &RemoteConnection,
+) -> Option<(crate::tunnels::profile::TunnelProfile, Option<String>)> {
     (connection.deploy == DeployMode::OnConnect)
         .then(|| ssh_profile(connection))
         .flatten()
+        .map(|profile| (profile, ssh_instance_id(connection)))
+}
+
+/// The `--instance` a stored SSH connection's ephemeral daemon runs under, if
+/// it names one (`None` is the default instance).
+pub(crate) fn ssh_instance_id(connection: &RemoteConnection) -> Option<String> {
+    match &connection.transport {
+        RemoteTransport::Ssh { instance_id, .. } => instance_id.clone(),
+        _ => None,
+    }
 }
 
 /// Stop everything one entry owns and announce the departure.
@@ -3692,7 +3758,7 @@ mod tests {
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
         state.remote.mark_provisioned("vps");
         disconnect(&state, "vps");
-        assert!(!state.remote.take_provisioned("vps"));
+        assert!(!state.remote.is_provisioned("vps"));
     }
 
     #[test]
@@ -5174,15 +5240,54 @@ mod tests {
     fn teardown_delete_stops_only_an_on_connect_ssh_daemon() {
         let mut connection = RemoteConnection::new_ssh("vps", "host", "boss");
         connection.deploy = DeployMode::OnConnect;
-        let profile = delete_stop_profile(&connection).expect("ephemeral daemon");
+        let (profile, instance) = delete_stop_target(&connection).expect("ephemeral daemon");
         assert_eq!(profile.ssh.host, "host");
+        assert_eq!(instance, None);
 
         connection.deploy = DeployMode::Installed;
-        assert!(delete_stop_profile(&connection).is_none());
+        assert!(delete_stop_target(&connection).is_none());
 
         let mut direct = RemoteConnection::new_direct("lan", "http://host:9877", "boss");
         direct.deploy = DeployMode::OnConnect;
-        assert!(delete_stop_profile(&direct).is_none());
+        assert!(delete_stop_target(&direct).is_none());
+    }
+
+    /// Deleting an OnConnect connection stopped its ephemeral daemon even
+    /// while it ran live remote sessions — the guard Disconnect and
+    /// `stop_after_delete` honour was bypassed by this second stop. It is now
+    /// left running (it exits `survive_secs` after its last client); with no
+    /// sessions it is stopped as before.
+    #[test]
+    fn teardown_delete_leaves_an_on_connect_daemon_with_live_sessions_running() {
+        let state = test_state();
+        let mut connection = RemoteConnection::new_ssh("vps", "host", "boss");
+        connection.deploy = DeployMode::OnConnect;
+        crate::remote_mirror::store_seed_for_test(
+            &state,
+            &connection.id,
+            vec![crate::mcp_http::types::SessionInfo {
+                session_id: "remote-1".into(),
+                ..Default::default()
+            }],
+        );
+        assert!(deleted_ephemeral_stop_target(&state, &connection).is_none());
+
+        crate::remote_mirror::store_seed_for_test(&state, &connection.id, Vec::new());
+        assert!(deleted_ephemeral_stop_target(&state, &connection).is_some());
+    }
+
+    /// Batch 32 review #1: deleting a connection with an Instance ID stopped
+    /// the DEFAULT instance's daemon (maybe another connection's on the same
+    /// host) and leaked its own.
+    #[test]
+    fn teardown_delete_stops_the_connections_own_instance() {
+        let mut connection = RemoteConnection::new_ssh("vps", "host", "boss");
+        connection.deploy = DeployMode::OnConnect;
+        if let RemoteTransport::Ssh { instance_id, .. } = &mut connection.transport {
+            *instance_id = Some("dev-box".into());
+        }
+        let (_, instance) = delete_stop_target(&connection).expect("ephemeral daemon");
+        assert_eq!(instance.as_deref(), Some("dev-box"));
     }
 
     // Catches: a retained deleted record no longer selecting the stop command's SSH authority.
@@ -5221,9 +5326,9 @@ mod tests {
             dir.path().display()
         );
         let ssh = crate::test_support::fake_ssh_script("removed_record_stop", &script, "exit /b 0");
-        let profile =
-            delete_stop_profile(&connection).expect("retained record owns ephemeral SSH authority");
-        crate::remote_deploy::stop_ephemeral_with_binary(&profile, None, &ssh)
+        let (profile, instance) =
+            delete_stop_target(&connection).expect("retained record owns ephemeral SSH authority");
+        crate::remote_deploy::stop_ephemeral_with_binary(&profile, instance.as_deref(), &ssh)
             .await
             .unwrap();
         let status = tokio::time::timeout(std::time::Duration::from_secs(15), daemon.wait())
@@ -5240,7 +5345,7 @@ mod tests {
         let start = source.find("fn stop_deleted_ephemeral").unwrap();
         let body = &source[start..source[start..].find("\n}\n").unwrap() + start];
         assert!(body.contains("tokio::spawn"));
-        assert!(body.contains("remote_deploy::stop_ephemeral"));
+        assert!(body.contains("remote_deploy::stop_ephemeral_for"));
         assert!(
             body.contains("let _ ="),
             "remote SSH failure must be ignored"

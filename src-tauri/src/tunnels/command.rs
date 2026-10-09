@@ -150,6 +150,30 @@ pub(crate) fn build_ssh_test_args(ssh: &SshConnectionParams) -> Vec<String> {
     args
 }
 
+/// Test Connection's daemon check over SSH: the same connection options as
+/// [`build_ssh_test_args`], but instead of a remote command, stdio forwarding
+/// (`-W 127.0.0.1:<port>`) to the daemon's port on the remote host's own
+/// loopback — the port Connect's tunnel forwards to. Needs no tool on the
+/// remote host (no curl), and the same `AllowTcpForwarding` Connect needs.
+pub(crate) fn build_ssh_daemon_probe_args(
+    ssh: &SshConnectionParams,
+    remote_port: u16,
+) -> Vec<String> {
+    let mut args = vec![
+        "-o".to_string(),
+        "ConnectTimeout=5".to_string(),
+        "-o".to_string(),
+        "ControlPath=none".to_string(),
+    ];
+    args.extend(build_ssh_base_args_for(ssh));
+    args.push("-T".to_string());
+    args.push("-W".to_string());
+    args.push(format!("127.0.0.1:{remote_port}"));
+    args.push("--".to_string());
+    args.push(format!("{}@{}", ssh.user, ssh.host));
+    args
+}
+
 /// Build environment variables for the ssh process.
 /// Sets SSH_AUTH_SOCK if agent_socket is provided.
 pub fn build_ssh_env(agent_socket: Option<&Path>) -> Vec<(String, String)> {
@@ -396,6 +420,33 @@ mod tests {
             Some("StrictHostKeyChecking=accept-new"),
             "AcceptNew must map to 'accept-new'"
         );
+    }
+
+    // --- build_ssh_daemon_probe_args (Test Connection's daemon check) ---
+
+    #[test]
+    fn daemon_probe_args_forward_stdio_to_the_remote_loopback_port_after_double_dash() {
+        let ssh = SshConnectionParams::new("example.com", "-oProxyCommand=evil");
+        let args = build_ssh_daemon_probe_args(&ssh, 9877);
+        let tail: Vec<&str> = args
+            .iter()
+            .rev()
+            .take(4)
+            .rev()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            tail,
+            [
+                "-W",
+                "127.0.0.1:9877",
+                "--",
+                "-oProxyCommand=evil@example.com"
+            ]
+        );
+        assert!(args.windows(2).any(|w| w == ["-o", "ControlPath=none"]));
+        assert!(args.windows(2).any(|w| w == ["-o", "ConnectTimeout=5"]));
+        assert!(!args.iter().any(|a| a == "-n" || a == "true"), "{args:?}");
     }
 
     // --- build_ssh_test_args (Test Connection's one-shot SSH check) ---
