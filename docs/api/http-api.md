@@ -1760,9 +1760,11 @@ A connection is
 | `Direct` | `url`, `tls_fingerprint` (optional: SHA-256 hex of a pinned self-signed certificate; omitted when unset) |
 | `Local` | `port`, `instance_id` — exactly one set (a whitespace-only `instance_id` counts as unset). Connect resolves `instance_id` from that instance's `config.json` on every attempt and connects to `http://127.0.0.1:<port>` with the normal token handshake; an unresolvable instance fails before anything is contacted. Before any credential is sent (Connect and `POST /config/remote-connections/test`), the port's `/health` `instance_id` must match what the instance's own Unix IPC socket (`/health.socket_path`, which must sit in that instance's socket location and be owned by this user) reports — otherwise it fails closed (Unix only). Update refuses it (`Update & restart is not available for a Local connection…`); deploy is SSH-only |
 
-The `ssh` object is the same `SshConnectionParams` a tunnel profile carries. The
-runtime always opens the tunnel with `StrictHostKeyChecking=accept-new`, whatever
-`strict_host_key_checking` says. **Shape change:** before the nested model the SSH
+The `ssh` object is the same `SshConnectionParams` a tunnel profile carries.
+`strict_host_key_checking` is honoured as stored by every SSH command run for the
+connection (Connect's tunnel, Test Connection, deploy/install/update): `Yes` refuses a
+host whose key is not already in `known_hosts`, `AcceptNew` pins it on first contact.
+A new connection defaults to `AcceptNew`; an unknown stored value loads as `Yes`. **Shape change:** before the nested model the SSH
 fields were flat on the transport (`ssh_host`, `ssh_port`, `ssh_user`,
 `identity_file`) and `auth_username` was a required string. Responses now carry
 only the nested shape and `auth_username` may be `null`; requests in the old flat
