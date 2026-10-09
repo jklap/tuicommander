@@ -69,9 +69,11 @@ export const Composer: Component<{
 	};
 
 	const stageImage = async (file: File): Promise<string | null> => {
+		const ownsDraft = aiChatDraft.captureOwnership();
 		try {
 			// An unstarted conversation has no capabilities yet, not an image refusal.
 			if (!props.chat.capabilities()) await props.chat.ensureStarted();
+			if (!ownsDraft(props.chat.sessionId() ?? "")) return null;
 			return await aiChatDraft.stageImage(file, props.chat.capabilities()?.promptImage === true);
 		} catch (error) {
 			return error instanceof Error ? error.message : String(error);

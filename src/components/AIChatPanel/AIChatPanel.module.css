@@ -1431,6 +1431,12 @@
 .mobileComposer .inputBody { flex: 1; min-width: 0; }
 .mobileComposer textarea { min-width: 0; width: 100%; }
 .composerActions { display: contents; }
+
+/* Centre 20px actions against the bottom 36px textarea line. */
+.inputArea:not(.mobileComposer) > button,
+.inputArea:not(.mobileComposer) > .composerActions > button {
+  margin-bottom: 8px;
+}
 .mobileComposerActions {
   display: flex;
   flex-basis: 100%;
