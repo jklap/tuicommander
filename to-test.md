@@ -1,3 +1,7 @@
+## Automations Once (1629-2262) — Rust restart required
+
+- [ ] After API/UI integration and Boss’s next planned `make dev` restart or `make build`, create a Once run in an IANA zone, confirm one preview instant and completed status after its scheduled run, retain the definition, and confirm restart/catch-up does not launch it twice. Rust does not hot-reload; this lane does not launch desktop.
+
 ## Automation prechecks (1614-7e8f) — Rust restart required
 
 - [ ] After dispatcher/API integration and Boss's next planned `make dev` restart or `make build`, run an automation whose precheck exits 0, exits nonzero and times out; confirm dispatch only for exit 0 and saved `skipped_precheck` diagnostics otherwise. Confirm Run Now records a bypass and does not execute the precheck. The standalone helper has targeted shell/process tests; runtime persistence belongs to Step 6. Rust does not hot-reload; this lane does not launch desktop.
