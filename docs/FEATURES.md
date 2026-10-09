@@ -86,7 +86,7 @@ per cell and the configured history limit still apply.
 
 - **Remote replay health** — Stream failure, unreadable frames and initial replay stalls show a persistent error toast. Reconnect success requires a delivered frame; healthy idle terminals have no output-silence deadline.
 
-- **CLI / Chat view** — Claude terminals switch between the grid and a conversation view with docked Compose input, built from the agent's session file (including older prompts, replies, folded tool cards, image/PDF markers and model-change cards). The grid is hidden, never unmounted.
+- **CLI / Chat view** — Claude terminals switch between the grid and a conversation view with docked Compose input, built from the agent's session file (including older prompts, human text/image follow-ups queued while Claude is busy, replies, folded tool cards, image/PDF markers and model-change cards). The grid is hidden, never unmounted.
 - **Chat transcript presentation** — Harness notices use compact system notes, image placeholders use attachment chips, adjacent thinking blocks share a disclosure, and TUIC answers retain the CLI highlight. Historical tool cards show status without fabricated execution timing.
 
 ### 1.2 Tab Bar
@@ -2714,3 +2714,17 @@ Rich merged linked worktrees with no sessions and verified lifecycle facts use a
 Rich parent terminal rows show N agents in each other repository containing live children. Clicking reveals the child group, repository and workspace, then selects a child through existing terminal navigation. Session placement and same-branch nesting stay intact; closed children disappear from summaries.
 
 Browser Add Repository provides a server-side directory picker using the existing filesystem routes. Root HTML navigation offers form login; touch-capable iPad Safari selects the mobile interface even with its desktop Mac user agent. API authentication is unchanged.
+
+### Automation Once schedules (Rust foundation)
+
+Definitions can schedule one wall-clock date-time in an IANA zone. Rust rejects
+past instants on creation and spring gaps, resolves folds to the earlier instant,
+and keeps consumed Once definitions for inspection. The backend supplies one
+preview instant and completed schedule state. Public automation controls arrive
+with the scheduler API and dialog.
+### Automations dialog (backend integration pending)
+
+Machine-local scheduled-run editor with search, backend cadence/zone preview,
+prechecks, workspace and duration controls, pause/resume, Run now, confirmed
+delete and recent status history. Open **Automations** from the command palette.
+Step 8 API integration is required before use; see [Automations](user-guide/automations.md).

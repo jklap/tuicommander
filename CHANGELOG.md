@@ -6,8 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Add the `automations` MCP tool for definition management, with bound creator provenance and atomic pause/resume.
+### Added
+- Add the Rust foundation for Once automation schedules with IANA timezone validation, a single preview instant and durable occurrence deduplication (#1629-2262).
+
 ### Fixed
 - Search the visible Claude Chat transcript with Cmd/Ctrl+F; matches span inline Markdown and skip collapsed thinking; Enter and Shift+Enter navigate matches, and switching CLI/Chat closes search and clears its highlight (#1633-f2cc).
+- Show Claude prompts typed mid-turn in terminal Chat, while keeping task notifications and queue metadata hidden (#1632-ec84).
 - Keep mobile AI Chat within the phone width and use the session composer styles with labelled icon actions (#1625-c04f).
 - Give the mobile update banner AA text contrast in both themes and place it below the header, away from the status edge (#1626-9529).
 - Fix mobile session notification sounds playing outside the visible Sessions list, including delayed completion sounds and hidden PWA documents. Keep muted transitions from replaying on return.
@@ -30,6 +35,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 
 ### Added
+- Add the Automations dialog with backend cadence and Once previews, recent history, atomic pause/resume, Run now and confirmed deletion. Backend API integration is pending (#1618-685b).
 - Add an all-repositories toggle to the Ideas panel header: it lists every repository's ideas for cross-repo work (in memory, resets on reload). The badge and "clear completed" follow the visible list, so clearing in a single-repository view no longer deletes other repositories' completed ideas; ideas added in all-mode stay tagged with the active repository (#1598-c0a0).
 - Add a headless agent capture scenario driver with explicit fixture promotion and ordered replay expectations; record real Codex and pi turns; Claude (expired login) and goose (its banner prints the home directory) stay unverified, and a test rejects fixtures that embed `/Users/` or `/home/` paths.
 
