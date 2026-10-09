@@ -3626,24 +3626,92 @@ mod tests {
         );
     }
 
+    /// Every VT screen size argument (`new_vt_log_buffer(rows, cols, …)` /
+    /// `VtLogBuffer::new(rows, cols, …)`) in a call site's production code.
+    /// Test modules are cut off at the file's top-level `#[cfg(test)] mod`.
+    fn vt_screen_size_args(source: &str) -> Vec<(String, String)> {
+        let production = source
+            .find("\n#[cfg(test)]\nmod tests")
+            .map_or(source, |end| &source[..end]);
+        let mut out = Vec::new();
+        for needle in ["new_vt_log_buffer(", "VtLogBuffer::new("] {
+            let mut rest = production;
+            while let Some(at) = rest.find(needle) {
+                rest = &rest[at + needle.len()..];
+                let mut depth = 1usize;
+                let mut end = 0usize;
+                for (i, c) in rest.char_indices() {
+                    match c {
+                        '(' => depth += 1,
+                        ')' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                end = i;
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                let args: Vec<String> = rest[..end]
+                    .split(',')
+                    .map(|a| a.split_whitespace().collect())
+                    .collect();
+                if args.len() >= 2 {
+                    out.push((args[0].clone(), args[1].clone()));
+                }
+            }
+        }
+        out
+    }
+
     /// The desktop commands (`create_pty`, `create_pty_with_worktree`,
     /// `agent::spawn_agent`) build their own VT screen instead of going
     /// through `register_pty_session`, so they can drift from its
     /// real-geometry contract on their own — they did, all three were left at a
     /// hardcoded 24x220. Not callable without a Tauri `AppHandle`, so the
-    /// contract is pinned on their source.
+    /// contract is pinned on their source: NO production VT screen in these
+    /// files may be built at any literal size (Batch 45/46 review: the guard
+    /// used to match only the exact `24,220` spelling).
     #[test]
     fn desktop_spawn_commands_size_the_vt_screen_to_the_real_pty() {
+        let is_literal = |arg: &str| {
+            let digits = arg.trim_end_matches("u16").trim_end_matches("_u16");
+            !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit() || c == '_')
+        };
+        let mut sites = 0;
         for (file, source) in [
             ("pty/commands.rs", include_str!("../pty/commands.rs")),
             ("agent.rs", include_str!("../agent.rs")),
+            ("mcp_http/session.rs", include_str!("session.rs")),
         ] {
-            let compact: String = source.split_whitespace().collect();
-            assert!(
-                !compact.contains("new_vt_log_buffer(24,220"),
-                "{file} builds a VT screen at a hardcoded 24x220 instead of the PTY's size"
-            );
+            for (rows, cols) in vt_screen_size_args(source) {
+                sites += 1;
+                assert!(
+                    !is_literal(&rows) && !is_literal(&cols),
+                    "{file} builds a VT screen at a hardcoded size ({rows}x{cols}) instead of the PTY's"
+                );
+            }
         }
+        // commands.rs x2, agent.rs, session.rs: a guard that finds nothing proves nothing.
+        assert!(
+            sites >= 4,
+            "expected the four VT screen sites, found {sites}"
+        );
+    }
+
+    #[test]
+    fn the_vt_size_guard_flags_any_literal_size() {
+        let flagged = vt_screen_size_args(
+            "fn a() { state.new_vt_log_buffer(40, 120, CAP); VtLogBuffer::new(rows, 80, 1); }",
+        );
+        assert_eq!(
+            flagged,
+            vec![
+                ("40".to_string(), "120".to_string()),
+                ("rows".to_string(), "80".to_string())
+            ]
+        );
     }
 
     /// `PUT /sessions/{id}/name` is a frontend-originated rename (the store's
