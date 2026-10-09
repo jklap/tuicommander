@@ -1,9 +1,9 @@
-use cached::proc_macro::cached;
 use rust_stemmers::{Algorithm as StemmingAlgorithm, Stemmer};
 use std::{
     borrow::Cow,
-    collections::HashSet,
+    collections::{HashSet, VecDeque},
     fmt::{self, Debug},
+    sync::{LazyLock, Mutex},
 };
 use stop_words::LANGUAGE as StopWordLanguage;
 #[cfg(feature = "language_detection")]
@@ -139,9 +139,43 @@ fn normalize(text: &str) -> Cow<'_, str> {
     deunicode::deunicode_with_tofu_cow(text, "[?]")
 }
 
-#[cached(size = 16)]
+// TUICommander patch: retain the bounded stopword LRU without cached's macros.
+#[derive(Default)]
+struct StopwordCache(VecDeque<(Language, bool, HashSet<String>)>);
+
+impl StopwordCache {
+    fn get(&mut self, language: &Language, normalized: bool) -> Option<HashSet<String>> {
+        let index = self
+            .0
+            .iter()
+            .position(|(lang, norm, _)| lang == language && *norm == normalized)?;
+        let entry = self.0.remove(index)?;
+        let words = entry.2.clone();
+        self.0.push_front(entry);
+        Some(words)
+    }
+
+    fn insert(&mut self, language: Language, normalized: bool, words: HashSet<String>) {
+        if let Some(index) = self
+            .0
+            .iter()
+            .position(|(lang, norm, _)| *lang == language && *norm == normalized)
+        {
+            self.0.remove(index);
+        }
+        self.0.push_front((language, normalized, words));
+        self.0.truncate(16);
+    }
+}
+
 fn get_stopwords(language: Language, normalized: bool) -> HashSet<String> {
-    match TryInto::<StopWordLanguage>::try_into(&language) {
+    static CACHE: LazyLock<Mutex<StopwordCache>> =
+        LazyLock::new(|| Mutex::new(StopwordCache::default()));
+    let mut cache = CACHE.lock().expect("stopword cache lock poisoned");
+    if let Some(words) = cache.get(&language, normalized) {
+        return words;
+    }
+    let words = match TryInto::<StopWordLanguage>::try_into(&language) {
         Err(_) => HashSet::new(),
         Ok(lang) => stop_words::get(lang)
             .iter()
@@ -150,7 +184,9 @@ fn get_stopwords(language: Language, normalized: bool) -> HashSet<String> {
                 false => w.to_string(),
             })
             .collect(),
-    }
+    };
+    cache.insert(language, normalized, words.clone());
+    words
 }
 
 fn get_stemmer(language: &Language) -> Stemmer {
@@ -381,11 +417,52 @@ impl DefaultTokenizerBuilder {
 
 #[cfg(test)]
 mod tests {
-    use crate::test_data_loader::tests::{read_recipes, Recipe};
+    use crate::test_data_loader::tests::{Recipe, read_recipes};
 
     use super::*;
 
     use insta::assert_debug_snapshot;
+
+    // Catches FIFO eviction and conflating normalized and original stopwords.
+    #[test]
+    fn stopword_lru_keeps_recent_hits_and_normalization_separate() {
+        let mut cache = StopwordCache::default();
+        let languages = [
+            Language::Arabic,
+            Language::Danish,
+            Language::Dutch,
+            Language::English,
+            Language::French,
+            Language::German,
+            Language::Greek,
+            Language::Hungarian,
+            Language::Italian,
+            Language::Norwegian,
+            Language::Portuguese,
+            Language::Romanian,
+            Language::Russian,
+            Language::Spanish,
+            Language::Swedish,
+            Language::Tamil,
+        ];
+        for language in &languages {
+            cache.insert(language.clone(), false, HashSet::from(["original".into()]));
+        }
+        assert!(cache.get(&Language::Arabic, false).is_some());
+        cache.insert(Language::Turkish, false, HashSet::new());
+        assert!(cache.get(&Language::Danish, false).is_none());
+        assert!(cache.get(&Language::Arabic, false).is_some());
+        cache.insert(Language::Arabic, true, HashSet::from(["normalized".into()]));
+        assert_eq!(
+            cache.get(&Language::Arabic, false).unwrap(),
+            HashSet::from(["original".into()])
+        );
+        assert_eq!(
+            cache.get(&Language::Arabic, true).unwrap(),
+            HashSet::from(["normalized".into()])
+        );
+        assert_eq!(cache.0.len(), 16);
+    }
 
     fn tokenize_recipes(recipe_file: &str, language_mode: LanguageMode) -> Vec<Vec<String>> {
         let recipes = read_recipes(recipe_file);
@@ -490,7 +567,9 @@ mod tests {
 
         assert_eq!(
             tokens,
-            vec!["connect", "connect", "connect", "connect", "connect", "connect"]
+            vec![
+                "connect", "connect", "connect", "connect", "connect", "connect"
+            ]
         );
     }
 
