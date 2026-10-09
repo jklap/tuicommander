@@ -163,7 +163,7 @@ per cell and the configured history limit still apply.
 
 ### 1.8 Find in Content
 - `Cmd+F` opens search overlay — context-aware: routes to terminal, markdown tab, or diff tab based on active view
-- **Terminal:** incremental search with highlight decorations
+- **Terminal:** CLI incremental search with highlight decorations; Chat searches the visible transcript across inline Markdown, skips collapsed thinking bodies, and selects matches with next/previous navigation. Switching views closes search and clears highlights.
 - **Markdown viewer:** DOM-based search with cross-element matching (finds text spanning inline tags)
 - **Diff viewer:** DOM-based search via SearchBar + DomSearchEngine (same engine as markdown viewer)
 - Yellow highlight for matches, orange for active match

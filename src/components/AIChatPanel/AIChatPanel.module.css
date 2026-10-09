@@ -181,6 +181,10 @@
 }
 
 .findBar {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  flex-shrink: 0;
   display: flex;
   gap: 4px;
   padding: 4px;
