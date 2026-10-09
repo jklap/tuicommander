@@ -139,16 +139,11 @@ fn log_tail_command(instance: Option<&str>) -> Result<String, String> {
     ))
 }
 
-pub(crate) async fn deploy_ephemeral(
-    profile: &TunnelProfile,
-    port: u16,
-    token: &str,
-    survive_secs: u64,
-) -> Result<(), DeployError> {
-    deploy_ephemeral_for(profile, port, token, survive_secs, None).await
-}
-
-/// [`deploy_ephemeral`] for a named remote instance (`--instance <id>`).
+/// Deploy and launch the ephemeral daemon for one remote instance
+/// (`--instance <id>`; `None` = the default instance). There is deliberately
+/// no instance-less variant: every caller has a connection, and a connection
+/// with an Instance ID that went through the default instance's PID file
+/// stopped or replaced another connection's daemon (Batch 32 review #1).
 pub(crate) async fn deploy_ephemeral_for(
     profile: &TunnelProfile,
     port: u16,
@@ -166,12 +161,6 @@ pub(crate) async fn deploy_ephemeral_for(
         Path::new("scp"),
     )
     .await
-}
-
-pub(crate) async fn stop_ephemeral(profile: &TunnelProfile) -> Result<(), ExitReason> {
-    stop_ephemeral_with_binary(profile, None, Path::new("ssh"))
-        .await
-        .map(|_| ())
 }
 
 /// Stop a named instance's ephemeral daemon. `Ok(true)` when a verified
