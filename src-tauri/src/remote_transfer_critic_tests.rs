@@ -86,7 +86,7 @@ fn file(name: &str, body: &[u8]) -> Vec<u8> {
 }
 
 fn dir(name: &str) -> Vec<u8> {
-    raw_member(name.as_bytes(), b'5', b"", 0, b"")
+    raw_member_mode(name.as_bytes(), b'5', b"", 0, b"", 0o755)
 }
 
 fn query(dest: &Path, name: &str, directory: bool) -> UploadQuery {
@@ -375,7 +375,8 @@ async fn oversized_body_is_cut_off_and_cleaned() {
 }
 
 // Catches: a header that *declares* a huge size (tar bomb / sparse-style lie) being
-// trusted for allocation or counted wrongly, and the 10 000-entry cap off by one.
+// trusted for allocation or counted wrongly, the 10 000-entry cap off by one,
+// and directory fixtures without search permission leaking the temporary tree.
 #[tokio::test]
 async fn declared_size_and_entry_count_limits_hold() {
     let tmp = scratch();
@@ -406,6 +407,31 @@ async fn declared_size_and_entry_count_limits_hold() {
         .await
         .unwrap();
     assert_eq!(out.moved, 1, "exactly 10000 entries is within the cap");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let published = root.join("x");
+        let mut all_searchable =
+            std::fs::metadata(&published).unwrap().permissions().mode() & 0o100 != 0;
+        // Restore access before inspecting children so even the RED run cleans up.
+        std::fs::set_permissions(&published, std::fs::Permissions::from_mode(0o755)).unwrap();
+        for entry in std::fs::read_dir(&published).unwrap() {
+            let entry = entry.unwrap();
+            all_searchable &= entry.metadata().unwrap().permissions().mode() & 0o100 != 0;
+            std::fs::set_permissions(entry.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let temporary_path = tmp.path().to_path_buf();
+        tmp.close().unwrap();
+        assert!(
+            !temporary_path.exists(),
+            "temporary transfer tree survived cleanup"
+        );
+        assert!(
+            all_searchable,
+            "directory fixtures lack owner search permission"
+        );
+    }
 }
 
 // Catches: path-length limit missing (long GNU name accepted / leaks an OS error
