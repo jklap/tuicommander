@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { findBlockAtViewport, foldRange } from "../../utils/blockFold";
+import { findBlockAtViewport, findFoldTargetAtViewport, foldRange } from "../../utils/blockFold";
 
 describe("foldRange", () => {
 	it("computes [start, count) after the header row (executionLine ?? promptLine)", () => {
@@ -77,5 +77,34 @@ describe("findBlockAtViewport", () => {
 		it("the still-open block matches any row at or past its promptLine", () => {
 			expect(findBlockAtViewport(blocks, 30, 0)).toBe(blocks[2]);
 		});
+	});
+});
+
+// The `Cmd+Shift+.` target (CanvasTerminal's toggleBlockFoldAtViewport): rows
+// below historyBase have been evicted from scrollback.
+describe("findFoldTargetAtViewport", () => {
+	// blocks[0]'s header (row 5) is evicted once historyBase is 10, but its long
+	// output (to row 120) still spans the viewport top at row 100.
+	const blocks = [
+		{ promptLine: 5, endLine: 120 },
+		{ promptLine: 120, endLine: 200 },
+	];
+
+	it("never targets a block whose header has been evicted", () => {
+		// The unfiltered lookup would pick the evicted block here.
+		expect(findBlockAtViewport(blocks, 100, 0)).toBe(blocks[0]);
+		expect(findFoldTargetAtViewport(blocks, 10, 100, 0)).toBeUndefined();
+	});
+
+	it("falls through to the visible block whose header is within half a screen", () => {
+		expect(findFoldTargetAtViewport(blocks, 10, 100, 24)).toBe(blocks[1]);
+	});
+
+	it("still targets a block whose header sits exactly at historyBase", () => {
+		expect(findFoldTargetAtViewport(blocks, 5, 100, 0)).toBe(blocks[0]);
+	});
+
+	it("with nothing evicted (historyBase 0), behaves like findBlockAtViewport", () => {
+		expect(findFoldTargetAtViewport(blocks, 0, 150, 0)).toBe(findBlockAtViewport(blocks, 150, 0));
 	});
 });
