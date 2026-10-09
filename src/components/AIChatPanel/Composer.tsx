@@ -72,7 +72,7 @@ export const Composer: Component<{
 		const ownsDraft = aiChatDraft.captureOwnership();
 		try {
 			// An unstarted conversation has no capabilities yet, not an image refusal.
-			const startedSession = !props.chat.capabilities() ? await props.chat.ensureStarted() : props.chat.sessionId();
+			const startedSession = await props.chat.ensureStarted();
 			for (const file of files) {
 				if (!ownsDraft(startedSession ?? "")) return null;
 				const error = await aiChatDraft.stageImage(file, props.chat.capabilities()?.promptImage === true);
