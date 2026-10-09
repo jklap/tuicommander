@@ -4844,3 +4844,5 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 ## Mobile slash button parity (story 1609-9faa)
 
 - [ ] In a disposable agent session on the phone PWA, compare typing `/` and tapping the keybar `/`: both must show the same live agent commands and navigation. Insert `/` within an unsent draft and confirm surrounding text survives without submission.
+
+- [ ] Automations dialog: after story 1617 API integration, verify create/update/pause/Run now/delete and backend previews against the real scheduler. The current peer verifies the injectable frontend boundary only.
