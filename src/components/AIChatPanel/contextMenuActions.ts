@@ -15,7 +15,9 @@
 
 import { appLogger } from "../../stores/appLogger";
 import { contextMenuActionsStore } from "../../stores/contextMenuActionsStore";
+import { settingsStore } from "../../stores/settings";
 import { terminalsStore } from "../../stores/terminals";
+import { toastsStore } from "../../stores/toasts";
 import { uiStore } from "../../stores/ui";
 import { aiChatDraft } from "./draft";
 
@@ -59,6 +61,23 @@ async function ask(sessionId: string | undefined, question: (output: string) => 
 	}
 	aiChatDraft.append(question(truncateText(raw, MAX_CHARS)));
 	uiStore.setAiChatPanelVisible(true);
+}
+
+/**
+ * Smart Selection's "Ask AI" action: draft `text` into the AI Chat composer and
+ * open the panel — but only while AI Chat is enabled. With the experimental
+ * switch off the panel never renders (`PanelOrchestrator`), so drafting and
+ * flipping `aiChatPanelVisible` would do nothing visible and still persist the
+ * flag; say why instead. Returns whether the text was drafted.
+ */
+export function askAiAboutText(text: string): boolean {
+	if (!settingsStore.isAiChatEnabled()) {
+		toastsStore.add("AI Chat is disabled", "Enable AI Chat in Settings to use Ask AI", "warn");
+		return false;
+	}
+	aiChatDraft.append(text);
+	uiStore.setAiChatPanelVisible(true);
+	return true;
 }
 
 export function registerAiChatContextActions(): Array<{ dispose(): void }> {

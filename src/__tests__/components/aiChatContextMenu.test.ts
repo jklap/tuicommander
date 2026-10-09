@@ -14,14 +14,24 @@ const terminals = vi.hoisted(() => ({
 }));
 
 const ui = vi.hoisted(() => ({ setAiChatPanelVisible: vi.fn() }));
+const settings = vi.hoisted(() => ({ aiChatEnabled: true }));
+const toasts = vi.hoisted(() => ({ add: vi.fn() }));
 
 vi.mock("../../stores/terminals", () => ({ terminalsStore: terminals }));
 vi.mock("../../stores/ui", () => ({ uiStore: ui }));
+vi.mock("../../stores/settings", () => ({
+	settingsStore: { isAiChatEnabled: () => settings.aiChatEnabled },
+}));
+vi.mock("../../stores/toasts", () => ({ toastsStore: toasts }));
 vi.mock("../../stores/appLogger", () => ({
 	appLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 
-import { registerAiChatContextActions, truncateText } from "../../components/AIChatPanel/contextMenuActions";
+import {
+	askAiAboutText,
+	registerAiChatContextActions,
+	truncateText,
+} from "../../components/AIChatPanel/contextMenuActions";
 import { aiChatDraft } from "../../components/AIChatPanel/draft";
 import { contextMenuActionsStore } from "../../stores/contextMenuActionsStore";
 
@@ -46,6 +56,7 @@ beforeEach(() => {
 	vi.clearAllMocks();
 	registered.forEach((disposable) => disposable.dispose());
 	aiChatDraft.clear();
+	settings.aiChatEnabled = true;
 	terminals.state.terminals = { t1: terminal("") };
 	registered = registerAiChatContextActions();
 });
@@ -100,5 +111,26 @@ describe("the AI entries on a terminal", () => {
 
 		expect(aiChatDraft.text()).toBe("");
 		expect(ui.setAiChatPanelVisible).not.toHaveBeenCalled();
+	});
+});
+
+// Smart Selection's "Ask AI" rule action. With the experimental AI Chat switch
+// off the panel never renders, so drafting into it and persisting
+// aiChatPanelVisible=true would be a silent dead end.
+describe("askAiAboutText (Smart Selection Ask AI)", () => {
+	it("drafts the text and opens the panel while AI Chat is enabled", () => {
+		expect(askAiAboutText("what is ENOENT?")).toBe(true);
+		expect(aiChatDraft.text()).toBe("what is ENOENT?");
+		expect(ui.setAiChatPanelVisible).toHaveBeenCalledWith(true);
+		expect(toasts.add).not.toHaveBeenCalled();
+	});
+
+	it("drafts nothing, opens nothing and says why while AI Chat is disabled", () => {
+		settings.aiChatEnabled = false;
+
+		expect(askAiAboutText("what is ENOENT?")).toBe(false);
+		expect(aiChatDraft.text()).toBe("");
+		expect(ui.setAiChatPanelVisible).not.toHaveBeenCalled();
+		expect(toasts.add).toHaveBeenCalledWith("AI Chat is disabled", expect.any(String), "warn");
 	});
 });
