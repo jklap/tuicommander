@@ -9,7 +9,6 @@ interface SlashMenuOverlayProps {
 	sessionId: string;
 	onSelect: (command: string) => void;
 	onClose?: () => void;
-	local?: boolean;
 }
 
 /** Compact dropup that renders above the input area. Items come pre-filtered
@@ -57,20 +56,18 @@ export function SlashMenuOverlay(props: SlashMenuOverlayProps) {
 					</button>
 				)}
 			</For>
-			<Show when={!props.local}>
-				<div class={styles.nav}>
-					<button class={styles.navBtn} onClick={() => navigate("up")} aria-label="Previous">
-						<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-							<path d="M7.41 15.41L12 10.83l4.59 4.58L18 14l-6-6-6 6z" />
-						</svg>
-					</button>
-					<button class={styles.navBtn} onClick={() => navigate("down")} aria-label="Next">
-						<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-							<path d="M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6z" />
-						</svg>
-					</button>
-				</div>
-			</Show>
+			<div class={styles.nav}>
+				<button class={styles.navBtn} onClick={() => navigate("up")} aria-label="Previous">
+					<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+						<path d="M7.41 15.41L12 10.83l4.59 4.58L18 14l-6-6-6 6z" />
+					</svg>
+				</button>
+				<button class={styles.navBtn} onClick={() => navigate("down")} aria-label="Next">
+					<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+						<path d="M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6z" />
+					</svg>
+				</button>
+			</div>
 		</div>
 	);
 }
