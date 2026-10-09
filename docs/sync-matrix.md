@@ -818,8 +818,9 @@ When changing which make target launches against which configuration directory:
 
 | File | What to update |
 |------|----------------|
-| `Makefile` | The `dev` and `test` recipes. A `TUIC_APP_INSTANCE` default MUST be target-specific (`test: TUIC_APP_INSTANCE?=…`) — a line-start assignment is global whatever target follows it, and sends `make dev` to an empty instance |
-| `scripts/check-make-instance-scope.sh` | The expected value per target, and the structural check. It asks `make -n` what it expands rather than reading the line |
+| `Makefile` | The `dev` and `test` recipes and the ONE global per-checkout `TUIC_APP_INSTANCE` default (`tuic-<checkout dir>`). Every `tauri dev` recipe passes `TUIC_APP_INSTANCE=$(TUIC_APP_INSTANCE)` and `$(WARN_SHARED_INSTANCE)`; no target-specific `target: TUIC_APP_INSTANCE?=…` split |
+| `scripts/check-make-instance-scope.sh` | The expected value per target (per-checkout id, overrides, the warning only for an empty value), and the structural checks. It asks `make -n` what it expands rather than reading the line |
+| `scripts/test-check-make-instance-scope.sh` | Fixture checkouts for the id derivation and one mutated Makefile per shape the guard must reject |
 | `scripts/hooks/pre-commit` | Gate 1 runs that script when `Makefile` is staged. Gate 2 is the agent-state fixture gate; `TUIC_SKIP_FIXTURE_GATE=1` deliberately skips only gate 2 |
 | `docs/backend/config.md` | The override forms and what each target defaults to |
 | `CHANGELOG.md` | Only when the behaviour a user sees changes |

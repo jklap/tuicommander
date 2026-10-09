@@ -149,14 +149,16 @@ Default to a **standalone test instance**, not the orchestrator you're running i
 click discipline, cleanup). This section covers the one thing that skill doesn't: making sure
 your instance doesn't collide with anyone else's.
 
-**Isolation is NOT automatic for `make dev` on this tree — pass `TUIC_APP_INSTANCE` yourself.**
-`make test` defaults to its own fixed `instances/tuic-test/` config directory; `make dev` runs on
-the shared default config directory by design (see the Makefile's own comment and root
-`AGENTS.md`'s "Test instance vs orchestrator instance" section). A dev run that will add/remove
-repos or otherwise mutate config must get an explicit, unique id. (The pre-rebase `wip` branch
-derived the id from the checkout's directory name for both targets; restoring that is a queued
-follow-up — update this section when it lands.) Two `make test` runs share the fixed
-`tuic-test` id, so the same collision rules apply to it.
+**Isolation is automatic by directory name, not by process.** `make dev`/`make test` derive
+`TUIC_APP_INSTANCE` from the checkout's own directory name (`tuic-<dir name>`; see the
+`TUIC_APP_INSTANCE` comment at the top of the Makefile and root `AGENTS.md`'s "Test instance vs
+orchestrator instance" section), so two *different* checkouts/worktrees never collide without you
+doing anything, and neither touches the shared default config directory. The case that DOES
+collide: running this skill from the **same checkout** (e.g. the main checkout) that Boss, or
+another agent, might already have a `make dev`/`make test` running in — that second launch would
+derive the identical instance id and either fail the port bind or silently share the first one's
+config/session state. Only an explicit EMPTY `TUIC_APP_INSTANCE=` puts a run on the shared
+default config, and both targets print a loud WARNING when it does — never do that here.
 
 Before starting anything:
 
@@ -164,8 +166,8 @@ Before starting anything:
 ps aux | grep -E "target/debug/tuicommander|tauri.js dev" | grep -v grep
 ```
 
-- **Nothing running from this checkout** → `make test` is already isolated (`tuic-test`); for
-  `make dev` pass an explicit id as below.
+- **Nothing running from this checkout** → just `make dev` (or `make test`), no manual
+  `TUIC_APP_INSTANCE` needed. The derived per-checkout isolation is already correct.
 - **Something IS already running from this checkout** → don't touch it (it may be Boss's own
   session). Launch your own with an explicit, unique override instead:
   ```bash

@@ -7,9 +7,38 @@ BUNDLE_ID=com.tuic.commander
 VERSION=$(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 
 # Optional runtime override used by isolated verification sessions. An empty
-# value preserves the production default; TUIC_APP_INSTANCE is intentionally
-# left undefined here so the test target can keep its own default below.
+# value preserves the production default.
 TUIC_PORT?=
+
+# Per-checkout config instance (#763-d219). `make dev` and `make test` both run
+# on their OWN `instances/<id>/` config directory (repositories.json,
+# agents.json, disabled_mcp_agents, ...), never the shared default one that
+# Boss's real, separately-launched TUICommander.app uses — that release build is
+# never started through this Makefile (see "Test instance vs orchestrator
+# instance" in AGENTS.md).
+#
+# The id is derived from the checkout's own directory name rather than a shared
+# literal like "tuic-test", so two worktrees running `make dev`/`make test` at
+# the same time — the normal multi-agent shape in this repo — get separate
+# instances instead of colliding on one repositories.json. It is a valid
+# instance id by construction: lowercase, non-alphanumerics folded to single
+# hyphens, no leading/trailing hyphen, `tuic-` + at most 58 characters = at
+# most 63 (docs/backend/config.md). A directory name with no usable character
+# falls back to `tuic-checkout`.
+#
+# Deliberately ONE global default for both targets: they are the same kind of
+# launch now, so there is no target that must stay on the shared directory.
+# Overrides: `make dev TUIC_APP_INSTANCE=<id>` / `TUIC_APP_INSTANCE=<id> make
+# dev` pick another instance; an EMPTY value (`make dev TUIC_APP_INSTANCE=` or
+# `TUIC_APP_INSTANCE= make dev`) opts back into the shared default config for
+# one run and prints a loud warning. `scripts/check-make-instance-scope.sh`
+# asks `make -n` what each target really expands (pre-commit + `make check`).
+TUIC_CHECKOUT_INSTANCE:=$(shell basename "$(CURDIR)" | tr 'A-Z' 'a-z' | tr -c 'a-z0-9' '-' | sed -E 's/-+/-/g; s/^-//' | cut -c1-58 | sed -E 's/-$$//')
+TUIC_APP_INSTANCE?=tuic-$(or $(TUIC_CHECKOUT_INSTANCE),checkout)
+
+# Expands to a recipe line ONLY when this run is on the shared default config,
+# so `make -n` shows the warning exactly when it would fire.
+WARN_SHARED_INSTANCE=$(if $(TUIC_APP_INSTANCE),,@echo "WARNING: TUIC_APP_INSTANCE is empty for this run - using the SHARED default config directory, the same one Boss's real TUICommander.app uses (repositories.json, agents.json, ...). Only do this on purpose." >&2)
 
 # rtk (Rust Token Killer) is an optional output-compacting proxy: `rtk <cmd>`
 # runs <cmd> and trims its output. It is a personal tool, not a project
@@ -66,13 +95,15 @@ hooks:
 # (or its `.rs.tmp.*` scratch files) will NOT rebuild/restart the Rust backend.
 # Vite HMR still reloads the UI (it runs as a separate `beforeDevCommand` process).
 # Rust changes require a manual `make dev` restart — see src-tauri/AGENTS.md "Dev Hot Reload".
-# An inherited `TUIC_APP_INSTANCE` (a dotfile, direnv, or one copy-pasted
-# `TUIC_APP_INSTANCE=<id> make dev` still exported in the shell) beats the
-# Makefile the same way the old global assignment did, and the guard in
+# Isolated per-checkout config instance by default — see the
+# `TUIC_APP_INSTANCE` comment at the top. An inherited `TUIC_APP_INSTANCE` (a
+# dotfile, direnv, or an exported `TUIC_APP_INSTANCE=` still in the shell)
+# beats the Makefile default, and the guard in
 # `scripts/check-make-instance-scope.sh` deliberately cannot see it. Say which
 # config directory this is starting on, so the wrong one is the first line of
 # output instead of something inferred from an empty repository list.
 dev: hooks
+	$(WARN_SHARED_INSTANCE)
 	@pnpm build:sidecar
 	@pnpm exec vite build
 	@cd src-tauri && cargo build --bin tuic-remote --no-default-features
@@ -80,33 +111,15 @@ dev: hooks
 	@echo "Starting Tauri dev on $(if $(TUIC_APP_INSTANCE),the ISOLATED config instance '$(TUIC_APP_INSTANCE)' (instances/$(TUIC_APP_INSTANCE)) — not the shared one,the shared default config directory)"
 	TUIC_APP_INSTANCE=$(TUIC_APP_INSTANCE) TUIC_PORT=$(TUIC_PORT) RUST_LOG=tuicommander_lib=debug,info pnpm tauri dev --no-watch -- --config 'target."cfg(target_os = \"macos\")".runner = ["python3", "$(CURDIR)/scripts/dev-exe-copy.py"]'
 
-# Build frontend + launch Tauri dev (for quick manual testing).
-#
-# Isolated by default (#763-d219): this target exists specifically for
-# throwaway manual verification, not as a daily-driver launch — unlike `make
-# dev`, which stays on the shared default config directory because it IS
-# Boss's actual long-running instance and switching it would look like every
-# repository had vanished. TUIC_APP_INSTANCE points this one at its own
-# `instances/tuic-test/` config namespace (see docs/backend/config.md), so a
-# verification session can add/remove repositories, worktrees, whatever it
-# needs, without ever touching production `repositories.json`. Override with
-# `make test TUIC_APP_INSTANCE=some-other-id`, or `TUIC_APP_INSTANCE= make
-# test` to opt back into the shared default instance for one run.
-#
-# Scoped to the `test` target on purpose (2026-09-17). Written as a bare
-# `TUIC_APP_INSTANCE?=tuic-test` this is a *global* make variable — position in
-# the file buys nothing — so `make dev` expanded it too and launched the daily
-# driver against an empty `instances/tuic-test/`, which is precisely the "every
-# repository had vanished" failure the paragraph above warns about. It cost no
-# data (production `repositories.json` was never opened) and a real scare.
-# Command-line and environment assignments still win over a target-specific
-# `?=`, so both overrides documented above keep working.
-test: TUIC_APP_INSTANCE?=tuic-test
+# Build frontend + launch Tauri dev (for quick manual, throwaway verification).
+# Same per-checkout config instance as `make dev` — see the `TUIC_APP_INSTANCE`
+# comment at the top.
 test:
+	$(WARN_SHARED_INSTANCE)
 	@echo "Building Vite frontend..."
 	@pnpm exec vite build
 	@cd src-tauri && cargo build -p tuic-bridge -p tuic-cli
-	@echo "Starting Tauri dev (isolated config instance: $(TUIC_APP_INSTANCE))..."
+	@echo "Starting Tauri dev on $(if $(TUIC_APP_INSTANCE),the ISOLATED config instance '$(TUIC_APP_INSTANCE)' (instances/$(TUIC_APP_INSTANCE)),the SHARED default config directory)..."
 	TAURI_CLI_WATCHER_IGNORE_FILENAME=.taurignore TUIC_APP_INSTANCE=$(TUIC_APP_INSTANCE) pnpm tauri dev
 
 # Build .app only (default, fast — skips DMG)

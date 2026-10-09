@@ -150,7 +150,9 @@ AGENTS.md's Visual section.
 ## 4. Clean up before stopping
 
 - **Config**: if you changed any setting for testing, restore it via the HTTP API before
-  stopping — debug and release builds share the same `config.json`/`repositories.json`
+  stopping. `make dev` already runs on its own per-checkout `instances/tuic-<dir>/` config, but
+  that instance is reused by every later `make dev` from the same checkout, and a run with an
+  explicit empty `TUIC_APP_INSTANCE=` shares Boss's real `config.json`/`repositories.json`
   (AGENTS.md's isolation caveat). `PUT /config` with the original values, then `GET /config` to
   confirm.
 - **Repos**: don't leave a scratch repo registered in the app (`GET /config/repositories`);
