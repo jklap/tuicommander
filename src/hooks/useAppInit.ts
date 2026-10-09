@@ -379,16 +379,84 @@ function stopSettingsSync(): void {
 	settingsSyncStops.clear();
 }
 
+function activeSessionId(): string | null {
+	const activeId = terminalsStore.state.activeId;
+	return (activeId ? terminalsStore.get(activeId)?.sessionId : null) ?? null;
+}
+
+/** Whether the user can actually be looking at this client's active terminal. */
+function windowIsSeen(): boolean {
+	return !document.hidden && document.hasFocus();
+}
+
+/** The local (non-remote) PTY-exit teardown `Terminal.tsx` runs for a mounted
+ *  tab, for a tab with no mounted Terminal watching its exit: an agent tab stays
+ *  with a grey "exited" dot, a plain shell's tab closes. */
+function closeUnwatchedLocalTab(termId: string, sessionId: string): void {
+	const t = terminalsStore.get(termId);
+	if (!t) return;
+	if (t.agentType != null) {
+		const notified = handleAgentExitCompletion(termId);
+		terminalsStore.update(termId, {
+			shellState: "exited",
+			sessionId: null,
+			...(notified ? { completionNotified: true } : {}),
+			currentTask: null,
+			agentType: null,
+			agentSessionId: null,
+			agentSessionIdIsAuthoritative: false,
+			pendingResumeCommand: null,
+			pendingResumeTitle: null,
+			pendingResumeSource: null,
+		});
+		terminalsStore.clearAwaitingInput(termId);
+		pluginRegistry.notifyStateChange({ type: "agent-stopped", sessionId, terminalId: termId });
+		return;
+	}
+	terminalsStore.update(termId, { sessionId: null });
+	terminalsStore.clearAwaitingInput(termId);
+	terminalsStore.notifyShellExit(termId);
+}
+
 /** Re-assert that this client still shows its active terminal's session.
  *  `terminalsStore.setActive` only asserts on a tab switch; a remote client's
  *  assertion is also what refreshes the backend's remote-activity grace
  *  (`background_mode::hidden`), so without this a tab a browser user keeps
- *  looking at could age into standby. Rides the 30 s snapshot timer. */
+ *  looking at could age into standby. Rides the 30 s snapshot timer.
+ *
+ *  Skipped while the document is hidden or the window unfocused: a minimised
+ *  window or background browser tab is not being looked at, so its session must
+ *  be allowed to reach standby. `wake: false` — a periodic keep-alive must
+ *  never SIGCONT a parked session; only a real return (focus/visibility, a tab
+ *  switch) wakes it. */
 function reassertActiveSessionVisible(): void {
-	const activeId = terminalsStore.state.activeId;
-	const sessionId = activeId ? terminalsStore.get(activeId)?.sessionId : null;
+	if (!windowIsSeen()) return;
+	const sessionId = activeSessionId();
 	if (!sessionId) return;
-	rpc("set_session_visible", { sessionId, visible: true, viewerId: CLIENT_INSTANCE_ID }).catch(() => {});
+	rpc("set_session_visible", { sessionId, visible: true, viewerId: CLIENT_INSTANCE_ID, wake: false }).catch(() => {});
+}
+
+/** Follow the window's own visibility: drop this viewer's assertion the moment
+ *  the document is hidden, and assert (and wake) again when the user comes back. */
+function installWindowVisibilityTracking(): () => void {
+	const report = (visible: boolean) => {
+		const sessionId = activeSessionId();
+		if (!sessionId) return;
+		rpc("set_session_visible", { sessionId, visible, viewerId: CLIENT_INSTANCE_ID }).catch(() => {});
+	};
+	const onVisibilityChange = () => {
+		if (document.hidden) report(false);
+		else if (document.hasFocus()) report(true);
+	};
+	const onFocus = () => {
+		if (!document.hidden) report(true);
+	};
+	document.addEventListener("visibilitychange", onVisibilityChange);
+	window.addEventListener("focus", onFocus);
+	return () => {
+		document.removeEventListener("visibilitychange", onVisibilityChange);
+		window.removeEventListener("focus", onFocus);
+	};
 }
 
 /** App initialization: hydrate stores, reconnect PTY sessions, restore state */
@@ -526,6 +594,7 @@ export async function initApp(deps: AppInitDeps) {
 	// Periodic terminal snapshot — ensures savedTerminals is always fresh
 	// so app restart recovers terminals even if beforeunload fails.
 	const SNAPSHOT_INTERVAL_MS = 30_000;
+	const stopVisibilityTracking = installWindowVisibilityTracking();
 	const snapshotTimer = setInterval(() => {
 		const snapshots = collectTerminalSnapshots();
 		if (snapshots.size > 0) {
@@ -537,6 +606,7 @@ export async function initApp(deps: AppInitDeps) {
 	// Snapshot terminal metadata, flush pending saves, and close PTY sessions on app exit
 	window.addEventListener("beforeunload", () => {
 		clearInterval(snapshotTimer);
+		stopVisibilityTracking();
 		// Every debounced persist has to land here: the timer dies with the
 		// WebView, so a preference toggled inside its window is simply lost.
 		activityStore.flushSave();
@@ -1116,12 +1186,14 @@ export async function initApp(deps: AppInitDeps) {
 		if (termId) terminalsStore.setPtyDescription(termId, event.payload.description ?? null);
 	}).catch((err) => appLogger.error("app", "Failed to register pty-description listener", err));
 
-	// A backend rename (MCP, tmux, OSC title) is applied here without an IPC
-	// echo; even an echo could not loop, since `set_session_name` never emits.
-	listen<{ session_id: string; name: string; is_custom: boolean }>("session-renamed", (event) => {
-		// Backend-originated (OSC title via osc_title.rs, tmux, MCP) and never
-		// echoed back — a `session-renamed` payload IS the backend's
-		// authoritative state. See `applyBackendRename`'s doc comment.
+	// A backend rename (MCP, tmux, OSC title) or another window's rename is
+	// applied here without an IPC echo; `set_session_name` emits only on a real
+	// change, so even an echo could not loop.
+	listen<{ session_id: string; name: string | null; is_custom: boolean }>("session-renamed", (event) => {
+		// Never echoed back to the backend — a `session-renamed` payload IS the
+		// backend's authoritative state. Carries backend renames (MCP, tmux, OSC
+		// titles) AND renames made in another window/client; `name: null` is a
+		// cleared name. See `applyBackendRename`'s doc comment.
 		const { session_id, name, is_custom } = event.payload;
 		terminalsStore.applyBackendRename(session_id, name, is_custom);
 	}).catch((err) => appLogger.error("app", "Failed to register session-renamed listener", err));
@@ -1344,9 +1416,17 @@ export async function initApp(deps: AppInitDeps) {
 		// would leave the name stuck forever because the ticker's isExternallyCreated guard
 		// aborts on the first tick and the setTimeout's isExternallyCreated guard skips removal.
 		const t0 = terminalsStore.get(termId);
-		if (!t0?.isExternallyCreated) return;
+		if (!t0) return;
 		// A suspended tab ended its PTY on purpose and must stay, restorable.
 		if (isSuspendingOrSuspended(termId)) return;
+		if (!t0.isExternallyCreated) {
+			// Owned by its mounted Terminal component — unless none is mounted. A
+			// human-created tab seen from ANOTHER window/client is `isExternallyCreated: false`
+			// too, and if it was never rendered there nobody would ever run its exit
+			// teardown, leaving a dead tab open (Batch 47 review).
+			if (!terminalsStore.isPtyExitWatched(termId)) closeUnwatchedLocalTab(termId, session_id);
+			return;
+		}
 
 		const parsedAgentType = parseAgentType(agent_type);
 		// Deliberately a different signal from `hadAgent` below: this one reads

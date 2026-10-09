@@ -153,7 +153,7 @@ fn write_name(state: &crate::AppState, session_id: &str, name: String) {
     if state.set_session_display_name(session_id, Some(name.clone()), false) {
         state.emit_dual(AppEvent::SessionRenamed {
             session_id: session_id.to_string(),
-            name,
+            name: Some(name),
             is_custom: false,
         });
     }
@@ -633,7 +633,7 @@ mod tests {
                 renamed = Some((session_id, name, is_custom));
             }
         }
-        assert_eq!(renamed, Some(("s1".into(), "npm test".into(), false)));
+        assert_eq!(renamed, Some(("s1".into(), Some("npm test".into()), false)));
     }
 
     #[test]
