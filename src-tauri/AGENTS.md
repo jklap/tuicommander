@@ -1609,6 +1609,16 @@ primitive is `tuic_core::process_tree` instead (`terminate_process_group`/`kill_
 `kill_process_tree`), where `graceful_kill` can adopt it too. Plain `output_with_deadline` (git,
 `lsof`) still kills only the direct child — those do not start children that must die with them.
 
+**Same shape, fixed 2026-10-09 for the one-shot ssh/scp runner** `tunnels::exec::run_process`
+(Test Connection's SSH check, remote deploy, SSH provisioning). It used to rely on
+`kill_on_drop`, which ends only the direct `ssh`/`sh`, so a `ProxyCommand` or a forking fake-ssh
+fixture orphaned its child on a timeout or a cancelled request. It now spawns with
+`process_group(0)`; a timeout SIGTERMs the group, waits a bounded grace, SIGKILLs the group and
+reaps the child within a bound; a dropped future signals the group through a drop guard. The pipes
+are drained on their own tasks under the same deadline, so a straggler holding stdout cannot hang
+the call either. Tests: `a_timed_out_one_shot_kills_the_grandchild_it_forked`,
+`a_cancelled_one_shot_kills_the_grandchild_it_forked` (`tunnels/exec.rs`).
+
 ## Notification Sound Playback (`rodio` decoder features, custom-file fallback)
 
 `notification_sound.rs` generates its built-in tones procedurally (`EnvelopedTone`,
