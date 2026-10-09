@@ -5,21 +5,30 @@
 # OSC output. Safe to delete this file, hook-debug.log, and the "hooks" key
 # in settings.local.json once done investigating.
 #
-# Fixed absolute paths on purpose, NOT ${CLAUDE_PROJECT_DIR}-relative: this
-# hook config applies repo-wide across every git worktree of tuicommander
-# (confirmed empirically 2026-08-30 — Claude Code resolves project settings
-# for a worktree back to the shared repo, not the per-worktree checkout), but
-# this script only physically exists in the main checkout. A path built from
-# $CLAUDE_PROJECT_DIR resolves correctly per-session (that part isn't broken)
-# but then points at a copy of this script that doesn't exist in whichever
-# worktree fired the hook, which is exactly what produced the "No such file
-# or directory" errors surfacing in unrelated worktree sessions. Fixed paths
-# also mean every worktree's hook activity lands in ONE log, which is more
-# useful for cross-session troubleshooting than a log fragmented per worktree.
+# ONE log for every worktree, on purpose: Claude Code resolves project
+# settings for a worktree back to the shared repo (confirmed empirically
+# 2026-08-30), so the hook config is invoked from every worktree's sessions,
+# and a log fragmented per worktree is less useful for cross-session
+# troubleshooting. The log therefore lives in the MAIN checkout's `.claude/`,
+# found from this script's own location via `git rev-parse --git-common-dir`
+# (works from a linked worktree too) — no personal absolute path. Override
+# with HOOK_DEBUG_LOG=/path/to/log; if git cannot answer, the log goes next to
+# `$CLAUDE_PROJECT_DIR/.claude/` (else this script's own checkout). The
+# hook-log-analysis skill's hooklog.py resolves the same path the same way.
 set -euo pipefail
 
 event="${1:-unknown}"
-logfile="/Users/jason.klapste/src/external/tuicommander/.claude/hook-debug.log"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+default_logfile() {
+  local common
+  if common="$(git -C "${script_dir}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" \
+    && [[ -n "${common}" ]]; then
+    printf '%s/.claude/hook-debug.log\n' "$(dirname "${common}")"
+  else
+    printf '%s/.claude/hook-debug.log\n' "${CLAUDE_PROJECT_DIR:-$(dirname "$(dirname "${script_dir}")")}"
+  fi
+}
+logfile="${HOOK_DEBUG_LOG:-$(default_logfile)}"
 retention_days=7
 payload="$(cat)"
 
@@ -45,6 +54,6 @@ fi
   # payload lacks. Credential-looking names are excluded so they never hit the log.
   printf '%s\n' "--- env ---"
   env | grep -E '^(CLAUDE|TUIC|TMUX)' | grep -viE '(TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL)' | sort || true
-} >> "$logfile"
+} >> "${logfile}"
 
 exit 0
