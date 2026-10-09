@@ -2036,6 +2036,17 @@ fn mcp_instruction_surface_bytes_stay_within_budget() {
     // markers as an injection-shaped override, and a subagent emitting
     // `suggest:` ends the parent's turn — both obligations, not prose.
     //
+    // Both empty-state budgets moved again on 2026-10-08 (classic 1600 ->
+    // 3264, collapsed 1664 -> 3328), deliberately, by the user's decision to
+    // keep wip's richer marker/protocol prose when wip was replayed onto main
+    // (plans/main-review/rebase-fixups.md, "USER DECISION ... MCP
+    // instruction budget": "Increase the budget and keep wip's prose").
+    // Measured on the final replayed tree with the 5-byte baseline version
+    // (so `ver_overhead` is 0 and not counted twice): classic empty 3199 B,
+    // collapsed empty 3262 B; each cap is that plus ~2%, rounded up to the
+    // next 64 bytes. The prose was NOT trimmed to fit; trimming it is the
+    // way to bring these back down, not another raise.
+    //
     // `env!("CARGO_PKG_VERSION")` (`ver`, above) appears twice in the
     // shared identity/marker prose both variants render, and its length
     // is not fixed: a release build reads e.g. "1.8.0" (5 bytes), but a
@@ -2051,11 +2062,11 @@ fn mcp_instruction_surface_bytes_stay_within_budget() {
     const BASELINE_VER_LEN: usize = 5; // e.g. "1.8.0"
     let ver_overhead = ver.len().saturating_sub(BASELINE_VER_LEN) * 2;
     assert!(
-        instructions_classic_empty <= 1792 + ver_overhead,
+        instructions_classic_empty <= 3264 + ver_overhead,
         "classic instructions grew past their budget — {measured}"
     );
     assert!(
-        instructions_collapsed_empty <= 1856 + ver_overhead,
+        instructions_collapsed_empty <= 3328 + ver_overhead,
         "collapsed instructions grew past their budget — {measured}"
     );
     assert!(
