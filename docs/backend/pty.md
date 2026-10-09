@@ -757,6 +757,10 @@ projects them with `ClaudeAdapter`, and retains a bounded ACP update log. Each
 view retains an open file-identity handle: replacing a JSONL at the same path
 resets the conversation even when the replacement is as large as the old file.
 The existing one-second ticker emits wake events; snapshot reads keep it alive.
+Binding discovery and its ten-second recheck require the parent JSONL, without
+requiring a subagents directory. Each frontend watch owns its cursor; delayed
+listener cleanup and snapshot replies from an earlier mount cannot clear or
+replace the current Chat conversation.
 Ticker stops log a WARN with the terminal ID and reason, and failed frontend
 refreshes log a WARN before retrying on the next wake or existing keepalive. It
 recognizes older prompt-ID rows without `origin`, excludes harness command echoes

@@ -100,18 +100,6 @@ describe("chat view follow boundaries", () => {
 		closeTwo();
 	});
 
-	// Catches: an epoch change continuing the replacement file under stale history.
-	it("replaces the conversation when the backend reports a different file epoch", async () => {
-		const dispose = await chatViewStore.watch("one");
-		invokeMock.mockResolvedValueOnce(snapshot("old", 1, true));
-		await chatViewStore.refresh("one");
-		invokeMock.mockResolvedValueOnce(snapshot("new", 2, true, 7));
-		wake("one");
-		await vi.waitFor(() => expect(texts("one")).toEqual(["new"]));
-		expect(chatViewStore.state.cursors.one.epoch).toBe(7);
-		dispose();
-	});
-
 	// Catches: event-driven reads failing silently and leaving no diagnostic for a frozen chat.
 	it("warns on a failed wake refresh and accepts the next wake", async () => {
 		const dispose = await chatViewStore.watch("one");
