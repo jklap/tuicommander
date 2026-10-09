@@ -1191,8 +1191,31 @@ return errors before writing. Unknown fields or malformed JSON cause the strict
 ConfigFile loader to preserve the original bytes in `.corrupt-<uuid>` recovery
 files and abort that operation. Semantic errors leave the original document in
 place. No independent unattended-permission flag exists: the run config owns
-permissions. Step 2 adds cron/IANA validation and the local-zone creation default;
-the storage foundation alone does not make a schedule executable.
+permissions.
+
+`automations/schedule.rs` validates exactly five Vixie fields, with day-of-month
+and day-of-week OR semantics when both day fields are restricted. If either day
+field starts with `*` (including `*/2`), both day fields must match. An explicit
+range such as `1-31/2` remains restricted. Seconds, years, shorthand macros and Quartz
+extensions are rejected. Named months/weekdays, ranges, lists and steps are
+supported. Patterns with no possible calendar occurrence return a bounded error;
+croner 4.0.1 limits its search iterations and years (through year 5000).
+
+At creation an omitted (empty internal) timezone is resolved with the operating
+system's local IANA zone and persisted. Failure to discover a supported zone is
+an error, with no UTC fallback. Loads and edits require a valid stored zone;
+they never reinterpret missing zones using the current host. Schedule evaluation
+uses chrono-tz 0.10.4 and the stored zone. Next occurrences are strictly after
+the supplied UTC instant; latest-due occurrences include that instant and must
+be strictly after an optional scheduled cursor.
+
+Fixed single wall-clock times skip spring gaps and run once, at the earlier
+fall-fold instant. Hourly/wildcard intervals retain both real fold occurrences.
+The wrapper filters croner's shifted gap results rather than dispatching them.
+Backend hourly, daily, weekday and weekly presets validate their controls and
+produce cron text; custom cron uses the same validator. Preview returns 1–20
+UTC occurrences with the cron and zone. These are Rust core functions; public
+HTTP/IPC commands arrive in plan Step 8. This core does not dispatch agents.
 
 ### Automation run ledger
 

@@ -32,7 +32,10 @@ impl DefinitionStore {
     }
 
     /// Create one definition without replacing another writer's edits.
-    pub fn create(&self, definition: AutomationDefinition) -> Result<(), String> {
+    pub fn create(&self, mut definition: AutomationDefinition) -> Result<(), String> {
+        if definition.timezone.is_empty() {
+            definition.timezone = super::schedule::timezone_for_creation(None)?;
+        }
         definition.validate()?;
         self.file.update_with_strict(|latest| {
             latest.validate()?;

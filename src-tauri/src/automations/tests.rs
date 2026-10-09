@@ -211,7 +211,6 @@ fn invalid_wire_definitions_do_not_deserialize_into_runnable_defaults() {
         "repository",
         "workspace",
         "cron",
-        "timezone",
     ] {
         let mut value = serde_json::to_value(definition("a")).unwrap();
         value.as_object_mut().unwrap().remove(field);
