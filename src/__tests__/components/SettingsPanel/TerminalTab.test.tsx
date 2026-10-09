@@ -265,6 +265,64 @@ describe("TerminalTab placement", () => {
 		expect(savedConfigs().at(-1)?.osc1337_focus_attention).toBe(true);
 	});
 
+	function selectByLabel(container: HTMLElement, label: string): HTMLSelectElement {
+		const el = Array.from(container.querySelectorAll("label")).find((l) => l.textContent === label);
+		const select = el?.parentElement?.querySelector("select");
+		if (!select) throw new Error(`select "${label}" not found`);
+		return select as HTMLSelectElement;
+	}
+
+	// Dropped-items-review #51: wip's mock-based "calls setX when its control
+	// changes" tests, re-done in this file's real-store style — change the
+	// control, then assert the persisted config key.
+	it("persists the Copy on select toggle under copy_on_select", async () => {
+		vi.useFakeTimers();
+		mockInvoke.mockImplementation(invokeImpl({ copy_on_select: false }));
+		await settingsStore.hydrate();
+		const { container } = render(() => <TerminalTab />);
+		const toggle = toggleByLabel(container, "Copy on select");
+		expect(toggle.checked).toBe(false);
+		mockInvoke.mockClear();
+
+		fireEvent.change(toggle, { target: { checked: true } });
+		await vi.advanceTimersByTimeAsync(600);
+
+		expect(settingsStore.state.copyOnSelect).toBe(true);
+		expect(savedConfigs().at(-1)?.copy_on_select).toBe(true);
+	});
+
+	it("persists the OSC 52 clipboard toggle under osc52_clipboard", async () => {
+		vi.useFakeTimers();
+		mockInvoke.mockImplementation(invokeImpl({ osc52_clipboard: false }));
+		await settingsStore.hydrate();
+		const { container } = render(() => <TerminalTab />);
+		const toggle = toggleByLabel(container, "Allow OSC 52 clipboard writes");
+		expect(toggle.checked).toBe(false);
+		mockInvoke.mockClear();
+
+		fireEvent.change(toggle, { target: { checked: true } });
+		await vi.advanceTimersByTimeAsync(600);
+
+		expect(settingsStore.state.osc52Clipboard).toBe(true);
+		expect(savedConfigs().at(-1)?.osc52_clipboard).toBe(true);
+	});
+
+	it("persists the Cursor Style select under cursor_style", async () => {
+		vi.useFakeTimers();
+		mockInvoke.mockImplementation(invokeImpl({ cursor_style: "bar" }));
+		await settingsStore.hydrate();
+		const { container } = render(() => <TerminalTab />);
+		const select = selectByLabel(container, "Cursor Style");
+		expect(select.value).toBe("bar");
+		mockInvoke.mockClear();
+
+		fireEvent.change(select, { target: { value: "underline" } });
+		await vi.advanceTimersByTimeAsync(600);
+
+		expect(settingsStore.state.cursorStyle).toBe("underline");
+		expect(savedConfigs().at(-1)?.cursor_style).toBe("underline");
+	});
+
 	describe("modifier-symbol-dependent label/hint text", () => {
 		const originalPlatform = Object.getOwnPropertyDescriptor(navigator, "platform");
 
