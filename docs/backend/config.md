@@ -35,18 +35,33 @@ nothing but discipline preventing a throwaway test repo from being persisted the
 (#763-d219). An invalid or already-selected id fails the process at startup rather
 than silently falling back to the default instance.
 
-Which target defaults to what is deliberate and guarded. `make test` is the
-throwaway verification launch and defaults to `instances/tuic-test/`; `make dev`
-is Boss's daily driver and carries **no** instance, because switching it looks
-exactly like every repository having vanished. That default is written
-`test: TUIC_APP_INSTANCE?=tuic-test` — target-specific. A line-start
-`TUIC_APP_INSTANCE?=…` is a *global* make variable however far down the file it
-appears, reads identically, and has sent `make dev` to the empty test instance
-twice; `scripts/check-make-instance-scope.sh` asks `make -n` what each target
-actually expands, and runs from both `make check` and `pre-commit`. An
-environment assignment still beats a target-specific `?=`, so
-`TUIC_APP_INSTANCE=<id> make dev` keeps working and `make dev` announces the
-configuration directory it starts on — no check can see a developer's shell.
+Both Makefile launches are isolated per checkout, deliberately and guarded.
+`make dev` and `make test` default `TUIC_APP_INSTANCE` to `tuic-<checkout
+directory name>` (lowercased, non-alphanumerics folded to single hyphens, cut to
+a valid 63-character id; `tuic-checkout` if nothing usable is left), so every
+worktree gets its own `instances/<id>/` and concurrent worktrees never share a
+`repositories.json`. Nothing started from the Makefile lands on the shared
+default config directory (the one Boss's separately-launched release app uses)
+by accident:
+
+| Invocation | Config directory |
+|---|---|
+| `make dev` / `make test` | `instances/tuic-<checkout dir>/` |
+| `make dev TUIC_APP_INSTANCE=<id>` or `TUIC_APP_INSTANCE=<id> make dev` | `instances/<id>/` |
+| `make dev TUIC_APP_INSTANCE=` or `TUIC_APP_INSTANCE= make dev` (empty) | the shared default directory, with a loud `WARNING:` first |
+
+The same forms apply to `make test`. The default is ONE global Makefile
+variable for both targets; `scripts/check-make-instance-scope.sh` asks `make
+-n` what each target actually expands (per-checkout id, overrides, the warning
+only for the empty value), rejects a `tauri dev` recipe that does not pass
+`TUIC_APP_INSTANCE=$(TUIC_APP_INSTANCE)` and a target-specific
+`target: TUIC_APP_INSTANCE?=…` split, and runs from both `make check` and
+`pre-commit` (its own tests: `scripts/test-check-make-instance-scope.sh`). An
+inherited environment value still beats the Makefile default, so `make dev`
+announces the configuration directory it starts on — no check can see a
+developer's shell. Independently of the Makefile, a named instance or a build
+from a linked worktree never writes the global agent configs (see "MCP Bridge
+Auto-Install" below).
 
 The `tuic` CLI and `tuic-bridge` sidecar use the same immutable instance
 selection through `tuic-ipc`. Both accept `--instance <id>`, which takes
@@ -77,8 +92,9 @@ existing next-port retry.
 
 **For the default instance, debug and release builds share this one directory**
 — `config_dir()` never branches on `cfg!(debug_assertions)`. The single-instance lock is release-only
-(`lib.rs`, `#[cfg(not(debug_assertions))]`), so a `make dev` build runs happily
-alongside the installed app, and both read and write the exact same
+(`lib.rs`, `#[cfg(not(debug_assertions))]`), so a debug build started on the
+default instance (`make dev TUIC_APP_INSTANCE=`, or the binary launched without
+the variable) runs happily alongside the installed app, and both read and write the exact same
 `config.json`, `repositories.json`, and every other file below. What makes that
 safe is the locking model in `ConfigFile<T>` (see Core Functions): a
 cross-process advisory file lock. Ordinary `AppConfig`, upstream MCP, and
