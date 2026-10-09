@@ -70,6 +70,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **SSH hosts and users are validated strictly** — `@`, whitespace and control characters are refused in either, `:` in the user, and `:` in the host unless it is a bare IPv6 address (which scp now receives bracketed), so the destination shown is the one dialled and `host:path` can't be mis-parsed.
 - **`tuic agent type` no longer wipes text you are typing** — it now submits atomically through the backend (nothing can splice into the clear/text/Enter sequence) and refuses when the agent's input box already holds text; `--no-clear` sends just the text and Enter.
 - **`GET /streamdock/devices` requires loopback or authentication** — it lists the connected macropads' USB serial numbers.
+- **The resume banner's title can't carry escape codes or line breaks** — a Claude session title (or end reason) reported by terminal output now has every control character removed before it is stored and shown; and a suspended-then-resumed tab is offered the resume banner again when its agent exits.
+- **Windows Setup/Archive Script PATH keeps quoted directories and says what it leaves out** — a quoted PATH entry containing `;` stays one directory, empty entries are dropped, and when the PATH still exceeds cmd.exe's 8191-character limit only the directories that do not fit are skipped (later ones that fit are kept), each named in a warning log.
 - Start sidebar agents when shell readiness arrives before launch preparation or the remote terminal subscription.
 
 - Return from captured Windows background launches before the command exits, and resolve Git in Windows worktree hooks.
