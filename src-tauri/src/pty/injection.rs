@@ -17,7 +17,10 @@ pub(super) struct ParentLifecycleDispatch {
 ///
 /// The result is injected into an agent's composer, so it MUST stay one short
 /// line — a multi-line paste submits itself halfway through.
-pub(super) fn describe_lifecycle_payload(child_session: &str, payload: &serde_json::Value) -> String {
+pub(super) fn describe_lifecycle_payload(
+    child_session: &str,
+    payload: &serde_json::Value,
+) -> String {
     let child = short_session(child_session);
     if payload.get("type").and_then(|t| t.as_str()) == Some("prompt_delivered") {
         return format!("child agent {child} has taken its initial prompt after all");
@@ -397,7 +400,10 @@ pub(super) struct InjectionClaim {
     took_idle: bool,
 }
 
-pub(super) fn claim_idle_for_injection(state: &AppState, session_id: &str) -> Option<InjectionClaim> {
+pub(super) fn claim_idle_for_injection(
+    state: &AppState,
+    session_id: &str,
+) -> Option<InjectionClaim> {
     claim_idle_for_submission(state, session_id, false)
 }
 
@@ -494,7 +500,11 @@ fn claim_composer_for_voice(state: &AppState, session_id: &str) -> Option<Inject
     Some(claim)
 }
 
-pub(super) fn rollback_injection_claim(state: &AppState, session_id: &str, claim: InjectionClaim) -> bool {
+pub(super) fn rollback_injection_claim(
+    state: &AppState,
+    session_id: &str,
+    claim: InjectionClaim,
+) -> bool {
     if !claim.took_idle {
         if let Some(silence) = state.session_maps.silence_states.get(session_id) {
             silence.lock().release_injection_claim(claim.token);
@@ -524,7 +534,11 @@ pub(super) fn mark_injection_uncertain(state: &AppState, session_id: &str, claim
     }
 }
 
-pub(super) fn mark_orchestrator_notice_uncertain(state: &AppState, session_id: &str, claim: InjectionClaim) {
+pub(super) fn mark_orchestrator_notice_uncertain(
+    state: &AppState,
+    session_id: &str,
+    claim: InjectionClaim,
+) {
     if let Some(silence) = state.session_maps.silence_states.get(session_id) {
         silence
             .lock()
@@ -1486,7 +1500,10 @@ pub(crate) fn route_registered_orchestrator_mail(
 
 /// Retry buffered orchestrator mail when the managed PTY has reached a
 /// canonical idle/completed lifecycle. Busy and unknown states remain inbox-only.
-pub(super) fn orchestrator_recipient_for_pty(state: &AppState, pty_session: &str) -> Option<String> {
+pub(super) fn orchestrator_recipient_for_pty(
+    state: &AppState,
+    pty_session: &str,
+) -> Option<String> {
     if state.orchestrator_peers.contains(pty_session) {
         Some(pty_session.to_string())
     } else {
