@@ -37,7 +37,7 @@ struct HookChannelSession {
     /// Keeps the reader's input open after the spinner stops, so the session
     /// lives until the test drops it.
     output: std::sync::mpsc::Sender<Vec<u8>>,
-    _dir: tempfile::TempDir,
+    _dir: tuic_test_support::SocketDir,
 }
 
 #[cfg(unix)]
@@ -160,7 +160,7 @@ impl Drop for HookChannelSession {
 
 #[cfg(unix)]
 fn claude_hook_for(event: &serde_json::Value) -> String {
-    crate::agent_hook::claude_hook_map()
+    crate::agent_hook::shell_claude_hook_map()
         .into_iter()
         .find(|(e, m, _)| *e == event["hook_event_name"].as_str().unwrap() && m.is_empty())
         .unwrap()
@@ -203,7 +203,7 @@ async fn claude_hook_receipts_reach_the_session_while_the_tui_redraws() {
 async fn grok_hook_receipts_reach_the_session_while_the_tui_redraws() {
     let sid = "grok-hook-side-channel";
     let session = HookChannelSession::start(sid, "grok", "grok-test-owner");
-    let command = crate::agent_hook::grok_hook_map().remove(0).2;
+    let command = crate::agent_hook::shell_grok_hook_map().remove(0).2;
     for event in recorded_grok_hooks("allow") {
         session.hook(&command, &event).await;
         if event["hookEventName"] == "notification" {

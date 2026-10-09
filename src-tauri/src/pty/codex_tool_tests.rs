@@ -49,7 +49,7 @@ async fn codex_tool_edges_restore_busy_without_rebinding_identity() {
         .codex_binding
         .clone();
     for index in [2, 3] {
-        tab.processor.handle_tuic_state("idle", sid, &state);
+        tab.processor.handle_tuic_state_unanchored("idle", sid, &state);
         feed_codex_tool(&mut tab, &state, &codex_tool_receipt(index, &native));
         assert_eq!(
             state
@@ -84,7 +84,7 @@ async fn codex_tool_edges_ignore_foreign_identity() {
     let mut tab = CodexHookTab::new(&state, sid, scratch.path());
     tab.emit(&state, &native);
     tab.emit(&state, &codex_tool_receipt(1, &native));
-    tab.processor.handle_tuic_state("idle", sid, &state);
+    tab.processor.handle_tuic_state_unanchored("idle", sid, &state);
     let mut foreign = codex_tool_receipt(2, &native);
     foreign["session_id"] = uuid::Uuid::new_v4().to_string().into();
     feed_codex_tool(&mut tab, &state, &foreign);
@@ -264,7 +264,7 @@ async fn assert_large_codex_receipt_restores_busy(large_prompt: bool) {
         prompt["prompt"] = serde_json::Value::String("source line\n".repeat(1800));
     }
     tab.emit(&state, &prompt);
-    tab.processor.handle_tuic_state("idle", sid, &state);
+    tab.processor.handle_tuic_state_unanchored("idle", sid, &state);
     let mut tool = codex_tool_receipt(if large_prompt { 2 } else { 3 }, &native);
     if !large_prompt {
         tool["tool_response"] = serde_json::Value::String("build output\n".repeat(1800));

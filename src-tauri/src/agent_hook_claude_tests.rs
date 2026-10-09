@@ -15,7 +15,7 @@ fn claude_permission_commands_emit_receipts_and_remain_inert_outside_tuic() {
     for (index, coarse) in [(1, Some("prompt")), (2, Some("busy")), (3, None), (4, None)] {
         let event = &events[index];
         let payload = event.to_string();
-        let command = claude_hook_map()
+        let command = shell_claude_hook_map()
             .into_iter()
             .find(|(e, m, _)| *e == event["hook_event_name"].as_str().unwrap() && m.is_empty())
             .unwrap()

@@ -85,10 +85,10 @@ fn every_hook_posts_its_frames_to_the_tuic_socket_and_not_the_tty() {
     let tty = dir.path().join("tty");
     let stdin = r#"{"session_id":"native","hook_event_name":"PreToolUse"}"#;
     let maps = [
-        ("claude", claude_hook_map()),
-        ("gemini", gemini_hook_map()),
-        ("codex", codex_hook_map()),
-        ("grok", grok_hook_map()),
+        ("claude", shell_claude_hook_map()),
+        ("gemini", shell_gemini_hook_map()),
+        ("codex", shell_codex_hook_map()),
+        ("grok", shell_grok_hook_map()),
     ];
     for (agent, map) in maps {
         for (event, matcher, command) in map {
@@ -127,7 +127,7 @@ fn claude_hook_posts_a_large_receipt_as_one_frame() {
         "tool_response": {"content": "x".repeat(200 * 1024)},
     })
     .to_string();
-    let command = claude_hook_map()
+    let command = shell_claude_hook_map()
         .into_iter()
         .find(|(event, matcher, _)| *event == "PostToolUse" && matcher.is_empty())
         .unwrap()

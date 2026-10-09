@@ -108,7 +108,7 @@ print('\nCURSOR-RESULT:' + reply.hex())
         .lock()
         .read_last(4096);
     let output = String::from_utf8(output).unwrap();
-    cleanup_session(sid, &state);
+    cleanup_session(sid, &state, "test cleanup");
     assert!(
         output.contains("CURSOR-RESULT:1b5b3f30751b5b3f36631b5b313b3152"),
         "queued replies missing or reordered: {output:?}"

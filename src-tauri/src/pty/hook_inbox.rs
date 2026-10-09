@@ -20,12 +20,25 @@ use super::{ChunkProcessor, SilenceState};
 use crate::state::AppState;
 
 /// The verbs a generated hook sends. Anything else is not a hook frame.
-const HOOK_VERBS: [&str; 5] = [
+const HOOK_VERBS: [&str; 16] = [
     "state",
     "claude-hook",
     "grok-hook",
     "codex-session",
     "codex-tool",
+    // Metadata the `tuic-hook` sidecar scrapes from the hook payload. Free text
+    // is percent-encoded, so every frame stays printable ASCII.
+    "toolfail",
+    "ccsession",
+    "cwd",
+    "transcript",
+    "cctitle",
+    "ccend",
+    "tool",
+    "notify",
+    "notifytype",
+    "bgtasks",
+    "bgtasksummary",
 ];
 
 /// The PTY reader's processor, shared with the local API.
@@ -225,6 +238,9 @@ mod tests {
             "\x1b]7770;state=idle\x1b\\",
             "\x1b]7770;claude-hook=tab:42:eyJ9\x1b\\\x1b]7770;claude-hook=tab:42:\x1b\\\x1b]7770;state=busy\x1b\\",
             "\x1b]7770;grok-hook=tab:eyJ9\x07",
+            // The sidecar's metadata verbs, failure flag first.
+            "\x1b]7770;toolfail=1\x1b\\\x1b]7770;state=idle\x1b\\",
+            "\x1b]7770;ccsession=abc\x1b\\\x1b]7770;cwd=%2Ftmp%2Fwork\x1b\\\x1b]7770;bgtasks=running\x1b\\",
         ] {
             assert!(hook_frames_only(accepted), "{accepted:?}");
         }
