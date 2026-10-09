@@ -37,6 +37,8 @@ vi.mock("../../components/Terminal/gridRenderer", () => ({
 }));
 
 import CanvasTerminal from "../../components/Terminal/CanvasTerminal";
+import { DEFAULT_SMART_SELECTION_RULES } from "../../components/Terminal/smartSelectionDefaults";
+import { settingsStore } from "../../stores/settings";
 
 const ROWS = 2;
 const COLS = 30;
@@ -251,15 +253,28 @@ describe("CanvasTerminal link press, critic 1336 round 3", () => {
 
 	// Catches: a hover claim surviving an in-place redraw of its text, so the menu of a link that is
 	// no longer on screen opens from the stale hover.
+	//
+	// The redrawn cell holds a plain word, and the default smart-selection set gives every
+	// whitespace-bounded word a Copy action that the right-click menu offers (11ecbf163) — a
+	// menu that legitimately suppresses the default one and has nothing to do with the hover.
+	// The word rule is kept but without actions here, so only a stale hover claim could
+	// suppress the default menu.
 	it("leaves the default menu alone once the hovered text was redrawn in place", async () => {
-		await hoverOsc8();
-		screenRow0 = "  see xyz  plain words";
-		send(frame("  see xyz  plain words", 2));
-		await new Promise((r) => setTimeout(r, 20));
-		const ev = contextMenu(OSC8_COL);
-		await new Promise((r) => setTimeout(r, 50));
-		expect(document.body.textContent ?? "").not.toContain("Copy link");
-		expect(ev.defaultPrevented).toBe(false);
+		const wordRule = DEFAULT_SMART_SELECTION_RULES.find((r) => r.id === "iterm-word");
+		if (!wordRule) throw new Error("default word rule missing");
+		settingsStore.setSmartSelectionRules([{ ...wordRule, actions: [] }]);
+		try {
+			await hoverOsc8();
+			screenRow0 = "  see xyz  plain words";
+			send(frame("  see xyz  plain words", 2));
+			await new Promise((r) => setTimeout(r, 20));
+			const ev = contextMenu(OSC8_COL);
+			await new Promise((r) => setTimeout(r, 50));
+			expect(document.body.textContent ?? "").not.toContain("Copy link");
+			expect(ev.defaultPrevented).toBe(false);
+		} finally {
+			settingsStore.setSmartSelectionRules([]);
+		}
 	});
 
 	// Catches: the default menu being suppressed asynchronously (after the probe) for a hover-only
