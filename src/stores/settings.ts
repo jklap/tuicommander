@@ -358,7 +358,11 @@ const VALID_BLOCK_TIMESTAMP_MODES: readonly BlockTimestampMode[] = ["off", "alwa
  * ever had the legacy `show_block_timestamps` boolean: `true` becomes
  * "modifier" (today's only behavior, preserved), `false` becomes "off". A
  * config that already carries a valid `block_timestamp_mode` always wins —
- * migration only fires for a config saved before this field existed.
+ * migration only fires for a config saved before this field existed. The
+ * backend now performs this migration itself at load
+ * (`config.rs` `migrate_legacy_block_timestamps`), because its serde default
+ * always hands this function a valid mode; this stays as the fallback for a
+ * payload that somehow lacks the field.
  */
 function resolveBlockTimestampMode(
 	mode: string | null | undefined,
