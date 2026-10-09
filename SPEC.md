@@ -823,3 +823,12 @@ instant. Once has one scheduled occurrence, a completed state after consumption,
 and a retained definition. The scheduler uses durable occurrence reservation to
 prevent restart/catch-up duplicates. Public API and UI integration follow the
 [Automations plan](plans/automations-scheduler.md).
+## Automations Dialog — Frontend verified, API integration pending (#1618-685b)
+
+The machine-local command-palette dialog edits cron or Once definitions and
+displays backend zone-aware previews and recent run evidence. Pause and Resume
+mutate only enabled by id, preserving concurrent agent edits and unsaved drafts.
+Once keeps `once_local` as a wall time; the backend owns timezone resolution and
+completed-occurrence evidence. One injectable adapter isolates Step 8 envelopes.
+Targeted frontend tests verify this boundary; real scheduler integration remains
+a separate requirement before the feature is available.
