@@ -91,8 +91,7 @@ pub struct HttpResponse {
 
 /// Validate that a URL is safe to fetch.
 /// - Must be http:// or https://
-/// - Must match at least one allowed URL pattern (if any are specified)
-/// - If `allowed_urls` is empty, allow any http/https URL (built-in plugins)
+/// - Must match at least one declared allowed URL pattern; an empty list allows nothing.
 fn validate_url(url: &str, allowed_urls: &[String]) -> Result<(), String> {
     let parsed = url::Url::parse(url).map_err(|e| format!("Invalid URL: {e}"))?;
 
@@ -124,7 +123,7 @@ fn validate_url(url: &str, allowed_urls: &[String]) -> Result<(), String> {
             .map(|ip| crate::mcp_http::auth::is_private_ip(&ip))
             .unwrap_or(false);
 
-        if (is_localhost || is_private) && !allowed_urls.is_empty() {
+        if is_localhost || is_private {
             // Only allow if the host is explicitly declared in allowedUrls
             let host_allowed = allowed_urls.iter().any(|pattern| pattern.contains(host));
             if !host_allowed {
@@ -138,11 +137,6 @@ fn validate_url(url: &str, allowed_urls: &[String]) -> Result<(), String> {
                 ));
             }
         }
-    }
-
-    // If no allowed URLs specified (built-in plugin), allow anything http/https
-    if allowed_urls.is_empty() {
-        return Ok(());
     }
 
     // Match against allowed URL patterns
@@ -289,14 +283,34 @@ mod tests {
     // -- URL validation --
 
     #[test]
+    fn empty_allowlist_rejects_every_http_destination() {
+        for url in [
+            "https://api.example.com/data",
+            "http://localhost:8080/api",
+            "http://10.0.0.1/api",
+        ] {
+            assert!(
+                validate_url(url, &[]).is_err(),
+                "empty allowlist permitted {url}"
+            );
+        }
+    }
+
+    #[test]
     fn validate_allows_https() {
-        let result = validate_url("https://api.example.com/data", &[]);
+        let result = validate_url(
+            "https://api.example.com/data",
+            &["https://api.example.com/*".into()],
+        );
         assert!(result.is_ok());
     }
 
     #[test]
     fn validate_allows_http() {
-        let result = validate_url("http://api.example.com/data", &[]);
+        let result = validate_url(
+            "http://api.example.com/data",
+            &["http://api.example.com/*".into()],
+        );
         assert!(result.is_ok());
     }
 
@@ -414,10 +428,10 @@ mod tests {
     }
 
     #[test]
-    fn validate_allows_localhost_for_builtin() {
-        // Empty allowed_urls = built-in plugin, no restrictions
+    fn validate_rejects_localhost_with_empty_allowlist() {
+        // No plugin may treat an empty list as unrestricted network access.
         let result = validate_url("http://localhost:8080/api", &[]);
-        assert!(result.is_ok());
+        assert!(result.is_err());
     }
 
     // -- Private IP (RFC1918) blocking --
@@ -456,9 +470,8 @@ mod tests {
     }
 
     #[test]
-    fn validate_allows_private_ip_for_builtin() {
-        // Empty allowed_urls = built-in plugin, no restrictions
-        assert!(validate_url("http://10.0.0.1/api", &[]).is_ok());
+    fn validate_rejects_private_ip_with_empty_allowlist() {
+        assert!(validate_url("http://10.0.0.1/api", &[]).is_err());
     }
 
     // -- Manifest is the source of truth (SSRF / scope-bypass fix) --
@@ -647,15 +660,16 @@ mod tests {
         std::fs::create_dir_all(&plugin_dir).unwrap();
         std::fs::write(
             plugin_dir.join("manifest.json"),
-            r#"{
+            serde_json::to_vec(&serde_json::json!({
                 "id": "streamer-plugin",
                 "name": "Streamer Plugin",
                 "version": "1.0.0",
                 "minAppVersion": "0.0.0",
                 "main": "main.js",
                 "capabilities": ["net:http"],
-                "allowedUrls": []
-            }"#,
+                "allowedUrls": [format!("http://127.0.0.1:{port}/*")]
+            }))
+            .unwrap(),
         )
         .unwrap();
 

@@ -1913,6 +1913,56 @@ describe("PluginHost — watchPath fan-out (613-00e8 F104)", () => {
 });
 
 describe("PluginHost — panel message bridge", () => {
+	it("unloading a plugin closes its panels and bridges", () => {
+		const onMessage = vi.fn();
+		const onClose = vi.fn();
+		const sender = vi.fn();
+		const handles: ReturnType<PluginHost["openPanel"]>[] = [];
+		pluginRegistry.register(
+			makePlugin("owner", (host) => {
+				for (const id of ["one", "two"])
+					handles.push(host.openPanel({ id, title: id, html: "hello", onMessage, onClose }));
+			}),
+		);
+		let other: ReturnType<PluginHost["openPanel"]>;
+		pluginRegistry.register(
+			makePlugin("other", (host) => {
+				other = host.openPanel({ id: "one", title: "Other", html: "hello" });
+			}),
+		);
+		for (const handle of handles) pluginRegistry.registerPanelSendChannel(handle.tabId, sender);
+
+		pluginRegistry.unregister("owner");
+
+		expect(Object.values(mdTabsStore.state.tabs).map((tab) => tab.id)).toEqual([other!.tabId]);
+		for (const handle of handles) {
+			pluginRegistry.handlePanelMessage(handle.tabId, "late");
+			handle.send("late");
+			expect(handle.isVisible()).toBe(false);
+			handle.close();
+		}
+		expect(onMessage).not.toHaveBeenCalled();
+		expect(sender).not.toHaveBeenCalled();
+		expect(onClose).toHaveBeenCalledTimes(2);
+	});
+
+	it("unload tolerates a panel already closed and closes a reopened panel once", () => {
+		let host!: PluginHost;
+		const onClose = vi.fn();
+		pluginRegistry.register(
+			makePlugin("owner", (api) => {
+				host = api;
+			}),
+		);
+		const closed = host.openPanel({ id: "closed", title: "Closed", html: "hello", onClose });
+		closed.close();
+		host.openPanel({ id: "open", title: "Open", html: "hello", onClose });
+		host.openPanel({ id: "open", title: "Open", html: "updated", onClose });
+		pluginRegistry.unregister("owner");
+		expect(Object.values(mdTabsStore.state.tabs)).toHaveLength(0);
+		expect(onClose).toHaveBeenCalledTimes(2);
+	});
+
 	it("onMessage callback receives messages via handlePanelMessage", () => {
 		const onMessage = vi.fn();
 		let handle: ReturnType<PluginHost["openPanel"]> | null = null;
