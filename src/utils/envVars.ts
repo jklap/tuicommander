@@ -39,3 +39,20 @@ export function buildEnvFromEntries(entries: readonly EnvVarEntry[]): Record<str
 export function isValidEnvVarKey(key: string): boolean {
 	return /^[A-Za-z_][A-Za-z0-9_]*$/.test(key);
 }
+
+/** A name the backend refuses in Custom Environment Variables
+ *  (`reserved_custom_env_key`, `src-tauri/src/config.rs`): TUIC's own `TUIC_*`
+ *  identity env, `ZDOTDIR` (how the zsh integration loads) and the dynamic
+ *  loader (`LD_PRELOAD`, `LD_LIBRARY_PATH`, `LD_AUDIT`, `DYLD_*`). UI feedback
+ *  only — the backend drops these on load/save and never applies them. */
+export function isReservedEnvVarKey(key: string): boolean {
+	const upper = key.toUpperCase();
+	return (
+		upper.startsWith("TUIC_") ||
+		upper === "ZDOTDIR" ||
+		upper === "LD_PRELOAD" ||
+		upper === "LD_LIBRARY_PATH" ||
+		upper === "LD_AUDIT" ||
+		upper.startsWith("DYLD_")
+	);
+}
