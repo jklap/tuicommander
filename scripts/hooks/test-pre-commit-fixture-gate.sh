@@ -282,4 +282,42 @@ if (cd "$repo" && bash "$project_root/scripts/hooks/pre-commit") > "$scratch/for
   echo 'dropping a meaningful comma in detection code unexpectedly passed' >&2
   exit 1
 fi
+
+# rustfmt re-indents a `\`-continued string line; the string's value is unchanged.
+git -C "$repo" checkout -q HEAD -- src-tauri/src/pty/tests.rs
+cat >> "$repo/src-tauri/src/pty/tests.rs" <<'RS'
+
+fn awaiting_input_note() -> (&'static str, &'static str) {
+    ("awaiting_input is stale \
+        on screen", "keeps an escaped backslash\\
+        here")
+}
+RS
+git -C "$repo" add src-tauri/src/pty/tests.rs
+git -C "$repo" -c user.name=Test -c user.email=test@example.com commit -qm continuation-baseline
+sed 's/^        on screen", /            on screen", /' "$repo/src-tauri/src/pty/tests.rs" > "$scratch/pty-tests"
+cp "$scratch/pty-tests" "$repo/src-tauri/src/pty/tests.rs"
+git -C "$repo" add src-tauri/src/pty/tests.rs
+if git -C "$repo" diff --cached --quiet; then
+  echo 'test setup: the continuation edit did not apply' >&2
+  exit 1
+fi
+if ! (cd "$repo" && bash "$project_root/scripts/hooks/pre-commit") > "$scratch/continuation" 2>&1; then
+  cat "$scratch/continuation" >&2
+  echo 're-indenting a string continuation line was blocked as a detection change' >&2
+  exit 1
+fi
+# ...but after an escaped backslash the newline and indentation are string content.
+git -C "$repo" checkout -q HEAD -- src-tauri/src/pty/tests.rs
+sed 's/^        here")$/            here")/' "$repo/src-tauri/src/pty/tests.rs" > "$scratch/pty-tests"
+cp "$scratch/pty-tests" "$repo/src-tauri/src/pty/tests.rs"
+git -C "$repo" add src-tauri/src/pty/tests.rs
+if git -C "$repo" diff --cached --quiet; then
+  echo 'test setup: the escaped-backslash edit did not apply' >&2
+  exit 1
+fi
+if (cd "$repo" && bash "$project_root/scripts/hooks/pre-commit") > "$scratch/continuation-content" 2>&1; then
+  echo 'changing string content after an escaped backslash unexpectedly passed' >&2
+  exit 1
+fi
 echo 'fixture gate regressions passed'
