@@ -91,12 +91,16 @@ export default defineConfig({
       // SessionDiffTab tree's own tests, measured lines 65.97%, statements 63.08%, functions
       // 61.32%, branches 57.76%). Set just under that new floor so CI can keep enforcing "don't
       // regress" — ratchet up incrementally as coverage genuinely improves, rather than lowering
-      // them again if a change makes CI red.
+      // them again if a change makes CI red. Re-measured 2026-10-08 on the tree that replays
+      // wip onto main (main had kept the never-enforced 80s; wip's 65/61/57/63 were measured
+      // on wip alone): a clean-env `vitest run --coverage` over 766 files / 11,376 tests
+      // measured lines 79.99%, statements 77.57%, functions 76.95%, branches 71.21%. Floors
+      // below are each value minus one point, rounded down.
       thresholds: {
-        lines: 65,
-        functions: 61,
-        branches: 57,
-        statements: 63,
+        lines: 78,
+        functions: 75,
+        branches: 70,
+        statements: 76,
       },
     },
   },
