@@ -58,6 +58,8 @@ export interface ComposePanelProps {
 	/** Drop a single queued command by id. */
 	onRemoveQueued: (id: number) => void | Promise<void>;
 	onTextChange?: (text: string) => void;
+	/** Host applies successful-submit cleanup to its shared draft and current editor. */
+	onSubmitted?: (remainingDraft: string) => void;
 	/** Pinned: the panel stays open after send and Esc, and takes its own slot
 	 *  under the terminal instead of overlaying it. */
 	pinned: Accessor<boolean>;
@@ -93,11 +95,16 @@ export const ComposePanel: Component<ComposePanelProps> = (props) => {
 	});
 
 	/** An unpinned panel is closed by the parent after a successful submit; a
-	 *  pinned one stays, so the editor is emptied here for the next message. A
+	 *  pinned one stays. Successful cleanup also reaches the host draft when
+	 *  this editor has unmounted. A
 	 *  rejected submit keeps the text — the parent has already logged the error.
 	 *  A pinned panel stays editable while the send runs, so only the submitted
 	 *  document is removed: whatever the user typed after it is the next message.
 	 *  A submit while another is in flight is dropped, so no text goes out twice. */
+	let disposed = false;
+	onCleanup(() => {
+		disposed = true;
+	});
 	let inFlight = false;
 	const submit = (handler: (text: string) => void | Promise<void>, text: string) => {
 		if (inFlight) return;
@@ -109,13 +116,18 @@ export const ComposePanel: Component<ComposePanelProps> = (props) => {
 			.then(
 				() => {
 					const view = editorView();
-					if (!props.pinned() || !view) return;
-					const doc = view.state.doc.toString();
-					// The user edited the sent text itself: no safe cut, leave it all.
-					if (doc.startsWith(submitted)) {
-						const rest = doc.slice(submitted.length);
-						const to = submitted.length + (rest.length - rest.trimStart().length);
-						view.dispatch({ changes: { from: 0, to, insert: "" } });
+					// The host's shared draft outlives this editor, including a switch
+					// away and back while the request is pending.
+					const doc = !disposed && view ? view.state.doc.toString() : props.initialText();
+					// Editing the submitted text itself leaves no safe prefix to remove.
+					const remaining = doc.startsWith(submitted) ? doc.slice(submitted.length).trimStart() : doc;
+					if (props.onSubmitted) {
+						props.onSubmitted(remaining);
+						return;
+					}
+					if (disposed || !props.pinned() || !view) return;
+					if (doc !== remaining) {
+						view.dispatch({ changes: { from: 0, to: doc.length - remaining.length, insert: "" } });
 					}
 					view.focus();
 				},
