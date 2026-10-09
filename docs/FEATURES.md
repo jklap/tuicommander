@@ -86,7 +86,7 @@ per cell and the configured history limit still apply.
 
 - **Remote replay health** — Stream failure, unreadable frames and initial replay stalls show a persistent error toast. Reconnect success requires a delivered frame; healthy idle terminals have no output-silence deadline.
 
-- **CLI / Chat view** — Claude terminals switch between the grid and a read-only conversation view built from the agent's session file (including older prompts, replies, folded tool cards, image/PDF markers and model-change cards). The grid is hidden, never unmounted.
+- **CLI / Chat view** — Claude terminals switch between the grid and a conversation view with docked Compose input, built from the agent's session file (including older prompts, replies, folded tool cards, image/PDF markers and model-change cards). The grid is hidden, never unmounted.
 - **Chat transcript presentation** — Harness notices use compact system notes, image placeholders use attachment chips, adjacent thinking blocks share a disclosure, and TUIC answers retain the CLI highlight. Historical tool cards show status without fabricated execution timing.
 
 ### 1.2 Tab Bar
@@ -255,6 +255,7 @@ Terminal output is segmented into command blocks — one per prompt+output cycle
 
 A multi-line editor docked under the terminal for writing a prompt without fighting the agent's own input box.
 
+- **Chat input** — Chat opens and focuses Compose automatically below the conversation. It stays docked after send or queue and clears submitted text. Chat hides the close and pin controls; `Esc` returns to CLI, where permission prompts must be answered. Returning to CLI restores the tab's previous open/pin state, and unsent drafts survive both directions, including while send or queue is pending
 - **Send now** — `Ctrl+Enter` (or the ▶ button) types the text into the composer and submits it immediately, steering whatever the agent is doing
 - **Queue for the next idle window** — `Shift+Ctrl+Enter` (or the ☰ button) hands the text to the backend's idle gate instead: it is submitted at once if the agent is already idle, otherwise parked until the agent's next busy→idle transition. This is the way to leave follow-up work for an agent mid-turn without interrupting it
 - **Queue badge** — the status bar shows `N queued` while commands are waiting; clicking it discards the whole queue. The count comes from the backend (`state.queued_commands`), so it is accurate across reloads and remote clients

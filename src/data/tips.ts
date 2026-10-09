@@ -10,6 +10,12 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "Terminal Chat Input",
+		description:
+			"Switch a Claude terminal to Chat to reply in docked Compose. Ctrl+Enter sends now; Shift+Ctrl+Enter queues. Answer permission prompts in CLI.",
+		shortcut: null,
+	},
+	{
 		feature: "ego Launch Permissions",
 		description:
 			"Choose permission mode and sandbox in Settings > Agents > ego for new terminal launches and managed spawns.",
