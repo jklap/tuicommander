@@ -430,7 +430,15 @@ They live on **Settings → Remote Servers** (the separate Remote Machines page 
    it is not running**, and then **Leave it running on disconnect** if a daemon
    TUICommander starts should outlive the connection
 8. Set the auth username and password the daemon was configured with
-9. Optionally click **Test Connection**, then Save, then click **Connect**
+9. Optionally click **Test Connection**, then Save, then click **Connect**.
+   Test Connection checks SSH first and then the daemon itself: it asks the
+   daemon's `/health` on the remote host's own `127.0.0.1:<daemon port>` through
+   SSH stdio forwarding (`ssh -W`, so nothing needs to be installed on the remote
+   host, but the SSH server must allow TCP forwarding — Connect needs that too).
+   "SSH works, but nothing listens on the remote host's port …" means SSH is fine
+   and the daemon is not running (start it, or use the row's **Start** button).
+   The typed username/password go with that request, so a protected daemon with
+   nothing typed reports that it requires a password
 
 For an installed service, Connect waits for the SSH forwarding port and retries the daemon health check during startup before reporting it unavailable.
 
@@ -454,8 +462,11 @@ certificate; if the certificate ever changes, Connect fails with
 certificate change, open the connection's editor and click **Forget pinned
 certificate** (changing the URL forgets it too); the next Connect asks again.
 Automatic reconnects never pin anything: an unpinned self-signed daemon stays in
-error until you confirm it. Test Connection does not use the pin and reports a
-self-signed target as unreachable.
+error until you confirm it. Test Connection judges the certificate the same way
+before it sends anything: a pinned certificate that still matches is tested
+through the same kind of relay; an unpinned self-signed certificate reports "not
+trusted" with its fingerprint, and a changed one reports "certificate changed"
+— in both cases nothing (no password either) is sent to the server.
 
 A URL that points back at the TUICommander you are configuring is refused with
 "this very TUICommander instance — a machine cannot mirror itself". The check
@@ -559,7 +570,11 @@ A daemon too old to know `--set-password-if-unset` refuses too, and nothing
 changes.
 
 **Disconnect** stops a daemon TUICommander started this way in this run, unless
-**Leave it running on disconnect** is checked. The stop is PID-file verified: the
+**Leave it running on disconnect** is checked — or the daemon still has live
+sessions (terminals or agents on that machine): those are never killed by a
+Disconnect; the daemon keeps running and exits by itself once its last client has
+been gone for the survive time. A later Disconnect with no sessions left still
+stops it. The stop is PID-file verified: the
 file must name a process that `ps` reports as `tuic-remote`, otherwise nothing is
 signalled — a stale PID is never killed and nothing is stopped by name. A daemon
 somebody else started is never touched.
