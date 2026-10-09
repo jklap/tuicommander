@@ -3073,9 +3073,11 @@ impl ChunkProcessor {
                         // accumulator) so `snapshot_resumable_session_on_agent_exit` can
                         // snapshot the live identity/title into `resumable_session`
                         // the instant the shell confirms the agent has exited — see
-                        // that function's doc comment.
+                        // that function's doc comment. `ccsession` additionally feeds
+                        // `AppState.claude_session_map` (Session Diff Review's "jump
+                        // to tab" feature, below).
                         "ccsession" => {
-                            let decoded = percent_decode_osc_payload(&payload);
+                            let claude_session_id = percent_decode_osc_payload(&payload);
                             if let Some(mut entry) =
                                 state.session_maps.session_states.get_mut(session_id)
                             {
@@ -3083,14 +3085,64 @@ impl ChunkProcessor {
                                 // already recorded means a new agent session
                                 // started in this pane — any previously
                                 // snapshotted resumable session is stale.
-                                if entry.agent_session_id.as_deref() != Some(decoded.as_str()) {
+                                if entry.agent_session_id.as_deref()
+                                    != Some(claude_session_id.as_str())
+                                {
                                     entry.resumable_session = None;
                                 }
-                                entry.agent_session_id = Some(decoded.clone());
+                                entry.agent_session_id = Some(claude_session_id.clone());
                             }
+                            // Claude session id ↔ TUIC PTY session id map (Session
+                            // Diff Review's "jump to tab" feature; see
+                            // `AppState::claude_session_map`/`tuic_to_claude_session`
+                            // and `tuic_session_for_claude_session`).
+                            // A TUIC session that emits several distinct
+                            // `ccsession` values over its life (a `claude
+                            // --resume` into a new session id, an agent
+                            // restart, or — since this is PTY output, i.e.
+                            // attacker-controlled input — a crafted OSC 7770
+                            // sequence a `cat`'d file or hostile script could
+                            // emit repeatedly) must not accumulate one
+                            // `claude_session_map` entry per value forever.
+                            // Only the CURRENT mapping for this TUIC session
+                            // is ever meaningful, so retire the old one first.
+                            // `remove_if`: another tab may have taken that
+                            // Claude session over since (a `claude --resume`
+                            // in a second pane) — its mapping is not ours to drop.
+                            if let Some((_, old_claude_id)) =
+                                state.tuic_to_claude_session.remove(session_id)
+                                && old_claude_id != claude_session_id
+                            {
+                                state
+                                    .claude_session_map
+                                    .remove_if(&old_claude_id, |_, owner| owner == session_id);
+                            }
+                            // The reverse case: this claude_session_id may already be
+                            // claimed by a DIFFERENT TUIC session (e.g. two tabs racing
+                            // to resume the same transcript, or attacker-supplied PTY
+                            // output claiming an id another live session already owns).
+                            // That other session's own `tuic_to_claude_session` entry
+                            // would otherwise go stale, pointing at an id this map is
+                            // about to reassign — clear it so it can't later be used to
+                            // wrongly evict THIS session's mapping on close.
+                            if let Some(prev_owner) =
+                                state.claude_session_map.get(&claude_session_id)
+                                && *prev_owner != session_id
+                            {
+                                let prev_owner = prev_owner.clone();
+                                state
+                                    .tuic_to_claude_session
+                                    .remove_if(&prev_owner, |_, v| *v == claude_session_id);
+                            }
+                            state
+                                .claude_session_map
+                                .insert(claude_session_id.clone(), session_id.to_string());
+                            state
+                                .tuic_to_claude_session
+                                .insert(session_id.to_string(), claude_session_id.clone());
                             tuic_events.push(ParsedEvent::AgentMetadata {
                                 field: "session_id".to_string(),
-                                value: decoded,
+                                value: claude_session_id,
                             });
                         }
                         "cwd" => {

@@ -1,10 +1,11 @@
 import { createVirtualizer } from "@tanstack/solid-virtual";
-import { type Component, createMemo, createSignal, For, type JSX, Show } from "solid-js";
+import { type Component, createEffect, createMemo, createSignal, For, type JSX, Show } from "solid-js";
 import type { DiffViewMode } from "../../stores/ui";
 import { cx } from "../../utils";
 import { onClickKeyDown } from "../../utils/a11y";
 import { type DiffFileSection, DiffViewer, type DiffViewerProps } from "../ui/DiffViewer";
 import s from "./diffFileList.module.css";
+import type { DiffListNavHandle } from "./diffListNav";
 
 /** Reconstruct the raw diff string for a single file section. */
 export function sectionToRawDiff(section: DiffFileSection): string {
@@ -35,14 +36,17 @@ export function fileRowKeys(files: DiffFileSection[]): string[] {
 const FileSection: Component<{
 	file: DiffFileSection;
 	mode: DiffViewMode;
+	wrap?: boolean;
+	maxLines?: number;
 	collapsed: boolean;
 	onToggleCollapsed: () => void;
 	onOpen?: () => void;
 	viewerProps?: Omit<DiffViewerProps, "diff" | "mode">;
 	extras?: JSX.Element;
+	flash?: boolean;
 }> = (props) => {
 	return (
-		<div class={s.fileSection}>
+		<div class={cx(s.fileSection, props.flash && s.flash)}>
 			<div
 				class={s.fileHeader}
 				role="button"
@@ -82,7 +86,13 @@ const FileSection: Component<{
 			<Show when={!props.collapsed}>
 				<div class={s.fileDiff}>
 					{props.extras}
-					<DiffViewer {...props.viewerProps} diff={sectionToRawDiff(props.file)} mode={props.mode} />
+					<DiffViewer
+						{...props.viewerProps}
+						diff={sectionToRawDiff(props.file)}
+						mode={props.mode}
+						wrap={props.wrap}
+						maxLines={props.maxLines}
+					/>
 				</div>
 			</Show>
 		</div>
@@ -92,6 +102,11 @@ const FileSection: Component<{
 export interface DiffFileListProps {
 	files: DiffFileSection[];
 	mode: DiffViewMode;
+	wrap?: boolean;
+	maxLines?: number;
+	/** Row keys (per `fileRowKeys()`) to flash-highlight right now — a live
+	 *  refresh just applied to a file that was already visible. */
+	flashKeys?: ReadonlySet<string>;
 	/** When provided, clicking a file path opens it (working-tree view). */
 	onOpenFile?: (path: string) => void;
 	/** Exposes the scroll container element (for Cmd+F search). */
@@ -117,6 +132,9 @@ export interface DiffFileListProps {
 	 */
 	collapsedKeys?: ReadonlySet<string>;
 	onToggleCollapsed?: (key: string) => void;
+	/** Imperative nav handle (`scrollToIndex`/`currentIndex`) for a caller's
+	 *  own `<`/`>` file-to-file toolbar buttons. */
+	ref?: (handle: DiffListNavHandle) => void;
 }
 
 /**
@@ -167,6 +185,20 @@ export const DiffFileList: Component<DiffFileListProps> = (props) => {
 		getItemKey: (i) => keys()[i] ?? i,
 	});
 
+	const [currentIndex, setCurrentIndex] = createSignal(0);
+	const [visibleIndices, setVisibleIndices] = createSignal<ReadonlySet<number>>(new Set());
+	createEffect(() => {
+		const items = virtualizer.getVirtualItems();
+		if (items.length > 0) setCurrentIndex(items[0].index);
+		setVisibleIndices(new Set(items.map((i) => i.index)));
+	});
+	props.ref?.({
+		scrollToIndex: (index, opts) => virtualizer.scrollToIndex(index, { align: opts?.align ?? "auto" }),
+		currentIndex,
+		rowCount: () => props.files.length,
+		visibleIndices,
+	});
+
 	return (
 		<div
 			class={s.container}
@@ -192,15 +224,18 @@ export const DiffFileList: Component<DiffFileListProps> = (props) => {
 								style={{ position: "absolute", top: `${vi.start}px`, left: "0", width: "100%" }}
 							>
 								<Show when={key()} keyed>
-									{() => (
+									{(_key) => (
 										<FileSection
 											file={props.files[vi.index]}
 											mode={props.mode}
+											wrap={props.wrap}
+											maxLines={props.maxLines}
 											collapsed={isCollapsed(props.files[vi.index], key())}
 											onToggleCollapsed={() => toggleCollapsed(key())}
 											viewerProps={props.viewerProps?.(props.files[vi.index])}
 											extras={props.fileExtras?.(props.files[vi.index])}
 											onOpen={props.onOpenFile ? () => props.onOpenFile?.(props.files[vi.index].path) : undefined}
+											flash={props.flashKeys?.has(key()) ?? false}
 										/>
 									)}
 								</Show>

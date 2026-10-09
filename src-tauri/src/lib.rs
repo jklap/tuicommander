@@ -65,6 +65,7 @@ pub mod settings;
 pub(crate) use tuic_git::cow;
 pub(crate) mod cpu_watchdog;
 pub(crate) use tuic_core::credentials;
+pub(crate) use tuic_git::diff_options;
 pub(crate) mod direct_proxy;
 #[cfg(feature = "desktop")]
 mod default_app;
@@ -202,6 +203,7 @@ pub(crate) mod scrollback_store;
 #[cfg(feature = "desktop")]
 pub(crate) mod selfsigned;
 pub(crate) mod session_review;
+pub(crate) mod session_review_watcher;
 mod shell_integration;
 #[cfg(feature = "desktop")]
 pub(crate) mod sleep_prevention;
@@ -2963,6 +2965,8 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
             session_review::get_session_review,
             session_review::revert_session_step,
             session_review::revert_file_to_session_start,
+            session_review_watcher::watch_session_review,
+            session_review_watcher::unwatch_session_review,
             list_markdown_files,
             read_file,
             read_editor_file,
