@@ -6,6 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Add the `automations` MCP tool for definition management, with bound creator provenance and atomic pause/resume.
 ### Added
 - Add the Rust foundation for Once automation schedules with IANA timezone validation, a single preview instant and durable occurrence deduplication (#1629-2262).
 

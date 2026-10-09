@@ -2090,3 +2090,22 @@ There is no Tauri command or `COMMAND_TABLE` entry: window IPC has no managed
 agent caller binding. Its push event is dual-emitted over Tauri and `/events` SSE,
 and session-list response fields are identical over IPC and HTTP. Schema and
 serialization regressions cover these shared contracts.
+
+### MCP Tool: `automations`
+
+The native `automations` tool supports `list`, `get`, `create`, `update`, `pause`,
+`resume`, and `delete`. Pass `action` at the top level. `get`, `update`, `pause`,
+`resume`, and `delete` require `id`; `create` and `update` require a complete
+`definition` with the stored snake_case fields. `list` returns an array, `get`
+returns one definition, and mutations return `{ "ok": true }`. Errors use
+`{ "error": "..." }` with the shared DefinitionStore validation text.
+
+Creation requires a bound agent session. The host sets `created_by_session`;
+input cannot impersonate a creator, and updates preserve the original creator.
+Pause/resume edit only `enabled` under the store lock. Deleting a definition does
+not touch the separate run ledger. Existing definitions without provenance remain
+readable. These actions manage definitions; they do not launch runs.
+
+The shared entry point is `automations::actions::execute(store, action,
+creator_session)`, using `DefinitionAction`. Plan Step 8 owns HTTP/IPC/CLI wiring
+and the Route Parity Gate. The MCP endpoint is `POST /mcp`.
