@@ -25,7 +25,7 @@ Worktree removal verifies checkout and submodule safety before asking Git to unr
 
 Git **writes** are performed by shelling out to the `git` CLI via the unified `git_cli` module. Git **reads** go through the reversible `GitReads` port (see below), which serves some ops from in-process gix and the rest from the same CLI. The `git_cli::git_cmd(path)` builder provides consistent error handling, binary resolution, and credential prompt suppression across all callsites.
 
-Windows checkout comparisons use `tuic-core::path_spelling::portable_spelling`: native and verbatim paths match Git's forward-slash paths. Unix backslashes remain literal filename bytes. Worktree creation passes its destination to Git in this same portable spelling, including the retry for an existing branch; filesystem state retains native paths. Git subprocesses enable `core.longpaths` on Windows, including deep submodule preservation refs. Worktree scripts use the same enriched PATH as Git subprocesses; the Windows search includes the standard Git installation and its `.exe` filename. Hook PATH entries use native Windows separators, put the resolved Git directory first, and remove case-insensitive duplicates. The hook keeps whole directories in precedence order up to cmd.exe's 8191 UTF-16-unit environment-value limit; later directories beyond that limit are omitted.
+Windows checkout comparisons use `tuic-core::path_spelling::portable_spelling`: native and verbatim paths match Git's forward-slash paths. Unix backslashes remain literal filename bytes. Worktree creation passes its destination to Git in this same portable spelling, including the retry for an existing branch; filesystem state retains native paths. Git subprocesses enable `core.longpaths` on Windows, including deep submodule preservation refs. Worktree scripts use the same enriched PATH as Git subprocesses; the Windows search includes the standard Git installation and its `.exe` filename. Hook PATH entries use native Windows separators, put the resolved Git directory first, and remove case-insensitive duplicates. Splitting honours double quotes (a quoted entry containing `;` stays one directory) and empty entries are dropped. The hook keeps whole directories in precedence order up to cmd.exe's 8191 UTF-16-unit environment-value limit; a directory that does not fit is skipped (a later, shorter one that still fits is kept) and every skipped directory is named in a warning log — never dropped silently.
 
 ## Async Execution & Caching
 
@@ -114,7 +114,7 @@ Two deadlines are in force:
 | Constant | Value | Applies to |
 |----------|-------|------------|
 | `git_cli::FETCH_TIMEOUT` | 180s | Every `git fetch`: `conflict_assist.rs` (base refspec + PR head), `github.rs` `local_pr_diff` (base, `refs/pull/N/head`, head fallback), `worktree.rs` `fetch_if_remote` |
-| `worktree::SCRIPT_TIMEOUT` | 900s | The user's worktree setup and archive/delete scripts, via `run_shell_script` |
+| `worktree::SCRIPT_TIMEOUT` | 900s | The user's worktree setup and archive/delete scripts, via `run_shell_script` → `git_cli::output_with_deadline_tree` (timeout kills the script's whole process group / Windows process tree; a finished script returns after at most a 2 s drain even if a backgrounded child still holds its output) |
 
 Both are deliberately generous. A fetch is the only git call that waits on something
 off this machine (`GIT_TERMINAL_PROMPT=0` stops git's own prompt but not a blocking
@@ -347,10 +347,30 @@ sealed ignored evidence remains available and the new worktree stays removable.
 Removal never collapses git's two independent refusals into one flag: `force` only
 permits discarding dirty files (and needs the confirmed `expected_fingerprint`), while a
 `git worktree lock` needs the separate `override_lock`. Branch deletion after a removal
-always uses the safe `git branch -d`. Live sessions in a checkout (`live_sessions_in`)
-are reported by the removal preview and block orphan cleanup; the desktop removal flow
-additionally asks a Cancel-by-default "in use" question before closing any attached
-terminal (`createWorktreeRemovalCoordinator`).
+always uses the safe `git branch -d`. Live sessions in a checkout (`live_sessions_in`:
+a session whose live cwd is inside it OR that was spawned into it, excluding a session
+whose process already exited) are reported by the removal preview and block orphan
+cleanup. They also block the removal itself: `workspace_removal_guard` is the one
+backend guard IPC `remove_worktree`, HTTP `DELETE /worktrees/{id}` and MCP
+`repo worktree_remove` all call before git is asked to remove anything — and so does a
+branch deletion that takes its worktree with it (IPC `delete_local_branch` / HTTP
+`POST /repo/delete-local-branch` with `keep_worktree` false, via
+`delete_local_branch_guard`; `override_busy` / `overrideBusy` lifts it the same way). A refusal starts
+with `worktree_busy:` (HTTP 409 with `code: "worktree_busy"` and `live_sessions`; the
+same body as the MCP `error`), and only the separate `override_busy` flag lifts it —
+never `force` or `override_lock`. A checkout that does not exist and the main checkout
+are not guarded. The desktop removal flow asks a Cancel-by-default "in use" question
+before closing any attached terminal (`createWorktreeRemovalCoordinator`), and asks it
+again for a `worktree_busy:` refusal (sessions it had no terminal for), retrying with
+`override_busy` only on an explicit yes. Merge/finalize cleanup reports live sessions as
+`needs_confirmation`; orphan removal keeps its own reviewed-session list
+(`confirmed_sessions`), with every orphan entry point going through
+`check_orphan_removal`.
+
+Sessions do NOT hold a `git worktree lock` for their lifetime (the pre-rebase branch
+did): the guard covers every TUIC entry point, while a session lock would have turned
+main's agent-lock prompt ("locked by an active Claude agent") into a second busy
+question, and needed a startup sweep for locks a crash left behind.
 
 ## Tauri Commands
 

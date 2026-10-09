@@ -385,6 +385,10 @@ pub(super) struct RemoveWorktreeQuery {
     pub expected_fingerprint: Option<String>,
     #[serde(rename = "confirmMissingCheckout", default)]
     pub confirm_missing_checkout: Option<bool>,
+    /// Explicit confirmation to remove a checkout live sessions still work in
+    /// (`worktree_busy:` refusal). Independent of `force` and `overrideLock`.
+    #[serde(rename = "overrideBusy", default)]
+    pub override_busy: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -1212,6 +1216,10 @@ pub(super) struct GitDeleteLocalBranchRequest {
     pub workspace_id: String,
     #[serde(rename = "keepWorktree")]
     pub keep_worktree: Option<bool>,
+    /// Lifts only the live-session refusal (`worktree_busy:`) when the checkout
+    /// is removed with the branch — same as `DELETE /worktrees/{id}`'s.
+    #[serde(rename = "overrideBusy", default)]
+    pub override_busy: Option<bool>,
 }
 
 #[derive(Deserialize)]

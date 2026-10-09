@@ -6861,6 +6861,16 @@ pub(crate) mod tests_support {
     /// liveness, so a resolver test needs a session that genuinely exists rather
     /// than a stub the filter would reject.
     pub fn insert_dummy_session(state: &AppState, session_id: &str) {
+        insert_session_running(
+            state,
+            session_id,
+            &tuic_test_support::wait_for_stdin_script(),
+        );
+    }
+
+    /// A `sessions` entry whose PTY child runs `script` under the host shell —
+    /// e.g. `true` for a session whose process has already exited.
+    pub fn insert_session_running(state: &AppState, session_id: &str, script: &str) {
         use portable_pty::{CommandBuilder, PtySize, native_pty_system};
         let pair = native_pty_system()
             .openpty(PtySize {
@@ -6872,7 +6882,7 @@ pub(crate) mod tests_support {
             .expect("openpty");
         let (shell, flag) = crate::test_support::host_shell();
         let mut command = CommandBuilder::new(shell);
-        command.args([flag, &tuic_test_support::wait_for_stdin_script()]);
+        command.args([flag, script]);
         let child = pair.slave.spawn_command(command).expect("spawn shell");
         let writer = pair.master.take_writer().expect("writer");
         state.session_maps.sessions.insert(

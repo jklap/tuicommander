@@ -335,6 +335,7 @@ pub(super) async fn remove_worktree_http(
     let override_lock = q.override_lock.unwrap_or(false);
     let expected_fingerprint = q.expected_fingerprint.clone();
     let confirm_missing_checkout = q.confirm_missing_checkout.unwrap_or(false);
+    let override_busy = q.override_busy.unwrap_or(false);
     if force && expected_fingerprint.is_none() && !confirm_missing_checkout {
         return (
             StatusCode::BAD_REQUEST,
@@ -345,6 +346,14 @@ pub(super) async fn remove_worktree_http(
     let id_for_event = workspace_id.clone();
     let preview_state = Arc::clone(&state);
     let result = tokio::task::spawn_blocking(move || {
+        if let Err(busy) = crate::worktree::workspace_removal_guard(
+            &preview_state,
+            &repo_path,
+            &workspace_id,
+            override_busy,
+        ) {
+            return Err(RemovalError::Busy(busy));
+        }
         let warnings = crate::worktree::inspect_worktree_removal(
             &preview_state,
             std::path::Path::new(&repo_path),
@@ -362,8 +371,10 @@ pub(super) async fn remove_worktree_http(
             override_lock,
             expected_fingerprint.as_deref(),
             confirm_missing_checkout,
-        )?;
-        Ok::<_, String>((outcome, warnings))
+            override_busy,
+        )
+        .map_err(RemovalError::Failed)?;
+        Ok::<_, RemovalError>((outcome, warnings))
     })
     .await;
     // The branch comes off the outcome: it was read from the record before the
@@ -386,9 +397,20 @@ pub(super) async fn remove_worktree_http(
             })),
         )
             .into_response(),
-        Ok(Err(e)) => err_500(&e),
+        // 409: the request is valid but conflicts with live sessions; the
+        // caller retries with `overrideBusy=true` once the user has seen them.
+        Ok(Err(RemovalError::Busy(busy))) => {
+            (StatusCode::CONFLICT, Json(busy.to_json())).into_response()
+        }
+        Ok(Err(RemovalError::Failed(e))) => err_500(&e),
         Err(e) => err_500(&format!("task panic: {e}")),
     }
+}
+
+/// Why `DELETE /worktrees/{id}` did not remove the checkout.
+enum RemovalError {
+    Busy(crate::worktree::WorktreeBusy),
+    Failed(String),
 }
 
 pub(super) async fn detect_orphan_worktrees_http(Query(q): Query<OptionalRepoQuery>) -> Response {
@@ -533,17 +555,14 @@ pub(super) async fn remove_orphan_worktree_http(
     // A refused guard is the caller's to act on (400); a removal that fails
     // after the guard keeps its old mapping.
     let result = tokio::task::spawn_blocking(move || {
-        crate::worktree::validate_worktree_path(&repo_path, &worktree_path)
-            .and_then(|()| {
-                crate::worktree::orphan_removal_guard(
-                    &guard_state,
-                    &repo_path,
-                    &worktree_path,
-                    safe_only,
-                    &confirmed_sessions,
-                )
-            })
-            .map_err(|error| (StatusCode::BAD_REQUEST, error))?;
+        crate::worktree::check_orphan_removal(
+            &guard_state,
+            &repo_path,
+            &worktree_path,
+            safe_only,
+            &confirmed_sessions,
+        )
+        .map_err(|error| (StatusCode::BAD_REQUEST, error))?;
         let worktree = crate::state::WorktreeInfo {
             name: std::path::Path::new(&worktree_path)
                 .file_name()
@@ -801,6 +820,7 @@ mod warm_tests {
             false,
             false,
             None,
+            false,
         )
         .unwrap();
         assert_eq!(outcome.removal_rule, "recyclable");
@@ -1512,6 +1532,7 @@ mod survivor_tests {
                     override_lock: None,
                     expected_fingerprint: fingerprint.map(str::to_owned),
                     confirm_missing_checkout: Some(missing),
+                    override_busy: None,
                 }),
             )
             .await;
@@ -1522,6 +1543,154 @@ mod survivor_tests {
             );
             assert!(json(response).await["error"].is_string());
         }
+    }
+
+    /// Catches: `DELETE /worktrees/{id}` removing a CLEAN worktree a live
+    /// session still works in (wip 9586bf02c; Batch 8 review), the refusal
+    /// not being a 409 carrying the sessions, and `overrideBusy` not lifting it.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn removal_refuses_a_live_worktree_with_409_until_override_busy() {
+        let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let repo = tuic_git::test_fixtures::setup_test_repo();
+        let worktree = tuic_git::test_fixtures::worktree_with(repo.path(), "busy", false);
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        crate::state::tests_support::insert_dummy_session(&state, "pty-http");
+        crate::state::tests_support::set_session_cwd(
+            &state,
+            "pty-http",
+            &worktree.to_string_lossy(),
+        );
+        let query = |override_busy: Option<bool>| {
+            Query(RemoveWorktreeQuery {
+                repo_path: repo.path().to_string_lossy().into_owned(),
+                force: None,
+                delete_branch: Some(false),
+                override_lock: None,
+                expected_fingerprint: None,
+                confirm_missing_checkout: None,
+                override_busy,
+            })
+        };
+
+        let refused =
+            remove_worktree_http(State(state.clone()), Path("busy".into()), query(None)).await;
+        assert_eq!(refused.status(), StatusCode::CONFLICT);
+        let body = json(refused).await;
+        assert!(
+            body["error"]
+                .as_str()
+                .is_some_and(|e| e.starts_with(crate::worktree::BUSY_WORKTREE_PREFIX)),
+            "{body}"
+        );
+        assert_eq!(body["code"], "worktree_busy");
+        assert_eq!(body["live_sessions"][0]["session_id"], "pty-http");
+        assert!(worktree.exists());
+
+        let removed =
+            remove_worktree_http(State(state.clone()), Path("busy".into()), query(Some(true)))
+                .await;
+        assert_eq!(removed.status(), StatusCode::OK);
+        assert!(!worktree.exists());
+    }
+
+    fn plain_removal(repo: &std::path::Path) -> Query<RemoveWorktreeQuery> {
+        Query(RemoveWorktreeQuery {
+            repo_path: repo.to_string_lossy().into_owned(),
+            force: None,
+            delete_branch: Some(true),
+            override_lock: None,
+            expected_fingerprint: None,
+            confirm_missing_checkout: None,
+            override_busy: None,
+        })
+    }
+
+    /// Catches: a plain `DELETE /worktrees/{id}` (no session, no override)
+    /// not removing the checkout, or not announcing it — the
+    /// `worktree-removed` bus event is what every HTTP/SSE client (and the
+    /// desktop sidebar) drops the row on. Re-pointed from wip 9586bf02c
+    /// `remove_worktree_http_removes_a_real_worktree_and_notifies`
+    /// (dropped-items-review #6).
+    #[tokio::test]
+    async fn removal_of_an_idle_worktree_removes_it_and_notifies() {
+        let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let repo = tuic_git::test_fixtures::setup_test_repo();
+        let worktree = tuic_git::test_fixtures::worktree_with(repo.path(), "http-remove", false);
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let mut events = state.event_bus.subscribe();
+
+        let response = remove_worktree_http(
+            State(state.clone()),
+            Path("http-remove".into()),
+            plain_removal(repo.path()),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(!worktree.exists(), "the worktree directory must be gone");
+        let mut removed = Vec::new();
+        while let Ok(event) = events.try_recv() {
+            if let crate::state::AppEvent::WorktreeRemoved(payload) = event {
+                removed.push(payload);
+            }
+        }
+        assert_eq!(removed.len(), 1, "exactly one worktree-removed event");
+        assert_eq!(removed[0].workspace_id, "http-remove");
+        assert_eq!(removed[0].branch, "http-remove");
+        assert_eq!(removed[0].repo_path, repo.path().to_string_lossy());
+    }
+
+    /// Catches: the HTTP removal skipping the repo's Archive Script (wip
+    /// 9586bf02c: the route once passed `archive_script: None` while the Tauri
+    /// command and MCP resolved it). Re-pointed from wip's
+    /// `remove_worktree_http_runs_the_archive_script` (dropped-items-review #6).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn removal_runs_the_repos_archive_script() {
+        let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let repo = tuic_git::test_fixtures::setup_test_repo();
+        let worktree = tuic_git::test_fixtures::worktree_with(repo.path(), "http-archive", false);
+        let marker = config.path().join("archive-ran.txt");
+        let key = repo.path().to_string_lossy().into_owned();
+        crate::config::save_repo_settings(
+            crate::config::RepoSettingsMap::default(),
+            crate::config::RepoSettingsMap {
+                repos: [(
+                    key.clone(),
+                    crate::config::RepoSettingsEntry {
+                        path: key,
+                        archive_script: Some(format!("pwd > '{}'", marker.display())),
+                        ..Default::default()
+                    },
+                )]
+                .into_iter()
+                .collect(),
+            },
+        )
+        .unwrap();
+        // Resolved now: the checkout (and with it any symlinked prefix) is gone after.
+        let expected_cwd = std::fs::canonicalize(&worktree).unwrap();
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+
+        let response = remove_worktree_http(
+            State(state),
+            Path("http-archive".into()),
+            plain_removal(repo.path()),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(!worktree.exists());
+        let ran_in = std::fs::read_to_string(&marker).expect("the archive script must have run");
+        assert_eq!(
+            std::path::Path::new(ran_in.trim()),
+            expected_cwd,
+            "the archive script runs inside the worktree being removed"
+        );
     }
 
     /// Catches: empty repoPath falling through to generic path validation instead of the required-field error.
