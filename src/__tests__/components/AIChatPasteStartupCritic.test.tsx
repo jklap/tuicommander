@@ -11,9 +11,9 @@ afterEach(() => {
 	vi.restoreAllMocks();
 });
 
-it("does not attach a startup-delayed paste to a different chat tab", async () => {
+it.each(["switch", "clear", "park", "start"])("keeps startup-delayed paste ownership across %s", async (action) => {
 	aiChatDraft.reset();
-	const [sessionId, setSessionId] = createSignal("original-chat");
+	const [sessionId, setSessionId] = createSignal(action === "start" ? "" : "original-chat");
 	let connected = false;
 	let finishStart!: () => void;
 	const starting = new Promise<void>((resolve) => {
@@ -38,12 +38,17 @@ it("does not attach a startup-delayed paste to a different chat tab", async () =
 			getData: () => "",
 		},
 	});
-	setSessionId("other-chat");
+	if (action === "switch") setSessionId("other-chat");
+	if (action === "clear") aiChatDraft.clear();
+	if (action === "park") {
+		aiChatDraft.set("park this draft");
+		aiChatDraft.parkOrSwap();
+	}
+	if (action === "start") setSessionId("created-chat");
 	connected = true;
 	finishStart();
 	await starting;
 	await Promise.resolve();
 	await Promise.resolve();
-	expect(container.querySelector('img[alt="Pasted image"]')).toBeNull();
-	expect(aiChatDraft.images()).toEqual([]);
+	expect(aiChatDraft.images()).toHaveLength(action === "start" ? 1 : 0);
 });
