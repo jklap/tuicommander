@@ -124,6 +124,77 @@ pub(crate) async fn scp_push_with_binaries(
     Ok(())
 }
 
+/// How long a timed-out one-shot's process group gets after SIGTERM before it
+/// is SIGKILLed, and how long the reap of the direct child may take after
+/// that. Both bound a cleanup step, never the behaviour under test.
+const KILL_GRACE: Duration = Duration::from_secs(1);
+const REAP_BOUND: Duration = Duration::from_secs(2);
+
+/// Signals a one-shot's whole process group (Windows: its process tree) when
+/// dropped while still armed — the cancellation path, where `run_process`'s
+/// future is dropped mid-wait (an HTTP request torn down, an outer
+/// `tokio::time::timeout`). `kill_on_drop` alone ends only the direct child,
+/// so a `sh`/`ssh` that forked (a `ProxyCommand`, a backgrounded job) would
+/// leave that grandchild running: the `sleep 3600` leak class in
+/// src-tauri/AGENTS.md "Killing a Child Process".
+struct ProcessGroupGuard(Option<u32>);
+
+impl ProcessGroupGuard {
+    /// The direct child has been reaped; only a straggler could remain, and
+    /// the normal-exit path does not own those.
+    fn disarm(&mut self) {
+        self.0 = None;
+    }
+
+    fn kill_now(&mut self) {
+        if let Some(pid) = self.0.take() {
+            #[cfg(unix)]
+            tuic_core::process_tree::kill_process_group(pid);
+            #[cfg(windows)]
+            tuic_core::process_tree::kill_process_tree(pid);
+        }
+    }
+}
+
+impl Drop for ProcessGroupGuard {
+    fn drop(&mut self) {
+        self.kill_now();
+    }
+}
+
+/// End a timed-out one-shot and everything it started, then confirm the reap
+/// of the direct child — every wait bounded. Unix: SIGTERM the group, a short
+/// grace, SIGKILL the group. Windows: `taskkill /T /F`.
+async fn kill_one_shot(child: &mut tokio::process::Child, guard: &mut ProcessGroupGuard) {
+    #[cfg(unix)]
+    if let Some(pid) = guard.0 {
+        tuic_core::process_tree::terminate_process_group(pid);
+        if tokio::time::timeout(KILL_GRACE, child.wait())
+            .await
+            .is_err()
+        {
+            tracing::debug!(
+                source = "tunnel_exec",
+                pid,
+                "one-shot ignored SIGTERM; killing its process group"
+            );
+        }
+    }
+    // SIGKILL whatever is left of the group even when the leader exited on
+    // SIGTERM: a member that ignores SIGTERM would otherwise survive it.
+    guard.kill_now();
+    let _ = child.start_kill();
+    if tokio::time::timeout(REAP_BOUND, child.wait())
+        .await
+        .is_err()
+    {
+        tracing::warn!(
+            source = "tunnel_exec",
+            "timed-out one-shot was not reaped within the bound"
+        );
+    }
+}
+
 async fn run_process(
     binary: &Path,
     args: &[String],
@@ -151,10 +222,16 @@ async fn run_process(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    // Its own process group, so a timeout or a cancellation can signal
+    // everything it started, not just this one PID.
+    #[cfg(unix)]
+    command.process_group(0);
 
     let mut child = command.spawn().map_err(|error| {
         ExitReason::Unknown(format!("failed to spawn {}: {error}", binary.display()))
     })?;
+    let mut guard = ProcessGroupGuard(child.id());
+    let deadline = tokio::time::Instant::now() + timeout;
 
     let writer = if let Some(payload) = stdin {
         let mut pipe = child
@@ -169,15 +246,46 @@ async fn run_process(
     } else {
         None
     };
+    let mut stdout_reader = drain(child.stdout.take());
+    let mut stderr_reader = drain(child.stderr.take());
+    let abort_all = |writer: Option<tokio::task::JoinHandle<std::io::Result<()>>>,
+                     stdout: &tokio::task::JoinHandle<Vec<u8>>,
+                     stderr: &tokio::task::JoinHandle<Vec<u8>>| {
+        if let Some(writer) = writer {
+            writer.abort();
+        }
+        stdout.abort();
+        stderr.abort();
+    };
 
-    let output = match tokio::time::timeout(timeout, child.wait_with_output()).await {
+    let status = match tokio::time::timeout_at(deadline, child.wait()).await {
         Ok(result) => result.map_err(|error| {
             ExitReason::Unknown(format!("failed to wait for {}: {error}", binary.display()))
         })?,
         Err(_) => {
-            if let Some(writer) = writer {
-                writer.abort();
-            }
+            kill_one_shot(&mut child, &mut guard).await;
+            abort_all(writer, &stdout_reader, &stderr_reader);
+            return Err(ExitReason::Timeout);
+        }
+    };
+
+    // The pipes close once every process holding them is gone. A straggler
+    // the one-shot left behind can keep them open past the deadline; it is
+    // part of the group we started, so it is ended rather than waited on.
+    let drained = tokio::time::timeout_at(deadline, async {
+        let stdout = (&mut stdout_reader).await.unwrap_or_default();
+        let stderr = (&mut stderr_reader).await.unwrap_or_default();
+        (stdout, stderr)
+    })
+    .await;
+    let (stdout, stderr) = match drained {
+        Ok(output) => {
+            guard.disarm();
+            output
+        }
+        Err(_) => {
+            guard.kill_now();
+            abort_all(writer, &stdout_reader, &stderr_reader);
             return Err(ExitReason::Timeout);
         }
     };
@@ -189,10 +297,10 @@ async fn run_process(
             .map_err(|error| ExitReason::Unknown(format!("failed to write ssh stdin: {error}")))?;
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-    let code = output.status.code();
-    if !output.status.success() {
+    let stdout = String::from_utf8_lossy(&stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&stderr).into_owned();
+    let code = status.code();
+    if !status.success() {
         return Err(classify_exit(&stderr, code));
     }
 
@@ -200,6 +308,21 @@ async fn run_process(
         stdout,
         stderr,
         code,
+    })
+}
+
+/// Read a child pipe to EOF on its own task, so the child can never block on
+/// a full pipe while we wait for it.
+fn drain<R>(pipe: Option<R>) -> tokio::task::JoinHandle<Vec<u8>>
+where
+    R: tokio::io::AsyncRead + Unpin + Send + 'static,
+{
+    tokio::spawn(async move {
+        let mut buffer = Vec::new();
+        if let Some(mut pipe) = pipe {
+            let _ = tokio::io::AsyncReadExt::read_to_end(&mut pipe, &mut buffer).await;
+        }
+        buffer
     })
 }
 
@@ -359,6 +482,101 @@ mod tests {
         .expect_err("mute process times out");
 
         assert_eq!(error, ExitReason::Timeout);
+    }
+
+    /// A fake ssh that forks a grandchild (`sleep 60 &`), records its PID,
+    /// and waits on it — the shape of a real `ssh` with a `ProxyCommand`.
+    #[cfg(unix)]
+    fn forking_ssh(name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        let marker = crate::test_support::test_temp_root().join(format!("{name}.grandchild.pid"));
+        let _ = std::fs::remove_file(&marker);
+        let posix = format!("sleep 60 & echo $! > '{}'; wait", marker.display());
+        (fake_ssh_script(name, &posix, "exit /b 0"), marker)
+    }
+
+    /// The grandchild's PID, once the fake ssh has written it. Setup, not the
+    /// behaviour under test, so the bound is generous.
+    #[cfg(unix)]
+    async fn grandchild_pid(marker: &std::path::Path) -> i32 {
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        loop {
+            if let Ok(text) = std::fs::read_to_string(marker)
+                && let Ok(pid) = text.trim().parse()
+            {
+                return pid;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "fake ssh never recorded its grandchild PID at {}",
+                marker.display()
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
+    /// Assert `pid` is gone (it is reparented to init/launchd and reaped
+    /// there, so allow a moment), killing it if it survived.
+    #[cfg(unix)]
+    async fn assert_process_gone(pid: i32) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while std::time::Instant::now() < deadline {
+            // SAFETY: signal 0 only probes for existence.
+            if unsafe { libc::kill(pid, 0) } != 0 {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        // SAFETY: a test-owned `sleep` we deliberately started.
+        unsafe { libc::kill(pid, libc::SIGKILL) };
+        panic!("the one-shot's grandchild {pid} survived the kill");
+    }
+
+    /// Catches: a timed-out one-shot killing only the direct child, so the
+    /// `sleep` it forked keeps running (the `sleep 3600` leak class).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_timed_out_one_shot_kills_the_grandchild_it_forked() {
+        let (ssh, marker) = forking_ssh("exec_timeout_forks_grandchild");
+
+        let error = ssh_exec_with_binary(
+            &profile(),
+            "ignored-command",
+            None,
+            Duration::from_secs(2),
+            &ssh,
+        )
+        .await
+        .expect_err("a process that never exits times out");
+
+        assert_eq!(error, ExitReason::Timeout);
+        let pid = grandchild_pid(&marker).await;
+        assert_process_gone(pid).await;
+    }
+
+    /// Catches: a cancelled one-shot (its future dropped mid-wait) relying on
+    /// `kill_on_drop`, which ends only the direct child.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_cancelled_one_shot_kills_the_grandchild_it_forked() {
+        let (ssh, marker) = forking_ssh("exec_cancel_forks_grandchild");
+        let task = tokio::spawn({
+            let ssh = ssh.clone();
+            async move {
+                ssh_exec_with_binary(
+                    &profile(),
+                    "ignored-command",
+                    None,
+                    Duration::from_secs(120),
+                    &ssh,
+                )
+                .await
+            }
+        });
+
+        let pid = grandchild_pid(&marker).await;
+        task.abort();
+        let _ = task.await;
+        assert_process_gone(pid).await;
     }
 
     #[tokio::test]
