@@ -2608,7 +2608,6 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
 - **TunnelProfileList** — the list/row rendering, extracted so both the overlay and Settings render the identical component
 - **`SshConnectionFields`** (shared) — host with `~/.ssh/config` autocomplete, port, user, identity file with Browse dialog (desktop only; the path field works everywhere), live SSH-agent detection (including each key's fingerprint), ServerAliveInterval, ServerAliveCountMax (now has its own field), StrictHostKeyChecking (fixed to AcceptNew, with a hint, for a Remote Server kind), compression (`ssh -C`). Used by both the "SSH Tunnel" and "Remote Server — SSH" kinds
 - **`PortForwardsEditor`** (shared, extracted from the old TunnelEditorModal) — add/remove, type-aware Local/Remote forward endpoint fields, numeric input mode for port fields
-- **TunnelEditorModal** — still exists, refactored to use the two shared components above, and still fully tested, but no longer opened anywhere in the live app now that Settings owns tunnel editing
 - **TunnelStatusBadge** — now a thin wrapper around a shared **ConnectionStatusBadge** presentation component (color=green/connected, blue/starting, orange/reconnecting, red/error, grey/stopped) — the same component the Remote Servers connection list uses for its own status vocabulary
 - **Command Palette** — `toggle-tunnels` action registered for quick access. No longer behind the experimental-features flag — tunnels are a fully graduated feature
 

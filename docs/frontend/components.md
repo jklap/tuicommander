@@ -631,7 +631,7 @@ system and never turns an absent provider value into zero.
 | `ConnectionStatusBadge` | Status dot + label shared by `TunnelStatusBadge` and the Remote Machines list; `remoteConnectionStatusColor`/`remoteConnectionStatusLabel` map a remote connection's status |
 | `KeyComboCapture` | Keyboard shortcut capture input (for keybinding editor) |
 | `SearchBar` | Reusable search bar with regex/case-sensitive toggles |
-| `SshConnectionFields` | Shared SSH form (host autocomplete, port, user, identity file + desktop Browse, agent keys, keepalive, host-key checking — fixed to AcceptNew for a Remote Server — and compression), used by the merged connection editor and `TunnelEditorModal` |
+| `SshConnectionFields` | Shared SSH form (host autocomplete, port, user, identity file + desktop Browse, agent keys, keepalive, host-key checking — fixed to AcceptNew for a Remote Server — and compression), used by the merged connection editor (`RemoteConnectionEditor`) |
 | `DiffFileList` | Virtualized per-file list shared by `PrDiffTab` and `BranchDiffScrollView`. Collapse state is hoisted (keyed by row, not list slot) via optional `collapsedKeys`/`onToggleCollapsed` props, falling back to an internal signal when a parent doesn't own it; `collapsedByDefault` starts chosen files collapsed. Exposes a nav handle (`scrollToIndex`/`currentIndex`/`rowCount`/`visibleIndices`, `components/shared/diffListNav.ts`) via `ref` for file-to-file `<`/`>` navigation |
 | `DiffOptionsMenu` | Toolbar popover for the 4 whitespace/case diff-comparison settings plus soft-wrap — reads/writes `settingsStore`/`uiStore` directly, no local state. Mounted in `SessionDiffTab`'s and `DiffTab`'s toolbars (the latter covers `BranchDiffScrollView` too, since it shares that toolbar) |
 

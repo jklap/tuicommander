@@ -495,7 +495,7 @@ When modifying tunnel profiles, supervisor, audit logging, backoff, or tunnel UI
 | `src/stores/tunnels.ts` | Frontend tunnel state (profiles, statuses) |
 | `src/stores/tunnelPanel.ts` | Tunnel panel UI state |
 | `src/components/TunnelsPanel/TunnelsPanel.tsx` | Tunnel list with start/stop controls |
-| `src/components/TunnelsPanel/TunnelEditorModal.tsx` | Profile create/edit form |
+| `src/components/SettingsPanel/tabs/services/RemoteConnectionEditor.tsx` | Profile create/edit form (Kind "SSH Tunnel"; shares `SshConnectionFields` + `PortForwardsEditor`) |
 | `src/components/TunnelsPanel/TunnelStatusBadge.tsx` | Color-coded status indicator |
 | `docs/features/ssh-tunnels.md` | Feature architecture doc |
 | `docs/FEATURES.md` | Section 23 (SSH Tunnel Manager) |

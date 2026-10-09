@@ -979,14 +979,11 @@ mod tests {
         );
     }
 
-    // ── Session Diff View overhaul — Phase 0 coverage gap ───────────────────
-    // See plans/enchanted-puzzling-teacup.md. `repo_diff`'s `PathQuery` has
-    // no `scope` field at all, so the handler always calls
-    // `get_git_diff(path, None)` regardless of what a caller wants — this is
-    // what drives the duplicate-files-in-browser-mode bug the plan calls
-    // out (a caller expecting a staged-only diff via `scope=staged` always
-    // gets the unstaged diff back instead). Expected to fail until `scope`
-    // is threaded through `PathQuery`/`repo_diff`/`get_git_diff`.
+    // ── Session Diff View overhaul — `GET /repo/diff` honours `scope` ───────
+    // `repo_diff` used to ignore `?scope=` (its `PathQuery` had no such field)
+    // and always returned the unstaged diff, which drove a duplicate-files bug
+    // in browser mode. `scope` is now threaded through `PathQuery` ->
+    // `repo_diff` -> `get_git_diff`; this pins IPC/HTTP parity for it.
 
     #[tokio::test]
     async fn repo_diff_route_honors_scope() {
@@ -1054,9 +1051,8 @@ mod tests {
         assert!(
             !http_diff.contains("b-unstaged-change"),
             "requesting ?scope=staged over HTTP must NOT leak the unstaged \
-             diff (b.txt's change) — PathQuery has no scope field today, so \
-             the handler always calls get_git_diff(path, None) regardless of \
-             the query string, got:\n{http_diff}"
+             diff (b.txt's change) — the handler must pass the query's \
+             scope to get_git_diff, got:\n{http_diff}"
         );
     }
 }
