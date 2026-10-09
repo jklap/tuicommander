@@ -16,7 +16,7 @@ const SEP_RE = /[/\\]/;
 
 /** Normalize all backslashes to forward slashes for comparison. */
 export function normalizeSep(p: string): string {
-	return p.replace(/\\/g, "/");
+	return p.replaceAll("\\", "/");
 }
 
 /** True when `p` is an absolute path on any OS. */
