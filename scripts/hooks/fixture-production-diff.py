@@ -45,7 +45,7 @@ def normalized(source):
     for start, end, kind in lexical_spans(source):
         code(source[pos:start])
         if kind == "literal":
-            items.append(("lit", source[start:end]))
+            items.append(("lit", string_value_form(source[start:end])))
         else:
             code(" ")
         pos = end
@@ -77,6 +77,34 @@ def normalized(source):
                 groups[-1][1] += 1
                 groups[-1][2] = len(out) - 1
     return out
+
+
+def string_value_form(literal):
+    """A literal with its string-continuation indentation removed.
+
+    In a non-raw string, `\\` + newline skips every following whitespace character,
+    so rustfmt re-indenting a continuation line does not change the value. Only that
+    whitespace is dropped; `\\\\` (an escaped backslash) before a newline is content
+    and is kept, as is every byte of a raw string or char literal.
+    """
+    if not literal.startswith(('"', 'b"')):
+        return literal
+    out, i = [], 0
+    while i < len(literal):
+        ch = literal[i]
+        if ch == "\\" and i + 1 < len(literal):
+            if literal[i + 1] == "\n":
+                out.append("\\\n")
+                i += 2
+                while i < len(literal) and literal[i] in " \t\r\n":
+                    i += 1
+                continue
+            out.append(literal[i:i + 2])
+            i += 2
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
 
 
 def lexical_spans(source):
