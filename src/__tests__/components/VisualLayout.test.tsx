@@ -9,11 +9,11 @@ import { HelpPanel } from "../../components/HelpPanel/HelpPanel";
 import { MarkdownPanel } from "../../components/MarkdownPanel/MarkdownPanel";
 import { PromptDrawer } from "../../components/PromptDrawer/PromptDrawer";
 import { CloseDialog } from "../../components/QuitDialog/CloseDialog";
+import { RemoteConnectionEditor } from "../../components/SettingsPanel/tabs/services/RemoteConnectionEditor";
 import { StoriesDialog } from "../../components/StoriesDialog/StoriesDialog";
 import { TaskField } from "../../components/Tasks/detail/TaskField";
 import { roadmapDemo } from "../../components/Tasks/roadmap/demo";
 import { TasksRoadmap } from "../../components/Tasks/roadmap/TasksRoadmap";
-import { TunnelEditorModal } from "../../components/TunnelsPanel/TunnelEditorModal";
 import { DiffViewer } from "../../components/ui/DiffViewer";
 import { WorktreeManager } from "../../components/WorktreeManager/WorktreeManager";
 import { BottomTabs } from "../../mobile/components/BottomTabs";
@@ -184,7 +184,27 @@ describe("visual review layout regressions", () => {
 
 	it("catches tunnel sibling fields receiving unequal top margins", () => {
 		css("src/components/SettingsPanel/Settings.module.css", "src/components/TunnelsPanel/TunnelEditorModal.module.css");
-		const { container } = render(() => <TunnelEditorModal onClose={noop} />);
+		// The tunnel's SSH fields as the live editor renders them: the standalone
+		// TunnelEditorModal is gone, the Remote Servers editor (Kind "SSH Tunnel") owns them.
+		const profile = {
+			id: "p1",
+			name: "db",
+			ssh: {
+				host: "bastion",
+				port: 22,
+				user: "me",
+				identity_file: null,
+				server_alive_interval: 15,
+				server_alive_count_max: 3,
+				strict_host_key_checking: "Yes" as const,
+				compression: true,
+			},
+			forwards: [],
+			auto_connect: false,
+		};
+		const { container } = render(() => (
+			<RemoteConnectionEditor target={{ kind: "edit-tunnel", profile }} onClose={noop} />
+		));
 		const host = container.querySelector('[data-setting-id="tunnels.profiles.{id}.ssh.host"]')!;
 		const port = container.querySelector('[data-setting-id="tunnels.profiles.{id}.ssh.port"]')!;
 		const top = (element: Element) => getComputedStyle(element.parentElement!).marginTop || "0px";

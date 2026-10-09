@@ -18,8 +18,7 @@ function files(directory: string): string[] {
 // expert/platform branches and dynamic row bodies are all parsed, even when unmounted.
 const sources = [
 	...files(join(root, "src/components/SettingsPanel")),
-	join(root, "src/components/TunnelsPanel/TunnelEditorModal.tsx"),
-	// Shared by the tunnel editor and the Remote Servers page's merged editor.
+	// Shared by the Remote Servers page's merged editor (the standalone tunnel modal is gone).
 	join(root, "src/components/TunnelsPanel/PortForwardsEditor.tsx"),
 	join(root, "src/components/TunnelsPanel/TunnelProfileList.tsx"),
 	join(root, "src/components/shared/SshConnectionFields.tsx"),
