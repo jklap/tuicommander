@@ -253,7 +253,7 @@ export function addTweakCommentAtSelection(view: EditorView, comment: Omit<Tweak
 	let start = 0;
 	while (start < before.length && before[start] === after[start]) start++;
 	let end = 0;
-	while (end < before.length - start && before[before.length - 1 - end] === after[after.length - 1 - end]) end++;
+	while (end < before.length - start && before.at(-1 - end)! === after.at(-1 - end)!) end++;
 	const insert = after.slice(start, after.length - end);
 	view.dispatch({
 		changes: { from: start, to: before.length - end, insert: crlf ? insert.replace(/\n/g, "\r\n") : insert },

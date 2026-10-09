@@ -62,7 +62,7 @@ export function pathParts(p: string): string[] {
 /** Get the last segment of a path (filename or directory name). */
 export function pathBasename(p: string): string {
 	const parts = pathParts(p);
-	return parts.length > 0 ? parts[parts.length - 1] : "";
+	return parts.length > 0 ? parts.at(-1)! : "";
 }
 
 /** Get the directory portion of a path, preserving the original separator. */

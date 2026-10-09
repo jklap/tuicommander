@@ -76,7 +76,7 @@ function statsFor(ring: number[]): MetricStats {
 		count: sorted.length,
 		p50: percentile(sorted, 50),
 		p95: percentile(sorted, 95),
-		max: sorted[sorted.length - 1],
+		max: sorted.at(-1)!,
 	};
 }
 
