@@ -4,7 +4,6 @@ import { appLogger } from "../../stores/appLogger";
 import { toastsStore } from "../../stores/toasts";
 import { HttpRpcError, rpc } from "../../transport";
 import { sendPtyKey, waitForAgentEnterGap } from "../../utils/sendCommand";
-import { getAgentCommands } from "../config/agentCommands";
 import type { ChoicePrompt, SlashMenuItem } from "../useSessions";
 import { retryWrite } from "../utils/retryWrite";
 import { ChoicePromptOverlay } from "./ChoicePromptOverlay";
@@ -30,8 +29,8 @@ interface CommandInputProps {
 	managedSession?: boolean;
 	awaitingInput?: boolean;
 	sessionExists?: boolean;
-	/** Registers the triggerSlash function so parent can invoke it. */
-	onRegisterTrigger?: (fn: () => void) => void;
+	/** Registers character insertion through the same path as composer typing. */
+	onRegisterInsertText?: (fn: (text: string) => void) => void;
 }
 
 export function CommandInput(props: CommandInputProps) {
@@ -40,8 +39,6 @@ export function CommandInput(props: CommandInputProps) {
 	const [uploading, setUploading] = createSignal<string | null>(null);
 	const [choiceSending, setChoiceSending] = createSignal(false);
 	const [codexNotesMode, setCodexNotesMode] = createSignal(false);
-	const [localSlashMenuOpen, setLocalSlashMenuOpen] = createSignal(false);
-	let slashDraft = "";
 	const atomicReply = () =>
 		props.managedSession && props.awaitingInput && !props.choicePrompt && !props.codexQuestionOpen && !codexNotesMode();
 	createEffect(() => {
@@ -81,7 +78,6 @@ export function CommandInput(props: CommandInputProps) {
 	// history-nav replacements) is ignored so the textarea can't be clobbered.
 	createEffect(() => {
 		if (atomicReply()) return;
-		if (localSlashMenuOpen()) return;
 		const text = props.ptyInputLine ?? "";
 		if (isPostSendGuardActive(Date.now(), lastSendAt)) return;
 		if (!isSupersetEcho(text, syncedText)) return;
@@ -116,12 +112,21 @@ export function CommandInput(props: CommandInputProps) {
 		syncedText = newText;
 	}
 
-	function handleInput(e: InputEvent & { currentTarget: HTMLTextAreaElement }) {
-		const text = e.currentTarget.value;
+	function updateInput(text: string) {
 		setValue(text);
 		autoResize();
-		if (localSlashMenuOpen()) return;
 		syncDelta(text);
+	}
+
+	function handleInput(e: InputEvent & { currentTarget: HTMLTextAreaElement }) {
+		updateInput(e.currentTarget.value);
+	}
+
+	function insertText(text: string) {
+		if (props.sessionExists === false || !textareaEl) return;
+		textareaEl.setRangeText(text, textareaEl.selectionStart, textareaEl.selectionEnd, "end");
+		updateInput(textareaEl.value);
+		textareaEl.focus();
 	}
 
 	async function attachFile(file: File): Promise<void> {
@@ -155,7 +160,6 @@ export function CommandInput(props: CommandInputProps) {
 		const prefix = slashIdx >= 0 ? current.slice(0, slashIdx) : "";
 		const text = prefix + command + " ";
 		setValue(text);
-		setLocalSlashMenuOpen(false);
 		syncDelta(text);
 		if (textareaEl) {
 			textareaEl.value = text;
@@ -164,41 +168,19 @@ export function CommandInput(props: CommandInputProps) {
 		}
 	}
 
-	/** Externally trigger slash mode (e.g. from TerminalKeybar "/" button). */
-	function triggerSlash() {
-		if (props.sessionExists === false || localSlashMenuOpen()) return;
-		slashDraft = textareaEl?.value ?? value();
-		setLocalSlashMenuOpen(true);
-		setValue("/");
-		if (textareaEl) {
-			textareaEl.value = "/";
-			textareaEl.focus();
-			autoResize();
-		}
-	}
-
 	function closeSlashMenu() {
-		if (localSlashMenuOpen()) {
-			setLocalSlashMenuOpen(false);
-			setValue(slashDraft);
-			if (textareaEl) textareaEl.value = slashDraft;
-			return;
-		}
 		setValue("");
 		if (textareaEl) textareaEl.value = "";
 		syncDelta("");
 	}
 
-	// Register triggerSlash with parent via callback prop
 	createEffect(() => {
-		if (textareaEl) {
-			props.onRegisterTrigger?.(triggerSlash);
-		}
+		if (textareaEl) props.onRegisterInsertText?.(insertText);
 	});
 
 	async function send() {
 		const text = (textareaEl?.value ?? value()).trim();
-		if (!text || props.sessionExists === false || localSlashMenuOpen() || submitting()) return;
+		if (!text || props.sessionExists === false || submitting()) return;
 
 		if (atomicReply()) {
 			setSubmitting(true);
@@ -272,17 +254,6 @@ export function CommandInput(props: CommandInputProps) {
 			e.preventDefault();
 			return;
 		}
-		if (localSlashMenuOpen()) {
-			if (e.key === "Escape") {
-				e.preventDefault();
-				closeSlashMenu();
-				return;
-			}
-			if (e.key === "Tab" || e.key === "Enter") {
-				e.preventDefault();
-				return;
-			}
-		}
 		if (atomicReply() && e.key === "Tab") return;
 		if (atomicReply() && e.key === "Escape") {
 			e.preventDefault();
@@ -309,13 +280,8 @@ export function CommandInput(props: CommandInputProps) {
 		}
 	}
 
-	const localSlashItems = () =>
-		getAgentCommands(props.agentType)
-			.commands.filter(({ command }) => command.startsWith(value().trim()))
-			.map(({ command, label }) => ({ command, description: label === command ? "" : label, highlighted: false }));
-	const slashItems = () => (localSlashMenuOpen() ? localSlashItems() : (props.slashItems ?? []));
-	const showDropup = () =>
-		props.sessionExists !== false && (localSlashMenuOpen() || (value().includes("/") && slashItems().length > 0));
+	const slashItems = () => props.slashItems ?? [];
+	const showDropup = () => props.sessionExists !== false && value().includes("/") && slashItems().length > 0;
 	const showChoicePrompt = () => !!props.choicePrompt && !codexNotesMode();
 
 	async function handleChoiceSelect(key: string) {
@@ -371,7 +337,6 @@ export function CommandInput(props: CommandInputProps) {
 				<SlashMenuOverlay
 					items={slashItems()}
 					sessionId={props.sessionId}
-					local={localSlashMenuOpen()}
 					onSelect={handleSlashSelect}
 					onClose={closeSlashMenu}
 				/>
@@ -424,7 +389,7 @@ export function CommandInput(props: CommandInputProps) {
 				class={styles.send}
 				type="button"
 				aria-label="Send"
-				disabled={props.sessionExists === false || localSlashMenuOpen()}
+				disabled={props.sessionExists === false}
 				onClick={send}
 			>
 				<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
