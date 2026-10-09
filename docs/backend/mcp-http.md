@@ -661,9 +661,14 @@ When intent markers are enabled for the connecting agent, initialize instruction
 
 ### Two instruction surfaces, and which one owns a rule
 
-Initialize instruction prose stays within the existing 1,600-byte classic and
-1,664-byte collapsed empty-state budgets. Compact wording preserves the answer
-marker, urgent mail and progress reporting rules.
+Initialize instruction prose stays within a 3,264-byte classic and a
+3,328-byte collapsed empty-state budget. Those caps were raised deliberately on
+2026-10-08 from 1,600 / 1,664 bytes, when the user chose to keep the richer
+marker and protocol prose of the `wip` branch while replaying it onto `main`:
+measured on that tree with the 5-byte release version string (classic empty
+3,199 B, collapsed empty 3,262 B), plus ~2%, rounded up to the next 64 bytes.
+Bring them down by trimming prose, not by raising them again. The wording
+keeps the answer marker, urgent mail and progress reporting rules.
 
 TUIC supplies protocol instructions and tool descriptions on different wire
 surfaces. Client receipt does not prove that the model can read either surface
