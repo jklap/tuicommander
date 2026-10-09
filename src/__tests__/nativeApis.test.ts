@@ -30,4 +30,8 @@ describe("ES2024 native API conventions", () => {
 			),
 		).toEqual([]);
 	});
+	it("prevents promise executors used only to export a resolver", () => {
+		expect(matches(/new Promise(?:<[^>]+>)?\(\(resolve\) => \{\s*\w+(?:Resolve|Resolver) = resolve/g)).toEqual([]);
+		expect(sources["../components/Terminal/canvasTerminalTransport.ts"]).not.toMatch(/rejectConnect = reject/);
+	});
 });
