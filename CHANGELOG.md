@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Fixed
+- Give the mobile update banner AA text contrast in both themes and place it below the header, away from the status edge (#1626-9529).
 - Restore headless builds by sharing GitHub account login validation with browser device-flow polling.
 - Keep browser GitHub add-account polling separate from default login; emit declared plugin state changes, deliver SDK host messages, close panels on unload, and reject HTTP plugin manifests without allowed URLs.
 - Remove clean worktrees whose ignored directories lack owner search permission, without changing permissions on symlink targets (#1607-0733).
