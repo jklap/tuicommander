@@ -1646,7 +1646,6 @@ pub(crate) fn ssh_profile(
     let RemoteTransport::Ssh { ssh, .. } = &connection.transport else {
         return None;
     };
-    use crate::ssh_connection::StrictHostKeyChecking;
     use crate::tunnels::profile::TunnelProfile;
     let mut profile = TunnelProfile::new(
         format!("remote connection {}", connection.name),
@@ -1654,10 +1653,10 @@ pub(crate) fn ssh_profile(
         ssh.user.clone(),
     );
     // The connection's own SSH settings — the struct a tunnel profile carries
-    // too — with one exception: this tunnel is created on the user's behalf,
-    // so a first connection cannot stop to ask about a fingerprint.
+    // too — unchanged, host-key policy included: `Yes` refuses a host whose
+    // key is not already in known_hosts (ssh runs with BatchMode, so it never
+    // stops to ask), `AcceptNew` pins it on first contact. Never weakened here.
     profile.ssh = ssh.clone();
-    profile.ssh.strict_host_key_checking = StrictHostKeyChecking::AcceptNew;
     Some(profile)
 }
 
@@ -3061,6 +3060,28 @@ mod tests {
 
         assert_eq!(token.as_deref(), Some("pair-token"));
         exchange.assert_async().await;
+    }
+
+    /// Catches: the tunnel (and every other SSH command) of a Remote Server
+    /// silently downgrading a stored `StrictHostKeyChecking=Yes` to accept-new
+    /// (D1, dropped-items-review).
+    #[test]
+    fn ssh_profile_honours_the_stored_host_key_policy() {
+        use crate::ssh_connection::StrictHostKeyChecking;
+        let mut connection = RemoteConnection::new_ssh("vps", "host", "boss");
+        for policy in [StrictHostKeyChecking::Yes, StrictHostKeyChecking::AcceptNew] {
+            if let RemoteTransport::Ssh { ssh, .. } = &mut connection.transport {
+                ssh.strict_host_key_checking = policy.clone();
+            }
+            let profile = ssh_profile(&connection).expect("SSH transport");
+            assert_eq!(profile.ssh.strict_host_key_checking, policy);
+            let expected = match policy {
+                StrictHostKeyChecking::Yes => "StrictHostKeyChecking=yes",
+                StrictHostKeyChecking::AcceptNew => "StrictHostKeyChecking=accept-new",
+            };
+            let args = crate::tunnels::command::build_ssh_args(&profile);
+            assert!(args.iter().any(|a| a == expected), "{expected} in {args:?}");
+        }
     }
 
     #[test]

@@ -508,9 +508,9 @@ then only that kind's fields, a **Test Connection** button and Save. Below it,
 **Remote Machines** the `tuic-remote` connections: discovered SSH hosts, then
 each connection's status with Connect, Update, Install, Edit and Remove.
 
-- A Remote Server's **StrictHostKeyChecking** is fixed to `AcceptNew` — the
-  tunnel opened on your behalf always runs that way; a tunnel profile offers
-  `Yes` too
+- A Remote Server's **StrictHostKeyChecking** offers `AcceptNew` (the default
+  for a new server) and `Yes`, like a tunnel profile (default `Yes`); every SSH
+  command run for it honours the stored value
 - **Auto-update remote daemons** is a per-connection option, off by default. It
   updates on connect only when the daemon has no live PTY sessions
 - The auth password goes to the OS credential vault; leave it blank on edit to

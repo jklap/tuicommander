@@ -300,9 +300,11 @@ They live on **Settings → Remote Servers** (the separate Remote Machines page 
    accept a shell login)
 2. Set **Kind** to **Remote Server — SSH**
 3. Configure the host, port (default 22), user and optional identity file — the
-   same SSH fields as a tunnel. **StrictHostKeyChecking** is fixed to
-   `AcceptNew` here: the tunnel TUICommander opens on your behalf always accepts a
-   new host's key on first contact and refuses a changed one
+   same SSH fields as a tunnel. **StrictHostKeyChecking** defaults to
+   `AcceptNew` (accept a new host's key on first contact, refuse a changed one);
+   pick `Yes` to refuse any host whose key is not already in `~/.ssh/known_hosts`
+   (connect once with plain `ssh` first). Every SSH command TUICommander runs for
+   the server honours the choice
 4. Set the remote daemon port (default 9877)
 5. Choose **Never deploy**, **Deploy on connect**, or **Installed service**, and
    set how many minutes an ephemeral daemon should survive with no client

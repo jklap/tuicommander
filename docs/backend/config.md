@@ -194,7 +194,7 @@ desktop and `tuic-remote` alike) a flat file is rewritten once:
 | Old (flat) | New (nested) |
 |------------|--------------|
 | `connections.json` transport `ssh_host` / `ssh_port` / `ssh_user` / `identity_file` | `transport.ssh.host` / `.port` / `.user` / `.identity_file` |
-| (not stored) | `transport.ssh.server_alive_interval = 15`, `server_alive_count_max = 3`, `strict_host_key_checking = "AcceptNew"`, `compression = true` — what the runtime always ran an SSH connection with |
+| (not stored) | `transport.ssh.server_alive_interval = 15`, `server_alive_count_max = 3`, `strict_host_key_checking = "AcceptNew"`, `compression = true` — what the runtime always ran an SSH connection with (the stored `strict_host_key_checking` is honoured from then on; an unknown value loads as `"Yes"`) |
 | `tunnels/<id>.toml` top-level `host` / `port` / `user` / `identity_file` | `[ssh] host` / `port` / `user` / `identity_file` |
 | `tunnels/<id>.toml` `[options]` (every key) | `[ssh]` (`compression = true` if it was absent) |
 

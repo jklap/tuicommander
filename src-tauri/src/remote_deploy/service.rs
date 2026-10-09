@@ -250,7 +250,7 @@ fn connection_profile(connection: &RemoteConnection) -> Result<(TunnelProfile, u
         return Err("persistent remote daemon installation requires an SSH connection".to_string());
     };
     // The same profile the connect path's tunnel uses, so the install runs over
-    // exactly the SSH settings (keepalive, compression, accept-new) Connect does.
+    // exactly the SSH settings (keepalive, compression, host-key policy) Connect does.
     let profile = crate::remote_runtime::ssh_profile(connection)
         .ok_or("persistent remote daemon installation requires an SSH connection")?;
     Ok((profile, *remote_daemon_port))

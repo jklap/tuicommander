@@ -45,10 +45,33 @@ pub(crate) fn compression_on() -> bool {
     true
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// ssh's `StrictHostKeyChecking`, honoured as stored by every tunnel and
+/// remote-server SSH command. Stored as `"Yes"` / `"AcceptNew"`; any other
+/// value (a hand-edited `connections.json` or `tunnels/*.toml`, a future
+/// variant read by an older build) loads as the strictest policy, `Yes`,
+/// instead of failing the whole file or silently trusting a new host key.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub enum StrictHostKeyChecking {
     Yes,
     AcceptNew,
+}
+
+impl<'de> Deserialize<'de> for StrictHostKeyChecking {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = String::deserialize(deserializer)?;
+        Ok(match value.as_str() {
+            "AcceptNew" => Self::AcceptNew,
+            "Yes" => Self::Yes,
+            other => {
+                tracing::warn!(
+                    source = "ssh",
+                    value = %other,
+                    "Unknown strict_host_key_checking value; using the strictest policy (Yes)"
+                );
+                Self::Yes
+            }
+        })
+    }
 }
 
 impl SshConnectionParams {
@@ -248,6 +271,21 @@ mod tests {
         assert_eq!(params.server_alive_count_max, 3);
         assert_eq!(params.strict_host_key_checking, StrictHostKeyChecking::Yes);
         assert!(params.compression);
+    }
+
+    /// Catches: an unrecognised stored host-key policy failing the whole
+    /// connections/tunnels file, or (worse) loading as `AcceptNew`.
+    #[test]
+    fn an_unknown_host_key_policy_loads_as_the_strictest() {
+        let parse = |v: &str| -> StrictHostKeyChecking {
+            serde_json::from_value(serde_json::Value::String(v.to_string())).unwrap()
+        };
+        assert_eq!(parse("Yes"), StrictHostKeyChecking::Yes);
+        assert_eq!(parse("AcceptNew"), StrictHostKeyChecking::AcceptNew);
+        for unknown in ["No", "Off", "accept-new", "acceptnew", "ask", ""] {
+            assert_eq!(parse(unknown), StrictHostKeyChecking::Yes, "{unknown:?}");
+        }
+        assert!(serde_json::from_value::<StrictHostKeyChecking>(serde_json::json!(false)).is_err());
     }
 
     #[test]

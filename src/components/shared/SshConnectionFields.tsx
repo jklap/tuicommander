@@ -19,14 +19,6 @@ interface SshAgentInfo {
 export interface SshConnectionFieldsProps {
 	value: SshConnectionParams;
 	onChange: (patch: Partial<SshConnectionParams>) => void;
-	/**
-	 * `"enforced-accept-new"` for a Remote Server connection: the tunnel TUIC
-	 * opens on the user's behalf always runs with `accept-new`
-	 * (`remote_runtime::ssh_profile`), so offering `Yes` there would be a
-	 * choice the runtime silently ignores. A tunnel profile honours both values
-	 * and keeps the selectable default.
-	 */
-	hostKeyChecking?: "selectable" | "enforced-accept-new";
 }
 
 /**
@@ -77,8 +69,6 @@ export const SshConnectionFields: Component<SshConnectionFieldsProps> = (props) 
 		});
 		if (selected) props.onChange({ identity_file: selected });
 	};
-
-	const hostKeyEnforced = () => props.hostKeyChecking === "enforced-accept-new";
 
 	const parseNumber = (value: string, fallback: number): number => {
 		const parsed = Number.parseInt(value, 10);
@@ -171,23 +161,14 @@ export const SshConnectionFields: Component<SshConnectionFieldsProps> = (props) 
 				<div class={s.group} style={{ width: "160px" }}>
 					<label class={s.label}>StrictHostKeyChecking</label>
 					<select
-						value={hostKeyEnforced() ? "AcceptNew" : props.value.strict_host_key_checking}
-						disabled={hostKeyEnforced()}
+						value={props.value.strict_host_key_checking}
 						onChange={(e) => props.onChange({ strict_host_key_checking: e.currentTarget.value as "Yes" | "AcceptNew" })}
 					>
 						<option value="AcceptNew">AcceptNew</option>
-						<Show when={!hostKeyEnforced()}>
-							<option value="Yes">Yes</option>
-						</Show>
+						<option value="Yes">Yes</option>
 					</select>
 				</div>
 			</div>
-			<Show when={hostKeyEnforced()}>
-				<p class={s.hint} style={{ margin: 0 }}>
-					A remote server's tunnel is opened on your behalf, so it always accepts a new host's key on first contact and
-					refuses a changed one (accept-new).
-				</p>
-			</Show>
 
 			<label class={s.toggle}>
 				<input
