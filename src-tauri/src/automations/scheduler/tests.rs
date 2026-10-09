@@ -332,6 +332,7 @@ fn once_waits_for_due_time_and_remains_consumed_after_restart_and_retention() {
 }
 
 mod critic_failure {
+    use crate::automations::run::RunStatus;
     use crate::automations::{
         model::{AutomationDefinition, AutomationsConfig},
         scheduler::tick,
