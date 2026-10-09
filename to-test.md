@@ -4842,3 +4842,5 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] In a disposable agent session on the phone PWA, compare typing `/` and tapping the keybar `/`: both must show the same live agent commands and navigation. Insert `/` within an unsent draft and confirm surrounding text survives without submission.
 
 - [ ] Desktop AI Chat: pin/play icon controls match terminal Compose in light/dark themes, with Send/Queue tooltips and highlighted parked drafts (#1636-0d08).
+
+- [ ] AI Chat: paste a PNG before the first connection and a Finder image copy; preview and send the image, while ordinary text still pastes as text (#1639-f474).
