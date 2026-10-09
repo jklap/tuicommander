@@ -2714,3 +2714,17 @@ Rich merged linked worktrees with no sessions and verified lifecycle facts use a
 Rich parent terminal rows show N agents in each other repository containing live children. Clicking reveals the child group, repository and workspace, then selects a child through existing terminal navigation. Session placement and same-branch nesting stay intact; closed children disappear from summaries.
 
 Browser Add Repository provides a server-side directory picker using the existing filesystem routes. Root HTML navigation offers form login; touch-capable iPad Safari selects the mobile interface even with its desktop Mac user agent. API authentication is unchanged.
+
+### Automation Once schedules (Rust foundation)
+
+Definitions can schedule one wall-clock date-time in an IANA zone. Rust rejects
+past instants on creation and spring gaps, resolves folds to the earlier instant,
+and keeps consumed Once definitions for inspection. The backend supplies one
+preview instant and completed schedule state. Public automation controls arrive
+with the scheduler API and dialog.
+### Automations dialog (backend integration pending)
+
+Machine-local scheduled-run editor with search, backend cadence/zone preview,
+prechecks, workspace and duration controls, pause/resume, Run now, confirmed
+delete and recent status history. Open **Automations** from the command palette.
+Step 8 API integration is required before use; see [Automations](user-guide/automations.md).
