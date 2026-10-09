@@ -10,6 +10,7 @@ authors and communities behind each project.
 <!-- BEGIN GENERATED:rust -->
 | Crate | Version | License |
 |-------|---------|---------|
+| ab_glyph | 0.2.32 | Apache-2.0 |
 | agent-client-protocol | 2.0.0 | Apache-2.0 |
 | anyhow | 1.0.104 | MIT OR Apache-2.0 |
 | arboard | 3.6.1 | MIT OR Apache-2.0 |
@@ -39,8 +40,10 @@ authors and communities behind each project.
 | dirs | 7.0.0 | MIT OR Apache-2.0 |
 | drag | 2.1.1 | Apache-2.0 OR MIT |
 | flate2 | 1.1.10 | MIT OR Apache-2.0 |
+| futures-lite | 2.6.1 | Apache-2.0 OR MIT |
 | futures-util | 0.3.33 | MIT OR Apache-2.0 |
 | gix | 0.89.0 | MIT OR Apache-2.0 |
+| gix-imara-diff | 0.3.1 | Apache-2.0 |
 | glob | 0.3.4 | MIT OR Apache-2.0 |
 | grep-matcher | 0.1.9 | Unlicense OR MIT |
 | grep-regex | 0.1.14 | Unlicense OR MIT |
@@ -50,6 +53,7 @@ authors and communities behind each project.
 | iana-time-zone | 0.1.65 | MIT OR Apache-2.0 |
 | ignore | 0.4.31 | Unlicense OR MIT |
 | include_dir | 0.7.4 | MIT |
+| jpeg-encoder | 0.6.1 | MIT OR Apache-2.0 AND IJG |
 | jsonc-parser | 0.33.1 | MIT |
 | jsonschema | 0.59.0 | MIT |
 | keepawake | 0.6.0 | MIT |
@@ -57,8 +61,10 @@ authors and communities behind each project.
 | lazy_static | 1.5.0 | MIT OR Apache-2.0 |
 | libc | 0.2.188 | MIT OR Apache-2.0 |
 | log | 0.4.33 | MIT OR Apache-2.0 |
+| lru | 0.18.5 | MIT |
 | memchr | 2.8.3 | Unlicense OR MIT |
 | mime_guess | 2.0.5 | MIT |
+| mirajazz | 0.16.2 | MPL-2.0 |
 | moka | 0.12.15 | MIT OR Apache-2.0 AND Apache-2.0 |
 | notify | 8.2.0 | CC0-1.0 |
 | open | 5.4.0 | MIT |
@@ -70,6 +76,7 @@ authors and communities behind each project.
 | rand | 0.10.2 | MIT OR Apache-2.0 |
 | rand_core | 0.6.4 | MIT OR Apache-2.0 |
 | rayon | 1.12.0 | MIT OR Apache-2.0 |
+| rcgen | 0.14.9 | MIT OR Apache-2.0 |
 | regex | 1.13.1 | MIT OR Apache-2.0 |
 | regex-automata | 0.4.16 | MIT OR Apache-2.0 |
 | reqwest | 0.13.5 | MIT OR Apache-2.0 |
@@ -79,6 +86,7 @@ authors and communities behind each project.
 | rusqlite | 0.40.2 | MIT |
 | rust-stemmers | 1.2.0 | MIT OR BSD-3-Clause |
 | rustls | 0.23.46 | Apache-2.0 OR ISC OR MIT |
+| rustls-native-certs | 0.8.4 | Apache-2.0 OR ISC OR MIT |
 | safetensors | 0.6.2 | Apache-2.0 |
 | same-file | 1.0.6 | Unlicense OR MIT |
 | schemars | 1.2.1 | MIT |
@@ -103,8 +111,12 @@ authors and communities behind each project.
 | tauri-plugin-updater | 2.14.0 | Apache-2.0 OR MIT |
 | tauri-plugin-window-state | 2.5.0 | Apache-2.0 OR MIT |
 | tempfile | 3.27.0 | MIT OR Apache-2.0 |
+| thiserror | 2.0.19 | MIT OR Apache-2.0 |
+| time | 0.3.55 | MIT OR Apache-2.0 |
+| tiny-skia | 0.11.4 | BSD-3-Clause |
 | tokenizers | 0.22.2 | Apache-2.0 |
 | tokio | 1.53.1 | MIT |
+| tokio-rustls | 0.26.4 | MIT OR Apache-2.0 |
 | tokio-tungstenite | 0.29.0 | MIT |
 | toml | 1.1.3+spec-1.1.0 | MIT OR Apache-2.0 |
 | toml_edit | 0.25.13+spec-1.1.0 | MIT OR Apache-2.0 |
@@ -234,20 +246,21 @@ Counts below collapse equivalent SPDX expressions (`MIT OR Apache-2.0` ≡ `Apac
 <!-- BEGIN GENERATED:summary -->
 | License | Count |
 |---------|-------|
-| MIT OR Apache-2.0 | 80 |
-| MIT | 70 |
-| Apache-2.0 | 8 |
+| MIT OR Apache-2.0 | 85 |
+| MIT | 71 |
+| Apache-2.0 | 10 |
 | Unlicense OR MIT | 7 |
 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | 4 |
-| BSD-3-Clause | 3 |
+| BSD-3-Clause | 4 |
+| Apache-2.0 OR ISC OR MIT | 2 |
 | MIT OR Apache-2.0 OR Zlib | 2 |
+| MPL-2.0 | 2 |
 | Apache-2.0 AND ISC | 1 |
-| Apache-2.0 OR ISC OR MIT | 1 |
 | BSD-2-Clause | 1 |
 | CC0-1.0 | 1 |
 | MIT OR Apache-2.0 AND Apache-2.0 | 1 |
+| MIT OR Apache-2.0 AND IJG | 1 |
 | MIT OR BSD-3-Clause | 1 |
-| MPL-2.0 | 1 |
 | MPL-2.0 OR Apache-2.0 | 1 |
 | Unlicense | 1 |
 <!-- END GENERATED:summary -->
