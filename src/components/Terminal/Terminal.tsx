@@ -10,7 +10,7 @@ import {
 	Suspense,
 	untrack,
 } from "solid-js";
-import { detectAgentForTerminal } from "../../hooks/useAgentPolling";
+import { applySessionStateEvent, detectAgentForTerminal } from "../../hooks/useAgentPolling";
 import { browserCreatedSessions } from "../../hooks/useAppInit";
 import { usePty } from "../../hooks/usePty";
 import { t } from "../../i18n";
@@ -25,6 +25,7 @@ import { settingsStore } from "../../stores/settings";
 import { type AwaitingInputType, isShellState, terminalsStore } from "../../stores/terminals";
 import { toastsStore } from "../../stores/toasts";
 import { HttpRpcError, isTauri, subscribePty, type Unsubscribe } from "../../transport";
+import { getSessionConnection } from "../../transportRuntime";
 import { onClickKeyDown } from "../../utils/a11y";
 import { writeClipboard } from "../../utils/clipboard";
 import { keyFor } from "../../utils/hotkey";
@@ -93,15 +94,6 @@ type ParsedEvent =
 	| { type: "shell-state"; state: "busy" | "idle" }
 	| { type: "agent-session-conflict"; matched_text: string; kind: "in-use" | "not-found" }
 	| { type: "agent-block"; action: "start" | "end"; line: number; exit_code?: number };
-
-type BackendSessionState = {
-	shell_state?: "busy" | "idle";
-	agent_state?: "starting" | "working" | "awaiting_input" | "idle" | "completed";
-	awaiting_input?: boolean;
-	question_confident?: boolean;
-	background_work?: boolean;
-	queued_commands?: number;
-};
 
 export interface TerminalProps {
 	id: string;
@@ -213,10 +205,21 @@ export const Terminal: Component<TerminalProps> = (props) => {
 	// for this terminal, so send and Esc leave it open.
 	const [composePinned, setComposePinned] = createSignal(false);
 	const [composeFocusRequest, setComposeFocusRequest] = createSignal(0);
+	const [composeTextRequest, setComposeTextRequest] = createSignal(0);
+	// Chat owns its input slot without changing this tab's CLI Compose preferences.
+	const composeVisible = () => chatActive() || composeOpen();
+	const composeDocked = () => chatActive() || composePinned();
+	createEffect(
+		on(chatActive, (active) => {
+			if (active) setComposeFocusRequest((n) => n + 1);
+		}),
+	);
 	/** After a send, an unpinned composer is done; a pinned one keeps the caret. */
-	const finishCompose = () => {
-		setPendingComposeText("");
-		if (composePinned()) return;
+	const finishCompose = (remainingDraft: string) => {
+		setPendingComposeText(remainingDraft);
+		// A different Compose instance may already be showing the same draft.
+		setComposeTextRequest((n) => n + 1);
+		if (composeDocked()) return;
 		setComposeOpen(false);
 		canvasTerminalRef()?.focus();
 	};
@@ -230,7 +233,6 @@ export const Terminal: Component<TerminalProps> = (props) => {
 	// synchronous try/catch that cannot see the rejection.
 	let unlistenParsed: (() => unknown) | undefined;
 	let unlistenKitty: (() => unknown) | undefined;
-	let unlistenTitle: (() => unknown) | undefined;
 	let unlistenClipboardStore: (() => unknown) | undefined;
 
 	let kittyFlags = 0;
@@ -244,8 +246,6 @@ export const Terminal: Component<TerminalProps> = (props) => {
 		unlistenParsed = undefined;
 		safeUnlisten(unlistenKitty);
 		unlistenKitty = undefined;
-		safeUnlisten(unlistenTitle);
-		unlistenTitle = undefined;
 		safeUnlisten(unlistenClipboardStore);
 		unlistenClipboardStore = undefined;
 	};
@@ -351,6 +351,32 @@ export const Terminal: Component<TerminalProps> = (props) => {
 		if (terminalsStore.state.activeId !== props.id && !activityFlagged) {
 			activityFlagged = true;
 			terminalsStore.update(props.id, { activity: true });
+		}
+	};
+
+	const handlePtyTitle = (title: string) => {
+		if (disposed) return;
+		const term = terminalsStore.get(props.id);
+		if (
+			!term ||
+			!shouldApplyOscTitle({
+				nameIsCustom: term.nameIsCustom,
+				nameFromSpawn: term.nameFromSpawn,
+				agentIntent: term.agentIntent,
+				intentTabTitle: settingsStore.state.intentTabTitle,
+			})
+		)
+			return;
+		if (!title) {
+			if (originalName) terminalsStore.update(props.id, { name: originalName });
+		} else {
+			const cleaned = cleanOscTitle(title);
+			if (cleaned) {
+				if (!originalName) originalName = terminalsStore.get(props.id)?.name || null;
+				terminalsStore.update(props.id, { name: cleaned });
+			} else if (originalName) {
+				terminalsStore.update(props.id, { name: originalName });
+			}
 		}
 	};
 
@@ -697,6 +723,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 			},
 			{
 				onActivity: handlePtyActivity,
+				onTitle: handlePtyTitle,
 				onReconnecting: (attempt, max) => setReconnecting({ attempt, max }),
 				onReconnected: () => setReconnecting(null),
 				// Browser mode: receive parsed events via WebSocket JSON frames
@@ -706,30 +733,14 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					}
 				},
 				onStateChange: (snapshot) => {
-					const state = snapshot as BackendSessionState;
-					const wasAwaiting = terminalsStore.get(props.id)?.awaitingInput === "question";
-					const isAwaiting = state.awaiting_input === true;
-					terminalsStore.update(props.id, {
-						agentState: state.agent_state ?? null,
-						backgroundWork: state.background_work === true,
-						queuedCommands: state.queued_commands ?? 0,
-						awaitingInput: state.awaiting_input === true ? "question" : null,
-						awaitingInputConfident: state.question_confident === true,
-						...(state.shell_state ? { shellState: state.shell_state } : {}),
-					});
-					if (wasAwaiting !== isAwaiting) {
-						pluginRegistry.dispatchStructuredEvent(
-							"awaiting",
-							{ awaiting: isAwaiting, confident: state.question_confident === true },
-							targetSessionId,
-						);
-					}
+					if (disposed) return;
+					applySessionStateEvent({ session_id: targetSessionId, state: snapshot });
 				},
 			},
 		);
 
 		// Tauri-only listeners (kitty keyboard, shell state sync)
-		if (isTauri()) {
+		if (isTauri() && !getSessionConnection(targetSessionId)) {
 			const { listen } = await import("@tauri-apps/api/event");
 			unlistenParsed = await listen<ParsedEvent>(`pty-parsed-${targetSessionId}`, (event) => {
 				handleParsedEvent(event.payload);
@@ -757,42 +768,6 @@ export const Terminal: Component<TerminalProps> = (props) => {
 			// delivery had just installed, inventing one empty command block per
 			// prompt. `agent-block` above still feeds the same sink, but that is a
 			// different source for agents with no shell integration, not a copy.
-
-			// Listen for OSC 0/2 title changes from Rust (native renderer)
-			unlistenTitle = await listen<string>(`pty-title-${targetSessionId}`, (event) => {
-				if (disposed) return;
-				const title = event.payload;
-				const term = terminalsStore.get(props.id);
-				if (
-					!term ||
-					!shouldApplyOscTitle({
-						nameIsCustom: term.nameIsCustom,
-						nameFromSpawn: term.nameFromSpawn,
-						agentIntent: term.agentIntent,
-						intentTabTitle: settingsStore.state.intentTabTitle,
-					})
-				)
-					return;
-				if (!title) {
-					if (originalName) terminalsStore.update(props.id, { name: originalName });
-				} else {
-					const cleaned = cleanOscTitle(title);
-					if (cleaned) {
-						if (!originalName) originalName = terminalsStore.get(props.id)?.name || null;
-						terminalsStore.update(props.id, { name: cleaned });
-					} else if (originalName) {
-						terminalsStore.update(props.id, { name: originalName });
-					}
-				}
-			});
-			// Unmounting during the await above leaves this listener attached:
-			// onCleanup already ran and saw `unlistenTitle` still undefined. Every
-			// sibling listener has this guard; this one was missing it.
-			if (disposed) {
-				safeUnlisten(unlistenTitle);
-				unlistenTitle = undefined;
-				return;
-			}
 
 			// Listen for OSC 52 clipboard store from Rust (native renderer).
 			// OSC 52 is honored from anywhere in the byte stream, so a displayed file/log
@@ -996,7 +971,8 @@ export const Terminal: Component<TerminalProps> = (props) => {
 				// Never steal the caret from a field the user is typing in — the search
 				// bar and the compose panel live inside this same terminal wrapper.
 				if (terminalsStore.state.activeId === props.id && !focusIsInsideOwnInput(document.activeElement, props.id)) {
-					canvasTerminalRef()?.focus();
+					if (chatActive()) setComposeFocusRequest((n) => n + 1);
+					else canvasTerminalRef()?.focus();
 				}
 			});
 
@@ -1088,6 +1064,10 @@ export const Terminal: Component<TerminalProps> = (props) => {
 		},
 		refresh: () => canvasTerminalRef()?.refresh(),
 		focus: () => {
+			if (chatActive()) {
+				setComposeFocusRequest((n) => n + 1);
+				return;
+			}
 			const ref = canvasTerminalRef();
 			if (ref) ref.focus();
 			else pendingCanvasFocus = true;
@@ -1096,6 +1076,10 @@ export const Terminal: Component<TerminalProps> = (props) => {
 		openSearch: () => openSearchBar(),
 		closeSearch: () => closeSearchBar(),
 		toggleCompose: () => {
+			if (chatActive()) {
+				setComposeFocusRequest((n) => n + 1);
+				return;
+			}
 			if (composePinned()) {
 				// Pinned stays open: the shortcut moves the caret between the two inputs.
 				if (focusIsInsideOwnInput(document.activeElement, props.id)) canvasTerminalRef()?.focus();
@@ -1120,7 +1104,8 @@ export const Terminal: Component<TerminalProps> = (props) => {
 		},
 		openComposeWithText: (text: string) => {
 			setPendingComposeText(text);
-			setComposeOpen(true);
+			if (!chatActive()) setComposeOpen(true);
+			setComposeTextRequest((n) => n + 1);
 		},
 		searchBuffer: (query: string) => {
 			if (!sessionId) return [];
@@ -1451,13 +1436,15 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					Compose {keyFor("toggle-compose-panel")}
 				</div>
 			</Show>
-			<Show when={composeOpen() && !chatActive()}>
+			<Show when={composeVisible()}>
 				<Suspense>
 					<ComposePanel
-						isOpen={composeOpen}
+						isOpen={composeVisible}
 						initialText={pendingComposeText}
 						onTextChange={setPendingComposeText}
-						pinned={composePinned}
+						onSubmitted={finishCompose}
+						pinned={composeDocked}
+						persistent={chatActive}
 						onTogglePin={() => setComposePinned(!composePinned())}
 						onDismiss={() => {
 							setComposePinned(false);
@@ -1465,6 +1452,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 							canvasTerminalRef()?.focus();
 						}}
 						focusRequest={composeFocusRequest}
+						textRequest={composeTextRequest}
 						canEnqueue={() => !!terminalsStore.get(props.id)?.agentType}
 						queuedCount={() => terminalsStore.get(props.id)?.queuedCommands ?? 0}
 						onClearQueue={async () => {
@@ -1504,17 +1492,16 @@ export const Terminal: Component<TerminalProps> = (props) => {
 								// lifecycle poll — the badge must react to the click.
 								terminalsStore.update(props.id, { queuedCommands: outcome.queued });
 							});
-							finishCompose();
 						}}
 						onClose={() => {
-							if (!composePinned()) setComposeOpen(false);
+							if (chatActive()) terminalsStore.setViewMode(props.id, "cli");
+							else if (!composePinned()) setComposeOpen(false);
 							canvasTerminalRef()?.focus();
 						}}
 						onSend={async (text) => {
 							await submitCompose("send", sessionId, (id) =>
 								pty.sendCommand(id, text, terminalsStore.get(props.id)?.agentType),
 							);
-							finishCompose();
 						}}
 					/>
 				</Suspense>

@@ -58,14 +58,20 @@ export interface ComposePanelProps {
 	/** Drop a single queued command by id. */
 	onRemoveQueued: (id: number) => void | Promise<void>;
 	onTextChange?: (text: string) => void;
+	/** Host applies successful-submit cleanup to its shared draft and current editor. */
+	onSubmitted?: (remainingDraft: string) => void;
 	/** Pinned: the panel stays open after send and Esc, and takes its own slot
 	 *  under the terminal instead of overlaying it. */
 	pinned: Accessor<boolean>;
+	/** The host requires this input: hide controls that would close or undock it. */
+	persistent?: Accessor<boolean>;
 	onTogglePin: () => void;
 	/** The close button: closes the panel even when pinned, unlike Esc. */
 	onDismiss: () => void;
 	/** Bumped to move the caret into the editor while the panel stays open. */
 	focusRequest: Accessor<number>;
+	/** Explicit host replacement (for example a smart prompt), independent of typing. */
+	textRequest?: Accessor<number>;
 }
 
 /** Who parked a queue entry, for the entries that are not the operator's own. */
@@ -89,11 +95,16 @@ export const ComposePanel: Component<ComposePanelProps> = (props) => {
 	});
 
 	/** An unpinned panel is closed by the parent after a successful submit; a
-	 *  pinned one stays, so the editor is emptied here for the next message. A
+	 *  pinned one stays. Successful cleanup also reaches the host draft when
+	 *  this editor has unmounted. A
 	 *  rejected submit keeps the text — the parent has already logged the error.
 	 *  A pinned panel stays editable while the send runs, so only the submitted
 	 *  document is removed: whatever the user typed after it is the next message.
 	 *  A submit while another is in flight is dropped, so no text goes out twice. */
+	let disposed = false;
+	onCleanup(() => {
+		disposed = true;
+	});
 	let inFlight = false;
 	const submit = (handler: (text: string) => void | Promise<void>, text: string) => {
 		if (inFlight) return;
@@ -105,13 +116,18 @@ export const ComposePanel: Component<ComposePanelProps> = (props) => {
 			.then(
 				() => {
 					const view = editorView();
-					if (!props.pinned() || !view) return;
-					const doc = view.state.doc.toString();
-					// The user edited the sent text itself: no safe cut, leave it all.
-					if (doc.startsWith(submitted)) {
-						const rest = doc.slice(submitted.length);
-						const to = submitted.length + (rest.length - rest.trimStart().length);
-						view.dispatch({ changes: { from: 0, to, insert: "" } });
+					// The host's shared draft outlives this editor, including a switch
+					// away and back while the request is pending.
+					const doc = !disposed && view ? view.state.doc.toString() : props.initialText();
+					// Editing the submitted text itself leaves no safe prefix to remove.
+					const remaining = doc.startsWith(submitted) ? doc.slice(submitted.length).trimStart() : doc;
+					if (props.onSubmitted) {
+						props.onSubmitted(remaining);
+						return;
+					}
+					if (disposed || !props.pinned() || !view) return;
+					if (doc !== remaining) {
+						view.dispatch({ changes: { from: 0, to: doc.length - remaining.length, insert: "" } });
 					}
 					view.focus();
 				},
@@ -192,14 +208,14 @@ export const ComposePanel: Component<ComposePanelProps> = (props) => {
 	createEffect(
 		on(props.isOpen, (open) => {
 			if (!open) return;
-			// Read initialText outside reactive tracking — we only want the value
-			// at open time, not to subscribe to further changes while typing.
-			const initial = props.initialText();
 			let inner = 0;
 			const outer = requestAnimationFrame(() => {
 				inner = requestAnimationFrame(() => {
 					const view = editorView();
 					if (!view) return;
+					// Read the shared draft when initialization runs: a pending submit
+					// may have cleaned it since opening. RAF reads are not tracked.
+					const initial = props.initialText();
 					const current = view.state.doc.toString();
 					if (current !== initial) {
 						view.dispatch({
@@ -224,6 +240,23 @@ export const ComposePanel: Component<ComposePanelProps> = (props) => {
 			props.focusRequest,
 			() => {
 				editorView()?.focus();
+			},
+			{ defer: true },
+		),
+	);
+
+	createEffect(
+		on(
+			() => props.textRequest?.(),
+			() => {
+				const view = editorView();
+				if (!view) return;
+				const text = props.initialText();
+				view.dispatch({
+					changes: { from: 0, to: view.state.doc.length, insert: text },
+					selection: { anchor: text.length },
+				});
+				view.focus();
 			},
 			{ defer: true },
 		),
@@ -351,17 +384,19 @@ export const ComposePanel: Component<ComposePanelProps> = (props) => {
 							</svg>
 						</button>
 					</Show>
-					<button
-						class={cx(s.pinButton, props.pinned() && s.pinButtonActive)}
-						onClick={() => props.onTogglePin()}
-						title={props.pinned() ? "Unpin from the terminal bottom" : "Pin to the terminal bottom"}
-						aria-pressed={props.pinned()}
-					>
-						<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-							<path d="M10.5 1.5l4 4-1 1-.8-.3-2.6 2.6.4 2.7-1 1-2.8-2.8L3 13.4l-.4-.4 3.7-3.7-2.8-2.8 1-1 2.7.4 2.6-2.6-.3-.8z" />
-						</svg>
-					</button>
-					<span class={s.divider} aria-hidden="true" />
+					<Show when={!props.persistent?.()}>
+						<button
+							class={cx(s.pinButton, props.pinned() && s.pinButtonActive)}
+							onClick={() => props.onTogglePin()}
+							title={props.pinned() ? "Unpin from the terminal bottom" : "Pin to the terminal bottom"}
+							aria-pressed={props.pinned()}
+						>
+							<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+								<path d="M10.5 1.5l4 4-1 1-.8-.3-2.6 2.6.4 2.7-1 1-2.8-2.8L3 13.4l-.4-.4 3.7-3.7-2.8-2.8 1-1 2.7.4 2.6-2.6-.3-.8z" />
+							</svg>
+						</button>
+						<span class={s.divider} aria-hidden="true" />
+					</Show>
 					<Show when={props.canEnqueue()}>
 						<button
 							class={s.queueButton}
@@ -378,17 +413,19 @@ export const ComposePanel: Component<ComposePanelProps> = (props) => {
 							<path d="M4 2l10 6-10 6V2z" />
 						</svg>
 					</button>
-					<span class={s.divider} aria-hidden="true" />
-					<button
-						class={s.closeButton}
-						onClick={() => props.onDismiss()}
-						title="Close compose panel"
-						aria-label="Close compose panel"
-					>
-						<svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-							<path d="M4.3 3.3l8.4 8.4-1 1-8.4-8.4zM12.7 4.3l-8.4 8.4-1-1 8.4-8.4z" />
-						</svg>
-					</button>
+					<Show when={!props.persistent?.()}>
+						<span class={s.divider} aria-hidden="true" />
+						<button
+							class={s.closeButton}
+							onClick={() => props.onDismiss()}
+							title="Close compose panel"
+							aria-label="Close compose panel"
+						>
+							<svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+								<path d="M4.3 3.3l8.4 8.4-1 1-8.4-8.4zM12.7 4.3l-8.4 8.4-1-1 8.4-8.4z" />
+							</svg>
+						</button>
+					</Show>
 				</div>
 			</div>
 		</div>

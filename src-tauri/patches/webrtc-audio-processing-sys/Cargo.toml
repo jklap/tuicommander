@@ -54,9 +54,6 @@ optional = true
 [build-dependencies.anyhow]
 version = "1"
 
-[build-dependencies.autotools]
-version = "0.2"
-
 [build-dependencies.bindgen]
 version = "0.72"
 
@@ -68,6 +65,3 @@ version = "1"
 
 [build-dependencies.pkg-config]
 version = "0.3"
-
-[build-dependencies.regex]
-version = "1"

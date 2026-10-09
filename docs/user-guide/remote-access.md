@@ -516,7 +516,9 @@ A standalone headless daemon for running TUICommander on a Linux server without 
 
 Download the `tuic-remote` binary **and** the `tuic-bridge` binary for your
 platform from the [GitHub Releases](https://github.com/sstraus/tuicommander/releases)
-page. Both are published for every platform below.
+page. Both are published for every platform below. Tagged releases carry the
+stable build; the rolling [`nightly`](https://github.com/sstraus/tuicommander/releases/tag/nightly)
+release carries the same four targets, rebuilt on every push to `main`.
 
 | Platform | Daemon | MCP bridge |
 |----------|--------|------------|
@@ -527,7 +529,7 @@ page. Both are published for every platform below.
 
 ```bash
 # Example: Linux x64
-BASE=https://github.com/sstraus/tuicommander/releases/latest/download
+BASE=https://github.com/sstraus/tuicommander/releases/latest/download   # nightly: .../releases/download/nightly
 curl -fsSL -o tuic-remote "$BASE/tuic-remote-x86_64-unknown-linux-gnu"
 curl -fsSL -o tuic-bridge "$BASE/tuic-bridge-x86_64-unknown-linux-gnu"
 chmod +x tuic-remote tuic-bridge
@@ -752,3 +754,8 @@ Follow the response's `continuation` instructions and `next_cursor` while
 `has_more` is true. Raw pages use byte positions; text pages use scrollback rows.
 The same paging works through a connected remote daemon. Buffer eviction can
 remove old output, and the response reports the resulting gap.
+
+Remote desktop terminal tabs consume the daemon's detected agent identity and
+OSC title updates, with the same custom-name and spawn-name protection as local
+tabs. Grid output streams over WebSocket; the text/log view batches rows at
+200 ms. Loopback timings do not establish latency on an SSH or Tailscale link.

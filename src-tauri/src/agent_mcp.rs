@@ -2131,16 +2131,11 @@ mod tests {
     /// without the other ships a config pointing at nothing.
     #[test]
     fn the_release_publishes_a_bridge_wherever_it_publishes_the_daemon() {
-        let workflow = include_str!("../../.github/workflows/release.yml");
+        let workflow = include_str!("../../.github/workflows/remote-daemon.yml");
         let job = workflow
             .split("\n  remote-daemon:")
             .nth(1)
-            .expect("the remote-daemon job must exist")
-            // The job that follows it. Splitting on a generic two-space indent
-            // would stop at the first nested key and read almost nothing.
-            .split("\n  finalize-release:")
-            .next()
-            .expect("job body");
+            .expect("the remote-daemon job must exist");
 
         assert!(
             job.contains("--bin tuic-remote --target"),

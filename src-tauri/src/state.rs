@@ -224,6 +224,9 @@ pub enum AppEvent {
     /// Working directory reported by the shell through OSC 7.
     #[serde(rename = "pty-cwd")]
     PtyCwd { session_id: String, cwd: String },
+    /// Terminal title set (or reset to empty) through OSC 0/2.
+    #[serde(rename = "pty-title")]
+    PtyTitle { session_id: String, title: String },
     /// "This session produced output." Payload-free on purpose: the only
     /// consumers are a last-seen timestamp and an unread flag, neither of which
     /// needs a byte of the output itself. Throttled at the producer — see
@@ -541,6 +544,7 @@ impl AppEvent {
             | AppEvent::PluginWatcherLines { session_id, .. }
             | AppEvent::PtyExit { session_id }
             | AppEvent::PtyActivity { session_id }
+            | AppEvent::PtyTitle { session_id, .. }
             | AppEvent::PtyOsc133 { session_id, .. }
             | AppEvent::PtyCwd { session_id, .. }
             | AppEvent::PtyDescriptionChanged { session_id, .. }
@@ -686,6 +690,12 @@ pub(crate) struct SessionState {
     /// were parsed so the async accumulator cannot restore prior-turn completion.
     #[serde(skip)]
     pub(crate) turn_epoch: u64,
+    /// One draft may interrupt this turn until the next native input write.
+    #[serde(skip)]
+    pub(crate) turn_interrupt: Option<Arc<()>>,
+    /// Native input retired this epoch; late drafts cannot rearm it.
+    #[serde(skip)]
+    pub(crate) turn_interrupt_retired_epoch: Option<u64>,
     /// Slash command menu items (from slash-menu parsed events)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub slash_menu_items: Option<Vec<crate::output_parser::SlashMenuItem>>,
@@ -2313,6 +2323,9 @@ impl AppState {
             .pty_writer(session_id)
             .ok_or_else(|| "Session not found".to_string())?;
         let mut writer = writer.lock();
+        if parts.iter().any(|part| !part.is_empty()) {
+            self.retire_turn_interrupt(session_id);
+        }
         for part in parts {
             writer
                 .write_all(part)
@@ -2321,6 +2334,14 @@ impl AppState {
         writer
             .flush()
             .map_err(|error| format!("Flush failed: {error}"))
+    }
+
+    /// Called only under the PTY writer lock, before any user input escapes.
+    pub(crate) fn retire_turn_interrupt(&self, session_id: &str) {
+        if let Some(mut session) = self.session_maps.session_states.get_mut(session_id) {
+            session.turn_interrupt = None;
+            session.turn_interrupt_retired_epoch = Some(session.turn_epoch);
+        }
     }
 
     /// Emit a PTY-scoped lifecycle event to
@@ -2341,7 +2362,11 @@ impl AppState {
     pub(crate) fn emit_pty_event(&self, event: AppEvent) {
         // State is authoritative and sticky, so it gets a lossless lane. The
         // broadcast copies remain best-effort transports for live consumers.
-        self.session_maps.session_state_events.send(event.clone());
+        // Titles are presentation only; do not grow the lossless state lane
+        // for an agent that animates its OSC title.
+        if !matches!(&event, AppEvent::PtyTitle { .. }) {
+            self.session_maps.session_state_events.send(event.clone());
+        }
         if let Some(sid) = event.pty_session_id()
             && let Some(tx) = self.session_maps.pty_event_channels.get(sid)
         {
@@ -4690,7 +4715,7 @@ impl AppState {
             // answers the different question "are bytes flowing right now", which
             // is true throughout a `tail -f` that produces no semantic event at
             // all. Folding the two would silently redefine the mobile column.
-            AppEvent::PtyActivity { .. } => {}
+            AppEvent::PtyActivity { .. } | AppEvent::PtyTitle { .. } => {}
             // Shell-integration markers and the OSC 7 cwd are terminal-rendering
             // signals, not session state. The cwd that state cares about is
             // written straight onto the `sessions` entry at the emit site; this
@@ -5265,6 +5290,11 @@ pub(crate) struct AgentConfig {
 #[cfg(test)]
 pub(crate) mod tests_support {
     use super::*;
+
+    /// Replay the production accumulator synchronously, without scheduling races.
+    pub(crate) fn apply_replay_event(state: &Arc<AppState>, event: &AppEvent) {
+        AppState::apply_event_to_session_state(state, event);
+    }
 
     /// A live `sessions` entry backed by a real PTY. `live_pty_for_peer` filters on
     /// liveness, so a resolver test needs a session that genuinely exists rather
@@ -6853,6 +6883,37 @@ mod tests {
                 .is_empty(),
             "releasing the same lease twice must not duplicate terminal handoff"
         );
+    }
+
+    /// Catches: title animation re-stamps semantic activity or enters the lossless state queue.
+    #[test]
+    fn remote_title_keeps_semantic_activity_and_state_queue_unchanged() {
+        let state = Arc::new(tests_support::make_test_app_state());
+        state.session_maps.session_states.insert(
+            "title-session".into(),
+            SessionState {
+                last_activity_ms: 123,
+                agent_state: Some("idle".into()),
+                ..Default::default()
+            },
+        );
+        let event = AppEvent::PtyTitle {
+            session_id: "title-session".into(),
+            title: "Claude Code".into(),
+        };
+        let mut bus = state.event_bus.subscribe();
+        let before = state.session_maps.session_state_events.depth();
+        state.emit_pty_event(event.clone());
+        assert!(matches!(bus.try_recv().unwrap(), AppEvent::PtyTitle { .. }));
+        assert_eq!(state.session_maps.session_state_events.depth(), before);
+        AppState::apply_event_to_session_state(&state, &event);
+        let session = state
+            .session_maps
+            .session_states
+            .get("title-session")
+            .unwrap();
+        assert_eq!(session.last_activity_ms, 123);
+        assert_eq!(session.agent_state.as_deref(), Some("idle"));
     }
 
     // ── emit_pty_event: per-session channel + global-bus parity (story 140) ──

@@ -1,5 +1,6 @@
 import { type Component, createMemo, createSignal, onCleanup, onMount, Show } from "solid-js";
 import type { AgentType } from "../../agents";
+import { useOutsideDismiss } from "../../hooks/useOutsideDismiss";
 import { executeCleanup } from "../../hooks/usePostMergeCleanup";
 import { t } from "../../i18n";
 import { invoke } from "../../invoke";
@@ -285,6 +286,9 @@ export const PrDetailPopover: Component<PrDetailPopoverProps> = (props) => {
 		}
 	};
 
+	// Non-modal: see useOutsideDismiss. The cleanup dialog replaces the popover, so it is not an outside press.
+	useOutsideDismiss({ inside: () => [popoverEl], onClose: props.onClose, enabled: () => !cleanupCtx() });
+
 	// Flip to top-anchor when the bottom-anchored popover would overflow the
 	// viewport top (clipping the repo/title header). Monotonic: only ever flips
 	// to top, never back — avoids oscillation.
@@ -361,7 +365,6 @@ export const PrDetailPopover: Component<PrDetailPopoverProps> = (props) => {
 			</Show>
 
 			<Show when={!cleanupCtx()}>
-				<div class={s.overlay} onClick={props.onClose} />
 				<div ref={popoverEl} class={cx(s.popover, shouldAnchorTop() && s.anchorTop)}>
 					<Show
 						when={prData()}

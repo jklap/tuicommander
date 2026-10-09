@@ -5767,6 +5767,7 @@ fn accept_managed_claude_trust_dialog(state: &AppState, session_id: &str) -> Res
         .pty_writer(session_id)
         .ok_or_else(|| "Session not found".to_string())?;
     let mut writer = writer.lock();
+    state.retire_turn_interrupt(session_id);
     writer
         .write_all(b"\x1b[A")
         .and_then(|()| writer.flush())
@@ -6681,6 +6682,10 @@ impl ChunkProcessor {
                         write_terminal_reply(state, session_id, response.as_bytes(), "PtyWrite");
                     }
                     TermEvent::Title(title) => {
+                        state.emit_pty_event(crate::state::AppEvent::PtyTitle {
+                            session_id: session_id.to_string(),
+                            title: title.clone(),
+                        });
                         #[cfg(feature = "desktop")]
                         if let Some(a) = state.app_handle.read().as_ref() {
                             let _ = a.emit(&format!("pty-title-{session_id}"), &title);
@@ -6713,6 +6718,10 @@ impl ChunkProcessor {
                         self.title_awaiting = title_awaiting;
                     }
                     TermEvent::ResetTitle => {
+                        state.emit_pty_event(crate::state::AppEvent::PtyTitle {
+                            session_id: session_id.to_string(),
+                            title: String::new(),
+                        });
                         #[cfg(feature = "desktop")]
                         if let Some(a) = state.app_handle.read().as_ref() {
                             let _ = a.emit(&format!("pty-title-{session_id}"), "");
@@ -7932,7 +7941,18 @@ fn write_terminal_reply(state: &AppState, session_id: &str, response: &[u8], kin
             "Terminal reply withheld: tty is canonical, the querier cannot read it yet");
         return;
     }
-    if let Err(error) = state.write_pty_parts(session_id, &[response]) {
+    // Terminal protocol replies are not replacement user input.
+    let result = state
+        .pty_writer(session_id)
+        .ok_or_else(|| "Session not found".to_string())
+        .and_then(|writer| {
+            let mut writer = writer.lock();
+            writer
+                .write_all(response)
+                .and_then(|()| writer.flush())
+                .map_err(|error| format!("Write failed: {error}"))
+        });
+    if let Err(error) = result {
         tracing::warn!(source = "terminal", session_id = %session_id, %kind, %error,
             "Terminal reply failed");
     }
@@ -9332,6 +9352,7 @@ fn write_agent_command_with_boundary(
     // splicing bytes into the command while the child is allowed to consume the
     // payload as a separate read.
     let mut writer = writer.lock();
+    state.retire_turn_interrupt(session_id);
     // Ctrl-U first, alone: see `injection_payload`. It types nothing, so a
     // failure before the first text byte cannot make a retry type the command
     // twice — hence it reports `NotStarted` and the text write counts from zero.
@@ -10122,6 +10143,7 @@ fn retry_enter_for_retained_composer(
         .unwrap_or(0);
     {
         let mut writer = writer.lock();
+        state.retire_turn_interrupt(session_id);
         if write_all_with_progress(writer.as_mut(), b"\r", 0).is_err() || writer.flush().is_err() {
             return false;
         }

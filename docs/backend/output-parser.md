@@ -561,3 +561,41 @@ linefeeds, and discards other executed controls, matching the previous
 A hook-generated `UserInput.line` is an all-time terminal row captured by the OSC 7770 handler. Keystroke-reconstructed events keep `line = -1`. Consumers discard evicted hook rows instead of rebasing stored rows with a newer origin.
 
 AI Chat also preserves reply text that immediately follows a parenthesized intent title on the same line. Untitled intent lines keep their existing status behavior; code examples are left intact.
+
+### Recorded replay oracle
+
+Run `scripts/replay-oracle.sh verify` to compare every `.tcap` under `src-tauri/`
+(including terminal-crate captures) with `src-tauri/src/fixtures/replay_oracle/`.
+The replay uses the production chunk processor, UTF-8 and escape buffers,
+Kitty stripping, recorded initial geometry, and the production session-state
+accumulator. It records ordered parsed payloads and state/awaiting/question
+snapshots after each output record, plus final ring length. Input records and
+capture elapsed times are not executed: this is a chunk-path parity oracle,
+not an end-to-end agent or silence-timer simulation. Legacy captures without
+geometry use the existing replay default of 41 rows and 128 columns.
+
+`mail.jsonl` records a scripted scenario using the production send/inbox handler
+and wake gate: paginated reads, wake coalescing and rearming after consumption.
+Its callback records transport acceptance; it does not claim native PTY delivery.
+Random message IDs and wall-clock cursors are projected to message positions.
+Normal tests are read-only and report the first differing event, including
+missing or extra events. To accept an intentional change, explicitly run
+`scripts/replay-oracle.sh regenerate`, review the JSONL diff, and commit it with
+the change. Add/stage a capture before regeneration so Git includes it in the
+corpus; an unknown agent filename requires an explicit replay mapping.
+
+## Real agent scenario captures
+
+Use `scripts/agent_capture/run.py` to record installed CLI scenarios in an isolated
+headless debug daemon. See [the driver guide](../../scripts/agent_capture/README.md)
+for prompt/question/approval/wait/interrupt steps, authentication prerequisites,
+and promotion. `.scenario.json` companions specify ordered expected states;
+`replay_oracle_all_committed_tcap_preserves_chunk_decisions` replays recorded input
+through the production input bookkeeping for scenario captures and enforces them in
+addition to the 1342 golden trace. Failed or absent agents remain unverified;
+no synthetic external transcripts substitute for captures.
+
+OSC 0/2 title notifications use the terminal event path (`PtyTitle`), separately
+from parsed lifecycle events. Desktop remote tabs consume parsed events on the
+owning daemon's WebSocket instead of subscribing to local IPC. Identity comes
+from the authoritative backend `agent_type`, not from a title heuristic.

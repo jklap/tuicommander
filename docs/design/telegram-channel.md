@@ -41,7 +41,8 @@ The adapter is a daemon-local registered peer without a PTY.
 
 The native MCP session map, peer registry, live PTY map and derived session snapshot
 own identity and lifecycle. Foreground-agent discovery already runs headlessly.
-Shared PTY input paths are unchanged; this adapter never writes terminal input.
+Shared PTY input parsing and submission semantics remain authoritative. The only
+adapter-originated terminal input is one fenced Escape for the current draft Stop.
 
 ## Agent MCP surface
 
@@ -93,6 +94,26 @@ keyboard uses `{"text":label,"disabled":{}}` without `callback_data`.
 There is no callback expiry, eviction quota or acknowledgement retry state.
 Buttons confer no publish approval; durable receipts and publisher integration
 are outside this story. [Telegram button schema](https://core.telegram.org/bots/api#inlinekeyboardbutton).
+
+## Phone Stop
+
+Draft creation and refresh set `can_stop: true` and `keep_on_stop: false`.
+A `stopped_message_generation` update must name the current allowlisted private
+chat and draft. The runtime consumes the draft before attempting interruption;
+duplicate, stale, wrong-chat and replaced-turn updates cannot write Escape.
+
+`begin` arms an in-memory ownership token under the PTY writer mutex. Every
+native user-input path retires that token under the same mutex before its first
+byte, including split text/Enter and managed submissions. This fences Stop even
+when the replacement writer has not yet applied input bookkeeping. Terminal
+protocol replies do not retire the token. Stop also checks the registered peer,
+its live PTY and the captured turn epoch before writing one Escape. Escape is an
+interrupt request, not proof that the agent stopped. It does not enter the line
+editor, where a bare escape would corrupt the replacement input. No lifecycle
+lock is held while the native writer runs, so captured writers can process output
+synchronously. No retries or replacement-turn recovery are introduced.
+
+[Telegram draft and Stop schema](https://core.telegram.org/bots/api#sendmessagedraft).
 
 ## Configuration, secrets and polling cursor
 

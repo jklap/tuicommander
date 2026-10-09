@@ -306,6 +306,22 @@
   padding: 0 4px 4px;
 }
 
+.validationWarning {
+  color: var(--warning);
+  font-size: 0.75rem;
+  padding: 0 4px 4px;
+}
+
+.argChip {
+  font-family: var(--font-mono);
+  font-size: var(--font-2xs);
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background: rgba(88, 166, 255, 0.15);
+  color: var(--accent);
+  align-self: center;
+}
+
 /* Action buttons row */
 
 .actionsRow {

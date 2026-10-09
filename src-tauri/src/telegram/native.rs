@@ -48,7 +48,9 @@ impl MailPort for NativeMail {
         value["accepted"].as_bool().ok_or(Error::Protocol)
     }
     async fn update(&mut self, value: &Value) -> Result<(), Error> {
-        if value.get("callback_query").is_none() {
+        if value.get("callback_query").is_none()
+            && value.get("stopped_message_generation").is_none()
+        {
             return Ok(());
         }
         let (reply, receive) = oneshot::channel();

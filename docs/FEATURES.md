@@ -55,6 +55,8 @@ Durable workflow run storage records event history, pinned graph revisions, node
 
 ## 1. Terminal Management
 
+Terminal prompt colours apply to Chat user messages only. The CLI grid retains prompt scrollbar ticks and answers-only prompt grouping without tinting prompt rows.
+
 - **Tablet keyboard input** — Touch taps and mouse presses focus the same terminal input. Soft-keyboard text and deletion use the shared input handler. Primary presses suppress the browser default canvas focus change.
 
 Terminal text retains stored combining marks through rendering, scrolling,
@@ -84,7 +86,7 @@ per cell and the configured history limit still apply.
 
 - **Remote replay health** — Stream failure, unreadable frames and initial replay stalls show a persistent error toast. Reconnect success requires a delivered frame; healthy idle terminals have no output-silence deadline.
 
-- **CLI / Chat view** — Claude terminals switch between the grid and a read-only conversation view built from the agent's session file (including older prompts, replies, folded tool cards, image/PDF markers and model-change cards). The grid is hidden, never unmounted.
+- **CLI / Chat view** — Claude terminals switch between the grid and a conversation view with docked Compose input, built from the agent's session file (including older prompts, replies, folded tool cards, image/PDF markers and model-change cards). The grid is hidden, never unmounted.
 - **Chat transcript presentation** — Harness notices use compact system notes, image placeholders use attachment chips, adjacent thinking blocks share a disclosure, and TUIC answers retain the CLI highlight. Historical tool cards show status without fabricated execution timing.
 
 ### 1.2 Tab Bar
@@ -253,6 +255,7 @@ Terminal output is segmented into command blocks — one per prompt+output cycle
 
 A multi-line editor docked under the terminal for writing a prompt without fighting the agent's own input box.
 
+- **Chat input** — Chat opens and focuses Compose automatically below the conversation. It stays docked after send or queue and clears submitted text. Chat hides the close and pin controls; `Esc` returns to CLI, where permission prompts must be answered. Returning to CLI restores the tab's previous open/pin state, and unsent drafts survive both directions, including while send or queue is pending
 - **Send now** — `Ctrl+Enter` (or the ▶ button) types the text into the composer and submits it immediately, steering whatever the agent is doing
 - **Queue for the next idle window** — `Shift+Ctrl+Enter` (or the ☰ button) hands the text to the backend's idle gate instead: it is submitted at once if the agent is already idle, otherwise parked until the agent's next busy→idle transition. This is the way to leave follow-up work for an agent mid-turn without interrupting it
 - **Queue badge** — the status bar shows `N queued` while commands are waiting; clicking it discards the whole queue. The count comes from the backend (`state.queued_commands`), so it is accurate across reloads and remote clients
@@ -471,6 +474,7 @@ Replaced by the Git Panel's Changes tab (section 3.8). `Cmd+Shift+D` now opens t
 - Mark as used: notes sent to terminal or queued are timestamped (`usedAt`) for tracking
 - Badge count: status bar toggle shows count of notes visible for the active repo
 - Per-repo filtering: notes can be tagged to a repository; untagged notes visible everywhere
+- All-repositories toggle (stacked-layers button, header): shows the ideas of every repository together; in memory only. Badge and "clear completed" follow the visible list; new ideas stay tagged with the active repo
 - **Image paste**: `Ctrl+V` / `Cmd+V` pastes clipboard images as thumbnails attached to the note
   - Images saved to `config_dir()/note-images/<note-id>/` on disk
   - Thumbnails displayed inline below note text and in the input area before submit
@@ -694,6 +698,7 @@ Tabbed side panel with four tabs: Changes, Log, Stashes, Branches. Replaces the 
   - The usage poll has no default provider: it stays silent until a Claude or Codex tab is focused, then follows that provider and stays on it while the active tab is a shell. A Codex-only install is therefore never shown a Claude reading (or a Claude "no token") it did not ask for
   - Codex windows are named by duration (`5h`, `7d`) because the API does not label them, and only the account limit is rendered. A plan whose account limit reports a single window shows a single reading; per-model limits stay in the dashboard, where their model name is visible
 - Shared ticker area: multi-source rotating messages from plugins with source labels, counter badge (1/3 ▸), click-to-cycle, right-click popover, and priority tiers (low/normal/urgent)
+- Non-modal popups (ticker popover, status info balloon, GitHub panel, Smart Prompts dropdown) have no backdrop: wheel and clicks reach the sidebar and terminal while they are open, and an outside press dismisses them without being consumed (shared `useOutsideDismiss` hook)
 - Update badge: "Update vX.Y.Z" (click to download & install), progress percentage during download
 
 ### 5.2 GitHub Section (center)
@@ -1086,7 +1091,7 @@ re-derived later.
 - Merge state: Ready to merge, Checks failing, Has conflicts, Behind base, Blocked, Draft
 - Review state: Approved, Changes requested, Review required
 - PR lifecycle rules: CLOSED PRs hidden from sidebar and status bar; MERGED PRs shown for 5 minutes of accumulated user activity then hidden
-- Auto-show PR popover filters out CLOSED and MERGED PRs (configurable in Settings > Git & GitHub > Pull Requests)
+- Auto-show PR popover filters out CLOSED and MERGED PRs (configurable in Settings > Git & GitHub > Pull Requests). The popover is non-modal: wheel scrolling over the sidebar keeps terminal keyboard focus; an outside press dismisses it and reaches the underlying control.
 
 ### 8.2 CI Checks
 - Ring indicator with proportional segments
@@ -2276,6 +2281,8 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
 - **Diagnostic mode** (toggleable at runtime, off by default): emits a health snapshot every 30s and alerts on FD/thread growth trends. Each snapshot includes: `cpu_pct` (TUIC self only, via `RUSAGE_SELF`), `children_cpu` (aggregate %cpu of all PTY child process trees + the hottest individual child — note the CPU watchdog spike trigger intentionally ignores children, so a hot `cargo`/agent only surfaces here), thread count, FD count, PTY session count, content-index build state, semaphore permits, sessions with grid frames outstanding (`session×count`, from the `GridGate` counters), event-bus subscriber count, and `head_emits_suppressed` (repo-watcher `head-changed` emits skipped by the resolved-HEAD-target guard — a climbing value signals a filesystem-event storm)
 - **Frontend liveness** (always on, desktop only): the WebView beats every 5s from its main thread; six missed beats log `Frontend unresponsive: no heartbeat for Ns` exactly once, and the return beat logs a matching recovery line. Sleep/wake re-baselines the clock so a lid-close is never charged to the frontend. Recover with `POST /debug/reload_webview` — a native-side navigation that works while the JS thread does not, and keeps every PTY session (they live in the backend). Recovery remembers only a URL on the app origin, including the configured development origin. Native navigations log their trigger, action, and target URL; each frontend initialization logs the document navigation type and start time. Frontend: `src/utils/frontendHeartbeat.ts`; backend: `src-tauri/src/frontend_liveness.rs`, `src-tauri/src/webview_recovery.rs`
 - Control via HTTP: `POST /diagnostics {"enabled":true}` to toggle, `GET /diagnostics` for status, `GET /logs?source=diagnostics` to read the snapshots
+- Developer agent capture scenarios record installed CLIs in isolated headless debug sessions; fixture promotion preserves bytes and checks ordered expected states through the replay oracle. See `scripts/agent_capture/README.md`.
+
 - Raw PTY captures can be directed to an absolute `TUIC_CAPTURE_DIR` for isolated regression evidence; the capture status reports the chosen directory.
 - Catches known failure patterns: IPC flush loops, content-index CPU saturation, a blocked or dead WebView main thread (missed heartbeats — *not* grid frames outstanding, which a hidden terminal produces on purpose by never acking), FD/thread leaks, and sleep/wake false-idle cascades
 - Backend: `src-tauri/src/cpu_watchdog.rs`

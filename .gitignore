@@ -50,6 +50,8 @@ benchmarks
 CLAUDE.md
 .mdkb
 scripts/*
+!scripts/agent_capture/
+!scripts/replay-oracle.sh
 !scripts/record-chat-fixtures.py
 !scripts/build-docs.sh
 !scripts/dev-install.sh
@@ -63,6 +65,7 @@ scripts/*
 !scripts/generate-release-notes.sh
 !scripts/third-party-notices.mjs
 !scripts/check-release-tag.sh
+!scripts/patch-nightly-version.sh
 !scripts/check-gitlink-reachable.sh
 !scripts/test-check-gitlink-reachable.sh
 !scripts/report-frontend-bundles.mjs

@@ -8,6 +8,7 @@
 import type { LogLine } from "./mobile/utils/logLine";
 import {
 	getRemoteBaseUrl,
+	getSessionConnection,
 	previewLogPayload,
 	resolveOwningConnection,
 	transportLogger,
@@ -71,6 +72,8 @@ export interface HttpMapping {
 	method: "GET" | "POST" | "PUT" | "DELETE";
 	path: string;
 	body?: unknown;
+	/** This route may return raw text as well as JSON (plugin data). */
+	allowText?: boolean;
 	/** Transform the HTTP response before returning (e.g. for can_spawn_session) */
 	transform?: (data: unknown) => unknown;
 	/**
@@ -974,6 +977,7 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			method: "GET",
 			path: `/api/plugins/${p("pluginId")}/data/${p("path")}`,
 			notFoundAsNull: true,
+			allowText: true,
 			transform: (data) => (data == null ? null : typeof data === "string" ? data : JSON.stringify(data)),
 		}),
 	},
@@ -2692,7 +2696,8 @@ async function rpcImpl<T>(command: string, args: Record<string, unknown>, connec
 	if (connectionId && !baseUrl) {
 		throw new Error(`Remote connection ${connectionId} not connected`);
 	}
-	const url = withRemoteToken(buildHttpUrl(mapping.path, baseUrl), connectionId);
+	const requestUrl = buildHttpUrl(mapping.path, baseUrl);
+	const url = withRemoteToken(requestUrl, connectionId);
 
 	// No client-side deadline: Tauri invoke() has none, and a fixed cap here cut
 	// backend calls that own a longer deadline (ego initialize: 60 s) with
@@ -2734,12 +2739,19 @@ async function rpcImpl<T>(command: string, args: Record<string, unknown>, connec
 			const detail = error instanceof Error ? `: ${error.message}` : "";
 			throw new Error(`RPC ${command}: invalid JSON response${detail}`);
 		}
+	} else if (mapping.allowText && (!contentType || contentType.toLowerCase().split(";")[0].trim() === "text/plain")) {
+		data = text;
 	} else {
-		// Try parsing as JSON anyway (some endpoints may not set content-type)
+		// Some JSON routes omit content-type. Never pass a failed decode to the
+		// consumer as a value: an HTML fallback is not a home directory.
 		try {
+			if (contentType) throw new Error("Unexpected content type");
 			data = JSON.parse(text);
 		} catch {
-			data = text;
+			// Use the URL before the connection token is attached.
+			throw new Error(
+				`RPC ${command}: expected JSON from ${requestUrl}, received ${contentType || "missing content-type"}`,
+			);
 		}
 	}
 
@@ -2831,6 +2843,7 @@ export interface SubscribePtyOptions {
 	 * Delivered on both transports from one backend signal.
 	 */
 	onActivity?: () => void;
+	onTitle?: (title: string) => void;
 	onParsed?: (event: WsParsedEvent) => void;
 	/** Called when WebSocket drops and reconnect is attempted (browser mode only). */
 	onReconnecting?: (attempt: number, maxAttempts: number) => void;
@@ -2852,7 +2865,8 @@ export async function subscribePty(
 	// it is on. Desktop has no socket to drop, so pausing there means suppressing
 	// delivery — the same observable contract, at the only cost desktop has.
 	let paused = false;
-	if (isTauri()) {
+	const connectionId = getSessionConnection(sessionId);
+	if (isTauri() && !connectionId) {
 		const { listen } = await import("@tauri-apps/api/event");
 		// No pty-output listener: nothing emits that event. It was removed from
 		// Rust in cda39f31 when line assembly moved to the reader thread, and the
@@ -2865,6 +2879,11 @@ export async function subscribePty(
 		// No `paused` guard: an exit is lifecycle, not data. Desktop has no
 		// reconnect to eventually notice a dead session, so suppressing it here
 		// would lose it for good.
+		const unlistenTitle = opts.onTitle
+			? await listen<string>(`pty-title-${sessionId}`, (event) => {
+					if (!paused) opts.onTitle?.(event.payload);
+				})
+			: undefined;
 		const unlistenExit = await listen(`pty-exit-${sessionId}`, () => {
 			onExit();
 		});
@@ -2878,6 +2897,7 @@ export async function subscribePty(
 			disposed = true;
 			Promise.resolve(unlistenActivity() as unknown).catch(() => {});
 			Promise.resolve(unlistenExit() as unknown).catch(() => {});
+			if (unlistenTitle) Promise.resolve(unlistenTitle() as unknown).catch(() => {});
 		};
 		return Object.assign(dispose, {
 			pause: () => {
@@ -2933,6 +2953,9 @@ export async function subscribePty(
 				switch (frame.type) {
 					case "output":
 						onData(frame.data as string);
+						break;
+					case "title":
+						if (typeof frame.title === "string") opts.onTitle?.(frame.title);
 						break;
 					case "activity":
 						opts.onActivity?.();
@@ -2999,7 +3022,10 @@ export async function subscribePty(
 			params.set("offset", String(opts.logOffset));
 		}
 		const query = params.size > 0 ? `?${params}` : "";
-		return `${protocol}//${window.location.host}/sessions/${sessionId}/stream${query}`;
+		const baseUrl = connectionId ? getRemoteBaseUrl(connectionId) : undefined;
+		if (connectionId && !baseUrl) throw new Error(`Remote connection ${connectionId} not connected`);
+		const wsBase = baseUrl ? baseUrl.replace(/^http/, "ws") : `${protocol}//${window.location.host}`;
+		return withRemoteToken(`${wsBase}/sessions/${encodeURIComponent(sessionId)}/stream${query}`, connectionId);
 	};
 
 	/** Connect (or reconnect) the WebSocket. */

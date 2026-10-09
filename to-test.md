@@ -1,3 +1,11 @@
+## Dependency lane (1584–1589, 1587) — backend rebuild required
+
+- [ ] Load the updated Rust dependencies with Boss's next planned `make dev` restart or `make build`; Rust does not hot-reload. After loading, check native folder dialogs, notifications and updater availability. Targeted git/OAuth2/push/relay tests, the desktop library check and frontend build passed in the worktree; no desktop instance was launched. WebRTC still needs coordinator-owned rb cross-platform verification, and crypto needs critic review before landing.
+
+## Remote terminal metadata (1581-8fd0) — Rust restart required
+
+- [ ] After Boss chooses to rebuild/restart the backend and update the Mint daemon, run Claude in a remote shell: verify agent icon, idle/busy transitions and OSC tab title updates; custom names remain protected. Compare observed streaming with the loopback baseline (grid marker delay 4–16 ms; text/log batches about 200 ms). No Mint latency improvement is claimed by the loopback probe.
+
 ## Launch instruction inspector (1547-2f5c) — Rust restart required
 
 ## iPad terminal keyboard focus (1577-a9bf)
@@ -4793,3 +4801,14 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 
 - [ ] iPad remote access after the next backend restart: open `/` without an authenticated cookie, sign in through the form, and confirm the touch interface loads. Recheck the originally reported connection failure on the physical iPad; no attributable transport error was available in server logs. Rust auth changes require a manual `make dev` restart by Boss.
 - [ ] Browser desktop Add Repository: browse server home, select a folder, or cancel; native desktop and connected-daemon pickers retain their own machine ownership.
+
+- [ ] Telegram Stop (#1521-52cd): after Boss restarts the rebuilt headless daemon, start a Telegram-bound reply, press Stop and verify the bound agent sees Escape. Send a replacement message and verify a repeated old Stop cannot interrupt it. Also delay draft begin until replacement bytes are written: it must not arm the retired turn. Backend byte ordering and captured Codex submission are covered by targeted tests; live Telegram client rendering remains unverified.
+
+- [ ] #1596-df57: In macOS desktop, focus a terminal on a branch with an automatically opened PR detail popover. Wheel over the sidebar without clicking; it must scroll, and typing must still reach the terminal. Click outside the popover: it closes and that first click activates the underlying control. Repeat with no popover, after a pane resize, and after a tab drag. Browser hit-testing reproduces the old full-window overlay; native wheel and visuals need Boss’s next-build check.
+
+- [ ] #1597-fab6: In macOS desktop, with each of the status-bar ticker popover (right-click a ticker), the status info balloon (click truncated status text), the sidebar GitHub panel (GitHub badge on a repo) and the Smart Prompts dropdown open, wheel over the sidebar without clicking; it must scroll. Click a sidebar control outside the popup: the popup closes and that first click activates the control. Clicking the GitHub badge or the info text again must close its popup (not re-open it). Browser hit-testing reproduces the old overlays; native wheel needs Boss’s next-build check.
+
+## Terminal Chat Compose input (#1599-db8a)
+
+- [x] Chat focuses docked Compose, preserves drafts and CLI open/pin state, and retains focus after send/queue. _(verified: `src/__tests__/components/Terminal/chatViewCompose.critic.test.tsx`, real CodeMirror integration cases; 40 targeted component tests passed, including delayed send/queue across editor unmount/remount.)_
+- [ ] Visually confirm Compose sits below the conversation without overlapping it in a running app, and answer a permission prompt in CLI. The worktree Vite/stealth-browser screenshot attempt timed out on the shared browser; native rendering remains unverified.
