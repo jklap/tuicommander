@@ -118,4 +118,104 @@ if (cd "$repo" && bash "$project_root/scripts/hooks/pre-commit") > "$scratch/ind
   echo 'unstaged restoration hid a staged production change' >&2
   exit 1
 fi
+# Drop this test's own staged state.rs edit before the next scenario.
+git -C "$repo" checkout -q HEAD -- src-tauri/src/state.rs
+
+# A test-module file whose function forgot its `#[test]` attribute: the function is
+# production-shaped in HEAD, a test in the index. Catches the false positive where
+# ADDING the attribute read as deleting production code that mentions 7770.
+mkdir -p "$repo/src-tauri/src/pty"
+cat > "$repo/src-tauri/src/pty/tests.rs" <<'RS'
+fn awaiting_input() -> bool {
+    false
+}
+
+#[test]
+fn existing_osc_test() {
+    assert!(!awaiting_input());
+}
+
+fn heuristic_without_osc_7770() {
+    let seq = 7770;
+    assert_eq!(seq, 7770);
+}
+RS
+git -C "$repo" add src-tauri/src/pty/tests.rs
+git -C "$repo" -c user.name=Test -c user.email=test@example.com commit -qm untagged-test-baseline
+attribute_only() {
+  python3 - "$repo/src-tauri/src/pty/tests.rs" <<'PYTEST'
+import pathlib, sys
+path = pathlib.Path(sys.argv[1])
+source = path.read_text()
+path.write_text(source.replace("fn heuristic_without_osc_7770", "#[test]\nfn heuristic_without_osc_7770", 1))
+PYTEST
+}
+attribute_only
+git -C "$repo" add src-tauri/src/pty/tests.rs
+if ! (cd "$repo" && bash "$project_root/scripts/hooks/pre-commit") > "$scratch/attribute" 2>&1; then
+  cat "$scratch/attribute" >&2
+  echo 'adding #[test] to an attribute-less test function was blocked as a production change' >&2
+  exit 1
+fi
+
+# Catches an overbroad exemption: adding the attribute must not hide a real production
+# detection edit staged in the same file.
+sed 's/^    false$/    true/' "$repo/src-tauri/src/pty/tests.rs" > "$scratch/pty-tests"
+cp "$scratch/pty-tests" "$repo/src-tauri/src/pty/tests.rs"
+git -C "$repo" add src-tauri/src/pty/tests.rs
+if (cd "$repo" && bash "$project_root/scripts/hooks/pre-commit") > "$scratch/attribute-mixed" 2>&1; then
+  echo 'a production detection edit next to an added #[test] unexpectedly passed' >&2
+  exit 1
+fi
+
+# Catches an overbroad exemption: turning a function into a test while also editing its
+# detection logic is not an attribute-only change, so the old production body still counts.
+git -C "$repo" checkout -q HEAD -- src-tauri/src/pty/tests.rs
+attribute_only
+sed 's/let seq = 7770;/let seq = 7771;/' "$repo/src-tauri/src/pty/tests.rs" > "$scratch/pty-tests"
+cp "$scratch/pty-tests" "$repo/src-tauri/src/pty/tests.rs"
+git -C "$repo" add src-tauri/src/pty/tests.rs
+if (cd "$repo" && bash "$project_root/scripts/hooks/pre-commit") > "$scratch/attribute-edit" 2>&1; then
+  echo 'converting a detection function into an edited test unexpectedly passed' >&2
+  exit 1
+fi
+
+# Catches an overbroad exemption: a NEW test that is a verbatim copy of a production
+# detection function must not let that production function's removal slip through.
+git -C "$repo" checkout -q HEAD -- src-tauri/src/pty/tests.rs
+python3 - "$repo/src-tauri/src/pty/tests.rs" <<'PYTEST'
+import pathlib, sys
+path = pathlib.Path(sys.argv[1])
+source = path.read_text()
+body = "fn heuristic_without_osc_7770() {\n    let seq = 7770;\n    assert_eq!(seq, 7770);\n}\n"
+# Remove the production copy, and add the identical text as a test inside a test module.
+source = source.replace(body, "")
+source += "#[cfg(test)]\nmod copied {\n#[test]\n" + body + "}\n"
+path.write_text(source)
+PYTEST
+git -C "$repo" add src-tauri/src/pty/tests.rs
+if ! (cd "$repo" && bash "$project_root/scripts/hooks/pre-commit") > "$scratch/attribute-move" 2>&1; then
+  # Moving the function verbatim into a test module is the same attribute-only change.
+  cat "$scratch/attribute-move" >&2
+  echo 'moving an attribute-less test function verbatim into a test module was blocked' >&2
+  exit 1
+fi
+# Catches double counting: keeping the attribute-less function AND adding an identical
+# test copy is test-only; the kept function must stay in both views (exempting it from
+# HEAD alone would read as a production insertion and falsely block).
+git -C "$repo" checkout -q HEAD -- src-tauri/src/pty/tests.rs
+python3 - "$repo/src-tauri/src/pty/tests.rs" <<'PYTEST'
+import pathlib, sys
+path = pathlib.Path(sys.argv[1])
+source = path.read_text()
+body = "fn heuristic_without_osc_7770() {\n    let seq = 7770;\n    assert_eq!(seq, 7770);\n}\n"
+source += "#[cfg(test)]\nmod copied {\n#[test]\n" + body + "}\n"
+path.write_text(source)
+PYTEST
+git -C "$repo" add src-tauri/src/pty/tests.rs
+if ! (cd "$repo" && bash "$project_root/scripts/hooks/pre-commit") > "$scratch/attribute-copy" 2>&1; then
+  cat "$scratch/attribute-copy" >&2
+  echo 'adding a test copy next to an unchanged function was blocked' >&2
+  exit 1
+fi
 echo 'fixture gate regressions passed'

@@ -221,7 +221,11 @@ When changing an awaiting/idle/busy signal — a parser, the hook suppression, o
 | `agent-signal-architecture.html` | The three-origin pipeline diagram, OSC 777-vs-7770 status, and the per-agent signal matrix — update if a signal's origin, confidence, or an agent's coverage changes |
 
 The fixture gate compares the indexed and committed production scopes, excluding
-`#[cfg(test)]` modules and `#[test]`/`#[tokio::test]` functions. Test-only
+`#[cfg(test)]` modules and `#[test]`/`#[tokio::test]` functions. A function or
+module that is a test item in the index and appears attribute-less but otherwise
+byte-identical in HEAD (a test that was missing its `#[test]`) is excluded from
+both views, so adding the attribute is test-only; editing its body in the same
+commit, or keeping the attribute-less copy, exempts nothing. Test-only
 changes may reuse existing captures. Production detection changes require a staged,
 framed TCAP v2 capture with nonzero geometry, complete records and a matching
 provenance Markdown file (capture source and SHA-256). New raw/text external
