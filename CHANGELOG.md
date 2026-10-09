@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Use the terminal composer pin and play icon buttons in desktop AI Chat, with named Queue and parked-draft states (#1636-0d08).
+
+- Accept pasted images in AI Chat before ego connects, retain concurrent pastes while its first session opens, and share Finder/text clipboard rules with Ideas and terminal Compose (#1639-f474).
 - Add the `automations` MCP tool for definition management, with bound creator provenance and atomic pause/resume.
 ### Added
 - Add the Rust foundation for Once automation schedules with IANA timezone validation, a single preview instant and durable occurrence deduplication (#1629-2262).
