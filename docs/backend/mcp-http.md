@@ -80,11 +80,19 @@ Cargo target cleanup, mbx view refreshes and app upgrades therefore cannot remov
 the configured executable. Failed installation leaves agent configs unchanged.
 Startup migrates TUIC bridge commands from cargo/mbx targets and its installed
 revision directory, while preserving custom working commands and transports.
+Claude migration covers `~/.claude.json`, an existing
+`~/.claude-private/.claude.json`, inherited `CLAUDE_CONFIG_DIR`, and the Claude
+agent's environment flags and saved run-config environment roots. Override roots
+use `<CLAUDE_CONFIG_DIR>/.claude.json`; canonical paths are deduplicated. Relative
+overrides cannot be resolved before a launch working directory is known and emit
+a warning. Disabled integrations and custom transports remain unchanged. A missing
+or non-executable configured absolute bridge command emits a warning naming the
+config and command even when no adjacent bridge is available to repair it.
 Secondary-instance ownership rules still apply. An explicit Settings > Agents
 Install can install under user authority. Manual setup snippets only inspect
 installed copies and never create them; without a copy they report the bare
 `tuic-bridge` command. Revision cleanup is deferred until every agent config root,
-including private Claude and `CLAUDE_CONFIG_DIR` roots, can be discovered.
+including profiles used only by external shell launchers, can be discovered.
 
 ## Activation
 
