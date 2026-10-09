@@ -1653,18 +1653,25 @@ fn cleanup_needs_lifecycle_confirmation(
 }
 
 /// Merge/finalize cleanup removes or moves the checkout, so it takes the same
-/// live-session refusal as a plain removal. `force` lifts only the dirty-file
-/// confirmation (see [`cleanup_needs_lifecycle_confirmation`]), never this.
+/// live-session refusal as a plain removal. A bare `force` lifts only the
+/// dirty-file confirmation (see [`cleanup_needs_lifecycle_confirmation`]), never
+/// this. The one consent that does count is the confirmation round-trip itself:
+/// `needs_confirmation` was returned BECAUSE of the live sessions (the dialog
+/// lists them), and the confirmed retry carries `force` plus the fingerprint the
+/// dialog was shown (`confirmed`). Without that fingerprint a caller cannot have
+/// seen the sessions, so it is refused.
 fn refuse_cleanup_with_live_sessions(
     state: &AppState,
     repo_path: &str,
     workspace_id: &str,
     action: &str,
+    confirmed: bool,
 ) -> Result<(), String> {
     if action != "archive" && action != "delete" {
         return Ok(());
     }
-    workspace_removal_guard(state, repo_path, workspace_id, false).map_err(|busy| busy.message())
+    workspace_removal_guard(state, repo_path, workspace_id, confirmed)
+        .map_err(|busy| busy.message())
 }
 
 pub(crate) fn finalize_merged_worktree_impl_with_confirmation(
@@ -1706,7 +1713,13 @@ pub(crate) fn finalize_merged_worktree_impl_with_confirmation(
             branch_delete_warning: None,
         });
     }
-    refuse_cleanup_with_live_sessions(state, &repo_path, &workspace_id, &action)?;
+    refuse_cleanup_with_live_sessions(
+        state,
+        &repo_path,
+        &workspace_id,
+        &action,
+        force && expected_fingerprint.is_some(),
+    )?;
 
     match action.as_str() {
         "archive" => {
@@ -1884,7 +1897,13 @@ pub(crate) fn merge_and_archive_worktree_impl_with_confirmation(
     }
 
     // Before the merge: refusing afterwards would leave it merged but uncleaned.
-    refuse_cleanup_with_live_sessions(state, &repo_path, &workspace_id, &after_merge)?;
+    refuse_cleanup_with_live_sessions(
+        state,
+        &repo_path,
+        &workspace_id,
+        &after_merge,
+        force && expected_fingerprint.is_some(),
+    )?;
 
     // 1. Ensure we're on the target branch in the base repo
     git_cmd(&base_repo)
