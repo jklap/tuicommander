@@ -438,7 +438,11 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 		if (!container || !query()) return;
 		const pattern = new RegExp(query().replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "giu");
 		const matches: Range[] = [];
-		const blocks: { element: Element | null; text: string; nodes: { node: Node; start: number; end: number }[] }[] = [];
+		const blocks: {
+			element: Element | null;
+			text: string;
+			offsets: { node: Node; start: number; end: number; endNode?: Node }[];
+		}[] = [];
 		let current: (typeof blocks)[number] | undefined;
 		const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
 		while (walker.nextNode()) {
@@ -460,27 +464,37 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 			// paragraphs and table cells must never produce a synthetic phrase.
 			const element = parent?.closest("p, h1, h2, h3, h4, h5, h6, pre, li, td, th, div, summary, blockquote") ?? null;
 			if (!current || current.element !== element) {
-				current = { element, text: "", nodes: [] };
+				current = { element, text: "", offsets: [] };
 				blocks.push(current);
 			}
-			const start = current.text.length;
-			current.text += node.textContent ?? "";
-			current.nodes.push({ node, start, end: current.text.length });
+			let preformatted = !!parent?.closest("pre");
+			for (let ancestor = parent; ancestor && !preformatted; ancestor = ancestor.parentElement) {
+				const whitespace = getComputedStyle(ancestor).whiteSpace;
+				preformatted = whitespace.startsWith("pre") || whitespace === "break-spaces";
+			}
+			const text = node.textContent ?? "";
+			for (let offset = 0; offset < text.length; offset++) {
+				// CSS collapses ASCII whitespace across inline nodes in normal prose.
+				const character = !preformatted && /[ \t\r\n\f]/.test(text[offset]) ? " " : text[offset];
+				if (!preformatted && character === " " && current.text.endsWith(" ")) {
+					const previous = current.offsets[current.offsets.length - 1];
+					previous.end = offset + 1;
+					// A collapsed run can span nodes; retain its final DOM endpoint.
+					previous.endNode = node;
+					continue;
+				}
+				current.text += character;
+				current.offsets.push({ node, start: offset, end: offset + 1 });
+			}
 		}
 		for (const block of blocks) {
-			let firstIndex = 0;
-			let lastIndex = 0;
 			for (const match of block.text.matchAll(pattern)) {
-				const at = match.index;
-				const end = at + match[0].length;
-				while (block.nodes[firstIndex]?.end <= at) firstIndex++;
-				while (block.nodes[lastIndex]?.end < end) lastIndex++;
-				const first = block.nodes[firstIndex];
-				const last = block.nodes[lastIndex];
+				const first = block.offsets[match.index];
+				const last = block.offsets[match.index + match[0].length - 1];
 				if (!first || !last) continue;
 				const range = document.createRange();
-				range.setStart(first.node, at - first.start);
-				range.setEnd(last.node, end - last.start);
+				range.setStart(first.node, first.start);
+				range.setEnd(last.endNode ?? last.node, last.end);
 				matches.push(range);
 			}
 		}

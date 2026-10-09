@@ -24,3 +24,22 @@ it("does not miss a visible phrase when Markdown whitespace collapses between in
 	// Prose collapses these spaces on screen; the DOM Range retains source spaces.
 	expect(window.getSelection()?.toString()).toBe("Use  git   rebase");
 });
+
+it("keeps code block whitespace literal instead of collapsing a different phrase into a match", async () => {
+	render(() => (
+		<Transcript
+			entries={() => [{ id: "reply", kind: "agent", text: "```text\nUse  git   rebase\n```" }]}
+			busy={() => false}
+			emptyMessage="No messages"
+		/>
+	));
+	await Promise.resolve();
+	fireEvent.keyDown(screen.getByText("Use  git   rebase", { normalizer: (text) => text }), { key: "f", ctrlKey: true });
+	const input = screen.getByRole("textbox", { name: "Find in chat" });
+	fireEvent.input(input, { target: { value: "Use git rebase" } });
+	fireEvent.keyDown(input, { key: "Enter" });
+	expect(window.getSelection()?.toString()).toBe("");
+	fireEvent.input(input, { target: { value: "Use  git   rebase" } });
+	fireEvent.keyDown(input, { key: "Enter" });
+	expect(window.getSelection()?.toString()).toBe("Use  git   rebase");
+});
