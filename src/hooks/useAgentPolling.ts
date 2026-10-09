@@ -132,7 +132,9 @@ function applySessionState(termId: string, sessionId: string, state: BackendSess
 /**
  * Offer a resume banner for the exit snapshot the backend took the instant it
  * confirmed a hook-instrumented Claude session exited (`resumable_session` on
- * `SessionState`, `clear_agent_type_on_confirmed_shell` in pty.rs). Dedups on
+ * `SessionState`, `snapshot_resumable_session_on_agent_exit` in pty.rs, run
+ * when `apply_foreground_agent_observation` sees the shell take back the
+ * foreground). Dedups on
  * `resumeOfferedFor` so a re-published, unchanged snapshot never re-verifies.
  * The "a later ccsession cleared it" branch is one of two independent clears
  * for a stale exit banner — see `detectAgentForTerminal`'s own clear for the
