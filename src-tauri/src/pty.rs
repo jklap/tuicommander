@@ -6774,11 +6774,20 @@ fn percent_decode_osc_payload(s: &str) -> String {
 /// splitting a multi-byte UTF-8 sequence.
 pub(crate) const MAX_AGENT_METADATA_TEXT_LEN: usize = 256;
 
+/// Bound untrusted agent metadata text (the resume banner's title, the
+/// SessionEnd reason): drop every control character first (C0 incl. ESC, CR,
+/// LF and BEL, DEL, and C1 — `char::is_control`), so a forged OSC title can't
+/// smuggle escape sequences or line breaks into a banner, tooltip or log line,
+/// then cap at [`MAX_AGENT_METADATA_TEXT_LEN`] chars.
 pub(crate) fn cap_agent_metadata_len(s: String) -> String {
-    if s.chars().count() <= MAX_AGENT_METADATA_TEXT_LEN {
-        return s;
+    if s.chars().any(char::is_control) || s.chars().count() > MAX_AGENT_METADATA_TEXT_LEN {
+        return s
+            .chars()
+            .filter(|c| !c.is_control())
+            .take(MAX_AGENT_METADATA_TEXT_LEN)
+            .collect();
     }
-    s.chars().take(MAX_AGENT_METADATA_TEXT_LEN).collect()
+    s
 }
 
 /// Whether `agent_type`'s config enables native-hook instrumentation. Resolved

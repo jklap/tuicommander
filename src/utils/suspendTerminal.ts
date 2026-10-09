@@ -93,6 +93,10 @@ async function suspendTab(id: string): Promise<SuspendOutcome> {
 		pendingResumeCommand: null,
 		pendingResumeTitle: null,
 		pendingResumeSource: null,
+		// The exit-banner dedupe key (`applyResumableSession`): left set, a resumed
+		// tab whose agent exits again with the SAME session id would never be
+		// offered the banner again.
+		resumeOfferedFor: null,
 	});
 	terminalsStore.setSessionId(id, null);
 	return { ok: true };
