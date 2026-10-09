@@ -2,6 +2,8 @@
 
 ## Prerequisites
 
+The macOS desktop app supports macOS 12 Monterey or later and requires system WebKit updated to Safari 17.4 or later for Mermaid diagrams. The bundle declares macOS 12.0 as its minimum; this does not guarantee that Safari updates are installed. The Rust deployment target stays at 10.15 for binary compilation. Windows uses the Evergreen WebView2 runtime; Linux builds use WebKitGTK 4.1 API packages.
+
 - **Node.js 24+** (the repository version is pinned in [`.nvmrc`](https://github.com/sstraus/tuicommander/blob/main/.nvmrc))
 - **Rust** (stable toolchain via rustup)
 - **Tauri CLI** (`cargo install tauri-cli`)
