@@ -55,7 +55,7 @@ A terminal that runs Claude Code shows a **CLI | Chat** switch in its top-right 
 
 Harness inbox and interruption notices appear as small system notes. Images without retained image data appear as attachment chips. Consecutive thinking blocks share one disclosure, and marked answers use the CLI's green highlight. Historical tool cards show status without a duration: the transcript does not provide execution timestamps. Copy appears beside a reply when you hover or focus it. The Compose handle is available in CLI view.
 
-In Chat, Compose stays docked and open after sending or queueing, clears the submitted text, and keeps focus for the next message. It cannot be closed or unpinned while Chat is active. **Esc** returns to CLI for terminal interaction; the Compose shortcut focuses the Chat input. Switching back to CLI restores that tab's previous Compose open and pin state. Unsent drafts survive switching in either direction.
+In Chat, Compose stays docked and open after sending or queueing, clears the submitted text, and keeps focus for the next message. It cannot be closed or unpinned while Chat is active. **Esc** returns to CLI for terminal interaction; the Compose shortcut focuses the Chat input. Switching back to CLI restores that tab's previous Compose open and pin state. Unsent drafts survive switching in either direction, including text entered while a send or queue is still pending.
 
 **Chat** is disabled, with the reason as its tooltip, when the terminal has no agent, the agent is not Claude, or TUICommander has not bound the agent to a session file yet. If the agent exits or the binding is lost while Chat is open, the terminal returns to CLI with a one-line notice.
 

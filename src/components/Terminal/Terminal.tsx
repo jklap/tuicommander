@@ -215,8 +215,10 @@ export const Terminal: Component<TerminalProps> = (props) => {
 		}),
 	);
 	/** After a send, an unpinned composer is done; a pinned one keeps the caret. */
-	const finishCompose = () => {
-		setPendingComposeText("");
+	const finishCompose = (remainingDraft: string) => {
+		setPendingComposeText(remainingDraft);
+		// A different Compose instance may already be showing the same draft.
+		setComposeTextRequest((n) => n + 1);
 		if (composeDocked()) return;
 		setComposeOpen(false);
 		canvasTerminalRef()?.focus();
@@ -1440,6 +1442,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 						isOpen={composeVisible}
 						initialText={pendingComposeText}
 						onTextChange={setPendingComposeText}
+						onSubmitted={finishCompose}
 						pinned={composeDocked}
 						persistent={chatActive}
 						onTogglePin={() => setComposePinned(!composePinned())}
@@ -1489,7 +1492,6 @@ export const Terminal: Component<TerminalProps> = (props) => {
 								// lifecycle poll — the badge must react to the click.
 								terminalsStore.update(props.id, { queuedCommands: outcome.queued });
 							});
-							finishCompose();
 						}}
 						onClose={() => {
 							if (chatActive()) terminalsStore.setViewMode(props.id, "cli");
@@ -1500,7 +1502,6 @@ export const Terminal: Component<TerminalProps> = (props) => {
 							await submitCompose("send", sessionId, (id) =>
 								pty.sendCommand(id, text, terminalsStore.get(props.id)?.agentType),
 							);
-							finishCompose();
 						}}
 					/>
 				</Suspense>

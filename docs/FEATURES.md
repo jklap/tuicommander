@@ -255,7 +255,7 @@ Terminal output is segmented into command blocks — one per prompt+output cycle
 
 A multi-line editor docked under the terminal for writing a prompt without fighting the agent's own input box.
 
-- **Chat input** — Chat opens and focuses Compose automatically below the conversation. It stays docked after send or queue and clears submitted text. Chat hides the close and pin controls; `Esc` returns to CLI, where permission prompts must be answered. Returning to CLI restores the tab's previous open/pin state, and unsent drafts survive both directions
+- **Chat input** — Chat opens and focuses Compose automatically below the conversation. It stays docked after send or queue and clears submitted text. Chat hides the close and pin controls; `Esc` returns to CLI, where permission prompts must be answered. Returning to CLI restores the tab's previous open/pin state, and unsent drafts survive both directions, including while send or queue is pending
 - **Send now** — `Ctrl+Enter` (or the ▶ button) types the text into the composer and submits it immediately, steering whatever the agent is doing
 - **Queue for the next idle window** — `Shift+Ctrl+Enter` (or the ☰ button) hands the text to the backend's idle gate instead: it is submitted at once if the agent is already idle, otherwise parked until the agent's next busy→idle transition. This is the way to leave follow-up work for an agent mid-turn without interrupting it
 - **Queue badge** — the status bar shows `N queued` while commands are waiting; clicking it discards the whole queue. The count comes from the backend (`state.queued_commands`), so it is accurate across reloads and remote clients
