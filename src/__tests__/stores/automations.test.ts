@@ -1,8 +1,8 @@
 import { createRoot } from "solid-js";
 import { describe, expect, it } from "vitest";
-import type { AutomationDefinition, SchedulePreview } from "../../components/AutomationsDialog/contract";
+import type { AutomationRun, SchedulePreview } from "../../components/AutomationsDialog/contract";
 import { createAutomationsStore } from "../../stores/automations";
-import { definition, fakeAdapter } from "../automationsFixtures";
+import { definition, fakeAdapter, runFixture } from "../automationsFixtures";
 
 describe("automations dialog state", () => {
 	it("retains the editable prompt after a rejected save instead of losing unsaved work", async () => {
@@ -57,30 +57,30 @@ describe("automations dialog state", () => {
 			dispose();
 		});
 	});
-	it("pauses the saved definition without accidentally saving a changed draft prompt", async () => {
+	it("a rejected atomic pause leaves unsaved draft and enabled state intact", async () => {
 		await createRoot(async (dispose) => {
-			let saved: AutomationDefinition | undefined;
 			const store = createAutomationsStore(
 				fakeAdapter({
-					save: async (value) => {
-						saved = value;
-						return value;
+					setEnabled: async () => {
+						throw new Error("Read-only definitions");
 					},
 				}),
 			);
-			await store.refresh();
 			store.select(definition);
 			store.edit({ prompt: "Unsaved" });
 			await store.setEnabled(false);
-			expect(saved?.prompt).toBe(definition.prompt);
-			expect(saved?.enabled).toBe(false);
+			expect(store.error()).toBe("Read-only definitions");
+			expect(store.draft()?.enabled).toBe(true);
 			expect(store.draft()?.prompt).toBe("Unsaved");
 			dispose();
 		});
 	});
+
 	it("does not replace the selected history when an earlier request finishes late", async () => {
 		await createRoot(async (dispose) => {
-			let finish: ((value: never[]) => void) | undefined;
+			let finish: ((value: AutomationRun[]) => void) | undefined;
+			const oldRuns = [runFixture("old-run", "a1")],
+				selectedRuns = [runFixture("selected-run", "a2")];
 			const store = createAutomationsStore(
 				fakeAdapter({
 					history: async (id) =>
@@ -88,17 +88,17 @@ describe("automations dialog state", () => {
 							? new Promise((resolve) => {
 									finish = resolve;
 								})
-							: [],
+							: selectedRuns,
 				}),
 			);
 			store.select(definition);
 			const old = store.loadHistory();
 			store.select({ ...definition, id: "a2" });
 			await store.loadHistory();
-			finish?.([]);
+			finish?.(oldRuns);
 			await old;
 			expect(store.draft()?.id).toBe("a2");
-			expect(store.runs()).toEqual([]);
+			expect(store.runs()).toEqual(selectedRuns);
 			dispose();
 		});
 	});

@@ -10,6 +10,12 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "Automations",
+		description:
+			"Open Automations from the command palette to edit scheduled agent runs and Once previews. The Automations backend API is required.",
+		shortcut: null,
+	},
+	{
 		feature: "Terminal Chat Input",
 		description:
 			"Switch a Claude terminal to Chat to reply in docked Compose. Ctrl+Enter sends now; Shift+Ctrl+Enter queues. Answer permission prompts in CLI.",

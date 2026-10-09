@@ -663,7 +663,8 @@ Rich parent terminal rows show N agents in each other repository containing live
 `AutomationsHost` loads it on demand from the command palette. The searchable
 list shows the stored zone, next occurrence and last status, including overlap
 skips. The editor supports literal prompts, run config, workspace, precheck,
-limits, backend cadence presets and backend schedule previews. Pause, Run now,
+limits, backend cadence presets and backend schedule previews. Once uses
+`once_local` plus the stored zone, without browser timezone conversion. Pause, Run now,
 save, confirmed deletion and recent history share one adapter. Deletion retains
 saved history. Escape uses the modal stack; Tab stays in the dialog.
 

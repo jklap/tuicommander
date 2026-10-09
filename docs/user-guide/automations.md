@@ -9,7 +9,10 @@ per run with a base branch. The agent uses its run config's permissions.
 
 Choose Hourly, Daily, Weekdays or Weekly, set the time controls and select
 **Apply cadence**. The backend converts the cadence to cron. You can also edit a
-five-field cron expression directly. Enter an IANA timezone such as
+five-field cron expression directly. For a one-time run, choose **Once** and
+enter **Once local time** in the named timezone. The backend resolves the
+instant; the browser does not convert it through your browser timezone.
+A completed one-time occurrence stays visible without another next run. Enter an IANA timezone such as
 `Europe/Madrid` and select **Preview schedule**. An empty creation zone resolves
 to the backend's local zone. Preview shows backend occurrences in that named
 zone. The backend validates schedules and handles daylight-saving transitions.
