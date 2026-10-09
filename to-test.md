@@ -7809,3 +7809,14 @@ stale-lock-sweep checks are gone.
   through; the busy one gets its own confirmation, not silently included.
 - [ ] `curl :9877/logs` after clicking through a removal and confirm a
   `git`-sourced `handleRemoveWorkspace` entry from the click shows up.
+  title changes, not a direct `PUT /name` call) **still needs a human check** — an attempt to
+  simulate it via raw `POST /sessions/{id}/write` bytes over curl was confounded by shell/kernel
+  local-echo behavior and an unexpectedly auto-launched Claude Code CLI session in the throwaway
+  PTY, and wasn't worth further automated debugging given the mechanism above is already proven
+  both by the Rust unit test
+  (`osc_title::a_real_title_immediately_followed_by_a_reset_emits_exactly_two_renames_then_settles`)
+  and the live check above. To close this out by hand: open a real terminal tab, run a real
+  agent (or `printf '\033]0;test title\007'` at a plain shell prompt) so its title changes and
+  then reverts, and confirm the tab title/accent border settle immediately with no flicker.
+
+- [ ] **Completion chime suppressed while Claude has declared background work** — frontend-only (`completionDecision.ts` `declared-background-work` reason; unit-tested). Live check after a rebuild: in a Claude session start a `run_in_background` task, let the turn end while the task keeps running with the tab in the background, and confirm no Completion chime plays until the task's follow-up turn finishes. `[HUMAN]` for the audio part only; `GET /logs` should show no `[Notify] ... completion` line while `declaredBackgroundWork` is true.
