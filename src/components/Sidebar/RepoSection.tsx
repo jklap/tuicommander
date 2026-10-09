@@ -1401,7 +1401,7 @@ export const RepoSection: Component<{
 					: state.status === "error"
 						? "is not answering"
 						: "is not connected";
-		return `${state.connection.name} ${reason}. Reconnect in Settings → Remote Machines.`;
+		return `${state.connection.name} ${reason}. Reconnect in Settings → Remote Servers.`;
 	});
 
 	const repoMenuItems = (): ContextMenuItem[] => {

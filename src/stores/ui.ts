@@ -547,7 +547,7 @@ function createUIStore() {
 			saveUIPrefs();
 		},
 
-		/** Reset all panel and sidebar widths to defaults */
+		/** Reset the sidebar and Settings-nav widths to defaults (Appearance → "Reset Sidebar Widths"; the pane layout is `useSplitPanes().resetLayout`) */
 		resetLayout(): void {
 			batch(() => {
 				setState("sidebarWidth", SIDEBAR_DEFAULT_WIDTH);

@@ -122,7 +122,7 @@ never all expert: in basic mode it would show an empty page.
 | **Nested Terminal Tabs** | Off | Opt in to collapsible branch activity cards. When off, the sidebar shows no activity caret or nested agent/session rows. When on, branches with open sessions show agent status, current activity, and last-update age. Applies immediately. |
 | **Max Tab Name Length** | — | 10–60 slider |
 | **Repository Groups** | — | Create, rename, delete, and color-code groups |
-| **Reset Panel Sizes** | — | Restore sidebar and panel widths to defaults (**Layout** section) |
+| **Reset Sidebar Widths** | — | Restore the sidebar and Settings navigation widths to defaults (**Layout** section). The pane split layout is reset by the Command Palette's **Reset Panel Sizes** instead |
 | **Bell Style** | Visual | How the terminal bell (BEL) is signaled: None, Visual, Sound, or Both (**Bell** section) |
 | **UI Legend** | — | Visual reference for colors, symbols, and badges used in the app, and the editor for them (see below) |
 
