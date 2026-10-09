@@ -11,7 +11,7 @@ use std::sync::Arc;
 use unicode_width::UnicodeWidthStr;
 // `parking_lot::Mutex` has no poison state. A panic taken anywhere near this
 // queue used to poison a `std::sync::Mutex` permanently: `send_event` then
-// panicked on `.lock().unwrap()` for the rest of the terminal's life, and
+// panicked on `.lock()` for the rest of the terminal's life, and
 // `drain_events` returned an empty `Vec` forever — silently dropping every
 // title change, OSC 133 mark, OSC 7 cwd and TUIC event while the grid kept
 // rendering. Pinned by `events_are_still_delivered_after_a_panic_under_their_lock`.
@@ -139,6 +139,14 @@ pub enum TermEvent {
     RequestAttention(String),
     /// OSC 1337 `OpenURL=:<base64>` — the decoded URL.
     OpenUrl(String),
+    /// A new inline-image placement was reserved (color-tools plan, Phase 5).
+    /// Carries `alacritty_terminal`'s own info struct verbatim — no reason to
+    /// re-shape it, since the WS/HTTP transport layer serializes its fields
+    /// directly.
+    ImagePlacement(alacritty_terminal::event::ImagePlacementInfo),
+    /// Every previously-announced placement should be treated as gone; the
+    /// consumer re-hydrates via `TerminalGrid::image_placements`.
+    ImagePlacementsCleared,
 }
 
 #[derive(Clone)]
@@ -156,6 +164,11 @@ pub struct TermEventCollector {
     /// / Kitty graphics `Handler` methods, via `EventListener::store_image`)
     /// hit the exact same store.
     image_store: Arc<Mutex<crate::terminal_images::ImageStore>>,
+    /// Kitty transmissions queued for deferred decode (color-tools plan) —
+    /// `queue_kitty_decode_job` (called synchronously, under `vt_log`, from
+    /// the `Handler` impl) only pushes onto this; the actual decode work
+    /// runs later, off that lock, in `TerminalGrid::drain_and_run_pending_kitty_decode_jobs`.
+    pending_kitty_jobs: Arc<Mutex<Vec<alacritty_terminal::term::kitty::PendingKittyDecodeJob>>>,
 }
 
 impl EventListener for TermEventCollector {
@@ -165,6 +178,7 @@ impl EventListener for TermEventCollector {
 
     fn store_image(
         &self,
+        client_id: Option<u32>,
         bytes: Arc<[u8]>,
         mime: String,
         intrinsic_width: u32,
@@ -172,8 +186,47 @@ impl EventListener for TermEventCollector {
     ) -> Option<Arc<alacritty_terminal::term::cell::ImageData>> {
         self.image_store
             .lock()
-            .store(bytes, mime, intrinsic_width, intrinsic_height)
+            .store(client_id, bytes, mime, intrinsic_width, intrinsic_height)
             .ok()
+    }
+
+    fn image_by_id(&self, image_id: u32) -> Option<Arc<alacritty_terminal::term::cell::ImageData>> {
+        self.image_store.lock().get(image_id)
+    }
+
+    fn forget_image(&self, image_id: u32) {
+        self.image_store.lock().forget(image_id);
+    }
+
+    fn forget_all_images(&self) {
+        self.image_store.lock().forget_all();
+    }
+
+    fn read_file_medium(&self, path: &[u8], delete_after: bool) -> Option<Vec<u8>> {
+        crate::terminal_image_transmission::read_file_medium(path, delete_after)
+    }
+
+    fn read_shm_medium(&self, name: &[u8]) -> Option<Vec<u8>> {
+        crate::terminal_image_transmission::read_shm_medium(name)
+    }
+
+    fn store_pending_image(
+        &self,
+        client_id: Option<u32>,
+        mime: String,
+        intrinsic_width: u32,
+        intrinsic_height: u32,
+    ) -> Option<Arc<alacritty_terminal::term::cell::ImageData>> {
+        Some(self.image_store.lock().store_pending(
+            client_id,
+            mime,
+            intrinsic_width,
+            intrinsic_height,
+        ))
+    }
+
+    fn queue_kitty_decode_job(&self, job: alacritty_terminal::term::kitty::PendingKittyDecodeJob) {
+        self.pending_kitty_jobs.lock().push(job);
     }
 
     fn send_event(&self, event: Event) {
@@ -267,6 +320,12 @@ impl EventListener for TermEventCollector {
                 let window_size = *self.window_size_px.lock();
                 let reply = cb(window_size);
                 self.events.lock().push(TermEvent::PtyWrite(reply));
+            }
+            Event::ImagePlacement(info) => {
+                self.events.lock().push(TermEvent::ImagePlacement(info));
+            }
+            Event::ImagePlacementsCleared => {
+                self.events.lock().push(TermEvent::ImagePlacementsCleared);
             }
             Event::ClipboardLoad(..) | Event::Wakeup | Event::Exit | Event::ChildExit(_) => {}
         }
@@ -777,6 +836,8 @@ pub struct TerminalGrid {
     /// 1337 / Kitty graphics `Handler` methods can register images directly,
     /// via `EventListener::store_image`, without needing `&mut TerminalGrid`.
     image_store: Arc<Mutex<crate::terminal_images::ImageStore>>,
+    /// See `TermEventCollector`'s field of the same name.
+    pending_kitty_jobs: Arc<Mutex<Vec<alacritty_terminal::term::kitty::PendingKittyDecodeJob>>>,
     /// When true, column resizes reflow scrollback history while leaving the
     /// visible screen untouched. Preserves TUI cursor positioning on screen
     /// while keeping scrollback readable across resize cycles.
@@ -839,11 +900,13 @@ impl TerminalGrid {
             cell_height: DEFAULT_CELL_HEIGHT_PX,
         }));
         let image_store = Arc::new(Mutex::new(crate::terminal_images::ImageStore::new()));
+        let pending_kitty_jobs = Arc::new(Mutex::new(Vec::new()));
         let listener = TermEventCollector {
             bell: bell_flag.clone(),
             events: events.clone(),
             window_size_px: window_size_px.clone(),
             image_store: image_store.clone(),
+            pending_kitty_jobs: pending_kitty_jobs.clone(),
         };
         let term = Term::new(config, &size, listener);
         Self {
@@ -865,6 +928,7 @@ impl TerminalGrid {
             events,
             window_size_px,
             image_store,
+            pending_kitty_jobs,
             reflow_history: true,
             reprint_merge_armed_at: None,
             frame_end_carry: Vec::new(),
@@ -898,20 +962,82 @@ impl TerminalGrid {
     > {
         self.image_store
             .lock()
-            .store(bytes, mime, intrinsic_width, intrinsic_height)
+            .store(None, bytes, mime, intrinsic_width, intrinsic_height)
     }
 
     /// Fetch a previously stored image's bytes by id, for the
-    /// `terminal_image_bytes` transport surface. `None` if unknown or already
-    /// evicted (no cell references it any more).
+    /// `terminal_image_bytes` transport surface. `None` if unknown or
+    /// forgotten (Kitty `a=d`) — images otherwise persist for the session's
+    /// lifetime regardless of which cells currently display them.
     pub fn image_bytes(&self, image_id: u32) -> Option<Arc<[u8]>> {
         self.image_store.lock().bytes(image_id)
     }
 
+    /// `(mime, intrinsic_width, intrinsic_height)` for a previously
+    /// transmitted image, by id — the frontend renderer's only way to learn
+    /// enough to interpret Kitty's raw `f=24`/`f=32` payloads (no container,
+    /// so `createImageBitmap` can't sniff dimensions/format the way it can
+    /// for PNG/GIF/JPEG). `None` under the same conditions as `image_bytes`.
+    pub fn image_meta(&self, image_id: u32) -> Option<(String, u32, u32)> {
+        let image = self.image_store.lock().get(image_id)?;
+        Some((
+            image.mime.clone(),
+            image.intrinsic_width,
+            image.intrinsic_height,
+        ))
+    }
+
+    /// Resolve every Kitty decode job queued since the last call, and push
+    /// each one's deferred OK/error reply onto the same `TermEvent::PtyWrite`
+    /// queue an immediate reply would use — so `drain_pty_write_events` (and
+    /// therefore the entire existing test suite built on it) sees no
+    /// difference between "replied synchronously" and "replied once decode
+    /// finished a moment later." Safe to call directly here (a bare, unlocked
+    /// test `TerminalGrid` has no lock-contention concept to preserve in the
+    /// first place) — `process` does, as its last step, for exactly this
+    /// reason. Production (`pty.rs::process_chunk`) instead calls
+    /// `terminal_image_transmission::drain_and_run_pending_kitty_decode_jobs`
+    /// directly against cloned handles and writes each reply itself, so it
+    /// never needs a `TerminalGrid`/lock reference while the (potentially
+    /// slow) decode work runs — which is also why this method itself has no
+    /// production caller, only `process` and the test suite.
+    #[allow(dead_code)]
+    pub(crate) fn drain_and_run_pending_kitty_decode_jobs(
+        &self,
+    ) -> Vec<crate::terminal_image_transmission::KittyJobOutcome> {
+        let outcomes = crate::terminal_image_transmission::drain_and_run_pending_kitty_decode_jobs(
+            &self.image_store,
+            &self.pending_kitty_jobs,
+        );
+        for outcome in &outcomes {
+            if let Some(reply) = crate::terminal_image_transmission::format_kitty_reply(outcome) {
+                self.events.lock().push(TermEvent::PtyWrite(reply));
+            }
+        }
+        outcomes
+    }
+
+    /// Cloned handles to this grid's image store and pending-Kitty-decode-job
+    /// queue — cheap `Arc::clone`s, meant to be taken once while the caller
+    /// already holds `vt_log` for another reason (e.g. `pty.rs::process_chunk`'s
+    /// Phase 1, which calls `process_without_kitty_decode_drain` anyway), then
+    /// used to run `terminal_image_transmission::drain_and_run_pending_kitty_decode_jobs`
+    /// *after* dropping that lock. Never re-acquire `vt_log` just to call
+    /// this — that would reintroduce exactly the lock-hold-during-decode
+    /// problem the color-tools plan's deferred-decode design exists to avoid.
+    pub(crate) fn kitty_decode_handles(
+        &self,
+    ) -> (
+        crate::terminal_image_transmission::KittyImageStoreHandle,
+        crate::terminal_image_transmission::KittyPendingJobsHandle,
+    ) {
+        (self.image_store.clone(), self.pending_kitty_jobs.clone())
+    }
+
     /// The inline-image tile shown at a given viewport position, if any:
-    /// `(image_id, placement_id, tile_col, tile_row)`. Mirrors `hyperlink_at`'s
-    /// viewport addressing exactly.
-    pub fn image_ref_at(&self, row: usize, col: usize) -> Option<(u32, u32, u16, u16)> {
+    /// `(image_id, placement_id, tile_col, tile_row, z_index)`. Mirrors
+    /// `hyperlink_at`'s viewport addressing exactly.
+    pub fn image_ref_at(&self, row: usize, col: usize) -> Option<(u32, u32, u16, u16, i32)> {
         let grid = self.term.grid();
         let display_offset = grid.display_offset();
         let line = Line(row as i32 - display_offset as i32);
@@ -919,8 +1045,86 @@ impl TerminalGrid {
             return None;
         }
         let cell = &grid[line][Column(col)];
-        cell.image_ref()
-            .map(|r| (r.image.image_id, r.placement_id, r.tile_col, r.tile_row))
+        cell.image_ref().map(|r| {
+            (
+                r.image.image_id,
+                r.placement_id,
+                r.tile_col,
+                r.tile_row,
+                r.z_index,
+            )
+        })
+    }
+
+    /// Every inline-image placement currently anchored anywhere in the
+    /// addressable grid (live screen *and* scrollback), as bounding
+    /// rectangles keyed by `placement_id` — the reconnect/new-client
+    /// hydration query (color-tools plan, Phase 5). Derived by scanning
+    /// `CellExtra.image` refs directly rather than kept in a side table: the
+    /// cell is the single source of truth for which placements still exist
+    /// (an overwritten or scrolled-off-history cell simply stops
+    /// contributing), so there is nothing to invalidate separately. A full
+    /// scan is O(rows × cols); acceptable because this only runs once per
+    /// (re)subscribe, not per frame.
+    pub fn image_placements(&self) -> Vec<alacritty_terminal::event::ImagePlacementInfo> {
+        use std::collections::HashMap;
+
+        let grid = self.term.grid();
+        let history = grid.history_size() as i32;
+        let screen_lines = grid.screen_lines() as i32;
+        let history_base = self
+            .term
+            .grid()
+            .total_scrolled()
+            .saturating_sub(history as usize);
+
+        struct Bounds {
+            image_id: u32,
+            z_index: i32,
+            min_row: i32,
+            max_row: i32,
+            min_col: u16,
+            max_col: u16,
+        }
+        let mut by_placement: HashMap<u32, Bounds> = HashMap::new();
+
+        for line_idx in -history..screen_lines {
+            let line = Line(line_idx);
+            let row = &grid[line];
+            for col in 0..grid.columns() {
+                let Some(r) = row[Column(col)].image_ref() else {
+                    continue;
+                };
+                let abs_row = (history_base as i64 + (line_idx + history) as i64) as u32;
+                let entry = by_placement.entry(r.placement_id).or_insert(Bounds {
+                    image_id: r.image.image_id,
+                    z_index: r.z_index,
+                    min_row: abs_row as i32,
+                    max_row: abs_row as i32,
+                    min_col: col as u16,
+                    max_col: col as u16,
+                });
+                entry.min_row = entry.min_row.min(abs_row as i32);
+                entry.max_row = entry.max_row.max(abs_row as i32);
+                entry.min_col = entry.min_col.min(col as u16);
+                entry.max_col = entry.max_col.max(col as u16);
+            }
+        }
+
+        by_placement
+            .into_iter()
+            .map(
+                |(placement_id, b)| alacritty_terminal::event::ImagePlacementInfo {
+                    placement_id,
+                    image_id: b.image_id,
+                    abs_row: b.min_row as u32,
+                    col: b.min_col,
+                    rows: (b.max_row - b.min_row + 1) as u16,
+                    cols: b.max_col - b.min_col + 1,
+                    z_index: b.z_index,
+                },
+            )
+            .collect()
     }
 
     /// Attach an image tile reference directly to the cell at a viewport
@@ -932,7 +1136,7 @@ impl TerminalGrid {
     ///
     /// Real callers land in Phase 2/3's dispatch handlers, same as
     /// `store_image` above.
-    #[allow(dead_code)]
+    #[allow(dead_code, clippy::too_many_arguments)]
     pub fn set_image_ref_at(
         &mut self,
         row: usize,
@@ -941,6 +1145,7 @@ impl TerminalGrid {
         placement_id: u32,
         tile_col: u16,
         tile_row: u16,
+        z_index: i32,
     ) -> bool {
         let display_offset = self.term.grid().display_offset();
         let line = Line(row as i32 - display_offset as i32);
@@ -953,6 +1158,7 @@ impl TerminalGrid {
             placement_id,
             tile_col,
             tile_row,
+            z_index,
         );
         self.term.grid_mut()[line][Column(col)].set_image_ref(Some(cell_ref));
         true
@@ -975,11 +1181,39 @@ impl TerminalGrid {
         (ws.cell_width, ws.cell_height)
     }
 
-    /// Feed raw PTY bytes into the terminal emulator.
+    /// Feed raw PTY bytes into the terminal emulator, then resolve any Kitty
+    /// image decode jobs queued along the way (color-tools plan).
     ///
     /// Returns changed rows. OSC 133 events are delivered via `drain_events()`
     /// as `TermEvent::Osc133` (parsed natively by the patched VTE handler).
+    ///
+    /// **Do not call this from behind a shared lock other callers also need**
+    /// (i.e. never from `VtLogBuffer::process`/`pty.rs::process_chunk`) —
+    /// resolving a Kitty decode job here can be slow (base64, zlib, file/
+    /// shared-memory I/O), and this method's `&mut self` requires holding
+    /// whatever lock guards the `TerminalGrid` for the entire call, exactly
+    /// the problem the deferred-decode design exists to avoid. Safe for the
+    /// entire existing test suite (a bare, unlocked `TerminalGrid`, so there
+    /// is no contention to protect) and any other single-threaded caller.
+    /// Production instead calls `process_without_kitty_decode_drain` under
+    /// the lock, drops it, then calls
+    /// `terminal_image_transmission::drain_and_run_pending_kitty_decode_jobs`
+    /// directly against the cloned `image_store`/`pending_kitty_jobs`
+    /// handles — never through this method. That leaves this one with no
+    /// production caller at all today — kept as the general-purpose
+    /// convenience API for the entire test suite and any future
+    /// single-threaded (no lock contention to protect) caller.
+    #[allow(dead_code)]
     pub fn process(&mut self, data: &[u8]) -> Vec<ChangedRow> {
+        let changed = self.process_without_kitty_decode_drain(data);
+        self.drain_and_run_pending_kitty_decode_jobs();
+        changed
+    }
+
+    /// The decode-deferred half of `process` split out — see its doc
+    /// comment for why. Never queues a Kitty decode job's actual resolution;
+    /// only `drain_and_run_pending_kitty_decode_jobs` does that.
+    pub(crate) fn process_without_kitty_decode_drain(&mut self, data: &[u8]) -> Vec<ChangedRow> {
         self.grid_sequence = self.grid_sequence.wrapping_add(1);
         if self.reprint_merge_armed_at.is_some() {
             if self.advance_frame_by_frame(data) {
@@ -4719,6 +4953,42 @@ mod tests {
         }
     }
 
+    /// A DEC 2026 synchronized update that stalls past its deadline and gets
+    /// force-flushed (`flush_sync_timeout_if_needed`) replays its buffered
+    /// bytes through the same `Term`/`Handler` an ordinary `process()` call
+    /// uses — so a Kitty image transmission buried inside it queues a
+    /// deferred decode job exactly like normal processing does. A code
+    /// review caught this as a real gap: before deferred decode existed,
+    /// this same flush path decoded the image inline; the production fix
+    /// (`pty.rs`'s `resolve_kitty_decode_jobs`, called from the frame
+    /// ticker after this exact flush) isn't reachable from this unit-test
+    /// level, but this proves the replay path itself queues a job that IS
+    /// resolvable — the part that's genuinely new/risky here.
+    #[test]
+    fn stalled_sync_update_flush_queues_a_resolvable_kitty_decode_job() {
+        use base64::Engine;
+        let raw_rgb = vec![9u8; 3 * 4]; // 2x2 px, f=24
+        let payload = base64::engine::general_purpose::STANDARD.encode(&raw_rgb);
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(BSU);
+        grid.process(format!("\x1b_Gi=1,a=T,f=24,s=2,v=2,c=2,r=2;{payload}\x1b\\").as_bytes());
+        std::thread::sleep(PAST_DEADLINE);
+        assert!(grid.flush_sync_timeout_if_needed());
+
+        assert!(
+            grid.image_ref_at(0, 0).is_some(),
+            "reservation happens during the replay itself, same as ordinary processing"
+        );
+        assert_eq!(
+            grid.image_bytes(1),
+            None,
+            "not resolved yet -- nothing has drained the queued job"
+        );
+
+        grid.drain_and_run_pending_kitty_decode_jobs();
+        assert_eq!(grid.image_bytes(1).as_deref(), Some(&raw_rgb[..]));
+    }
+
     /// A live TUI redraw re-runs the same search over and over, and each run was
     /// compiling the query from scratch — `RegexSearch::new` builds four DFAs
     /// (forward/backward x literal/regex). The query changes when the user types,
@@ -7005,8 +7275,8 @@ mod tests {
             .expect("under cap");
         let image_id = data.image_id;
 
-        assert!(grid.set_image_ref_at(0, 0, data, 1, 0, 0));
-        assert_eq!(grid.image_ref_at(0, 0), Some((image_id, 1, 0, 0)));
+        assert!(grid.set_image_ref_at(0, 0, data, 1, 0, 0, 0));
+        assert_eq!(grid.image_ref_at(0, 0), Some((image_id, 1, 0, 0, 0)));
         assert_eq!(
             grid.image_bytes(image_id).as_deref(),
             Some(&[1u8, 2, 3, 4][..])
@@ -7016,18 +7286,25 @@ mod tests {
         let data2 = grid
             .store_image(Arc::from(vec![9u8]), "image/png".to_string(), 1, 1)
             .unwrap();
-        assert!(!grid.set_image_ref_at(999, 999, data2, 1, 0, 0));
+        assert!(!grid.set_image_ref_at(999, 999, data2, 1, 0, 0, 0));
 
-        // Overwriting the cell with a plain character clears the ref — same
+        // Overwriting the cell with a plain character clears its *ref* — same
         // mechanism as the hyperlink test above (`write_at_cursor` replacing
-        // the whole `extra`) — and since that was the only reference to the
-        // first image, its bytes are now unreachable.
+        // the whole `extra`).
         grid.process(b"\x1b[1;1HY");
         assert_eq!(grid.image_ref_at(0, 0), None);
+
+        // But the image's *bytes* remain fetchable: the store holds its own
+        // strong reference for the session's lifetime (per the color-tools
+        // plan's "in-memory, session lifetime" decision), independent of
+        // which cells currently display it — Kitty's `a=t` transmit-without-
+        // display and later `a=p` placement depend on exactly this. Only an
+        // explicit forget (Kitty `a=d`) or the session ending actually drops
+        // it.
         assert_eq!(
-            grid.image_bytes(image_id),
-            None,
-            "no cell references this image any more; its bytes must be gone"
+            grid.image_bytes(image_id).as_deref(),
+            Some(&[1u8, 2, 3, 4][..]),
+            "the store's own reference must outlive any single cell's ref"
         );
     }
 
@@ -7045,12 +7322,12 @@ mod tests {
         grid.process(seq.as_bytes());
 
         // 4x2 footprint reserved starting at (0,0).
-        let (image_id, placement_id, _, _) = grid.image_ref_at(0, 0).expect("top-left tile");
+        let (image_id, placement_id, _, _, _) = grid.image_ref_at(0, 0).expect("top-left tile");
         for row in 0..2 {
             for col in 0..4 {
                 assert_eq!(
                     grid.image_ref_at(row, col),
-                    Some((image_id, placement_id, col as u16, row as u16)),
+                    Some((image_id, placement_id, col as u16, row as u16, 0)),
                     "tile at ({row},{col})"
                 );
             }
@@ -7148,6 +7425,928 @@ mod tests {
         );
         assert_eq!(grid.image_ref_at(0, 10), None);
         assert_eq!(grid.image_ref_at(1, 0), None, "only 1 row expected");
+    }
+
+    /// End-to-end: `a=T` (transmit + display), `f=24` raw RGB, explicit
+    /// `c=`/`r=`, through the real vte/alacritty_terminal APC pipeline.
+    #[test]
+    fn kitty_transmit_and_display_direct_raw_rgb() {
+        use base64::Engine;
+        let raw_rgb = vec![0u8; 3 * 3 * 3]; // 3x3 px, f=24 (RGB) = width*height*3 bytes
+        let payload = base64::engine::general_purpose::STANDARD.encode(&raw_rgb);
+        let full = format!("\x1b_Gi=1,a=T,f=24,s=3,v=3,c=2,r=1;{payload}\x1b\\");
+
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(full.as_bytes());
+
+        let (image_id, placement_id, ..) = grid.image_ref_at(0, 0).expect("top-left tile");
+        assert_eq!(image_id, 1, "client-chosen i= must be respected");
+        assert_eq!(placement_id, 1, "falls back to image id when p= is absent");
+        assert!(grid.image_ref_at(0, 1).is_some());
+        assert_eq!(grid.image_ref_at(0, 2), None, "only 2 cols requested");
+        assert_eq!(grid.image_ref_at(1, 0), None, "only 1 row requested");
+        assert_eq!(grid.image_bytes(1).as_deref(), Some(&raw_rgb[..]));
+
+        // Default q=0 -> an OK response, echoing i=.
+        let replies = grid.drain_pty_write_events();
+        assert_eq!(replies, vec!["\x1b_Gi=1;OK\x1b\\".to_string()]);
+    }
+
+    /// The whole point of the deferred-decode design (color-tools plan): a
+    /// Kitty transmission's footprint is reserved synchronously — before the
+    /// decode job that resolves its actual bytes has run at all. Proven here
+    /// by using `process_without_kitty_decode_drain` directly (what
+    /// `pty.rs::process_chunk` calls before dropping `vt_log`) instead of the
+    /// convenience `process()` every other test uses, which would resolve
+    /// the job before this test ever got a chance to observe the gap.
+    #[test]
+    fn kitty_reservation_is_visible_before_the_decode_job_runs() {
+        use base64::Engine;
+        let raw_rgb = vec![7u8; 3 * 4]; // 2x2 px, f=24
+        let payload = base64::engine::general_purpose::STANDARD.encode(&raw_rgb);
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process_without_kitty_decode_drain(
+            format!("\x1b_Gi=9,a=T,f=24,s=2,v=2,c=2,r=2;{payload}\x1b\\").as_bytes(),
+        );
+
+        let (image_id, placement_id, ..) = grid
+            .image_ref_at(0, 0)
+            .expect("reservation must be visible immediately, before decode runs");
+        assert_eq!(image_id, 9);
+        assert_eq!(placement_id, 9);
+        assert_eq!(
+            grid.image_bytes(9),
+            None,
+            "bytes aren't resolved yet — the decode job hasn't run"
+        );
+        assert!(
+            grid.drain_pty_write_events().is_empty(),
+            "the OK/error reply is deferred along with decode, not sent yet"
+        );
+
+        // Now resolve it — same call `process()` makes internally.
+        grid.drain_and_run_pending_kitty_decode_jobs();
+        assert_eq!(
+            grid.image_bytes(9).as_deref(),
+            Some(&raw_rgb[..]),
+            "bytes are resolved once the job actually runs"
+        );
+        assert_eq!(
+            grid.image_ref_at(0, 0).map(|(id, ..)| id),
+            Some(9),
+            "completing the placeholder must not change its identity or require touching any cell"
+        );
+        assert_eq!(
+            grid.drain_pty_write_events(),
+            vec!["\x1b_Gi=9;OK\x1b\\".to_string()],
+            "the OK reply arrives once decode actually completes"
+        );
+    }
+
+    /// Unicode virtual placeholders (`U=1`, color-tools plan Phase 7):
+    /// registration via `a=T,U=1,q=2` must store the image but touch no
+    /// cells, exactly like today — the app then prints ordinary text
+    /// (`U+10EEEE` + diacritics + an SGR foreground) which is what actually
+    /// attaches the image tile. This is the real end-to-end path every
+    /// target tool (image.nvim, snacks.nvim, yazi) uses.
+    #[test]
+    fn kitty_unicode_placeholder_registration_touches_no_cells() {
+        use base64::Engine;
+        let raw_rgb = vec![9u8; 3]; // 1x1 px, f=24
+        let payload = base64::engine::general_purpose::STANDARD.encode(&raw_rgb);
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(format!("\x1b_Gi=42,a=T,f=24,s=1,v=1,U=1,q=2;{payload}\x1b\\").as_bytes());
+        assert_eq!(
+            grid.image_ref_at(0, 0),
+            None,
+            "U=1 registration must not display anything"
+        );
+        assert_eq!(
+            grid.image_bytes(42).as_deref(),
+            Some(&raw_rgb[..]),
+            "but must still store it"
+        );
+    }
+
+    /// The `z=` on an `a=T,U=1` registration is only ever carried on that
+    /// registration command — never on the placeholder text itself — so it
+    /// must still reach the resolved cell's `ImageCellRef.z_index` (color-
+    /// tools plan, Phase 7's z-order-compositing follow-up). Regression
+    /// guard for exactly the gap image.nvim's real usage (`z=-1`) would hit.
+    #[test]
+    fn kitty_unicode_placeholder_z_index_is_recovered_from_the_registration() {
+        use base64::Engine;
+        let raw_rgb = vec![9u8; 3];
+        let payload = base64::engine::general_purpose::STANDARD.encode(&raw_rgb);
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(
+            format!("\x1b_Gi=42,a=T,f=24,s=1,v=1,U=1,z=-1,q=2;{payload}\x1b\\").as_bytes(),
+        );
+
+        grid.process("\x1b[38;5;42m\u{10EEEE}\u{305}\u{305}\x1b[39m".as_bytes());
+        let (image_id, _, _, _, z_index) = grid.image_ref_at(0, 0).expect("placeholder resolved");
+        assert_eq!(image_id, 42);
+        assert_eq!(
+            z_index, -1,
+            "z=-1 from the a=T,U=1 registration must survive to the cell"
+        );
+    }
+
+    /// The spec's own worked example: a 2x2 grid of image 42, printed as
+    /// plain SGR-256-color text with row/column diacritics — verified
+    /// against the real end-to-end parser, not just the pure diacritic
+    /// decode logic (already covered in `kitty.rs`'s own unit tests).
+    #[test]
+    fn kitty_unicode_placeholder_2x2_grid_matches_the_specs_own_example() {
+        use base64::Engine;
+        let raw_rgb = vec![9u8; 3 * 2 * 2]; // 2x2 px, f=24
+        let payload = base64::engine::general_purpose::STANDARD.encode(&raw_rgb);
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(format!("\x1b_Gi=42,a=T,f=24,s=2,v=2,U=1,q=2;{payload}\x1b\\").as_bytes());
+
+        // printf "\e[38;5;42m\U10EEEE\U0305\U0305\U10EEEE\U0305\U030D\e[39m\n"
+        // printf "\e[38;5;42m\U10EEEE\U030D\U0305\U10EEEE\U030D\U030D\e[39m\n"
+        grid.process(
+            "\x1b[38;5;42m\u{10EEEE}\u{305}\u{305}\u{10EEEE}\u{305}\u{30D}\x1b[39m\r\n".as_bytes(),
+        );
+        grid.process(
+            "\x1b[38;5;42m\u{10EEEE}\u{30D}\u{305}\u{10EEEE}\u{30D}\u{30D}\x1b[39m\r\n".as_bytes(),
+        );
+
+        assert_eq!(
+            grid.image_ref_at(0, 0),
+            Some((42, 42, 0, 0, 0)),
+            "(row 0, col 0)"
+        );
+        assert_eq!(
+            grid.image_ref_at(0, 1),
+            Some((42, 42, 1, 0, 0)),
+            "(row 0, col 1)"
+        );
+        assert_eq!(
+            grid.image_ref_at(1, 0),
+            Some((42, 42, 0, 1, 0)),
+            "(row 1, col 0)"
+        );
+        assert_eq!(
+            grid.image_ref_at(1, 1),
+            Some((42, 42, 1, 1, 0)),
+            "(row 1, col 1)"
+        );
+    }
+
+    /// The underline color encodes the placement id, independent of the
+    /// foreground color's image id.
+    #[test]
+    fn kitty_unicode_placeholder_underline_color_is_the_placement_id() {
+        use base64::Engine;
+        let raw_rgb = vec![9u8; 3];
+        let payload = base64::engine::general_purpose::STANDARD.encode(&raw_rgb);
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(format!("\x1b_Gi=42,a=T,f=24,s=1,v=1,U=1,q=2;{payload}\x1b\\").as_bytes());
+
+        // SGR 58 sets the underline color (256-color form); placement id 7.
+        grid.process(
+            "\x1b[38;5;42m\x1b[58;5;7m\u{10EEEE}\u{305}\u{305}\x1b[59m\x1b[39m".as_bytes(),
+        );
+        let (image_id, placement_id, ..) = grid.image_ref_at(0, 0).expect("placeholder resolved");
+        assert_eq!(image_id, 42);
+        assert_eq!(placement_id, 7);
+    }
+
+    /// The spec's own most-significant-byte example: image ID
+    /// `33554474 = 42 + (2 << 24)`, encoded via a third diacritic.
+    #[test]
+    fn kitty_unicode_placeholder_third_diacritic_extends_the_image_id() {
+        use base64::Engine;
+        let raw_rgb = vec![9u8; 3];
+        let payload = base64::engine::general_purpose::STANDARD.encode(&raw_rgb);
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(
+            format!("\x1b_Gi=33554474,a=T,f=24,s=1,v=1,U=1,q=2;{payload}\x1b\\").as_bytes(),
+        );
+
+        // printf "\e[38;5;42m\U10EEEE\U0305\U0305\U030E\n" (row 0, col 0, msb 2)
+        grid.process("\x1b[38;5;42m\u{10EEEE}\u{305}\u{305}\u{30E}\x1b[39m".as_bytes());
+        let (image_id, ..) = grid.image_ref_at(0, 0).expect("placeholder resolved");
+        assert_eq!(image_id, 33554474);
+    }
+
+    /// Diacritics may be omitted for a contiguous horizontal run of
+    /// placeholder cells — the spec's own inheritance optimization, used by
+    /// real minimalist encoders. A cell inherits row/col+1 from its left
+    /// neighbor only when colors match exactly.
+    #[test]
+    fn kitty_unicode_placeholder_inherits_from_the_left_neighbor_when_diacritics_are_omitted() {
+        use base64::Engine;
+        let raw_rgb = vec![9u8; 3 * 3]; // 3x1 px, f=24
+        let payload = base64::engine::general_purpose::STANDARD.encode(&raw_rgb);
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(format!("\x1b_Gi=42,a=T,f=24,s=3,v=1,U=1,q=2;{payload}\x1b\\").as_bytes());
+
+        // Only the first cell carries a row diacritic; the next two rely on
+        // inheritance entirely (2 rows x 3 columns example from the spec).
+        grid.process("\x1b[38;5;42m\u{10EEEE}\u{305}\u{10EEEE}\u{10EEEE}\x1b[39m".as_bytes());
+
+        assert_eq!(grid.image_ref_at(0, 0), Some((42, 42, 0, 0, 0)));
+        assert_eq!(grid.image_ref_at(0, 1), Some((42, 42, 1, 0, 0)));
+        assert_eq!(grid.image_ref_at(0, 2), Some((42, 42, 2, 0, 0)));
+    }
+
+    /// A placeholder referencing an image id nothing ever transmitted must
+    /// be left as ordinary (invisible, since U+10EEEE renders as nothing)
+    /// text — no image ref, no panic.
+    #[test]
+    fn kitty_unicode_placeholder_unknown_image_id_is_left_as_plain_text() {
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process("\x1b[38;5;99m\u{10EEEE}\u{305}\u{305}\x1b[39m".as_bytes());
+        assert_eq!(grid.image_ref_at(0, 0), None);
+    }
+
+    /// `a=t` (transmit only) must store the image without displaying it;
+    /// a later `a=p` (place) against the same id then displays it.
+    #[test]
+    fn kitty_transmit_only_then_place() {
+        use base64::Engine;
+        let raw_rgb = vec![0u8; 3 * 9];
+        let payload = base64::engine::general_purpose::STANDARD.encode(&raw_rgb);
+
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(format!("\x1b_Gi=5,a=t,f=24,s=3,v=3,q=2;{payload}\x1b\\").as_bytes());
+        assert_eq!(grid.image_ref_at(0, 0), None, "a=t alone must not display");
+        assert_eq!(
+            grid.image_bytes(5).as_deref(),
+            Some(&raw_rgb[..]),
+            "but must still be stored"
+        );
+
+        grid.process(b"\x1b_Ga=p,i=5,c=1,r=1,q=2\x1b\\");
+        assert_eq!(grid.image_ref_at(0, 0), Some((5, 5, 0, 0, 0)));
+    }
+
+    /// `a=p` against an unknown image id must respond with an error, not
+    /// silently no-op.
+    #[test]
+    fn kitty_place_unknown_image_id_errors() {
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(b"\x1b_Ga=p,i=999,c=1,r=1\x1b\\");
+        let replies = grid.drain_pty_write_events();
+        assert_eq!(
+            replies,
+            vec!["\x1b_Gi=999;ENOENT:no image with that id\x1b\\".to_string()]
+        );
+    }
+
+    /// `a=q` (capability probe) must acknowledge without storing or
+    /// displaying anything — real clients (yazi, blackcat) rely on exactly
+    /// this to detect support without side effects.
+    #[test]
+    fn kitty_query_action_is_a_pure_probe() {
+        use base64::Engine;
+        let payload = base64::engine::general_purpose::STANDARD.encode(b"AAAA");
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(format!("\x1b_Gi=42,a=q,t=d,f=24,s=1,v=1;{payload}\x1b\\").as_bytes());
+
+        assert_eq!(grid.image_ref_at(0, 0), None);
+        assert_eq!(
+            grid.image_bytes(42),
+            None,
+            "a query must not store anything"
+        );
+        let replies = grid.drain_pty_write_events();
+        assert_eq!(replies, vec!["\x1b_Gi=42;OK\x1b\\".to_string()]);
+    }
+
+    /// `q=2` suppresses every response, success or failure.
+    #[test]
+    fn kitty_quiet_level_2_suppresses_all_responses() {
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(b"\x1b_Ga=q,i=1,q=2\x1b\\");
+        assert!(
+            grid.drain_pty_write_events().is_empty(),
+            "OK must be suppressed"
+        );
+
+        grid.process(b"\x1b_Ga=p,i=999,q=2\x1b\\");
+        assert!(
+            grid.drain_pty_write_events().is_empty(),
+            "error must also be suppressed"
+        );
+    }
+
+    /// `q=1` suppresses only success (OK) responses; errors still fire.
+    #[test]
+    fn kitty_quiet_level_1_suppresses_only_ok() {
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(b"\x1b_Ga=q,i=1,q=1\x1b\\");
+        assert!(grid.drain_pty_write_events().is_empty());
+
+        grid.process(b"\x1b_Ga=p,i=999,q=1\x1b\\");
+        assert_eq!(
+            grid.drain_pty_write_events(),
+            vec!["\x1b_Gi=999;ENOENT:no image with that id\x1b\\".to_string()]
+        );
+    }
+
+    /// `t=f`/`t=t`/`t=s` are unimplemented transmission mediums and must get
+    /// a real protocol error response (so a well-behaved client can fall
+    /// back), not be silently ignored.
+    #[test]
+    fn kitty_t_equals_f_reads_a_real_file_and_displays_it() {
+        use base64::Engine;
+        let dir = std::env::temp_dir().join(format!("tuic-grid-test-tf-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("raw.bin");
+        let raw_rgb = vec![9u8; 3 * 2 * 2]; // 2x2 px, f=24
+        std::fs::write(&path, &raw_rgb).unwrap();
+        let path_b64 = base64::engine::general_purpose::STANDARD.encode(path.to_str().unwrap());
+
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(format!("\x1b_Gi=1,a=T,t=f,f=24,s=2,v=2,c=1,r=1;{path_b64}\x1b\\").as_bytes());
+        assert!(grid.image_ref_at(0, 0).is_some(), "t=f must display");
+        assert_eq!(grid.image_bytes(1).as_deref(), Some(&raw_rgb[..]));
+        // t=f (unlike t=t) must never delete the source file.
+        assert!(path.exists());
+
+        std::fs::remove_file(&path).ok();
+        std::fs::remove_dir(&dir).ok();
+    }
+
+    #[test]
+    fn kitty_t_equals_t_reads_and_deletes_a_temp_file() {
+        use base64::Engine;
+        let dir = std::env::temp_dir().join(format!("tuic-grid-test-tt-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // Kitty spec: only a file named with `tty-graphics-protocol` is
+        // ever deleted (real clients always name it so).
+        let path = dir.join("tty-graphics-protocol-raw.bin");
+        let raw_rgb = vec![7u8; 3 * 2 * 2];
+        std::fs::write(&path, &raw_rgb).unwrap();
+        let path_b64 = base64::engine::general_purpose::STANDARD.encode(path.to_str().unwrap());
+
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(format!("\x1b_Gi=1,a=T,t=t,f=24,s=2,v=2,c=1,r=1;{path_b64}\x1b\\").as_bytes());
+        assert!(grid.image_ref_at(0, 0).is_some(), "t=t must display");
+        assert_eq!(grid.image_bytes(1).as_deref(), Some(&raw_rgb[..]));
+        assert!(!path.exists(), "t=t must delete the temp-dir source file");
+
+        std::fs::remove_dir(&dir).ok();
+    }
+
+    /// Raw formats (`f=24`/`f=32`) reserve their footprint synchronously from
+    /// `s=`/`v=` alone — no decode needed for that — so a placement is
+    /// already visible before the deferred job discovers the file doesn't
+    /// exist (color-tools plan: decode moved off the `vt_log` lock). The
+    /// cells just never get real bytes: `image_bytes` stays `None` forever
+    /// and the deferred ENOENT reply still arrives, same as before this
+    /// changed which came first.
+    #[test]
+    fn kitty_t_equals_f_missing_file_errors_cleanly() {
+        use base64::Engine;
+        let path_b64 = base64::engine::general_purpose::STANDARD.encode("/no/such/path/at/all");
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(format!("\x1b_Gi=1,a=T,t=f,f=24,s=1,v=1;{path_b64}\x1b\\").as_bytes());
+        assert!(
+            grid.image_ref_at(0, 0).is_some(),
+            "reservation happens synchronously, before the deferred job learns the file is missing"
+        );
+        assert_eq!(grid.image_bytes(1), None, "decode must still have failed");
+        assert_eq!(
+            grid.drain_pty_write_events(),
+            vec![
+                "\x1b_Gi=1;ENOENT:could not load the image from the requested medium\x1b\\"
+                    .to_string()
+            ]
+        );
+    }
+
+    /// The synchronous PNG-auto-size path (`f=100`, no `c=`/`r=`) must not
+    /// answer `OK` for an arbitrary local file, nor a reply that differs
+    /// from a missing file's — either would let a remote sender probe
+    /// local file existence through the PTY reply.
+    #[test]
+    fn kitty_t_equals_f_png_reply_does_not_reveal_whether_a_file_exists() {
+        use base64::Engine;
+        let dir =
+            std::env::temp_dir().join(format!("tuic-grid-test-oracle-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("notes.txt");
+        std::fs::write(&path, b"plain text, definitely not a PNG").unwrap();
+
+        let reply_for = |p: &str| {
+            let b64 = base64::engine::general_purpose::STANDARD.encode(p);
+            let mut grid = TerminalGrid::new(24, 80, 0);
+            grid.process(format!("\x1b_Gi=7,a=T,t=f,f=100;{b64}\x1b\\").as_bytes());
+            let _ = grid.drain_and_run_pending_kitty_decode_jobs();
+            grid.drain_pty_write_events()
+        };
+        let existing = reply_for(path.to_str().unwrap());
+        let missing = reply_for("/no/such/path/at/all.png");
+        assert_eq!(
+            existing,
+            vec![
+                "\x1b_Gi=7;ENOENT:could not load the image from the requested medium\x1b\\"
+                    .to_string()
+            ]
+        );
+        assert_eq!(existing, missing);
+
+        std::fs::remove_file(&path).ok();
+        std::fs::remove_dir(&dir).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn kitty_t_equals_s_reads_a_real_shared_memory_segment() {
+        use base64::Engine;
+        let name = format!("/tuic-grid-test-shm-{}", std::process::id());
+        let cname = std::ffi::CString::new(name.clone()).unwrap();
+        let raw_rgb = vec![3u8; 3 * 2 * 2];
+        unsafe {
+            let fd = libc::shm_open(cname.as_ptr(), libc::O_CREAT | libc::O_RDWR, 0o600);
+            assert!(fd >= 0);
+            assert_eq!(libc::ftruncate(fd, raw_rgb.len() as i64), 0);
+            let ptr = libc::mmap(
+                std::ptr::null_mut(),
+                raw_rgb.len(),
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_SHARED,
+                fd,
+                0,
+            );
+            assert_ne!(ptr, libc::MAP_FAILED);
+            std::ptr::copy_nonoverlapping(raw_rgb.as_ptr(), ptr as *mut u8, raw_rgb.len());
+            libc::munmap(ptr, raw_rgb.len());
+            libc::close(fd);
+        }
+        let name_b64 = base64::engine::general_purpose::STANDARD.encode(&name);
+
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(format!("\x1b_Gi=1,a=T,t=s,f=24,s=2,v=2,c=1,r=1;{name_b64}\x1b\\").as_bytes());
+        assert!(grid.image_ref_at(0, 0).is_some(), "t=s must display");
+        assert_eq!(grid.image_bytes(1).as_deref(), Some(&raw_rgb[..]));
+
+        unsafe {
+            libc::shm_unlink(cname.as_ptr());
+        }
+    }
+
+    /// `o=z`: the payload is zlib-compressed pixel/PNG data, orthogonal to
+    /// which medium delivered it — verified against a real `flate2` roundtrip,
+    /// not a hand-rolled byte string, so this test would fail if either side's
+    /// zlib framing assumptions ever drifted.
+    #[test]
+    fn kitty_o_equals_z_decompresses_a_real_zlib_payload() {
+        use base64::Engine;
+        use std::io::Write;
+        let raw_rgb = vec![42u8; 3 * 2 * 2];
+        let mut encoder =
+            flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(&raw_rgb).unwrap();
+        let compressed = encoder.finish().unwrap();
+        let payload_b64 = base64::engine::general_purpose::STANDARD.encode(&compressed);
+
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(
+            format!("\x1b_Gi=1,a=T,f=24,s=2,v=2,c=1,r=1,o=z;{payload_b64}\x1b\\").as_bytes(),
+        );
+        assert!(grid.image_ref_at(0, 0).is_some());
+        assert_eq!(grid.image_bytes(1).as_deref(), Some(&raw_rgb[..]));
+    }
+
+    /// A raw-format (`f=24`/`f=32`) payload shorter than `width*height*channels`
+    /// is a real transmission problem, not something to zero-pad and display.
+    /// Reservation (from `s=`/`v=`/`c=`/`r=` alone) still happens
+    /// synchronously and is unaffected — only the pixel bytes never arrive
+    /// (color-tools plan: decode moved off the `vt_log` lock, so a
+    /// transmission's eventual success/failure is no longer known before its
+    /// footprint is reserved).
+    #[test]
+    fn kitty_raw_format_payload_shorter_than_expected_errors() {
+        use base64::Engine;
+        // f=24 (RGB, 3 bytes/px) at 2x2 needs 12 bytes; supply only 3.
+        let payload_b64 = base64::engine::general_purpose::STANDARD.encode([1u8, 2, 3]);
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(format!("\x1b_Gi=1,a=T,f=24,s=2,v=2,c=1,r=1;{payload_b64}\x1b\\").as_bytes());
+        assert!(
+            grid.image_ref_at(0, 0).is_some(),
+            "reservation is unaffected by the eventual decode failure"
+        );
+        assert_eq!(
+            grid.image_bytes(1),
+            None,
+            "but the payload itself must never be accepted"
+        );
+        assert_eq!(
+            grid.drain_pty_write_events(),
+            vec!["\x1b_Gi=1;EINVAL:payload shorter than width*height*channels\x1b\\".to_string()]
+        );
+    }
+
+    /// A permanently-failed deferred decode must not leave a dead entry in
+    /// `ImageStore` forever — a security review found `store_pending`
+    /// registers unconditionally (no bytes exist yet to check against a
+    /// cap), so without eviction-on-failure, a stream of cheap (~30-byte)
+    /// junk transmissions that each fail to decode would grow the store's
+    /// `HashMap` without bound, independent of and unbounded by
+    /// `MAX_SESSION_IMAGE_BYTES` (which only ever looks at bytes that
+    /// resolved successfully). `image_meta` is the observable proxy for
+    /// this: it reads straight through the store's `get()`, so it returns
+    /// `None` only once the entry is actually gone from the map — not just
+    /// once its `bytes` resolve to empty (which `image_bytes` alone would
+    /// show even if the entry technically still existed).
+    #[test]
+    fn kitty_failed_deferred_decode_evicts_the_store_entry_not_just_the_bytes() {
+        use base64::Engine;
+        let payload_b64 = base64::engine::general_purpose::STANDARD.encode([1u8, 2, 3]);
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(format!("\x1b_Gi=1,a=T,f=24,s=2,v=2,c=1,r=1;{payload_b64}\x1b\\").as_bytes());
+        assert_eq!(
+            grid.image_meta(1),
+            None,
+            "a permanently-failed image must be fully evicted from the store, \
+             not merely left with empty bytes under a live entry"
+        );
+
+        // Confirmed at scale too: many failing transmissions in a row must
+        // never accumulate live entries.
+        for i in 2..502u32 {
+            grid.process(
+                format!("\x1b_Gi={i},a=T,f=24,s=2,v=2,c=1,r=1;{payload_b64}\x1b\\").as_bytes(),
+            );
+        }
+        for i in 2..502u32 {
+            assert_eq!(
+                grid.image_meta(i),
+                None,
+                "image {i} must have been evicted too"
+            );
+        }
+    }
+
+    /// A payload longer than `width*height*channels` (observed in practice
+    /// when `t=s`'s backing OS segment is page-rounded larger than the
+    /// client's actual payload) must be trimmed to the exact expected
+    /// length, not stored with trailing garbage appended.
+    #[test]
+    fn kitty_raw_format_payload_longer_than_expected_is_trimmed() {
+        use base64::Engine;
+        let mut oversized = vec![5u8; 3 * 2 * 2]; // exact 2x2 f=24 payload
+        oversized.extend_from_slice(&[0xffu8; 100]); // page-rounding-style padding
+        let payload_b64 = base64::engine::general_purpose::STANDARD.encode(&oversized);
+
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(format!("\x1b_Gi=1,a=T,f=24,s=2,v=2,c=1,r=1;{payload_b64}\x1b\\").as_bytes());
+        assert_eq!(grid.image_bytes(1).as_deref(), Some(&[5u8; 12][..]));
+    }
+
+    /// A crafted `r=` far larger than any real image needs must not hang the
+    /// session — `reserve_image_footprint` clamps to a hard cap
+    /// (`MAX_FOOTPRINT_ROWS`) instead of looping once per requested row.
+    /// Regression guard for a real DoS a security review found:
+    /// `r=4000000000` previously attempted up to `u32::MAX` `linefeed()`
+    /// calls, all under the session's `vt_log` lock.
+    #[test]
+    fn kitty_footprint_row_count_is_clamped_to_a_sane_maximum() {
+        use base64::Engine;
+        let raw_rgb = vec![1u8; 3];
+        let payload = base64::engine::general_purpose::STANDARD.encode(&raw_rgb);
+        let mut grid = TerminalGrid::new(24, 80, 20_000);
+        grid.process(
+            format!("\x1b_Gi=1,a=T,f=24,s=1,v=1,c=1,r=50000,q=2;{payload}\x1b\\").as_bytes(),
+        );
+        let placements = grid.image_placements();
+        assert_eq!(placements.len(), 1);
+        assert_eq!(
+            placements[0].rows, 10_000,
+            "a far-oversized r= must clamp to the hard cap, not attempt 50,000 linefeeds"
+        );
+    }
+
+    /// `o=z` inflating far beyond the accepted size must be rejected before
+    /// the full decompressed buffer is ever built — a classic decompression
+    /// bomb (a small compressed all-zero payload expanding to tens of MB).
+    /// Regression guard for a real gap a security review found: the
+    /// previous unbounded `read_to_end` allocated the entire inflated
+    /// buffer before the app-level `MAX_SESSION_IMAGE_BYTES` cap ever ran.
+    /// Reservation (from `s=`/`v=`/`c=`/`r=`) still happens synchronously
+    /// and is unaffected — the deferred-decode design (color-tools plan)
+    /// means a transmission's footprint is reserved before anyone knows
+    /// whether its payload will actually decode; only the pixel bytes are
+    /// permanently refused.
+    #[test]
+    fn kitty_o_equals_z_decompression_bomb_is_rejected() {
+        use base64::Engine;
+        use std::io::Write;
+        // ~65 MiB of zeros compresses to a tiny payload but would inflate
+        // past the 64 MiB cap this fix enforces.
+        let huge = vec![0u8; 65 * 1024 * 1024];
+        let mut encoder =
+            flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(&huge).unwrap();
+        let compressed = encoder.finish().unwrap();
+        let payload_b64 = base64::engine::general_purpose::STANDARD.encode(&compressed);
+
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(
+            format!("\x1b_Gi=1,a=T,f=24,s=1,v=1,c=1,r=1,o=z;{payload_b64}\x1b\\").as_bytes(),
+        );
+        assert!(
+            grid.image_ref_at(0, 0).is_some(),
+            "reservation is unaffected by the eventual decode failure"
+        );
+        assert_eq!(
+            grid.image_bytes(1),
+            None,
+            "an oversized inflated payload must never be accepted, even though a placement exists"
+        );
+        assert_eq!(
+            grid.drain_pty_write_events(),
+            vec!["\x1b_Gi=1;EINVAL:decompressed payload exceeds the size limit\x1b\\".to_string()]
+        );
+    }
+
+    /// `a=d,d=I,i=<id>` forgets the store's own reference but must not
+    /// affect a cell already displaying that image — the cell holds its own
+    /// clone of the `Arc`, independent of the store's bookkeeping.
+    #[test]
+    fn kitty_delete_by_id_does_not_affect_already_displayed_cells() {
+        use base64::Engine;
+        let payload = base64::engine::general_purpose::STANDARD.encode(vec![0u8; 3]);
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(format!("\x1b_Gi=9,a=T,f=24,s=1,v=1,c=1,r=1;{payload}\x1b\\").as_bytes());
+        assert!(grid.image_ref_at(0, 0).is_some());
+        grid.drain_pty_write_events(); // the transmit+display's own OK
+
+        grid.process(b"\x1b_Ga=d,d=I,i=9\x1b\\");
+        grid.drain_pty_write_events(); // the delete's own OK
+        assert!(
+            grid.image_ref_at(0, 0).is_some(),
+            "the already-displayed cell must keep showing the image"
+        );
+        // But a *new* placement can no longer reference it by id.
+        grid.process(b"\x1b_Ga=p,i=9,c=1,r=1\x1b\\");
+        let replies = grid.drain_pty_write_events();
+        assert_eq!(
+            replies,
+            vec!["\x1b_Gi=9;ENOENT:no image with that id\x1b\\".to_string()]
+        );
+    }
+
+    /// `a=d,d=a` forgets every image the store knows about.
+    #[test]
+    fn kitty_delete_all_forgets_every_image() {
+        use base64::Engine;
+        let payload = base64::engine::general_purpose::STANDARD.encode(vec![0u8; 3]);
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(format!("\x1b_Gi=1,a=t,f=24,s=1,v=1,q=2;{payload}\x1b\\").as_bytes());
+        grid.process(format!("\x1b_Gi=2,a=t,f=24,s=1,v=1,q=2;{payload}\x1b\\").as_bytes());
+        grid.process(b"\x1b_Ga=d,d=a,q=2\x1b\\");
+
+        grid.process(b"\x1b_Ga=p,i=1,c=1,r=1,q=1\x1b\\");
+        assert!(
+            !grid.drain_pty_write_events().is_empty(),
+            "image 1 should be gone"
+        );
+        grid.process(b"\x1b_Ga=p,i=2,c=1,r=1,q=1\x1b\\");
+        assert!(
+            !grid.drain_pty_write_events().is_empty(),
+            "image 2 should be gone"
+        );
+    }
+
+    /// Chunked transmission (`m=1` on every sequence but the last): the
+    /// base64 payload must assemble correctly, and the control data must
+    /// come from the *first* chunk (continuation chunks carry only `m=`).
+    #[test]
+    fn kitty_chunked_transmission_assembles_across_sequences() {
+        use base64::Engine;
+        let raw_rgb = vec![7u8; 3 * 9]; // 3x3 px RGB
+        let full_payload = base64::engine::general_purpose::STANDARD.encode(&raw_rgb);
+        let (part1, part2) = full_payload.split_at(full_payload.len() / 2);
+
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(format!("\x1b_Gi=3,a=T,f=24,s=3,v=3,c=2,r=1,m=1;{part1}\x1b\\").as_bytes());
+        // Continuation chunk: only m=/payload, per spec.
+        grid.process(format!("\x1b_Gm=0;{part2}\x1b\\").as_bytes());
+
+        assert!(
+            grid.image_ref_at(0, 0).is_some(),
+            "display only happens once assembled"
+        );
+        assert_eq!(grid.image_bytes(3).as_deref(), Some(&raw_rgb[..]));
+    }
+
+    /// A `PendingMultipart`/`PendingTransmission`-style abandoned chunked
+    /// transfer (no final `m=0` chunk) must not display anything and must
+    /// not wedge later, unrelated processing.
+    #[test]
+    fn kitty_abandoned_chunked_transmission_is_inert() {
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(b"\x1b_Gi=1,a=T,f=24,s=1,v=1,c=1,r=1,m=1;AAAA\x1b\\");
+        // No final chunk. A later unrelated write must still work normally.
+        grid.process(b"hello");
+        assert_eq!(grid.image_ref_at(0, 0), None);
+        assert_eq!(grid.get_row_text(0).trim_end(), "hello");
+    }
+
+    /// A malicious client could keep the `m=1` bit set forever, streaming
+    /// chunk after chunk with no final chunk that ever assembles the
+    /// transfer. Each individual chunk is already capped by vte's own
+    /// `MAX_OSC_RAW_STD` (2 MiB per dispatch), but nothing previously
+    /// stopped the *accumulated total* from growing past
+    /// `kitty::MAX_CHUNKED_B64_BYTES` before the app-level byte cap ever got
+    /// a chance to reject it. Regression guard for a real gap a security
+    /// review found.
+    #[test]
+    fn kitty_chunked_transmission_over_cap_aborts_the_whole_transfer() {
+        let chunk = "A".repeat(2_000_000); // under vte's own 2 MiB per-dispatch cap
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(format!("\x1b_Gi=1,a=T,f=24,s=1,v=1,c=1,r=1,m=1;{chunk}\x1b\\").as_bytes());
+        // Enough further chunks to push the accumulated total past the
+        // 96 MiB cap while still claiming more chunks are coming. No final
+        // (`m=0`) chunk is ever sent — a real `m=0` chunk carries only
+        // `m=`/`q=` per spec, so completing the transfer after an abort
+        // would just start a brand-new, independent (and here, otherwise
+        // valid) transmission under a freshly auto-allocated image id,
+        // which would prove nothing about whether *this* transfer's
+        // accumulated payload was actually discarded.
+        for _ in 0..50 {
+            grid.process(format!("\x1b_Gm=1;{chunk}\x1b\\").as_bytes());
+        }
+        assert_eq!(
+            grid.image_ref_at(0, 0),
+            None,
+            "the whole transfer must have been aborted once the accumulated total exceeded the cap"
+        );
+        assert_eq!(
+            grid.image_bytes(1),
+            None,
+            "image id 1 (this transfer's own client-chosen id) must never have been stored"
+        );
+    }
+
+    /// An APC sequence without the literal `G` marker isn't a Kitty graphics
+    /// sequence at all (some other, unimplemented APC use) and must be
+    /// silently ignored rather than misparsed.
+    #[test]
+    fn kitty_apc_without_g_marker_is_ignored() {
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(b"\x1b_not-kitty-at-all\x1b\\hello");
+        assert!(grid.drain_pty_write_events().is_empty());
+        assert_eq!(grid.get_row_text(0).trim_end(), "hello");
+    }
+
+    /// True end-to-end proof of the color-tools plan's Phase 2/Phase 4 seam:
+    /// these are the *actual* bytes `tuic divider /tmp/test-image.bin`
+    /// (the real, compiled clean-room CLI, `crates/tuic-cli/src/imgcat.rs`)
+    /// printed on 2026-09-10 — captured via `xxd -p`, not hand-constructed —
+    /// fed through our own OSC 1337 parser. Proves the two halves of this
+    /// feature actually interoperate, not just that each was unit-tested in
+    /// isolation against its own idea of the wire format.
+    #[test]
+    fn real_tuic_divider_cli_output_displays_through_our_own_parser() {
+        let hex = "1b5d313333373b46696c653d696e6c696e653d313b77696474683d313030253b6865696768743d313b7072657365727665417370656374526174696f3d303a6147567362473867643239796247513d070a";
+        let bytes: Vec<u8> = (0..hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+            .collect();
+
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(&bytes);
+
+        // width=100% of 80 cols, height=1 -> reserved across the whole row.
+        let (image_id, ..) = grid.image_ref_at(0, 0).expect("divider image displayed");
+        assert!(grid.image_ref_at(0, 79).is_some(), "full-width reservation");
+        assert_eq!(
+            grid.image_bytes(image_id).as_deref(),
+            Some(&b"hello world"[..]),
+            "the real CLI's base64 payload must decode to the original file bytes"
+        );
+    }
+
+    /// Reserving an image footprint must emit a `TermEvent::ImagePlacement`
+    /// carrying the exact geometry the frontend renderer needs (color-tools
+    /// plan, Phase 5) — not just mutate cells silently.
+    #[test]
+    fn reserve_image_footprint_emits_a_placement_event_with_correct_geometry() {
+        use base64::Engine;
+        let payload =
+            base64::engine::general_purpose::STANDARD.encode(b"not a real image, just bytes");
+        let seq = format!("\x1b]1337;File=width=4;height=2;inline=1:{payload}\x1b\\");
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(seq.as_bytes());
+
+        let events = grid.drain_events();
+        let placement = events
+            .iter()
+            .find_map(|e| match e {
+                TermEvent::ImagePlacement(info) => Some(info),
+                _ => None,
+            })
+            .expect("an ImagePlacement event must have been emitted");
+        assert_eq!(placement.abs_row, 0);
+        assert_eq!(placement.col, 0);
+        assert_eq!(placement.rows, 2);
+        assert_eq!(placement.cols, 4);
+        assert_eq!(placement.z_index, 0, "iTerm2 has no z-index concept");
+    }
+
+    /// A Kitty placement's `z=` must ride all the way through to the emitted
+    /// placement event, not just the per-cell `ImageCellRef`.
+    #[test]
+    fn kitty_placement_event_carries_the_requested_z_index() {
+        use base64::Engine;
+        let raw_rgb = vec![0u8; 3 * 4];
+        let payload = base64::engine::general_purpose::STANDARD.encode(&raw_rgb);
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(
+            format!("\x1b_Gi=9,a=T,f=24,s=2,v=2,c=2,r=2,z=-1,q=2;{payload}\x1b\\").as_bytes(),
+        );
+
+        let events = grid.drain_events();
+        let placement = events
+            .iter()
+            .find_map(|e| match e {
+                TermEvent::ImagePlacement(info) => Some(info),
+                _ => None,
+            })
+            .expect("an ImagePlacement event must have been emitted");
+        assert_eq!(placement.z_index, -1);
+    }
+
+    /// The reconnect/new-client hydration query (`image_placements`) must
+    /// derive the same bounding rectangle a live placement event reports,
+    /// purely by scanning cells — proving the two paths (live event vs.
+    /// scan-based hydration) agree with no separate bookkeeping to drift.
+    #[test]
+    fn image_placements_scan_matches_the_live_placement_event() {
+        use base64::Engine;
+        let payload =
+            base64::engine::general_purpose::STANDARD.encode(b"not a real image, just bytes");
+        let seq = format!("\x1b]1337;File=width=4;height=2;inline=1:{payload}\x1b\\");
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(seq.as_bytes());
+
+        let placements = grid.image_placements();
+        assert_eq!(placements.len(), 1);
+        let p = &placements[0];
+        assert_eq!(p.abs_row, 0);
+        assert_eq!(p.col, 0);
+        assert_eq!(p.rows, 2);
+        assert_eq!(p.cols, 4);
+    }
+
+    /// Kitty `a=d,d=A` (delete all) must tell the renderer every placement is
+    /// gone, not just forget the images server-side — otherwise a deleted
+    /// image stays stuck on the frontend's separate image canvas layer,
+    /// which never sees the ordinary cell-overwrite diff that ordinary text
+    /// relies on.
+    #[test]
+    fn kitty_delete_all_emits_placements_cleared() {
+        use base64::Engine;
+        let raw_rgb = vec![0u8; 3 * 2];
+        let payload = base64::engine::general_purpose::STANDARD.encode(&raw_rgb);
+        let mut grid = TerminalGrid::new(24, 80, 0);
+        grid.process(format!("\x1b_Gi=3,a=T,f=24,s=1,v=1,c=1,r=1,q=2;{payload}\x1b\\").as_bytes());
+        grid.drain_events();
+
+        grid.process(b"\x1b_Ga=d,d=A,q=2\x1b\\");
+        let events = grid.drain_events();
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, TermEvent::ImagePlacementsCleared)),
+            "a=d,d=A must emit ImagePlacementsCleared"
+        );
+    }
+
+    /// Entering and leaving the alt screen must each tell the renderer to
+    /// drop its placement set — image placements are primary-screen-only by
+    /// design (color-tools plan, Architecture), and the underlying cells are
+    /// never touched by the swap itself, so there is no incremental diff for
+    /// the renderer to key off without this explicit signal.
+    #[test]
+    fn alt_screen_swap_emits_placements_cleared_both_ways() {
+        let mut grid = TerminalGrid::new(24, 80, 0);
+
+        grid.process(b"\x1b[?1049h"); // enter alt screen
+        let events = grid.drain_events();
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, TermEvent::ImagePlacementsCleared)),
+            "entering the alt screen must emit ImagePlacementsCleared"
+        );
+
+        grid.process(b"\x1b[?1049l"); // leave alt screen
+        let events = grid.drain_events();
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, TermEvent::ImagePlacementsCleared)),
+            "leaving the alt screen must emit ImagePlacementsCleared"
+        );
     }
 
     /// `CSI 14 t` (`text_area_size_pixels`) reports the text area size in

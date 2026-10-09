@@ -414,6 +414,43 @@ generation kept) and, best-effort, to the running instance's own logs via `POST 
 works when TUICommander isn't running. Disable with `TUIC_TMUX_LOG=0`; set `TUIC_TMUX_LOG=stderr`
 to also mirror every line to stderr.
 
+## Inline Images
+
+Clean-room reimplementations of iTerm2's `imgcat`/`imgls`/`divider` utility
+scripts (color-tools plan, Phase 4) — iTerm2's own scripts are GPLv2 and
+can't be vendored into this Apache-2.0 repo, so these are independent
+implementations of the same observable behavior, verified against the real
+scripts' text. They print an OSC 1337 escape sequence to stdout and don't
+talk to a running TUICommander instance — they work in any terminal that
+understands the protocol, including this one (see `docs/backend/pty.md`'s
+"iTerm2 Inline Images" section for what the terminal side supports).
+
+```bash
+# Display an image inline
+tuic imgcat photo.png
+tuic imgcat -W 40 -H 20 photo.png       # explicit size in cells
+tuic imgcat -W 50% screenshot.png       # percent of the viewport
+cat photo.png | tuic imgcat             # reads stdin if no path given
+
+# List a directory with inline thumbnails
+tuic imgls
+tuic imgls ~/Pictures
+
+# Print a full-width horizontal divider stretched from an image
+tuic divider ~/.config/tuic/divider.png
+```
+
+Inside any TUICommander terminal (Unix only), bare `imgcat`/`imgls`/`divider`
+also work with no `tuic` prefix — one-line shim scripts on that session's
+`PATH` `exec` the same subcommands, matching the bare-command convention
+iTerm2's own scripts use.
+
+The frontend renders these inline, on their own canvas layer above the text
+but below the cursor/selection — see `docs/frontend/terminal-features.md`'s
+"Inline Images" section for how, and its documented gaps (Kitty `z<0`
+placements, and mpv/blackcat's raw pixel formats, both deferred — see
+`to-test.md`).
+
 ## System Commands
 
 ```bash

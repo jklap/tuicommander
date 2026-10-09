@@ -25,6 +25,16 @@ mod test_support {
         Guard { _lock: lock }
     }
 
+    /// Whether a test currently has an active `set_override`. Lets code with a
+    /// real filesystem side effect keyed off `config_dir()` (e.g. the app's
+    /// `image_cli_shims::shim_dir()`) skip it in a test that never opted in.
+    pub fn has_override() -> bool {
+        OVERRIDE
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .is_some()
+    }
+
     /// Clear the override for a test that verifies the safe fallback branch.
     pub fn without_override() -> impl Drop {
         let lock = EXCLUSIVE.lock().unwrap_or_else(|error| error.into_inner());
@@ -93,7 +103,7 @@ mod test_support {
 }
 
 #[cfg(feature = "test-support")]
-pub use test_support::{set_override, without_override};
+pub use test_support::{has_override, set_override, without_override};
 
 pub fn config_dir() -> PathBuf {
     // A dependency crate does not inherit the consuming crate's cfg(test), so

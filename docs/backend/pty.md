@@ -619,20 +619,170 @@ real cell pixel size before they'll attempt to display anything:
   preserves aspect ratio against the image's real proportions, not just its
   raw intrinsic size.
 - **Storage**: `Cell.extra.image: Option<ImageCellRef>` holds a direct
-  `Arc<ImageData>` (both in `term/cell.rs`, alongside `Hyperlink`) — eviction
-  is ordinary Rust ownership (the app-level `terminal_images::ImageStore`
-  keeps only `Weak` refs), not a cache policy. See that module's own doc
-  comment.
+  `Arc<ImageData>` (both in `term/cell.rs`, alongside `Hyperlink`). The
+  app-level `terminal_images::ImageStore` also holds its own **strong**
+  reference (not `Weak`) so images persist for the session's lifetime
+  independent of which cells currently display them — required for Kitty's
+  transmit-without-display + later-placement pattern (Phase 3); freed only
+  by an explicit forget (Kitty `a=d`) or the session ending. See that
+  module's own doc comment for the full reasoning, including the bug this
+  avoids.
 - **`inline=0`** (the default when omitted) is a display no-op, not a
   write-to-disk — the download path is out of scope for now.
-- **Known gap**: the PTY flight-recorder rings (`pty_raw_rings`,
-  `OUTPUT_RING_BUFFER_CAPACITY`) do not elide image payload bytes, so a large
-  transmission can consume a large fraction of their 2 MB cap. Deliberately
-  deferred rather than modifying the reader thread's hot loop under time
-  pressure — see `to-test.md`.
-- **Known gap**: no frontend renderer exists yet. `terminal_image_ref_at`/
-  `terminal_image_bytes` return real data once an image is transmitted, but
-  nothing paints it to the canvas.
+- **Diagnostics-ring elision** (Phase 8, `image_payload_elision.rs`): an OSC
+  1337/Kitty APC payload is replaced with a short `<image N bytes elided>`
+  placeholder before it reaches the PTY flight-recorder ring (`pty_raw_rings`)
+  or a `.tcap` capture (`pty_capture::record`) — both are pure debugging aids
+  (AGENTS.md's "capture before you theorise"), and a single large
+  transmission would otherwise evict most of the ring's 2 MB cap or overflow
+  a capture's 512 KB one outright. The real parser downstream is never
+  touched by this — it always sees the original, unelided bytes.
+  **Deliberately NOT applied to `output_buffers`/`broadcast_to_ws_clients`**
+  (`state.rs`) — unlike the two sinks above, that ring is a real client's
+  live raw-stream + reconnect-replay source, not a debugging aid; eliding
+  there would visibly break image display for whatever consumes it. Scope
+  is also deliberately narrow: only a sequence fully contained within one
+  `read()`'s bytes is elided — one split across a read boundary (a large
+  image straddling a 64 KB read) passes through unelided, same as before
+  this change, so there is no new failure mode, only a strict improvement.
+- **Frontend renderer** (Phase 5): `src/components/Terminal/imageLayer.ts` +
+  a dedicated canvas layer in `CanvasTerminal.tsx`, between the glyph canvas
+  and the cursor/selection overlay. See `docs/frontend/terminal-features.md`
+  for the transport/paint design and its documented z-index/raw-pixel-format
+  scope.
+
+## Kitty Graphics Protocol
+
+`patches/vte/src/lib.rs` splits APC (`ESC _ ... ST`) out of the shared
+`SosPmApcString` state into its own `State::ApcString`, accumulating and
+dispatching it via a new `Perform::apc_dispatch` (PM/SOS remain fully
+discarded, unaffected). `patches/alacritty_terminal/src/term/kitty.rs` (pure
+parsing, mirroring `iterm2.rs`'s split) plus `term/mod.rs`'s
+`kitty_graphics`/`kitty_graphics_dispatch`/`kitty_process`/`kitty_display`
+implement the protocol itself.
+
+- **Scope**: `a=t/T/p/d/q`, `f=24/32/100`, all four transmission mediums
+  (`t=d/f/t/s`), `o=z` zlib compression, `m=` chunking,
+  `i=`/`p=`/`c=`/`r=`/`z=`/`C=`/`q=`, and the capability-probe response —
+  see `kitty.rs`'s own module doc comment for exactly what's implemented.
+- **Decode runs off the `vt_log` lock** (2026-09-11): cell reservation
+  (footprint sizing, cursor advance) still happens synchronously inside
+  `Term::process`, exactly as before — every real target tool (mpv, timg,
+  blackcat: raw `f=24`/`f=32` with explicit `c=`/`r=`/`s=`/`v=`) can compute
+  its footprint from control fields alone, never decoded bytes. Only the
+  actual decode (base64, zlib inflate, file/shared-memory reads) is deferred:
+  `kitty_process` queues a `PendingKittyDecodeJob` against a placeholder
+  `ImageData` (its `bytes` field is `OnceLock`-backed — `pending()`/
+  `complete_bytes()`/`mark_failed()`) instead of decoding inline, and
+  `pty.rs::process_chunk` resolves queued jobs in its existing lock-free
+  interlude (right where `PtyWrite` replies are already flushed), writing the
+  deferred OK/error reply and firing a new `image-decoded` event so the
+  frontend can retry a fetch that raced the still-in-flight decode. This is
+  what makes a sustained video stream (`mpv --vo=kitty`, `timg`, sending a
+  new frame every 16-33ms) not hold `vt_log` for the decode itself — the
+  original design goal a 2026-09-11 security review found was never actually
+  built (only the *worst-case cost* of decode was bounded, not its lock-hold
+  location). PNG format without explicit `c=`/`r=` (auto-sizing, the one
+  case that genuinely needs decoded bytes before it can reserve) stays on
+  the old fully-synchronous path — see `kitty::finish_decode`, shared
+  between both paths so there's one decode implementation, not two. One
+  disclosed behavior change: a transmission's eventual decode failure no
+  longer prevents its footprint from being reserved (reservation happens
+  before anyone knows whether decode will succeed) — cells just never get
+  real bytes.
+- **Transmission mediums** (Phase 6): `t=f`/`t=t` (file/temp-file) and `t=s`
+  (POSIX/Windows shared memory) are implemented by delegating the actual
+  OS I/O to the embedding app (`EventListener::read_file_medium`/
+  `read_shm_medium`, implemented in `terminal_image_transmission.rs`) —
+  the vendored crate only base64-decodes the wire payload into a path/name
+  string and hands it off, never touching the filesystem or a shared-memory
+  API itself. Policy (`terminal_image_transmission.rs`): a file is read
+  only from an absolute path, opened non-blocking and checked with `fstat`
+  on the opened handle (a non-empty regular file no larger than
+  `MAX_SESSION_IMAGE_BYTES`, read through `take(len)`; FIFOs, devices,
+  directories and zero-length `/proc`-style files are refused). `t=t`'s
+  delete-after-read follows the Kitty spec's guard: the file NAME must
+  contain `tty-graphics-protocol`, the path must be a regular file (never
+  a symlink, which is neither followed nor removed), and its canonicalized
+  parent must lie inside `std::env::temp_dir()`, `/tmp` or `/dev/shm`;
+  otherwise the image still displays and nothing is deleted. Reading itself
+  isn't access-restricted beyond that, since the process driving these
+  sequences already runs as this user in this PTY. **Replies don't reveal
+  local files:** every failure on a local medium (missing path, wrong
+  shape for `s=`/`v=`, bad zlib, an `f=100` payload that isn't a real
+  PNG/GIF, over the session byte cap) answers the single
+  `ENOENT:could not load the image from the requested medium`
+  (`kitty::MEDIUM_ERROR`), because remote SSH output names paths on this
+  machine. Residual (same as real Kitty): a successful `OK` still tells the
+  sender a decodable image of that shape exists at the path. `t=s` never
+  trusts the client's claimed `S=`/`v=` size over the OS-reported segment
+  size (`fstat`/`VirtualQuery`) and only opens an existing segment. On
+  Linux/BSD the segment is copied out with `read(2)` (a segment shrunk
+  mid-copy just comes up short, no SIGBUS); macOS can only `mmap` shm, which
+  is safe there because a macOS segment's size can't change once set. After
+  reading, a segment whose name contains `tty-graphics-protocol` is
+  unlinked (the Kitty spec's terminal-side unlink); any other name is left
+  alone so escape-sequence output can't remove another program's segment.
+  Windows only closes its handle (per spec). **The
+  Windows `t=s` path is written against documented Win32 semantics but
+  has not been compiled or run on Windows** (this repo is developed on
+  macOS/Linux) — see `to-test.md`.
+- **Raw pixel formats and length**: `f=24`/`f=32` payloads are trimmed to
+  exactly `width_px * height_px * channels` bytes regardless of medium — a
+  page-rounded `t=s` segment (observed on macOS: `fstat` can report a
+  larger size than what was actually written) must never leak trailing
+  garbage into the stored image, and a payload shorter than expected is a
+  real transmission error (`EINVAL`), not something to zero-pad.
+- **Client-chosen image ids**: unlike iTerm2, Kitty's `i=` is chosen by the
+  client and referenced by later `a=p`/`a=d` — `terminal_images::ImageStore`
+  accepts an optional `client_id` for exactly this (iTerm2 passes `None` and
+  gets an auto-allocated id).
+- **Responses**: `\x1b_Gi=<id>[,p=<placement>];OK\x1b\\` on success,
+  `\x1b_Gi=<id>;<CODE>:<message>\x1b\\` on failure, gated by `q=`
+  (0 = both, 1 = errors only, 2 = neither) — `Term::kitty_respond_ok`/
+  `kitty_respond_error`.
+- **Chunking**: `m=1` on all but the last sequence; only the *first* chunk
+  carries real control data (continuation chunks are `m=`/`q=` only per
+  spec), tracked via `pending_kitty_transmission`. Accumulated size across
+  all chunks of one transfer is capped at `kitty::MAX_CHUNKED_B64_BYTES`
+  (96 MiB, mirroring `iterm2::MAX_MULTIPART_B64_BYTES`'s "fail closed, abort
+  the whole transfer" pattern) — each individual chunk is already bounded by
+  vte's own `MAX_OSC_RAW_STD` (2 MiB), but nothing previously stopped a
+  client from streaming an unbounded *number* of `m=1` chunks and growing
+  the pending buffer without limit before the app-level
+  `MAX_SESSION_IMAGE_BYTES` cap ever ran (found by a 2026-09-11 security
+  review, see `to-test.md`).
+- **Reservation and decompression size caps** (also from that review):
+  `reserve_image_footprint` clamps requested rows to a hard
+  `MAX_FOOTPRINT_ROWS = 10_000` — a crafted `r=`/iTerm2 `height=` with no
+  clamp of its own could otherwise attempt up to `u32::MAX` `linefeed()`
+  calls under the session's `vt_log` lock, a real hang. `o=z` zlib
+  decompression is bounded via `Read::take` at 64 MiB before the inflated
+  buffer is fully built, closing a classic decompression-bomb path a plain
+  unbounded `read_to_end` would otherwise allow.
+- **`U=1` Unicode virtual placeholders** (Phase 7): fully implemented —
+  `Term::input` recognizes an app-printed `U+10EEEE` placeholder character
+  (with diacritics encoding tile row/column/most-significant-id-byte, image
+  id in the foreground color, placement id in the underline color) and
+  attaches an `ImageCellRef` instead of storing it as a glyph, via
+  `try_resolve_unicode_placeholder`. The diacritic table
+  (`kitty::ROWCOL_DIACRITICS`) is transcribed verbatim from Kitty's own
+  authoritative `rowcolumn-diacritics.txt` and verified against the
+  protocol docs' own worked examples (2x2 grid, most-significant-byte,
+  left-neighbor diacritic-omission inheritance) via real end-to-end tests
+  in `terminal_grid.rs`, not just unit-tested in isolation — this is the
+  path image.nvim, snacks.nvim, and yazi's modern driver all actually use.
+  Because `z=` is only ever carried on the `a=p,U=1`/`a=T,U=1` registration
+  command and never on the placeholder text itself, `Term` remembers it in
+  a `unicode_placeholder_z: HashMap<(image_id, placement_id), i32>` (cleared
+  on `d=a`/`d=A`, filtered by image id on `d=i`/`d=I`) so
+  `try_resolve_unicode_placeholder` can recover the real `z_index` — including
+  image.nvim's `z=-1` — instead of hardcoding `0`.
+- The Phase 5 frontend renderer covers Kitty placements too, including full
+  z-order compositing, raw `f=24`/`f=32` pixel decoding, and heuristic
+  overwrite detection — see `docs/frontend/terminal-features.md`'s renderer
+  section for the current (no longer gapped) state. Diagnostics-ring elision
+  (above) covers Kitty APC payloads the same way it covers OSC 1337.
 
 ## Shell Environment Variables
 

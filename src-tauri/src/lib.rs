@@ -112,6 +112,10 @@ pub(crate) mod grid_watch;
 pub(crate) mod grok_usage;
 #[cfg(feature = "desktop")]
 pub(crate) mod hook_binary;
+// Resolves the `tuic` sidecar via the desktop-only `tuic_cli` module.
+#[cfg(feature = "desktop")]
+pub(crate) mod image_cli_shims;
+pub(crate) mod image_payload_elision;
 pub(crate) mod improvement_scan;
 pub(crate) use tuic_core::jsonc_edit;
 pub(crate) use tuic_terminal::input_line_buffer;
@@ -202,6 +206,7 @@ pub(crate) mod tasks;
 pub(crate) mod telegram;
 pub(crate) mod transcript_tail;
 pub(crate) use tuic_terminal::terminal_grid;
+pub(crate) use tuic_terminal::terminal_image_transmission;
 #[cfg(test)]
 mod build_graph_tests;
 #[cfg(test)]
@@ -2876,6 +2881,8 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
             pty::terminal_hyperlink_span,
             pty::terminal_image_ref_at,
             pty::terminal_image_bytes,
+            pty::terminal_image_meta,
+            pty::terminal_image_placements,
             pty::set_session_visible,
             pty::set_session_name,
             open_markdown_tabs::sync_open_markdown_tabs,
