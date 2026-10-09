@@ -579,7 +579,7 @@ system and never turns an absent provider value into zero.
 | `CiRing` | SVG circular CI status indicator with proportional segments |
 | `DiffViewer` | Syntax-highlighted unified diff renderer |
 | `Dropdown` | Reusable dropdown select component |
-| `ContentRenderer` | Safe markdown-to-HTML rendering with DOMPurify sanitization (including raw form and image-map removal), with escaped preformatted text on parser failure, interactive checkboxes, tweak highlights, and click interception for every rendered link; `MarkdownTab` sends local href resolution to Rust |
+| `ContentRenderer` | Safe markdown-to-HTML rendering with DOMPurify sanitization (including raw form and image-map removal), with escaped preformatted text on parser failure, interactive checkboxes, tweak highlights, and click interception for every rendered link; Mermaid 12 diagrams retain the dark theme and strict security setting while using upstream layout and appearance defaults; `MarkdownTab` sends local href resolution to Rust |
 | `PanelResizeHandle` | Draggable resize handle for panel boundaries |
 | `PromptOption` | Agent prompt multiple-choice option |
 | `StatusBadge` | Git status badges (clean/dirty/conflict) |
