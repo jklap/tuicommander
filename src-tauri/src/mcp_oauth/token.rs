@@ -8,7 +8,8 @@
 //! - Immediate keyring persistence after every token operation
 
 use anyhow::{Context, Result, bail};
-use oauth2::PkceCodeChallenge;
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -47,6 +48,10 @@ pub(crate) struct PkceChallengePair {
     pub(crate) verifier: String,
 }
 
+fn pkce_s256(verifier: &str) -> String {
+    URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()))
+}
+
 impl TokenManager {
     pub(crate) fn new(
         upstream_name: String,
@@ -67,11 +72,11 @@ impl TokenManager {
 
     /// Generate a new PKCE S256 challenge pair for an authorization request.
     pub(crate) fn generate_pkce() -> PkceChallengePair {
-        let (challenge, verifier) = PkceCodeChallenge::new_random_sha256();
+        let verifier = URL_SAFE_NO_PAD.encode(rand::random::<[u8; 32]>());
         PkceChallengePair {
-            challenge: challenge.as_str().to_string(),
+            challenge: pkce_s256(&verifier),
             method: "S256".to_string(),
-            verifier: verifier.secret().to_string(),
+            verifier,
         }
     }
 
@@ -278,6 +283,15 @@ struct TokenResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Catches hashing the encoded digest or retaining base64 padding in S256.
+    #[test]
+    fn pkce_s256_matches_rfc7636_appendix_b() {
+        assert_eq!(
+            pkce_s256("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"),
+            "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+        );
+    }
 
     #[test]
     fn pkce_generates_s256() {
