@@ -51,6 +51,8 @@ enum Command {
         #[arg(required = true, last = true)]
         command: Vec<String>,
     },
+    /// Apply a shared automation action (JSON object, or - for stdin)
+    Automations { arguments: Option<String> },
     /// Call a server-owned MCP tool with JSON arguments
     Mcp {
         /// MCP tool name (for example agent or session)
@@ -412,6 +414,7 @@ fn dispatch(cmd: Command) -> Result<(), String> {
             caller,
             command,
         } => bg::run(&log, &caller, &command),
+        Command::Automations { arguments } => cmd_mcp("automations", arguments.as_deref()),
         Command::Mcp { tool, arguments } => cmd_mcp(&tool, arguments.as_deref()),
         Command::Diff { file_a, file_b } => cmd_diff(&file_a, &file_b),
         Command::Ls { json } => cmd_ls(json),

@@ -98,22 +98,27 @@ impl InMemoryWorkItemProvider {
             let moves = board
                 .columns
                 .iter()
-                .filter(|c| legal(&detail, &c.action))
-                .map(|c| WorkItemBoardMove {
-                    column_id: c.id.clone(),
-                    action: c.action.clone(),
+                .filter_map(|column| {
+                    column
+                        .action
+                        .as_ref()
+                        .filter(|action| legal(&detail, action))
+                        .map(|action| WorkItemBoardMove {
+                            column_id: column.id.clone(),
+                            action: action.clone(),
+                        })
                 })
                 .collect::<Vec<_>>();
             for (column, lane) in board.columns.iter().zip(&mut lanes) {
                 let belongs = match &column.action {
-                    WorkItemAction::EditField(edit) => match edit.value.as_ref() {
+                    Some(WorkItemAction::EditField(edit)) => match edit.value.as_ref() {
                         Some(value) => super::validation::matches_filter(
                             item.fields.get(&board.field_id).and_then(Option::as_ref),
                             value,
                         ),
                         None => item.fields.get(&board.field_id).is_none_or(Option::is_none),
                     },
-                    WorkItemAction::Transition(id) => &item.state.id == id,
+                    Some(WorkItemAction::Transition(id)) => &item.state.id == id,
                     _ => false,
                 };
                 if belongs {

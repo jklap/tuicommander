@@ -2,15 +2,25 @@
 use super::{model::*, protocol::*};
 use std::collections::BTreeMap;
 
-#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum WorkItemError {
-    #[error("Item is outside this provider/account or does not exist")]
     NotFound,
-    #[error("Invalid query: {0}")]
     Query(String),
-    #[error("Invalid action: {0}")]
     Action(String),
 }
+
+impl std::fmt::Display for WorkItemError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotFound => {
+                formatter.write_str("Item is outside this provider/account or does not exist")
+            }
+            Self::Query(message) => write!(formatter, "Invalid query: {message}"),
+            Self::Action(message) => write!(formatter, "Invalid action: {message}"),
+        }
+    }
+}
+impl std::error::Error for WorkItemError {}
 
 /// One instance owns one account. UI streams can keep an instance per fixture scope.
 pub struct InMemoryWorkItemProvider {
