@@ -23,7 +23,7 @@ export function recipient(draft, agents, preferredSessionId) {
 
 // Persist this batch before requesting delivery; retry the exact batch after a lost reply.
 export function prepareSend(draft, key) {
-  if (draft.pendingSend) return draft;
+  if (draft.pendingSend?.sessionId === draft.selectedSessionId) return draft;
   if (!draft.selectedSessionId) throw new Error('Choose an agent first.');
   const picks = draft.picks.filter((pick) => pick.comment.trim());
   if (!picks.length) throw new Error('Add a comment before sending.');
