@@ -39,11 +39,15 @@ into its context, or into sub-teammates it already spawned with that wrong scope
    ```bash
    # Capture untracked new files into the diff too (round-trip, doesn't leave anything staged):
    git add -N <untracked files/dirs>
-   git diff > /tmp/scoped-review-diff.txt
+   git diff > "${TMPDIR:-/tmp}/scoped-review-diff.txt"
    git reset -- <untracked files/dirs>   # restores them to untracked, nothing left staged
    ```
 
-   For a specific commit range instead: `git diff <base>..<head> -- <paths> > /tmp/scoped-review-diff.txt`.
+   For a specific commit range instead: `git diff <base>..<head> -- <paths> > "${TMPDIR:-/tmp}/scoped-review-diff.txt"`.
+
+   Scratch files go under `$TMPDIR` (or your session's scratchpad directory, when you have
+   one), never a literal `/tmp`: an agent sandbox may not allow it, and the review agent must
+   be given the path you actually wrote, expanded.
 
 2. **Do NOT invoke `Skill({skill: "code-review"})` or `Skill({skill: "security-review"})`** —
    route around them entirely. Use a plain `Agent()` call instead.
@@ -69,7 +73,7 @@ into its context, or into sub-teammates it already spawned with that wrong scope
 
    > SCOPE OVERRIDE — do not compute your own diff, do not run `git diff`/`git status` against
    > HEAD or main, and do not review the whole branch/repo. The ONLY thing to review is the
-   > exact diff already saved at: `/tmp/scoped-review-diff.txt`. Read that file directly and
+   > exact diff already saved at: `<expanded $TMPDIR>/scoped-review-diff.txt`. Read that file directly and
    > review ONLY the changes it contains.
 
    Follow with real context: what the change is, what's already been reviewed/fixed if this is
