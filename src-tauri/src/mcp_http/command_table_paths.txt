@@ -263,8 +263,13 @@
 /repo/panel-context
 /repo/post-pr-review
 /repo/pr-diff
+/repo/pr-draft-review
+/repo/pr-line-threads
 /repo/pr-review
 /repo/pr-review-threads
+/repo/pr-thread-comments
+/repo/pr-thread-reply
+/repo/pr-thread-resolved
 /repo/prs
 /repo/prs/batch
 /repo/recent-branches

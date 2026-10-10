@@ -902,3 +902,11 @@ literal prompt with delimited, escaped untrusted stdout capped at 16 KiB;
 truncation is marked and stderr is excluded. Empty output and manual bypasses
 inject nothing. The run ledger records `precheck_context: {injected, bytes}` for
 the prepared launch prompt, counting escaped stdout bytes before framing/marker.
+
+### PR line review commands
+
+- `get_pr_line_threads(repoPath, prNumber, after?)`: `{headSha, threads, hasNextPage, endCursor}`. Threads retain GitHub `line`, `originalLine`, `diffSide`, `isOutdated`, `isResolved`, and `comments` connection.
+- `get_pr_thread_comments(repoPath, threadId, after?)`: GitHub comments connection.
+- `set_pr_thread_resolved(repoPath, threadId, resolved)`: confirmed thread.
+- `reply_pr_thread(repoPath, threadId, body)`: posted comment.
+- `submit_pr_draft_review(repoPath, prNumber, draft)`: posted review. Draft `{headSha, body, event, comments}` accepts COMMENT, APPROVE, REQUEST_CHANGES; request changes needs a body. Inline comments retain path/line/side/body.

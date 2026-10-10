@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Added GitHub line review backend APIs for paginated threads, replies, resolve/unresolve and head-pinned draft submission.
+
 - Unify MCP automation actions with HTTP/IPC validation and results; add `tuic automations` for definitions, previews, history, summaries and Run Now (#1630-cbfa, #1621-5dce).
 - Restore missing live PTY identity bindings on MCP requests so spawned children remain linked to their parent in session lists (#1673-da49).
 

@@ -2785,3 +2785,5 @@ Automation agent surface (#1630-cbfa, #1621-5dce): MCP `automations` and
 `tuic automations` share the HTTP/IPC action parser, definition results, schedule
 previews, run history, summaries and Run Now runtime. Enabled-only updates and
 Once definitions work identically; MCP creation retains host-bound provenance.
+
+GitHub backend: paginated line review threads and replies, resolve/unresolve, and draft review submission pinned to the reviewed head are available through IPC and HTTP.

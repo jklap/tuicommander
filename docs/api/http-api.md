@@ -3002,3 +3002,17 @@ object directly; HTTP wraps it in `input`. MCP creation additionally requires a
 bound caller identity and records it in `created_by_session`. CLI sends the
 unchanged action through HTTP-over-IPC MCP, prints JSON on success and reports
 the same backend error text on stderr with exit 1.
+
+### PR line reviews
+
+Desktop command arguments and HTTP bodies use the same camelCase fields.
+
+| Method | Route | Arguments |
+|---|---|---|
+| GET | `/repo/pr-line-threads` | `repoPath`, `prNumber`, optional `after` |
+| GET | `/repo/pr-thread-comments` | `repoPath`, `threadId`, optional `after` |
+| POST | `/repo/pr-thread-resolved` | `{repoPath, threadId, resolved}` |
+| POST | `/repo/pr-thread-reply` | `{repoPath, threadId, body}` |
+| POST | `/repo/pr-draft-review` | `{repoPath, prNumber, draft:{headSha, body, event, comments}}` |
+
+Draft submission rejects a moved reviewed head and pins REST `commit_id`. Thread and comment connections expose pagination; outdated threads retain null current lines.

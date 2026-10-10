@@ -318,3 +318,7 @@ GitHub Actions jobs are downloaded through GitHub's jobs API. CircleCI checks ar
 When `include_merged` is true, `get_repo_pr_statuses` includes recently merged PRs. Stale merged PRs are filtered: if a branch has been recreated after a PR was merged (detected via branch creation timestamp vs PR merge timestamp), the old merged PR is excluded to prevent ghost badges.
 
 Browser add-account polling uses `POST /github/accounts/poll` and the same `github_poll_add_account_impl` as desktop IPC. Success persists a named account without replacing the default runtime token. Default login continues to use `POST /github/auth/poll`.
+
+### Line review backend
+
+The additive `github_review_threads` API reads paginated line threads with current/original line, diff side, resolved and outdated state, plus paginated replies. The existing `get_pr_review_threads` badge-count API is unchanged. Resolve/unresolve returns the confirmed GitHub thread; reply returns the posted comment. Draft submission checks the reviewed head against GitHub and posts through the existing review body builder/parser with `commit_id` pinned. A moved head returns `review-head-changed`; refresh before resubmitting. All calls resolve the repository account and use its host, token and circuit breaker.

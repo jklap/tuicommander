@@ -886,3 +886,5 @@ Step 8 API. The same action JSON controls definitions, enabled-only updates,
 Once previews, run history, summaries and Run Now on the addressed backend.
 MCP create requires host-bound creator provenance. CLI exposes these actions as
 `tuic automations '<JSON>'` or stdin via `-`; results and validation text match.
+
+GitHub line review backend supports paginated thread/comment reads, reply, resolve/unresolve and head-pinned draft submission on both transports. UI integration is tracked separately.

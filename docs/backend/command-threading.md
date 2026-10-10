@@ -253,3 +253,5 @@ HTTP routes because remote clients must not access the host pasteboard.
 Automation `automation_action` is async. Shared Rust parsing routes Run Now to
 the owner-guarded runtime; definition, history, aggregate and preview work uses
 `tokio::task::spawn_blocking`. HTTP calls the same boundary.
+
+The async commands in `github_review_threads` run network work asynchronously; repository account resolution delegates blocking filesystem/credential lookup to the existing resolver.

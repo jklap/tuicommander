@@ -1082,6 +1082,39 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			body: { repoPath: args.repoPath, title: args.title, body: args.body },
 		}),
 	},
+	get_pr_line_threads: {
+		map: (args, p) => ({
+			method: "GET",
+			path: `/repo/pr-line-threads?repoPath=${p("repoPath")}&prNumber=${p("prNumber")}${args.after ? `&after=${p("after")}` : ""}`,
+		}),
+	},
+	get_pr_thread_comments: {
+		map: (args, p) => ({
+			method: "GET",
+			path: `/repo/pr-thread-comments?repoPath=${p("repoPath")}&threadId=${p("threadId")}${args.after ? `&after=${p("after")}` : ""}`,
+		}),
+	},
+	set_pr_thread_resolved: {
+		map: (args) => ({
+			method: "POST",
+			path: "/repo/pr-thread-resolved",
+			body: { repoPath: args.repoPath, threadId: args.threadId, resolved: args.resolved },
+		}),
+	},
+	reply_pr_thread: {
+		map: (args) => ({
+			method: "POST",
+			path: "/repo/pr-thread-reply",
+			body: { repoPath: args.repoPath, threadId: args.threadId, body: args.body },
+		}),
+	},
+	submit_pr_draft_review: {
+		map: (args) => ({
+			method: "POST",
+			path: "/repo/pr-draft-review",
+			body: { repoPath: args.repoPath, prNumber: args.prNumber, draft: args.draft },
+		}),
+	},
 	post_pr_review: {
 		map: (args) => ({
 			method: "POST",

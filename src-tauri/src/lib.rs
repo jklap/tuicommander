@@ -72,6 +72,8 @@ pub(crate) mod github_account;
 pub(crate) mod github_auth;
 #[cfg(test)]
 mod github_compat_tests;
+pub(crate) mod github_pr_api;
+pub(crate) mod github_review_threads;
 pub(crate) use tuic_git::github_debug;
 pub(crate) mod github_poller;
 #[cfg(feature = "desktop")]
@@ -2176,6 +2178,11 @@ pub fn run() {
             github::create_pr,
             github::create_issue,
             github::post_pr_review,
+            github_review_threads::get_pr_line_threads,
+            github_review_threads::get_pr_thread_comments,
+            github_review_threads::set_pr_thread_resolved,
+            github_review_threads::reply_pr_thread,
+            github_review_threads::submit_pr_draft_review,
             github::get_merged_prs,
             pr_review::run_pr_review,
             changelog::generate_changelog,
