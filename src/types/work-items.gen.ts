@@ -23,22 +23,9 @@ export interface WorkItemState {
 	tone: WorkItemTone;
 }
 
-export type WorkItemTone =
-	| "neutral"
-	| "info"
-	| "success"
-	| "warning"
-	| "danger";
+export type WorkItemTone = "neutral" | "info" | "success" | "warning" | "danger";
 
-export type WorkItemFieldKind =
-	| "text"
-	| "markdown"
-	| "enum"
-	| "user"
-	| "labels"
-	| "date"
-	| "number"
-	| "link";
+export type WorkItemFieldKind = "text" | "markdown" | "enum" | "user" | "labels" | "date" | "number" | "link";
 
 export type WorkItemFieldValue =
 	| { kind: "text"; value: string }
@@ -143,12 +130,7 @@ export interface WorkItemDetail {
 	comments: WorkItemCommentPage;
 }
 
-export type WorkItemActionKind =
-	| "create"
-	| "edit_field"
-	| "transition"
-	| "comment"
-	| "start_work";
+export type WorkItemActionKind = "create" | "edit_field" | "transition" | "comment" | "start_work";
 
 export interface WorkItemActionDescriptor {
 	id: string;
@@ -179,9 +161,7 @@ export interface WorkItemStartWork {
 	delivery: WorkItemDelivery;
 }
 
-export type WorkItemDelivery =
-	| "draft"
-	| "submit";
+export type WorkItemDelivery = "draft" | "submit";
 
 export type WorkItemAction =
 	| { kind: "create"; value: WorkItemCreate }
