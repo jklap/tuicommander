@@ -1,3 +1,20 @@
+## Test scratch without `~/Gits` (gits-dir-cleanup, 2026-10-09) — no app restart needed
+
+Unit and shell tests cover the resolvers; these need a real, unsandboxed run.
+
+- [ ] **Full gate inside the agent sandbox.** `./scripts/check-gate.sh` from a sandboxed agent
+  session (no write access to `~/Gits`) gets past `test-shell` and the `tuic-cli` socket tests no
+  longer fail with EACCES. Afterwards nothing new exists under `~/Gits/.tmp` or
+  `<checkout>/.tmp/tuic-tests`, and `/tmp/tuic-s*` directories are mode 0700.
+- [ ] **Exec-scan timing on macOS.** Time `make check` twice with the new default
+  (`$TMPDIR/tuic-tests`) and twice with `TUIC_TEST_TMP_BASE=<checkout>/.tmp/tuic-tests`, outside
+  the sandbox, on a quiet machine. If the default is noticeably slower or a first-exec timing test
+  flakes, record the numbers in `src-tauri/AGENTS.md`'s exec-scan bullet and consider
+  `TUIC_TEST_TMP_BASE=/tmp/tuic-tests-$(id -u)` as the macOS default.
+- [ ] **Remote fixture client.** `scripts/run-remote-fixture.sh <test-support tuic-remote>` prints
+  `Fixture TMPDIR: …`; a separate shell with that `TMPDIR` exported reaches the fixture with
+  `tuic ls`.
+
 ## Dropped-items actions batch 2 (dropped-items-review #16/#22/#23/#31/#41-#44, #21 fix, 2026-10-09) — Rust restart required
 
 Unit/integration tests cover the logic; these need a running app (isolated `make dev`) and real agents.
@@ -4725,8 +4742,8 @@ build`, or `tuic install-cli` after a `cargo build -p tuic-cli`).
 1. [ ] `tuic "$TMPDIR/scratch"` (after `mkdir -p "$TMPDIR/scratch"`) exits
    non-zero and prints the refusal naming the path, plus the `tuic new <path>`
    suggestion. Nothing new appears in the sidebar.
-2. [ ] With `TMPDIR=$HOME/Gits/.tmp` exported — this repo's Rust-suite
-   convention — `tuic "$HOME/Gits/.tmp/scratch"` is refused too. This is the
+2. [ ] With `TMPDIR` exported to some other directory (e.g. `export
+   TMPDIR=$HOME/scratch-tmp`), `tuic "$TMPDIR/scratch"` is refused too. This is the
    case that proves the check reads the *caller's* `TMPDIR` and not the app's;
    it is the one of the fifteen observed ghost rows that an app-side check
    would have missed.

@@ -78,16 +78,38 @@ Produces platform-specific installers:
 
 ## Testing
 
-Rust socket tests use `tuic-test-support::short_socket_test_temp_root()`. If the
-checkout's test path exceeds the Unix socket limit, the helper uses a short
-checkout-specific directory under the nearest short `Gits/.tmp/s<checkout-hash>`.
-Outside `Gits`, or when all such ancestors are too long, it uses
-`/tmp/tuic-s<checkout-hash>`. It measures every candidate against the socket
-budget, including the full mdkb staging filename and eight bytes of margin. The
-`scripts/with-test-tmp.sh` wrapper removes abandoned Gits socket directories and
-test-run directories under `~/Gits/.tmp/tuic-tests` and the checkout's
-`.tmp/tuic-tests` after they have been unused for more than seven days. Run
-standalone Rust tests through that wrapper.
+Test scratch comes from your temp directory, never from `$HOME`:
+
+| Root | Resolution (first match wins) |
+|---|---|
+| host temp | `TUIC_TEST_HOST_TMPDIR` (exported by the wrapper) → `$TMPDIR` → `/tmp` |
+| base | `TUIC_TEST_TMP_BASE` → `<host temp>/tuic-tests` |
+| per-run | `TUIC_TEST_TMP_ROOT` → `scripts/with-test-tmp.sh`'s `<base>/tuic-run.XXXXXX` (nextest without the wrapper: `<base>/tuic-nextest-<hash>`; a bare test binary: `<base>/tuic-proc-<hash>`) |
+| Unix sockets | `TUIC_TEST_SOCKET_ROOT` → the per-run root → `<host temp>/tuic-s<hash>` → `/tmp/tuic-s<hash>` |
+
+`scripts/with-test-tmp.sh`, `src-tauri/scripts/nextest-test-tmp.{sh,ps1}`,
+`tuic-test-support` and `scripts/test-tmp-root.mjs` (vitest, cycle checker) all
+apply that order. Set `TUIC_TEST_TMP_BASE=<checkout>/.tmp/tuic-tests` to keep
+scratch in the checkout as before.
+
+Rust socket tests use `tuic-test-support::short_socket_test_temp_root()`. A
+socket root must be at most 49 characters (104-byte `sun_path`, the NUL, eight
+bytes of HOME margin and mdkb's `/sXXXXXX/.mdkb/daemon-hook.sock.4294967295.tmp`),
+so on macOS, where `$TMPDIR` alone is about 48 characters, it is normally
+`/tmp/tuic-s<checkout-hash>`. Each candidate must fit and pass a create-and-write
+probe; the shared `/tmp` directories are created mode 0700, and a symlink or a
+directory owned by another user is refused. If none qualifies, the panic names
+every candidate and `TUIC_TEST_SOCKET_ROOT=<short writable dir>`.
+
+The wrapper prunes, after more than six days unused, only what this tooling
+creates: `tuic-run.*` under the base (and the old `<checkout>/.tmp/tuic-tests`),
+and your own `tuic-s<16 hex>` socket directories in the host temp dir and `/tmp`.
+A prune it cannot complete prints a warning and never fails the command. Earlier
+versions used `~/Gits/.tmp/tuic-tests`, `~/Gits/.tmp/s<16 hex>` and
+`<checkout>/.tmp/tuic-tests`; nothing touches those any more, and you may delete
+them by hand. `make check` runs `scripts/check-no-home-gits.mjs`, which fails on a
+`$HOME/Gits` path in code or tooling. Run standalone Rust tests through the
+wrapper.
 
 ### Live peer-mail wake canary
 
@@ -145,8 +167,8 @@ that checkout's artifacts instead of a target supplied by the parent
 TUICommander process. The worktrees' `tuic-terminal` builds have the same Cargo
 fingerprint key, while [Cargo checks path sources by file mtime](https://doc.rust-lang.org/stable/nightly-rustc/cargo/core/compiler/fingerprint/index.html);
 sharing one target can therefore make an older checkout look fresh against an
-artifact from another checkout. The wrapper also keeps test scratch files under
-`~/Gits`.
+artifact from another checkout. The wrapper also gives each run its own scratch
+directory under `$TMPDIR/tuic-tests` (see Testing above).
 
 ### TypeScript mutation testing
 

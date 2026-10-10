@@ -175,7 +175,7 @@ time beyond the retry waiting period. The command works
 on macOS, Linux, and Windows.
 
 ```bash
-tuic bg "$HOME/Gits/.tmp/build.log" -- make check
+tuic bg "$TMPDIR/build.log" -- make check
 ```
 
 On Windows, the detached runner does not inherit the launcher's input or output pipes. Capturing the launcher output therefore returns before the background command completes.
