@@ -1,0 +1,75 @@
+import { type Component, For, Show } from "solid-js";
+import s from "./fields.module.css";
+import { SettingField, type SettingFieldProps } from "./SettingField";
+
+export interface SettingListRow {
+	id: string;
+	values: Record<string, string>;
+}
+
+export interface SettingListProps extends SettingFieldProps {
+	rows: readonly SettingListRow[];
+	columns: readonly { id: string; label: string; placeholder?: string }[];
+	onChange: (rows: SettingListRow[]) => void;
+	/** The caller supplies a stable ID and default values for a new row. */
+	onAdd?: () => SettingListRow;
+}
+
+export const SettingList: Component<SettingListProps> = (props) => (
+	<SettingField label={props.label} hint={props.hint}>
+		{(id, hintId) => (
+			<div id={id} role="group" aria-label={props.label} aria-describedby={hintId} class={s.list}>
+				<For each={props.rows}>
+					{(row) => (
+						<div class={s.row} role="group" aria-label={`Row ${row.id}`}>
+							<For each={props.columns}>
+								{(column) => (
+									<label class={s.cell}>
+										<span>{column.label}</span>
+										<input
+											type="text"
+											value={row.values[column.id] ?? ""}
+											placeholder={column.placeholder}
+											disabled={props.disabled}
+											onInput={(e) => {
+												const value = e.currentTarget.value;
+												props.onChange(
+													props.rows.map((current) =>
+														current.id === row.id
+															? { ...current, values: { ...current.values, [column.id]: value } }
+															: current,
+													),
+												);
+											}}
+										/>
+									</label>
+								)}
+							</For>
+							<button
+								type="button"
+								class={s.button}
+								disabled={props.disabled}
+								aria-label={`Remove row ${row.id}`}
+								onClick={() => props.onChange(props.rows.filter((current) => current.id !== row.id))}
+							>
+								Remove
+							</button>
+						</div>
+					)}
+				</For>
+				<Show when={props.onAdd}>
+					{(add) => (
+						<button
+							type="button"
+							class={s.button}
+							disabled={props.disabled}
+							onClick={() => props.onChange([...props.rows, add()()])}
+						>
+							Add row
+						</button>
+					)}
+				</Show>
+			</div>
+		)}
+	</SettingField>
+);
