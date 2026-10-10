@@ -2995,3 +2995,10 @@ literal prompt with delimited, escaped untrusted stdout capped at 16 KiB;
 truncation is marked and stderr is excluded. Empty output and manual bypasses
 inject nothing. The run ledger records `precheck_context: {injected, bytes}` for
 the prepared launch prompt, counting escaped stdout bytes before framing/marker.
+
+The MCP `automations` tool and `tuic automations '<action JSON>'` use the same
+action table, parser and result values as this endpoint. MCP receives the action
+object directly; HTTP wraps it in `input`. MCP creation additionally requires a
+bound caller identity and records it in `created_by_session`. CLI sends the
+unchanged action through HTTP-over-IPC MCP, prints JSON on success and reports
+the same backend error text on stderr with exit 1.
