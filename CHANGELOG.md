@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Unify MCP automation actions with HTTP/IPC validation and results; add `tuic automations` for definitions, previews, history, summaries and Run Now (#1630-cbfa, #1621-5dce).
+
 - Preserve current automation settings when opening an old run notice; show deleted definitions as run details without an editor (#1620-82ae).
 
 - Notify once when an automation needs input or fails, with saved run and owning-session navigation; retain durable per-channel delivery claims (#1620-82ae).
