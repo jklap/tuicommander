@@ -296,8 +296,13 @@ async fn save_mcp_upstreams_http(
     State(state): State<Arc<AppState>>,
     Json(request): Json<crate::mcp_upstream_config::UpstreamMcpSaveRequest>,
 ) -> Response {
-    match crate::mcp_upstream_config::save_mcp_upstreams_inner(request.base, request.config, &state)
-        .await
+    match crate::mcp_upstream_config::save_mcp_upstreams_with_credentials_inner(
+        request.base,
+        request.config,
+        request.credentials,
+        &state,
+    )
+    .await
     {
         Ok(()) => Json(()).into_response(),
         Err(e)
@@ -366,7 +371,18 @@ async fn save_mcp_upstream_credential_http(Json(body): Json<serde_json::Value>) 
         Some(url) => url.to_string(),
         None => return (StatusCode::BAD_REQUEST, "missing 'url'").into_response(),
     };
-    match crate::mcp_upstream_credentials::save_mcp_upstream_credential(name, token, header, url) {
+    let result = if body
+        .get("replace")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        crate::mcp_upstream_credentials::save_mcp_upstream_credential_with_replace(
+            name, token, header, url, true,
+        )
+    } else {
+        crate::mcp_upstream_credentials::save_mcp_upstream_credential(name, token, header, url)
+    };
+    match result {
         Ok(()) => Json(()).into_response(),
         Err(e) => err_500(&e),
     }
@@ -4719,6 +4735,59 @@ mod tests {
                 .is_some_and(|message| message.contains("was added concurrently"))
         );
         assert_eq!(crate::mcp_upstream_config::load_mcp_upstreams(), current);
+    }
+
+    // Catches: HTTP dropping compound credentials or treating omitted replace
+    // as permission to overwrite an existing upstream credential.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn upstream_http_compound_credentials_require_explicit_replacement() {
+        let tmp = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(tmp.path().to_path_buf());
+        let name = "compound-http-lifecycle";
+        let url = "https://example.com/mcp";
+        let body = serde_json::json!({
+            "base": {"servers": []},
+            "config": {"servers": [{"id":"new-http", "name":name,
+                "transport":{"type":"http","url":url}, "enabled":false,
+                "auth":{"type":"bearer","token":""}}]},
+            "credentials": [{"server_id":"new-http", "token":"original-http-secret"}]
+        });
+        let response = build_router(test_state(), false, true)
+            .oneshot(put_from(
+                "/mcp/upstreams",
+                &body,
+                std::net::SocketAddr::from(([127, 0, 0, 1], 0)),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            crate::mcp_upstream_credentials::read_credential_for_url(name, url)
+                .unwrap()
+                .as_deref(),
+            Some("original-http-secret")
+        );
+        let mut replacement =
+            serde_json::json!({"name":name,"token":"replacement-http-secret","url":url});
+        let response = save_mcp_upstream_credential_http(Json(replacement.clone())).await;
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(
+            crate::mcp_upstream_credentials::read_credential_for_url(name, url)
+                .unwrap()
+                .as_deref(),
+            Some("original-http-secret")
+        );
+        replacement["replace"] = serde_json::json!(true);
+        let response = save_mcp_upstream_credential_http(Json(replacement)).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            crate::mcp_upstream_credentials::read_credential_for_url(name, url)
+                .unwrap()
+                .as_deref(),
+            Some("replacement-http-secret")
+        );
+        crate::mcp_upstream_credentials::delete_upstream_credential(name).unwrap();
     }
 
     #[tokio::test]
