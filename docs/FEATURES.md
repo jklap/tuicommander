@@ -2590,7 +2590,7 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
 
 ### 23.9 Orphan SSH Process Cleanup
 - `check_local_port()` distinguishes `PermissionDenied` (privileged ports) from `AddrInUse`
-- `kill_ssh_on_port()` finds SSH processes holding a port via `lsof`, verifies with `ps`, sends SIGTERM
+- `kill_ssh_on_port()` finds SSH processes holding a port via `lsof`, verifies each is `ssh` natively (executable path / kernel name, no `ps` exec), sends SIGTERM
 - Only kills confirmed `ssh` processes — never unrelated services
 
 ### 23.10 Statusbar Shield

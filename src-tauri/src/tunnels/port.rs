@@ -18,7 +18,8 @@ pub async fn check_local_port(port: u16) -> Result<(), String> {
 }
 
 /// Kill orphaned SSH processes holding a local port.
-/// Uses `lsof` to find PIDs, then verifies each is an `ssh` process before sending SIGTERM.
+/// Uses `lsof` to find PIDs, then verifies each is an `ssh` process (natively,
+/// see [`is_ssh_process`]) before sending SIGTERM.
 #[cfg(unix)]
 pub async fn kill_ssh_on_port(port: u16) {
     let output = tokio::process::Command::new("lsof")
@@ -29,26 +30,28 @@ pub async fn kill_ssh_on_port(port: u16) {
     let Ok(output) = output else { return };
     let pids = String::from_utf8_lossy(&output.stdout);
     for pid_str in pids.split_whitespace() {
-        let Ok(pid) = pid_str.parse::<i32>() else {
+        let Ok(pid) = pid_str.parse::<u32>() else {
             continue;
         };
-        let ps = tokio::process::Command::new("ps")
-            .args(["-p", pid_str, "-o", "comm="])
-            .output()
-            .await;
-        let is_ssh = ps
-            .as_ref()
-            .map(|o| {
-                let comm = String::from_utf8_lossy(&o.stdout);
-                comm.trim().ends_with("ssh")
-            })
-            .unwrap_or(false);
-        if is_ssh {
-            unsafe {
-                libc::kill(pid, libc::SIGTERM);
-            }
+        if is_ssh_process(pid) {
+            tuic_core::process_info::terminate(pid);
         }
     }
+}
+
+/// Whether `pid` runs an `ssh` binary, by executable path or kernel name.
+/// Replaces `ps -p <pid> -o comm=`, which a sandboxed host refuses to exec —
+/// there the check read "not ssh" for everything and the orphan survived.
+#[cfg(unix)]
+fn is_ssh_process(pid: u32) -> bool {
+    tuic_core::process_info::exe(pid).is_some_and(|exe| names_ssh(&exe.to_string_lossy()))
+        || tuic_core::process_info::info(pid).is_some_and(|process| names_ssh(&process.comm))
+}
+
+/// The `ends_with("ssh")` rule the `ps comm` check applied.
+#[cfg(unix)]
+fn names_ssh(name: &str) -> bool {
+    name.trim().ends_with("ssh")
 }
 
 /// Find a free port on 127.0.0.1 by letting the OS assign one.
@@ -62,6 +65,22 @@ pub async fn find_free_port() -> std::io::Result<u16> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn ssh_detection_reads_the_process_natively() {
+        assert!(names_ssh("/usr/bin/ssh"));
+        assert!(names_ssh("ssh"));
+        assert!(!names_ssh("/bin/sleep"));
+        let mut sleeper = std::process::Command::new("/bin/sleep")
+            .arg("30")
+            .spawn()
+            .expect("spawn sleep");
+        let is_ssh = is_ssh_process(sleeper.id());
+        let _ = sleeper.kill();
+        let _ = sleeper.wait();
+        assert!(!is_ssh, "a sleep is not an ssh");
+    }
 
     #[tokio::test]
     async fn check_local_port_returns_err_when_bound() {
