@@ -7,6 +7,9 @@ import type { WorkItemDetail } from "../../../../types/work-items.gen";
 import { TasksDetail } from "../TasksDetail";
 import { detail, provider, reference } from "./detailFixture";
 
+// A stale response from an async provider settles over several microtasks; only a macrotask outlasts them all.
+const flushMacrotask = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+
 afterEach(() => vi.useRealTimers());
 
 describe("TasksDetail", () => {
@@ -208,7 +211,7 @@ describe("TasksDetail", () => {
 		setRef({ ...reference, id: "2" });
 		await screen.findByText("Second item");
 		finish(detail());
-		await Promise.resolve();
+		await flushMacrotask();
 		expect(screen.queryByText("Inspect the work item")).toBeNull();
 	});
 
@@ -268,7 +271,7 @@ describe("TasksDetail", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Close as completed" }));
 		await waitFor(() => expect(screen.getByRole("status").textContent).toBe("Closed"));
 		finish(detail());
-		await Promise.resolve();
+		await flushMacrotask();
 		expect(screen.getByRole("status").textContent).toBe("Closed");
 	});
 });

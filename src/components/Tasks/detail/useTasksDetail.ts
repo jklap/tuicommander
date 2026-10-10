@@ -37,6 +37,24 @@ export function useTasksDetail(props: {
 		props.onItemChange?.(value);
 	};
 
+	// Re-read pages already opened rather than dropping their comments after a refresh or an action.
+	async function withOpenPages(
+		first: WorkItemDetail,
+		provider: WorkItemProvider,
+		target: WorkItemRef,
+		signal: AbortSignal,
+	): Promise<WorkItemDetail> {
+		let value = first;
+		for (let page = 1; page < pageCount && value.comments.nextCursor; page++) {
+			const next = await provider.comments(target, value.comments.nextCursor, 50, signal);
+			value = {
+				...value,
+				comments: { entries: mergeEntries(value.comments.entries, next.entries), nextCursor: next.nextCursor },
+			};
+		}
+		return value;
+	}
+
 	async function refresh() {
 		if (!reference || loading() || pending() || paging() || !active()) return;
 		const currentEpoch = epoch;
@@ -47,15 +65,7 @@ export function useTasksDetail(props: {
 		setLoading(true);
 		setError(undefined);
 		try {
-			let value = await provider.detail(target, signal);
-			// Re-read pages already opened rather than dropping their comments on a timer tick.
-			for (let page = 1; page < pageCount && value.comments.nextCursor; page++) {
-				const next = await provider.comments(target, value.comments.nextCursor, 50, signal);
-				value = {
-					...value,
-					comments: { entries: mergeEntries(value.comments.entries, next.entries), nextCursor: next.nextCursor },
-				};
-			}
+			const value = await withOpenPages(await provider.detail(target, signal), provider, target, signal);
 			if (currentEpoch === epoch && currentRequest === request) accept(value);
 		} catch (cause) {
 			if (currentEpoch === epoch && currentRequest === request) report(cause);
@@ -88,6 +98,7 @@ export function useTasksDetail(props: {
 	async function act(action: WorkItemAction, label: string): Promise<boolean> {
 		if (!reference || !detail() || pending() || paging()) return false;
 		const currentEpoch = epoch;
+		const target = reference;
 		// Invalidate an in-flight refresh before applying any optimistic presentation.
 		++request;
 		setLoading(false);
@@ -95,11 +106,12 @@ export function useTasksDetail(props: {
 		setPendingKind(action.kind);
 		setError(undefined);
 		try {
-			const result = await source.act(reference, action, controller.signal);
+			const result = await source.act(target, action, controller.signal);
 			if (currentEpoch !== epoch) return false;
 			if (result.kind !== "item") throw new Error("The provider did not return an updated work item.");
-			pageCount = 1;
-			accept(result.value);
+			const value = await withOpenPages(result.value, source, target, controller.signal);
+			if (currentEpoch !== epoch) return false;
+			accept(value);
 			return true;
 		} catch (cause) {
 			if (currentEpoch === epoch) report(cause);

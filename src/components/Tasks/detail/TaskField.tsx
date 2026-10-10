@@ -13,17 +13,13 @@ export function TaskField(props: {
 	const [text, setText] = createSignal("");
 	const [selected, setSelected] = createSignal<string[]>([]);
 	const [dirty, setDirty] = createSignal(false);
-	createEffect(
-		on(
-			() => JSON.stringify(props.value),
-			() => {
-				const value = props.value;
-				setText(value && value.kind !== "user" && value.kind !== "labels" ? String(value.value) : "");
-				setSelected(value?.kind === "user" || value?.kind === "labels" ? value.value.map((entry) => entry.id) : []);
-				setDirty(false);
-			},
-		),
-	);
+	const syncFromProps = () => {
+		const value = props.value;
+		setText(value && value.kind !== "user" && value.kind !== "labels" ? String(value.value) : "");
+		setSelected(value?.kind === "user" || value?.kind === "labels" ? value.value.map((entry) => entry.id) : []);
+		setDirty(false);
+	};
+	createEffect(on(() => JSON.stringify(props.value), syncFromProps));
 	const editable = () => props.canEdit && props.schema.editable;
 	const options = createMemo(() => {
 		const choices = new Map(props.schema.options.map((option) => [option.id, option]));
@@ -64,7 +60,8 @@ export function TaskField(props: {
 				),
 			};
 		else if (text() !== "") value = kind === "number" ? { kind, value: Number(text()) } : { kind, value: text() };
-		if (await props.onSave(value)) setDirty(false);
+		// A provider may accept the call yet keep the old value; show what it holds, not the draft.
+		if (await props.onSave(value)) syncFromProps();
 	}
 	const input = (value: string) => {
 		setText(value);
