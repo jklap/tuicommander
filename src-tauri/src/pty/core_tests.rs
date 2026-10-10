@@ -3193,6 +3193,35 @@ fn a_wrapper_running_real_work_is_not_a_prompt() {
     ));
 }
 
+/// Native snapshot under `sudo su`: the root hops' argv is unreadable to an
+/// unprivileged caller (user decision Q1). The inner shell could be
+/// `bash -c 'long job'`, so an unknown argv must never clear BUSY.
+#[test]
+fn a_shell_with_unknown_argv_does_not_override_busy() {
+    let mut tree = sudo_su_tree();
+    for entry in tree.iter_mut().skip(1) {
+        entry.command.clear();
+        entry.argv_unknown = true;
+    }
+    assert!(
+        !foreground_group_at_prompt(200, &tree),
+        "a root shell whose argv is unknown may be running a script"
+    );
+    let unknown_shell = ProcessTreeEntry {
+        argv_unknown: true,
+        ..process(1, 0, "/bin/zsh", "")
+    };
+    assert!(!is_prompt_shell_process(&unknown_shell));
+    let unknown_wrapper = ProcessTreeEntry {
+        argv_unknown: true,
+        ..process(1, 0, "/usr/bin/sudo", "")
+    };
+    assert!(
+        is_prompt_shell_process(&unknown_wrapper),
+        "wrappers are judged by name alone, as before"
+    );
+}
+
 #[test]
 fn an_unknown_root_is_not_a_prompt() {
     // No snapshot entry for the pid means no evidence; fail toward busy.
