@@ -1742,13 +1742,6 @@ pub fn run() {
     let index_strategy = config.index_strategy.clone();
     let builder = tauri::Builder::default();
     let builder = plugins::register_plugin_protocol(builder);
-    let builder = builder.plugin(
-        tauri::plugin::Builder::<tauri::Wry>::new("window-background")
-            .js_init_script(themes::window_background::initialization_script(
-                startup_background,
-            ))
-            .build(),
-    );
     let builder = builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
