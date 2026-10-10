@@ -145,11 +145,13 @@ export function CommandInput(props: CommandInputProps) {
 	});
 
 	function handleInput(e: InputEvent & { currentTarget: HTMLTextAreaElement }) {
+		browserDictation.cancel();
 		updateInput(e.currentTarget.value);
 	}
 
 	function insertText(text: string) {
 		if (props.sessionExists === false || !textareaEl) return;
+		browserDictation.cancel();
 		textareaEl.setRangeText(text, textareaEl.selectionStart, textareaEl.selectionEnd, "end");
 		updateInput(textareaEl.value);
 		textareaEl.focus();

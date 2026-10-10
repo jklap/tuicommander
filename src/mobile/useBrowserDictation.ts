@@ -94,7 +94,7 @@ export function useBrowserDictation(options: {
 				if (recognition !== current) return;
 				const draft = options.getDraft();
 				// Replace the previous hypothesis only while it still owns the draft tail.
-				// A user edit starts a new append boundary rather than losing typed text.
+				// Manual composer edits cancel recognition before changing the draft.
 				const base = renderedSpeech && draft.endsWith(renderedSpeech) ? draft.slice(0, -renderedSpeech.length) : draft;
 				const speech = Array.from(event.results, (result) => result[0].transcript.trim())
 					.join(" ")

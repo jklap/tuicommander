@@ -255,14 +255,46 @@ it("excludes browser speech during a pending server permission prompt", async ()
 	);
 });
 
+it.each(["run tests in package", "replace everything", ""])(
+	"returns the mic to idle and keeps the edited draft %j after queued speech",
+	async (edited) => {
+		// Catches: editing leaves recording active or a queued result overwrites the manual draft.
+		browserSpeech();
+		mount();
+		const server = await screen.findByRole("button", { name: "Start voice conversation" });
+		const input = screen.getByRole("textbox") as HTMLTextAreaElement;
+		fireEvent.click(screen.getByRole("button", { name: "Dictate into draft" }));
+		const recognition = FakeRecognition.latest;
+		recognition.result("run tests", true);
+		const lateResult = recognition.onresult!;
+		fireEvent.input(input, { target: { value: edited } });
+		expect(recognition.abort).toHaveBeenCalledTimes(1);
+		expect(screen.getByRole("button", { name: "Dictate into draft" }).getAttribute("aria-pressed")).toBe("false");
+		expect(server.hasAttribute("disabled")).toBe(false);
+		rpc.mockClear();
+		lateResult({ results: [{ isFinal: true, 0: { transcript: "run tests now" } }] });
+		expect(input.value).toBe(edited);
+		expect(rpc).not.toHaveBeenCalled();
+		fireEvent.click(screen.getByRole("button", { name: "Dictate into draft" }));
+		FakeRecognition.latest.result("continue");
+		expect(input.value).toBe(edited ? `${edited} continue` : "continue");
+	},
+);
+
 it("aborts recognition and ignores late results when the screen is left", async () => {
 	// Catches: background recording or modifying an abandoned composer.
 	browserSpeech();
 	const { unmount } = mount();
 	await screen.findByRole("button", { name: "Start voice conversation" });
+	const input = screen.getByRole("textbox") as HTMLTextAreaElement;
 	fireEvent.click(screen.getByRole("button", { name: "Dictate into draft" }));
 	const recognition = FakeRecognition.latest;
+	recognition.result("keep draft");
+	const lateResult = recognition.onresult!;
 	unmount();
 	expect(recognition.abort).toHaveBeenCalledTimes(1);
-	expect(recognition.onresult).toBeNull();
+	rpc.mockClear();
+	lateResult({ results: [{ isFinal: true, 0: { transcript: "late speech" } }] });
+	expect(input.value).toBe("keep draft");
+	expect(rpc).not.toHaveBeenCalled();
 });
