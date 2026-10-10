@@ -18,7 +18,7 @@ use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
 use super::payload::GrabPayload;
-use super::source::{self, ScriptMaps};
+use super::source_cdp::{self as source, ScriptMaps};
 
 const MAX_PNG_BYTES: usize = 2 * 1024 * 1024;
 /// One deadline for closing every browser at exit, not one per repository.

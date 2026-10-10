@@ -20,3 +20,6 @@ mod hints;
 #[cfg(feature = "desktop")]
 pub(crate) mod launcher;
 pub(crate) mod send;
+
+#[cfg(feature = "desktop")]
+mod source_cdp;

@@ -29,7 +29,7 @@ pub(crate) fn pick_evidence(raw: &Value) -> Result<String, String> {
         raw["styles"].clone(),
         raw["rect"].clone(),
     );
-    let source = super::source::resolve(&raw["source"], &mut super::source::ScriptMaps::default());
+    let source = super::source::resolve(&raw["source"]);
     Ok(fenced(
         &payload.to_prompt_with_source(None, source.as_ref()),
     ))
