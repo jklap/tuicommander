@@ -4085,8 +4085,8 @@ mod tests {
     /// body fields the TCP mock must report.
     #[cfg(unix)]
     struct FakeLocalInstance {
-        _temp: tempfile::TempDir,
-        _config: tempfile::TempDir,
+        _temp: tuic_test_support::SocketDir,
+        _config: tuic_test_support::SocketDir,
         _server: tokio::task::JoinHandle<()>,
         health_body: String,
     }
@@ -4182,14 +4182,12 @@ mod tests {
         })
     }
 
-    /// A short directory under `/tmp`: a Unix socket path must fit SUN_LEN,
-    /// which nextest's deep per-test TMPDIR does not.
+    /// A private per-test socket dir under the test socket root (never a
+    /// literal `/tmp`): a Unix socket path must fit SUN_LEN, which nextest's
+    /// deep per-test TMPDIR does not.
     #[cfg(unix)]
-    fn short_socket_dir() -> tempfile::TempDir {
-        tempfile::Builder::new()
-            .prefix("tuicv")
-            .tempdir_in("/tmp")
-            .unwrap()
+    fn short_socket_dir() -> tuic_test_support::SocketDir {
+        crate::test_support::short_socket_tempdir()
     }
 
     #[cfg(unix)]
@@ -4265,6 +4263,14 @@ mod tests {
         let temp = short_socket_dir();
         let config = short_socket_dir();
         let dev = tuic_ipc::named_socket_path("dev-box", temp.path());
+        // The production name (`tuic-mcp-<16 hex>.sock`) cannot be shortened
+        // and is connected by absolute path, so a long TMPDIR cannot hold it.
+        if !tuic_test_support::socket_test_can_run(
+            "named_local_identity_requires_that_instances_socket",
+            &dev,
+        ) {
+            return;
+        }
         let _dev = serve_unix_health(&dev, "dev-process");
         let other = tuic_ipc::named_socket_path("other-box", temp.path());
         let _other = serve_unix_health(&other, "other-process");

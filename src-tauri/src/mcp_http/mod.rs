@@ -9227,17 +9227,16 @@ mod tests {
         );
     }
 
+    /// A per-test socket dir; the longest name these tests bind there is
+    /// `mcp-<pid>.sock` (16 bytes with a 7-digit Linux pid).
     #[cfg(unix)]
-    fn short_socket_test_dir() -> tempfile::TempDir {
-        let dir = tempfile::Builder::new()
-            .prefix("s")
-            .tempdir_in(crate::test_support::short_socket_test_temp_root())
-            .expect("create repository-local socket test dir");
-        assert!(
-            dir.path().join("mcp-4294967295.sock").as_os_str().len() < 104,
-            "socket test path exceeds macOS SUN_LEN: {}",
-            dir.path().display()
-        );
+    fn short_socket_test_dir() -> tuic_test_support::SocketDir {
+        let dir = crate::test_support::short_socket_tempdir();
+        if let Err(reason) =
+            tuic_test_support::unix_socket_path_fits(&dir.path().join("mcp-4194304.sock"))
+        {
+            panic!("socket test path exceeds SUN_LEN: {reason}");
+        }
         dir
     }
 

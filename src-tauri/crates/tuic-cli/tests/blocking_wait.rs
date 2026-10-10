@@ -47,8 +47,7 @@ fn request(stream: &mut std::os::unix::net::UnixStream) -> serde_json::Value {
 
 fn wait_response(args: &[&str], delay: Duration) -> (std::process::Output, Duration) {
     let socket = tuic_test_support::short_socket_path(&format!(
-        "tuic-wait-{}-{}.sock",
-        std::process::id(),
+        "w{}.sock",
         NEXT_SOCKET.fetch_add(1, Ordering::Relaxed)
     ));
     let listener = UnixListener::bind(&socket).unwrap();
@@ -134,8 +133,7 @@ fn default_agent_wait_accepts_response_after_three_seconds() {
 #[test]
 fn non_wait_request_still_times_out_after_about_three_seconds() {
     let socket = tuic_test_support::short_socket_path(&format!(
-        "tuic-nonwait-{}-{}.sock",
-        std::process::id(),
+        "nw{}.sock",
         NEXT_SOCKET.fetch_add(1, Ordering::Relaxed)
     ));
     let listener = UnixListener::bind(&socket).unwrap();
