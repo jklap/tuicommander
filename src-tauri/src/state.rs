@@ -6585,7 +6585,8 @@ pub(crate) mod tests_support {
         let dir = tempfile::tempdir().expect("create temp dir");
         let path = dir.path();
         for args in [
-            vec!["init"],
+            // No git template: no hooks/*.sample copies (see src-tauri/AGENTS.md).
+            vec!["init", "--template="],
             vec!["config", "user.email", "test@test.com"],
             vec!["config", "user.name", "Test"],
         ] {
