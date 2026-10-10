@@ -1,3 +1,16 @@
+## Private temp dirs for mdkb install and Tailscale certs (tmp-dir-cleanup phase A, 2026-10-09) — Rust restart required
+
+Unit tests cover the staging helpers with fake files and a fake `tailscale`; these need the real tools.
+
+- [ ] **mdkb install with elevation.** With `/usr/local/bin` not writable by you, Settings → install
+  mdkb: the admin prompt appears, mdkb lands in `/usr/local/bin/mdkb` and runs, and afterwards no
+  `mdkb-install*` directory is left in `$TMPDIR` (on Linux with `TMPDIR` unset: none in `/tmp`, and
+  a pre-created `/tmp/mdkb-install` owned by another user is ignored).
+- [ ] **Tailscale cert via the CLI.** On a machine without `/var/run/tailscale/tailscaled.sock`
+  (macOS App Store Tailscale, Windows) enable Tailscale HTTPS: the cert is provisioned and served,
+  and no `tuicommander-certs*` directory is left in `$TMPDIR` (the App Store CLI can still write
+  into the new random subdirectory).
+
 ## Test scratch without `~/Gits` (gits-dir-cleanup, 2026-10-09) — no app restart needed
 
 Unit and shell tests cover the resolvers; these need a real, unsandboxed run.
@@ -11,8 +24,9 @@ Unit and shell tests cover the resolvers; these need a real, unsandboxed run.
   outside the sandbox, on a quiet machine (the in-checkout base is unsafe wherever writes to the
   checkout's `.git/hooks`/`.git/config` are denied, as in the sandbox, so never recommend it as a
   default). If the default is noticeably slower or a first-exec timing test
-  flakes, record the numbers in `src-tauri/AGENTS.md`'s exec-scan bullet and consider
-  `TUIC_TEST_TMP_BASE=/tmp/tuic-tests-$(id -u)` as the macOS default.
+  flakes, record the numbers in `src-tauri/AGENTS.md`'s exec-scan bullet and consider a
+  private, `$TMPDIR`-independent base you own (never a literal `/tmp`, which
+  `scripts/check-no-hardcoded-tmp.mjs` rejects) as the opt-in mitigation.
 - [ ] **Remote fixture client.** `scripts/run-remote-fixture.sh <test-support tuic-remote>` prints
   `Fixture TMPDIR: …`; a separate shell with that `TMPDIR` exported reaches the fixture with
   `tuic ls`.
