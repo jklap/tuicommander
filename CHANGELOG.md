@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Added the provider-neutral Tasks data contract and a local in-memory development provider; visible Tasks integration follows separately.
+
 - Keep mobile session history advancing after the terminal reaches its 10,000-row history cap, so live redraws do not erase already displayed output (#1681-507e).
 
 - Unify MCP automation actions with HTTP/IPC validation and results; add `tuic automations` for definitions, previews, history, summaries and Run Now (#1630-cbfa, #1621-5dce).
