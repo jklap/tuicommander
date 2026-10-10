@@ -24,8 +24,8 @@ Read [`docs/sync-matrix.md`](docs/sync-matrix.md) before any feature/API/config 
 
 ## Tests
 
-- Run standalone Rust, Vitest, and plugin test commands through `scripts/with-test-tmp.sh`; `make check`, `make test-shell`, `make cov`, and `make mutants` set their own repository-local test temp root. This does not apply to `make dev` or `cargo run`.
-- Bare `cargo test` Rust test binaries initialize `TMPDIR`, `TMP`, and `TEMP` from `TUIC_TEST_TMP_ROOT` or this checkout's `.tmp/tuic-tests` before libtest starts; Nextest does the same for every test binary through `.config/nextest.toml` setup scripts. New Rust tests must use `test_temp_root()` or assert their scratch paths stay inside it. Neither mechanism changes `make dev` or `cargo run`.
+- Run standalone Rust, Vitest, and plugin test commands through `scripts/with-test-tmp.sh`; `make check`, `make test-shell`, `make cov`, and `make mutants` set their own per-run test temp root under `$TMPDIR/tuic-tests` (never `$HOME`; `TUIC_TEST_TMP_BASE` overrides the base). This does not apply to `make dev` or `cargo run`.
+- Bare `cargo test` Rust test binaries initialize `TMPDIR`, `TMP`, and `TEMP` from `TUIC_TEST_TMP_ROOT`, else a per-checkout dir under `${TUIC_TEST_TMP_BASE:-$TMPDIR/tuic-tests}`, before libtest starts; Nextest does the same for every test binary through `.config/nextest.toml` setup scripts. New Rust tests must use `test_temp_root()` or assert their scratch paths stay inside it. Neither mechanism changes `make dev` or `cargo run`.
 
 - **Test only the changed behavior.** Routine validation MUST use the narrowest test filters that cover the production code, protocol surface, fixtures, or test support changed by the task. Do not run full-crate, full-app, full-tree, or unrelated suites merely for reassurance; they waste shared build time and obscure relevant evidence. Expand beyond targeted tests only when a documented gate explicitly requires it, targeted evidence proves a cross-cutting risk, or Boss explicitly asks for the broader run.
 - Before declaring a change complete, run `./scripts/check-gate.sh` (or `make check-gate`) —
