@@ -37,22 +37,16 @@ fn log_keeps_each_new_line_after_grid_history_fills() {
 // The pre-cap replay is the differential oracle: stream bytes and geometry are identical.
 #[test]
 fn recorded_redraw_feeds_the_same_mobile_log_before_and_after_grid_cap() {
-    let bytes = include_bytes!("../../../../tests/visual/mobile-reading/coordinator.raw");
+    let bytes = include_bytes!("fixtures/coordinator.raw");
     let mut short = VtLogBuffer::new(27, 71, 20_000);
     let mut capped = VtLogBuffer::new(27, 71, 20_000);
     fill(&mut short, 50);
     fill(&mut capped, 10_050);
     let short_start = short.total_lines();
     let capped_start = capped.total_lines();
-    let mut cursor = capped_start;
-    let mut frames = Vec::new();
-    frames.push(serde_json::json!({"lines": [], "screen": capped.screen_log_lines()}));
     for chunk in bytes.chunks(2048) {
         short.process(chunk);
         capped.process(chunk);
-        let (lines, next) = capped.lines_since_owned(cursor, usize::MAX);
-        frames.push(serde_json::json!({"lines": lines, "screen": capped.screen_log_lines()}));
-        cursor = next;
     }
     // The native grid still retains producer output: isolate log extraction from VT loss.
     let tail = |buf: &VtLogBuffer| {
@@ -78,20 +72,6 @@ fn recorded_redraw_feeds_the_same_mobile_log_before_and_after_grid_cap() {
         .into_iter()
         .map(|line| line.text())
         .collect();
-    if let Ok(output) = std::env::var("TUIC_MOBILE_REPLAY_JSON") {
-        let output = std::path::PathBuf::from(output);
-        assert!(
-            output.starts_with(
-                std::env::var("TUIC_TEST_TMP_ROOT").expect("repository test tmp root")
-            )
-        );
-        std::fs::write(
-            output,
-            serde_json::to_vec(&serde_json::json!({"frames": frames, "expected": expected}))
-                .unwrap(),
-        )
-        .unwrap();
-    }
     assert!(
         !expected.is_empty(),
         "recording must commit real output rows"
