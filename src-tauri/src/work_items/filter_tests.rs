@@ -96,10 +96,10 @@ fn board_and_grouped_pages_project_authoritative_lanes() {
             .collect::<Vec<_>>(),
         ["high", "low"]
     );
-    provider.boards[0].columns[1].action = WorkItemAction::EditField(WorkItemEdit {
+    provider.boards[0].columns[1].action = Some(WorkItemAction::EditField(WorkItemEdit {
         field_id: "priority".into(),
         value: Some(WorkItemFieldValue::Enum("missing".into())),
-    });
+    }));
     assert_eq!(
         provider.board("priority", &query(50)).unwrap().lanes[0].cards[0]
             .moves

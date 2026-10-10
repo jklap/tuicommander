@@ -155,7 +155,7 @@ pub struct WorkItemBoardColumn {
     pub id: String,
     pub name: String,
     /// Drop dispatches a provider action: field update or workflow transition.
-    pub action: WorkItemAction,
+    pub action: Option<WorkItemAction>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]

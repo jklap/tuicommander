@@ -109,7 +109,7 @@ fn scoped_identity_and_rejected_actions_preserve_detail() {
 fn board_actions_change_query_results_and_invalidate_old_cursor() {
     let mut provider = demo_provider();
     let page = provider.list(&query(1)).unwrap();
-    let action = provider.boards[0].columns[1].action.clone();
+    let action = provider.boards[0].columns[1].action.clone().unwrap();
     provider.act(Some(&reference("1")), action).unwrap();
     let filtered = WorkItemQuery {
         saved_filter_id: Some("high".into()),

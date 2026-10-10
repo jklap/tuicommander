@@ -33,7 +33,7 @@ describe("local work-item provider", () => {
 		const board = await provider.board("priority", query());
 		expect(board.lanes[0].cards.map((card) => card.item.key)).toEqual(["DEMO-1", "DEMO-3"]);
 		expect(board.lanes[0].cards[0].moves.map((move) => move.columnId)).toEqual(["high", "low"]);
-		await provider.act(reference, board.board.columns[1].action);
+		await provider.act(reference, board.lanes[0].cards[0].moves[1].action);
 		const groups = await provider.grouped({ ...query(), groupBy: "priority" });
 		expect(groups.groups.map((group) => [group.name, group.items.length])).toEqual([
 			["High", 1],
