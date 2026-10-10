@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 - Added the provider-neutral Tasks data contract and a local in-memory development provider; visible Tasks integration follows separately.
+- Add the generic Tasks list component with account-scoped sources, provider presets and filters, debounced search, sorting, virtual rows and cursor pagination. Shell mounting remains a separate integration step (#1686-ce77).
 
 - Restore missing live PTY identity bindings on MCP requests so spawned children remain linked to their parent in session lists (#1673-da49).
 

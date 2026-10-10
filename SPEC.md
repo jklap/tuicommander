@@ -22,6 +22,15 @@ Unknown evidence remains unverified, and off+online never passes vacuously. Exis
 
 ## Overview
 
+### Tasks list component — Implemented (#1686-ce77)
+
+`TasksList` is a host-rendered Solid component backed by the data-only work-item
+provider port. It offers account-scoped sources, presets, descriptor filters,
+250 ms search debounce, provider sorting, virtual rows and cursor pagination.
+The query controller keeps at most 32 cached pages, ignores obsolete requests,
+and labels retained rows stale after an error. Mounting the Tasks shell is a
+separate integration step.
+
 TUICommander is a multi-agent terminal orchestrator designed to manage supported AI coding agents, including Claude Code, Gemini CLI, OpenCode, Aider, and Codex, in parallel. It provides per-pane zoom, git worktree isolation, and GitHub integration.
 
 ## Goals
