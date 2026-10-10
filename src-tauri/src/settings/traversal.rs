@@ -70,17 +70,16 @@ impl Catalogue {
                 .filter(|v| v.get("type").and_then(Value::as_str) != Some("null"))
             {
                 let mut variant = variant.clone();
-                if node.get("anyOf").is_some() && variants.iter().any(|v| v["type"] == "null") {
-                    if let Some(ty) = variant
+                if node.get("anyOf").is_some()
+                    && variants.iter().any(|v| v["type"] == "null")
+                    && let Some(ty) = variant
                         .get("type")
                         .and_then(Value::as_str)
                         .map(str::to_owned)
-                    {
-                        variant["type"] = serde_json::json!([ty, "null"]);
-                        if let Some(choices) = variant.get_mut("enum").and_then(Value::as_array_mut)
-                        {
-                            choices.push(Value::Null);
-                        }
+                {
+                    variant["type"] = serde_json::json!([ty, "null"]);
+                    if let Some(choices) = variant.get_mut("enum").and_then(Value::as_array_mut) {
+                        choices.push(Value::Null);
                     }
                 }
                 self.walk(

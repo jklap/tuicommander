@@ -9005,6 +9005,11 @@ export const settingsCatalogue = {
   "exclusions": [
     {
       "store": "app",
+      "path": "/session_duration_migrated",
+      "reason": "Internal legacy session-duration migration marker"
+    },
+    {
+      "store": "app",
       "path": "/mcp_config_installed",
       "reason": "One-time MCP installation migration marker, not a user preference."
     },

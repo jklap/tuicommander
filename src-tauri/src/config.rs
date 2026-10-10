@@ -863,6 +863,10 @@ pub(crate) struct ServicesConfig {
 
 #[derive(Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct AppConfig {
+    /// Internal one-shot legacy-default migration state; never a user setting.
+    #[serde(default)]
+    #[schemars(extend("x-not-setting" = "Internal legacy session-duration migration marker"))]
+    pub(crate) session_duration_migrated: bool,
     #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"next_session","effect":"Used when the next session or process starts; existing sessions retain their launch configuration.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) shell: Option<String>,
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"next_session","effect":"Used when the next session or process starts; existing sessions retain their launch configuration.","operations":["get","set"],"confirmationClass":"ordinary"}))]
@@ -1254,6 +1258,7 @@ fn default_remote_port() -> u16 {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
+            session_duration_migrated: true,
             shell: None,
             font_family: "JetBrains Mono".to_string(),
             font_size: 14,
@@ -2078,6 +2083,15 @@ pub(crate) struct ConfigSaveRequest<T> {
 // ---------------------------------------------------------------------------
 
 const APP_CONFIG_FILE: &str = "config.json";
+
+// Internal foundation; transport registration is deliberately deferred to cutover.
+#[path = "settings/app.rs"]
+#[allow(
+    dead_code,
+    reason = "owner seam is consumed by the later settings cutover"
+)]
+pub(crate) mod settings_app;
+
 const NOTIFICATION_CONFIG_FILE: &str = "notifications.json";
 const UI_PREFS_FILE: &str = "ui-prefs.json";
 const REPO_SETTINGS_FILE: &str = "repo-settings.json";
@@ -2359,6 +2373,8 @@ impl AppSecretSnapshot {
 }
 
 fn config_for_disk(mut config: AppConfig) -> Result<AppConfig, String> {
+    // All writes express current intent, including callers omitting this internal field.
+    config.session_duration_migrated = true;
     config.services.auth.session_token_exists = persist_secret(
         crate::credentials::Credential::RemoteSessionToken,
         &config.services.auth.session_token,
@@ -3028,15 +3044,16 @@ fn read_app_config_unlocked(
     }
 }
 
-/// Move the old 24h default to the new 30-day default. Returns `true` when changed.
-/// Any other value is a deliberate choice and stays. Once persisted the value no
-/// longer matches, so this runs once.
+/// Migrate legacy files once, persisting completion even for non-legacy durations.
+/// Later explicit 24h choices must survive every reader and writer.
 fn migrate_legacy_session_token_duration(config: &mut AppConfig) -> bool {
-    let auth = &mut config.services.auth;
-    if auth.session_token_duration_secs != LEGACY_SESSION_TOKEN_DURATION_SECS {
+    if config.session_duration_migrated {
         return false;
     }
-    auth.session_token_duration_secs = default_session_token_duration_secs();
+    if config.services.auth.session_token_duration_secs == LEGACY_SESSION_TOKEN_DURATION_SECS {
+        config.services.auth.session_token_duration_secs = default_session_token_duration_secs();
+    }
+    config.session_duration_migrated = true;
     true
 }
 
@@ -5119,12 +5136,20 @@ mod tests {
 
         assert_eq!(second.services.auth.session_token_duration_secs, 2_592_000);
         assert_eq!(fs::read_to_string(&path).unwrap(), after_first);
+        let mut explicit = second;
+        explicit.services.auth.session_token_duration_secs = 86_400;
+        save_app_config(explicit).unwrap();
+        assert_eq!(
+            load_app_config().services.auth.session_token_duration_secs,
+            86_400
+        );
     }
 
     #[test]
     fn app_config_round_trip() {
         let dir = TempDir::new().unwrap();
         let cfg = AppConfig {
+            session_duration_migrated: true,
             shell: Some("/bin/zsh".to_string()),
             progress_tracking: false,
             font_family: "Fira Code".to_string(),
