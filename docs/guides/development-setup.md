@@ -120,6 +120,20 @@ them by hand. `make check` runs `scripts/check-no-home-gits.mjs`, which fails on
 `$HOME/Gits` path in code or tooling. Run standalone Rust tests through the
 wrapper.
 
+Nothing may be written, created or bound under a hard-coded `/tmp`, `/var/tmp`,
+`/private/tmp` or `/dev/shm`: derive scratch from the caller's temp dir
+(`std::env::temp_dir()`/`tempfile`, `os.tmpdir()`, `"${TMPDIR:-/tmp}"`, the test
+roots above). `make check` runs `scripts/check-no-hardcoded-tmp.mjs`, which fails
+on a write-shaped use of those literals in code or tooling (including the code
+blocks of `.claude/skills/*/SKILL.md`). Other mentions — a fixture string, a
+classifier input — are allowed only through its `file::fn` allow-list (each entry
+with a reason) or the shrink-only per-file counts in
+`scripts/hardcoded-tmp-baseline.json`: a count may go down (lower the baseline in
+the same change, `node scripts/check-no-hardcoded-tmp.mjs --write-baseline`) but
+never up. The `/tmp` socket fallbacks described above are the known exceptions,
+allow-listed as `PHASE-B` until the socket roots move under `$TMPDIR`. New tests
+use a fake root that never exists rather than a `/tmp/...` string.
+
 ### Live peer-mail wake canary
 
 After a Rust rebuild, run this against the isolated test instance, not the

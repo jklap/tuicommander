@@ -837,7 +837,7 @@ When changing how `make mutants` selects, builds or runs mutants:
 | `CONTRIBUTING.md` | The install line and the one-paragraph mention |
 
 ### Test scratch roots
-When changing where tests, the wrapper or fixtures put scratch files or Unix sockets (`TUIC_TEST_HOST_TMPDIR`, `TUIC_TEST_TMP_BASE`, `TUIC_TEST_TMP_ROOT`, `TUIC_TEST_SOCKET_ROOT`, prune rules, the socket budget):
+When changing where tests, the wrapper, fixtures, scripts or agent skills put scratch files or Unix sockets (a hard-coded temp dir, `TUIC_TEST_HOST_TMPDIR`, `TUIC_TEST_TMP_BASE`, `TUIC_TEST_TMP_ROOT`, `TUIC_TEST_SOCKET_ROOT`, prune rules, the socket budget):
 
 | File | What to update |
 |------|----------------|
@@ -847,6 +847,8 @@ When changing where tests, the wrapper or fixtures put scratch files or Unix soc
 | `src-tauri/scripts/nextest-test-tmp.{sh,ps1}` | Same default as the wrapper when no root was chosen (the `.ps1` reimplements the hash) |
 | `scripts/test-tmp-root.mjs` | Node-side resolver for `vitest.config.ts` and `scripts/check-frontend-cycles.mjs` |
 | `scripts/check-no-home-gits.mjs` | Scan roots, patterns and the allow-list |
+| `scripts/check-no-hardcoded-tmp.mjs`, `scripts/hardcoded-tmp-baseline.json` | Scan roots, write patterns, the `file::fn` allow-list (drop `PHASE-B` entries with their fix) and the shrink-only baseline (`--write-baseline` after removing literals) |
+| `.claude/skills/*/SKILL.md`, `tests/terminal-stress/SKILL.md` | Scratch paths in their commands use `"${TMPDIR:-/tmp}"`, never a literal `/tmp` |
 | `scripts/run-remote-fixture.sh`, `scripts/test-remote-mcp.py`, `tools/ipad-repro/run.sh` | Fixture scratch and the printed fixture `TMPDIR` (`docs/user-guide/remote-access.md`) |
 | `docs/guides/development-setup.md` | "Testing" table and prune description |
 | `AGENTS.md`, `CONTRIBUTING.md` | The one-line test temp root descriptions |
