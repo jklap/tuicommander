@@ -6,7 +6,7 @@
 set -euo pipefail
 
 project_root="$(git rev-parse --show-toplevel)"
-test_tmp="${TUIC_TEST_TMP_ROOT:-${TMPDIR:-/tmp}}"
+test_tmp="$(. "$project_root/scripts/test-tmp-lib.sh" && tuic_test_tmp_root "$project_root")"
 mkdir -p "$test_tmp"
 fixture_root="$(mktemp -d "$test_tmp/make-instance-scope.XXXXXX")"
 trap 'rm -rf "$fixture_root"' EXIT

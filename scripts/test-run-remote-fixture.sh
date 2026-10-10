@@ -5,7 +5,7 @@
 set -euo pipefail
 
 root="$(git rev-parse --show-toplevel)"
-base="${TUIC_TEST_TMP_ROOT:-${TMPDIR:-/tmp}}"
+base="$(. "$root/scripts/test-tmp-lib.sh" && tuic_test_tmp_root "$root")"
 fixture="$(mktemp -d "${base%/}/tuic-remote-fixture-test.XXXXXX")"
 # Short enough to hold the named socket even where TMPDIR is long.
 short="$(mktemp -d /tmp/tuic-rft.XXXXXX)"
