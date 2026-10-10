@@ -1,3 +1,13 @@
+## Native process inspection (ps-exec-removal, 2026-10-09) — Rust restart required
+
+`ps` could not run in the sandbox where this was built, so native vs `ps` parity was never compared on a real machine.
+
+- [ ] **Process monitor.** Open the process manager with a few agent tabs busy (`cargo build`): every session lists its descendants, RSS is plausible, CPU% is non-zero for the busy ones (now a lifetime average on macOS, so lower than Activity Monitor's instant value).
+- [ ] **Background work.** In a Claude/Codex tab start `sleep 300 &` via a tool call and end the turn: the tab stays Working until the sleep exits; integration daemons (`mdkb`, `tuic-bridge`, `codex-code-mode-host`) still do not count.
+- [ ] **Nested prompt + sudo.** In a plain shell tab run `sh`: after the prompt-probe silence the tab returns to idle. Then `sudo -s` (or `sudo su`): with `ps` available the tab returns to idle and the log shows ONE `process_snapshot ... falling back to ps` warning; `sudo bash -c 'sleep 60'` stays busy.
+- [ ] **Codex idle in a sandbox.** Run Codex with its sandbox on in a TUIC tab: `state=idle` arrives at the end of each turn (the notify script now writes to `$TUIC_PTY_TTY`).
+- [ ] **Diagnostics.** `POST /diagnostics {"enabled":true}`, wait 30s: the HEALTH line shows a real thread count and `children_cpu=` naming a busy child.
+
 ## Dropped-items actions batch 2 (dropped-items-review #16/#22/#23/#31/#41-#44, #21 fix, 2026-10-09) — Rust restart required
 
 Unit/integration tests cover the logic; these need a running app (isolated `make dev`) and real agents.
