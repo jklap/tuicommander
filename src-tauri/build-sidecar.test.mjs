@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { copyFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -79,6 +79,7 @@ test("sidecar build fails when the release binary is an empty placeholder", (t) 
   assert.notEqual(statSync(bridge).mode & 0o111, 0);
 });
 
+// Catches: publishing a non-executable artifact makes a symlinked CLI reader fail with EACCES.
 test("sidecar_publication_keeps_installed_cli_executable", (t) => {
   const fixture = mkdtempSync(join(tmpdir(), "tuic-sidecar-mode-"));
   t.after(() => rmSync(fixture, { recursive: true, force: true }));
@@ -91,13 +92,19 @@ test("sidecar_publication_keeps_installed_cli_executable", (t) => {
   writeFileSync(join(tools, "rustc"), "#!/bin/sh\necho fixture-target\n", { mode: 0o755 });
   writeFileSync(join(tools, "cargo"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
   writeFileSync(join(release, "tuic-bridge"), "valid bridge", { mode: 0o755 });
-  writeFileSync(join(release, "tuic"), "invalid CLI without execute bits", { mode: 0o644 });
+  writeFileSync(join(release, "tuic"), "#!/bin/sh\nprintf 'invalid new CLI\\n'\n", { mode: 0o644 });
   const installed = join(binaries, "tuic-fixture-target");
-  writeFileSync(installed, "previous executable CLI", { mode: 0o755 });
+  const previousCli = "#!/bin/sh\nprintf 'previous CLI help\\n'\n";
+  writeFileSync(installed, previousCli, { mode: 0o755 });
+  const cliOnPath = join(fixture, "tuic");
+  symlinkSync(installed, cliOnPath);
+  assert.equal(execFileSync(cliOnPath, ["--help"], { encoding: "utf8" }), "previous CLI help\n");
   assert.throws(() => execFileSync(process.execPath, [join(tauri, "build-sidecar.mjs")], {
     env: { ...process.env, PATH: `${tools}:${process.env.PATH}` }, stdio: "pipe",
   }), (error) => /placeholder/.test(String(error.stderr)));
-  assert.equal(readFileSync(installed, "utf8"), "previous executable CLI");
+  // The OS executes through the same symlink after the builder rejects the artifact.
+  assert.equal(execFileSync(cliOnPath, ["--help"], { encoding: "utf8" }), "previous CLI help\n");
+  assert.equal(readFileSync(installed, "utf8"), previousCli);
   assert.notEqual(statSync(installed).mode & 0o111, 0);
   assert.deepEqual(readdirSync(binaries).filter((name) => name.includes(".update.")), []);
 });
