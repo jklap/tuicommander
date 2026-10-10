@@ -22167,7 +22167,10 @@ fn wake_session_errors_and_consumes_entry_when_session_missing() {
 fn query_process_stats_reports_own_process() {
     let own = std::process::id();
     let map = query_process_stats(&[own]);
-    assert!(map.contains_key(&own), "ps must report our own pid");
+    assert!(
+        map.contains_key(&own),
+        "the native read must report our own pid"
+    );
     let (rss, _cpu) = map[&own];
     assert!(
         rss > 0,
@@ -22193,35 +22196,22 @@ fn process_parent_map_covers_the_live_process_table() {
 }
 
 #[cfg(not(windows))]
-#[test]
-fn parse_process_parent_map_skips_unreadable_rows() {
-    let parent_map = parse_process_parent_map(
-        "  PID  PPID\n    1     0\n  100     1\nbogus row\n  101   100\n  102\n  103   100\n",
-    );
-    assert_eq!(
-        parent_map.get(&1).map(Vec::as_slice),
-        Some([100].as_slice())
-    );
-    assert_eq!(
-        parent_map.get(&100).map(Vec::as_slice),
-        Some([101, 103].as_slice()),
-        "a header, a word row and a truncated row must not drop the rows around them"
-    );
-    assert!(
-        !parent_map.contains_key(&102),
-        "a row without a parent column contributes nothing"
-    );
+fn parent_map_from_pairs(pairs: &[(u32, u32)]) -> std::collections::HashMap<u32, Vec<u32>> {
+    let mut map: std::collections::HashMap<u32, Vec<u32>> = std::collections::HashMap::new();
+    for &(pid, parent) in pairs {
+        map.entry(parent).or_default().push(pid);
+    }
+    map
 }
 
-/// The refresh queries `ps` once and walks one subtree per session, so the
+/// The refresh queries the process table once and walks one subtree per session, so the
 /// walk must be a pure function of the shared map: each root gets its own
 /// transitive closure, and an extra root costs no extra query.
 #[cfg(not(windows))]
 #[test]
 fn descendants_are_transitive_and_distributed_per_root() {
-    let parent_map = parse_process_parent_map(
-        "  PID  PPID\n  100     1\n  101   100\n  102   101\n  200     1\n  201   200\n",
-    );
+    let parent_map =
+        parent_map_from_pairs(&[(100, 1), (101, 100), (102, 101), (200, 1), (201, 200)]);
     let mut first = descendants_from_parent_map(&parent_map, 100);
     first.sort_unstable();
     assert_eq!(first, vec![101, 102], "the walk must reach grandchildren");
@@ -22237,7 +22227,7 @@ fn descendants_are_transitive_and_distributed_per_root() {
 #[cfg(not(windows))]
 #[test]
 fn descendants_walk_terminates_on_a_self_parented_row() {
-    let parent_map = parse_process_parent_map("  0     0\n  100     0\n");
+    let parent_map = parent_map_from_pairs(&[(0, 0), (100, 0)]);
     assert_eq!(
         descendants_from_parent_map(&parent_map, 0),
         vec![100],

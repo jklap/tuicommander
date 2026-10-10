@@ -15463,14 +15463,11 @@ pub(crate) fn collect_process_stats(state: &AppState) -> Vec<ProcessStats> {
 /// each one taken while the session lock was held. One shared map serves every
 /// root, so the cost no longer scales with the number of sessions.
 fn process_parent_map() -> Option<std::collections::HashMap<u32, Vec<u32>>> {
+    // Native (`tuic_core::process_info`), not `ps -eo pid,ppid`: sandboxed
+    // hosts refuse to exec the setuid `ps`, which emptied the modal there.
     #[cfg(not(windows))]
     {
-        let output = std::process::Command::new("ps")
-            .args(["-eo", "pid,ppid"])
-            .output()
-            .ok()?;
-        let parent_map = parse_process_parent_map(&String::from_utf8_lossy(&output.stdout));
-        (!parent_map.is_empty()).then_some(parent_map)
+        tuic_core::process_info::parent_map(&tuic_core::process_info::NativeProcessSource)
     }
     #[cfg(windows)]
     {
@@ -15500,27 +15497,6 @@ fn process_parent_map() -> Option<std::collections::HashMap<u32, Vec<u32>>> {
     }
 }
 
-/// Parse `ps -eo pid,ppid` output into a parent -> children map.
-///
-/// Rows that do not read as two PIDs (the header, a truncated line) are
-/// skipped. Aborting on the first unreadable row would report every session as
-/// childless, and one shared map makes that failure global instead of local.
-#[cfg(not(windows))]
-fn parse_process_parent_map(text: &str) -> std::collections::HashMap<u32, Vec<u32>> {
-    let mut parent_map: std::collections::HashMap<u32, Vec<u32>> = std::collections::HashMap::new();
-    for line in text.lines() {
-        let mut parts = line.split_whitespace();
-        let (Some(Ok(pid)), Some(Ok(parent_pid))) = (
-            parts.next().map(str::parse::<u32>),
-            parts.next().map(str::parse::<u32>),
-        ) else {
-            continue;
-        };
-        parent_map.entry(parent_pid).or_default().push(pid);
-    }
-    parent_map
-}
-
 /// Every transitive descendant of `root`, excluding the root itself.
 ///
 /// `seen` guards the walk: the table comes from the OS, and a self-parented row
@@ -15546,35 +15522,19 @@ fn descendants_from_parent_map(
     result
 }
 
-/// Query RSS (KB) and CPU% for a batch of PIDs using `ps` on Unix.
+/// Query RSS (KB) and CPU% for a batch of PIDs on Unix, natively.
+///
+/// CPU% is the process-lifetime average (CPU time over wall time since the
+/// process started) — Linux `ps -o %cpu` semantics. A pid whose usage cannot be
+/// read (gone, or on macOS owned by another user, e.g. under `sudo`) is absent
+/// and reports as 0 KB / 0%.
 #[cfg(not(windows))]
 fn query_process_stats(pids: &[u32]) -> std::collections::HashMap<u32, (u64, f32)> {
-    let mut map = std::collections::HashMap::new();
-    if pids.is_empty() {
-        return map;
-    }
-    let pid_args: Vec<String> = pids.iter().map(|p| p.to_string()).collect();
-    let Ok(output) = std::process::Command::new("ps")
-        .args(["-o", "pid,rss,%cpu", "-p"])
-        .arg(pid_args.join(","))
-        .output()
-    else {
-        return map;
-    };
-    let text = String::from_utf8_lossy(&output.stdout);
-    for line in text.lines().skip(1) {
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() >= 3
-            && let (Ok(pid), Ok(rss), Ok(cpu)) = (
-                parts[0].parse::<u32>(),
-                parts[1].parse::<u64>(),
-                parts[2].parse::<f32>(),
-            )
-        {
-            map.insert(pid, (rss, cpu));
-        }
-    }
-    map
+    tuic_core::process_info::usage_stats(
+        &tuic_core::process_info::NativeProcessSource,
+        pids,
+        std::time::SystemTime::now(),
+    )
 }
 
 /// Query RSS (KB) and CPU% for a batch of PIDs on Windows.
