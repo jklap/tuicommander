@@ -9404,6 +9404,9 @@ mod tests {
                 // `assert_no_field_default_drift_except` and
                 // `app_config_serde_default_for_new_fields`.
                 "mcp_server_enabled",
+                // A missing marker means a legacy file that still needs the
+                // one-shot duration migration; a fresh config has nothing to migrate.
+                "session_duration_migrated",
             ],
         );
     }
