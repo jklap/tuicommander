@@ -30,8 +30,11 @@ occurrence while a previous run remains open. An optional precheck runs before
 scheduled launches: exit 0 allows the agent to run; other exits skip quietly.
 Save the definition before running it.
 
-To pass what the precheck found to the agent, set `inject_output: true` in the
-precheck object through the definition API or MCP, for example:
+To pass what the precheck found to the agent, enable **Include precheck stdout in
+the agent prompt** in the Precheck section and save. The checkbox starts off and
+can be changed for each definition. Turning the precheck off and on resets consent.
+The same setting is `inject_output: true` in the precheck object through the
+definition API or MCP, for example:
 
 ```json
 {"command":"git status --short","timeout_secs":30,"inject_output":true}

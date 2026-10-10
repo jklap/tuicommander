@@ -1,3 +1,7 @@
+## Automation precheck context editor (1624-c5f5)
+
+- [ ] In the Automations dialog, enable a precheck: stdout context starts off. Save with it on, reopen, and confirm it remains on without changing prompt whitespace. Turning the precheck off and back on resets consent. Uses the already-landed backend; this change adds no production Rust behavior and does not require a backend restart. _(Visual capture unavailable: two bundled headless Chrome attempts timed out without a screenshot.)_
+
 ## Automation precheck prompt context (1631-45bf) — Rust restart required
 
 - [ ] After Boss restarts `make dev` or installs `make build`, create an isolated Once automation through the API/MCP with `precheck.inject_output: true`. Confirm a successful scheduled precheck prefixes bounded, marked untrusted stdout before the literal prompt and run history reports `precheck_context`. Compare omitted/false flags and Run Now (literal prompt, no context); stderr must not appear. Targeted dispatch tests exercise the real shell, launch-request boundary and reopened ledger. No desktop instance was launched or restarted by this peer.

@@ -2768,6 +2768,8 @@ deadlines. Reconciliation reports the stop errors after processing those runs.
 Blocked runs remain active; idle alone does not prove success. Rust restart required.
 
 Automation needs-you and failure notices use durable per-run/status/channel claims, existing notification preferences, and canonical saved-run/owning-session bell navigation. Unknown and interrupted outcomes remain history, not success. Notice navigation edits only the current definition; deleted definitions retain read-only run details.
+The Automations editor exposes **Include precheck stdout in the agent prompt**,
+off by default, using the same saved definition flag (#1624-c5f5).
 Automation precheck context (#1631-45bf): definitions can opt in with
 `precheck.inject_output: true` (default false). Proceeding checks prefix the
 literal prompt with delimited, escaped untrusted stdout capped at 16 KiB;

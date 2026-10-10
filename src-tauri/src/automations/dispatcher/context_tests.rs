@@ -49,6 +49,46 @@ fn configured(command: String, flag: Option<bool>) -> Precheck {
     serde_json::from_value(value).unwrap()
 }
 
+// Catches: invalid UTF-8 aborting dispatch, corrupting prompt bytes, or bypassing
+// the context budget when lossy decoding expands an invalid byte to three bytes.
+#[tokio::test]
+async fn invalid_stdout_is_lossy_bounded_context_without_altering_original_prompt() {
+    for (bytes, expected, truncated) in [
+        (vec![b'A', 0xff, b'B'], "A\u{fffd}B".to_owned(), false),
+        (vec![0xff; 6000], "\u{fffd}".repeat(5461), true),
+    ] {
+        let (fixture, id) = Fixture::new(
+            Some(configured(print_file_script("input.txt"), Some(true))),
+            false,
+        );
+        std::fs::write(
+            std::path::Path::new(&fixture.dispatcher.effects.workspace).join("input.txt"),
+            bytes,
+        )
+        .unwrap();
+        fixture.dispatcher.dispatch(&id).await.unwrap();
+        let saved = fixture.saved(&id);
+        assert_eq!(saved.status, RunStatus::Running);
+        let calls = fixture.dispatcher.effects.calls.lock();
+        let prompt = &calls[0].prompt;
+        let (prefix, original) = prompt.split_once("\n</precheck-output>\n\n").unwrap();
+        assert_eq!(original, "Literal {{files}}\nKeep this prompt.");
+        let (_, payload) = prefix
+            .split_once("<precheck-output untrusted=\"true\">\n")
+            .unwrap();
+        assert_eq!(
+            payload
+                .strip_suffix("\n[output truncated]")
+                .unwrap_or(payload),
+            expected
+        );
+        assert_eq!(payload.ends_with("\n[output truncated]"), truncated);
+        let metadata = saved.precheck_context.unwrap();
+        assert!(metadata.injected);
+        assert_eq!(metadata.bytes, expected.len() as u64);
+    }
+}
+
 // Catches: default-on injection, ignoring an explicit opt-out, or losing the
 // opted-in flag during definition persistence/reload.
 #[tokio::test]
