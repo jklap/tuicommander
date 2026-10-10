@@ -202,9 +202,9 @@ pub struct VtLogBuffer {
     capacity: usize,
     /// Whether the previous `process()` call saw the alternate screen active.
     was_alternate: bool,
-    /// Number of scrollback lines already read from the grid.
-    /// Used to detect new scrollback lines after each `process()`.
-    scrollback_read: usize,
+    /// Primary-screen origin at the last extraction, including evicted rows.
+    /// History length stops growing at the cap and cannot serve as this cursor.
+    scrollback_origin: usize,
     /// Monotonically increasing count of all log lines ever pushed (not bounded
     /// by capacity). Used as stable cursor for paginated reads.
     total_pushed: usize,
@@ -240,7 +240,7 @@ impl VtLogBuffer {
             log: VecDeque::new(),
             capacity,
             was_alternate: false,
-            scrollback_read: 0,
+            scrollback_origin: 0,
             total_pushed: 0,
             max_cols: cols,
             pty_cols: cols,
@@ -297,12 +297,12 @@ impl VtLogBuffer {
         //
         // When suppress_capture is set (side panel halved the terminal
         // width), Ink re-renders push fragmented junk into scrollback.
-        // Skip capture but keep scrollback_read in sync. Inline TUIs use
+        // Skip capture but keep scrollback_origin in sync. Inline TUIs use
         // the same keep-cursor-in-sync path so disabling mouse mode does
         // not flush the TUI history into the log.
         if !is_alternate {
-            let total_sb = self.grid.scrollback_count();
-            let delta = total_sb.saturating_sub(self.scrollback_read);
+            let total_sb = self.grid.primary_screen_origin();
+            let delta = total_sb.saturating_sub(self.scrollback_origin);
             if delta > 0 {
                 if !self.suppress_capture && !inline_tui {
                     let mut new_lines = self.grid.read_scrollback_log_lines(delta);
@@ -315,8 +315,9 @@ impl VtLogBuffer {
                 } else {
                     self.note_capture_gap();
                 }
-                self.scrollback_read = total_sb;
             }
+            // Reconciliation may rewind the origin; resynchronize even without new rows.
+            self.scrollback_origin = total_sb;
         }
 
         self.was_alternate = is_alternate;
@@ -349,7 +350,7 @@ impl VtLogBuffer {
         // alternate-screen app is active. Keep the durable-log cursor in the
         // primary coordinate space; syncing it to alt history suppresses normal
         // shell capture after exit until primary history catches up.
-        self.scrollback_read = self.grid.primary_scrollback_count();
+        self.scrollback_origin = self.grid.primary_screen_origin();
         self.note_capture_gap();
     }
 

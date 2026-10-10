@@ -559,8 +559,12 @@ async fn dispatch_mcp_tool_call_with_context(
         .unwrap_or(false);
     match name {
         "automations" => {
-            crate::automations::mcp::handle(args, resolve_mcp_origin_session(state, mcp_session_id))
-                .await
+            crate::automations::mcp::handle(
+                args,
+                resolve_mcp_origin_session(state, mcp_session_id),
+                Arc::clone(state),
+            )
+            .await
         }
         "secret" => crate::secrets::handle_secret(state, args).await,
         "telegram" => crate::telegram::handle_tool(state, args, mcp_session_id).await,

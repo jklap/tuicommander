@@ -58,9 +58,10 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 	const [moreOpen, setMoreOpen] = createSignal(false);
 	const [headerPanel, setHeaderPanel] = createSignal<SessionHeaderPanel | null>(null);
 	const agentType = () => sessionState()?.agent_type;
+	const [browserDictating, setBrowserDictating] = createSignal(false);
 	const voice = useMobileVoice(
 		() => props.session.session_id,
-		() => !!agentType() && props.sessionExists,
+		() => !!agentType() && props.sessionExists && !browserDictating(),
 	);
 	const statusText = () =>
 		({
@@ -247,6 +248,7 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 						classList={{ [styles.voiceActive]: voice.armed() }}
 						aria-label={voice.armed() ? "Stop voice conversation" : "Start voice conversation"}
 						aria-pressed={voice.armed()}
+						disabled={browserDictating()}
 						onClick={() => void voice.toggle()}
 					>
 						<svg
@@ -454,6 +456,8 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 				onInputKeyRequest={(key) => requestComposerInputKey?.(key)}
 			/>
 			<CommandInput
+				serverVoiceRecording={voice.recording()}
+				onBrowserDictating={setBrowserDictating}
 				sessionId={props.session.session_id}
 				managedSession={!!sessionState()?.agent_type}
 				awaitingInput={sessionState()?.awaiting_input}
