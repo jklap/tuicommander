@@ -7,8 +7,10 @@ Unit and shell tests cover the resolvers; these need a real, unsandboxed run.
   longer fail with EACCES. Afterwards nothing new exists under `~/Gits/.tmp` or
   `<checkout>/.tmp/tuic-tests`, and `/tmp/tuic-s*` directories are mode 0700.
 - [ ] **Exec-scan timing on macOS.** Time `make check` twice with the new default
-  (`$TMPDIR/tuic-tests`) and twice with `TUIC_TEST_TMP_BASE=<checkout>/.tmp/tuic-tests`, outside
-  the sandbox, on a quiet machine. If the default is noticeably slower or a first-exec timing test
+  (`$TMPDIR/tuic-tests`) and twice with the opt-in `TUIC_TEST_TMP_BASE=<checkout>/.tmp/tuic-tests`,
+  outside the sandbox, on a quiet machine (the in-checkout base is unsafe wherever writes to the
+  checkout's `.git/hooks`/`.git/config` are denied, as in the sandbox, so never recommend it as a
+  default). If the default is noticeably slower or a first-exec timing test
   flakes, record the numbers in `src-tauri/AGENTS.md`'s exec-scan bullet and consider
   `TUIC_TEST_TMP_BASE=/tmp/tuic-tests-$(id -u)` as the macOS default.
 - [ ] **Remote fixture client.** `scripts/run-remote-fixture.sh <test-support tuic-remote>` prints

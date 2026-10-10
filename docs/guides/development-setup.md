@@ -82,15 +82,22 @@ Test scratch comes from your temp directory, never from `$HOME`:
 
 | Root | Resolution (first match wins) |
 |---|---|
-| host temp | `TUIC_TEST_HOST_TMPDIR` (exported by the wrapper) → `$TMPDIR` → `/tmp` |
-| base | `TUIC_TEST_TMP_BASE` → `<host temp>/tuic-tests` |
-| per-run | `TUIC_TEST_TMP_ROOT` → `scripts/with-test-tmp.sh`'s `<base>/tuic-run.XXXXXX` (nextest without the wrapper: `<base>/tuic-nextest-<hash>`; a bare test binary: `<base>/tuic-proc-<hash>`) |
+| host temp | `TUIC_TEST_HOST_TMPDIR` (exported by every entry point before it repoints `TMPDIR`, so a default never nests) → `$TMPDIR` → the OS temp dir |
+| base | `TUIC_TEST_TMP_BASE` (opt-in) → `<host temp>/tuic-tests` |
+| root | an inherited `TUIC_TEST_TMP_ROOT`, used as is and never deleted → `scripts/with-test-tmp.sh`: a fresh `<base>/tuic-run.XXXXXX`, removed on exit; nextest without the wrapper, a bare test binary and the shell tests: the per-checkout `<base>/tuic-co-<checkout hash>` |
 | Unix sockets | `TUIC_TEST_SOCKET_ROOT` → the per-run root → `<host temp>/tuic-s<hash>` → `/tmp/tuic-s<hash>` |
 
 `scripts/with-test-tmp.sh`, `src-tauri/scripts/nextest-test-tmp.{sh,ps1}`,
+`scripts/mutants.sh` and the shell tests (all through `scripts/test-tmp-lib.sh`),
 `tuic-test-support` and `scripts/test-tmp-root.mjs` (vitest, cycle checker) all
-apply that order. Set `TUIC_TEST_TMP_BASE=<checkout>/.tmp/tuic-tests` to keep
-scratch in the checkout as before.
+apply that order. The checkout hash is FNV-1a 64 of the checkout's physical path,
+the same in every one, so parallel worktrees never share a default root.
+
+`TUIC_TEST_TMP_BASE=<checkout>/.tmp/tuic-tests` still puts scratch in the
+checkout, but only as an explicit opt-in: it is unsafe wherever writes to the
+checkout's `.git/hooks` or `.git/config` are denied (observed in the agent
+sandbox), and a fixture created inside the checkout can reach the real
+repository through `find_repo_root`. Nothing defaults there any more.
 
 Rust socket tests use `tuic-test-support::short_socket_test_temp_root()`. A
 socket root must be at most 49 characters (104-byte `sun_path`, the NUL, eight
@@ -102,7 +109,9 @@ directory owned by another user is refused. If none qualifies, the panic names
 every candidate and `TUIC_TEST_SOCKET_ROOT=<short writable dir>`.
 
 The wrapper prunes, after more than six days unused, only what this tooling
-creates: `tuic-run.*` under the base (and the old `<checkout>/.tmp/tuic-tests`),
+creates: `tuic-run.*` and the per-checkout `tuic-co-*` (and the older
+`tuic-proc-*`/`tuic-nextest-*`) under the base, the old
+`<checkout>/.tmp/tuic-tests` and an inherited root,
 and your own `tuic-s<16 hex>` socket directories in the host temp dir and `/tmp`.
 A prune it cannot complete prints a warning and never fails the command. Earlier
 versions used `~/Gits/.tmp/tuic-tests`, `~/Gits/.tmp/s<16 hex>` and
