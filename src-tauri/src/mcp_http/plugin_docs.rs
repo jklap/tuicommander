@@ -697,8 +697,8 @@ descriptors and a separately paginated comment page on open. Comment entries are
 `review_summary` (state and reviewed commitId). Bodies are markdown, not trusted HTML.
 
 Actions are `create`, `edit_field`, `transition`, `comment`, and `start_work`.
-Transitions use provider action IDs, not state display names. Board columns carry
-the edit/transition action to dispatch on drop. Start-work carries repoPath,
+Transitions use provider action IDs, not state display names. Board columns may carry a default edit/transition action or null; per-card moves
+carry the actual legal action to dispatch on drop (workflow IDs can vary by item). Start-work carries repoPath,
 branch, optional baseRef, prompt, agentType and explicit draft/submit delivery;
 core executes the existing worktree/agent workflow and owns errors/rollback.
 
@@ -810,8 +810,14 @@ mod tests {
         let model = include_str!("../work_items/model.rs");
         let kinds = section(model, "pub enum WorkItemFieldKind {", "\n}");
         let expected = captures(kinds, r"(?m)^    ([A-Za-z]+),")
-            .into_iter().map(|kind| kind.to_lowercase()).collect();
-        assert_inventory(PLUGIN_DOCS, "### Work-item field kind inventory\n", expected);
+            .into_iter()
+            .map(|kind| kind.to_lowercase())
+            .collect();
+        assert_inventory(
+            PLUGIN_DOCS,
+            "### Work-item field kind inventory\n",
+            expected,
+        );
     }
 
     // Catches: new manifest-driven UI or core plugin components are absent from the UX guide.
