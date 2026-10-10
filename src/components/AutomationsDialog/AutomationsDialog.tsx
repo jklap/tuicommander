@@ -1,6 +1,6 @@
 import { createEffect, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { t } from "../../i18n";
-import { createAutomationsStore } from "../../stores/automations";
+import { automationsUi, createAutomationsStore } from "../../stores/automations";
 import { registerModal } from "../../stores/modalStack";
 import s from "./AutomationsDialog.module.css";
 import type { AutomationAdapter } from "./contract";
@@ -25,6 +25,13 @@ export function AutomationsDialog(props: { onClose: () => void; adapter?: Automa
 	onCleanup(() => {
 		store.dispose();
 		if (priorFocus instanceof HTMLElement && priorFocus.isConnected) priorFocus.focus();
+	});
+	createEffect(() => {
+		const id = automationsUi.requestedRun();
+		if (id) {
+			setTab("definitions");
+			void store.openRun(id);
+		}
 	});
 	createEffect(() => {
 		store.draft()?.id;
@@ -236,9 +243,9 @@ export function AutomationsDialog(props: { onClose: () => void; adapter?: Automa
 								<Show when={store.draft()?.id} keyed>
 									{(_id) => <DefinitionEditor store={store} />}
 								</Show>
-								<Show when={!store.isNew()}>
-									<DetailHistory store={store} />
-								</Show>
+							</Show>
+							<Show when={!store.isNew() && (store.draft() || store.runs().length > 0)}>
+								<DetailHistory store={store} />
 							</Show>
 						</main>
 					</div>

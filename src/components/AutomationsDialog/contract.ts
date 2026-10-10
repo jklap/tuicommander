@@ -80,6 +80,7 @@ export interface RunSummary {
 }
 export interface AutomationAdapter {
 	list(): Promise<AutomationListItem[]>;
+	run(id: string): Promise<AutomationRun>;
 	save(definition: AutomationDefinition, create: boolean): Promise<AutomationDefinition>;
 	setEnabled(id: string, enabled: boolean): Promise<void>;
 	remove(id: string): Promise<void>;
@@ -96,7 +97,7 @@ export type AutomationAction =
 	| { action: "list" }
 	| { action: "create" | "update"; definition: AutomationDefinition }
 	| { action: "update"; id: string; enabled: boolean }
-	| { action: "get"; id: string }
+	| { action: "get" | "run"; id: string }
 	| { action: "summary"; window: "24h" | "7d" }
 	| { action: "delete" | "run_now" | "pause" | "resume"; id: string }
 	| { action: "list_runs"; id?: string; limit: number; offset?: number }

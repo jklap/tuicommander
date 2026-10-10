@@ -41,6 +41,9 @@ pub(crate) enum AutomationAction {
     RunNow {
         id: String,
     },
+    Run {
+        id: String,
+    },
     ListRuns {
         id: Option<String>,
         #[serde(default = "history_limit")]
@@ -159,6 +162,7 @@ pub(crate) fn execute_stored(
         AutomationAction::Delete { id } => {
             actions::execute(definitions, DefinitionAction::Delete { id }, None)
         }
+        AutomationAction::Run { id } => value(runs.get(&id)?),
         AutomationAction::ListRuns { id, limit, offset } => {
             value(runs.history(id.as_deref(), limit, offset)?)
         }

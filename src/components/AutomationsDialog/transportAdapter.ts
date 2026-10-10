@@ -21,6 +21,7 @@ export function createAutomationAdapter(connectionId?: string): AutomationAdapte
 	}
 	return {
 		list: () => call<AutomationListItem[]>({ action: "list" }),
+		run: (id) => call<AutomationRun>({ action: "run", id }),
 		save: (definition, create) => call<AutomationDefinition>({ action: create ? "create" : "update", definition }),
 		setEnabled: (id, enabled) => call<void>({ action: enabled ? "resume" : "pause", id }),
 		remove: (id) => call<void>({ action: "delete", id }),

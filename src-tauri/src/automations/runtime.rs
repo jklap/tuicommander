@@ -116,6 +116,10 @@ impl AutomationRuntime {
         });
     }
 
+    pub(crate) fn notification_store(&self) -> Option<RunStore> {
+        self.owner.lock().clone()
+    }
+
     /// Step 8 exposes this same owner-guarded boundary through HTTP and IPC.
     pub(crate) async fn run_now(state: &Arc<AppState>, id: &str) -> Result<AutomationRun, String> {
         let runs = state

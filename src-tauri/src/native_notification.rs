@@ -3,6 +3,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub(crate) enum NativeNoticeTarget {
+    Automation {
+        id: String,
+    },
     Terminal {
         id: String,
     },
@@ -119,9 +122,45 @@ pub(crate) async fn show_native_notification(
     }
 }
 
+pub(crate) async fn send_automation_notice(
+    app: tauri::AppHandle,
+    title: String,
+    body: String,
+    target: NativeNoticeTarget,
+) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        macos::send(app, title, body, target)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        use tauri_plugin_notification::NotificationExt;
+        let _ = target;
+        app.notification()
+            .builder()
+            .title(title)
+            .body(body)
+            .show()
+            .map_err(|error| error.to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::NativeNoticeTarget;
+
+    // Catches a native click losing its canonical saved-run target.
+    #[test]
+    fn automation_target_matches_frontend_run_navigation() {
+        let json = serde_json::to_value(NativeNoticeTarget::Automation {
+            id: "saved-run".into(),
+        })
+        .unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({"kind":"automation","id":"saved-run"})
+        );
+    }
 
     /// The frontend emits and matches kind "aichat"; a rename here would silently drop the click route.
     #[test]
