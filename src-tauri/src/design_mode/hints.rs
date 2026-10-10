@@ -16,11 +16,11 @@ pub(super) fn advertised(state: &AppState, roots: &[PathBuf], live: &[Value]) ->
     let mut found = Vec::new();
     for entry in state.session_maps.sessions.iter() {
         let sid = entry.key();
-        if !state
+        if state
             .session_maps
             .last_output_ms
             .get(sid)
-            .is_some_and(|timestamp| now.saturating_sub(timestamp.load(Ordering::Relaxed)) < 60_000)
+            .is_none_or(|timestamp| now.saturating_sub(timestamp.load(Ordering::Relaxed)) >= 60_000)
         {
             continue;
         }

@@ -35,13 +35,41 @@ pub(crate) struct ModeStatus {
 }
 
 #[derive(Clone, Copy, Debug)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "Retained CDP path (design-mode-v2 sections 14/15)"
+    )
+)]
 pub(crate) struct Rect {
+    #[cfg_attr(
+        test,
+        expect(
+            dead_code,
+            reason = "Retained CDP path (design-mode-v2 sections 14/15)"
+        )
+    )]
     pub(crate) x: f64,
+    #[cfg_attr(
+        test,
+        expect(
+            dead_code,
+            reason = "Retained CDP path (design-mode-v2 sections 14/15)"
+        )
+    )]
     pub(crate) y: f64,
     pub(crate) width: f64,
     pub(crate) height: f64,
 }
 
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "Retained CDP path (design-mode-v2 sections 14/15)"
+    )
+)]
 impl Rect {
     fn from_value(value: &Value) -> Option<Self> {
         let number = |key| value.get(key)?.as_f64().filter(|number| number.is_finite());
@@ -62,6 +90,13 @@ impl Rect {
     }
 }
 
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "Retained CDP path (design-mode-v2 sections 14/15)"
+    )
+)]
 pub(crate) struct Pick {
     pub(crate) raw: Value,
     pub(crate) styles: Value,
@@ -70,11 +105,32 @@ pub(crate) struct Pick {
 }
 
 pub(crate) trait InspectBrowser: Send + Sync {
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Retained CDP path (design-mode-v2 sections 14/15)"
+        )
+    )]
     fn arm(&self) -> BoxFuture<'_, Result<(), String>>;
     /// Leaves inspect mode and drops every pick queued while nobody listened,
     /// so a later start cannot deliver a click the user made for another agent.
     fn disarm(&self) -> BoxFuture<'_, Result<(), String>>;
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Retained CDP path (design-mode-v2 sections 14/15)"
+        )
+    )]
     fn next_pick(&self) -> BoxFuture<'_, Option<Pick>>;
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Retained CDP path (design-mode-v2 sections 14/15)"
+        )
+    )]
     fn capture(&self, rect: Rect) -> BoxFuture<'_, Result<Option<Vec<u8>>, String>>;
     fn close(&self) -> BoxFuture<'_, Result<(), String>>;
 }
@@ -89,7 +145,21 @@ struct Mode {
 #[derive(Clone)]
 pub(crate) struct DesignModeManager {
     modes: Arc<Mutex<HashMap<String, Mode>>>,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Retained CDP path (design-mode-v2 sections 14/15)"
+        )
+    )]
     grab_dir: PathBuf,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Retained CDP path (design-mode-v2 sections 14/15)"
+        )
+    )]
     prefill: Prefill,
     notify: Notify,
 }
@@ -124,10 +194,10 @@ impl DesignModeManager {
             if let Some(listener) = mode.listener.take() {
                 listener.abort();
             }
-            if let Some(browser) = mode.browser.take() {
-                if let Err(error) = browser.disarm().await {
-                    tracing::warn!(%error,"Could not stop previous inspector");
-                }
+            if let Some(browser) = mode.browser.take()
+                && let Err(error) = browser.disarm().await
+            {
+                tracing::warn!(%error,"Could not stop previous inspector");
             }
         }
         (self.notify)(&status);
@@ -153,6 +223,13 @@ impl DesignModeManager {
     /// Launching Chrome and arming take seconds, so the repo is marked
     /// "starting" and the `modes` lock is released meanwhile: other repos'
     /// picks, status reads and `stop` must not wait behind one launch.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Retained CDP path (design-mode-v2 sections 14/15)"
+        )
+    )]
     pub(crate) async fn start<F, Fut>(
         &self,
         repo_path: String,
@@ -239,6 +316,13 @@ impl DesignModeManager {
         Ok(status)
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Retained CDP path (design-mode-v2 sections 14/15)"
+        )
+    )]
     async fn listen(&self, repo_path: String, generation: u64, browser: Arc<dyn InspectBrowser>) {
         loop {
             let Some(pick) = browser.next_pick().await else {
@@ -262,6 +346,13 @@ impl DesignModeManager {
         }
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Retained CDP path (design-mode-v2 sections 14/15)"
+        )
+    )]
     async fn is_armed(&self, repo_path: &str, generation: u64) -> bool {
         self.modes
             .lock()
@@ -270,6 +361,13 @@ impl DesignModeManager {
             .is_some_and(|mode| mode.generation == generation && mode.status.status == "armed")
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Retained CDP path (design-mode-v2 sections 14/15)"
+        )
+    )]
     async fn handle_pick(
         &self,
         repo_path: &str,
@@ -303,6 +401,13 @@ impl DesignModeManager {
         (self.prefill)(&mode.status.session_id, &prompt)
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Retained CDP path (design-mode-v2 sections 14/15)"
+        )
+    )]
     fn save_png(&self, bytes: &[u8]) -> Result<Option<PathBuf>, String> {
         super::captures::save_png(&self.grab_dir, bytes)
     }
@@ -311,6 +416,13 @@ impl DesignModeManager {
     /// explicitly. Dropping the last `Arc` instead would SIGKILL a Chrome that
     /// TUIC launched (chromey sets `kill_on_drop`) and skip the graceful close.
     /// Only a healthy browser whose terminal closed is kept (`session_closed`).
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Retained CDP path (design-mode-v2 sections 14/15)"
+        )
+    )]
     async fn disconnected(&self, repo_path: &str, generation: u64) {
         let mut modes = self.modes.lock().await;
         let Some(mode) = modes.get_mut(repo_path) else {
@@ -415,6 +527,13 @@ const STARTING: &str = "starting";
 /// Arms a reused browser, or makes a new one. A reused browser that cannot
 /// arm is dead (the user closed Chrome), so it is closed and replaced in the
 /// same click instead of failing it.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "Retained CDP path (design-mode-v2 sections 14/15)"
+    )
+)]
 async fn arm_browser<F, Fut>(
     reused: Option<Arc<dyn InspectBrowser>>,
     make_browser: F,
@@ -447,6 +566,10 @@ where
 
 /// The concrete headed Chrome adapter. A dedicated profile is reused on a
 /// second start; the handler task is owned here and ends with the browser.
+#[expect(
+    dead_code,
+    reason = "Retained CDP path (design-mode-v2 sections 14/15)"
+)]
 struct CdpInspectBrowser {
     browser: Mutex<Browser>,
     page: Page,
@@ -456,6 +579,10 @@ struct CdpInspectBrowser {
     map_task: JoinHandle<()>,
 }
 
+#[expect(
+    dead_code,
+    reason = "Retained CDP path (design-mode-v2 sections 14/15)"
+)]
 impl CdpInspectBrowser {
     async fn connect(
         repo_root: &Path,
@@ -704,6 +831,13 @@ impl InspectBrowser for CdpInspectBrowser {
 /// Enables the CDP domains Design Mode reads. Debugger is on only for
 /// `scriptParsed`, but while it is enabled Chrome stops at every `debugger;`
 /// statement and nothing here resumes, so the page would hang: skip all pauses.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "Retained CDP path (design-mode-v2 sections 14/15)"
+    )
+)]
 async fn enable_domains(page: &Page) -> Result<(), String> {
     let error = |error: chromiumoxide::error::CdpError| error.to_string();
     page.execute(dom::EnableParams::default())
@@ -724,6 +858,10 @@ async fn enable_domains(page: &Page) -> Result<(), String> {
     Ok(())
 }
 
+#[expect(
+    dead_code,
+    reason = "Retained CDP path (design-mode-v2 sections 14/15)"
+)]
 pub(crate) async fn live_browser(
     repo_root: &Path,
     dev_server_url: Option<&str>,

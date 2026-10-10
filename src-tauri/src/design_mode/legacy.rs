@@ -98,6 +98,13 @@ pub(crate) async fn start(
 /// Repo settings are keyed by the path the frontend registered, which may be a
 /// symlink (or `/var` against `/private/var`) of the canonical root Design Mode
 /// uses. Match on the canonical root of each key, not on the text.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "Retained CDP path (design-mode-v2 sections 14/15)"
+    )
+)]
 fn dev_server_url(
     settings: &crate::config::RepoSettingsMap,
     repo: &std::path::Path,

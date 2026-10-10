@@ -12,6 +12,13 @@ pub(crate) fn profile_dir(repo_root: &Path) -> PathBuf {
         .join(&key[..16])
 }
 
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "Retained CDP path (design-mode-v2 sections 14/15)"
+    )
+)]
 pub(crate) fn read_active_port(profile: &Path) -> Result<u16, String> {
     let text = std::fs::read_to_string(profile.join("DevToolsActivePort"))
         .map_err(|error| error.to_string())?;
@@ -90,6 +97,13 @@ pub(crate) fn chrome_candidates() -> Vec<PathBuf> {
 /// chromey's `DEFAULT_ARGS` (chromey-2.58.2 browser.rs:1578) minus `--enable-automation`
 /// (automation infobar) and `--disable-extensions` (blocks the Design Mode extension),
 /// plus the Design Mode additions. chromey cannot drop single defaults, so all are restated.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "Retained CDP path (design-mode-v2 sections 14/15)"
+    )
+)]
 const BROWSER_ARGS: [&str; 25] = [
     "--disable-background-networking",
     "--enable-features=NetworkService,NetworkServiceInProcess",
@@ -118,6 +132,13 @@ const BROWSER_ARGS: [&str; 25] = [
     "--no-default-browser-check",
 ];
 
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "Retained CDP path (design-mode-v2 sections 14/15)"
+    )
+)]
 fn browser_config(chrome: PathBuf, profile: PathBuf) -> Result<BrowserConfig, String> {
     BrowserConfig::builder()
         .with_head()
@@ -130,6 +151,10 @@ fn browser_config(chrome: PathBuf, profile: PathBuf) -> Result<BrowserConfig, St
         .map_err(|error| error.to_string())
 }
 
+#[expect(
+    dead_code,
+    reason = "Retained CDP path (design-mode-v2 sections 14/15)"
+)]
 pub(crate) async fn launch_or_attach(repo_root: &Path) -> Result<(Browser, Handler), String> {
     let profile = profile_dir(repo_root);
     if let Ok(port) = read_active_port(&profile)

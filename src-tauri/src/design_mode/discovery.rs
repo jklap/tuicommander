@@ -89,8 +89,8 @@ async fn command(binary: &str, args: &[&str]) -> Result<String, String> {
         .map_err(|_| format!("{binary} discovery timed out"))?
         .map_err(|e| format!("{binary}: {e}"))?;
     // lsof exits 1 when no process matches; that is an empty set, not a scan error.
-    if !output.status.success()
-        && !(binary == "lsof" && output.status.code() == Some(1) && output.stderr.is_empty())
+    if !(output.status.success()
+        || binary == "lsof" && output.status.code() == Some(1) && output.stderr.is_empty())
     {
         return Err(format!(
             "{binary}: {}",
@@ -149,9 +149,9 @@ pub(crate) async fn discover(state: &crate::AppState, repo: &Path) -> Result<Val
             let known = cwd_map(&cwds);
             let commands = command("ps", &["-p", &ids, "-o", "pid=,command="]).await?;
             for (pid, root) in command_owners(&commands, &roots) {
-                if !known
+                if known
                     .get(&pid)
-                    .is_some_and(|cwd| owner(cwd, &roots).is_some())
+                    .is_none_or(|cwd| owner(cwd, &roots).is_none())
                 {
                     cwds.push_str(&format!("p{pid}\nfcwd\nn{}\n", root.display()));
                 }
