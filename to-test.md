@@ -1,3 +1,17 @@
+## Socket roots under TMPDIR (tmp-dir-cleanup phase B, 2026-10-09) — Rust restart required for the IPC log
+
+Unit and shell tests cover the budget, the resolver, relative binds and the fixture launcher; these need a full or unsandboxed run.
+
+- [ ] **Full gate, sandboxed and not.** `./scripts/check-gate.sh` inside the agent sandbox (72-byte
+  `TMPDIR`) and once outside it (~49 bytes): the socket tests pass, `named_instance.rs` (tuic-cli,
+  tuic-bridge) passes under nextest, and afterwards nothing new exists under `/tmp`,
+  `/private/tmp` or as a `t.XXXXXX` dir in `$TMPDIR`. Inside the sandbox
+  `mdkb_reports_symbol_lines_zero_based` and `named_local_identity_requires_that_instances_socket`
+  print `UNCHECKED` (expected); outside it they run for real.
+- [ ] **Named instance with a long TMPDIR.** Start a second `make dev` of the same named instance
+  from inside the sandbox: its log says the `tuic-mcp-<hash>-<pid>.sock` path is over the
+  103-byte limit and names `TMPDIR`/`TUIC_SOCKET`, instead of three opaque SUN_LEN bind failures.
+
 ## Private temp dirs for mdkb install and Tailscale certs (tmp-dir-cleanup phase A, 2026-10-09) — Rust restart required
 
 Unit tests cover the staging helpers with fake files and a fake `tailscale`; these need the real tools.
@@ -18,7 +32,7 @@ Unit and shell tests cover the resolvers; these need a real, unsandboxed run.
 - [ ] **Full gate inside the agent sandbox.** `./scripts/check-gate.sh` from a sandboxed agent
   session (no write access to `~/Gits`) gets past `test-shell` and the `tuic-cli` socket tests no
   longer fail with EACCES. Afterwards nothing new exists under `~/Gits/.tmp` or
-  `<checkout>/.tmp/tuic-tests`, and `/tmp/tuic-s*` directories are mode 0700.
+  `<checkout>/.tmp/tuic-tests`, and no `t.XXXXXX` socket root is left in `$TMPDIR`.
 - [ ] **Exec-scan timing on macOS.** Time `make check` twice with the new default
   (`$TMPDIR/tuic-tests`) and twice with the opt-in `TUIC_TEST_TMP_BASE=<checkout>/.tmp/tuic-tests`,
   outside the sandbox, on a quiet machine (the in-checkout base is unsafe wherever writes to the
