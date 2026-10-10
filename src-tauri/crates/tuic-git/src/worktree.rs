@@ -6449,11 +6449,7 @@ branch refs/heads/feat
 
     #[cfg(unix)]
     fn pid_is_alive(pid: &str) -> bool {
-        std::process::Command::new("kill")
-            .args(["-0", pid])
-            .stderr(std::process::Stdio::null())
-            .status()
-            .is_ok_and(|status| status.success())
+        pid.parse().is_ok_and(tuic_core::process_info::is_alive)
     }
 
     /// Batch 17 review (restores wip's group-kill test): a timeout used to
@@ -6477,10 +6473,8 @@ branch refs/heads/feat
             std::thread::sleep(Duration::from_millis(50));
         }
         let alive = pid_is_alive(pid);
-        if alive {
-            let _ = std::process::Command::new("kill")
-                .args(["-9", pid])
-                .status();
+        if alive && let Ok(pid) = pid.parse() {
+            tuic_core::process_info::kill(pid);
         }
         assert!(
             !alive,
@@ -6502,8 +6496,10 @@ branch refs/heads/feat
         let started = std::time::Instant::now();
         let result = run_shell_script(&script, dir.path(), Duration::from_secs(60), &[]);
         let waited = started.elapsed();
-        if let Ok(pid) = std::fs::read_to_string(&pid_file) {
-            let _ = std::process::Command::new("kill").arg(pid.trim()).status();
+        if let Ok(pid) = std::fs::read_to_string(&pid_file)
+            && let Ok(pid) = pid.trim().parse()
+        {
+            tuic_core::process_info::terminate(pid);
         }
 
         let out = result.expect("the script itself succeeded");
@@ -7052,27 +7048,14 @@ branch refs/heads/feat
     /// count would report "2 before, 2 after" as unchanged even if one child
     /// had been reaped and a different one leaked in the same window.
     ///
-    /// Unix-only, like its caller: `ps` and the zombie state are both POSIX,
-    /// and without the gate this is dead code the Windows job warns about.
+    /// Unix-only, like its caller: the zombie state is POSIX, and without the
+    /// gate this is dead code the Windows job warns about. Read natively
+    /// (`tuic_core::process_info`), never by exec'ing `ps`: sandboxed hosts
+    /// refuse to run the setuid `ps`, which used to fail this test there.
     #[cfg(unix)]
     fn own_zombie_pids() -> Vec<u32> {
-        let ps = Command::new("ps")
-            .args(["-o", "pid=,ppid=,stat=", "-ax"])
-            .output()
-            .expect("ps");
-        let table = String::from_utf8_lossy(&ps.stdout);
-        let mine = std::process::id().to_string();
-        table
-            .lines()
-            .filter_map(|line| {
-                let mut fields = line.split_whitespace();
-                let pid = fields.next()?;
-                if fields.next()? != mine {
-                    return None;
-                }
-                fields.next()?.starts_with('Z').then(|| pid.parse().ok())?
-            })
-            .collect()
+        tuic_core::process_info::zombie_children(std::process::id())
+            .expect("list this process's zombie children")
     }
 
     /// End-to-end companion to `test_fetch_local_branch_with_slash_is_noop`:
