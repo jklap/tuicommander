@@ -831,10 +831,25 @@ When changing how `make mutants` selects, builds or runs mutants:
 | File | What to update |
 |------|----------------|
 | `src-tauri/.cargo/mutants.toml` | Test tool, cargo test args, excluded globs |
-| `scripts/mutants.sh` | `git archive` export + `--in-place` + `--in-diff` mechanics, the `dist` copy `generate_context!` needs |
+| `scripts/mutants.sh` | local `git clone --local` copy + `--in-place` + `--in-diff` mechanics, the `dist` copy `generate_context!` needs |
 | `Makefile` | The `mutants` target and its `RANGE` default |
 | `src-tauri/AGENTS.md` | "Tests" section bullet (per-change rule, who runs it, surviving-mutant policy) |
 | `CONTRIBUTING.md` | The install line and the one-paragraph mention |
+
+### Test scratch roots
+When changing where tests, the wrapper or fixtures put scratch files or Unix sockets (`TUIC_TEST_HOST_TMPDIR`, `TUIC_TEST_TMP_BASE`, `TUIC_TEST_TMP_ROOT`, `TUIC_TEST_SOCKET_ROOT`, prune rules, the socket budget):
+
+| File | What to update |
+|------|----------------|
+| `scripts/with-test-tmp.sh` | Resolution order and prune rules; keep `scripts/test-with-test-tmp-prune.sh` / `-readonly-home.sh` in step |
+| `src-tauri/crates/tuic-test-support/src/lib.rs` | `host_temp_dir`/`test_base`/`test_temp_root`, socket candidates and `MAX_SOCKET_ROOT_LEN`; `tests/socket_root.rs`, `tests/temp_roots.rs` |
+| `src-tauri/scripts/nextest-test-tmp.{sh,ps1}` | Same default as the wrapper when no root was chosen |
+| `scripts/test-tmp-root.mjs` | Node-side resolver for `vitest.config.ts` and `scripts/check-frontend-cycles.mjs` |
+| `scripts/check-no-home-gits.mjs` | Scan roots, patterns and the allow-list |
+| `scripts/run-remote-fixture.sh`, `scripts/test-remote-mcp.py`, `tools/ipad-repro/run.sh` | Fixture scratch and the printed fixture `TMPDIR` (`docs/user-guide/remote-access.md`) |
+| `docs/guides/development-setup.md` | "Testing" table and prune description |
+| `AGENTS.md`, `CONTRIBUTING.md` | The one-line test temp root descriptions |
+| `src-tauri/AGENTS.md` | "Tests (Rust)" exec-scan bullet and the in-checkout `find_repo_root` trap |
 
 ### Config-instance scoping (`TUIC_APP_INSTANCE`)
 When changing which make target launches against which configuration directory:
