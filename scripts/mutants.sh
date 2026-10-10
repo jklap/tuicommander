@@ -37,16 +37,17 @@ set -euo pipefail
 
 RANGE="${1:-HEAD~1}"
 ROOT="$(git rev-parse --show-toplevel)"
-case "${TMPDIR:-}" in
-  "$ROOT/"*|"$HOME/Gits/"*) TEST_TMP_BASE="${TMPDIR%/}" ;;
-  *) TEST_TMP_BASE="$ROOT/.tmp/tuic-tests" ;;
-esac
+# Same roots as scripts/with-test-tmp.sh: the caller's temp dir, never $HOME.
+TEST_TMP_HOST="${TUIC_TEST_HOST_TMPDIR:-${TMPDIR:-/tmp}}"
+TEST_TMP_HOST="${TEST_TMP_HOST%/}"
+TEST_TMP_BASE="${TUIC_TEST_TMP_BASE:-$TEST_TMP_HOST/tuic-tests}"
 mkdir -p "$TEST_TMP_BASE"
 TEST_TMP="$(mktemp -d "$TEST_TMP_BASE/tuic-mutants.XXXXXX")"
 trap 'rm -rf "$TEST_TMP"' EXIT
 export TMPDIR="$TEST_TMP/"
 export TMP="$TMPDIR" TEMP="$TMPDIR"
 export TUIC_TEST_TMP_ROOT="$TEST_TMP"
+export TUIC_TEST_HOST_TMPDIR="$TEST_TMP_HOST"
 SRC="$ROOT/.tmp/mutants-src"
 DIFF="$ROOT/.tmp/mutants.diff"
 

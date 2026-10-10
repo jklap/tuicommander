@@ -2,7 +2,7 @@
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
-test_tmp_base="${TMPDIR:-$root/.tmp/tuic-tests}"
+test_tmp_base="${TUIC_TEST_TMP_ROOT:-${TMPDIR:-/tmp}}"
 mkdir -p "$test_tmp_base"
 fixture="$(mktemp -d "${test_tmp_base%/}/tuic-target-test.XXXXXX")"
 trap 'rm -rf "$fixture"' EXIT
@@ -20,7 +20,7 @@ assert_target_not_inherited() {
 }
 
 # Catches: a parent Cargo target silently makes worktree tests use another checkout's artifacts.
-assert_target_not_inherited "foreign absolute target" "$HOME/Gits/.tmp/shared-artifact-target"
+assert_target_not_inherited "foreign absolute target" "/nonexistent/other-checkout/src-tauri/target"
 # Catches: clearing only absolute paths leaves relative target overrides active.
 assert_target_not_inherited "relative target" "shared-artifact-target"
 

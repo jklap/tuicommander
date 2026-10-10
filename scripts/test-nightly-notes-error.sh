@@ -2,7 +2,7 @@
 # Catches: masking a failed release edit and reporting update-notes as successful.
 set -euo pipefail
 project_root="$(cd "$(dirname "$0")/.." && pwd)"
-test_tmp="${TUIC_TEST_TMP_ROOT:-$project_root/.tmp/tuic-tests}"
+test_tmp="${TUIC_TEST_TMP_ROOT:-${TMPDIR:-/tmp}}"
 mkdir -p "$test_tmp"
 fixture="$(mktemp -d "$test_tmp/nightly-notes-error.XXXXXX")"
 trap 'rm -rf "$fixture"' EXIT

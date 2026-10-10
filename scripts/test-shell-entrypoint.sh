@@ -2,7 +2,7 @@
 set -euo pipefail
 
 project_root="$(git rev-parse --show-toplevel)"
-test_tmp="${TUIC_TEST_TMP_ROOT:-$project_root/.tmp/tuic-tests}"
+test_tmp="${TUIC_TEST_TMP_ROOT:-${TMPDIR:-/tmp}}"
 mkdir -p "$test_tmp"
 fixture_dir="$(mktemp -d "$test_tmp/shell-entrypoint.XXXXXX")"
 trap 'rm -rf "$fixture_dir"' EXIT
@@ -48,7 +48,8 @@ fi
 printf '%s\n' "$output" | grep -Fq "no shell tests found"
 
 # The shipped tests must stay tracked, or the skip above would hide them.
-for shipped in scripts/test-shell-entrypoint.sh scripts/test-with-test-tmp-prune.sh scripts/hooks/test-install-hooks.sh; do
+for shipped in scripts/test-shell-entrypoint.sh scripts/test-with-test-tmp-prune.sh \
+  scripts/test-with-test-tmp-readonly-home.sh scripts/hooks/test-install-hooks.sh; do
   if git -C "$project_root" check-ignore -q "$shipped"; then
     echo "$shipped is git-ignored and would never run" >&2
     exit 1
