@@ -38,6 +38,8 @@ pub(crate) async fn request(state: &Arc<AppState>, mut request: Request) -> Resu
                     .ok_or("Invalid GitHub Enterprise hostname")?;
                 account.host = format!("https://{}", host.as_str());
             }
+            // Refuse for any non-secret cause before the user types a token.
+            accounts::precheck_new(account)?;
             format!(
                 "Store a {} credential for {} at {}.",
                 account.provider, account.label, account.host
@@ -91,9 +93,10 @@ pub(super) async fn submit_native(
             "stored"
                 if submission.template.is_none()
                     && submission.values.len() == 1
-                    && submission.values.get("TOKEN").is_some_and(|v| {
-                        !v.is_empty() && v.len() <= 16384 && !v.contains('\0')
-                    }) => {}
+                    && submission
+                        .values
+                        .get("TOKEN")
+                        .is_some_and(|v| super::valid_secret_value(v)) => {}
             _ => return Err("Invalid account secret submission".into()),
         }
         // Consume the nonce before awaiting verification. Replays cannot rotate

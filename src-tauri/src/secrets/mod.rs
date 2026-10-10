@@ -8,6 +8,11 @@ pub(crate) mod policy;
 mod run;
 mod schema;
 use schema::valid_name;
+
+/// The one rule for a submitted secret value: non-empty, at most 16 KiB, no NUL.
+fn valid_secret_value(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 16384 && !value.contains('\0')
+}
 pub(crate) use schema::{Field, FieldKind, Form};
 #[cfg(test)]
 mod tests;
@@ -188,7 +193,7 @@ impl SecretStore {
                     !submission
                         .values
                         .get(*name)
-                        .is_some_and(|v| !v.is_empty() && v.len() <= 16384 && !v.contains('\0'))
+                        .is_some_and(|v| valid_secret_value(v))
                 })
             {
                 return Err("Values must match the requested fields".into());

@@ -4978,6 +4978,7 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
   native token window. Submit a valid PAT and confirm the account appears.
 - [ ] Decline and close before submitting; confirm no account appears. Retry
   with an invalid PAT and confirm no partial account is created.
-- [ ] Launch a rotate request for an existing account; confirm presence remains
-  set and subsequent provider requests use the replacement credential.
+- [ ] No UI launches rotation yet. Send `POST /accounts/secret-form` with
+  `{"action":"rotate","id":"<account id>"}` to the test instance; confirm
+  presence remains set and provider requests use the replacement credential.
 - [ ] Confirm native entry has no mobile link or developer tools.

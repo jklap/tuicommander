@@ -80,7 +80,7 @@ async fn account_secret_never_crosses_ipc_to_webview() {
     let state = crate::state::tests_support::make_test_app_state();
     let store = &state.secrets;
     let form = open(
-        &store,
+        store,
         account_sink::Request::Add {
             account: input("a2c-non-echo", &host),
         },
@@ -132,7 +132,7 @@ async fn account_secret_never_crosses_ipc_to_webview() {
     // Rotation uses the same owner service and does not create another account.
     *store.window.lock() = None;
     let rotated = open(
-        &store,
+        store,
         account_sink::Request::Rotate {
             id: rows[0].account.id.clone(),
         },
@@ -279,7 +279,7 @@ async fn invalid_account_notifies_launcher_without_writing() {
     let state = crate::state::tests_support::make_test_app_state();
     let store = &state.secrets;
     let form = open(
-        &store,
+        store,
         account_sink::Request::Add {
             account: input("github", "https://github.com"),
         },
@@ -297,4 +297,22 @@ async fn invalid_account_notifies_launcher_without_writing() {
     assert_eq!(error, "Account verification or storage failed");
     assert_eq!(rx.await.unwrap().status, "failed");
     assert!(!dir.path().join("accounts.json").exists());
+}
+
+// Catches: a metadata-only refusal surfacing as a generic failure after the user typed a token.
+#[tokio::test]
+async fn request_refuses_invalid_account_with_cause_and_opens_no_form() {
+    let (_dir, _guard) = isolated_config();
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    let error = account_sink::request(
+        &state,
+        account_sink::Request::Add {
+            account: input("github", "https://github.com"),
+        },
+    )
+    .await
+    .err()
+    .unwrap();
+    assert_eq!(error, "github.com uses device-flow login, not a PAT");
+    assert!(state.secrets.inner.lock().pending.is_none());
 }

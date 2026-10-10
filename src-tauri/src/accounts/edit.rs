@@ -6,15 +6,13 @@ use super::{providers, store, verify};
 use crate::credentials::Credential;
 use crate::state::AppState;
 
-fn validate_new(input: &NewAccount, token: &str) -> Result<String, String> {
+/// Checks that need no credential, so a caller can refuse before asking for one.
+fn validate_metadata(input: &NewAccount) -> Result<String, String> {
     let provider = providers::descriptor(&input.provider)?;
     if !provider.kinds.contains(&input.kind)
         || matches!(input.kind, AuthKind::Ambient | AuthKind::OauthDevice)
     {
         return Err("This authentication kind requires the core GitHub login flow".into());
-    }
-    if token.trim().is_empty() || token.len() > 16 * 1024 || token.contains(['\r', '\n', '\0']) {
-        return Err("A non-empty account token without line breaks is required".into());
     }
     if input.label.trim().is_empty() || input.label.len() > 256 {
         return Err("Account label must contain 1–256 bytes".into());
@@ -39,14 +37,40 @@ fn validate_new(input: &NewAccount, token: &str) -> Result<String, String> {
     Ok(host)
 }
 
+fn account_id(input: &NewAccount, host: &str) -> String {
+    if input.provider == "github" {
+        host.trim_start_matches("https://").to_string()
+    } else {
+        uuid::Uuid::new_v4().to_string()
+    }
+}
+
+const EXISTS: &str = "Account already exists; remove it before adding a replacement";
+
+/// Refuses a new account for a non-secret cause before any credential is requested.
+pub(crate) fn precheck_new(input: &NewAccount) -> Result<(), String> {
+    let host = validate_metadata(input)?;
+    if input.provider == "github"
+        && store::snapshot()?
+            .accounts
+            .contains_key(&account_id(input, &host))
+    {
+        return Err(EXISTS.into());
+    }
+    Ok(())
+}
+
+fn validate_new(input: &NewAccount, token: &str) -> Result<String, String> {
+    if token.trim().is_empty() || token.len() > 16 * 1024 || token.contains(['\r', '\n', '\0']) {
+        return Err("A non-empty account token without line breaks is required".into());
+    }
+    validate_metadata(input)
+}
+
 pub(crate) async fn add_account(input: NewAccount, token: String) -> Result<AccountView, String> {
     let host = validate_new(&input, &token)?;
     let mut record = Account {
-        id: if input.provider == "github" {
-            host.trim_start_matches("https://").to_string()
-        } else {
-            uuid::Uuid::new_v4().to_string()
-        },
+        id: account_id(&input, &host),
         provider: input.provider,
         site_id: String::new(),
         host,
@@ -69,7 +93,7 @@ pub(crate) async fn add_account(input: NewAccount, token: String) -> Result<Acco
     let account = tokio::task::spawn_blocking(move || {
         store::with_registry(|registry| {
             if registry.accounts.contains_key(&record.id) {
-                return Err("Account already exists; remove it before adding a replacement".into());
+                return Err(EXISTS.into());
             }
             let site = store::ensure_site(registry, &record.provider, &record.host, &record.label);
             record.site_id = site.id;

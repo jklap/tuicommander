@@ -1744,7 +1744,7 @@ describe("transport", () => {
 			expect(mapCommandToHttp("github_diagnostics", {}).path).toBe("/github/diagnostics");
 		});
 
-		// Catches: IPC wrapping being forwarded to HTTP instead of the tagged account action.
+		// Catches: the {request} wrapper being forwarded as the body, or the launch reaching a different endpoint.
 		it("maps metadata-only account secret launch to the shared native host endpoint", () => {
 			const request = { action: "rotate", id: "account-id" };
 			expect(mapCommandToHttp("account_secret_form", { request })).toEqual({
@@ -1754,6 +1754,7 @@ describe("transport", () => {
 			});
 		});
 
+		// Catches: IPC wrapping being forwarded to HTTP instead of the tagged account action.
 		it("maps account_action to the shared presence-only owner endpoint", () => {
 			const request = { action: "list", provider: "github" };
 			expect(mapCommandToHttp("account_action", { request })).toEqual({
