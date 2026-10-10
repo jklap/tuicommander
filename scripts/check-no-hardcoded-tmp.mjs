@@ -83,10 +83,6 @@ const ALLOWED = new Map([
 		"Kitty t=t: the spec lets the terminal delete a client-created file only in known temp dirs; we never create files there",
 	],
 	["src-tauri/src/tunnels/agent.rs::launchd_socket", "macOS SSH_AUTH_SOCK discovery glob (connect only)"],
-	[
-		"src-tauri/src/mdkb_client.rs::socket_path",
-		"connect-only fallback when HOME is unresolvable; assessment §3.2 drops it (no /tmp fallback for the daemon socket)",
-	],
 	// Tests that assert a path is NOT under a shared temp dir.
 	[
 		"src-tauri/crates/tuic-test-support/tests/socket_root.rs::socket_root_is_a_private_marked_dir_under_the_host_temp_dir_never_tmp",

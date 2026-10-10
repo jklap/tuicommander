@@ -77,8 +77,8 @@ mod platform {
     pub struct MdkbClient;
 
     impl MdkbClient {
-        pub fn socket_path() -> PathBuf {
-            PathBuf::new()
+        pub fn socket_path() -> Option<PathBuf> {
+            None
         }
 
         pub async fn connect() -> Result<Self> {
@@ -228,14 +228,20 @@ mod platform {
     }
 
     impl MdkbClient {
-        pub fn socket_path() -> PathBuf {
-            dirs::home_dir()
-                .unwrap_or_else(|| PathBuf::from("/tmp"))
-                .join(".mdkb/daemon-hook.sock")
+        /// mdkb's daemon socket, `~/.mdkb/daemon-hook.sock`. `None` when there
+        /// is no home directory: there is no shared fallback (a predictable
+        /// socket in `/tmp` is one any local user could plant).
+        pub fn socket_path() -> Option<PathBuf> {
+            Self::socket_path_in(dirs::home_dir())
+        }
+
+        pub(crate) fn socket_path_in(home: Option<PathBuf>) -> Option<PathBuf> {
+            home.map(|home| home.join(".mdkb/daemon-hook.sock"))
         }
 
         pub async fn connect() -> Result<Self> {
-            let path = Self::socket_path();
+            let path = Self::socket_path()
+                .context("mdkb: no home directory, so no daemon socket to connect to")?;
             let stream = UnixStream::connect(&path)
                 .await
                 .with_context(|| format!("mdkb: connect to {}", path.display()))?;
@@ -804,6 +810,16 @@ pub(crate) mod tests {
         let one_over = home(tuic_test_support::SUN_PATH_USABLE - suffix);
         assert_eq!(mdkb_staging_socket(&one_over).as_os_str().len(), 104);
         assert!(!mdkb_staging_socket_fits(&one_over));
+    }
+
+    // Catches: a `/tmp` (or any shared) fallback when HOME is unresolvable.
+    #[test]
+    fn no_home_means_no_daemon_socket() {
+        assert_eq!(MdkbClient::socket_path_in(None), None);
+        assert_eq!(
+            MdkbClient::socket_path_in(Some(PathBuf::from("/h"))),
+            Some(PathBuf::from("/h/.mdkb/daemon-hook.sock"))
+        );
     }
 
     /// mdkb reports symbol lines **0-based**, and `editor_line` adds one.
