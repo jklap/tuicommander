@@ -66,6 +66,7 @@ scripts/*
 !scripts/report-frontend-bundles.mjs
 !scripts/check-frontend-cycles.mjs
 !scripts/test-tmp-root.mjs
+!scripts/check-no-process-exec.mjs
 !scripts/check-make-instance-scope.sh
 !scripts/test-check-make-instance-scope.sh
 !scripts/check-make-dev-builds-sibling.sh
