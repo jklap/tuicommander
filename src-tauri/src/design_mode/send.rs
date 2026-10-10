@@ -34,6 +34,45 @@ pub(crate) fn feedback(picks: &Value) -> Result<String, String> {
     Ok(prompt)
 }
 
+#[cfg(all(test, unix))]
+mod critic_tests {
+    use super::*;
+    use base64::Engine;
+
+    // Catches: acknowledging a crop-bearing pick while silently dropping the image.
+    #[tokio::test]
+    async fn accepted_pick_keeps_its_screenshot_readable_by_the_recipient() {
+        let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap();
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let sid = "critic-design-crop";
+        crate::test_support::agent_session(&state, sid, crate::pty::SHELL_IDLE);
+        let bytes = crate::test_support::insert_recording_session(&state, sid);
+        state.session_maps.sessions.get(sid).unwrap().lock().cwd =
+            Some(repo.to_string_lossy().into_owned());
+        let png = include_bytes!("../../../spike/design-mode-v2-s0/evidence/cft-panel-0.png");
+        let image = format!(
+            "data:image/png;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(png)
+        );
+        let result = send(state, json!({"repoPath":repo,"sessionId":sid,"idempotencyKey":"critic-crop", "picks":[{"comment":"Match the spacing in this crop", "image":image,"raw":{"url":"http://localhost:5173/","tagName":"button","selector":"#target","textContent":"Target"}}]})).await.unwrap();
+        assert_eq!(result["accepted"], true);
+        let text = String::from_utf8(bytes.lock().unwrap().clone()).unwrap();
+        let path = text
+            .lines()
+            .find_map(|line| {
+                line.strip_prefix("[image: ")
+                    .and_then(|line| line.strip_suffix(']'))
+            })
+            .expect("accepted screenshot pick lost its image reference in PTY feedback");
+        assert_eq!(
+            std::fs::read(path).expect("recipient cannot read the screenshot"),
+            png
+        );
+    }
+}
+
 pub(crate) async fn send(state: Arc<AppState>, body: Value) -> Result<Value, String> {
     let repo = body["repoPath"]
         .as_str()
