@@ -7790,6 +7790,8 @@ mod tests {
             .unwrap();
         // The linked checkout lives inside the main one; hide it from `git status` so
         // the main checkout is clean and only the removal guard can stop the call.
+        // No git template in tests, so `.git/info/` may not exist yet.
+        std::fs::create_dir_all(repo.path().join(".git/info")).unwrap();
         std::fs::write(repo.path().join(".git/info/exclude"), "caller/\n").unwrap();
         let caller = critic_detached_checkout(repo.path(), "caller");
         let main = repo.path().to_str().unwrap();

@@ -78,6 +78,7 @@ scripts/*
 !scripts/test-append-only-merge.sh
 !scripts/test-with-test-tmp-prune.sh
 !scripts/test-with-test-tmp-worktree-target.sh
+!scripts/test-with-test-tmp-git-template.sh
 !scripts/check-no-nul-bytes.mjs
 !scripts/run-plugin-tests.mjs
 !scripts/check-gate.sh

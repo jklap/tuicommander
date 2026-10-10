@@ -41,4 +41,9 @@ export TMPDIR="$test_tmp/"
 export TMP="$test_tmp/"
 export TEMP="$test_tmp/"
 export TUIC_TEST_TMP_ROOT="$test_tmp"
+# Test-fixture `git init`/`git clone` must not copy git's hooks/*.sample files
+# into every scratch repo (slow, machine-dependent, EPERM where `.git/hooks`
+# writes are forbidden). nextest's setup script sets its own under the same root.
+mkdir -p "$test_tmp/git-template-empty"
+export GIT_TEMPLATE_DIR="$test_tmp/git-template-empty"
 "$@"
