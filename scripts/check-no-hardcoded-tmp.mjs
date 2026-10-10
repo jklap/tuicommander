@@ -28,9 +28,6 @@
 //             does a count below it (lower the baseline in the same change,
 //             `--write-baseline` does it and refuses to raise anything).
 //
-// ALLOWED entries marked PHASE-B are known write sites (Unix-socket scratch
-// whose paths must stay short) that the socket-root rework removes; they keep
-// the guard green until then and must be deleted with that change.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -88,11 +85,7 @@ const ALLOWED = new Map([
 		"src-tauri/crates/tuic-test-support/tests/socket_root.rs::socket_root_is_a_private_marked_dir_under_the_host_temp_dir_never_tmp",
 		"asserts the socket root is under none of them",
 	],
-	// PHASE-B: known sites the TMPDIR-only socket-root rework (assessment §3.1,
-	// §3.3, plan steps 4-10) removes. Delete each entry with its fix.
-	["scripts/run-remote-fixture.sh::<top level>", "PHASE-B: /tmp/tuic-rf-<hash> fixture TMPDIR when $TMPDIR is too long for the named socket"],
-	["scripts/test-run-remote-fixture.sh::<top level>", "PHASE-B: mktemp -d /tmp/tuic-rft.XXXXXX short scratch"],
-	["scripts/test-run-remote-fixture.sh::cleanup", "PHASE-B: removes the /tmp/tuic-rf-<hash> fixture dir"],
+	["scripts/test-run-remote-fixture.sh::no_tmp_mention", "asserts the launcher's output never names /tmp"],
 ]);
 
 const TMP_LITERAL = /(?<![\w.~$}-])(?:\/private)?(?:\/var)?\/tmp(?![\w-])|\/dev\/shm(?![\w-])/;
