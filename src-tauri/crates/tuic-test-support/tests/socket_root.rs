@@ -127,6 +127,8 @@ fn socket_root_is_stable_and_distinct_per_checkout_and_ignores_gits_ancestors() 
         assert!(root.is_dir());
         assert!(tuic_test_support::socket_root_fits(root));
         assert_binds_longest_socket(root);
+        // These belong to the fake checkouts, which no other test uses.
+        std::fs::remove_dir(root).expect("remove fake-checkout socket root");
     }
 }
 
