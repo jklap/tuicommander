@@ -2037,6 +2037,11 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         // SSH tunnel management
         .nest("/tunnels", tunnel_routes());
 
+    routes = routes.route(
+        "/design-mode/extension",
+        post(crate::design_mode::extension::message),
+    );
+
     #[cfg(feature = "desktop")]
     {
         routes = routes
