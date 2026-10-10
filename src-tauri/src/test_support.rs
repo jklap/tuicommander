@@ -34,16 +34,12 @@ pub(crate) fn fake_ssh_processes(marker: &std::path::Path) -> Vec<i32> {
         .trim()
         .parse()
         .unwrap();
-    let output = std::process::Command::new("pgrep")
-        .args(["-P", &parent.to_string()])
-        .output()
-        .expect("list fake SSH child PIDs");
+    // Natively, not via `pgrep -P`: sandboxed hosts cannot run pgrep (it needs
+    // the sysmond service), which failed every caller of this helper there.
+    let children =
+        tuic_core::process_info::children(parent as u32).expect("list fake SSH child PIDs");
     let mut pids = vec![parent];
-    pids.extend(
-        String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .map(|line| line.parse::<i32>().unwrap()),
-    );
+    pids.extend(children.into_iter().map(|pid| pid as i32));
     pids
 }
 

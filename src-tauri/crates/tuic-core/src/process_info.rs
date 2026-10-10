@@ -226,6 +226,18 @@ pub fn signal(pid: u32, signal: libc::c_int) -> bool {
     unsafe { libc::kill(pid, signal) == 0 }
 }
 
+/// SIGTERM one process (see [`signal`]); for crates without a `libc` dependency.
+#[cfg(unix)]
+pub fn terminate(pid: u32) -> bool {
+    signal(pid, libc::SIGTERM)
+}
+
+/// SIGKILL one process (see [`signal`]); for crates without a `libc` dependency.
+#[cfg(unix)]
+pub fn kill(pid: u32) -> bool {
+    signal(pid, libc::SIGKILL)
+}
+
 // ─── Shared derivations (pure over a ProcessSource) ────────────────────────
 
 /// Map every live process onto its direct children, from ONE snapshot.

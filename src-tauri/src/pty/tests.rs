@@ -21985,13 +21985,10 @@ fn cleanup_session_actually_kills_a_process_that_ignores_everything_but_sigkill(
 
     cleanup_session(sid, &state, "closed");
 
-    // `kill -0` reports whether the process exists at all, without sending a
-    // real signal — the standard "is this pid still alive" check.
-    let still_alive = std::process::Command::new("kill")
-        .args(["-0", &pid.to_string()])
-        .status()
-        .expect("kill -0 runs")
-        .success();
+    // `kill(pid, 0)` reports whether the process exists at all, without
+    // sending a real signal — the standard "is this pid still alive" check
+    // (same semantics as `/bin/kill -0`, an unreaped zombie included).
+    let still_alive = tuic_core::process_info::is_alive(pid);
     assert!(
         !still_alive,
         "cleanup_session must actually terminate the child process (pid {pid}), \
