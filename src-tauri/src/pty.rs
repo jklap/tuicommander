@@ -3678,6 +3678,12 @@ struct ProcessTreeEntry {
     /// it. `None` on Windows, whose `PROCESSENTRY32` carries no creation time —
     /// see [`started_with_agent`] for what the absence costs.
     age_seconds: Option<u64>,
+    /// The platform could have reported argv but did not for this process
+    /// (native snapshot: another user's process, typically root under `sudo`).
+    /// `command` is then empty and must be read as UNKNOWN, not as "no
+    /// arguments". Never set by the `ps` parser or on Windows (whose ToolHelp
+    /// snapshot never had argv, and keeps its established name-only rules).
+    argv_unknown: bool,
 }
 
 #[derive(Default)]
@@ -3927,6 +3933,12 @@ fn is_prompt_shell_process(process: &ProcessTreeEntry) -> bool {
     if !PROMPT_SHELL_NAMES.contains(&name.as_str()) {
         return false;
     }
+    // A shell whose argv could not be read may be `bash -c 'long job'` under
+    // sudo. Calling it a prompt would clear BUSY on running work, so the
+    // unknown case does not override (the conservative direction).
+    if process.argv_unknown {
+        return false;
+    }
     !process
         .command
         .split_whitespace()
@@ -4033,12 +4045,134 @@ fn explicit_busy_is_a_nested_prompt(state: &AppState, session_id: &str) -> bool 
     foreground_group_at_prompt(root_pid, &processes)
 }
 
+/// The shared process-tree snapshot (unix).
+///
+/// Native first (`tuic_core::process_info`): sandboxed hosts refuse to exec the
+/// setuid `ps`. `ps` remains a FALLBACK, taken only when the native enumeration
+/// failed, or when a process in TUIC's own subtree — where every PTY session
+/// lives — could be listed but its argv or start time could not be read (a
+/// root process under `sudo`: `ps` is setuid root and can read it, an
+/// unprivileged native caller cannot). The fallback's first use per reason is
+/// logged once. If `ps` cannot run either, the native entries are used with
+/// `argv_unknown` set, which the consumers treat conservatively.
+// DEFERRED (2026-10-09, user decision Q5): keep the `ps` fallback for this
+// release; remove it once the native path has soaked and the warning has
+// never been seen (docs/backend/pty.md).
 #[cfg(not(windows))]
 fn process_tree_snapshot() -> Option<Vec<ProcessTreeEntry>> {
-    let output = std::process::Command::new("ps")
+    process_tree_snapshot_from(
+        &tuic_core::process_info::NativeProcessSource,
+        std::process::id(),
+        std::time::SystemTime::now(),
+        ps_process_tree_snapshot,
+    )
+}
+
+/// Why a native snapshot was not enough on its own.
+#[cfg(not(windows))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PsFallbackReason {
+    /// The native process-table enumeration itself failed.
+    EnumerationFailed,
+    /// A process in TUIC's subtree has unreadable argv or start time.
+    UnreadableDescendant,
+}
+
+#[cfg(not(windows))]
+fn process_tree_snapshot_from(
+    source: &dyn tuic_core::process_info::ProcessSource,
+    own_pid: u32,
+    now: std::time::SystemTime,
+    ps_fallback: impl FnOnce(PsFallbackReason) -> Option<Vec<ProcessTreeEntry>>,
+) -> Option<Vec<ProcessTreeEntry>> {
+    let native = source.snapshot(true);
+    let reason = match &native {
+        None => Some(PsFallbackReason::EnumerationFailed),
+        Some(processes) => tuic_core::process_info::first_unreadable_in_subtree(processes, own_pid)
+            .map(|_| PsFallbackReason::UnreadableDescendant),
+    };
+    if let Some(reason) = reason
+        && let Some(entries) = ps_fallback(reason)
+    {
+        return Some(entries);
+    }
+    let entries = native?
+        .iter()
+        .map(|process| native_process_tree_entry(process, now))
+        .collect();
+    valid_process_snapshot(true, entries)
+}
+
+/// Map a native process onto the snapshot shape the consumers were written
+/// against (`ps -o comm=,args=`): `name` is argv[0] when readable (macOS `ps`
+/// prints argv[0]-derived text, `-zsh` for a login shell), else the executable
+/// path, else the kernel short name; `command` is argv joined with spaces.
+#[cfg(not(windows))]
+fn native_process_tree_entry(
+    process: &tuic_core::process_info::ProcInfo,
+    now: std::time::SystemTime,
+) -> ProcessTreeEntry {
+    ProcessTreeEntry {
+        pid: process.pid,
+        parent_pid: process.ppid,
+        name: process.display_name(),
+        command: process
+            .argv
+            .as_ref()
+            .map(|argv| argv.join(" "))
+            .unwrap_or_default(),
+        age_seconds: process.age_seconds(now),
+        argv_unknown: process.argv.is_err(),
+    }
+}
+
+/// Set once `ps` could not even be spawned (sandboxed: EPERM); every later
+/// fallback is then skipped instead of failing the same exec each second.
+#[cfg(not(windows))]
+static PS_FALLBACK_UNAVAILABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+#[cfg(not(windows))]
+static PS_FALLBACK_WARNED_ENUMERATION: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+#[cfg(not(windows))]
+static PS_FALLBACK_WARNED_UNREADABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// The `ps` fallback for [`process_tree_snapshot`]. The one place production
+/// code still execs `ps` (allow-listed in `scripts/check-no-process-exec.mjs`).
+#[cfg(not(windows))]
+fn ps_process_tree_snapshot(reason: PsFallbackReason) -> Option<Vec<ProcessTreeEntry>> {
+    use std::sync::atomic::Ordering;
+    if PS_FALLBACK_UNAVAILABLE.load(Ordering::Relaxed) {
+        return None;
+    }
+    let warned = match reason {
+        PsFallbackReason::EnumerationFailed => &PS_FALLBACK_WARNED_ENUMERATION,
+        PsFallbackReason::UnreadableDescendant => &PS_FALLBACK_WARNED_UNREADABLE,
+    };
+    if !warned.swap(true, Ordering::Relaxed) {
+        tracing::warn!(
+            source = "process_snapshot",
+            ?reason,
+            "native process snapshot insufficient; falling back to `ps` (logged once per reason)"
+        );
+    }
+    let output = match std::process::Command::new("ps")
         .args(["-ww", "-axo", "pid=,ppid=,etime=,comm=,args="])
         .output()
-        .ok()?;
+    {
+        Ok(output) => output,
+        Err(error) => {
+            if !PS_FALLBACK_UNAVAILABLE.swap(true, Ordering::Relaxed) {
+                tracing::warn!(
+                    source = "process_snapshot",
+                    %error,
+                    "`ps` fallback cannot run; using the native snapshot with unknown argv"
+                );
+            }
+            return None;
+        }
+    };
     parse_process_tree_snapshot(
         output.status.success(),
         &String::from_utf8_lossy(&output.stdout),
@@ -4073,6 +4207,7 @@ fn parse_process_tree_snapshot(success: bool, text: &str) -> Option<Vec<ProcessT
             name: name.to_string(),
             command: command.trim_start().to_string(),
             age_seconds: parse_elapsed_time(elapsed),
+            argv_unknown: false,
         });
     }
     (!result.is_empty()).then_some(result)
@@ -4140,6 +4275,7 @@ fn process_tree_snapshot() -> Option<Vec<ProcessTreeEntry>> {
                 command: String::new(),
                 name,
                 age_seconds: None,
+                argv_unknown: false,
             });
             if Process32Next(snapshot, &mut entry) == 0 {
                 break;
@@ -4150,7 +4286,6 @@ fn process_tree_snapshot() -> Option<Vec<ProcessTreeEntry>> {
     }
 }
 
-#[cfg(any(windows, test))]
 fn valid_process_snapshot(
     enumeration_succeeded: bool,
     processes: Vec<ProcessTreeEntry>,
