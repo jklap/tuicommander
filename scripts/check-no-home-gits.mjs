@@ -21,7 +21,13 @@ const selfTest = process.argv.includes("--self-test");
 
 const REAL_ROOTS = ["scripts", "tools", "src-tauri", ".github", "Makefile", "vitest.config.ts", "package.json"];
 
-const SKIP = [/^src-tauri\/(patches|icons|binaries|gen)\//, /\.(tcap|raw|png|jpe?g|icns|ico|wav|mp3|ogg|bin|lock|pdf|ttf|woff2?)$/i];
+// Docs under the scan roots (src-tauri/AGENTS.md, tools/*/README.md) are out
+// of scope by decision: they may describe the old convention.
+const SKIP = [
+	/^src-tauri\/(patches|icons|binaries|gen)\//,
+	/\.(md|markdown|txt|html)$/i,
+	/\.(tcap|raw|png|jpe?g|icns|ico|wav|mp3|ogg|bin|lock|pdf|ttf|woff2?)$/i,
+];
 
 // Product/runtime references that deliberately keep `~/Gits` (assessment
 // §1c). Each entry must still exist and still match, or the self-test fails.
@@ -100,6 +106,7 @@ if (selfTest) {
 			"ok.rs": 'assert_eq!(clean("~/Gits/personal/tuicommander"), "");\n// the old `~/Gits` layout\n',
 			"ok.sh": 'base="${TMPDIR:-/tmp}/tuic-tests"\n',
 			"ok.py": 'root = Path(tempfile.gettempdir()) / "tuic-1419"\n',
+			"NOTES.md": "Old layout: `$HOME/Gits/.tmp/tuic-tests` and `~/Gits/.tmp`.\n",
 		};
 		for (const [name, text] of Object.entries({ ...offending, ...clean, "allowed.json": '"$HOME/Gits/**"\n' })) {
 			fs.writeFileSync(path.join(fixtureRoot, name), text);
