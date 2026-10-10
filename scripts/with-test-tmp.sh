@@ -40,26 +40,29 @@ prune_stale_runs() {
     -o -name 'tuic-proc-*' -o -name 'tuic-nextest-*' \) -mtime +6 \
     -exec rm -rf -- {} + 2>/dev/null || warn_prune "$1"
 }
-# tuic-test-support's per-checkout socket dirs (tuic-s<16 hex>), ours only.
+# tuic-test-support's socket roots in the host temp dir, ours only: a private
+# t.XXXXXX holding its .tuic-socket-root marker (each test process removes its
+# own at exit; this catches the ones a killed process left), and the older
+# per-checkout tuic-s<16 hex> dirs. Never anything in /tmp.
 prune_stale_socket_dirs() {
   [[ -d "$1" ]] || return 0
-  local stale
+  local stale name
   while IFS= read -r -d '' stale; do
-    [[ ${stale##*/} =~ ^tuic-s[0-9a-f]{16}$ ]] || continue
+    name=${stale##*/}
     [[ -O "$stale" && ! -L "$stale" ]] || continue
+    if [[ $name =~ ^t\.[a-z0-9]{6}$ ]]; then
+      [[ -f "$stale/.tuic-socket-root" ]] || continue
+    elif [[ ! $name =~ ^tuic-s[0-9a-f]{16}$ ]]; then
+      continue
+    fi
     rm -rf -- "$stale" 2>/dev/null || warn_prune "$stale"
   done < <(find "$1" -mindepth 1 -maxdepth 1 -type d \
-    -name 'tuic-s????????????????' -mtime +6 -print0 2>/dev/null || true)
+    \( -name 't.??????' -mtime +1 -o -name 'tuic-s????????????????' -mtime +6 \) \
+    -print0 2>/dev/null || true)
 }
 prune_stale_runs "$test_tmp_base"
 prune_stale_runs "$root/.tmp/tuic-tests"
 prune_stale_socket_dirs "$host"
-for shared in /tmp /private/tmp; do
-  [[ -d "$shared" ]] || continue
-  [[ "$host" -ef "$shared" ]] && continue
-  [[ "$shared" = /private/tmp && /tmp -ef /private/tmp ]] && continue
-  prune_stale_socket_dirs "$shared"
-done
 
 if [[ -n "${TUIC_TEST_TMP_ROOT:-}" ]]; then
   # The caller's root: use it as is, never delete it.

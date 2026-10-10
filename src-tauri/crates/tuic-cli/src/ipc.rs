@@ -227,12 +227,14 @@ mod tests {
     /// process-global, so two of these running concurrently would still
     /// stomp on each other even though each one's own round trip is now
     /// internally race-free.
-    fn round_trip(response: &'static str) -> (Response, tempfile::TempDir) {
+    fn round_trip(response: &'static str) -> (Response, tuic_test_support::SocketDir) {
         let (resp, dir) = round_trip_result(response);
         (resp.unwrap(), dir)
     }
 
-    fn round_trip_result(response: &'static str) -> (io::Result<Response>, tempfile::TempDir) {
+    fn round_trip_result(
+        response: &'static str,
+    ) -> (io::Result<Response>, tuic_test_support::SocketDir) {
         let dir = crate::short_socket_tempdir();
         let sock_path = dir.path().join("mcp.sock");
         let listener = UnixListener::bind(&sock_path).unwrap();

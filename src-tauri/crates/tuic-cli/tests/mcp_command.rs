@@ -10,8 +10,7 @@ static NEXT_SOCKET: AtomicU64 = AtomicU64::new(0);
 
 fn socket() -> (std::path::PathBuf, UnixListener) {
     let path = tuic_test_support::short_socket_path(&format!(
-        "tuic-mcp-{}-{}.sock",
-        std::process::id(),
+        "m{}.sock",
         NEXT_SOCKET.fetch_add(1, Ordering::Relaxed)
     ));
     let listener = UnixListener::bind(&path).unwrap();
@@ -525,8 +524,7 @@ fn mcp_reads_stdin_json_with_apostrophe() {
 
 #[test]
 fn mcp_rejects_bad_input_before_connecting() {
-    let nonexistent =
-        tuic_test_support::short_socket_path(&format!("no-mcp-{}.sock", std::process::id()));
+    let nonexistent = tuic_test_support::short_socket_path("none.sock");
     assert!(!nonexistent.exists());
     for args in [
         vec!["mcp", "agent", "{"],

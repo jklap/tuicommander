@@ -87,17 +87,14 @@ const ALLOWED = new Map([
 		"src-tauri/src/mdkb_client.rs::socket_path",
 		"connect-only fallback when HOME is unresolvable; assessment §3.2 drops it (no /tmp fallback for the daemon socket)",
 	],
+	// Tests that assert a path is NOT under a shared temp dir.
+	[
+		"src-tauri/crates/tuic-test-support/tests/socket_root.rs::socket_root_is_a_private_marked_dir_under_the_host_temp_dir_never_tmp",
+		"asserts the socket root is under none of them",
+	],
 	// PHASE-B: known sites the TMPDIR-only socket-root rework (assessment §3.1,
 	// §3.3, plan steps 4-10) removes. Delete each entry with its fix.
-	["src-tauri/crates/tuic-test-support/src/lib.rs::resolve_socket_root", "PHASE-B: /tmp and /private/tmp socket-root candidates"],
 	["src-tauri/crates/tuic-test-support/src/lib.rs::dir_outside_home", "PHASE-B: rejection-probe target, replaced by a HOME override + sibling tempdir"],
-	["src-tauri/crates/tuic-test-support/tests/socket_root.rs::short_scratch", "PHASE-B: tempdir_in(\"/tmp\") scratch for the resolver tests"],
-	[
-		"src-tauri/crates/tuic-test-support/tests/socket_root.rs::socket_root_is_stable_and_distinct_per_checkout_and_ignores_gits_ancestors",
-		"PHASE-B: tempdir_in(\"/tmp\") fake Gits parent",
-	],
-	["src-tauri/src/remote_runtime.rs::short_socket_dir", "PHASE-B: tempdir_in(\"/tmp\") socket dir; becomes test_support::short_socket_tempdir()"],
-	["scripts/with-test-tmp.sh::prune_stale_socket_dirs", "PHASE-B: prunes our stale socket dirs from /tmp and /private/tmp"],
 	["scripts/run-remote-fixture.sh::<top level>", "PHASE-B: /tmp/tuic-rf-<hash> fixture TMPDIR when $TMPDIR is too long for the named socket"],
 	["scripts/test-run-remote-fixture.sh::<top level>", "PHASE-B: mktemp -d /tmp/tuic-rft.XXXXXX short scratch"],
 	["scripts/test-run-remote-fixture.sh::cleanup", "PHASE-B: removes the /tmp/tuic-rf-<hash> fixture dir"],

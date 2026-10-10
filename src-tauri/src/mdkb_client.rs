@@ -774,6 +774,38 @@ pub(crate) mod tests {
         fallback.is_file().then_some(fallback)
     }
 
+    /// mdkb's staging socket for HOME `home`, with the longest pid this test
+    /// budgets for (7 digits: Linux `pid_max`; macOS pids have 5).
+    fn mdkb_staging_socket(home: &std::path::Path) -> PathBuf {
+        home.join(".mdkb/daemon-hook.sock.4194304.tmp")
+    }
+
+    /// `false`, with a loud UNCHECKED line, when mdkb's own staging socket
+    /// cannot fit SUN_LEN under `home`.
+    fn mdkb_staging_socket_fits(home: &std::path::Path) -> bool {
+        tuic_test_support::socket_test_can_run(
+            "mdkb_reports_symbol_lines_zero_based (mdkb's own socket name)",
+            &mdkb_staging_socket(home),
+        )
+    }
+
+    // Catches: the contract test skipping when its socket would fit, or
+    // running into an opaque bind failure when it cannot.
+    #[test]
+    fn mdkb_contract_skip_fires_only_when_the_staging_socket_cannot_fit() {
+        let suffix = mdkb_staging_socket(std::path::Path::new("/"))
+            .as_os_str()
+            .len()
+            - 1;
+        let home = |len: usize| PathBuf::from(format!("/{}", "h".repeat(len - 1)));
+        let longest = home(tuic_test_support::SUN_PATH_USABLE - 1 - suffix);
+        assert_eq!(mdkb_staging_socket(&longest).as_os_str().len(), 103);
+        assert!(mdkb_staging_socket_fits(&longest));
+        let one_over = home(tuic_test_support::SUN_PATH_USABLE - suffix);
+        assert_eq!(mdkb_staging_socket(&one_over).as_os_str().len(), 104);
+        assert!(!mdkb_staging_socket_fits(&one_over));
+    }
+
     /// mdkb reports symbol lines **0-based**, and `editor_line` adds one.
     ///
     /// Every other test around that conversion asserts the SHIFT — that TUIC
@@ -791,7 +823,9 @@ pub(crate) mod tests {
     /// When mdkb is not installed the contract cannot be exercised and the test
     /// says so on stderr rather than asserting anything. That is a real gap: CI
     /// runners have no mdkb, so upstream breakage is caught on a developer
-    /// machine, not in CI. Wiring mdkb into CI would close it.
+    /// machine, not in CI. Wiring mdkb into CI would close it. Likewise when
+    /// TMPDIR is too long for mdkb's own staging socket name (an `UNCHECKED`
+    /// line on stdout and stderr names the budget).
     #[tokio::test]
     async fn mdkb_reports_symbol_lines_zero_based() {
         let Some(mdkb) = installed_mdkb() else {
@@ -802,22 +836,15 @@ pub(crate) mod tests {
             return;
         };
 
-        // mdkb binds daemon-hook.sock.<pid>.tmp before renaming it. The normal
-        // repository test root can exceed macOS SUN_LEN before that bind.
-        let tmp = tempfile::Builder::new()
-            .prefix("s")
-            .tempdir_in(crate::test_support::short_socket_test_temp_root())
-            .expect("short socket test dir");
+        // mdkb binds HOME/.mdkb/daemon-hook.sock.<pid>.tmp before renaming it.
+        // That name is mdkb's own and HOME cannot be shorter than TMPDIR, so a
+        // long TMPDIR (the agent sandbox's is 72 bytes) cannot hold it at all.
+        let tmp = crate::test_support::short_socket_tempdir();
         let home = tmp.path().to_path_buf();
+        if !mdkb_staging_socket_fits(&home) {
+            return;
+        }
         let repo = tmp.path().join("repo");
-        assert!(
-            home.join(".mdkb/daemon-hook.sock.4294967295.tmp")
-                .as_os_str()
-                .len()
-                < 104,
-            "mdkb daemon socket path exceeds macOS SUN_LEN: {}",
-            home.display()
-        );
         std::fs::create_dir_all(home.join(".mdkb")).expect("home");
         std::fs::create_dir_all(repo.join("src")).expect("repo");
         // Symbols on human lines 1, 5, and 9 expose the base and any drift.

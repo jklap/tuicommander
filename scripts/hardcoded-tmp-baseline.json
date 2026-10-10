@@ -10,7 +10,6 @@
 		"src-tauri/crates/tuic-hook/src/tty.rs": 7,
 		"src-tauri/crates/tuic-terminal/src/chrome.rs": 3,
 		"src-tauri/crates/tuic-terminal/src/terminal_grid.rs": 4,
-		"src-tauri/crates/tuic-test-support/tests/socket_root.rs": 1,
 		"src-tauri/src/agent_hook.rs": 2,
 		"src-tauri/src/agent_mcp.rs": 1,
 		"src-tauri/src/agent_session.rs": 4,

@@ -1,28 +1,33 @@
 #![cfg(unix)]
 
 use std::io::Write;
-use std::os::unix::net::UnixListener;
 use std::process::{Command, Stdio};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
 
+// The named socket's absolute path (`<TMPDIR>/tuic-mcp-<16 hex>.sock`, a
+// production name) cannot fit sun_path under a long TMPDIR (the agent
+// sandbox's is 72 bytes). Then the listener binds it by a RELATIVE name
+// (`SocketSpelling::Relative`: chdir under a process-wide lock, then restore),
+// and the child runs in that directory with `TMPDIR=.`. That needs one test
+// per process: `cargo nextest` (the gate's runner), or RUST_TEST_THREADS=1;
+// `tuic_test_support::in_dir` panics otherwise.
 // Catches: bridge connecting/falling back to another instance instead of the selected socket.
 #[test]
 fn named_instance_bridge_reaches_its_socket_and_override_wins() {
-    let root = tuic_test_support::short_socket_test_temp_root();
-    let dir = tempfile::Builder::new()
-        .prefix("ipc")
-        .tempdir_in(root)
-        .unwrap();
+    let dir = tuic_test_support::socket_dir();
+    let fallback = "tuic-mcp-b199f45760a9ee6c-123.sock";
+    let spelling = tuic_test_support::SocketSpelling::for_dir(dir.path(), fallback);
     for mode in ["flag", "env", "fallback", "override"] {
-        let path = dir.path().join(match mode {
+        let name = match mode {
             "override" => "override.sock",
-            "fallback" => "tuic-mcp-b199f45760a9ee6c-123.sock",
+            "fallback" => fallback,
             _ => "tuic-mcp-b199f45760a9ee6c.sock",
-        });
-        let listener = UnixListener::bind(&path).unwrap();
+        };
+        let path = dir.path().join(name);
+        let listener = spelling.bind(dir.path(), name).unwrap();
         listener.set_nonblocking(true).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
         let server_stop = stop.clone();
@@ -55,7 +60,8 @@ fn named_instance_bridge_reaches_its_socket_and_override_wins() {
         command
             .env_remove("TUIC_SOCKET")
             .env_remove("TUIC_APP_INSTANCE")
-            .env("TMPDIR", dir.path())
+            .current_dir(dir.path())
+            .env("TMPDIR", spelling.temp_dir(dir.path()))
             .stdin(Stdio::null());
         if mode == "flag" {
             command.args(["--instance", "ipc-bridge-regression"]);
@@ -64,7 +70,7 @@ fn named_instance_bridge_reaches_its_socket_and_override_wins() {
             command.env("TUIC_APP_INSTANCE", "ipc-bridge-regression");
         }
         if mode == "override" {
-            command.env("TUIC_SOCKET", &path);
+            command.env("TUIC_SOCKET", spelling.path(dir.path(), name));
         }
         let output = command.output().unwrap();
         stop.store(true, Ordering::Relaxed);
