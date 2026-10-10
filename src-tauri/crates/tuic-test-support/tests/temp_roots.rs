@@ -109,3 +109,101 @@ fn trailing_slash_on_tmpdir_is_dropped() {
             .env("EXPECTED_HOST", host.path());
     });
 }
+
+fn checkout_hash() -> String {
+    tuic_test_support::socket_dir_name()
+        .strip_prefix("tuic-s")
+        .unwrap()
+        .to_owned()
+}
+
+// Catches: the bare `cargo test` default drifting from the one the shell entry
+// points (with-test-tmp.sh, the nextest setup script, shell tests) pick.
+#[test]
+fn default_root_is_the_per_checkout_dir_every_entry_point_uses() {
+    let host = host_fixture();
+    run_child("child_sees_the_per_checkout_default", |child| {
+        child
+            .env("TMPDIR", host.path())
+            .env("EXPECTED_HOST", host.path());
+    });
+}
+
+#[test]
+fn child_sees_the_per_checkout_default() {
+    if std::env::var_os(CHILD).is_none() {
+        return;
+    }
+    let host = PathBuf::from(std::env::var_os("EXPECTED_HOST").unwrap());
+    assert_eq!(
+        tuic_test_support::test_temp_root(),
+        host.join("tuic-tests")
+            .join(format!("tuic-co-{}", checkout_hash()))
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn shell_lib_hashes_the_checkout_like_tuic_test_support() {
+    let checkout = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../..")
+        .canonicalize()
+        .unwrap();
+    let output = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(". \"$1/scripts/test-tmp-lib.sh\" && tuic_checkout_hash \"$1\"")
+        .arg("sh")
+        .arg(&checkout)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    // checkout_hash() hashes the checkout found from the cwd, which nextest
+    // and cargo both set inside this checkout.
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap().trim(),
+        checkout_hash()
+    );
+}
+
+// Catches: a process started with the environment a test process exports
+// (TMPDIR already pointing at the root) nesting a second default inside it.
+#[test]
+fn chained_test_processes_keep_one_root() {
+    let host = host_fixture();
+    let report = host.path().join("report");
+    run_child("child_reports_its_roots", |child| {
+        child.env("TMPDIR", host.path()).env("REPORT", &report);
+    });
+    let first = std::fs::read_to_string(&report).unwrap();
+    let mut lines = first.lines();
+    let (tmpdir, host_tmpdir, root) = (
+        lines.next().unwrap().to_owned(),
+        lines.next().unwrap().to_owned(),
+        lines.next().unwrap().to_owned(),
+    );
+    assert_eq!(PathBuf::from(&host_tmpdir), host.path());
+    run_child("child_reports_its_roots", |child| {
+        child
+            .env("TMPDIR", &tmpdir)
+            .env("TUIC_TEST_HOST_TMPDIR", &host_tmpdir)
+            .env("REPORT", &report);
+    });
+    let second = std::fs::read_to_string(&report).unwrap();
+    assert_eq!(second, first, "the chained process picked another root");
+    assert_eq!(PathBuf::from(&root), PathBuf::from(&tmpdir));
+}
+
+#[test]
+fn child_reports_its_roots() {
+    if std::env::var_os(CHILD).is_none() {
+        return;
+    }
+    let report = std::env::var_os("REPORT").unwrap();
+    let text = format!(
+        "{}\n{}\n{}\n",
+        std::env::temp_dir().display(),
+        tuic_test_support::host_temp_dir().display(),
+        tuic_test_support::test_temp_root().display()
+    );
+    std::fs::write(report, text).unwrap();
+}

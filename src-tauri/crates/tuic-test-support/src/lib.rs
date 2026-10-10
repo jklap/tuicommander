@@ -95,7 +95,8 @@ fn without_trailing_separator(path: std::path::PathBuf) -> std::path::PathBuf {
     }
 }
 
-/// FNV-1a: stable across Rust releases, unlike `DefaultHasher`, so a toolchain
+/// FNV-1a (`tuic_checkout_hash` in scripts/test-tmp-lib.sh computes the same):
+/// stable across Rust releases, unlike `DefaultHasher`, so a toolchain
 /// bump never orphans the previous run's per-checkout directories.
 fn checkout_hash() -> String {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
@@ -123,11 +124,12 @@ pub fn test_base() -> std::path::PathBuf {
 }
 
 /// Scratch space for Rust tests: `TUIC_TEST_TMP_ROOT` when a runner chose it,
-/// else a per-checkout directory under [`test_base`] — outside the checkout,
-/// so `find_repo_root` from a fixture never walks up into this repository.
+/// else `<`[`test_base`]`>/tuic-co-<checkout hash>` — the same per-checkout
+/// default `scripts/test-tmp-lib.sh` gives the shell entry points, and outside
+/// the checkout, so `find_repo_root` from a fixture never walks up into it.
 pub fn test_temp_root() -> std::path::PathBuf {
     let root = non_empty_env("TUIC_TEST_TMP_ROOT")
-        .unwrap_or_else(|| test_base().join(format!("tuic-proc-{}", checkout_hash())));
+        .unwrap_or_else(|| test_base().join(format!("tuic-co-{}", checkout_hash())));
     std::fs::create_dir_all(&root).expect("create test temp root");
     root
 }

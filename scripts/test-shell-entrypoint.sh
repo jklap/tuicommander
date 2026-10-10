@@ -2,7 +2,7 @@
 set -euo pipefail
 
 project_root="$(git rev-parse --show-toplevel)"
-test_tmp="${TUIC_TEST_TMP_ROOT:-${TMPDIR:-/tmp}}"
+test_tmp="$(. "$project_root/scripts/test-tmp-lib.sh" && tuic_test_tmp_root "$project_root")"
 mkdir -p "$test_tmp"
 fixture_dir="$(mktemp -d "$test_tmp/shell-entrypoint.XXXXXX")"
 trap 'rm -rf "$fixture_dir"' EXIT
@@ -13,7 +13,7 @@ fixture_checkout="$fixture_dir/checkout"
 git init --quiet "$fixture_checkout"
 mkdir -p "$fixture_checkout/scripts"
 cp "$project_root/Makefile" "$fixture_checkout/Makefile"
-cp "$project_root/scripts/with-test-tmp.sh" "$fixture_checkout/scripts/with-test-tmp.sh"
+cp "$project_root/scripts/with-test-tmp.sh" "$project_root/scripts/test-tmp-lib.sh" "$fixture_checkout/scripts/"
 fixture="$fixture_checkout/test-failing-fixture.sh"
 printf '#!/usr/bin/env bash\nexit 1\n' > "$fixture"
 

@@ -6,7 +6,7 @@
 set -euo pipefail
 
 root="$(git rev-parse --show-toplevel)"
-base="${TUIC_TEST_TMP_ROOT:-${TMPDIR:-/tmp}}"
+base="$(. "$root/scripts/test-tmp-lib.sh" && tuic_test_tmp_root "$root")"
 fixture="$(mktemp -d "${base%/}/tuic-prune-test.XXXXXX")"
 cleanup() {
   chmod -R u+rwX "$fixture"
@@ -19,10 +19,10 @@ trap cleanup EXIT
 checkout="$fixture/checkout"
 git init --quiet "$checkout"
 mkdir -p "$checkout/scripts" "$checkout/.tmp/tuic-tests"
-cp "$root/scripts/with-test-tmp.sh" "$checkout/scripts/with-test-tmp.sh"
+cp "$root/scripts/with-test-tmp.sh" "$root/scripts/test-tmp-lib.sh" "$checkout/scripts/"
 
 wrap() {
-  env -u TUIC_TEST_HOST_TMPDIR -u TUIC_TEST_TMP_BASE TMPDIR="$1/" \
+  env -u TUIC_TEST_TMP_ROOT -u TUIC_TEST_HOST_TMPDIR -u TUIC_TEST_TMP_BASE TMPDIR="$1/" \
     "$checkout/scripts/with-test-tmp.sh" true
 }
 

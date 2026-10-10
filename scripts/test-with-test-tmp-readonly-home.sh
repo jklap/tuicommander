@@ -5,7 +5,7 @@
 set -euo pipefail
 
 root="$(git rev-parse --show-toplevel)"
-base="${TUIC_TEST_TMP_ROOT:-${TMPDIR:-/tmp}}"
+base="$(. "$root/scripts/test-tmp-lib.sh" && tuic_test_tmp_root "$root")"
 fixture="$(mktemp -d "${base%/}/tuic-ro-home.XXXXXX")"
 cleanup() {
   chmod -R u+rwX "$fixture"
@@ -34,13 +34,18 @@ esac
 test "${seen_tmpdir%/}" = "$seen_root" || { echo "TUIC_TEST_TMP_ROOT $seen_root != TMPDIR $seen_tmpdir" >&2; exit 1; }
 test "$seen_host" = "$host" || { echo "TUIC_TEST_HOST_TMPDIR $seen_host != $host" >&2; exit 1; }
 
-# Catches: a nested wrapper nesting its run dir inside the outer one.
-nested="$(run_isolated "$root/scripts/with-test-tmp.sh" \
-  "$root/scripts/with-test-tmp.sh" sh -c 'printf "%s" "$TMPDIR"')"
-case "$nested" in
+# Catches: a nested wrapper making a second run dir instead of reusing the
+# root the outer one exported (it would nest it if TMPDIR were its host).
+nested="$(run_isolated "$root/scripts/with-test-tmp.sh" sh -c \
+  'printf "%s|" "$TMPDIR"; "$0" sh -c "printf %s \"\$TMPDIR\""' \
+  "$root/scripts/with-test-tmp.sh")"
+IFS='|' read -r outer_tmpdir inner_tmpdir <<<"$nested"
+case "$outer_tmpdir" in
   "$host/tuic-tests/tuic-run."*) ;;
-  *) echo "nested per-run TMPDIR $nested left the host base" >&2; exit 1 ;;
+  *) echo "outer per-run TMPDIR $outer_tmpdir left the host base" >&2; exit 1 ;;
 esac
+test "$inner_tmpdir" = "$outer_tmpdir" \
+  || { echo "nested wrapper TMPDIR $inner_tmpdir != outer $outer_tmpdir" >&2; exit 1; }
 
 # Catches: the prune test (part of `make check`) creating fixtures under HOME.
 if ! output="$(run_isolated bash "$root/scripts/test-with-test-tmp-prune.sh" 2>&1)"; then

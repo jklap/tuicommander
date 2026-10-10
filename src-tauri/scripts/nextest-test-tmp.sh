@@ -1,20 +1,14 @@
 #!/bin/sh
 # Nextest setup script: give every test process the same scratch roots
 # scripts/with-test-tmp.sh would. TUIC_TEST_TMP_ROOT when a wrapper already
-# chose one, else a per-checkout dir under
-# ${TUIC_TEST_TMP_BASE:-<host temp>/tuic-tests}. Never derived from $HOME.
+# chose one, else this checkout's default under the host temp dir (order in
+# scripts/test-tmp-lib.sh). Never derived from $HOME.
 set -eu
 
-host=${TUIC_TEST_HOST_TMPDIR:-${TMPDIR:-/tmp}}
-host=${host%/}
-host=${host:-/}
-if [ -n "${TUIC_TEST_TMP_ROOT:-}" ]; then
-    root=$TUIC_TEST_TMP_ROOT
-else
-    checkout_hash=$(cd .. && pwd | cksum | cut -d ' ' -f 1)
-    root="${TUIC_TEST_TMP_BASE:-$host/tuic-tests}/tuic-nextest-$checkout_hash"
-fi
-mkdir -p "$root"
+# shellcheck source=../../scripts/test-tmp-lib.sh
+. ../scripts/test-tmp-lib.sh
+host=$(tuic_test_host_tmpdir)
+root=$(tuic_test_tmp_root ..)
 root=$(cd "$root" && pwd)
 {
     printf 'TUIC_TEST_HOST_TMPDIR=%s\n' "$host"

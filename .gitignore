@@ -72,6 +72,8 @@ scripts/*
 !scripts/mutants.sh
 !scripts/ts-mutants.mjs
 !scripts/with-test-tmp.sh
+!scripts/test-tmp-lib.sh
+!scripts/test-with-test-tmp-roots.sh
 !scripts/check-nextest-fixture-scope.sh
 !scripts/test-remote-mcp.py
 !scripts/install-launch-shells.sh
