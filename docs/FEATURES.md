@@ -2780,3 +2780,11 @@ The Automations **Runs** view shows backend 24h/7d counts, paginated history, di
 ### Tasks contract foundation
 
 Provider-neutral Rust DTOs and generated TypeScript cover work-item queries, fields, comments, actions and boards. A deterministic local provider supports development; visible Tasks views and remote providers are separate integration work. See [plugin guide](plugins.md#tasks-data-contract-phase-a4).
+
+## Tasks board component
+
+The core Tasks board component renders provider-declared columns and virtualized
+lanes. Cards support drag and drop and a keyboard-accessible move menu. Pending
+moves cannot be repeated; rejected actions restore the card and show the error.
+This component is available to the Tasks host; provider registration and the
+Tasks navigation surface determine where it is shown.

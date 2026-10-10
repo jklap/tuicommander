@@ -697,3 +697,12 @@ only provisional command-envelope boundary; tests inject `AutomationAdapter`.
 No schedules or launch decisions are calculated in TypeScript.
 
 `RunsView` in the Automations dialog renders all-history pages and backend 24h/7d summaries. `RunOutput` renders saved stdout/stderr and immutable workspace details. View run only focuses a live terminal with matching daemon ownership; unavailable sessions never launch a replacement.
+
+## Tasks board
+
+`Tasks/board/TasksBoard.tsx` renders the provider/core board projection. Each lane
+has a virtualized card list. Pointer capture supports drag and drop; the native
+move menu provides keyboard and touch access. Moves dispatch the provider's per-card
+action, show pending feedback, and restore the origin on rejection. Cancellation
+and scope changes clean up drag state. Consumers refresh the projection after a
+successful move; the view does not infer workflow transitions.
