@@ -38,7 +38,8 @@ The orchestrator (your own embedded instance) holds port 9876. Never touch it. B
 lsof -iTCP:9876 -sTCP:LISTEN -Pn   # confirm the orchestrator holds 9876
 lsof -iTCP:9877 -sTCP:LISTEN -Pn   # confirm 9877 is free
 
-nohup make dev > /tmp/tuic-dev-verify.log 2>&1 &
+# Log under $TMPDIR (or your session scratchpad), never a literal /tmp.
+nohup make dev > "${TMPDIR:-/tmp}/tuic-dev-verify.log" 2>&1 &
 disown
 ```
 
