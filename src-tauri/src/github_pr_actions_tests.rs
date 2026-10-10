@@ -273,3 +273,60 @@ async fn queue_rule_on_later_page_still_enqueues() {
         .unwrap();
     assert_eq!(response["action"], "enqueued");
 }
+
+mod critic {
+    use super::super::*;
+    use std::sync::Mutex;
+
+    /// A base branch whose merge queue comes from classic branch protection:
+    /// GitHub reports `isMergeQueueEnabled` on the PR, while the rulesets
+    /// endpoint (`rules/branches/{branch}`) lists only ruleset rules.
+    struct ClassicQueueApi {
+        writes: Mutex<Vec<String>>,
+    }
+
+    impl PrApi for ClassicQueueApi {
+        async fn graphql(&self, query: &str, _variables: Value) -> Result<Value, String> {
+            if query.contains("enqueuePullRequest") {
+                self.writes.lock().unwrap().push("enqueue".into());
+                return Ok(json!({"enqueuePullRequest":{"mergeQueueEntry":{"id":"MQE_1","position":1,"state":"QUEUED"}}}));
+            }
+            let recorded: Value = serde_json::from_str(include_str!(
+                "../fixtures/github-review/actions-pr-recorded.json"
+            ))
+            .unwrap();
+            let pr = recorded["data"]["repository"]["pullRequests"]["nodes"][0].clone();
+            Ok(json!({"repository":{"pullRequest":pr}}))
+        }
+
+        async fn rest(&self, method: &str, endpoint: &str, _body: Value) -> Result<Value, String> {
+            if method == "GET" && endpoint.starts_with("rules/branches/") {
+                return Ok(json!([]));
+            }
+            self.writes
+                .lock()
+                .unwrap()
+                .push(format!("{method} {endpoint}"));
+            Ok(json!({"merged":true,"sha":"0000000000000000000000000000000000000001"}))
+        }
+    }
+
+    // catches: a merge queue required by classic branch protection, invisible to
+    // the rulesets API, sent as a direct merge that GitHub refuses.
+    #[tokio::test]
+    async fn merge_enqueues_when_pr_reports_merge_queue_without_ruleset() {
+        let api = ClassicQueueApi {
+            writes: Mutex::new(Vec::new()),
+        };
+        let response = merge_or_enqueue(
+            &api,
+            json!({}),
+            46254,
+            "squash",
+            "a2b8613ecf3dda46cc0b608efd69b8f309e8fbc0",
+        )
+        .await;
+        assert_eq!(*api.writes.lock().unwrap(), vec!["enqueue".to_string()]);
+        assert_eq!(response.unwrap()["action"], "enqueued");
+    }
+}
