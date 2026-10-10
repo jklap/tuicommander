@@ -4959,3 +4959,5 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] Design Mode v2 pilot: after Boss rebuilds/restarts TUIC, load the unpacked extension into its dedicated Edge profile; verify toolbar opening, activeTab capture and sidebar return after switching tabs. Rust does not hot-reload. CFT sidebar and trusted top/frame picks were verified in story 1672.
 
 - [ ] After the next Rust rebuild/restart, verify Design Mode sends a captured crop as a readable image and lets retained feedback reach a replacement after its original recipient exits (#1672-cd3d). Rust does not hot-reload.
+
+- [ ] Mobile session history (#1681-507e): after Boss manually restarts `make dev` or rebuilds release, verify a long-running Claude Code session keeps completed output above its live region while scrolling on iPhone. Rust does not hot-reload; this peer did not restart Boss's app.
