@@ -118,6 +118,7 @@ scripts/fixtures/*
 !scripts/test-with-test-tmp-worktree-target.sh
 !scripts/test-install-sh-tmpdir.sh
 !scripts/test-with-test-tmp-git-template.sh
+!scripts/test-with-test-tmp-git-ceiling.sh
 !scripts/check-no-nul-bytes.mjs
 !scripts/check-no-home-gits.mjs
 !scripts/check-no-hardcoded-tmp.mjs
