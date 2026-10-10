@@ -11,16 +11,57 @@ use tempfile::TempDir;
 use crate::git_cli::git_cmd;
 use crate::worktree::{WorktreeConfig, create_worktree_internal};
 
+/// `git init` a fixture repo at `dir` and prove it is its own toplevel before
+/// anything else runs there. A failed or odd init must stop the test here: the
+/// next fixture command would otherwise run in whatever repository encloses
+/// `dir` (once, the real checkout, whose branches it renamed).
+///
+/// # Panics
+///
+/// `git init` fails, or `git rev-parse --show-toplevel` in `dir` is not `dir`.
+pub fn init_fixture_repo(dir: &Path) {
+    // `--template=`: no hooks/*.sample copies, even under a bare `cargo test`
+    // that skips the harness's `GIT_TEMPLATE_DIR` (see src-tauri/AGENTS.md).
+    let out = std::process::Command::new("git")
+        .args(["init", "-q", "--template="])
+        .current_dir(dir)
+        .output()
+        .unwrap_or_else(|err| panic!("run git init for fixture repo {}: {err}", dir.display()));
+    assert!(
+        out.status.success(),
+        "git init failed for fixture repo {}: {}",
+        dir.display(),
+        String::from_utf8_lossy(&out.stderr).trim()
+    );
+    assert_own_toplevel(dir);
+}
+
+/// Panic unless `dir` is the toplevel of its own git repository.
+pub fn assert_own_toplevel(dir: &Path) {
+    let want = dir
+        .canonicalize()
+        .unwrap_or_else(|err| panic!("canonicalize fixture dir {}: {err}", dir.display()));
+    let out = std::process::Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(dir)
+        .output()
+        .unwrap_or_else(|err| panic!("run git rev-parse in {}: {err}", dir.display()));
+    let got = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let got = Path::new(&got).canonicalize().ok();
+    assert!(
+        out.status.success() && got.as_deref() == Some(want.as_path()),
+        "{} is not its own git toplevel (git says {:?}: {}); refusing to run fixture git commands there",
+        dir.display(),
+        got,
+        String::from_utf8_lossy(&out.stderr).trim()
+    );
+}
+
 pub fn setup_test_repo() -> TempDir {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let repo_path = temp_dir.path();
 
-    // `--template=`: no hooks/*.sample copies, even under a bare `cargo test`
-    // that skips the harness's `GIT_TEMPLATE_DIR` (see src-tauri/AGENTS.md).
-    git_cmd(repo_path)
-        .args(["init", "--template="])
-        .run()
-        .expect("Failed to init git repo");
+    init_fixture_repo(repo_path);
     git_cmd(repo_path)
         .args(["config", "user.email", "test@test.com"])
         .run()
@@ -89,11 +130,7 @@ pub fn dirty_worktree_with(repo: &Path, branch: &str, commit: bool) -> PathBuf {
 pub fn setup_test_repo_with_commit() -> (tempfile::TempDir, PathBuf) {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().to_path_buf();
-    std::process::Command::new("git")
-        .current_dir(&path)
-        .args(["init", "--template="])
-        .output()
-        .expect("git init");
+    init_fixture_repo(&path);
     std::process::Command::new("git")
         .current_dir(&path)
         .args(["config", "user.email", "test@test.com"])
@@ -132,6 +169,30 @@ mod tests {
                 .collect(),
             Err(_) => Vec::new(),
         }
+    }
+
+    /// A fixture dir whose `git init` fails, inside another repository: the
+    /// helper must panic instead of leaving later commands to hit the outer one.
+    #[test]
+    #[should_panic(expected = "fixture repo")]
+    fn init_fixture_repo_panics_when_git_init_fails() {
+        let outer = TempDir::new().unwrap();
+        init_fixture_repo(outer.path());
+        let dir = outer.path().join("fixture");
+        fs::create_dir_all(&dir).unwrap();
+        // Not a gitfile: `git init` refuses it.
+        fs::write(dir.join(".git"), "garbage\n").unwrap();
+        init_fixture_repo(&dir);
+    }
+
+    #[test]
+    #[should_panic(expected = "is not its own git toplevel")]
+    fn assert_own_toplevel_rejects_a_dir_inside_another_repository() {
+        let outer = TempDir::new().unwrap();
+        init_fixture_repo(outer.path());
+        let sub = outer.path().join("sub");
+        fs::create_dir_all(&sub).unwrap();
+        assert_own_toplevel(&sub);
     }
 
     #[test]
