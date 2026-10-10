@@ -1745,6 +1745,15 @@ describe("transport", () => {
 		});
 
 		// Catches: IPC wrapping being forwarded to HTTP instead of the tagged account action.
+		it("maps metadata-only account secret launch to the shared native host endpoint", () => {
+			const request = { action: "rotate", id: "account-id" };
+			expect(mapCommandToHttp("account_secret_form", { request })).toEqual({
+				method: "POST",
+				path: "/accounts/secret-form",
+				body: request,
+			});
+		});
+
 		it("maps account_action to the shared presence-only owner endpoint", () => {
 			const request = { action: "list", provider: "github" };
 			expect(mapCommandToHttp("account_action", { request })).toEqual({

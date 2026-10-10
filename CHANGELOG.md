@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- GitHub Enterprise PAT entry now opens a private native window and writes
+  directly to the account vault; Settings no longer holds the PAT.
+
 - Add the core shared account/site registry with write-only tokens, generic provider verification and GitHub migration; omit tokens from OAuth replies (#1679-1419).
 
 - Restore missing live PTY identity bindings on MCP requests so spawned children remain linked to their parent in session lists (#1673-da49).

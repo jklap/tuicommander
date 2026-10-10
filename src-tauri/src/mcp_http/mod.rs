@@ -942,6 +942,7 @@ fn shared_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/mcp/peer", get(remote_peer::endpoint))
         .route("/accounts/action", post(account_routes::action))
+        .route("/accounts/secret-form", post(account_routes::secret_form))
         // Version (authenticated)
         .route("/api/version", get(session::app_version))
         // Shared on purpose: this is how a remote client escapes the header-only

@@ -13,7 +13,7 @@ pub(crate) async fn form_http(
     State(state): State<Arc<AppState>>,
     Path(nonce): Path<String>,
 ) -> Response {
-    let reply = match state.secrets.form(&nonce) {
+    let reply = match state.secrets.public_form(&nonce) {
         Ok(form) => Json(form).into_response(),
         Err(_) => (
             StatusCode::NOT_FOUND,
@@ -44,7 +44,7 @@ pub(crate) async fn submit_http(
     private_response(reply)
 }
 
-pub(super) fn private_response(mut response: Response) -> Response {
+pub(crate) fn private_response(mut response: Response) -> Response {
     response.headers_mut().insert(
         header::CACHE_CONTROL,
         axum::http::HeaderValue::from_static("no-store"),
@@ -78,30 +78,25 @@ pub(crate) async fn secret_form_submit(
     window: tauri::WebviewWindow,
     submission: Submission,
 ) -> Result<Status, String> {
-    // Native caller identity cannot be supplied or spoofed in invoke arguments.
-    {
-        let inner = state.secrets.inner.lock();
-        let pending = inner
-            .pending
-            .as_ref()
-            .ok_or("Unknown or expired secret form")?;
-        if window.label() != format!("secret-{}", pending.form.id)
-            || !state.secrets.has_window(window.label())
-        {
-            return Err("Secret submit requires the private native window".into());
-        }
-    }
-    let nonce = Zeroizing::new(submission.nonce.clone());
-    let id = state.secrets.form(&nonce)?.id;
-    let result = state.secrets.submit(&nonce, submission)?;
+    // Tauri supplies the window; invoke arguments cannot spoof its identity.
+    let id = state.secrets.form(&submission.nonce)?.id;
+    let result = account_sink::submit_native(&state, window.label(), submission).await?;
     close_window(&state, &id);
     Ok(result)
 }
 
 pub(super) async fn ask(state: &Arc<AppState>, form: Form) -> Result<Status, String> {
+    ask_with_sink(state, form, None).await
+}
+
+pub(super) async fn ask_with_sink(
+    state: &Arc<AppState>,
+    form: Form,
+    sink: Option<account_sink::Request>,
+) -> Result<Status, String> {
     #[cfg(not(feature = "desktop"))]
     {
-        let _ = (state, form);
+        let _ = (state, form, sink);
         Err("Secret requests require a desktop host to open the private form".into())
     }
     #[cfg(feature = "desktop")]
@@ -112,10 +107,12 @@ pub(super) async fn ask(state: &Arc<AppState>, form: Form) -> Result<Status, Str
             .read()
             .clone()
             .ok_or("Secret entry requires a desktop host")?;
-        let form = state.secrets.open(form)?;
+        let form = state.secrets.open_with_sink(form, sink)?;
         // Browser entry uses the existing server origin and its auth/TLS policy.
         // Boss accepts app-origin service-worker exposure and plaintext access.
-        if let Some(pending) = state.secrets.inner.lock().pending.as_mut() {
+        if let Some(pending) = state.secrets.inner.lock().pending.as_mut()
+            && pending.sink.is_none()
+        {
             pending.form.mobile_url =
                 Some(format!("/index.html#/secret-form?nonce={}", form.nonce));
         }
@@ -190,8 +187,8 @@ pub(super) async fn ask(state: &Arc<AppState>, form: Form) -> Result<Status, Str
     }
 }
 
-#[cfg(feature = "desktop")]
-fn cancel(state: &Arc<AppState>, id: &str) {
+#[cfg(any(feature = "desktop", test))]
+pub(super) fn cancel(state: &Arc<AppState>, id: &str) {
     let mut inner = state.secrets.inner.lock();
     if inner.pending.as_ref().is_some_and(|p| p.form.id == id)
         && let Some(mut pending) = inner.pending.take()

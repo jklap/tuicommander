@@ -4970,3 +4970,14 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] After the next Rust rebuild/restart, verify Design Mode sends a captured crop as a readable image and lets retained feedback reach a replacement after its original recipient exits (#1672-cd3d). Rust does not hot-reload.
 
 - [ ] [HUMAN] #1674-93d5: On iPhone Safari and separately the installed Home Screen PWA, tap the composer mic beside Send. Verify interim/final speech appends without opening the keyboard, stop works, Send remains explicit, and server hands-free cannot record simultaneously. Check permission refusal preserves the draft. While dictating, edit the draft: the mic returns to idle, the edit stays exact, and tapping the mic starts a new recording. Historical WebKit standalone restriction: https://bugs.webkit.org/show_bug.cgi?id=225298#c3. At 360×800 the controls remain in the existing row; Send/mic targets grow from 40 to 44 px, costing 4 vertical px rather than another terminal row.
+
+## Private account secret entry (#1696-c6d4)
+
+- [ ] After a manual `make dev` restart (or `make build`), add an Enterprise
+  account: Settings shows only the host field; Add account opens the private
+  native token window. Submit a valid PAT and confirm the account appears.
+- [ ] Decline and close before submitting; confirm no account appears. Retry
+  with an invalid PAT and confirm no partial account is created.
+- [ ] Launch a rotate request for an existing account; confirm presence remains
+  set and subsequent provider requests use the replacement credential.
+- [ ] Confirm native entry has no mobile link or developer tools.

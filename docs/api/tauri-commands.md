@@ -910,3 +910,12 @@ the prepared launch prompt, counting escaped stdout bytes before framing/marker.
 | `account_action` | `request: AccountAction` | Metadata/presence-only action reply | `POST /accounts/action`, body = request |
 
 The async command delegates to the same owner service as HTTP; disk/vault work runs on the blocking pool. See [the account action table](../backend/github.md#shared-account-registry).
+
+### Private account credential entry
+
+`account_secret_form {request}` opens the existing isolated native secret window.
+The request is `{action:"add",account:{provider,host,kind,label,username?}}` or
+`{action:"rotate",id}`; it accepts no credential. The reply contains only
+`{names:[],status:"stored"|"declined"|"failed"}`. `secret_form_bootstrap` and
+`secret_form_submit` require the active native window identity. Account forms
+do not expose a mobile capability or accept HTTP bootstrap/submission.

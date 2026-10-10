@@ -2999,3 +2999,14 @@ the prepared launch prompt, counting escaped stdout bytes before framing/marker.
 ## Account actions
 
 `POST /accounts/action` accepts the tagged core account action directly, without an IPC `request` envelope. It is registered identically on desktop and headless routers with the loopback-or-authenticated route guard. TCP listeners additionally require transport authentication, including loopback requests. Reads return metadata and credential presence only; no action returns a token. List/add/test/remove, site operations and write-only token replacement/clear share the Rust account owner service. See [the account action table](../backend/github.md#shared-account-registry). Frontend mapping lives in `src/transport/commandTable.ts`.
+
+### Account credential entry
+
+`POST /accounts/secret-form` accepts the same metadata-only request as
+`account_secret_form` (see the Tauri command reference). It requires local or
+authenticated access and a desktop host; a headless host returns an error. The
+request waits for native entry and returns status only, with `Cache-Control:
+no-store`. It never returns a nonce or credential. Account forms cannot be read
+through `GET /secrets/forms/{nonce}` or submitted through
+`POST /secrets/forms/submit`, even with the correct nonce. Ordinary secret forms
+retain their existing mobile capability support.

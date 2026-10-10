@@ -2784,3 +2784,8 @@ The Automations **Runs** view shows backend 24h/7d counts, paginated history, di
 ## Shared provider accounts
 
 Core account/site list, add, Test and remove use one registry with write-only credential storage. GitHub metadata/tokens migrate without changing account IDs or repo bindings; core retains the GitHub provider and ambient auth chain. Generic provider descriptors allow token/basic verification for plugin providers. Native Settings secret entry and plugin-manifest/authenticated-request wiring are separate integration steps.
+
+Account credential entry uses a private native form with one-time nonce and
+window identity checks. Settings sends account metadata only and receives status
+only; Enterprise PATs go directly to the account vault after verification.
+Account forms have no browser/mobile entry capability.

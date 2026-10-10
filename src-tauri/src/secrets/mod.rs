@@ -1,4 +1,7 @@
 //! In-memory secrets. No raw-value getter, serialization, logging or persistence.
+pub(crate) mod account_sink;
+#[cfg(test)]
+mod account_sink_tests;
 pub(crate) mod forms;
 mod mask;
 pub(crate) mod policy;
@@ -64,6 +67,7 @@ pub(crate) struct Status {
 
 struct Pending {
     form: Form,
+    sink: Option<account_sink::Request>,
     response: Option<tokio::sync::oneshot::Sender<Status>>,
 }
 
@@ -94,17 +98,25 @@ impl SecretStore {
         self.inner.lock().pending.is_some() || self.window.lock().is_some()
     }
     pub(crate) fn open(&self, form: Form) -> Result<Form, String> {
+        self.open_with_sink(form, None)
+    }
+    fn open_with_sink(
+        &self,
+        form: Form,
+        sink: Option<account_sink::Request>,
+    ) -> Result<Form, String> {
         let mut inner = self.inner.lock();
         if inner.pending.is_some() || self.window.lock().is_some() {
             return Err("A secret form is already open".into());
         }
         inner.pending = Some(Pending {
             form: form.clone(),
+            sink,
             response: None,
         });
         Ok(form)
     }
-    #[cfg(feature = "desktop")]
+    #[cfg(any(feature = "desktop", test))]
     fn has_window(&self, label: &str) -> bool {
         self.window.lock().as_deref() == Some(label)
     }
@@ -114,6 +126,15 @@ impl SecretStore {
         if window.as_deref() == Some(label) {
             *window = None;
         }
+    }
+    fn public_form(&self, nonce: &str) -> Result<Form, String> {
+        let inner = self.inner.lock();
+        inner
+            .pending
+            .as_ref()
+            .filter(|p| p.form.nonce == nonce && p.sink.is_none())
+            .map(|p| p.form.clone())
+            .ok_or_else(|| "Unknown or expired secret form".into())
     }
     fn form(&self, nonce: &str) -> Result<Form, String> {
         let inner = self.inner.lock();
@@ -126,6 +147,9 @@ impl SecretStore {
     }
     pub(crate) fn submit(&self, nonce: &str, mut submission: Submission) -> Result<Status, String> {
         let mut inner = self.inner.lock();
+        if inner.pending.as_ref().is_some_and(|p| p.sink.is_some()) {
+            return Err("Account entry requires the private native window".into());
+        }
         let form = &inner
             .pending
             .as_ref()

@@ -460,3 +460,9 @@ Settings → Telegram configures the current machine. Mobile Settings has a **Te
 ## Shared provider account storage
 
 Core now stores provider accounts and sites in one registry. Existing GitHub accounts retain their identities and repository bindings. Token values remain in the core credential store; account reads show only set, unset or unavailable status. The Accounts controls and private native add flow are integrated separately by the Settings extension. A failed account operation may need storage repair before retrying; see [migration and recovery](../backend/github.md#github-migration-and-recovery).
+
+GitHub Enterprise account creation asks for the host in Settings, then opens a
+separate private native window for the PAT. Settings never displays or stores
+the PAT. Decline or close that window before submission to cancel. A headless
+server cannot open this native credential window. After Submit is accepted,
+verification finishes even if you close the window.

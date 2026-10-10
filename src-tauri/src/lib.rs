@@ -2208,6 +2208,7 @@ pub fn run() {
             github_auth::github_diagnostics,
             github_auth::github_auth_status,
             accounts::account_action,
+            secrets::account_sink::account_secret_form,
             github_account::github_add_account,
             github_account::github_remove_account,
             github_account::github_bind_repo,
