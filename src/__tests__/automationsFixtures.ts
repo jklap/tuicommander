@@ -22,6 +22,7 @@ export function fakeAdapter(overrides: Partial<AutomationAdapter> = {}): Automat
 		remove: async () => {},
 		runNow: async () => ({ status: "skipped_concurrency", reason: "All slots are busy" }),
 		history: async () => [],
+		summary: async () => ({ total: 0, by_status: {} }),
 		preview: async (cron, timezone) => ({
 			cron,
 			timezone: timezone || "Europe/Madrid",

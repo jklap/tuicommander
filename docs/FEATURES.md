@@ -2764,3 +2764,7 @@ retains bounded final output, and expires active runs at their persisted deadlin
 If stopping one run fails, it stays active while other runs still enforce their
 deadlines. Reconciliation reports the stop errors after processing those runs.
 Blocked runs remain active; idle alone does not prove success. Rust restart required.
+
+### Automation runs view
+
+The Automations **Runs** view shows backend 24h/7d counts, paginated history, distinct needs-you/unknown/interrupted states, and saved output after definition deletion. View run focuses only an available terminal on the owning daemon; otherwise it shows the saved report and workspace details without launching a replacement.

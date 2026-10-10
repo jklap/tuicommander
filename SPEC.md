@@ -864,3 +864,7 @@ and preserve immutable terminal history with 256 KiB output snapshots. Transitio
 use desktop and SSE dual-emission; boot interrupts open runs without retry.
 
 CLI directory opens and MCP `repo action=add` share server-owned repository registration over local IPC. They persist and activate canonical Git or shell directories without an OS URL handler, preserve existing workspace and terminal state on repeated calls, and broadcast configuration changes. MCP `ui tab` rejects `tuic://open-repo` URLs and directs callers to `repo add`.
+
+## Automation Runs View (#1619-b84d)
+
+The Runs tab displays paginated immutable history across definitions, including deleted definitions, and backend 24h/7d elapsed-window summaries. View run focuses only a live terminal owned by the addressed daemon. Absent, suspended or exited sessions display saved bounded output, truncation evidence and recorded workspace details without creating sessions or workspaces. The dialog captures the active repository's daemon owner when opened. Visual verification remains pending because headless Chrome screenshot attempts timed out.
