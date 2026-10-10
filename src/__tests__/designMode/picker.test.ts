@@ -15,27 +15,49 @@ it("leaves browsing alone unless explicitly armed and removes the overlay on eve
 			},
 		},
 	};
+	const extract = vi.fn(() => ({ selector: "#browse" }));
 	new Function("chrome", "tuicExtract", readFileSync("browser-extension/design-mode/picker.js", "utf8"))(
 		chrome,
-		vi.fn(),
+		extract,
 	);
-	const children = document.documentElement.children.length;
-	const click = new MouseEvent("click", { bubbles: true, cancelable: true });
-	document.body.dispatchEvent(click);
-	expect(click.defaultPrevented).toBe(false);
-	expect(document.documentElement.children).toHaveLength(children);
-	receive({ kind: "arm" });
-	expect(document.documentElement.children).toHaveLength(children + 1);
-	const escapeEvent = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
-	window.dispatchEvent(escapeEvent);
-	expect(escapeEvent.defaultPrevented).toBe(true);
-	expect(document.documentElement.children).toHaveLength(children);
-	receive({ kind: "arm", multi: true });
-	receive({ kind: "stop" });
-	expect(document.documentElement.children).toHaveLength(children);
-	receive({ kind: "arm" });
-	vi.advanceTimersByTime(120000);
-	expect(document.documentElement.children).toHaveLength(children);
-	window.dispatchEvent(new Event("pagehide"));
+	const button = document.createElement("button");
+	button.id = "browse";
+	document.body.append(button);
+	const browse = vi.fn();
+	button.addEventListener("click", browse);
+	// happy-dom has no browser input driver. Mark DOM-dispatched events trusted
+	// to exercise the same capture handler used for browser input.
+	const click = () => {
+		const event = new MouseEvent("click", { bubbles: true, cancelable: true });
+		Object.defineProperty(event, "isTrusted", { value: true });
+		button.dispatchEvent(event);
+		return event;
+	};
+	const assertBrowsing = () => {
+		browse.mockClear();
+		extract.mockClear();
+		expect(click().defaultPrevented).toBe(false);
+		expect(browse).toHaveBeenCalledOnce();
+		expect(extract).not.toHaveBeenCalled();
+	};
+	assertBrowsing();
+	for (const cancel of ["escape", "stop", "timeout", "pagehide"]) {
+		receive({ kind: "arm", multi: true });
+		browse.mockClear();
+		expect(click().defaultPrevented).toBe(true);
+		expect(browse).not.toHaveBeenCalled();
+		expect(extract).toHaveBeenCalled();
+		if (cancel === "escape") {
+			window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+		} else if (cancel === "stop") {
+			receive({ kind: "stop" });
+		} else if (cancel === "timeout") {
+			vi.advanceTimersByTime(120000);
+		} else {
+			window.dispatchEvent(new Event("pagehide"));
+		}
+		assertBrowsing();
+	}
+	button.remove();
 	vi.useRealTimers();
 });
