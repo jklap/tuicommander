@@ -9,6 +9,7 @@ pub mod error_classification;
 pub mod jsonc_edit;
 pub mod path_spelling;
 pub mod process_env;
+pub mod process_info;
 pub mod process_tree;
 pub mod redaction;
 pub mod text_rank;
