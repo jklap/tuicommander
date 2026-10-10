@@ -5,6 +5,7 @@ import type {
 	AutomationListItem,
 	AutomationRun,
 	DefinitionSchedulePreview,
+	RunSummary,
 	SchedulePreset,
 	SchedulePreview,
 } from "../components/AutomationsDialog/contract";
@@ -27,6 +28,34 @@ export function createAutomationsStore(adapter: AutomationAdapter) {
 	const [schedulePreview, setSchedulePreview] = createSignal<SchedulePreview | DefinitionSchedulePreview>();
 	const [previewError, setPreviewError] = createSignal("");
 	const [previewLoading, setPreviewLoading] = createSignal(false);
+	const [allRuns, setAllRuns] = createSignal<AutomationRun[]>([]);
+	const [summaries, setSummaries] = createSignal<Record<string, RunSummary>>({});
+	const [runsLoading, setRunsLoading] = createSignal(false);
+	const [runsOffset, setRunsOffset] = createSignal(0);
+	const [hasMoreRuns, setHasMoreRuns] = createSignal(false);
+	let runsEpoch = 0;
+	const pageSize = 20;
+	async function loadRuns(offset = 0) {
+		const epoch = ++runsEpoch;
+		setRunsLoading(true);
+		setError("");
+		try {
+			const [history, day, week] = await Promise.all([
+				adapter.history(undefined, offset, pageSize + 1),
+				adapter.summary("24h"),
+				adapter.summary("7d"),
+			]);
+			if (epoch !== runsEpoch) return;
+			setAllRuns(history.slice(0, pageSize));
+			setHasMoreRuns(history.length > pageSize);
+			setRunsOffset(offset);
+			setSummaries({ "24h": day, "7d": week });
+		} catch (cause) {
+			if (epoch === runsEpoch) setError(message(cause));
+		} finally {
+			if (epoch === runsEpoch) setRunsLoading(false);
+		}
+	}
 	let listEpoch = 0,
 		previewEpoch = 0,
 		selectionEpoch = 0,
@@ -118,6 +147,12 @@ export function createAutomationsStore(adapter: AutomationAdapter) {
 		}
 	}
 	return {
+		allRuns,
+		summaries,
+		runsLoading,
+		runsOffset,
+		hasMoreRuns,
+		loadRuns,
 		items,
 		draft,
 		isNew,
@@ -210,6 +245,7 @@ export function createAutomationsStore(adapter: AutomationAdapter) {
 				await preview();
 			}),
 		dispose() {
+			runsEpoch++;
 			listEpoch++;
 			selectionEpoch++;
 			historyEpoch++;

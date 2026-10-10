@@ -745,3 +745,5 @@ they preserve both newer agent edits and an unsaved local prompt. Once stores
 a local wall-clock string and uses backend `preview_definition` for UTC
 occurrences and completion evidence. The backend owns validation, cron,
 capacity, execution and durable history; the adapter owns transport.
+
+Automation all-run history uses 20-row pages plus one backend lookahead row. `loadRuns` reads both backend summaries with the page and rejects stale replies. Definition deletion does not remove the all-history view. The transport adapter accepts an explicit remote connection so global history and summaries do not fall back to the local ledger.

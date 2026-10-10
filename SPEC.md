@@ -871,3 +871,7 @@ literal prompt with delimited, escaped untrusted stdout capped at 16 KiB;
 truncation is marked and stderr is excluded. Empty output and manual bypasses
 inject nothing. The run ledger records `precheck_context: {injected, bytes}` for
 the prepared launch prompt, counting escaped stdout bytes before framing/marker.
+
+## Automation Runs View (#1619-b84d)
+
+The Runs tab displays paginated immutable history across definitions, including deleted definitions, and backend 24h/7d elapsed-window summaries. View run focuses only a live terminal owned by the addressed daemon. Absent, suspended or exited sessions display saved bounded output, truncation evidence and recorded workspace details without creating sessions or workspaces. The dialog captures the active repository's daemon owner when opened. Visual verification remains pending because headless Chrome screenshot attempts timed out.

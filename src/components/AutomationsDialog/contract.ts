@@ -74,13 +74,18 @@ export interface RunReceipt {
 	status: RunStatus;
 	reason: string | null;
 }
+export interface RunSummary {
+	total: number;
+	by_status: Partial<Record<RunStatus, number>>;
+}
 export interface AutomationAdapter {
 	list(): Promise<AutomationListItem[]>;
 	save(definition: AutomationDefinition, create: boolean): Promise<AutomationDefinition>;
 	setEnabled(id: string, enabled: boolean): Promise<void>;
 	remove(id: string): Promise<void>;
 	runNow(id: string): Promise<RunReceipt>;
-	history(id: string): Promise<AutomationRun[]>;
+	history(id?: string, offset?: number, limit?: number): Promise<AutomationRun[]>;
+	summary(window: "24h" | "7d"): Promise<RunSummary>;
 	preview(cron: string, timezone: string): Promise<SchedulePreview>;
 	previewDefinition(definition: AutomationDefinition): Promise<DefinitionSchedulePreview>;
 	preset(preset: SchedulePreset): Promise<{ cron: string }>;
@@ -94,7 +99,7 @@ export type AutomationAction =
 	| { action: "get"; id: string }
 	| { action: "summary"; window: "24h" | "7d" }
 	| { action: "delete" | "run_now" | "pause" | "resume"; id: string }
-	| { action: "list_runs"; id: string; limit: number }
+	| { action: "list_runs"; id?: string; limit: number; offset?: number }
 	| { action: "preview"; cron: string; timezone: string | null; count: number }
 	| { action: "preview_definition"; definition: AutomationDefinition; count: number }
 	| { action: "preset"; preset: SchedulePreset };
