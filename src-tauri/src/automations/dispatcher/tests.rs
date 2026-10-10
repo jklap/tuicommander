@@ -167,6 +167,7 @@ async fn dispatch_persists_clean_workspace_precheck_and_launches_exact_prompt() 
         Some(Precheck {
             command: format!("{clean}{}", print_file_script("input.txt")),
             timeout_secs: 30,
+            inject_output: false,
         }),
         false,
     );
@@ -207,6 +208,7 @@ async fn dispatch_records_nonzero_and_timeout_as_skipped_precheck_without_launch
             Some(Precheck {
                 command,
                 timeout_secs: 1,
+                inject_output: false,
             }),
             false,
         );
@@ -236,6 +238,7 @@ async fn run_now_dispatch_bypasses_precheck_durably_even_when_paused() {
         Some(Precheck {
             command: touch_script("must-not-exist"),
             timeout_secs: 1,
+            inject_output: false,
         }),
         true,
     );
@@ -378,3 +381,6 @@ async fn dispatch_stops_only_owned_child_when_binding_loses_terminal_transition(
         vec!["owned-session"]
     );
 }
+
+#[path = "context_tests.rs"]
+mod context_tests;
