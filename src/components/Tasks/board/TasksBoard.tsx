@@ -100,13 +100,18 @@ export const TasksBoard: Component<TasksBoardProps> = (props) => {
 			}
 		return result;
 	});
+	const cancelOnEscape = (event: KeyboardEvent) => {
+		if (event.key === "Escape") drag.cancel();
+	};
 	onMount(() => {
+		window.addEventListener("keydown", cancelOnEscape);
 		window.addEventListener("blur", drag.cancel);
 		document.addEventListener("visibilitychange", drag.cancel);
 	});
 	onCleanup(() => {
 		mounted = false;
 		generation += 1;
+		window.removeEventListener("keydown", cancelOnEscape);
 		window.removeEventListener("blur", drag.cancel);
 		document.removeEventListener("visibilitychange", drag.cancel);
 	});
@@ -132,9 +137,6 @@ export const TasksBoard: Component<TasksBoardProps> = (props) => {
 				onPointerUp={drag.end}
 				onPointerCancel={drag.pointerCancel}
 				onLostPointerCapture={drag.pointerCancel}
-				onKeyDown={(event) => {
-					if (event.key === "Escape") drag.cancel();
-				}}
 			>
 				<For each={props.board.columns}>
 					{(column) => (
