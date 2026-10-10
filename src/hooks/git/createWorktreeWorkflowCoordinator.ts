@@ -10,6 +10,7 @@ import type { WorkspaceLifecycleStatus } from "../../stores/workspaceIdentity";
 import { effectiveMergeMethod, isMergeHeadChanged, isMergeMethodNotAllowed } from "../../utils/prMerge";
 import { type AgentSeed, buildAgentSeed } from "./agentSeed";
 import type { PendingCreation } from "./createRepositoryRefreshCoordinator";
+import { bindStartWork, createStartWork } from "./startWork";
 
 interface WorktreeWorkflowCoordinatorDeps {
 	repo: {
@@ -84,7 +85,7 @@ interface WorktreeWorkflowCoordinatorDeps {
 	refreshAllBranchStats: (repoPath: string) => Promise<void>;
 }
 
-/** Owns auto-fix, conflict assist, merge, and post-merge cleanup workflows. */
+/** Owns start work (auto-fix included), conflict assist, merge, and post-merge cleanup workflows. */
 export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordinatorDeps) {
 	const {
 		creatingWorktreeRepos,
@@ -94,36 +95,26 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 		refreshAllBranchStats,
 	} = deps;
 
-	/** Auto-fix an issue: create a fresh `autofix/issue-<n>` worktree off the
-	 *  default branch and launch the default agent in it seeded with `prompt`.
-	 *  Mirrors confirmCreateWorktree's create/error handling; the agent
-	 *  seed is threaded into setupNewWorktree so the terminal's agentType +
-	 *  pendingInitCommand are set in the same window the runScript path uses. */
+	const handleStartWork = createStartWork({
+		listBaseRefOptions: (repoPath) => deps.repo.listBaseRefOptions(repoPath),
+		createWorktree: (...args) => deps.repo.createWorktree(...args),
+		setupNewWorktree,
+		setStatusInfo: deps.setStatusInfo,
+		creatingWorktreeRepos,
+		setCreatingWorktreeRepos,
+	});
+	bindStartWork(handleStartWork);
+
+	/** Auto-fix an issue: start work on a fresh `autofix/issue-<n>` worktree off
+	 *  the default branch. The user confirmed `prompt` in the auto-fix dialog, so
+	 *  it is submitted rather than left as a draft. */
 	const handleAutofixIssue = async (repoPath: string, issueNumber: number, prompt: string) => {
 		if (creatingWorktreeRepos().has(repoPath)) return;
-		setCreatingWorktreeRepos((prev) => new Set([...prev, repoPath]));
-
-		const branch = autofixBranchName(issueNumber);
-		const agentSeed = await buildAgentSeed(prompt, repoPath);
-
 		try {
-			// Fork the auto-fix branch off the repo's default branch (main/master).
-			const baseRefs = await deps.repo.listBaseRefOptions(repoPath);
-			const base = baseRefs.find((r) => r.is_default)?.name ?? baseRefs[0]?.name ?? "main";
-
-			deps.setStatusInfo(`Creating auto-fix worktree ${branch}...`);
-			const result = await deps.repo.createWorktree(repoPath, branch, true, base);
-
-			await setupNewWorktree(repoPath, result, branch, agentSeed);
+			await handleStartWork({ repoPath, branch: autofixBranchName(issueNumber), prompt, delivery: "submit" });
 		} catch (err) {
 			appLogger.error("git", "Failed to create auto-fix worktree", err);
 			deps.setStatusInfo(`Failed to create auto-fix worktree: ${err}`);
-		} finally {
-			setCreatingWorktreeRepos((prev) => {
-				const next = new Set(prev);
-				next.delete(repoPath);
-				return next;
-			});
 		}
 	};
 
@@ -432,5 +423,6 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 		handleAutofixIssue,
 		handleConflictAssist,
 		handleMergeAndArchive,
+		handleStartWork,
 	};
 }

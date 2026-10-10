@@ -1815,3 +1815,23 @@ list, detail, comments, schemas, saved filters, board columns and mutations.
 It touches no network, credentials, filesystem or subprocesses. It is a development
 provider, not a fixture proving GitHub/Jira/GitLab API compatibility. Its search is
 literal text; sort supports key/title/updatedAt. Its cursor expires on mutation.
+
+## Start work and URL paste
+
+`host.startWork({ repoPath, branch, baseRef?, prompt, agentType?, delivery?, link? })`
+(capability `pty:write`) creates a worktree on a new `branch` (from `baseRef`, default
+the repo's default branch) and opens an agent in it. The agent is `agentType` or, when
+omitted, the first enabled agent with a run config on the repo's machine; that run
+config supplies the command and env. The prompt is never a shell argument: the host
+waits for the agent's composer and types it there, inside an `<untrusted-content>`
+block, control bytes removed, capped at 12000 characters. `delivery: "draft"`
+(default) leaves Enter to the user; `"submit"` sends it. `link` links the item to the
+new worktree. It resolves to `{ repoPath, workspaceId, branch, worktreePath }`.
+The GitHub Auto-fix action uses the same path with `delivery: "submit"`.
+
+`host.registerUrlResolver((url, signal) => ...)` claims URLs pasted in the command
+palette. Return `null` for a URL that is not yours, or `{ link, startWork? }`.
+Resolvers run in registration order; the first non-null result wins and a resolver
+that throws is skipped. When a worktree is already linked to `link.reference`, the
+palette offers **Open worktree**; otherwise it offers **Start work** with your
+request (`repoPath` defaults to the active repository).
