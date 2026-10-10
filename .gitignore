@@ -57,6 +57,7 @@ scripts/*
 !scripts/test_dev_exe_copy_critic.py
 !scripts/test_dev_exe_copy.py
 !scripts/run-remote-fixture.sh
+!scripts/test-run-remote-fixture.sh
 !scripts/generate-release-notes.sh
 !scripts/third-party-notices.mjs
 !scripts/check-release-tag.sh
