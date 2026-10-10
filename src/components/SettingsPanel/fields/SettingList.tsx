@@ -19,23 +19,23 @@ export const SettingList: Component<SettingListProps> = (props) => (
 	<SettingField label={props.label} hint={props.hint}>
 		{(id, hintId) => (
 			<div id={id} role="group" aria-label={props.label} aria-describedby={hintId} class={s.list}>
-				<For each={props.rows}>
-					{(row) => (
-						<div class={s.row} role="group" aria-label={`Row ${row.id}`}>
+				<For each={props.rows.map((row) => row.id)}>
+					{(rowId, index) => (
+						<div class={s.row} role="group" aria-label={`Row ${rowId}`}>
 							<For each={props.columns}>
 								{(column) => (
 									<label class={s.cell}>
 										<span>{column.label}</span>
 										<input
 											type="text"
-											value={row.values[column.id] ?? ""}
+											value={props.rows[index()]?.values[column.id] ?? ""}
 											placeholder={column.placeholder}
 											disabled={props.disabled}
 											onInput={(e) => {
 												const value = e.currentTarget.value;
 												props.onChange(
 													props.rows.map((current) =>
-														current.id === row.id
+														current.id === rowId
 															? { ...current, values: { ...current.values, [column.id]: value } }
 															: current,
 													),
@@ -49,8 +49,8 @@ export const SettingList: Component<SettingListProps> = (props) => (
 								type="button"
 								class={s.button}
 								disabled={props.disabled}
-								aria-label={`Remove row ${row.id}`}
-								onClick={() => props.onChange(props.rows.filter((current) => current.id !== row.id))}
+								aria-label={`Remove row ${rowId}`}
+								onClick={() => props.onChange(props.rows.filter((current) => current.id !== rowId))}
 							>
 								Remove
 							</button>
