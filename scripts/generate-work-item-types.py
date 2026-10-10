@@ -35,9 +35,11 @@ def split_type(value):
 def ts_type(value):
     if value in ("String", "bool", "u32", "f64"):
         return {"String": "string", "bool": "boolean", "u32": "number", "f64": "number"}[value]
-    generic = re.fullmatch(r"(Option|Vec|BTreeMap)<(.+)>", value)
+    generic = re.fullmatch(r"(Option|Vec|BTreeMap|Box)<(.+)>", value)
     if generic:
         kind, inner = generic.groups()
+        if kind == "Box":
+            return ts_type(inner)
         if kind == "Option":
             return f"{ts_type(inner)} | null"
         if kind == "Vec":
