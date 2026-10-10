@@ -9308,7 +9308,9 @@ dependencies = [
 name = "tuic-ipc"
 version = "1.8.0"
 dependencies = [
+ "serde_json",
  "sha2 0.11.0",
+ "tempfile",
 ]
 
 [[package]]

@@ -42,3 +42,5 @@ pub fn named_socket_path(id: &str, temp_dir: &Path) -> PathBuf {
 
 /// Windows IPC endpoint. Kept identical to the server's existing pipe contract.
 pub const PIPE_NAME: &str = r"\\.\pipe\tuicommander-mcp";
+
+pub mod review_agents;
