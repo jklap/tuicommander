@@ -8,6 +8,8 @@ set -euo pipefail
 project_root="$(git rev-parse --show-toplevel)"
 test_tmp="${TUIC_TEST_TMP_ROOT:-$project_root/.tmp/tuic-tests}"
 mkdir -p "$test_tmp"
+# Fail closed: no git here may find a repository above the test root.
+export GIT_CEILING_DIRECTORIES="${GIT_CEILING_DIRECTORIES:+$GIT_CEILING_DIRECTORIES:}$(cd "$test_tmp" && pwd):$(cd "$test_tmp" && pwd -P)"
 fixture_root="$(mktemp -d "$test_tmp/make-instance-scope.XXXXXX")"
 trap 'rm -rf "$fixture_root"' EXIT
 

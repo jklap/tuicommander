@@ -70,6 +70,78 @@ fn isolate_git_config(root: &std::path::Path) {
         std::env::remove_var("GIT_CONFIG_PARAMETERS");
         std::env::remove_var("GIT_CONFIG_COUNT");
     }
+    fence_git_discovery(root);
+}
+
+/// Fail closed: no git process this test binary starts may discover a
+/// repository above the scratch root. A fixture whose `git init` failed used to
+/// fall through to the enclosing real checkout and rename or delete its
+/// branches. See [`git_ceiling_directories`].
+fn fence_git_discovery(root: &std::path::Path) {
+    let root = std::path::absolute(root).expect("absolute test temp root");
+    let existing = std::env::var_os("GIT_CEILING_DIRECTORIES");
+    let ceiling = git_ceiling_directories(&root, existing.as_deref())
+        .unwrap_or_else(|err| panic!("fence git discovery at {}: {err}", root.display()));
+    // SAFETY: called from the process constructor, before libtest starts threads.
+    unsafe { std::env::set_var("GIT_CEILING_DIRECTORIES", ceiling) };
+}
+
+/// The `GIT_CEILING_DIRECTORIES` value that stops git's repository discovery
+/// from climbing out of `root`: `existing` (kept verbatim, so a stricter value
+/// set by an outer wrapper survives) plus `root`'s parent, spelled both
+/// lexically and canonically, each added once.
+///
+/// Git skips any entry it cannot compare with its canonicalized cwd: relative
+/// entries are ignored, and after an empty entry symlinks are no longer
+/// resolved (macOS `/var` vs `/private/var`). Listing both spellings keeps the
+/// fence up either way. The ceiling is the parent, not `root` itself, because
+/// git still ascends from a cwd that *equals* a ceiling entry.
+///
+/// # Errors
+///
+/// `root` is relative or has no parent.
+pub fn git_ceiling_directories(
+    root: &std::path::Path,
+    existing: Option<&std::ffi::OsStr>,
+) -> Result<std::ffi::OsString, String> {
+    use std::path::{Component, PathBuf};
+
+    if !root.is_absolute() {
+        return Err(format!("{} is not absolute", root.display()));
+    }
+    let mut lexical = PathBuf::new();
+    for component in root.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                lexical.pop();
+            }
+            other => lexical.push(other),
+        }
+    }
+    let parent = lexical
+        .parent()
+        .ok_or_else(|| format!("{} has no parent", root.display()))?
+        .to_path_buf();
+    let canonical = std::fs::canonicalize(&lexical)
+        .ok()
+        .and_then(|real| real.parent().map(std::path::Path::to_path_buf));
+
+    let sep = if cfg!(windows) { ';' } else { ':' };
+    let mut value = existing
+        .map(|v| v.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    for entry in std::iter::once(parent).chain(canonical) {
+        let entry = entry.to_string_lossy().into_owned();
+        if value.split(sep).any(|present| present == entry) {
+            continue;
+        }
+        if !value.is_empty() {
+            value.push(sep);
+        }
+        value.push_str(&entry);
+    }
+    Ok(value.into())
 }
 
 /// Scratch space for Rust tests, overridable by the test runner.
@@ -348,6 +420,141 @@ pub fn read_http_request(reader: &mut impl std::io::Read) -> std::io::Result<Htt
 
 #[cfg(test)]
 mod tests {
+    use super::git_ceiling_directories;
+    use std::ffi::OsStr;
+    use std::path::{Path, PathBuf};
+
+    const SEP: &str = if cfg!(windows) { ";" } else { ":" };
+
+    fn entries(value: &OsStr) -> Vec<PathBuf> {
+        value
+            .to_str()
+            .unwrap()
+            .split(SEP)
+            .map(PathBuf::from)
+            .collect()
+    }
+
+    /// A `git` in `cwd` with the given ceiling (`None`: no ceiling at all).
+    fn toplevel(cwd: &Path, ceiling: Option<&OsStr>) -> Result<PathBuf, String> {
+        let mut cmd = std::process::Command::new("git");
+        cmd.args(["rev-parse", "--show-toplevel"]).current_dir(cwd);
+        match ceiling {
+            Some(value) => cmd.env("GIT_CEILING_DIRECTORIES", value),
+            None => cmd.env_remove("GIT_CEILING_DIRECTORIES"),
+        };
+        let out = cmd.output().expect("run git rev-parse");
+        if out.status.success() {
+            Ok(PathBuf::from(String::from_utf8_lossy(&out.stdout).trim()))
+        } else {
+            Err(String::from_utf8_lossy(&out.stderr).into_owned())
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ceiling_lists_the_parent_lexically_and_canonically() {
+        let dir = tempfile::tempdir_in(super::test_temp_root()).unwrap();
+        let real = dir.path().canonicalize().unwrap().join("real");
+        std::fs::create_dir_all(real.join("root")).unwrap();
+        let link = dir.path().canonicalize().unwrap().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        let value = git_ceiling_directories(&link.join("root"), None).unwrap();
+        assert_eq!(entries(&value), vec![link.clone(), real.clone()]);
+
+        // Trailing slash and `.`/`..` segments are normalized away.
+        let messy = PathBuf::from(format!("{}/./x/../root/", link.display()));
+        assert_eq!(
+            git_ceiling_directories(&messy, None).unwrap(),
+            value,
+            "a non-normalized root spells the same ceiling"
+        );
+    }
+
+    #[test]
+    fn ceiling_keeps_an_existing_value_and_adds_each_entry_once() {
+        let dir = tempfile::tempdir_in(super::test_temp_root()).unwrap();
+        let parent = dir.path().canonicalize().unwrap();
+        let root = parent.join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        let outer = format!("{SEP}/stricter/outer");
+        let value = git_ceiling_directories(&root, Some(OsStr::new(&outer))).unwrap();
+        assert_eq!(
+            value.to_str().unwrap(),
+            format!("{outer}{SEP}{}", parent.display())
+        );
+        // Re-applying it (nested wrapper, then the constructor) changes nothing.
+        assert_eq!(git_ceiling_directories(&root, Some(&value)).unwrap(), value);
+    }
+
+    #[test]
+    fn ceiling_rejects_a_relative_or_parentless_root() {
+        assert!(git_ceiling_directories(Path::new("relative/root"), None).is_err());
+        assert!(git_ceiling_directories(Path::new("/"), None).is_err());
+    }
+
+    /// The hazard itself: an outer repository, a test root inside it, and a
+    /// scratch dir whose fixture repo was never created. Without the ceiling,
+    /// git in the scratch dir silently operates on the outer repository.
+    #[test]
+    fn ceiling_stops_git_from_finding_a_repository_above_the_root() {
+        let dir = tempfile::tempdir_in(super::test_temp_root()).unwrap();
+        let outer = dir.path().canonicalize().unwrap().join("outer");
+        let root = outer.join("sub/root");
+        let scratch = root.join("x");
+        std::fs::create_dir_all(&scratch).unwrap();
+        let init = std::process::Command::new("git")
+            .args(["init", "-q", "--template="])
+            .current_dir(&outer)
+            .status()
+            .unwrap();
+        assert!(init.success(), "git init {}", outer.display());
+
+        assert_eq!(
+            toplevel(&scratch, None).as_deref(),
+            Ok(outer.as_path()),
+            "control: without a ceiling git climbs to the outer repository"
+        );
+        let ceiling = git_ceiling_directories(&root, None).unwrap();
+        let err = toplevel(&scratch, Some(&ceiling)).expect_err("git escaped the test root");
+        assert!(err.contains("not a git repository"), "{err}");
+        // A fixture repo below the root is still found.
+        let fixture = root.join("fixture");
+        std::fs::create_dir_all(fixture.join("deep")).unwrap();
+        let init = std::process::Command::new("git")
+            .args(["init", "-q", "--template="])
+            .current_dir(&fixture)
+            .status()
+            .unwrap();
+        assert!(init.success());
+        assert_eq!(
+            toplevel(&fixture.join("deep"), Some(&ceiling)).as_deref(),
+            Ok(fixture.as_path())
+        );
+    }
+
+    /// The constructor fences this very process: git started in a repo-less
+    /// dir under the test root finds nothing, even when that root sits inside
+    /// a real checkout (the default `<checkout>/.tmp/tuic-tests`).
+    #[test]
+    fn git_in_a_test_process_cannot_leave_the_test_root() {
+        let dir = tempfile::tempdir_in(super::test_temp_root()).unwrap();
+        let inherited = std::env::var_os("GIT_CEILING_DIRECTORIES");
+        let err = toplevel(dir.path(), inherited.as_deref())
+            .expect_err("git found a repository above the test root");
+        assert!(err.contains("not a git repository"), "{err}");
+        let parent = super::test_temp_root().canonicalize().unwrap();
+        let parent = parent.parent().unwrap();
+        assert!(
+            entries(inherited.as_deref().expect("constructor sets a ceiling"))
+                .iter()
+                .any(|entry| entry == parent),
+            "ceiling must name the test root's parent {}",
+            parent.display()
+        );
+    }
+
     fn git_config_get(cwd: &std::path::Path, key: &str) -> Option<String> {
         let out = std::process::Command::new("git")
             .args(["config", "--get", key])

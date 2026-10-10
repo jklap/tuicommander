@@ -4,6 +4,8 @@ set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 test_tmp_base="${TMPDIR:-$root/.tmp/tuic-tests}"
 mkdir -p "$test_tmp_base"
+# Fail closed: no git here may find a repository above the test root.
+export GIT_CEILING_DIRECTORIES="${GIT_CEILING_DIRECTORIES:+$GIT_CEILING_DIRECTORIES:}$(cd "$test_tmp_base" && pwd):$(cd "$test_tmp_base" && pwd -P)"
 fixture="$(mktemp -d "${test_tmp_base%/}/tuic-target-test.XXXXXX")"
 trap 'rm -rf "$fixture"' EXIT
 git init --quiet --separate-git-dir "$fixture/git-dir" "$fixture/checkout"
