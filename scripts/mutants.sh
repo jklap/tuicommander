@@ -38,12 +38,18 @@ set -euo pipefail
 RANGE="${1:-HEAD~1}"
 ROOT="$(git rev-parse --show-toplevel)"
 # Same roots as scripts/with-test-tmp.sh: the caller's temp dir, never $HOME.
-TEST_TMP_HOST="${TUIC_TEST_HOST_TMPDIR:-${TMPDIR:-/tmp}}"
-TEST_TMP_HOST="${TEST_TMP_HOST%/}"
-TEST_TMP_BASE="${TUIC_TEST_TMP_BASE:-$TEST_TMP_HOST/tuic-tests}"
-mkdir -p "$TEST_TMP_BASE"
-TEST_TMP="$(mktemp -d "$TEST_TMP_BASE/tuic-mutants.XXXXXX")"
-trap 'rm -rf "$TEST_TMP"' EXIT
+# shellcheck source=test-tmp-lib.sh
+. "$ROOT/scripts/test-tmp-lib.sh"
+TEST_TMP_HOST="$(tuic_test_host_tmpdir)"
+if [ -n "${TUIC_TEST_TMP_ROOT:-}" ]; then
+  # The caller's root: use it as is, never delete it.
+  TEST_TMP="$(tuic_test_tmp_root "$ROOT")"
+else
+  TEST_TMP_BASE="$(tuic_test_tmp_base)"
+  mkdir -p "$TEST_TMP_BASE"
+  TEST_TMP="$(mktemp -d "$TEST_TMP_BASE/tuic-mutants.XXXXXX")"
+  trap 'rm -rf "$TEST_TMP"' EXIT
+fi
 export TMPDIR="$TEST_TMP/"
 export TMP="$TMPDIR" TEMP="$TMPDIR"
 export TUIC_TEST_TMP_ROOT="$TEST_TMP"
