@@ -74,7 +74,7 @@ per cell and the configured history limit still apply.
 - Start from an agent terminal's tab context menu or the Command Palette (the palette acts on the active terminal only). While the repository is armed, both offer Stop instead. TUICommander opens a separate Chrome window for the repository's configured development-server URL, or `about:blank` when none is configured.
 - Chrome highlights hovered elements. A click collects the selected element's selector, paths, nearby text, HTML snippet, selected styles, the design tokens (CSS custom properties) its matching rules reference with their resolved values, rectangle, source location when development metadata permits, and an optional PNG reference.
 - The grab is appended to the bound agent's draft without submitting it; repeated grabs and the user's existing text remain editable. Starting from another agent terminal in the same repository rebinds the Chrome window.
-- The tab indicator follows Design Mode status. Browser/PWA clients can request inspection, but Chrome opens on the host running TUICommander. See the [user guide](user-guide/design-mode.md).
+- The tab shows a D badge while Design Mode is armed and removes it when stopped. Browser/PWA clients can request inspection, but Chrome opens on the host running TUICommander. See the [user guide](user-guide/design-mode.md).
 
 ### 1.1 PTY Sessions
 - Up to 50 concurrent PTY sessions (configurable in Rust `MAX_SESSIONS`)
