@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Added the provider-neutral Tasks data contract and a local in-memory development provider; visible Tasks integration follows separately.
+
 - Restore missing live PTY identity bindings on MCP requests so spawned children remain linked to their parent in session lists (#1673-da49).
 
 - Preserve current automation settings when opening an old run notice; show deleted definitions as run details without an editor (#1620-82ae).
