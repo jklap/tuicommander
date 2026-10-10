@@ -15,7 +15,7 @@ when you scroll, select, copy or search. Search matches the exact characters
 printed by the program: precomposed and decomposed spellings are not automatically
 normalized into each other.
 
-In the mobile session output, long text wraps to the phone width. A continuation
+In the mobile session output, completed lines continue into history even after the terminal history fills, while the live region redraws below. Long text wraps to the phone width. A continuation
 keeps the original line's leading spaces or tabs, so indented lists and code
 remain readable. Claude tool-call status dots keep the same space while pulsing
 or turning green, and wrapped continuations align after that space. Box-drawing
