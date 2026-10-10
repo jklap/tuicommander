@@ -175,6 +175,7 @@ async fn wait(
             command = receive.recv() => {
                 let Some(command) = command else { return; };
                 let reply = match command {
+                    Command::Automation { .. } => continue,
                     Command::Tool { reply, .. } | Command::Deliver { reply, .. } | Command::Update { reply, .. } => reply,
                 };
                 let _ = reply.send(Err(error));

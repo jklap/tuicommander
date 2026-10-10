@@ -124,18 +124,72 @@ pub(crate) async fn launch(
     )
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    // Catches: a path containing HTML becoming executable script in first-run instructions.
-    #[test]
-    fn first_run_page_is_useful_without_a_server_and_escapes_paths() {
-        let tmp = tempfile::tempdir().unwrap();
-        let url = onboarding(tmp.path(), Path::new("/repo/<script>\"&")).unwrap();
-        let html = std::fs::read_to_string(tmp.path().join("design-mode.html")).unwrap();
-        assert!(url.starts_with("file:"));
-        assert!(html.contains("Load unpacked"));
-        assert!(html.contains("&lt;script&gt;&quot;&amp;"));
-        assert!(!html.contains("about:blank"));
+    use std::os::unix::fs::PermissionsExt;
+
+    // Catches: launch choosing about:blank/no setup page, or writing an unescaped profile path.
+    #[tokio::test]
+    async fn first_run_page_is_useful_without_a_server_and_escapes_paths() {
+        const ROLE: &str = "TUIC_DESIGN_LAUNCH_TEST";
+        if let Some(root) = std::env::var_os(ROLE) {
+            let root = PathBuf::from(root);
+            let _config = crate::config::set_config_dir_override(root.join("<script>\"&"));
+            let state = Arc::new(crate::state::tests_support::make_test_app_state());
+            *state.bound_socket_path.write() = root.join("socket");
+            let bridge = root.join(".local/bin/tuic-bridge");
+            assert_eq!(crate::agent_mcp::locate_bridge_binary(), Some(bridge));
+            let response = launch(
+                &state,
+                &root.join("repo"),
+                "launching-agent",
+                Some("chrome"),
+            )
+            .await
+            .unwrap();
+            let target = response["url"].as_str().unwrap();
+            let path = url::Url::parse(target).unwrap().to_file_path().unwrap();
+            let html = std::fs::read_to_string(path).unwrap();
+            assert!(target.starts_with("file:"));
+            assert!(html.contains("Load unpacked"));
+            assert!(html.contains("&lt;script&gt;&quot;&amp;"));
+            assert!(!html.contains("about:blank"));
+            let captured = root.join("browser-args");
+            while !captured.exists() {
+                tokio::task::yield_now().await;
+            }
+            let args = std::fs::read_to_string(captured).unwrap();
+            assert_eq!(args.lines().last(), Some(target));
+            assert!(args.contains("--user-data-dir="));
+            return;
+        }
+        // Environment-based browser/sidecar discovery is isolated from other libtest threads.
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join(".local/bin")).unwrap();
+        std::fs::create_dir(root.join("repo")).unwrap();
+        super::super::discovery::tests::git(&root.join("repo"), &["init"]);
+        let bridge = root.join(".local/bin/tuic-bridge");
+        std::fs::write(
+            &bridge,
+            "#!/bin/sh\nmkdir -p \"$2/tuic-design-extension\"\n",
+        )
+        .unwrap();
+        let browser = root.join("chrome-test");
+        std::fs::write(&browser, "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$TUIC_DESIGN_LAUNCH_TEST/browser-args.pending\"\nmv \"$TUIC_DESIGN_LAUNCH_TEST/browser-args.pending\" \"$TUIC_DESIGN_LAUNCH_TEST/browser-args\"\n").unwrap();
+        for path in [&bridge, &browser] {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let output = tokio::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "design_mode::launcher::tests::first_run_page_is_useful_without_a_server_and_escapes_paths", "--nocapture"])
+            .env(ROLE, root).env("HOME", root).env("TUIC_DESIGN_CHROME", browser)
+            .output().await.unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 }

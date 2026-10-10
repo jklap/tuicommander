@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Restore missing live PTY identity bindings on MCP requests so spawned children remain linked to their parent in session lists (#1673-da49).
 
+- Preserve current automation settings when opening an old run notice; show deleted definitions as run details without an editor (#1620-82ae).
+
+- Notify once when an automation needs input or fails, with saved run and owning-session navigation; retain durable per-channel delivery claims (#1620-82ae).
 - Add the Design Mode v2 unpacked-extension pilot: one-shot picks, per-pick comments, same-repository recipients, queued feedback, native messaging and dev-server discovery (#1672-cd3d).
 - Add opt-in automation precheck stdout context with a 16 KiB escaped payload cap, untrusted delimiters and durable injection metadata; exclude stderr (#1631-45bf).
 

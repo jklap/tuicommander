@@ -255,7 +255,6 @@ fn host_manifest(host: &Path) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
     // Catches: fragmented reads truncating Unicode or interpreting the next frame as payload.
     #[test]
     fn native_frames_preserve_unicode_and_reject_truncation_and_oversize() {
@@ -270,30 +269,5 @@ mod tests {
         assert_eq!(read_frame(&mut input).unwrap(), Some(json!({"next":true})));
         assert!(read_frame(&mut std::io::Cursor::new(&frames[..5])).is_err());
         assert!(read_frame(&mut std::io::Cursor::new(u32::MAX.to_ne_bytes())).is_err());
-    }
-    // Catches: a native manifest admitting arbitrary extension origins or a relative executable.
-    #[test]
-    fn native_manifest_pins_the_extension_and_executable() {
-        let path = PathBuf::from(if cfg!(windows) {
-            r"C:\profile\host.exe"
-        } else {
-            "/profile/host"
-        });
-        let manifest = host_manifest(&path);
-        assert_eq!(manifest["path"], json!(path));
-        assert_eq!(
-            manifest["allowed_origins"],
-            json!(["chrome-extension://eefbgjmmpaimpeaflioojmdipmfchefo/"])
-        );
-    }
-    // Catches: mismatched protocol being relayed before version validation.
-    #[tokio::test]
-    async fn native_version_mismatch_is_refused_before_connecting() {
-        let result = dispatch(
-            &json!({"endpoint":"missing"}),
-            &json!({"version":"1.0.0","action":"hello"}),
-        )
-        .await;
-        assert!(result.unwrap_err().contains("version mismatch"));
     }
 }

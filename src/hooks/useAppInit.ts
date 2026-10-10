@@ -2,6 +2,7 @@ import { AGENT_TYPES, type AgentType } from "../agents";
 import { handleAgentExitCompletion } from "../components/Terminal/agentExitCompletion";
 import { invoke, listen } from "../invoke";
 import { isNotificationSound } from "../notifications";
+import { presentAutomationNotice } from "../services/automationNotifications";
 import { listenForNativeNoticeClicks } from "../services/nativeNotificationNavigation";
 import { activityStore } from "../stores/activityStore";
 import { appLogger } from "../stores/appLogger";
@@ -398,6 +399,7 @@ export async function initApp(deps: AppInitDeps) {
 	subscribeEvents(
 		{
 			"progress-recorded": (payload) => progressStore.presentLive(payload as ProgressRecordedPayload),
+			"automation-run-changed": (payload) => presentAutomationNotice(payload),
 			"workflow-run-changed": (payload) => workflowRunSignals.accept(payload),
 		},
 		{

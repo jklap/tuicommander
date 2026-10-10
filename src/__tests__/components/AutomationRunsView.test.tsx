@@ -1,27 +1,20 @@
 import { fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { createRoot } from "solid-js";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { AutomationsDialog } from "../../components/AutomationsDialog/AutomationsDialog";
-import { focusAutomationRun } from "../../components/AutomationsDialog/RunsView";
 import { createAutomationAdapter } from "../../components/AutomationsDialog/transportAdapter";
 import { createAutomationsStore } from "../../stores/automations";
+import { repositoriesStore } from "../../stores/repositories";
 import { terminalsStore } from "../../stores/terminals";
-import { rpc } from "../../transport";
-import { getSessionConnection } from "../../transportRuntime";
-import { navigateToTerminal } from "../../utils/navigateToTerminal";
+import { setRemoteBaseUrlLookup, setRemoteTokenLookup } from "../../transportRuntime";
 import { fakeAdapter, runFixture } from "../automationsFixtures";
-
-vi.mock("../../utils/navigateToTerminal", () => ({ navigateToTerminal: vi.fn() }));
-vi.mock("../../transportRuntime", async (original) => ({
-	...(await original<typeof import("../../transportRuntime")>()),
-	getSessionConnection: vi.fn(),
-}));
-vi.mock("../../transport", async (original) => ({
-	...(await original<typeof import("../../transport")>()),
-	rpc: vi.fn(),
-}));
+import { makeTerminal } from "../helpers/store";
 
 describe("automation runs", () => {
+	afterEach(() => {
+		repositoriesStore._testCancelPendingSave();
+		terminalsStore._testCancelPendingTimers();
+	});
 	it("keeps deleted automation snapshots visible and renders backend counts rather than counting the page", async () => {
 		const history = vi.fn(async (_id?: string, offset = 0) =>
 			offset
@@ -77,37 +70,98 @@ describe("automation runs", () => {
 		expect(screen.getByText("/repo/removed-worktree")).toBeTruthy();
 		expect(screen.getByText("Saved output was truncated by the backend.")).toBeTruthy();
 	});
-	it("never focuses a same-id session owned by another daemon or a suspended or exited terminal", () => {
-		const run = { ...runFixture("remote", "a"), session_id: "session" };
-		vi.spyOn(terminalsStore, "getTerminalForSession").mockReturnValue("term");
-		const get = vi
-			.spyOn(terminalsStore, "get")
-			.mockReturnValue({ suspended: false, shellState: "idle" } as ReturnType<typeof terminalsStore.get>);
-		vi.mocked(getSessionConnection).mockReturnValue("remote-owner");
-		vi.mocked(navigateToTerminal).mockClear();
-		expect(focusAutomationRun(run)).toBe(false);
-		expect(focusAutomationRun(run, "remote-owner")).toBe(true);
-		expect(navigateToTerminal).toHaveBeenCalledWith("term");
-		get.mockReturnValue({ suspended: true, shellState: "idle" } as ReturnType<typeof terminalsStore.get>);
-		expect(focusAutomationRun(run, "remote-owner")).toBe(false);
-		get.mockReturnValue({ suspended: false, shellState: "exited" } as ReturnType<typeof terminalsStore.get>);
-		expect(focusAutomationRun(run, "remote-owner")).toBe(false);
-		vi.restoreAllMocks();
+	// Catches View run skipping real navigation or selecting a foreign/dead terminal.
+	it.each([
+		{ owner: "remote-owner", suspended: false, shellState: "idle" as const, navigates: true },
+		{ owner: "another-owner", suspended: false, shellState: "idle" as const, navigates: false },
+		{ owner: "remote-owner", suspended: true, shellState: "idle" as const, navigates: false },
+		{ owner: "remote-owner", suspended: false, shellState: "exited" as const, navigates: false },
+	])("View run resolves actual focus or saved output for $owner/$suspended/$shellState", async (row) => {
+		const local = "/runs-test-local",
+			remote = "/runs-test-remote";
+		const localTerminal = "runs-test-local",
+			remoteTerminal = "runs-test-remote";
+		repositoriesStore.add({ path: local, displayName: "Local" });
+		repositoriesStore.add({ path: remote, displayName: "Remote", connectionId: "remote-owner" });
+		for (const [path, id, session] of [
+			[local, localTerminal, "local-session"],
+			[remote, remoteTerminal, "remote-session"],
+		]) {
+			repositoriesStore.setWorkspace(path, "main");
+			terminalsStore.register(id, makeTerminal({ sessionId: session, cwd: path }));
+			repositoriesStore.addTerminalToWorkspace(path, "main", id);
+		}
+		terminalsStore.update(remoteTerminal, { suspended: row.suspended, shellState: row.shellState });
+		repositoriesStore.setActive(local);
+		terminalsStore.setActive(localTerminal);
+		const run = {
+			...runFixture("remote-run", "deleted"),
+			session_id: "remote-session",
+			stdout: { text: "Retained remote output", truncated: false },
+		};
+		const view = render(() => (
+			<AutomationsDialog
+				connectionId={row.owner}
+				onClose={() => {}}
+				adapter={fakeAdapter({ history: async () => [run] })}
+			/>
+		));
+		try {
+			fireEvent.click(screen.getByRole("button", { name: "Runs" }));
+			fireEvent.click(await screen.findByRole("button", { name: "View run" }));
+			if (row.navigates) {
+				expect(terminalsStore.state.activeId).toBe(remoteTerminal);
+				expect(repositoriesStore.state.activeRepoPath).toBe(remote);
+				expect(repositoriesStore.state.repositories[remote].activeWorkspaceId).toBe("main");
+				expect(screen.queryByText("Retained remote output")).toBeNull();
+			} else {
+				expect(await screen.findByText("Retained remote output")).toBeTruthy();
+				expect(terminalsStore.state.activeId).toBe(localTerminal);
+				expect(repositoriesStore.state.activeRepoPath).toBe(local);
+			}
+		} finally {
+			view.unmount();
+			terminalsStore.remove(localTerminal);
+			terminalsStore.remove(remoteTerminal);
+			repositoriesStore.remove(local);
+			repositoriesStore.remove(remote);
+		}
 	});
-	it("addresses remote history and summaries explicitly rather than reading the local ledger", async () => {
-		const adapter = createAutomationAdapter("remote-owner");
-		await adapter.history(undefined, 20, 21);
-		await adapter.summary("7d");
-		expect(rpc).toHaveBeenCalledWith(
-			"automation_action",
-			{ input: { action: "list_runs", id: undefined, offset: 20, limit: 21 } },
-			"remote-owner",
-		);
-		expect(rpc).toHaveBeenCalledWith(
-			"automation_action",
-			{ input: { action: "summary", window: "7d" } },
-			"remote-owner",
-		);
+	// Catches an owner being lost between the adapter and real HTTP transport.
+	it("sends remote history summaries and canonical run lookup to the owning daemon HTTP endpoint", async () => {
+		setRemoteBaseUrlLookup((id) => (id === "remote-owner" ? "http://owner.test:9877" : undefined));
+		setRemoteTokenLookup((id) => (id === "remote-owner" ? "owner-token" : undefined));
+		const fetch = vi
+			.fn()
+			.mockImplementation(async () => new Response("[]", { headers: { "content-type": "application/json" } }));
+		vi.stubGlobal("fetch", fetch);
+		try {
+			const adapter = createAutomationAdapter("remote-owner");
+			await adapter.history(undefined, 20, 21);
+			await adapter.summary("7d");
+			await adapter.run("saved-remote-run");
+			expect(fetch.mock.calls.map(([url, init]) => [url, init.method, JSON.parse(init.body)])).toEqual([
+				[
+					"http://owner.test:9877/automations/action?token=owner-token",
+					"POST",
+					{ input: { action: "list_runs", offset: 20, limit: 21 } },
+				],
+				[
+					"http://owner.test:9877/automations/action?token=owner-token",
+					"POST",
+					{ input: { action: "summary", window: "7d" } },
+				],
+				[
+					"http://owner.test:9877/automations/action?token=owner-token",
+					"POST",
+					{ input: { action: "run", id: "saved-remote-run" } },
+				],
+			]);
+		} finally {
+			setRemoteBaseUrlLookup(() => undefined);
+			setRemoteTokenLookup(() => undefined);
+			vi.unstubAllGlobals();
+		}
 	});
 	it("ignores a stale history page so late previous requests cannot replace the requested page", async () => {
 		await createRoot(async (dispose) => {

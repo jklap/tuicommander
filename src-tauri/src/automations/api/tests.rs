@@ -194,3 +194,38 @@ fn api_aggregates_elapsed_windows_and_rejects_invalid_inputs_without_writes() {
         RunStatus::Reserved
     );
 }
+
+// Catches a notification link depending on a definition that has since been deleted.
+#[test]
+fn canonical_run_lookup_survives_definition_deletion() {
+    let (_dir, definitions, owner) = setup();
+    call(
+        &definitions,
+        owner.store(),
+        json!({"action":"create","definition":definition("notice")}),
+    )
+    .unwrap();
+    let run = owner
+        .store()
+        .reserve(
+            &definitions.get("notice").unwrap(),
+            RunTrigger::Manual,
+            now().timestamp_millis(),
+        )
+        .unwrap()
+        .unwrap();
+    call(
+        &definitions,
+        owner.store(),
+        json!({"action":"delete","id":"notice"}),
+    )
+    .unwrap();
+    let reply = call(
+        &definitions,
+        owner.store(),
+        json!({"action":"run","id":run.id}),
+    )
+    .unwrap();
+    assert_eq!(reply["id"], run.id);
+    assert_eq!(reply["definition"]["id"], "notice");
+}

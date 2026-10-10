@@ -1,10 +1,12 @@
 import { For, Show } from "solid-js";
 import { t } from "../../i18n";
 import type { AutomationsStore } from "../../stores/automations";
+import { terminalsStore } from "../../stores/terminals";
+import { navigateToTerminal } from "../../utils/navigateToTerminal";
 import s from "./AutomationsDialog.module.css";
 import { zonedTime } from "./ScheduleFields";
 
-/** Recent history only. Aggregates and output/session navigation belong to Step 10. */
+/** Saved run identity and owning session remain available after definition deletion. */
 export function DetailHistory(props: { store: AutomationsStore }) {
 	return (
 		<section class={s.history} aria-label={t("automations.history", "Recent runs")}>
@@ -26,6 +28,26 @@ export function DetailHistory(props: { store: AutomationsStore }) {
 						<li>
 							<time>{zonedTime(run.created_ms, run.definition.timezone)}</time>
 							<strong>{run.status}</strong>
+							<span>{run.id}</span>
+							<Show when={run.session_id}>
+								<button
+									type="button"
+									disabled={!terminalsStore.findBySessionId(run.session_id!)}
+									onClick={() => {
+										const terminal = terminalsStore.findBySessionId(run.session_id!);
+										if (terminal) navigateToTerminal(terminal);
+									}}
+								>
+									{t("automations.openSession", "Open owning session")}
+								</button>
+							</Show>
+							{/* DEFERRED (2026-10-10) — live browser screenshot verification timed out; coordinator must verify this run view before landing. */}
+							<Show when={run.stdout.text}>
+								<pre>{run.stdout.text}</pre>
+								<Show when={run.stdout.truncated}>
+									<span>Output truncated</span>
+								</Show>
+							</Show>
 							<span>{run.trigger.kind}</span>
 							<Show when={run.reason}>
 								<p>{run.reason}</p>

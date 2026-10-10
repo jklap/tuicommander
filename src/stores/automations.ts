@@ -11,8 +11,21 @@ import type {
 } from "../components/AutomationsDialog/contract";
 import { randomId } from "../utils/randomId";
 
+const [requestedRun, setRequestedRun] = createSignal<string | null>(null);
 const [visible, setVisible] = createSignal(false);
-export const automationsUi = { visible, open: () => setVisible(true), close: () => setVisible(false) };
+export const automationsUi = {
+	visible,
+	requestedRun,
+	open: () => {
+		setRequestedRun(null);
+		setVisible(true);
+	},
+	openRun: (id: string) => {
+		setRequestedRun(id);
+		setVisible(true);
+	},
+	close: () => setVisible(false),
+};
 
 /** Dialog-scoped state. The adapter owns validation, schedule interpretation and launch. */
 export function createAutomationsStore(adapter: AutomationAdapter) {
@@ -67,7 +80,7 @@ export function createAutomationsStore(adapter: AutomationAdapter) {
 		setPreviewError("");
 		setPreviewLoading(false);
 	};
-	function select(value: AutomationDefinition, creating = false) {
+	function select(value: AutomationDefinition | undefined, creating = false) {
 		selectionEpoch++;
 		historyEpoch++;
 		invalidatePreview();
@@ -81,6 +94,26 @@ export function createAutomationsStore(adapter: AutomationAdapter) {
 	function edit(patch: Partial<AutomationDefinition>) {
 		setDraft((value) => (value ? { ...value, ...patch } : value));
 		if ("cron" in patch || "timezone" in patch || "once_local" in patch) invalidatePreview();
+	}
+	async function openRun(id: string) {
+		const epoch = ++selectionEpoch;
+		historyEpoch++;
+		invalidatePreview();
+		setDraft(undefined);
+		setRuns([]);
+		setHistoryLoading(false);
+		setError("");
+		setNotice("");
+		try {
+			const run = await adapter.run(id);
+			const current = await adapter.list();
+			if (epoch !== selectionEpoch) return;
+			// A run's snapshot is history, never an editable replacement definition.
+			select(current.find((item) => item.definition.id === run.definition.id)?.definition);
+			setRuns([run]);
+		} catch (cause) {
+			if (epoch === selectionEpoch) setError(message(cause));
+		}
 	}
 	async function refresh() {
 		const epoch = ++listEpoch;
@@ -147,6 +180,7 @@ export function createAutomationsStore(adapter: AutomationAdapter) {
 		}
 	}
 	return {
+		openRun,
 		allRuns,
 		summaries,
 		runsLoading,

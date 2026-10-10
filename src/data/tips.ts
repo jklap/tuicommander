@@ -30,7 +30,7 @@ export const TIPS: Tip[] = [
 	{
 		feature: "Automations",
 		description:
-			"Open Automations from the command palette to edit schedules. Select Runs for 24h/7d counts, run history and saved output.",
+			"Open Automations from the command palette to edit schedules. Select Runs for 24h/7d counts, history and saved output. Needs-you and failure bell items open the saved run and its owning session.",
 		shortcut: null,
 	},
 	{
