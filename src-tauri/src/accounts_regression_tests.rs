@@ -63,7 +63,7 @@ fn migration_preserves_every_github_account() {
 
 // Catches: a plugin/model observing the device-flow token through its serialized reply.
 #[test]
-fn account_views_never_return_tokens() {
+fn oauth_poll_replies_never_return_tokens() {
     let reply = crate::github_auth::PollResult::Success {
         access_token: "a1-secret-sentinel".into(),
         scope: "repo".into(),

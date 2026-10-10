@@ -13,7 +13,6 @@ pub(crate) enum AuthKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub(crate) struct Account {
     #[schemars(extend("x-not-setting" = "Stable account identity issued by core or preserved by migration."))]
     pub id: String,
@@ -40,7 +39,6 @@ pub(crate) struct Account {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub(crate) struct Site {
     #[schemars(extend("x-not-setting" = "Stable site identity issued by core."))]
     pub id: String,
@@ -53,7 +51,6 @@ pub(crate) struct Site {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub(crate) struct Registry {
     #[serde(default)]
     #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"live","effect":"Creates or removes accounts through the account owner service.","operations":["get","create","remove"],"confirmationClass":"ordinary"}))]
@@ -139,10 +136,6 @@ pub(crate) enum AccountAction {
         provider: String,
         host: String,
         label: String,
-    },
-    TestSite {
-        id: String,
-        account_id: String,
     },
     RemoveSite {
         id: String,

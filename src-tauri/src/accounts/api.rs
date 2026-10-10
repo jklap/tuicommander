@@ -56,6 +56,9 @@ async fn test_account(id: String, state: &AppState) -> Result<AccountView, Strin
 }
 
 fn remove_account(id: &str, state: &AppState) -> Result<(), String> {
+    if id == crate::github_account::GitHubAccount::GITHUB_COM_ID {
+        return Err("The github.com default cannot be removed; use clear_secret to log out".into());
+    }
     let record = store::snapshot()?.accounts.remove(id);
     if record
         .as_ref()
@@ -63,11 +66,6 @@ fn remove_account(id: &str, state: &AppState) -> Result<(), String> {
     {
         crate::github_account::remove_account_everywhere(id)?;
         state.github.ghe_state.remove(id);
-        if id == crate::github_account::GitHubAccount::GITHUB_COM_ID {
-            *state.github.token.write() = None;
-            *state.github.token_source.write() = crate::github_auth::TokenSource::None;
-            crate::github::invalidate_viewer_login(state);
-        }
         let prefix = format!("{id}:");
         state
             .git_cache
@@ -101,25 +99,6 @@ pub(crate) async fn execute(
         }
         AccountAction::Test { id } => serde_json::to_value(test_account(id, state).await?)
             .map_err(|_| "Account serialization failed".into()),
-        AccountAction::TestSite { id, account_id } => {
-            let site_id = id.clone();
-            let target_id = account_id.clone();
-            tokio::task::spawn_blocking(move || {
-                let registry = store::snapshot()?;
-                let account = registry
-                    .accounts
-                    .get(&target_id)
-                    .ok_or("Account not found")?;
-                if account.site_id != site_id {
-                    return Err("Account does not belong to this site".to_string());
-                }
-                Ok(())
-            })
-            .await
-            .map_err(|_| "Account storage task failed")??;
-            serde_json::to_value(test_account(account_id, state).await?)
-                .map_err(|_| "Account serialization failed".into())
-        }
         request => {
             let state = state.clone();
             tokio::task::spawn_blocking(move || {
@@ -165,6 +144,13 @@ pub(crate) async fn execute(
                         let registry = store::snapshot()?;
                         if !registry.sites.contains_key(&id) {
                             return Err("Site not found".into());
+                        }
+                        // Reject before the cascade can remove any credentials or bindings.
+                        if registry.accounts.values().any(|account| {
+                            account.site_id == id
+                                && account.id == crate::github_account::GitHubAccount::GITHUB_COM_ID
+                        }) {
+                            return Err("The github.com default site cannot be removed".into());
                         }
                         for account in registry
                             .accounts
