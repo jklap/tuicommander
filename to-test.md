@@ -1,3 +1,7 @@
+## Crate diet stage A (1640-ecee) — Rust restart required
+
+- [ ] After landing and Boss's planned `make dev` restart or `make build`, confirm CUID2 generation still returns 24 lowercase base36 characters starting with a letter, and an upstream OAuth sign-in completes with PKCE S256. Rust changes require a manual restart to load; this peer does not restart desktop.
+
 ## Claude MCP launch profiles (1637-d6e1) — Rust restart required
 
 - [ ] After landing and Boss's planned `make dev` restart or `make build`, confirm startup repairs a stale Claude private/run-profile TUIC bridge path and a fresh Claude session receives the TUIC MCP instructions. Targeted tests cover default/private/inherited/run-config roots, disabled integrations, custom transports and missing-path warnings. The backend change does not hot-reload; this lane does not restart desktop.
