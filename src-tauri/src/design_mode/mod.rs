@@ -21,5 +21,6 @@ mod hints;
 pub(crate) mod launcher;
 pub(crate) mod send;
 
+mod captures;
 #[cfg(feature = "desktop")]
 mod source_cdp;

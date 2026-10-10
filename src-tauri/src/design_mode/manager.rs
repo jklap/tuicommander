@@ -20,7 +20,7 @@ use tokio::task::JoinHandle;
 use super::payload::GrabPayload;
 use super::source_cdp::{self as source, ScriptMaps};
 
-const MAX_PNG_BYTES: usize = 2 * 1024 * 1024;
+use super::captures::MAX_PNG_BYTES;
 /// One deadline for closing every browser at exit, not one per repository.
 const STOP_ALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -304,13 +304,7 @@ impl DesignModeManager {
     }
 
     fn save_png(&self, bytes: &[u8]) -> Result<Option<PathBuf>, String> {
-        if bytes.is_empty() || bytes.len() > MAX_PNG_BYTES {
-            return Ok(None);
-        }
-        std::fs::create_dir_all(&self.grab_dir).map_err(|error| error.to_string())?;
-        let path = self.grab_dir.join(format!("{}.png", uuid::Uuid::now_v7()));
-        std::fs::write(&path, bytes).map_err(|error| error.to_string())?;
-        Ok(Some(path))
+        super::captures::save_png(&self.grab_dir, bytes)
     }
 
     /// A browser that lost its connection or cannot re-arm is closed

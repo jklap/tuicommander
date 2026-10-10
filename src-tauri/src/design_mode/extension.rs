@@ -16,6 +16,13 @@ pub(super) fn fenced(text: &str) -> String {
 }
 
 pub(crate) fn pick_evidence(raw: &Value) -> Result<String, String> {
+    pick_evidence_with_image(raw, None)
+}
+
+pub(super) fn pick_evidence_with_image(
+    raw: &Value,
+    image: Option<&std::path::Path>,
+) -> Result<String, String> {
     if serde_json::to_vec(raw).map_err(|e| e.to_string())?.len() > 32 * 1024 {
         return Err("Pick exceeds 32 KiB".into());
     }
@@ -31,7 +38,7 @@ pub(crate) fn pick_evidence(raw: &Value) -> Result<String, String> {
     );
     let source = super::source::resolve(&raw["source"]);
     Ok(fenced(
-        &payload.to_prompt_with_source(None, source.as_ref()),
+        &payload.to_prompt_with_source(image, source.as_ref()),
     ))
 }
 
