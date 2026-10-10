@@ -94,3 +94,35 @@ fn newer_registry_fields_still_load_every_account() {
         assert_eq!(loaded.sites, before.sites, "extra {level} field");
     }
 }
+
+// Catches: the legacy github_remove_account command and HTTP route bypassing the
+// account-action guard, so an agent removing "github.com" deletes the durable
+// default record and the OAuth token that main never touched on that path.
+#[test]
+fn legacy_github_remove_keeps_the_default_record_and_oauth_token() {
+    let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let _config = crate::config::set_config_dir_override(dir.path().to_path_buf());
+    crate::github_auth::save_github_oauth_token("critic-legacy-token").unwrap();
+    assert!(
+        super::store::snapshot()
+            .unwrap()
+            .accounts
+            .contains_key("github.com")
+    );
+
+    let removal = crate::github_account::remove_account_everywhere("github.com");
+
+    assert!(removal.is_err(), "the durable default cannot be removed");
+    assert!(
+        super::store::snapshot()
+            .unwrap()
+            .accounts
+            .contains_key("github.com")
+    );
+    assert_eq!(
+        crate::credentials::get(Credential::GithubOauthToken)
+            .unwrap()
+            .as_deref(),
+        Some("critic-legacy-token")
+    );
+}
