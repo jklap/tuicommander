@@ -939,6 +939,24 @@ GET /repo/branches?path=/path/to/repo
 
 Returns sorted branch list.
 
+### Remotes
+
+```
+GET /repo/remotes?path=/path/to/repo
+```
+
+Returns `[{ "name": "origin", "url": "https://github.com/acme/app.git" }]`. Userinfo (an embedded token) is removed from every URL. IPC twin: `get_git_remotes`.
+
+### Work-item links
+
+```
+GET    /workitem-links
+PUT    /workitem-links   {"repoPath": "/repo", "branch": "feat/x", "link": WorkItemLink}
+DELETE /workitem-links   {"repoPath": "/repo", "branch": "feat/x"}
+```
+
+`GET` returns `{ repoPath: { branch: WorkItemLink } }`. `WorkItemLink` is `{ reference: { providerId, accountId, id }, key, title, url, state: { id, name, tone } | null }`. `PUT` answers 400 for a relative `repoPath`, an empty key or a non-http(s) `url`. `DELETE` returns `true` when a link existed. Stored in `workitem_links.json` in the config dir; TUIC drops the link when it removes the worktree. IPC twins: `list_workitem_links`, `link_workitem`, `unlink_workitem`.
+
 ### Repo Summary
 
 ```

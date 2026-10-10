@@ -35,6 +35,7 @@ mod system_routes;
 mod telegram_routes;
 pub(crate) mod types;
 mod watcher_routes;
+mod workitem_link_routes;
 mod worktree_routes;
 mod ws_compression;
 
@@ -1126,6 +1127,13 @@ fn shared_routes() -> Router<Arc<AppState>> {
         // Git operations
         .route("/repo/info", get(git_routes::repo_info))
         .route("/repo/remote-url", get(git_routes::remote_url))
+        .route("/repo/remotes", get(workitem_link_routes::remotes))
+        .route(
+            "/workitem-links",
+            get(workitem_link_routes::list)
+                .put(workitem_link_routes::link)
+                .delete(workitem_link_routes::unlink),
+        )
         .route("/repo/diff", get(git_routes::repo_diff))
         .route("/repo/diff-stats", get(git_routes::repo_diff_stats))
         .route("/repo/files", get(git_routes::repo_changed_files))
@@ -4095,6 +4103,8 @@ mod tests {
             "/metrics",
             "/process/stats",
             "/repo/info",
+            "/repo/remotes",
+            "/workitem-links",
             "/repo/diff",
             "/repo/files",
             "/repo/branches",

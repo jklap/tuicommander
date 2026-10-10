@@ -4259,6 +4259,7 @@ impl AppState {
     /// post-removal worktree state.
     pub(crate) fn notify_worktree_removed(&self, payload: WorktreeRemovedPayload) {
         self.invalidate_repo_caches(&payload.repo_path);
+        crate::workitem_links::drop_link_of_removed_worktree(&payload.repo_path, &payload.branch);
         #[cfg(feature = "desktop")]
         if let Some(ref app) = *self.app_handle.read() {
             let _ = app.emit("worktree-removed", &payload);
