@@ -86,6 +86,8 @@ scripts/*
 !scripts/test-install-sh-tmpdir.sh
 !scripts/check-no-nul-bytes.mjs
 !scripts/check-no-home-gits.mjs
+!scripts/check-no-hardcoded-tmp.mjs
+!scripts/hardcoded-tmp-baseline.json
 !scripts/run-plugin-tests.mjs
 !scripts/check-gate.sh
 !scripts/hooks/
