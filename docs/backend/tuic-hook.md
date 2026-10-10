@@ -72,7 +72,8 @@ runs this binary against every spec of every agent and holds it to that table
 **Builds without this binary.** Only the desktop app bundles `tuic-hook`. The headless
 `tuic-remote` binary ships alone, yet still launches Claude with the launch-scoped
 `agent-hooks/claude.json`; a non-desktop build therefore generates each spec's `wire`
-as a self-contained shell one-liner (`ps`-resolved tty + `printf`) instead — the same
+as a self-contained shell one-liner (tty from `$TUIC_PTY_TTY`, falling back to `ps -o tty=` only
+for an agent TUIC did not spawn, + `printf`) instead — the same
 state/`toolfail` bytes, without the metadata scrapes or `is_interrupt` suppression.
 
 **One override survives in `agent_hook.rs`:** Claude's `PreToolUse` entry is scoped to

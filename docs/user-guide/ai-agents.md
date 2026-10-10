@@ -76,7 +76,7 @@ For unrecognized agents, silence-based detection kicks in — if the terminal st
 
 ## Native Hook Instrumentation
 
-Claude and Codex status signals are enabled by default and scoped to each TUIC launch. Claude receives an additional `--settings <config-dir>/agent-hooks/claude.json`; Codex receives `-c notify=["<config-dir>/agent-hooks/codex-notify.sh"]`. Existing explicit overrides win. The Codex adapter emits idle on `agent-turn-complete` and then chains the user's configured `notify` command with the original JSON payload. No global agent configuration is written by this default path.
+Claude and Codex status signals are enabled by default and scoped to each TUIC launch. Claude receives an additional `--settings <config-dir>/agent-hooks/claude.json`; Codex receives `-c notify=["<config-dir>/agent-hooks/codex-notify.sh"]`. Existing explicit overrides win. The Codex adapter emits idle on `agent-turn-complete` (to the PTY TUIC stamped in `$TUIC_PTY_TTY`, so it works inside a sandboxed agent that cannot run `ps`) and then chains the user's configured `notify` command with the original JSON payload. No global agent configuration is written by this default path.
 
 After a completion hook, decorative terminal animation and redraws keep the
 session idle. New input and recognized active work can start another turn.
