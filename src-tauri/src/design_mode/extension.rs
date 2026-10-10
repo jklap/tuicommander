@@ -44,6 +44,24 @@ pub(crate) async fn message(
     } else {
         match body["action"].as_str() {
             Some("hello") => Ok(json!({"version":"2.0.0"})),
+            Some("list_dev_servers") => match body["repoPath"].as_str() {
+                Some(repo) => super::discovery::discover(&state, std::path::Path::new(repo)).await,
+                None => Err("Missing repository".into()),
+            },
+            Some("start_dev_server") => match body["repoPath"].as_str() {
+                Some(repo) => match super::discovery::run_script(std::path::Path::new(repo)) {
+                    Some(script) => {
+                        crate::mcp_http::design_start_server(
+                            state,
+                            std::path::Path::new(repo),
+                            script,
+                        )
+                        .await
+                    }
+                    None => Err("Configure a Run Script in Repository Settings first".into()),
+                },
+                None => Err("Missing repository".into()),
+            },
             Some("send") => super::send::send(state, body.clone()).await,
             Some("pick") => pick_evidence(&body["raw"]).map(Value::String),
             _ => Err("Unknown Design Mode action".into()),

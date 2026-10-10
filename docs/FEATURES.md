@@ -71,10 +71,10 @@ per cell and the configured history limit still apply.
 
 ### 1.0 Design Mode for agent terminals
 
-- Start from an agent terminal's tab context menu or the Command Palette (the palette acts on the active terminal only). While the repository is armed, both offer Stop instead. TUICommander opens a separate Chrome window for the repository's configured development-server URL, or `about:blank` when none is configured.
-- Chrome highlights hovered elements. A click collects the selected element's selector, paths, nearby text, HTML snippet, selected styles, the design tokens (CSS custom properties) its matching rules reference with their resolved values, rectangle, source location when development metadata permits, and an optional PNG reference.
-- The grab is appended to the bound agent's draft without submitting it; repeated grabs and the user's existing text remain editable. Starting from another agent terminal in the same repository rebinds the Chrome window.
-- The tab indicator follows Design Mode status. Browser/PWA clients can request inspection, but Chrome opens on the host running TUICommander. See the [user guide](user-guide/design-mode.md).
+- Start from an agent terminal’s context menu or the Command Palette. Choose Edge or Chrome; TUIC uses a dedicated profile per repository and browser. The launching terminal remains the default recipient and carries the armed D badge.
+- During the pilot, load the materialised extension folder once using **Load unpacked**. The first-run page explains setup; a missing URL opens these instructions instead of a blank page. The sidebar lists configured URLs and live servers attributed to this repository and its linked worktrees, with fresh PTY advertisements validated against listeners.
+- **Pick element** selects once, then browsing resumes. **Multi-pick**, Escape and Stop control longer collection. Cards keep extraction evidence, optional screenshots and independent comments; delete removes a card. The sidebar offers live local agents from the same repository and reports an exited recipient without switching silently.
+- **Send to agent** sanitises and fences page evidence in Rust, then uses the same idle gate as Markdown reviews: deliver now when idle, queue when busy. Failed sends retain the cards; retry keys prevent duplicate delivery. See the [pilot guide](user-guide/design-mode.md) for setup and validation limits.
 
 ### 1.1 PTY Sessions
 - Up to 50 concurrent PTY sessions (configurable in Rust `MAX_SESSIONS`)

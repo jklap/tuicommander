@@ -2011,7 +2011,11 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 
 	// --- Tunnels ---
 	start_design_mode: {
-		map: (args) => ({ method: "POST", path: "/design-mode/start", body: { sessionId: args.sessionId } }),
+		map: (args) => ({
+			method: "POST",
+			path: "/design-mode/start",
+			body: { sessionId: args.sessionId, ...(args.browser ? { browser: args.browser } : {}) },
+		}),
 	},
 	stop_design_mode: {
 		map: (args) => ({ method: "POST", path: "/design-mode/stop", body: { repoPath: args.repoPath } }),

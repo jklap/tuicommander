@@ -50,6 +50,8 @@ pub(crate) fn chrome_candidates() -> Vec<PathBuf> {
             "google-chrome",
             "chromium",
             "chromium-browser",
+            "microsoft-edge-stable",
+            "microsoft-edge",
         ] {
             for folder in std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()) {
                 paths.push(folder.join(binary));
@@ -77,7 +79,8 @@ pub(crate) fn chrome_candidates() -> Vec<PathBuf> {
         }
         for root in ["PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA"] {
             if let Some(dir) = std::env::var_os(root) {
-                paths.push(PathBuf::from(dir).join("Google/Chrome/Application/chrome.exe"));
+                paths.push(PathBuf::from(&dir).join("Google/Chrome/Application/chrome.exe"));
+                paths.push(PathBuf::from(dir).join("Microsoft/Edge/Application/msedge.exe"));
             }
         }
     }

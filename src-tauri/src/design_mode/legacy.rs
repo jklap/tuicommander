@@ -52,6 +52,7 @@ pub(crate) fn status_json(status: &mode_manager::ModeStatus) -> serde_json::Valu
 pub(crate) async fn start(
     state: &Arc<AppState>,
     session_id: String,
+    browser: Option<String>,
 ) -> Result<serde_json::Value, String> {
     let agent = state
         .session_maps
@@ -90,20 +91,8 @@ pub(crate) async fn start(
             .trim_end_matches(std::path::MAIN_SEPARATOR)
             .to_owned()
     };
-    let url = dev_server_url(&crate::config::load_repo_settings(), &repo);
-    if let Some(url) = &url {
-        let parsed = url::Url::parse(url).map_err(|_| "Invalid Design Mode URL")?;
-        if !matches!(parsed.scheme(), "http" | "https") {
-            return Err("Design Mode URL must use HTTP or HTTPS".into());
-        }
-    }
-    let status = manager(state)
-        .await
-        .start(repo_path, session_id, || async move {
-            mode_manager::live_browser(&repo, url.as_deref()).await
-        })
-        .await?;
-    Ok(status_json(&status))
+    let _ = repo_path;
+    super::launcher::launch(state, &repo, &session_id, browser.as_deref()).await
 }
 
 /// Repo settings are keyed by the path the frontend registered, which may be a

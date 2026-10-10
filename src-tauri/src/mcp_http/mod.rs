@@ -2871,6 +2871,42 @@ pub async fn start_server(
     tcp_bound
 }
 
+/// Start the explicitly configured Repo Scripts command in its own visible shell tab.
+pub(crate) async fn design_start_server(
+    state: Arc<AppState>,
+    repo: &std::path::Path,
+    script: String,
+) -> Result<serde_json::Value, String> {
+    use axum::response::IntoResponse;
+    let body =
+        serde_json::from_value(serde_json::json!({"cwd":repo})).map_err(|e| e.to_string())?;
+    let response = session::create_session(axum::extract::State(state.clone()), axum::Json(body))
+        .await
+        .into_response();
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+        .await
+        .map_err(|e| e.to_string())?;
+    let result: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+    if !status.is_success() {
+        return Err(result["error"]
+            .as_str()
+            .unwrap_or("Could not start dev-server terminal")
+            .to_owned());
+    }
+    let sid = result["session_id"]
+        .as_str()
+        .ok_or("No dev-server session was created")?
+        .to_owned();
+    let response_sid = sid.clone();
+    tokio::task::spawn_blocking(move || {
+        session::write_pty_input_pair(&state, &sid, &script, "\r", None)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    Ok(serde_json::json!({"sessionId":response_sid}))
+}
+
 /// The native host and core sender use the same live repository recipient rule.
 pub(crate) fn design_review_agents(
     state: &AppState,

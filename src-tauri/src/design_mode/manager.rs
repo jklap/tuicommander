@@ -104,6 +104,36 @@ impl DesignModeManager {
         }
     }
 
+    /// The extension owns picking; retain the existing terminal badge lifecycle.
+    pub(crate) async fn arm_extension(&self, repo_path: String, session_id: String) -> ModeStatus {
+        let status = ModeStatus {
+            repo_path: repo_path.clone(),
+            session_id,
+            status: "armed",
+        };
+        let old = self.modes.lock().await.insert(
+            repo_path,
+            Mode {
+                status: status.clone(),
+                browser: None,
+                listener: None,
+                generation: 0,
+            },
+        );
+        if let Some(mut mode) = old {
+            if let Some(listener) = mode.listener.take() {
+                listener.abort();
+            }
+            if let Some(browser) = mode.browser.take() {
+                if let Err(error) = browser.disarm().await {
+                    tracing::warn!(%error,"Could not stop previous inspector");
+                }
+            }
+        }
+        (self.notify)(&status);
+        status
+    }
+
     pub(crate) async fn statuses(&self) -> Vec<ModeStatus> {
         let mut statuses: Vec<_> = self
             .modes
@@ -833,6 +863,21 @@ mod tests {
             .await
             .unwrap()
             .unwrap()
+    }
+
+    // Catches: a v2 launch losing its terminal badge or leaving it armed after exit.
+    #[tokio::test]
+    async fn extension_lifecycle_keeps_launching_terminal_and_stops_after_exit() {
+        let dir = tempfile::tempdir().unwrap();
+        let (manager, _, mut events) = manager(dir.path().to_path_buf());
+        let status = manager
+            .arm_extension("/repo".into(), "terminal-X".into())
+            .await;
+        assert_eq!(status.session_id, "terminal-X");
+        assert_eq!(recv(&mut events).await.status, "armed");
+        manager.session_closed("terminal-X").await;
+        assert_eq!(recv(&mut events).await.status, "stopped");
+        assert_eq!(manager.statuses().await[0].status, "stopped");
     }
 
     #[tokio::test]

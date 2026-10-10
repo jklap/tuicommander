@@ -892,3 +892,5 @@ previews/presets, UTC run summaries and owner-guarded Run Now with
 and application error messages match HTTP. See the HTTP Automations action table
 for every field and reply. Blocking storage/schedule work runs off the main
 thread. Run Now executes only on the addressed backend; phase 1 is Once-only.
+
+Design Mode v2: `start_design_mode(sessionId, browser?: "edge" | "chrome")` opens the dedicated browser profile and installs its native host. HTTP `POST /design-mode/start` accepts the identical camelCase body. Stop/status and the terminal badge retain their existing shapes. The browser opens on the backend host.

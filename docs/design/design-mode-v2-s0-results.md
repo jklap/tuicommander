@@ -142,3 +142,20 @@ undefined. No desktop TUIC was built or launched.
 
 Decision: proceed with X-A and native messaging. S2 must prove the real socket
 relay and explicit-instance handshake; the spike echo is not that proof.
+
+### Product-pilot continuation (2026-10-10)
+
+After the S2 host install, the product sidebar completed a real native `hello`
+against the selected `mcp.sock` and pinned instance. CFT disabled the unpacked
+extension on runtime reload while Developer mode was off
+(`unsupportedDeveloperExtension=true`). A trusted click on Developer mode in
+`chrome://extensions` enabled it immediately. The pilot setup instructions
+already require this switch. The native host's framing/manifest/version tests and
+repository-recipient test passed (4/4).
+
+A live session observation also established that `is_remote=true` describes
+sessions created through the API, including local PTYs. It is not a remote-daemon
+ownership signal. Recipient isolation uses `connection_id` instead. The running
+pre-v2 TUIC returns HTTP 404 for `/design-mode/extension`; the product sidebar
+prints the exact endpoint and restart requirement while retaining cards. Native
+Edge checks remain outstanding.

@@ -209,8 +209,15 @@ pub(crate) async fn install(
     } else {
         "tuic-design-host"
     });
-    std::fs::copy(std::env::current_exe().map_err(|e| e.to_string())?, &host)
+    // A fresh inode avoids macOS invalidating the cached executable signature.
+    let staged = host.with_extension(format!("install-{}", std::process::id()));
+    std::fs::copy(std::env::current_exe().map_err(|e| e.to_string())?, &staged)
         .map_err(|e| e.to_string())?;
+    #[cfg(windows)]
+    if host.exists() {
+        std::fs::remove_file(&host).map_err(|e| e.to_string())?;
+    }
+    std::fs::rename(staged, &host).map_err(|e| e.to_string())?;
     let config = json!({"repoPath":repo,"endpoint":endpoint,"instanceId":identity});
     std::fs::write(host.with_extension("json"), config.to_string()).map_err(|e| e.to_string())?;
     let manifest = host_manifest(&host);

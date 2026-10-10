@@ -79,19 +79,19 @@ function createDesignModeStore() {
 		/** Stop the armed repository bound to this session, or start Design Mode
 		 *  for it. The outcome arrives as a `design-mode-changed` push; a failure
 		 *  is shown with the backend's message. */
-		toggle(sessionId: string): void {
+		toggle(sessionId: string, browser?: "edge" | "chrome"): void {
 			const mode = forSession(sessionId);
 			const armed = mode?.status === "armed";
 			const request = armed
 				? invoke("stop_design_mode", { repoPath: mode.repo_path })
-				: invoke("start_design_mode", { sessionId });
+				: invoke("start_design_mode", { sessionId, ...(browser ? { browser } : {}) });
 			void request.then(
 				() => {
 					// Chrome opens beside the backend, not beside a browser client.
 					if (!armed && !isTauri()) {
 						toastsStore.add(
 							t("tabBar.designModeTitle", "Design Mode"),
-							t("tabBar.designModeHostNotice", "Chrome opened on the host machine."),
+							t("tabBar.designModeHostNotice", "Browser opened on the host machine."),
 							"info",
 						);
 					}

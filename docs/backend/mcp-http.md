@@ -238,11 +238,12 @@ uncapping the server.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/design-mode/start` | Start or rebind Chrome inspection to an agent session (`{sessionId}`) |
+| `POST` | `/design-mode/start` | Start/rebind the dedicated Edge/Chrome profile (`{sessionId, browser?}`) |
 | `POST` | `/design-mode/stop` | Stop inspection for a repository (`{repoPath}`) |
 | `GET` | `/design-mode` | Read the array of per-repository Design Mode statuses |
+| `POST` | `/design-mode/extension` | Versioned native-host pick, send, discovery and configured server-start operations |
 
-The Chrome window opens on the host running TUICommander, including when a
+The chosen browser opens on the host running TUICommander, including when a
 remote browser initiates the request. `design-mode-changed` is dual-emitted to
 the desktop window and `/events` SSE with `{repo_path, session_id, status}`;
 `status` is `armed` or `stopped`. See the [HTTP API](../api/http-api.md#design-mode-endpoints)

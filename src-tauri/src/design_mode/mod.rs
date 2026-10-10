@@ -15,4 +15,8 @@ pub(crate) mod tauri_commands;
 pub(crate) use legacy::*;
 #[cfg(all(test, unix))]
 mod demo;
+pub(crate) mod discovery;
+mod hints;
+#[cfg(feature = "desktop")]
+pub(crate) mod launcher;
 pub(crate) mod send;

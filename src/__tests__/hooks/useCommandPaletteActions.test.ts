@@ -173,7 +173,7 @@ describe("useCommandPaletteActions", () => {
 			.find((entry) => entry.id === "start-design-mode")
 			?.execute();
 		await Promise.resolve();
-		expect(toastsStore.add).toHaveBeenCalledWith("Design Mode", "Chrome opened on the host machine.", "info");
+		expect(toastsStore.add).toHaveBeenCalledWith("Design Mode", "Browser opened on the host machine.", "info");
 		tauri.mockRestore();
 	});
 

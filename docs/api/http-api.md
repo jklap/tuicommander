@@ -2971,3 +2971,19 @@ Automation runtime transitions are streamed on `/events` as
 to the desktop event. This includes failure and needs-you changes. Final runs
 retain bounded output; missed live events are reconciled from host state rather
 than replaying or restarting execution.
+
+### Design Mode extension pilot
+
+`POST /design-mode/extension` is available on the existing local IPC HTTP server
+(and the existing authenticated remote transport). The native host uses this
+route; it introduces no TCP listener. Requests carry `id`, `action`, `version`
+(`2.x`) and `repoPath`. Replies are `{id, ok, result}` or `{id, ok:false, error}`.
+`hello` checks the major version. `pick` accepts `raw` DOM extraction and returns
+bounded, redacted, fenced evidence. Non-HTTP(S) page URLs are rejected. Page data
+cannot invoke privileged operations: the worker accepts those only from its panel.
+
+The framed native host maps `list_agents` to the existing `GET /sessions` route,
+then applies the shared Rust repository recipient rule. `hello` checks `/health`
+against the process identity recorded at install. Other v2 operations use the
+extension route. An older running backend returns a visible HTTP 404 plus the
+exact endpoint and a restart instruction; the host does not guess another socket.

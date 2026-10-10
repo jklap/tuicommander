@@ -1658,7 +1658,7 @@ describe("TabBar", () => {
 			);
 			fireEvent.click(item!);
 			await Promise.resolve();
-			expect(addToast).toHaveBeenCalledWith("Design Mode", "Chrome opened on the host machine.", "info");
+			expect(addToast).toHaveBeenCalledWith("Design Mode", "Browser opened on the host machine.", "info");
 			addToast.mockRestore();
 			tauri.mockRestore();
 		});
