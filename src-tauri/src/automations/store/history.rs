@@ -62,7 +62,7 @@ impl RunStore {
             .collect()
     }
 
-    /// Delete only final rows older than the cutoff; default retention is 90 days.
+    /// Delete at most 256 final rows per owner tick; default retention is 90 days.
     pub fn prune(&self, now_ms: i64, retention_days: Option<u32>) -> Result<usize, String> {
         self.require_owner()?;
         let days = retention_days.unwrap_or(90);
@@ -73,7 +73,7 @@ impl RunStore {
         self.connect()?
             .execute(
                 &format!(
-                    "DELETE FROM automation_runs WHERE status NOT IN {OPEN} AND finished_ms<?1"
+                    "DELETE FROM automation_runs WHERE id IN (SELECT id FROM automation_runs WHERE status NOT IN {OPEN} AND finished_ms<?1 ORDER BY finished_ms,id LIMIT 256)"
                 ),
                 [cutoff],
             )
