@@ -868,6 +868,8 @@ CLI directory opens and MCP `repo action=add` share server-owned repository regi
 ## Automation notices (#1620-82ae)
 
 Live needs_you/failed transitions claim each delivery channel durably before effects. Existing native question/error preferences, Web Push opt-in and owning-agent Telegram registration apply. No historical or ambiguous send replay; delivery does not mutate execution. Bell/native macOS clicks resolve the canonical run, even after definition deletion. Bell delivery is an unacknowledged live event, not proof of client display.
+The Automations editor exposes **Include precheck stdout in the agent prompt**,
+off by default, using the same saved definition flag (#1624-c5f5).
 Automation precheck context (#1631-45bf): definitions can opt in with
 `precheck.inject_output: true` (default false). Proceeding checks prefix the
 literal prompt with delimited, escaped untrusted stdout capped at 16 KiB;
