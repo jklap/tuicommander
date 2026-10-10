@@ -190,7 +190,7 @@ export interface WorkItemBoard {
 
 export interface WorkItemBoardCard {
 	item: WorkItem;
-	allowedColumnIds: Array<string>;
+	moves: Array<WorkItemBoardMove>;
 }
 
 export interface WorkItemBoardLane {
@@ -223,4 +223,9 @@ export interface WorkItemGroup {
 export interface WorkItemGroupedPage {
 	groups: Array<WorkItemGroup>;
 	nextCursor: string | null;
+}
+
+export interface WorkItemBoardMove {
+	columnId: string;
+	action: WorkItemAction;
 }

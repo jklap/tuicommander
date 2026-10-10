@@ -109,7 +109,7 @@ pub struct WorkItemStartWork {
     pub base_ref: Option<String>,
     pub prompt: String,
     pub agent_type: Option<String>,
-    /// Draft is safe by default; submission must be explicitly requested.
+    /// Use draft unless the caller explicitly requests submission.
     pub delivery: WorkItemDelivery,
 }
 
@@ -144,7 +144,7 @@ pub enum WorkItemAction {
     deny_unknown_fields
 )]
 pub enum WorkItemActionResult {
-    Item(WorkItemDetail),
+    Item(Box<WorkItemDetail>),
     /// Host executes this via the existing worktree/agent workflow; providers do not.
     StartWork(WorkItemStartWork),
 }
@@ -171,7 +171,7 @@ pub struct WorkItemBoard {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WorkItemBoardCard {
     pub item: WorkItem,
-    pub allowed_column_ids: Vec<String>,
+    pub moves: Vec<WorkItemBoardMove>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -214,4 +214,11 @@ pub struct WorkItemGroup {
 pub struct WorkItemGroupedPage {
     pub groups: Vec<WorkItemGroup>,
     pub next_cursor: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkItemBoardMove {
+    pub column_id: String,
+    pub action: WorkItemAction,
 }
