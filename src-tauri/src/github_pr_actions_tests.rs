@@ -286,28 +286,41 @@ mod critic {
     }
 
     impl PrApi for ClassicQueueApi {
-        async fn graphql(&self, query: &str, _variables: Value) -> Result<Value, String> {
+        fn graphql(
+            &self,
+            query: &str,
+            _variables: Value,
+        ) -> impl std::future::Future<Output = Result<Value, String>> + Send {
             if query.contains("enqueuePullRequest") {
                 self.writes.lock().unwrap().push("enqueue".into());
-                return Ok(json!({"enqueuePullRequest":{"mergeQueueEntry":{"id":"MQE_1","position":1,"state":"QUEUED"}}}));
+                return std::future::ready(Ok(
+                    json!({"enqueuePullRequest":{"mergeQueueEntry":{"id":"MQE_1","position":1,"state":"QUEUED"}}}),
+                ));
             }
             let recorded: Value = serde_json::from_str(include_str!(
                 "../fixtures/github-review/actions-pr-recorded.json"
             ))
             .unwrap();
             let pr = recorded["data"]["repository"]["pullRequests"]["nodes"][0].clone();
-            Ok(json!({"repository":{"pullRequest":pr}}))
+            std::future::ready(Ok(json!({"repository":{"pullRequest":pr}})))
         }
 
-        async fn rest(&self, method: &str, endpoint: &str, _body: Value) -> Result<Value, String> {
+        fn rest(
+            &self,
+            method: &str,
+            endpoint: &str,
+            _body: Value,
+        ) -> impl std::future::Future<Output = Result<Value, String>> + Send {
             if method == "GET" && endpoint.starts_with("rules/branches/") {
-                return Ok(json!([]));
+                return std::future::ready(Ok(json!([])));
             }
             self.writes
                 .lock()
                 .unwrap()
                 .push(format!("{method} {endpoint}"));
-            Ok(json!({"merged":true,"sha":"0000000000000000000000000000000000000001"}))
+            std::future::ready(Ok(
+                json!({"merged":true,"sha":"0000000000000000000000000000000000000001"}),
+            ))
         }
     }
 
