@@ -1011,7 +1011,6 @@
 	"tabBar.designModeArmed": "Design Mode armed",
 	"tabBar.designModeError": "Design Mode failed",
 	"tabBar.designModeHostNotice": "Chrome opened on the host machine.",
-	"tabBar.designModeStopped": "Design Mode stopped",
 	"tabBar.designModeTitle": "Design Mode",
 	"tabBar.moveToWorktree": "Move to Worktree",
 	"tabBar.newTab": "New Tab",

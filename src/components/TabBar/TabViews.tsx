@@ -161,16 +161,12 @@ export const TerminalTabView: Component<TerminalTabViewProps> = (props) => {
 				}}
 			>
 				<span class={s.tabIcon}>●</span>
-				<Show when={props.designModeStatus}>
+				<Show when={props.designModeStatus === "armed"}>
 					<span
-						class={cx(s.designModeBadge, props.designModeStatus === "armed" ? s.designModeArmed : s.designModeStopped)}
-						title={
-							props.designModeStatus === "armed"
-								? t("tabBar.designModeArmed", "Design Mode armed")
-								: t("tabBar.designModeStopped", "Design Mode stopped")
-						}
+						class={cx(s.designModeBadge, s.designModeArmed)}
+						title={t("tabBar.designModeArmed", "Design Mode armed")}
 					>
-						{props.designModeStatus === "armed" ? "D" : "D·"}
+						D
 					</span>
 				</Show>
 				<Show
