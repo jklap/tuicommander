@@ -42,7 +42,8 @@ failed list load. Escape closes the dialog and Tab stays inside it.
 
 A live transition to `needs_you` or `failed` adds a Messages bell item. Select
 it to open the canonical saved run, including its status, output and owning
-session. The run stays available after its definition is deleted. **Open owning
+session. Editing uses the current saved definition, not the historical run snapshot.
+The run stays available after its definition is deleted, with no definition editor. **Open owning
 session** is disabled when the session no longer has a terminal tab.
 
 Native alerts use **Notifications** → **Enabled** and the existing **Question**

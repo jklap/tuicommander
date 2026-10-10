@@ -1127,6 +1127,7 @@
 	"toolbar.prUpdates": "PR UPDATES",
 	"toolbar.renameBranch": "Rename branch",
 	"toolbar.showSidebar": "Show Sidebar",
+	"automations.openSession": "Open owning session",
 	"automations.title": "Automations",
 	"automations.machine": "Scheduled agent runs on this machine",
 	"automations.close": "Close automations",

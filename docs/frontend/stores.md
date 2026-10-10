@@ -745,3 +745,6 @@ they preserve both newer agent edits and an unsaved local prompt. Once stores
 a local wall-clock string and uses backend `preview_definition` for UTC
 occurrences and completion evidence. The backend owns validation, cron,
 capacity, execution and durable history; the adapter owns transport.
+Notice navigation reloads current definitions before exposing an editor; historical
+run snapshots are never saved as replacement definitions. Deleted definitions
+leave saved run details visible without an editable draft.

@@ -56,16 +56,17 @@ fn enabled(config: &crate::config::NotificationConfig, run: &AutomationRun) -> b
 }
 
 /// Bell delivery means the live event was offered, not that a client displayed it.
-pub(crate) fn publish(state: &Arc<AppState>, run: &AutomationRun) -> bool {
-    let Some(store) = state.automation_runtime.notification_store() else {
-        return false;
-    };
-    let bell = claim(&store, run, "bell").unwrap_or(false);
+pub(crate) fn publish(
+    state: &Arc<AppState>,
+    store: &RunStore,
+    config: &crate::config::NotificationConfig,
+    run: &AutomationRun,
+) -> bool {
+    let bell = claim(store, run, "bell").unwrap_or(false);
     if transition(run).is_none() {
         return false;
     }
-    let config = crate::config::load_notification_config();
-    let allowed = enabled(&config, run);
+    let allowed = enabled(config, run);
     let title = format!("{} · {}", run.definition.name, transition(run).unwrap());
     let body = format!(
         "Run {}{}",
@@ -78,7 +79,7 @@ pub(crate) fn publish(state: &Arc<AppState>, run: &AutomationRun) -> bool {
     #[cfg(feature = "desktop")]
     if allowed
         && let Some(app) = state.app_handle.read().clone()
-        && claim(&store, run, "native").unwrap_or(false)
+        && claim(store, run, "native").unwrap_or(false)
     {
         let store = store.clone();
         let run = run.clone();
@@ -99,7 +100,7 @@ pub(crate) fn publish(state: &Arc<AppState>, run: &AutomationRun) -> bool {
     if allowed
         && push_config.services.push.enabled
         && !state.push_store.is_empty()
-        && claim(&store, run, "push").unwrap_or(false)
+        && claim(store, run, "push").unwrap_or(false)
     {
         let state = state.clone();
         let store = store.clone();
@@ -129,7 +130,7 @@ pub(crate) fn publish(state: &Arc<AppState>, run: &AutomationRun) -> bool {
     }
     // Telegram's existing opt-in is per registered agent, not a global destination.
     if allowed && run.session_id.is_some() {
-        crate::telegram::automation_notice(store, run.clone(), format!("{title}\n{body}"));
+        crate::telegram::automation_notice(store.clone(), run.clone(), format!("{title}\n{body}"));
     }
     bell
 }

@@ -52,7 +52,7 @@ export function createAutomationsStore(adapter: AutomationAdapter) {
 		setPreviewError("");
 		setPreviewLoading(false);
 	};
-	function select(value: AutomationDefinition, creating = false) {
+	function select(value: AutomationDefinition | undefined, creating = false) {
 		selectionEpoch++;
 		historyEpoch++;
 		invalidatePreview();
@@ -69,11 +69,19 @@ export function createAutomationsStore(adapter: AutomationAdapter) {
 	}
 	async function openRun(id: string) {
 		const epoch = ++selectionEpoch;
+		historyEpoch++;
+		invalidatePreview();
+		setDraft(undefined);
+		setRuns([]);
+		setHistoryLoading(false);
 		setError("");
+		setNotice("");
 		try {
 			const run = await invoke<AutomationRun>("automation_action", { input: { action: "run", id } });
+			const current = await adapter.list();
 			if (epoch !== selectionEpoch) return;
-			select(run.definition);
+			// A run's snapshot is history, never an editable replacement definition.
+			select(current.find((item) => item.definition.id === run.definition.id)?.definition);
 			setRuns([run]);
 		} catch (cause) {
 			if (epoch === selectionEpoch) setError(message(cause));

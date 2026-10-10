@@ -53,11 +53,15 @@ describe("automation notification navigation", () => {
 		navigateFromNativeNotice({ kind: "automation", id: run.id });
 		expect(automationsUi.requestedRun()).toBe(run.id);
 		await createRoot(async (dispose) => {
-			const store = createAutomationsStore(fakeAdapter());
+			const save = vi.fn();
+			const store = createAutomationsStore(fakeAdapter({ list: async () => [], save }));
 			await store.openRun(run.id);
 			expect(invoke).toHaveBeenCalledWith("automation_action", { input: { action: "run", id: run.id } });
 			expect(store.runs()).toEqual([run]);
-			expect(store.draft()?.id).toBe("deleted");
+			expect(store.draft()).toBeUndefined();
+			store.edit({ name: "Accidental historical edit" });
+			await store.save();
+			expect(save).not.toHaveBeenCalled();
 			dispose();
 		});
 	});

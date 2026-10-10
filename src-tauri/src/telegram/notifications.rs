@@ -93,7 +93,11 @@ pub(crate) fn automation_notice(
     text: String,
 ) {
     if let Some(sender) = super::runtime::HANDLE.get() {
-        let _ = sender.try_send(super::runtime::Command::Automation { store, run, text });
+        let _ = sender.try_send(super::runtime::Command::Automation {
+            store,
+            run: Box::new(run),
+            text,
+        });
     }
 }
 impl super::runtime::Runtime {

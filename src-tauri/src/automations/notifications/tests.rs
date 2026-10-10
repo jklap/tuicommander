@@ -101,34 +101,80 @@ fn delivery_failure_is_independent_of_execution_and_other_channels() {
     );
     assert_eq!(owner.store().get(&run.id).unwrap(), run);
 }
-// Catches historical successes/skips/unknown states producing misleading live notices.
-#[test]
-fn only_needs_you_and_failed_route_with_existing_preferences() {
-    let (_dir, owner, mut run) = setup();
-    let mut config = crate::config::NotificationConfig::default();
-    for status in [
-        RunStatus::Running,
-        RunStatus::Completed,
-        RunStatus::Unknown,
-        RunStatus::Interrupted,
-        RunStatus::SkippedPrecheck,
-        RunStatus::TimedOut,
+// Catches routing bypassing enabled/question/error preferences or Push opt-in.
+#[tokio::test]
+async fn routing_claims_push_only_for_live_allowed_transitions() {
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    // Internal delivery fault model: no VAPID key, so no vendor request is made.
+    state.push_store.upsert(crate::push::PushSubscription {
+        endpoint: "https://example.invalid/test".into(),
+        keys: crate::push::PushSubscriptionKeys {
+            p256dh: "invalid".into(),
+            auth: "invalid".into(),
+        },
+        created_at: chrono::Utc::now(),
+    });
+    for (status, enabled, question, error, push, expected_bell, expected_push) in [
+        (RunStatus::NeedsYou, true, true, true, true, true, true),
+        (RunStatus::Failed, true, true, true, true, true, true),
+        (RunStatus::NeedsYou, false, true, true, true, true, false),
+        (RunStatus::Failed, false, true, true, true, true, false),
+        (RunStatus::NeedsYou, true, false, true, true, true, false),
+        (RunStatus::Failed, true, true, false, true, true, false),
+        (RunStatus::NeedsYou, true, true, false, true, true, true),
+        (RunStatus::Failed, true, false, true, true, true, true),
+        (RunStatus::NeedsYou, true, true, true, false, true, false),
+        (RunStatus::Failed, true, true, true, false, true, false),
+        (RunStatus::Running, true, true, true, true, false, false),
+        (
+            RunStatus::SkippedPrecheck,
+            true,
+            true,
+            true,
+            true,
+            false,
+            false,
+        ),
+        (RunStatus::Completed, true, true, true, true, false, false),
+        (RunStatus::Unknown, true, true, true, true, false, false),
+        (RunStatus::Interrupted, true, true, true, true, false, false),
+        (RunStatus::TimedOut, true, true, true, true, false, false),
     ] {
-        run.status = status;
-        assert!(!claim(owner.store(), &run, "bell").unwrap());
-        assert!(!enabled(&config, &run));
+        let (_dir, owner, run) = setup();
+        let run = owner
+            .store()
+            .transition(&run.id, status, Default::default(), 3)
+            .unwrap();
+        let config = crate::config::NotificationConfig {
+            enabled,
+            sounds: crate::config::NotificationSounds {
+                question,
+                error,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        state.config.write().services.push.enabled = push;
+        assert_eq!(publish(&state, owner.store(), &config, &run), expected_bell);
+        let transition = if status == RunStatus::NeedsYou {
+            "needs_you"
+        } else {
+            "failed"
+        };
+        assert_eq!(
+            owner
+                .store()
+                .notification(&run.id, transition, "bell")
+                .is_ok(),
+            expected_bell
+        );
+        assert_eq!(
+            owner
+                .store()
+                .notification(&run.id, transition, "push")
+                .is_ok(),
+            expected_push
+        );
+        assert!(!publish(&state, owner.store(), &config, &run));
     }
-    for status in [RunStatus::NeedsYou, RunStatus::Failed] {
-        run.status = status;
-        assert!(enabled(&config, &run));
-        config.enabled = false;
-        assert!(!enabled(&config, &run));
-        config.enabled = true;
-    }
-    run.status = RunStatus::NeedsYou;
-    config.sounds.question = false;
-    assert!(!enabled(&config, &run));
-    run.status = RunStatus::Failed;
-    config.sounds.error = false;
-    assert!(!enabled(&config, &run));
 }

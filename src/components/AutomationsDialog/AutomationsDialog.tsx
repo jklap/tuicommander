@@ -210,9 +210,9 @@ export function AutomationsDialog(props: { onClose: () => void; adapter?: Automa
 							<Show when={store.draft()?.id} keyed>
 								{(_id) => <DefinitionEditor store={store} />}
 							</Show>
-							<Show when={!store.isNew()}>
-								<DetailHistory store={store} />
-							</Show>
+						</Show>
+						<Show when={!store.isNew() && (store.draft() || store.runs().length > 0)}>
+							<DetailHistory store={store} />
 						</Show>
 					</main>
 				</div>

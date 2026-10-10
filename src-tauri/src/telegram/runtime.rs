@@ -11,7 +11,7 @@ pub(super) static HANDLE: OnceLock<mpsc::Sender<Command>> = OnceLock::new();
 pub(super) enum Command {
     Automation {
         store: crate::automations::store::RunStore,
-        run: crate::automations::run::AutomationRun,
+        run: Box<crate::automations::run::AutomationRun>,
         text: String,
     },
     Tool {

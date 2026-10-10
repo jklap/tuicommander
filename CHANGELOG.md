@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Preserve current automation settings when opening an old run notice; show deleted definitions as run details without an editor (#1620-82ae).
+
 - Notify once when an automation needs input or fails, with saved run and owning-session navigation; retain durable per-channel delivery claims (#1620-82ae).
 
 - Remove the Design Mode tab badge when inspection stops (#1671-812f).

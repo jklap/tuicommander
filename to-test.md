@@ -4945,3 +4945,5 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] Discord community links: Help → Resources → Discord Community opens TUICommander & Co; website footers and README badge use the permanent invite, with bugs directed to GitHub issues.
 
 - [ ] After Boss restarts the Rust backend, run a Once automation that needs input and one that fails. Verify one bell/native alert per run/status, canonical saved output and owning-session navigation, configured Push and registered-agent Telegram delivery, and no replay after restart. Rust does not hot-reload (#1620-82ae).
+
+- [ ] After Boss restarts the Rust backend, verify automation notification preferences still gate native/Push/Telegram delivery after payload boxing and routing refactor. Open an older run notice after editing the definition: the editor must show current settings; after deletion only retained run details are shown (#1620-82ae). Rust does not hot-reload.

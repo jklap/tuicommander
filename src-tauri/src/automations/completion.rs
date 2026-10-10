@@ -207,7 +207,15 @@ impl CompletionEffects for NativeCompletion<'_> {
     }
 
     fn publish(&self, run: &AutomationRun) {
-        let notice = super::notifications::publish(self.0, run);
+        let store = self.0.automation_runtime.notification_store();
+        let notice = store.as_ref().is_some_and(|store| {
+            super::notifications::publish(
+                self.0,
+                store,
+                &crate::config::load_notification_config(),
+                run,
+            )
+        });
         let payload = serde_json::json!({"run": run, "notice": notice});
         #[cfg(feature = "desktop")]
         if let Some(app) = self.0.app_handle.read().as_ref() {
@@ -218,7 +226,7 @@ impl CompletionEffects for NativeCompletion<'_> {
             .0
             .event_bus
             .send(AppEvent::AutomationRunChanged { payload });
-        if notice && let Some(store) = self.0.automation_runtime.notification_store() {
+        if notice && let Some(store) = store {
             super::notifications::settle(&store, run, "bell", false);
         }
     }
