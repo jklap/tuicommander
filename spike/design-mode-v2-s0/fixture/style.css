@@ -1,0 +1,4 @@
+body { background:#1e1e1e; color:#cccccc; font:14px monospace; padding:24px; }
+button { width:180px; height:60px; background:#252526; color:#cccccc; }
+iframe { display:block; width:480px; height:160px; margin-top:24px; }
+a { color:#59a8dd; }

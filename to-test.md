@@ -1,3 +1,7 @@
+## Automation precheck prompt context (1631-45bf) — Rust restart required
+
+- [ ] After Boss restarts `make dev` or installs `make build`, create an isolated Once automation through the API/MCP with `precheck.inject_output: true`. Confirm a successful scheduled precheck prefixes bounded, marked untrusted stdout before the literal prompt and run history reports `precheck_context`. Compare omitted/false flags and Run Now (literal prompt, no context); stderr must not appear. Targeted dispatch tests exercise the real shell, launch-request boundary and reopened ledger. No desktop instance was launched or restarted by this peer.
+
 ## iPhone hands-free Now Playing (1670-fdc8)
 
 - [HUMAN] After landing and reloading the iPhone PWA, arm hands-free and lock the phone. Confirm the title is **TUICommander hands-free**; Pause holds the spoken reply and Play resumes at its position while the microphone stays active. Stop (if iOS exposes it) ends capture and drops queued replies. Also stop from the PWA and confirm controls no longer act on the ended session. Check a reply still uses media volume with the microphone open, then re-arm. Browser boundary tests cover registration, HTTP action routing and cleanup; physical iPhone audio/lock-screen behavior is unverified. No Rust change or backend restart is required.
@@ -4947,3 +4951,7 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] After Boss restarts the Rust backend, run a Once automation that needs input and one that fails. Verify one bell/native alert per run/status, canonical saved output and owning-session navigation, configured Push and registered-agent Telegram delivery, and no replay after restart. Rust does not hot-reload (#1620-82ae).
 
 - [ ] After Boss restarts the Rust backend, verify automation notification preferences still gate native/Push/Telegram delivery after payload boxing and routing refactor. Open an older run notice after editing the definition: the editor must show current settings; after deletion only retained run details are shown (#1620-82ae). Rust does not hot-reload.
+- [ ] Automations Runs (#1619-b84d): verify Runs and saved-output layout with light/dark themes. Headless Chrome for Testing timed out without producing screenshots. Check 24h/7d summary cards, pagination, needs_you/unknown/interrupted badges, and View run fallback with saved output and removed workspace paths. No desktop instance was launched by the implementer.
+- [ ] Design Mode v2 pilot: after Boss rebuilds/restarts TUIC, load the unpacked extension into its dedicated Edge profile; verify toolbar opening, activeTab capture and sidebar return after switching tabs. Rust does not hot-reload. CFT sidebar and trusted top/frame picks were verified in story 1672.
+
+- [ ] After the next Rust rebuild/restart, verify Design Mode sends a captured crop as a readable image and lets retained feedback reach a replacement after its original recipient exits (#1672-cd3d). Rust does not hot-reload.

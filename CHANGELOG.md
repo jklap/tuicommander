@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Preserve current automation settings when opening an old run notice; show deleted definitions as run details without an editor (#1620-82ae).
 
 - Notify once when an automation needs input or fails, with saved run and owning-session navigation; retain durable per-channel delivery claims (#1620-82ae).
+- Add the Design Mode v2 unpacked-extension pilot: one-shot picks, per-pick comments, same-repository recipients, queued feedback, native messaging and dev-server discovery (#1672-cd3d).
+- Add opt-in automation precheck stdout context with a 16 KiB escaped payload cap, untrusted delimiters and durable injection metadata; exclude stderr (#1631-45bf).
 
 - Remove the Design Mode tab badge when inspection stops (#1671-812f).
 
@@ -40,6 +42,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Add the Rust foundation for Once automation schedules with IANA timezone validation, a single preview instant and durable occurrence deduplication (#1629-2262).
 
 ### Fixed
+- Preserve Design Mode screenshot evidence and send retained feedback to an explicitly chosen replacement agent (#1672-cd3d).
 - Attach saved AI Chat tabs when selected, show connection failures with Retry and pending model controls, and name tabs from conversation titles or prompts (#1628-4459).
 
 - Keep enforcing other automation runs' deadlines when stopping one owned process fails (#1616-1882).
@@ -77,6 +80,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 
 ### Added
+- Add Automations Runs with backend 24h/7d counts, paginated history, owner-safe terminal navigation and saved output for unavailable sessions (#1619-b84d).
 - Add the Automations dialog with backend cadence and Once previews, recent history, atomic pause/resume, Run now and confirmed deletion. Backend API integration is pending (#1618-685b).
 - Add an all-repositories toggle to the Ideas panel header: it lists every repository's ideas for cross-repo work (in memory, resets on reload). The badge and "clear completed" follow the visible list, so clearing in a single-repository view no longer deletes other repositories' completed ideas; ideas added in all-mode stay tagged with the active repository (#1598-c0a0).
 - Add a headless agent capture scenario driver with explicit fixture promotion and ordered replay expectations; record real Codex and pi turns; Claude (expired login) and goose (its banner prints the home directory) stay unverified, and a test rejects fixtures that embed `/Users/` or `/home/` paths.

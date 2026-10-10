@@ -43,3 +43,10 @@
 @media (max-width: 700px) { .dialog { height: 90vh; } .sidebar { width: 180px; padding: 8px; } .detail { padding: 8px; } .group { padding: 8px; } .actions { flex-wrap: wrap; } }
 
 .history li pre { flex-basis: 100%; max-height: 240px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
+.summaries { display: flex; gap: 12px; margin: 16px 0; }
+.summaries > section { flex: 1; }
+.summaries h4 { margin: 0; }
+.output { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow: auto; font-family: var(--font-mono); }
+.runStatus[data-status="needs_you"] { color: var(--attention); }
+.runStatus[data-status="unknown"] { color: var(--warning); }
+.runStatus[data-status="interrupted"] { color: var(--error); }

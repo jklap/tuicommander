@@ -37,6 +37,7 @@ it.each([false, true])("setting enabled=%s does not overwrite newer fields saved
 		}),
 		remove: async () => {},
 		runNow: async () => ({ status: "reserved", reason: null }),
+		summary: async () => ({ total: 0, by_status: {} }),
 		history: async () => [],
 		preview: async (cron, timezone) => ({ cron, timezone, occurrences: [] }),
 		preset: async () => ({ cron: "0 9 * * *" }),

@@ -2,7 +2,8 @@
 
 The backend Once runtime starts on desktop and headless hosts. It records
 precheck decisions before launching the saved agent profile with the literal
-prompt. Precheck output is saved in history and is not added to the prompt.
+prompt. Precheck output is saved in history. It is not added to the prompt unless
+the definition opts in with `precheck.inject_output: true`.
 Recurring dispatch, public execution controls, completion detection and maximum
 duration enforcement are not yet available. Use isolated test definitions until
 the remaining execution integration is complete.
@@ -28,6 +29,23 @@ Set a maximum duration and catch-up grace in seconds. Overlap always skips an
 occurrence while a previous run remains open. An optional precheck runs before
 scheduled launches: exit 0 allows the agent to run; other exits skip quietly.
 Save the definition before running it.
+
+To pass what the precheck found to the agent, set `inject_output: true` in the
+precheck object through the definition API or MCP, for example:
+
+```json
+{"command":"git status --short","timeout_secs":30,"inject_output":true}
+```
+
+The flag defaults to false. A successful scheduled precheck adds stdout before
+the unchanged prompt in a `<precheck-output untrusted="true">` block, labeled as
+data rather than instructions. XML delimiters are escaped. The escaped stdout
+payload is capped at 16 KiB on character boundaries; `[output truncated]` marks
+omitted data. Framing and this marker are outside the payload budget. stderr is
+never included. Empty stdout, refused checks, absent checks and Run Now bypasses
+do not add context. Run history includes `precheck_context.injected` and `bytes`
+for the prepared launch prompt; bytes counts escaped stdout only, not framing
+or the marker. A failed launch can retain this preparation receipt.
 
 **Pause** stops scheduled launches; **Resume** enables them. **Run now** works
 while paused, bypasses precheck, obeys capacity and overlap, and leaves the
@@ -63,3 +81,12 @@ or saved output. Delivery acceptance does not prove a notification appeared on
 a device. The bell is live-only: disconnected clients can miss the event and
 must inspect run history; boot never replays historical notices. On non-macOS
 desktop platforms native alerts do not support click navigation; use the bell.
+The dialog's backend integration is pending Step 8 (story 1617). Until that API
+is installed, requests show a backend error. The injectable adapter is verified
+independently; this guide does not claim an installed scheduler is available.
+
+## Run history and saved output
+
+The dialog addresses the daemon that owns the active repository when you open it (or this machine for a local repository). Switch repository and reopen to view another owner. Select **Runs** to view all persisted runs, including runs of deleted automations. The 24h and 7d counts come from the backend and use elapsed UTC windows, not local calendar days. **Previous runs** and **Next runs** page through history. Each row retains its original automation name, repository and status. `needs_you`, `unknown` and `interrupted` are distinct; none implies success.
+
+**View run** focuses the owning live terminal when it is present in this client. If the terminal is absent, suspended, exited or belongs to another daemon, the dialog shows saved stdout/stderr, truncation warnings, the recorded workspace and run configuration. A missing or removed workspace is not recreated. Viewing a run never starts another run. History and output retention remain backend-controlled.

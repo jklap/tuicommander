@@ -64,6 +64,9 @@ pub enum Overlap {
 pub struct Precheck {
     pub command: String,
     pub timeout_secs: u64,
+    /// Opt in: place bounded stdout of a proceeding precheck before the prompt.
+    #[serde(default)]
+    pub inject_output: bool,
 }
 
 impl AutomationsConfig {

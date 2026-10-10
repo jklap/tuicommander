@@ -6,8 +6,9 @@ use crate::AppState;
 pub(crate) async fn start_design_mode(
     state: tauri::State<'_, Arc<AppState>>,
     session_id: String,
+    browser: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    super::start(state.inner(), session_id).await
+    super::start(state.inner(), session_id, browser).await
 }
 
 #[tauri::command]

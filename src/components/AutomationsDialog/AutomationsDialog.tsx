@@ -1,16 +1,18 @@
 import { createEffect, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { t } from "../../i18n";
-import { automationsUi, createAutomationsStore } from "../../stores/automations";
+import { createAutomationsStore } from "../../stores/automations";
 import { registerModal } from "../../stores/modalStack";
 import s from "./AutomationsDialog.module.css";
 import type { AutomationAdapter } from "./contract";
 import { DefinitionEditor } from "./DefinitionEditor";
 import { DetailHistory } from "./DetailHistory";
+import { RunsView } from "./RunsView";
 import { zonedTime } from "./ScheduleFields";
-import { automationAdapter } from "./transportAdapter";
+import { createAutomationAdapter } from "./transportAdapter";
 
-export function AutomationsDialog(props: { onClose: () => void; adapter?: AutomationAdapter }) {
-	const store = createAutomationsStore(props.adapter ?? automationAdapter);
+export function AutomationsDialog(props: { onClose: () => void; adapter?: AutomationAdapter; connectionId?: string }) {
+	const store = createAutomationsStore(props.adapter ?? createAutomationAdapter(props.connectionId));
+	const [tab, setTab] = createSignal("definitions");
 	const [search, setSearch] = createSignal("");
 	const [confirmDelete, setConfirmDelete] = createSignal(false);
 	let panel: HTMLDivElement | undefined, searchInput: HTMLInputElement | undefined;
@@ -26,7 +28,10 @@ export function AutomationsDialog(props: { onClose: () => void; adapter?: Automa
 	});
 	createEffect(() => {
 		const id = automationsUi.requestedRun();
-		if (id) void store.openRun(id);
+		if (id) {
+			setTab("definitions");
+			void store.openRun(id);
+		}
 	});
 	createEffect(() => {
 		store.draft()?.id;
@@ -90,132 +95,161 @@ export function AutomationsDialog(props: { onClose: () => void; adapter?: Automa
 						{store.notice()}
 					</div>
 				</Show>
-				<div class={s.content}>
-					<aside class={s.sidebar} aria-label={t("automations.list", "Automation definitions")}>
-						<div class={s.row}>
-							<button type="button" disabled={store.busy()} onClick={() => store.create()}>
-								{t("automations.new", "New automation")}
-							</button>
-							<button type="button" disabled={store.busy() || store.loading()} onClick={() => void store.refresh()}>
-								{t("automations.refresh", "Refresh")}
-							</button>
-						</div>
-						<input
-							ref={searchInput}
-							aria-label={t("automations.search", "Search automations")}
-							placeholder={t("automations.search", "Search automations")}
-							value={search()}
-							onInput={(event) => setSearch(event.currentTarget.value)}
-						/>
-						<Show when={store.loading()}>
-							<p role="status">{t("automations.loading", "Loading automations…")}</p>
-						</Show>
-						<Show when={!store.loading() && !store.error() && store.items().length === 0}>
-							<p class={s.empty}>
-								{t("automations.empty", "No automations yet. Create one to schedule an agent run.")}
-							</p>
-						</Show>
-						<For
-							each={store
-								.items()
-								.filter((item) =>
-									`${item.definition.name} ${item.definition.repository}`
-										.toLocaleLowerCase()
-										.includes(search().toLocaleLowerCase()),
-								)}
-						>
-							{(item) => (
-								<button
-									type="button"
-									disabled={store.busy()}
-									class={s.item}
-									aria-pressed={store.draft()?.id === item.definition.id}
-									onClick={() => choose(item.definition)}
-								>
-									<span class={s.itemTitle}>
-										{item.definition.name}
-										<small>
-											{item.definition.enabled ? t("automations.active", "Active") : t("automations.paused", "Paused")}
-										</small>
-									</span>
-									<span>{item.definition.repository}</span>
-									<code>
-										{item.definition.once_local != null
-											? `${t("automations.once", "Once")} ${item.definition.once_local}`
-											: item.definition.cron}
-									</code>
-									<span>{item.definition.timezone}</span>
-									<Show when={item.next_run_ms !== null}>
-										<time>{zonedTime(item.next_run_ms as number, item.definition.timezone)}</time>
-									</Show>
-									<Show when={item.last_status}>
-										<strong>{item.last_status}</strong>
-									</Show>
+				<div class={s.row}>
+					<button type="button" aria-pressed={tab() === "definitions"} onClick={() => setTab("definitions")}>
+						{t("automations.list", "Automation definitions")}
+					</button>
+					<button
+						type="button"
+						aria-pressed={tab() === "runs"}
+						onClick={() => {
+							setTab("runs");
+							void store.loadRuns();
+						}}
+					>
+						{t("automations.runs", "Runs")}
+					</button>
+				</div>
+				<Show when={tab() === "runs"}>
+					<main class={s.detail}>
+						<RunsView store={store} connectionId={props.connectionId} onNavigate={props.onClose} />
+					</main>
+				</Show>
+				<Show when={tab() === "definitions"}>
+					<div class={s.content}>
+						<aside class={s.sidebar} aria-label={t("automations.list", "Automation definitions")}>
+							<div class={s.row}>
+								<button type="button" disabled={store.busy()} onClick={() => store.create()}>
+									{t("automations.new", "New automation")}
 								</button>
-							)}
-						</For>
-						<Show
-							when={
-								store.items().length > 0 &&
-								!store
+								<button type="button" disabled={store.busy() || store.loading()} onClick={() => void store.refresh()}>
+									{t("automations.refresh", "Refresh")}
+								</button>
+							</div>
+							<input
+								ref={searchInput}
+								aria-label={t("automations.search", "Search automations")}
+								placeholder={t("automations.search", "Search automations")}
+								value={search()}
+								onInput={(event) => setSearch(event.currentTarget.value)}
+							/>
+							<Show when={store.loading()}>
+								<p role="status">{t("automations.loading", "Loading automations…")}</p>
+							</Show>
+							<Show when={!store.loading() && !store.error() && store.items().length === 0}>
+								<p class={s.empty}>
+									{t("automations.empty", "No automations yet. Create one to schedule an agent run.")}
+								</p>
+							</Show>
+							<For
+								each={store
 									.items()
-									.some((item) =>
+									.filter((item) =>
 										`${item.definition.name} ${item.definition.repository}`
 											.toLocaleLowerCase()
 											.includes(search().toLocaleLowerCase()),
-									)
-							}
-						>
-							<p class={s.empty}>{t("automations.noMatches", "No matching automations.")}</p>
-						</Show>
-					</aside>
-					<main class={s.detail}>
-						<Show
-							when={store.draft()}
-							fallback={<p class={s.empty}>{t("automations.select", "Select an automation or create one.")}</p>}
-						>
-							<div class={s.actions}>
-								<Show when={!store.isNew()}>
+									)}
+							>
+								{(item) => (
 									<button
 										type="button"
 										disabled={store.busy()}
-										onClick={() => void store.setEnabled(!store.draft()?.enabled)}
+										class={s.item}
+										aria-pressed={store.draft()?.id === item.definition.id}
+										onClick={() => choose(item.definition)}
 									>
-										{store.draft()?.enabled ? t("automations.pause", "Pause") : t("automations.resume", "Resume")}
+										<span class={s.itemTitle}>
+											{item.definition.name}
+											<small>
+												{item.definition.enabled
+													? t("automations.active", "Active")
+													: t("automations.paused", "Paused")}
+											</small>
+										</span>
+										<span>{item.definition.repository}</span>
+										<code>
+											{item.definition.once_local != null
+												? `${t("automations.once", "Once")} ${item.definition.once_local}`
+												: item.definition.cron}
+										</code>
+										<span>{item.definition.timezone}</span>
+										<Show when={item.next_run_ms !== null}>
+											<time>{zonedTime(item.next_run_ms as number, item.definition.timezone)}</time>
+										</Show>
+										<Show when={item.last_status}>
+											<strong>{item.last_status}</strong>
+										</Show>
 									</button>
-									<button type="button" disabled={store.busy()} onClick={() => void store.runNow()}>
-										{t("automations.runNow", "Run now")}
+								)}
+							</For>
+							<Show
+								when={
+									store.items().length > 0 &&
+									!store
+										.items()
+										.some((item) =>
+											`${item.definition.name} ${item.definition.repository}`
+												.toLocaleLowerCase()
+												.includes(search().toLocaleLowerCase()),
+										)
+								}
+							>
+								<p class={s.empty}>{t("automations.noMatches", "No matching automations.")}</p>
+							</Show>
+						</aside>
+						<main class={s.detail}>
+							<Show
+								when={store.draft()}
+								fallback={<p class={s.empty}>{t("automations.select", "Select an automation or create one.")}</p>}
+							>
+								<div class={s.actions}>
+									<Show when={!store.isNew()}>
+										<button
+											type="button"
+											disabled={store.busy()}
+											onClick={() => void store.setEnabled(!store.draft()?.enabled)}
+										>
+											{store.draft()?.enabled ? t("automations.pause", "Pause") : t("automations.resume", "Resume")}
+										</button>
+										<button type="button" disabled={store.busy()} onClick={() => void store.runNow()}>
+											{t("automations.runNow", "Run now")}
+										</button>
+									</Show>
+									<button type="button" class={s.primary} disabled={store.busy()} onClick={() => void store.save()}>
+										{t("automations.save", "Save")}
 									</button>
-								</Show>
-								<button type="button" class={s.primary} disabled={store.busy()} onClick={() => void store.save()}>
-									{t("automations.save", "Save")}
-								</button>
-								<Show when={!store.isNew()}>
-									<button type="button" class={s.danger} disabled={store.busy()} onClick={() => setConfirmDelete(true)}>
-										{t("automations.delete", "Delete")}
-									</button>
-								</Show>
-							</div>
-							<Show when={confirmDelete()}>
-								<div class={s.confirm} role="group" aria-label={t("automations.confirmDelete", "Confirm delete")}>
-									<p>{t("automations.deleteHint", "Delete this automation? Saved run history is kept.")}</p>
-									<button type="button" class={s.danger} disabled={store.busy()} onClick={() => void store.remove()}>
-										{t("automations.confirmDelete", "Confirm delete")}
-									</button>
-									<button type="button" onClick={() => setConfirmDelete(false)}>
-										{t("automations.cancel", "Cancel")}
-									</button>
+									<Show when={!store.isNew()}>
+										<button
+											type="button"
+											class={s.danger}
+											disabled={store.busy()}
+											onClick={() => setConfirmDelete(true)}
+										>
+											{t("automations.delete", "Delete")}
+										</button>
+									</Show>
 								</div>
+								<Show when={confirmDelete()}>
+									<div class={s.confirm} role="group" aria-label={t("automations.confirmDelete", "Confirm delete")}>
+										<p>{t("automations.deleteHint", "Delete this automation? Saved run history is kept.")}</p>
+										<button type="button" class={s.danger} disabled={store.busy()} onClick={() => void store.remove()}>
+											{t("automations.confirmDelete", "Confirm delete")}
+										</button>
+										<button type="button" onClick={() => setConfirmDelete(false)}>
+											{t("automations.cancel", "Cancel")}
+										</button>
+									</div>
+								</Show>
+								<Show when={store.draft()?.id} keyed>
+									{(_id) => <DefinitionEditor store={store} />}
+								</Show>
 							</Show>
-							<Show when={store.draft()?.id} keyed>
-								{(_id) => <DefinitionEditor store={store} />}
+							<Show when={!store.isNew() && (store.draft() || store.runs().length > 0)}>
+								<DetailHistory store={store} />
 							</Show>
-						</Show>
-						<Show when={!store.isNew() && (store.draft() || store.runs().length > 0)}>
-							<DetailHistory store={store} />
-						</Show>
-					</main>
-				</div>
+						</main>
+					</div>
+				</Show>
 			</div>
 		</div>
 	);

@@ -151,6 +151,15 @@ export function useCommandPaletteActions(options: CommandPaletteActionOptions): 
 				keybinding: "",
 				execute: () => designModeStore.toggle(designSessionId),
 			});
+			if (!armed)
+				for (const browser of ["edge", "chrome"] as const)
+					entries.push({
+						id: `start-design-mode-${browser}`,
+						label: `Start Design Mode in ${browser === "edge" ? "Edge" : "Chrome"}`,
+						category: "Terminal",
+						keybinding: "",
+						execute: () => designModeStore.toggle(designSessionId, browser),
+					});
 		}
 		if (activeTermId) {
 			for (const worktree of options.gitOps.getWorktreeTargets(activeTermId)) {

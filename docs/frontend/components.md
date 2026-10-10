@@ -695,3 +695,5 @@ saved history. Escape uses the modal stack; Tab stays in the dialog.
 The Step 8 API is a separate integration dependency. `transportAdapter.ts` is the
 only provisional command-envelope boundary; tests inject `AutomationAdapter`.
 No schedules or launch decisions are calculated in TypeScript.
+
+`RunsView` in the Automations dialog renders all-history pages and backend 24h/7d summaries. `RunOutput` renders saved stdout/stderr and immutable workspace details. View run only focuses a live terminal with matching daemon ownership; unavailable sessions never launch a replacement.

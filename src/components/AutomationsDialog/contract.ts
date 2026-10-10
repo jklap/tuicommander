@@ -15,7 +15,7 @@ export interface AutomationDefinition {
 	grace_secs: number;
 	overlap: "skip";
 	max_duration_secs: number;
-	precheck: { command: string; timeout_secs: number } | null;
+	precheck: { command: string; timeout_secs: number; inject_output?: boolean } | null;
 }
 export type RunStatus =
 	| "reserved"
@@ -54,6 +54,7 @@ export interface AutomationRun {
 	stdout: SavedOutput;
 	stderr: SavedOutput;
 	reason: string | null;
+	precheck_context?: { injected: boolean; bytes: number } | null;
 	precheck: { exit_code: number | null; timed_out: boolean; stdout: SavedOutput; stderr: SavedOutput } | null;
 }
 export interface SchedulePreview {
@@ -73,13 +74,19 @@ export interface RunReceipt {
 	status: RunStatus;
 	reason: string | null;
 }
+export interface RunSummary {
+	total: number;
+	by_status: Partial<Record<RunStatus, number>>;
+}
 export interface AutomationAdapter {
 	list(): Promise<AutomationListItem[]>;
+	run(id: string): Promise<AutomationRun>;
 	save(definition: AutomationDefinition, create: boolean): Promise<AutomationDefinition>;
 	setEnabled(id: string, enabled: boolean): Promise<void>;
 	remove(id: string): Promise<void>;
 	runNow(id: string): Promise<RunReceipt>;
-	history(id: string): Promise<AutomationRun[]>;
+	history(id?: string, offset?: number, limit?: number): Promise<AutomationRun[]>;
+	summary(window: "24h" | "7d"): Promise<RunSummary>;
 	preview(cron: string, timezone: string): Promise<SchedulePreview>;
 	previewDefinition(definition: AutomationDefinition): Promise<DefinitionSchedulePreview>;
 	preset(preset: SchedulePreset): Promise<{ cron: string }>;
@@ -93,7 +100,7 @@ export type AutomationAction =
 	| { action: "get" | "run"; id: string }
 	| { action: "summary"; window: "24h" | "7d" }
 	| { action: "delete" | "run_now" | "pause" | "resume"; id: string }
-	| { action: "list_runs"; id: string; limit: number }
+	| { action: "list_runs"; id?: string; limit: number; offset?: number }
 	| { action: "preview"; cron: string; timezone: string | null; count: number }
 	| { action: "preview_definition"; definition: AutomationDefinition; count: number }
 	| { action: "preset"; preset: SchedulePreset };

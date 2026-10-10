@@ -7,6 +7,9 @@
 //! Unix: connects via Unix domain socket at `<config_dir>/mcp.sock`
 //! Windows: connects via named pipe at `\\.\pipe\tuicommander-mcp`
 
+mod native;
+mod native_assets;
+
 use serde_json::Value;
 use std::io::{self, BufRead, Write};
 use std::sync::{
@@ -897,6 +900,46 @@ async fn dispatch_loop(
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() {
+    let native_args: Vec<String> = std::env::args().skip(1).collect();
+    if native_args
+        .first()
+        .is_some_and(|arg| arg.starts_with("chrome-extension://"))
+    {
+        let result = match std::env::current_exe() {
+            Ok(executable) => {
+                native::run(&native_args[0], &executable.with_extension("json")).await
+            }
+            Err(error) => Err(error.to_string()),
+        };
+        if let Err(error) = result {
+            eprintln!("tuic-design-host: {error}");
+            std::process::exit(1);
+        }
+        return;
+    }
+    if native_args.first().map(String::as_str) == Some("--design-install") {
+        if !(4..=5).contains(&native_args.len()) {
+            eprintln!(
+                "Usage: tuic-bridge --design-install <profile> <repo> <socket-or-pipe> [session-id]"
+            );
+            std::process::exit(1);
+        }
+        match native::install(
+            std::path::Path::new(&native_args[1]),
+            std::path::Path::new(&native_args[2]),
+            &native_args[3],
+            native_args.get(4).map(String::as_str),
+        )
+        .await
+        {
+            Ok(result) => println!("{result}"),
+            Err(error) => {
+                eprintln!("tuic-design-host: {error}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
     let mut args = std::env::args().skip(1);
     let selected = match args.next().as_deref() {
         None => tuic_ipc::app_instance::select_app_instance_from_env(),

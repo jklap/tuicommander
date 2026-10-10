@@ -1010,7 +1010,8 @@
 	"tabBar.detachToWindow": "Detach to Window",
 	"tabBar.designModeArmed": "Design Mode armed",
 	"tabBar.designModeError": "Design Mode failed",
-	"tabBar.designModeHostNotice": "Chrome opened on the host machine.",
+	"tabBar.designModeHostNotice": "Browser opened on the host machine.",
+	"tabBar.designModeStopped": "Design Mode stopped",
 	"tabBar.designModeTitle": "Design Mode",
 	"tabBar.moveToWorktree": "Move to Worktree",
 	"tabBar.newTab": "New Tab",
@@ -1189,5 +1190,16 @@
 	"automations.precheckHint": "Exit 0 runs the agent; other exits skip quietly. Precheck output is saved in history.",
 	"automations.once": "Once",
 	"automations.onceTime": "Once local time",
-	"automations.onceCompleted": "This one-time occurrence has completed."
+	"automations.onceCompleted": "This one-time occurrence has completed.",
+	"automations.runs": "Runs",
+	"automations.savedOutput": "Saved run output",
+	"automations.sessionUnavailable": "Live session unavailable. No replacement run was started.",
+	"automations.noWorkspace": "No workspace was recorded.",
+	"automations.noOutput": "No saved output.",
+	"automations.outputTruncated": "Saved output was truncated by the backend.",
+	"automations.totalRuns": "Total runs",
+	"automations.viewRun": "View run",
+	"automations.previousRuns": "Previous runs",
+	"automations.nextRuns": "Next runs",
+	"automations.recordedWorkspace": "Workspace"
 }
