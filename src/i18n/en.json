@@ -1,4 +1,7 @@
 {
+	"mobile.dictation.error": "Dictation failed",
+	"mobile.dictation.start": "Dictate into draft",
+	"mobile.dictation.stop": "Stop dictation",
 	"perimeter.heading": "Perimeter",
 	"perimeter.hint": "ego roots extend the AI Chat workspace; they do not replace it. These defaults apply to new ego runs. Running conversations keep their admitted perimeter.",
 	"perimeter.failure": "The write or readback failed. Reload from ego to check what is stored. Check the ego executable and AI Chat workspace in General if the command could not start.",

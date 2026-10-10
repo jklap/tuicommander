@@ -17,6 +17,7 @@ vi.mock("../useMobileVoice", () => ({
 	useMobileVoice: () => ({
 		available: () => false,
 		armed: () => false,
+		recording: () => false,
 		phase: () => undefined,
 		toggle: async () => {},
 	}),
