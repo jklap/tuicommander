@@ -253,3 +253,7 @@ HTTP routes because remote clients must not access the host pasteboard.
 Automation `automation_action` is async. Shared Rust parsing routes Run Now to
 the owner-guarded runtime; definition, history, aggregate and preview work uses
 `tokio::task::spawn_blocking`. HTTP calls the same boundary.
+
+## Account actions
+
+`accounts::account_action` is async. Shared `execute` moves registry/vault/file-lock work to `spawn_blocking`; token verification awaits bounded HTTP without following redirects. The HTTP account action calls the same service. No account filesystem or keychain work runs on the IPC main thread.

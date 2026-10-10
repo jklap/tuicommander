@@ -318,3 +318,89 @@ GitHub Actions jobs are downloaded through GitHub's jobs API. CircleCI checks ar
 When `include_merged` is true, `get_repo_pr_statuses` includes recently merged PRs. Stale merged PRs are filtered: if a branch has been recreated after a PR was merged (detected via branch creation timestamp vs PR merge timestamp), the old merged PR is excluded to prevent ghost badges.
 
 Browser add-account polling uses `POST /github/accounts/poll` and the same `github_poll_add_account_impl` as desktop IPC. Success persists a named account without replacing the default runtime token. Default login continues to use `POST /github/auth/poll`.
+
+## Shared account registry
+
+Core owns provider sites and accounts in `accounts.json`. Tokens are stored only
+in the instance credential vault under `account/{id}`. Reads return account
+metadata and `secret: {status: "set" | "unset" | "unavailable"}`. Vault errors
+are unavailable, never an absent credential. No account action reveals tokens.
+
+`account_action` (IPC) and `POST /accounts/action` (HTTP) call the same Rust owner
+service. IPC takes `{request: <action>}`; HTTP takes the action directly. HTTP
+uses the loopback-or-authenticated route guard on both routers. TCP listeners
+additionally require transport authentication, including loopback requests. The future Settings MCP adapter uses this service; this change
+does not add an unrestricted plugin `invoke` grant or a standalone MCP tool.
+
+| Action | Input | Reply |
+|---|---|---|
+| `list` | Optional `provider` | AccountView array |
+| `list_sites` | Optional `provider` | Site array |
+| `add` | `account: {provider, host, kind, label, username?}`, `token` | Verified AccountView |
+| `test` | `id` | Verified AccountView |
+| `remove` | `id` | `{removed:true}` |
+| `add_site` | `provider`, `host`, `label` | Site |
+| `test_site` | Site `id`, `account_id` belonging to that site | Verified AccountView |
+| `remove_site` | Site `id` | `{removed:true}`; removes its accounts, credentials and GitHub bindings |
+| `set_secret` | `id`, `token` | Verified AccountView; token/basic accounts only |
+| `clear_secret` | `id` | `{cleared:true}`; retains account metadata |
+| `set_label` | `id`, `label` | `{updated:true}`; renames an account |
+| `set_site_label` | `id`, `label` | `{updated:true}`; renames a site |
+
+AccountView fields: `id`, `provider`, `site_id`, `host`, `kind`, `label`, `login`,
+`username`, `created_at`, `auth_source`, `secret`. Site fields: `id`, `provider`,
+`host`, `label`. IDs are stable; new non-GitHub accounts receive UUIDs. Multiple
+accounts may share one provider/site. Site URLs include their HTTP(S) origin and
+optional context path; userinfo, query strings, fragments and traversal are
+rejected. Verification uses a 30-second deadline, a 64 KiB response cap, no
+redirects, and returns only a selected viewer identity. Error bodies are never
+returned. Tests use a controlled protocol server, not live Jira/GitLab credentials.
+
+Core registers GitHub and reuses its provider. Cloud login still requires device
+flow; PAT input cannot bypass it. Non-core `ProviderDescriptor` registration is
+restricted to `bearer` and `basic` token authentication. A descriptor declares
+`id`, `label`, `kinds`, and `verify: {path, login_pointer}`. The trusted manifest
+adapter calls `accounts::register_provider(owner, descriptor)`; unload calls
+`unregister_providers(owner)`. Unload retains persisted accounts and credentials.
+Verification of an unloaded provider returns unavailable; metadata remains readable.
+Plugin manifest wiring and authenticated plugin HTTP requests are delivered by
+the host-API stream, not this registry change.
+
+Native secret-entry integration is separate. Its sink calls
+`accounts::add_account(NewAccount, token)` directly. The core Settings control
+must not collect or forward token values through plugin JavaScript. This change
+provides the write-only service/input transport; it does not claim native
+secret-entry privacy before that sink is integrated.
+
+`accounts::catalogue_schema()` returns an inline Rust schema without reading
+files, credentials or providers. The logical token leaf has secret sensitivity,
+no default or examples, and `get`/`set_secret`/`clear_secret` operations. Get is
+presence-only. Catalogue aggregate registration is a serial Settings integration
+step after the accounts module lands; the module does not edit the shared catalogue.
+
+### GitHub migration and recovery
+
+The first registry operation imports all `github_accounts.json` entries with
+unchanged account IDs, hosts, login and auth provenance. The implicit
+`github.com` record still resolves the existing env → OAuth vault → gh chain;
+env/CLI tokens are not copied into the vault. The legacy metadata file is retained
+for recovery and is not re-imported after the migration marker is committed.
+`github_bindings.json` stays authoritative, so existing repo bindings remain valid.
+All GitHub registry writers now use the shared registry.
+
+On vault load, `github/oauth-token` and `github/account/{id}/token` migrate to
+`account/{id}` in one persisted blob. Existing canonical credentials win. Old
+copies disappear only after persistence succeeds; a failed migration can retry.
+GitHub credential enum variants address the same canonical slots, including OAuth
+login/logout and per-account token resolution. OAuth replies and Debug output
+omit `access_token`.
+
+Metadata updates use the existing cross-process ConfigFile lock and atomic file
+replacement. Corrupt account metadata is rejected and retained for operator
+repair. Vault and metadata are separate stores: a vault change followed by a
+metadata persistence failure may leave a credential phase committed. An operation
+error is not a guarantee of cross-store rollback; inspect presence and retry the
+owner action after repairing storage. Site removal can stop after removing some
+accounts if a later credential/binding operation fails; retry the site action.
+Rust changes load only after Boss manually restarts `make dev` or installs a
+`make build`; this work does not launch or restart the app.

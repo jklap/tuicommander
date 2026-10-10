@@ -2995,3 +2995,7 @@ literal prompt with delimited, escaped untrusted stdout capped at 16 KiB;
 truncation is marked and stderr is excluded. Empty output and manual bypasses
 inject nothing. The run ledger records `precheck_context: {injected, bytes}` for
 the prepared launch prompt, counting escaped stdout bytes before framing/marker.
+
+## Account actions
+
+`POST /accounts/action` accepts the tagged core account action directly, without an IPC `request` envelope. It is registered identically on desktop and headless routers with the loopback-or-authenticated route guard. TCP listeners additionally require transport authentication, including loopback requests. Reads return metadata and credential presence only; no action returns a token. List/add/test/remove, site operations and write-only token replacement/clear share the Rust account owner service. See [the account action table](../backend/github.md#shared-account-registry). Frontend mapping lives in `src/transport/commandTable.ts`.

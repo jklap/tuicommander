@@ -1336,3 +1336,7 @@ bound to that run. Final output is bounded to 256 KiB; final states reject late
 or duplicate evidence. Boot preserves final history and interrupts open runs
 without retry. `automation-run-changed` is dual-emitted to desktop and SSE with
 an identical `{ "run": ... }` payload, including failure and needs-you transitions.
+
+## Core provider accounts
+
+`accounts.json` stores provider/site/account metadata only. The first read migrates `github_accounts.json` while preserving IDs; the old file is retained for recovery and a durable marker prevents re-import after removals. `github_bindings.json` remains the GitHub binding store. Tokens migrate atomically within the credential vault to `account/{id}`; env/CLI credentials remain ambient. Corrupt metadata is retained and blocks account writes. See [Shared account registry](github.md#shared-account-registry) for APIs, credential presence and partial cross-store recovery.

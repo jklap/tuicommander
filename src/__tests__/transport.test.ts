@@ -1744,6 +1744,16 @@ describe("transport", () => {
 			expect(mapCommandToHttp("github_diagnostics", {}).path).toBe("/github/diagnostics");
 		});
 
+		// Catches: IPC wrapping being forwarded to HTTP instead of the tagged account action.
+		it("maps account_action to the shared presence-only owner endpoint", () => {
+			const request = { action: "list", provider: "github" };
+			expect(mapCommandToHttp("account_action", { request })).toEqual({
+				method: "POST",
+				path: "/accounts/action",
+				body: request,
+			});
+		});
+
 		it("maps multi-account accounts + repo bindings", () => {
 			expect(mapCommandToHttp("github_list_accounts", {}).method).toBe("GET");
 			expect(mapCommandToHttp("github_list_accounts", {}).path).toBe("/github/accounts");

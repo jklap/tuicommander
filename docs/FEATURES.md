@@ -2780,3 +2780,7 @@ the prepared launch prompt, counting escaped stdout bytes before framing/marker.
 ### Automation runs view
 
 The Automations **Runs** view shows backend 24h/7d counts, paginated history, distinct needs-you/unknown/interrupted states, and saved output after definition deletion. View run focuses only an available terminal on the owning daemon; otherwise it shows the saved report and workspace details without launching a replacement.
+
+## Shared provider accounts
+
+Core account/site list, add, Test and remove use one registry with write-only credential storage. GitHub metadata/tokens migrate without changing account IDs or repo bindings; core retains the GitHub provider and ambient auth chain. Generic provider descriptors allow token/basic verification for plugin providers. Native Settings secret entry and plugin-manifest/authenticated-request wiring are separate integration steps.
