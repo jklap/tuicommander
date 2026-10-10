@@ -892,3 +892,10 @@ previews/presets, UTC run summaries and owner-guarded Run Now with
 and application error messages match HTTP. See the HTTP Automations action table
 for every field and reply. Blocking storage/schedule work runs off the main
 thread. Run Now executes only on the addressed backend; phase 1 is Once-only.
+
+Automation precheck context (#1631-45bf): definitions can opt in with
+`precheck.inject_output: true` (default false). Proceeding checks prefix the
+literal prompt with delimited, escaped untrusted stdout capped at 16 KiB;
+truncation is marked and stderr is excluded. Empty output and manual bypasses
+inject nothing. The run ledger records `precheck_context: {injected, bytes}` for
+the prepared launch prompt, counting escaped stdout bytes before framing/marker.

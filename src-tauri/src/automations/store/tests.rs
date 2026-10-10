@@ -245,6 +245,7 @@ fn saved_reports_bound_each_stream_and_keep_definition_snapshot_and_launch_point
                         duration_ms: 12,
                     },
                 )),
+                precheck_context: None,
                 workspace_id: Some("allocated-workspace-id".into()),
                 reason: Some("confirmed done".into()),
             },

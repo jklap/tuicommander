@@ -30,7 +30,7 @@ pub fn tool_definition() -> Value {
                         "cron":{"type":"string"}, "timezone":{"type":"string","description":"IANA zone; defaults to local on creation"},
                         "enabled":{"type":"boolean"}, "grace_secs":{"type":"integer","minimum":1},
                         "overlap":{"type":"string","enum":["skip"]}, "max_duration_secs":{"type":"integer","minimum":1},
-                        "precheck":{"anyOf":[{"type":"null"},{"type":"object","additionalProperties":false,"required":["command","timeout_secs"],"properties":{"command":{"type":"string"},"timeout_secs":{"type":"integer","minimum":1},"inject_output":{"type":"boolean"}}}]}
+                        "precheck":{"anyOf":[{"type":"null"},{"type":"object","additionalProperties":false,"required":["command","timeout_secs"],"properties":{"command":{"type":"string"},"timeout_secs":{"type":"integer","minimum":1},"inject_output":{"type":"boolean","default":false,"description":"Prefix the prompt with up to 16 KiB of escaped, untrusted precheck stdout. stderr is never injected."}}}]}
                     }
                 }
             }
