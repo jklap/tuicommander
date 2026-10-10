@@ -2141,6 +2141,8 @@ Phone-optimized progressive web app for monitoring AI agents remotely. Separate 
 - `font-variant-emoji: text` on output view — forces Unicode symbols (●, ○, ◉) to render as monochrome text glyphs instead of colorful emoji
 
 ### 18.11 Standalone CSS
+- The mobile composer offers browser dictation directly next to Send (44 px touch targets) when `SpeechRecognition` or `webkitSpeechRecognition` is available. Interim and final speech append to the draft without focusing the textarea or sending; tap again to stop. Editing the draft cancels recognition and keeps the edit exactly; tap the mic to start again. Late results from the cancelled recording are ignored. Errors keep the draft and show a toast. It uses the configured dictation language, falling back to the browser language for automatic detection. Browser dictation and server hands-free conversation cannot record together.
+- iPhone Home Screen availability remains device-dependent: [WebKit bug 225298](https://bugs.webkit.org/show_bug.cgi?id=225298#c3) documents the historical standalone restriction; Safari's [14.1 release notes](https://webkit.org/blog/11648/new-webkit-features-in-safari-14-1/) require Siri enabled. Feature detection and error handling apply; Safari tab support does not prove PWA support.
 - Mobile PWA uses its own standalone stylesheet (`src/mobile/mobile.css`), independent from the desktop `global.css`
 - Shares core color palette and border radius tokens; differs in font stacks, layout approach, and iOS-specific rules
 - WebSocket state deduplication: duplicate state pushes are filtered to reduce unnecessary re-renders
@@ -2766,6 +2768,8 @@ deadlines. Reconciliation reports the stop errors after processing those runs.
 Blocked runs remain active; idle alone does not prove success. Rust restart required.
 
 Automation needs-you and failure notices use durable per-run/status/channel claims, existing notification preferences, and canonical saved-run/owning-session bell navigation. Unknown and interrupted outcomes remain history, not success. Notice navigation edits only the current definition; deleted definitions retain read-only run details.
+The Automations editor exposes **Include precheck stdout in the agent prompt**,
+off by default, using the same saved definition flag (#1624-c5f5).
 Automation precheck context (#1631-45bf): definitions can opt in with
 `precheck.inject_output: true` (default false). Proceeding checks prefix the
 literal prompt with delimited, escaped untrusted stdout capped at 16 KiB;
@@ -2780,6 +2784,11 @@ The Automations **Runs** view shows backend 24h/7d counts, paginated history, di
 ### Tasks contract foundation
 
 Provider-neutral Rust DTOs and generated TypeScript cover work-item queries, fields, comments, actions and boards. A deterministic local provider supports development; visible Tasks views and remote providers are separate integration work. See [plugin guide](plugins.md#tasks-data-contract-phase-a4).
+
+Automation agent surface (#1630-cbfa, #1621-5dce): MCP `automations` and
+`tuic automations` share the HTTP/IPC action parser, definition results, schedule
+previews, run history, summaries and Run Now runtime. Enabled-only updates and
+Once definitions work identically; MCP creation retains host-bound provenance.
 
 ## Tasks board component
 

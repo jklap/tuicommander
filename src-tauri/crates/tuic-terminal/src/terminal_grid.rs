@@ -1017,6 +1017,11 @@ impl TerminalGrid {
         self.term.grid().total_scrolled()
     }
 
+    /// Primary-screen origin, including evicted rows, even while alternate screen is active.
+    pub fn primary_screen_origin(&self) -> usize {
+        self.term.primary_total_scrolled()
+    }
+
     /// Number of primary-screen scrollback lines, regardless of the active screen.
     pub fn primary_scrollback_count(&self) -> usize {
         self.term.primary_history_size()
