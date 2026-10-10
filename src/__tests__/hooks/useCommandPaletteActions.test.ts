@@ -1,4 +1,6 @@
-import { createRoot } from "solid-js";
+import { render } from "@solidjs/testing-library";
+import { ToastList } from "../../components/ToastContainer/ToastList";
+import { createComponent, createRoot } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { mockContextActions, mockGetActionEntries, mockPluginStore, mockPrompt, mockRepositories, mockTerminals } =
@@ -53,7 +55,6 @@ vi.mock("../../invoke", () => ({
 	invoke: vi.fn().mockResolvedValue(undefined),
 	listen: vi.fn().mockResolvedValue(vi.fn()),
 }));
-vi.mock("../../stores/toasts", () => ({ toastsStore: { add: vi.fn() } }));
 vi.mock("../../stores/updater", () => ({ updaterStore: { checkForUpdate: vi.fn().mockResolvedValue(undefined) } }));
 
 import { useCommandPaletteActions } from "../../hooks/useCommandPaletteActions";
@@ -65,6 +66,8 @@ describe("useCommandPaletteActions", () => {
 	let dispose: (() => void) | undefined;
 
 	beforeEach(() => {
+		vi.useFakeTimers();
+		for (const toast of [...toastsStore.toasts]) toastsStore.remove(toast.id);
 		// A fresh array per call, as in production: the hook appends to it on every recompute.
 		mockGetActionEntries.mockImplementation(() => [
 			{ id: "static", label: "Static", category: "Test", keybinding: "", execute: vi.fn() },
@@ -79,6 +82,7 @@ describe("useCommandPaletteActions", () => {
 		mockTerminals.get.mockReturnValue({ sessionId: "session-1", agentType: "claude" });
 		mockTerminals.findTerminalWithSession.mockReturnValue({ sessionId: "session-1", agentType: "claude" });
 		vi.clearAllMocks();
+		vi.spyOn(toastsStore, "add");
 	});
 
 	const renderActions = () => {
@@ -158,6 +162,7 @@ describe("useCommandPaletteActions", () => {
 	});
 
 	it("explains the browser host after starting design mode from the palette", async () => {
+		const notice = render(() => createComponent(ToastList, { onDismiss: () => {}, repoName: () => null }));
 		const tauri = vi.spyOn(transport, "isTauri").mockReturnValue(false);
 		let actions: ReturnType<typeof useCommandPaletteActions> | undefined;
 		createRoot((rootDispose) => {
@@ -173,13 +178,17 @@ describe("useCommandPaletteActions", () => {
 			.find((entry) => entry.id === "start-design-mode")
 			?.execute();
 		await Promise.resolve();
-		expect(toastsStore.add).toHaveBeenCalledWith("Design Mode", "Browser opened on the host machine.", "info");
+		expect(notice.getByText("Browser opened on the host machine.")).toBeVisible();
+		expect(notice.getByText("Design Mode")).toBeVisible();
 		tauri.mockRestore();
 	});
 
-	afterEach(() => {
+	afterEach(async () => {
+		for (const toast of [...toastsStore.toasts]) toastsStore.remove(toast.id);
 		dispose?.();
 		dispose = undefined;
+		await vi.runOnlyPendingTimersAsync();
+		vi.useRealTimers();
 	});
 
 	it("combines static, repository, plugin, worktree, prompt, and registered actions", () => {

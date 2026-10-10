@@ -168,62 +168,6 @@ pub(crate) async fn discover(state: &crate::AppState, repo: &Path) -> Result<Val
     )
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    // Catches: confusing two live servers, stale listeners, nested roots and path-like substrings.
-    #[test]
-    fn recorded_mac_listeners_use_deepest_cwd_and_require_a_live_owner() {
-        let listing = include_str!("fixtures/mac-listeners.txt");
-        let cwds = include_str!("fixtures/mac-cwds.txt");
-        let parent = PathBuf::from(
-            "/Users/stefano.straus/Gits/personal/tuicommander__wt/feat-design-mode-v2-1672/.tmp/design-v2/discovery",
-        );
-        let roots = vec![parent.clone(), parent.join("app")];
-        let found = candidates(listing, cwds, &roots);
-        assert_eq!(found.len(), 2);
-        assert_eq!(found[0]["url"], "http://localhost:19342/");
-        assert_eq!(found[1]["worktreePath"], json!(roots[1]));
-        assert!(
-            candidates(listing, "", &roots).is_empty(),
-            "dead/unattributed listener cannot become a URL"
-        );
-        assert!(
-            candidates(
-                listing,
-                &cwds.replace("/discovery", "/discovery-other"),
-                &roots
-            )
-            .is_empty(),
-            "path substring is not ownership"
-        );
-    }
-    // Catches: another worktree disappearing, and command-line path substrings claiming ownership.
-    #[test]
-    fn recorded_vite_processes_distinguish_worktrees_and_command_path_boundaries() {
-        let root = PathBuf::from("/Users/stefano.straus/Gits/personal/tuicommander__wt");
-        let roots = vec![
-            root.join("feat-design-mode-v2-1672"),
-            root.join("fix-1369-answers-history"),
-        ];
-        let found = candidates(
-            include_str!("fixtures/mac-worktrees-listeners.txt"),
-            include_str!("fixtures/mac-worktrees-cwds.txt"),
-            &roots,
-        );
-        assert_eq!(found.len(), 2);
-        let commands = include_str!("fixtures/mac-worktrees-commands.txt");
-        assert_eq!(
-            command_owners(commands, &roots).len(),
-            1,
-            "only the absolute Vite argv path is usable as a fallback"
-        );
-        assert!(
-            command_owners(
-                &commands.replace("feat-design-mode-v2-1672", "feat-design-mode-v2-1672-other"),
-                &roots
-            )
-            .is_empty()
-        );
-    }
-}
+#[cfg(all(test, unix))]
+#[path = "discovery_tests.rs"]
+pub(super) mod tests;

@@ -52,16 +52,69 @@ fn validated(text: &str, live: &[Value]) -> Vec<Value> {
         Some(json!({"url":text,"source":"fresh PTY","pid":listener["pid"],"worktreePath":listener["worktreePath"]}))
     }).collect()
 }
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
+    use super::super::discovery::tests::{Server, offered, repository};
     use super::*;
-    // Catches: a printed stale or foreign URL becoming an actionable server.
-    #[test]
-    fn pty_urls_require_a_current_owned_listener_on_the_same_port() {
-        let live = vec![json!({"url":"http://localhost:19340/","source":"listener","pid":83008})];
-        let hints = validated(include_str!("fixtures/mac-vite-output.txt"), &live);
+    use std::sync::{Arc, atomic::AtomicU64};
+    // Catches: discovery offering stale, foreign-host, or unowned PTY advertisements.
+    #[tokio::test]
+    async fn pty_urls_require_a_current_owned_listener_on_the_same_port() {
+        let repo = repository();
+        let server = Server::start(repo.path(), None);
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let sid = "design-advertiser";
+        crate::test_support::insert_recording_session(&state, sid);
+        state.session_maps.sessions.get(sid).unwrap().lock().cwd =
+            Some(repo.path().to_string_lossy().into_owned());
+        let mut buffer = crate::OutputRingBuffer::new(8192);
+        buffer.write(format!("http://127.0.0.1:{}/preview http://localhost:1/stale https://other.invalid:{}/ http://localhost.evil.invalid:{}/", server.port, server.port, server.port).as_bytes());
+        state
+            .session_maps
+            .output_buffers
+            .insert(sid.into(), parking_lot::Mutex::new(buffer));
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        state
+            .session_maps
+            .last_output_ms
+            .insert(sid.into(), AtomicU64::new(now));
+        let found = offered(state.clone(), repo.path()).await;
+        let hints: Vec<_> = found
+            .iter()
+            .filter(|row| row["source"] == "fresh PTY")
+            .collect();
         assert_eq!(hints.len(), 1);
-        assert_eq!(hints[0]["url"], "http://127.0.0.1:19340/");
-        assert!(validated("https://other.invalid:19340/ http://localhost.evil.invalid:19340/ http://localhost:9999/",&live).is_empty());
+        assert_eq!(
+            hints[0]["url"],
+            format!("http://127.0.0.1:{}/preview", server.port)
+        );
+        state
+            .session_maps
+            .last_output_ms
+            .get(sid)
+            .unwrap()
+            .store(0, Ordering::Relaxed);
+        assert!(
+            !offered(state.clone(), repo.path())
+                .await
+                .iter()
+                .any(|row| row["source"] == "fresh PTY")
+        );
+        state
+            .session_maps
+            .last_output_ms
+            .get(sid)
+            .unwrap()
+            .store(now, Ordering::Relaxed);
+        drop(server);
+        assert!(
+            !offered(state, repo.path())
+                .await
+                .iter()
+                .any(|row| row["source"] == "fresh PTY")
+        );
     }
 }

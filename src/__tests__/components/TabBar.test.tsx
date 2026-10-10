@@ -47,6 +47,7 @@ vi.mock("@tauri-apps/plugin-opener", () => ({
 }));
 
 import type { ContextMenuItem } from "../../components/ContextMenu/ContextMenu";
+import { ToastList } from "../../components/ToastContainer/ToastList";
 import { TabBar } from "../../components/TabBar/TabBar";
 import { invoke, listen } from "../../invoke";
 import { diffTabsStore } from "../../stores/diffTabs";
@@ -1647,9 +1648,10 @@ describe("TabBar", () => {
 		});
 
 		it("explains that browser design mode opens Chrome on the host", async () => {
+			for (const toast of [...toastsStore.toasts]) toastsStore.remove(toast.id);
 			const tauri = vi.spyOn(transport, "isTauri").mockReturnValue(false);
 			const id = agentTab("agent-session", "claude");
-			const addToast = vi.spyOn(toastsStore, "add");
+			const notice = render(() => <ToastList onDismiss={() => {}} repoName={() => null} />);
 			const { container } = renderBar();
 			fireEvent.contextMenu(container.querySelector(`[data-tab-id="${id}"]`)!);
 			const item = Array.from(container.querySelectorAll(".menu .item")).find((node) =>
@@ -1657,8 +1659,8 @@ describe("TabBar", () => {
 			);
 			fireEvent.click(item!);
 			await Promise.resolve();
-			expect(addToast).toHaveBeenCalledWith("Design Mode", "Browser opened on the host machine.", "info");
-			addToast.mockRestore();
+			expect(notice.getByText("Browser opened on the host machine.")).toBeVisible();
+			expect(notice.getByText("Design Mode")).toBeVisible();
 			tauri.mockRestore();
 		});
 	});
