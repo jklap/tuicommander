@@ -83,8 +83,7 @@ fn run(
     is_error: bool,
 ) -> (Output, Vec<Seen>, Duration) {
     let path = tuic_test_support::short_socket_path(&format!(
-        "tuic-drop-{}-{}.sock",
-        std::process::id(),
+        "d{}.sock",
         NEXT_SOCKET.fetch_add(1, Ordering::Relaxed)
     ));
     let listener = UnixListener::bind(&path).unwrap();

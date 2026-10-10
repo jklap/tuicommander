@@ -111,10 +111,7 @@ fn trailing_slash_on_tmpdir_is_dropped() {
 }
 
 fn checkout_hash() -> String {
-    tuic_test_support::socket_dir_name()
-        .strip_prefix("tuic-s")
-        .unwrap()
-        .to_owned()
+    tuic_test_support::checkout_hash()
 }
 
 // Catches: the bare `cargo test` default drifting from the one the shell entry
