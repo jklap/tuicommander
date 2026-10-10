@@ -56,9 +56,6 @@ async fn test_account(id: String, state: &AppState) -> Result<AccountView, Strin
 }
 
 fn remove_account(id: &str, state: &AppState) -> Result<(), String> {
-    if id == crate::github_account::GitHubAccount::GITHUB_COM_ID {
-        return Err("The github.com default cannot be removed; use clear_secret to log out".into());
-    }
     let record = store::snapshot()?.accounts.remove(id);
     if record
         .as_ref()
