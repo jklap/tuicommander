@@ -4959,3 +4959,8 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] Design Mode v2 pilot: after Boss rebuilds/restarts TUIC, load the unpacked extension into its dedicated Edge profile; verify toolbar opening, activeTab capture and sidebar return after switching tabs. Rust does not hot-reload. CFT sidebar and trusted top/frame picks were verified in story 1672.
 
 - [ ] After the next Rust rebuild/restart, verify Design Mode sends a captured crop as a readable image and lets retained feedback reach a replacement after its original recipient exits (#1672-cd3d). Rust does not hot-reload.
+
+### Jira provider B9 — after account HTTP integration
+
+- [ ] After A1/A3c account HTTP wiring lands, restart the test build when ready and load the Jira plugin. Verify two site accounts register independently, unload removes both providers, a Jira browse URL resolves to the right account, and Start work opens the core draft flow. Current checkpoint has a tested injected-fetch activation seam; default plugin activation intentionally awaits the real host integration.
+- [ ] Once a Jira Cloud site exists, replace the unrecorded fixtures and perform the live checks in `plugins/jira/README.md`. Confirm search/comment pagination, creation metadata across issue types, per-card board transition IDs, ADF write/read, and Retry-After behavior.
