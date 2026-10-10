@@ -14,10 +14,8 @@ async fn two_commented_picks_reach_a_test_agent_pty() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap();
-    let scratch = tempfile::Builder::new()
-        .prefix("dm2-")
-        .tempdir_in(crate::test_support::short_socket_test_temp_root())
-        .unwrap();
+    // Private per-test socket dir: "s" and "ready" stay within its name budget.
+    let scratch = crate::test_support::short_socket_tempdir();
     let socket = scratch.path().join("s");
     let state = Arc::new(crate::state::tests_support::make_test_app_state());
     *state.bound_socket_path.write() = socket.clone();
