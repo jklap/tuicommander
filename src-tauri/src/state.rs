@@ -6584,9 +6584,10 @@ pub(crate) mod tests_support {
     pub fn create_temp_git_repo() -> tempfile::TempDir {
         let dir = tempfile::tempdir().expect("create temp dir");
         let path = dir.path();
+        // Panics unless `path` became its own repository: a failed init must
+        // not leave the commands below to run in an enclosing one.
+        tuic_git::test_fixtures::init_fixture_repo(path);
         for args in [
-            // No git template: no hooks/*.sample copies (see src-tauri/AGENTS.md).
-            vec!["init", "--template="],
             vec!["config", "user.email", "test@test.com"],
             vec!["config", "user.name", "Test"],
         ] {
