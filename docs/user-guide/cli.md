@@ -199,7 +199,7 @@ time beyond the retry waiting period. The command works
 on macOS, Linux, and Windows.
 
 ```bash
-tuic bg "$HOME/Gits/.tmp/build.log" -- make check
+tuic bg "$TMPDIR/build.log" -- make check
 ```
 
 The detached command does not inherit `TUIC_SESSION` or `TUIC_PARENT`. It is

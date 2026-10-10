@@ -5854,6 +5854,23 @@ copies up to four ignored directories at once, reports progress, and gives
   confirm the feature is actually useful for real troubleshooting, not just self-consistent in
   tests.
 
+## Test scratch without `~/Gits` (gits-dir-cleanup, 2026-10-09) — no app restart needed
+
+Unit and shell tests cover the resolvers; these need a real, unsandboxed run.
+
+- [ ] **Full gate inside the agent sandbox.** `./scripts/check-gate.sh` from a sandboxed agent
+  session (no write access to `~/Gits`) gets past `test-shell` and the `tuic-cli` socket tests no
+  longer fail with EACCES. Afterwards nothing new exists under `~/Gits/.tmp` or
+  `<checkout>/.tmp/tuic-tests`, and `/tmp/tuic-s*` directories are mode 0700.
+- [ ] **Exec-scan timing on macOS.** Time `make check` twice with the new default
+  (`$TMPDIR/tuic-tests`) and twice with `TUIC_TEST_TMP_BASE=<checkout>/.tmp/tuic-tests`, outside
+  the sandbox, on a quiet machine. If the default is noticeably slower or a first-exec timing test
+  flakes, record the numbers in `src-tauri/AGENTS.md`'s exec-scan bullet and consider
+  `TUIC_TEST_TMP_BASE=/tmp/tuic-tests-$(id -u)` as the macOS default.
+- [ ] **Remote fixture client.** `scripts/run-remote-fixture.sh <test-support tuic-remote>` prints
+  `Fixture TMPDIR: …`; a separate shell with that `TMPDIR` exported reaches the fixture with
+  `tuic ls`.
+
 ## Dropped-items actions batch 2 (dropped-items-review #16/#22/#23/#31/#41-#44, #21 fix, 2026-10-09) — Rust restart required
 
 Unit/integration tests cover the logic; these need a running app (isolated `make dev`) and real agents.
