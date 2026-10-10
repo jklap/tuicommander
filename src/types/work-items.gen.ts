@@ -178,7 +178,7 @@ export type WorkItemActionResult =
 export interface WorkItemBoardColumn {
 	id: string;
 	name: string;
-	action: WorkItemAction;
+	action: WorkItemAction | null;
 }
 
 export interface WorkItemBoard {

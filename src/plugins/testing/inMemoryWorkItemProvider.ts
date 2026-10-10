@@ -180,9 +180,11 @@ export function createInMemoryWorkItemProvider(seed: WorkItemProviderSnapshot = 
 					cards: result.items
 						.filter((item) => {
 							const value = item.fields[board.fieldId];
-							return column.action.kind === "edit_field"
-								? column.action.value.value !== null && matches(value, column.action.value.value)
-								: column.action.kind === "transition" && item.state.id === column.action.value;
+							const action = column.action;
+							if (!action) return false;
+							return action.kind === "edit_field"
+								? action.value.value !== null && matches(value, action.value.value)
+								: action.kind === "transition" && item.state.id === action.value;
 						})
 						.map((item) => ({
 							item,
@@ -190,6 +192,7 @@ export function createInMemoryWorkItemProvider(seed: WorkItemProviderSnapshot = 
 								.filter((target) => {
 									const d = detail(item.reference);
 									const action = target.action;
+									if (!action) return false;
 									if (action.kind === "transition")
 										return d.actions.some((a) => a.kind === "transition" && a.id === action.value && a.enabled);
 									if (action.kind !== "edit_field") return false;
@@ -202,7 +205,9 @@ export function createInMemoryWorkItemProvider(seed: WorkItemProviderSnapshot = 
 										return false;
 									} // Invalid provider target is intentionally not offered as a legal move.
 								})
-								.map((target) => ({ columnId: target.id, action: structuredClone(target.action) })),
+								.flatMap((target) =>
+									target.action ? [{ columnId: target.id, action: structuredClone(target.action) }] : [],
+								),
 						})),
 				})),
 			};

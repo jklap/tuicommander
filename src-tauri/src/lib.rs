@@ -4,7 +4,6 @@
     allow(dead_code, unused_imports, unused_variables)
 )]
 
-pub mod work_items;
 pub mod acp;
 pub(crate) mod acp_chat;
 pub(crate) mod acp_commands;
@@ -22,6 +21,7 @@ pub(crate) mod attachments;
 #[cfg(feature = "desktop")]
 pub(crate) mod audio_enumeration;
 pub(crate) mod prompt_receipt;
+pub mod work_items;
 pub use tuic_core::app_instance;
 pub(crate) mod app_logger;
 pub(crate) mod changelog;
