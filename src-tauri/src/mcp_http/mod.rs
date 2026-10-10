@@ -8562,6 +8562,8 @@ mod tests {
             .unwrap();
         // The linked checkout lives inside the main one; hide it from `git status` so
         // the main checkout is clean and only the removal guard can stop the call.
+        // No git template in tests, so `.git/info/` may not exist yet.
+        std::fs::create_dir_all(repo.path().join(".git/info")).unwrap();
         std::fs::write(repo.path().join(".git/info/exclude"), "caller/\n").unwrap();
         let caller = critic_detached_checkout(repo.path(), "caller");
         let main = repo.path().to_str().unwrap();
@@ -11207,8 +11209,10 @@ mod tests {
     #[tokio::test]
     async fn attachment_upload_does_not_write_into_repository() {
         let repo = create_temp_git_repo();
+        // Fixture repos have no git template, so `info/exclude` may be absent:
+        // compare presence and bytes, which also catches an upload creating it.
         let exclude = repo.path().join(".git/info/exclude");
-        let before = std::fs::read(&exclude).unwrap();
+        let before = std::fs::read(&exclude).ok();
         let state = test_state();
         crate::state::tests_support::insert_dummy_session(&state, "upload-session");
         crate::state::tests_support::set_session_cwd(
@@ -11229,7 +11233,7 @@ mod tests {
             !repo.path().join(".tuic").exists(),
             "uploads must not create repository files"
         );
-        assert_eq!(std::fs::read(&exclude).unwrap(), before);
+        assert_eq!(std::fs::read(&exclude).ok(), before);
         let bytes = axum::body::to_bytes(response.into_body(), 4096)
             .await
             .unwrap();
@@ -11407,8 +11411,10 @@ mod tests {
         let legacy = nested.join(".tuic/attachments/user.txt");
         std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
         std::fs::write(&legacy, b"user bytes").unwrap();
+        // Fixture repos have no git template, so `info/exclude` may be absent:
+        // compare presence and bytes, which also catches an upload creating it.
         let exclude = repo.path().join(".git/info/exclude");
-        let before = std::fs::read(&exclude).unwrap();
+        let before = std::fs::read(&exclude).ok();
         let state = test_state();
         crate::state::tests_support::insert_dummy_session(&state, "nested-upload");
         crate::state::tests_support::set_session_cwd(
@@ -11433,7 +11439,7 @@ mod tests {
         assert_eq!(std::fs::read(path).unwrap(), b"nested bytes");
         crate::pty::cleanup_session("nested-upload", &state, "closed");
         assert_eq!(std::fs::read(legacy).unwrap(), b"user bytes");
-        assert_eq!(std::fs::read(exclude).unwrap(), before);
+        assert_eq!(std::fs::read(exclude).ok(), before);
         assert!(!path.exists());
     }
 

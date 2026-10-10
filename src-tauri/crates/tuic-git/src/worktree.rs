@@ -13524,6 +13524,8 @@ branch refs/heads/feat
         // Git invokes this after locking the deletion ref, before committing it.
         // Run a real fetch here to deterministically order the concurrent writer.
         let hook = repo.join(".git/hooks/reference-transaction");
+        // No git template in tests, so `.git/hooks/` may not exist yet.
+        fs::create_dir_all(hook.parent().unwrap()).unwrap();
         fs::write(
             &hook,
             "#!/bin/sh\n[ \"$1\" = prepared ] || exit 0\nwhile read -r old new ref; do\n  if [ \"$ref\" = refs/heads/remote-contained ]; then\n    git fetch --force origin >/dev/null 2>&1 || exit 1\n  fi\ndone\n",
