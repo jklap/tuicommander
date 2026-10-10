@@ -91,6 +91,9 @@ impl RunStore {
         if let Some(value) = details.reason {
             run.reason = Some(value);
         }
+        if let Some(value) = details.precheck_context {
+            run.precheck_context = Some(value);
+        }
         if let Some(mut value) = details.precheck_outcome {
             if let super::super::precheck::PrecheckOutcome::Executed(result) = &mut value {
                 let stdout = SavedOutput::bounded(&result.stdout);

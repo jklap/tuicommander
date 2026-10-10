@@ -68,6 +68,13 @@ pub struct SavedPrecheck {
     pub stderr: SavedOutput,
 }
 
+/// Ledger fact for the prepared launch prompt; excludes framing and truncation marker.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize)]
+pub struct PrecheckContext {
+    pub injected: bool,
+    pub bytes: u64,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct AutomationRun {
     pub id: String,
@@ -92,6 +99,9 @@ pub struct AutomationRun {
     /// Full pre-dispatch decision, including explicit bypass and absent checks.
     #[serde(default)]
     pub precheck_outcome: Option<super::precheck::PrecheckOutcome>,
+    /// Whether precheck stdout was included in the prepared launch prompt.
+    #[serde(default)]
+    pub precheck_context: Option<PrecheckContext>,
     pub reason: Option<String>,
 }
 
@@ -106,6 +116,7 @@ pub struct RunDetails {
     pub stderr: Option<String>,
     pub precheck: Option<SavedPrecheck>,
     pub precheck_outcome: Option<super::precheck::PrecheckOutcome>,
+    pub precheck_context: Option<PrecheckContext>,
     pub reason: Option<String>,
 }
 

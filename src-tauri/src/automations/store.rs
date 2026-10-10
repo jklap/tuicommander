@@ -229,6 +229,7 @@ fn reserve_in(
         stderr: SavedOutput::default(),
         precheck: None,
         precheck_outcome: None,
+        precheck_context: None,
         reason: None,
     };
     let inserted = conn.execute("INSERT INTO automation_runs(id,automation_id,occurrence_ms,status,created_ms,snapshot_json,finished_ms) VALUES(?1,?2,?3,?6,?4,?5,?7) ON CONFLICT(automation_id,occurrence_ms) WHERE occurrence_ms IS NOT NULL DO NOTHING", params![run.id, definition.id, occurrence, now_ms, encode(&run)?, status(initial_status)?, run.finished_ms]).map_err(error)?;

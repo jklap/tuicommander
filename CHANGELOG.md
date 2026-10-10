@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Add opt-in automation precheck stdout context with a 16 KiB escaped payload cap, untrusted delimiters and durable injection metadata; exclude stderr (#1631-45bf).
+
 - Remove the Design Mode tab badge when inspection stops (#1671-812f).
 
 - Name iPhone Now Playing controls “TUICommander hands-free”; Play/Pause control spoken replies and Stop ends the conversation. Release controls when hands-free ends (#1670-fdc8).

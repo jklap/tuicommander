@@ -865,6 +865,13 @@ use desktop and SSE dual-emission; boot interrupts open runs without retry.
 
 CLI directory opens and MCP `repo action=add` share server-owned repository registration over local IPC. They persist and activate canonical Git or shell directories without an OS URL handler, preserve existing workspace and terminal state on repeated calls, and broadcast configuration changes. MCP `ui tab` rejects `tuic://open-repo` URLs and directs callers to `repo add`.
 
+Automation precheck context (#1631-45bf): definitions can opt in with
+`precheck.inject_output: true` (default false). Proceeding checks prefix the
+literal prompt with delimited, escaped untrusted stdout capped at 16 KiB;
+truncation is marked and stderr is excluded. Empty output and manual bypasses
+inject nothing. The run ledger records `precheck_context: {injected, bytes}` for
+the prepared launch prompt, counting escaped stdout bytes before framing/marker.
+
 ## Automation Runs View (#1619-b84d)
 
 The Runs tab displays paginated immutable history across definitions, including deleted definitions, and backend 24h/7d elapsed-window summaries. View run focuses only a live terminal owned by the addressed daemon. Absent, suspended or exited sessions display saved bounded output, truncation evidence and recorded workspace details without creating sessions or workspaces. The dialog captures the active repository's daemon owner when opened. Visual verification remains pending because headless Chrome screenshot attempts timed out.

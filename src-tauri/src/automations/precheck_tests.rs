@@ -8,6 +8,7 @@ fn check(command: String) -> Precheck {
     Precheck {
         command,
         timeout_secs: 30,
+        inject_output: false,
     }
 }
 fn executed(outcome: PrecheckOutcome) -> PrecheckResult {
@@ -137,6 +138,7 @@ async fn timeout_preserves_partial_output_and_refuses_dispatch() {
     let precheck = Precheck {
         command: format!("echo before {separator} {}", sleep_script()),
         timeout_secs: 1,
+        inject_output: false,
     };
     let outcome = run_precheck(&test_temp_root(), Some(&precheck), false).await;
     assert!(!outcome.proceeds());
@@ -153,6 +155,7 @@ async fn timeout_terminates_owned_grandchild() {
     let precheck = Precheck {
         command: format!("{} & echo $!; wait", sleep_script()),
         timeout_secs: 1,
+        inject_output: false,
     };
     let result = executed(run_precheck(&test_temp_root(), Some(&precheck), false).await);
     assert_eq!(result.termination, Termination::TimedOut);
@@ -182,6 +185,7 @@ async fn invalid_execution_bounds_refuse_dispatch() {
         Precheck {
             command: "echo ready".into(),
             timeout_secs: 0,
+            inject_output: false,
         },
         check(" ".into()),
     ] {

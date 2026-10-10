@@ -1,5 +1,6 @@
 //! One reserved run becomes a durable precheck decision and at most one launch.
 use super::{
+    context::inject_context,
     definitions::DefinitionStore,
     model::{AutomationDefinition, Workspace},
     precheck::run_precheck,
@@ -124,6 +125,15 @@ impl<E: DispatchEffects> Dispatcher<E> {
         )
         .await;
         let proceed = outcome.proceeds();
+        let (prompt, context) = if proceed {
+            inject_context(
+                &outcome,
+                run.definition.precheck.as_ref(),
+                &run.definition.prompt,
+            )
+        } else {
+            (String::new(), Default::default())
+        };
         let saved = self.runs.transition(
             &run.id,
             if proceed {
@@ -133,6 +143,7 @@ impl<E: DispatchEffects> Dispatcher<E> {
             },
             RunDetails {
                 precheck_outcome: Some(outcome),
+                precheck_context: Some(context),
                 ..Default::default()
             },
             now_ms(),
@@ -152,7 +163,7 @@ impl<E: DispatchEffects> Dispatcher<E> {
                 name: run.definition.name.clone(),
                 run_config: run.definition.run_config.clone(),
                 workspace: path,
-                prompt: run.definition.prompt.clone(),
+                prompt,
             })
             .await?;
         let bound = self.runs.transition(
