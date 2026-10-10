@@ -1,3 +1,7 @@
+## Automation precheck prompt context (1631-45bf) — Rust restart required
+
+- [ ] After Boss restarts `make dev` or installs `make build`, create an isolated Once automation through the API/MCP with `precheck.inject_output: true`. Confirm a successful scheduled precheck prefixes bounded, marked untrusted stdout before the literal prompt and run history reports `precheck_context`. Compare omitted/false flags and Run Now (literal prompt, no context); stderr must not appear. Targeted dispatch tests exercise the real shell, launch-request boundary and reopened ledger. No desktop instance was launched or restarted by this peer.
+
 ## iPhone hands-free Now Playing (1670-fdc8)
 
 - [HUMAN] After landing and reloading the iPhone PWA, arm hands-free and lock the phone. Confirm the title is **TUICommander hands-free**; Pause holds the spoken reply and Play resumes at its position while the microphone stays active. Stop (if iOS exposes it) ends capture and drops queued replies. Also stop from the PWA and confirm controls no longer act on the ended session. Check a reply still uses media volume with the microphone open, then re-arm. Browser boundary tests cover registration, HTTP action routing and cleanup; physical iPhone audio/lock-screen behavior is unverified. No Rust change or backend restart is required.

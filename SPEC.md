@@ -864,3 +864,10 @@ and preserve immutable terminal history with 256 KiB output snapshots. Transitio
 use desktop and SSE dual-emission; boot interrupts open runs without retry.
 
 CLI directory opens and MCP `repo action=add` share server-owned repository registration over local IPC. They persist and activate canonical Git or shell directories without an OS URL handler, preserve existing workspace and terminal state on repeated calls, and broadcast configuration changes. MCP `ui tab` rejects `tuic://open-repo` URLs and directs callers to `repo add`.
+
+Automation precheck context (#1631-45bf): definitions can opt in with
+`precheck.inject_output: true` (default false). Proceeding checks prefix the
+literal prompt with delimited, escaped untrusted stdout capped at 16 KiB;
+truncation is marked and stderr is excluded. Empty output and manual bypasses
+inject nothing. The run ledger records `precheck_context: {injected, bytes}` for
+the prepared launch prompt, counting escaped stdout bytes before framing/marker.

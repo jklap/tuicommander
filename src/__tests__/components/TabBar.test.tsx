@@ -1562,7 +1562,7 @@ describe("TabBar", () => {
 			expect(invoke).toHaveBeenCalledWith("start_design_mode", { sessionId: "second-session" });
 		});
 
-		it("hides design mode on a shell tab and reflects armed and stopped events on the bound tab", async () => {
+		it("removes the Design Mode badge when the bound session stops (regression: stopped badge remains)", async () => {
 			const shell = agentTab("shell-session", null);
 			const agent = agentTab("agent-session", "claude");
 			const { container } = renderBar();
@@ -1572,7 +1572,10 @@ describe("TabBar", () => {
 			const eventHandler = vi.mocked(listen).mock.calls.find(([name]) => name === "design-mode-changed")?.[1];
 			expect(eventHandler).toBeDefined();
 			eventHandler?.({ payload: { repo_path: "/repo", session_id: "agent-session", status: "armed" } });
-			expect(container.querySelector(`[data-tab-id="${agent}"] .designModeBadge`)).not.toBeNull();
+			expect(container.querySelector(`[data-tab-id="${agent}"] .designModeBadge`)?.textContent).toBe("D");
+			expect(container.querySelector(`[data-tab-id="${agent}"] .designModeBadge`)?.getAttribute("title")).toBe(
+				"Design Mode armed",
+			);
 			expect(container.querySelector(`[data-tab-id="${shell}"] .designModeBadge`)).toBeNull();
 			fireEvent.contextMenu(container.querySelector(`[data-tab-id="${agent}"]`)!);
 			const stopItem = Array.from(container.querySelectorAll(".menu .item")).find((node) =>
@@ -1582,9 +1585,7 @@ describe("TabBar", () => {
 			fireEvent.click(stopItem!);
 			expect(invoke).toHaveBeenCalledWith("stop_design_mode", { repoPath: "/repo" });
 			eventHandler?.({ payload: { repo_path: "/repo", session_id: "agent-session", status: "stopped" } });
-			expect(container.querySelector(`[data-tab-id="${agent}"] .designModeBadge`)?.getAttribute("title")).toBe(
-				"Design Mode stopped",
-			);
+			expect(container.querySelector(`[data-tab-id="${agent}"] .designModeBadge`)).toBeNull();
 		});
 
 		it("restores design mode status after a webview reload", async () => {
@@ -1623,9 +1624,7 @@ describe("TabBar", () => {
 			eventHandler?.({ payload: { repo_path: "/repo", session_id: "agent-session", status: "stopped" } });
 			resolveSnapshot([{ repoPath: "/repo", sessionId: "agent-session", status: "armed" }]);
 			await Promise.resolve();
-			expect(container.querySelector(`[data-tab-id="${id}"] .designModeBadge`)?.getAttribute("title")).toBe(
-				"Design Mode stopped",
-			);
+			expect(container.querySelector(`[data-tab-id="${id}"] .designModeBadge`)).toBeNull();
 		});
 
 		it("shows the backend message when starting design mode fails", async () => {

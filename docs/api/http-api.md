@@ -2987,3 +2987,10 @@ then applies the shared Rust repository recipient rule. `hello` checks `/health`
 against the process identity recorded at install. Other v2 operations use the
 extension route. An older running backend returns a visible HTTP 404 plus the
 exact endpoint and a restart instruction; the host does not guess another socket.
+
+Automation precheck context (#1631-45bf): definitions can opt in with
+`precheck.inject_output: true` (default false). Proceeding checks prefix the
+literal prompt with delimited, escaped untrusted stdout capped at 16 KiB;
+truncation is marked and stderr is excluded. Empty output and manual bypasses
+inject nothing. The run ledger records `precheck_context: {injected, bytes}` for
+the prepared launch prompt, counting escaped stdout bytes before framing/marker.

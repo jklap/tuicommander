@@ -168,11 +168,6 @@
   border: 1px solid var(--success);
 }
 
-.designModeStopped {
-  color: var(--fg-primary);
-  border: 1px solid var(--fg-primary);
-}
-
 .tabName {
   font-size: var(--font-md);
   color: var(--fg-secondary);

@@ -169,3 +169,39 @@ fn mcp_automation_tool_is_discoverable_with_all_definition_actions() {
         ])
     );
 }
+
+// Catches: the MCP definition path rejecting the new opt-in or dropping it
+// across create/update/get while shared HTTP/IPC definitions accept it.
+#[test]
+fn mcp_precheck_context_opt_in_round_trips_and_can_be_disabled() {
+    let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let store = super::definitions::DefinitionStore::at_path(dir.path().join("automations.json"));
+    let mut value = definition("context");
+    value["precheck"] =
+        json!({"command":"git status --short","timeout_secs":30,"inject_output":true});
+    assert_eq!(
+        super::mcp::execute(
+            &store,
+            json!({"action":"create","definition":value}),
+            Some("creator")
+        ),
+        json!({"ok":true})
+    );
+    let saved = super::mcp::execute(&store, json!({"action":"get","id":"context"}), None);
+    assert_eq!(saved["precheck"]["inject_output"], true);
+    let mut update = saved;
+    update["precheck"]
+        .as_object_mut()
+        .unwrap()
+        .remove("inject_output");
+    assert_eq!(
+        super::mcp::execute(
+            &store,
+            json!({"action":"update","id":"context","definition":update}),
+            None
+        ),
+        json!({"ok":true})
+    );
+    let saved = super::mcp::execute(&store, json!({"action":"get","id":"context"}), None);
+    assert_eq!(saved["precheck"]["inject_output"], false);
+}
