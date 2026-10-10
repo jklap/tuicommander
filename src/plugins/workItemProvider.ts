@@ -3,9 +3,11 @@ import type {
 	WorkItemAction,
 	WorkItemActionResult,
 	WorkItemBoard,
+	WorkItemBoardPage,
 	WorkItemCommentPage,
 	WorkItemDetail,
 	WorkItemFieldSchema,
+	WorkItemGroupedPage,
 	WorkItemPage,
 	WorkItemQuery,
 	WorkItemRef,
@@ -19,6 +21,9 @@ export interface WorkItemProvider {
 	readonly fields: readonly WorkItemFieldSchema[];
 	readonly savedFilters: readonly WorkItemSavedFilter[];
 	readonly boards: readonly WorkItemBoard[];
+	createFields(itemType?: string, signal?: AbortSignal): Promise<WorkItemFieldSchema[]>;
+	board(id: string, query: WorkItemQuery, signal?: AbortSignal): Promise<WorkItemBoardPage>;
+	grouped(query: WorkItemQuery, signal?: AbortSignal): Promise<WorkItemGroupedPage>;
 	list(query: WorkItemQuery, signal?: AbortSignal): Promise<WorkItemPage>;
 	detail(reference: WorkItemRef, signal?: AbortSignal): Promise<WorkItemDetail>;
 	comments(

@@ -11,6 +11,7 @@ pub struct WorkItemQuery {
     /// Provider-native query syntax is passed through, not interpreted by core.
     pub search: String,
     pub sort: Option<WorkItemSort>,
+    pub group_by: Option<String>,
     pub cursor: Option<String>,
     pub limit: u32,
 }
@@ -120,7 +121,12 @@ pub enum WorkItemDelivery {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-#[serde(tag = "kind", content = "value", rename_all = "snake_case", deny_unknown_fields)]
+#[serde(
+    tag = "kind",
+    content = "value",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum WorkItemAction {
     Create(WorkItemCreate),
     EditField(WorkItemEdit),
@@ -131,7 +137,12 @@ pub enum WorkItemAction {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-#[serde(tag = "kind", content = "value", rename_all = "snake_case", deny_unknown_fields)]
+#[serde(
+    tag = "kind",
+    content = "value",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum WorkItemActionResult {
     Item(WorkItemDetail),
     /// Host executes this via the existing worktree/agent workflow; providers do not.
@@ -154,4 +165,53 @@ pub struct WorkItemBoard {
     pub name: String,
     pub field_id: String,
     pub columns: Vec<WorkItemBoardColumn>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkItemBoardCard {
+    pub item: WorkItem,
+    pub allowed_column_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkItemBoardLane {
+    pub column_id: String,
+    pub cards: Vec<WorkItemBoardCard>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkItemBoardPage {
+    pub board: WorkItemBoard,
+    pub lanes: Vec<WorkItemBoardLane>,
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkItemProviderSnapshot {
+    pub provider_id: String,
+    pub account_id: String,
+    pub name: String,
+    pub fields: Vec<WorkItemFieldSchema>,
+    pub saved_filters: Vec<WorkItemSavedFilter>,
+    pub boards: Vec<WorkItemBoard>,
+    pub items: Vec<WorkItemDetail>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkItemGroup {
+    pub id: String,
+    pub name: String,
+    pub items: Vec<WorkItem>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkItemGroupedPage {
+    pub groups: Vec<WorkItemGroup>,
+    pub next_cursor: Option<String>,
 }
