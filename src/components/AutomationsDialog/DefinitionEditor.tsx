@@ -116,35 +116,57 @@ export function DefinitionEditor(props: { store: AutomationsStore }) {
 								type="checkbox"
 								checked={draft().precheck !== null}
 								onChange={(event) =>
-									store.edit({ precheck: event.currentTarget.checked ? { command: "", timeout_secs: 30 } : null })
+									store.edit({
+										precheck: event.currentTarget.checked
+											? { command: "", timeout_secs: 30, inject_output: false }
+											: null,
+									})
 								}
 							/>
 							{t("automations.enablePrecheck", "Run a shell precheck before scheduled runs")}
 						</label>
 						<Show when={draft().precheck}>
 							{(precheck) => (
-								<div class={s.row}>
-									<label>
-										{t("automations.precheckCommand", "Precheck command")}
+								<>
+									<div class={s.row}>
+										<label>
+											{t("automations.precheckCommand", "Precheck command")}
+											<input
+												value={precheck().command}
+												onInput={(event) =>
+													store.edit({ precheck: { ...precheck(), command: event.currentTarget.value } })
+												}
+											/>
+										</label>
+										<label>
+											{t("automations.precheckTimeout", "Precheck timeout (seconds)")}
+											<input
+												type="number"
+												min="1"
+												value={precheck().timeout_secs}
+												onInput={(event) =>
+													store.edit({ precheck: { ...precheck(), timeout_secs: event.currentTarget.valueAsNumber } })
+												}
+											/>
+										</label>
+									</div>
+									<label class={s.check}>
 										<input
-											value={precheck().command}
-											onInput={(event) =>
-												store.edit({ precheck: { ...precheck(), command: event.currentTarget.value } })
+											type="checkbox"
+											checked={precheck().inject_output ?? false}
+											onChange={(event) =>
+												store.edit({ precheck: { ...precheck(), inject_output: event.currentTarget.checked } })
 											}
 										/>
+										{t("automations.injectPrecheckOutput", "Include precheck stdout in the agent prompt")}
 									</label>
-									<label>
-										{t("automations.precheckTimeout", "Precheck timeout (seconds)")}
-										<input
-											type="number"
-											min="1"
-											value={precheck().timeout_secs}
-											onInput={(event) =>
-												store.edit({ precheck: { ...precheck(), timeout_secs: event.currentTarget.valueAsNumber } })
-											}
-										/>
-									</label>
-								</div>
+									<p class={s.hint}>
+										{t(
+											"automations.precheckContextHint",
+											"Off by default. Adds up to 16 KiB of escaped stdout as delimited data before your unchanged prompt. Truncation is marked; stderr is excluded. Run now bypasses precheck.",
+										)}
+									</p>
+								</>
 							)}
 						</Show>
 						<p class={s.hint}>

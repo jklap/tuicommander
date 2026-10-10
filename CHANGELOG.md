@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Notify once when an automation needs input or fails, with saved run and owning-session navigation; retain durable per-channel delivery claims (#1620-82ae).
 - Add the Design Mode v2 unpacked-extension pilot: one-shot picks, per-pick comments, same-repository recipients, queued feedback, native messaging and dev-server discovery (#1672-cd3d).
+- Expose the existing precheck stdout context opt-in in the Automations editor, off by default and saved per definition (#1624-c5f5).
 - Add opt-in automation precheck stdout context with a 16 KiB escaped payload cap, untrusted delimiters and durable injection metadata; exclude stderr (#1631-45bf).
 
 - Remove the Design Mode tab badge when inspection stops (#1671-812f).

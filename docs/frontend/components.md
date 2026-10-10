@@ -697,3 +697,7 @@ only provisional command-envelope boundary; tests inject `AutomationAdapter`.
 No schedules or launch decisions are calculated in TypeScript.
 
 `RunsView` in the Automations dialog renders all-history pages and backend 24h/7d summaries. `RunOutput` renders saved stdout/stderr and immutable workspace details. View run only focuses a live terminal with matching daemon ownership; unavailable sessions never launch a replacement.
+
+The Precheck section includes a default-off stdout context checkbox. It edits
+`precheck.inject_output` through the existing store and shared save API, without
+changing prompt text. Disabling and re-enabling the precheck resets the flag.
