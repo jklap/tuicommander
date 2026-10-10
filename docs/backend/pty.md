@@ -10,6 +10,18 @@ from terminal names or working directories.
 
 Manages pseudo-terminal sessions for all terminal tabs in the application.
 
+## Identity loss during replacement
+
+A restored tab reuses its saved `tuicSession`. If reconnect falls back to a
+fresh PTY while the original remains alive, `bind_pty_identity` assigns that
+identity to the replacement. Closing the replacement removes the sole binding;
+the original process still carries `TUIC_SESSION`, but its session row has none.
+The next MCP attachment repairs this association from the surviving process.
+`replacement_pty_cleanup_reconnect_restores_surviving_parent_identity` reproduces
+this lifecycle through spawn binding, cleanup, reconnect and session publication.
+It fails on the pre-repair revision `1137eeb6f`. This proves a reachable removal
+path, not that this sequence caused the historical incident in story 1673.
+
 ## Session Lifecycle
 
 ```
