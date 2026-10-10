@@ -40,8 +40,10 @@ Authority (do not reopen): the work-item providers analysis in `ideas/` (main ch
 - Stories live in the main checkout store (git-ignored, like settings-MCP 1675/1676).
 
 - A1 (account manager, agent `wi-a1-accounts`) and A4 (Tasks data contract + fake provider, agent `wi-a4-contract`) are already running and own their stories (`plan_step` "Phase A1" / "Phase A4"). They publish their interfaces by mail.
+- Interfaces received 2026-10-10: A1 = `accounts::Account {id,provider,host,kind,label,login,created_at}`, `AccountView` with secret `{status:set|unset|unavailable}`, tagged `AccountAction` list/add/test/remove via IPC `account_action` and `POST /accounts/action`, generic `ProviderDescriptor` + registration API, GitHub registered in core. A4 = Rust `work_items::{model,protocol}` (checkpoint `066a97093`), generated `src/types/work-items.gen.ts`; `WorkItemRef {providerId,accountId,id}`; 8 field kinds; `WorkItemQuery` / page `{items,nextCursor}`; `WorkItemDetail` with tagged comments (normal, review_thread, review_summary); actions create/edit_field/transition/comment/start_work; start_work returns a host intent, never runs a PTY.
+- Boundaries set by the coordinator: the native secret-entry UI is A2 (A2c); plugin-manifest provider declarations and `httpFetch({account})` injection are A3 (A3c).
 - Every Phase B stream starts **now** against the A4 contract and the A4 fake provider. It does not wait for A1-A3.
-- Provider plugins (B8-B10) code against an injected `fetch` port, tested with recorded fixtures. Wiring to `host.httpFetch({account})` is the last task of each plugin story and needs A1 merged.
+- Provider plugins (B8-B10) code against an injected `fetch` port, tested with recorded fixtures. Wiring to `host.httpFetch({account})` is the last task of each plugin story and needs A3c merged.
 - A stream that needs an interface not yet merged codes against the mailed signature and rebases when it lands. A changed contract is mailed by A4 to all streams.
 
 ```ts
@@ -76,7 +78,7 @@ export const hostFetch = (host: PluginHost, account: AccountRef): Fetch => (r) =
 
 ## First shipped slice (decided)
 
-- **Slice 1 = A1 + A4 + B1 + B2 + B4 + B9 (read path, transitions, board):** account registry with GitHub migration (fixes D1), Jira site accounts, Jira list / detail / status transition / board with drag and drop.
+- **Slice 1 = A1 + A2c + A3c + A4 + B1 + B2 + B4 + B9 (read path, transitions, board):** account registry with GitHub migration (fixes D1), Jira site accounts, Jira list / detail / status transition / board with drag and drop.
 - Why Jira: GitHub already has a PR panel; Jira gives new value for WORK, and decision "board in the first slice" maps to Jira transitions. Gate: Open Question 2 (Jira Cloud site). If the site is absent when B9 needs it, slice 1 ships with B8 (GitHub) instead; the core steps do not change.
 - Feature flag: none. The Tasks tab appears only when a provider plugin is installed, so an unfinished stream ships nothing visible.
 
@@ -106,6 +108,13 @@ export const SettingList: Component<{ label: string; rows: Row[]; columns: Col[]
 - **RED:** `unloaded_plugin_tab_disappears` — catches: stale tab writing to a dead plugin. `plugin_tab_is_searchable` — catches: search index built only from static tabs. `plugin_tab_write_goes_through_settings_service` — catches: a second settings path.
 - **Validation:** targeted vitest; Playwright screenshot on rb (Integrations group with a fixture plugin tab).
 
+### Phase A2c: Secret-entry native window with vault sink (M) — story 1696-c6d4
+- **Owns:** `src-tauri/src/secrets/account_sink.rs` (new), the call from the Accounts UI, tests. Serialize with 1520-46b1 on `src-tauri/src/secrets/*`.
+- **Implement:** the `secrets/forms` pattern (window-label check, nonce, no devtools) with a sink into the A1 add/rotate action; GitHub PAT entry moves here. Settings shows presence only.
+- **Depends on:** A1 interface.
+- **RED:** `account_secret_never_crosses_ipc_to_webview` — catches: token in an IPC/HTTP response. `secret_form_rejects_foreign_window_label` — catches: any webview writing the vault. `cancelled_form_writes_nothing` — catches: account with an empty secret.
+- **Validation:** targeted nextest via `build-slot.sh`; `to-test.md` (native window).
+
 ### Phase A3a: Start work and URL paste (M) — rows 13, 14 — story 1684-6f88
 - **Owns:** `src/hooks/git/startWork.ts` (new, extracted from `handleAutofixIssue`), `createWorktreeWorkflowCoordinator.ts` (call site), `src/components/CommandPalette/urlPaste.ts` (new), `PluginHost.startWork` + `registerUrlResolver` in `types.ts`/`pluginRegistry.ts`, `plugin_docs.rs` section.
 - **Implement:** `host.startWork({repoPath, branch, baseRef?, prompt, agentType?, delivery:'draft'|'submit', link?})`: worktree + branch, the repo's run config (no hardcoded `claude`), prompt through `sendCommand`, draft by default; `handleAutofixIssue` becomes a caller. Palette: pasted URL → first plugin resolver that claims it → jump to the linked worktree or offer start work.
@@ -122,6 +131,13 @@ await sendCommand(sessionId, untrusted(prompt, 12_000), { submit: opts.delivery 
 - **Constraint:** sidebar branch-row change approved (H5) for the badge only; no other click behavior changes.
 - **RED:** `link_survives_restart` — catches: in-memory link store. `removed_worktree_drops_link` — catches: orphan links. `badge_click_does_not_toggle_branch` — catches: propagation to `branchIconToggle`. `command_table_paths_all_hit_a_registered_route` stays green — catches: IPC/HTTP drift.
 - **Validation:** `cargo nextest run -E 'test(workitem_links)'` via `build-slot.sh`; `pnpm vitest run src/__tests__/transport.test.ts`; Playwright screenshot on rb of a branch row with a badge. Rust change → `to-test.md`.
+
+### Phase A3c: Manifest provider declarations and `httpFetch({account})` (M) — story 1697-4cdc
+- **Owns:** `src-tauri/src/plugins.rs` (manifest `providers`), `src-tauri/src/plugin_http.rs` (account option), `HttpFetchOptions` in `src/plugins/types.ts`, `plugin_docs.rs` section.
+- **Implement:** manifest providers register through the A1 registration API; Rust resolves the account, checks the URL against its host rule, injects the header, re-validates each redirect and drops the header on a cross-host hop; 401 recovery like `resolve_bearer`.
+- **Depends on:** A1 interface.
+- **RED:** `account_header_dropped_on_cross_host_redirect` — catches: token leak. `url_outside_account_host_rule_rejected` — catches: Jira token sent to another host. `plugin_cannot_use_undeclared_provider` — catches: consent bypass. `response_never_contains_authorization` — catches: token echoed to JS.
+- **Validation:** targeted nextest via `build-slot.sh`; `to-test.md`.
 
 ### Phase B1: List view (L) — rows 2, 3 — story 1686-ce77
 - **Owns:** `src/components/Tasks/list/*`, `src/stores/tasksQuery.ts` (new), tests, `plugin_docs.rs` "Tasks list" section.
@@ -195,12 +211,14 @@ const gen = ++generation; const page = await provider.list(query, cursor); if (g
 | A1 (1679-1419), A4 (1680-6b32) | — | running | — |
 | A2a | S-M | now | A1 interface for `SettingAccount` |
 | A2b | M | after A2a | settings-MCP Step 5 |
+| A2c | M | now | A1 interface; serialize with 1520-46b1 |
 | A3a | M | now | A3b signature (mailed) |
+| A3c | M | now | A1 interface |
 | A3b | M | now | A4 `get` for live badge state |
 | B1, B2, B4, B5 | L/L/L/M | now | A4 contract + fake provider |
 | B3 | M | after A2a | A2a, A4 |
 | B6, B7 | L/M | now | none (core GitHub) |
-| B8, B9, B10 | L | now (fixtures) | A1 merged for final `httpFetch({account})` wiring; B8 also B6/B7 for those actions |
+| B8, B9, B10 | L | now (fixtures) | A3c merged for final `httpFetch({account})` wiring; B8 also B6/B7 for those actions |
 
 ## Acceptance Criteria
 
