@@ -2871,6 +2871,16 @@ pub async fn start_server(
     tcp_bound
 }
 
+/// The native host and core sender use the same live repository recipient rule.
+pub(crate) fn design_review_agents(
+    state: &AppState,
+    repo: &std::path::Path,
+) -> Result<Vec<serde_json::Value>, String> {
+    let rows = serde_json::to_value(session::local_session_rows(state))
+        .map_err(|error| error.to_string())?;
+    tuic_ipc::review_agents::review_agents(&rows, repo)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

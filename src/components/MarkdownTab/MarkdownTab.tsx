@@ -1,4 +1,5 @@
 import { type Component, createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
+import { reviewAgents as repositoryReviewAgents } from "../../../browser-extension/design-mode/reviewAgents.js";
 import { usePty } from "../../hooks/usePty";
 import { useRepository } from "../../hooks/useRepository";
 import { t } from "../../i18n";
@@ -524,13 +525,10 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 	const reviewAgents = createMemo(() => {
 		const tab = props.tab;
 		if (tab.type !== "file") return [];
-		return terminalsStore
-			.getIds()
-			.map((id) => terminalsStore.get(id))
-			.filter((terminal): terminal is NonNullable<typeof terminal> =>
-				Boolean(terminal?.sessionId && terminal.agentType && terminal.repoPath === tab.repoPath),
-			)
-			.map((terminal) => ({ sessionId: terminal.sessionId!, label: terminal.name }));
+		return repositoryReviewAgents(
+			terminalsStore.getIds().map((id) => terminalsStore.get(id)),
+			tab.repoPath,
+		);
 	});
 
 	createEffect(() => {

@@ -13,3 +13,6 @@ mod source;
 pub(crate) mod tauri_commands;
 #[cfg(feature = "desktop")]
 pub(crate) use legacy::*;
+#[cfg(all(test, unix))]
+mod demo;
+pub(crate) mod send;

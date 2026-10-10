@@ -44,6 +44,7 @@ pub(crate) async fn message(
     } else {
         match body["action"].as_str() {
             Some("hello") => Ok(json!({"version":"2.0.0"})),
+            Some("send") => super::send::send(state, body.clone()).await,
             Some("pick") => pick_evidence(&body["raw"]).map(Value::String),
             _ => Err("Unknown Design Mode action".into()),
         }
