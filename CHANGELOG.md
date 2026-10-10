@@ -13,6 +13,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Keep mobile session history advancing after the terminal reaches its 10,000-row history cap, so live redraws do not erase already displayed output (#1681-507e).
 
 - Unify MCP automation actions with HTTP/IPC validation and results; add `tuic automations` for definitions, previews, history, summaries and Run Now (#1630-cbfa, #1621-5dce).
+- Add the core Tasks detail component with field editing, rich paged comments, status-action rollback and refresh while visible (#1687-27a3).
+
 - Restore missing live PTY identity bindings on MCP requests so spawned children remain linked to their parent in session lists (#1673-da49).
 
 - Preserve current automation settings when opening an old run notice; show deleted definitions as run details without an editor (#1620-82ae).
