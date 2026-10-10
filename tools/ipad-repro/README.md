@@ -7,7 +7,7 @@ touch injector.
 1. `python3 tools/ipad-repro/mock_backend.py` (fake API on :9891, 6 repos x 8 branches, 120 files)
 2. `pnpm exec vite --config tools/ipad-repro/vite.config.ts` (:5188, type-checker overlay off)
 3. Build once: `xcodebuild build-for-testing -project tools/ipad-repro/xcui/Swipe.xcodeproj -scheme SwipeUITests -destination 'platform=iOS Simulator,id=<udid>' -derivedDataPath <dd>`
-4. `run.sh TAG URL X Y DX DY HOLD STEPS` (paths and the simulator UDID are set at the top of the script; TAPX/TAPY taps first, e.g. to open the Files panel). Screenshots land in `out/`.
+4. `run.sh TAG URL X Y DX DY HOLD STEPS` (scratch defaults to `${TMPDIR:-/tmp}/tuic-1329-ipad`, override with `TUIC_IPAD_DIR`; the simulator UDID is set at the top of the script; TAPX/TAPY taps first, e.g. to open the Files panel). Screenshots land in `out/`.
 
 `repro.html` is a plain scroll list with the real `global.css` and `useMouseDrag` listeners
 (`?css=none|global&drag=0|1&touchaction=<value>`), for isolating CSS and listener effects.
