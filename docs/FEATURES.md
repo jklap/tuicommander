@@ -2781,6 +2781,10 @@ the prepared launch prompt, counting escaped stdout bytes before framing/marker.
 
 The Automations **Runs** view shows backend 24h/7d counts, paginated history, distinct needs-you/unknown/interrupted states, and saved output after definition deletion. View run focuses only an available terminal on the owning daemon; otherwise it shows the saved report and workspace details without launching a replacement.
 
+### Tasks contract foundation
+
+Provider-neutral Rust DTOs and generated TypeScript cover work-item queries, fields, comments, actions and boards. A deterministic local provider supports development; visible Tasks views and remote providers are separate integration work. See [plugin guide](plugins.md#tasks-data-contract-phase-a4).
+
 Automation agent surface (#1630-cbfa, #1621-5dce): MCP `automations` and
 `tuic automations` share the HTTP/IPC action parser, definition results, schedule
 previews, run history, summaries and Run Now runtime. Enabled-only updates and
