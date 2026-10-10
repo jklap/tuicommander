@@ -843,7 +843,8 @@ When changing where tests, the wrapper or fixtures put scratch files or Unix soc
 |------|----------------|
 | `scripts/with-test-tmp.sh` | Resolution order and prune rules; keep `scripts/test-with-test-tmp-prune.sh` / `-readonly-home.sh` in step |
 | `src-tauri/crates/tuic-test-support/src/lib.rs` | `host_temp_dir`/`test_base`/`test_temp_root`, socket candidates and `MAX_SOCKET_ROOT_LEN`; `tests/socket_root.rs`, `tests/temp_roots.rs` |
-| `src-tauri/scripts/nextest-test-tmp.{sh,ps1}` | Same default as the wrapper when no root was chosen |
+| `scripts/test-tmp-lib.sh` | Shared shell resolver (wrapper, nextest setup, `mutants.sh`, shell tests) and its FNV-1a checkout hash; `scripts/test-with-test-tmp-roots.sh` |
+| `src-tauri/scripts/nextest-test-tmp.{sh,ps1}` | Same default as the wrapper when no root was chosen (the `.ps1` reimplements the hash) |
 | `scripts/test-tmp-root.mjs` | Node-side resolver for `vitest.config.ts` and `scripts/check-frontend-cycles.mjs` |
 | `scripts/check-no-home-gits.mjs` | Scan roots, patterns and the allow-list |
 | `scripts/run-remote-fixture.sh`, `scripts/test-remote-mcp.py`, `tools/ipad-repro/run.sh` | Fixture scratch and the printed fixture `TMPDIR` (`docs/user-guide/remote-access.md`) |
