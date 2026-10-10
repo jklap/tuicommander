@@ -4698,6 +4698,7 @@ fn process(pid: u32, parent_pid: u32, name: &str, command: &str) -> ProcessTreeE
         name: name.to_string(),
         command: command.to_string(),
         age_seconds: None,
+        argv_unknown: false,
     }
 }
 
@@ -4776,6 +4777,35 @@ fn a_wrapper_running_real_work_is_not_a_prompt() {
             process(401, 400, "dd", "dd if=/dev/rdisk11"),
         ]
     ));
+}
+
+/// Native snapshot under `sudo su`: the root hops' argv is unreadable to an
+/// unprivileged caller (user decision Q1). The inner shell could be
+/// `bash -c 'long job'`, so an unknown argv must never clear BUSY.
+#[test]
+fn a_shell_with_unknown_argv_does_not_override_busy() {
+    let mut tree = sudo_su_tree();
+    for entry in tree.iter_mut().skip(1) {
+        entry.command.clear();
+        entry.argv_unknown = true;
+    }
+    assert!(
+        !foreground_group_at_prompt(200, &tree),
+        "a root shell whose argv is unknown may be running a script"
+    );
+    let unknown_shell = ProcessTreeEntry {
+        argv_unknown: true,
+        ..process(1, 0, "/bin/zsh", "")
+    };
+    assert!(!is_prompt_shell_process(&unknown_shell));
+    let unknown_wrapper = ProcessTreeEntry {
+        argv_unknown: true,
+        ..process(1, 0, "/usr/bin/sudo", "")
+    };
+    assert!(
+        is_prompt_shell_process(&unknown_wrapper),
+        "wrappers are judged by name alone, as before"
+    );
 }
 
 #[test]
@@ -5117,6 +5147,141 @@ fn background_snapshot_macos_truncated_comm_fixture_excludes_helpers() {
     let mut with_turn_work = processes;
     with_turn_work.push(aged_process(707, 701, "cargo", "cargo test", 30));
     assert!(has_meaningful_descendant(701, &with_turn_work));
+}
+
+/// The native snapshot must classify the `ps` fixture above identically:
+/// argv[0] / full argv replace the truncated `comm`, ages come from the start
+/// time. Pins the name/command mapping (assessment §5.1).
+#[cfg(not(windows))]
+#[test]
+fn native_snapshot_mapping_matches_the_macos_ps_fixture() {
+    use std::time::{Duration, SystemTime};
+    use tuic_core::process_info::{FakeProcessSource, ProcInfo};
+    let now = SystemTime::UNIX_EPOCH + Duration::from_secs(100_000);
+    let native = |pid: u32, ppid: u32, comm: &str, argv: &[&str], age: u64| ProcInfo {
+        start_time: Some(now - Duration::from_secs(age)),
+        ..FakeProcessSource::process(pid, ppid, comm, argv)
+    };
+    let source = FakeProcessSource::with_processes(vec![
+        native(700, 1, "zsh", &["/bin/zsh"], 3605),
+        native(
+            701,
+            700,
+            "codex",
+            &["/Applications/Codex.app/Contents/MacOS/codex"],
+            3600,
+        ),
+        native(
+            702,
+            701,
+            "mdkb",
+            &["/Users/boss/.local/bin/mdkb", "serve"],
+            3598,
+        ),
+        native(
+            703,
+            701,
+            "tuic-bridge",
+            &["/Users/boss/.cache/tuic/tuic-bridge", "--stdio"],
+            3598,
+        ),
+        native(
+            704,
+            701,
+            "node",
+            &[
+                "/opt/homebrew/bin/node",
+                "/Users/boss/.cache/tuic/node_repl.js",
+            ],
+            3598,
+        ),
+        native(705, 702, "sqlite-worker", &["sqlite-worker"], 3597),
+        native(
+            706,
+            701,
+            "codex-code-mode",
+            &["/opt/homebrew/Caskroom/codex/0.149.0/bin/codex-code-mode-host"],
+            3585,
+        ),
+    ]);
+    let processes = process_tree_snapshot_from(&source, 1, now, |_| {
+        panic!("a fully readable snapshot must not fall back to ps")
+    })
+    .expect("native snapshot");
+    assert_eq!(processes[0].age_seconds, Some(3605));
+    assert_eq!(processes[0].name, "/bin/zsh");
+    assert_eq!(processes[2].command, "/Users/boss/.local/bin/mdkb serve");
+    assert!(processes.iter().all(|process| !process.argv_unknown));
+    assert_eq!(agent_process_root(700, "codex", &processes), Some(701));
+    assert!(!has_meaningful_descendant(701, &processes));
+    let mut with_turn_work = processes;
+    with_turn_work.push(aged_process(707, 701, "cargo", "cargo test", 30));
+    assert!(has_meaningful_descendant(701, &with_turn_work));
+}
+
+/// `ps` stays a fallback: never the primary path, taken only when the native
+/// enumeration fails or a process in TUIC's own subtree is unreadable.
+#[cfg(not(windows))]
+#[test]
+fn ps_fallback_is_taken_only_when_native_is_insufficient() {
+    use std::cell::Cell;
+    use std::time::SystemTime;
+    use tuic_core::process_info::{FakeProcessSource, ProcInfo, Unreadable};
+    let now = SystemTime::now();
+    let ps_rows = || Some(vec![process(1, 0, "launchd", "/sbin/launchd")]);
+    let readable = |pid: u32, ppid: u32, argv: &[&str]| ProcInfo {
+        start_time: Some(now),
+        ..FakeProcessSource::process(pid, ppid, "x", argv)
+    };
+
+    // Native enumeration failed: ps answers.
+    let calls = Cell::new(None);
+    let failing = FakeProcessSource::failing();
+    let result = process_tree_snapshot_from(&failing, 10, now, |reason| {
+        calls.set(Some(reason));
+        ps_rows()
+    });
+    assert_eq!(calls.get(), Some(PsFallbackReason::EnumerationFailed));
+    assert_eq!(result.unwrap()[0].name, "launchd");
+    // ...and if ps cannot run either, there is no snapshot.
+    assert!(process_tree_snapshot_from(&failing, 10, now, |_| None).is_none());
+
+    // A root shell under our own sudo: unreadable argv inside our subtree.
+    let mut root_shell = readable(12, 11, &[]);
+    root_shell.argv = Err(Unreadable::PermissionDenied);
+    let mut stranger = readable(50, 1, &[]);
+    stranger.argv = Err(Unreadable::PermissionDenied);
+    let sudo_tree = FakeProcessSource::with_processes(vec![
+        readable(10, 1, &["tuic"]),
+        readable(11, 10, &["sudo", "-s"]),
+        root_shell,
+        stranger.clone(),
+    ]);
+    let calls = Cell::new(None);
+    let result = process_tree_snapshot_from(&sudo_tree, 10, now, |reason| {
+        calls.set(Some(reason));
+        ps_rows()
+    });
+    assert_eq!(calls.get(), Some(PsFallbackReason::UnreadableDescendant));
+    assert_eq!(result.unwrap().len(), 1, "the ps rows win when ps runs");
+    // ps unavailable (the sandbox): degrade to native with argv marked unknown.
+    let degraded = process_tree_snapshot_from(&sudo_tree, 10, now, |_| None).unwrap();
+    let inner = degraded.iter().find(|p| p.pid == 12).unwrap();
+    assert!(inner.argv_unknown);
+    assert!(inner.command.is_empty());
+
+    // Unreadable processes OUTSIDE our subtree (other users' daemons) are
+    // normal on every Mac and must not trigger ps.
+    let normal = FakeProcessSource::with_processes(vec![
+        readable(10, 1, &["tuic"]),
+        readable(11, 10, &["zsh"]),
+        stranger,
+    ]);
+    let result = process_tree_snapshot_from(&normal, 10, now, |_| {
+        panic!("strangers' unreadable argv must not trigger the fallback")
+    })
+    .unwrap();
+    assert_eq!(result.len(), 3);
 }
 
 #[test]
@@ -22239,7 +22404,7 @@ fn descendants_walk_terminates_on_a_self_parented_row() {
 #[test]
 fn process_tree_snapshot_reports_own_process() {
     let own = std::process::id();
-    let snapshot = process_tree_snapshot().expect("ps process-tree snapshot");
+    let snapshot = process_tree_snapshot().expect("native process-tree snapshot");
     let mine = snapshot
         .iter()
         .find(|process| process.pid == own)
@@ -22249,7 +22414,7 @@ fn process_tree_snapshot_reports_own_process() {
     // readable here rather than inferred from the fixture tests.
     assert!(
         mine.age_seconds.is_some(),
-        "this platform's ps must yield a parsable elapsed time"
+        "this platform's snapshot must yield a process age"
     );
 }
 
