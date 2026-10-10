@@ -140,6 +140,9 @@ jobs:
       - name: No HOME-relative Gits paths in code and tooling
         run: bash scripts/with-test-tmp.sh pnpm check:no-home-gits && bash scripts/with-test-tmp.sh pnpm check:no-home-gits:test
 
+      - name: No hard-coded temp-dir writes in code and tooling
+        run: bash scripts/with-test-tmp.sh pnpm check:no-hardcoded-tmp && bash scripts/with-test-tmp.sh pnpm check:no-hardcoded-tmp:test
+
   # Always runs: clippy + tests on Linux (fastest, catches most issues)
   rust:
     timeout-minutes: 60

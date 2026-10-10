@@ -16,6 +16,8 @@
     "check:no-nul-bytes:test": "node scripts/check-no-nul-bytes.mjs --self-test",
     "check:no-home-gits": "node scripts/check-no-home-gits.mjs",
     "check:no-home-gits:test": "node scripts/check-no-home-gits.mjs --self-test",
+    "check:no-hardcoded-tmp": "node scripts/check-no-hardcoded-tmp.mjs",
+    "check:no-hardcoded-tmp:test": "node scripts/check-no-hardcoded-tmp.mjs --self-test",
     "build:watch": "vite build --watch",
     "preview": "vite preview",
     "tauri": "tauri",
