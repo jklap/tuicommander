@@ -2971,3 +2971,10 @@ Automation runtime transitions are streamed on `/events` as
 to the desktop event. This includes failure and needs-you changes. Final runs
 retain bounded output; missed live events are reconciled from host state rather
 than replaying or restarting execution.
+
+Automation precheck context (#1631-45bf): definitions can opt in with
+`precheck.inject_output: true` (default false). Proceeding checks prefix the
+literal prompt with delimited, escaped untrusted stdout capped at 16 KiB;
+truncation is marked and stderr is excluded. Empty output and manual bypasses
+inject nothing. The run ledger records `precheck_context: {injected, bytes}` for
+the prepared launch prompt, counting escaped stdout bytes before framing/marker.

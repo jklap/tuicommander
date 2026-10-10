@@ -2,7 +2,8 @@
 
 The backend Once runtime starts on desktop and headless hosts. It records
 precheck decisions before launching the saved agent profile with the literal
-prompt. Precheck output is saved in history and is not added to the prompt.
+prompt. Precheck output is saved in history. It is not added to the prompt unless
+the definition opts in with `precheck.inject_output: true`.
 Recurring dispatch, public execution controls, completion detection and maximum
 duration enforcement are not yet available. Use isolated test definitions until
 the remaining execution integration is complete.
@@ -28,6 +29,23 @@ Set a maximum duration and catch-up grace in seconds. Overlap always skips an
 occurrence while a previous run remains open. An optional precheck runs before
 scheduled launches: exit 0 allows the agent to run; other exits skip quietly.
 Save the definition before running it.
+
+To pass what the precheck found to the agent, set `inject_output: true` in the
+precheck object through the definition API or MCP, for example:
+
+```json
+{"command":"git status --short","timeout_secs":30,"inject_output":true}
+```
+
+The flag defaults to false. A successful scheduled precheck adds stdout before
+the unchanged prompt in a `<precheck-output untrusted="true">` block, labeled as
+data rather than instructions. XML delimiters are escaped. The escaped stdout
+payload is capped at 16 KiB on character boundaries; `[output truncated]` marks
+omitted data. Framing and this marker are outside the payload budget. stderr is
+never included. Empty stdout, refused checks, absent checks and Run Now bypasses
+do not add context. Run history includes `precheck_context.injected` and `bytes`
+for the prepared launch prompt; bytes counts escaped stdout only, not framing
+or the marker. A failed launch can retain this preparation receipt.
 
 **Pause** stops scheduled launches; **Resume** enables them. **Run now** works
 while paused, bypasses precheck, obeys capacity and overlap, and leaves the

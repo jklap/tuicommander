@@ -15,7 +15,7 @@ export interface AutomationDefinition {
 	grace_secs: number;
 	overlap: "skip";
 	max_duration_secs: number;
-	precheck: { command: string; timeout_secs: number } | null;
+	precheck: { command: string; timeout_secs: number; inject_output?: boolean } | null;
 }
 export type RunStatus =
 	| "reserved"
@@ -54,6 +54,7 @@ export interface AutomationRun {
 	stdout: SavedOutput;
 	stderr: SavedOutput;
 	reason: string | null;
+	precheck_context?: { injected: boolean; bytes: number } | null;
 	precheck: { exit_code: number | null; timed_out: boolean; stdout: SavedOutput; stderr: SavedOutput } | null;
 }
 export interface SchedulePreview {

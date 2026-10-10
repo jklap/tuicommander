@@ -2149,3 +2149,10 @@ fields. Route snapshots and registered-route PATCH probes cover this route.
 The existing MCP `automations` tool retains its definition-only contract and
 shares `DefinitionStore` actions with the API; this change does not add MCP run
 controls. HTTP application error messages match IPC rejections.
+
+Automation precheck context (#1631-45bf): definitions can opt in with
+`precheck.inject_output: true` (default false). Proceeding checks prefix the
+literal prompt with delimited, escaped untrusted stdout capped at 16 KiB;
+truncation is marked and stderr is excluded. Empty output and manual bypasses
+inject nothing. The run ledger records `precheck_context: {injected, bytes}` for
+the prepared launch prompt, counting escaped stdout bytes before framing/marker.
