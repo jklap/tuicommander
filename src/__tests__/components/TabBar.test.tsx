@@ -47,8 +47,8 @@ vi.mock("@tauri-apps/plugin-opener", () => ({
 }));
 
 import type { ContextMenuItem } from "../../components/ContextMenu/ContextMenu";
-import { ToastList } from "../../components/ToastContainer/ToastList";
 import { TabBar } from "../../components/TabBar/TabBar";
+import { ToastList } from "../../components/ToastContainer/ToastList";
 import { invoke, listen } from "../../invoke";
 import { diffTabsStore } from "../../stores/diffTabs";
 import { editorTabsStore } from "../../stores/editorTabs";

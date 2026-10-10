@@ -1,7 +1,7 @@
 import { render } from "@solidjs/testing-library";
-import { ToastList } from "../../components/ToastContainer/ToastList";
 import { createComponent, createRoot } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ToastList } from "../../components/ToastContainer/ToastList";
 
 const { mockContextActions, mockGetActionEntries, mockPluginStore, mockPrompt, mockRepositories, mockTerminals } =
 	vi.hoisted(() => ({
