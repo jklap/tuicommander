@@ -93,3 +93,9 @@ independently; this guide does not claim an installed scheduler is available.
 The dialog addresses the daemon that owns the active repository when you open it (or this machine for a local repository). Switch repository and reopen to view another owner. Select **Runs** to view all persisted runs, including runs of deleted automations. The 24h and 7d counts come from the backend and use elapsed UTC windows, not local calendar days. **Previous runs** and **Next runs** page through history. Each row retains its original automation name, repository and status. `needs_you`, `unknown` and `interrupted` are distinct; none implies success.
 
 **View run** focuses the owning live terminal when it is present in this client. If the terminal is absent, suspended, exited or belongs to another daemon, the dialog shows saved stdout/stderr, truncation warnings, the recorded workspace and run configuration. A missing or removed workspace is not recreated. Viewing a run never starts another run. History and output retention remain backend-controlled.
+
+Agents and scripts can use MCP `automations` or `tuic automations '<action JSON>'`
+for the same operations. List returns definition rows with next-run/last-status
+metadata; create/update return the saved definition. Agent-created definitions
+record the bound session. See the CLI guide for examples and the HTTP API
+Automations table for fields.

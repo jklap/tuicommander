@@ -81,7 +81,7 @@ fn run_with_stub_delay(
     let (path, listener) = socket();
     let response = tool_response(tool_text, is_error);
     let external = session.is_none();
-    let with_health = args.first() != Some(&"mcp");
+    let with_health = !matches!(args.first(), Some(&"mcp" | &"automations"));
     let server = std::thread::spawn(move || {
         let mut requests = Vec::new();
         let total = (if external { 3 } else { 2 }) + usize::from(with_health) + 1;
@@ -549,4 +549,61 @@ fn mcp_rejects_bad_input_before_connecting() {
         assert!(output.stdout.is_empty());
         assert!(!String::from_utf8_lossy(&output.stderr).contains("Cannot connect"));
     }
+}
+
+// Catches: automation CLI reshaping action inputs or hiding the backend validation error.
+#[test]
+fn automations_command_preserves_shared_action_values_and_errors() {
+    for (input, reply, error) in [
+        (
+            r#"{"action":"preset","preset":{"kind":"daily","hour":9,"minute":30}}"#,
+            r#"{"cron":"30 9 * * *"}"#,
+            false,
+        ),
+        (
+            r#"{"action":"update","id":"absent","enabled":false}"#,
+            r#"{"error":"Automation not found"}"#,
+            true,
+        ),
+        (
+            r#"{"action":"list","unexpected":true}"#,
+            r#"{"error":"Invalid automation action: unknown field `unexpected`, there are no fields"}"#,
+            true,
+        ),
+    ] {
+        let (output, requests) =
+            run_with_stub(&["automations", input], None, Some("peer-1"), reply, error);
+        assert_eq!(requests[1].1["params"]["name"], "automations");
+        assert_eq!(
+            requests[1].1["params"]["arguments"],
+            serde_json::from_str::<serde_json::Value>(input).unwrap()
+        );
+        assert_eq!(output.status.success(), !error);
+        if error {
+            let value: serde_json::Value = serde_json::from_str(reply).unwrap();
+            assert_eq!(
+                String::from_utf8_lossy(&output.stderr),
+                format!("tuic: {}\n", value["error"].as_str().unwrap())
+            );
+            assert!(output.stdout.is_empty());
+        } else {
+            assert_eq!(
+                String::from_utf8_lossy(&output.stdout),
+                format!("{reply}\n")
+            );
+            assert!(output.stderr.is_empty());
+        }
+    }
+    let (output, requests) = run_with_stub(
+        &["automations", "-"],
+        Some(r#"{"action":"list"}"#),
+        Some("peer-1"),
+        "[]",
+        false,
+    );
+    assert!(output.status.success());
+    assert_eq!(
+        requests[1].1["params"]["arguments"],
+        serde_json::json!({"action":"list"})
+    );
 }
