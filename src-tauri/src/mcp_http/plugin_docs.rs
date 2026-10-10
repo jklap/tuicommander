@@ -708,6 +708,22 @@ It touches no network, credentials, filesystem or subprocesses. It is a developm
 provider, not a fixture proving GitHub/Jira/GitLab API compatibility. Its search is
 literal text; sort supports key/title/updatedAt. Its cursor expires on mutation.
 
+## Tasks detail
+
+### Tasks detail component inventory
+`TasksDetail`.
+
+#### TasksDetail
+
+Core renders work-item detail with Solid controls. Providers supply `WorkItemDetail` through the async `WorkItemProvider` port; they do not supply a view or iframe. The Tasks shell mounts `TasksDetail` with a provider and `{providerId, accountId, id}` reference, and passes `visible=false` when hidden. Shell/provider registration is a separate integration step.
+
+- Header: key, title, type, authoritative state, updated time and provider link.
+- Fields: the detail's descriptors select text, Markdown, enum, user, labels, date, number or link controls. Only editable fields with an enabled `edit_field` action can be saved. Values use the tagged field-value union; required empty values cannot be submitted.
+- Body and all comment entries use `ContentRenderer` with `untrustedContent=true`. It keeps Markdown, tables, images and `<details>` while stripping scripts, event handlers, style tags and style attributes. Reader expansion survives refresh.
+- Comments: `normal`, `review_thread` (file, line and resolved state), and `review_summary` (review state) render together. Load more uses `comments(reference,cursor,50)` and the provider cursor. Add comment dispatches `comment`; a rejected request keeps the draft.
+- Status: buttons use the declared transition action IDs, enabled state and disabled reasons. The pending action label appears immediately; state IDs are never inferred from the label. Success adopts the returned detail; rejection restores the authoritative label and reports the error.
+- Refresh: manual Refresh plus a 60-second timer, enabled by default only while open, the Tasks view is visible and the document is visible. Already-loaded comment pages are refreshed too. Old-item responses cannot replace the current item.
+
 ## Troubleshooting
 
 | Error | Fix |
@@ -731,6 +747,7 @@ mod tests {
     const HOST: &str = include_str!("../../../src/plugins/pluginRegistry.ts");
     const CSS: &str = include_str!("../../../src/components/PluginPanel/pluginBaseStyles.ts");
     const UX: &str = include_str!("../../../src/components/SettingsPanel/tabs/PluginsTab.tsx");
+    const TASK_DETAIL: &str = include_str!("../../../src/components/Tasks/detail/TasksDetail.tsx");
 
     fn captures(source: &str, pattern: &str) -> BTreeSet<String> {
         Regex::new(pattern)
@@ -810,8 +827,14 @@ mod tests {
         let model = include_str!("../work_items/model.rs");
         let kinds = section(model, "pub enum WorkItemFieldKind {", "\n}");
         let expected = captures(kinds, r"(?m)^    ([A-Za-z]+),")
-            .into_iter().map(|kind| kind.to_lowercase()).collect();
-        assert_inventory(PLUGIN_DOCS, "### Work-item field kind inventory\n", expected);
+            .into_iter()
+            .map(|kind| kind.to_lowercase())
+            .collect();
+        assert_inventory(
+            PLUGIN_DOCS,
+            "### Work-item field kind inventory\n",
+            expected,
+        );
     }
 
     // Catches: new manifest-driven UI or core plugin components are absent from the UX guide.
@@ -843,6 +866,14 @@ mod tests {
                 PLUGIN_DOCS.contains(&format!("#### {component}\n")),
                 "each core component needs UX instructions: {component}"
             );
+        }
+        assert_inventory(
+            PLUGIN_DOCS,
+            "### Tasks detail component inventory\n",
+            captures(TASK_DETAIL, r"(?m)^export function ([A-Za-z]+)\("),
+        );
+        for component in inventory(PLUGIN_DOCS, "### Tasks detail component inventory\n") {
+            assert!(PLUGIN_DOCS.contains(&format!("#### {component}\n")));
         }
     }
 }

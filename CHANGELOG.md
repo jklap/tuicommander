@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 - Added the provider-neutral Tasks data contract and a local in-memory development provider; visible Tasks integration follows separately.
+- Add the core Tasks detail component with field editing, rich paged comments, status-action rollback and refresh while visible (#1687-27a3).
 
 - Restore missing live PTY identity bindings on MCP requests so spawned children remain linked to their parent in session lists (#1673-da49).
 

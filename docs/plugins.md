@@ -1815,3 +1815,30 @@ list, detail, comments, schemas, saved filters, board columns and mutations.
 It touches no network, credentials, filesystem or subprocesses. It is a development
 provider, not a fixture proving GitHub/Jira/GitLab API compatibility. Its search is
 literal text; sort supports key/title/updatedAt. Its cursor expires on mutation.
+
+## Tasks detail
+
+Core's `TasksDetail` consumes the async `WorkItemProvider` port and a `WorkItemRef`.
+The Tasks shell supplies the selected provider/reference and `visible` state.
+Providers supply data and declared actions; they do not render this view.
+
+The header shows key, title, type, state and updated time. Detail field schemas
+select text, Markdown, enum, user, labels, date, number and link controls. Saving
+requires an editable field and an enabled `edit_field` action. Required fields
+cannot be cleared. Values retain their tagged field-value shape.
+
+Descriptions and normal comments, review threads and review summaries render
+through `ContentRenderer` with `untrustedContent`. Markdown, tables, images and
+`<details>` survive; scripts, event handlers and provider CSS do not. Review
+threads show file/line and resolved state. The provider's comment cursor drives
+Load more. Add comment retains its draft on rejection.
+
+Transition buttons use declared IDs and disabled reasons. The pending action
+label appears immediately while the authoritative state ID stays intact.
+Success adopts the returned detail; rejection restores the state label and
+shows the error. Core does not infer a target state from a transition name.
+
+Refresh is manual and periodic (60 seconds by default) while the detail, Tasks
+view and document are visible. Refresh preserves disclosure state and reloads
+comment pages already opened. Switching items rejects stale responses.
+
