@@ -137,6 +137,9 @@ jobs:
       - name: No literal NUL bytes in source
         run: bash scripts/with-test-tmp.sh pnpm check:no-nul-bytes && bash scripts/with-test-tmp.sh pnpm check:no-nul-bytes:test
 
+      - name: No HOME-relative Gits paths in code and tooling
+        run: bash scripts/with-test-tmp.sh pnpm check:no-home-gits && bash scripts/with-test-tmp.sh pnpm check:no-home-gits:test
+
   # Always runs: clippy + tests on Linux (fastest, catches most issues)
   rust:
     timeout-minutes: 60

@@ -14,6 +14,8 @@
     "test-tmp-root:test": "node scripts/test-tmp-root.mjs --self-test",
     "check:no-nul-bytes": "node scripts/check-no-nul-bytes.mjs",
     "check:no-nul-bytes:test": "node scripts/check-no-nul-bytes.mjs --self-test",
+    "check:no-home-gits": "node scripts/check-no-home-gits.mjs",
+    "check:no-home-gits:test": "node scripts/check-no-home-gits.mjs --self-test",
     "build:watch": "vite build --watch",
     "preview": "vite preview",
     "tauri": "tauri",
