@@ -207,7 +207,8 @@ impl CompletionEffects for NativeCompletion<'_> {
     }
 
     fn publish(&self, run: &AutomationRun) {
-        let payload = serde_json::json!({"run": run});
+        let notice = super::notifications::publish(self.0, run);
+        let payload = serde_json::json!({"run": run, "notice": notice});
         #[cfg(feature = "desktop")]
         if let Some(app) = self.0.app_handle.read().as_ref() {
             use tauri::Emitter;
@@ -217,6 +218,9 @@ impl CompletionEffects for NativeCompletion<'_> {
             .0
             .event_bus
             .send(AppEvent::AutomationRunChanged { payload });
+        if notice && let Some(store) = self.0.automation_runtime.notification_store() {
+            super::notifications::settle(&store, run, "bell", false);
+        }
     }
 }
 

@@ -2971,3 +2971,5 @@ Automation runtime transitions are streamed on `/events` as
 to the desktop event. This includes failure and needs-you changes. Final runs
 retain bounded output; missed live events are reconciled from host state rather
 than replaying or restarting execution.
+
+Automation action `run` accepts `{id: "<run id>"}` and returns the canonical saved AutomationRun independent of definition lifetime. The live `automation-run-changed` payload adds `notice: boolean`; only true invites a bell item. False and history reads never notify.

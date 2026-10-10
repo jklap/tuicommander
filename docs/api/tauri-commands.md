@@ -892,3 +892,5 @@ previews/presets, UTC run summaries and owner-guarded Run Now with
 and application error messages match HTTP. See the HTTP Automations action table
 for every field and reply. Blocking storage/schedule work runs off the main
 thread. Run Now executes only on the addressed backend; phase 1 is Once-only.
+
+`automation_action` also accepts `{input:{action:"run",id:"<run id>"}}` to fetch a canonical saved run for notification navigation. Native automation click targets are `{kind:"automation",id:"<run id>"}` on macOS.

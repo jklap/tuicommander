@@ -1,6 +1,6 @@
 import { createEffect, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { t } from "../../i18n";
-import { createAutomationsStore } from "../../stores/automations";
+import { automationsUi, createAutomationsStore } from "../../stores/automations";
 import { registerModal } from "../../stores/modalStack";
 import s from "./AutomationsDialog.module.css";
 import type { AutomationAdapter } from "./contract";
@@ -23,6 +23,10 @@ export function AutomationsDialog(props: { onClose: () => void; adapter?: Automa
 	onCleanup(() => {
 		store.dispose();
 		if (priorFocus instanceof HTMLElement && priorFocus.isConnected) priorFocus.focus();
+	});
+	createEffect(() => {
+		const id = automationsUi.requestedRun();
+		if (id) void store.openRun(id);
 	});
 	createEffect(() => {
 		store.draft()?.id;

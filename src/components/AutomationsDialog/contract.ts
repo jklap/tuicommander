@@ -90,7 +90,7 @@ export type AutomationAction =
 	| { action: "list" }
 	| { action: "create" | "update"; definition: AutomationDefinition }
 	| { action: "update"; id: string; enabled: boolean }
-	| { action: "get"; id: string }
+	| { action: "get" | "run"; id: string }
 	| { action: "summary"; window: "24h" | "7d" }
 	| { action: "delete" | "run_now" | "pause" | "resume"; id: string }
 	| { action: "list_runs"; id: string; limit: number }

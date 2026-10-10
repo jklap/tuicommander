@@ -9,6 +9,11 @@ use tokio::sync::{mpsc, oneshot};
 
 pub(super) static HANDLE: OnceLock<mpsc::Sender<Command>> = OnceLock::new();
 pub(super) enum Command {
+    Automation {
+        store: crate::automations::store::RunStore,
+        run: crate::automations::run::AutomationRun,
+        text: String,
+    },
     Tool {
         caller: String,
         sid: String,
@@ -201,7 +206,7 @@ impl Runtime {
         self.callback(&value).await?;
         Ok(json!({"accepted":true}))
     }
-    fn enabled(&self) -> bool {
+    pub(super) fn enabled(&self) -> bool {
         Config::load(&self.outbound.paths)
             .ok()
             .flatten()
@@ -274,7 +279,12 @@ impl Runtime {
             tokio::select! {
                 command = commands.recv() => {
                     let Some(command) = command else { break; };
+                    if let Command::Automation { store, run, text } = command {
+                        self.automation_notice(&store, &run, &text).await;
+                        continue;
+                    }
                     let (reply,result) = match command {
+                        Command::Automation { .. } => unreachable!(),
                         Command::Tool { caller,sid,input,reply } => (reply,self.tool(&caller,&sid,input).await),
                         Command::Deliver { mail,reply } => (reply,self.deliver(mail).await),
                         Command::Update { value,reply } => (reply,self.update(value).await),

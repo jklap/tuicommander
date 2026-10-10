@@ -8,10 +8,24 @@ import type {
 	SchedulePreset,
 	SchedulePreview,
 } from "../components/AutomationsDialog/contract";
+import { invoke } from "../invoke";
 import { randomId } from "../utils/randomId";
 
+const [requestedRun, setRequestedRun] = createSignal<string | null>(null);
 const [visible, setVisible] = createSignal(false);
-export const automationsUi = { visible, open: () => setVisible(true), close: () => setVisible(false) };
+export const automationsUi = {
+	visible,
+	requestedRun,
+	open: () => {
+		setRequestedRun(null);
+		setVisible(true);
+	},
+	openRun: (id: string) => {
+		setRequestedRun(id);
+		setVisible(true);
+	},
+	close: () => setVisible(false),
+};
 
 /** Dialog-scoped state. The adapter owns validation, schedule interpretation and launch. */
 export function createAutomationsStore(adapter: AutomationAdapter) {
@@ -52,6 +66,18 @@ export function createAutomationsStore(adapter: AutomationAdapter) {
 	function edit(patch: Partial<AutomationDefinition>) {
 		setDraft((value) => (value ? { ...value, ...patch } : value));
 		if ("cron" in patch || "timezone" in patch || "once_local" in patch) invalidatePreview();
+	}
+	async function openRun(id: string) {
+		const epoch = ++selectionEpoch;
+		setError("");
+		try {
+			const run = await invoke<AutomationRun>("automation_action", { input: { action: "run", id } });
+			if (epoch !== selectionEpoch) return;
+			select(run.definition);
+			setRuns([run]);
+		} catch (cause) {
+			if (epoch === selectionEpoch) setError(message(cause));
+		}
 	}
 	async function refresh() {
 		const epoch = ++listEpoch;
@@ -118,6 +144,7 @@ export function createAutomationsStore(adapter: AutomationAdapter) {
 		}
 	}
 	return {
+		openRun,
 		items,
 		draft,
 		isNew,

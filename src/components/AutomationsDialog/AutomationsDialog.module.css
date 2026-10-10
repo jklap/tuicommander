@@ -41,3 +41,5 @@
 .history li { display: flex; flex-wrap: wrap; gap: 8px 16px; padding: 12px 0; border-top: 1px solid var(--border); }
 .history li p { flex-basis: 100%; margin: 0; color: var(--fg-secondary); }
 @media (max-width: 700px) { .dialog { height: 90vh; } .sidebar { width: 180px; padding: 8px; } .detail { padding: 8px; } .group { padding: 8px; } .actions { flex-wrap: wrap; } }
+
+.history li pre { flex-basis: 100%; max-height: 240px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }

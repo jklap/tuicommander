@@ -24,7 +24,7 @@ export const TIPS: Tip[] = [
 	{
 		feature: "Automations",
 		description:
-			"Open Automations from the command palette to edit scheduled agent runs and Once previews. The Automations backend API is required.",
+			"Open Automations from the command palette to edit scheduled agent runs and Once previews. Needs-you and failure bell items open the saved run and its owning session.",
 		shortcut: null,
 	},
 	{

@@ -864,3 +864,7 @@ and preserve immutable terminal history with 256 KiB output snapshots. Transitio
 use desktop and SSE dual-emission; boot interrupts open runs without retry.
 
 CLI directory opens and MCP `repo action=add` share server-owned repository registration over local IPC. They persist and activate canonical Git or shell directories without an OS URL handler, preserve existing workspace and terminal state on repeated calls, and broadcast configuration changes. MCP `ui tab` rejects `tuic://open-repo` URLs and directs callers to `repo add`.
+
+## Automation notices (#1620-82ae)
+
+Live needs_you/failed transitions claim each delivery channel durably before effects. Existing native question/error preferences, Web Push opt-in and owning-agent Telegram registration apply. No historical or ambiguous send replay; delivery does not mutate execution. Bell/native macOS clicks resolve the canonical run, even after definition deletion. Bell delivery is an unacknowledged live event, not proof of client display.
