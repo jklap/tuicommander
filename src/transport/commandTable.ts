@@ -1082,6 +1082,56 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			body: { repoPath: args.repoPath, title: args.title, body: args.body },
 		}),
 	},
+	get_pr_action_state: {
+		map: (_args, p) => ({
+			method: "GET",
+			path: `/repo/pr-action-state?repoPath=${p("repoPath")}&prNumber=${p("prNumber")}`,
+		}),
+	},
+	set_pr_auto_merge: {
+		map: (args) => ({
+			method: "POST",
+			path: "/repo/pr-auto-merge",
+			body: {
+				repoPath: args.repoPath,
+				prNumber: args.prNumber,
+				enabled: args.enabled,
+				mergeMethod: args.mergeMethod,
+				expectedHeadSha: args.expectedHeadSha,
+			},
+		}),
+	},
+	set_pr_merge_queue: {
+		map: (args) => ({
+			method: "POST",
+			path: "/repo/pr-merge-queue",
+			body: {
+				repoPath: args.repoPath,
+				prNumber: args.prNumber,
+				enqueued: args.enqueued,
+				expectedHeadSha: args.expectedHeadSha,
+			},
+		}),
+	},
+	merge_or_enqueue_pr: {
+		map: (args) => ({
+			method: "POST",
+			path: "/repo/pr-merge-or-enqueue",
+			body: {
+				repoPath: args.repoPath,
+				prNumber: args.prNumber,
+				mergeMethod: args.mergeMethod,
+				expectedHeadSha: args.expectedHeadSha,
+			},
+		}),
+	},
+	rerun_failed_pr_jobs: {
+		map: (args) => ({
+			method: "POST",
+			path: "/repo/pr-rerun-failed",
+			body: { repoPath: args.repoPath, runId: args.runId },
+		}),
+	},
 	get_pr_line_threads: {
 		map: (args, p) => ({
 			method: "GET",

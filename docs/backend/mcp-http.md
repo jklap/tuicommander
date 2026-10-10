@@ -2170,3 +2170,5 @@ inject nothing. The run ledger records `precheck_context: {injected, bytes}` for
 the prepared launch prompt, counting escaped stdout bytes before framing/marker.
 
 PR line review routes (`/repo/pr-line-threads`, `/repo/pr-thread-comments`, `/repo/pr-thread-resolved`, `/repo/pr-thread-reply`, `/repo/pr-draft-review`) share account resolution and backend behavior with their desktop commands.
+
+The PR action routes (`/repo/pr-action-state`, `/repo/pr-auto-merge`, `/repo/pr-merge-queue`, `/repo/pr-merge-or-enqueue`, `/repo/pr-rerun-failed`) share account-aware backend logic with IPC. Successful rerun means accepted, not completed.

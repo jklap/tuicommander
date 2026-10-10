@@ -322,3 +322,7 @@ Browser add-account polling uses `POST /github/accounts/poll` and the same `gith
 ### Line review backend
 
 The additive `github_review_threads` API reads paginated line threads with current/original line, diff side, resolved and outdated state, plus paginated replies. The existing `get_pr_review_threads` badge-count API is unchanged. Resolve/unresolve returns the confirmed GitHub thread; reply returns the posted comment. Draft submission checks the reviewed head against GitHub and posts through the existing review body builder/parser with `commit_id` pinned. A moved head returns `review-head-changed`; refresh before resubmitting. All calls resolve the repository account and use its host, token and circuit breaker.
+
+### PR action backend
+
+`github_pr_actions` exposes auto-merge enable/disable, merge queue enqueue/dequeue/state and failed-job reruns. `merge_or_enqueue_pr` reads active effective branch rules, including inherited rules, and enqueues when `merge_queue` is required; otherwise it merges with a pinned REST SHA. Unknown/incomplete rules stop the write. Queue entry and auto-merge enable mutations carry `expectedHeadOid`. Failed reruns use the Actions `rerun-failed-jobs` endpoint, which also reruns dependent jobs. The legacy review post and draft API both reject REQUEST_CHANGES with an empty body before account/network work. These additive commands require frontend consumers to opt in; the existing merge command is unchanged.

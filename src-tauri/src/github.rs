@@ -2583,6 +2583,7 @@ pub(crate) async fn post_pr_review_impl(
     comments: &[PrReviewInlineComment],
     state: &AppState,
 ) -> Result<PostedPrReview, String> {
+    crate::github_pr_actions::validate_review_event(body, event.unwrap_or("COMMENT"))?;
     let (account, token, owner, repo) = resolve_repo_for_rest(state, repo_path).await?;
     let endpoint = format!("repos/{owner}/{repo}/pulls/{pr_number}/reviews");
     let body_json = build_post_pr_review_body(body, event.unwrap_or("COMMENT"), comments);

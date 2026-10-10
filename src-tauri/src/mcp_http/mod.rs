@@ -10,6 +10,7 @@ mod dictation_routes;
 mod ego_routes;
 mod fs_routes;
 mod git_routes;
+mod github_pr_action_routes;
 mod github_review_routes;
 mod github_routes;
 mod guards;
@@ -1596,6 +1597,20 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         .route(
             "/repo/pr-review-threads",
             get(github_routes::repo_pr_review_threads),
+        )
+        .route("/repo/pr-action-state", get(github_pr_action_routes::state))
+        .route(
+            "/repo/pr-auto-merge",
+            post(github_pr_action_routes::auto_merge),
+        )
+        .route("/repo/pr-merge-queue", post(github_pr_action_routes::queue))
+        .route(
+            "/repo/pr-merge-or-enqueue",
+            post(github_pr_action_routes::merge),
+        )
+        .route(
+            "/repo/pr-rerun-failed",
+            post(github_pr_action_routes::rerun),
         )
         .route("/repo/pr-line-threads", get(github_review_routes::threads))
         .route(

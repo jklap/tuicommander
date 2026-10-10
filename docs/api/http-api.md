@@ -3016,3 +3016,15 @@ Desktop command arguments and HTTP bodies use the same camelCase fields.
 | POST | `/repo/pr-draft-review` | `{repoPath, prNumber, draft:{headSha, body, event, comments}}` |
 
 Draft submission rejects a moved reviewed head and pins REST `commit_id`. Thread and comment connections expose pagination; outdated threads retain null current lines.
+
+### PR actions
+
+| Method | Route | Arguments |
+|---|---|---|
+| GET | `/repo/pr-action-state` | `repoPath`, `prNumber` |
+| POST | `/repo/pr-auto-merge` | `{repoPath, prNumber, enabled, mergeMethod?, expectedHeadSha?}` |
+| POST | `/repo/pr-merge-queue` | `{repoPath, prNumber, enqueued, expectedHeadSha?}` |
+| POST | `/repo/pr-merge-or-enqueue` | `{repoPath, prNumber, mergeMethod, expectedHeadSha}` |
+| POST | `/repo/pr-rerun-failed` | `{repoPath, runId}` |
+
+The routes share desktop command results. Enabling auto-merge and queue entry require the reviewed head. Merge policy read failures stop writes. The legacy `/repo/post-pr-review` and pinned `/repo/pr-draft-review` reject empty REQUEST_CHANGES bodies.

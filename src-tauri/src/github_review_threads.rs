@@ -119,15 +119,7 @@ pub(crate) fn validate_review(draft: &DraftReview) -> Result<(), String> {
     if draft.head_sha.trim().is_empty() {
         return Err("Reviewed head SHA is required".into());
     }
-    if !matches!(
-        draft.event.as_str(),
-        "COMMENT" | "APPROVE" | "REQUEST_CHANGES"
-    ) {
-        return Err("Invalid review event".into());
-    }
-    if draft.event == "REQUEST_CHANGES" && draft.body.trim().is_empty() {
-        return Err("Request changes requires a review body".into());
-    }
+    crate::github_pr_actions::validate_review_event(&draft.body, &draft.event)?;
     if draft.comments.iter().any(|c| {
         c.path.trim().is_empty()
             || c.line == 0

@@ -255,3 +255,5 @@ the owner-guarded runtime; definition, history, aggregate and preview work uses
 `tokio::task::spawn_blocking`. HTTP calls the same boundary.
 
 The async commands in `github_review_threads` run network work asynchronously; repository account resolution delegates blocking filesystem/credential lookup to the existing resolver.
+
+The `github_pr_action_commands` wrappers are async. GraphQL/REST work stays off the main thread and reuses the existing blocking account resolver.
