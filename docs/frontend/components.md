@@ -697,3 +697,7 @@ only provisional command-envelope boundary; tests inject `AutomationAdapter`.
 No schedules or launch decisions are calculated in TypeScript.
 
 `RunsView` in the Automations dialog renders all-history pages and backend 24h/7d summaries. `RunOutput` renders saved stdout/stderr and immutable workspace details. View run only focuses a live terminal with matching daemon ownership; unavailable sessions never launch a replacement.
+
+### Mobile composer browser dictation
+
+`CommandInput` mounts `useBrowserDictation`, a feature-detected browser interaction hook. Its mic is directly before Send in the existing row; interim hypotheses are replaced and final speech stays in the current draft without focus or automatic Enter. `SessionDetailScreen` excludes server hands-free while browser recognition is pending or active, and `useMobileVoice.recording` blocks browser starts during server arming/recording. Manual typing or keybar text insertion cancels recognition, preserves the edited draft, and returns the mic to idle; queued results from that recording are ignored. Tap the mic to resume. The hook also stops on send, session end, or unmount. No setting or backend route is added.

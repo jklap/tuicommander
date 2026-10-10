@@ -1,9 +1,11 @@
 import { createEffect, createSignal, Show } from "solid-js";
+import { t } from "../../i18n";
 import { uploadAttachment } from "../../services/uploadAttachment";
 import { appLogger } from "../../stores/appLogger";
 import { toastsStore } from "../../stores/toasts";
 import { HttpRpcError, rpc } from "../../transport";
 import { sendPtyKey, waitForAgentEnterGap } from "../../utils/sendCommand";
+import { useBrowserDictation } from "../useBrowserDictation";
 import type { ChoicePrompt, SlashMenuItem } from "../useSessions";
 import { retryWrite } from "../utils/retryWrite";
 import { ChoicePromptOverlay } from "./ChoicePromptOverlay";
@@ -13,6 +15,8 @@ import { type ComposerInputKey, computeInputDelta, isPostSendGuardActive, isSupe
 
 interface CommandInputProps {
 	sessionId: string;
+	serverVoiceRecording?: boolean;
+	onBrowserDictating?: (recording: boolean) => void;
 	/** When set, prefills the textarea and focuses it. Seq counter ensures re-fire on same text. */
 	prefillValue?: { text: string; seq: number };
 	/** Current PTY input line text (synced from terminal prompt via WebSocket). */
@@ -130,12 +134,24 @@ export function CommandInput(props: CommandInputProps) {
 		syncDelta(text);
 	}
 
+	const browserDictation = useBrowserDictation({
+		blocked: () => !!props.serverVoiceRecording || props.sessionExists === false,
+		getDraft: () => textareaEl?.value ?? value(),
+		setDraft: (text) => {
+			if (textareaEl) textareaEl.value = text;
+			updateInput(text);
+		},
+		onRecording: (active) => props.onBrowserDictating?.(active),
+	});
+
 	function handleInput(e: InputEvent & { currentTarget: HTMLTextAreaElement }) {
+		browserDictation.cancel();
 		updateInput(e.currentTarget.value);
 	}
 
 	function insertText(text: string) {
 		if (props.sessionExists === false || !textareaEl) return;
+		browserDictation.cancel();
 		textareaEl.setRangeText(text, textareaEl.selectionStart, textareaEl.selectionEnd, "end");
 		updateInput(textareaEl.value);
 		textareaEl.focus();
@@ -218,6 +234,8 @@ export function CommandInput(props: CommandInputProps) {
 	async function send() {
 		const text = (textareaEl?.value ?? value()).trim();
 		if (!text || props.sessionExists === false || submitting()) return;
+
+		browserDictation.cancel();
 
 		if (atomicReply()) {
 			setSubmitting(true);
@@ -424,6 +442,25 @@ export function CommandInput(props: CommandInputProps) {
 					<path d="M20 11.5l-8.6 8.6a5 5 0 0 1-7.1-7.1L13 4.3a3.5 3.5 0 0 1 5 5l-8.7 8.7a2 2 0 0 1-2.8-2.8l8-8" />
 				</svg>
 			</button>
+			<Show when={browserDictation.available}>
+				<button
+					class={styles.dictate}
+					type="button"
+					aria-label={
+						browserDictation.recording()
+							? t("mobile.dictation.stop", "Stop dictation")
+							: t("mobile.dictation.start", "Dictate into draft")
+					}
+					aria-pressed={browserDictation.recording()}
+					disabled={!!props.serverVoiceRecording || props.sessionExists === false}
+					onPointerDown={(event) => event.preventDefault()}
+					onClick={browserDictation.toggle}
+				>
+					<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+						<path d="M12 15a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v7a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.93V22h2v-3.07A7 7 0 0 0 19 12Z" />
+					</svg>
+				</button>
+			</Show>
 			<button
 				class={styles.send}
 				type="button"

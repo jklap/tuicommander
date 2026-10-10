@@ -94,6 +94,10 @@
 - [ ] After Boss chooses to rebuild/restart the backend, launch a new managed peer and open **Inspect Launch Instructions…** from its terminal context menu. Confirm the final brief includes peer context, explicit system instruction sections/file snapshots and served MCP initialization sections have sources/bytes, and secrets are redacted. A shell-launched or restored session must show its launch as unavailable while retaining any MCP initialization instructions actually served; autonomous agent file reads must remain unobservable. The standalone real-component preview was visually checked; live desktop/backend integration waits for the authorized restart. No second desktop instance was launched.
 # To Test
 
+## PTY identity reattachment (1673-da49) — Rust restart required
+
+- [ ] After Boss's planned manual `make dev` restart or `make build`, confirm the coordinator session row publishes its stable `tuic_session`, `agent register` reports `terminal=true`, and its children nest under it on mobile. Real-process rb regressions cover missing-map repair, existing MCP routes, ambiguous identities and child parent resolution. Rust does not hot-reload; no desktop instance was restarted by this peer.
+
 - [ ] #1669-bca7: On the affected phone, save any draft and use the mobile update action, then dictate to the coordinator with an empty mobile composer. Confirm the turn reaches the terminal once and leaves the mobile composer empty. Live logs showed an older mobile client (`c0cb1d193`) during the report; its exact device identity and cached/network version response could not be inspected. The current served bundle already includes #1662; no Rust change or app restart is required by this investigation.
 
 ## Hands-free phrase boundaries (1656-eb5e) — Rust restart required
@@ -4955,3 +4959,5 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] Design Mode v2 pilot: after Boss rebuilds/restarts TUIC, load the unpacked extension into its dedicated Edge profile; verify toolbar opening, activeTab capture and sidebar return after switching tabs. Rust does not hot-reload. CFT sidebar and trusted top/frame picks were verified in story 1672.
 
 - [ ] After the next Rust rebuild/restart, verify Design Mode sends a captured crop as a readable image and lets retained feedback reach a replacement after its original recipient exits (#1672-cd3d). Rust does not hot-reload.
+
+- [ ] [HUMAN] #1674-93d5: On iPhone Safari and separately the installed Home Screen PWA, tap the composer mic beside Send. Verify interim/final speech appends without opening the keyboard, stop works, Send remains explicit, and server hands-free cannot record simultaneously. Check permission refusal preserves the draft. While dictating, edit the draft: the mic returns to idle, the edit stays exact, and tapping the mic starts a new recording. Historical WebKit standalone restriction: https://bugs.webkit.org/show_bug.cgi?id=225298#c3. At 360×800 the controls remain in the existing row; Send/mic targets grow from 40 to 44 px, costing 4 vertical px rather than another terminal row.

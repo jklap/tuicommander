@@ -593,6 +593,14 @@ second initialize response to the client.
 
 On reconnect, a peer may reclaim its stable TUIC identity after the prior MCP protocol session has no live SSE subscriber and has missed the bridge activity grace period. The takeover retires the old forward and reverse routing entries atomically.
 
+When the asserted identity has no live PTY binding, the first MCP request also
+checks the foreground processes of local terminals. Exactly one process whose
+actual `TUIC_SESSION` matches the header restores that terminal association.
+This repairs a missing restore-time binding even when the MCP route already
+exists, so session lists publish the parent's identity and mobile can nest its
+children. Existing live bindings stay intact; unrelated or ambiguous matches
+remain terminal-less. ACP conversation identities do not acquire a terminal.
+
 On normal stdio EOF, the bridge sends `DELETE /mcp` after its in-flight requests settle, releasing that protocol session immediately. Each fresh initialize for an existing `x-tuic-session` identity also retires protocol metadata, routes, and message channels of stale sibling sessions left by abrupt exits. Subscribed and recently active siblings remain intact. Sessions without a stable identity still use the hourly maintenance sweep after an abrupt exit.
 
 After a failed upstream initialize, the bridge waits before trying again. The pause starts at one second, doubles up to eight seconds on consecutive failures, and resets after a successful connection. Request-triggered, downstream initialize, and background retries share this limit within one bridge process.
