@@ -1,5 +1,11 @@
 # PTY Management
 
+Stable `TUIC_SESSION` identities are attached at spawn. If the live association
+is missing when a bridge reconnects, MCP identity attachment repairs it from
+one uniquely matching foreground process environment. Session-list consumers
+use the repaired association for parent-child routing; they do not infer it
+from terminal names or working directories.
+
 **Module:** `src-tauri/src/pty.rs`
 
 Manages pseudo-terminal sessions for all terminal tabs in the application.

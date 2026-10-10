@@ -94,6 +94,10 @@
 - [ ] After Boss chooses to rebuild/restart the backend, launch a new managed peer and open **Inspect Launch Instructions…** from its terminal context menu. Confirm the final brief includes peer context, explicit system instruction sections/file snapshots and served MCP initialization sections have sources/bytes, and secrets are redacted. A shell-launched or restored session must show its launch as unavailable while retaining any MCP initialization instructions actually served; autonomous agent file reads must remain unobservable. The standalone real-component preview was visually checked; live desktop/backend integration waits for the authorized restart. No second desktop instance was launched.
 # To Test
 
+## PTY identity reattachment (1673-da49) — Rust restart required
+
+- [ ] After Boss's planned manual `make dev` restart or `make build`, confirm the coordinator session row publishes its stable `tuic_session`, `agent register` reports `terminal=true`, and its children nest under it on mobile. Real-process rb regressions cover missing-map repair, existing MCP routes, ambiguous identities and child parent resolution. Rust does not hot-reload; no desktop instance was restarted by this peer.
+
 - [ ] #1669-bca7: On the affected phone, save any draft and use the mobile update action, then dictate to the coordinator with an empty mobile composer. Confirm the turn reaches the terminal once and leaves the mobile composer empty. Live logs showed an older mobile client (`c0cb1d193`) during the report; its exact device identity and cached/network version response could not be inspected. The current served bundle already includes #1662; no Rust change or app restart is required by this investigation.
 
 ## Hands-free phrase boundaries (1656-eb5e) — Rust restart required
@@ -4948,6 +4952,9 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] After rebuilding/restarting `tuic-remote`, start it before tailscaled, then verify its FQDN `/health` changes from 403 to 200 within 30.5 seconds plus scheduler delay after tailscaled becomes ready, provided detection completes within its 500 ms budget; verify stop/rename removes the former FQDN. Rust changes require a manual restart to load; coordinator owns mac-mint deployment.
 - [ ] Discord community links: Help → Resources → Discord Community opens TUICommander & Co; website footers and README badge use the permanent invite, with bugs directed to GitHub issues.
 
+- [ ] After Boss restarts the Rust backend, run a Once automation that needs input and one that fails. Verify one bell/native alert per run/status, canonical saved output and owning-session navigation, configured Push and registered-agent Telegram delivery, and no replay after restart. Rust does not hot-reload (#1620-82ae).
+
+- [ ] After Boss restarts the Rust backend, verify automation notification preferences still gate native/Push/Telegram delivery after payload boxing and routing refactor. Open an older run notice after editing the definition: the editor must show current settings; after deletion only retained run details are shown (#1620-82ae). Rust does not hot-reload.
 - [ ] Automations Runs (#1619-b84d): verify Runs and saved-output layout with light/dark themes. Headless Chrome for Testing timed out without producing screenshots. Check 24h/7d summary cards, pagination, needs_you/unknown/interrupted badges, and View run fallback with saved output and removed workspace paths. No desktop instance was launched by the implementer.
 - [ ] Design Mode v2 pilot: after Boss rebuilds/restarts TUIC, load the unpacked extension into its dedicated Edge profile; verify toolbar opening, activeTab capture and sidebar return after switching tabs. Rust does not hot-reload. CFT sidebar and trusted top/frame picks were verified in story 1672.
 

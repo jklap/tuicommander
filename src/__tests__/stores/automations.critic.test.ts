@@ -19,6 +19,9 @@ it.each([false, true])("setting enabled=%s does not overwrite newer fields saved
 		precheck: null,
 	};
 	const adapter: AutomationAdapter = {
+		run: async () => {
+			throw new Error("Unexpected run lookup in enabled-setting regression");
+		},
 		list: async () => [{ definition: structuredClone(persisted), next_run_ms: null, last_status: null }],
 		save: async (definition) => {
 			persisted = structuredClone(definition);

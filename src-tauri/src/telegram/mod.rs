@@ -70,3 +70,5 @@ mod tests;
 
 #[cfg(test)]
 mod critic_setup_tests;
+
+pub(crate) use notifications::automation_notice;

@@ -1,4 +1,5 @@
 import type { AutomationAdapter, AutomationDefinition, AutomationRun } from "../components/AutomationsDialog/contract";
+import { invoke } from "../invoke";
 export const definition: AutomationDefinition = {
 	id: "a1",
 	name: "Sentry",
@@ -16,6 +17,7 @@ export const definition: AutomationDefinition = {
 };
 export function fakeAdapter(overrides: Partial<AutomationAdapter> = {}): AutomationAdapter {
 	return {
+		run: (id) => invoke<AutomationRun>("automation_action", { input: { action: "run", id } }),
 		list: async () => [{ definition, next_run_ms: 1791568800000, last_status: "skipped_overlap" }],
 		save: async (value) => value,
 		setEnabled: async () => {},

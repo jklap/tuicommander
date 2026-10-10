@@ -56,6 +56,31 @@ statuses and reasons. **Delete** asks for confirmation and keeps saved history.
 Errors stay visible and failed saves retain the draft. **Refresh** retries a
 failed list load. Escape closes the dialog and Tab stays inside it.
 
+## Needs-you and failure notices
+
+A live transition to `needs_you` or `failed` adds a Messages bell item. Select
+it to open the canonical saved run, including its status, output and owning
+session. Editing uses the current saved definition, not the historical run snapshot.
+The run stays available after its definition is deleted, with no definition editor. **Open owning
+session** is disabled when the session no longer has a terminal tab.
+
+Native alerts use **Notifications** → **Enabled** and the existing **Question**
+or **Error** preference. Web Push also requires its existing service opt-in and
+a subscribed device. Push opens the owning mobile session when one exists;
+the message names the saved run. Telegram uses only the owning agent's existing
+registration and allowlisted destination. Automations never register an agent
+or select another conversation on its behalf. Without a matching registration,
+Telegram remains quiet.
+
+Each run/status/channel is claimed in SQLite before delivery. Repeated awaiting
+signals, reconnects and restarts do not replay notices. `needs_you` is announced
+at most once per run per channel, even if that run resumes and blocks again.
+Precheck skips, success, unknown, interrupted and timeout outcomes stay in history
+without these alerts. A failed or ambiguous send never changes execution status
+or saved output. Delivery acceptance does not prove a notification appeared on
+a device. The bell is live-only: disconnected clients can miss the event and
+must inspect run history; boot never replays historical notices. On non-macOS
+desktop platforms native alerts do not support click navigation; use the bell.
 The dialog's backend integration is pending Step 8 (story 1617). Until that API
 is installed, requests show a backend error. The injectable adapter is verified
 independently; this guide does not claim an installed scheduler is available.
