@@ -83,6 +83,7 @@ scripts/*
 !scripts/test-with-test-tmp-prune.sh
 !scripts/test-with-test-tmp-readonly-home.sh
 !scripts/test-with-test-tmp-worktree-target.sh
+!scripts/test-install-sh-tmpdir.sh
 !scripts/check-no-nul-bytes.mjs
 !scripts/check-no-home-gits.mjs
 !scripts/run-plugin-tests.mjs
