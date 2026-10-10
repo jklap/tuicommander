@@ -9,8 +9,7 @@ use std::time::{Duration, Instant};
 static NEXT_JOB: AtomicU64 = AtomicU64::new(0);
 
 fn test_path(name: &str) -> std::path::PathBuf {
-    let root = std::path::PathBuf::from(std::env::var("TUIC_TEST_TMP_ROOT").unwrap());
-    std::fs::create_dir_all(&root).unwrap();
+    let root = tuic_test_support::test_temp_root();
     root.join(format!(
         "bg-{name}-{}-{}",
         std::process::id(),
