@@ -1,0 +1,43 @@
+// Per-tab draft model. The service worker serialises mutations into storage.local.
+export function addPick(draft, pick) {
+  if (draft.picks.length >= 32) throw new Error('Send or delete picks before collecting more (32 maximum).');
+  return {...draft, picks: [...draft.picks, {...pick, comment: ''}]};
+}
+export function editPick(draft, id, comment) {
+  return {...draft, picks: draft.picks.map((pick) => pick.id === id ? {...pick, comment: comment.slice(0, 4096)} : pick)};
+}
+export function deletePick(draft, id) {
+  return {...draft, picks: draft.picks.filter((pick) => pick.id !== id)};
+}
+export function draftForTab(drafts, tabId) {
+  return drafts[String(tabId)] ?? {picks: []};
+}
+
+export function recipient(draft, agents, preferredSessionId) {
+  const wanted = draft.selectionInitialized ? draft.selectedSessionId : preferredSessionId;
+  if (wanted && agents.some((agent) => agent.sessionId === wanted)) return {selectedSessionId: wanted, selectionInitialized: true, agentNotice: ''};
+  if (wanted) return {selectedSessionId: '', selectionInitialized: true, agentNotice: 'The selected agent exited. Choose another agent.'};
+  if (draft.selectionInitialized) return {selectedSessionId: '', selectionInitialized: true, agentNotice: draft.agentNotice ?? ''};
+  return {selectedSessionId: agents[0]?.sessionId ?? '', selectionInitialized: agents.length > 0, agentNotice: ''};
+}
+
+// Persist this batch before requesting delivery; retry the exact batch after a lost reply.
+export function prepareSend(draft, key) {
+  if (draft.pendingSend?.sessionId === draft.selectedSessionId) return draft;
+  if (!draft.selectedSessionId) throw new Error('Choose an agent first.');
+  const picks = draft.picks.filter((pick) => pick.comment.trim());
+  if (!picks.length) throw new Error('Add a comment before sending.');
+  return {...draft,pendingSend:{idempotencyKey:key,sessionId:draft.selectedSessionId,picks}};
+}
+export function completeSend(draft) {
+  const sent = new Map(draft.pendingSend.picks.map((pick) => [pick.id,pick.comment]));
+  return {...draft,pendingSend:undefined,picks:draft.picks.filter((pick) => !sent.has(pick.id) || sent.get(pick.id) !== pick.comment)};
+}
+export async function deliverDraft(draft, request, save, key) {
+  let pending=prepareSend(draft,key);
+  await save(pending);
+  const result=await request(pending.pendingSend);
+  if (!result.accepted) throw new Error('TUICommander did not accept feedback. Your picks are retained.');
+  pending=completeSend(pending);await save(pending);
+  return result;
+}

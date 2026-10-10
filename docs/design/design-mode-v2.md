@@ -282,3 +282,12 @@ Reviewer: Codex (astra), read-only, HEAD e25adff0e. Verdict: X-A with native mes
 | Missing | `captureVisibleTab` needs `activeTab`/all_urls; tab/document races; frame-coordinate transforms; extension updates; source-map replacement. | **Agree.** | Added to §5.2 and S0/S1. |
 
 Disagreements: none. One scope note: Codex says do not delete CDP yet; the plan already defers deletion to S6 and Boss's permission. S0 now decides whether source-map discovery without CDP is acceptable; if not, X-B (CDP only for source maps/capture) returns for that part.
+
+## 16. Boss correction (2026-10-10)
+
+This decision overrides sections 6, 7 and 12: keep the terminal-tab entry and the
+armed `D` badge. Starting from terminal X selects X in the sidebar; the user can
+switch to another live same-repository agent. Starting without a session uses
+the shared repository recipient rule and selects the first agent. When the
+selected agent exits, the panel explains this and offers the others; it does not
+silently send feedback to a replacement.

@@ -41,7 +41,6 @@ pub(crate) mod content_index;
 pub(crate) use tuic_git::cow;
 pub(crate) mod cpu_watchdog;
 pub(crate) use tuic_core::credentials;
-#[cfg(feature = "desktop")]
 pub(crate) mod design_mode;
 // Tests of the sidecar config override that build.rs also compiles; a build
 // script has no test harness.
@@ -1314,7 +1313,7 @@ fn apply_tailscale_status(
             new_https,
             "HTTPS state changed, restarting server"
         );
-        restart_server(&state, "Tailscale HTTPS availability changed");
+        restart_server(state, "Tailscale HTTPS availability changed");
     }
 
     new_state

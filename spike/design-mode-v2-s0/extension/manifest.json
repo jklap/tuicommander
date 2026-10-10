@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "TUIC Design Mode S0 (throwaway)",
+  "version": "0.0.1",
+  "permissions": ["sidePanel", "activeTab", "scripting", "tabs", "nativeMessaging", "storage"],
+  "host_permissions": ["http://localhost/*", "http://127.0.0.1/*"],
+  "background": {"service_worker": "worker.js"},
+  "action": {"default_title": "Open S0 panel"},
+  "side_panel": {"default_path": "panel.html"},
+  "content_scripts": [
+    {"matches": ["http://localhost/*", "http://127.0.0.1/*"], "js": ["main.js"], "world": "MAIN", "all_frames": true, "match_origin_as_fallback": true, "run_at": "document_start"},
+    {"matches": ["http://localhost/*", "http://127.0.0.1/*"], "js": ["extract.js", "picker.js"], "world": "ISOLATED", "all_frames": true, "match_origin_as_fallback": true, "run_at": "document_start"}
+  ]
+}

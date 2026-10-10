@@ -1,0 +1,61 @@
+{
+  "date": "2026-10-08",
+  "help": {
+    "content": [
+      {
+        "type": "text",
+        "text": "macOS control via MCP — mouse, keyboard, screenshots, windows, shell, processes\n\nNEVER use osascript or AppleScript. These tools replace it entirely.\nUse list_windows() or processes() to discover correct app names first.\n\nWORKFLOW:\n1. list_windows(\"Safari\") or capture_window(\"Safari\") to find/see window\n2. do([{type:\"click\",app:\"Safari\",x:100,y:50}]) — target element CENTER\n\nBATCH actions in ONE do() call. Each call = 1 round-trip.\n  BAD:  do([click]) → capture_window → do([click]) → capture_window  (4 calls)\n  GOOD: do([click, wait, screenshot, click, wait, screenshot])       (1 call)\n\nInput batches show a 3, 2, 1 takeover countdown once per control session.\nThe on-screen control indicator ends 10 seconds after the last input action.\nFor long sequences, call control(action:\"begin\"), then do() batches, then\ncontrol(action:\"end\"). Explicit control stays active for 60 idle seconds.\nThe menu bar Stop / riprendi il controllo releases immediately; later input\nreturns released_by_user until a new explicit begin.\nIf physical mouse or keyboard activity occurs, do() stops with user_active\nand lists completed actions. Retry after the user is idle.\n\nUse do(screenshot) for inline captures. Use capture_window only for region/title params.\n\nhelp(\"actions\") = action reference, help(\"shell\") = PTY docs, help(\"examples\") = examples"
+      }
+    ]
+  },
+  "capture_screen": {
+    "content": [
+      {
+        "type": "text",
+        "text": "Screen Recording permission required. Grant access in System Settings > Privacy & Security > Screen Recording"
+      }
+    ],
+    "isError": true
+  },
+  "list_windows": {
+    "content": [
+      {
+        "type": "text",
+        "text": "Screen Recording permission required. Grant access in System Settings > Privacy & Security > Screen Recording"
+      }
+    ],
+    "isError": true
+  }
+}
+
+Screen lock check (ioreg -n Root -d1):
+  "IOConsoleLocked" = No
+  kCGSSessionOnConsoleKey=Yes; kCGSessionLoginDoneKey=Yes
+
+maccontrol processes(name="mcpmaccontrol"), exact response:
+PID     PPID    CPU%  MEM(MB)  USER         STATE  NAME
+----------------------------------------------------------------------
+51489   1       0.0   30.4     stefano.straus S      /Applications/MCPMacControl.app/Contents/MacOS/mcpmaccontrol
+34336   34217   0.0   10.8     stefano.straus S+     /Applications/MCPMacControl.app/Contents/MacOS/mcpmaccontrol
+
+2 processes
+
+ps identifies PID 51489 argv as:
+/Applications/MCPMacControl.app/Contents/MacOS/mcpmaccontrol --server
+PID 34336 argv is the same binary without --server.
+codesign -dv /Applications/MCPMacControl.app:
+Executable=/Applications/MCPMacControl.app/Contents/MacOS/mcpmaccontrol
+Identifier=com.sstraus.mcpmaccontrol
+Signature=adhoc
+TeamIdentifier=not set
+
+TCC attribution check:
+/usr/bin/log show --last 10m --info --debug --style compact --predicate 'subsystem == "com.apple.TCC" AND (eventMessage CONTAINS[c] "mcpmaccontrol" OR eventMessage CONTAINS[c] "34336" OR eventMessage CONTAINS[c] "51489")'
+Exit 0; output only: Timestamp               Ty Process[PID:TID]
+No matching attribution record. The tool names Screen Recording but does not
+name the responsible TCC process. The installed/running app is MCPMacControl.app;
+which of its two processes is denied, and why an existing grant is ineffective,
+remain unknown. No TCC database, credentials or authentication stores were read.
+Accessibility was not retested in round 2: the capture prerequisite already fails.
+No browser was launched or profile changed in round 2. No permissions were changed,
+processes restarted or workaround capture mechanism substituted.
