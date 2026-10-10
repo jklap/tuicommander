@@ -87,8 +87,7 @@ glyph **and** the `|` separator it sits on so every spinner frame collapses to o
 | Clear to line start | `ctrl+u` (`tui.editor.deleteToLineStart`) |
 | Interrupt | `ctrl+c` (`app.clear`) |
 
-`sendCommand`'s agent path (Ctrl-U alone, 50ms gap, text, 50ms gap, separate `\r`) is correct for pi as-is —
-`ctrl+u` is a real binding, so the prefix is consumed rather than echoed.
+`sendCommand`'s agent path (text, 50ms gap, separate `\r`; no Ctrl-U since dropped-items #16) is correct for pi as-is.
 
 ## Not yet observed
 

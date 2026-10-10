@@ -669,7 +669,7 @@ async fn mobile_http_reply_answers_confident_question_with_automated_mail_queued
     let receipt: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(receipt["submitted"], true);
     assert_eq!(receipt["acknowledged"], true);
-    assert_eq!(bytes.lock().unwrap().as_slice(), b"\x15Boss answer\r");
+    assert_eq!(bytes.lock().unwrap().as_slice(), b"Boss answer\r");
     assert_eq!(state.pending_injections.get(session_id).unwrap().len(), 1);
 }
 
@@ -755,7 +755,7 @@ async fn mobile_reply_while_awaiting_input_reaches_the_agent() {
     let receipt: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(receipt["submitted"], true);
     assert_eq!(receipt["acknowledged"], true);
-    assert_eq!(bytes.lock().unwrap().as_slice(), b"\x15Boss answer\r");
+    assert_eq!(bytes.lock().unwrap().as_slice(), b"Boss answer\r");
     assert_eq!(state.pending_injections.get(session_id).unwrap().len(), 1);
 }
 
@@ -5371,7 +5371,7 @@ async fn ego_plain_question_submit_is_not_a_modal_approval() {
     );
     assert_eq!(
         bytes.lock().unwrap().as_slice(),
-        b"\x15The paths are missing.\r"
+        b"The paths are missing.\r"
     );
     assert_eq!(
         crate::pty::queued_command_count(&state, sid),
@@ -5504,7 +5504,7 @@ async fn ego_conversational_submit_still_requires_idle() {
             assert!(bytes.lock().unwrap().is_empty());
         } else {
             assert_eq!(response["submitted"], true, "{response}");
-            assert_eq!(bytes.lock().unwrap().as_slice(), b"\x15answer\r");
+            assert_eq!(bytes.lock().unwrap().as_slice(), b"answer\r");
         }
     }
 }

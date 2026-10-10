@@ -3386,7 +3386,9 @@ mod tests {
             .store(crate::pty::SHELL_IDLE, Ordering::Release);
         crate::pty::flush_pending_injections_blocking(&state, sid);
         crate::pty::flush_pending_injections_blocking(&state, sid);
-        assert_eq!(*bytes.lock().unwrap(), b"next task\x15\x15next task\r");
+        // C33: the queued text is injected with no Ctrl-U of its own; only the
+        // owned-draft clear above (`enqueue_owned_draft`, #1717) sends one.
+        assert_eq!(*bytes.lock().unwrap(), b"next task\x15next task\r");
         assert!(crate::pty::list_queued_commands(&state, sid).is_empty());
     }
 
@@ -3488,7 +3490,7 @@ mod tests {
             }
         }
         assert!(crate::pty::list_queued_commands(&state, sid).is_empty());
-        assert_eq!(*bytes.lock().unwrap(), b"\x15BG DONE\r");
+        assert_eq!(*bytes.lock().unwrap(), b"BG DONE\r");
     }
 
     /// A silent agent may use the full confirmation window, but the async
