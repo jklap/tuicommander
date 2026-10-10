@@ -57,7 +57,12 @@ pub enum WorkItemFieldKind {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-#[serde(tag = "kind", content = "value", rename_all = "snake_case", deny_unknown_fields)]
+#[serde(
+    tag = "kind",
+    content = "value",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum WorkItemFieldValue {
     Text(String),
     Markdown(String),
@@ -128,7 +133,12 @@ pub struct WorkItemReviewSummary {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-#[serde(tag = "kind", content = "value", rename_all = "snake_case", deny_unknown_fields)]
+#[serde(
+    tag = "kind",
+    content = "value",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum WorkItemCommentEntry {
     Normal(WorkItemComment),
     ReviewThread(WorkItemReviewThread),

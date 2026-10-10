@@ -92,6 +92,7 @@ export interface WorkItemQuery {
 	savedFilterId: string | null;
 	search: string;
 	sort: WorkItemSort | null;
+	groupBy: string | null;
 	cursor: string | null;
 	limit: number;
 }
@@ -185,4 +186,41 @@ export interface WorkItemBoard {
 	name: string;
 	fieldId: string;
 	columns: Array<WorkItemBoardColumn>;
+}
+
+export interface WorkItemBoardCard {
+	item: WorkItem;
+	allowedColumnIds: Array<string>;
+}
+
+export interface WorkItemBoardLane {
+	columnId: string;
+	cards: Array<WorkItemBoardCard>;
+}
+
+export interface WorkItemBoardPage {
+	board: WorkItemBoard;
+	lanes: Array<WorkItemBoardLane>;
+	nextCursor: string | null;
+}
+
+export interface WorkItemProviderSnapshot {
+	providerId: string;
+	accountId: string;
+	name: string;
+	fields: Array<WorkItemFieldSchema>;
+	savedFilters: Array<WorkItemSavedFilter>;
+	boards: Array<WorkItemBoard>;
+	items: Array<WorkItemDetail>;
+}
+
+export interface WorkItemGroup {
+	id: string;
+	name: string;
+	items: Array<WorkItem>;
+}
+
+export interface WorkItemGroupedPage {
+	groups: Array<WorkItemGroup>;
+	nextCursor: string | null;
 }
