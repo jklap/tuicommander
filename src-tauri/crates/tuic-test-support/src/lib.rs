@@ -17,6 +17,13 @@ fn checkout_root() -> std::path::PathBuf {
 // only into test binaries, so install their temp root before the harness starts.
 #[ctor::ctor]
 fn install_test_temp_root() {
+    // Remember the temp dir this process was given before it is redirected
+    // below, so host_temp_dir() and nested processes still see it.
+    if non_empty_env("TUIC_TEST_HOST_TMPDIR").is_none() {
+        let host = without_trailing_separator(std::env::temp_dir());
+        // SAFETY: this constructor runs before libtest creates worker threads.
+        unsafe { std::env::set_var("TUIC_TEST_HOST_TMPDIR", host) };
+    }
     let root = test_temp_root();
     // Freeze the checkout selected at process start: tests may change cwd.
     // SAFETY: this constructor runs before libtest creates worker threads.
@@ -72,53 +79,205 @@ fn isolate_git_config(root: &std::path::Path) {
     }
 }
 
-/// Scratch space for Rust tests, overridable by the test runner.
+fn non_empty_env(key: &str) -> Option<std::path::PathBuf> {
+    std::env::var_os(key)
+        .filter(|value| !value.is_empty())
+        .map(|value| without_trailing_separator(value.into()))
+}
+
+/// `"/var/folders/…/T/"` and `"/var/folders/…/T"` are the same directory, but
+/// only one spelling keeps the socket budget arithmetic exact.
+fn without_trailing_separator(path: std::path::PathBuf) -> std::path::PathBuf {
+    if path.as_os_str().len() > 1 {
+        path.components().collect()
+    } else {
+        path
+    }
+}
+
+/// FNV-1a: stable across Rust releases, unlike `DefaultHasher`, so a toolchain
+/// bump never orphans the previous run's per-checkout directories.
+fn checkout_hash() -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in checkout_root().as_os_str().as_encoded_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{hash:016x}")
+}
+
+/// The temp directory this test process was handed before the constructor
+/// pointed `TMPDIR`/`TMP`/`TEMP` at its per-run root: `TUIC_TEST_HOST_TMPDIR`
+/// (exported by `scripts/with-test-tmp.sh`, the nextest setup script and the
+/// constructor itself), else the OS temp dir. Never derived from `$HOME`.
+pub fn host_temp_dir() -> std::path::PathBuf {
+    non_empty_env("TUIC_TEST_HOST_TMPDIR")
+        .unwrap_or_else(|| without_trailing_separator(std::env::temp_dir()))
+}
+
+/// Parent of every per-run test root: `TUIC_TEST_TMP_BASE` (opt-in, e.g.
+/// `<checkout>/.tmp/tuic-tests` for the old in-checkout layout), else
+/// `<host temp>/tuic-tests`.
+pub fn test_base() -> std::path::PathBuf {
+    non_empty_env("TUIC_TEST_TMP_BASE").unwrap_or_else(|| host_temp_dir().join("tuic-tests"))
+}
+
+/// Scratch space for Rust tests: `TUIC_TEST_TMP_ROOT` when a runner chose it,
+/// else a per-checkout directory under [`test_base`] — outside the checkout,
+/// so `find_repo_root` from a fixture never walks up into this repository.
 pub fn test_temp_root() -> std::path::PathBuf {
-    let root = std::env::var_os("TUIC_TEST_TMP_ROOT")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| checkout_root().join(".tmp/tuic-tests"));
-    std::fs::create_dir_all(&root).expect("create repository test temp root");
+    let root = non_empty_env("TUIC_TEST_TMP_ROOT")
+        .unwrap_or_else(|| test_base().join(format!("tuic-proc-{}", checkout_hash())));
+    std::fs::create_dir_all(&root).expect("create test temp root");
     root
 }
 
-#[cfg(unix)]
-fn socket_root_fits(root: &std::path::Path) -> bool {
-    root.join("sXXXXXX/.mdkb/daemon-hook.sock.4294967295.tmp")
-        .as_os_str()
-        .len()
-        + 8
-        < 104
+/// macOS `sun_path` size, NUL included (Linux allows 108; the smaller wins).
+pub const SUN_PATH_MAX: usize = 104;
+/// CI's `$HOME` can be up to this many bytes longer than the one a socket
+/// path was measured under (mdkb derives part of its path from it).
+pub const HOME_MARGIN: usize = 8;
+/// The longest socket path any test binds below a socket root: mdkb's staging
+/// socket inside a `tempfile` `s??????` directory.
+pub const LONGEST_TEST_SOCKET_SUFFIX: &str = "sXXXXXX/.mdkb/daemon-hook.sock.4294967295.tmp";
+/// Longest socket root that still fits [`LONGEST_TEST_SOCKET_SUFFIX`] plus the
+/// HOME margin: 104 − NUL − 8 − `/` − 45 = 49 characters.
+pub const MAX_SOCKET_ROOT_LEN: usize =
+    SUN_PATH_MAX - 1 - HOME_MARGIN - 1 - LONGEST_TEST_SOCKET_SUFFIX.len();
+
+/// Whether `root` leaves room for every socket the tests bind below it.
+pub fn socket_root_fits(root: &std::path::Path) -> bool {
+    root.as_os_str().len() <= MAX_SOCKET_ROOT_LEN
 }
 
-/// Return a short, checkout-specific scratch path for Unix-domain socket tests.
+/// Name of this checkout's private socket directory (`tuic-s<16 hex>`), so
+/// parallel worktrees never share socket scratch.
+pub fn socket_dir_name() -> String {
+    format!("tuic-s{}", checkout_hash())
+}
+
+#[cfg(unix)]
+static PROBES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Make `dir` usable as a socket root, or say why it is not. A `private`
+/// candidate sits at a predictable path in a shared directory such as `/tmp`:
+/// it is created mode 0700, and a symlink or a directory owned by another user
+/// found there is refused rather than followed.
+#[cfg(unix)]
+fn prepare_socket_root(dir: &std::path::Path, private: bool) -> Result<(), String> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
+
+    if !socket_root_fits(dir) {
+        return Err(format!(
+            "{} chars, over the {MAX_SOCKET_ROOT_LEN}-char budget",
+            dir.as_os_str().len()
+        ));
+    }
+    let created = if private {
+        std::fs::DirBuilder::new().mode(0o700).create(dir)
+    } else {
+        std::fs::create_dir_all(dir)
+    };
+    match created {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(format!("cannot create: {error}")),
+    }
+    let meta = std::fs::symlink_metadata(dir).map_err(|error| format!("cannot stat: {error}"))?;
+    if private && meta.file_type().is_symlink() {
+        return Err("is a symlink".to_owned());
+    }
+    if !std::fs::metadata(dir).is_ok_and(|meta| meta.is_dir()) {
+        return Err("is not a directory".to_owned());
+    }
+    // A file this process just created carries its effective uid, so the
+    // probe both proves the directory is writable and tells us who we are.
+    let probe = dir.join(format!(
+        ".tuic-probe-{}-{}",
+        std::process::id(),
+        PROBES.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    std::fs::write(&probe, b"").map_err(|error| format!("not writable: {error}"))?;
+    let own_uid = std::fs::symlink_metadata(&probe).map(|probe| probe.uid());
+    let _ = std::fs::remove_file(&probe);
+    let own_uid = own_uid.map_err(|error| format!("cannot stat probe: {error}"))?;
+    if private {
+        if meta.uid() != own_uid {
+            return Err(format!("owned by uid {}, not {own_uid}", meta.uid()));
+        }
+        if meta.mode() & 0o077 != 0 {
+            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+                .map_err(|error| format!("cannot make private: {error}"))?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn resolve_socket_root() -> Result<std::path::PathBuf, String> {
+    let mut candidates: Vec<(std::path::PathBuf, bool)> = Vec::new();
+    let explicit = non_empty_env("TUIC_TEST_SOCKET_ROOT");
+    if let Some(explicit) = &explicit {
+        candidates.push((explicit.clone(), false));
+    } else {
+        // Do not use env::temp_dir(): the constructor points it at the
+        // per-run root, which is the first candidate already.
+        candidates.push((test_temp_root(), false));
+        let name = socket_dir_name();
+        candidates.push((host_temp_dir().join(&name), true));
+        candidates.push((std::path::Path::new("/tmp").join(&name), true));
+        if cfg!(target_os = "macos") {
+            candidates.push((std::path::Path::new("/private/tmp").join(&name), true));
+        }
+    }
+    let mut rejected = Vec::new();
+    for (index, (candidate, private)) in candidates.iter().enumerate() {
+        if candidates[..index]
+            .iter()
+            .any(|(seen, _)| seen == candidate)
+        {
+            continue;
+        }
+        match prepare_socket_root(candidate, *private) {
+            Ok(()) => return Ok(candidate.clone()),
+            Err(reason) => rejected.push(format!("  {}: {reason}", candidate.display())),
+        }
+    }
+    let source = if explicit.is_some() {
+        "TUIC_TEST_SOCKET_ROOT is set but unusable"
+    } else {
+        "no candidate is usable"
+    };
+    Err(format!(
+        "no Unix-socket test root: {source}. A socket root must be at most \
+         {MAX_SOCKET_ROOT_LEN} chars ({SUN_PATH_MAX}-byte sun_path − NUL − \
+         {HOME_MARGIN}-byte HOME margin − `/{LONGEST_TEST_SOCKET_SUFFIX}`) and writable.\n\
+         {}\nSet TUIC_TEST_SOCKET_ROOT=<short, private, writable dir> to choose one.",
+        rejected.join("\n")
+    ))
+}
+
+/// A short, private, checkout-specific scratch directory for Unix-domain
+/// socket tests. First usable of: `TUIC_TEST_SOCKET_ROOT` (exclusive when
+/// set), the per-run [`test_temp_root`], `<host temp>/tuic-s<hash>`,
+/// `/tmp/tuic-s<hash>` (and `/private/tmp/…` on macOS). Usable means within
+/// [`MAX_SOCKET_ROOT_LEN`] and passing a create-and-write probe. Panics naming
+/// every candidate and `TUIC_TEST_SOCKET_ROOT` when none is.
 #[cfg(unix)]
 pub fn short_socket_test_temp_root() -> std::path::PathBuf {
-    let requested = test_temp_root();
-    if socket_root_fits(&requested) {
-        return requested;
-    }
-    use std::hash::{Hash, Hasher};
+    resolve_socket_root().unwrap_or_else(|message| panic!("{message}"))
+}
 
-    let checkout = checkout_root();
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    checkout.hash(&mut hasher);
-    let suffix = format!("s{:016x}", hasher.finish());
-    // A nested Gits directory can itself be too long. Try every ancestor,
-    // preserving the short Gits scratch root used by developer worktrees.
-    let root = checkout
-        .ancestors()
-        .filter(|path| path.file_name().is_some_and(|name| name == "Gits"))
-        .map(|gits| gits.join(".tmp").join(&suffix))
-        .find(|root| socket_root_fits(root))
-        // CI checkouts need not live under Gits. Do not use env::temp_dir():
-        // the test constructor points it back at the oversized requested root.
-        .unwrap_or_else(|| std::path::Path::new("/tmp").join(format!("tuic-{suffix}")));
+/// `name` inside [`short_socket_test_temp_root`], asserted to fit `sun_path`.
+#[cfg(unix)]
+pub fn short_socket_path(name: &str) -> std::path::PathBuf {
+    let path = short_socket_test_temp_root().join(name);
     assert!(
-        socket_root_fits(&root),
-        "short socket root exceeds Unix path budget"
+        path.as_os_str().len() < SUN_PATH_MAX,
+        "socket path exceeds the Unix path budget: {}",
+        path.display()
     );
-    std::fs::create_dir_all(&root).expect("create short socket test root");
-    root
+    path
 }
 
 /// Return the host shell and its script argument.
@@ -365,8 +524,8 @@ mod tests {
     #[test]
     fn git_in_a_test_process_reads_only_the_test_gitconfig() {
         let dir = tempfile::tempdir_in(super::test_temp_root()).expect("temp dir");
-        // Its own repo: the temp root sits inside this checkout, whose local
-        // config would otherwise answer.
+        // Its own repo, so no enclosing repository's local config can answer
+        // (the temp root may sit inside a checkout via TUIC_TEST_TMP_BASE).
         let init = std::process::Command::new("git")
             .args(["init", "-q"])
             .current_dir(dir.path())
