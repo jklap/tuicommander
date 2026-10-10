@@ -11,6 +11,7 @@
     "bundle:report": "node scripts/report-frontend-bundles.mjs",
     "architecture:cycles": "node scripts/check-frontend-cycles.mjs",
     "architecture:cycles:test": "node scripts/check-frontend-cycles.mjs --self-test",
+    "test-tmp-root:test": "node scripts/test-tmp-root.mjs --self-test",
     "check:no-nul-bytes": "node scripts/check-no-nul-bytes.mjs",
     "check:no-nul-bytes:test": "node scripts/check-no-nul-bytes.mjs --self-test",
     "build:watch": "vite build --watch",
