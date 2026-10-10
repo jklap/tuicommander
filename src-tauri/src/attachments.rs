@@ -117,6 +117,16 @@ fn exclude_from_git(cwd: &Path) -> Result<(), UploadError> {
     let old = std::fs::read_to_string(&exclude).unwrap_or_default();
     if !old.lines().any(|line| line == pattern) {
         use std::io::Write;
+        // `info/` comes from git's template, so a repo made with an empty one
+        // (`git init --template=`, a bare-bones init.templateDir) has none.
+        if let Some(parent) = exclude.parent() {
+            std::fs::create_dir_all(parent).map_err(|_| {
+                error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "could not exclude attachments from Git",
+                )
+            })?;
+        }
         let mut file = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
