@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Match native window and webview resize backgrounds to the selected theme, including light themes (Fixes #125; #1678-158c).
+
 - Restore missing live PTY identity bindings on MCP requests so spawned children remain linked to their parent in session lists (#1673-da49).
 
 - Preserve current automation settings when opening an old run notice; show deleted definitions as run details without an editor (#1620-82ae).

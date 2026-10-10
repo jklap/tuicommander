@@ -91,9 +91,12 @@ pub async fn open_panel_window(
         builder = builder.position(f64::from(g.x), f64::from(g.y));
     }
 
-    let window = builder
-        .build()
-        .map_err(|e| format!("Failed to create panel window: {e}"))?;
+    let window = crate::themes::window_background::configure(
+        builder,
+        crate::themes::window_background::current(&app),
+    )
+    .build()
+    .map_err(|e| format!("Failed to create panel window: {e}"))?;
 
     let panel_id_close = panel_id.clone();
     let app_handle = app.clone();

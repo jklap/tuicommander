@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FontType } from "../stores/settings";
 
+vi.mock("../utils/windowBackground", () => ({ syncWindowBackground: vi.fn() }));
+
 vi.mock("../invoke", () => ({
 	invoke: vi.fn().mockResolvedValue([]),
 }));
