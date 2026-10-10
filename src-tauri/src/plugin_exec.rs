@@ -557,7 +557,16 @@ mod tests {
     #[test]
     fn validate_cwd_rejects_outside_home() {
         let home = dirs::home_dir().unwrap();
-        let outside = crate::test_support::dir_outside_home();
+        // An existing directory outside HOME: the system root on Windows
+        // (its temp dir is inside the profile), else a fresh test temp dir.
+        let scratch = tempfile::tempdir().unwrap();
+        let outside = if cfg!(windows) {
+            std::path::PathBuf::from(
+                std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string()),
+            )
+        } else {
+            scratch.path().to_path_buf()
+        };
         if !outside.starts_with(&home) {
             assert!(validate_cwd(&outside.to_string_lossy()).is_err());
         }

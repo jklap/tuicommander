@@ -691,17 +691,6 @@ pub fn slashed(path: &str) -> String {
     path.replace('\\', "/")
 }
 
-/// Return an existing directory outside the current user's home directory.
-pub fn dir_outside_home() -> std::path::PathBuf {
-    if cfg!(windows) {
-        std::path::PathBuf::from(
-            std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string()),
-        )
-    } else {
-        std::path::PathBuf::from("/tmp")
-    }
-}
-
 /// HTTP request bytes captured by an IPC test server.
 pub struct HttpRequest {
     pub request_line: String,

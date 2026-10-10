@@ -94,14 +94,9 @@ const ALLOWED = new Map([
 	],
 	// PHASE-B: known sites the TMPDIR-only socket-root rework (assessment §3.1,
 	// §3.3, plan steps 4-10) removes. Delete each entry with its fix.
-	["src-tauri/crates/tuic-test-support/src/lib.rs::dir_outside_home", "PHASE-B: rejection-probe target, replaced by a HOME override + sibling tempdir"],
 	["scripts/run-remote-fixture.sh::<top level>", "PHASE-B: /tmp/tuic-rf-<hash> fixture TMPDIR when $TMPDIR is too long for the named socket"],
 	["scripts/test-run-remote-fixture.sh::<top level>", "PHASE-B: mktemp -d /tmp/tuic-rft.XXXXXX short scratch"],
 	["scripts/test-run-remote-fixture.sh::cleanup", "PHASE-B: removes the /tmp/tuic-rf-<hash> fixture dir"],
-	[
-		"src-tauri/src/mcp_http/mcp_transport.rs::ui_tab_falls_back_to_pty_cwd_when_no_peer_agent",
-		"PHASE-B: cmd.cwd(\"/tmp\") existing-dir cwd fixture (assessment §1c'', plan step 8)",
-	],
 ]);
 
 const TMP_LITERAL = /(?<![\w.~$}-])(?:\/private)?(?:\/var)?\/tmp(?![\w-])|\/dev\/shm(?![\w-])/;
