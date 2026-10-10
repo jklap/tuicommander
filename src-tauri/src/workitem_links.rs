@@ -49,10 +49,16 @@ impl LinkStore {
     }
 
     pub(crate) fn list(&self) -> Result<WorkItemLinks, String> {
-        self.file.update_with_strict(|links| Ok((links.clone(), false)))
+        self.file
+            .update_with_strict(|links| Ok((links.clone(), false)))
     }
 
-    pub(crate) fn link(&self, repo_path: &str, branch: &str, link: WorkItemLink) -> Result<(), String> {
+    pub(crate) fn link(
+        &self,
+        repo_path: &str,
+        branch: &str,
+        link: WorkItemLink,
+    ) -> Result<(), String> {
         validate(repo_path, branch, &link)?;
         self.file.update_with_strict(|links| {
             let changed = links.get(repo_path).and_then(|b| b.get(branch)) != Some(&link);
@@ -97,7 +103,9 @@ pub(crate) fn validate(repo_path: &str, branch: &str, link: &WorkItemLink) -> Re
         ("key", link.key.as_str()),
     ] {
         if value.trim().is_empty() || value.len() > MAX_TEXT {
-            return Err(format!("{name} must be non-empty and at most {MAX_TEXT} bytes"));
+            return Err(format!(
+                "{name} must be non-empty and at most {MAX_TEXT} bytes"
+            ));
         }
     }
     if link.title.len() > MAX_TEXT {

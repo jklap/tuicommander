@@ -78,7 +78,10 @@ fn corrupt_links_file_is_not_overwritten() {
         .unwrap()
         .filter_map(Result::ok)
         .any(|e| e.file_name().to_string_lossy().contains(".corrupt-"));
-    assert!(preserved, "the unreadable document must survive for recovery");
+    assert!(
+        preserved,
+        "the unreadable document must survive for recovery"
+    );
 }
 
 /// catches: unlink of the last branch leaving an empty repo entry, or reporting

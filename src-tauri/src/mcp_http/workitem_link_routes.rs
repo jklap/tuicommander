@@ -27,7 +27,11 @@ pub(super) struct UnlinkRequest {
 }
 
 fn bad_request(msg: String) -> Response {
-    (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": msg}))).into_response()
+    (
+        StatusCode::BAD_REQUEST,
+        Json(serde_json::json!({"error": msg})),
+    )
+        .into_response()
 }
 
 pub(super) async fn list(

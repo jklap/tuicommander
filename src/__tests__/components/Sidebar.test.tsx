@@ -3090,7 +3090,9 @@ describe("Sidebar", () => {
 			const onBranchSelect = vi.fn();
 			try {
 				const { container } = render(() => <Sidebar {...defaultProps({ onBranchSelect })} />);
-				const badge = branchRow(container, "feature/x").querySelector<HTMLElement>("[data-testid='branch-item-badge']")!;
+				const badge = branchRow(container, "feature/x").querySelector<HTMLElement>(
+					"[data-testid='branch-item-badge']",
+				)!;
 				expect(badge).toHaveTextContent("ACME-7");
 
 				fireEvent.click(badge);
