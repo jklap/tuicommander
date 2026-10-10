@@ -5,6 +5,7 @@ Only named structs and unit/adjacently-tagged newtype enums are accepted. Fail
 closed when a DTO uses syntax this generator cannot represent. No Rust build.
 """
 import argparse
+import json
 from pathlib import Path
 import re
 
@@ -88,8 +89,12 @@ if __name__ == "__main__":
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
     generated = generate()
+    fixture_output = ROOT / "src/plugins/testing/work-items-demo.gen.ts"
+    snapshot = json.loads((SOURCES / "demo.json").read_text())
+    fixture = "// Generated from the local-only work_items/demo.json. Do not edit.\nimport type { WorkItemProviderSnapshot } from \"../../types/work-items.gen\";\n// biome-ignore format: preserve canonical JSON fixture formatting\nexport const workItemsDemo = " + json.dumps(snapshot, indent="\t") + " satisfies WorkItemProviderSnapshot;\n"
     if args.check:
-        if OUTPUT.read_text() != generated:
+        if OUTPUT.read_text() != generated or fixture_output.read_text() != fixture:
             raise SystemExit("Work-item types drift: run python3 scripts/generate-work-item-types.py")
     else:
         OUTPUT.write_text(generated)
+        fixture_output.write_text(fixture)
