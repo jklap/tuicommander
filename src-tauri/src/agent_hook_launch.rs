@@ -107,6 +107,12 @@ fn codex_user_notify() -> Vec<String> {
         .collect()
 }
 
+/// Codex's `notify` script. The tty comes from `$TUIC_PTY_TTY` — the device
+/// TUIC stamps on every PTY child (`spawn_pty_pair_with_retry`), inherited by
+/// the agent and by the notify it runs — exactly as `tuic-hook` resolves it.
+/// `ps -o tty=` is only the fallback for an agent TUIC did not spawn: inside a
+/// sandboxed agent the setuid `ps` cannot be exec'd, which used to drop the
+/// tty to `/dev/tty` (none for a detached notify) and lose `state=idle`.
 fn codex_script(user_notify: &[String]) -> String {
     let chain = if user_notify.is_empty() {
         String::new()
@@ -124,8 +130,11 @@ fn codex_script(user_notify: &[String]) -> String {
 payload=${{1:-}}
 case "$payload" in
   *'"type":"agent-turn-complete"'*|*'"type": "agent-turn-complete"'*)
-    tty=$(ps -o tty= -p "$PPID" 2>/dev/null | tr -d '[:space:]')
-    case "$tty" in *[0-9]*) tty="/dev/${{tty#/dev/}}";; *) tty=/dev/tty;; esac
+    tty=${{TUIC_PTY_TTY:-}}
+    if [ -z "$tty" ]; then
+      tty=$(ps -o tty= -p "$PPID" 2>/dev/null | tr -d '[:space:]')
+      case "$tty" in *[0-9]*) tty="/dev/${{tty#/dev/}}";; *) tty=/dev/tty;; esac
+    fi
     printf '\033]7770;state=idle\033\\' > "$tty" 2>/dev/null || true
     ;;
 esac
@@ -623,6 +632,32 @@ mod tests {
         assert!(claude.contains("UserPromptSubmit"));
         assert!(codex.contains("agent-turn-complete"));
         assert!(codex.contains("7770;state=idle"));
+        let pty_tty = codex.find("TUIC_PTY_TTY").expect("reads TUIC_PTY_TTY");
+        let ps = codex.find("ps -o tty=").expect("keeps the ps fallback");
+        assert!(pty_tty < ps, "TUIC_PTY_TTY is tried before ps: {codex}");
+    }
+
+    /// The notify must reach the PTY TUIC stamped without exec'ing `ps`:
+    /// `PATH` is emptied, so any `ps`/`tr` call would fail. Red before the
+    /// `$TUIC_PTY_TTY` lookup (the tty fell back to `/dev/tty`).
+    #[cfg(unix)]
+    #[test]
+    fn codex_notify_writes_to_tuic_pty_tty_without_ps() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let script = dir.path().join("notify.sh");
+        std::fs::write(&script, codex_script(&[])).unwrap();
+        let tty = dir.path().join("fake-tty");
+        std::fs::write(&tty, "").unwrap();
+        let status = std::process::Command::new("/bin/sh")
+            .arg(&script)
+            .arg(r#"{"type":"agent-turn-complete"}"#)
+            .env_clear()
+            .env("PATH", dir.path().join("no-such-dir"))
+            .env("TUIC_PTY_TTY", &tty)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        assert_eq!(std::fs::read(&tty).unwrap(), b"\x1b]7770;state=idle\x1b\\");
     }
 
     #[test]
@@ -635,7 +670,7 @@ mod tests {
     }
 
     /// Unix only because it runs the hook commands, and the TUIC one is a POSIX
-    /// shell script that reads the controlling tty through `ps -o tty=`. The
+    /// shell script that resolves the controlling tty (`$TUIC_PTY_TTY`, else `ps -o tty=`). The
     /// additivity it proves is Claude's, not the platform's.
     ///
     /// DEFERRED (2026-09-15) — `hook_command` and `codex_script` are generated
