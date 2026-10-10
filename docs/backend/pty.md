@@ -392,7 +392,7 @@ impl OutputRingBuffer {
 
 ### VtLogBuffer
 
-**Module:** `src-tauri/src/state.rs`
+**Module:** `src-tauri/crates/tuic-terminal/src/vt_log.rs`
 
 VT100-aware extractor that captures clean log lines from PTY output. Designed for mobile/browser clients that need readable text without ANSI noise or TUI screen garbage.
 
@@ -427,7 +427,7 @@ struct ChangedRow {
 
 1. Owns the session's `TerminalGrid`, backed by Alacritty (24 rows × 220 cols default); the same grid supplies rendered frames, scrollback, copy and search
 2. On each `process()` call, compares current screen rows against previous snapshot
-3. Newly scrolled primary-history rows are extracted into the separate `LogLine` log
+3. Newly scrolled primary-history rows are extracted into the separate `LogLine` log. The extraction cursor uses the primary grid origin (`total_scrolled`), including evicted rows; bounded history length stops at 10,000 and would otherwise freeze this log while the live screen keeps changing
 4. **Separate alternate-screen contracts:** changed rows are still returned while a TUI app owns the alternate screen, so status/intent/question parsers keep working. Durable log extraction reads only primary-screen history, so fullscreen repaint noise never reaches mobile/MCP logs
 5. The grid retains 10,000 history rows per screen; the separate log is bounded by `VT_LOG_BUFFER_CAPACITY` (10,000 lines). Oldest entries are dropped when each buffer is full. The grid history cannot be reduced as an independent log scratch buffer
 6. **Monotonic cursor:** `total_lines()` returns a monotonically increasing count of all lines ever pushed (not the current buffer length). Clients use this as a stable cursor for paginated reads via `lines_since_owned(offset, limit)`. If a client's saved offset falls in the evicted range, it is clamped to `oldest_offset()`
