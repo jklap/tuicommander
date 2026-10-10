@@ -51,16 +51,16 @@ mod tests {
         let cases: &[(&[&str], &[u8])] = &[
             (
                 &["first phrase", "second phrase"],
-                b"\x15\x1b[200~first phrase\nsecond phrase\x1b[201~\r",
+                b"\x1b[200~first phrase\nsecond phrase\x1b[201~\r",
             ),
-            (&["first phrase"], b"\x15first phrase\r"),
+            (&["first phrase"], b"first phrase\r"),
             (
                 &["first phrase", "second phrase", "third phrase"],
-                b"\x15\x1b[200~first phrase\nsecond phrase\nthird phrase\x1b[201~\r",
+                b"\x1b[200~first phrase\nsecond phrase\nthird phrase\x1b[201~\r",
             ),
             (
                 &["first phrase\n", "second phrase"],
-                b"\x15\x1b[200~first phrase\nsecond phrase\x1b[201~\r",
+                b"\x1b[200~first phrase\nsecond phrase\x1b[201~\r",
             ),
         ];
         for (agent, (phrases, expected)) in ["claude", "codex"]
