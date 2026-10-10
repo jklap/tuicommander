@@ -4,6 +4,7 @@
     allow(dead_code, unused_imports, unused_variables)
 )]
 
+pub mod work_items;
 pub mod acp;
 pub(crate) mod acp_chat;
 pub(crate) mod acp_commands;
