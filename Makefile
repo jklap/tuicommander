@@ -144,6 +144,7 @@ check: test-shell
 	@scripts/with-test-tmp.sh $(RTK) pnpm exec biome check --max-diagnostics=100 src/ && echo "  biome ✓"
 	@scripts/with-test-tmp.sh $(RTK) pnpm architecture:cycles && scripts/with-test-tmp.sh $(RTK) pnpm architecture:cycles:test && scripts/with-test-tmp.sh $(RTK) pnpm test-tmp-root:test && echo "  architecture cycles ✓"
 	@scripts/with-test-tmp.sh $(RTK) pnpm check:no-nul-bytes && scripts/with-test-tmp.sh $(RTK) pnpm check:no-nul-bytes:test && echo "  no NUL bytes ✓"
+	@scripts/with-test-tmp.sh $(RTK) pnpm check:no-home-gits && scripts/with-test-tmp.sh $(RTK) pnpm check:no-home-gits:test && echo "  no HOME-relative Gits paths ✓"
 	@scripts/with-test-tmp.sh bash -c 'caps=$$(sed -n "/const KNOWN_CAPABILITIES/,/];/p" src-tauri/src/plugins.rs | grep -oE "\"[a-z][a-z:_-]+\"" | tr -d "\""); miss=0; for c in $$caps; do for d in src-tauri/src/mcp_http/plugin_docs.rs docs/plugins.md; do grep -qF "$$c" "$$d" || { echo "  ✗ capability $$c missing from $$d"; miss=1; }; done; done; [ $$miss -eq 0 ]' && echo "  plugin-docs-sync ✓"
 	@scripts/with-test-tmp.sh bash scripts/check-make-instance-scope.sh && echo "  make-instance-scope ✓"
 	@scripts/with-test-tmp.sh bash scripts/check-make-dev-builds-sibling.sh && echo "  make-dev-builds-sibling ✓"

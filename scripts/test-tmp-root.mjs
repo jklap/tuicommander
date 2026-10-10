@@ -28,7 +28,7 @@ function selfTest() {
 		[{ TUIC_TEST_TMP_BASE: "/checkout/.tmp/tuic-tests" }, "/os", "/checkout/.tmp/tuic-tests"],
 		[{ TUIC_TEST_HOST_TMPDIR: "/host/" }, "/os", "/host/tuic-tests"],
 		[{}, "/var/folders/x/T/", "/var/folders/x/T/tuic-tests"],
-		// Catches: the old ~/Gits allow-list deciding anything.
+		// Catches: the old HOME-relative Gits allow-list deciding anything.
 		[{ HOME: "/home/dev", TMPDIR: "/home/dev/Gits/.tmp" }, "/home/dev/Gits/.tmp", "/home/dev/Gits/.tmp/tuic-tests"],
 		[{ HOME: "/home/dev" }, "/tmp", "/tmp/tuic-tests"],
 	];
