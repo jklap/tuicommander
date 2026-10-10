@@ -6,6 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Add the Design Mode v2 unpacked-extension pilot: one-shot picks, per-pick comments, same-repository recipients, queued feedback, native messaging and dev-server discovery (#1672-cd3d).
 - Add opt-in automation precheck stdout context with a 16 KiB escaped payload cap, untrusted delimiters and durable injection metadata; exclude stderr (#1631-45bf).
 
 - Remove the Design Mode tab badge when inspection stops (#1671-812f).
@@ -38,6 +39,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Add the Rust foundation for Once automation schedules with IANA timezone validation, a single preview instant and durable occurrence deduplication (#1629-2262).
 
 ### Fixed
+- Preserve Design Mode screenshot evidence and send retained feedback to an explicitly chosen replacement agent (#1672-cd3d).
 - Attach saved AI Chat tabs when selected, show connection failures with Retry and pending model controls, and name tabs from conversation titles or prompts (#1628-4459).
 
 - Keep enforcing other automation runs' deadlines when stopping one owned process fails (#1616-1882).

@@ -10,6 +10,12 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "Design Mode",
+		description:
+			"Start Design Mode from an agent tab, open its browser sidebar, pick elements and comment before sending. Busy agents receive feedback at their next idle window.",
+		shortcut: null,
+	},
+	{
 		feature: "Spoken replies",
 		description:
 			"Turn off Spoken replies in mobile hands-free or Settings > Voice to keep dictating while the agent answers in text.",

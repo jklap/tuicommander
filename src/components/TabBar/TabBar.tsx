@@ -389,6 +389,15 @@ export const TabBar: Component<TabBarProps> = (props) => {
 					action: () => designModeStore.toggle(sessionId),
 				},
 			);
+			if (!isArmed)
+				items.push({
+					label: "Choose Design Mode browser",
+					action: () => {},
+					children: [
+						{ label: "Open in Edge", action: () => designModeStore.toggle(sessionId, "edge") },
+						{ label: "Open in Chrome", action: () => designModeStore.toggle(sessionId, "chrome") },
+					],
+				});
 		}
 		if (isPerfDebug() && sessionId) {
 			const recording = ptyCaptureStore.isRecording(sessionId);

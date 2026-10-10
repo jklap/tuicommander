@@ -4949,3 +4949,6 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] Discord community links: Help → Resources → Discord Community opens TUICommander & Co; website footers and README badge use the permanent invite, with bugs directed to GitHub issues.
 
 - [ ] Automations Runs (#1619-b84d): verify Runs and saved-output layout with light/dark themes. Headless Chrome for Testing timed out without producing screenshots. Check 24h/7d summary cards, pagination, needs_you/unknown/interrupted badges, and View run fallback with saved output and removed workspace paths. No desktop instance was launched by the implementer.
+- [ ] Design Mode v2 pilot: after Boss rebuilds/restarts TUIC, load the unpacked extension into its dedicated Edge profile; verify toolbar opening, activeTab capture and sidebar return after switching tabs. Rust does not hot-reload. CFT sidebar and trusted top/frame picks were verified in story 1672.
+
+- [ ] After the next Rust rebuild/restart, verify Design Mode sends a captured crop as a readable image and lets retained feedback reach a replacement after its original recipient exits (#1672-cd3d). Rust does not hot-reload.

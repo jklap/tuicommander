@@ -610,7 +610,7 @@ Some frontend-only stores persist to localStorage:
 - [x] SolidJS migration
 
 ### Completed (P2)
-- [x] Design Mode opens a dedicated Chrome window per repository and pre-fills selected element context into the bound agent terminal without submitting the draft; local per-repository URL, status events, HTTP parity and bounded/redacted payloads
+- [x] Design Mode v2 pilot: dedicated Chrome/Edge profile, unpacked extension sidebar, explicit picking, per-pick comments, launching-agent default, same-repository recipient selection, native messaging, idle-gated Send and live dev-server discovery; native Edge validation remains tracked in to-test.md
 - [x] Split pane layout
 - [x] Touch branch action trays: left swipe reveals existing actions; vertical scrolling and desktop hover controls remain unchanged
 - [x] Multi-repository sidebar

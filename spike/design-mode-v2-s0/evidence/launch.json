@@ -1,0 +1,26 @@
+{
+  "collector": [
+    "python3",
+    "/Users/stefano.straus/Gits/personal/tuicommander__wt/spike-design-mode-v2-s0/spike/design-mode-v2-s0/collector.py"
+  ],
+  "vite": [
+    "node",
+    "/Users/stefano.straus/Gits/personal/tuicommander__wt/spike-design-mode-v2-s0/node_modules/.pnpm/vite@8.3.0_@types+node@22.20.2_esbuild@0.28.2/node_modules/vite/bin/vite.js",
+    "/Users/stefano.straus/Gits/personal/tuicommander__wt/spike-design-mode-v2-s0/spike/design-mode-v2-s0/fixture",
+    "--host",
+    "0.0.0.0",
+    "--port",
+    "19340",
+    "--strictPort"
+  ],
+  "edge": [
+    "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+    "--user-data-dir=/Users/stefano.straus/Gits/.tmp/dm2-s0/edge-profile",
+    "--no-first-run",
+    "--no-default-browser-check",
+    "--load-extension=/Users/stefano.straus/Gits/personal/tuicommander__wt/spike-design-mode-v2-s0/spike/design-mode-v2-s0/extension",
+    "--enable-logging",
+    "--log-file=/Users/stefano.straus/Gits/.tmp/dm2-s0/edge.log",
+    "http://127.0.0.1:19340/"
+  ]
+}

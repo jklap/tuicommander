@@ -300,6 +300,12 @@ describe("transport", () => {
 				path: "/design-mode/start",
 				body: { sessionId: "agent-1" },
 			});
+			// Catches: browser choice being dropped on the browser/PWA transport.
+			expect(mapCommandToHttp("start_design_mode", { sessionId: "agent-1", browser: "edge" })).toEqual({
+				method: "POST",
+				path: "/design-mode/start",
+				body: { sessionId: "agent-1", browser: "edge" },
+			});
 			expect(mapCommandToHttp("stop_design_mode", { repoPath: "/repo" })).toEqual({
 				method: "POST",
 				path: "/design-mode/stop",
