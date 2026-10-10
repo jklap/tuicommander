@@ -183,7 +183,9 @@ export function createInMemoryWorkItemProvider(seed: WorkItemProviderSnapshot = 
 							const action = column.action;
 							if (!action) return false;
 							return action.kind === "edit_field"
-								? action.value.value !== null && matches(value, action.value.value)
+								? action.value.value === null
+									? value == null
+									: matches(value, action.value.value)
 								: action.kind === "transition" && item.state.id === action.value;
 						})
 						.map((item) => ({
@@ -228,6 +230,7 @@ export function createInMemoryWorkItemProvider(seed: WorkItemProviderSnapshot = 
 					...created.item,
 					reference: { providerId: data.providerId, accountId: data.accountId, id },
 					key: `DEMO-${id}`,
+					url: `https://example.invalid/tasks/${id}`,
 					title: action.value.title,
 					itemType: action.value.itemType,
 					assignees: [],
