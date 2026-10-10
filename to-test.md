@@ -4955,3 +4955,5 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] Design Mode v2 pilot: after Boss rebuilds/restarts TUIC, load the unpacked extension into its dedicated Edge profile; verify toolbar opening, activeTab capture and sidebar return after switching tabs. Rust does not hot-reload. CFT sidebar and trusted top/frame picks were verified in story 1672.
 
 - [ ] After the next Rust rebuild/restart, verify Design Mode sends a captured crop as a readable image and lets retained feedback reach a replacement after its original recipient exits (#1672-cd3d). Rust does not hot-reload.
+
+- [ ] Settings catalogue foundation: after Boss's next manual `make dev` restart or release build, later settings adapters must use the Rust descriptors, retain unavailable voice fields and refuse cutover while inventory gaps remain. This commit adds internal definitions only; no new MCP tool or UI control is exposed yet.
