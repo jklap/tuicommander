@@ -32,7 +32,6 @@ interface DeviceCodeResponse {
 
 interface PollResult {
 	status: "pending" | "slow_down" | "success" | "expired" | "access_denied";
-	access_token?: string;
 	scope?: string;
 }
 

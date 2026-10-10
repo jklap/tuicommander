@@ -878,3 +878,7 @@ the prepared launch prompt, counting escaped stdout bytes before framing/marker.
 ## Automation Runs View (#1619-b84d)
 
 The Runs tab displays paginated immutable history across definitions, including deleted definitions, and backend 24h/7d elapsed-window summaries. View run focuses only a live terminal owned by the addressed daemon. Absent, suspended or exited sessions display saved bounded output, truncation evidence and recorded workspace details without creating sessions or workspaces. The dialog captures the active repository's daemon owner when opened. Visual verification remains pending because headless Chrome screenshot attempts timed out.
+
+## Core account registry status
+
+A1 implements the shared account/site registry, generic token-only provider registration/verification, write-only account action transport and GitHub migration. The core retains GitHub provider/binding semantics. Account reads and OAuth replies contain no tokens. Settings catalogue aggregate registration, private native secret-entry UI and plugin manifest/authenticated HTTP wiring remain separate assigned integration steps.
