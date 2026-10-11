@@ -1235,10 +1235,10 @@ Returns `{"bot": N, "human": M}`: unresolved review threads of one PR (first 50)
 ### PR Diff
 
 ```
-GET /repo/pr-diff?path=/path/to/repo
+GET /repo/pr-diff?path=/path/to/repo&pr=42
 ```
 
-Returns diff for the current branch's open PR.
+Returns `{"diff": "...", "headSha": "..."}`. `headSha` is the commit the diff was read at; the call fails with 502 if the PR head moves while the diff loads.
 
 ### Conflict Assist
 

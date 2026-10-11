@@ -5003,6 +5003,8 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 
 - [ ] After a manual `make dev` restart (or `make build`), verify the line review APIs through the integrated Files UI: outdated/resolved threads, replies, resolution and rejection after the PR head moves. Rust changes require restart; automated checks use recorded GitHub fixtures/local stubs.
 
+- [ ] [HUMAN] #1691-bdff: Open a PR with review threads from "View diff" on a real repository (desktop build). Check: threads sit on their lines and an outdated thread is labelled and listed above its file; Resolve/Unresolve and Reply show GitHub's answer; hover a line, click "+", add a comment, then Submit review as COMMENT on a throwaway PR; push a commit to the PR, then Submit review must say the PR has new commits and keep the pending comments. Check that long files no longer overlap the next file header. Automated: recorded fixtures and a local stub, Chromium + WebKit iPhone screenshots.
+
 - [ ] After manual `make dev` restart (or `make build`), verify integrated PR actions: failed-job rerun, auto-merge enable/disable, enqueue/dequeue and queue state. A queue-required merge must enqueue; a moved head or unavailable branch policy must prevent writes. REQUEST_CHANGES with blank text must fail. Automated checks use recorded responses and local stubs only.
 ## Private account secret entry (#1696-c6d4)
 
