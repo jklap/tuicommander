@@ -20,9 +20,10 @@ pub(crate) const UPSTREAMS_FILE: &str = "mcp-upstreams.json";
 static UPSTREAM_SAVE_SEQUENCE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// Top-level wrapper for the upstream config file.
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 pub(crate) struct UpstreamMcpConfig {
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates servers for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}, "x-collection-key" = "id"))]
     pub(crate) servers: Vec<UpstreamMcpServer>,
 }
 
@@ -64,39 +65,49 @@ impl Drop for CreatedCredentials {
 }
 
 /// A single upstream MCP server configuration.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 pub(crate) struct UpstreamMcpServer {
     /// Unique identifier (UUID).
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates id for the current owner.","operations":["get"],"confirmationClass":"ordinary"}))]
     pub(crate) id: String,
     /// Human-readable name, also used as the tool namespace prefix.
     /// Must be unique, non-empty, and contain only `[a-z0-9_-]`.
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates name for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) name: String,
     /// Transport configuration.
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates transport for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) transport: UpstreamTransport,
     /// Whether this upstream is active.
     #[serde(default = "default_true")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates enabled for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) enabled: bool,
     /// Timeout in seconds for tool calls (0 = no timeout).
     #[serde(default = "default_timeout")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates timeout secs for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) timeout_secs: u32,
     /// Optional tool filter (allow/deny list).
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates tool filter for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) tool_filter: Option<ToolFilter>,
     /// Optional authentication configuration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates auth for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) auth: Option<UpstreamAuth>,
     /// Secret header metadata only; values live in the upstream credential vault.
     // Keep an explicit empty array so a delta removing the final header does not
     // turn the omitted field into null (which cannot deserialize as a Vec).
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates headers for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}, "x-collection-key" = "name"))]
     pub(crate) headers: Vec<UpstreamHeader>,
 }
 
 /// A secret header and its opaque, upstream-scoped credential reference.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct UpstreamHeader {
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates name for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) name: String,
+    #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"live","effect":"Updates credential ref for the current owner.","operations":["get"],"confirmationClass":"ordinary"}))]
     pub(crate) credential_ref: String,
 }
 
@@ -131,32 +142,39 @@ impl UpstreamHeader {
 }
 
 /// Transport type for connecting to an upstream MCP server.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub(crate) enum UpstreamTransport {
     Http {
+        #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"live","effect":"Updates url for the current owner.","operations":["get","set"],"confirmationClass":"execution_authority"}))]
         url: String,
     },
     Stdio {
+        #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"next_session","effect":"Used when the next session or process starts; existing sessions retain their launch configuration.","operations":["get","set"],"confirmationClass":"ordinary"}))]
         command: String,
         #[serde(default)]
+        #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"next_session","effect":"Used when the next session or process starts; existing sessions retain their launch configuration.","operations":["get","set"],"confirmationClass":"ordinary"}))]
         args: Vec<String>,
         #[serde(default)]
+        #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"next_session","effect":"Used when the next session or process starts; existing sessions retain their launch configuration.","operations":["get","set"],"confirmationClass":"ordinary"}))]
         env: HashMap<String, String>,
         /// Working directory for the spawned process.
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates cwd for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
         cwd: Option<String>,
     },
 }
 
 /// Tool filter: allow or deny specific tools by glob pattern.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 pub(crate) struct ToolFilter {
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates mode for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) mode: FilterMode,
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates patterns for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) patterns: Vec<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum FilterMode {
     Allow,
@@ -164,11 +182,14 @@ pub(crate) enum FilterMode {
 }
 
 /// Authentication method for an upstream MCP server.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(crate) enum UpstreamAuth {
     /// Static bearer token.
-    Bearer { token: String },
+    Bearer {
+        #[schemars(extend("x-setting" = {"sensitivity":"secret","apply":"live","effect":"Updates token for the current owner.","operations":["get","set_secret","clear_secret"],"confirmationClass":"execution_authority"}))]
+        token: String,
+    },
     /// OAuth 2.1 with PKCE (RFC 9449 / RFC 8707).
     ///
     /// Wire tag is `oauth2` (matches the frontend `UpstreamAuth` type and the
@@ -179,17 +200,22 @@ pub(crate) enum UpstreamAuth {
     /// left OAuth upstreams (e.g. publishwith-ai) with no Authorize action.
     #[serde(rename = "oauth2", alias = "o_auth2")]
     OAuth2 {
+        #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates client id for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
         client_id: String,
         /// Confidential clients (e.g. from DCR) have a secret; public clients omit it.
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(extend("x-setting" = {"sensitivity":"secret","apply":"live","effect":"Updates client secret for the current owner.","operations":["get","set_secret","clear_secret"],"confirmationClass":"ordinary"}))]
         client_secret: Option<String>,
         #[serde(default)]
+        #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates scopes for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
         scopes: Vec<String>,
         /// Override discovered authorization endpoint.
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates authorization endpoint for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
         authorization_endpoint: Option<String>,
         /// Override discovered token endpoint.
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates token endpoint for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
         token_endpoint: Option<String>,
     },
 }

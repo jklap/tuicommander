@@ -1,3 +1,5 @@
+import { urlResolverRegistry } from "../components/CommandPalette/urlPaste";
+import { startWork } from "../hooks/git/startWork";
 import { invoke, listen } from "../invoke";
 import { activityStore } from "../stores/activityStore";
 import { agentConfigsStore } from "../stores/agentConfigs";
@@ -47,6 +49,7 @@ import type {
 	TuiPlugin,
 } from "./types";
 import { INVOKE_WHITELIST, NOTIFICATION_SOUNDS, PluginCapabilityError } from "./types";
+import { workItemProviderRegistry } from "./workItemProviderRegistry";
 
 /**
  * Central plugin lifecycle manager.
@@ -285,6 +288,24 @@ function createPluginRegistry() {
 			},
 
 			// -- Tier 1: Activity Center + watchers + providers --
+
+			registerWorkItemProvider(provider) {
+				return track(workItemProviderRegistry.register(provider));
+			},
+
+			async startWork(request) {
+				requireCapability(pluginId, capabilities, "pty:write");
+				if (isPluginPaused(pluginId)) throw new Error(`Plugin ${pluginId} is paused`);
+				return startWork(request);
+			},
+
+			registerUrlResolver(resolver) {
+				return track(
+					urlResolverRegistry.register(pluginId, (url, signal) =>
+						isPluginPaused(pluginId) ? Promise.resolve(null) : resolver(url, signal),
+					),
+				);
+			},
 
 			registerSection(section) {
 				return track(activityStore.registerSection({ ...section, pluginId }));

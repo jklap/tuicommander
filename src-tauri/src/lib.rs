@@ -21,6 +21,7 @@ pub(crate) mod attachments;
 #[cfg(feature = "desktop")]
 pub(crate) mod audio_enumeration;
 pub(crate) mod prompt_receipt;
+pub mod work_items;
 pub use tuic_core::app_instance;
 pub(crate) mod app_logger;
 pub(crate) mod changelog;
@@ -38,6 +39,7 @@ pub(crate) mod codex_usage;
 pub(crate) mod config;
 pub(crate) mod conflict_assist;
 pub(crate) mod content_index;
+pub mod settings;
 pub(crate) use tuic_git::cow;
 pub(crate) mod cpu_watchdog;
 pub(crate) use tuic_core::credentials;
@@ -200,7 +202,8 @@ async fn open_secondary_window(app: tauri::AppHandle) -> Result<(), String> {
     }
 
     let url = tauri::WebviewUrl::App("/?mode=secondary".into());
-    tauri::WebviewWindowBuilder::new(&app, "secondary", url)
+    let builder = tauri::WebviewWindowBuilder::new(&app, "secondary", url);
+    themes::window_background::configure(builder, themes::window_background::current(&app))
         .title("TUICommander — Secondary")
         .inner_size(1200.0, 800.0)
         .min_inner_size(800.0, 600.0)
@@ -1723,6 +1726,21 @@ pub fn run() {
 
     sanitize_window_state();
 
+    let themes_dir = config::config_dir().join("themes");
+    if let Err(e) = themes::seed_builtin_themes(&themes_dir) {
+        tracing::warn!("Failed to seed themes: {e}");
+    }
+    let startup_background =
+        themes::window_background::resolve(&themes::load_themes(&themes_dir), &config.theme);
+    let mut context = tauri::generate_context!();
+    for window in &mut context.config_mut().app.windows {
+        window.background_color = Some(tauri::window::Color(
+            startup_background[0],
+            startup_background[1],
+            startup_background[2],
+            255,
+        ));
+    }
     let index_strategy = config.index_strategy.clone();
     let builder = tauri::Builder::default();
     let builder = plugins::register_plugin_protocol(builder);
@@ -1849,7 +1867,7 @@ pub fn run() {
             if app.get_webview_window("main").is_none() {
                 tracing::warn!("Main window missing from config — creating programmatically");
                 let builder = tauri::WebviewWindowBuilder::new(
-                    app,
+                    app.handle(),
                     "main",
                     tauri::WebviewUrl::App("index.html".into()),
                 )
@@ -1863,7 +1881,7 @@ pub fn run() {
                 let builder = builder
                     .hidden_title(true)
                     .title_bar_style(tauri::TitleBarStyle::Overlay);
-                builder.build()?;
+                themes::window_background::configure(builder, startup_background).build()?;
             }
 
             // Track desktop window focus so push notifications can be
@@ -1935,12 +1953,9 @@ pub fn run() {
                 press_and_hold::disable();
             }
 
-            // Seed built-in themes on first run, then start hot-reload watcher
-            let themes_dir = config::config_dir().join("themes");
-            if let Err(e) = themes::seed_builtin_themes(&themes_dir) {
-                tracing::warn!("Failed to seed built-in themes: {e}");
-            }
-            themes::start_theme_watcher(themes_dir, app_state);
+            // Themes are seeded before window creation so the first paint uses
+            // the saved theme. Start hot reload after the AppHandle is available.
+            themes::start_theme_watcher(config::config_dir().join("themes"), app_state);
 
             // Former built-ins are seeded once as ordinary uninstallable plugins.
             // Seed before the watcher starts so startup does not emit redundant
@@ -2512,7 +2527,7 @@ pub fn run() {
             ego_cli::perimeter::ego_set_perimeter_network,
             ego_cli::ego_set_default_model
         ])
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while building tauri application")
         .run(|app_handle, event| {
             match &event {
