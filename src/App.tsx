@@ -116,6 +116,7 @@ import { openFileAction, openTerminalFilePath } from "./utils/filePreview";
 import { markdownDocumentPanelId } from "./utils/markdownDocumentPanelId";
 import { navigateToTerminal } from "./utils/navigateToTerminal";
 import { initPaneTabAssignment } from "./utils/paneTabAssign";
+import { quickSwitcherHints } from "./utils/quickSwitcherHints";
 import { getShellFamily, sendCommand } from "./utils/sendCommand";
 
 const getDefaultFontSize = () => settingsStore.state.defaultFontSize;
@@ -908,7 +909,7 @@ const App: Component = () => {
 			<div id="app-body">
 				{/* Sidebar - always mounted, hidden via CSS */}
 				<Sidebar
-					quickSwitcherActive={quickSwitcherVisible() && !globalWorkspaceStore.isActive()}
+					quickSwitcherActive={quickSwitcherHints(quickSwitcherVisible(), globalWorkspaceStore.isActive()).sidebar}
 					onBranchSelect={gitOps.handleBranchSelect}
 					onAddTerminal={gitOps.handleAddTerminalToWorkspace}
 					onRemoveBranch={gitOps.handleRemoveWorkspace}
@@ -968,7 +969,7 @@ const App: Component = () => {
 					{/* Tab bar */}
 					<div id="tab-bar">
 						<TabBar
-							quickSwitcherActive={quickSwitcherVisible() && globalWorkspaceStore.isActive()}
+							quickSwitcherActive={quickSwitcherHints(quickSwitcherVisible(), globalWorkspaceStore.isActive()).tabBar}
 							onTabSelect={terminalLifecycle.handleTerminalSelect}
 							onTabClose={terminalLifecycle.closeTerminal}
 							onCloseOthers={terminalLifecycle.closeOtherTabs}
