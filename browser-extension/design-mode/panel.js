@@ -28,7 +28,13 @@ function render(draft) {
   const selection = draft.selectedSessionId ?? '';
   if (draft.agentNotice) status(draft.agentNotice,true);
   $('agent').replaceChildren();
-  for (const agent of draft.agents ?? []) { const option=node('option',agent.label.slice(0,120)); option.value=agent.sessionId; option.title=agent.label; $('agent').append(option); }
+  const others=node('optgroup');others.label='Other agents';
+  for (const agent of draft.agents ?? []) {
+    const starter=agent.sessionId===draft.armedSessionId;
+    const option=node('option',`${agent.label.slice(0,120)}${starter?' · started Design Mode':''}`); option.value=agent.sessionId; option.title=agent.label;
+    if (starter) $('agent').prepend(option); else others.append(option);
+  }
+  if (others.children.length) $('agent').append(others);
   if (!draft.agents?.length) { const reason = draft.connection.startsWith('Connected') ? 'No live agents in this repository' : 'Connection unavailable — see reason above'; const option=node('option',reason); option.value=''; $('agent').append(option); }
   if (!selection && draft.agents?.length) { const option=node('option','Choose another agent'); option.value=''; $('agent').prepend(option); }
   $('agent').value=selection;

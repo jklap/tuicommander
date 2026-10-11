@@ -74,3 +74,25 @@ it("new_pick_appears_while_comment_has_focus", async () => {
 	await vi.advanceTimersByTimeAsync(5000);
 	expect(Array.from(document.querySelectorAll("#cards .card code"), (code) => code.textContent)).toEqual(["#second"]);
 });
+
+// Catches: the Design Mode starter hidden among randomly named agents in the recipient list.
+it("starter_agent_is_first_and_labelled", async () => {
+	mountPanel({
+		...base,
+		picks: [],
+		agents: [
+			{ sessionId: "a", label: "fix-dm-list" },
+			{ sessionId: "b", label: "feat-1719" },
+		],
+		armedSessionId: "b",
+		selectedSessionId: "b",
+	});
+	await vi.waitFor(() => expect(document.querySelectorAll("#agent option")).toHaveLength(2));
+	const select = document.getElementById("agent") as HTMLSelectElement;
+	expect(select.options[0].textContent).toBe("feat-1719 · started Design Mode");
+	expect(select.value).toBe("b");
+	expect(select.querySelector("optgroup")?.label).toBe("Other agents");
+	expect(Array.from(select.querySelectorAll("optgroup option"), (option) => option.textContent)).toEqual([
+		"fix-dm-list",
+	]);
+});
