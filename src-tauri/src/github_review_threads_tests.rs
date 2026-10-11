@@ -36,19 +36,19 @@ impl PrApi for Stub {
             } else {
                 "unresolveReviewThread"
             };
-            return std::future::ready(Ok(json!({operation:{"thread":thread}})));
+            return std::future::ready(Ok(json!({"data":{operation:{"thread":thread}}})));
         }
         if query.contains("ReplyToThread") {
             self.writes.lock().unwrap().push(vars.clone());
             let mut comment = self.pr["reviewThreads"]["nodes"][0]["comments"]["nodes"][0].clone();
             comment["body"] = vars["input"]["body"].clone();
             return std::future::ready(Ok(
-                json!({"addPullRequestReviewThreadReply":{"comment":comment}}),
+                json!({"data":{"addPullRequestReviewThreadReply":{"comment":comment}}}),
             ));
         }
         if query.contains("ThreadComments") {
             return std::future::ready(Ok(
-                json!({"node":{"comments":self.pr["reviewThreads"]["nodes"][0]["comments"]}}),
+                json!({"data":{"node":{"comments":self.pr["reviewThreads"]["nodes"][0]["comments"]}}}),
             ));
         }
         if query.contains("ReviewThreadDetails") {
@@ -61,7 +61,7 @@ impl PrApi for Stub {
                 }
             }
         }
-        std::future::ready(Ok(json!({"repository":{"pullRequest":self.pr}})))
+        std::future::ready(Ok(json!({"data":{"repository":{"pullRequest":self.pr}}})))
     }
     fn rest(
         &self,
@@ -105,11 +105,13 @@ async fn draft_review_rejected_when_head_moved() {
     assert!(api.writes.lock().unwrap().is_empty());
 }
 
-// Catches: attaching an outdated thread to its original line in the new diff.
+// Catches: reading outside the GraphQL data envelope or attaching an outdated
+// thread to its original line in the new diff.
 #[tokio::test]
 async fn outdated_thread_shown_as_outdated() {
     let api = Stub::recorded();
     let page = read_threads(&api, json!({}), None).await.unwrap();
+    assert_eq!(page.head_sha, "7926288fd77e8fe9f86fb54228583c4454c66801");
     assert_eq!(page.threads[0]["isOutdated"], true);
     assert_eq!(page.threads[0]["line"], Value::Null);
     assert!(page.threads[0]["originalLine"].as_u64().is_some());
@@ -170,4 +172,18 @@ async fn absent_pr_returns_error() {
     let mut api = Stub::recorded();
     api.pr = Value::Null;
     assert!(read_threads(&api, json!({}), None).await.is_err());
+}
+
+// Catches: reading thread comments outside the GraphQL data envelope.
+#[tokio::test]
+async fn thread_comments_read_from_full_graphql_envelope() {
+    let api = Stub::recorded();
+    let comments = read_comments(&api, "thread-id", None).await.unwrap();
+    assert_eq!(comments["nodes"][0]["databaseId"], 4234708030_u64);
+    assert_eq!(comments["nodes"].as_array().unwrap().len(), 2);
+    assert_eq!(comments["pageInfo"]["hasNextPage"], false);
+    assert_eq!(
+        comments["pageInfo"]["endCursor"],
+        "Y3Vyc29yOnYyOpK0MjAyNi0xMC0wOVQyMTo0Mjo1MVrO_GmtNg=="
+    );
 }

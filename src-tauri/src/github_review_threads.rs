@@ -37,7 +37,7 @@ pub(crate) async fn read_threads(
         "query ReviewThreadDetails($owner:String!,$repo:String!,$number:Int!,$after:String) {{ repository(owner:$owner,name:$repo) {{ pullRequest(number:$number) {{ headRefOid reviewThreads(first:100,after:$after) {{ pageInfo {{ hasNextPage endCursor }} nodes {{ {THREAD_FIELDS} }} }} }} }} }}"
     );
     let data = api.graphql(&query, variables).await?;
-    let pr = &data["repository"]["pullRequest"];
+    let pr = &data["data"]["repository"]["pullRequest"];
     let head = pr["headRefOid"]
         .as_str()
         .ok_or("GitHub response missing PR head")?;
@@ -65,7 +65,7 @@ pub(crate) async fn read_comments(
     after: Option<String>,
 ) -> Result<Value, String> {
     let data = api.graphql("query ThreadComments($id:ID!,$after:String) { node(id:$id) { ... on PullRequestReviewThread { comments(first:100,after:$after) { pageInfo { hasNextPage endCursor } nodes { id databaseId body url author { login } createdAt } } } } }", json!({"id":thread_id,"after":after})).await?;
-    let comments = &data["node"]["comments"];
+    let comments = &data["data"]["node"]["comments"];
     if !comments["nodes"].is_array() {
         return Err("GitHub response missing thread comments".into());
     }
@@ -91,7 +91,7 @@ pub(crate) async fn resolve_thread(
     let data = api
         .graphql(&query, json!({"input":{"threadId":thread_id}}))
         .await?;
-    let thread = &data[operation]["thread"];
+    let thread = &data["data"][operation]["thread"];
     if thread["isResolved"].as_bool() != Some(resolved) || thread["id"].as_str() != Some(thread_id)
     {
         return Err("GitHub did not confirm the requested thread resolution".into());
@@ -108,7 +108,7 @@ pub(crate) async fn reply_thread(
         return Err("Thread id and reply body are required".into());
     }
     let data = api.graphql("mutation ReplyToThread($input:AddPullRequestReviewThreadReplyInput!) { addPullRequestReviewThreadReply(input:$input) { comment { id body url author { login } createdAt } } }", json!({"input":{"pullRequestReviewThreadId":thread_id,"body":body}})).await?;
-    let comment = &data["addPullRequestReviewThreadReply"]["comment"];
+    let comment = &data["data"]["addPullRequestReviewThreadReply"]["comment"];
     if !comment["id"].is_string() {
         return Err("GitHub response missing posted reply".into());
     }
@@ -139,7 +139,7 @@ pub(crate) async fn submit_review(
 ) -> Result<crate::github::PostedPrReview, String> {
     validate_review(&draft)?;
     let data = api.graphql(HEAD_QUERY, variables).await?;
-    if data["repository"]["pullRequest"]["headRefOid"].as_str() != Some(&draft.head_sha) {
+    if data["data"]["repository"]["pullRequest"]["headRefOid"].as_str() != Some(&draft.head_sha) {
         return Err(
             "review-head-changed: Refresh and review the new commits before submitting".into(),
         );

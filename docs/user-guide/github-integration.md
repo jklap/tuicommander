@@ -2,6 +2,8 @@
 
 TUICommander monitors your GitHub PRs and CI status automatically.
 
+PR creation, issue creation, and review submission use the repository's selected account over HTTP, including GitHub Enterprise. These writes do not require an installed `gh` executable.
+
 ## Authentication
 
 TUICommander needs a GitHub token to access PRs and CI status. You have two options:
