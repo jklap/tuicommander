@@ -25,6 +25,7 @@ type CommandTableEntry = { map: (args: Record<string, unknown>, p: ArgEncoder) =
  * The `p` helper encodes a required argument for URL usage (throws if missing).
  */
 export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
+	account_secret_form: { map: (args) => ({ method: "POST", path: "/accounts/secret-form", body: args.request }) },
 	account_action: { map: (args) => ({ method: "POST", path: "/accounts/action", body: args.request }) },
 	telegram_settings: { map: () => ({ method: "GET", path: "/config/telegram" }) },
 	telegram_setup: { map: (args) => ({ method: "PUT", path: "/config/telegram", body: { change: args.change } }) },
@@ -160,7 +161,7 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		map: (args) => ({
 			method: "PUT",
 			path: "/mcp/upstreams",
-			body: { base: args.base, config: args.config },
+			body: { base: args.base, config: args.config, ...(args.credentials ? { credentials: args.credentials } : {}) },
 		}),
 	},
 	reconnect_mcp_upstream: {
@@ -170,7 +171,13 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		map: (args) => ({
 			method: "POST",
 			path: "/mcp/upstreams/credential",
-			body: { name: args.name, token: args.token, url: args.url, ...(args.header ? { header: args.header } : {}) },
+			body: {
+				name: args.name,
+				token: args.token,
+				url: args.url,
+				...(args.header ? { header: args.header } : {}),
+				...(args.replace !== undefined ? { replace: args.replace } : {}),
+			},
 		}),
 	},
 	delete_mcp_upstream_credential: {

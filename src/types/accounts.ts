@@ -22,3 +22,15 @@ export interface AccountSite {
 	host: string;
 	label: string;
 }
+
+/** Metadata-only launch. The private native window supplies the token to Rust. */
+export type AccountSecretRequest =
+	| {
+			action: "add";
+			account: { provider: string; host: string; kind: AccountAuthKind; label: string; username?: string | null };
+	  }
+	| { action: "rotate"; id: string };
+export interface AccountSecretFormStatus {
+	names: string[];
+	status: "stored" | "declined" | "failed";
+}

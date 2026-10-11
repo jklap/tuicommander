@@ -20,6 +20,21 @@ pub(super) async fn action(
     super::json_result(crate::accounts::execute(&state, request).await)
 }
 
+/// Metadata-only launch is HTTP-safe; bootstrap and entry remain native-only.
+pub(super) async fn secret_form(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<Authenticated>>,
+    Json(request): Json<crate::secrets::account_sink::Request>,
+) -> Response {
+    if let Err(response) = require_local_or_auth(&addr, auth.is_some()) {
+        return response.into_response();
+    }
+    crate::secrets::forms::private_response(super::json_result(
+        crate::secrets::account_sink::request(&state, request).await,
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -27,6 +42,45 @@ mod tests {
     use axum::extract::ConnectInfo;
     use axum::http::{Request, StatusCode};
     use tower::ServiceExt;
+
+    // Catches: secret launch accepting credentials from Settings or lacking a desktop host guard.
+    #[tokio::test]
+    async fn account_secret_launch_rejects_token_payloads_and_missing_native_host() {
+        let state = super::super::tests::test_state();
+        for (body, expected) in [
+            (
+                serde_json::json!({"action":"rotate","id":"metadata-only"}),
+                StatusCode::INTERNAL_SERVER_ERROR,
+            ),
+            (
+                serde_json::json!({"action":"rotate","id":"metadata-only","token":"never-accept"}),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+        ] {
+            let response = super::super::build_router(state.clone(), false, true)
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/accounts/secret-form")
+                        .header("content-type", "application/json")
+                        .extension(ConnectInfo("127.0.0.1:1234".parse::<SocketAddr>().unwrap()))
+                        .body(Body::from(body.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected);
+            let bytes = axum::body::to_bytes(response.into_body(), 8192)
+                .await
+                .unwrap();
+            let body = String::from_utf8_lossy(&bytes);
+            assert!(!body.contains("never-accept"));
+            if expected == StatusCode::INTERNAL_SERVER_ERROR {
+                assert!(body.contains("desktop host"));
+            }
+            assert!(!state.secrets.tools_blocked());
+        }
+    }
 
     // Catches: account mutation being reachable by unauthenticated remote callers.
     #[tokio::test]

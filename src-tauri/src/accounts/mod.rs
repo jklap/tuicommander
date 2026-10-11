@@ -14,7 +14,7 @@ mod critic_tests;
 mod tests;
 
 pub(crate) use api::execute;
-pub(crate) use edit::{add_account, list_accounts, set_secret};
+pub(crate) use edit::{add_account, list_accounts, precheck_new, set_secret};
 pub(crate) use model::{Account, AccountAction, AccountView, AuthKind, NewAccount, Registry};
 pub(crate) use providers::{
     ProviderDescriptor, VerifyRequest, register_provider, unregister_providers,

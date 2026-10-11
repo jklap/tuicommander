@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- GitHub Enterprise PAT entry now opens a private native window and writes
+  directly to the account vault; Settings no longer holds the PAT.
+
 - Add the core shared account/site registry with write-only tokens, generic provider verification and GitHub migration; omit tokens from OAuth replies (#1679-1419).
 - Match native window and webview resize backgrounds to the selected theme, including light themes (Fixes #125; #1678-158c).
 - Added the provider-neutral Tasks data contract and a local in-memory development provider; visible Tasks integration follows separately.

@@ -402,10 +402,10 @@ Commands for managing upstream MCP servers proxied through TUICommander's `/mcp`
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
 | `load_mcp_upstreams` | -- | `UpstreamMcpConfig` | Load upstream config from `mcp-upstreams.json` |
-| `save_mcp_upstreams` | `base: UpstreamMcpConfig, config: UpstreamMcpConfig` | `()` | Apply the caller's ID-keyed base-to-config delta to the latest locked `mcp-upstreams.json`, validate it, and hot-reload the exact persisted change. Removing a server or its optional `auth` field is an explicit deletion; unrelated concurrent changes are preserved |
+| `save_mcp_upstreams` | `base: UpstreamMcpConfig, config: UpstreamMcpConfig, credentials?: {server_id, token, header?}[]` | `()` | Add-time credentials are validated and created under the config lock; failures roll back new vault entries. Apply the caller's ID-keyed base-to-config delta to the latest locked `mcp-upstreams.json`, validate it, and hot-reload the exact persisted change. Removing a server or its optional `auth` field is an explicit deletion; unrelated concurrent changes are preserved |
 | `reconnect_mcp_upstream` | `name: String` | `()` | Disconnect and reconnect a single upstream by name. Useful after credential changes or transient failures |
 | `get_mcp_upstream_status` | -- | `Vec<UpstreamStatus>` | Get live status of all upstream MCP servers. Status values: `connecting`, `ready`, `circuit_open`, `disabled`, `failed`, `authenticating`, `needs_auth` |
-| `save_mcp_upstream_credential` | `name: String, token: String, url: String, header?: {name, credential_ref}` | `()` | Store a Bearer token or scoped header secret with its intended HTTP origin in the OS credential vault |
+| `save_mcp_upstream_credential` | `name: String, token: String, url: String, header?: {name, credential_ref}, replace?: boolean` | `()` | Refuse to overwrite an existing entry unless `replace: true` explicitly requests an edit. Store a Bearer token or scoped header secret with its intended HTTP origin in the OS credential vault |
 | `delete_mcp_upstream_credential` | `name: String, header?: {name, credential_ref}` | `()` | Remove a Bearer/OAuth token or a scoped custom header secret (idempotent) |
 
 ### UpstreamMcpConfig schema
@@ -910,3 +910,12 @@ the prepared launch prompt, counting escaped stdout bytes before framing/marker.
 | `account_action` | `request: AccountAction` | Metadata/presence-only action reply | `POST /accounts/action`, body = request |
 
 The async command delegates to the same owner service as HTTP; disk/vault work runs on the blocking pool. See [the account action table](../backend/github.md#shared-account-registry).
+
+### Private account credential entry
+
+`account_secret_form {request}` opens the existing isolated native secret window.
+The request is `{action:"add",account:{provider,host,kind,label,username?}}` or
+`{action:"rotate",id}`; it accepts no credential. The reply contains only
+`{names:[],status:"stored"|"declined"|"failed"}`. `secret_form_bootstrap` and
+`secret_form_submit` require the active native window identity. Account forms
+do not expose a mobile capability or accept HTTP bootstrap/submission.

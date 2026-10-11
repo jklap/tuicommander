@@ -403,3 +403,15 @@ owner action after repairing storage. Site removal can stop after removing some
 accounts if a later credential/binding operation fails; retry the site action.
 Rust changes load only after Boss manually restarts `make dev` or installs a
 `make build`; this work does not launch or restart the app.
+
+### Private account token sink
+
+Enterprise PAT entry in Settings launches `account_secret_form` with account
+metadata only. The private native form sends its one-time nonce and token to
+Rust; the account sink calls `accounts::add_account` or `accounts::set_secret`.
+The token never enters Settings state or the general secret-command environment.
+Provider validation precedes persistence. Decline or close before submission
+writes no account or credential. After Submit is accepted, verification and storage
+finish even if the window closes; a consumed nonce cannot be replayed. Rotation
+invalidates the same GitHub Enterprise runtime cache as the account owner API.
+Native inspection remains blocked until the private window is destroyed.
