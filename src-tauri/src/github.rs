@@ -36,7 +36,7 @@ fn extract_graphql_name(query: &str) -> &str {
 
 /// Resolve a GitHub API token from all available sources.
 /// Delegates to `github_auth::resolve_token_with_source()` — single source of truth
-/// for the priority chain: GH_TOKEN env → GITHUB_TOKEN env → keyring OAuth → gh_token crate → gh CLI.
+/// for the priority chain: GH_TOKEN env → GITHUB_TOKEN env → keyring OAuth.
 #[cfg(test)]
 pub(crate) fn resolve_github_token() -> Option<String> {
     crate::github_auth::resolve_token_with_source().0
@@ -520,7 +520,6 @@ pub(crate) fn github_com_account(state: &AppState) -> crate::github_account::Git
     use crate::github_auth::TokenSource;
     let kind = match *state.github.token_source.read() {
         TokenSource::Env => AccountKind::GithubComEnv,
-        TokenSource::GhCli => AccountKind::GithubComGhCli,
         // OAuth, Pat (n/a for cloud), and None all map to the OAuth default.
         TokenSource::OAuth | TokenSource::Pat | TokenSource::None => AccountKind::GithubComOauth,
     };
@@ -4762,8 +4761,8 @@ mod tests {
     }
 
     // --- resolve_github_token tests ---
-    // Must run serially: env vars are process-global state and gh_token crate
-    // also reads them internally, causing races when tests run in parallel.
+    // Must run serially: env vars are process-global state, causing
+    // races when tests run in parallel.
 
     #[test]
     #[serial_test::serial]
@@ -5180,35 +5179,7 @@ mod tests {
     }
 
     // --- Empty token filtering tests ---
-    // Env vars are process-global state, so all env-var scenarios run in a single
-    // test to avoid parallel race conditions.
-
-    #[test]
-    #[serial_test::serial] // mutates GH_TOKEN/GITHUB_TOKEN — must not race the other env tests
-    fn test_resolve_github_token_filters_empty_from_gh_token_crate() {
-        // Simulate Tauri GUI process: GITHUB_TOKEN="" (set but empty).
-        // gh_token crate's get() uses env::var_os() which returns Some("") for
-        // empty env vars without checking emptiness. Our resolve_github_token()
-        // must filter this and not return Some("").
-        unsafe {
-            std::env::set_var("GITHUB_TOKEN", "");
-            std::env::remove_var("GH_TOKEN");
-        }
-
-        let result = resolve_github_token();
-        // Result should be either None (no gh CLI) or a non-empty token from CLI
-        if let Some(ref token) = result {
-            assert!(
-                !token.is_empty(),
-                "resolve_github_token must never return an empty string"
-            );
-        }
-
-        // Cleanup
-        unsafe {
-            std::env::remove_var("GITHUB_TOKEN");
-        }
-    }
+    // Env vars are process-global state, so these run serially.
 
     #[test]
     #[serial_test::serial]
@@ -5230,66 +5201,6 @@ mod tests {
         unsafe {
             std::env::remove_var("GH_TOKEN");
             std::env::remove_var("GITHUB_TOKEN");
-        }
-    }
-
-    // --- Integration test: token resolution with gh CLI fallback ---
-    // Run with: cargo test --lib -- --ignored --test-threads=1
-
-    /// Verify that resolve_github_token works even when env vars are empty,
-    /// by falling through to `gh auth token` CLI.
-    /// This catches the exact bug where GITHUB_TOKEN="" in Tauri GUI processes
-    /// caused gh_token crate to return an empty string → 401 Bad credentials.
-    #[tokio::test]
-    #[ignore = "requires an authenticated GitHub CLI"]
-    async fn test_resolve_token_with_empty_env_falls_through_to_cli() {
-        // Save and clear env vars to simulate GUI context
-        let saved_gh = std::env::var("GH_TOKEN").ok();
-        let saved_github = std::env::var("GITHUB_TOKEN").ok();
-        unsafe {
-            std::env::set_var("GITHUB_TOKEN", "");
-            std::env::set_var("GH_TOKEN", "");
-        }
-
-        let token = resolve_github_token();
-        assert!(
-            token.is_some(),
-            "Should resolve token via gh CLI when env vars are empty"
-        );
-        let token = token.unwrap();
-        assert!(!token.is_empty(), "Token from CLI should not be empty");
-
-        // Verify the token actually works against GitHub API
-        let client = reqwest::Client::new();
-        let result = graphql_request(
-            &client,
-            &token,
-            "https://api.github.com/graphql",
-            "query { viewer { login } }",
-            &serde_json::json!({}),
-        )
-        .await;
-        assert!(
-            result.is_ok(),
-            "Token from gh CLI should authenticate successfully: {:?}",
-            result.err()
-        );
-
-        let data = result.unwrap();
-        let login = data["data"]["viewer"]["login"].as_str();
-        assert!(login.is_some(), "Should return authenticated user login");
-        println!("Authenticated via CLI fallback as: {}", login.unwrap());
-
-        // Restore env vars
-        unsafe {
-            match saved_gh {
-                Some(v) => std::env::set_var("GH_TOKEN", v),
-                None => std::env::remove_var("GH_TOKEN"),
-            }
-            match saved_github {
-                Some(v) => std::env::set_var("GITHUB_TOKEN", v),
-                None => std::env::remove_var("GITHUB_TOKEN"),
-            }
         }
     }
 

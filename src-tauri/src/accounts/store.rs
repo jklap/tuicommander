@@ -42,8 +42,8 @@ fn migrate_github(registry: &mut Registry) -> Result<bool, String> {
     for account in legacy.accounts {
         upsert_github_metadata(registry, account)?;
     }
-    // The default is a durable reference to the existing env/vault/gh chain,
-    // not a copied env/CLI secret. Its id also preserves legacy repo bindings.
+    // The default is a durable reference to the existing env/vault chain,
+    // not a copied environment secret. Its id also preserves legacy repo bindings.
     if !registry.accounts.contains_key(GitHubAccount::GITHUB_COM_ID) {
         upsert_github_metadata(
             registry,
@@ -99,7 +99,6 @@ fn upsert_github_metadata(registry: &mut Registry, github: GitHubAccount) -> Res
     let source = match github.kind {
         AccountKind::GithubComOauth => "oauth",
         AccountKind::GithubComEnv => "env",
-        AccountKind::GithubComGhCli => "gh_cli",
         AccountKind::GhePat => "pat",
     };
     let existing = registry.accounts.get(&github.id);
@@ -128,7 +127,6 @@ pub(crate) fn github_account(record: &Account) -> Option<GitHubAccount> {
     let host = GitHubHost::new(record.host.strip_prefix("https://")?)?;
     let kind = match record.auth_source.as_deref() {
         Some("env") => AccountKind::GithubComEnv,
-        Some("gh_cli") => AccountKind::GithubComGhCli,
         Some("pat") => AccountKind::GhePat,
         _ if record.kind == AuthKind::Bearer => AccountKind::GhePat,
         _ => AccountKind::GithubComOauth,
