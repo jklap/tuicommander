@@ -48,6 +48,7 @@
         "https://localhost/*"
       ],
       "js": [
+        "errors.js",
         "main.js"
       ],
       "world": "MAIN",
@@ -64,7 +65,8 @@
       ],
       "js": [
         "extract.js",
-        "picker.js"
+        "picker.js",
+        "errorsBridge.js"
       ],
       "world": "ISOLATED",
       "all_frames": true,

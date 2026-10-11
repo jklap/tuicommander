@@ -2186,3 +2186,7 @@ Automation templates (#1622-be11): the shared automation action accepts
 repository, run_config and optional timezone (host local by default).
 Drafts have fresh ids and start disabled; no definition or run is created until
 an explicit create action. These actions match across HTTP, IPC, MCP and CLI.
+
+### Design Mode lifecycle tool
+
+The native `design_mode` tool exposes `start`, `stop` and `status` through normal discovery and dispatch. Start accepts `session_id`, optional `browser` (`chrome` or `edge`) and optional absolute HTTP(S) `url`. Session references resolve like the session tool. Stop accepts `repo_path` from start/status. The adapter uses the same lifecycle core as HTTP and IPC; headless builds return an explicit desktop-host-required error. URL-aware start is the default coordinator path for layout work.

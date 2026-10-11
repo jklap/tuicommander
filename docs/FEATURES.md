@@ -89,6 +89,8 @@ per cell and the configured history limit still apply.
 
 ### 1.0 Design Mode for agent terminals
 
+Right-click an HTTP(S) terminal link (including localhost) and choose **Start in Design Mode**, then **Edge** or **Chrome**, to open that exact page with the terminal agent connected. Agent coordinators use `design_mode action=start session_id=<terminal> url=<page>` for layout work; stop uses the returned `repoPath`.
+
 - Start from an agent terminal’s context menu or the Command Palette. Choose Edge or Chrome; TUIC uses a dedicated profile per repository and browser. The launching terminal remains the default recipient and carries the armed D badge.
 - During the pilot, load the materialised extension folder once using **Load unpacked**. The first-run page explains setup; a missing URL opens these instructions instead of a blank page. The sidebar lists configured URLs and live servers attributed to this repository and its linked worktrees, with fresh PTY advertisements validated against listeners.
 - **Pick element** selects once, then browsing resumes. **Multi-pick**, Escape and Stop control longer collection. Cards keep extraction evidence, optional screenshots and independent comments; delete removes a card. The sidebar offers live local agents from the same repository and reports an exited recipient without switching silently.
@@ -377,7 +379,7 @@ Right-click the main worktree row → **Switch Branch** submenu to checkout a di
 
 ### 2.6 Quick Branch Switcher
 - Hold `Cmd+Ctrl` (macOS) or `Ctrl+Alt` (Win/Linux): show numbered overlay
-- `Cmd+Ctrl+1-9`: switch to branch by index
+- `Cmd+Ctrl+1-9`: switch to branch by index (in the Global Workspace: switch to tab N)
 
 ### 2.7 Park Repos
 - Right-click any repo in the sidebar to park or unpark it
@@ -1326,6 +1328,7 @@ The `tuic-dictation` Rust crate implements audio, transcription and speech; the 
 - Sources and licensing: the graphs come from a public Hugging Face export of Kyutai's Pocket TTS weights; the voices come from Kyutai's ungated repository without the voice-cloning weights. Both are CC-BY-4.0, attributed in `THIRD_PARTY_NOTICES.md`.
 
 ### 9.8 Spoken Replies
+- **Hands-free listening and spoken replies are independent.** Settings → Voice has a toggle for each (mobile Settings too): listening only, replies only (push-to-talk dictation, answers spoken), both, or none. Existing users keep listening on. The dictation toast carries a speaker button that turns spoken replies on and off for the next reply and stops one that is playing.
 - **Spoken replies** defaults on and can be disabled from Voice Settings or mobile Settings. Off keeps dictation armed, cancels the speech queue, and enforces text replies server-side. Edge 401/403 rejections start a five-minute cool-down across conversations.
 - Arming hands-free also opens a **reply queue** for that conversation, so the model can answer out loud. Arming without a working voice still works — that is ordinary dictation — and the reason is reported rather than discovered on the first reply.
 - **The user can talk over a reply.** Speaking stops the moment the capture loop hears them, and their words land in the new turn rather than behind the sentence they interrupted. Echo cancellation runs first, so a reply never interrupts itself on its own voice coming back through the microphone.
@@ -1850,7 +1853,7 @@ Buffer eviction is reported; it does not create another output store.
 | Shortcut | Action |
 |----------|--------|
 | Hold `Cmd+Ctrl` | Show quick switcher overlay |
-| `Cmd+Ctrl+1-9` | Switch to branch by index |
+| `Cmd+Ctrl+1-9` | Switch to branch by index (in the Global Workspace: switch to tab N; only the tab hints show) |
 
 ### Voice Dictation
 | Shortcut | Action |

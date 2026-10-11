@@ -89,6 +89,7 @@ export interface TerminalData {
 	// (e.g. "CLAUDE_CONFIG_DIR=/Users/me/.claude-private claude --dangerously-skip-permissions"),
 	// because a shell alias hides both the binary and the env that locates the session.
 	agentLaunchCommand: string | null;
+	agentProvider: string | null; // Model provider the agent session runs on (ego: from its session manifest); drives the icon
 	pendingResumeCommand: string | null; // Set at restore time, consumed on first shell idle
 	pendingInitCommand: string | null; // Setup/run script to auto-execute on first shell idle
 	usageLimit: { percentage: number; limitType: string } | null; // Claude Code usage limit
@@ -138,6 +139,7 @@ type TerminalCreateData = Omit<
 	| "nameFromSpawn"
 	| "agentType"
 	| "agentLaunchCommand"
+	| "agentProvider"
 	| "pendingResumeCommand"
 	| "pendingInitCommand"
 	| "usageLimit"
@@ -462,6 +464,7 @@ function createTerminalsStore() {
 				nameFromSpawn: false,
 				agentType: null,
 				agentLaunchCommand: null,
+				agentProvider: null,
 				pendingResumeCommand: null,
 				pendingInitCommand: null,
 				usageLimit: null,
@@ -519,6 +522,7 @@ function createTerminalsStore() {
 				nameFromSpawn: false,
 				agentType: null,
 				agentLaunchCommand: null,
+				agentProvider: null,
 				pendingResumeCommand: null,
 				pendingInitCommand: null,
 				usageLimit: null,

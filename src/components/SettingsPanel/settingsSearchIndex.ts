@@ -423,6 +423,12 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{
 		tab: "dictation",
 		section: "Hands-free conversation",
+		label: "Hands-free listening",
+		labelKey: "dictation.handsFreeListeningLabel",
+	},
+	{
+		tab: "dictation",
+		section: "Hands-free conversation",
 		label: "Spoken replies",
 		labelKey: "dictation.spokenRepliesLabel",
 	},

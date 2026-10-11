@@ -231,6 +231,14 @@ export function SettingsScreen(props: SettingsScreenProps) {
 			<Show when={voice.available()}>
 				<section class={styles.section}>
 					<h3 class={styles.sectionTitle}>VOICE</h3>
+					<label class={styles.row}>
+						<span class={styles.label}>Hands-free listening</span>
+						<input
+							type="checkbox"
+							checked={voice.listening()}
+							onChange={(e) => voice.setListening(e.currentTarget.checked)}
+						/>
+					</label>
 					<label class={`${styles.row} ${styles.spokenReplies}`}>
 						<span class={styles.label}>Spoken replies</span>
 						<input
