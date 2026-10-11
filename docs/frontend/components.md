@@ -6,6 +6,8 @@ It renders schema-driven fields, sanitized Markdown, all declared comment
 variants, cursor pagination, a comment composer and provider transition actions.
 The shell must pass visibility to pause the default 60-second refresh timer.
 `useTasksDetail` fences responses by item generation and serializes mutations.
+Committed mutations remain accepted if reloading opened comment pages fails;
+the view reports the history error and Retry reloads those pages.
 `TaskMarkdown` preserves reader disclosure state across provider refreshes.
 Shell mounting and provider registration are owned by the Tasks integration.
 
