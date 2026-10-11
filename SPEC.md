@@ -22,6 +22,16 @@ Unknown evidence remains unverified, and off+online never passes vacuously. Exis
 
 ## Overview
 
+### Tasks roadmap component — Implemented (#1690-5d98)
+
+`TasksRoadmap` renders provider list pages using explicit host start/target field IDs,
+or the first two date descriptors in provider order when IDs are absent. Month/quarter
+zoom and previous/next/Today navigate a local calendar. Date-only values preserve
+their day; zoned timestamps use local dates, with inclusive target days and clipped bars.
+One endpoint gives a milestone; unset, invalid or reversed dates remain in a side list.
+Virtual rows and the list query controller retain pagination and stale-response protection.
+Provider-declared date roles and Tasks shell mounting remain separate integration work.
+
 ### Tasks list component — Implemented (#1686-ce77)
 
 `TasksList` is a host-rendered Solid component backed by the data-only work-item

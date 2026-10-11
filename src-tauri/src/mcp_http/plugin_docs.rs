@@ -786,6 +786,21 @@ repeated cursors stop pagination. Failed refreshes retain rows marked Stale resu
 Opening an item calls the host onOpen(reference); list rendering does not fetch detail.
 Tasks shell mounting remains a separate integration step.
 
+## Tasks roadmap
+
+Core TasksRoadmap renders WorkItemProvider.list pages and provider.fields date descriptors.
+The host passes provider, onOpen(reference), optional query/visible/initialDate and optional
+startFieldId/targetFieldId. Absent IDs use the first and second kind=date descriptors in
+provider order; field names are never guessed. Provider-declared date roles are deferred.
+Month/quarter zoom, previous/next and Today navigate the local calendar. ISO date-only
+values keep their calendar day; timestamps require an explicit offset and display in the
+viewer local time zone. Bars include the target day and clip to the visible period.
+One unset endpoint gives a one-day milestone. Missing, invalid or reversed dates remain
+clickable in the Without usable dates side list. Out-of-period tasks remain listed.
+Both lists use virtual rows. Load more follows provider cursors; failed refreshes retain
+stale results, and obsolete provider responses cannot replace the current view.
+No new manifest, IPC or HTTP API is introduced. Tasks shell mounting remains separate.
+
 ## Troubleshooting
 
 | Error | Fix |
