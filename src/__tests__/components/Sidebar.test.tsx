@@ -156,6 +156,7 @@ import { settingsStore } from "../../stores/settings";
 import { sidebarPluginStore } from "../../stores/sidebarPluginStore";
 import { terminalsStore } from "../../stores/terminals";
 import { uiStore } from "../../stores/ui";
+import { workItemLinksStore } from "../../stores/workItemLinks";
 
 /** Helper to create default no-op props for Sidebar */
 function defaultProps(overrides: Partial<Parameters<typeof Sidebar>[0]> = {}) {
@@ -3056,6 +3057,55 @@ describe("Sidebar", () => {
 			expect(mockToggleBranchTabsCollapsed).toHaveBeenCalledTimes(2);
 
 			expect(mockToggleBranchTabsCollapsed).toHaveBeenCalledWith("/repo1", "main");
+		});
+
+		// Catches: a badge click propagating to the row (opens the branch) or to branchIconToggle.
+		it("badge_click_does_not_toggle_branch", async () => {
+			const link = {
+				reference: { providerId: "jira", accountId: "acme", id: "10001" },
+				key: "ACME-7",
+				title: "Fix login",
+				url: "https://acme.atlassian.net/browse/ACME-7",
+				state: { id: "3", name: "In Progress", tone: "info" as const },
+			};
+			mockInvoke.mockImplementation(async (cmd: string) =>
+				cmd === "list_workitem_links" ? { "/repo1": { "feature/x": link } } : undefined,
+			);
+			await workItemLinksStore.refresh();
+			setRepos({
+				"/repo1": makeRepo({
+					workspaces: {
+						"feature/x": {
+							workspaceId: "feature/x",
+							branchName: "feature/x",
+							isMain: false,
+							worktreePath: "/wt/x",
+							terminals: ["t2"],
+							additions: 0,
+							deletions: 0,
+						},
+					},
+				}),
+			});
+			const onBranchSelect = vi.fn();
+			try {
+				const { container } = render(() => <Sidebar {...defaultProps({ onBranchSelect })} />);
+				const badge = branchRow(container, "feature/x").querySelector<HTMLElement>(
+					"[data-testid='branch-item-badge']",
+				)!;
+				expect(badge).toHaveTextContent("ACME-7");
+
+				fireEvent.click(badge);
+				fireEvent.keyDown(badge, { key: "Enter" });
+
+				expect(mockOpenUrl).toHaveBeenCalledTimes(2);
+				expect(mockOpenUrl).toHaveBeenCalledWith(link.url);
+				expect(onBranchSelect).not.toHaveBeenCalled();
+				expect(mockToggleBranchTabsCollapsed).not.toHaveBeenCalled();
+			} finally {
+				mockInvoke.mockResolvedValue(undefined);
+				await workItemLinksStore.unlink("/repo1", "feature/x");
+			}
 		});
 
 		it("collapsed chevron retains the session count beside the disclosure", () => {

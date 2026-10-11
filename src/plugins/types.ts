@@ -487,6 +487,12 @@ export interface PluginHost {
 	/** Register a data-only Tasks provider; auto-disposed on unload. */
 	registerWorkItemProvider(provider: import("./workItemProvider").WorkItemProvider): Disposable;
 
+	/** Link a worktree branch to a work item; the sidebar shows its key and state. Persisted. */
+	linkItem(repoPath: string, branch: string, link: import("../types/workItemLinks").WorkItemLink): Promise<void>;
+
+	/** Remove the work-item link of a worktree branch. Resolves true when a link existed. */
+	unlinkItem(repoPath: string, branch: string): Promise<boolean>;
+
 	/**
 	 * Create a worktree and branch, launch an agent from the repo's run config and
 	 * type `prompt` into it as an untrusted brief. Delivery defaults to "draft"
@@ -604,6 +610,12 @@ export interface PluginHost {
 	 * @param scope - Optional: "staged", "unstaged", or omit for combined
 	 */
 	getGitDiff(repoPath: string, scope?: "staged" | "unstaged"): Promise<string>;
+
+	/**
+	 * List the git remotes of a repository. Requires "git:read" capability.
+	 * Credentials embedded in a remote URL are removed.
+	 */
+	getRemotes(repoPath: string): Promise<import("../types/workItemLinks").GitRemote[]>;
 
 	// -- Tier 3: Write actions (capability-gated) --
 

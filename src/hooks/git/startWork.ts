@@ -5,8 +5,10 @@ import { appLogger } from "../../stores/appLogger";
 import { repositoriesStore } from "../../stores/repositories";
 import { settingsStore } from "../../stores/settings";
 import { terminalsStore } from "../../stores/terminals";
+import { workItemLinksStore } from "../../stores/workItemLinks";
 import { rpc } from "../../transport";
-import type { WorkItemDelivery, WorkItemRef, WorkItemState } from "../../types/work-items.gen";
+import type { WorkItemDelivery, WorkItemRef } from "../../types/work-items.gen";
+import type { WorkItemLink } from "../../types/workItemLinks";
 import { newTerminalShellFamily, scopedLaunchCommand } from "../../utils/agentLaunchCommand";
 import { prepareAgentLaunchCommand } from "../../utils/agentSession";
 import { usePty } from "../usePty";
@@ -18,16 +20,8 @@ export const START_WORK_PROMPT_CAP = 12_000;
 /** Time an agent gets to reach its composer (startup dialogs included) before delivery is attempted anyway. */
 export const AGENT_COMPOSER_TIMEOUT_MS = 120_000;
 
-/** A worktree's linked item. Same shape as the A3b link store's `WorkItemLink`. */
-// DEFERRED (2026-10-11) — import `WorkItemLink` from src/types/workItemLinks.ts once
-// story 1685-4b12 lands; until then this mirrors its mailed signature.
-export interface StartWorkLink {
-	reference: WorkItemRef;
-	key: string;
-	title: string;
-	url: string;
-	state: WorkItemState | null;
-}
+/** A worktree's linked item. */
+export type StartWorkLink = WorkItemLink;
 
 /** The part of the A3b link store that start work and URL paste use. */
 export interface WorkItemLinkPort {
@@ -164,6 +158,9 @@ export function setWorkItemLinkPort(port: WorkItemLinkPort): () => void {
 		if (linkPort === port) linkPort = null;
 	};
 }
+
+// Bound at module load, so Start Work persists links in every build; tests rebind it.
+setWorkItemLinkPort(workItemLinksStore);
 
 export function getWorkItemLinkPort(): WorkItemLinkPort | null {
 	return linkPort;

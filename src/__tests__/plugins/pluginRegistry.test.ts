@@ -1095,6 +1095,21 @@ describe("PluginHost — git:read capability gating", () => {
 		await expect(host!.getGitDiff("/some/repo", "staged")).resolves.toBeDefined();
 	});
 
+	// Catches: getRemotes left outside the git:read consent gate.
+	it("external plugin without git:read throws on getRemotes and never invokes", async () => {
+		const { invoke: mockInvoke } = await import("../../invoke");
+		(mockInvoke as ReturnType<typeof vi.fn>).mockClear();
+		let host: PluginHost | null = null;
+		await pluginRegistry.register(
+			makePlugin("ext", (h) => {
+				host = h;
+			}),
+			[],
+		);
+		await expect(host!.getRemotes("/some/repo")).rejects.toThrow(PluginCapabilityError);
+		expect(mockInvoke).not.toHaveBeenCalledWith("get_git_remotes", expect.anything());
+	});
+
 	it("built-in plugin can call git:read methods without capability", async () => {
 		let host: PluginHost | null = null;
 		pluginRegistry.register(
