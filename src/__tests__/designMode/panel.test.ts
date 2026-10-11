@@ -2,7 +2,11 @@ import { readFileSync } from "node:fs";
 import { afterEach, expect, it, vi } from "vitest";
 
 const DIR = "browser-extension/design-mode";
-const pick = (id: string, selector: string) => ({ id, comment: "", raw: { tagName: "button", selector, textContent: id } });
+const pick = (id: string, selector: string) => ({
+	id,
+	comment: "",
+	raw: { tagName: "button", selector, textContent: id },
+});
 
 function mountPanel(snapshot: Record<string, unknown>) {
 	vi.useFakeTimers();
