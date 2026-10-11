@@ -19,6 +19,10 @@ use crate::state::{
 use crate::cli::has_cli;
 pub(crate) use crate::cli::resolve_cli;
 
+#[cfg(all(test, target_os = "macos", feature = "desktop"))]
+#[path = "agent_launch_reaping_tests.rs"]
+mod launch_reaping_tests;
+
 /// Format a path with line/col for --goto style editors (vscode, cursor, windsurf)
 fn format_goto_arg(path: &str, line: Option<u32>, col: Option<u32>) -> String {
     match (line, col) {
