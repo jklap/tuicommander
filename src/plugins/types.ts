@@ -487,6 +487,18 @@ export interface PluginHost {
 	/** Register a data-only Tasks provider; auto-disposed on unload. */
 	registerWorkItemProvider(provider: import("./workItemProvider").WorkItemProvider): Disposable;
 
+	/**
+	 * Create a worktree and branch, launch an agent from the repo's run config and
+	 * type `prompt` into it as an untrusted brief. Delivery defaults to "draft"
+	 * (Enter left to the user). Requires "pty:write" capability.
+	 */
+	startWork(
+		request: import("../hooks/git/startWork").StartWorkRequest,
+	): Promise<import("../hooks/git/startWork").StartWorkResult>;
+
+	/** Claim pasted URLs in the command palette; return null for a URL that is not yours. Auto-disposed on unload. */
+	registerUrlResolver(resolver: import("../components/CommandPalette/urlPaste").UrlResolver): Disposable;
+
 	// -- Tier 0: Logging (always available) --
 
 	/** Write a message to this plugin's log (visible in Settings > Plugins). */

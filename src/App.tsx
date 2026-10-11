@@ -2,6 +2,7 @@ import { type Component, createSignal, lazy, Show, Suspense } from "solid-js";
 import { ApplicationOverlays } from "./components/ApplicationOverlays/ApplicationOverlays";
 import { BranchSwitcher } from "./components/BranchSwitcher/BranchSwitcher";
 import { CommandPalette } from "./components/CommandPalette";
+import { urlPasteActions } from "./components/CommandPalette/urlPaste";
 import { createContextMenu } from "./components/ContextMenu";
 import { PanelOrchestrator } from "./components/PanelOrchestrator";
 import type { CleanupStep, StepId, StepStatus } from "./components/PostMergeCleanupDialog/PostMergeCleanupDialog";
@@ -33,6 +34,7 @@ import { McpPopup } from "./components/McpPopup/McpPopup";
 import { MobileViewBanner } from "./components/MobileViewBanner";
 import { ToastContainer } from "./components/ToastContainer/ToastContainer";
 import { type WorktreeActions, WorktreeManager } from "./components/WorktreeManager";
+import { getWorkItemLinkPort, startWork } from "./hooks/git/startWork";
 import { useActiveTerminalSync } from "./hooks/useActiveTerminalSync";
 import { useAgentDetection } from "./hooks/useAgentDetection";
 import { useAgentPolling } from "./hooks/useAgentPolling";
@@ -813,6 +815,23 @@ const App: Component = () => {
 		executeSmartPrompt: smartPrompts.executeSmartPrompt,
 	});
 
+	const paletteUrlActions = (text: string, signal: AbortSignal) =>
+		urlPasteActions(
+			text,
+			{
+				activeRepoPath: () => repositoriesStore.state.activeRepoPath,
+				links: getWorkItemLinkPort,
+				workspaceIdOnBranch: (repoPath, branch) => repositoriesStore.workspaceIdOnBranch(repoPath, branch),
+				openWorkspace: (repoPath, workspaceId) => {
+					repositoriesStore.setActive(repoPath);
+					void gitOps.handleBranchSelect(repoPath, workspaceId);
+				},
+				startWork,
+				notify: setStatusInfo,
+			},
+			signal,
+		);
+
 	useShortcutRegistration(shortcutHandlers);
 
 	useNativeMenuBridge({
@@ -1047,7 +1066,7 @@ const App: Component = () => {
 			<PromptDrawer />
 
 			{/* Browser mode uses the same palette with its HTTP-safe action subset. */}
-			<CommandPalette actions={actionEntries()} browserMode={!isTauri()} />
+			<CommandPalette actions={actionEntries()} browserMode={!isTauri()} urlActions={paletteUrlActions} />
 
 			{/* Quick branch switcher */}
 			<BranchSwitcher
