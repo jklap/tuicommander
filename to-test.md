@@ -5090,3 +5090,7 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 
 - [ ] S5 CI logs: after Boss restarts the backend, check auto-heal on github.com and a GHE-bound repo without `gh`; verify failure tails and selected external CI logs. The Rust change requires a manual `make dev` restart or `make build`.
 - [ ] Mobile browser dictation (#1718-c32a): on iPhone, dictate and stop three times; edit a dictated draft, then dictate again. Confirm no repeated `aborted` toast and no lost or duplicated text. Browser error/end timing requires device replay.
+
+## PR action buttons (#1738-eb5e)
+
+- [ ] [HUMAN] After a restart, on a PR of a throwaway repository: "Re-run failed jobs" (failed Actions check), "Enable/Disable auto-merge", "Add to / Remove from merge queue" (queue-protected branch only) and "Request changes" (blank body is blocked) reach GitHub and show the outcome. Unit tests stub the invoke boundary; no live write was made.
