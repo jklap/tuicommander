@@ -29,6 +29,7 @@
 ## Automations HTTP fallback (1617-290d) — Rust restart required
 
 - [ ] After Boss's manual `make dev` restart or `make build`, confirm `POST /automations/missing` returns HTTP 404 and JSON `{"error":"no such endpoint: /automations/missing"}`. The critic regression exercises the router; Rust does not hot-reload. No desktop instance was restarted by this peer.
+  _(failed: isolated headless HTTP returned an empty 404 body; fix story #1704-75c9. Evidence: `~/Gits/.tmp/totest-1011/http-mcp-trace.json`.)_
 
 ## Saved AI Chat tabs (1628-4459)
 
@@ -77,21 +78,25 @@
 - [ ] After landing and Boss's planned `make dev` restart or `make build`, confirm startup repairs a stale Claude private/run-profile TUIC bridge path and a fresh Claude session receives the TUIC MCP instructions. Targeted tests cover default/private/inherited/run-config roots, disabled integrations, custom transports and missing-path warnings. The backend change does not hot-reload; this lane does not restart desktop.
 ## Automations MCP (1630-cbfa) — Rust restart required
 
-- [ ] After Boss's planned `make dev` restart or `make build`, use the `automations` MCP tool from a bound agent to create/get/list/update/pause/resume/delete a definition. Confirm invalid edits return the same definition validation errors and the saved creator remains unchanged. Step 8 owns HTTP/IPC/CLI wiring. Rust does not hot-reload; no desktop instance was launched by this peer.
+- [x] After Boss's planned `make dev` restart or `make build`, use the `automations` MCP tool from a bound agent to create/get/list/update/pause/resume/delete a definition. Confirm invalid edits return the same definition validation errors and the saved creator remains unchanged. Step 8 owns HTTP/IPC/CLI wiring. Rust does not hot-reload; no desktop instance was launched by this peer.
+  _(verified: totest-1011 isolated main `cd07d1e38135f49261c11789a75608188853a2b1`; probe.py: bound MCP create/get/list/update/pause/resume/delete; identical HTTP/MCP invalid-edit errors; host creator survives forged edits. Evidence: `~/Gits/.tmp/totest-1011/`.)_
 ## Automations Once (1629-2262) — Rust restart required
 
-- [ ] After API/UI integration and Boss’s next planned `make dev` restart or `make build`, create a Once run in an IANA zone, confirm one preview instant and completed status after its scheduled run, retain the definition, and confirm restart/catch-up does not launch it twice. Rust does not hot-reload; this lane does not launch desktop.
+- [x] After API/UI integration and Boss’s next planned `make dev` restart or `make build`, create a Once run in an IANA zone, confirm one preview instant and completed status after its scheduled run, retain the definition, and confirm restart/catch-up does not launch it twice. Rust does not hot-reload; this lane does not launch desktop.
+  _(verified: totest-1011 isolated main `cd07d1e38135f49261c11789a75608188853a2b1`; Real scheduled Once in UTC has one preview instant, terminates skipped_precheck on exit 3, stays retained/completed; own daemon restart preserves run ID without duplicate (http-mcp-trace.json). Evidence: `~/Gits/.tmp/totest-1011/`.)_
 
 ## Automation prechecks (1614-7e8f) — Rust restart required
 
 - [ ] After dispatcher/API integration and Boss's next planned `make dev` restart or `make build`, run an automation whose precheck exits 0, exits nonzero and times out; confirm dispatch only for exit 0 and saved `skipped_precheck` diagnostics otherwise. Confirm Run Now records a bypass and does not execute the precheck. The standalone helper has targeted shell/process tests; runtime persistence belongs to Step 6. Rust does not hot-reload; this lane does not launch desktop.
 ## Automations cron and timezone (1611-fa3f) — Rust restart required
 
-- [ ] After landing and Boss's planned `make dev` restart or `make build`, verify creation defaults to the local IANA zone and previews use the saved zone through the commands once Step 8 lands. Verify `0 9 */2 * MON` only previews matching Mondays, while `0 9 1-31/2 * MON` also includes matching non-Mondays. Fixed wall times skip spring gaps and use the earlier fall-fold instant. Rust does not hot-reload; this lane did not launch or restart desktop.
+- [x] After landing and Boss's planned `make dev` restart or `make build`, verify creation defaults to the local IANA zone and previews use the saved zone through the commands once Step 8 lands. Verify `0 9 */2 * MON` only previews matching Mondays, while `0 9 1-31/2 * MON` also includes matching non-Mondays. Fixed wall times skip spring gaps and use the earlier fall-fold instant. Rust does not hot-reload; this lane did not launch or restart desktop.
+  _(verified: totest-1011 isolated main `cd07d1e38135f49261c11789a75608188853a2b1`; probe.py: Europe/Madrid default, saved-zone preview, both Vixie day-field cases, skipped spring gaps and earlier Berlin fall fold. Evidence: `~/Gits/.tmp/totest-1011/`.)_
 
 ## Automations definition storage (1610-ac85) — Rust restart required
 
-- [ ] After landing and Boss's next planned `make dev` restart or `make build`, verify the selected instance's `automations.json` through the Automations commands once plan Step 8 lands: create/edit/delete a definition, retain a second definition and the global concurrency setting, and reject invalid edits. Step 1 supplies storage only; it does not yet register commands or run a scheduler. Rust does not hot-reload. This lane did not launch or restart a desktop instance.
+- [x] After landing and Boss's next planned `make dev` restart or `make build`, verify the selected instance's `automations.json` through the Automations commands once plan Step 8 lands: create/edit/delete a definition, retain a second definition and the global concurrency setting, and reject invalid edits. Step 1 supplies storage only; it does not yet register commands or run a scheduler. Rust does not hot-reload. This lane did not launch or restart a desktop instance.
+  _(verified: totest-1011 isolated main `cd07d1e38135f49261c11789a75608188853a2b1`; probe.py: isolated automations.json create/edit/delete, second definition retained, concurrency remains two, invalid edit rejected. Evidence: `~/Gits/.tmp/totest-1011/`.)_
 
 ## Plugin host phase 0 — backend restart required
 
@@ -4928,7 +4933,8 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 
 - [ ] After landing and rebuilding `tuic-remote`, verify browser add-account device-flow login resolves and stores the named account. The shared helper now compiles without desktop. Rust changes require a manual restart to load; no desktop instance was launched.
 
-- [ ] Automations run ledger (#1612-70d1): after the scheduler runtime is wired and Boss restarts `make dev` (or rebuilds release), verify saved history survives definition deletion and restarting interrupts open runs without retry. This Rust storage change does not hot-reload; no scheduler runtime is launched by this step.
+- [x] Automations run ledger (#1612-70d1): after the scheduler runtime is wired and Boss restarts `make dev` (or rebuilds release), verify saved history survives definition deletion and restarting interrupts open runs without retry. This Rust storage change does not hot-reload; no scheduler runtime is launched by this step.
+  _(verified: totest-1011 isolated main `cd07d1e38135f49261c11789a75608188853a2b1`; scheduled-results.py + restart.py: history survives definition deletion; recorded real prechecking run becomes interrupted on own daemon restart, same run ID, no duplicate on startup tick; runs-after-restart.json. Evidence: `~/Gits/.tmp/totest-1011/`.)_
 - [ ] Mobile AI Chat on iPhone: confirm wrapped long suggestions/tool titles and table-local scrolling at 360–430px, session-style input auto-grow, attachment/Send icons and Park/Stop toolbar. Chromium component-layout evidence is recorded for #1625-c04f; phone touch and keyboard remain to check.
 - [ ] On iPhone PWA, check the update strip below the header in Commander and Paper; confirm that the native status-edge fade does not cover its text (#1626-9529). Chromium contrast is verified; iOS compositor behavior is not.
 ## Mobile slash button parity (story 1609-9faa)
@@ -4960,12 +4966,14 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] After an Edge access rejection, confirm the UI reports the cool-down and dictation continues; wait five minutes before retrying speech.
 - [ ] Mobile Ctrl menu (#1660-b7f6): on iPhone/iPad with the real keyboard open, open Ctrl, choose each key, dismiss outside, and check Ctrl+C/Ctrl+D danger colours. Ctrl+Enter submits with Claude CSI-u and ego LF; Codex/OpenCode/Goose/Grok/pi insert a newline. Other mappings and uncertainty are recorded in docs/evidence/ctrl-menu-1660/README.md. Desktop browser verification reserves keyboard space; real iOS keyboard remains to check.
 
-- [ ] Plugin development guide (#1661-4ea5): after Boss restarts `make dev` or rebuilds release, call `plugin_dev_guide` and confirm the source-checked inventories and Core-rendered plugin UX section are present. The compiled Rust guide does not hot-reload.
+- [x] Plugin development guide (#1661-4ea5): after Boss restarts `make dev` or rebuilds release, call `plugin_dev_guide` and confirm the source-checked inventories and Core-rendered plugin UX section are present. The compiled Rust guide does not hot-reload.
+  _(verified: totest-1011 isolated main `cd07d1e38135f49261c11789a75608188853a2b1`; MCP plugin_dev_guide returns compiled guide with capability/host/base-CSS inventories and Core-rendered plugin UX field/component inventories; plugin-guide.txt. Evidence: `~/Gits/.tmp/totest-1011/`.)_
 - [ ] After Boss restarts `make dev` (or rebuilds release), use the rebuilt CLI to open a persistent directory and verify its sidebar row becomes active; repeat without losing tabs. Verify MCP `repo add` works and `ui tab` rejects `tuic://open-repo` with an actionable error (#1668-9b59). Rust and the installed CLI require rebuild/restart; the current running app does not load these edits.
 - [ ] After Boss restarts `make dev` (or rebuilds release), verify the Automations dialog can save, pause/resume, preview and inspect history over IPC and browser HTTP. Rust does not hot-reload. Use an isolated headless instance and throwaway definition for HTTP Run Now; phase 1 dispatches Once only (#1617-290d).
 - [ ] After a manual Rust rebuild/restart: verify a failed short-name remote host names DNS resolution, suggests its advertised Tailscale FQDN, and shows a retry delay without a simultaneous Connecting/error state. Verify HTTP 403 Untrusted Host says the daemon rejected the name. Backend and renderer regressions cover these paths; desktop verification remains pending because this task forbids launching or accessing the live app. Two isolated headless Chrome screenshot attempts hung (the second stopped at its 45s outer limit).
 
-- [ ] After a manual `make dev` restart or `make build`, verify a remote daemon returning a chunked HTTP 403 Untrusted Host reports the rejected host name instead of a permissions error. Automated regression covers the split response.
+- [x] After a manual `make dev` restart or `make build`, verify a remote daemon returning a chunked HTTP 403 Untrusted Host reports the rejected host name instead of a permissions error. Automated regression covers the split response.
+  _(verified: totest-1011 isolated main `cd07d1e38135f49261c11789a75608188853a2b1`; remote-probe.py: record actual daemon Untrusted Host response, replay split chunks over HTTP/1.1; production remote connect reports rejected 127.0.0.1, HTTP403 and error state. Evidence: `~/Gits/.tmp/totest-1011/`.)_
 - [ ] Automations completion (#1616-1882): after Boss restarts `make dev` or rebuilds release, verify a Once run reports done/failed/needs-you, retains bounded output, and a blocked run expires without stopping another terminal. A stop failure must leave that run open while other runs still expire; the critic regression covers this case. Rust does not hot-reload; this peer did not launch or restart desktop TUIC.
 - [ ] After rebuilding/restarting TUIC, open `https://tuicommander.com/blog/claude-cache-tiers.html` with MCP `ui action=tab`; confirm the page renders and localhost dashboards and asset previews still load. CSP config is embedded at build time; no desktop instance was launched for this change.
 - [ ] Telegram desktop owner: after a manual `make dev` restart or `make build`, enable a checked bot token with no tuic-remote running; confirm Connected (this app), link a private chat, and ask an agent to call Telegram MCP `register`. Start tuic-remote first in a separate check; confirm the desktop reports Connected (tuic-remote) and leaves its registration intact. Close the owner and confirm the standby takes over. Rust changes require restart; no desktop build was launched by the managed peer.
