@@ -698,6 +698,16 @@ No schedules or launch decisions are calculated in TypeScript.
 
 `RunsView` in the Automations dialog renders all-history pages and backend 24h/7d summaries. `RunOutput` renders saved stdout/stderr and immutable workspace details. View run only focuses a live terminal with matching daemon ownership; unavailable sessions never launch a replacement.
 
+### Reusable setting field controls
+
+`SettingsPanel/SettingFields.tsx` exports `SettingAccount`, `SettingList`,
+`SettingMultiSelect`, `SettingStatus` and `SettingButton`. The implementations in
+`SettingsPanel/fields/` share the existing label and hint layout. Editable rows use
+stable IDs; multiselect uses checkboxes; status is read-only. The account picker
+loads the core account list and delegates Add to a token-free native-flow callback.
+These controlled components do not persist settings or define catalogue fields.
+The dev-only `fields/preview.html` mounts the actual controls for visual checks.
+
 The Precheck section includes a default-off stdout context checkbox. It edits
 `precheck.inject_output` through the existing store and shared save API, without
 changing prompt text. Disabling and re-enabling the precheck resets the flag.

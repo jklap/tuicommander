@@ -418,6 +418,28 @@ The Browse row shows registry name, version, description, author, tags and minim
 
 The current PluginManifest has no settings schema, field-kind union or generic Tasks-view declaration. Core does not render schema-driven plugin settings or generic plugin Tasks views. Do not invent manifest fields or import core Settings components. Plugins can open their own UI with `host.openPanel` or `host.openMarkdownPanel`. When a settings schema or Tasks-view API is added, document its fields, kinds and core-rendered controls here and extend the source-derived UX drift check to its real schema/renderer. The manifest field and host method inventories fail on new API entries until the guide is updated.
 
+### Settings field kinds
+
+These are reusable core Solid controls, not manifest fields or plugin imports. The catalogue renderer owns persistence and maps its JSON schema and choices to controls. All controls take `label` and optional `hint` and `disabled`. They never save settings directly.
+
+### Settings control inventory
+`SettingAccount`, `SettingButton`, `SettingList`, `SettingMultiSelect`, `SettingStatus`.
+
+#### SettingAccount
+Takes `provider`, `value` (account ID), and `onInput(id)`. Loads the A1 secret-safe account list through `account_action` with `{request:{action:"list"}}` and displays only labels for the selected provider. `onAdd(provider)` opens the host's native secret-entry flow; it receives no token and resolves after save or cancel, then the control reloads the list. `listAccounts` can supply a host-owned list port. Backend error text is never rendered. No credential is accepted as a control prop.
+
+#### SettingList
+Takes `rows: {id,values:Record<string,string>}[]`, `columns: {id,label,placeholder?}[]`, and `onChange(rows)`. Edits and removal use stable row IDs. Optional `onAdd()` supplies a new row with a unique stable ID and initial values. The caller owns validation, defaults and persistence.
+
+#### SettingMultiSelect
+Takes `value:string[]`, `options:{value,label}[]`, and `onInput(values)`. Checkbox choices support keyboard and touch interaction; changing one choice preserves the other selected values.
+
+#### SettingStatus
+Read-only `value` text with optional `tone:neutral|info|success|warning|danger`. The text communicates the state as well as its colour.
+
+#### SettingButton
+Takes `value` (button text) and `onClick()`. It does not submit an enclosing form; the caller handles the action and its pending state with `disabled`.
+
 ## Structured Event Types
 
 The Rust OutputParser detects patterns in terminal output and emits typed events. Handle them with `host.registerStructuredEventHandler(type, handler)`.
@@ -714,6 +736,20 @@ It touches no network, credentials, filesystem or subprocesses. It is a developm
 provider, not a fixture proving GitHub/Jira/GitLab API compatibility. Its search is
 literal text; sort supports key/title/updatedAt. Its cursor expires on mutation.
 
+## Tasks list
+
+Core TasksList consumes WorkItemProvider data, never plugin HTML or iframes.
+Providers supply providerId, accountId, name, fields, savedFilters, and async list(query, signal).
+Core renders source and preset selectors, descriptor filters, 250 ms debounced search,
+provider sorting, virtual rows, and Load more using nextCursor.
+Queries carry filters, savedFilterId, search, sort, groupBy, cursor and limit.
+Grouped results come from grouped(query, signal); core renders provider group names and members.
+The LRU cache holds at most 32 pages, partitioned by provider, account and query.
+Obsolete responses cannot replace newer results. Repeated references update a row;
+repeated cursors stop pagination. Failed refreshes retain rows marked Stale results.
+Opening an item calls the host onOpen(reference); list rendering does not fetch detail.
+Tasks shell mounting remains a separate integration step.
+
 ## Troubleshooting
 
 | Error | Fix |
@@ -737,6 +773,8 @@ mod tests {
     const HOST: &str = include_str!("../../../src/plugins/pluginRegistry.ts");
     const CSS: &str = include_str!("../../../src/components/PluginPanel/pluginBaseStyles.ts");
     const UX: &str = include_str!("../../../src/components/SettingsPanel/tabs/PluginsTab.tsx");
+    const SETTING_FIELDS: &str =
+        include_str!("../../../src/components/SettingsPanel/SettingFields.tsx");
 
     fn captures(source: &str, pattern: &str) -> BTreeSet<String> {
         Regex::new(pattern)
@@ -829,6 +867,17 @@ mod tests {
     // Catches: new manifest-driven UI or core plugin components are absent from the UX guide.
     #[test]
     fn plugin_docs_matches_core_plugin_ux() {
+        assert_inventory(
+            PLUGIN_DOCS,
+            "### Settings control inventory\n",
+            captures(SETTING_FIELDS, r"(?m)^export \{ (Setting[A-Za-z]+),"),
+        );
+        for control in inventory(PLUGIN_DOCS, "### Settings control inventory\n") {
+            assert!(
+                PLUGIN_DOCS.contains(&format!("#### {control}\n")),
+                "each setting control needs UX instructions: {control}"
+            );
+        }
         let manifest = section(PLUGINS, "pub struct PluginManifest {", "\n}");
         let field = Regex::new(r#"(?s)(?:#\[serde\(([^]]*)\)\]\s*)?pub ([a-z_]+):"#).unwrap();
         let fields = field

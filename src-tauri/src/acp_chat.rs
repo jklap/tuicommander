@@ -9,12 +9,16 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use std::{path::PathBuf, sync::Arc};
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ChatLaunch {
+    #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"next_session","effect":"Used when the next session or process starts; existing sessions retain their launch configuration.","operations":["get","set"],"confirmationClass":"execution_authority"}))]
     pub executable: String,
+    #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"next_session","effect":"Used when the next session or process starts; existing sessions retain their launch configuration.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub profile: String,
+    #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"next_session","effect":"Used when the next session or process starts; existing sessions retain their launch configuration.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub workspace: PathBuf,
+    #[schemars(extend("x-not-setting" = "Host-issued conversation identity; not a configurable launch option."))]
     pub peer_id: String,
 }
 

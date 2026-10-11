@@ -142,3 +142,47 @@ async fn automation_http_matches_shared_ipc_results_and_errors() {
         }
     }
 }
+
+async fn unknown_automation_json_404(router: axum::Router) {
+    let response = router
+        .oneshot(
+            Request::post("/automations/missing?token=fallback-404-secret")
+                .header("host", "127.0.0.1:9876")
+                .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+                    [127, 0, 0, 1],
+                    5555,
+                ))))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+            .expect("404 body is JSON");
+    assert_eq!(
+        body,
+        json!({"error":"no such endpoint: /automations/missing"})
+    );
+}
+
+fn state_with_token() -> std::sync::Arc<crate::state::AppState> {
+    let state = test_state();
+    *state.session_token.write() = "fallback-404-secret".to_string();
+    state
+}
+
+// Catches: the headless TCP router (no SPA fallback) answering an unknown API path
+// with an empty 404 instead of the documented JSON error.
+#[tokio::test]
+async fn headless_tcp_router_unknown_automation_endpoint_returns_json_404() {
+    unknown_automation_json_404(crate::mcp_http::build_remote_router(state_with_token())).await;
+}
+
+// Catches: the local HTTP-over-IPC router losing the JSON 404 in a build without
+// the desktop-only SPA fallback.
+#[tokio::test]
+async fn local_ipc_router_unknown_automation_endpoint_returns_json_404() {
+    unknown_automation_json_404(build_router(state_with_token(), false, true)).await;
+}
