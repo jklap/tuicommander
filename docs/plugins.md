@@ -1780,6 +1780,18 @@ Available from the [plugin registry](https://github.com/sstraus/tuicommander-plu
 | Changes not reflecting | Hot reload cache | Save the file again, or restart the app |
 | `default export` error | Module doesn't `export default { ... }` | Ensure your module has a default export with `id`, `onload`, `onunload` |
 
+## Core account registry integration
+
+Provider accounts and sites are core-owned. Metadata reads expose credential presence only. A trusted manifest adapter registers `ProviderDescriptor {id,label,kinds,verify:{path,login_pointer}}` with `accounts::register_provider(owner, descriptor)`; non-core providers use bearer/basic tokens only. Unload unregisters descriptors but keeps accounts and credentials. Account actions are not currently a grant in `host.invoke`; the scoped plugin host adapter and authenticated HTTP injection are separate host-API work. Secret entry belongs in the core private native sink, which calls the write-only account service; plugins must never receive token values. See [Shared account registry](backend/github.md#shared-account-registry).
+
+## Core setting controls
+
+The core provides account, editable-list, multiselect, read-only status and action
+button controls for catalogue-backed settings and work-item forms. Plugins do not
+import these Solid components or gain new manifest fields from them. The host
+owns account selection and native secret entry; no token enters a plugin prop.
+See `plugin_dev_guide` → **Settings field kinds** for the core-rendered contracts.
+
 ## Tasks roadmap
 
 Core `TasksRoadmap` renders `WorkItemProvider.list` pages and the provider's date
@@ -1851,3 +1863,23 @@ list, detail, comments, schemas, saved filters, board columns and mutations.
 It touches no network, credentials, filesystem or subprocesses. It is a development
 provider, not a fixture proving GitHub/Jira/GitLab API compatibility. Its search is
 literal text; sort supports key/title/updatedAt. Its cursor expires on mutation.
+
+## Start work and URL paste
+
+`host.startWork({ repoPath, branch, baseRef?, prompt, agentType?, delivery?, link? })`
+(capability `pty:write`) creates a worktree on a new `branch` (from `baseRef`, default
+the repo's default branch) and opens an agent in it. The agent is `agentType` or, when
+omitted, the first enabled agent with a run config on the repo's machine; that run
+config supplies the command and env. The prompt is never a shell argument: the host
+waits for the agent's composer and types it there, inside an `<untrusted-content>`
+block, control bytes removed, capped at 12000 characters. `delivery: "draft"`
+(default) leaves Enter to the user; `"submit"` sends it. `link` links the item to the
+new worktree. It resolves to `{ repoPath, workspaceId, branch, worktreePath }`.
+The GitHub Auto-fix action uses the same path with `delivery: "submit"`.
+
+`host.registerUrlResolver((url, signal) => ...)` claims URLs pasted in the command
+palette. Return `null` for a URL that is not yours, or `{ link, startWork? }`.
+Resolvers run in registration order; the first non-null result wins and a resolver
+that throws is skipped. When a worktree is already linked to `link.reference`, the
+palette offers **Open worktree**; otherwise it offers **Start work** with your
+request (`repoPath` defaults to the active repository).

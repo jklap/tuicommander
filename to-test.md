@@ -7,6 +7,11 @@
 
 ## Automation precheck prompt context (1631-45bf) — Rust restart required
 
+## Core provider accounts (1679-1419) — Rust restart required
+
+- [ ] After landing and Boss's manual `make dev` restart or `make build`, list accounts through `POST /accounts/action`; confirm existing GitHub IDs and repo bindings, plus presence-only credential status. OAuth success replies must omit `access_token`. No app was launched, restarted or killed by this peer.
+- [ ] After A2/A3 integration, use the private native add flow for a registered Jira/GitLab token provider, Test it, then remove a throwaway account/site. A1 tests the generic descriptor protocol on rb; live provider auth and native secret-entry privacy are not claimed.
+
 - [ ] After Boss restarts `make dev` or installs `make build`, create an isolated Once automation through the API/MCP with `precheck.inject_output: true`. Confirm a successful scheduled precheck prefixes bounded, marked untrusted stdout before the literal prompt and run history reports `precheck_context`. Compare omitted/false flags and Run Now (literal prompt, no context); stderr must not appear. Targeted dispatch tests exercise the real shell, launch-request boundary and reopened ledger. No desktop instance was launched or restarted by this peer.
 
 ## iPhone hands-free Now Playing (1670-fdc8)
@@ -4967,6 +4972,7 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 
 - [ ] After the next Rust rebuild/restart, verify Design Mode sends a captured crop as a readable image and lets retained feedback reach a replacement after its original recipient exits (#1672-cd3d). Rust does not hot-reload.
 
+- [ ] Work-item setting controls: after integration, verify the five controls in their consuming settings and Tasks forms; account Add requires the separate native account sink. The dev-only field preview covers the controls independently.
 - [ ] Settings catalogue foundation: after Boss's next manual `make dev` restart or release build, later settings adapters must use the Rust descriptors, retain unavailable voice fields and refuse cutover while inventory gaps remain. This commit adds internal definitions only; no new MCP tool or UI control is exposed yet.
 - [ ] Settings transaction foundation: after Boss's next manual restart/build and the later transport cutover, verify stale revisions conflict, a rejected batch writes nothing, and persisted listener changes report pending/recovery until applied. Internal service only at this stage; no new tool is exposed.
 - [ ] After the next manual Rust restart/build, verify an explicitly saved 24h remote session lifetime survives reload; legacy unmarked files migrate only once (#1676-1230).
@@ -4974,3 +4980,15 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] Mobile session history (#1681-507e): after Boss manually restarts `make dev` or rebuilds release, verify a long-running Claude Code session keeps completed output above its live region while scrolling on iPhone. Rust does not hot-reload; this peer did not restart Boss's app.
 - [ ] After Boss restarts `make dev` or rebuilds release: check MCP/CLI automation list, enabled-only update and Once preview use the shared HTTP/IPC shapes; confirm bound creator provenance is retained (#1630-cbfa, #1621-5dce). Rust changes require a restart.
 - [ ] [HUMAN] #1674-93d5: On iPhone Safari and separately the installed Home Screen PWA, tap the composer mic beside Send. Verify interim/final speech appends without opening the keyboard, stop works, Send remains explicit, and server hands-free cannot record simultaneously. Check permission refusal preserves the draft. While dictating, edit the draft: the mic returns to idle, the edit stays exact, and tapping the mic starts a new recording. Historical WebKit standalone restriction: https://bugs.webkit.org/show_bug.cgi?id=225298#c3. At 360×800 the controls remain in the existing row; Send/mic targets grow from 40 to 44 px, costing 4 vertical px rather than another terminal row.
+
+## Private account secret entry (#1696-c6d4)
+
+- [ ] After a manual `make dev` restart (or `make build`), add an Enterprise
+  account: Settings shows only the host field; Add account opens the private
+  native token window. Submit a valid PAT and confirm the account appears.
+- [ ] Decline and close before submitting; confirm no account appears. Retry
+  with an invalid PAT and confirm no partial account is created.
+- [ ] No UI launches rotation yet. Send `POST /accounts/secret-form` with
+  `{"action":"rotate","id":"<account id>"}` to the test instance; confirm
+  presence remains set and provider requests use the replacement credential.
+- [ ] Confirm native entry has no mobile link or developer tools.

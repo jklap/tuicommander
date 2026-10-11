@@ -501,7 +501,9 @@ work starts.
 
 Header metadata uses an explicit empty array when no headers remain, so removing the last header stays a valid config delta. Authenticated HTTP upstreams cannot change origin in place. The locked save compares the latest prior entries by ID or credential-owning name, before persistence and activation, even if the request clears auth/header metadata. Use a separate upstream name for another provider. Same-origin path edits remain allowed.
 
-**Commands:** `load_mcp_upstreams()`, `save_mcp_upstreams(base, config)`
+Add-time secrets travel in an optional write-only `credentials` array on the save request. Under the same cross-process lock, the backend validates the merged config, creates only new vault entries, and persists the config. Failed saves roll back newly created secrets. An existing credential is never replaced by an add, even at the same origin; the standalone credential endpoint requires explicit `replace: true` for edits.
+
+**Commands:** `load_mcp_upstreams()`, `save_mcp_upstreams(base, config, credentials?)`
 
 ### Notification Config (`notifications.json`)
 
@@ -1408,3 +1410,7 @@ settings controls and cannot be edited through the catalogue.
 Validation errors include schema-derived `expected` and `allowed` hints, never
 rejected input values. Persisted effect failures return `nextAction:"get"` and the
 committed revision: reread the affected paths rather than replaying the mutation.
+
+## Core provider accounts
+
+`accounts.json` stores provider/site/account metadata only. The first read migrates `github_accounts.json` while preserving IDs; the old file is retained for recovery and a durable marker prevents re-import after removals. `github_bindings.json` remains the GitHub binding store. Tokens migrate atomically within the credential vault to `account/{id}`; env/CLI credentials remain ambient. Corrupt metadata is retained and blocks account writes. See [Shared account registry](github.md#shared-account-registry) for APIs, credential presence and partial cross-store recovery.

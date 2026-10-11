@@ -4,6 +4,9 @@
     allow(dead_code, unused_imports, unused_variables)
 )]
 
+pub(crate) mod accounts;
+#[cfg(test)]
+mod accounts_regression_tests;
 pub mod acp;
 pub(crate) mod acp_chat;
 pub(crate) mod acp_commands;
@@ -2219,6 +2222,8 @@ pub fn run() {
             github_auth::github_disconnect,
             github_auth::github_diagnostics,
             github_auth::github_auth_status,
+            accounts::account_action,
+            secrets::account_sink::account_secret_form,
             github_account::github_add_account,
             github_account::github_remove_account,
             github_account::github_bind_repo,
@@ -2348,7 +2353,7 @@ pub fn run() {
             mcp_upstream_config::set_project_mcp_upstreams,
             mcp_upstream_config::reconnect_mcp_upstream,
             mcp_upstream_config::get_mcp_upstream_status,
-            mcp_upstream_credentials::save_mcp_upstream_credential,
+            mcp_upstream_credentials::commands::save_mcp_upstream_credential,
             mcp_upstream_credentials::delete_mcp_upstream_credential,
             mcp_oauth::commands::start_mcp_upstream_oauth,
             mcp_oauth::commands::mcp_oauth_callback,
