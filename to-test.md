@@ -1,3 +1,6 @@
+## ego provider sidebar icon (1736-76a4) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, run `ego` in a terminal tab and confirm the sidebar icon matches the provider of its `model` (anthropic → Claude, openai/openai-codex → OpenAI, gemini, github-copilot, xai, openrouter; anything else → ring with epsilon). Copilot, xAI, OpenRouter and generic ego are hand-drawn stand-ins, not official brand paths. The provider is read from the manifest of the session leased to the ego pid; manifest refresh after an in-session model switch is unverified. Rust does not hot-reload; no desktop instance was started by this peer.
 ## Design Mode dev servers (1723-4a21) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, reload the Design Mode extension and refresh servers. Confirm TUIC, non-HTML listeners and servers of other worktrees are absent, and only the bound session’s servers are listed. No desktop instance was started or restarted by this peer.
