@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { mockInvoke } from "../mocks/tauri";
 import "../mocks/tauri";
 import { render, waitFor } from "@solidjs/testing-library";
