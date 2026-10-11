@@ -5,6 +5,12 @@ import { isTauri } from "../transport";
 import { appLogger } from "./appLogger";
 import { toastsStore } from "./toasts";
 
+/** Browser discovery currently runs only during host launch; keep both explicit choices. */
+export const designModeBrowsers = [
+	{ id: "edge", label: "Edge" },
+	{ id: "chrome", label: "Chrome" },
+] as const;
+
 export type DesignModeStatus = "armed" | "stopped";
 /** Shape of the `design-mode-changed` push, one entry per repository. */
 export type DesignModeEntry = { repo_path: string; session_id: string; status: DesignModeStatus };

@@ -1,4 +1,4 @@
-import {addPick, editPick, deletePick, draftForTab, recipient, deliverDraft, serverSession} from './cards.js';
+import {addPick, editPick, deletePick, addError, clearErrors, draftForTab, recipient, deliverDraft, serverSession} from './cards.js';
 import {reviewAgents} from './reviewAgents.js';
 import {connectNative, nativeRequest} from './native.js';
 let connection = 'Connecting…';
@@ -8,6 +8,7 @@ const noServers = {servers:[],canStart:false};
 const serversBySession = new Map();
 let lastRefresh = 0;
 let lastMode;
+let armed;
 async function refreshConnection(tabId) {
   if (Date.now() - lastRefresh < 5000) return;
   lastRefresh = Date.now();
@@ -22,6 +23,8 @@ async function refreshConnection(tabId) {
         for(const tab of await chrome.tabs.query({})) if(tab.id) chrome.tabs.sendMessage(tab.id,{kind:'stop'}).catch(()=>{});
       }
       lastMode=mode?.status;
+      // TUIC is the authority on which session started Design Mode; binding.json is only the install-time copy.
+      armed=mode?.status==='armed'?mode.sessionId:undefined;
     } catch(error) { connection=`${connection} · Status unavailable: ${error.message}`; }
     const sessionId = await selectedSession(tabId);
     try { serversBySession.set(sessionId, await request('list_dev_servers',{sessionId})); }
@@ -43,12 +46,15 @@ async function request(action, fields = {}) {
   return nativeRequest({action, repoPath: config.repoPath, version: '2.0.0', ...fields});
 }
 async function selectedSession(tabId) {
-  return serverSession(draftForTab(await drafts(), tabId), agents, bound.sessionId);
+  return serverSession(draftForTab(await drafts(), tabId), agents, armed ?? bound.sessionId);
 }
 async function drafts() { return (await chrome.storage.local.get('drafts')).drafts ?? {}; }
 async function mutate(tabId, change) {
   const all = await drafts();
-  all[String(tabId)] = change(draftForTab(all, tabId));
+  const current = draftForTab(all, tabId);
+  const next = change(current);
+  if (next === current) return;
+  all[String(tabId)] = next;
   await chrome.storage.local.set({drafts: all}); notify();
 }
 async function activeTab() {
@@ -59,9 +65,9 @@ async function activeTab() {
 async function snapshot(tabId) {
   const all = await drafts();
   const draft = draftForTab(all, tabId);
-  const selection = connection.startsWith('Connected') ? recipient(draft, agents, bound?.sessionId) : {};
+  const selection = connection.startsWith('Connected') ? recipient(draft, agents, armed ?? bound?.sessionId) : {};
   if (Object.keys(selection).some((key) => draft[key] !== selection[key])) { all[String(tabId)] = {...draft,...selection}; await chrome.storage.local.set({drafts:all}); }
-  return {tabId, ...draft, ...selection, repoPath: bound?.repoPath, connection, agents, servers: serversBySession.get(selection.selectedSessionId ?? '') ?? noServers};
+  return {tabId, ...draft, ...selection, repoPath: bound?.repoPath, connection, agents, servers: serversBySession.get(selection.selectedSessionId ?? '') ?? noServers, armedSessionId: armed ?? bound?.sessionId};
 }
 async function capture(message, sender) {
   if (sender.frameId !== 0) return {captureError: 'Frame screenshot omitted; DOM evidence retained.'};
@@ -99,6 +105,11 @@ async function handle(message, sender) {
     await mutate(sender.tab.id, (draft) => addPick(draft, pick));
     return snapshot(sender.tab.id);
   }
+  if (message.kind === 'page_error') {
+    if (!sender.tab?.id || typeof message.error !== 'object') throw new Error('Page error without a tab.');
+    await mutate(sender.tab.id, (draft) => addError(draft, message.error));
+    return;
+  }
   // Content scripts never get a path to sends, host configuration or draft edits.
   if (sender.tab || sender.url !== chrome.runtime.getURL('panel.html')) return;
   const tab = await activeTab();
@@ -118,12 +129,14 @@ async function handle(message, sender) {
   if (message.kind === 'send') {
     const draft=draftForTab(await drafts(),message.tabId);
     const outcome=await deliverDraft(draft,(batch)=>request('send',batch),
-      (value)=>mutate(message.tabId,()=>value),crypto.randomUUID());
+      (value)=>mutate(message.tabId,()=>value),crypto.randomUUID(),message.errorsOnly === true);
     return {draft:await snapshot(message.tabId),outcome};
   }
   if (message.kind === 'stop') await chrome.tabs.sendMessage(tab.id,{kind:'stop'});
   if (message.kind === 'edit') await mutate(message.tabId, (draft) => editPick(draft,message.id,message.comment));
   if (message.kind === 'select') { await mutate(message.tabId, (draft) => ({...draft,selectedSessionId:message.sessionId,selectionInitialized:true,agentNotice:''})); lastRefresh=0; await refreshConnection(message.tabId); }
+  if (message.kind === 'attach_errors') await mutate(message.tabId, (draft) => ({...draft,attachErrors:message.attach === true}));
+  if (message.kind === 'clear_errors') await mutate(message.tabId, clearErrors);
   if (message.kind === 'delete') await mutate(message.tabId, (draft) => deletePick(draft,message.id));
   return snapshot(tab.id);
 }
@@ -137,6 +150,10 @@ chrome.runtime.onMessage.addListener((message,sender,reply) => {
 });
 chrome.tabs.onActivated.addListener(notify);
 chrome.tabs.onUpdated.addListener((_id,change) => { if (change.status === 'complete') notify(); });
+// A new page load starts a new error list; the serial queue keeps it ordered before that page's errors.
+chrome.tabs.onUpdated.addListener((tabId,change) => {
+  if (change.status === 'loading') serial = serial.then(() => mutate(tabId, clearErrors)).catch(() => {});
+});
 chrome.tabs.onRemoved.addListener((tabId) => {
   serial = serial.then(async () => { const all=await drafts(); delete all[String(tabId)]; await chrome.storage.local.set({drafts:all}); }).catch(() => {});
 });

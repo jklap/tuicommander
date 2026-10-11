@@ -28,6 +28,8 @@ interface DictationConfig {
 	hands_free_start_notice: string;
 	/** Play the hands-free earcons on the owning client. On by default. */
 	hands_free_earcons: boolean;
+	/** Capture speech hands-free. Off is a replies-only conversation: input stays push-to-talk. Applies to the next conversation. */
+	hands_free_listening: boolean;
 	hands_free_spoken_replies: boolean;
 	/** A user-supplied speech engine as argv, used when `speech_engine` is `external`. Edited in Expert. */
 	speech_command: string[];
@@ -105,6 +107,8 @@ export type HandsFreePhase =
 /** Live hands-free state, mirroring Rust's `HandsFreeStatus`. */
 export interface HandsFreeStatus {
 	armed: boolean;
+	/** Speech is captured. False is a replies-only conversation: input stays push-to-talk. */
+	listening: boolean;
 	phase: HandsFreePhase;
 	/** The bound terminal. Unchanged by focus for as long as it is set. */
 	sessionId: string | null;
@@ -378,6 +382,7 @@ interface DictationStoreState {
 	handsFreeActivationPhrase: string;
 	/** Whether the delivered/dropped earcons play. Defaults to true, as in Rust. */
 	handsFreeEarcons: boolean;
+	handsFreeListening: boolean;
 	spokenReplies: boolean;
 	/** Which engine speaks replies. */
 	speechEngine: SpeechEngineId;
@@ -485,6 +490,7 @@ function createDictationStore() {
 		handsFreeHoldBackMs: DEFAULT_HOLD_BACK_MS,
 		handsFreeActivationPhrase: "",
 		handsFreeEarcons: true,
+		handsFreeListening: true,
 		spokenReplies: true,
 		speechEngine: "edge",
 		speechCommand: [],
@@ -654,6 +660,7 @@ function createDictationStore() {
 					handsFreeHoldBackMs: config.hands_free_hold_back_ms ?? DEFAULT_HOLD_BACK_MS,
 					handsFreeActivationPhrase: config.hands_free_activation_phrase ?? "",
 					handsFreeEarcons: config.hands_free_earcons ?? true,
+					handsFreeListening: config.hands_free_listening ?? true,
 					spokenReplies: config.hands_free_spoken_replies ?? true,
 					speechEngine: config.speech_engine || "edge",
 					speechCommand: config.speech_command ?? [],
@@ -720,6 +727,7 @@ function createDictationStore() {
 				if (partial.speech_edge_voice !== undefined) storeUpdate.speechEdgeVoice = partial.speech_edge_voice;
 				if (partial.speech_volume_db !== undefined) storeUpdate.speechVolumeDb = partial.speech_volume_db;
 				if (partial.speech_levelling !== undefined) storeUpdate.speechLevelling = partial.speech_levelling;
+				if (partial.hands_free_listening !== undefined) storeUpdate.handsFreeListening = partial.hands_free_listening;
 				if (partial.hands_free_spoken_replies !== undefined)
 					storeUpdate.spokenReplies = partial.hands_free_spoken_replies;
 				if (partial.hands_free_earcons !== undefined) storeUpdate.handsFreeEarcons = partial.hands_free_earcons;
@@ -749,6 +757,10 @@ function createDictationStore() {
 
 		setNotifyModelOnHandsFree(value: boolean): void {
 			actions.saveConfig({ hands_free_notify_model: value });
+		},
+
+		setHandsFreeListening(value: boolean): void {
+			void actions.saveConfig({ hands_free_listening: value });
 		},
 
 		setSpokenReplies(value: boolean): void {
@@ -1193,7 +1205,7 @@ function createDictationStore() {
 					.catch(() => {});
 				if (!isTauri()) {
 					stopBrowserVoice();
-					browserVoice = await connectBrowserVoice(owner);
+					browserVoice = await connectBrowserVoice(owner, undefined, state.handsFreeListening);
 				}
 				applyHandsFree(
 					await invoke<HandsFreeStatus>("arm_hands_free_dictation", {

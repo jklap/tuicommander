@@ -373,3 +373,7 @@ Use **Toggle answers-only view** (`Cmd+Alt+R` on macOS) to read selectable marke
 When old output leaves the scrollback, command boundaries and prompt ticks stay attached to their retained output. Ticks for discarded prompts disappear; answers-only history keeps the retained question and answer association.
 
 Terminal stream reconnect notices use the current terminal name when available and show the transport’s current attempt (up to 10). A received grid frame or confirmed empty replay removes only that stream notice; socket opening alone does not. Exhausted retries leave a persistent failure notice. Closing the terminal removes its notice, and late subscription failures cannot publish a notice after closure.
+
+### Open a terminal link in Design Mode
+
+Right-click an HTTP or HTTPS link, including a localhost dev server, then select **Start in Design Mode** and choose **Edge** or **Chrome**. The dedicated browser opens that URL and connects the agent in that terminal, not the focused tab. File and other non-web links retain Open and Copy link only. Browser extension setup is required once per repository profile.

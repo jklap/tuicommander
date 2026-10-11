@@ -262,6 +262,10 @@ pub(super) const NATIVE_TOOL_SUMMARIES: &[(&str, &str)] = &[
     ("repo", "Inspect repositories and manage their worktrees."),
     ("story", "Read project stories and update their progress."),
     (
+        "design_mode",
+        "Start Design Mode at a terminal link for layout work.",
+    ),
+    (
         "automations",
         "Create and manage scheduled agent definitions.",
     ),
@@ -307,6 +311,7 @@ pub(super) const NATIVE_TOOL_SUMMARIES: &[(&str, &str)] = &[
 pub(super) fn native_tool_definitions() -> serde_json::Value {
     let defs = serde_json::json!([
         crate::automations::mcp::tool_definition(),
+        crate::design_mode::mcp::tool_definition(),
         crate::secrets::tool_definition(),
         crate::telegram::tool_definition(),
         {
@@ -466,7 +471,7 @@ pub(super) fn native_tool_definitions() -> serde_json::Value {
                 "html": { "type": "string", "description": "Inline HTML content to render in sandboxed iframe (action=tab, mutually exclusive with url)" },
                 "url": { "type": "string", "description": "Tab URL (action=tab, xor html). http(s) → iframe. file:///path → read and inline. tuic://edit/<path>?line=N → native editor. tuic://open/<path> → markdown tab. Absolute paths need `//` prefix." },
                 "pinned": { "type": "boolean", "description": "Pin tab across all branches (default false)" },
-                "focus": { "type": "boolean", "description": "Switch to this tab after open/update (action=tab, default true). Pass false to update silently without stealing focus." },
+                "focus": { "type": "boolean", "description": "Switch to this tab when it is first opened (action=tab, default false: reports open in the background and never steal terminal input focus). Updates of an open tab never switch." },
                 "message": { "type": "string", "description": "Optional body text (action=toast/confirm)" },
                 "level": { "type": "string", "description": "Toast level: info, warn, error (default: info)" },
                 "sound": { "description": "Audible signal for action=toast (default: none). true = the tone matching `level`. Or name one: question, completion, error, warning, info, attention. `attention` is a triangular G4→G4→E5 callback, unlike any other sound in the app — use it when you are running unattended and need the user back (a blocking question, a decision only they can make). Plays through the user's notification settings, so volume, output device and mutes are respected.", "anyOf": [{ "type": "boolean" }, { "type": "string", "enum": ["question", "completion", "error", "warning", "info", "attention"] }] }

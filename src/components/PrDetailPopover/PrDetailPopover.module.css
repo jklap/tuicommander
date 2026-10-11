@@ -696,3 +696,24 @@
 :global([data-compact]) .statusRow {
   padding: 4px 12px;
 }
+
+.requestForm {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  width: 100%;
+}
+
+.requestForm textarea {
+  width: 100%;
+  min-height: 64px;
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--fg-primary);
+  font: inherit;
+  font-size: var(--font-xs);
+  padding: 6px;
+}

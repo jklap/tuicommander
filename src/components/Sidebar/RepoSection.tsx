@@ -539,7 +539,7 @@ const BranchTabList: Component<{ terminalIds: string[]; repoPath: string }> = (p
 							>
 								{(agent) => (
 									<span class={s.branchAgentIcon} aria-hidden="true">
-										<AgentIcon agent={agent()} size={14} />
+										<AgentIcon agent={agent()} provider={t().agentProvider} size={14} />
 									</span>
 								)}
 							</Show>

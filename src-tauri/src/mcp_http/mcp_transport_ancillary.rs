@@ -1856,7 +1856,7 @@ pub(super) fn handle_ui(
                 });
             }
             let pinned = args["pinned"].as_bool().unwrap_or(false);
-            let focus = args["focus"].as_bool().unwrap_or(true);
+            let focus = args["focus"].as_bool().unwrap_or(false);
             // Resolve origin repo for the calling MCP session so the tab lands
             // in the repo where the agent is actually working, not whichever
             // repo happens to have focus in the frontend.
