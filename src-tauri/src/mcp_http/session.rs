@@ -203,6 +203,9 @@ pub(super) async fn enqueue_command(
     Json(body): Json<EnqueueCommandRequest>,
 ) -> impl IntoResponse {
     let outcome = tokio::task::spawn_blocking(move || {
+        if let Some(draft) = body.expected_draft.as_deref() {
+            return crate::pty::enqueue_owned_draft(&state, &session_id, &body.text, draft);
+        }
         crate::pty::enqueue_user_command(
             &state,
             &session_id,
@@ -2530,6 +2533,100 @@ mod tests {
         }
     }
 
+    /// Catches: mobile queue retaining its own draft or sending Enter mid-turn.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn mobile_owned_draft_queues_without_mid_turn_enter() {
+        let state = super::super::tests::test_state();
+        let sid = "mobile-owned-draft";
+        crate::test_support::agent_session(&state, sid, crate::pty::SHELL_BUSY);
+        let bytes = crate::test_support::insert_recording_session(&state, sid);
+        write_pty_input(&state, sid, "next task").unwrap();
+        let request = serde_json::from_value(serde_json::json!({
+            "text": "next task", "expectedDraft": "next task"
+        }))
+        .unwrap();
+        let response = enqueue_command(State(state.clone()), Path(sid.into()), Json(request))
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(*bytes.lock().unwrap(), b"next task\x15");
+        assert!(
+            state
+                .session_maps
+                .input_buffers
+                .get(sid)
+                .unwrap()
+                .lock()
+                .content()
+                .is_empty()
+        );
+        assert_eq!(
+            crate::pty::list_queued_commands(&state, sid)[0].text,
+            "next task"
+        );
+        state
+            .session_maps
+            .session_states
+            .get_mut(sid)
+            .unwrap()
+            .agent_type = Some("amp".into());
+        state
+            .session_maps
+            .silence_states
+            .get(sid)
+            .unwrap()
+            .lock()
+            .confirm_idle();
+        state
+            .session_maps
+            .shell_states
+            .get(sid)
+            .unwrap()
+            .store(crate::pty::SHELL_IDLE, Ordering::Release);
+        crate::pty::flush_pending_injections_blocking(&state, sid);
+        crate::pty::flush_pending_injections_blocking(&state, sid);
+        assert_eq!(*bytes.lock().unwrap(), b"next task\x15\x15next task\r");
+        assert!(crate::pty::list_queued_commands(&state, sid).is_empty());
+    }
+
+    /// Catches: clearing somebody else's changed composer or a non-agent shell.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn mobile_owned_draft_rejection_preserves_input() {
+        for (sid, expected, agent) in [
+            ("changed-draft", "old task", true),
+            ("shell-draft", "new task", false),
+        ] {
+            let state = super::super::tests::test_state();
+            if agent {
+                crate::test_support::agent_session(&state, sid, crate::pty::SHELL_BUSY);
+            }
+            let bytes = crate::test_support::insert_recording_session(&state, sid);
+            write_pty_input(&state, sid, "new task").unwrap();
+            let request = serde_json::from_value(
+                serde_json::json!({ "text": expected, "expectedDraft": expected }),
+            )
+            .unwrap();
+            let response = enqueue_command(State(state.clone()), Path(sid.into()), Json(request))
+                .await
+                .into_response();
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+            assert_eq!(*bytes.lock().unwrap(), b"new task");
+            assert_eq!(
+                state
+                    .session_maps
+                    .input_buffers
+                    .get(sid)
+                    .unwrap()
+                    .lock()
+                    .content(),
+                "new task"
+            );
+            assert!(crate::pty::list_queued_commands(&state, sid).is_empty());
+        }
+    }
+
     /// Catches: retrying an earlier job after a later acceptance duplicates the
     /// first job, or text-based deduplication silently drops the second job.
     #[cfg(unix)]
@@ -2628,6 +2725,7 @@ mod tests {
             Path(sid.into()),
             Json(EnqueueCommandRequest {
                 text: "wake".into(),
+                expected_draft: None,
                 idempotency_key: None,
             }),
         )

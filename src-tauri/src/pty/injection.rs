@@ -2245,6 +2245,44 @@ pub(crate) fn enqueue_user_command(
     })
 }
 
+/// Transfer the mobile composer's live draft to the existing ready-window queue.
+pub(crate) fn enqueue_owned_draft(
+    state: &AppState,
+    session_id: &str,
+    text: &str,
+    expected_draft: &str,
+) -> Result<EnqueuedCommand, String> {
+    if text.trim().is_empty() || text != expected_draft.trim() {
+        return Err("Draft does not match queued text".into());
+    }
+    if !state.session_maps.sessions.contains_key(session_id) {
+        return Err("Session not found".into());
+    }
+    if !session_is_agent(state, session_id) || blocked_on_confident_question(state, session_id) {
+        return Err("Session cannot queue a live draft".into());
+    }
+    let input_entry = state
+        .session_maps
+        .input_buffers
+        .get(session_id)
+        .ok_or_else(|| "Composer draft changed".to_string())?;
+    let mut input = input_entry.lock();
+    if input.content() != expected_draft {
+        return Err("Composer draft changed".into());
+    }
+    // DEFERRED (2026-10-11) — another producer can race this transfer; the phone disables edits during Queue.
+    state
+        .write_pty_parts(session_id, &[b"\x15"])
+        .map_err(|error| format!("Queue state uncertain, check the session: {error}"))?;
+    input.feed("\x15");
+    drop(input);
+    // Release the DashMap guard before the ready gate reads input_buffers.
+    drop(input_entry);
+    crate::pty_capture::record_input(session_id, b"\x15");
+    enqueue_user_command(state, session_id, text, None)
+        .map_err(|error| format!("Queue state uncertain, check the session: {error}"))
+}
+
 /// Append one entry and run the idle gate over the queue.
 ///
 /// Returns the entry's id, whether that entry is the one the flush typed, and

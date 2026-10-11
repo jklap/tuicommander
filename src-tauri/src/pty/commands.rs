@@ -735,7 +735,11 @@ pub(crate) fn enqueue_agent_command(
     session_id: String,
     text: String,
     idempotency_key: Option<String>,
+    expected_draft: Option<String>,
 ) -> Result<EnqueuedCommand, String> {
+    if let Some(draft) = expected_draft {
+        return enqueue_owned_draft(&state, &session_id, &text, &draft);
+    }
     enqueue_user_command(&state, &session_id, &text, idempotency_key.as_deref())
 }
 

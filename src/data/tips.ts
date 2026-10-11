@@ -10,6 +10,12 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "Mobile prompt queue",
+		description:
+			"Hold Send and select Queue to submit your current agent draft at its next ready window. Tap Send to submit now.",
+		shortcut: null,
+	},
+	{
 		feature: "Tasks roadmap",
 		description:
 			"Switch Month or Quarter in the Tasks roadmap to change the timeline scale. Tasks without usable dates stay in the side list.",

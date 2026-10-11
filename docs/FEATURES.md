@@ -1,5 +1,7 @@
 # TUICommander — Complete Feature Reference
 
+Mobile terminal Send supports long-press Queue for the next agent ready window.
+
 Published story workflows can start in Plans and Stories through the owning daemon. Run history renders graph positions, decisions, evidence and paged event payloads, with explicit graph recovery and cancellation. IPC/HTTP and the generated `workflow_run` MCP schema share the native run service. Plan start remains visibly unavailable pending plan dispatch.
 
 > Canonical capability inventory. Update this file when adding, changing, or removing user-visible features.

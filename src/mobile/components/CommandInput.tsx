@@ -1,4 +1,4 @@
-import { createEffect, createSignal, Show } from "solid-js";
+import { createEffect, createSignal, onCleanup, Show } from "solid-js";
 import { t } from "../../i18n";
 import { uploadAttachment } from "../../services/uploadAttachment";
 import { appLogger } from "../../stores/appLogger";
@@ -42,6 +42,63 @@ interface CommandInputProps {
 export function CommandInput(props: CommandInputProps) {
 	const [value, setValue] = createSignal("");
 	const [submitting, setSubmitting] = createSignal(false);
+	const [queueMenu, setQueueMenu] = createSignal(false);
+	let pressTimer: ReturnType<typeof setTimeout> | undefined;
+	let held = false;
+	function cancelPress() {
+		clearTimeout(pressTimer);
+		pressTimer = undefined;
+	}
+	onCleanup(cancelPress);
+	function startPress(event: PointerEvent) {
+		if (event.button !== 0 || submitting()) return;
+		cancelPress();
+		held = false;
+		pressTimer = setTimeout(() => {
+			held = true;
+			setQueueMenu(true);
+		}, 500);
+	}
+	async function queueDraft() {
+		const draft = textareaEl?.value ?? value();
+		const text = draft.trim();
+		if (!text || submitting() || props.sessionExists === false) return;
+		cancelPress();
+		setQueueMenu(false);
+		browserDictation.cancel();
+		setSubmitting(true);
+		try {
+			await lastInputWrite;
+			const result = await rpc<{ accepted: boolean; typed: boolean }>("enqueue_agent_command", {
+				sessionId: props.sessionId,
+				text,
+				expectedDraft: draft,
+			});
+			if (!result.accepted) throw new Error("Queue was not accepted");
+			syncedText = "";
+			inputRequest = null;
+			lastSendAt = Date.now();
+			setValue("");
+			if (textareaEl) {
+				textareaEl.value = "";
+				textareaEl.style.height = "auto";
+			}
+			toastsStore.add(
+				"Prompt queued",
+				result.typed ? "Submitted at the ready window" : "Waiting for the next ready window",
+				"info",
+			);
+		} catch (error) {
+			toastsStore.add(
+				"Queue failed",
+				`Queue state uncertain, check the session. ${error instanceof Error ? error.message : String(error)}`,
+				"error",
+				true,
+			);
+		} finally {
+			setSubmitting(false);
+		}
+	}
 	const [uploading, setUploading] = createSignal<string | null>(null);
 	const [choiceSending, setChoiceSending] = createSignal(false);
 	const [codexNotesMode, setCodexNotesMode] = createSignal(false);
@@ -135,7 +192,7 @@ export function CommandInput(props: CommandInputProps) {
 	}
 
 	const browserDictation = useBrowserDictation({
-		blocked: () => !!props.serverVoiceRecording || props.sessionExists === false,
+		blocked: () => submitting() || !!props.serverVoiceRecording || props.sessionExists === false,
 		getDraft: () => textareaEl?.value ?? value(),
 		setDraft: (text) => {
 			if (textareaEl) textareaEl.value = text;
@@ -150,7 +207,7 @@ export function CommandInput(props: CommandInputProps) {
 	}
 
 	function insertText(text: string) {
-		if (props.sessionExists === false || !textareaEl) return;
+		if (props.sessionExists === false || submitting() || !textareaEl) return;
 		browserDictation.cancel();
 		textareaEl.setRangeText(text, textareaEl.selectionStart, textareaEl.selectionEnd, "end");
 		updateInput(textareaEl.value);
@@ -410,7 +467,7 @@ export function CommandInput(props: CommandInputProps) {
 				autocapitalize="off"
 				inputmode="text"
 				rows={1}
-				disabled={props.sessionExists === false}
+				disabled={props.sessionExists === false || submitting()}
 			/>
 			<input
 				ref={fileInput}
@@ -427,7 +484,7 @@ export function CommandInput(props: CommandInputProps) {
 				class={styles.attach}
 				type="button"
 				aria-label="Attach file"
-				disabled={!!uploading() || props.sessionExists === false || atomicReply()}
+				disabled={submitting() || !!uploading() || props.sessionExists === false || atomicReply()}
 				onClick={() => fileInput?.click()}
 			>
 				<svg
@@ -452,7 +509,7 @@ export function CommandInput(props: CommandInputProps) {
 							: t("mobile.dictation.start", "Dictate into draft")
 					}
 					aria-pressed={browserDictation.recording()}
-					disabled={!!props.serverVoiceRecording || props.sessionExists === false}
+					disabled={submitting() || !!props.serverVoiceRecording || props.sessionExists === false}
 					onPointerDown={(event) => event.preventDefault()}
 					onClick={browserDictation.toggle}
 				>
@@ -461,12 +518,42 @@ export function CommandInput(props: CommandInputProps) {
 					</svg>
 				</button>
 			</Show>
+			<Show when={queueMenu()}>
+				<div
+					class={styles.queueMenu}
+					role="menu"
+					onKeyDown={(event) => {
+						if (event.key === "Escape") setQueueMenu(false);
+					}}
+				>
+					<button type="button" role="menuitem" disabled={submitting() || !value().trim()} onClick={queueDraft}>
+						Queue
+					</button>
+				</div>
+			</Show>
 			<button
 				class={styles.send}
 				type="button"
 				aria-label="Send"
-				disabled={props.sessionExists === false}
-				onClick={send}
+				disabled={props.sessionExists === false || submitting()}
+				aria-haspopup="menu"
+				aria-expanded={queueMenu()}
+				onPointerDown={startPress}
+				onPointerUp={cancelPress}
+				onPointerLeave={cancelPress}
+				onPointerCancel={() => {
+					cancelPress();
+					held = true;
+				}}
+				onContextMenu={(event) => event.preventDefault()}
+				onClick={() => {
+					if (held) {
+						held = false;
+						return;
+					}
+					setQueueMenu(false);
+					void send();
+				}}
 			>
 				<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
 					<path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />

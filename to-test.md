@@ -5074,3 +5074,5 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 ## GitHub HTTP writes (1710-124a) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, create a PR, create an issue, and submit a review with inline comments on a throwaway repository bound to the intended GitHub/GHE account. Confirm the bound identity is used without a `gh` executable and validation errors retain HTTP status/body. Targeted tests cover request coordinates, fields, review validation, and error propagation; no desktop instance was launched or restarted.
+
+- [ ] After a backend rebuild, hold mobile Send, select Queue while an agent is busy, and verify one submission at its next ready window with an empty input box. Queue errors must preserve local text and warn to inspect the session (#1717-efd3).
