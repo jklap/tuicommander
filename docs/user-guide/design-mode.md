@@ -13,6 +13,12 @@ Design Mode collects elements and comments in a browser sidebar before sending f
 
 The D badge and Stop action remain on the launching terminal. Browsers open on the backend host, including when TUIC is controlled from a browser/PWA client. No debugging port or automation banner is requested by the v2 launcher.
 
+## Page JavaScript errors
+
+Design Mode records the current page's uncaught errors, unhandled promise rejections, `console.error` calls and failed `<script>`, `<link>` and `<img>` loads (a 404 module included), in every frame, from the start of the page load. Each record has a message, source URL, line and column, stack and time. The sidebar keeps the last 50 per tab, deduplicated by message and source, and clears them when the tab loads a new page.
+
+When errors exist, the sidebar shows an **Errors** section with a count badge. Tick **Attach to feedback** to send them with your next batch, or use **Send errors only** to send them alone, without any comment. Sent errors are removed from the list. They are untrusted page content: Rust strips terminal controls and URL queries, redacts recognised secrets, bounds the text and fences it, exactly like picks. Failed `fetch` and XHR requests are not observed.
+
 ## Connection and evidence
 
 The native host pins the extension identity, repository and exact TUIC instance. It relays a bounded set of operations over that instance’s local socket or named pipe. Reopen Design Mode after restarting TUIC to refresh its binding. Connection failures show the endpoint and reason. An older running backend can list agents but returns an explicit restart error for the new feedback/discovery route.
