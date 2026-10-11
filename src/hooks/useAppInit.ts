@@ -632,10 +632,9 @@ export async function initApp(deps: AppInitDeps) {
 				(parsedAgentType
 					? `Session ${terminalsStore.getCount() + 1}`
 					: `PTY: Session ${terminalsStore.getCount() + 1}`),
-			// A spawn-assigned display name is the base title, not a manual rename:
-			// an intent title may refine it and a user rename replaces it, but the
-			// agent's own OSC title (Claude's session title) must not.
-			nameIsCustom: false,
+			// A spawn-assigned display name is pinned like a manual rename: neither
+			// an intent title nor the agent's OSC title may replace it.
+			nameIsCustom: Boolean(display_name),
 			nameFromSpawn: Boolean(display_name),
 			cwd: cwd ?? null,
 			awaitingInput: null,

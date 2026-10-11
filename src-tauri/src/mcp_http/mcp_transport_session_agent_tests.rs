@@ -2737,6 +2737,9 @@ async fn spawn_name_is_applied_to_peer_session_and_response() {
         .find(|row| row.session_id == session_id)
         .expect("the spawned session is listed");
     assert!(row.display_name_from_spawn, "{row:?}");
+    // A spawn name is a pinned name, exactly like `rename is_custom=true`: an
+    // intent or OSC title synced back later must never replace it.
+    assert!(row.display_name_is_custom, "{row:?}");
     assert_eq!(
         row.parent_session.as_deref(),
         Some("550e8400-e29b-41d4-a716-446655440b01")
