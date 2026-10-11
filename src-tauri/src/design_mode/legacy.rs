@@ -291,7 +291,9 @@ mod tests {
     async fn navigate_and_reload_are_typed_errors_when_nothing_is_armed() {
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
         assert_eq!(
-            navigate(&state, "/repo", "http://localhost:1/").await.unwrap_err(),
+            navigate(&state, "/repo", "http://localhost:1/")
+                .await
+                .unwrap_err(),
             "Design Mode is not running for this repository"
         );
         assert_eq!(

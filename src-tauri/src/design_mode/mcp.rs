@@ -77,8 +77,14 @@ mod tests {
                 json!({"action":"unknown"}),
                 "Choose Design Mode start, stop, status, reload or navigate",
             ),
-            (json!({"action":"navigate","url":"http://localhost/"}), "repo_path is required"),
-            (json!({"action":"navigate","repo_path":"/r"}), "url is required"),
+            (
+                json!({"action":"navigate","url":"http://localhost/"}),
+                "repo_path is required",
+            ),
+            (
+                json!({"action":"navigate","repo_path":"/r"}),
+                "url is required",
+            ),
             (
                 json!({"action":"start","session_id":"missing","url":4}),
                 "url must be a string",

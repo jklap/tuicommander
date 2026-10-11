@@ -178,18 +178,34 @@ mod tests {
     fn navigation_is_pending_only_while_armed_and_never_replayed() {
         let now = Instant::now();
         let mut live = Liveness::default();
-        assert_eq!(live.request_navigate("/repo", "http://localhost:1/".into()), None);
+        assert_eq!(
+            live.request_navigate("/repo", "http://localhost:1/".into()),
+            None
+        );
         live.armed("/repo", "agent", now);
         assert_eq!(live.pending_navigate("/repo"), None);
-        assert_eq!(live.request_navigate("/repo", "http://localhost:1/a".into()), Some(1));
-        assert_eq!(live.request_navigate("/repo", "http://localhost:1/b".into()), Some(2));
+        assert_eq!(
+            live.request_navigate("/repo", "http://localhost:1/a".into()),
+            Some(1)
+        );
+        assert_eq!(
+            live.request_navigate("/repo", "http://localhost:1/b".into()),
+            Some(2)
+        );
         assert_eq!(
             live.pending_navigate("/repo"),
             Some((2, "http://localhost:1/b".into()))
         );
         live.armed("/repo", "other-agent", now);
-        assert_eq!(live.pending_navigate("/repo"), None, "re-arming is not a navigation");
-        assert_eq!(live.request_navigate("/repo", "http://localhost:1/c".into()), Some(3));
+        assert_eq!(
+            live.pending_navigate("/repo"),
+            None,
+            "re-arming is not a navigation"
+        );
+        assert_eq!(
+            live.request_navigate("/repo", "http://localhost:1/c".into()),
+            Some(3)
+        );
         live.stopped("/repo");
         assert_eq!(live.pending_navigate("/repo"), None);
     }

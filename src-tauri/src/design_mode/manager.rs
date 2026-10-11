@@ -229,7 +229,10 @@ impl DesignModeManager {
 
     pub(crate) async fn request_navigate(&self, repo_path: &str, url: String) -> Option<u64> {
         let _modes = self.modes.lock().await;
-        self.liveness.lock().unwrap().request_navigate(repo_path, url)
+        self.liveness
+            .lock()
+            .unwrap()
+            .request_navigate(repo_path, url)
     }
 
     pub(crate) async fn pending_navigate(&self, repo_path: &str) -> Option<(u64, String)> {
