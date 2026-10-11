@@ -163,6 +163,43 @@ pub(crate) async fn reload(
     Ok(serde_json::json!({"repoPath": repo_path, "reloadSeq": seq}))
 }
 
+/// Only pages on this machine: the browser is the user's, and a remote host needs
+/// the optional host permission the user grants in the extension.
+fn local_http_url(raw: &str) -> Result<url::Url, String> {
+    let url = url::Url::parse(raw).map_err(|_| "Navigate needs an absolute HTTP(S) URL")?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err("Navigate URL must use HTTP or HTTPS".into());
+    }
+    let local = match url.host() {
+        Some(url::Host::Domain(name)) => name == "localhost",
+        Some(url::Host::Ipv4(ip)) => ip == std::net::Ipv4Addr::LOCALHOST,
+        Some(url::Host::Ipv6(ip)) => ip == std::net::Ipv6Addr::LOCALHOST,
+        None => false,
+    };
+    if !local || !url.username().is_empty() || url.password().is_some() {
+        return Err(
+            "Navigate is limited to localhost, 127.0.0.1 and [::1]; other hosts need the optional host permission granted in the extension"
+                .into(),
+        );
+    }
+    Ok(url)
+}
+
+/// Asks the extension to open `url` in the reviewed tab; it sees the request on its next beat.
+pub(crate) async fn navigate(
+    state: &Arc<AppState>,
+    repo_path: &str,
+    url: &str,
+) -> Result<serde_json::Value, String> {
+    let url = local_http_url(url)?;
+    let seq = manager(state)
+        .await
+        .request_navigate(repo_path, url.to_string())
+        .await
+        .ok_or("Design Mode is not running for this repository")?;
+    Ok(serde_json::json!({"repoPath": repo_path, "url": url.as_str(), "navigateSeq": seq}))
+}
+
 pub(crate) async fn statuses(state: &Arc<AppState>) -> Vec<serde_json::Value> {
     let Some(manager) = state.design_mode.get() else {
         return Vec::new();
@@ -222,5 +259,44 @@ mod tests {
             Some("http://localhost:5173")
         );
         assert_eq!(dev_server_url(&settings, &dir.path().join("other")), None);
+    }
+
+    // Catches: navigation to a remote, credentialed or non-HTTP target reaching the user's browser.
+    #[test]
+    fn navigate_accepts_only_local_http_urls() {
+        for ok in [
+            "http://localhost:5173/a?b=1#c",
+            "https://localhost/",
+            "http://127.0.0.1:9877/",
+            "http://[::1]:3000/x",
+        ] {
+            assert!(local_http_url(ok).is_ok(), "{ok}");
+        }
+        for bad in [
+            "https://example.com/",
+            "http://localhost.evil.com/",
+            "http://127.0.0.2/",
+            "http://user:pw@localhost/",
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+            "localhost:5173",
+            "",
+        ] {
+            assert!(local_http_url(bad).is_err(), "{bad}");
+        }
+    }
+
+    // Catches: navigate/reload answering success, or queueing, when no browser is armed.
+    #[tokio::test]
+    async fn navigate_and_reload_are_typed_errors_when_nothing_is_armed() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        assert_eq!(
+            navigate(&state, "/repo", "http://localhost:1/").await.unwrap_err(),
+            "Design Mode is not running for this repository"
+        );
+        assert_eq!(
+            reload(&state, "/repo").await.unwrap_err(),
+            "Design Mode is not running for this repository"
+        );
     }
 }

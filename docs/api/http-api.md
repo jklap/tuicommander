@@ -624,6 +624,20 @@ Content-Type: application/json
 { "repoPath": "/path/to/repository" }
 ```
 
+### Reload or navigate the reviewed tab
+
+```
+POST /design-mode/reload
+{ "repoPath": "/path/to/repository" }
+
+POST /design-mode/navigate
+{ "repoPath": "/path/to/repository", "url": "http://localhost:5173/page" }
+```
+
+Both need an armed Design Mode and answer `400 {"error": ...}` otherwise. `url` must be
+HTTP(S) on `localhost`, `127.0.0.1` or `[::1]` without credentials. The extension applies
+each request once on its next heartbeat (about 5 s).
+
 ### Read status
 
 ```

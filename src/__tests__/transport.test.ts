@@ -323,6 +323,17 @@ describe("transport", () => {
 				path: "/design-mode/stop",
 				body: { repoPath: "/repo" },
 			});
+			// Catches: agent browser control reachable over IPC but missing on the HTTP transport.
+			expect(mapCommandToHttp("reload_design_mode", { repoPath: "/repo" })).toEqual({
+				method: "POST",
+				path: "/design-mode/reload",
+				body: { repoPath: "/repo" },
+			});
+			expect(mapCommandToHttp("navigate_design_mode", { repoPath: "/repo", url: "http://localhost:5173/x" })).toEqual({
+				method: "POST",
+				path: "/design-mode/navigate",
+				body: { repoPath: "/repo", url: "http://localhost:5173/x" },
+			});
 			expect(mapCommandToHttp("get_design_mode_status", {})).toEqual({
 				method: "GET",
 				path: "/design-mode",

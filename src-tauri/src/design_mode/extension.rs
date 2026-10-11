@@ -46,16 +46,23 @@ pub(super) fn pick_evidence_with_image(
 async fn heartbeat(state: &Arc<AppState>, body: &Value) -> Result<Value, String> {
     let repo = body["repoPath"].as_str().ok_or("Missing repository")?;
     #[cfg(feature = "desktop")]
-    let seq = match state.design_mode.get() {
-        Some(manager) => manager.heartbeat(repo).await,
-        None => None,
+    let (seq, navigate) = match state.design_mode.get() {
+        Some(manager) => (
+            manager.heartbeat(repo).await,
+            manager.pending_navigate(repo).await,
+        ),
+        None => (None, None),
     };
     #[cfg(not(feature = "desktop"))]
-    let seq: Option<u64> = {
+    let (seq, navigate): (Option<u64>, Option<(u64, String)>) = {
         let _ = (state, repo);
-        None
+        (None, None)
     };
-    Ok(json!({"armed": seq.is_some(), "reloadSeq": seq.unwrap_or(0)}))
+    let mut reply = json!({"armed": seq.is_some(), "reloadSeq": seq.unwrap_or(0)});
+    if let Some((seq, url)) = navigate {
+        reply["navigate"] = json!({"seq": seq, "url": url});
+    }
+    Ok(reply)
 }
 
 pub(crate) async fn message(
@@ -182,6 +189,32 @@ pub(crate) mod tests {
         assert_eq!(
             beat(state.clone()).await,
             json!({"armed":true,"reloadSeq":1})
+        );
+        manager.stop("/repo").await.unwrap();
+        assert_eq!(beat(state).await, json!({"armed":false,"reloadSeq":0}));
+    }
+
+    // Catches: a navigation request missing from the heartbeat reply, or leaking after Stop.
+    #[cfg(feature = "desktop")]
+    #[tokio::test]
+    async fn heartbeat_reply_carries_the_pending_navigation() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let beat = |state: Arc<AppState>| async move {
+            request(
+                state,
+                json!({"version":"2.0.0","action":"heartbeat","repoPath":"/repo"}),
+            )
+            .await["result"]
+                .clone()
+        };
+        let manager = super::super::manager(&state).await;
+        manager.arm_extension("/repo".into(), "agent".into()).await;
+        super::super::navigate(&state, "/repo", "http://localhost:5173/page")
+            .await
+            .unwrap();
+        assert_eq!(
+            beat(state.clone()).await,
+            json!({"armed":true,"reloadSeq":0,"navigate":{"seq":1,"url":"http://localhost:5173/page"}})
         );
         manager.stop("/repo").await.unwrap();
         assert_eq!(beat(state).await, json!({"armed":false,"reloadSeq":0}));

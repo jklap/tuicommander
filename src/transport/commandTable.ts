@@ -2136,6 +2136,16 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	stop_design_mode: {
 		map: (args) => ({ method: "POST", path: "/design-mode/stop", body: { repoPath: args.repoPath } }),
 	},
+	reload_design_mode: {
+		map: (args) => ({ method: "POST", path: "/design-mode/reload", body: { repoPath: args.repoPath } }),
+	},
+	navigate_design_mode: {
+		map: (args) => ({
+			method: "POST",
+			path: "/design-mode/navigate",
+			body: { repoPath: args.repoPath, url: args.url },
+		}),
+	},
 	get_design_mode_status: { map: () => ({ method: "GET", path: "/design-mode" }) },
 	list_tunnel_profiles: { map: () => ({ method: "GET", path: "/tunnels/profiles" }) },
 	save_tunnel_profile: { map: (args) => ({ method: "POST", path: "/tunnels/profiles", body: args.profile }) },

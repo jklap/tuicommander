@@ -6,13 +6,13 @@ use std::sync::Arc;
 pub(crate) fn tool_definition() -> Value {
     json!({
         "name": "design_mode",
-        "description": "Start or stop Design Mode on the host. Use start with session_id and url as the default path for layout work: it binds the browser to the agent that printed the link and opens that HTTP(S) URL directly. Omit url to use dev-server discovery/onboarding. Requires a live terminal agent; an ACP coordinator should name the target terminal agent. stop and reload use repo_path from start/status; reload makes the browser reload the reviewed tab once, after you change the page; status lists repository bindings. Browser extension setup is required once per repository profile.",
+        "description": "Start or stop Design Mode on the host. Use start with session_id and url as the default path for layout work: it binds the browser to the agent that printed the link and opens that HTTP(S) URL directly. Omit url to use dev-server discovery/onboarding. Requires a live terminal agent; an ACP coordinator should name the target terminal agent. stop, reload and navigate use repo_path from start/status; reload makes the browser reload the reviewed tab once, after you change the page; navigate opens url (HTTP(S) on localhost, 127.0.0.1 or [::1] only) in the reviewed tab once; status lists repository bindings. Browser extension setup is required once per repository profile.",
         "inputSchema": {"type":"object", "additionalProperties":false, "required":["action"], "properties": {
-            "action":{"type":"string","enum":["start","stop","status","reload"]},
+            "action":{"type":"string","enum":["start","stop","status","reload","navigate"]},
             "session_id":{"type":"string","description":"Live agent PTY id, TUIC session, alias, unique prefix or display name; required for start"},
-            "repo_path":{"type":"string","description":"Repository path returned by start/status; required for stop and reload"},
+            "repo_path":{"type":"string","description":"Repository path returned by start/status; required for stop, reload and navigate"},
             "browser":{"type":"string","enum":["chrome","edge"]},
-            "url":{"type":"string","description":"Absolute HTTP or HTTPS URL, including localhost, opened directly on start"}
+            "url":{"type":"string","description":"Absolute HTTP or HTTPS URL, including localhost, opened directly on start; for navigate, the page to open"}
         }}
     })
 }
@@ -55,8 +55,11 @@ async fn execute(state: &Arc<AppState>, args: &Value) -> Result<Value, String> {
         }
         Some("stop") => super::stop(state, &required("repo_path")?).await,
         Some("reload") => super::reload(state, &required("repo_path")?).await,
+        Some("navigate") => {
+            super::navigate(state, &required("repo_path")?, &required("url")?).await
+        }
         Some("status") => Ok(json!(super::statuses(state).await)),
-        _ => Err("Choose Design Mode start, stop, status or reload".into()),
+        _ => Err("Choose Design Mode start, stop, status, reload or navigate".into()),
     }
 }
 
@@ -72,8 +75,10 @@ mod tests {
             (json!({"action":"stop"}), "repo_path is required"),
             (
                 json!({"action":"unknown"}),
-                "Choose Design Mode start, stop or status",
+                "Choose Design Mode start, stop, status, reload or navigate",
             ),
+            (json!({"action":"navigate","url":"http://localhost/"}), "repo_path is required"),
+            (json!({"action":"navigate","repo_path":"/r"}), "url is required"),
             (
                 json!({"action":"start","session_id":"missing","url":4}),
                 "url must be a string",

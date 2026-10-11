@@ -227,6 +227,16 @@ impl DesignModeManager {
         self.liveness.lock().unwrap().request_reload(repo_path)
     }
 
+    pub(crate) async fn request_navigate(&self, repo_path: &str, url: String) -> Option<u64> {
+        let _modes = self.modes.lock().await;
+        self.liveness.lock().unwrap().request_navigate(repo_path, url)
+    }
+
+    pub(crate) async fn pending_navigate(&self, repo_path: &str) -> Option<(u64, String)> {
+        let _modes = self.modes.lock().await;
+        self.liveness.lock().unwrap().pending_navigate(repo_path)
+    }
+
     /// Stops every armed mode whose browser stopped beating.
     pub(crate) async fn stop_expired(&self) {
         let mut modes = self.modes.lock().await;

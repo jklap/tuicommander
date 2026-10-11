@@ -22,6 +22,13 @@ pub(crate) struct StopBody {
     repo_path: String,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct NavigateBody {
+    repo_path: String,
+    url: String,
+}
+
 fn response(result: Result<serde_json::Value, String>) -> Response {
     match result {
         Ok(status) => (StatusCode::OK, Json(status)).into_response(),
@@ -45,6 +52,20 @@ pub(crate) async fn stop(
     Json(body): Json<StopBody>,
 ) -> Response {
     response(super::stop(&state, &body.repo_path).await)
+}
+
+pub(crate) async fn reload(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<StopBody>,
+) -> Response {
+    response(super::reload(&state, &body.repo_path).await)
+}
+
+pub(crate) async fn navigate(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<NavigateBody>,
+) -> Response {
+    response(super::navigate(&state, &body.repo_path, &body.url).await)
 }
 
 pub(crate) async fn statuses(State(state): State<Arc<AppState>>) -> Json<Vec<serde_json::Value>> {
