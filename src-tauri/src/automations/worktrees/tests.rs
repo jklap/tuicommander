@@ -83,8 +83,12 @@ impl Fixture {
     fn path(&self) -> &Path {
         Path::new(self.run.workspace.as_deref().unwrap())
     }
-    fn call(&self, remove: bool) -> Result<Value, String> {
-        execute(&self.state, self.owner.store(), &self.run.id, remove)
+    async fn call(&self, remove: bool) -> Result<Value, String> {
+        let state = Arc::clone(&self.state);
+        let id = self.run.id.clone();
+        tokio::task::spawn_blocking(move || execute(&state, &RunStore::open()?, &id, remove))
+            .await
+            .unwrap()
     }
 }
 
@@ -114,8 +118,8 @@ async fn final_run_cleanup_retains_provenance_after_definition_deletion_and_reop
     );
     assert!(!f.path().exists());
     assert_eq!(reader.get(&f.run.id).unwrap(), f.run);
-    assert_eq!(f.call(false).unwrap()["can_remove"], false);
-    assert!(f.call(true).is_err());
+    assert_eq!(f.call(false).await.unwrap()["can_remove"], false);
+    assert!(f.call(true).await.is_err());
     assert!(f.repo.join("input.txt").exists());
 }
 
@@ -123,24 +127,24 @@ async fn final_run_cleanup_retains_provenance_after_definition_deletion_and_reop
 #[tokio::test]
 async fn cleanup_rechecks_dirty_unmerged_and_locked_worktrees_without_discarding_work() {
     let (_guard, f) = Fixture::new().await;
-    assert_eq!(f.call(false).unwrap()["can_remove"], true);
+    assert_eq!(f.call(false).await.unwrap()["can_remove"], true);
     std::fs::write(f.path().join("keep.txt"), "valuable work").unwrap();
-    assert!(f.call(true).is_err());
+    assert!(f.call(true).await.is_err());
     assert_eq!(
         std::fs::read_to_string(f.path().join("keep.txt")).unwrap(),
         "valuable work"
     );
     git(f.path(), &["add", "keep.txt"]);
     git(f.path(), &["commit", "-m", "unmerged"]);
-    assert_eq!(f.call(false).unwrap()["can_remove"], false);
-    assert!(f.call(true).is_err());
+    assert_eq!(f.call(false).await.unwrap()["can_remove"], false);
+    assert!(f.call(true).await.is_err());
     git(
         &f.repo,
         &["merge", "--ff-only", f.run.workspace_id.as_deref().unwrap()],
     );
-    assert_eq!(f.call(false).unwrap()["can_remove"], true);
+    assert_eq!(f.call(false).await.unwrap()["can_remove"], true);
     git(&f.repo, &["worktree", "lock", f.path().to_str().unwrap()]);
-    assert!(f.call(true).unwrap_err().contains("worktree_locked"));
+    assert!(f.call(true).await.unwrap_err().contains("worktree_locked"));
     assert!(f.path().join("keep.txt").exists());
 }
 
@@ -155,8 +159,8 @@ async fn cleanup_preserves_live_sessions_and_rejects_unowned_or_changed_workspac
         "live",
         &f.path().join("nested").to_string_lossy(),
     );
-    assert_eq!(f.call(false).unwrap()["can_remove"], false);
-    assert!(f.call(true).is_err());
+    assert_eq!(f.call(false).await.unwrap()["can_remove"], false);
+    assert!(f.call(true).await.is_err());
     assert!(f.path().exists());
     f.state.session_maps.sessions.remove("live");
     let mut run = f.run.clone();
@@ -181,10 +185,10 @@ async fn cleanup_requires_archive_for_content_superset_integration() {
     std::fs::write(f.repo.join("rules.txt"), "rule B\nrule A\nextra rule\n").unwrap();
     git(&f.repo, &["add", "rules.txt"]);
     git(&f.repo, &["commit", "-m", "revised rules"]);
-    let preview = f.call(false).unwrap();
+    let preview = f.call(false).await.unwrap();
     assert_eq!(preview["can_remove"], false);
     assert!(preview["reason"].as_str().unwrap().contains("archive"));
-    assert!(f.call(true).is_err());
+    assert!(f.call(true).await.is_err());
     assert!(f.path().exists());
     let archive = format!("refs/archive/{}", f.run.workspace_id.as_deref().unwrap());
     git(
@@ -195,7 +199,7 @@ async fn cleanup_requires_archive_for_content_superset_integration() {
             f.run.workspace_id.as_deref().unwrap(),
         ],
     );
-    assert_eq!(f.call(false).unwrap()["can_remove"], true);
-    assert_eq!(f.call(true).unwrap()["removed"], true);
+    assert_eq!(f.call(false).await.unwrap()["can_remove"], true);
+    assert_eq!(f.call(true).await.unwrap()["removed"], true);
     assert!(!f.path().exists());
 }
