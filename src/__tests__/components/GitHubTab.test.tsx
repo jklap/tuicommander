@@ -70,16 +70,9 @@ const h = vi.hoisted(() => {
 			case "github_poll_login":
 			case "github_poll_add_account":
 				return Promise.resolve({ status: "pending" });
-			case "github_add_account": {
-				const acc: Account = {
-					id: String(args?.host),
-					host: { host: String(args?.host) },
-					login: "ent-user",
-					kind: "ghe_pat",
-				};
-				accounts.push(acc);
-				return Promise.resolve(acc);
-			}
+			case "account_secret_form":
+				return Promise.resolve({ status: "stored", names: [] });
+
 			case "github_remove_account": {
 				const idx = accounts.findIndex((a) => a.id === args?.id);
 				if (idx >= 0) accounts.splice(idx, 1);
@@ -183,20 +176,28 @@ describe("GitHubTab — additional accounts", () => {
 		expect(await findByText(/github\.com · OAuth/)).toBeTruthy();
 	});
 
-	it("adds an Enterprise account via github_add_account(host, pat)", async () => {
-		const { getByText, getByPlaceholderText, findByText } = render(() => <GitHubTab />);
-		// Reveal the manager first (single-account collapse).
+	// Catches: Enterprise PAT entry being exposed to the Settings webview.
+	it("launches Enterprise secret entry with metadata only", async () => {
+		const { getByText, getByPlaceholderText, queryByPlaceholderText, findByText } = render(() => <GitHubTab />);
 		fireEvent.click(await findByText("Add another GitHub account"));
 		await findByText("No additional accounts configured.");
-
+		expect(queryByPlaceholderText("Personal Access Token")).toBeNull();
 		fireEvent.input(getByPlaceholderText("ghe.example.com"), { target: { value: "ghe.acme.com" } });
-		fireEvent.input(getByPlaceholderText("Personal Access Token"), { target: { value: "ghp_secret" } });
 		fireEvent.click(getByText("Add account"));
-
 		await waitFor(() =>
-			expect(h.rpc).toHaveBeenCalledWith("github_add_account", { host: "ghe.acme.com", pat: "ghp_secret" }),
+			expect(h.rpc).toHaveBeenCalledWith("account_secret_form", {
+				request: {
+					action: "add",
+					account: {
+						provider: "github",
+						host: "ghe.acme.com",
+						kind: "bearer",
+						label: "ghe.acme.com",
+						username: null,
+					},
+				},
+			}),
 		);
-		expect(await findByText("ent-user")).toBeTruthy();
 	});
 
 	it("starts a device-flow login when adding a github.com account (003)", async () => {

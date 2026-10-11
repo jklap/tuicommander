@@ -51,6 +51,7 @@ import b from "../shared/branch.module.css";
 import { AgentIcon } from "../ui/AgentIcon";
 import { ChevronIcon } from "../ui/ChevronIcon";
 import { SubAgentIcon } from "../ui/SubAgentIcon";
+import { BranchItemBadge } from "./BranchItemBadge";
 import { PR_STATE_LABELS, PrStateBadge, prBadgeKind } from "./PrStateBadge";
 import s from "./Sidebar.module.css";
 import { SidebarPluginSection } from "./SidebarPluginSection";
@@ -1089,6 +1090,7 @@ export const BranchItem: Component<{
 							</span>
 						</Show>
 					</div>
+					<BranchItemBadge repoPath={props.repoPath} branch={props.branch.branchName} />
 					{/* The badge answers one question — what would removing this workspace
 				    lose? A main checkout is never removed here, so it gets no badge at
 				    all: "Dirty" on every main row was noise about a risk that does not

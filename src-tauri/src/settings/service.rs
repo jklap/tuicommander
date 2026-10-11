@@ -1,0 +1,200 @@
+//! Internal owner service; no transport or origin/confirmation authority is granted here.
+use super::{
+    catalogue::Catalogue,
+    model::*,
+    pointer,
+    request::*,
+    transaction::{self, Prepared},
+};
+use serde_json::{Value, json};
+use std::{collections::BTreeMap, future::Future, sync::Arc};
+
+/// An adapter owns strict reads, validation, locking, persistence and runtime effects.
+/// `commit` MUST invoke `prepare` on latest state under the same owner/file lock as
+/// its one atomic write. It must not call `apply` or publish before persistence.
+pub trait Store: Send + Sync + 'static {
+    fn id(&self) -> &str;
+    fn target(&self) -> Target;
+    fn read(&self) -> Result<Value, Failure>;
+    fn commit(
+        &self,
+        prepare: &mut dyn FnMut(&Value) -> Result<Prepared, Failure>,
+    ) -> Result<CommitReply, Failure>;
+    /// `false` means effects were scheduled but completion still needs readback.
+    fn apply(&self, reply: &CommitReply) -> impl Future<Output = Result<bool, Failure>> + Send;
+}
+
+pub struct Service<S> {
+    catalogue: Arc<Catalogue>,
+    owner: Arc<S>,
+}
+
+impl<S: Store> Service<S> {
+    pub fn new(catalogue: Arc<Catalogue>, owner: Arc<S>) -> Self {
+        Self { catalogue, owner }
+    }
+
+    fn check_owner(&self, target: &Target, store: &str) -> Result<(), Failure> {
+        if store != self.owner.id() || *target != self.owner.target() {
+            // Use the registered store, never echo an arbitrary caller string.
+            return Err(Error::new(self.owner.id(), "not_found"));
+        }
+        if !self.catalogue.fields.values().any(|f| f.store == store) {
+            return Err(Error::new(self.owner.id(), "unavailable"));
+        }
+        Ok(())
+    }
+
+    pub async fn execute(&self, request: Request) -> Result<Reply, Failure> {
+        match request {
+            Request::Get {
+                target,
+                store,
+                paths,
+            } => self.get(target, store, paths).await.map(Reply::Snapshot),
+            Request::Set {
+                target,
+                store,
+                path,
+                value,
+                expected_revision,
+            } => self
+                .patch(
+                    target,
+                    store,
+                    expected_revision,
+                    vec![Edit::Set { path, value }],
+                )
+                .await
+                .map(Reply::Commit),
+            Request::Reset {
+                target,
+                store,
+                path,
+                expected_revision,
+            } => self
+                .patch(target, store, expected_revision, vec![Edit::Reset { path }])
+                .await
+                .map(Reply::Commit),
+            Request::Patch {
+                target,
+                store,
+                expected_revision,
+                operations,
+            } => self
+                .patch(target, store, expected_revision, operations)
+                .await
+                .map(Reply::Commit),
+        }
+    }
+
+    pub async fn get(
+        &self,
+        target: Target,
+        store: String,
+        paths: Vec<String>,
+    ) -> Result<Snapshot, Failure> {
+        self.check_owner(&target, &store)?;
+        if paths.is_empty() || paths.len() > 128 {
+            let mut error = Error::new(&store, "out_of_range");
+            error.expected = Some("paths array".into());
+            error.allowed = vec!["minItems: 1".into(), "maxItems: 128".into()];
+            return Err(error);
+        }
+        let cat = self.catalogue.clone();
+        let owner = self.owner.clone();
+        let safe_store = store.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut latest = owner.read()?;
+            let revision = transaction::revision(&latest)?;
+            let mut values = BTreeMap::new();
+            for path in paths {
+                let parts = pointer::segments(&path, &store)?;
+                let field = pointer::field(&cat, &store, &parts)?;
+                if !matches!(field.availability, Availability::Available)
+                    || !field.annotation.operations.contains(&Operation::Get)
+                {
+                    return Err(Error::new(&store, "unavailable"));
+                }
+                let value =
+                    match pointer::at_mut(&mut latest, &parts, &cat, &store, &mut Vec::new()) {
+                        Ok(value) => value.clone(),
+                        Err(error) if field.nullable && error.code == "not_found" => {
+                            let (key, parent) = parts.split_last().expect("nonempty pointer");
+                            let parent = pointer::at_mut(
+                                &mut latest,
+                                parent,
+                                &cat,
+                                &store,
+                                &mut Vec::new(),
+                            )?;
+                            if field.path.ends_with('}')
+                                || !parent.is_object()
+                                || parent.get(key).is_some()
+                            {
+                                return Err(error);
+                            }
+                            Value::Null
+                        }
+                        Err(error) => return Err(error),
+                    };
+                let stored = if matches!(
+                    field.annotation.sensitivity,
+                    Sensitivity::Secret | Sensitivity::DerivedSecret
+                ) {
+                    let set = !value.is_null() && value != "";
+                    json!({"status": if set { "set" } else { "unset" }})
+                } else {
+                    value
+                };
+                values.insert(
+                    path,
+                    StoredValue {
+                        effective: stored.clone(),
+                        stored,
+                        source: "stored".into(),
+                    },
+                );
+            }
+            Ok(Snapshot { revision, values })
+        })
+        .await
+        .map_err(|_| Error::new(&safe_store, "store_failed"))?
+    }
+
+    pub async fn patch(
+        &self,
+        target: Target,
+        store: String,
+        expected_revision: String,
+        operations: Vec<Edit>,
+    ) -> Result<CommitReply, Failure> {
+        self.check_owner(&target, &store)?;
+        let owner = self.owner.clone();
+        let cat = self.catalogue.clone();
+        let safe_store = store.clone();
+        let mut reply = tokio::task::spawn_blocking(move || {
+            owner.commit(&mut |latest| {
+                transaction::prepare(&cat, &store, latest, &expected_revision, &operations)
+            })
+        })
+        .await
+        .map_err(|_| Error::new(&safe_store, "store_failed"))??;
+        if !reply.changed_ids.is_empty() {
+            match self.owner.apply(&reply).await {
+                Ok(applied) => reply.applied = applied,
+                Err(_) => {
+                    let mut error = Error::new(&safe_store, "apply_failed");
+                    error.persisted = reply.persisted;
+                    error.revision = Some(reply.revision);
+                    error.next_action = "get".into();
+                    // Reread/recover effects; never invite replay of a durable mutation.
+                    return Err(error);
+                }
+            }
+        } else {
+            reply.applied = true;
+        }
+        Ok(reply)
+    }
+}

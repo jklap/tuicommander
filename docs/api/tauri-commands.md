@@ -139,6 +139,10 @@ receive it on `/events`.
 | `get_gutter_changes` | `path, file, scope?` | `Vec<GutterChange>` | Per-line editor gutter/scrollbar change markers (diff parsed in Rust); empty for an untracked file |
 | `get_git_branches` | `path` | `Vec<JSON>` | All branches (sorted) |
 | `get_recent_commits` | `path` | `Vec<JSON>` | Recent git commits |
+| `get_git_remotes` | `path` | `Vec<{name,url}>` | Every remote; credentials in URLs removed (`workitem_links.rs`) |
+| `list_workitem_links` | — | `{repoPath: {branch: WorkItemLink}}` | Work-item links of worktree branches (`workitem_links.rs`) |
+| `link_workitem` | `repoPath, branch, link` | `()` | Link a worktree branch to a work item; url must be http(s) |
+| `unlink_workitem` | `repoPath, branch` | `bool` | Remove a link; true when one existed |
 | `rename_branch` | `path, old_name, new_name` | `()` | Rename branch |
 | `check_is_main_branch` | `branch` | `bool` | Is main/master/develop |
 | `get_initials` | `name` | `String` | 2-char repo initials |
@@ -402,10 +406,10 @@ Commands for managing upstream MCP servers proxied through TUICommander's `/mcp`
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
 | `load_mcp_upstreams` | -- | `UpstreamMcpConfig` | Load upstream config from `mcp-upstreams.json` |
-| `save_mcp_upstreams` | `base: UpstreamMcpConfig, config: UpstreamMcpConfig` | `()` | Apply the caller's ID-keyed base-to-config delta to the latest locked `mcp-upstreams.json`, validate it, and hot-reload the exact persisted change. Removing a server or its optional `auth` field is an explicit deletion; unrelated concurrent changes are preserved |
+| `save_mcp_upstreams` | `base: UpstreamMcpConfig, config: UpstreamMcpConfig, credentials?: {server_id, token, header?}[]` | `()` | Add-time credentials are validated and created under the config lock; failures roll back new vault entries. Apply the caller's ID-keyed base-to-config delta to the latest locked `mcp-upstreams.json`, validate it, and hot-reload the exact persisted change. Removing a server or its optional `auth` field is an explicit deletion; unrelated concurrent changes are preserved |
 | `reconnect_mcp_upstream` | `name: String` | `()` | Disconnect and reconnect a single upstream by name. Useful after credential changes or transient failures |
 | `get_mcp_upstream_status` | -- | `Vec<UpstreamStatus>` | Get live status of all upstream MCP servers. Status values: `connecting`, `ready`, `circuit_open`, `disabled`, `failed`, `authenticating`, `needs_auth` |
-| `save_mcp_upstream_credential` | `name: String, token: String, url: String, header?: {name, credential_ref}` | `()` | Store a Bearer token or scoped header secret with its intended HTTP origin in the OS credential vault |
+| `save_mcp_upstream_credential` | `name: String, token: String, url: String, header?: {name, credential_ref}, replace?: boolean` | `()` | Refuse to overwrite an existing entry unless `replace: true` explicitly requests an edit. Store a Bearer token or scoped header secret with its intended HTTP origin in the OS credential vault |
 | `delete_mcp_upstream_credential` | `name: String, header?: {name, credential_ref}` | `()` | Remove a Bearer/OAuth token or a scoped custom header secret (idempotent) |
 
 ### UpstreamMcpConfig schema
@@ -618,7 +622,7 @@ JavaScript `String.slice` semantics for ASCII, accented text, and non-BMP emoji.
 
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
-| `plugin_http_fetch` | `url, method?, headers?, body?, allowed_urls, plugin_id` | `HttpResponse` | Make HTTP request (validated against allowed_urls) |
+| `plugin_http_fetch` | `url, method?, headers?, body?, account?, plugin_id` | `HttpResponse` | Make HTTP request (validated against the on-disk manifest `allowedUrls`; with `account`, Rust injects that account's credential under the account host rule) |
 
 ## Code Intelligence / MDKB (`mdkb_commands.rs`)
 
@@ -902,3 +906,38 @@ literal prompt with delimited, escaped untrusted stdout capped at 16 KiB;
 truncation is marked and stderr is excluded. Empty output and manual bypasses
 inject nothing. The run ledger records `precheck_context: {injected, bytes}` for
 the prepared launch prompt, counting escaped stdout bytes before framing/marker.
+
+### PR line review commands
+
+- `get_pr_line_threads(repoPath, prNumber, after?)`: `{headSha, threads, hasNextPage, endCursor}`. Threads retain GitHub `line`, `originalLine`, `diffSide`, `isOutdated`, `isResolved`, and `comments` connection.
+- `get_pr_thread_comments(repoPath, threadId, after?)`: GitHub comments connection.
+- `set_pr_thread_resolved(repoPath, threadId, resolved)`: confirmed thread.
+- `reply_pr_thread(repoPath, threadId, body)`: posted comment.
+- `submit_pr_draft_review(repoPath, prNumber, draft)`: posted review. Draft `{headSha, body, event, comments}` accepts COMMENT, APPROVE, REQUEST_CHANGES; request changes needs a body. Inline comments retain path/line/side/body.
+
+### PR action commands
+
+- `get_pr_action_state(repoPath, prNumber)`: `{id, headSha, baseRefName, state, isDraft, autoMergeRequest, mergeQueueEntry, queueRequired}`. Queue entries retain id/position/state; auto-merge requests retain enabledAt/mergeMethod.
+- `set_pr_auto_merge(repoPath, prNumber, enabled, mergeMethod?, expectedHeadSha?)`: confirmed GraphQL payload. Enabling needs a valid merge/squash/rebase method and reviewed head.
+- `set_pr_merge_queue(repoPath, prNumber, enqueued, expectedHeadSha?)`: confirmed GraphQL payload with mergeQueueEntry. Enqueue needs reviewed head; dequeue does not.
+- `merge_or_enqueue_pr(repoPath, prNumber, mergeMethod, expectedHeadSha)`: `{action:"enqueued", mergeQueueEntry}` or `{action:"merged", sha}`. Queue-required branches enqueue.
+- `rerun_failed_pr_jobs(repoPath, runId)`: `{accepted:true, runId}` after GitHub accepts the failed-job rerun, not a claim the new run finished.
+
+`post_pr_review` and `submit_pr_draft_review` require a nonempty body for REQUEST_CHANGES and reject unsupported event values.
+
+## Core account command
+
+| Command | Arguments | Result | HTTP equivalent |
+|---|---|---|---|
+| `account_action` | `request: AccountAction` | Metadata/presence-only action reply | `POST /accounts/action`, body = request |
+
+The async command delegates to the same owner service as HTTP; disk/vault work runs on the blocking pool. See [the account action table](../backend/github.md#shared-account-registry).
+
+### Private account credential entry
+
+`account_secret_form {request}` opens the existing isolated native secret window.
+The request is `{action:"add",account:{provider,host,kind,label,username?}}` or
+`{action:"rotate",id}`; it accepts no credential. The reply contains only
+`{names:[],status:"stored"|"declined"|"failed"}`. `secret_form_bootstrap` and
+`secret_form_submit` require the active native window identity. Account forms
+do not expose a mobile capability or accept HTTP bootstrap/submission.

@@ -850,6 +850,16 @@ impl<T> Term<T> {
         }
     }
 
+    /// Primary-screen origin, including rows evicted from bounded history.
+    #[inline]
+    pub fn primary_total_scrolled(&self) -> usize {
+        if self.mode.contains(TermMode::ALT_SCREEN) {
+            self.inactive_grid.total_scrolled()
+        } else {
+            self.grid.total_scrolled()
+        }
+    }
+
     /// Resize terminal to new dimensions.
     pub fn resize<S: Dimensions>(&mut self, size: S) {
         self.resize_reflow(size, crate::grid::ReflowMode::All);

@@ -111,7 +111,7 @@ never all expert: in basic mode it would show an empty page.
 | **Reset Panel Sizes** | — | Restore sidebar and panel widths to defaults (**Layout** section) |
 | **UI Legend** | — | Visual reference for colors, symbols, and badges used in the app |
 
-The terminal and app color theme is on the [Terminal](#terminal) page. The mobile PWA offers a separate Dark/Light choice in its Settings screen, saved on the server for connected mobile clients; the screen also shows app and server versions.
+The terminal and app color theme is on the [Terminal](#terminal) page. Native window and webview backgrounds use the same theme color at startup and when the theme changes, including light themes. The mobile PWA offers a separate Dark/Light choice in its Settings screen, saved on the server for connected mobile clients; the screen also shows app and server versions.
 
 #### Show agents under branches
 
@@ -456,3 +456,13 @@ Settings → Telegram configures the current machine. Mobile Settings has a **Te
 1. Paste the BotFather token into the password field and select **Save and check bot**. TUIC writes `bot.token` with owner-only permissions and checks `getMe`. Settings shows the bot username and whether a token is set; it never reads the token back.
 2. Enable Telegram. Ask an agent in the polling app to opt in with the Telegram MCP tool (`register`/`unregister`); Settings shows the registered agent read-only, or **No agent registered**. When the status is connected, select **Link chat**, then send the displayed six-character code to the bot within ten minutes. The code works once. Alternatively, type a positive private chat ID and select **Add chat ID**. Remove revokes authorization. A bare `/start` does not authorize a chat. An ordinary message after pairing in the same poll uses the new authorization; the pairing code never reaches the agent.
 3. Check connection status, safe error category and last accepted message time. Status identifies **this app**, **tuic-remote**, or another desktop owner. The desktop app starts the same adapter at boot; its process-held lock prevents a second local poller. A standby takes over when the owner exits. If no poller is connected, Settings explains the next action and disables **Link chat**. Config changes restart the owning adapter and retire its current transient draft state. Resolve any reported error, then disable and enable Telegram to retry a stopped adapter.
+
+## Shared provider account storage
+
+Core now stores provider accounts and sites in one registry. Existing GitHub accounts retain their identities and repository bindings. Token values remain in the core credential store; account reads show only set, unset or unavailable status. The Accounts controls and private native add flow are integrated separately by the Settings extension. A failed account operation may need storage repair before retrying; see [migration and recovery](../backend/github.md#github-migration-and-recovery).
+
+GitHub Enterprise account creation asks for the host in Settings, then opens a
+separate private native window for the PAT. Settings never displays or stores
+the PAT. Decline or close that window before submission to cancel. A headless
+server cannot open this native credential window. After Submit is accepted,
+verification finishes even if you close the window.

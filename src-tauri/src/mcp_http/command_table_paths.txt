@@ -2,6 +2,8 @@
 # One HTTP path per COMMAND_TABLE entry, query stripped, deduplicated.
 # Read by mcp_http::tests::command_table_paths_all_hit_a_registered_route.
 # Regenerate: pnpm vitest run src/__tests__/transport.test.ts -u
+/accounts/action
+/accounts/secret-form
 /acp/chat/open
 /acp/connections
 /acp/connections/x
@@ -262,14 +264,25 @@
 /repo/orphan-worktrees
 /repo/panel-context
 /repo/post-pr-review
+/repo/pr-action-state
+/repo/pr-auto-merge
 /repo/pr-diff
+/repo/pr-draft-review
+/repo/pr-line-threads
+/repo/pr-merge-or-enqueue
+/repo/pr-merge-queue
+/repo/pr-rerun-failed
 /repo/pr-review
 /repo/pr-review-threads
+/repo/pr-thread-comments
+/repo/pr-thread-reply
+/repo/pr-thread-resolved
 /repo/prs
 /repo/prs/batch
 /repo/recent-branches
 /repo/recent-commits
 /repo/remote-url
+/repo/remotes
 /repo/remove-orphan
 /repo/run-git
 /repo/stage
@@ -353,6 +366,7 @@
 /watchers/repo
 /workflows/definition/action
 /workflows/run/action
+/workitem-links
 /worktrees
 /worktrees/dir
 /worktrees/finalize

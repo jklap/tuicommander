@@ -1,4 +1,24 @@
+## Plugin account requests (1697-4cdc) — Rust restart required
+
+- [ ] After Boss restarts `make dev` or installs `make build`: install a plugin whose manifest declares `"capabilities":["net:http"]` and a `providers` descriptor, confirm the provider appears in the account add flow, add a throwaway account, and call `host.httpFetch(<site>/<path>, { account })` from the plugin. The response arrives without the token; a URL outside the site and a plugin without that provider are refused. Uninstall the plugin and confirm the account remains listed. Local-server tests on rb cover injection, host rule, consent, redirects and redaction; a real Jira/GitLab/GitHub call is not verified. No desktop instance was launched by this peer.
+
+## Work-item links and sidebar badge (1685-4b12) — Rust restart required
+
+- [ ] After Boss restarts `make dev` or installs `make build`: send `PUT /workitem-links` to :9876 with `{"repoPath":"<a repo>","branch":"<a worktree branch>","link":{"reference":{"providerId":"jira","accountId":"a","id":"1"},"key":"ACME-1","title":"t","url":"https://example.com/ACME-1","state":{"id":"1","name":"In Progress","tone":"info"}}}`, reload the window, and confirm the branch row shows an `ACME-1` chip in the info colour. Clicking it opens the URL and neither selects the branch nor toggles its agents. Remove the worktree from the sidebar and confirm `GET /workitem-links` no longer lists it. `GET /repo/remotes?path=<repo>` lists every remote without userinfo. No desktop instance was launched by this peer.
+
+## Window resize background (1678-158c / GitHub #125) — Boss build required
+
+- [ ] After Boss runs `make build` (or manually restarts `make dev`), rapidly enlarge and shrink the main window on macOS. Repeat with Commander, VS Code Light, and a theme with different terminal/app backgrounds. Confirm exposed resize areas use the app background; switch themes and reopen secondary/panel windows. Also cold-start with a saved light theme. Rust does not hot-reload. Regression tests cover native window/webview color requests for all bundled themes and saved-theme resolution; actual native paint remains unverified. A headless Chrome startup-document screenshot attempt timed out after 50 seconds without an image. No TUIC instance was launched, restarted or killed by this peer.
+## Automation precheck context editor (1624-c5f5)
+
+- [ ] In the Automations dialog, enable a precheck: stdout context starts off. Save with it on, reopen, and confirm it remains on without changing prompt whitespace. Turning the precheck off and back on resets consent. Uses the already-landed backend; this change adds no production Rust behavior and does not require a backend restart. _(Visual capture unavailable: two bundled headless Chrome attempts timed out without a screenshot.)_
+
 ## Automation precheck prompt context (1631-45bf) — Rust restart required
+
+## Core provider accounts (1679-1419) — Rust restart required
+
+- [ ] After landing and Boss's manual `make dev` restart or `make build`, list accounts through `POST /accounts/action`; confirm existing GitHub IDs and repo bindings, plus presence-only credential status. OAuth success replies must omit `access_token`. No app was launched, restarted or killed by this peer.
+- [ ] After A2/A3 integration, use the private native add flow for a registered Jira/GitLab token provider, Test it, then remove a throwaway account/site. A1 tests the generic descriptor protocol on rb; live provider auth and native secret-entry privacy are not claimed.
 
 - [ ] After Boss restarts `make dev` or installs `make build`, create an isolated Once automation through the API/MCP with `precheck.inject_output: true`. Confirm a successful scheduled precheck prefixes bounded, marked untrusted stdout before the literal prompt and run history reports `precheck_context`. Compare omitted/false flags and Run Now (literal prompt, no context); stderr must not appear. Targeted dispatch tests exercise the real shell, launch-request boundary and reopened ledger. No desktop instance was launched or restarted by this peer.
 
@@ -4959,3 +4979,35 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] Design Mode v2 pilot: after Boss rebuilds/restarts TUIC, load the unpacked extension into its dedicated Edge profile; verify toolbar opening, activeTab capture and sidebar return after switching tabs. Rust does not hot-reload. CFT sidebar and trusted top/frame picks were verified in story 1672.
 
 - [ ] After the next Rust rebuild/restart, verify Design Mode sends a captured crop as a readable image and lets retained feedback reach a replacement after its original recipient exits (#1672-cd3d). Rust does not hot-reload.
+
+- [ ] After a manual `make dev` restart or `make build`, verify account removal rejects the github.com default and its site; use `clear_secret` to log out and confirm login keeps the default listed (#1679-1419).
+- [ ] Work-item setting controls: after integration, verify the five controls in their consuming settings and Tasks forms; account Add requires the separate native account sink. The dev-only field preview covers the controls independently.
+- [ ] Settings catalogue foundation: after Boss's next manual `make dev` restart or release build, later settings adapters must use the Rust descriptors, retain unavailable voice fields and refuse cutover while inventory gaps remain. This commit adds internal definitions only; no new MCP tool or UI control is exposed yet.
+- [ ] Settings transaction foundation: after Boss's next manual restart/build and the later transport cutover, verify stale revisions conflict, a rejected batch writes nothing, and persisted listener changes report pending/recovery until applied. Internal service only at this stage; no new tool is exposed.
+- [ ] After the next manual Rust restart/build, verify an explicitly saved 24h remote session lifetime survives reload; legacy unmarked files migrate only once (#1676-1230).
+- [ ] After the next manual Rust restart, verify Tasks integration against the A4 contract when its UI/transport stream is installed. A4 itself adds a library contract and local provider only; no new visible surface.
+## Tasks detail integration (#1687-27a3)
+
+- [ ] After the Tasks shell is integrated and the next normal rebuild loads the updated plugin guide, open a work item from its list. Confirm the shell passes visibility, opens the selected provider/account/item, and receives authoritative detail updates. Component behavior is covered by the targeted detail tests and rb browser fixture; this item covers the separate shell integration.
+- [ ] Mobile session history (#1681-507e): after Boss manually restarts `make dev` or rebuilds release, verify a long-running Claude Code session keeps completed output above its live region while scrolling on iPhone. Rust does not hot-reload; this peer did not restart Boss's app.
+- [ ] After Boss restarts `make dev` or rebuilds release: check MCP/CLI automation list, enabled-only update and Once preview use the shared HTTP/IPC shapes; confirm bound creator provenance is retained (#1630-cbfa, #1621-5dce). Rust changes require a restart.
+- [ ] [HUMAN] #1674-93d5: On iPhone Safari and separately the installed Home Screen PWA, tap the composer mic beside Send. Verify interim/final speech appends without opening the keyboard, stop works, Send remains explicit, and server hands-free cannot record simultaneously. Check permission refusal preserves the draft. While dictating, edit the draft: the mic returns to idle, the edit stays exact, and tapping the mic starts a new recording. Historical WebKit standalone restriction: https://bugs.webkit.org/show_bug.cgi?id=225298#c3. At 360×800 the controls remain in the existing row; Send/mic targets grow from 40 to 44 px, costing 4 vertical px rather than another terminal row.
+
+- [ ] After a manual `make dev` restart (or `make build`), verify the line review APIs through the integrated Files UI: outdated/resolved threads, replies, resolution and rejection after the PR head moves. Rust changes require restart; automated checks use recorded GitHub fixtures/local stubs.
+
+- [ ] After manual `make dev` restart (or `make build`), verify integrated PR actions: failed-job rerun, auto-merge enable/disable, enqueue/dequeue and queue state. A queue-required merge must enqueue; a moved head or unavailable branch policy must prevent writes. REQUEST_CHANGES with blank text must fail. Automated checks use recorded responses and local stubs only.
+## Private account secret entry (#1696-c6d4)
+
+- [ ] After a manual `make dev` restart (or `make build`), add an Enterprise
+  account: Settings shows only the host field; Add account opens the private
+  native token window. Submit a valid PAT and confirm the account appears.
+- [ ] Decline and close before submitting; confirm no account appears. Retry
+  with an invalid PAT and confirm no partial account is created.
+- [ ] No UI launches rotation yet. Send `POST /accounts/secret-form` with
+  `{"action":"rotate","id":"<account id>"}` to the test instance; confirm
+  presence remains set and provider requests use the replacement credential.
+- [ ] Confirm native entry has no mobile link or developer tools.
+
+## Tasks create integration (#1688-518d)
+
+- [ ] After the Tasks shell is integrated and a provider plugin that follows the `itemType` convention is installed, open the create form, choose a type, fill its required fields and create. Confirm the created item opens in Tasks detail. Component behavior is covered by the targeted create tests and the rb browser fixture; this item covers the shell and real-provider integration.

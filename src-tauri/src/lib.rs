@@ -4,6 +4,9 @@
     allow(dead_code, unused_imports, unused_variables)
 )]
 
+pub(crate) mod accounts;
+#[cfg(test)]
+mod accounts_regression_tests;
 pub mod acp;
 pub(crate) mod acp_chat;
 pub(crate) mod acp_commands;
@@ -21,6 +24,7 @@ pub(crate) mod attachments;
 #[cfg(feature = "desktop")]
 pub(crate) mod audio_enumeration;
 pub(crate) mod prompt_receipt;
+pub mod work_items;
 pub use tuic_core::app_instance;
 pub(crate) mod app_logger;
 pub(crate) mod changelog;
@@ -38,6 +42,7 @@ pub(crate) mod codex_usage;
 pub(crate) mod config;
 pub(crate) mod conflict_assist;
 pub(crate) mod content_index;
+pub mod settings;
 pub(crate) use tuic_git::cow;
 pub(crate) mod cpu_watchdog;
 pub(crate) use tuic_core::credentials;
@@ -72,6 +77,11 @@ pub(crate) mod github_account;
 pub(crate) mod github_auth;
 #[cfg(test)]
 mod github_compat_tests;
+#[cfg(feature = "desktop")]
+pub(crate) mod github_pr_action_commands;
+pub(crate) mod github_pr_actions;
+pub(crate) mod github_pr_api;
+pub(crate) mod github_review_threads;
 pub(crate) use tuic_git::github_debug;
 pub(crate) mod github_poller;
 #[cfg(feature = "desktop")]
@@ -176,6 +186,7 @@ pub(crate) mod tunnels;
 mod updater;
 pub(crate) mod webview_recovery;
 pub(crate) mod workflows;
+pub(crate) mod workitem_links;
 pub(crate) mod worktree;
 
 use std::path::{Path, PathBuf};
@@ -200,7 +211,8 @@ async fn open_secondary_window(app: tauri::AppHandle) -> Result<(), String> {
     }
 
     let url = tauri::WebviewUrl::App("/?mode=secondary".into());
-    tauri::WebviewWindowBuilder::new(&app, "secondary", url)
+    let builder = tauri::WebviewWindowBuilder::new(&app, "secondary", url);
+    themes::window_background::configure(builder, themes::window_background::current(&app))
         .title("TUICommander — Secondary")
         .inner_size(1200.0, 800.0)
         .min_inner_size(800.0, 600.0)
@@ -1723,6 +1735,21 @@ pub fn run() {
 
     sanitize_window_state();
 
+    let themes_dir = config::config_dir().join("themes");
+    if let Err(e) = themes::seed_builtin_themes(&themes_dir) {
+        tracing::warn!("Failed to seed themes: {e}");
+    }
+    let startup_background =
+        themes::window_background::resolve(&themes::load_themes(&themes_dir), &config.theme);
+    let mut context = tauri::generate_context!();
+    for window in &mut context.config_mut().app.windows {
+        window.background_color = Some(tauri::window::Color(
+            startup_background[0],
+            startup_background[1],
+            startup_background[2],
+            255,
+        ));
+    }
     let index_strategy = config.index_strategy.clone();
     let builder = tauri::Builder::default();
     let builder = plugins::register_plugin_protocol(builder);
@@ -1849,7 +1876,7 @@ pub fn run() {
             if app.get_webview_window("main").is_none() {
                 tracing::warn!("Main window missing from config — creating programmatically");
                 let builder = tauri::WebviewWindowBuilder::new(
-                    app,
+                    app.handle(),
                     "main",
                     tauri::WebviewUrl::App("index.html".into()),
                 )
@@ -1863,7 +1890,7 @@ pub fn run() {
                 let builder = builder
                     .hidden_title(true)
                     .title_bar_style(tauri::TitleBarStyle::Overlay);
-                builder.build()?;
+                themes::window_background::configure(builder, startup_background).build()?;
             }
 
             // Track desktop window focus so push notifications can be
@@ -1935,12 +1962,9 @@ pub fn run() {
                 press_and_hold::disable();
             }
 
-            // Seed built-in themes on first run, then start hot-reload watcher
-            let themes_dir = config::config_dir().join("themes");
-            if let Err(e) = themes::seed_builtin_themes(&themes_dir) {
-                tracing::warn!("Failed to seed built-in themes: {e}");
-            }
-            themes::start_theme_watcher(themes_dir, app_state);
+            // Themes are seeded before window creation so the first paint uses
+            // the saved theme. Start hot reload after the AppHandle is available.
+            themes::start_theme_watcher(config::config_dir().join("themes"), app_state);
 
             // Former built-ins are seeded once as ordinary uninstallable plugins.
             // Seed before the watcher starts so startup does not emit redundant
@@ -2053,6 +2077,10 @@ pub fn run() {
             worktree::get_worktrees_dir,
             git::get_repo_info,
             git::get_remote_url,
+            workitem_links::get_git_remotes,
+            workitem_links::list_workitem_links,
+            workitem_links::link_workitem,
+            workitem_links::unlink_workitem,
             git::get_git_diff,
             git::get_diff_stats,
             git::get_changed_files,
@@ -2176,6 +2204,16 @@ pub fn run() {
             github::create_pr,
             github::create_issue,
             github::post_pr_review,
+            github_pr_action_commands::get_pr_action_state,
+            github_pr_action_commands::set_pr_auto_merge,
+            github_pr_action_commands::set_pr_merge_queue,
+            github_pr_action_commands::merge_or_enqueue_pr,
+            github_pr_action_commands::rerun_failed_pr_jobs,
+            github_review_threads::get_pr_line_threads,
+            github_review_threads::get_pr_thread_comments,
+            github_review_threads::set_pr_thread_resolved,
+            github_review_threads::reply_pr_thread,
+            github_review_threads::submit_pr_draft_review,
             github::get_merged_prs,
             pr_review::run_pr_review,
             changelog::generate_changelog,
@@ -2204,6 +2242,8 @@ pub fn run() {
             github_auth::github_disconnect,
             github_auth::github_diagnostics,
             github_auth::github_auth_status,
+            accounts::account_action,
+            secrets::account_sink::account_secret_form,
             github_account::github_add_account,
             github_account::github_remove_account,
             github_account::github_bind_repo,
@@ -2333,7 +2373,7 @@ pub fn run() {
             mcp_upstream_config::set_project_mcp_upstreams,
             mcp_upstream_config::reconnect_mcp_upstream,
             mcp_upstream_config::get_mcp_upstream_status,
-            mcp_upstream_credentials::save_mcp_upstream_credential,
+            mcp_upstream_credentials::commands::save_mcp_upstream_credential,
             mcp_upstream_credentials::delete_mcp_upstream_credential,
             mcp_oauth::commands::start_mcp_upstream_oauth,
             mcp_oauth::commands::mcp_oauth_callback,
@@ -2512,7 +2552,7 @@ pub fn run() {
             ego_cli::perimeter::ego_set_perimeter_network,
             ego_cli::ego_set_default_model
         ])
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while building tauri application")
         .run(|app_handle, event| {
             match &event {

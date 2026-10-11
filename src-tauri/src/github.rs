@@ -508,7 +508,7 @@ pub(crate) fn github_com_account(state: &AppState) -> crate::github_account::Git
 /// chain resolve), exactly as the old per-command preamble did. GHE-bound repos
 /// use their account's PAT + host. Errors when the repo is unbound, ambiguous,
 /// or unauthenticated.
-async fn resolve_repo_for_rest(
+pub(crate) async fn resolve_repo_for_rest(
     state: &AppState,
     repo_path: &str,
 ) -> Result<(crate::github_account::GitHubAccount, String, String, String), String> {
@@ -1347,7 +1347,7 @@ pub(crate) async fn reopen_issue(
 /// primary limit, a `retry-after` for a secondary/abuse limit — then from the
 /// JSON message when GitHub omits both headers. Ambiguous bodies are buffered
 /// and rebuilt so plain permission-denied responses still reach their caller.
-async fn send_rest_with_breaker(
+pub(crate) async fn send_rest_with_breaker(
     state: &AppState,
     account: &crate::github_account::GitHubAccount,
     request: reqwest::RequestBuilder,
@@ -2387,7 +2387,7 @@ fn build_create_issue_body(title: &str, body: &str) -> serde_json::Value {
     })
 }
 
-fn build_post_pr_review_body(
+pub(crate) fn build_post_pr_review_body(
     body: &str,
     event: &str,
     comments: &[PrReviewInlineComment],
@@ -2438,7 +2438,7 @@ fn parse_created_issue(json: serde_json::Value) -> Result<CreatedIssue, String> 
     })
 }
 
-fn parse_posted_review(json: serde_json::Value) -> Result<PostedPrReview, String> {
+pub(crate) fn parse_posted_review(json: serde_json::Value) -> Result<PostedPrReview, String> {
     Ok(PostedPrReview {
         id: json["id"]
             .as_i64()
@@ -2583,6 +2583,7 @@ pub(crate) async fn post_pr_review_impl(
     comments: &[PrReviewInlineComment],
     state: &AppState,
 ) -> Result<PostedPrReview, String> {
+    crate::github_pr_actions::validate_review_event(body, event.unwrap_or("COMMENT"))?;
     let (account, token, owner, repo) = resolve_repo_for_rest(state, repo_path).await?;
     let endpoint = format!("repos/{owner}/{repo}/pulls/{pr_number}/reviews");
     let body_json = build_post_pr_review_body(body, event.unwrap_or("COMMENT"), comments);
