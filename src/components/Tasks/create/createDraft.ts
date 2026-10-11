@@ -15,19 +15,22 @@ export const emptyValue = (schema: WorkItemFieldSchema): DraftValue => (isMulti(
 export const formFields = (schema: readonly WorkItemFieldSchema[]) =>
 	schema.filter((field) => field.editable && field.id !== ITEM_TYPE_FIELD);
 
-/** Keep a value across a type change only where the new type has the same field with the same kind. */
+/** Keep a value across a type change only where the new type has the same field with the same kind and still offers it. */
 export function carryOver(
 	previous: readonly WorkItemFieldSchema[],
 	next: readonly WorkItemFieldSchema[],
 	draft: Draft,
 ) {
 	const kinds = new Map(previous.map((field) => [field.id, field.kind]));
-	return Object.fromEntries(
-		next.map((field) => [
-			field.id,
-			kinds.get(field.id) === field.kind && field.id in draft ? draft[field.id] : emptyValue(field),
-		]),
-	);
+	const offered = (field: WorkItemFieldSchema, id: string) => field.options.some((option) => option.id === id);
+	const carried = (field: WorkItemFieldSchema): DraftValue => {
+		const value = draft[field.id];
+		if (kinds.get(field.id) !== field.kind || value === undefined) return emptyValue(field);
+		if (field.kind === "enum") return typeof value === "string" && offered(field, value) ? value : emptyValue(field);
+		if (isMulti(field) && Array.isArray(value) && field.options.length > 0) return value.filter((id) => offered(field, id));
+		return value;
+	};
+	return Object.fromEntries(next.map((field) => [field.id, carried(field)]));
 }
 
 /** Converts a raw control value; `undefined` means the value is invalid and cannot be sent. */
@@ -56,13 +59,14 @@ export function toFieldValue(
 /** Field values for `WorkItemCreate`, or the name of the first field that blocks submission. */
 export type Collected =
 	| { ok: true; fields: Record<string, WorkItemFieldValue | null> }
-	| { ok: false; blocker: string };
+	| { ok: false; blocker: string; invalid: boolean };
 
 export function collectFields(schema: readonly WorkItemFieldSchema[], draft: Draft): Collected {
 	const fields: Record<string, WorkItemFieldValue | null> = {};
 	for (const field of schema) {
 		const value = toFieldValue(field, draft[field.id]);
-		if (value === undefined || (value === null && field.required)) return { ok: false, blocker: field.name };
+		if (value === undefined) return { ok: false, blocker: field.name, invalid: true };
+		if (value === null && field.required) return { ok: false, blocker: field.name, invalid: false };
 		fields[field.id] = value;
 	}
 	return { ok: true, fields };

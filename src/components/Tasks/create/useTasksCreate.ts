@@ -87,10 +87,10 @@ export function useTasksCreate(props: TasksCreateOptions) {
 
 	const collected = createMemo(() => collectFields(schema(), draft()));
 	const blocker = () => {
-		if (!title().trim()) return "Title";
-		if (!itemType() || loaded().type !== itemType()) return "Type";
+		if (!title().trim()) return "Required: Title";
+		if (!itemType() || loaded().type !== itemType()) return "Required: Type";
 		const result = collected();
-		return result.ok ? null : result.blocker;
+		return result.ok ? null : `${result.invalid ? "Invalid" : "Required"}: ${result.blocker}`;
 	};
 	const canSubmit = () => !loading() && !submitting() && blocker() === null;
 

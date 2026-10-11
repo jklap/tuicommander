@@ -5,6 +5,7 @@ import { expect, it, vi } from "vitest";
 import { createInMemoryWorkItemProvider } from "../../../../plugins/testing/inMemoryWorkItemProvider";
 import type { WorkItemProvider } from "../../../../plugins/workItemProvider";
 import type { WorkItemFieldSchema } from "../../../../types/work-items.gen";
+import { collectFields } from "../createDraft";
 import { TasksCreate } from "../TasksCreate";
 
 const priority = (options: string[]): WorkItemFieldSchema => ({
@@ -60,4 +61,11 @@ it("drops a carried enum value the new type does not offer", async () => {
 	fireEvent.click(create);
 	await waitFor(() => expect(act).toHaveBeenCalledTimes(1));
 	expect(act.mock.calls[0][1]).toMatchObject({ kind: "create", value: { itemType: "issue", fields: { priority: null } } });
+});
+
+// Catches: an invalid value on an optional field is reported as required, which tells the user to fill a field they may leave empty.
+it("collectFields reports an invalid optional number as invalid, not required", () => {
+	const points: WorkItemFieldSchema = { id: "points", name: "Points", kind: "number", required: false, editable: true, options: [] };
+	expect(collectFields([points], { points: "abc" })).toEqual({ ok: false, blocker: "Points", invalid: true });
+	expect(collectFields([{ ...points, required: true }], { points: "" })).toEqual({ ok: false, blocker: "Points", invalid: false });
 });
