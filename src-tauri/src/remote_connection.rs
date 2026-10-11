@@ -15,22 +15,32 @@ const CONNECTIONS_FILE: &str = "connections.json";
 // ---------------------------------------------------------------------------
 
 /// A saved remote connection.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct RemoteConnection {
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates id for the current owner.","operations":["get"],"confirmationClass":"ordinary"}))]
     pub(crate) id: String,
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates name for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) name: String,
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates transport for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) transport: RemoteTransport,
+    #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"live","effect":"Updates auth username for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) auth_username: String,
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates enabled for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) enabled: bool,
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates auto update for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) auto_update: bool,
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates deploy for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) deploy: DeployMode,
     #[serde(default = "default_survive_secs")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates survive secs for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) survive_secs: u64,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum DeployMode {
     #[default]
@@ -44,17 +54,23 @@ const fn default_survive_secs() -> u64 {
 }
 
 /// Transport layer for a remote connection.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type")]
 pub(crate) enum RemoteTransport {
     Ssh {
+        #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"live","effect":"Updates ssh host for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
         ssh_host: String,
+        #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates ssh port for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
         ssh_port: u16,
+        #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"live","effect":"Updates ssh user for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
         ssh_user: String,
+        #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"live","effect":"Updates identity file for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
         identity_file: Option<String>,
+        #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates remote daemon port for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
         remote_daemon_port: u16,
     },
     Direct {
+        #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"live","effect":"Updates url for the current owner.","operations":["get","set"],"confirmationClass":"execution_authority"}))]
         url: String,
     },
 }
