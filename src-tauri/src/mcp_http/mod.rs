@@ -11,6 +11,8 @@ mod dictation_routes;
 mod ego_routes;
 mod fs_routes;
 mod git_routes;
+mod github_pr_action_routes;
+mod github_review_routes;
 mod github_routes;
 mod guards;
 mod log_routes;
@@ -1627,6 +1629,31 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             "/repo/pr-review-threads",
             get(github_routes::repo_pr_review_threads),
         )
+        .route("/repo/pr-action-state", get(github_pr_action_routes::state))
+        .route(
+            "/repo/pr-auto-merge",
+            post(github_pr_action_routes::auto_merge),
+        )
+        .route("/repo/pr-merge-queue", post(github_pr_action_routes::queue))
+        .route(
+            "/repo/pr-merge-or-enqueue",
+            post(github_pr_action_routes::merge),
+        )
+        .route(
+            "/repo/pr-rerun-failed",
+            post(github_pr_action_routes::rerun),
+        )
+        .route("/repo/pr-line-threads", get(github_review_routes::threads))
+        .route(
+            "/repo/pr-thread-comments",
+            get(github_review_routes::comments),
+        )
+        .route(
+            "/repo/pr-thread-resolved",
+            post(github_review_routes::resolve),
+        )
+        .route("/repo/pr-thread-reply", post(github_review_routes::reply))
+        .route("/repo/pr-draft-review", post(github_review_routes::submit))
         .route("/repo/pr-diff", get(github_routes::repo_pr_diff))
         .route("/repo/merged-prs", get(github_routes::repo_merged_prs))
         .route(

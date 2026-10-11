@@ -2830,6 +2830,10 @@ Automation agent surface (#1630-cbfa, #1621-5dce): MCP `automations` and
 previews, run history, summaries and Run Now runtime. Enabled-only updates and
 Once definitions work identically; MCP creation retains host-bound provenance.
 
+GitHub backend: paginated line review threads and replies, resolve/unresolve, and draft review submission pinned to the reviewed head are available through IPC and HTTP.
+
+GitHub backend: failed-job reruns, auto-merge enable/disable, merge queue state/entry/removal and queue-aware merge are available over IPC and HTTP. Request changes requires review text.
+
 ## Tasks board component
 
 The core Tasks board component renders provider-declared columns and virtualized
