@@ -1236,8 +1236,14 @@ mod tests {
         write(EGO_A, r#"{"model":"openai-codex/gpt-6-sol"}"#);
         write(EGO_B, r#"{"model":"openrouter/anthropic/claude-x"}"#);
         let h = dir.path();
-        assert_eq!(ego_session_provider(h, EGO_A).as_deref(), Some("openai-codex"));
-        assert_eq!(ego_session_provider(h, EGO_B).as_deref(), Some("openrouter"));
+        assert_eq!(
+            ego_session_provider(h, EGO_A).as_deref(),
+            Some("openai-codex")
+        );
+        assert_eq!(
+            ego_session_provider(h, EGO_B).as_deref(),
+            Some("openrouter")
+        );
         write(EGO_A, r#"{"model":"no-separator"}"#);
         assert_eq!(ego_session_provider(h, EGO_A), None);
         write(EGO_A, "{}");
