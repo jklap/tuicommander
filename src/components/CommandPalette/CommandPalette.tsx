@@ -29,7 +29,8 @@ export interface CommandPaletteProps {
  * until their HTTP or browser implementation has been verified explicitly.
  */
 const BROWSER_ACTION_IDS = new Set([
-	"start-design-mode",
+	"start-design-mode-edge",
+	"start-design-mode-chrome",
 	"stop-design-mode",
 	"new-terminal",
 	"close-terminal",

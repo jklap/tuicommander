@@ -89,6 +89,8 @@ per cell and the configured history limit still apply.
 
 ### 1.0 Design Mode for agent terminals
 
+Right-click an HTTP(S) terminal link (including localhost) and choose **Start in Design Mode**, then **Edge** or **Chrome**, to open that exact page with the terminal agent connected. Agent coordinators use `design_mode action=start session_id=<terminal> url=<page>` for layout work; stop uses the returned `repoPath`.
+
 - Start from an agent terminal’s context menu or the Command Palette. Choose Edge or Chrome; TUIC uses a dedicated profile per repository and browser. The launching terminal remains the default recipient and carries the armed D badge.
 - During the pilot, load the materialised extension folder once using **Load unpacked**. The first-run page explains setup; a missing URL opens these instructions instead of a blank page. The sidebar lists configured URLs and live servers attributed to this repository and its linked worktrees, with fresh PTY advertisements validated against listeners.
 - **Pick element** selects once, then browsing resumes. **Multi-pick**, Escape and Stop control longer collection. Cards keep extraction evidence, optional screenshots and independent comments; delete removes a card. The sidebar offers live local agents from the same repository and reports an exited recipient without switching silently.

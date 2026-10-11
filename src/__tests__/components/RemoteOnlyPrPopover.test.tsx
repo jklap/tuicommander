@@ -90,6 +90,7 @@ describe("RemoteOnlyPrPopover — 405 merge method auto-fallback", () => {
 
 	it("falls back to squash when merge is rejected with 405", async () => {
 		mockInvoke
+			.mockResolvedValueOnce({}) // get_pr_action_state, read on mount by the PR action buttons
 			.mockRejectedValueOnce(new Error("GitHub merge failed (405): Merge commits are not allowed."))
 			.mockResolvedValueOnce("abc123sha");
 
@@ -107,6 +108,7 @@ describe("RemoteOnlyPrPopover — 405 merge method auto-fallback", () => {
 
 	it("falls back to rebase when both merge and squash are rejected", async () => {
 		mockInvoke
+			.mockResolvedValueOnce({}) // get_pr_action_state, read on mount by the PR action buttons
 			.mockRejectedValueOnce(new Error("GitHub merge failed (405): Merge commits are not allowed."))
 			.mockRejectedValueOnce(new Error("GitHub merge failed (405): Squash merging is not allowed."))
 			.mockResolvedValueOnce("abc123sha");
@@ -120,11 +122,12 @@ describe("RemoteOnlyPrPopover — 405 merge method auto-fallback", () => {
 				expect.objectContaining({ mergeMethod: "rebase" }),
 			);
 		});
-		expect(repoSettingsStore.getEffective("/repo")?.prMergeStrategy).toBe("rebase");
+		await waitFor(() => expect(repoSettingsStore.getEffective("/repo")?.prMergeStrategy).toBe("rebase"));
 	});
 
 	it("shows error when all merge methods fail", async () => {
 		mockInvoke
+			.mockResolvedValueOnce({}) // get_pr_action_state, read on mount by the PR action buttons
 			.mockRejectedValueOnce(new Error("GitHub merge failed (405): Merge commits are not allowed."))
 			.mockRejectedValueOnce(new Error("GitHub merge failed (405): Squash merging is not allowed."))
 			.mockRejectedValueOnce(new Error("GitHub merge failed (405): Rebase merging is not allowed."));

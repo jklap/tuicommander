@@ -14,6 +14,7 @@ import { stripAnsi } from "../../utils/stripAnsi";
 import { relativeTime } from "../../utils/time";
 import { SeverityIcon } from "../shared/SeverityIcon";
 import { CiRing } from "../ui/CiRing";
+import { PrActionButtons } from "./PrActionButtons";
 import s from "./PrDetailPopover.module.css";
 
 /** Map backend merge state CSS class strings to module classes */
@@ -439,6 +440,8 @@ export const PrDetailContent: Component<PrDetailContentProps> = (props) => {
 							</Show>
 						</div>
 					</Show>
+
+					<PrActionButtons repoPath={props.repoPath} pr={pr()} checks={checkDetails()} />
 
 					{/* Check list */}
 					<Show when={checkDetails().length > 0}>
