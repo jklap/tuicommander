@@ -2841,3 +2841,10 @@ lanes. Cards support drag and drop and a keyboard-accessible move menu. Pending
 moves cannot be repeated; rejected actions restore the card and show the error.
 This component is available to the Tasks host; provider registration and the
 Tasks navigation surface determine where it is shown.
+
+## Tasks create component
+
+Core provides a generic work-item create form. The provider declares the item
+types and the fields of each type; the form uses the shared setting controls,
+blocks Create until the required fields of the current type are set, and opens
+the created item. The Tasks shell integrates this component separately.

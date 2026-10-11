@@ -1930,3 +1930,19 @@ Resolvers run in registration order; the first non-null result wins and a resolv
 that throws is skipped. When a worktree is already linked to `link.reference`, the
 palette offers **Open worktree**; otherwise it offers **Start work** with your
 request (`repoPath` defaults to the active repository).
+
+## Tasks create
+
+Core's `TasksCreate` consumes `createFields` and `act` of the `WorkItemProvider` port.
+The host supplies `provider`, `onCreated(detail)` to open the created item, and
+optional `onCancel`. Providers supply types and schemas; they do not render the form.
+
+`createFields()` without a type must return an enum field with id `itemType` that
+lists the creatable types; a single type is preselected. `createFields(type)`
+returns the fields of that type. Title and Description are fixed inputs, so a
+schema does not repeat them. Only editable fields render.
+
+A type change reloads the schema; values survive only for the same field id and
+kind, and a late schema of an earlier type is dropped. Create stays disabled until
+Title, Type and every required field of the current type are set. Submit sends one
+`create` action with every current field (unset is null). A rejection keeps the draft.
