@@ -1,6 +1,6 @@
 ## GitLab provider plugin (1695-9f3a) — needs 1697-4cdc and a desktop restart
 
-- [ ] After story 1697-4cdc lands (`host.httpFetch({account})` and manifest provider declarations) and Boss restarts the desktop app, install the `gitlab` plugin and add two GitLab accounts, one on a non-default port. In Tasks, confirm each account lists its own issues, merge requests and to-do items; paste an item URL of each instance and confirm only its own account resolves it. On a merge request, confirm merge/squash choices, readable blockers, approve, pipeline jobs and job retry; on a board, move a card and confirm the list label changes in GitLab. The plugin was tested only against hand-authored (unrecorded) fixtures; no desktop instance was launched by this peer.
+- [ ] After story 1697-4cdc lands (`host.httpFetch({account})` and manifest provider declarations) and Boss restarts the desktop app, install the `gitlab` plugin and add two GitLab accounts, one on a non-default port. In Tasks, confirm each account lists its own issues, merge requests and to-do items; paste an item URL of each instance and confirm only its own account resolves it. On a merge request, confirm merge/squash choices, readable blockers, approve, pipeline jobs and job retry; on a board, move a card and confirm the list label changes in GitLab. The plugin tests run on fixtures recorded from GitLab CE (`plugins/gitlab/fixtures/recorded.json`); no desktop instance was launched by this peer.
 
 ## Work-item links and sidebar badge (1685-4b12) — Rust restart required
 
