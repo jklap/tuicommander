@@ -5,8 +5,11 @@ import {describe, expect, it, vi} from 'vitest';
 function load() {
   const sendMessage = vi.fn(() => Promise.resolve());
   (globalThis as any).chrome = {runtime: {sendMessage}};
+  let handler: (event: unknown) => void = () => {};
+  vi.spyOn(window, 'addEventListener').mockImplementation(((_type: string, listener: (event: unknown) => void) => { handler = listener; }) as never);
   new Function(readFileSync('browser-extension/design-mode/errorsBridge.js', 'utf8'))();
-  const post = (record: object) => window.dispatchEvent(Object.assign(new MessageEvent('message', {data: {tuicDesignError: record}}), {source: window}));
+  vi.restoreAllMocks();
+  const post = (record: object) => handler({source: window, data: {tuicDesignError: record}});
   return {sendMessage, post};
 }
 
