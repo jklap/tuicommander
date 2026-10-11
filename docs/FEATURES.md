@@ -2830,7 +2830,7 @@ Automation agent surface (#1630-cbfa, #1621-5dce): MCP `automations` and
 previews, run history, summaries and Run Now runtime. Enabled-only updates and
 Once definitions work identically; MCP creation retains host-bound provenance.
 
-GitHub backend: paginated line review threads and replies, resolve/unresolve, and draft review submission pinned to the reviewed head are available through IPC and HTTP.
+GitHub backend: paginated line review threads and replies, resolve/unresolve, and draft review submission pinned to the reviewed head are available through IPC and HTTP. The PR Files tab draws them on the diff lines: outdated threads are listed above their file, pending comments are added from the line gutter, and Submit review is refused once the PR head moves.
 
 GitHub backend: failed-job reruns, auto-merge enable/disable, merge queue state/entry/removal and queue-aware merge are available over IPC and HTTP. Request changes requires review text.
 

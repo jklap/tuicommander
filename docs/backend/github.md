@@ -72,7 +72,7 @@ The active token source is tracked in `AppState.github_token_source` as a `Token
 | `update_pr_branch` | `(repo_path: String, pr_number: i64, expected_head_sha: String) -> ()` | Merge the base branch into the PR branch (REST `PUT /pulls/{n}/update-branch`, same operation as GraphQL `updatePullRequestBranch`), pinned to the head the UI showed; 422 head mismatch → `PR head changed` |
 | `close_pr` | `(repo_path: String, pr_number: i64) -> ()` | Close a PR without merging (REST `PATCH /pulls/{n}` `state=closed`) |
 | `get_all_pr_statuses` | `(paths: Vec<String>, include_merged: bool) -> HashMap<String, Vec<BranchPrStatus>>` | Batch PR status across many repos in one GraphQL call |
-| `get_pr_diff` | `(repo_path: String, pr_number: i64) -> String` | Get PR diff content; falls back to a local-clone `git diff` when GitHub rejects oversized diffs |
+| `get_pr_diff` | `(repo_path: String, pr_number: i64) -> PrDiff {diff, headSha}` | Get PR diff content and the head commit it was read at (head read before and after the diff; a push in between is an error); falls back to a local-clone `git diff` when GitHub rejects oversized diffs |
 | `merge_pr_via_github` | `(repo_path: String, pr_number: i64, merge_method: String, expected_head_sha: String) -> String` | Merge PR via GitHub API, pinned to the reviewed head (409 → `PR head changed`) |
 | `fetch_ci_failure_logs` | `(repo_path: String, branch: String, check_url?: String, head_sha?: String) -> String` | Fetch failure logs for the local branch head during auto-heal or for a selected check at the PR head SHA |
 | `create_issue_from_proposal` | `(repo_path: String, proposal: ImprovementProposal) -> CreatedIssue` | Explicit issue creation from a proposal; scan never creates issues automatically |

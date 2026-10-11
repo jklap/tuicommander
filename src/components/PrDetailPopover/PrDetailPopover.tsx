@@ -261,11 +261,11 @@ export const PrDetailPopover: Component<PrDetailPopoverProps> = (props) => {
 		if (!pr) return;
 		setDiffLoading(true);
 		try {
-			const diff = await invoke<string>("get_pr_diff", {
+			const { diff, headSha } = await invoke<{ diff: string; headSha: string }>("get_pr_diff", {
 				repoPath: props.repoPath,
 				prNumber: pr.number,
 			});
-			mdTabsStore.addPrDiff(props.repoPath, pr.number, pr.title, diff);
+			mdTabsStore.addPrDiff(props.repoPath, pr.number, pr.title, diff, headSha);
 			props.onClose();
 		} catch (e) {
 			const msg = String(e);
