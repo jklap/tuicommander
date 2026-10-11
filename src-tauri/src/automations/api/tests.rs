@@ -24,6 +24,56 @@ fn setup() -> (tempfile::TempDir, DefinitionStore, RunOwner) {
     (dir, definitions, owner)
 }
 
+// Catches: transport callers losing the opt-in on create/update, accepting a
+// non-boolean consent value, or changing the literal prompt during persistence.
+#[test]
+fn shared_api_persists_explicit_context_consent_and_rejects_invalid_flags() {
+    let (dir, definitions, owner) = setup();
+    let mut value = definition("context");
+    value["prompt"] = json!("  Literal {{files}}\né  \n");
+    value["precheck"] = json!({"command":"git status --short","timeout_secs":30});
+    let created = call(
+        &definitions,
+        owner.store(),
+        json!({"action":"create","definition":value}),
+    )
+    .unwrap();
+    assert_eq!(created["precheck"]["inject_output"], false);
+    for enabled in [true, false] {
+        value["precheck"]["inject_output"] = json!(enabled);
+        call(
+            &definitions,
+            owner.store(),
+            json!({"action":"update","definition":value}),
+        )
+        .unwrap();
+        let saved = call(
+            &definitions,
+            owner.store(),
+            json!({"action":"get","id":"context"}),
+        )
+        .unwrap();
+        assert_eq!(saved["precheck"]["inject_output"], enabled);
+        assert_eq!(saved["prompt"], "  Literal {{files}}\né  \n");
+    }
+    let before = std::fs::read(dir.path().join("automations.json")).unwrap();
+    for invalid in [json!("true"), json!(1), Value::Null] {
+        value["precheck"]["inject_output"] = invalid;
+        assert!(
+            call(
+                &definitions,
+                owner.store(),
+                json!({"action":"update","definition":value})
+            )
+            .is_err()
+        );
+    }
+    assert_eq!(
+        std::fs::read(dir.path().join("automations.json")).unwrap(),
+        before
+    );
+}
+
 // Catches: whole-array writes, stale pause overwrites, history deletion and mutable run snapshots.
 #[test]
 fn per_id_api_edits_preserve_other_definitions_and_deleted_history() {

@@ -13,3 +13,4 @@ pub mod redaction;
 pub mod text_rank;
 
 pub mod config_dir;
+pub mod voice_defaults;

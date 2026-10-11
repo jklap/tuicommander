@@ -4,8 +4,10 @@ import { dashboardRegistry } from "../../plugins/dashboardRegistry";
 import { filePreviewRegistry } from "../../plugins/filePreviewRegistry";
 import { markdownProviderRegistry } from "../../plugins/markdownProviderRegistry";
 import { pluginRegistry } from "../../plugins/pluginRegistry";
+import { createInMemoryWorkItemProvider } from "../../plugins/testing/inMemoryWorkItemProvider";
 import type { PluginHost, TuiPlugin } from "../../plugins/types";
 import { PluginCapabilityError } from "../../plugins/types";
+import { workItemProviderRegistry } from "../../plugins/workItemProviderRegistry";
 import { activityStore } from "../../stores/activityStore";
 import { contextMenuActionsStore } from "../../stores/contextMenuActionsStore";
 import { mdTabsStore } from "../../stores/mdTabs";
@@ -2254,4 +2256,16 @@ describe("PluginHost — getActiveRepoPath", () => {
 		repositoriesStore.setActive(null);
 		repositoriesStore.remove("/my/repo");
 	});
+});
+
+// Catches: plugin unload leaks Tasks providers after their owning plugin is removed.
+it("unregisters work-item providers when their plugin unloads", async () => {
+	await pluginRegistry.register(
+		makePlugin("tasks-provider", (host) => {
+			host.registerWorkItemProvider(createInMemoryWorkItemProvider());
+		}),
+	);
+	expect(workItemProviderRegistry.get("demo", "local")).toBeDefined();
+	pluginRegistry.unregister("tasks-provider");
+	expect(workItemProviderRegistry.get("demo", "local")).toBeUndefined();
 });

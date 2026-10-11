@@ -676,10 +676,11 @@ mod tests {
     // session token, into the message the UI shows.
     #[tokio::test]
     async fn upload_connect_failure_never_reports_the_session_token() {
-        let port = {
-            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-            listener.local_addr().unwrap().port()
-        };
+        // Reserve the port without listening, so connect fails and no parallel
+        // server can claim the address before the upload attempts it.
+        let socket = tokio::net::TcpSocket::new_v4().unwrap();
+        socket.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let address = socket.local_addr().unwrap();
         let build = BuildIdentity {
             version: "1.7.7".to_string(),
             target: "t".to_string(),
@@ -692,7 +693,7 @@ mod tests {
             .unwrap();
         let error = send_binary_upload(
             &client,
-            &format!("http://127.0.0.1:{port}"),
+            &format!("http://{address}"),
             "super-secret-token",
             &build,
             0,

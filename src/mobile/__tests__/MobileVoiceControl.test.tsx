@@ -131,3 +131,170 @@ it("keeps Spoken replies out of the session screen when voice is available", asy
 	expect(screen.queryByRole("checkbox", { name: "Spoken replies" })).toBeNull();
 	expect(screen.queryByText("Spoken replies")).toBeNull();
 });
+
+class FakeRecognition {
+	static latest: FakeRecognition;
+	lang = "";
+	continuous = false;
+	interimResults = false;
+	onresult: ((event: { results: ArrayLike<{ isFinal: boolean; 0: { transcript: string } }> }) => void) | null = null;
+	onerror: ((event: { error: string }) => void) | null = null;
+	onend: (() => void) | null = null;
+	start = vi.fn();
+	stop = vi.fn(() => this.onend?.());
+	abort = vi.fn();
+	constructor() {
+		FakeRecognition.latest = this;
+	}
+	result(text: string, isFinal = false) {
+		this.onresult?.({ results: [{ isFinal, 0: { transcript: text } }] });
+	}
+}
+
+function browserSpeech() {
+	vi.stubGlobal("webkitSpeechRecognition", FakeRecognition);
+}
+
+afterEach(() => vi.unstubAllGlobals());
+
+it("hides browser dictation when neither recognition constructor exists", async () => {
+	// Catches: shipping an unusable browser mic on unsupported devices.
+	vi.stubGlobal("SpeechRecognition", undefined);
+	vi.stubGlobal("webkitSpeechRecognition", undefined);
+	mount();
+	await screen.findByRole("button", { name: "Start voice conversation" });
+	expect(screen.queryByRole("button", { name: "Dictate into draft" })).toBeNull();
+});
+
+it("appends interim and final speech without focusing, duplicating hypotheses or auto-submitting", async () => {
+	// Catches: opening the phone keyboard, replacing typed text, or sending on result.
+	browserSpeech();
+	const { container } = mount();
+	await screen.findByRole("button", { name: "Start voice conversation" });
+	const input = container.querySelector("textarea")!;
+	const focus = vi.spyOn(input, "focus");
+	fireEvent.input(input, { target: { value: "Review" } });
+	rpc.mockClear();
+	const mic = screen.getByRole("button", { name: "Dictate into draft" });
+	expect(mic.nextElementSibling).toBe(screen.getByRole("button", { name: "Send" }));
+	fireEvent.click(mic);
+	FakeRecognition.latest.result("the diff");
+	expect(input.value).toBe("Review the diff");
+	FakeRecognition.latest.result("the changes", true);
+	expect(input.value).toBe("Review the changes");
+	expect(focus).not.toHaveBeenCalled();
+	expect(document.activeElement).not.toBe(input);
+	expect(rpc.mock.calls.some(([name, args]) => name === "submit_agent_reply" || args?.data?.includes("\r"))).toBe(
+		false,
+	);
+	fireEvent.click(screen.getByRole("button", { name: "Stop dictation" }));
+	expect(FakeRecognition.latest.stop).toHaveBeenCalledTimes(1);
+});
+
+it.each(["not-allowed", "network", "no-speech"])(
+	"keeps the draft and toasts the %s recognition error",
+	async (error) => {
+		// Catches: silently discarding the draft on browser/service permission failures.
+		browserSpeech();
+		const { container } = mount();
+		await screen.findByRole("button", { name: "Start voice conversation" });
+		const input = container.querySelector("textarea")!;
+		fireEvent.input(input, { target: { value: "Keep this" } });
+		fireEvent.click(screen.getByRole("button", { name: "Dictate into draft" }));
+		FakeRecognition.latest.onerror?.({ error });
+		expect(input.value).toBe("Keep this");
+		expect(toastAdd).toHaveBeenCalledWith("Dictation failed", error, "error", true);
+		expect(screen.getByRole("button", { name: "Dictate into draft" }).getAttribute("aria-pressed")).toBe("false");
+	},
+);
+
+it.each(["it", "auto"])("uses configured language %s or the navigator fallback", async (language) => {
+	// Catches: ignoring the shared dictation language or passing Whisper's auto token to Web Speech.
+	browserSpeech();
+	rpc.mockImplementation(async (command) => (command === "get_dictation_config" ? { language } : { armed: false }));
+	mount();
+	await screen.findByRole("button", { name: "Start voice conversation" });
+	await waitFor(() => expect(rpc).toHaveBeenCalledWith("get_dictation_config"));
+	await Promise.resolve();
+	fireEvent.click(screen.getByRole("button", { name: "Dictate into draft" }));
+	expect(FakeRecognition.latest.lang).toBe(language === "auto" ? navigator.language : language);
+});
+
+it("excludes server voice while browser recognition starts and releases it on end", async () => {
+	// Catches: two mic consumers during the browser permission prompt.
+	browserSpeech();
+	mount();
+	const server = await screen.findByRole("button", { name: "Start voice conversation" });
+	fireEvent.click(screen.getByRole("button", { name: "Dictate into draft" }));
+	expect(server.hasAttribute("disabled")).toBe(true);
+	fireEvent.click(server);
+	expect(voice.armHandsFree).not.toHaveBeenCalled();
+	FakeRecognition.latest.onend?.();
+	expect(server.hasAttribute("disabled")).toBe(false);
+	fireEvent.click(server);
+	await screen.findByRole("button", { name: "Stop voice conversation" });
+	expect(screen.getByRole("button", { name: "Dictate into draft" }).hasAttribute("disabled")).toBe(true);
+});
+
+it("excludes browser speech during a pending server permission prompt", async () => {
+	// Catches: a race before the server has published its armed status.
+	browserSpeech();
+	let finish!: (ok: boolean) => void;
+	voice.armHandsFree.mockImplementation(
+		() =>
+			new Promise<boolean>((resolve) => {
+				finish = resolve;
+			}),
+	);
+	mount();
+	fireEvent.click(await screen.findByRole("button", { name: "Start voice conversation" }));
+	expect(screen.getByRole("button", { name: "Dictate into draft" }).hasAttribute("disabled")).toBe(true);
+	finish(false);
+	await waitFor(() =>
+		expect(screen.getByRole("button", { name: "Dictate into draft" }).hasAttribute("disabled")).toBe(false),
+	);
+});
+
+it.each(["run tests in package", "replace everything", ""])(
+	"returns the mic to idle and keeps the edited draft %j after queued speech",
+	async (edited) => {
+		// Catches: editing leaves recording active or a queued result overwrites the manual draft.
+		browserSpeech();
+		mount();
+		const server = await screen.findByRole("button", { name: "Start voice conversation" });
+		const input = screen.getByRole("textbox") as HTMLTextAreaElement;
+		fireEvent.click(screen.getByRole("button", { name: "Dictate into draft" }));
+		const recognition = FakeRecognition.latest;
+		recognition.result("run tests", true);
+		const lateResult = recognition.onresult!;
+		fireEvent.input(input, { target: { value: edited } });
+		expect(recognition.abort).toHaveBeenCalledTimes(1);
+		expect(screen.getByRole("button", { name: "Dictate into draft" }).getAttribute("aria-pressed")).toBe("false");
+		expect(server.hasAttribute("disabled")).toBe(false);
+		rpc.mockClear();
+		lateResult({ results: [{ isFinal: true, 0: { transcript: "run tests now" } }] });
+		expect(input.value).toBe(edited);
+		expect(rpc).not.toHaveBeenCalled();
+		fireEvent.click(screen.getByRole("button", { name: "Dictate into draft" }));
+		FakeRecognition.latest.result("continue");
+		expect(input.value).toBe(edited ? `${edited} continue` : "continue");
+	},
+);
+
+it("aborts recognition and ignores late results when the screen is left", async () => {
+	// Catches: background recording or modifying an abandoned composer.
+	browserSpeech();
+	const { unmount } = mount();
+	await screen.findByRole("button", { name: "Start voice conversation" });
+	const input = screen.getByRole("textbox") as HTMLTextAreaElement;
+	fireEvent.click(screen.getByRole("button", { name: "Dictate into draft" }));
+	const recognition = FakeRecognition.latest;
+	recognition.result("keep draft");
+	const lateResult = recognition.onresult!;
+	unmount();
+	expect(recognition.abort).toHaveBeenCalledTimes(1);
+	rpc.mockClear();
+	lateResult({ results: [{ isFinal: true, 0: { transcript: "late speech" } }] });
+	expect(input.value).toBe("keep draft");
+	expect(rpc).not.toHaveBeenCalled();
+});

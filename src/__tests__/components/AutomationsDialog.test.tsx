@@ -4,6 +4,44 @@ import { AutomationsDialog } from "../../components/AutomationsDialog/Automation
 import { definition, fakeAdapter } from "../automationsFixtures";
 
 describe("AutomationsDialog", () => {
+	// Catches: context enabled without consent, the opt-in lost on save, or prompt whitespace/template text altered.
+	it("saves explicit precheck context consent while preserving the exact original prompt", async () => {
+		const original = "  Literal {{files}}\nKeep é and trailing spaces.  \n";
+		const saves: unknown[] = [];
+		render(() => (
+			<AutomationsDialog
+				adapter={fakeAdapter({
+					list: async () => [{ definition: { ...definition, prompt: original }, next_run_ms: null, last_status: null }],
+					save: async (value) => {
+						saves.push(structuredClone(value));
+						return value;
+					},
+				})}
+				onClose={() => {}}
+			/>
+		));
+		fireEvent.click(await screen.findByRole("button", { name: /Sentry/ }));
+		fireEvent.click(screen.getByLabelText("Run a shell precheck before scheduled runs"));
+		const consent = screen.getByLabelText("Include precheck stdout in the agent prompt");
+		expect(consent).not.toBeChecked();
+		fireEvent.input(screen.getByLabelText("Precheck command"), { target: { value: "git status --short" } });
+		fireEvent.click(screen.getByRole("button", { name: "Save" }));
+		await waitFor(() => expect(saves).toHaveLength(1));
+		await waitFor(() => expect(screen.getByRole("button", { name: "Save" })).not.toBeDisabled());
+		expect(saves[0]).toMatchObject({ prompt: original, precheck: { inject_output: false } });
+		fireEvent.click(screen.getByLabelText("Include precheck stdout in the agent prompt"));
+		fireEvent.click(screen.getByRole("button", { name: "Save" }));
+		await waitFor(() => expect(saves).toHaveLength(2));
+		await waitFor(() => expect(screen.getByRole("button", { name: "Save" })).not.toBeDisabled());
+		expect(saves[1]).toMatchObject({
+			prompt: original,
+			precheck: { command: "git status --short", timeout_secs: 30, inject_output: true },
+		});
+		expect(screen.getByLabelText("Include precheck stdout in the agent prompt")).toBeChecked();
+		fireEvent.click(screen.getByLabelText("Run a shell precheck before scheduled runs"));
+		fireEvent.click(screen.getByLabelText("Run a shell precheck before scheduled runs"));
+		expect(screen.getByLabelText("Include precheck stdout in the agent prompt")).not.toBeChecked();
+	});
 	it("previews and saves Once as a local wall time without converting through the browser zone", async () => {
 		let previewed: unknown, saved: unknown;
 		render(() => (

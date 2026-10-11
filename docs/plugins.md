@@ -1459,6 +1459,22 @@ The Browse row shows registry name, version, description, author, tags and minim
 
 ### Settings schema and Tasks views
 
+#### Tasks list
+
+Core `TasksList` consumes the async `WorkItemProvider` port. Providers supply
+account and provider IDs, a display name, field descriptors, saved filters and
+`list(query, signal)`. Core renders Solid controls and virtual rows; providers
+return data only. Source selection partitions cached pages by provider and
+account. Queries include filters, saved-filter ID, search, sort and cursor.
+Search waits 250 ms after input; sorting and filters run in the provider.
+Grouping calls `grouped(query, signal)` with `groupBy`; core renders the returned
+group names and members without inferring membership.
+`nextCursor` enables Load more; repeated cursors stop pagination, and repeated
+item references update the existing row. The cache holds at most 32 pages.
+An obsolete request cannot replace current rows. A failed refresh retains
+available rows and marks them stale. Detail data is requested by the detail
+view after the host receives `onOpen(reference)`. Shell mounting is separate.
+
 The current PluginManifest has no settings schema, field-kind union or generic Tasks-view declaration. Core does not render schema-driven plugin settings or generic plugin Tasks views. Do not invent manifest fields or import core Settings components. Plugins can open their own UI with `host.openPanel` or `host.openMarkdownPanel`. When a settings schema or Tasks-view API is added, document its fields, kinds and core-rendered controls here and extend the source-derived UX drift check to its real schema/renderer. The manifest field and host method inventories fail on new API entries until the guide is updated.
 
 ## Plugin Management (Settings > Plugins)
@@ -1763,3 +1779,55 @@ Available from the [plugin registry](https://github.com/sstraus/tuicommander-plu
 | Module not found | `main` field doesn't match filename | Ensure `"main": "main.js"` matches your actual file |
 | Changes not reflecting | Hot reload cache | Save the file again, or restart the app |
 | `default export` error | Module doesn't `export default { ... }` | Ensure your module has a default export with `id`, `onload`, `onunload` |
+
+## Tasks data contract (Phase A4)
+
+Register via `host.registerWorkItemProvider(provider)`, returning an auto-cleaned
+Disposable. Provider/account pairs must be unique; core consumers use
+`workItemProviderRegistry.get(providerId, accountId)` or `.list(providerId?)`.
+The async `WorkItemProvider` port includes list/detail/comments/act, dynamic
+createFields(itemType?), grouped(query) and board(id, query). Grouping uses query.groupBy;
+board lanes include per-card moves (columnId and action) so UI never guesses legal moves.
+The test/development fake is `createInMemoryWorkItemProvider()` in
+`src/plugins/testing/inMemoryWorkItemProvider.ts`, seeded from the same synthetic
+JSON as the Rust fake. No fake routes or IPC commands are installed.
+
+
+Core owns the Solid Tasks views; provider plugins supply data, schemas and actions,
+never view HTML. A4 defines DTOs only: registration, transport and visible views
+are delivered by the following integration steps.
+
+### Work-item field kind inventory
+`text`, `markdown`, `enum`, `user`, `labels`, `date`, `number`, `link`
+
+- `text`: a plain text input; `markdown`: the shared markdown renderer/editor.
+- `enum`: a select using provider option IDs; `user`: a user picker, multiple users.
+- `labels`: multiple labels with stable IDs; `date`: ISO-8601 date input.
+- `number`: finite numeric input; `link`: URL/link control.
+
+The canonical DTOs are `work_items::model` and `work_items::protocol` in Rust.
+Generate their TypeScript declarations with
+`python3 scripts/generate-work-item-types.py`; import from
+`src/types/work-items.gen.ts`. Fields use camelCase; discriminated unions use
+`{kind, value}` with snake_case kinds. `WorkItemRef` scopes opaque item IDs by
+`providerId` and `accountId`. Missing field keys mean not loaded; null means unset.
+
+`WorkItemQuery` carries ANDed filters (values are ORed), saved filter ID, native
+search, sort, bounded page size and opaque cursor. Providers must bind cursors to
+the account/query; selecting a preset starts with no cursor. `WorkItemPage`
+contains items and `nextCursor`. Details load body, field schemas, allowed action
+descriptors and a separately paginated comment page on open. Comment entries are
+`normal`, `review_thread` (resolved, path, line and reviewed commitId), or
+`review_summary` (state and reviewed commitId). Bodies are markdown, not trusted HTML.
+
+Actions are `create`, `edit_field`, `transition`, `comment`, and `start_work`.
+Transitions use provider action IDs, not state display names. Board columns may carry a default edit/transition action or null; per-card moves
+carry the actual legal action to dispatch on drop (workflow IDs can vary by item). Start-work carries repoPath,
+branch, optional baseRef, prompt, agentType and explicit draft/submit delivery;
+core executes the existing worktree/agent workflow and owns errors/rollback.
+
+`work_items::demo::demo_provider()` supplies deterministic local-only data with
+list, detail, comments, schemas, saved filters, board columns and mutations.
+It touches no network, credentials, filesystem or subprocesses. It is a development
+provider, not a fixture proving GitHub/Jira/GitLab API compatibility. Its search is
+literal text; sort supports key/title/updatedAt. Its cursor expires on mutation.
