@@ -819,7 +819,6 @@ async fn inject_localhost_connect_info(
 /// Kept honest by `api_prefixes_cover_every_registered_route`, which reads the
 /// route literals out of this file — a new family added here without a matching
 /// entry fails that test instead of quietly serving HTML again.
-#[cfg(any(feature = "desktop", test))]
 const API_PREFIXES: &[&str] = &[
     "accounts",
     "acp",
@@ -881,7 +880,6 @@ const API_PREFIXES: &[&str] = &[
 /// PATCH probe read that 405 as "route present". A fallback fires only when no
 /// route matched the path; a real route with the wrong method still returns its
 /// own 405, which is precisely the distinction the probe needs.
-#[cfg(feature = "desktop")]
 async fn spa_or_api_404(uri: axum::http::Uri) -> Response {
     // Compare against the path without its leading slash, as `{*path}` did.
     let path = AxumPath(uri.path().trim_start_matches('/').to_string());
@@ -895,7 +893,11 @@ async fn spa_or_api_404(uri: axum::http::Uri) -> Response {
         )
             .into_response();
     }
-    static_files::serve_static(path).await
+    #[cfg(feature = "desktop")]
+    return static_files::serve_static(path).await;
+    // The headless binary embeds no frontend: a non-API path is a plain 404.
+    #[cfg(not(feature = "desktop"))]
+    StatusCode::NOT_FOUND.into_response()
 }
 
 /// Build the router (exposed for testing).
@@ -2240,11 +2242,10 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
 
     // Static files — SPA frontend (desktop only; not embedded in the remote binary)
     #[cfg(feature = "desktop")]
-    let routes = routes
-        .route("/", get(static_files::serve_index))
-        .fallback(spa_or_api_404);
+    let routes = routes.route("/", get(static_files::serve_index));
 
     let routes = routes
+        .fallback(spa_or_api_404)
         .with_state(state.clone())
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
@@ -2315,6 +2316,7 @@ pub fn build_remote_router(state: Arc<AppState>) -> Router {
         )
         // SSH tunnel management
         .nest("/tunnels", tunnel_routes())
+        .fallback(spa_or_api_404)
         .with_state(state.clone())
         .layer(cors)
         .layer(
