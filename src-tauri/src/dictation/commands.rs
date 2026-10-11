@@ -3627,6 +3627,54 @@ mod tests {
         drop(link);
     }
 
+    /// Bug caught: a replies-only conversation hears no audio by design, so the
+    /// runtime's starvation rule disarms it five seconds after arming with
+    /// "The capture device delivered no audio" — the mode never lasts.
+    #[test]
+    fn a_replies_only_conversation_outlives_the_capture_starvation_timeout() {
+        struct AcceptingTarget;
+        impl continuous::TargetProbe for AcceptingTarget {
+            fn accepts(&self, _session_id: &str) -> bool {
+                true
+            }
+        }
+        struct UnusedSink;
+        impl continuous::VoiceSink for UnusedSink {
+            fn write(&self, _: &str, _: &str) -> Result<continuous::VoiceWrite, String> {
+                panic!("a replies-only conversation delivers no transcript")
+            }
+        }
+        let dictation = DictationState::new();
+        let mut endpoint = open_muted_endpoint(&dictation, DESKTOP_OWNER).expect("endpoint");
+        let mut hands_free = continuous::HandsFree::new(1_000);
+        hands_free.arm("target", DESKTOP_OWNER, true).expect("arm");
+        hands_free.set_listening(false);
+        let mode = parking_lot::Mutex::new(hands_free);
+        let echo = Arc::new(parking_lot::Mutex::new(echo::EchoGuard::new(Box::new(
+            echo::PassThrough,
+        ))));
+        let mut capture = continuous::Capture::new(
+            continuous::SegmenterConfig::default(),
+            continuous::DEVICE_SILENCE_TIMEOUT_MS,
+            0,
+            echo,
+            None,
+        );
+        let late = continuous::DEVICE_SILENCE_TIMEOUT_MS + 1_000;
+        let outcome = continuous::tick(
+            &mut capture,
+            &mode,
+            endpoint.as_mut(),
+            &AcceptingTarget,
+            &UnusedSink,
+            late,
+        );
+        assert!(
+            matches!(outcome, continuous::Tick::Running { .. }),
+            "replies-only conversation was disarmed after {late} ms without audio: {outcome:?}"
+        );
+    }
+
     /// Bug caught: the status of a non-owner reports a plain "ready", so the UI
     /// never says another instance owns dictation.
     #[test]
