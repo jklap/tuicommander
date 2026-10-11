@@ -5070,3 +5070,7 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
   Covered by tests: rpc test for a `text/html` 200 answer to `get_home_directory`; transport and picker tests (321), full run 8581. Not verified: the root cause on the real server (version, base URL, route) and the home-directory listing; both need the real Verification server URL and an authenticated path.
 
 - [ ] After Boss restarts the Rust backend: verify Enterprise account creation through the core account manager and native secret form, and that existing accounts still list and resolve repo bindings. The legacy PAT add IPC command and POST /github/accounts route are removed.
+
+## GitHub HTTP writes (1710-124a) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, create a PR, create an issue, and submit a review with inline comments on a throwaway repository bound to the intended GitHub/GHE account. Confirm the bound identity is used without a `gh` executable and validation errors retain HTTP status/body. Targeted tests cover request coordinates, fields, review validation, and error propagation; no desktop instance was launched or restarted.
