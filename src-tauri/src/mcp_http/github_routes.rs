@@ -192,10 +192,7 @@ pub(super) async fn repo_pr_diff(
     }
     let path = q.path;
     let pr = q.pr;
-    match crate::github::get_pr_diff_impl(&path, pr, &state).await {
-        Ok(diff) => diff.into_response(),
-        Err(e) => (axum::http::StatusCode::BAD_GATEWAY, e).into_response(),
-    }
+    upstream_json_result(crate::github::get_pr_diff_pinned_impl(&path, pr, &state).await)
 }
 
 pub(super) async fn repo_merged_prs(

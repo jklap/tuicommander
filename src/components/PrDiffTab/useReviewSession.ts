@@ -22,6 +22,8 @@ export interface ReviewSession {
 	busyThread: Accessor<string | null>;
 	submitting: Accessor<boolean>;
 	refresh(): Promise<void>;
+	/** The diff was reopened at another head: drop threads, drafts and the move flag, then re-read. */
+	reset(pin?: string): Promise<void>;
 	reply(threadId: string, body: string): Promise<boolean>;
 	setResolved(threadId: string, resolved: boolean): Promise<void>;
 	loadMoreComments(threadId: string): Promise<void>;
@@ -32,22 +34,32 @@ export interface ReviewSession {
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
-/** Thread, reply, resolve and draft-review state for one PR. Mutations change the UI only after the backend confirms. */
-export function createReviewSession(repoPath: string, prNumber: number): ReviewSession {
+/**
+ * Thread, reply, resolve and draft-review state for one PR. Mutations change the UI only after the backend confirms.
+ * `pin` is the head the diff was fetched at. Without it the first thread read pins the head and reports it to `onPin`.
+ */
+export function createReviewSession(
+	repoPath: string,
+	prNumber: number,
+	pin?: string,
+	onPin?: (headSha: string) => void,
+): ReviewSession {
 	const [threads, setThreads] = createSignal<ReviewThread[]>([]);
 	const [drafts, setDrafts] = createSignal<DraftComment[]>([]);
-	const [headSha, setHeadSha] = createSignal<string | null>(null);
+	const [headSha, setHeadSha] = createSignal<string | null>(pin ?? null);
 	const [headMoved, setHeadMoved] = createSignal(false);
 	const [loading, setLoading] = createSignal(false);
 	const [error, setError] = createSignal<string | null>(null);
 	const [busyThread, setBusyThread] = createSignal<string | null>(null);
 	const [submitting, setSubmitting] = createSignal(false);
 	let nextDraft = 0;
+	let generation = 0;
 
 	const replaceThread = (id: string, update: (t: ReviewThread) => ReviewThread) =>
 		setThreads((all) => all.map((t) => (t.id === id ? update(t) : t)));
 
 	async function refresh() {
+		const started = generation;
 		setLoading(true);
 		setError(null);
 		try {
@@ -64,16 +76,29 @@ export function createReviewSession(repoPath: string, prNumber: number): ReviewS
 				all.push(...page.threads);
 				after = page.hasNextPage ? page.endCursor : null;
 			} while (after);
+			if (started !== generation) return; // reset() superseded this read
 			setThreads(all);
-			// The first read pins the head the diff belongs to.
-			if (headSha() === null) setHeadSha(head);
-			else if (headSha() !== head) setHeadMoved(true);
+			if (headSha() === null) {
+				setHeadSha(head);
+				onPin?.(head);
+			} else if (headSha() !== head) setHeadMoved(true);
 		} catch (e) {
+			if (started !== generation) return;
 			appLogger.warn("github", "Failed to load review threads", { error: message(e) });
 			setError(message(e));
 		} finally {
-			setLoading(false);
+			if (started === generation) setLoading(false);
 		}
+	}
+
+	async function reset(next?: string) {
+		generation++;
+		setThreads([]);
+		setDrafts([]);
+		setHeadSha(next ?? null);
+		setHeadMoved(false);
+		setError(null);
+		await refresh();
 	}
 
 	/** Run a thread mutation; `busyThread` and `error` describe the outcome. */
@@ -100,6 +125,7 @@ export function createReviewSession(repoPath: string, prNumber: number): ReviewS
 		busyThread,
 		submitting,
 		refresh,
+		reset,
 		async reply(threadId, body) {
 			const comment = await mutate(threadId, () =>
 				invoke<ReviewComment>("reply_pr_thread", { repoPath, threadId, body }),

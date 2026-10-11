@@ -2,7 +2,11 @@
 import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
 import { createRequire } from "node:module";
-const require = createRequire(process.env.PW_ROOT ?? "/home/rb/Gits/.tmp/pw/");
+if (!process.env.PW_ROOT) {
+	console.error("PW_ROOT is required: the directory whose node_modules holds playwright-core.");
+	process.exit(1);
+}
+const require = createRequire(process.env.PW_ROOT);
 const { chromium, webkit, devices } = require("playwright-core");
 const url = `http://127.0.0.1:${process.env.PW_PORT ?? 4180}/src/components/PrDiffTab/__tests__/preview.html`;
 // The gutter button shows on row hover and listens for mousedown.

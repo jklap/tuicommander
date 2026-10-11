@@ -1,5 +1,5 @@
 import { SplitSide } from "@git-diff-view/solid";
-import { type Component, createMemo, createSignal, For, Index, onMount, Show } from "solid-js";
+import { type Component, createEffect, createMemo, createSignal, For, Index, on, onMount, Show } from "solid-js";
 import { t } from "../../i18n";
 import { invoke } from "../../invoke";
 import { type DiffViewMode, uiStore } from "../../stores/ui";
@@ -18,6 +18,10 @@ export interface PrDiffTabProps {
 	prNumber: number;
 	prTitle: string;
 	diff: string;
+	/** Head the diff was fetched at; drafts are pinned to it. Changes when the diff is reopened. */
+	headSha?: string;
+	/** Reports a head pinned by the first thread read when `headSha` was not supplied. */
+	onPin?: (headSha: string) => void;
 	/** Local checkout, used to read `.gitattributes` for `linguist-generated` patterns. */
 	repoPath?: string;
 }
@@ -39,8 +43,20 @@ export const PrDiffTab: Component<PrDiffTabProps> = (props) => {
 	const collapsedCount = createMemo(() => files().filter(collapsedByDefault).length);
 
 	// Line threads and the draft review need the checkout path to resolve the GitHub account.
-	const session = props.repoPath ? createReviewSession(props.repoPath, props.prNumber) : undefined;
+	const session = props.repoPath
+		? createReviewSession(props.repoPath, props.prNumber, props.headSha, (sha) => props.onPin?.(sha))
+		: undefined;
 	onMount(() => void session?.refresh());
+	// Reopening the diff swaps its head on the live tab; the session must follow it.
+	createEffect(
+		on(
+			() => props.headSha,
+			(head) => {
+				if (session && head !== session.headSha()) void session.reset(head);
+			},
+			{ defer: true },
+		),
+	);
 	const byFile = createMemo(() => groupByFile(session?.threads() ?? [], session?.drafts() ?? []));
 
 	const renderLine: NonNullable<DiffViewerProps["renderExtendLine"]> = ({ data }) => {
