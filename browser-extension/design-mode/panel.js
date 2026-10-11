@@ -1,5 +1,6 @@
 const $ = (id) => document.getElementById(id);
 let current;
+const cards = new Map();
 const status = (text, error = false) => { $('status').textContent = text; $('status').dataset.error = String(error); };
 async function call(message) {
   const response = await chrome.runtime.sendMessage(message);
@@ -32,13 +33,15 @@ function render(draft) {
   if (!selection && draft.agents?.length) { const option=node('option','Choose another agent'); option.value=''; $('agent').prepend(option); }
   $('agent').value=selection;
   $('send').disabled = !selection || !draft.picks.some((pick)=>pick.comment.trim());
-  const focused = document.activeElement;
-  // A comment save updates state without stealing the user's focus/caret.
-  if (focused instanceof HTMLTextAreaElement && focused.closest('#cards')) return;
-  $('cards').replaceChildren();
-  if (!draft.picks.length) $('cards').append(node('p','Pick an element on your page, then add a comment.','muted'));
+  // Cards are keyed by pick id and never rebuilt or moved, so a comment being typed keeps its focus/caret
+  // while later picks are appended. Picks only append or disappear, so the order is preserved.
+  const ids = new Set(draft.picks.map((pick) => pick.id));
+  for (const [id, card] of cards) if (!ids.has(id)) { card.remove(); cards.delete(id); }
+  $('empty').hidden = draft.picks.length > 0;
   for (const pick of draft.picks) {
+    if (cards.has(pick.id)) continue;
     const card = node('article',undefined,'card');
+    cards.set(pick.id, card);
     card.append(node('h2',`${pick.raw.tagName} · ${(pick.raw.textContent ?? '').slice(0,80)}`),node('code',pick.raw.selector));
     if (pick.image) { const image=node('img'); image.src=pick.image; image.alt='Selected element'; card.append(image); }
     if (pick.captureError) card.append(node('p',pick.captureError,'muted'));
