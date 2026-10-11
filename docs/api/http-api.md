@@ -1986,7 +1986,7 @@ the matching `dictation::commands` Tauri command resolves to — a bare string f
 `src/stores/dictation.ts` reads both transports with the same code. Before the app
 handle is up, every state-touching route answers `503`.
 
-The dictation config field hands_free_spoken_replies (default true) is shared
+The dictation config field hands_free_listening (default true) selects hands-free capture versus a replies-only conversation, and hands_free_spoken_replies (default true) is shared
 by IPC and HTTP. Off cancels speech and refuses new replies without disarming
 capture. Speech status reports available=false and unavailableReason. The
 MCP voice tool includes these fields on refused speak requests. Edge HTTP
@@ -2159,7 +2159,7 @@ queue, so there is nothing to cancel and nothing typed can be taken back.
 Both bodies are the structs `dictation::commands` serializes, camelCase on the
 wire and identical on both transports:
 
-- `HandsFreeStatus { armed, phase, sessionId, owner, generation, pendingText, holdBackMs, error, deliveredTurns, droppedTurns }`
+- `HandsFreeStatus { armed, listening, phase, sessionId, owner, generation, pendingText, holdBackMs, error, deliveredTurns, droppedTurns }`
 - `HandsFreeDisarmed { wasArmed, generation, discardedPending, discardedCapture, status }`
 
 `pendingText` is the turn waiting out its hold-back, or held by a permission

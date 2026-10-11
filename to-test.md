@@ -1,3 +1,7 @@
+## Hands-free listening / spoken replies split (1729-f7f1) — Rust restart required
+
+- [ ] After Boss restarts `make dev`: (1) Settings → Voice, turn Hands-free listening off, Spoken replies on, Start conversation on a Claude terminal: no microphone indicator, the agent is told it may speak, push-to-talk dictation works, and the agent's `voice speak` is heard (with Dictation language Auto, after the first push-to-talk take). (2) Listening on, replies off: speech is captured and the agent answers in text. (3) Both off: Start conversation is refused with a clear message. (4) While recording, click the speaker button in the toast: it flips Settings → Spoken replies, and turning it off while a reply plays stops it. (5) Browser/phone tab: replies-only asks for no microphone permission. Layout of the toast button still needs Boss's eye in Design Mode. Vitest and Rust targeted tests cover the logic; real audio is unverified.
+
 ## Commit failing checks (1712-b11c) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, select a failing external check in a throwaway PR and confirm auto-heal uses its exact head and detail link. Confirm a successful rerun removes the stale failure. The lookup uses the bound repository account over GraphQL and does not depend on the first 100 open PRs. Recorded GitHub fixtures cover CheckRuns, external StatusContexts and pagination on rb; live account requests remain unverified. No desktop instance was started or restarted by this peer.

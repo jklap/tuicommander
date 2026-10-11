@@ -1969,6 +1969,7 @@ pub async fn stop_dictation_and_transcribe(app: AppHandle) -> Result<TranscribeR
     ) = prepare.unwrap(); // always Some — the None path returns Err above
 
     let app_clone = app.clone();
+    let hands_free = app.state::<DictationState>().hands_free.clone();
 
     // Run session join + whisper inference off the IPC thread
     let result = tokio::task::spawn_blocking(move || {
@@ -2042,6 +2043,11 @@ pub async fn stop_dictation_and_transcribe(app: AppHandle) -> Result<TranscribeR
             let lang_ref = lang_owned.as_deref();
             match transcribe_final_ptt_audio(transcriber.as_ref(), &all_audio, lang_ref, gates) {
                 Ok(result) if result.skip_reason.is_none() => {
+                    // A replies-only conversation hears no speech of its own, so
+                    // what the user dictates is what tells it the language.
+                    hands_free
+                        .lock()
+                        .note_push_to_talk_language(result.language.as_deref());
                     final_text = result.text;
                 }
                 Ok(result) => {
@@ -2203,6 +2209,10 @@ pub(crate) const MAX_BINDING_LEN: usize = 256;
 #[serde(rename_all = "camelCase")]
 pub struct HandsFreeStatus {
     pub armed: bool,
+    /// Speech is captured. False is a replies-only conversation: the binding
+    /// and the reply queue exist, the microphone is never opened, and input
+    /// stays push-to-talk.
+    pub listening: bool,
     /// See `continuous::Phase::as_wire`.
     pub phase: String,
     /// The bound delivery target. Unchanged by focus for as long as it is set.
@@ -2244,6 +2254,7 @@ pub(crate) fn hands_free_status(dictation: &DictationState) -> HandsFreeStatus {
     let mode = dictation.hands_free.lock();
     HandsFreeStatus {
         armed: mode.binding().is_some(),
+        listening: mode.listening(),
         phase: mode.phase().as_wire().to_string(),
         session_id: mode.binding().map(|binding| binding.session_id.clone()),
         owner: mode.binding().map(|binding| binding.owner.clone()),
@@ -2344,6 +2355,34 @@ pub(crate) fn transcribe_utterance(
     })
 }
 
+/// The endpoint of a replies-only conversation: it captures nothing and only
+/// reports whether its owner is still there, so the runtime keeps doing what
+/// it does for every conversation — closing it when the target session or the
+/// owner goes away, and writing the entry and exit hints.
+struct MutedVoiceEndpoint {
+    connected: Box<dyn Fn() -> bool + Send>,
+    /// Audio a browser client may still send is discarded rather than left to
+    /// pile up in the link.
+    discard: Option<Box<dyn Fn() + Send>>,
+}
+
+impl continuous::VoiceEndpoint for MutedVoiceEndpoint {
+    fn drain(&mut self) -> Result<Vec<f32>, String> {
+        if let Some(discard) = &self.discard {
+            discard();
+        }
+        Ok(Vec::new())
+    }
+
+    fn connected(&self) -> bool {
+        (self.connected)()
+    }
+
+    fn transcribe(&self, _audio: &[f32]) -> Result<continuous::Transcript, String> {
+        Ok(continuous::Transcript::default())
+    }
+}
+
 /// Open the capture endpoint the named owner is entitled to.
 ///
 /// The owner decides which device is opened, and there is deliberately no
@@ -2354,6 +2393,9 @@ fn open_endpoint(
     owner: &str,
 ) -> Result<Box<dyn continuous::VoiceEndpoint>, String> {
     let config = get_dictation_config();
+    if !config.hands_free_listening {
+        return open_muted_endpoint(dictation, owner);
+    }
     let language = (config.language != "auto").then(|| config.language.clone());
     let gates = config.gates();
     if owner != DESKTOP_OWNER {
@@ -2400,6 +2442,31 @@ fn open_endpoint(
         transcriber,
         language,
         gates,
+    }))
+}
+
+/// The replies-only endpoint. The model and the microphone are never touched,
+/// but a browser owner must still have its socket: that is where the replies go.
+fn open_muted_endpoint(
+    dictation: &DictationState,
+    owner: &str,
+) -> Result<Box<dyn continuous::VoiceEndpoint>, String> {
+    if owner != DESKTOP_OWNER {
+        let link = dictation
+            .browser_endpoints
+            .get(owner)
+            .ok_or_else(|| format!("No client is connected for audio owner '{owner}'"))?;
+        let alive = Arc::clone(&link);
+        return Ok(Box::new(MutedVoiceEndpoint {
+            connected: Box::new(move || alive.connected()),
+            discard: Some(Box::new(move || drop(link.drain_capture()))),
+        }));
+    }
+    let alive = dictation.hands_free_owner_alive.clone();
+    alive.store(true, Ordering::Release);
+    Ok(Box::new(MutedVoiceEndpoint {
+        connected: Box::new(move || alive.load(Ordering::Acquire)),
+        discard: None,
     }))
 }
 
@@ -2471,6 +2538,13 @@ pub(crate) fn arm_hands_free_with(
     dictation.ensure_owner()?;
     check_binding_field(session_id, "Session id")?;
     check_binding_field(owner, "Audio owner")?;
+    let settings = get_dictation_config();
+    if !settings.hands_free_listening && !settings.hands_free_spoken_replies {
+        return Err(
+            "Hands-free listening and spoken replies are both off; turn one on to start a conversation"
+                .to_string(),
+        );
+    }
     if !crate::pty::session_accepts_voice(state, session_id) {
         return Err("Session cannot accept hands-free input".to_string());
     }
@@ -2499,6 +2573,10 @@ pub(crate) fn arm_hands_free_with(
         release_desktop_endpoint(dictation);
         return Err(error);
     }
+    dictation
+        .hands_free
+        .lock()
+        .set_listening(settings.hands_free_listening);
 
     // Tell the model the conversation opened, if the user asked us to. Before
     // the runtime starts, so no spoken turn can go first: a model that reads
@@ -2515,8 +2593,9 @@ pub(crate) fn arm_hands_free_with(
         && let Some(Err(error)) = continuous::deliver_entry_hint(
             &mut dictation.hands_free.lock(),
             &super::adapters::PtyVoiceSink(state.as_ref()),
-            &continuous::entry_hint_for_replies(
+            &continuous::entry_hint_for(
                 &config.hands_free_start_notice,
+                settings.hands_free_listening,
                 config.hands_free_spoken_replies,
             ),
             Some(&config.language),
@@ -2748,6 +2827,12 @@ fn dictation_config_from_value(value: serde_json::Value) -> DictationConfig {
             &object,
             "hands_free_start_notice",
             defaults.hands_free_start_notice,
+            &mut recovered,
+        ),
+        hands_free_listening: recovered_field(
+            &object,
+            "hands_free_listening",
+            defaults.hands_free_listening,
             &mut recovered,
         ),
         hands_free_spoken_replies: recovered_field(
@@ -3478,6 +3563,68 @@ mod tests {
             crate::dictation::ownership::OWNED_ELSEWHERE
         );
         assert!(!opened.load(Ordering::SeqCst), "the microphone was opened");
+    }
+
+    /// Bug caught: with listening and spoken replies both off, arming still
+    /// opens the microphone for a conversation that can neither hear nor speak.
+    #[test]
+    fn arming_with_listening_and_replies_both_off_is_refused_before_any_endpoint_opens() {
+        let _config = config_of_this_test(DictationConfig {
+            hands_free_listening: false,
+            hands_free_spoken_replies: false,
+            ..Default::default()
+        });
+        let dictation = DictationState::new();
+        let opened = std::sync::atomic::AtomicBool::new(false);
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        crate::test_support::agent_session(&state, "voice-none", crate::pty::SHELL_BUSY);
+        let result = arm_hands_free_with(&state, &dictation, "voice-none", "desktop", &|_, _| {
+            opened.store(true, Ordering::SeqCst);
+            Err("endpoint opened".to_string())
+        });
+        assert!(result.unwrap_err().contains("both off"));
+        assert!(!opened.load(Ordering::SeqCst));
+        assert!(!hands_free_status(&dictation).armed);
+    }
+
+    /// Bug caught: a replies-only conversation is not a conversation — speech
+    /// is refused as "not armed", or the status still claims it listens.
+    #[cfg(unix)]
+    #[test]
+    fn a_replies_only_conversation_binds_the_session_without_listening() {
+        let _config = config_of_this_test(DictationConfig {
+            hands_free_listening: false,
+            hands_free_spoken_replies: true,
+            hands_free_notify_model: false,
+            ..Default::default()
+        });
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        crate::test_support::agent_session(&state, "voice-ro", crate::pty::SHELL_BUSY);
+        let _typed = crate::test_support::insert_recording_session(&state, "voice-ro");
+        let dictation = DictationState::new();
+        let status = arm_hands_free_with(&state, &dictation, "voice-ro", "desktop", &open_endpoint)
+            .expect("arm");
+        assert!(status.armed);
+        assert!(!status.listening, "replies-only must not report listening");
+        assert!(
+            dictation.hands_free_audio.lock().is_none(),
+            "no microphone is opened"
+        );
+        assert_eq!(bound_session(&dictation).as_deref(), Ok("voice-ro"));
+        assert!(disarm_hands_free(&state, &dictation).was_armed);
+    }
+
+    /// Bug caught: a replies-only browser conversation arms for a client with
+    /// no socket, so every reply fails later instead of arming being refused.
+    #[test]
+    fn a_muted_browser_endpoint_needs_its_socket_and_drops_stray_capture() {
+        let dictation = DictationState::new();
+        assert!(open_muted_endpoint(&dictation, "browser-9").is_err());
+        let link = dictation.browser_endpoints.connect("browser-9");
+        let mut endpoint = open_muted_endpoint(&dictation, "browser-9").expect("endpoint");
+        assert!(endpoint.connected());
+        assert!(endpoint.drain().unwrap().is_empty());
+        drop(link);
     }
 
     /// Bug caught: the status of a non-owner reports a plain "ready", so the UI
