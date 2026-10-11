@@ -49,6 +49,17 @@ IPC but not over HTTP.
 
 ## Audit (2026-08-18)
 
+### Application launchers (2026-10-11)
+
+`open_in_app`, `open_in_custom` and the macOS microphone settings opener use
+`tuic_core::child_reaping::spawn_reaped`. A named thread owns process creation
+and the subsequent OS wait. The caller receives the spawn result and returns
+while the application is still running; it does not wait for application exit.
+Creating the thread before the child prevents a thread creation failure from
+abandoning a child. Spawn errors reach the launcher caller, and wait errors are
+logged without command arguments. This lifecycle is shared by IPC and HTTP
+callers. It does not replace PTY child ownership or kill launched applications.
+
 ### Remote update (2026-09-26)
 
 `prepare_remote_update` and `update_and_restart_remote` are async commands.

@@ -110,9 +110,9 @@ pub(crate) fn open_in_app(
     line: Option<u32>,
     col: Option<u32>,
 ) -> Result<(), String> {
-    let mut cmd = build_open_in_app_command(&path, &app, line, col)?;
+    let cmd = build_open_in_app_command(&path, &app, line, col)?;
 
-    cmd.spawn()
+    tuic_core::child_reaping::spawn_reaped(cmd)
         .map_err(|e| format!("Failed to open in {app}: {e}"))?;
 
     Ok(())
@@ -416,9 +416,9 @@ pub(crate) fn open_in_custom(
     // Drop blank lines from the args editor (textarea is one-arg-per-line).
     let args: Vec<String> = args.into_iter().filter(|a| !a.trim().is_empty()).collect();
     let expanded = expand_placeholders(&args, &ctx);
-    Command::new(resolve_cli(&executable))
-        .args(&expanded)
-        .spawn()
+    let mut command = Command::new(resolve_cli(&executable));
+    command.args(&expanded);
+    tuic_core::child_reaping::spawn_reaped(command)
         .map_err(|e| format!("Failed to launch {executable}: {e}"))?;
     Ok(())
 }
