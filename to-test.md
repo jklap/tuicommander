@@ -1,3 +1,6 @@
+## Window resize background (1678-158c / GitHub #125) — Boss build required
+
+- [ ] After Boss runs `make build` (or manually restarts `make dev`), rapidly enlarge and shrink the main window on macOS. Repeat with Commander, VS Code Light, and a theme with different terminal/app backgrounds. Confirm exposed resize areas use the app background; switch themes and reopen secondary/panel windows. Also cold-start with a saved light theme. Rust does not hot-reload. Regression tests cover native window/webview color requests for all bundled themes and saved-theme resolution; actual native paint remains unverified. A headless Chrome startup-document screenshot attempt timed out after 50 seconds without an image. No TUIC instance was launched, restarted or killed by this peer.
 ## Automation precheck context editor (1624-c5f5)
 
 - [ ] In the Automations dialog, enable a precheck: stdout context starts off. Save with it on, reopen, and confirm it remains on without changing prompt whitespace. Turning the precheck off and back on resets consent. Uses the already-landed backend; this change adds no production Rust behavior and does not require a backend restart. _(Visual capture unavailable: two bundled headless Chrome attempts timed out without a screenshot.)_
