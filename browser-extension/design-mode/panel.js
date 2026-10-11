@@ -14,15 +14,16 @@ function render(draft) {
   current = draft;
   $('repo').textContent = draft.repoPath ?? 'Open Design Mode from TUICommander to select a repository.';
   $('connection').textContent = draft.connection;
-  $('servers').replaceChildren(node('h2','Dev servers'));
+  $('servers-title').textContent=`Dev servers (${draft.servers?.servers?.length ?? 0})`;
+  $('server-list').replaceChildren();
   for (const server of draft.servers?.servers ?? []) {
     const open=node('button',`${server.url} · ${server.source}${server.pid?' · pid '+server.pid:''}`);
-    open.onclick=()=>call({kind:'open_server',url:server.url}).catch((error)=>status(error.message,true));$('servers').append(open);
+    open.onclick=()=>call({kind:'open_server',url:server.url}).catch((error)=>status(error.message,true));$('server-list').append(open);
   }
-  if (draft.servers?.scanNotice) $('servers').append(node('p',draft.servers.scanNotice,'muted'));
-  if (!draft.servers?.servers?.length) $('servers').append(node('p','No running dev server found. Use the address bar or start your configured Run Script.','muted'));
-  const refreshServers=node('button','Refresh servers and agents');refreshServers.onclick=()=>call({kind:'refresh'}).then(render).catch((error)=>status(error.message,true));$('servers').append(refreshServers);
-  if(draft.servers?.canStart) {const start=node('button','Start dev server');start.onclick=()=>call({kind:'start_server'}).then(render).catch((error)=>status(error.message,true));$('servers').append(start);}
+  if (draft.servers?.scanNotice) $('server-list').append(node('p',draft.servers.scanNotice,'muted'));
+  if (!draft.servers?.servers?.length) $('server-list').append(node('p','No running dev server found. Use the address bar or start your configured Run Script.','muted'));
+  const refreshServers=node('button','Refresh servers and agents');refreshServers.onclick=()=>call({kind:'refresh'}).then(render).catch((error)=>status(error.message,true));$('server-list').append(refreshServers);
+  if(draft.servers?.canStart) {const start=node('button','Start dev server');start.onclick=()=>call({kind:'start_server'}).then(render).catch((error)=>status(error.message,true));$('server-list').append(start);}
   const selection = draft.selectedSessionId ?? '';
   if (draft.agentNotice) status(draft.agentNotice,true);
   $('agent').replaceChildren();
