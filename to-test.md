@@ -1,3 +1,7 @@
+## Design Mode dev servers (1723-4a21) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, reload the Design Mode extension and refresh servers. Confirm TUIC, non-HTML listeners and servers of other worktrees are absent, and only the bound session’s servers are listed. No desktop instance was started or restarted by this peer.
+
 ## Commit failing checks (1712-b11c) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, select a failing external check in a throwaway PR and confirm auto-heal uses its exact head and detail link. Confirm a successful rerun removes the stale failure. The lookup uses the bound repository account over GraphQL and does not depend on the first 100 open PRs. Recorded GitHub fixtures cover CheckRuns, external StatusContexts and pagination on rb; live account requests remain unverified. No desktop instance was started or restarted by this peer.
