@@ -127,7 +127,7 @@ describe("UpstreamMcpPanel lifecycle", () => {
 		view.unmount();
 	});
 
-	it("keeps the add form and hides secret-bearing errors when compound save fails", async () => {
+	it("keeps the add form and shows the real cause when compound save fails", async () => {
 		const view = render(() => <UpstreamMcpPanel />);
 		await vi.advanceTimersByTimeAsync(0);
 		view.getByTitle("Add upstream server").click();
@@ -138,11 +138,11 @@ describe("UpstreamMcpPanel lifecycle", () => {
 		view.getByTitle("Add secret header").click();
 		fireEvent.input(view.getByLabelText("Header name 1"), { target: { value: "x-api-key" } });
 		fireEvent.input(view.getByLabelText("Header secret 1"), { target: { value: "DUMMY_ERROR_SENTINEL" } });
-		vi.mocked(rpc).mockRejectedValueOnce(new Error("DUMMY_ERROR_SENTINEL"));
+		vi.mocked(rpc).mockRejectedValueOnce(new Error("Duplicate server name: example"));
 		view.getByText("Add").click();
 		await vi.advanceTimersByTimeAsync(0);
-		expect(view.getByText("Failed to save upstream credentials")).toBeTruthy();
-		expect(view.container.textContent).not.toContain("DUMMY_ERROR_SENTINEL");
+		expect(view.getByText("Error: Duplicate server name: example")).toBeTruthy();
+		expect(view.queryByText("Failed to save upstream credentials")).toBeNull();
 		expect(vi.mocked(rpc).mock.calls.filter(([c]) => c === "save_mcp_upstreams")).toHaveLength(1);
 		expect(view.getByLabelText("Header secret 1")).toBeTruthy();
 		expect(vi.mocked(rpc).mock.calls.some(([c]) => c === "save_mcp_upstream_credential")).toBe(false);

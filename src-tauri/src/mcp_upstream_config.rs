@@ -581,7 +581,9 @@ fn persist_upstream_delta_with_credentials(
                     &credential.token,
                     credential.header.as_ref(),
                     url,
-                    false,
+                    // The server is newly added to a validated config, so any
+                    // vault entry under its name is an orphan; replace it.
+                    true,
                 )?;
                 created.0.push(key);
             }

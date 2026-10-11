@@ -184,6 +184,11 @@ fn compound_add_rolls_back_partial_vault_writes_and_can_retry() {
     };
     let mut new = server("new", "compound-add-lifecycle", url);
     new.headers.push(header.clone());
+    let header2 = UpstreamHeader {
+        name: "x-other".into(),
+        credential_ref: uuid::Uuid::new_v4().to_string(),
+    };
+    new.headers.push(header2.clone());
     let desired = UpstreamMcpConfig { servers: vec![new] };
     let writes = || {
         vec![
@@ -195,27 +200,25 @@ fn compound_add_rolls_back_partial_vault_writes_and_can_retry() {
             secret("new", "bearer-secret"),
         ]
     };
-    save_credential_for_url("compound-add-lifecycle", "orphan-original", url).unwrap();
+    let mut failing = writes();
+    failing[1] = UpstreamCredentialWrite {
+        server_id: "new".into(),
+        token: "bad\nvalue".into(),
+        header: Some(header2.clone()),
+    };
     let error = persist_upstream_delta_with_credentials(
         &UpstreamMcpConfig::default(),
         &desired,
         9876,
-        writes(),
+        failing,
     )
     .unwrap_err();
-    assert!(error.contains("already exists"), "{error}");
+    assert!(error.contains("Invalid custom header value"), "{error}");
     assert!(load_mcp_upstreams().servers.is_empty());
     assert_eq!(
         read_credential_for_url(&header.credential_key("compound-add-lifecycle"), url).unwrap(),
         None
     );
-    assert_eq!(
-        read_credential_for_url("compound-add-lifecycle", url)
-            .unwrap()
-            .as_deref(),
-        Some("orphan-original")
-    );
-    delete_upstream_credential("compound-add-lifecycle").unwrap();
     persist_upstream_delta_with_credentials(
         &UpstreamMcpConfig::default(),
         &desired,
@@ -268,4 +271,33 @@ fn existing_upstream_without_vault_entry_requires_explicit_credential_edit() {
         None
     );
     assert_eq!(load_mcp_upstreams(), config);
+}
+
+// Catches: an orphan vault entry (no config entry) blocking a legitimate add of
+// that name, or the add keeping the stale orphan secret.
+#[test]
+#[serial_test::serial]
+fn add_replaces_orphan_vault_entry_for_unconfigured_name() {
+    let tmp = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let _guard = crate::config::set_config_dir_override(tmp.path().to_path_buf());
+    let url = "https://example.com/mcp";
+    save_credential_for_url("orphan-add-lifecycle", "orphan-original", url).unwrap();
+    let desired = UpstreamMcpConfig {
+        servers: vec![server("new", "orphan-add-lifecycle", url)],
+    };
+    persist_upstream_delta_with_credentials(
+        &UpstreamMcpConfig::default(),
+        &desired,
+        9876,
+        vec![secret("new", "fresh-secret")],
+    )
+    .unwrap();
+    assert_eq!(load_mcp_upstreams(), desired);
+    assert_eq!(
+        read_credential_for_url("orphan-add-lifecycle", url)
+            .unwrap()
+            .as_deref(),
+        Some("fresh-secret")
+    );
+    delete_upstream_credential("orphan-add-lifecycle").unwrap();
 }

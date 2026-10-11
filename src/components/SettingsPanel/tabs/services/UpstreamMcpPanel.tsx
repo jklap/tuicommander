@@ -305,9 +305,8 @@ export const UpstreamMcpPanel: Component = () => {
 			setUpstreams(servers);
 			return true;
 		} catch (e) {
-			const message = credentials.length ? "Failed to save upstream credentials" : String(e);
-			appLogger.error("mcp", "saveUpstreams: RPC failed", { error: message });
-			setError(message);
+			appLogger.error("mcp", "saveUpstreams: RPC failed", { error: String(e) });
+			setError(String(e));
 			return false;
 		} finally {
 			setSaving(false);
