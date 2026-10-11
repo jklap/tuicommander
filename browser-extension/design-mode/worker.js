@@ -22,7 +22,7 @@ async function refreshConnection() {
       }
       lastMode=mode?.status;
     } catch(error) { connection=`${connection} · Status unavailable: ${error.message}`; }
-    try { servers=await request('list_dev_servers'); }
+    try { servers=await request('list_dev_servers',{sessionId:bound.sessionId}); }
     catch(error) { servers={servers:[],canStart:false,scanNotice:error.message}; }
   } catch (error) { agents = []; connection = error.message; }
 }
@@ -104,7 +104,7 @@ async function handle(message, sender) {
     return snapshot(tab.id);
   }
   if (message.kind === 'open_server') {
-    const fresh=await request('list_dev_servers');
+    const fresh=await request('list_dev_servers',{sessionId:bound.sessionId});
     if(!fresh.servers.some((server)=>server.url===message.url)) throw new Error('That server is no longer available. Refresh the list.');
     await chrome.tabs.update(tab.id,{url:message.url});
   }
