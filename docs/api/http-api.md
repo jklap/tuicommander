@@ -598,8 +598,9 @@ DELETE /sessions/:id?cleanup_worktree=false
 
 The inspector opens a dedicated Chrome window on the machine running
 TUICommander. It binds to an agent terminal, even when the request comes from
-a browser/PWA client. The page URL is read from the local per-repository
-`dev_server_url` setting; an unset URL opens `about:blank`.
+a browser/PWA client. Optional `url` opens an absolute HTTP(S) address directly,
+including localhost. Without it, start uses dev-server discovery and profile onboarding.
+Optional `browser` selects `chrome` or `edge`. Invalid URLs fail before browser side effects.
 
 ### Start or rebind inspection
 
@@ -607,7 +608,7 @@ a browser/PWA client. The page URL is read from the local per-repository
 POST /design-mode/start
 Content-Type: application/json
 
-{ "sessionId": "<agent session ID>" }
+{ "sessionId": "<agent session ID>", "url": "http://localhost:5173/page", "browser": "chrome" }
 ```
 
 Starting another terminal in the same repository reuses its Chrome window and

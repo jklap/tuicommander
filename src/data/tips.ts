@@ -24,7 +24,7 @@ export const TIPS: Tip[] = [
 	{
 		feature: "Design Mode",
 		description:
-			"Start Design Mode from an agent tab, open its browser sidebar, pick elements and comment before sending. Busy agents receive feedback at their next idle window.",
+			"Right-click a terminal web link and choose Start in Design Mode to connect that agent and open the page directly. Pick elements and comment in the browser sidebar before sending.",
 		shortcut: null,
 	},
 	{

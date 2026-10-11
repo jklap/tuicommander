@@ -25,3 +25,5 @@ pub(crate) mod send;
 mod captures;
 #[cfg(feature = "desktop")]
 mod source_cdp;
+
+pub(crate) mod mcp;

@@ -112,7 +112,7 @@ that session's input draft without submitting it.
 
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
-| `start_design_mode` | `sessionId: String` | `DesignModeStatus` | Start or rebind inspection for an agent terminal; opens the repository's configured URL or `about:blank` |
+| `start_design_mode` | `sessionId: String, browser?: String, url?: String` | `DesignModeStatus` | Start or rebind an agent terminal; optional HTTP(S) `url` opens directly, otherwise uses discovery/onboarding |
 | `stop_design_mode` | `repoPath: String` | `DesignModeStatus` | Stop inspection for a repository |
 | `get_design_mode_status` | -- | `Vec<DesignModeStatus>` | Read the active per-repository modes |
 
@@ -898,7 +898,7 @@ for every field and reply. Blocking storage/schedule work runs off the main
 thread. Run Now executes only on the addressed backend; phase 1 is Once-only.
 
 `automation_action` also accepts `{input:{action:"run",id:"<run id>"}}` to fetch a canonical saved run for notification navigation. Native automation click targets are `{kind:"automation",id:"<run id>"}` on macOS.
-Design Mode v2: `start_design_mode(sessionId, browser?: "edge" | "chrome")` opens the dedicated browser profile and installs its native host. HTTP `POST /design-mode/start` accepts the identical camelCase body. Stop/status and the terminal badge retain their existing shapes. The browser opens on the backend host.
+Design Mode v2: `start_design_mode(sessionId, browser?: "edge" | "chrome", url?: string)` opens the dedicated browser profile and installs its native host. HTTP `POST /design-mode/start` accepts the identical camelCase body. Stop/status and the terminal badge retain their existing shapes. The browser opens on the backend host.
 
 Automation precheck context (#1631-45bf): definitions can opt in with
 `precheck.inject_output: true` (default false). Proceeding checks prefix the
