@@ -598,8 +598,9 @@ DELETE /sessions/:id?cleanup_worktree=false
 
 The inspector opens a dedicated Chrome window on the machine running
 TUICommander. It binds to an agent terminal, even when the request comes from
-a browser/PWA client. The page URL is read from the local per-repository
-`dev_server_url` setting; an unset URL opens `about:blank`.
+a browser/PWA client. Optional `url` opens an absolute HTTP(S) address directly,
+including localhost. Without it, start uses dev-server discovery and profile onboarding.
+Optional `browser` selects `chrome` or `edge`. Invalid URLs fail before browser side effects.
 
 ### Start or rebind inspection
 
@@ -607,7 +608,7 @@ a browser/PWA client. The page URL is read from the local per-repository
 POST /design-mode/start
 Content-Type: application/json
 
-{ "sessionId": "<agent session ID>" }
+{ "sessionId": "<agent session ID>", "url": "http://localhost:5173/page", "browser": "chrome" }
 ```
 
 Starting another terminal in the same repository reuses its Chrome window and
@@ -1986,7 +1987,7 @@ the matching `dictation::commands` Tauri command resolves to — a bare string f
 `src/stores/dictation.ts` reads both transports with the same code. Before the app
 handle is up, every state-touching route answers `503`.
 
-The dictation config field hands_free_spoken_replies (default true) is shared
+The dictation config field hands_free_listening (default true) selects hands-free capture versus a replies-only conversation, and hands_free_spoken_replies (default true) is shared
 by IPC and HTTP. Off cancels speech and refuses new replies without disarming
 capture. Speech status reports available=false and unavailableReason. The
 MCP voice tool includes these fields on refused speak requests. Edge HTTP
@@ -2159,7 +2160,7 @@ queue, so there is nothing to cancel and nothing typed can be taken back.
 Both bodies are the structs `dictation::commands` serializes, camelCase on the
 wire and identical on both transports:
 
-- `HandsFreeStatus { armed, phase, sessionId, owner, generation, pendingText, holdBackMs, error, deliveredTurns, droppedTurns }`
+- `HandsFreeStatus { armed, listening, phase, sessionId, owner, generation, pendingText, holdBackMs, error, deliveredTurns, droppedTurns }`
 - `HandsFreeDisarmed { wasArmed, generation, discardedPending, discardedCapture, status }`
 
 `pendingText` is the turn waiting out its hold-back, or held by a permission

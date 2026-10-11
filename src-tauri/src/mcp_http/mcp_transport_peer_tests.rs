@@ -117,6 +117,69 @@ fn client_pid_is_logged_only_when_it_is_a_plain_pid() {
     assert_eq!(client_pid_header(&HeaderMap::new()), "");
 }
 
+#[cfg(unix)]
+async fn post_fresh_initialize(state: &Arc<AppState>) {
+    let mut headers = HeaderMap::new();
+    headers.insert(TUIC_SESSION_HEADER, TEST_UUID_A.parse().unwrap());
+    mcp_post(
+        State(Arc::clone(state)),
+        ConnectInfo("127.0.0.1:1".parse().unwrap()),
+        headers,
+        Json(serde_json::json!({
+            "jsonrpc":"2.0", "id":1, "method":"initialize", "params":{
+                "protocolVersion":"2025-06-18",
+                "clientInfo":{"name":"tuic-bridge","version":"test"}
+            }
+        })),
+    )
+    .await;
+}
+
+#[cfg(unix)]
+fn served_texts(state: &Arc<AppState>) -> Vec<String> {
+    crate::prompt_receipt::read_receipt(state, TEST_UUID_A)
+        .unwrap()
+        .sections
+        .into_iter()
+        .filter(|s| s.status == "served")
+        .map(|s| s.text)
+        .collect()
+}
+
+// Catches: one inspector row per bridge reconnect, the 16-section cap then
+// hiding later rows; and a receipt that grows on every read.
+#[cfg(unix)]
+#[tokio::test]
+async fn reconnects_with_identical_instructions_show_one_row_stable_across_reads() {
+    let state = test_state();
+    let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    insert_managed_test_session(&state, TEST_UUID_A, root.path().to_str().unwrap());
+    for _ in 0..5 {
+        post_fresh_initialize(&state).await;
+    }
+    let first = served_texts(&state);
+    assert_eq!(first.len(), 1, "five identical initializes: {first:?}");
+    assert_eq!(served_texts(&state), first, "a second read must not append");
+}
+
+// Catches: collapsing by session instead of by text, hiding a prompt that changed.
+#[cfg(unix)]
+#[tokio::test]
+async fn changed_instructions_keep_one_row_per_distinct_text() {
+    let state = test_state();
+    let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    insert_managed_test_session(&state, TEST_UUID_A, root.path().to_str().unwrap());
+    post_fresh_initialize(&state).await;
+    post_fresh_initialize(&state).await;
+    let collapsed = state.config.read().collapse_tools;
+    state.config.write().collapse_tools = !collapsed;
+    post_fresh_initialize(&state).await;
+    post_fresh_initialize(&state).await;
+    let texts = served_texts(&state);
+    assert_eq!(texts.len(), 2, "{texts:?}");
+    assert_ne!(texts[0], texts[1]);
+}
+
 // Catches: claiming no MCP initialize was captured for an existing PTY
 // solely because its launch brief is unavailable.
 #[cfg(unix)]

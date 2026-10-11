@@ -121,6 +121,12 @@ export interface CommandOverviewTab extends BaseTab {
 	title: string;
 }
 
+/** Native Tasks tab (work-item providers' list, board, roadmap, detail and create views) */
+export interface TasksTab extends BaseTab {
+	type: "tasks";
+	title: string;
+}
+
 /** Discriminated union of all markdown tab types */
 export type MdTabData =
 	| FileTab
@@ -132,7 +138,8 @@ export type MdTabData =
 	| GithubOpsTab
 	| PrDiffTab
 	| HtmlPreviewTab
-	| CommandOverviewTab;
+	| CommandOverviewTab
+	| TasksTab;
 
 /**
  * Resolve a caller-supplied path (repo root or PTY cwd) to a registered repo path.
@@ -670,6 +677,18 @@ function createMdTabsStore() {
 
 			const id = base._nextId("md");
 			return base._addTab({ type: "command-overview", id, title: "Commands", pinned: true } as CommandOverviewTab);
+		},
+
+		/** Add the Tasks tab (singleton — reuses existing if open) */
+		addTasks(): string {
+			const existing = Object.values(base.state.tabs).find((tab) => tab.type === "tasks") as TasksTab | undefined;
+			if (existing) {
+				base.setActive(existing.id);
+				return existing.id;
+			}
+
+			const id = base._nextId("md");
+			return base._addTab({ type: "tasks", id, title: "Tasks", pinned: true } as TasksTab);
 		},
 
 		/** Add a PR diff tab (or reuse existing for same repo+prNumber, updating diff content) */

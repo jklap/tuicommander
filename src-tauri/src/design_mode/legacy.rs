@@ -53,6 +53,7 @@ pub(crate) async fn start(
     state: &Arc<AppState>,
     session_id: String,
     browser: Option<String>,
+    url: Option<String>,
 ) -> Result<serde_json::Value, String> {
     let agent = state
         .session_maps
@@ -92,7 +93,14 @@ pub(crate) async fn start(
             .to_owned()
     };
     let _ = repo_path;
-    super::launcher::launch(state, &repo, &session_id, browser.as_deref()).await
+    super::launcher::launch(
+        state,
+        &repo,
+        &session_id,
+        browser.as_deref(),
+        url.as_deref(),
+    )
+    .await
 }
 
 /// Repo settings are keyed by the path the frontend registered, which may be a

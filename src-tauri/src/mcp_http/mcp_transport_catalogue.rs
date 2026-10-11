@@ -262,6 +262,10 @@ pub(super) const NATIVE_TOOL_SUMMARIES: &[(&str, &str)] = &[
     ("repo", "Inspect repositories and manage their worktrees."),
     ("story", "Read project stories and update their progress."),
     (
+        "design_mode",
+        "Start Design Mode at a terminal link for layout work.",
+    ),
+    (
         "automations",
         "Create and manage scheduled agent definitions.",
     ),
@@ -307,6 +311,7 @@ pub(super) const NATIVE_TOOL_SUMMARIES: &[(&str, &str)] = &[
 pub(super) fn native_tool_definitions() -> serde_json::Value {
     let defs = serde_json::json!([
         crate::automations::mcp::tool_definition(),
+        crate::design_mode::mcp::tool_definition(),
         crate::secrets::tool_definition(),
         crate::telegram::tool_definition(),
         {

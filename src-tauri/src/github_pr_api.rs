@@ -14,6 +14,13 @@ pub(crate) trait PrApi: Sync {
         endpoint: &str,
         body: Value,
     ) -> impl std::future::Future<Output = Result<Value, String>> + Send;
+    fn rest_text(
+        &self,
+        _endpoint: &str,
+        _max_bytes: usize,
+    ) -> impl std::future::Future<Output = Result<String, String>> + Send {
+        std::future::ready(Err("Text downloads are unsupported".into()))
+    }
 }
 
 /// Read a complete connection; incomplete pagination is an error, never evidence.
@@ -81,12 +88,35 @@ impl<'a> RepoApi<'a> {
             repo,
         })
     }
+    fn text_request(&self, endpoint: &str) -> reqwest::RequestBuilder {
+        let path = format!("/repos/{}/{}/{}", self.owner, self.repo, endpoint);
+        crate::github_debug::log_api("GET", &path, "CI job log download");
+        crate::github::github_rest_request(
+            &self.state.http_client,
+            reqwest::Method::GET,
+            &self.account.host,
+            &path,
+            &self.token,
+            crate::github::GITHUB_JSON,
+        )
+    }
+
     pub fn variables(&self, number: i64) -> Value {
         serde_json::json!({"owner": self.owner, "repo": self.repo, "number": number})
     }
 }
 
 impl PrApi for RepoApi<'_> {
+    async fn rest_text(&self, endpoint: &str, max_bytes: usize) -> Result<String, String> {
+        download_text_tail(
+            self.state,
+            &self.account,
+            self.text_request(endpoint),
+            max_bytes,
+        )
+        .await
+    }
+
     async fn graphql(&self, query: &str, variables: Value) -> Result<Value, String> {
         crate::github::graphql_with_retry(
             self.state,
@@ -129,3 +159,47 @@ impl PrApi for RepoApi<'_> {
         serde_json::from_slice(&bytes).map_err(|e| format!("Invalid GitHub response: {e}"))
     }
 }
+
+/// Stream an Actions log without retaining its unbounded prefix. The shared
+/// client's redirect policy removes bearer auth when the download host changes.
+async fn download_text_tail(
+    state: &AppState,
+    account: &GitHubAccount,
+    request: reqwest::RequestBuilder,
+    max_bytes: usize,
+) -> Result<String, String> {
+    let mut response = crate::github::send_rest_with_breaker(state, account, request).await?;
+    let status = response.status();
+    let mut tail = std::collections::VecDeque::with_capacity(max_bytes);
+    while let Some(chunk) = response.chunk().await.map_err(|error| error.to_string())? {
+        if chunk.len() >= max_bytes {
+            tail.clear();
+            tail.extend(&chunk[chunk.len() - max_bytes..]);
+        } else {
+            let discard = tail
+                .len()
+                .saturating_add(chunk.len())
+                .saturating_sub(max_bytes);
+            tail.drain(..discard);
+            tail.extend(&chunk);
+        }
+    }
+    let bytes = tail.make_contiguous();
+    // A byte cap can cut through a UTF-8 codepoint; omit its remaining bytes.
+    let start = bytes
+        .iter()
+        .position(|byte| byte & 0xc0 != 0x80)
+        .unwrap_or(bytes.len());
+    let text = String::from_utf8_lossy(&bytes[start..]).into_owned();
+    if !status.is_success() {
+        return Err(format!(
+            "GitHub API failed ({status}): {}",
+            crate::github::sanitize_ci_logs(&text)
+        ));
+    }
+    Ok(text)
+}
+
+#[cfg(test)]
+#[path = "github_ci_download_tests.rs"]
+mod download_tests;

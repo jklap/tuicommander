@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::path::{Path, PathBuf};
+#[cfg(test)]
 use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -13,6 +14,9 @@ use crate::state::AppState;
 
 #[path = "github_ci_checks.rs"]
 mod ci_checks;
+
+#[path = "github_ci_logs.rs"]
+mod ci_logs;
 
 fn extract_graphql_name(query: &str) -> &str {
     // Extract name from "query FooBar {" or "mutation Baz(" patterns
@@ -3102,7 +3106,22 @@ fn circleci_token_not_configured_error(checks: &[FailingCheck]) -> String {
     )
 }
 
-const CI_CLI_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+/// Bound the whole async log sweep, including external CI downloads.
+const CI_SWEEP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
+fn resolve_ci_head_sha(repo_path: &str, branch: &str) -> Result<String, String> {
+    let output = crate::git_cli::git_cmd(Path::new(repo_path))
+        .args([
+            "rev-parse",
+            "--verify",
+            "--end-of-options",
+            &format!("refs/heads/{branch}^{{commit}}"),
+        ])
+        .timeout(std::time::Duration::from_secs(30))
+        .run()
+        .map_err(|error| format!("Failed to resolve branch head: {error}"))?;
+    normalize_ci_head_sha(output.stdout.trim(), false)
+}
 
 fn normalize_ci_head_sha(head_sha: &str, selected: bool) -> Result<String, String> {
     if head_sha.len() != 40 || !head_sha.bytes().all(|byte| byte.is_ascii_hexdigit()) {
@@ -3116,202 +3135,27 @@ fn normalize_ci_head_sha(head_sha: &str, selected: bool) -> Result<String, Strin
     Ok(head_sha.to_ascii_lowercase())
 }
 
-/// Find failed jobs for the branch's latest head commit and fetch their logs.
-/// Job-level log downloads work even while sibling jobs keep the overall
-/// workflow run in progress, unlike `gh run view --log-failed`.
-/// Resolves the GitHub repo slug from the local repo path.
-fn fetch_ci_failure_logs_impl(
+/// Resolve the repo account once, then use it for checks, runs, jobs and logs.
+async fn fetch_ci_failure_logs_impl(
     repo_path: &str,
     branch: &str,
     check_url: Option<&str>,
     selected_head_sha: Option<&str>,
-    failing_checks: impl FnOnce(&str) -> Result<Vec<FailingCheck>, String>,
+    state: &AppState,
 ) -> Result<CiLogsOutcome, String> {
-    let repo_path_buf = PathBuf::from(repo_path);
-
-    // gh-CLI-assisted CI log fetch is only available for github.com in v1. If
-    // the repo is explicitly bound to a GitHub Enterprise Server account, say so
-    // clearly instead of falling through to a confusing "no remote" error.
-    {
-        let registry = crate::github_account::GitHubAccountRegistry::load();
-        let bindings = crate::github_account::RepoBindingStore::load();
-        if let Some(binding) = bindings.get_binding(&repo_path_buf)
-            && let Some(account) = registry.get(&binding.account_id)
-            && !account.is_cloud()
-        {
-            return Err(
-                "CI log fetch uses the gh CLI and is only available for github.com accounts in this version."
-                    .to_string(),
-            );
+    let head_sha = match selected_head_sha {
+        Some(sha) => normalize_ci_head_sha(sha, true)?,
+        None => {
+            let path = repo_path.to_owned();
+            let branch = branch.to_owned();
+            // Only the local git read is blocking; no HTTP work or sweep runs here.
+            tokio::task::spawn_blocking(move || resolve_ci_head_sha(&path, &branch))
+                .await
+                .map_err(|error| error.to_string())??
         }
-    }
-
-    let remote_url = get_github_remote_url(&repo_path_buf)
-        .ok_or_else(|| "No GitHub remote found for this repo".to_string())?;
-    let (owner, repo) = parse_remote_url(&remote_url)
-        .ok_or_else(|| format!("Cannot parse GitHub owner/repo from remote URL: {remote_url}"))?;
-    let repo_slug = format!("{owner}/{repo}");
-    let gh = crate::agent::resolve_cli("gh");
-    let head_sha = if let Some(sha) = selected_head_sha {
-        sha.to_string()
-    } else {
-        crate::git_cli::git_cmd(&repo_path_buf)
-            .args([
-                "rev-parse",
-                "--verify",
-                "--end-of-options",
-                &format!("refs/heads/{branch}^{{commit}}"),
-            ])
-            .timeout(CI_CLI_TIMEOUT)
-            .run()
-            .map_err(|error| format!("Failed to resolve branch head: {error}"))?
-            .stdout
-            .trim()
-            .to_string()
     };
-    let head_sha = normalize_ci_head_sha(&head_sha, selected_head_sha.is_some())?;
-
-    // Step 1: list recent runs and restrict inspection to the latest head SHA.
-    // A commit commonly has several workflow runs, all of which may contribute
-    // checks to the PR summary.
-    crate::github_debug::log_api(
-        "CLI",
-        &format!("gh run list --repo {repo_slug} --branch {branch} --limit 50"),
-        "fetch_ci_failure_logs_impl",
-    );
-    let mut list_cmd = Command::new(&gh);
-    list_cmd.args([
-        "run",
-        "list",
-        "--repo",
-        &repo_slug,
-        &format!("--branch={branch}"),
-        "--limit",
-        "50",
-        "--json",
-        "databaseId,headSha",
-    ]);
-    crate::cli::apply_no_window(&mut list_cmd);
-
-    let list_output = crate::git_cli::output_with_deadline(&mut list_cmd, CI_CLI_TIMEOUT)
-        .map_err(|e| format!("Failed to run gh: {e}"))?;
-    if !list_output.status.success() {
-        let stderr = sanitize_ci_logs(&String::from_utf8_lossy(&list_output.stderr));
-        return Err(format!("gh run list failed: {stderr}"));
-    }
-
-    let list_json: serde_json::Value = serde_json::from_slice(&list_output.stdout)
-        .map_err(|e| format!("Failed to parse gh run list output: {e}"))?;
-    let runs = list_json
-        .as_array()
-        .ok_or_else(|| "Unexpected gh run list response".to_string())?;
-    let run_ids: Vec<u64> = runs
-        .iter()
-        .filter(|run| {
-            run.get("headSha").and_then(serde_json::Value::as_str) == Some(head_sha.as_str())
-        })
-        .filter_map(|run| run.get("databaseId").and_then(serde_json::Value::as_u64))
-        .collect();
-
-    // Step 2: inspect jobs on every workflow run for the current head. A run may
-    // still be in progress while one of its jobs is already conclusively red.
-    let mut failed_jobs = Vec::new();
-    // DEFERRED (2026-09-25) — each subprocess has a deadline, but the entire sweep
-    // does not. A Tokio timeout around spawn_blocking would return while its
-    // blocking work keeps running. Propagate one deadline through the CLI and
-    // CircleCI requests before adding an overall bound and a job cap.
-    for run_id in run_ids {
-        crate::github_debug::log_api(
-            "CLI",
-            &format!("gh run view {run_id} --repo {repo_slug} --json jobs"),
-            "fetch_ci_failure_logs_impl",
-        );
-        let mut view_cmd = Command::new(&gh);
-        view_cmd.args([
-            "run",
-            "view",
-            &run_id.to_string(),
-            "--repo",
-            &repo_slug,
-            "--json",
-            "jobs",
-        ]);
-        crate::cli::apply_no_window(&mut view_cmd);
-        let view_output = crate::git_cli::output_with_deadline(&mut view_cmd, CI_CLI_TIMEOUT)
-            .map_err(|e| format!("Failed to run gh: {e}"))?;
-        // A single run that can't be viewed (e.g. HTTP 404 for a stale/deleted or
-        // cross-repo run surfaced by `run list`) must NOT abort the whole heal —
-        // other runs on the same head may still carry the failing jobs. Skip it.
-        if !view_output.status.success() {
-            let stderr = sanitize_ci_logs(&String::from_utf8_lossy(&view_output.stderr));
-            tracing::warn!(
-                source = "fetch_ci_failure_logs_impl",
-                "gh run view {run_id} failed, skipping: {}",
-                stderr.trim()
-            );
-            continue;
-        }
-        let run_json: serde_json::Value = match serde_json::from_slice(&view_output.stdout) {
-            Ok(json) => json,
-            Err(e) => {
-                tracing::warn!(
-                    source = "fetch_ci_failure_logs_impl",
-                    "failed to parse gh run view {run_id} output, skipping: {e}"
-                );
-                continue;
-            }
-        };
-        failed_jobs.extend(failed_jobs_from_run_json(&run_json));
-    }
-
-    // A selected PR row must use that exact backend-listed external check even
-    // when GitHub Actions also failed. Unselected auto-heal keeps GHA priority.
-    let failing = if check_url.is_some() || failed_jobs.is_empty() {
-        failing_checks(&head_sha)?
-    } else {
-        Vec::new()
-    };
-    match choose_ci_log_source(check_url, !failed_jobs.is_empty(), failing) {
-        Ok(CiLogSource::ExternalOnly(checks)) => {
-            return Ok(CiLogsOutcome::ExternalOnly {
-                checks,
-                owner,
-                repo,
-                head_sha,
-            });
-        }
-        Ok(CiLogSource::GitHubActions) => {}
-        Err(error) if check_url.is_some() => return Err(error),
-        Err(_) => return Err("No failed GitHub Actions job found for this branch head".to_string()),
-    }
-
-    // Step 3: download each failed job directly. The jobs API exposes completed
-    // job logs before the containing workflow run reaches a terminal state.
-    let mut logs = String::new();
-    for (job_id, job_name) in failed_jobs {
-        let endpoint = format!("repos/{repo_slug}/actions/jobs/{job_id}/logs");
-        crate::github_debug::log_api(
-            "CLI",
-            &format!("gh api {endpoint}"),
-            "fetch_ci_failure_logs_impl",
-        );
-        let mut logs_cmd = Command::new(&gh);
-        logs_cmd.args(["api", &endpoint]);
-        crate::cli::apply_no_window(&mut logs_cmd);
-        let logs_output = crate::git_cli::output_with_deadline(&mut logs_cmd, CI_CLI_TIMEOUT)
-            .map_err(|e| format!("Failed to run gh: {e}"))?;
-        if !logs_output.status.success() {
-            let stderr = sanitize_ci_logs(&String::from_utf8_lossy(&logs_output.stderr));
-            return Err(format!("gh api job logs failed: {stderr}"));
-        }
-        if !logs.is_empty() {
-            logs.push_str("\n\n");
-        }
-        logs.push_str(&format!("===== FAILED JOB: {job_name} =====\n"));
-        logs.push_str(&String::from_utf8_lossy(&logs_output.stdout));
-    }
-
-    Ok(CiLogsOutcome::Logs(format_ci_logs(&logs)))
+    let api = crate::github_pr_api::RepoApi::resolve(state, repo_path).await?;
+    ci_logs::fetch_with(&api, &api.owner, &api.repo, &head_sha, check_url).await
 }
 
 /// Tauri command: fetch failed-job logs for the branch's latest workflow head.
@@ -3341,40 +3185,52 @@ pub(crate) async fn fetch_ci_failure_logs_with_state(
     head_sha: Option<String>,
     state: Arc<AppState>,
 ) -> Result<String, String> {
+    tokio::time::timeout(
+        CI_SWEEP_TIMEOUT,
+        fetch_ci_failure_logs_inner(repo_path, branch, check_url, head_sha, state),
+    )
+    .await
+    .map_err(|_| "CI log fetch timed out".to_string())?
+}
+
+async fn fetch_ci_failure_logs_inner(
+    repo_path: String,
+    branch: String,
+    check_url: Option<String>,
+    head_sha: Option<String>,
+    state: Arc<AppState>,
+) -> Result<String, String> {
     #[cfg(test)]
     let test_fixture = CI_LOGS_TEST_FIXTURES
         .get(&repo_path)
         .map(|fixture| Arc::clone(fixture.value()));
+    let selected_sha = if check_url.is_some() { head_sha } else { None };
     #[cfg(test)]
-    let blocking_fixture = test_fixture.clone();
-    let selected = check_url.clone();
-    let selected_sha = if selected.is_some() { head_sha } else { None };
-    let runtime = tokio::runtime::Handle::current();
-    let outcome = tokio::task::spawn_blocking(move || {
-        #[cfg(test)]
-        if let Some(fixture) = blocking_fixture {
-            return fixture
-                .outcome
-                .lock()
-                .take()
-                .ok_or_else(|| "CI log test fixture already consumed".to_string());
-        }
+    let outcome = if let Some(fixture) = test_fixture.as_ref() {
+        fixture
+            .outcome
+            .lock()
+            .take()
+            .ok_or("CI log test fixture already consumed")?
+    } else {
         fetch_ci_failure_logs_impl(
             &repo_path,
             &branch,
-            selected.as_deref(),
+            check_url.as_deref(),
             selected_sha.as_deref(),
-            |sha| {
-                runtime.block_on(async {
-                    let api = crate::github_pr_api::RepoApi::resolve(&state, &repo_path).await?;
-                    ci_checks::list_failing_checks_with(&api, &api.owner, &api.repo, sha).await
-                })
-            },
+            &state,
         )
-    })
-    .await
-    .map_err(|e| format!("Task failed: {e}"))
-    .and_then(|result| result)?;
+        .await?
+    };
+    #[cfg(not(test))]
+    let outcome = fetch_ci_failure_logs_impl(
+        &repo_path,
+        &branch,
+        check_url.as_deref(),
+        selected_sha.as_deref(),
+        &state,
+    )
+    .await?;
     match outcome {
         CiLogsOutcome::Logs(logs) => Ok(logs),
         CiLogsOutcome::ExternalOnly {
@@ -3730,14 +3586,7 @@ mod tests {
         )
         .unwrap();
         let before = crate::git_cli::git_cmd_forks(repo.path());
-        let error = fetch_ci_failure_logs_impl(
-            repo.path().to_str().unwrap(),
-            "missing",
-            None,
-            None,
-            |_| unreachable!(),
-        )
-        .unwrap_err();
+        let error = resolve_ci_head_sha(repo.path().to_str().unwrap(), "missing").unwrap_err();
         assert!(error.contains("Failed to resolve branch head"));
         assert_eq!(crate::git_cli::git_cmd_forks(repo.path()), before + 1);
     }
@@ -5874,9 +5723,9 @@ mod tests {
             "status": "in_progress",
             "conclusion": "",
             "jobs": [
-                { "databaseId": 101, "name": "still running", "conclusion": "" },
-                { "databaseId": 102, "name": "tests", "conclusion": "failure" },
-                { "databaseId": 103, "name": "lint", "conclusion": "success" }
+                { "id": 101, "name": "still running", "conclusion": "" },
+                { "id": 102, "name": "tests", "conclusion": "failure" },
+                { "id": 103, "name": "lint", "conclusion": "success" }
             ]
         });
 
@@ -5887,56 +5736,17 @@ mod tests {
     }
 
     #[test]
-    fn failed_jobs_ignore_entries_without_database_id() {
+    fn failed_jobs_ignore_entries_without_rest_id() {
         let run = serde_json::json!({
             "jobs": [
                 { "name": "missing id", "conclusion": "failure" },
-                { "databaseId": 201, "conclusion": "failure" }
+                { "id": 201, "conclusion": "failure" }
             ]
         });
 
         assert_eq!(
             failed_jobs_from_run_json(&run),
             vec![(201, "failed job".to_string())]
-        );
-    }
-
-    #[test]
-    fn ci_logs_disabled_for_ghe_bound_repo() {
-        use crate::github_account::{GitHubAccount, GitHubHost, RepoBinding, RepoBindingStore};
-        let dir = tempfile::tempdir().expect("tempdir");
-        let _guard = crate::config::set_config_dir_override(dir.path().join("cfg"));
-        let repo = dir.path().join("repo");
-        std::fs::create_dir_all(repo.join(".git")).expect("mkdir .git");
-
-        crate::accounts::upsert_github(
-            GitHubAccount::ghe_pat(GitHubHost::new("ghe.acme.com").unwrap(), None),
-            None,
-        )
-        .unwrap();
-        let mut bindings = RepoBindingStore::default();
-        bindings.set_binding(
-            &repo,
-            RepoBinding {
-                account_id: "ghe.acme.com".into(),
-                owner: "team".into(),
-                repo: "project".into(),
-                remote_name: "origin".into(),
-            },
-        );
-        bindings.save(&RepoBindingStore::default()).unwrap();
-
-        let err = fetch_ci_failure_logs_impl(
-            repo.to_str().unwrap(),
-            "main",
-            None,
-            None,
-            |_| unreachable!(),
-        )
-        .unwrap_err();
-        assert!(
-            err.contains("github.com accounts"),
-            "expected gh-CLI-disabled message, got: {err}"
         );
     }
 

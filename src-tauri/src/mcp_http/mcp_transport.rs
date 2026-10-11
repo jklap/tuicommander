@@ -558,6 +558,7 @@ async fn dispatch_mcp_tool_call_with_context(
         .map(|meta| meta.is_claude_code)
         .unwrap_or(false);
     match name {
+        "design_mode" => crate::design_mode::mcp::handle(state, args).await,
         "automations" => {
             crate::automations::mcp::handle(
                 args,

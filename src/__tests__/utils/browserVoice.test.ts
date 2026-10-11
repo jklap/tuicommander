@@ -215,6 +215,29 @@ describe("starting a browser voice session on iOS", () => {
 	});
 });
 
+describe("a replies-only browser voice session", () => {
+	it("opens the socket and the speaker but never the microphone", async () => {
+		// catches: replies-only still asks for the microphone, so a phone prompts
+		// for a device the user turned off and streams silence to the server.
+		const nodes = fakeContext();
+		const getUserMedia = vi.fn(async () => ({ getTracks: () => [] }) as unknown as MediaStream);
+		const session = { type: "auto" };
+		const deps: BrowserVoiceDeps = {
+			openSocket: () => new FakeSocket() as unknown as WebSocket,
+			getUserMedia,
+			createContext: () => nodes.context,
+			audioSession: () => session,
+		};
+
+		const voice = await connectBrowserVoice("b1", deps, false);
+
+		expect(getUserMedia).not.toHaveBeenCalled();
+		expect(nodes.capture.connect).not.toHaveBeenCalled();
+		expect(session.type).toBe("playback");
+		expect(() => voice.stop()).not.toThrow();
+	});
+});
+
 describe("openMicrophone", () => {
 	afterEach(() => vi.unstubAllGlobals());
 

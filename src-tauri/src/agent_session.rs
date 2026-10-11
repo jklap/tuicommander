@@ -49,9 +49,19 @@ pub(crate) fn discover_agent_session(
     let session_id =
         discover_session_id(&agent_type, &cwd, &claimed_ids, agent_pid, &env_overrides)?;
     let launch_command = agent_pid.and_then(|pid| rebuild_launch_command(&agent_type, pid));
+    let provider = (agent_type == "ego")
+        .then(|| {
+            let env = resolve_env_overrides(&agent_type, agent_pid, &env_overrides);
+            ego_session_provider(
+                &ego_sessions_dir(env.get("EGO_HOME").map(|s| s.as_str()))?,
+                &session_id,
+            )
+        })
+        .flatten();
     Some(DiscoveredSession {
         session_id,
         launch_command,
+        provider,
     })
 }
 
@@ -66,6 +76,9 @@ pub(crate) fn discover_agent_session(
 pub(crate) struct DiscoveredSession {
     pub session_id: String,
     pub launch_command: Option<String>,
+    /// The model provider the session runs on, for agents whose store names it
+    /// (ego: first segment of the manifest `model`). Drives the sidebar icon.
+    pub provider: Option<String>,
 }
 
 fn discover_session_id(
@@ -939,6 +952,16 @@ fn discover_ego_session(agent_pid: Option<u32>, ego_home: Option<&str>) -> Optio
     ego_session_for_pid(&ego_sessions_dir(ego_home)?, agent_pid?)
 }
 
+/// The provider half of `<sessions>/<session_id>/manifest.json`'s `model`
+/// (`provider/model`, split on the first `/` exactly as ego does).
+fn ego_session_provider(sessions_dir: &Path, session_id: &str) -> Option<String> {
+    let manifest =
+        std::fs::read_to_string(sessions_dir.join(session_id).join("manifest.json")).ok()?;
+    let manifest: serde_json::Value = serde_json::from_str(&manifest).ok()?;
+    let (provider, model) = manifest.get("model")?.as_str()?.split_once('/')?;
+    (!provider.is_empty() && !model.is_empty()).then(|| provider.to_string())
+}
+
 /// Check if `<sessions>/<session_id>/manifest.json` exists.
 fn verify_ego_session(session_id: &str, ego_home: Option<&str>) -> bool {
     is_uuid(session_id)
@@ -1200,6 +1223,31 @@ mod tests {
         assert!(verify_ego_session(EGO_A, Some(home)));
         assert!(!verify_ego_session(EGO_B, Some(home)));
         assert!(!verify_ego_session("../sessions", Some(home)));
+    }
+
+    /// Catches: the sidebar icon reading the provider from the model name or
+    /// the user config instead of the session the pid actually holds.
+    #[test]
+    fn test_ego_session_provider_is_the_first_segment_of_the_manifest_model() {
+        let dir = ego_store(&[(EGO_A, 111, 5), (EGO_B, 222, 9)]);
+        let write = |id: &str, body: &str| {
+            fs::write(dir.path().join(id).join("manifest.json"), body).unwrap()
+        };
+        write(EGO_A, r#"{"model":"openai-codex/gpt-6-sol"}"#);
+        write(EGO_B, r#"{"model":"openrouter/anthropic/claude-x"}"#);
+        let h = dir.path();
+        assert_eq!(
+            ego_session_provider(h, EGO_A).as_deref(),
+            Some("openai-codex")
+        );
+        assert_eq!(
+            ego_session_provider(h, EGO_B).as_deref(),
+            Some("openrouter")
+        );
+        write(EGO_A, r#"{"model":"no-separator"}"#);
+        assert_eq!(ego_session_provider(h, EGO_A), None);
+        write(EGO_A, "{}");
+        assert_eq!(ego_session_provider(h, EGO_A), None);
     }
 
     /// Catches: ego missing from the env table, so a session under a custom

@@ -774,6 +774,10 @@ pub struct HandsFree {
     /// and disarm with `turn_language`: a new conversation has been told
     /// nothing yet.
     announced_language: Option<String>,
+    /// Whether this arm captures speech. False is a replies-only conversation:
+    /// the binding, the reply queue and the entry hint exist, the microphone
+    /// does not, and input stays push-to-talk. Set by the caller after `arm`.
+    listening: bool,
 }
 
 impl HandsFree {
@@ -793,6 +797,30 @@ impl HandsFree {
             entry_hint: EntryHint::NotSent,
             speech_outage_notice: None,
             announced_language: None,
+            listening: true,
+        }
+    }
+
+    pub fn listening(&self) -> bool {
+        self.listening
+    }
+
+    /// Record whether the conversation just armed captures speech.
+    pub fn set_listening(&mut self, listening: bool) {
+        self.listening = listening;
+    }
+
+    /// A push-to-talk transcript was accepted for the replies-only conversation.
+    ///
+    /// Nothing else tells this mode what the user speaks, and under `auto` a
+    /// reply cannot be voiced without it. A listening conversation learns it
+    /// from its own turns, so this leaves that one alone.
+    pub fn note_push_to_talk_language(&mut self, language: Option<&str>) {
+        if self.binding.is_some()
+            && !self.listening
+            && let Some(language) = language
+        {
+            self.turn_language = Some(language.to_string());
         }
     }
 
@@ -891,6 +919,7 @@ impl HandsFree {
         self.speech_outage_notice = None;
         self.announced_language = None;
         self.last_hold = None;
+        self.listening = true;
         Ok(self.generation)
     }
 
@@ -1302,6 +1331,31 @@ pub fn entry_hint_text(configured: &str) -> String {
     }
 }
 
+/// What a replies-only conversation tells the model: nothing is heard, input
+/// is the user's push-to-talk dictation, and answers may be spoken.
+pub const REPLIES_ONLY_ENTRY_HINT: &str = "Spoken replies are now on for this terminal: the user \
+     dictates by push-to-talk, and you can answer out loud with the `voice` tool of the \
+     TUICommander MCP server (tuicommander), called with action \"speak\". If that tool is not \
+     loaded yet, search your deferred tools for \"voice\". Keep spoken replies short enough to \
+     listen to.";
+
+/// The start notice for a conversation, from both voice settings.
+///
+/// Listening decides what the input is, spoken replies what the model may do
+/// about it; a custom notice replaces only the built-in wording of the cases
+/// that allow speech.
+pub fn entry_hint_for(configured: &str, listening: bool, spoken_replies: bool) -> String {
+    if listening || !spoken_replies {
+        return entry_hint_for_replies(configured, spoken_replies);
+    }
+    let folded = configured.split_whitespace().collect::<Vec<_>>().join(" ");
+    if folded.is_empty() {
+        REPLIES_ONLY_ENTRY_HINT.to_string()
+    } else {
+        folded
+    }
+}
+
 /// A muted conversation asks for text even when a custom notice suggests speech.
 pub fn entry_hint_for_replies(configured: &str, spoken_replies: bool) -> String {
     if spoken_replies {
@@ -1595,7 +1649,11 @@ pub fn tick(
         Err(error) => return disarmed_or_not_armed(mode.lock().note_device_failed(error)),
     };
     if samples.is_empty() {
-        if now_ms.saturating_sub(capture.last_audio_ms) > capture.device_silence_timeout_ms {
+        // A replies-only conversation opens no capture device, so silence from
+        // it is the design and not a dead microphone.
+        if mode.lock().listening()
+            && now_ms.saturating_sub(capture.last_audio_ms) > capture.device_silence_timeout_ms
+        {
             return disarmed_or_not_armed(mode.lock().note_device_failed(format!(
                 "The capture device delivered no audio for {}s",
                 capture.device_silence_timeout_ms / 1_000
@@ -2904,6 +2962,45 @@ mod tests {
             "{MODE_ENTRY_HINT}"
         );
         assert!(MODE_ENTRY_HINT.contains("action \"speak\""));
+    }
+
+    // catches: a replies-only conversation tells the model its input was spoken,
+    // or a muted one still invites speech.
+    #[test]
+    fn the_entry_hint_follows_both_voice_settings() {
+        assert_eq!(entry_hint_for("", true, true), MODE_ENTRY_HINT);
+        assert_eq!(entry_hint_for("", false, true), REPLIES_ONLY_ENTRY_HINT);
+        for listening in [true, false] {
+            let notice = entry_hint_for("Always call voice speak", listening, false);
+            assert!(notice.contains("Reply in text"), "{notice}");
+        }
+        assert!(!REPLIES_ONLY_ENTRY_HINT.contains("spoken out loud"));
+        assert!(!REPLIES_ONLY_ENTRY_HINT.contains('\n'));
+    }
+
+    // catches: push-to-talk overwriting what a listening conversation heard, or
+    // a replies-only one never learning its language under `auto`.
+    #[test]
+    fn push_to_talk_language_reaches_only_a_bound_replies_only_conversation() {
+        let mut mode = HandsFree::new(0);
+        mode.note_push_to_talk_language(Some("it"));
+        assert_eq!(mode.turn_language(), None, "nothing is bound");
+        mode.arm("s", "desktop", true).unwrap();
+        mode.note_push_to_talk_language(Some("it"));
+        assert_eq!(
+            mode.turn_language(),
+            None,
+            "a listening conversation hears its own"
+        );
+        mode.set_listening(false);
+        mode.note_push_to_talk_language(Some("it"));
+        assert_eq!(mode.turn_language(), Some("it"));
+        mode.note_push_to_talk_language(None);
+        assert_eq!(
+            mode.turn_language(),
+            Some("it"),
+            "an unnamed language changes nothing"
+        );
     }
 
     #[test]

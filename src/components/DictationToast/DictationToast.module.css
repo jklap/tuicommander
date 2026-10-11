@@ -149,6 +149,10 @@
   color: var(--fg-primary);
 }
 
+.controlOff {
+  opacity: 0.6;
+}
+
 /* Touch: 44px is the smallest target a thumb hits reliably. */
 @media (pointer: coarse) {
   .control {

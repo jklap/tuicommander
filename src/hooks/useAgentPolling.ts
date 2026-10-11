@@ -328,7 +328,7 @@ export async function detectAgentForTerminal(termId: string, source: DetectionSo
 			}
 
 			try {
-				const found = await invoke<{ sessionId: string; launchCommand: string | null } | null>(
+				const found = await invoke<{ sessionId: string; launchCommand: string | null; provider: string | null } | null>(
 					"discover_agent_session",
 					{
 						agentType,
@@ -351,6 +351,10 @@ export async function detectAgentForTerminal(termId: string, source: DetectionSo
 				// before exec, so TUIC only ever sees "c2".
 				if (found?.launchCommand && found.launchCommand !== current.agentLaunchCommand) {
 					terminalsStore.update(termId, { agentLaunchCommand: found.launchCommand });
+				}
+				const provider = found?.provider ?? null;
+				if (found && provider !== (current.agentProvider ?? null)) {
+					terminalsStore.update(termId, { agentProvider: provider });
 				}
 			} catch (err) {
 				appLogger.debug("app", `[AgentDetect] ${termId} discover_agent_session failed`, err);
