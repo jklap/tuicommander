@@ -1,5 +1,6 @@
 import { createEffect, createSignal, For, onMount, Show } from "solid-js";
 import { Composer } from "../../components/AIChatPanel/Composer";
+import { chatErrorView } from "../../components/AIChatPanel/chatError";
 import { Interactions } from "../../components/AIChatPanel/Interactions";
 import { Transcript } from "../../components/AIChatPanel/Transcript";
 import { createAcpChat } from "../../components/AIChatPanel/useAcpChat";
@@ -73,6 +74,11 @@ export function MobileChatScreen(props: { onOpenFile?: (candidate: string, cwd: 
 		props.onOpenFile(candidate, cwd);
 	};
 
+	async function startNewChat(): Promise<void> {
+		await chat.closeFailed();
+		await chat.startSession();
+	}
+
 	return (
 		<section class={styles.screen} aria-label="AI Chat">
 			<header class={styles.header}>
@@ -103,14 +109,24 @@ export function MobileChatScreen(props: { onOpenFile?: (candidate: string, cwd: 
 				)}
 			</Show>
 			<Show when={chat.error()}>
-				{(message) => (
-					<div class={styles.banner}>
-						{message()}{" "}
-						<button type="button" onClick={() => void chat.recover()}>
-							Retry
-						</button>
-					</div>
-				)}
+				{(message) => {
+					const view = () => chatErrorView(message());
+					return (
+						<div class={styles.banner} role="alert">
+							{view().text}{" "}
+							<Show when={view().retryable}>
+								<button type="button" onClick={() => void chat.recover()}>
+									Retry
+								</button>
+							</Show>
+							<Show when={view().startNew}>
+								<button type="button" onClick={() => void startNewChat()}>
+									Start new chat
+								</button>
+							</Show>
+						</div>
+					);
+				}}
 			</Show>
 			<Show when={chat.phase() === "live" && !chat.isStreaming()}>
 				<div class={styles.banner}>Not receiving updates.</div>
