@@ -1034,7 +1034,7 @@
 }
 
 .infoBadge:hover .infoBadgeTip {
-  display: block;
+  visibility: visible;
 }
 
 .downloadBtn {
