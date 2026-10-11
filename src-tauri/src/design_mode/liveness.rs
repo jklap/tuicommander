@@ -78,10 +78,9 @@ impl Liveness {
     }
 
     /// The navigation the extension has not necessarily applied yet, for an armed repository.
-    pub(crate) fn pending_navigate(&self, repo: &str) -> Option<(u64, String)> {
+    pub(crate) fn pending_navigate(&self, repo: &str) -> Option<(u64, Option<String>)> {
         self.entries.get(repo)?;
-        let (seq, url) = self.navigate.get(repo)?;
-        Some((*seq, url.clone()?))
+        Some(self.navigate.get(repo).cloned().unwrap_or_default())
     }
 
     /// Removes and returns `(repo, session)` for every mode whose browser went quiet.
@@ -183,7 +182,7 @@ mod tests {
             None
         );
         live.armed("/repo", "agent", now);
-        assert_eq!(live.pending_navigate("/repo"), None);
+        assert_eq!(live.pending_navigate("/repo"), Some((0, None)));
         assert_eq!(
             live.request_navigate("/repo", "http://localhost:1/a".into()),
             Some(1)
@@ -194,12 +193,12 @@ mod tests {
         );
         assert_eq!(
             live.pending_navigate("/repo"),
-            Some((2, "http://localhost:1/b".into()))
+            Some((2, Some("http://localhost:1/b".into())))
         );
         live.armed("/repo", "other-agent", now);
         assert_eq!(
             live.pending_navigate("/repo"),
-            None,
+            Some((2, None)),
             "re-arming is not a navigation"
         );
         assert_eq!(

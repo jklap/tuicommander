@@ -112,7 +112,7 @@ describe("Design Mode heartbeat navigation delivery", () => {
 		await heartbeatReply(reply(1, "http://localhost:5173/new"), storage, tabs, 9);
 		await heartbeatReply(reply(2, "http://localhost:5173/new"), storage, tabs, 9);
 		expect(tabs.update).toHaveBeenLastCalledWith(9, { url: "http://localhost:5173/new" });
-		expect(tabs.update).toHaveBeenCalledTimes(2);
+		expect(tabs.update).toHaveBeenCalledTimes(3);
 	});
 });
 
@@ -139,4 +139,38 @@ it("delivers the first navigation after an idle backend restart heartbeat", asyn
 			[9, { url: "http://localhost:5173/after" }],
 		]);
 	}
+});
+
+// Catches: equal counters after restart losing a command that arrives before an idle beat.
+it("delivers navigation before the first idle beat of a new backend", async () => {
+	for (const previousSeq of [1, 5]) {
+		const { storage, tabs } = browser();
+		await heartbeatReply(
+			{ armed: true, backendId: "old", navigate: { seq: previousSeq, url: "http://localhost/before" } },
+			storage,
+			tabs,
+			9,
+		);
+		const reply = { armed: true, backendId: "new", navigate: { seq: 1, url: "http://localhost/after" } };
+		tabs.update.mockRejectedValueOnce(new Error("Tab unavailable"));
+		await expect(heartbeatReply(reply, storage, tabs, 9)).rejects.toThrow("Tab unavailable");
+		await heartbeatReply(reply, storage, tabs, 9);
+		await heartbeatReply(reply, storage, tabs, 9);
+		expect(tabs.update.mock.calls).toEqual([
+			[9, { url: "http://localhost/before" }],
+			[9, { url: "http://localhost/after" }],
+			[9, { url: "http://localhost/after" }],
+		]);
+	}
+});
+// Catches: a URL-free sequence reply reusing an old acknowledgement or replaying an old URL.
+it("rebases URL-free navigation sequences without applying a page", async () => {
+	const { storage, tabs } = browser();
+	await heartbeatReply({ armed: true, navigate: { seq: 3, url: "http://localhost/before" } }, storage, tabs, 9);
+	await heartbeatReply({ armed: true, navigate: { seq: 0 } }, storage, tabs, 9);
+	await heartbeatReply({ armed: true, navigate: { seq: 1, url: "http://localhost/after" } }, storage, tabs, 9);
+	expect(tabs.update.mock.calls).toEqual([
+		[9, { url: "http://localhost/before" }],
+		[9, { url: "http://localhost/after" }],
+	]);
 });

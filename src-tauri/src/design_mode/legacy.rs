@@ -262,15 +262,23 @@ mod tests {
     }
 
     // Catches: navigation to a remote, credentialed or non-HTTP target reaching the user's browser.
-    #[test]
-    fn navigate_accepts_only_local_http_urls() {
+    #[tokio::test]
+    async fn navigate_accepts_only_local_http_urls() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let manager = manager(&state).await;
+        manager.arm_extension("/repo".into(), "agent".into()).await;
         for ok in [
             "http://localhost:5173/a?b=1#c",
             "https://localhost/",
             "http://127.0.0.1:9877/",
             "http://[::1]:3000/x",
         ] {
-            assert!(local_http_url(ok).is_ok(), "{ok}");
+            let reply = navigate(&state, "/repo", ok).await.unwrap();
+            assert_eq!(reply["url"], ok);
+            assert_eq!(
+                manager.pending_navigate("/repo").await,
+                Some((reply["navigateSeq"].as_u64().unwrap(), Some(ok.into())))
+            );
         }
         for bad in [
             "https://example.com/",
@@ -282,7 +290,10 @@ mod tests {
             "localhost:5173",
             "",
         ] {
-            assert!(local_http_url(bad).is_err(), "{bad}");
+            let pending = manager.pending_navigate("/repo").await;
+            let error = navigate(&state, "/repo", bad).await.unwrap_err();
+            assert!(error.starts_with("Navigate"), "{bad}: {error}");
+            assert_eq!(manager.pending_navigate("/repo").await, pending, "{bad}");
         }
     }
 

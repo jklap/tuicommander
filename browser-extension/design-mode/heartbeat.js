@@ -22,8 +22,18 @@ export async function heartbeatReply(reply, storage, tabs, reviewedTab) {
     await tabs.reload(id);
     return true;
   });
-  const {seq, url} = reply.navigate ?? {};
-  if (typeof url !== 'string') return;
+  const {seq = 0, url} = reply.navigate ?? {};
+  if (!Number.isSafeInteger(seq) || seq < 0) return;
+  const saved = await storage.get(['navigateSeq', 'backendId']);
+  // A backend identity distinguishes equal counters when a command precedes the first idle beat.
+  const restarted = typeof reply.backendId === 'string' && reply.backendId !== saved.backendId;
+  if (restarted || seq < (saved.navigateSeq ?? 0)) {
+    await storage.set({navigateSeq: 0, ...(typeof reply.backendId === 'string' ? {backendId: reply.backendId} : {})});
+  }
+  if (typeof url !== 'string') {
+    await storage.set({navigateSeq: seq});
+    return;
+  }
   await once(storage, 'navigateSeq', seq, async () => {
     const id = await tab();
     if (!id) return false;

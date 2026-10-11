@@ -46,21 +46,31 @@ pub(super) fn pick_evidence_with_image(
 async fn heartbeat(state: &Arc<AppState>, body: &Value) -> Result<Value, String> {
     let repo = body["repoPath"].as_str().ok_or("Missing repository")?;
     #[cfg(feature = "desktop")]
-    let (seq, navigate) = match state.design_mode.get() {
+    let (seq, navigate, backend_id) = match state.design_mode.get() {
         Some(manager) => (
             manager.heartbeat(repo).await,
             manager.pending_navigate(repo).await,
+            Some(manager.heartbeat_id.as_str()),
         ),
-        None => (None, None),
+        None => (None, None, None),
     };
     #[cfg(not(feature = "desktop"))]
-    let (seq, navigate): (Option<u64>, Option<(u64, String)>) = {
+    let (seq, navigate, backend_id): (
+        Option<u64>,
+        Option<(u64, Option<String>)>,
+        Option<&str>,
+    ) = {
         let _ = (state, repo);
-        (None, None)
+        (None, None, None)
     };
     let mut reply = json!({"armed": seq.is_some(), "reloadSeq": seq.unwrap_or(0)});
-    if let Some((seq, url)) = navigate {
-        reply["navigate"] = json!({"seq": seq, "url": url});
+    let (navigate_seq, url) = navigate.unwrap_or_default();
+    reply["navigate"] = json!({"seq": navigate_seq});
+    if let Some(url) = url {
+        reply["navigate"]["url"] = json!(url);
+    }
+    if let Some(backend_id) = backend_id {
+        reply["backendId"] = json!(backend_id);
     }
     Ok(reply)
 }
@@ -164,34 +174,42 @@ pub(crate) mod tests {
     async fn heartbeat_reply_carries_each_reload_request_once() {
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
         let beat = |state: Arc<AppState>| async move {
-            request(
-                state,
+            let mut reply = request(
+                state.clone(),
                 json!({"version":"2.0.0","action":"heartbeat","repoPath":"/repo"}),
             )
             .await["result"]
-                .clone()
+                .clone();
+            if let Some(manager) = state.design_mode.get() {
+                assert_eq!(reply["backendId"], manager.heartbeat_id);
+            }
+            reply.as_object_mut().unwrap().remove("backendId");
+            reply
         };
         assert_eq!(
             beat(state.clone()).await,
-            json!({"armed":false,"reloadSeq":0})
+            json!({"armed":false,"reloadSeq":0,"navigate":{"seq":0}})
         );
         let manager = super::super::manager(&state).await;
         manager.arm_extension("/repo".into(), "agent".into()).await;
         assert_eq!(
             beat(state.clone()).await,
-            json!({"armed":true,"reloadSeq":0})
+            json!({"armed":true,"reloadSeq":0,"navigate":{"seq":0}})
         );
         super::super::reload(&state, "/repo").await.unwrap();
         assert_eq!(
             beat(state.clone()).await,
-            json!({"armed":true,"reloadSeq":1})
+            json!({"armed":true,"reloadSeq":1,"navigate":{"seq":0}})
         );
         assert_eq!(
             beat(state.clone()).await,
-            json!({"armed":true,"reloadSeq":1})
+            json!({"armed":true,"reloadSeq":1,"navigate":{"seq":0}})
         );
         manager.stop("/repo").await.unwrap();
-        assert_eq!(beat(state).await, json!({"armed":false,"reloadSeq":0}));
+        assert_eq!(
+            beat(state).await,
+            json!({"armed":false,"reloadSeq":0,"navigate":{"seq":0}})
+        );
     }
 
     // Catches: a navigation request missing from the heartbeat reply, or leaking after Stop.
@@ -200,12 +218,17 @@ pub(crate) mod tests {
     async fn heartbeat_reply_carries_the_pending_navigation() {
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
         let beat = |state: Arc<AppState>| async move {
-            request(
-                state,
+            let mut reply = request(
+                state.clone(),
                 json!({"version":"2.0.0","action":"heartbeat","repoPath":"/repo"}),
             )
             .await["result"]
-                .clone()
+                .clone();
+            if let Some(manager) = state.design_mode.get() {
+                assert_eq!(reply["backendId"], manager.heartbeat_id);
+            }
+            reply.as_object_mut().unwrap().remove("backendId");
+            reply
         };
         let manager = super::super::manager(&state).await;
         manager.arm_extension("/repo".into(), "agent".into()).await;
@@ -217,6 +240,34 @@ pub(crate) mod tests {
             json!({"armed":true,"reloadSeq":0,"navigate":{"seq":1,"url":"http://localhost:5173/page"}})
         );
         manager.stop("/repo").await.unwrap();
-        assert_eq!(beat(state).await, json!({"armed":false,"reloadSeq":0}));
+        assert_eq!(
+            beat(state).await,
+            json!({"armed":false,"reloadSeq":0,"navigate":{"seq":0}})
+        );
+    }
+    // Catches: a new manager reusing the browser acknowledgement namespace after a restart.
+    #[cfg(feature = "desktop")]
+    #[tokio::test]
+    async fn heartbeat_identity_changes_after_backend_restart() {
+        let mut identities = Vec::new();
+        for _ in 0..2 {
+            let state = Arc::new(crate::state::tests_support::make_test_app_state());
+            let manager = super::super::manager(&state).await;
+            manager.arm_extension("/repo".into(), "agent".into()).await;
+            super::super::navigate(&state, "/repo", "http://localhost/page")
+                .await
+                .unwrap();
+            let reply = request(
+                state,
+                json!({"version":"2.0.0","action":"heartbeat","repoPath":"/repo"}),
+            )
+            .await;
+            assert_eq!(
+                reply["result"]["navigate"],
+                json!({"seq":1,"url":"http://localhost/page"})
+            );
+            identities.push(reply["result"]["backendId"].as_str().unwrap().to_owned());
+        }
+        assert_ne!(identities[0], identities[1]);
     }
 }
