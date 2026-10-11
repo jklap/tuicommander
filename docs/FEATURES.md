@@ -1,5 +1,7 @@
 # TUICommander — Complete Feature Reference
 
+Mobile terminal Send supports long-press Queue for the next agent ready window.
+
 Published story workflows can start in Plans and Stories through the owning daemon. Run history renders graph positions, decisions, evidence and paged event payloads, with explicit graph recovery and cancellation. IPC/HTTP and the generated `workflow_run` MCP schema share the native run service. Plan start remains visibly unavailable pending plan dispatch.
 
 > Canonical capability inventory. Update this file when adding, changing, or removing user-visible features.
@@ -1148,6 +1150,7 @@ re-derived later.
 - TriStateToggle component: 3-position pill switch (left=hide, center=default, right=show) matching existing toggle style
 
 ### 8.5 Auto-Heal
+- Auto-heal resolves failing checks from the exact commit over account-bound GraphQL, including external CI; check pagination and newest-rerun deduplication do not depend on the open PR count.
 - When a PR on a branch with an active agent terminal becomes blocked, auto-heal hands the problem to the agent:
   - **CI failure** — fetches failure logs and injects them with a fix prompt
   - **Merge conflict** (`mergeable === "CONFLICTING"`) — injects a resolve-conflicts prompt

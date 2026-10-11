@@ -7,6 +7,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- Long-press mobile Send to queue the current agent draft for its next ready window (#1717-efd3).
+
 - Automation run worktree provenance and explicit cleanup with existing integration, archive and live-session safety checks (#1623-8b2a).
 
 - Add built-in automation templates as editable, paused drafts using the selected repository, run config and host local zone; applying a template never saves or starts a run (#1622-be11).
@@ -72,6 +74,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Add the Rust foundation for Once automation schedules with IANA timezone validation, a single preview instant and durable occurrence deduplication (#1629-2262).
 
 ### Fixed
+- Reap child processes launched by built-in apps, custom tools and macOS microphone settings without waiting for the launched application to close (#1707-bd40).
 - Preserve Design Mode screenshot evidence and send retained feedback to an explicitly chosen replacement agent (#1672-cd3d).
 - Attach saved AI Chat tabs when selected, show connection failures with Retry and pending model controls, and name tabs from conversation titles or prompts (#1628-4459).
 

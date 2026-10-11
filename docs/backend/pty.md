@@ -699,6 +699,8 @@ that acknowledgement. Movement proves the child terminal reacted, not that the
 application understood the command. A complete or uncertain write is never
 automatically retryable; only rejection/no-byte failure is.
 
+Mobile Queue supplies `expectedDraft` to validate the live InputLineBuffer before a server-side Ctrl-U and enqueue on this same FIFO. Preflight rejections leave the draft untouched. A write failure may have cleared it already; the caller reports uncertainty and does not retry automatically. Concurrent producers are not transactionally isolated.
+
 **User-composed commands share that gate:** the Compose panel's enqueue action
 (`enqueue_agent_command` / `POST /sessions/:id/queue`) appends to the same
 typed `pending_injections` FIFO as peer delivery rather than writing to the PTY,

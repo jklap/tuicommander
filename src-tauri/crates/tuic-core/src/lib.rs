@@ -3,6 +3,7 @@
 pub mod app_instance;
 #[cfg(feature = "audio-output")]
 pub mod audio_output;
+pub mod child_reaping;
 pub mod cli;
 pub mod credentials;
 pub mod error_classification;

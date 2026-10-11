@@ -1,3 +1,7 @@
+## Commit failing checks (1712-b11c) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, select a failing external check in a throwaway PR and confirm auto-heal uses its exact head and detail link. Confirm a successful rerun removes the stale failure. The lookup uses the bound repository account over GraphQL and does not depend on the first 100 open PRs. Recorded GitHub fixtures cover CheckRuns, external StatusContexts and pagination on rb; live account requests remain unverified. No desktop instance was started or restarted by this peer.
+
 ## Merged GitHub PR proof (1711-67a7) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, check sidebar lifecycle and cleanup of a squash-merged throwaway worktree for a bound cloud account and an enterprise account. The proof now uses that repository's account over HTTP GraphQL and must not trust an incomplete response. Targeted stub tests cover pagination, retryability and the blocking-thread bridge; live account requests remain unverified. Rust does not hot-reload; no desktop instance was started or restarted by this peer.
@@ -5074,3 +5078,8 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 ## GitHub HTTP writes (1710-124a) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, create a PR, create an issue, and submit a review with inline comments on a throwaway repository bound to the intended GitHub/GHE account. Confirm the bound identity is used without a `gh` executable and validation errors retain HTTP status/body. Targeted tests cover request coordinates, fields, review validation, and error propagation; no desktop instance was launched or restarted.
+
+- [ ] After a backend rebuild, hold mobile Send, select Queue while an agent is busy, and verify one submission at its next ready window with an empty input box. Queue errors must preserve local text and warn to inspect the session (#1717-efd3).
+## Launcher child reaping (1707-bd40) — Rust restart required
+
+- [ ] After landing, Boss must manually restart `make dev` or install `make build` to load the Rust fix. Open a built-in editor, a custom tool and macOS microphone settings, then use the desktop normally for a day. Confirm its child processes contain no zombie older than one minute. Real-process regression tests cover immediate exit and retained wait ownership; the day-long production observation remains pending. No desktop instance was started or restarted by this peer.
