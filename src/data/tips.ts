@@ -10,6 +10,12 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "Tasks roadmap",
+		description:
+			"Switch Month or Quarter in the Tasks roadmap to change the timeline scale. Tasks without usable dates stay in the side list.",
+		shortcut: null,
+	},
+	{
 		feature: "Design Mode",
 		description:
 			"Start Design Mode from an agent tab, open its browser sidebar, pick elements and comment before sending. Busy agents receive feedback at their next idle window.",

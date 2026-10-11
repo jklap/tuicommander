@@ -15,6 +15,15 @@ Desktop AI Chat uses the terminal composer’s pin and blue play buttons. The pi
 
 AI Chat image paste discovers capabilities on first use and shares clipboard precedence with Ideas, terminal Compose, and terminal input: Finder image filenames allow attachments, while substantive text takes priority.
 
+## Tasks roadmap component
+
+The host-rendered roadmap shows provider date fields on a month or quarter timeline.
+Date-only values retain their day; timestamps use the viewer's local time zone.
+Undated or invalid schedules stay in a side list, and single dates show as milestones.
+Both lists use virtual rows and provider cursor pagination. The host can choose start
+and target field IDs; the fallback uses the first two date descriptors in order.
+The component is ready for Tasks shell integration and does not add a tab by itself.
+
 ## Tasks list component
 
 The generic Tasks list renders data-only work-item providers with account-scoped
@@ -2820,6 +2829,10 @@ Automation agent surface (#1630-cbfa, #1621-5dce): MCP `automations` and
 `tuic automations` share the HTTP/IPC action parser, definition results, schedule
 previews, run history, summaries and Run Now runtime. Enabled-only updates and
 Once definitions work identically; MCP creation retains host-bound provenance.
+
+GitHub backend: paginated line review threads and replies, resolve/unresolve, and draft review submission pinned to the reviewed head are available through IPC and HTTP.
+
+GitHub backend: failed-job reruns, auto-merge enable/disable, merge queue state/entry/removal and queue-aware merge are available over IPC and HTTP. Request changes requires review text.
 
 ## Tasks board component
 
