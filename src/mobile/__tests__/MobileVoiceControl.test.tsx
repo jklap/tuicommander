@@ -1,5 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { appLogger } from "../../stores/appLogger";
 import { SessionDetailScreen } from "../screens/SessionDetailScreen";
 import type { SessionInfo } from "../useSessions";
 
@@ -13,6 +14,11 @@ const { rpc, toastAdd, voice } = vi.hoisted(() => {
 		setError: (_message: string | null) => {},
 	};
 	return { rpc: vi.fn(), toastAdd: vi.fn(), voice };
+});
+
+vi.mock("../../stores/appLogger", async (importOriginal) => {
+	const original = await importOriginal<typeof import("../../stores/appLogger")>();
+	return { ...original, appLogger: { ...original.appLogger, warn: vi.fn() } };
 });
 
 vi.mock("../../transport", async (importOriginal) => ({
@@ -202,8 +208,10 @@ it.each(["not-allowed", "network", "no-speech"])(
 		fireEvent.input(input, { target: { value: "Keep this" } });
 		fireEvent.click(screen.getByRole("button", { name: "Dictate into draft" }));
 		FakeRecognition.latest.onerror?.({ error });
+		FakeRecognition.latest.onend?.();
 		expect(input.value).toBe("Keep this");
 		expect(toastAdd).toHaveBeenCalledWith("Dictation failed", error, "error", true);
+		expect(appLogger.warn).toHaveBeenCalledWith("dictation", "Browser dictation failed", error);
 		expect(screen.getByRole("button", { name: "Dictate into draft" }).getAttribute("aria-pressed")).toBe("false");
 	},
 );
@@ -256,7 +264,7 @@ it("excludes browser speech during a pending server permission prompt", async ()
 });
 
 it.each(["run tests in package", "replace everything", ""])(
-	"returns the mic to idle and keeps the edited draft %j after queued speech",
+	"returns the mic to idle after end and keeps the edited draft %j after queued speech",
 	async (edited) => {
 		// Catches: editing leaves recording active or a queued result overwrites the manual draft.
 		browserSpeech();
@@ -269,6 +277,8 @@ it.each(["run tests in package", "replace everything", ""])(
 		const lateResult = recognition.onresult!;
 		fireEvent.input(input, { target: { value: edited } });
 		expect(recognition.abort).toHaveBeenCalledTimes(1);
+		expect(server.hasAttribute("disabled")).toBe(true);
+		recognition.onend?.();
 		expect(screen.getByRole("button", { name: "Dictate into draft" }).getAttribute("aria-pressed")).toBe("false");
 		expect(server.hasAttribute("disabled")).toBe(false);
 		rpc.mockClear();

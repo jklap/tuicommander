@@ -37,6 +37,7 @@ export function useBrowserDictation(options: {
 	const Constructor = browser.SpeechRecognition ?? browser.webkitSpeechRecognition;
 	const [recording, setRecording] = createSignal(false);
 	let recognition: BrowserRecognition | null = null;
+	let discarding = false;
 	let language = navigator.language;
 	let renderedSpeech = "";
 
@@ -54,17 +55,26 @@ export function useBrowserDictation(options: {
 	}
 
 	function fail(error: unknown) {
+		appLogger.warn("dictation", "Browser dictation failed", error);
 		toastsStore.add(t("mobile.dictation.error", "Dictation failed"), String(error), "error", true);
 	}
 
-	function cancel() {
-		const current = recognition;
+	function release() {
+		if (recognition) recognition.onresult = recognition.onerror = recognition.onend = null;
 		recognition = null;
-		if (current) {
-			current.onresult = current.onerror = current.onend = null;
-			current.abort();
-		}
 		markRecording(false);
+	}
+
+	function cancel() {
+		if (!recognition || discarding) return;
+		discarding = true;
+		// abort() is asynchronous: keep the service and microphone claim until end.
+		try {
+			recognition.abort();
+		} catch (error) {
+			release();
+			fail(error);
+		}
 	}
 
 	createEffect(() => {
@@ -74,6 +84,7 @@ export function useBrowserDictation(options: {
 
 	function toggle() {
 		if (recognition) {
+			if (discarding) return;
 			try {
 				recognition.stop();
 			} catch (error) {
@@ -86,12 +97,13 @@ export function useBrowserDictation(options: {
 		try {
 			const current = new Constructor();
 			recognition = current;
+			discarding = false;
 			renderedSpeech = "";
 			current.lang = language;
 			current.continuous = true;
 			current.interimResults = true;
 			current.onresult = (event) => {
-				if (recognition !== current) return;
+				if (recognition !== current || discarding) return;
 				const draft = options.getDraft();
 				// Replace the previous hypothesis only while it still owns the draft tail.
 				// Manual composer edits cancel recognition before changing the draft.
@@ -103,19 +115,20 @@ export function useBrowserDictation(options: {
 				options.setDraft(base + renderedSpeech);
 			};
 			current.onerror = (event) => {
-				cancel();
+				if (recognition !== current || discarding) return;
+				discarding = true;
 				fail(event.error);
 			};
 			current.onend = () => {
 				if (recognition !== current) return;
-				recognition = null;
-				markRecording(false);
+				release();
 			};
 			// Claim the microphone before start(), including the permission prompt.
 			markRecording(true);
 			current.start();
 		} catch (error) {
-			cancel();
+			// A synchronous start failure has no running service to emit end.
+			release();
 			fail(error);
 		}
 	}

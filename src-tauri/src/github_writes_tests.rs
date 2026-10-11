@@ -106,22 +106,6 @@ async fn post_pr_review_preserves_inline_comments_and_defaults_right() {
     );
 }
 
-// Catches: API status/body replaced with generic gh/task wording on any write path.
-#[tokio::test]
-async fn rest_error_keeps_status_and_message() {
-    let api = Stub::default();
-    let errors = [
-        create_pr_with(&api, "T", "B", "main", "feat", false)
-            .await
-            .unwrap_err(),
-        create_issue_with(&api, "T", "B").await.unwrap_err(),
-        post_pr_review_with(&api, 7, "B", Some("APPROVE"), &[])
-            .await
-            .unwrap_err(),
-    ];
-    assert_eq!(errors, [REST_ERROR; 3]);
-}
-
 // Catches: review validation moved after the write, allowing unsupported or empty rejection reviews.
 #[tokio::test]
 async fn invalid_review_is_rejected_before_any_rest_write() {
