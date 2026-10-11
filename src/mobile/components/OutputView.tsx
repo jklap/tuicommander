@@ -42,7 +42,7 @@ export function OutputView(props: OutputViewProps) {
 	let containerEl: HTMLDivElement | undefined;
 	let unsubscribe: PtySubscription | null = null;
 	// When the user scrolls up manually, stop auto-scrolling until they
-	// return near the bottom.
+	// return to the bottom.
 	let userScrolledUp = false;
 	// Tracks the oldest log offset we've loaded — 0 means full history is loaded.
 	let oldestLoadedOffset = 0;
@@ -152,7 +152,8 @@ export function OutputView(props: OutputViewProps) {
 	function scrollToBottom(force = false) {
 		if (!force && (userScrolledUp || touchActive)) return;
 		requestAnimationFrame(() => {
-			if (containerEl) {
+			// Output can queue this frame before the user starts scrolling.
+			if (containerEl && (force || (!userScrolledUp && !touchActive))) {
 				containerEl.scrollTop = containerEl.scrollHeight;
 			}
 		});
@@ -160,9 +161,9 @@ export function OutputView(props: OutputViewProps) {
 
 	function handleScroll() {
 		if (!containerEl) return;
-		// Larger threshold for touch devices where inertia scroll is imprecise
-		const threshold = "ontouchstart" in window ? 200 : 80;
-		const atBottom = containerEl.scrollHeight - containerEl.scrollTop - containerEl.clientHeight < threshold;
+		// scrollTop can be fractional while scrollHeight/clientHeight are rounded.
+		// Only tolerate rounding, not an upward gesture inside a near-bottom zone.
+		const atBottom = containerEl.scrollHeight - containerEl.scrollTop - containerEl.clientHeight <= 1;
 		userScrolledUp = !atBottom;
 		// Lazy-load older lines when scrolling near the top
 		if (containerEl.scrollTop < SCROLL_UP_THRESHOLD && oldestLoadedOffset > 0) {
@@ -182,6 +183,7 @@ export function OutputView(props: OutputViewProps) {
 		containerEl?.addEventListener("scroll", handleScroll, { passive: true });
 		containerEl?.addEventListener("touchstart", handleTouchStart, { passive: true });
 		containerEl?.addEventListener("touchend", handleTouchEnd, { passive: true });
+		containerEl?.addEventListener("touchcancel", handleTouchEnd, { passive: true });
 		const offset = await fetchInitialOutput();
 
 		try {
@@ -228,6 +230,7 @@ export function OutputView(props: OutputViewProps) {
 		containerEl?.removeEventListener("scroll", handleScroll);
 		containerEl?.removeEventListener("touchstart", handleTouchStart);
 		containerEl?.removeEventListener("touchend", handleTouchEnd);
+		containerEl?.removeEventListener("touchcancel", handleTouchEnd);
 	});
 
 	// Reflow before filtering: it joins rows by their adjacency on the source
