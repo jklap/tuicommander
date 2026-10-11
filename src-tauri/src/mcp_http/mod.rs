@@ -1,3 +1,4 @@
+mod account_routes;
 pub(crate) mod acp_mcp;
 mod acp_routes;
 mod agent_routes;
@@ -835,6 +836,7 @@ async fn inject_localhost_connect_info(
 /// route literals out of this file — a new family added here without a matching
 /// entry fails that test instead of quietly serving HTML again.
 const API_PREFIXES: &[&str] = &[
+    "accounts",
     "acp",
     "agent",
     "agents",
@@ -957,6 +959,8 @@ fn tunnel_routes() -> Router<Arc<AppState>> {
 fn shared_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/mcp/peer", get(remote_peer::endpoint))
+        .route("/accounts/action", post(account_routes::action))
+        .route("/accounts/secret-form", post(account_routes::secret_form))
         // Version (authenticated)
         .route("/api/version", get(session::app_version))
         // Shared on purpose: this is how a remote client escapes the header-only

@@ -1410,3 +1410,7 @@ settings controls and cannot be edited through the catalogue.
 Validation errors include schema-derived `expected` and `allowed` hints, never
 rejected input values. Persisted effect failures return `nextAction:"get"` and the
 committed revision: reread the affected paths rather than replaying the mutation.
+
+## Core provider accounts
+
+`accounts.json` stores provider/site/account metadata only. The first read migrates `github_accounts.json` while preserving IDs; the old file is retained for recovery and a durable marker prevents re-import after removals. `github_bindings.json` remains the GitHub binding store. Tokens migrate atomically within the credential vault to `account/{id}`; env/CLI credentials remain ambient. Corrupt metadata is retained and blocks account writes. See [Shared account registry](github.md#shared-account-registry) for APIs, credential presence and partial cross-store recovery.

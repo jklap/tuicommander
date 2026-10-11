@@ -1780,6 +1780,10 @@ Available from the [plugin registry](https://github.com/sstraus/tuicommander-plu
 | Changes not reflecting | Hot reload cache | Save the file again, or restart the app |
 | `default export` error | Module doesn't `export default { ... }` | Ensure your module has a default export with `id`, `onload`, `onunload` |
 
+## Core account registry integration
+
+Provider accounts and sites are core-owned. Metadata reads expose credential presence only. A trusted manifest adapter registers `ProviderDescriptor {id,label,kinds,verify:{path,login_pointer}}` with `accounts::register_provider(owner, descriptor)`; non-core providers use bearer/basic tokens only. Unload unregisters descriptors but keeps accounts and credentials. Account actions are not currently a grant in `host.invoke`; the scoped plugin host adapter and authenticated HTTP injection are separate host-API work. Secret entry belongs in the core private native sink, which calls the write-only account service; plugins must never receive token values. See [Shared account registry](backend/github.md#shared-account-registry).
+
 ## Core setting controls
 
 The core provides account, editable-list, multiselect, read-only status and action
