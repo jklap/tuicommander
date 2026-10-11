@@ -1,3 +1,7 @@
+## GitLab provider plugin (1695-9f3a) — needs 1697-4cdc and a desktop restart
+
+- [ ] After story 1697-4cdc lands (`host.httpFetch({account})` and manifest provider declarations) and Boss restarts the desktop app, install the `gitlab` plugin and add two GitLab accounts, one on a non-default port. In Tasks, confirm each account lists its own issues, merge requests and to-do items; paste an item URL of each instance and confirm only its own account resolves it. On a merge request, confirm merge/squash choices, readable blockers, approve, pipeline jobs and job retry; on a board, move a card and confirm the list label changes in GitLab. The plugin was tested only against hand-authored (unrecorded) fixtures; no desktop instance was launched by this peer.
+
 ## Work-item links and sidebar badge (1685-4b12) — Rust restart required
 
 - [ ] After Boss restarts `make dev` or installs `make build`: send `PUT /workitem-links` to :9876 with `{"repoPath":"<a repo>","branch":"<a worktree branch>","link":{"reference":{"providerId":"jira","accountId":"a","id":"1"},"key":"ACME-1","title":"t","url":"https://example.com/ACME-1","state":{"id":"1","name":"In Progress","tone":"info"}}}`, reload the window, and confirm the branch row shows an `ACME-1` chip in the info colour. Clicking it opens the URL and neither selects the branch nor toggles its agents. Remove the worktree from the sidebar and confirm `GET /workitem-links` no longer lists it. `GET /repo/remotes?path=<repo>` lists every remote without userinfo. No desktop instance was launched by this peer.
