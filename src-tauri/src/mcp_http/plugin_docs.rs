@@ -159,7 +159,7 @@ These inventories are checked against the capability validator, the host object 
 `credentials:read`, `exec:cli`, `fs:delete`, `fs:list`, `fs:read`, `fs:rename`, `fs:scan`, `fs:watch`, `fs:write`, `git:read`, `invoke:list_markdown_files`, `invoke:read_file`, `net:http`, `pty:read`, `pty:write`, `ui:context-menu`, `ui:file-icons`, `ui:file-preview`, `ui:markdown`, `ui:panel`, `ui:sidebar`, `ui:sound`, `ui:ticker`.
 
 ### Host method inventory
-`addItem`, `clearTicker`, `deleteBuildArtifact`, `execCli`, `getActiveRepo`, `getActiveRepoPath`, `getActiveTerminalSessionId`, `getClaudeProjectDir`, `getGitBranches`, `getGitDiff`, `getPrNotifications`, `getRecentCommits`, `getRepoPathForSession`, `getRepos`, `getSessionCwd`, `getSettings`, `getTerminalState`, `httpFetch`, `invoke`, `listDirectory`, `log`, `onStateChange`, `openEditorTab`, `openMarkdownFile`, `openMarkdownFileBackground`, `openMarkdownPanel`, `openPanel`, `playNotificationSound`, `readCredential`, `readFile`, `readFileBase64`, `readFileTail`, `readFiles`, `readSessionOutput`, `registerCommand`, `registerContextMenuAction`, `registerDashboard`, `registerFileIconProvider`, `registerFilePreview`, `registerMarkdownProvider`, `registerOutputWatcher`, `registerSection`, `registerSidebarPanel`, `registerStructuredEventHandler`, `registerTerminalAction`, `registerUrlResolver`, `registerWorkItemProvider`, `removeItem`, `renamePath`, `scanBuildArtifacts`, `sendAgentInput`, `setTicker`, `startWork`, `trimBuildArtifact`, `updateItem`, `watchPath`, `writeFile`, `writeFileBase64`, `writePty`.
+`addItem`, `clearTicker`, `deleteBuildArtifact`, `execCli`, `getActiveRepo`, `getActiveRepoPath`, `getActiveTerminalSessionId`, `getClaudeProjectDir`, `getGitBranches`, `getGitDiff`, `getPrNotifications`, `getRecentCommits`, `getRemotes`, `getRepoPathForSession`, `getRepos`, `getSessionCwd`, `getSettings`, `getTerminalState`, `httpFetch`, `invoke`, `linkItem`, `listDirectory`, `log`, `onStateChange`, `openEditorTab`, `openMarkdownFile`, `openMarkdownFileBackground`, `openMarkdownPanel`, `openPanel`, `playNotificationSound`, `readCredential`, `readFile`, `readFileBase64`, `readFileTail`, `readFiles`, `readSessionOutput`, `registerCommand`, `registerContextMenuAction`, `registerDashboard`, `registerFileIconProvider`, `registerFilePreview`, `registerMarkdownProvider`, `registerOutputWatcher`, `registerSection`, `registerSidebarPanel`, `registerStructuredEventHandler`, `registerTerminalAction`, `registerUrlResolver`, `registerWorkItemProvider`, `removeItem`, `renamePath`, `scanBuildArtifacts`, `sendAgentInput`, `setTicker`, `startWork`, `trimBuildArtifact`, `unlinkItem`, `updateItem`, `watchPath`, `writeFile`, `writeFileBase64`, `writePty`.
 
 ### Base CSS class inventory
 `badge`, `badge-accent`, `badge-error`, `badge-muted`, `badge-p1`, `badge-p2`, `badge-p3`, `badge-success`, `badge-warning`, `btn`, `btn-danger`, `btn-primary`, `card`, `critical`, `danger`, `dash-header`, `dash-meter`, `dash-meter-fill`, `dash-section`, `dash-section-hint`, `dash-section-title`, `dash-stat`, `dash-stat-grid`, `dash-stat-label`, `dash-stat-sub`, `dash-stat-value`, `dash-subtitle`, `dash-title`, `dashboard`, `empty-state`, `error`, `filter-bar`, `hint`, `num`, `ok`, `primary`, `show`, `success`, `toast`, `warn`.
@@ -241,6 +241,7 @@ Final shell/awaiting transitions emitted together with session teardown retain t
 host.getGitBranches(repoPath)           // [{ name, isCurrent }]
 host.getRecentCommits(repoPath, count?) // [{ hash, message, author, date }]
 host.getGitDiff(repoPath, scope?)       // unified diff string (scope: "staged" | "unstaged")
+host.getRemotes(repoPath)               // [{ name, url }] — every remote; credentials in URLs are removed
 ```
 
 ### Tier 3: Write Actions (capability-gated)
@@ -701,6 +702,25 @@ Core owns the Solid Tasks views; provider plugins supply data, schemas and actio
 never view HTML. A4 defines DTOs only: registration, transport and visible views
 are delivered by the following integration steps.
 
+### Work-item links (Phase A3b)
+
+Link a worktree branch to a work item. The link persists across restarts and the
+sidebar branch row shows its key, coloured by `state.tone`; a click opens `url`.
+TUIC drops the link when it removes that worktree.
+
+```typescript
+await host.linkItem(repoPath, branch, {
+  reference: { providerId, accountId, id }, // WorkItemRef of your provider
+  key: "ACME-7", title: "Fix login",
+  url: "https://acme.atlassian.net/browse/ACME-7", // http(s) only, else rejected
+  state: { id: "3", name: "In Progress", tone: "info" }, // or null
+});
+await host.unlinkItem(repoPath, branch) // true when a link existed
+```
+
+`repoPath` is the main repository path; `branch` is the worktree branch name. On hover
+the badge refreshes the state through your provider's `detail(reference)`.
+
 ### Work-item field kind inventory
 `text`, `markdown`, `enum`, `user`, `labels`, `date`, `number`, `link`
 
@@ -735,6 +755,22 @@ list, detail, comments, schemas, saved filters, board columns and mutations.
 It touches no network, credentials, filesystem or subprocesses. It is a development
 provider, not a fixture proving GitHub/Jira/GitLab API compatibility. Its search is
 literal text; sort supports key/title/updatedAt. Its cursor expires on mutation.
+
+## Tasks detail
+
+### Tasks detail component inventory
+`TasksDetail`.
+
+#### TasksDetail
+
+Core renders work-item detail with Solid controls. Providers supply `WorkItemDetail` through the async `WorkItemProvider` port; they do not supply a view or iframe. The Tasks shell mounts `TasksDetail` with a provider and `{providerId, accountId, id}` reference, and passes `visible=false` when hidden. Shell/provider registration is a separate integration step.
+
+- Header: key, title, type, authoritative state, updated time and provider link.
+- Fields: the detail's descriptors select text, Markdown, enum, user, labels, date, number or link controls. Only editable fields with an enabled `edit_field` action can be saved. Values use the tagged field-value union; required empty values cannot be submitted.
+- Body and all comment entries use `ContentRenderer` with `untrustedContent=true`. It keeps Markdown, tables, images and `<details>` while stripping scripts, event handlers, style tags and style attributes. Reader expansion survives refresh.
+- Comments: `normal`, `review_thread` (file, line and resolved state), and `review_summary` (review state) render together. Load more uses `comments(reference,cursor,50)` and the provider cursor. Add comment dispatches `comment`; a rejected request keeps the draft.
+- Status: buttons use the declared transition action IDs, enabled state and disabled reasons. The pending action label appears immediately; state IDs are never inferred from the label. Success adopts the returned detail; rejection restores the authoritative label and reports the error.
+- Refresh: manual Refresh plus a 60-second timer, enabled by default only while open, the Tasks view is visible and the document is visible. Already-loaded comment pages are refreshed too. Old-item responses cannot replace the current item.
 
 ## Tasks list
 
@@ -817,6 +853,7 @@ mod tests {
     const HOST: &str = include_str!("../../../src/plugins/pluginRegistry.ts");
     const CSS: &str = include_str!("../../../src/components/PluginPanel/pluginBaseStyles.ts");
     const UX: &str = include_str!("../../../src/components/SettingsPanel/tabs/PluginsTab.tsx");
+    const TASK_DETAIL: &str = include_str!("../../../src/components/Tasks/detail/TasksDetail.tsx");
     const SETTING_FIELDS: &str =
         include_str!("../../../src/components/SettingsPanel/SettingFields.tsx");
 
@@ -948,6 +985,14 @@ mod tests {
                 PLUGIN_DOCS.contains(&format!("#### {component}\n")),
                 "each core component needs UX instructions: {component}"
             );
+        }
+        assert_inventory(
+            PLUGIN_DOCS,
+            "### Tasks detail component inventory\n",
+            captures(TASK_DETAIL, r"(?m)^export function ([A-Za-z]+)\("),
+        );
+        for component in inventory(PLUGIN_DOCS, "### Tasks detail component inventory\n") {
+            assert!(PLUGIN_DOCS.contains(&format!("#### {component}\n")));
         }
     }
 }

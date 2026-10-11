@@ -2817,6 +2817,14 @@ Account forms have no browser/mobile entry capability.
 
 Provider-neutral Rust DTOs and generated TypeScript cover work-item queries, fields, comments, actions and boards. A deterministic local provider supports development; visible Tasks views and remote providers are separate integration work. See [plugin guide](plugins.md#tasks-data-contract-phase-a4).
 
+## Tasks detail component
+
+Core provides a generic work-item detail component with descriptor-driven field
+editors, sanitized descriptions and comments, review threads and summaries,
+cursor pagination, add comment, and declared status actions with rollback.
+Visible details refresh every 60 seconds and preserve expanded sections.
+The Tasks shell and provider registration integrate this component separately.
+
 Automation agent surface (#1630-cbfa, #1621-5dce): MCP `automations` and
 `tuic automations` share the HTTP/IPC action parser, definition results, schedule
 previews, run history, summaries and Run Now runtime. Enabled-only updates and

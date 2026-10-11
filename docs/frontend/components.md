@@ -1,5 +1,14 @@
 # Components
 
+`Tasks/detail/TasksDetail` is the core work-item detail surface. Its props are
+`provider`, `reference`, optional `visible`, `onClose` and `onItemChange`.
+It renders schema-driven fields, sanitized Markdown, all declared comment
+variants, cursor pagination, a comment composer and provider transition actions.
+The shell must pass visibility to pause the default 60-second refresh timer.
+`useTasksDetail` fences responses by item generation and serializes mutations.
+`TaskMarkdown` preserves reader disclosure state across provider refreshes.
+Shell mounting and provider registration are owned by the Tasks integration.
+
 Slice F exposes `start_graph {target:{type:story|plan,id},expected_revision?,definition_id,definition_revision,request_id,limits?}` through the existing owning-daemon service. Story starts require the current native revision and pin the selected publication; the request ID is bound to its payload. Omitted limits use Rust defaults. Plan dispatch remains unavailable in this build and its start control says so. The `workflow_run` MCP tool uses an inline schema generated from `RunAction` and the public `RunCommand` variants; it returns the same scoped snapshots and cursor-ordered events as IPC/HTTP. Run history shows pinned activations, decisions/evidence, repair counters, pause targets and complete event payloads across pages. Graph recovery uses `resume_graph {execution_id,activation_id,resolution}` after answering pending input; pause and cancel use the existing sequence-fenced commands. Legacy runs offer inspection and cancellation in the UI. No new persistence or client scheduler is added.
 
 All components are SolidJS functional components in `src/components/`.

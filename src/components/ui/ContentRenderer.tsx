@@ -31,6 +31,8 @@ const ALLOWED_URI_REGEXP =
 
 export interface ContentRendererProps {
 	content: string;
+	/** Provider-authored content cannot supply CSS that changes the host UI. */
+	untrustedContent?: boolean;
 	/** Opt-in copy action for fenced code blocks. Receives the original source text. */
 	onCodeCopy?: (text: string) => void;
 	/** Turn plain file paths into links; the caller still resolves and validates them. */
@@ -301,7 +303,7 @@ async function renderMermaidBlocks(container: HTMLElement): Promise<void> {
  */
 function renderMarkdownSegment(
 	source: string,
-	opts: { baseDir?: string; imageSrc?: (path: string) => string; lineOffset: number },
+	opts: { baseDir?: string; imageSrc?: (path: string) => string; lineOffset: number; untrustedContent?: boolean },
 ): string {
 	const raw = stripAnsiOutsideCodeBlocks(source);
 	try {
@@ -376,7 +378,8 @@ function renderMarkdownSegment(
 			html = template.innerHTML;
 		}
 		return DOMPurify.sanitize(stripEventHandlers(html), {
-			FORBID_TAGS: ["form", "map", "area"],
+			FORBID_TAGS: opts.untrustedContent ? ["form", "map", "area", "style"] : ["form", "map", "area"],
+			FORBID_ATTR: opts.untrustedContent ? ["style"] : [],
 			ADD_ATTR: [
 				"data-tuic-href",
 				"data-tweak-id",
@@ -401,7 +404,12 @@ export const ContentRenderer: Component<ContentRendererProps> = (props) => {
 	const processedContent = createMemo(() =>
 		props.incremental
 			? ""
-			: renderMarkdownSegment(props.content ?? "", { baseDir: props.baseDir, imageSrc: props.imageSrc, lineOffset: 0 }),
+			: renderMarkdownSegment(props.content ?? "", {
+					baseDir: props.baseDir,
+					imageSrc: props.imageSrc,
+					lineOffset: 0,
+					untrustedContent: props.untrustedContent,
+				}),
 	);
 
 	/**
@@ -417,6 +425,7 @@ export const ContentRenderer: Component<ContentRendererProps> = (props) => {
 	let renderedFor: MarkdownSegment[] = [];
 	let renderedBaseDir: string | undefined;
 	let renderedImageSrc: ContentRendererProps["imageSrc"];
+	let renderedUntrusted: boolean | undefined;
 	const incrementalContent = createMemo(() => {
 		if (!props.incremental) return { committed: [] as string[], tail: "" };
 		split = splitStream(props.content ?? "", split);
@@ -425,9 +434,14 @@ export const ContentRenderer: Component<ContentRendererProps> = (props) => {
 		// Segment identity is not the whole cache key: `baseDir` rewrites image
 		// src values, so cached HTML from another directory points at the wrong
 		// files.
-		if (props.baseDir !== renderedBaseDir || props.imageSrc !== renderedImageSrc) {
+		if (
+			props.baseDir !== renderedBaseDir ||
+			props.imageSrc !== renderedImageSrc ||
+			props.untrustedContent !== renderedUntrusted
+		) {
 			renderedBaseDir = props.baseDir;
 			renderedImageSrc = props.imageSrc;
+			renderedUntrusted = props.untrustedContent;
 			renderedHtml = [];
 			renderedFor = [];
 		} else if (n > committed.length || (n > 0 && committed[n - 1] !== renderedFor[n - 1])) {
@@ -440,6 +454,7 @@ export const ContentRenderer: Component<ContentRendererProps> = (props) => {
 					baseDir: props.baseDir,
 					imageSrc: props.imageSrc,
 					lineOffset: committed[i].lineOffset,
+					untrustedContent: props.untrustedContent,
 				}),
 			);
 			renderedFor.push(committed[i]);
@@ -450,6 +465,7 @@ export const ContentRenderer: Component<ContentRendererProps> = (props) => {
 				baseDir: props.baseDir,
 				imageSrc: props.imageSrc,
 				lineOffset: split.tail.lineOffset,
+				untrustedContent: props.untrustedContent,
 			}),
 		};
 	});

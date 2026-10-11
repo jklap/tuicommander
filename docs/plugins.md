@@ -428,6 +428,13 @@ const diff = await host.getGitDiff("/Users/me/project", "staged");
 // Returns unified diff string
 ```
 
+#### `host.getRemotes(repoPath) -> Promise<Array<{ name, url }>>`
+
+```typescript
+const remotes = await host.getRemotes("/Users/me/project");
+// [{ name: "origin", url: "https://github.com/acme/app.git" }] — credentials in URLs are removed
+```
+
 ### Tier 3: Write Actions (capability-gated)
 
 These methods require declaring capabilities in `manifest.json`. Calling without the required capability throws `PluginCapabilityError`.
@@ -1299,7 +1306,7 @@ Capabilities gate access to Tier 3 and Tier 4 methods. Declare them in `manifest
 | `fs:scan` | `host.scanBuildArtifacts()` | Can recursively scan registered repos for build-artifact directories (read-only; ignores `.gitignore`) |
 | `fs:delete` | `host.deleteBuildArtifact()`, `host.trimBuildArtifact()` | Can delete a build-artifact directory inside a registered repo (guarded `remove_dir_all`), or remove just its intermediates |
 | `exec:cli` | `host.execCli()` | Can execute CLI binaries declared in manifest `binaries` field |
-| `git:read` | `host.getGitBranches()`, `host.getRecentCommits()`, `host.getGitDiff()` | Read-only access to git repository state |
+| `git:read` | `host.getGitBranches()`, `host.getRecentCommits()`, `host.getGitDiff()`, `host.getRemotes()` | Read-only access to git repository state |
 | `ui:context-menu` | `host.registerTerminalAction()` | Can add actions to the terminal right-click "Actions" submenu |
 | `ui:sidebar` | `host.registerSidebarPanel()` | Can register collapsible panel sections in the sidebar |
 | `ui:file-icons` | `host.registerFileIconProvider()` | Can provide file/folder icons for the file browser (e.g. VS Code icon themes) |
@@ -1829,6 +1836,17 @@ Core owns the Solid Tasks views; provider plugins supply data, schemas and actio
 never view HTML. A4 defines DTOs only: registration, transport and visible views
 are delivered by the following integration steps.
 
+### Work-item links (Phase A3b)
+
+`host.linkItem(repoPath, branch, link)` persists a link from a worktree branch to a
+work item; `host.unlinkItem(repoPath, branch)` removes it and resolves `true` when a
+link existed. No capability is required. `link` is
+`{ reference: { providerId, accountId, id }, key, title, url, state: { id, name, tone } | null }`;
+`url` must be http(s). The sidebar branch row shows `key` coloured by `state.tone`;
+hovering refreshes the state through the provider's `detail(reference)`, and a click
+opens `url` without selecting the branch. TUIC drops the link when it removes the
+worktree. `repoPath` is the main repository path, `branch` the worktree branch name.
+
 ### Work-item field kind inventory
 `text`, `markdown`, `enum`, `user`, `labels`, `date`, `number`, `link`
 
@@ -1863,6 +1881,32 @@ list, detail, comments, schemas, saved filters, board columns and mutations.
 It touches no network, credentials, filesystem or subprocesses. It is a development
 provider, not a fixture proving GitHub/Jira/GitLab API compatibility. Its search is
 literal text; sort supports key/title/updatedAt. Its cursor expires on mutation.
+
+## Tasks detail
+
+Core's `TasksDetail` consumes the async `WorkItemProvider` port and a `WorkItemRef`.
+The Tasks shell supplies the selected provider/reference and `visible` state.
+Providers supply data and declared actions; they do not render this view.
+
+The header shows key, title, type, state and updated time. Detail field schemas
+select text, Markdown, enum, user, labels, date, number and link controls. Saving
+requires an editable field and an enabled `edit_field` action. Required fields
+cannot be cleared. Values retain their tagged field-value shape.
+
+Descriptions and normal comments, review threads and review summaries render
+through `ContentRenderer` with `untrustedContent`. Markdown, tables, images and
+`<details>` survive; scripts, event handlers and provider CSS do not. Review
+threads show file/line and resolved state. The provider's comment cursor drives
+Load more. Add comment retains its draft on rejection.
+
+Transition buttons use declared IDs and disabled reasons. The pending action
+label appears immediately while the authoritative state ID stays intact.
+Success adopts the returned detail; rejection restores the state label and
+shows the error. Core does not infer a target state from a transition name.
+
+Refresh is manual and periodic (60 seconds by default) while the detail, Tasks
+view and document are visible. Refresh preserves disclosure state and reloads
+comment pages already opened. Switching items rejects stale responses.
 
 ## Start work and URL paste
 

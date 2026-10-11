@@ -181,6 +181,7 @@ pub(crate) mod tunnels;
 mod updater;
 pub(crate) mod webview_recovery;
 pub(crate) mod workflows;
+pub(crate) mod workitem_links;
 pub(crate) mod worktree;
 
 use std::path::{Path, PathBuf};
@@ -2071,6 +2072,10 @@ pub fn run() {
             worktree::get_worktrees_dir,
             git::get_repo_info,
             git::get_remote_url,
+            workitem_links::get_git_remotes,
+            workitem_links::list_workitem_links,
+            workitem_links::link_workitem,
+            workitem_links::unlink_workitem,
             git::get_git_diff,
             git::get_diff_stats,
             git::get_changed_files,
