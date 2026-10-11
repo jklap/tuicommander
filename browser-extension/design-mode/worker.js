@@ -8,6 +8,7 @@ const noServers = {servers:[],canStart:false};
 const serversBySession = new Map();
 let lastRefresh = 0;
 let lastMode;
+let armed;
 async function refreshConnection(tabId) {
   if (Date.now() - lastRefresh < 5000) return;
   lastRefresh = Date.now();
@@ -22,6 +23,8 @@ async function refreshConnection(tabId) {
         for(const tab of await chrome.tabs.query({})) if(tab.id) chrome.tabs.sendMessage(tab.id,{kind:'stop'}).catch(()=>{});
       }
       lastMode=mode?.status;
+      // TUIC is the authority on which session started Design Mode; binding.json is only the install-time copy.
+      armed=mode?.status==='armed'?mode.sessionId:undefined;
     } catch(error) { connection=`${connection} · Status unavailable: ${error.message}`; }
     const sessionId = await selectedSession(tabId);
     try { serversBySession.set(sessionId, await request('list_dev_servers',{sessionId})); }
@@ -43,7 +46,7 @@ async function request(action, fields = {}) {
   return nativeRequest({action, repoPath: config.repoPath, version: '2.0.0', ...fields});
 }
 async function selectedSession(tabId) {
-  return serverSession(draftForTab(await drafts(), tabId), agents, bound.sessionId);
+  return serverSession(draftForTab(await drafts(), tabId), agents, armed ?? bound.sessionId);
 }
 async function drafts() { return (await chrome.storage.local.get('drafts')).drafts ?? {}; }
 async function mutate(tabId, change) {
@@ -59,9 +62,9 @@ async function activeTab() {
 async function snapshot(tabId) {
   const all = await drafts();
   const draft = draftForTab(all, tabId);
-  const selection = connection.startsWith('Connected') ? recipient(draft, agents, bound?.sessionId) : {};
+  const selection = connection.startsWith('Connected') ? recipient(draft, agents, armed ?? bound?.sessionId) : {};
   if (Object.keys(selection).some((key) => draft[key] !== selection[key])) { all[String(tabId)] = {...draft,...selection}; await chrome.storage.local.set({drafts:all}); }
-  return {tabId, ...draft, ...selection, repoPath: bound?.repoPath, connection, agents, servers: serversBySession.get(selection.selectedSessionId ?? '') ?? noServers};
+  return {tabId, ...draft, ...selection, repoPath: bound?.repoPath, connection, agents, servers: serversBySession.get(selection.selectedSessionId ?? '') ?? noServers, armedSessionId: armed ?? bound?.sessionId};
 }
 async function capture(message, sender) {
   if (sender.frameId !== 0) return {captureError: 'Frame screenshot omitted; DOM evidence retained.'};
