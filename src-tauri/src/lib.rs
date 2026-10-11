@@ -3123,6 +3123,8 @@ pub async fn run_remote(mut options: RemoteOptions) -> anyhow::Result<()> {
 mod tests {
     use super::*;
 
+    include!("github_http_guard_tests.rs");
+
     #[cfg(feature = "desktop")]
     fn register_document_grid(state: &AppState, session_id: &str, webview_label: &str) -> u64 {
         let gate = Arc::new(crate::grid_gate::GridGate::new());

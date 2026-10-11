@@ -1,3 +1,7 @@
+## GitHub REST headers (1709-e9f4) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, confirm issue close/reopen, PR approve/close/update and diff retrieval work for a bound cloud account and an enterprise account. Requests now share the account host/token and pinned API headers. Targeted request and error/breaker tests cover the contract; live GitHub operations remain unverified. Rust does not hot-reload; no desktop instance was started or restarted by this peer.
+
 ## Plugin account requests (1697-4cdc) — Rust restart required
 
 - [ ] After Boss restarts `make dev` or installs `make build`: install a plugin whose manifest declares `"capabilities":["net:http"]` and a `providers` descriptor, confirm the provider appears in the account add flow, add a throwaway account, and call `host.httpFetch(<site>/<path>, { account })` from the plugin. The response arrives without the token; a URL outside the site and a plugin without that provider are refused. Uninstall the plugin and confirm the account remains listed. Local-server tests on rb cover injection, host rule, consent, redirects and redaction; a real Jira/GitLab/GitHub call is not verified. No desktop instance was launched by this peer.

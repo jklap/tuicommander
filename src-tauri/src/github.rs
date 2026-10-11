@@ -360,6 +360,27 @@ fn body_snippet(body: &[u8]) -> String {
     }
 }
 
+pub(crate) const GITHUB_USER_AGENT: &str = "TUICommander";
+pub(crate) const GITHUB_JSON: &str = "application/vnd.github+json";
+
+/// Build a REST request for the host and token selected by account resolution.
+/// Sending, breaker accounting, and status wording remain with the caller.
+pub(crate) fn github_rest_request(
+    client: &reqwest::Client,
+    method: reqwest::Method,
+    host: &crate::github_account::GitHubHost,
+    path: &str,
+    token: &str,
+    accept: &str,
+) -> reqwest::RequestBuilder {
+    client
+        .request(method, crate::github_account::github_rest_url(host, path))
+        .bearer_auth(token)
+        .header("User-Agent", GITHUB_USER_AGENT)
+        .header("Accept", accept)
+        .header("X-GitHub-Api-Version", "2022-11-28")
+}
+
 /// Execute a GraphQL query against the GitHub API.
 /// Returns the parsed JSON response or a typed error.
 /// Detects rate limits from HTTP status codes, headers, and GraphQL error types.
@@ -378,7 +399,7 @@ pub(crate) async fn graphql_request(
     let response = client
         .post(url)
         .header("Authorization", format!("Bearer {token}"))
-        .header("User-Agent", "tuicommander")
+        .header("User-Agent", GITHUB_USER_AGENT)
         .json(&body)
         .send()
         .await
@@ -1238,23 +1259,23 @@ pub(crate) async fn close_issue_impl(
 ) -> Result<(), String> {
     let (account, token, owner, repo) = resolve_repo_for_rest(state, repo_path).await?;
 
-    let url = crate::github_account::github_rest_url(
-        &account.host,
-        &format!("/repos/{owner}/{repo}/issues/{issue_number}"),
-    );
+    let path = format!("/repos/{owner}/{repo}/issues/{issue_number}");
+    let url = crate::github_account::github_rest_url(&account.host, &path);
     crate::github_debug::log_api("PATCH", &url, "close_issue_impl");
     let body = serde_json::json!({ "state": "closed" });
 
     let response = send_rest_with_breaker(
         state,
         &account,
-        state
-            .http_client
-            .patch(&url)
-            .header("Authorization", format!("Bearer {token}"))
-            .header("User-Agent", "tuicommander")
-            .header("Accept", "application/vnd.github+json")
-            .json(&body),
+        github_rest_request(
+            &state.http_client,
+            reqwest::Method::PATCH,
+            &account.host,
+            &path,
+            &token,
+            GITHUB_JSON,
+        )
+        .json(&body),
     )
     .await?;
 
@@ -1288,23 +1309,23 @@ pub(crate) async fn reopen_issue_impl(
 ) -> Result<(), String> {
     let (account, token, owner, repo) = resolve_repo_for_rest(state, repo_path).await?;
 
-    let url = crate::github_account::github_rest_url(
-        &account.host,
-        &format!("/repos/{owner}/{repo}/issues/{issue_number}"),
-    );
+    let path = format!("/repos/{owner}/{repo}/issues/{issue_number}");
+    let url = crate::github_account::github_rest_url(&account.host, &path);
     crate::github_debug::log_api("PATCH", &url, "reopen_issue_impl");
     let body = serde_json::json!({ "state": "open" });
 
     let response = send_rest_with_breaker(
         state,
         &account,
-        state
-            .http_client
-            .patch(&url)
-            .header("Authorization", format!("Bearer {token}"))
-            .header("User-Agent", "tuicommander")
-            .header("Accept", "application/vnd.github+json")
-            .json(&body),
+        github_rest_request(
+            &state.http_client,
+            reqwest::Method::PATCH,
+            &account.host,
+            &path,
+            &token,
+            GITHUB_JSON,
+        )
+        .json(&body),
     )
     .await?;
 
@@ -1420,21 +1441,10 @@ pub(crate) async fn send_rest_with_breaker(
 async fn fetch_github_json(
     state: &AppState,
     account: &crate::github_account::GitHubAccount,
-    url: &str,
-    token: &str,
+    request: reqwest::RequestBuilder,
     context: &str,
 ) -> Result<serde_json::Value, String> {
-    let response = send_rest_with_breaker(
-        state,
-        account,
-        state
-            .http_client
-            .get(url)
-            .header("Authorization", format!("Bearer {token}"))
-            .header("User-Agent", "tuicommander")
-            .header("Accept", "application/vnd.github+json"),
-    )
-    .await?;
+    let response = send_rest_with_breaker(state, account, request).await?;
 
     let status = response.status().as_u16();
     if !(200..300).contains(&status) {
@@ -1455,23 +1465,33 @@ pub(crate) async fn get_issue_detail_impl(
     state: &AppState,
 ) -> Result<IssueDetail, String> {
     let (account, token, owner, repo) = resolve_repo_for_rest(state, repo_path).await?;
-    let issue_url = crate::github_account::github_rest_url(
-        &account.host,
-        &format!("/repos/{owner}/{repo}/issues/{issue_number}"),
-    );
+    let issue_path = format!("/repos/{owner}/{repo}/issues/{issue_number}");
+    let issue_url = crate::github_account::github_rest_url(&account.host, &issue_path);
     crate::github_debug::log_api("GET", &issue_url, "get_issue_detail_impl");
-    let issue_json = fetch_github_json(state, &account, &issue_url, &token, "GitHub issue").await?;
-
-    let comments_url = crate::github_account::github_rest_url(
+    let issue_request = github_rest_request(
+        &state.http_client,
+        reqwest::Method::GET,
         &account.host,
-        &format!("/repos/{owner}/{repo}/issues/{issue_number}/comments"),
+        &issue_path,
+        &token,
+        GITHUB_JSON,
     );
+    let issue_json = fetch_github_json(state, &account, issue_request, "GitHub issue").await?;
+
+    let comments_path = format!("/repos/{owner}/{repo}/issues/{issue_number}/comments");
+    let comments_url = crate::github_account::github_rest_url(&account.host, &comments_path);
     crate::github_debug::log_api("GET", &comments_url, "get_issue_detail_impl comments");
     let comments_json = fetch_github_json(
         state,
         &account,
-        &comments_url,
-        &token,
+        github_rest_request(
+            &state.http_client,
+            reqwest::Method::GET,
+            &account.host,
+            &comments_path,
+            &token,
+            GITHUB_JSON,
+        ),
         "GitHub issue comments",
     )
     .await?;
@@ -2224,23 +2244,23 @@ pub(crate) async fn merge_pr_github_impl(
     }
     let (account, token, owner, repo) = resolve_repo_for_rest(state, repo_path).await?;
 
-    let url = crate::github_account::github_rest_url(
-        &account.host,
-        &format!("/repos/{owner}/{repo}/pulls/{pr_number}/merge"),
-    );
+    let path = format!("/repos/{owner}/{repo}/pulls/{pr_number}/merge");
+    let url = crate::github_account::github_rest_url(&account.host, &path);
     crate::github_debug::log_api("PUT", &url, "merge_pr_github_impl");
     let body = merge_request_body(merge_method, expected_head_sha);
 
     let response = send_rest_with_breaker(
         state,
         &account,
-        state
-            .http_client
-            .put(&url)
-            .header("Authorization", format!("Bearer {token}"))
-            .header("User-Agent", "tuicommander")
-            .header("Accept", "application/vnd.github+json")
-            .json(&body),
+        github_rest_request(
+            &state.http_client,
+            reqwest::Method::PUT,
+            &account.host,
+            &path,
+            &token,
+            GITHUB_JSON,
+        )
+        .json(&body),
     )
     .await?;
 
@@ -2657,23 +2677,23 @@ pub(crate) async fn approve_pr_impl(
 ) -> Result<(), String> {
     let (account, token, owner, repo) = resolve_repo_for_rest(state, repo_path).await?;
 
-    let url = crate::github_account::github_rest_url(
-        &account.host,
-        &format!("/repos/{owner}/{repo}/pulls/{pr_number}/reviews"),
-    );
+    let path = format!("/repos/{owner}/{repo}/pulls/{pr_number}/reviews");
+    let url = crate::github_account::github_rest_url(&account.host, &path);
     crate::github_debug::log_api("POST", &url, "approve_pr_impl");
     let body = serde_json::json!({ "event": "APPROVE" });
 
     let response = send_rest_with_breaker(
         state,
         &account,
-        state
-            .http_client
-            .post(&url)
-            .header("Authorization", format!("Bearer {token}"))
-            .header("User-Agent", "tuicommander")
-            .header("Accept", "application/vnd.github+json")
-            .json(&body),
+        github_rest_request(
+            &state.http_client,
+            reqwest::Method::POST,
+            &account.host,
+            &path,
+            &token,
+            GITHUB_JSON,
+        )
+        .json(&body),
     )
     .await?;
 
@@ -2761,23 +2781,23 @@ pub(crate) async fn update_pr_branch_impl(
     }
     let (account, token, owner, repo) = resolve_repo_for_rest(state, repo_path).await?;
 
-    let url = crate::github_account::github_rest_url(
-        &account.host,
-        &format!("/repos/{owner}/{repo}/pulls/{pr_number}/update-branch"),
-    );
+    let path = format!("/repos/{owner}/{repo}/pulls/{pr_number}/update-branch");
+    let url = crate::github_account::github_rest_url(&account.host, &path);
     crate::github_debug::log_api("PUT", &url, "update_pr_branch_impl");
     let body = serde_json::json!({ "expected_head_sha": expected_head_sha });
 
     let response = send_rest_with_breaker(
         state,
         &account,
-        state
-            .http_client
-            .put(&url)
-            .header("Authorization", format!("Bearer {token}"))
-            .header("User-Agent", "tuicommander")
-            .header("Accept", "application/vnd.github+json")
-            .json(&body),
+        github_rest_request(
+            &state.http_client,
+            reqwest::Method::PUT,
+            &account.host,
+            &path,
+            &token,
+            GITHUB_JSON,
+        )
+        .json(&body),
     )
     .await?;
 
@@ -2812,23 +2832,23 @@ pub(crate) async fn close_pr_impl(
 ) -> Result<(), String> {
     let (account, token, owner, repo) = resolve_repo_for_rest(state, repo_path).await?;
 
-    let url = crate::github_account::github_rest_url(
-        &account.host,
-        &format!("/repos/{owner}/{repo}/pulls/{pr_number}"),
-    );
+    let path = format!("/repos/{owner}/{repo}/pulls/{pr_number}");
+    let url = crate::github_account::github_rest_url(&account.host, &path);
     crate::github_debug::log_api("PATCH", &url, "close_pr_impl");
     let body = serde_json::json!({ "state": "closed" });
 
     let response = send_rest_with_breaker(
         state,
         &account,
-        state
-            .http_client
-            .patch(&url)
-            .header("Authorization", format!("Bearer {token}"))
-            .header("User-Agent", "tuicommander")
-            .header("Accept", "application/vnd.github+json")
-            .json(&body),
+        github_rest_request(
+            &state.http_client,
+            reqwest::Method::PATCH,
+            &account.host,
+            &path,
+            &token,
+            GITHUB_JSON,
+        )
+        .json(&body),
     )
     .await?;
 
@@ -2871,21 +2891,21 @@ pub(crate) async fn get_pr_diff_impl(
 ) -> Result<String, String> {
     let (account, token, owner, repo) = resolve_repo_for_rest(state, repo_path).await?;
 
-    let url = crate::github_account::github_rest_url(
-        &account.host,
-        &format!("/repos/{owner}/{repo}/pulls/{pr_number}"),
-    );
+    let path = format!("/repos/{owner}/{repo}/pulls/{pr_number}");
+    let url = crate::github_account::github_rest_url(&account.host, &path);
     crate::github_debug::log_api("GET", &url, "get_pr_diff_impl");
 
     let response = send_rest_with_breaker(
         state,
         &account,
-        state
-            .http_client
-            .get(&url)
-            .header("Authorization", format!("Bearer {token}"))
-            .header("User-Agent", "tuicommander")
-            .header("Accept", "application/vnd.github.diff"),
+        github_rest_request(
+            &state.http_client,
+            reqwest::Method::GET,
+            &account.host,
+            &path,
+            &token,
+            "application/vnd.github.diff",
+        ),
     )
     .await?;
 
@@ -3038,20 +3058,20 @@ pub(crate) async fn get_pr_refs_impl(
     state: &AppState,
 ) -> Result<PrRefs, String> {
     let (account, token, owner, repo) = resolve_repo_for_rest(state, repo_path).await?;
-    let url = crate::github_account::github_rest_url(
-        &account.host,
-        &format!("/repos/{owner}/{repo}/pulls/{pr_number}"),
-    );
+    let path = format!("/repos/{owner}/{repo}/pulls/{pr_number}");
+    let url = crate::github_account::github_rest_url(&account.host, &path);
     crate::github_debug::log_api("GET", &url, "get_pr_refs_impl");
     let json: serde_json::Value = send_rest_with_breaker(
         state,
         &account,
-        state
-            .http_client
-            .get(&url)
-            .header("Authorization", format!("Bearer {token}"))
-            .header("User-Agent", "tuicommander")
-            .header("Accept", "application/vnd.github+json"),
+        github_rest_request(
+            &state.http_client,
+            reqwest::Method::GET,
+            &account.host,
+            &path,
+            &token,
+            GITHUB_JSON,
+        ),
     )
     .await?
     .json()
@@ -5807,6 +5827,7 @@ mod tests {
         let mut server = mockito::Server::new_async().await;
         let mock = server
             .mock("POST", "/graphql")
+            .match_header("user-agent", "TUICommander")
             .with_status(200)
             .with_body(r#"{"data":{"viewer":{"login":"octocat"}}}"#)
             .create_async()
@@ -6905,6 +6926,104 @@ mod tests {
         );
     }
 
+    fn mock_rest_request(state: &AppState, url: &str) -> reqwest::RequestBuilder {
+        let account = github_com_account(state);
+        let parsed = reqwest::Url::parse(url).unwrap();
+        let mut request = github_rest_request(
+            &state.http_client,
+            reqwest::Method::GET,
+            &account.host,
+            parsed.path(),
+            "tok",
+            GITHUB_JSON,
+        )
+        .build()
+        .unwrap();
+        *request.url_mut() = parsed;
+        reqwest::RequestBuilder::from_parts(state.http_client.clone(), request)
+    }
+
+    // Catches: a REST caller omits GitHub's pinned API version header.
+    #[tokio::test]
+    async fn rest_request_targets_the_account_host() {
+        use crate::github_account::GitHubHost;
+        let client = reqwest::Client::new();
+        for (host, token, expected) in [
+            (
+                "github.com",
+                "cloud-token",
+                "https://api.github.com/repos/o/r/pulls",
+            ),
+            (
+                "ghe.acme.com",
+                "enterprise-token",
+                "https://ghe.acme.com/api/v3/repos/o/r/pulls",
+            ),
+            (
+                "github.com",
+                "second-account-token",
+                "https://api.github.com/repos/o/r/pulls",
+            ),
+        ] {
+            let request = github_rest_request(
+                &client,
+                reqwest::Method::POST,
+                &GitHubHost::new(host).unwrap(),
+                "/repos/o/r/pulls",
+                token,
+                "application/vnd.github+json",
+            )
+            .json(&serde_json::json!({"title":"Example"}))
+            .build()
+            .unwrap();
+            assert_eq!(request.url().as_str(), expected);
+            assert_eq!(request.method(), reqwest::Method::POST);
+            assert_eq!(
+                request.headers()["authorization"],
+                format!("Bearer {token}")
+            );
+            assert_eq!(request.headers()["user-agent"], "TUICommander");
+            assert_eq!(request.headers()["accept"], "application/vnd.github+json");
+            assert_eq!(request.headers()["x-github-api-version"], "2022-11-28");
+            assert_eq!(
+                request.body().unwrap().as_bytes().unwrap(),
+                br#"{"title":"Example"}"#
+            );
+        }
+        let diff = github_rest_request(
+            &client,
+            reqwest::Method::GET,
+            &GitHubHost::new("ghe.acme.com").unwrap(),
+            "/repos/o/r/pulls/7",
+            "enterprise-token",
+            "application/vnd.github.diff",
+        )
+        .build()
+        .unwrap();
+        assert_eq!(diff.headers()["accept"], "application/vnd.github.diff");
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("GET", "/repos/o/r/pulls")
+            .match_header("x-github-api-version", "2022-11-28")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body("[]")
+            .create_async()
+            .await;
+        let state = crate::state::tests_support::make_test_app_state();
+        let account = github_com_account(&state);
+        let url = format!("{}/repos/o/r/pulls", server.url());
+        fetch_github_json(
+            &state,
+            &account,
+            mock_rest_request(&state, &url),
+            "GitHub pulls",
+        )
+        .await
+        .expect("REST request must include the pinned API version");
+        mock.assert_async().await;
+    }
+
     // --- fetch_github_json status-check tests ---
 
     #[tokio::test]
@@ -6921,7 +7040,13 @@ mod tests {
         let state = crate::state::tests_support::make_test_app_state();
         let account = github_com_account(&state);
         let url = format!("{}/repos/o/r/issues/999", server.url());
-        let result = fetch_github_json(&state, &account, &url, "tok", "GitHub issue").await;
+        let result = fetch_github_json(
+            &state,
+            &account,
+            mock_rest_request(&state, &url),
+            "GitHub issue",
+        )
+        .await;
 
         mock.assert_async().await;
         // A 404 must surface as an Err, NOT parse into a silent empty issue.
@@ -6947,7 +7072,13 @@ mod tests {
         let state = crate::state::tests_support::make_test_app_state();
         let account = github_com_account(&state);
         let url = format!("{}/repos/o/r/issues/1", server.url());
-        let result = fetch_github_json(&state, &account, &url, "tok", "GitHub issue").await;
+        let result = fetch_github_json(
+            &state,
+            &account,
+            mock_rest_request(&state, &url),
+            "GitHub issue",
+        )
+        .await;
 
         mock.assert_async().await;
         let err = result.expect_err("401 must return Err");
@@ -6972,9 +7103,14 @@ mod tests {
         let state = crate::state::tests_support::make_test_app_state();
         let account = github_com_account(&state);
         let url = format!("{}/repos/o/r/issues/42", server.url());
-        let value = fetch_github_json(&state, &account, &url, "tok", "GitHub issue")
-            .await
-            .expect("2xx should parse into JSON");
+        let value = fetch_github_json(
+            &state,
+            &account,
+            mock_rest_request(&state, &url),
+            "GitHub issue",
+        )
+        .await
+        .expect("2xx should parse into JSON");
 
         mock.assert_async().await;
         assert_eq!(value["number"].as_i64(), Some(42));

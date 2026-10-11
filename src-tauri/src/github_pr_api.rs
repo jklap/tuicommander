@@ -53,18 +53,16 @@ impl PrApi for RepoApi<'_> {
         .await
     }
     async fn rest(&self, method: &str, endpoint: &str, body: Value) -> Result<Value, String> {
-        let url = crate::github_account::github_rest_url(
-            &self.account.host,
-            &format!("/repos/{}/{}/{}", self.owner, self.repo, endpoint),
-        );
+        let path = format!("/repos/{}/{}/{}", self.owner, self.repo, endpoint);
         let method = reqwest::Method::from_bytes(method.as_bytes()).map_err(|e| e.to_string())?;
-        let request = self
-            .state
-            .http_client
-            .request(method.clone(), url)
-            .bearer_auth(&self.token)
-            .header("User-Agent", "tuicommander")
-            .header("Accept", "application/vnd.github+json");
+        let request = crate::github::github_rest_request(
+            &self.state.http_client,
+            method.clone(),
+            &self.account.host,
+            &path,
+            &self.token,
+            crate::github::GITHUB_JSON,
+        );
         let request = if method == reqwest::Method::GET {
             request
         } else {
