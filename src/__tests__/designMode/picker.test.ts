@@ -119,3 +119,56 @@ it("picks_on_press_and_page_never_sees_it", () => {
 	button.remove();
 	vi.useRealTimers();
 });
+
+// Catches: picking the icon inside a disabled control: Chromium targets the child, not the disabled button.
+it("picks_the_disabled_control_when_the_press_lands_on_its_icon", () => {
+	vi.useFakeTimers();
+	let receive: (message: { kind: string; multi?: boolean }) => void = () => {};
+	const chrome = {
+		runtime: {
+			sendMessage: vi.fn(async () => {}),
+			onMessage: { addListener: (listener: typeof receive) => (receive = listener) },
+		},
+	};
+	const extract = vi.fn(function (this: Element) {
+		return { selector: this.tagName.toLowerCase() };
+	});
+	new Function("chrome", "tuicExtract", readFileSync("browser-extension/design-mode/picker.js", "utf8"))(
+		chrome,
+		extract,
+	);
+	const press = (target: Element) => {
+		const event = new PointerEvent("pointerdown", { bubbles: true, cancelable: true });
+		Object.defineProperty(event, "isTrusted", { value: true });
+		target.dispatchEvent(event);
+		vi.advanceTimersByTime(1);
+	};
+	const make = (host: string, attrs: Record<string, string>) => {
+		const control = document.createElement(host);
+		for (const [name, value] of Object.entries(attrs)) control.setAttribute(name, value);
+		const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+		control.append(icon);
+		document.body.append(control);
+		return { control, icon };
+	};
+	const cases = [make("button", { disabled: "" }), make("div", { "aria-disabled": "true" })];
+	for (const { control, icon } of cases) {
+		extract.mockClear();
+		receive({ kind: "arm" });
+		press(icon);
+		expect(extract.mock.contexts[0]).toBe(control);
+	}
+	// Other elements keep the exact press target: an icon in an enabled button, a bare element.
+	const enabled = make("button", {});
+	extract.mockClear();
+	receive({ kind: "arm" });
+	press(enabled.icon);
+	expect(extract.mock.contexts[0]).toBe(enabled.icon);
+	const ariaFalse = make("div", { "aria-disabled": "false" });
+	extract.mockClear();
+	receive({ kind: "arm" });
+	press(ariaFalse.icon);
+	expect(extract.mock.contexts[0]).toBe(ariaFalse.icon);
+	for (const { control } of [...cases, enabled, ariaFalse]) control.remove();
+	vi.useRealTimers();
+});

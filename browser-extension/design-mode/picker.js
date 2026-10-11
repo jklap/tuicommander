@@ -30,7 +30,12 @@
     document.documentElement.append(overlay);
     timer = setTimeout(stop, 120000);
   }
-  const elementAt = (event) => event.composedPath().find((node) => node instanceof Element && node !== overlay);
+  // A press on the icon inside a disabled control targets the icon; the control is what is picked.
+  const DISABLED = 'button:disabled, input:disabled, select:disabled, textarea:disabled, [aria-disabled="true"]';
+  const elementAt = (event) => {
+    const target = event.composedPath().find((node) => node instanceof Element && node !== overlay);
+    return target?.closest(DISABLED) ?? target;
+  };
   window.addEventListener('pointermove', (event) => {
     if (!armed) return;
     const target = elementAt(event);
