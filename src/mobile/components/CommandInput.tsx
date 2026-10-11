@@ -62,7 +62,7 @@ export function CommandInput(props: CommandInputProps) {
 	async function queueDraft() {
 		const draft = textareaEl?.value ?? value();
 		const text = draft.trim();
-		if (!text || submitting() || props.sessionExists === false) return;
+		if (!text || submitting() || uploading() || props.sessionExists === false) return;
 		cancelPress();
 		setQueueMenu(false);
 		browserDictation.cancel();
@@ -526,7 +526,12 @@ export function CommandInput(props: CommandInputProps) {
 						if (event.key === "Escape") setQueueMenu(false);
 					}}
 				>
-					<button type="button" role="menuitem" disabled={submitting() || !value().trim()} onClick={queueDraft}>
+					<button
+						type="button"
+						role="menuitem"
+						disabled={submitting() || !!uploading() || !value().trim()}
+						onClick={queueDraft}
+					>
 						Queue
 					</button>
 				</div>
