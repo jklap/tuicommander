@@ -102,6 +102,8 @@ impl SecretStore {
     pub(crate) fn tools_blocked(&self) -> bool {
         self.inner.lock().pending.is_some() || self.window.lock().is_some()
     }
+    // DEFERRED (2026-10-11) — test-only: production opens forms through open_with_sink.
+    #[cfg(test)]
     pub(crate) fn open(&self, form: Form) -> Result<Form, String> {
         self.open_with_sink(form, None)
     }
