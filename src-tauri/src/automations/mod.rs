@@ -27,3 +27,5 @@ pub(crate) mod completion;
 
 pub(crate) mod context;
 pub(crate) mod notifications;
+
+pub(crate) mod worktrees;

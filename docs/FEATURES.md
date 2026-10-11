@@ -2848,3 +2848,6 @@ Core provides a generic work-item create form. The provider declares the item
 types and the fields of each type; the form uses the shared setting controls,
 blocks Create until the required fields of the current type are set, and opens
 the created item. The Tasks shell integrates this component separately.
+
+
+Automation worktree cleanup (#1623-8b2a): Automation runs retain automation/run IDs and the exact created workspace path and ID in their saved snapshot, including after definition deletion. Worktree cleanup is explicit and limited to final runs. The backend resolves the saved identity and rechecks shared Git integration/archive proof, dirt, submodule commits and live sessions; it never forces removal or closes sessions. Shared `automation_action` actions `worktree_preview` and `cleanup_worktree` accept a saved run `id` on IPC, HTTP, MCP and CLI.

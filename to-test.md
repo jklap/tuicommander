@@ -5019,3 +5019,5 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 ## Tasks create integration (#1688-518d)
 
 - [ ] After the Tasks shell is integrated and a provider plugin that follows the `itemType` convention is installed, open the create form, choose a type, fill its required fields and create. Confirm the created item opens in Tasks detail. Component behavior is covered by the targeted create tests and the rb browser fixture; this item covers the shell and real-provider integration.
+
+- [ ] Automation worktree cleanup (#1623-8b2a): after Boss restarts `make dev` or installs a new release, inspect and remove a safe final-run workspace in Runs. Confirm a live session and dirty/unmerged work block removal; saved output remains available. Rust changes require a manual restart to load.

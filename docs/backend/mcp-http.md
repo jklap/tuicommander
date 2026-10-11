@@ -2178,3 +2178,6 @@ The PR action routes (`/repo/pr-action-state`, `/repo/pr-auto-merge`, `/repo/pr-
 ## Core accounts owner surface
 
 IPC `account_action` and HTTP `POST /accounts/action` share one Rust service and presence-only replies. Both HTTP routers require loopback or authenticated API access. The Settings MCP adapter can consume the owner service/schema after integration; account actions are not a new standalone MCP tool or an unrestricted plugin invoke grant. See [Shared account registry](github.md#shared-account-registry).
+
+
+Automation worktree cleanup (#1623-8b2a): Automation runs retain automation/run IDs and the exact created workspace path and ID in their saved snapshot, including after definition deletion. Worktree cleanup is explicit and limited to final runs. The backend resolves the saved identity and rechecks shared Git integration/archive proof, dirt, submodule commits and live sessions; it never forces removal or closes sessions. Shared `automation_action` actions `worktree_preview` and `cleanup_worktree` accept a saved run `id` on IPC, HTTP, MCP and CLI.

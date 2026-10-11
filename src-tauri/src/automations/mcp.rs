@@ -9,13 +9,13 @@ use std::sync::Arc;
 pub fn tool_definition() -> Value {
     json!({
         "name": "automations",
-        "description": "Manage automations through the shared HTTP/IPC API. list returns definition, next_run_ms and last_status. create/update return the saved definition; update accepts definition or enabled, exactly one. run_now starts a run; run reads a saved run; list_runs and summary read history. preview/preview_definition and preset resolve schedules. Creation records the bound caller session; delete retains history.",
+        "description": "Manage automations through the shared HTTP/IPC API. list returns definition, next_run_ms and last_status. create/update return the saved definition; update accepts definition or enabled, exactly one. run_now starts a run; run reads a saved run; list_runs and summary read history. preview/preview_definition and preset resolve schedules. Creation records the bound caller session; delete retains history. worktree_preview inspects saved run provenance and safety; cleanup_worktree explicitly removes only a safe final run worktree, retaining history.",
         "inputSchema": {
             "type": "object", "additionalProperties": false,
             "required": ["action"],
             "properties": {
-                "action": {"type":"string", "enum":["list","get","create","update","pause","resume","delete","run_now","run","list_runs","summary","preview","preview_definition","preset"]},
-                "id": {"type":"string", "description":"Definition id, or saved run id for run"},
+                "action": {"type":"string", "enum":["list","get","create","update","pause","resume","delete","run_now","run","list_runs","summary","preview","preview_definition","preset","worktree_preview","cleanup_worktree"]},
+                "id": {"type":"string", "description":"Definition id, or saved run id for run/worktree_preview/cleanup_worktree"},
                 "enabled":{"type":"boolean"},
                 "limit":{"type":"integer","minimum":1,"maximum":100,"default":50},
                 "offset":{"type":"integer","minimum":0,"default":0},

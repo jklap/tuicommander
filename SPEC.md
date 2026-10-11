@@ -944,3 +944,6 @@ change keeps only same-id, same-kind values and drops late schemas of an earlier
 type. Create stays disabled until Title, Type and every required field hold a
 valid value; it dispatches one `create` action and hands the returned item to the
 host to open. A rejection keeps the draft. Tasks shell mounting is separate.
+
+
+Automation worktree cleanup (#1623-8b2a): Automation runs retain automation/run IDs and the exact created workspace path and ID in their saved snapshot, including after definition deletion. Worktree cleanup is explicit and limited to final runs. The backend resolves the saved identity and rechecks shared Git integration/archive proof, dirt, submodule commits and live sessions; it never forces removal or closes sessions. Shared `automation_action` actions `worktree_preview` and `cleanup_worktree` accept a saved run `id` on IPC, HTTP, MCP and CLI.

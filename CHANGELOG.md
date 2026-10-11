@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- Automation run worktree provenance and explicit cleanup with existing integration, archive and live-session safety checks (#1623-8b2a).
+
 - Added GitHub PR action backend APIs for failed-job reruns, auto-merge and queue-aware merging; empty request-changes reviews now fail validation.
 
 - Added GitHub line review backend APIs for paginated threads, replies, resolve/unresolve and head-pinned draft submission.
