@@ -1,8 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
-use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Instant;
@@ -1353,7 +1352,7 @@ pub(crate) async fn reopen_issue(
 
 /// Send a direct REST request through the account's circuit breaker.
 ///
-/// `graphql_with_retry` and `run_gh_write` were breaker-aware; the direct-REST
+/// `graphql_with_retry` and legacy gh writes were breaker-aware; the direct-REST
 /// sites were not, so once an account was rate-limited every one of them kept
 /// hammering GitHub while the GraphQL path politely backed off. This is the same
 /// check-send-record cycle, adapted to REST.
@@ -2365,25 +2364,6 @@ pub(crate) struct PostedPrReview {
     pub state: String,
 }
 
-fn gh_api_args(
-    host: &crate::github_account::GitHubHost,
-    endpoint: &str,
-    method: &str,
-) -> Vec<String> {
-    vec![
-        "api".to_string(),
-        "--hostname".to_string(),
-        host.as_str().to_string(),
-        endpoint.to_string(),
-        "--method".to_string(),
-        method.to_string(),
-        "--header".to_string(),
-        "Accept: application/vnd.github+json".to_string(),
-        "--input".to_string(),
-        "-".to_string(),
-    ]
-}
-
 fn build_create_pr_body(
     title: &str,
     body: &str,
@@ -2472,82 +2452,53 @@ pub(crate) fn parse_posted_review(json: serde_json::Value) -> Result<PostedPrRev
     })
 }
 
-fn run_gh_api_json_with_input(
-    repo_path: &str,
-    account: &crate::github_account::GitHubAccount,
-    token: &str,
-    args: &[String],
-    body: &serde_json::Value,
-) -> Result<serde_json::Value, String> {
-    let gh = crate::agent::resolve_cli("gh");
-    let mut cmd = Command::new(&gh);
-    cmd.current_dir(repo_path)
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    if account.is_cloud() {
-        cmd.env("GH_TOKEN", token);
-    } else {
-        cmd.env("GH_ENTERPRISE_TOKEN", token);
-        cmd.env("GH_HOST", account.host.as_str());
-    }
-    crate::cli::apply_no_window(&mut cmd);
-
-    let mut child = cmd.spawn().map_err(|e| format!("Failed to run gh: {e}"))?;
-    {
-        let stdin = child
-            .stdin
-            .as_mut()
-            .ok_or_else(|| "Failed to open gh stdin".to_string())?;
-        stdin
-            .write_all(body.to_string().as_bytes())
-            .map_err(|e| format!("Failed to write gh request body: {e}"))?;
-    }
-    let output = child
-        .wait_with_output()
-        .map_err(|e| format!("Failed to wait for gh: {e}"))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("gh api failed: {}", stderr.trim()));
-    }
-    serde_json::from_slice(&output.stdout).map_err(|e| format!("Failed to parse gh JSON: {e}"))
+pub(crate) async fn create_pr_with(
+    api: &impl crate::github_pr_api::PrApi,
+    title: &str,
+    body: &str,
+    base: &str,
+    head: &str,
+    draft: bool,
+) -> Result<CreatedPr, String> {
+    parse_created_pr(
+        api.rest(
+            "POST",
+            "pulls",
+            build_create_pr_body(title, body, base, head, draft),
+        )
+        .await?,
+    )
 }
 
-/// Shared plumbing for GitHub REST "write" calls executed via `gh api`:
-/// checks the circuit breaker, runs the `gh api` subprocess on a blocking
-/// thread, records success/failure on the breaker, then hands the raw JSON to
-/// `parse`. Callers still resolve the account/token/owner/repo and build the
-/// endpoint + request body themselves, since those vary per call site.
-async fn run_gh_write<T>(
-    state: &AppState,
-    repo_path: &str,
-    account: &crate::github_account::GitHubAccount,
-    token: String,
-    endpoint: &str,
-    body_json: serde_json::Value,
-    parse: impl FnOnce(serde_json::Value) -> Result<T, String>,
-) -> Result<T, String> {
-    with_account_breaker(state, account, |b| b.check())?;
-    let args = gh_api_args(&account.host, endpoint, "POST");
-    let repo_path = repo_path.to_string();
-    let account_for_run = account.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        run_gh_api_json_with_input(&repo_path, &account_for_run, &token, &args, &body_json)
-    })
-    .await
-    .map_err(|e| format!("Task failed: {e}"))
-    .and_then(|r| r);
-    match result {
-        Ok(json) => {
-            with_account_breaker(state, account, |b| b.record_success());
-            parse(json)
-        }
-        Err(e) => {
-            with_account_breaker(state, account, |b| b.record_failure());
-            Err(e)
-        }
-    }
+pub(crate) async fn create_issue_with(
+    api: &impl crate::github_pr_api::PrApi,
+    title: &str,
+    body: &str,
+) -> Result<CreatedIssue, String> {
+    parse_created_issue(
+        api.rest("POST", "issues", build_create_issue_body(title, body))
+            .await?,
+    )
+}
+
+pub(crate) async fn post_pr_review_with(
+    api: &impl crate::github_pr_api::PrApi,
+    pr_number: i64,
+    body: &str,
+    event: Option<&str>,
+    comments: &[PrReviewInlineComment],
+) -> Result<PostedPrReview, String> {
+    let event = event.unwrap_or("COMMENT");
+    crate::github_pr_actions::validate_review_event(body, event)?;
+    let endpoint = format!("pulls/{pr_number}/reviews");
+    parse_posted_review(
+        api.rest(
+            "POST",
+            &endpoint,
+            build_post_pr_review_body(body, event, comments),
+        )
+        .await?,
+    )
 }
 
 pub(crate) async fn create_pr_impl(
@@ -2559,19 +2510,8 @@ pub(crate) async fn create_pr_impl(
     draft: bool,
     state: &AppState,
 ) -> Result<CreatedPr, String> {
-    let (account, token, owner, repo) = resolve_repo_for_rest(state, repo_path).await?;
-    let endpoint = format!("repos/{owner}/{repo}/pulls");
-    let body_json = build_create_pr_body(title, body, base, head, draft);
-    run_gh_write(
-        state,
-        repo_path,
-        &account,
-        token,
-        &endpoint,
-        body_json,
-        parse_created_pr,
-    )
-    .await
+    let api = crate::github_pr_api::RepoApi::resolve(state, repo_path).await?;
+    create_pr_with(&api, title, body, base, head, draft).await
 }
 
 pub(crate) async fn create_issue_impl(
@@ -2580,19 +2520,8 @@ pub(crate) async fn create_issue_impl(
     body: &str,
     state: &AppState,
 ) -> Result<CreatedIssue, String> {
-    let (account, token, owner, repo) = resolve_repo_for_rest(state, repo_path).await?;
-    let endpoint = format!("repos/{owner}/{repo}/issues");
-    let body_json = build_create_issue_body(title, body);
-    run_gh_write(
-        state,
-        repo_path,
-        &account,
-        token,
-        &endpoint,
-        body_json,
-        parse_created_issue,
-    )
-    .await
+    let api = crate::github_pr_api::RepoApi::resolve(state, repo_path).await?;
+    create_issue_with(&api, title, body).await
 }
 
 pub(crate) async fn post_pr_review_impl(
@@ -2604,19 +2533,8 @@ pub(crate) async fn post_pr_review_impl(
     state: &AppState,
 ) -> Result<PostedPrReview, String> {
     crate::github_pr_actions::validate_review_event(body, event.unwrap_or("COMMENT"))?;
-    let (account, token, owner, repo) = resolve_repo_for_rest(state, repo_path).await?;
-    let endpoint = format!("repos/{owner}/{repo}/pulls/{pr_number}/reviews");
-    let body_json = build_post_pr_review_body(body, event.unwrap_or("COMMENT"), comments);
-    run_gh_write(
-        state,
-        repo_path,
-        &account,
-        token,
-        &endpoint,
-        body_json,
-        parse_posted_review,
-    )
-    .await
+    let api = crate::github_pr_api::RepoApi::resolve(state, repo_path).await?;
+    post_pr_review_with(&api, pr_number, body, event, comments).await
 }
 
 #[cfg(feature = "desktop")]
@@ -3663,6 +3581,10 @@ pub(crate) async fn get_pr_diff(
 }
 
 #[cfg(test)]
+#[path = "github_writes_tests.rs"]
+mod write_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -4575,26 +4497,6 @@ mod tests {
             .await
             .expect_err("blank sha must be rejected");
         assert!(err.contains("head commit"), "{err}");
-    }
-
-    #[test]
-    fn github_write_primitives_build_gh_api_args() {
-        let host = crate::github_account::GitHubHost::new("github.com").unwrap();
-        assert_eq!(
-            gh_api_args(&host, "repos/o/r/pulls", "POST"),
-            vec![
-                "api",
-                "--hostname",
-                "github.com",
-                "repos/o/r/pulls",
-                "--method",
-                "POST",
-                "--header",
-                "Accept: application/vnd.github+json",
-                "--input",
-                "-",
-            ]
-        );
     }
 
     #[test]
@@ -6652,7 +6554,7 @@ mod tests {
 
     // --- direct-REST circuit breaker (#491-6bb2) ---
 
-    /// The defect: only graphql_with_retry and run_gh_write consulted the breaker,
+    /// The defect: only graphql_with_retry and legacy gh writes consulted the breaker,
     /// so a rate-limited account kept hammering GitHub through every direct-REST
     /// call while the GraphQL path politely backed off. A tripped breaker must now
     /// stop the request before it is sent — asserted by the mock NEVER being hit.

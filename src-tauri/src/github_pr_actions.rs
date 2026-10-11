@@ -42,7 +42,7 @@ async fn read_pr(api: &impl PrApi, variables: Value) -> Result<Value, String> {
         "query PrActions($owner:String!,$repo:String!,$number:Int!) {{ repository(owner:$owner,name:$repo) {{ pullRequest(number:$number) {{ {PR_FIELDS} }} }} }}"
     );
     let data = api.graphql(&query, variables).await?;
-    let pr = data["repository"]["pullRequest"].clone();
+    let pr = data["data"]["repository"]["pullRequest"].clone();
     for field in ["id", "headRefOid", "baseRefName", "state"] {
         if !pr[field].is_string() {
             return Err(format!("GitHub response missing PR {field}"));
@@ -138,7 +138,7 @@ async fn mutate(
         "mutation PrAction($input:{input_type}!) {{ {operation}(input:$input) {{ {selection} }} }}"
     );
     let response = api.graphql(&query, json!({"input":input})).await?;
-    let payload = &response[operation];
+    let payload = &response["data"][operation];
     if !payload.is_object() {
         return Err("GitHub did not confirm the PR action".into());
     }
