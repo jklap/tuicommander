@@ -1764,6 +1764,26 @@ describe("transport", () => {
 			expect(mapCommandToHttp("github_diagnostics", {}).path).toBe("/github/diagnostics");
 		});
 
+		// Catches: the {request} wrapper being forwarded as the body, or the launch reaching a different endpoint.
+		it("maps metadata-only account secret launch to the shared native host endpoint", () => {
+			const request = { action: "rotate", id: "account-id" };
+			expect(mapCommandToHttp("account_secret_form", { request })).toEqual({
+				method: "POST",
+				path: "/accounts/secret-form",
+				body: request,
+			});
+		});
+
+		// Catches: IPC wrapping being forwarded to HTTP instead of the tagged account action.
+		it("maps account_action to the shared presence-only owner endpoint", () => {
+			const request = { action: "list", provider: "github" };
+			expect(mapCommandToHttp("account_action", { request })).toEqual({
+				method: "POST",
+				path: "/accounts/action",
+				body: request,
+			});
+		});
+
 		it("maps multi-account accounts + repo bindings", () => {
 			expect(mapCommandToHttp("github_list_accounts", {}).method).toBe("GET");
 			expect(mapCommandToHttp("github_list_accounts", {}).path).toBe("/github/accounts");

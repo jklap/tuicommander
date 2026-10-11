@@ -2795,6 +2795,15 @@ stable-ID editable rows, checkbox multiselect, read-only status tones and action
 buttons. They are controlled rendering components for settings and work-item
 forms; adding them does not add a settings page or a plugin manifest API.
 
+## Shared provider accounts
+
+Core account/site list, add, Test and remove use one registry with write-only credential storage. GitHub metadata/tokens migrate without changing account IDs or repo bindings; core retains the GitHub provider and ambient auth chain. Generic provider descriptors allow token/basic verification for plugin providers. Native Settings secret entry and plugin-manifest/authenticated-request wiring are separate integration steps.
+
+Account credential entry uses a private native form with one-time nonce and
+window identity checks. Settings sends account metadata only and receives status
+only; Enterprise PATs go directly to the account vault after verification.
+Account forms have no browser/mobile entry capability.
+
 ### Tasks contract foundation
 
 Provider-neutral Rust DTOs and generated TypeScript cover work-item queries, fields, comments, actions and boards. A deterministic local provider supports development; visible Tasks views and remote providers are separate integration work. See [plugin guide](plugins.md#tasks-data-contract-phase-a4).
