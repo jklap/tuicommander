@@ -115,3 +115,28 @@ describe("Design Mode heartbeat navigation delivery", () => {
 		expect(tabs.update).toHaveBeenCalledTimes(2);
 	});
 });
+
+// Catches: the browser's saved acknowledgement silently dropping the first navigation after TUIC restarts.
+it("delivers the first navigation after an idle backend restart heartbeat", async () => {
+	for (const previousSeq of [1, 5]) {
+		const { storage, tabs } = browser();
+		await heartbeatReply(
+			{ armed: true, reloadSeq: 0, navigate: { seq: previousSeq, url: "http://localhost:5173/before" } },
+			storage,
+			tabs,
+			9,
+		);
+		// A newly started backend has no pending URL until the agent requests one.
+		await heartbeatReply({ armed: true, reloadSeq: 0 }, storage, tabs, 9);
+		await heartbeatReply(
+			{ armed: true, reloadSeq: 0, navigate: { seq: 1, url: "http://localhost:5173/after" } },
+			storage,
+			tabs,
+			9,
+		);
+		expect(tabs.update.mock.calls, `previous sequence ${previousSeq}`).toEqual([
+			[9, { url: "http://localhost:5173/before" }],
+			[9, { url: "http://localhost:5173/after" }],
+		]);
+	}
+});
