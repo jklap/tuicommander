@@ -1,4 +1,4 @@
-import {addPick, editPick, deletePick, draftForTab, recipient, deliverDraft} from './cards.js';
+import {addPick, editPick, deletePick, addError, clearErrors, draftForTab, recipient, deliverDraft} from './cards.js';
 import {reviewAgents} from './reviewAgents.js';
 import {connectNative, nativeRequest} from './native.js';
 let connection = 'Connecting…';
@@ -94,6 +94,11 @@ async function handle(message, sender) {
     await mutate(sender.tab.id, (draft) => addPick(draft, pick));
     return snapshot(sender.tab.id);
   }
+  if (message.kind === 'page_error') {
+    if (!sender.tab?.id || typeof message.error !== 'object') throw new Error('Page error without a tab.');
+    await mutate(sender.tab.id, (draft) => addError(draft, message.error));
+    return;
+  }
   // Content scripts never get a path to sends, host configuration or draft edits.
   if (sender.tab || sender.url !== chrome.runtime.getURL('panel.html')) return;
   const tab = await activeTab();
@@ -113,12 +118,14 @@ async function handle(message, sender) {
   if (message.kind === 'send') {
     const draft=draftForTab(await drafts(),message.tabId);
     const outcome=await deliverDraft(draft,(batch)=>request('send',batch),
-      (value)=>mutate(message.tabId,()=>value),crypto.randomUUID());
+      (value)=>mutate(message.tabId,()=>value),crypto.randomUUID(),message.errorsOnly === true);
     return {draft:await snapshot(message.tabId),outcome};
   }
   if (message.kind === 'stop') await chrome.tabs.sendMessage(tab.id,{kind:'stop'});
   if (message.kind === 'edit') await mutate(message.tabId, (draft) => editPick(draft,message.id,message.comment));
   if (message.kind === 'select') await mutate(message.tabId, (draft) => ({...draft,selectedSessionId:message.sessionId,selectionInitialized:true,agentNotice:''}));
+  if (message.kind === 'attach_errors') await mutate(message.tabId, (draft) => ({...draft,attachErrors:message.attach === true}));
+  if (message.kind === 'clear_errors') await mutate(message.tabId, clearErrors);
   if (message.kind === 'delete') await mutate(message.tabId, (draft) => deletePick(draft,message.id));
   return snapshot(tab.id);
 }
@@ -132,6 +139,10 @@ chrome.runtime.onMessage.addListener((message,sender,reply) => {
 });
 chrome.tabs.onActivated.addListener(notify);
 chrome.tabs.onUpdated.addListener((_id,change) => { if (change.status === 'complete') notify(); });
+// A new page load starts a new error list; the serial queue keeps it ordered before that page's errors.
+chrome.tabs.onUpdated.addListener((tabId,change) => {
+  if (change.status === 'loading') serial = serial.then(() => mutate(tabId, clearErrors)).catch(() => {});
+});
 chrome.tabs.onRemoved.addListener((tabId) => {
   serial = serial.then(async () => { const all=await drafts(); delete all[String(tabId)]; await chrome.storage.local.set({drafts:all}); }).catch(() => {});
 });
