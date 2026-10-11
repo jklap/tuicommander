@@ -112,7 +112,8 @@ impl AccountAuth {
         self.secrets
             .iter()
             .filter(|secret| !secret.is_empty())
-            .fold(text, |text, secret| text.replace(secret.as_str(), "[redacted]"))
+            .fold(text, |text, secret| {
+                text.replace(secret.as_str(), "[redacted]")
+            })
     }
 }
-

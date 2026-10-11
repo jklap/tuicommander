@@ -241,7 +241,10 @@ pub(crate) async fn plugin_http_fetch_impl(
         .parse()
         .map_err(|_| format!("Invalid HTTP method: {method_str}"))?;
 
-    let client = client_for(manifest.allowed_urls.clone(), auth.as_ref().map(|a| a.base()))?;
+    let client = client_for(
+        manifest.allowed_urls.clone(),
+        auth.as_ref().map(|a| a.base()),
+    )?;
     let mut request = client.request(http_method, &url);
 
     if let Some(ref hdrs) = headers {

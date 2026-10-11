@@ -33,7 +33,9 @@ async fn server(prefix: &str, redirect_to: Option<String>) -> (String, Seen) {
                     .push((uri.path().to_string(), auth.clone()));
                 let auth = auth.unwrap_or_default();
                 match uri.path().rsplit('/').next().unwrap() {
-                    "identity" => axum::Json(serde_json::json!({"name":"a3c-user"})).into_response(),
+                    "identity" => {
+                        axum::Json(serde_json::json!({"name":"a3c-user"})).into_response()
+                    }
                     "echo" => ([("x-echo", auth.clone())], format!("seen: {auth}")).into_response(),
                     "redirect" => (
                         axum::http::StatusCode::FOUND,
@@ -76,8 +78,7 @@ fn descriptor(id: &str) -> serde_json::Value {
 /// Load the plugin through the production registration path, which registers
 /// its declared descriptors.
 fn load(state: &crate::AppState, id: &str) {
-    crate::plugins::register_loaded_plugin_impl(state, id.into(), vec!["net:http".into()])
-        .unwrap();
+    crate::plugins::register_loaded_plugin_impl(state, id.into(), vec!["net:http".into()]).unwrap();
 }
 
 async fn account(provider: &str, host: &str, kind: AuthKind, token: &str) -> String {
@@ -123,19 +124,39 @@ async fn account_header_dropped_on_cross_host_redirect() {
     // Same port family, different host string: `localhost` is not `127.0.0.1`.
     let target = target.replace("127.0.0.1", "localhost");
     let (base, seen) = server("/site", Some(format!("{target}/capture"))).await;
-    write_manifest(dir.path(), "a3c-redirect", descriptor("a3c-redirect"), &[format!("{target}/*")]);
+    write_manifest(
+        dir.path(),
+        "a3c-redirect",
+        descriptor("a3c-redirect"),
+        &[format!("{target}/*")],
+    );
     let state = Arc::new(crate::state::tests_support::make_test_app_state());
     load(&state, "a3c-redirect");
-    let id = account("a3c-redirect", &base, AuthKind::Bearer, "a3c-redirect-token").await;
+    let id = account(
+        "a3c-redirect",
+        &base,
+        AuthKind::Bearer,
+        "a3c-redirect-token",
+    )
+    .await;
 
-    let response = fetch(&state, "a3c-redirect", format!("{base}/redirect"), None, &id)
-        .await
-        .unwrap();
+    let response = fetch(
+        &state,
+        "a3c-redirect",
+        format!("{base}/redirect"),
+        None,
+        &id,
+    )
+    .await
+    .unwrap();
 
     assert_eq!(response.status, 200);
     assert_eq!(
         seen.lock().unwrap().last().unwrap(),
-        &("/site/redirect".to_string(), Some("Bearer a3c-redirect-token".into())),
+        &(
+            "/site/redirect".to_string(),
+            Some("Bearer a3c-redirect-token".into())
+        ),
         "the account host must receive the injected credential"
     );
     assert_eq!(
@@ -162,7 +183,13 @@ async fn url_outside_account_host_rule_rejected() {
     );
     let state = Arc::new(crate::state::tests_support::make_test_app_state());
     load(&state, "a3c-hostrule");
-    let id = account("a3c-hostrule", &base, AuthKind::Bearer, "a3c-hostrule-token").await;
+    let id = account(
+        "a3c-hostrule",
+        &base,
+        AuthKind::Bearer,
+        "a3c-hostrule-token",
+    )
+    .await;
     let verified = seen.lock().unwrap().len();
 
     for url in [
@@ -176,8 +203,15 @@ async fn url_outside_account_host_rule_rejected() {
             .unwrap_err();
         assert!(err.contains("outside the account host"), "{url}: {err}");
     }
-    assert!(other_seen.lock().unwrap().is_empty(), "other host was contacted");
-    assert_eq!(seen.lock().unwrap().len(), verified, "a refused URL reached the site");
+    assert!(
+        other_seen.lock().unwrap().is_empty(),
+        "other host was contacted"
+    );
+    assert_eq!(
+        seen.lock().unwrap().len(),
+        verified,
+        "a refused URL reached the site"
+    );
 }
 
 // Catches: manifest consent bypass — a plugin that never declared the provider
@@ -186,8 +220,18 @@ async fn url_outside_account_host_rule_rejected() {
 async fn plugin_cannot_use_undeclared_provider() {
     let (dir, _guard) = isolated_config();
     let (base, seen) = server("", None).await;
-    write_manifest(dir.path(), "a3c-owner", descriptor("a3c-consent"), &[format!("{base}/*")]);
-    write_manifest(dir.path(), "a3c-borrower", serde_json::json!([]), &[format!("{base}/*")]);
+    write_manifest(
+        dir.path(),
+        "a3c-owner",
+        descriptor("a3c-consent"),
+        &[format!("{base}/*")],
+    );
+    write_manifest(
+        dir.path(),
+        "a3c-borrower",
+        serde_json::json!([]),
+        &[format!("{base}/*")],
+    );
     let state = Arc::new(crate::state::tests_support::make_test_app_state());
     load(&state, "a3c-owner");
     load(&state, "a3c-borrower");
@@ -209,7 +253,12 @@ async fn response_never_contains_authorization() {
     use base64::Engine as _;
     let (dir, _guard) = isolated_config();
     let (base, seen) = server("", None).await;
-    write_manifest(dir.path(), "a3c-echo", descriptor("a3c-echo"), &[format!("{base}/*")]);
+    write_manifest(
+        dir.path(),
+        "a3c-echo",
+        descriptor("a3c-echo"),
+        &[format!("{base}/*")],
+    );
     let state = Arc::new(crate::state::tests_support::make_test_app_state());
     load(&state, "a3c-echo");
 
@@ -222,8 +271,8 @@ async fn response_never_contains_authorization() {
             .await
             .unwrap();
         let sent = seen.lock().unwrap().last().unwrap().1.clone().unwrap();
-        let encoded = base64::engine::general_purpose::STANDARD
-            .encode(format!("user@example.test:{token}"));
+        let encoded =
+            base64::engine::general_purpose::STANDARD.encode(format!("user@example.test:{token}"));
         let expected = match kind {
             AuthKind::Basic => format!("Basic {encoded}"),
             _ => format!("Bearer {token}"),
@@ -232,7 +281,10 @@ async fn response_never_contains_authorization() {
         let reply = format!("{} {:?}", response.body, response.headers);
         assert!(response.body.starts_with("seen: "), "{reply}");
         assert!(!reply.contains(token), "token reached JS: {reply}");
-        assert!(!reply.contains(&encoded), "Basic credential reached JS: {reply}");
+        assert!(
+            !reply.contains(&encoded),
+            "Basic credential reached JS: {reply}"
+        );
     }
 }
 
@@ -241,16 +293,27 @@ async fn response_never_contains_authorization() {
 async fn caller_authorization_header_rejected_for_account_request() {
     let (dir, _guard) = isolated_config();
     let (base, seen) = server("", None).await;
-    write_manifest(dir.path(), "a3c-header", descriptor("a3c-header"), &[format!("{base}/*")]);
+    write_manifest(
+        dir.path(),
+        "a3c-header",
+        descriptor("a3c-header"),
+        &[format!("{base}/*")],
+    );
     let state = Arc::new(crate::state::tests_support::make_test_app_state());
     load(&state, "a3c-header");
     let id = account("a3c-header", &base, AuthKind::Bearer, "a3c-header-token").await;
     let verified = seen.lock().unwrap().len();
     let headers = std::collections::HashMap::from([("authorization".into(), "Bearer x".into())]);
 
-    let err = fetch(&state, "a3c-header", format!("{base}/echo"), Some(headers), &id)
-        .await
-        .unwrap_err();
+    let err = fetch(
+        &state,
+        "a3c-header",
+        format!("{base}/echo"),
+        Some(headers),
+        &id,
+    )
+    .await
+    .unwrap_err();
 
     assert!(err.contains("must not set Authorization"), "{err}");
     assert_eq!(seen.lock().unwrap().len(), verified);
@@ -261,7 +324,12 @@ async fn caller_authorization_header_rejected_for_account_request() {
 #[tokio::test]
 async fn unloading_a_plugin_unregisters_its_providers() {
     let (dir, _guard) = isolated_config();
-    write_manifest(dir.path(), "a3c-unload", descriptor("a3c-unload"), &["https://a3c.example.test/*".into()]);
+    write_manifest(
+        dir.path(),
+        "a3c-unload",
+        descriptor("a3c-unload"),
+        &["https://a3c.example.test/*".into()],
+    );
     let state = crate::state::tests_support::make_test_app_state();
     let input = NewAccount {
         provider: "a3c-unload".into(),
@@ -291,15 +359,27 @@ fn manifest_provider_entries_are_validated() {
     let urls = ["https://a3c.example.test/*".to_string()];
     for (id, providers, expected) in [
         ("a3c-shadow", github, "must be a core id"),
-        ("a3c-ghost", serde_json::json!(["jira"]), "must be a core id"),
-        ("a3c-twice", serde_json::json!(["github", "github"]), "declared twice"),
+        (
+            "a3c-ghost",
+            serde_json::json!(["jira"]),
+            "must be a core id",
+        ),
+        (
+            "a3c-twice",
+            serde_json::json!(["github", "github"]),
+            "declared twice",
+        ),
     ] {
         write_manifest(dir.path(), id, providers, &urls);
         let err = crate::plugins::read_single_manifest(id).unwrap_err();
         assert!(err.contains(expected), "{id}: {err}");
     }
     write_manifest(dir.path(), "a3c-core", serde_json::json!(["github"]), &urls);
-    assert!(crate::plugins::read_single_manifest("a3c-core").unwrap().declares_provider("github"));
+    assert!(
+        crate::plugins::read_single_manifest("a3c-core")
+            .unwrap()
+            .declares_provider("github")
+    );
 
     let plugin_dir = dir.path().join("plugins").join("a3c-nohttp");
     std::fs::create_dir_all(&plugin_dir).unwrap();
