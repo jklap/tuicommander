@@ -1558,6 +1558,12 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		if (historyGrowth > 0) {
 			const liveTop = lastHistoryBase + lastHistorySize;
 			scroll.commitLiveRows(liveTop, liveTop + historyGrowth);
+		} else if (historyGrowth < 0) {
+			// History rewound: the resize-repaint dedupe removed rows (or the scrollback
+			// was erased). Every row newer than the removed ones now has a lower all-time
+			// index, and the frame does not say where they were, so no cached row or
+			// chunk in flight can be trusted (#1264-89c8). This frame reseeds the viewport.
+			scroll.clearCache();
 		}
 		// These describe the merge origin for the next frame even when history and
 		// display offset advanced together and left the visible all-time top stable.

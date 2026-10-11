@@ -74,15 +74,19 @@ function fullFrame(opts: {
 	return buffer;
 }
 
-/** What `terminal_styled_rows` answers: rows `[start, start+count)` that exist, text from `textOf`. */
+/**
+ * What `terminal_styled_rows` answers: rows `[start, start+count)` that exist —
+ * all-time rows `[first, total)`, the ones below `first` evicted — text from `textOf`.
+ */
 function styledRange(
 	start: number,
 	count: number,
 	total: number,
 	historySize: number,
 	textOf: (abs: number) => string,
+	first = 0,
 ) {
-	const abs = Array.from({ length: count }, (_, i) => start + i).filter((a) => a < total);
+	const abs = Array.from({ length: count }, (_, i) => start + i).filter((a) => a >= first && a < total);
 	const buffer = new ArrayBuffer(12 + abs.length * (6 + COLS * CELL_SIZE));
 	const view = new DataView(buffer);
 	view.setUint32(0, start, true);
@@ -135,6 +139,32 @@ function layOutPane() {
 		y: 0,
 		toJSON: () => ({}),
 	});
+}
+
+/** Text of the rows a paint call drew, by viewport row; rows it had no cached row for are absent. */
+function rowsOf(rows: Map<number, { codepoints: Uint32Array }>): Map<number, string> {
+	return new Map(
+		Array.from(rows, ([r, row]) => [
+			r,
+			String.fromCodePoint(...Array.from(row.codepoints).map((c) => c || 32)).trimEnd(),
+		]),
+	);
+}
+
+/**
+ * Every row of every paint since the last `paintGrid.mockClear()` is a real line,
+ * and the rows of one paint sit in `truth` at the same distance as on screen:
+ * no stale line, no duplicate, no block skipped between two painted rows.
+ */
+function expectEveryPaintIsARunOf(truth: string[]) {
+	const at = new Map(truth.map((line, abs) => [line, abs]));
+	for (const [rows] of paintGrid.mock.calls as Array<[Map<number, { codepoints: Uint32Array }>]>) {
+		const painted = [...rowsOf(rows)];
+		expect(painted.filter(([, line]) => !at.has(line)).map(([, line]) => line)).toEqual([]);
+		const [r0, line0] = painted[0] ?? [0, ""];
+		for (const [r, line] of painted)
+			expect(`${line}@${(at.get(line) ?? 0) - r}`).toBe(`${line}@${(at.get(line0) ?? 0) - r0}`);
+	}
 }
 
 function sentOffsets(): number[] {
@@ -345,5 +375,211 @@ describe("CanvasTerminal scroll gesture during output", () => {
 		} finally {
 			view.unmount();
 		}
+	});
+
+	// At the scrollback cap `historySize` stops moving and only `historyBase`
+	// advances: the backend evicts one old line per new one.
+	describe("at the scrollback cap", () => {
+		const CAP = 200;
+
+		// catches: history growth computed from historySize alone (the #1681 shape):
+		// at the cap it reads 0, so the gesture is not rebased over the output and
+		// the next flush scrolls the view forward over the lines that just landed.
+		it("keeps the lines under the user when output lands mid-gesture", async () => {
+			const view = render(() => <CanvasTerminal sessionId="scroll-1264-cap" terminalId="scroll-1264-cap" />);
+			try {
+				await waitFor(() => expect(frameSink.current).not.toBeNull());
+				frameSink.current?.(fullFrame({ historySize: CAP, historyBase: 1000, displayOffset: 0 }));
+				const canvas = view.container.querySelector('canvas[tabindex="0"]');
+				if (!canvas) throw new Error("terminal canvas not mounted");
+
+				wheel(canvas, -80);
+				await waitFor(() => expect(sentOffsets().length).toBe(1));
+				const firstOffset = sentOffsets()[0];
+				expect(firstOffset).toBeGreaterThan(0);
+
+				// 5 lines of output: 5 evicted at the top, so the history size is unchanged.
+				frameSink.current?.(fullFrame({ historySize: CAP, historyBase: 1005, displayOffset: firstOffset + 5 }));
+
+				wheel(canvas, -80);
+				await waitFor(() => expect(sentOffsets().length).toBe(2));
+				// The same wheel step again, on top of the 5 lines the backend already
+				// added to the offset. Not rebased, it sends only 2 * firstOffset.
+				expect(sentOffsets()[1]).toBeGreaterThanOrEqual(2 * firstOffset + 5);
+			} finally {
+				view.unmount();
+			}
+		});
+
+		// catches: the same growth-from-historySize bug on the commit path: at the cap
+		// growth reads 0, commitLiveRows never runs, and the chunk cached while lines
+		// 1200-1203 were the live region keeps painting their pre-commit text.
+		it("shows the committed lines, not the live-region rows cached before they were committed", async () => {
+			let base = 1000;
+			let committed = false;
+			const liveTop = 1000 + CAP;
+			const textOf = (abs: number) =>
+				abs < liveTop ? `H${abs}` : committed && abs < liveTop + 5 ? `F${abs}` : `V${abs}`;
+			const truth = () =>
+				Array.from({ length: base + CAP + ROWS }, (_, abs) => (abs < base ? `evicted${abs}` : textOf(abs)));
+			invoke.mockImplementation(async (cmd: string, args: { start?: number; count?: number }) => {
+				if (cmd !== "terminal_styled_rows") return undefined;
+				return styledRange(args.start ?? 0, args.count ?? 0, base + CAP + ROWS, CAP, textOf, base);
+			});
+			paintGrid.mockClear();
+			layOutPane();
+			const view = render(() => <CanvasTerminal sessionId="scroll-1264-cap-live" terminalId="scroll-1264-cap-live" />);
+			try {
+				await waitFor(() => expect(frameSink.current).not.toBeNull());
+				frameSink.current?.(fullFrame({ historySize: CAP, historyBase: base, displayOffset: 0, textOf }));
+				const canvas = view.container.querySelector('canvas[tabindex="0"]');
+				if (!canvas) throw new Error("terminal canvas not mounted");
+
+				wheel(canvas, -80);
+				await waitFor(() => expect(sentOffsets().length).toBe(1));
+				const firstOffset = sentOffsets()[0];
+				await waitFor(() => expect(invoke.mock.calls.map(([c]) => c)).toContain("terminal_styled_rows"));
+				await new Promise((r) => setTimeout(r, 20));
+
+				committed = true;
+				base = 1005;
+				paintGrid.mockClear();
+				frameSink.current?.(fullFrame({ historySize: CAP, historyBase: base, displayOffset: firstOffset + 5, textOf }));
+
+				wheel(canvas, 40);
+				await new Promise((r) => setTimeout(r, 150));
+
+				expectEveryPaintIsARunOf(truth());
+				expect(paintedLines()).toContain(`F${liveTop}`);
+			} finally {
+				view.unmount();
+			}
+		});
+	});
+
+	// A rewind removes rows the backend already sent: the resize-repaint dedupe
+	// (`drop_newest_history`, `drop_history_before` in the alacritty fork) lowers
+	// total_scrolled with history_base unchanged. Every row newer than the removed
+	// ones moves down by the same count in the all-time space the cache is keyed by.
+	describe("when the backend rewinds history mid-gesture", () => {
+		/** Mount, show `historySize` lines at the bottom, start a gesture and let the band fetch land. */
+		async function scrolledBack(id: string, historySize: number, textOf: (abs: number) => string) {
+			paintGrid.mockClear();
+			layOutPane();
+			const view = render(() => <CanvasTerminal sessionId={id} terminalId={id} />);
+			await waitFor(() => expect(frameSink.current).not.toBeNull());
+			frameSink.current?.(fullFrame({ historySize, displayOffset: 0, textOf }));
+			const canvas = view.container.querySelector('canvas[tabindex="0"]');
+			if (!canvas) throw new Error("terminal canvas not mounted");
+			wheel(canvas, -80);
+			await waitFor(() => expect(sentOffsets().length).toBe(1));
+			await waitFor(() => expect(invoke.mock.calls.map(([c]) => c)).toContain("terminal_styled_rows"));
+			await new Promise((r) => setTimeout(r, 20));
+			return { view, canvas, offset: sentOffsets()[0] };
+		}
+
+		/**
+		 * Keep the same gesture going up a few lines, so the cache is painted after the
+		 * rewind over the removed rows too. A stale cache can otherwise paint the whole
+		 * window shifted by the same count, which is still a run of real lines.
+		 */
+		async function keepScrolling(canvas: Element) {
+			for (let i = 0; i < 4; i++) {
+				wheel(canvas, -60);
+				await new Promise((r) => setTimeout(r, 30));
+			}
+			await new Promise((r) => setTimeout(r, 100));
+		}
+
+		// Physical lines P0..P103: 100 history lines, then the screen. The dedupe
+		// removes P90..P92, the 3 rows just before the 7 newest history rows
+		// (`drop_history_before(7, 3)`), so P93 moves from all-time row 93 to 90.
+		const removedInside = (rewound: () => boolean) => (abs: number) => `P${!rewound() || abs < 90 ? abs : abs + 3}`;
+		const insideOffset = (offset: number) => (offset > 7 ? Math.max(offset - 3, 7) : offset);
+
+		// catches: negative history growth is ignored, so rows cached before the
+		// rewind keep their old all-time keys: the gesture paints the removed
+		// duplicates and misses the last 3 lines of the newer block — a contiguous
+		// block missing in the middle of history.
+		it("paints history without the removed rows and without a gap", async () => {
+			let rewound = false;
+			const textOf = removedInside(() => rewound);
+			const historySize = () => (rewound ? 97 : 100);
+			invoke.mockImplementation(async (cmd: string, args: { start?: number; count?: number }) => {
+				if (cmd !== "terminal_styled_rows") return undefined;
+				return styledRange(args.start ?? 0, args.count ?? 0, historySize() + ROWS, historySize(), textOf);
+			});
+			const { view, canvas, offset } = await scrolledBack("rewind-inside", 100, textOf);
+			try {
+				rewound = true;
+				paintGrid.mockClear();
+				frameSink.current?.(fullFrame({ historySize: 97, displayOffset: insideOffset(offset), textOf }));
+				await keepScrolling(canvas);
+
+				expectEveryPaintIsARunOf(Array.from({ length: 97 + ROWS }, (_, abs) => textOf(abs)));
+				// The window reached the rows just above the removed ones.
+				expect(paintedLines()).toContain("P89");
+			} finally {
+				view.unmount();
+			}
+		});
+
+		// catches: the same ignored rewind when the dedupe drops the NEWEST history
+		// rows (`drop_newest_history(3)`): the screen moves up into their all-time
+		// rows, and the live rows cached at the old screen position paint the
+		// screen's first lines a second time below it.
+		it("paints the screen once after the newest history rows are dropped", async () => {
+			let rewound = false;
+			// History P0..P96, then copies of the screen's first 3 lines, then the screen S0..S3.
+			const screenTop = () => (rewound ? 97 : 100);
+			const textOf = (abs: number) =>
+				abs < 97 ? `P${abs}` : abs < screenTop() ? `S${abs - 97}` : `S${abs - screenTop()}`;
+			invoke.mockImplementation(async (cmd: string, args: { start?: number; count?: number }) => {
+				if (cmd !== "terminal_styled_rows") return undefined;
+				return styledRange(args.start ?? 0, args.count ?? 0, screenTop() + ROWS, screenTop(), textOf);
+			});
+			const { view, canvas, offset } = await scrolledBack("rewind-newest", 100, textOf);
+			try {
+				rewound = true;
+				paintGrid.mockClear();
+				frameSink.current?.(fullFrame({ historySize: 97, displayOffset: Math.max(0, offset - 3), textOf }));
+				await keepScrolling(canvas);
+
+				expectEveryPaintIsARunOf(Array.from({ length: 97 + ROWS }, (_, abs) => textOf(abs)));
+				expect(paintGrid).toHaveBeenCalled();
+			} finally {
+				view.unmount();
+			}
+		});
+
+		// catches: a fix that drops the cached rows but lets a chunk fetched before
+		// the rewind land afterwards: it installs the pre-rewind rows at their old keys.
+		it("discards a chunk that was fetched before the rewind and answers after it", async () => {
+			let rewound = false;
+			const textOf = removedInside(() => rewound);
+			const historySize = () => (rewound ? 97 : 100);
+			const held: Array<() => void> = [];
+			invoke.mockImplementation(async (cmd: string, args: { start?: number; count?: number }) => {
+				if (cmd !== "terminal_styled_rows") return undefined;
+				// Read the rows now; deliver them only once the rewind frame is in.
+				const answer = styledRange(args.start ?? 0, args.count ?? 0, historySize() + ROWS, historySize(), textOf);
+				if (rewound) return answer;
+				return new Promise((resolve) => held.push(() => resolve(answer)));
+			});
+			const { view, canvas, offset } = await scrolledBack("rewind-in-flight", 100, textOf);
+			try {
+				expect(held.length).toBeGreaterThan(0);
+				rewound = true;
+				paintGrid.mockClear();
+				frameSink.current?.(fullFrame({ historySize: 97, displayOffset: insideOffset(offset), textOf }));
+				for (const release of held.splice(0)) release();
+				await keepScrolling(canvas);
+
+				expectEveryPaintIsARunOf(Array.from({ length: 97 + ROWS }, (_, abs) => textOf(abs)));
+				expect(paintedLines()).toContain("P89");
+			} finally {
+				view.unmount();
+			}
+		});
 	});
 });
