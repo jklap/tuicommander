@@ -149,6 +149,39 @@ fn settings(repo: &Path) -> Option<crate::config::RepoSettingsEntry> {
             .then_some(value)
         })
 }
+fn attributed_candidates(
+    listing: &str,
+    cwds: &mut String,
+    commands: &str,
+    roots: &[PathBuf],
+) -> Vec<Value> {
+    let known = cwd_map(cwds);
+    for (pid, root) in command_owners(commands, roots) {
+        if known
+            .get(&pid)
+            .is_none_or(|cwd| owner(cwd, roots).is_none())
+        {
+            cwds.push_str(&format!("p{pid}\nfcwd\nn{}\n", root.display()));
+        }
+    }
+    candidates(listing, cwds, roots)
+}
+#[cfg(unix)]
+async fn live_candidates(roots: &[PathBuf]) -> Result<Vec<Value>, String> {
+    let listing = command("lsof", &["-nP", "-iTCP", "-sTCP:LISTEN", "-Fpcn"]).await?;
+    let ids = listeners(&listing)
+        .iter()
+        .map(|listener| listener.pid.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    if !ids.is_empty() {
+        let mut cwds = command("lsof", &["-a", "-p", &ids, "-d", "cwd", "-Fn"]).await?;
+        let commands = command("ps", &["-p", &ids, "-o", "pid=,command="]).await?;
+        return Ok(attributed_candidates(&listing, &mut cwds, &commands, roots));
+    }
+    Ok(Vec::new())
+}
+
 /// Only trusted TUIC settings supply scripts; .tuic.json cannot silently execute code.
 pub(super) fn run_script(repo: &Path) -> Option<String> {
     settings(repo)
@@ -171,6 +204,33 @@ pub(crate) async fn discover(
     repo: &Path,
     session: Option<&str>,
 ) -> Result<Value, String> {
+    discover_with_source(state, repo, session, |roots| {
+        let roots = roots.to_vec();
+        async move {
+            #[cfg(unix)]
+            {
+                live_candidates(&roots).await
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = roots;
+                Ok(Vec::new())
+            }
+        }
+    })
+    .await
+}
+
+async fn discover_with_source<F, Fut>(
+    state: &crate::AppState,
+    repo: &Path,
+    session: Option<&str>,
+    source: F,
+) -> Result<Value, String>
+where
+    F: FnOnce(&[PathBuf]) -> Fut,
+    Fut: std::future::Future<Output = Result<Vec<Value>, String>>,
+{
     let repo = repo.canonicalize().map_err(|e| e.to_string())?;
     let path = repo.to_str().ok_or("Repository path is not UTF-8")?;
     let worktrees = command("git", &["-C", path, "worktree", "list", "--porcelain"]).await?;
@@ -190,35 +250,15 @@ pub(crate) async fn discover(
         }
         servers.push(json!({"url":url,"source":"configured"}));
     }
-    #[cfg(unix)]
     {
-        let listing = command("lsof", &["-nP", "-iTCP", "-sTCP:LISTEN", "-Fpcn"]).await?;
-        let ids = listeners(&listing)
-            .iter()
-            .map(|listener| listener.pid.to_string())
-            .collect::<Vec<_>>()
-            .join(",");
-        if !ids.is_empty() {
-            let mut cwds = command("lsof", &["-a", "-p", &ids, "-d", "cwd", "-Fn"]).await?;
-            let known = cwd_map(&cwds);
-            let commands = command("ps", &["-p", &ids, "-o", "pid=,command="]).await?;
-            for (pid, root) in command_owners(&commands, &roots) {
-                if known
-                    .get(&pid)
-                    .is_none_or(|cwd| owner(cwd, &roots).is_none())
-                {
-                    cwds.push_str(&format!("p{pid}\nfcwd\nn{}\n", root.display()));
-                }
-            }
-            let mut owned = candidates(&listing, &cwds, &roots);
-            let scope = session_root(state, session, &roots);
-            owned.retain(|row| {
-                scope
-                    .as_ref()
-                    .is_some_and(|root| row["worktreePath"] == json!(root))
-            });
-            servers.extend(html_servers(owned).await);
-        }
+        let mut owned = source(&roots).await?;
+        let scope = session_root(state, session, &roots);
+        owned.retain(|row| {
+            scope
+                .as_ref()
+                .is_some_and(|root| row["worktreePath"] == json!(root))
+        });
+        servers.extend(html_servers(owned).await);
     }
     let hints = session.map_or_else(Vec::new, |sid| {
         super::hints::advertised(state, sid, &servers)
