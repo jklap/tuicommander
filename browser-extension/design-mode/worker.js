@@ -43,7 +43,10 @@ async function request(action, fields = {}) {
 async function drafts() { return (await chrome.storage.local.get('drafts')).drafts ?? {}; }
 async function mutate(tabId, change) {
   const all = await drafts();
-  all[String(tabId)] = change(draftForTab(all, tabId));
+  const current = draftForTab(all, tabId);
+  const next = change(current);
+  if (next === current) return;
+  all[String(tabId)] = next;
   await chrome.storage.local.set({drafts: all}); notify();
 }
 async function activeTab() {
