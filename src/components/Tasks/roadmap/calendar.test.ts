@@ -1,8 +1,18 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { projectRoadmap, roadmapWindow } from "./calendar";
 import { roadmapSeed } from "./demo";
 
 describe("Roadmap calendar geometry", () => {
+	// Node re-reads TZ on assignment; the DST case needs a zone that observes DST.
+	const savedTz = process.env.TZ;
+	beforeEach(() => {
+		process.env.TZ = "America/Los_Angeles";
+	});
+	afterEach(() => {
+		if (savedTz === undefined) delete process.env.TZ;
+		else process.env.TZ = savedTz;
+	});
+
 	// Catches: dividing elapsed hours by 24 makes a DST-crossing span a fractional day.
 	it("date_only_span_crossing_dst_keeps_whole_calendar_day_width", () => {
 		const seed = roadmapSeed(1);

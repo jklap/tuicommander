@@ -7,12 +7,17 @@ import type { WorkItemProvider } from "../../../plugins/workItemProvider";
 import { roadmapDemo, roadmapSeed } from "./demo";
 import { TasksRoadmap } from "./TasksRoadmap";
 
+const savedTz = process.env.TZ;
 beforeEach(() => {
+	// Node re-reads TZ on assignment; the local-day assertions assume Los Angeles.
+	process.env.TZ = "America/Los_Angeles";
 	// happy-dom supplies no layout; exercise the real virtualizer with a viewport.
 	vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(600);
 	vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(1000);
 });
 afterEach(() => {
+	if (savedTz === undefined) delete process.env.TZ;
+	else process.env.TZ = savedTz;
 	cleanup();
 	vi.restoreAllMocks();
 });
@@ -37,7 +42,7 @@ describe("Tasks roadmap", () => {
 
 	// Catches: displaying an instant's UTC date instead of the viewer's calendar day.
 	it("span_uses_local_timezone", async () => {
-		// The run sets TZ=America/Los_Angeles; browser coverage also checks a positive offset.
+		// beforeEach pins America/Los_Angeles; browser coverage also checks a positive offset.
 		render(() => <TasksRoadmap provider={roadmapDemo()} initialDate={october()} onOpen={() => {}} />);
 		const row = await screen.findByRole("button", { name: /UTC boundary/ });
 		expect(row).toHaveTextContent("2026-10-10 – 2026-10-11");
