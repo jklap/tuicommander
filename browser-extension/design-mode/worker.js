@@ -7,6 +7,7 @@ let agents = [];
 let servers = {servers:[],canStart:false};
 let lastRefresh = 0;
 let lastMode;
+let armed;
 async function refreshConnection() {
   if (Date.now() - lastRefresh < 5000) return;
   lastRefresh = Date.now();
@@ -21,6 +22,8 @@ async function refreshConnection() {
         for(const tab of await chrome.tabs.query({})) if(tab.id) chrome.tabs.sendMessage(tab.id,{kind:'stop'}).catch(()=>{});
       }
       lastMode=mode?.status;
+      // TUIC is the authority on which session started Design Mode; binding.json is only the install-time copy.
+      armed=mode?.status==='armed'?mode.sessionId:undefined;
     } catch(error) { connection=`${connection} · Status unavailable: ${error.message}`; }
     try { servers=await request('list_dev_servers'); }
     catch(error) { servers={servers:[],canStart:false,scanNotice:error.message}; }
@@ -54,9 +57,9 @@ async function activeTab() {
 async function snapshot(tabId) {
   const all = await drafts();
   const draft = draftForTab(all, tabId);
-  const selection = connection.startsWith('Connected') ? recipient(draft, agents, bound?.sessionId) : {};
+  const selection = connection.startsWith('Connected') ? recipient(draft, agents, armed ?? bound?.sessionId) : {};
   if (Object.keys(selection).some((key) => draft[key] !== selection[key])) { all[String(tabId)] = {...draft,...selection}; await chrome.storage.local.set({drafts:all}); }
-  return {tabId, ...draft, ...selection, repoPath: bound?.repoPath, connection, agents, servers};
+  return {tabId, ...draft, ...selection, repoPath: bound?.repoPath, connection, agents, servers, armedSessionId: armed ?? bound?.sessionId};
 }
 async function capture(message, sender) {
   if (sender.frameId !== 0) return {captureError: 'Frame screenshot omitted; DOM evidence retained.'};

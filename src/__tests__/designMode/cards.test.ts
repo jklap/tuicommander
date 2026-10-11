@@ -35,12 +35,35 @@ describe("Design Mode agent selection", () => {
 		];
 		expect(recipient({ picks: [] }, agents, "X").selectedSessionId).toBe("X");
 		expect(
-			recipient({ picks: [], selectionInitialized: true, selectedSessionId: "Y" }, agents, "X").selectedSessionId,
+			recipient({ picks: [], selectionInitialized: true, selectedSessionId: "Y", armedFor: "X" }, agents, "X")
+				.selectedSessionId,
 		).toBe("Y");
 		const exited = recipient({ picks: [], selectionInitialized: true, selectedSessionId: "X" }, [agents[0]], "X");
 		expect(exited.selectedSessionId).toBe("");
 		expect(exited.agentNotice).toContain("exited");
 		expect(recipient({ picks: [] }, agents).selectedSessionId).toBe("Y");
+	});
+
+	// Catches: the default recipient staying on the session bound at extension start after Boss starts Design Mode elsewhere.
+	it("recipient_follows_newly_armed_session", async () => {
+		// @ts-expect-error plain MV3 module
+		const { recipient } = await import("../../../browser-extension/design-mode/cards.js");
+		const agents = [
+			{ sessionId: "X", label: "First starter" },
+			{ sessionId: "Y", label: "Manual choice" },
+			{ sessionId: "Z", label: "New starter" },
+		];
+		const chosen = { picks: [], selectionInitialized: true, selectedSessionId: "Y", armedFor: "X" };
+		expect(recipient(chosen, agents, "Z")).toMatchObject({ selectedSessionId: "Z", armedFor: "Z" });
+		// A draft from before armedFor existed adopts the armed session once.
+		expect(
+			recipient({ picks: [], selectionInitialized: true, selectedSessionId: "Y" }, agents, "X").selectedSessionId,
+		).toBe("X");
+		// An armed session not yet listed leaves the choice alone and is retried later.
+		expect({ ...chosen, ...recipient(chosen, agents.slice(0, 2), "Q") }).toMatchObject({
+			selectedSessionId: "Y",
+			armedFor: "X",
+		});
 	});
 });
 
