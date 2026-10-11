@@ -218,6 +218,7 @@ export function getShortcutSections(): ShortcutSection[] {
 					description: "Focus mode (hide sidebar & panels)",
 				},
 				{ action: "command-overview", keys: keyFor("command-overview"), description: "Command overview" },
+				{ action: "open-tasks", keys: keyFor("open-tasks"), description: "Open Tasks" },
 				{ action: "toggle-outline", keys: keyFor("toggle-outline"), description: "Toggle outline panel" },
 				{ action: "toggle-compose-panel", keys: keyFor("toggle-compose-panel"), description: "Toggle compose panel" },
 				{ action: "toggle-tunnels", keys: keyFor("toggle-tunnels"), description: "SSH Tunnels" },
