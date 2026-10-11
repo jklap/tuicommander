@@ -13,6 +13,13 @@ failure leaves the branch unproved; patch-equivalence remains a local fallback.
 The MCP local-branch deletion action uses the same merged-PR evidence when a
 branch has no worktree.
 
+REST requests use `github::github_rest_request` with the host and token selected by
+`resolve_repo_for_rest` (registry and per-repo binding) or by the account identity
+flow. The builder pins `User-Agent: TUICommander`, the requested Accept media type,
+and `X-GitHub-Api-Version: 2022-11-28`. GraphQL uses the same User-Agent. Each caller
+keeps its status/error wording and existing circuit-breaker handling. A production
+source guard ratchets the remaining `gh` spawn sites until their HTTP migrations land.
+
 ## Multi-Account Model (`github_account.rs`)
 
 The integration is **account-centric**: the primary key is a stable `GitHubAccountId`, not the host. This keeps github.com behaving exactly as before behind an "ambient default" account while enabling additional accounts.

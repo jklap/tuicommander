@@ -359,16 +359,17 @@ pub(crate) async fn fetch_account_login(
     host: &GitHubHost,
     token: &str,
 ) -> Result<Option<String>, String> {
-    let url = format!("{}/user", host.rest_base());
-    let resp = client
-        .get(&url)
-        .header("Authorization", format!("Bearer {token}"))
-        .header("Accept", "application/vnd.github+json")
-        .header("User-Agent", "TUICommander")
-        .header("X-GitHub-Api-Version", "2022-11-28")
-        .send()
-        .await
-        .map_err(|e| format!("Could not reach {}: {e}", host.as_str()))?;
+    let resp = crate::github::github_rest_request(
+        client,
+        reqwest::Method::GET,
+        host,
+        "/user",
+        token,
+        crate::github::GITHUB_JSON,
+    )
+    .send()
+    .await
+    .map_err(|e| format!("Could not reach {}: {e}", host.as_str()))?;
     crate::accounts::read_verified_identity(resp, "/login", token)
         .await
         .map(Some)

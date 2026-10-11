@@ -3120,6 +3120,9 @@ pub async fn run_remote(mut options: RemoteOptions) -> anyhow::Result<()> {
 }
 
 #[cfg(test)]
+mod github_http_guard_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
