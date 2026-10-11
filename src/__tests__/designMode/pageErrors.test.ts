@@ -44,3 +44,21 @@ it("forwards every page failure kind, including recurring ones", async () => {
 	expect(sent.find((e) => e.kind === "resource")).toMatchObject({ source: "http://localhost/missing.js" });
 	expect(sent.filter((e) => e.message === "x is not defined")).toHaveLength(2);
 });
+
+// Catches: a long-lived dev page (HMR, no reload) that has produced 50 distinct errors never reporting a 51st,
+// because the bridge kept its own cap instead of leaving the cap to the worker.
+it("keeps forwarding new distinct errors after fifty", async () => {
+	const sendMessage = vi.fn(async (_message: { error: Record<string, unknown> }) => {});
+	vi.spyOn(window, "postMessage").mockImplementation((data: unknown) => {
+		window.dispatchEvent(new MessageEvent("message", { data, source: window }));
+	});
+	new Function(script("errors.js"))();
+	new Function("chrome", script("errorsBridge.js"))({ runtime: { sendMessage } });
+
+	for (let n = 0; n < 51; n++) {
+		window.dispatchEvent(new ErrorEvent("error", { message: `e${n}`, filename: "http://localhost/app.js" }));
+	}
+	await new Promise((resolve) => setTimeout(resolve, 20));
+
+	expect(sendMessage.mock.calls.map(([m]) => m.error.message)).toContain("e50");
+});
