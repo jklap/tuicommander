@@ -21,9 +21,10 @@ export const INTENT_HIGHLIGHT_RE = /^[\s●⏺]*intent:\s+/;
  * The answer marker an agent prefixes to every sentence that directly answers
  * the user (💬). Matched on row text, which carries no escape sequences — bold,
  * colour and the like live in cell attributes — so styling cannot hide it.
- * Like `intent:`, it may sit behind the agent's own bullet.
+ * Like `intent:`, it may sit behind the agent's own bullet: Claude's `●`/`⏺`
+ * or Codex's `•`.
  */
-export const ANSWER_MARKER_RE = /^[\s●⏺]*💬/;
+export const ANSWER_MARKER_RE = /^[\s●⏺•]*💬/;
 /** An agent output row: a bullet glyph at the start of the line. */
 const OUTPUT_ROW_RE = /^\s*[●⏺]/;
 /** A continuation row of an answer: indented under the agent's bullet. */
