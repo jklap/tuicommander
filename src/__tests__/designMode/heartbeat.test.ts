@@ -67,6 +67,7 @@ it("reload_after_backend_restart_is_not_suppressed_by_previous_sequence", async 
 		query: async () => [{ id: 42 }],
 	};
 	await heartbeatReply({ armed: true, reloadSeq: 0 }, storage, tabs);
+	expect(reloaded).toEqual([]);
 	await heartbeatReply({ armed: true, reloadSeq: 1 }, storage, tabs);
 	expect(reloaded).toEqual([42]);
 });
