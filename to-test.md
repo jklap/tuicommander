@@ -7,6 +7,11 @@
 
 ## Automation precheck prompt context (1631-45bf) — Rust restart required
 
+## Core provider accounts (1679-1419) — Rust restart required
+
+- [ ] After landing and Boss's manual `make dev` restart or `make build`, list accounts through `POST /accounts/action`; confirm existing GitHub IDs and repo bindings, plus presence-only credential status. OAuth success replies must omit `access_token`. No app was launched, restarted or killed by this peer.
+- [ ] After A2/A3 integration, use the private native add flow for a registered Jira/GitLab token provider, Test it, then remove a throwaway account/site. A1 tests the generic descriptor protocol on rb; live provider auth and native secret-entry privacy are not claimed.
+
 - [ ] After Boss restarts `make dev` or installs `make build`, create an isolated Once automation through the API/MCP with `precheck.inject_output: true`. Confirm a successful scheduled precheck prefixes bounded, marked untrusted stdout before the literal prompt and run history reports `precheck_context`. Compare omitted/false flags and Run Now (literal prompt, no context); stderr must not appear. Targeted dispatch tests exercise the real shell, launch-request boundary and reopened ledger. No desktop instance was launched or restarted by this peer.
 
 ## iPhone hands-free Now Playing (1670-fdc8)
@@ -4979,3 +4984,14 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] After a manual `make dev` restart (or `make build`), verify the line review APIs through the integrated Files UI: outdated/resolved threads, replies, resolution and rejection after the PR head moves. Rust changes require restart; automated checks use recorded GitHub fixtures/local stubs.
 
 - [ ] After manual `make dev` restart (or `make build`), verify integrated PR actions: failed-job rerun, auto-merge enable/disable, enqueue/dequeue and queue state. A queue-required merge must enqueue; a moved head or unavailable branch policy must prevent writes. REQUEST_CHANGES with blank text must fail. Automated checks use recorded responses and local stubs only.
+## Private account secret entry (#1696-c6d4)
+
+- [ ] After a manual `make dev` restart (or `make build`), add an Enterprise
+  account: Settings shows only the host field; Add account opens the private
+  native token window. Submit a valid PAT and confirm the account appears.
+- [ ] Decline and close before submitting; confirm no account appears. Retry
+  with an invalid PAT and confirm no partial account is created.
+- [ ] No UI launches rotation yet. Send `POST /accounts/secret-form` with
+  `{"action":"rotate","id":"<account id>"}` to the test instance; confirm
+  presence remains set and provider requests use the replacement credential.
+- [ ] Confirm native entry has no mobile link or developer tools.

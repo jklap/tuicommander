@@ -1403,12 +1403,14 @@ TUICommander can proxy upstream MCP servers (stdio or HTTP) and aggregate their 
 ### Upstream configuration save contract
 
 IPC `save_mcp_upstreams` and HTTP `PUT /mcp/upstreams` both accept
-`{ base, config }`: the snapshot the caller loaded and its desired result. The
+`{ base, config, credentials? }`: the snapshot the caller loaded, its desired result, and optional write-only secrets for newly added servers. The
 backend indexes servers by stable `id`, derives the semantic base-to-desired
 delta, and applies that delta to the latest on-disk configuration inside the
 cross-process `ConfigFile` lock. It validates and atomically persists the merged
 result while still holding that lock instead of replacing the file with a stale
 UI snapshot.
+
+Add-time credentials identify their new server by `server_id`. The locked merged config is validated before any vault writes. Existing vault entries are never overwritten by an add; failed partial writes or config persistence roll back new entries. The standalone credential endpoint defaults to refusing replacement and accepts `replace: true` for an explicit edit.
 
 Absence has explicit semantics relative to `base`: omitting a former server from
 `config` removes that ID, and omitting its former optional `auth` field clears
@@ -2172,3 +2174,7 @@ the prepared launch prompt, counting escaped stdout bytes before framing/marker.
 PR line review routes (`/repo/pr-line-threads`, `/repo/pr-thread-comments`, `/repo/pr-thread-resolved`, `/repo/pr-thread-reply`, `/repo/pr-draft-review`) share account resolution and backend behavior with their desktop commands.
 
 The PR action routes (`/repo/pr-action-state`, `/repo/pr-auto-merge`, `/repo/pr-merge-queue`, `/repo/pr-merge-or-enqueue`, `/repo/pr-rerun-failed`) share account-aware backend logic with IPC. Successful rerun means accepted, not completed.
+
+## Core accounts owner surface
+
+IPC `account_action` and HTTP `POST /accounts/action` share one Rust service and presence-only replies. Both HTTP routers require loopback or authenticated API access. The Settings MCP adapter can consume the owner service/schema after integration; account actions are not a new standalone MCP tool or an unrestricted plugin invoke grant. See [Shared account registry](github.md#shared-account-registry).

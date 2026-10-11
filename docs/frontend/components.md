@@ -715,3 +715,12 @@ changing prompt text. Disabling and re-enabling the precheck resets the flag.
 ### Mobile composer browser dictation
 
 `CommandInput` mounts `useBrowserDictation`, a feature-detected browser interaction hook. Its mic is directly before Send in the existing row; interim hypotheses are replaced and final speech stays in the current draft without focus or automatic Enter. `SessionDetailScreen` excludes server hands-free while browser recognition is pending or active, and `useMobileVoice.recording` blocks browser starts during server arming/recording. Manual typing or keybar text insertion cancels recognition, preserves the edited draft, and returns the mic to idle; queued results from that recording are ignored. Tap the mic to resume. The hook also stops on send, session end, or unmount. No setting or backend route is added.
+
+## Tasks board
+
+`Tasks/board/TasksBoard.tsx` renders the provider/core board projection. Each lane
+has a virtualized card list. Pointer capture supports drag and drop; the native
+move menu provides keyboard and touch access. Moves dispatch the provider's per-card
+action, show pending feedback, and restore the origin on rejection. Cancellation
+and scope changes clean up drag state. Consumers refresh the projection after a
+successful move; the view does not infer workflow transitions.

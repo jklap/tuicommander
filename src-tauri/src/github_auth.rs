@@ -1066,7 +1066,7 @@ mod tests {
         };
         let json = serde_json::to_string(&success).unwrap();
         assert!(json.contains(r#""status":"success"#));
-        assert!(json.contains(r#""access_token":"gho_abc"#));
+        assert!(!json.contains("access_token") && !json.contains("gho_abc"));
     }
 
     #[test]

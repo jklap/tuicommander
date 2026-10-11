@@ -11,7 +11,7 @@ pub struct DeviceCodeResponse {
 }
 
 /// Result of a single poll attempt to `POST https://github.com/login/oauth/access_token`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "status")]
 pub enum PollResult {
     /// User hasn't authorized yet — keep polling.
@@ -22,13 +22,26 @@ pub enum PollResult {
     SlowDown,
     /// User authorized — token received.
     #[serde(rename = "success")]
-    Success { access_token: String, scope: String },
+    Success {
+        #[serde(skip_serializing, default)]
+        access_token: String,
+        scope: String,
+    },
     /// Device code expired (15 min) — must restart flow.
     #[serde(rename = "expired")]
     Expired,
     /// User denied access.
     #[serde(rename = "access_denied")]
     AccessDenied,
+}
+
+impl std::fmt::Debug for PollResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match serde_json::to_value(self) {
+            Ok(value) => write!(f, "{value}"),
+            Err(_) => f.write_str("GitHub poll status unavailable"),
+        }
+    }
 }
 
 /// Where the active GitHub token came from.

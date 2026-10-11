@@ -159,7 +159,7 @@ These inventories are checked against the capability validator, the host object 
 `credentials:read`, `exec:cli`, `fs:delete`, `fs:list`, `fs:read`, `fs:rename`, `fs:scan`, `fs:watch`, `fs:write`, `git:read`, `invoke:list_markdown_files`, `invoke:read_file`, `net:http`, `pty:read`, `pty:write`, `ui:context-menu`, `ui:file-icons`, `ui:file-preview`, `ui:markdown`, `ui:panel`, `ui:sidebar`, `ui:sound`, `ui:ticker`.
 
 ### Host method inventory
-`addItem`, `clearTicker`, `deleteBuildArtifact`, `execCli`, `getActiveRepo`, `getActiveRepoPath`, `getActiveTerminalSessionId`, `getClaudeProjectDir`, `getGitBranches`, `getGitDiff`, `getPrNotifications`, `getRecentCommits`, `getRepoPathForSession`, `getRepos`, `getSessionCwd`, `getSettings`, `getTerminalState`, `httpFetch`, `invoke`, `listDirectory`, `log`, `onStateChange`, `openEditorTab`, `openMarkdownFile`, `openMarkdownFileBackground`, `openMarkdownPanel`, `openPanel`, `playNotificationSound`, `readCredential`, `readFile`, `readFileBase64`, `readFileTail`, `readFiles`, `readSessionOutput`, `registerCommand`, `registerContextMenuAction`, `registerDashboard`, `registerFileIconProvider`, `registerFilePreview`, `registerMarkdownProvider`, `registerOutputWatcher`, `registerSection`, `registerSidebarPanel`, `registerStructuredEventHandler`, `registerTerminalAction`, `registerWorkItemProvider`, `removeItem`, `renamePath`, `scanBuildArtifacts`, `sendAgentInput`, `setTicker`, `trimBuildArtifact`, `updateItem`, `watchPath`, `writeFile`, `writeFileBase64`, `writePty`.
+`addItem`, `clearTicker`, `deleteBuildArtifact`, `execCli`, `getActiveRepo`, `getActiveRepoPath`, `getActiveTerminalSessionId`, `getClaudeProjectDir`, `getGitBranches`, `getGitDiff`, `getPrNotifications`, `getRecentCommits`, `getRepoPathForSession`, `getRepos`, `getSessionCwd`, `getSettings`, `getTerminalState`, `httpFetch`, `invoke`, `listDirectory`, `log`, `onStateChange`, `openEditorTab`, `openMarkdownFile`, `openMarkdownFileBackground`, `openMarkdownPanel`, `openPanel`, `playNotificationSound`, `readCredential`, `readFile`, `readFileBase64`, `readFileTail`, `readFiles`, `readSessionOutput`, `registerCommand`, `registerContextMenuAction`, `registerDashboard`, `registerFileIconProvider`, `registerFilePreview`, `registerMarkdownProvider`, `registerOutputWatcher`, `registerSection`, `registerSidebarPanel`, `registerStructuredEventHandler`, `registerTerminalAction`, `registerUrlResolver`, `registerWorkItemProvider`, `removeItem`, `renamePath`, `scanBuildArtifacts`, `sendAgentInput`, `setTicker`, `startWork`, `trimBuildArtifact`, `updateItem`, `watchPath`, `writeFile`, `writeFileBase64`, `writePty`.
 
 ### Base CSS class inventory
 `badge`, `badge-accent`, `badge-error`, `badge-muted`, `badge-p1`, `badge-p2`, `badge-p3`, `badge-success`, `badge-warning`, `btn`, `btn-danger`, `btn-primary`, `card`, `critical`, `danger`, `dash-header`, `dash-meter`, `dash-meter-fill`, `dash-section`, `dash-section-hint`, `dash-section-title`, `dash-stat`, `dash-stat-grid`, `dash-stat-label`, `dash-stat-sub`, `dash-stat-value`, `dash-subtitle`, `dash-title`, `dashboard`, `empty-state`, `error`, `filter-bar`, `hint`, `num`, `ok`, `primary`, `show`, `success`, `toast`, `warn`.
@@ -270,6 +270,8 @@ host.getGitDiff(repoPath, scope?)       // unified diff string (scope: "staged" 
 | `host.registerSidebarPanel({ id, label, icon?, priority?, collapsed? }): SidebarPanelHandle` | `ui:sidebar` |
 | `host.registerDashboard({ label?, icon?, open }): Disposable` | *(none)* |
 | `host.registerCommand({ id, title, defaultShortcut?, run }): Disposable` | *(none)* |
+| `await host.startWork({ repoPath, branch, baseRef?, prompt, agentType?, delivery?, link? }): Promise<StartWorkResult>` | `pty:write` |
+| `host.registerUrlResolver(resolve(url, signal)): Disposable` | *(none)* |
 
 TerminalActionContext (passed to action/disabled at right-click time): `{ sessionId: string | null, repoPath: string | null }`. Actions appear in terminal right-click "Actions" submenu. Submenu hidden when no actions registered. Stale handlers (after plugin unload) are no-ops.
 
@@ -282,6 +284,10 @@ PanelHandle: `{ tabId, update(html), close(), send(data, transfer?) }` — HTML 
 `registerDashboard({ label?, icon?, open })`: Register a one-click entry point shown as a **Dashboard** button in *Settings → Plugins*. The host closes the Settings panel automatically before calling `open()`. A plugin may only register one dashboard; second calls replace the first. Pair this with the `.dashboard` style guide above.
 
 `registerCommand({ id, title, defaultShortcut?, run })`: Register a user-rebindable command. Appears in *Settings → Keyboard Shortcuts* under "Plugin Commands". Action name is auto-namespaced as `plugin:<pluginId>:<id>`. `defaultShortcut` is optional ("Cmd+Shift+K" etc.); on conflict the command is registered but left unbound with a warning.
+`startWork(request)`: Create a worktree and a new `branch` (from `baseRef`, default the repo's default branch) in `repoPath`, then open an agent in it. The agent is `agentType` or, when omitted, the first enabled agent with a run config on the repo's machine; its run config supplies the command and env. `prompt` is never a shell argument: the host waits until the agent shows its composer and types the prompt there, inside an `<untrusted-content>` block with control bytes removed and a 12000-character cap. `delivery: "draft"` (default) leaves Enter to the user; `"submit"` sends it. `link: { reference, key, title, url, state }` links the item to the new worktree. Resolves to `{ repoPath, workspaceId, branch, worktreePath }`; rejects when the repo is already creating a worktree, the agent is unknown or disabled, or worktree creation fails.
+
+`registerUrlResolver(resolve)`: Claim URLs pasted in the command palette. `resolve(url, signal)` returns `null` for a URL that is not yours, or `{ link, startWork? }` where `startWork` is a `startWork` request without `repoPath`/`link` (`repoPath` optional, default the active repo). Resolvers run in registration order and the first non-null result wins; a resolver that throws is skipped. When a worktree is already linked to `link.reference` the palette offers to open it; otherwise it offers start work with your request.
+
 HttpResponse: `{ status: number, headers: Record<string, string>, body: string }` — non-2xx is NOT an error.
 
 **setTicker notes:** Shared ticker area rotates messages from all plugins. Priority tiers: <10 = popover only, 10-99 = auto-rotate (5s), >=100 = urgent pin. `label` is shown as source prefix (e.g. "Usage · 5h: 42%"). Counter badge (1/3 ▸) shown when multiple tickers active. Click badge to cycle, right-click for popover. Removed aliases `postTickerMessage`/`removeTickerMessage` are not supported.
@@ -755,6 +761,35 @@ Tasks shell mounting remains a separate integration step.
 | Module not found | main field must match filename |
 | Changes not reflecting | Save again or restart app |
 | `default export` error | Must export default { id, onload, onunload } |
+
+## Tasks board
+
+The core renders `TasksBoard` with Solid controls, never plugin HTML or an iframe.
+Declare boards as `{id,name,fieldId,columns:[{id,name,action}]}`. Each column's
+`action` is a nullable default for simple field boards. Workflow transitions can differ
+per item: column IDs and transition IDs are distinct.
+
+`provider.board(id, query, signal)` returns `{board,lanes,nextCursor}`. Each lane
+contains `{columnId,cards:[{item,moves:[{columnId,action}]}]}`. Supply authoritative
+lane assignments and per-item move actions from core/provider data. The view never
+infers transitions from display names. Dispatch the matching card move action,
+never a guessed transition ID or the column default. Unknown or forbidden columns
+cannot be selected or dropped onto. Cards are virtualized inside each lane.
+
+Pointer capture keeps dragging stable across the board. Pointer cancellation,
+lost capture, Escape, window blur, hiding the document and unmount clean up the
+ghost without dispatching a move. A native move menu provides the same action
+with a keyboard or touch. Pending cards cannot be moved twice. The view shows
+an optimistic placement, retains the authoritative item state, and restores
+the origin on rejection. Errors are visible and successful moves are announced.
+
+Consumers pass a provider/account/query `scopeKey`, board and lane projections,
+`onMove(reference, action)` and `onUpdated(result)` to refresh the projection.
+Changing the scope discards pending presentation state; late responses cannot
+change the new board. Accepted cards await a fresh projection before another
+move, so stale transition permissions are never reused. The board writes no
+story files and sends no terminal commands.
+
 "###;
 
 #[cfg(test)]

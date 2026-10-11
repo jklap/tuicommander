@@ -9,6 +9,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Added GitHub PR action backend APIs for failed-job reruns, auto-merge and queue-aware merging; empty request-changes reviews now fail validation.
 
 - Added GitHub line review backend APIs for paginated threads, replies, resolve/unresolve and head-pinned draft submission.
+- GitHub Enterprise PAT entry now opens a private native window and writes
+  directly to the account vault; Settings no longer holds the PAT.
+
+- Add the core shared account/site registry with write-only tokens, generic provider verification and GitHub migration; omit tokens from OAuth replies (#1679-1419).
 - Match native window and webview resize backgrounds to the selected theme, including light themes (Fixes #125; #1678-158c).
 - Added the provider-neutral Tasks data contract and a local in-memory development provider; visible Tasks integration follows separately.
 - Add the generic Tasks list component with account-scoped sources, provider presets and filters, debounced search, sorting, virtual rows and cursor pagination. Shell mounting remains a separate integration step (#1686-ce77).
