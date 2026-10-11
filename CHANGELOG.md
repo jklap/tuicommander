@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+- Design Mode lists only the dev servers of the session being edited (HTML-serving listeners of its worktree, URLs it printed, the configured URL) and excludes TUIC itself (#1723-4a21).
+
 ### Added
 - Long-press mobile Send to queue the current agent draft for its next ready window (#1717-efd3).
 
