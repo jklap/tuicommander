@@ -323,7 +323,7 @@ Browser add-account polling uses `POST /github/accounts/poll` and the same `gith
 
 Core owns provider sites and accounts in `accounts.json`. Tokens are stored only
 in the instance credential vault under `account/{id}`. Reads return account
-metadata and `secret: {status: "set" | "unset" | "unavailable"}`. Vault errors
+metadata and `secret: {status: "set" | "unset" | "unavailable"}`. Persisted registry, site and account records tolerate unknown fields from newer builds. Vault errors
 are unavailable, never an absent credential. No account action reveals tokens.
 
 `account_action` (IPC) and `POST /accounts/action` (HTTP) call the same Rust owner
@@ -338,10 +338,9 @@ does not add an unrestricted plugin `invoke` grant or a standalone MCP tool.
 | `list_sites` | Optional `provider` | Site array |
 | `add` | `account: {provider, host, kind, label, username?}`, `token` | Verified AccountView |
 | `test` | `id` | Verified AccountView |
-| `remove` | `id` | `{removed:true}` |
+| `remove` | `id` | `{removed:true}`; rejects the durable github.com default |
 | `add_site` | `provider`, `host`, `label` | Site |
-| `test_site` | Site `id`, `account_id` belonging to that site | Verified AccountView |
-| `remove_site` | Site `id` | `{removed:true}`; removes its accounts, credentials and GitHub bindings |
+| `remove_site` | Site `id` | `{removed:true}`; removes its accounts, credentials and GitHub bindings; rejects the default github.com site before any removal |
 | `set_secret` | `id`, `token` | Verified AccountView; token/basic accounts only |
 | `clear_secret` | `id` | `{cleared:true}`; retains account metadata |
 | `set_label` | `id`, `label` | `{updated:true}`; renames an account |

@@ -287,16 +287,15 @@ async fn site_actions_cascade_only_the_selected_site() {
     let first = add_account(input, "site-a1-token".into()).await.unwrap();
     let second = edit::add_site("a1-sites", "https://unrelated.example.test", "keep site").unwrap();
     let state = Arc::new(crate::state::tests_support::make_test_app_state());
-    let mismatch = execute(
+    let verified = execute(
         &state,
-        AccountAction::TestSite {
-            id: second.id.clone(),
-            account_id: first.account.id.clone(),
+        AccountAction::Test {
+            id: first.account.id.clone(),
         },
     )
     .await
-    .unwrap_err();
-    assert!(mismatch.contains("does not belong"));
+    .unwrap();
+    assert_eq!(verified["login"], "verified-user");
     execute(
         &state,
         AccountAction::RemoveSite {
