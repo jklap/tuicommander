@@ -5021,3 +5021,40 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 ## Tasks create integration (#1688-518d)
 
 - [ ] After the Tasks shell is integrated and a provider plugin that follows the `itemType` convention is installed, open the create form, choose a type, fill its required fields and create. Confirm the created item opens in Tasks detail. Component behavior is covered by the targeted create tests and the rb browser fixture; this item covers the shell and real-provider integration.
+
+## Hands-free dictation keeps the whole sentence (1164-ee4b) — Rust restart required
+
+- [HUMAN] After a manual `make dev` restart, arm hands-free on a Claude terminal and say "computer, <phrase one>, <short breath>, <phrase two>". The terminal receives one message holding both phrases, equal to the transcript box. Say the keyword plus a phrase, wait 4 s, then speak again without the keyword: the second phrase joins the same message. After 5 s of silence the message is sent.
+- [HUMAN] Let the agent speak a reply through the speakers with the microphone open. The reply is not taken as user speech (no new transcript from the TTS audio). Also watch the mic gain for a minute: it stays steady.
+  Covered by tests: `a_one_second_breath_keeps_both_phrases_in_one_utterance`, `keyword_turn_keeps_a_five_second_follow_up_in_the_same_terminal_message`, `speech_started_before_the_five_second_deadline_is_not_submitted_mid_phrase`; 91 continuous and 99 root dictation tests. Not verified: TTS not accepted as speech on the real speaker/microphone setup (the only open criterion); acoustic gain.
+
+## Hands-free spoken reply does not interrupt itself (1376-f33e) — Rust restart required
+
+- [HUMAN] After the backend restart, on Boss's Edge/speaker/microphone setup, arm hands-free and ask for a long spoken reply. It plays to the end without pausing or stopping itself.
+- [HUMAN] Speak over the reply without the wake word: the reply pauses, then resumes from the same point. Speak the wake word over the reply: it stops and the new turn starts.
+  Covered by tests: recorded Edge echo replay, `a_residual_echo_burst_does_not_stop_the_reply`, `scattered_residual_echo_frames_do_not_add_up_to_a_voice`, wake/no-wake reply tests (466 tuic-dictation, 149 root dictation, 2026-10-02). Not verified: real playback with the microphone open and real-voice barge-in (the two open criteria).
+
+## Scrolled-up terminal keeps its lines during output (1264-89c8) — frontend only (HMR)
+
+- [ ] [VISUAL] In the running app, start an agent that prints a lot of output. Scroll up with the wheel and with the scrollbar while it writes. The lines under the cursor stay put and no gap or repeated block appears. Scroll back down: every line is present, in order. Repeat once with a long session at the scrollback limit.
+  Covered by tests: `CanvasTerminal-scroll-during-output` (rebase of the gesture offset, committed rows, backend history rewind), `canvasTerminalScroll` tests, `tuic-terminal` `history_*` capture tests. Not verified: the live scroll feel. Known open gap: under sustained output the 400 ms settle fallback can move the view forward by a few lines.
+
+## Scrollbar shows one tick per user prompt (1388-a2e6) — Rust restart required
+
+- [ ] After the restart, open a long real Claude Code session (many prompts, many tool calls). The scrollbar shows one green tick per user prompt at the right height, and no solid green band at the bottom right. Tool calls add no tick.
+  Covered by tests: `tuic_state_busy_carries_no_prompt_row` (busy hooks carry row -1, prompt hooks the real row); headless run with 300 busy hooks and 3 prompts gave 3 ticks. Not verified: a screenshot of a long real session (earlier screenshots used simulated hooks).
+
+## Answer highlight covers the whole answer (1389-3a47) — frontend only (HMR)
+
+- [ ] [VISUAL] In a live Claude session, get an answer with a 💬 line, wrapped rows and 3 or more continuation lines. Every row of the answer is tinted, up to the next bullet, prompt or marker. Nothing after the answer is tinted. The answers-only view shows the same extent. Take a screenshot.
+  Covered by tests: `answerExtent` (shared by overlay and answers-only view), suggestOverlay 32 and answersTurn 23 tests, critic tests for fenced code and indented prompts. Not verified: a live session screenshot.
+
+## Mobile sub-agent rows nest under the coordinator (1698-46a8) — Rust restart required
+
+- [HUMAN] After the restart, open the sessions list on the iPhone. The coordinator row's `tuic_session` equals the children's `parent_session`, and the sub-agent rows are nested under the coordinator (not a flat list).
+  Cause is story 1673 (a resumed coordinator PTY lost `tuic_session`), fixed by 4ca81ccaf and a5cd0e7fd; Boss's running app predates it. Covered by tests: the 1673 real-process regressions. Not verified: the story's own RED, the phone-payload nesting test and the iPhone screenshot are not written.
+
+## Remote add-repository picker with the Verification server (1594-f297)
+
+- [ ] Connect the Verification server and open Add repository. The picker lists the home directory. If the server answers with HTML (wrong version, base URL or route), the picker shows an error with the URL and content type, and the path field stays empty.
+  Covered by tests: rpc test for a `text/html` 200 answer to `get_home_directory`; transport and picker tests (321), full run 8581. Not verified: the root cause on the real server (version, base URL, route) and the home-directory listing; both need the real Verification server URL and an authenticated path.
