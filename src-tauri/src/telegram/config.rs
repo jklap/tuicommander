@@ -63,11 +63,13 @@ impl Paths {
     }
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Config {
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates enabled for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) enabled: bool,
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates bot alias for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) bot_alias: String,
 }
 impl Config {
