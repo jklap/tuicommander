@@ -87,7 +87,7 @@ always moves TUIC history.
 | Cmd+R | Run saved command |
 | Cmd+Shift+R | Edit saved command |
 | Cmd+Shift+F | Search file contents |
-| Cmd+Ctrl+1–9 | Quick branch switch (hold Cmd+Ctrl, press number) |
+| Cmd+Ctrl+1–9 | Quick branch switch (hold Cmd+Ctrl, press number); in the Global Workspace it switches to tab N |
 
 ### Zoom
 

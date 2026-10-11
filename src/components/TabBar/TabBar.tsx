@@ -39,6 +39,7 @@ import { handleOpenUrl, openLocalPath } from "../../utils/openUrl";
 // Named for its first caller; it is a plain `file://` → path parser and returns
 // null for every other scheme, which is exactly the guard needed here.
 import { parseOsc7Url } from "../../utils/osc7";
+import { orderTerminalsByPaneLayout } from "../../utils/paneTabOrder";
 import { computeLeafRects } from "../../utils/paneTreeGeometry";
 import { isAbsolutePath, joinPath } from "../../utils/pathUtils";
 import { isPerfDebug } from "../../utils/perfDebug";
@@ -484,24 +485,7 @@ export const TabBar: Component<TabBarProps> = (props) => {
 		}
 
 		// In split mode, reorder tabs to match the spatial pane layout (DFS order)
-		if (!paneLayoutStore.isSplit()) return ids;
-		const idSet = new Set(ids);
-		const ordered: string[] = [];
-		for (const groupId of paneLayoutStore.getAllGroupIds()) {
-			const group = paneLayoutStore.state.groups[groupId];
-			if (!group) continue;
-			for (const tab of group.tabs) {
-				if (tab.type === "terminal" && idSet.has(tab.id)) {
-					ordered.push(tab.id);
-					idSet.delete(tab.id);
-				}
-			}
-		}
-		// Append any orphan terminals not assigned to a pane group
-		for (const id of ids) {
-			if (idSet.has(id)) ordered.push(id);
-		}
-		return ordered;
+		return orderTerminalsByPaneLayout(ids);
 	};
 
 	// Branch key for filtering non-terminal tabs. A legitimate use of focus: this

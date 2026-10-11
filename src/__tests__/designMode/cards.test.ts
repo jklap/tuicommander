@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 // Extension modules run directly in Chromium; no build step changes their state model.
-// @ts-expect-error plain MV3 module
-import { addPick, deletePick, draftForTab, editPick } from "../../../browser-extension/design-mode/cards.js";
+import {
+	addPick,
+	deletePick,
+	draftForTab,
+	editPick,
+	serverSession,
+	// @ts-expect-error plain MV3 module
+} from "../../../browser-extension/design-mode/cards.js";
 
 describe("Design Mode drafts", () => {
 	// Catches: editing/deleting one pick overwriting another tab's feedback.
@@ -104,5 +110,13 @@ describe("Design feedback delivery", () => {
 		expect(batches).toEqual([expect.objectContaining({ idempotencyKey: "batch-1", sessionId: "X" })]);
 		expect(result.typed).toBe(false);
 		expect(stored.picks).toEqual([expect.objectContaining({ id: "two" })]);
+	});
+	// Catches: the dev-server list keyed to the launching session (binding.json) instead of the selected agent.
+	it("lists servers for the agent selected in the dropdown, not the launcher", () => {
+		const agents = [{ sessionId: "launcher" }, { sessionId: "B" }];
+		const selected = { picks: [], selectedSessionId: "B", selectionInitialized: true };
+		expect(serverSession(selected, agents, "launcher")).toBe("B");
+		expect(serverSession({ picks: [] }, agents, "launcher")).toBe("launcher");
+		expect(serverSession({ ...selected, selectedSessionId: "gone" }, agents, "launcher")).toBe("");
 	});
 });
