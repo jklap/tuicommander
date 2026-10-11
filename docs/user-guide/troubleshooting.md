@@ -46,7 +46,7 @@ A worktree involved in a rebase, merge, cherry-pick, revert, or bisect should no
 
 ## GitHub, PR, or CI data is stale
 
-- Verify that `gh auth status` succeeds for the intended account.
+- Verify that Settings > Git & GitHub shows the intended account as signed in. The `gh` CLI login is not used.
 - Check the repository remote and account binding in Settings.
 - Use Fetch or refresh the GitHub panel.
 - Check whether the provider is rate-limited or temporarily unavailable.

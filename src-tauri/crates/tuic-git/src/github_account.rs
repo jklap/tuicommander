@@ -136,11 +136,10 @@ pub type GitHubAccountId = String;
 #[serde(rename_all = "snake_case")]
 pub enum AccountKind {
     /// github.com via OAuth Device Flow (keyring `GithubOauthToken` slot).
+    #[serde(alias = "github_com_gh_cli")]
     GithubComOauth,
     /// github.com via `GH_TOKEN`/`GITHUB_TOKEN` environment variable.
     GithubComEnv,
-    /// github.com via `gh` CLI.
-    GithubComGhCli,
     /// GitHub Enterprise Server via pasted Personal Access Token.
     GhePat,
 }

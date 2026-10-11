@@ -1621,10 +1621,9 @@ pub fn run() {
         tracing::error!(source = "app", "Failed to persist config: {e}");
     }
 
-    // Boot reads the environment and nothing else. Every other token source
-    // spawns `gh auth token` or reads the OS credential store, neither of which
-    // is guaranteed to answer, and this runs before the window is built — a
-    // wedged `gh` used to mean no window at all. `setup()` finishes the chain
+    // Boot reads the environment and nothing else. The other token source reads
+    // the OS credential store, which is not guaranteed to answer, and this runs
+    // before the window is built. `setup()` finishes the chain
     // once the window exists.
     let (github_token, github_token_source) = crate::github_auth::resolve_token_from_env();
 
@@ -3671,9 +3670,8 @@ mod tests {
         );
     }
 
-    /// `gh auth token` reads the OS credential store and can hang there. It ran
-    /// synchronously before the window was built, so a wedged `gh` meant no
-    /// window at all. Boot now takes only the env vars — which cost nothing and
+    /// The OS credential store can hang. Reading it synchronously before the
+    /// window was built meant no window at all. Boot now takes only the env vars — which cost nothing and
     /// outrank every other source — and `setup()` finishes the chain.
     #[test]
     fn boot_takes_only_the_env_github_token_and_defers_the_rest() {

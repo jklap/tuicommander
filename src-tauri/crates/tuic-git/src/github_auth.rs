@@ -52,8 +52,6 @@ pub enum TokenSource {
     Env,
     /// OAuth Device Flow token stored in OS keyring
     OAuth,
-    /// gh CLI config or `gh auth token`
-    GhCli,
     /// Personal Access Token pasted for a GitHub Enterprise Server account
     Pat,
     /// No token available

@@ -2737,6 +2737,9 @@ async fn spawn_name_is_applied_to_peer_session_and_response() {
         .find(|row| row.session_id == session_id)
         .expect("the spawned session is listed");
     assert!(row.display_name_from_spawn, "{row:?}");
+    // A spawn name is a pinned name, exactly like `rename is_custom=true`: an
+    // intent or OSC title synced back later must never replace it.
+    assert!(row.display_name_is_custom, "{row:?}");
     assert_eq!(
         row.parent_session.as_deref(),
         Some("550e8400-e29b-41d4-a716-446655440b01")
@@ -2780,6 +2783,54 @@ async fn spawn_name_is_applied_to_peer_session_and_response() {
         caller["is_caller"], true,
         "the caller's managed PTY must be explicit so it is never self-closed"
     );
+
+    handle_session(
+        &state,
+        &serde_json::json!({"action": "kill", "session_id": session_id}),
+        None,
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn unnamed_spawn_leaves_display_name_unpinned() {
+    // Catches: pinning every spawn (`display_name_is_custom: true`), which would
+    // freeze an unnamed agent's tab against the intent title that should name it.
+    let state = test_state();
+    let addr = "127.0.0.1:0".parse().unwrap();
+    register_peer(
+        &state,
+        "550e8400-e29b-41d4-a716-446655440b01",
+        "orchestrator",
+        "mcp-orch",
+    );
+    let result = handle_agent(
+        &state,
+        addr,
+        &serde_json::json!({
+            "action": "spawn",
+            "prompt": "hello",
+            "binary_path": LONG_LIVED_TEST_BINARY,
+            "cwd": TEST_SPAWN_CWD,
+        }),
+        Some("mcp-orch"),
+    );
+    if result
+        .get("error")
+        .and_then(|e| e.as_str())
+        .is_some_and(|e| e.contains("Failed to open PTY"))
+    {
+        eprintln!("Skipping: PTY not available in this environment");
+        return;
+    }
+    assert!(result.get("error").is_none(), "spawn failed: {result}");
+    let session_id = result["session_id"].as_str().unwrap();
+    let row = super::super::session::local_session_rows(&state)
+        .into_iter()
+        .find(|row| row.session_id == session_id)
+        .expect("the spawned session is listed");
+    assert!(!row.display_name_is_custom, "{row:?}");
+    assert!(!row.display_name_from_spawn, "{row:?}");
 
     handle_session(
         &state,

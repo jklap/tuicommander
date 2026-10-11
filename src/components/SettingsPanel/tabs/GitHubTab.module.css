@@ -10,7 +10,7 @@
 /* The tab renders into `.section` from Settings.module.css, which is a plain
    block with no gap: every top-level card here stacks flush against the next,
    so each one owns its own leading space. Without this the "Token provided
-   via gh CLI" hint sits on the buttons and the STATUS heading sits on them
+   via environment variable" hint sits on the buttons and the STATUS heading sits on them
    from below.
    The three gaps are deliberately UNEQUAL. Elsewhere in Settings a `.hint` is a
    caption hugging its control (4px above, nothing below), so giving the token

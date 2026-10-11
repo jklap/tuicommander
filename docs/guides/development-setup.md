@@ -7,7 +7,7 @@ The macOS desktop app supports macOS 12 Monterey or later and requires system We
 - **Node.js 24+** (the repository version is pinned in [`.nvmrc`](https://github.com/sstraus/tuicommander/blob/main/.nvmrc))
 - **Rust** (stable toolchain via rustup)
 - **Tauri CLI** (`cargo install tauri-cli`)
-- **git** and **gh** (GitHub CLI) for git/GitHub features
+- **git** for git features. `gh` (GitHub CLI) is only a release tool; the app does not run it.
 
 > **Windows users:** See the [Windows-specific prerequisites](#windows-prerequisites) section below before proceeding.
 

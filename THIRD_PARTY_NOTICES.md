@@ -40,7 +40,6 @@ authors and communities behind each project.
 | drag | 2.1.1 | Apache-2.0 OR MIT |
 | flate2 | 1.1.10 | MIT OR Apache-2.0 |
 | futures-util | 0.3.33 | MIT OR Apache-2.0 |
-| gh-token | 0.1.8 | MIT OR Apache-2.0 |
 | gix | 0.85.0 | MIT OR Apache-2.0 |
 | glob | 0.3.4 | MIT OR Apache-2.0 |
 | grep-matcher | 0.1.9 | Unlicense OR MIT |
@@ -230,7 +229,7 @@ Counts below collapse equivalent SPDX expressions (`MIT OR Apache-2.0` ≡ `Apac
 <!-- BEGIN GENERATED:summary -->
 | License | Count |
 |---------|-------|
-| MIT OR Apache-2.0 | 80 |
+| MIT OR Apache-2.0 | 79 |
 | MIT | 66 |
 | Apache-2.0 | 8 |
 | Unlicense OR MIT | 7 |

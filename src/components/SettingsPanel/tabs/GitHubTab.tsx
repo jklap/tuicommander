@@ -40,7 +40,7 @@ interface AuthStatus {
 	authenticated: boolean;
 	login: string | null;
 	avatar_url: string | null;
-	source: "env" | "oauth" | "gh_cli" | "none";
+	source: "env" | "oauth" | "none";
 	scopes: string | null;
 	error?: string | null;
 }
@@ -57,7 +57,7 @@ interface CircleCiTokenStatus {
 	source: "vault" | "env" | "cliconfig" | "none";
 }
 
-type AccountKind = "github_com_oauth" | "github_com_env" | "github_com_gh_cli" | "ghe_pat";
+type AccountKind = "github_com_oauth" | "github_com_env" | "ghe_pat";
 
 interface GitHubHost {
 	host: string;
@@ -89,7 +89,6 @@ interface RepoResolutionDto {
 const SOURCE_LABELS: Record<string, string> = {
 	oauth: "OAuth (Device Flow)",
 	env: "Environment variable",
-	gh_cli: "gh CLI",
 	pat: "Personal Access Token",
 	none: "Not connected",
 };
@@ -504,7 +503,7 @@ export const GitHubTab: Component = () => {
 					</div>
 				</div>
 
-				{/* Only show logout for OAuth tokens — env/CLI tokens are managed externally */}
+				{/* Only show logout for OAuth tokens — env tokens are managed externally */}
 				<Show when={authStatus()?.source === "oauth"}>
 					<div class={g.actions}>
 						<button class={cx(g.btn, g.btnDanger)} onClick={logout} disabled={loading()}>
@@ -513,11 +512,8 @@ export const GitHubTab: Component = () => {
 					</div>
 				</Show>
 
-				<Show when={authStatus()?.source === "env" || authStatus()?.source === "gh_cli"}>
-					<div class={s.hint}>
-						Token provided via{" "}
-						{authStatus()?.source === "env" ? "environment variable (GH_TOKEN or GITHUB_TOKEN)" : "gh CLI"}.
-					</div>
+				<Show when={authStatus()?.source === "env"}>
+					<div class={s.hint}>Token provided via environment variable (GH_TOKEN or GITHUB_TOKEN).</div>
 					<div class={g.actions}>
 						<button class={cx(g.btn)} onClick={() => startLogin()} disabled={loading()}>
 							{loading() ? "Starting..." : "Switch to OAuth"}

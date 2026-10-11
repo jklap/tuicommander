@@ -707,7 +707,19 @@ describe("initApp", () => {
 		sessionCreated!({ payload: { session_id: "named", cwd: "/repo", agent_type: "claude", display_name: "call-map" } });
 		sessionCreated!({ payload: { session_id: "unnamed", cwd: "/repo", agent_type: "claude", display_name: null } });
 		const byId = (sid: string) => terminalsStore.get(terminalsStore.getTerminalForSession(sid)!);
-		expect(byId("named")).toMatchObject({ name: "call-map", nameFromSpawn: true, nameIsCustom: false });
+		expect(byId("named")).toMatchObject({ name: "call-map", nameFromSpawn: true, nameIsCustom: true });
+		expect(byId("unnamed")?.nameIsCustom).toBe(false);
+
+		// The child's `intent:` title arrives later and must not replace the spawn name.
+		const namedId = terminalsStore.getTerminalForSession("named")!;
+		handleIntentEvent({
+			terminalId: namedId,
+			text: "Picking the diagnosis",
+			title: "Pick diagnosis",
+			globalEnabled: true,
+			perAgentEnabled: true,
+		});
+		expect(byId("named")?.name).toBe("call-map");
 		expect(byId("unnamed")?.nameFromSpawn).toBe(false);
 	});
 
@@ -2926,7 +2938,7 @@ describe("initApp", () => {
 			setActiveSpy.mockRestore();
 		});
 
-		it("uses a spawned agent display name as an intent-replaceable base title", async () => {
+		it("pins a spawned agent display name against intent and OSC titles", async () => {
 			const { getCallback } = captureSessionCreated();
 			const deps = createMockDeps();
 			await initApp(deps);
@@ -2942,7 +2954,7 @@ describe("initApp", () => {
 
 			const terminalId = terminalsStore.getIds().find((id) => terminalsStore.get(id)?.sessionId === "named-sess");
 			expect(terminalsStore.get(terminalId!)?.name).toBe("windows-primary");
-			expect(terminalsStore.get(terminalId!)?.nameIsCustom).toBe(false);
+			expect(terminalsStore.get(terminalId!)?.nameIsCustom).toBe(true);
 		});
 
 		it("setActiveGroup called with first leaf when split but no active group", async () => {

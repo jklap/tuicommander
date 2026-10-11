@@ -424,7 +424,7 @@ Client ──WebSocket──> /sessions/{session_id}/stream
 
 When sessions are created or closed (via HTTP, MCP, or PTY exit), the server broadcasts events through the SSE event bus:
 
-- **`session-created`** — Emitted when a new PTY session is created (both local and MCP-spawned). Carries `session_id`, `cwd`, `agent_type`, the optional stable `display_name`, and `parent_session` (the spawning agent's `$TUIC_SESSION`, present only for `agent action=spawn` by a caller with a registered identity — a `pending-mcp:` placeholder is never published; the UI marks such tabs with a shared robot icon). Frontend uses this to auto-add remote tabs; a spawn-assigned name may be refined by an `intent:` title or replaced by a user rename, but an agent's OSC 0/2 title (Claude Code's own session title) never replaces it, while session-list snapshots carry independent `display_name_is_custom`, `display_name_from_spawn` and `is_remote` flags, plus `parent_session` and the live `tuic_session` bound to each PTY, for reconnect and parent-name resolution.
+- **`session-created`** — Emitted when a new PTY session is created (both local and MCP-spawned). Carries `session_id`, `cwd`, `agent_type`, the optional stable `display_name`, and `parent_session` (the spawning agent's `$TUIC_SESSION`, present only for `agent action=spawn` by a caller with a registered identity — a `pending-mcp:` placeholder is never published; the UI marks such tabs with a shared robot icon). Frontend uses this to auto-add remote tabs; a spawn-assigned name is stored as a custom name (`display_name_is_custom`), like `session rename is_custom=true`: neither an `intent:` title nor an agent's OSC 0/2 title replaces it, only a user rename does, while session-list snapshots carry independent `display_name_is_custom`, `display_name_from_spawn` and `is_remote` flags, plus `parent_session` and the live `tuic_session` bound to each PTY, for reconnect and parent-name resolution.
 - **`term-alias-assigned`** — Emitted when a session receives its human-friendly alias. Carries `session_id` and `alias`. Published after `session-created` on the bus, and also as a desktop window event. Frontend uses this to update tab tooltips; it fires once, so after a reload the alias comes from the session list (`alias` on `GET /sessions` / `list_active_sessions`).
 - **`session-renamed`** — Emitted when MCP `session action=rename` changes a tab's display name. Carries `session_id`, `name` and `is_custom`. The desktop and browser UIs update the tab bar and sidebar from it. The name must be one line of at most 256 characters without control characters.
 - **`session-suspend-requested`** — Emitted when MCP `session action=suspend` passed the busy check. Carries `session_id` and `request_id`. The UI ends that tab's PTY and keeps the tab suspended.
@@ -1573,7 +1573,7 @@ so callers cannot replace peer identity. Environment values are redacted from
 spawn logs.
 Managed Claude peers default to `CLAUDE_CODE_TMPDIR=$HOME/Gits/.tmp/claude/`; TUIC creates this directory before spawn and preserves an explicit inherited, run-config or caller value.
 
-`name` optionally assigns a non-empty peer and PTY display name at spawn time.
+`name` optionally assigns a non-empty peer and PTY display name at spawn time, pinned against later `intent:` and OSC titles.
 The parent-assigned name is stored before prompt delivery, returned in the spawn
 response, exposed as `name` by `agent action=list_peers` and as `display_name`
 by `session action=list`, and preserved when the child later auto-binds its MCP
