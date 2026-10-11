@@ -1015,12 +1015,10 @@
 }
 
 .infoBadge .infoBadgeTip {
-  display: none;
-  position: absolute;
-  top: calc(100% + 6px);
-  left: 0;
+  visibility: hidden;
+  position: fixed;
   width: max-content;
-  max-width: 320px;
+  max-width: min(320px, calc(100vw - 16px));
   padding: 8px 12px;
   background: var(--bg-tertiary);
   border: 1px solid var(--border);
@@ -1036,7 +1034,7 @@
 }
 
 .infoBadge:hover .infoBadgeTip {
-  display: block;
+  visibility: visible;
 }
 
 .downloadBtn {
