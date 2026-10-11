@@ -15,12 +15,17 @@ impl PrApi for Stub {
         panic!("writes must use REST");
     }
 
-    async fn rest(&self, method: &str, endpoint: &str, body: Value) -> Result<Value, String> {
+    fn rest(
+        &self,
+        method: &str,
+        endpoint: &str,
+        body: Value,
+    ) -> impl std::future::Future<Output = Result<Value, String>> + Send {
         self.calls
             .lock()
             .unwrap()
             .push((method.into(), endpoint.into(), body));
-        Err(REST_ERROR.into())
+        std::future::ready(Err(REST_ERROR.into()))
     }
 }
 
@@ -138,9 +143,14 @@ impl PrApi for RecordedResponses {
         panic!("writes must use REST");
     }
 
-    async fn rest(&self, method: &str, endpoint: &str, _: Value) -> Result<Value, String> {
+    fn rest(
+        &self,
+        method: &str,
+        endpoint: &str,
+        _: Value,
+    ) -> impl std::future::Future<Output = Result<Value, String>> + Send {
         assert_eq!(method, "POST");
-        Ok(match endpoint {
+        std::future::ready(Ok(match endpoint {
             "pulls" => {
                 serde_json::from_str(include_str!("../fixtures/github-writes/pr-recorded.json"))
                     .unwrap()
@@ -157,7 +167,7 @@ impl PrApi for RecordedResponses {
                 reviews[0].clone()
             }
             _ => panic!("unexpected write endpoint {endpoint}"),
-        })
+        }))
     }
 }
 
