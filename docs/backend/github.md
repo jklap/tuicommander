@@ -90,6 +90,16 @@ The active token source is tracked in `AppState.github_token_source` as a `Token
 | `fetch_ci_failure_logs` | `(repo_path: String, branch: String, check_url?: String, head_sha?: String) -> String` | Fetch failure logs for the local branch head during auto-heal or for a selected check at the PR head SHA |
 | `create_issue_from_proposal` | `(repo_path: String, proposal: ImprovementProposal) -> CreatedIssue` | Explicit issue creation from a proposal; scan never creates issues automatically |
 
+### Failing checks for auto-heal
+
+Failing checks are read from the exact commit's `statusCheckRollup.contexts`,
+through `RepoApi::resolve` and account-bound GraphQL with breaker accounting.
+The lookup does not search open PRs. It combines up to 100 pages before keeping
+the newest check per name, then returns failed CheckRuns and external
+StatusContexts with their detail links. An incomplete response is an error;
+a commit with a null rollup has no checks. CI job log retrieval remains a
+separate operation.
+
 ### Circuit breaker coverage
 
 **Every** call out to GitHub goes through the account's circuit breaker:

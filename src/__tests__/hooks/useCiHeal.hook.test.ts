@@ -207,7 +207,7 @@ describe("useCiHeal budget + re-entry guard", () => {
 
 	it("shows an error toast for an unexpected CI log failure", async () => {
 		seed({ enabled: true, attempts: 0, healing: false });
-		h.invoke.mockRejectedValueOnce(new Error("gh pr list timed out"));
+		h.invoke.mockRejectedValueOnce(new Error("GitHub checks request timed out"));
 		fireCiFailed();
 		await flush();
 		expect(h.loggerError).toHaveBeenCalled();

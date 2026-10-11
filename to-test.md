@@ -1,3 +1,7 @@
+## Commit failing checks (1712-b11c) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, select a failing external check in a throwaway PR and confirm auto-heal uses its exact head and detail link. Confirm a successful rerun removes the stale failure. The lookup uses the bound repository account over GraphQL and does not depend on the first 100 open PRs. Recorded GitHub fixtures cover CheckRuns, external StatusContexts and pagination on rb; live account requests remain unverified. No desktop instance was started or restarted by this peer.
+
 ## Merged GitHub PR proof (1711-67a7) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, check sidebar lifecycle and cleanup of a squash-merged throwaway worktree for a bound cloud account and an enterprise account. The proof now uses that repository's account over HTTP GraphQL and must not trust an incomplete response. Targeted stub tests cover pagination, retryability and the blocking-thread bridge; live account requests remain unverified. Rust does not hot-reload; no desktop instance was started or restarted by this peer.

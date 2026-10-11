@@ -12,6 +12,9 @@ use tauri::State;
 use crate::error_classification::calculate_backoff_delay;
 use crate::state::AppState;
 
+#[path = "github_ci_checks.rs"]
+mod ci_checks;
+
 fn extract_graphql_name(query: &str) -> &str {
     // Extract name from "query FooBar {" or "mutation Baz(" patterns
     for keyword in &["query ", "mutation "] {
@@ -3155,31 +3158,6 @@ fn is_github_actions_link(link: &str) -> bool {
     link.contains("/actions/runs/")
 }
 
-fn failing_checks_from_json(json: &serde_json::Value) -> Vec<FailingCheck> {
-    json.as_array()
-        .into_iter()
-        .flatten()
-        .filter(|check| check.get("bucket").and_then(serde_json::Value::as_str) == Some("fail"))
-        .map(|check| {
-            let name = check
-                .get("name")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("failed check")
-                .to_string();
-            let link = check
-                .get("link")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("")
-                .to_string();
-            FailingCheck {
-                name: sanitize_ci_label(&name),
-                is_github_actions: is_github_actions_link(&link),
-                link,
-            }
-        })
-        .collect()
-}
-
 fn circleci_jobs_from_checks(
     checks: &[FailingCheck],
 ) -> Vec<(String, crate::circleci::CircleCiJob)> {
@@ -3206,116 +3184,7 @@ fn circleci_token_not_configured_error(checks: &[FailingCheck]) -> String {
     )
 }
 
-/// List the PR's failing checks via `gh pr checks`. Unlike `gh run list` (which
-/// only sees GitHub Actions), this reflects the SAME aggregated set the PR
-/// summary shows, so it can explain a failure that lives on external CI.
-///
-/// `gh pr checks` exits non-zero when any check is failing/pending, so we parse
-/// stdout regardless of exit status and only bail when stdout has no JSON.
 const CI_CLI_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
-
-fn list_failing_checks_cli(
-    gh: &str,
-    repo_slug: &str,
-    head_sha: &str,
-) -> Result<Vec<FailingCheck>, String> {
-    list_failing_checks_cli_with(|| Command::new(gh), CI_CLI_TIMEOUT, repo_slug, head_sha)
-}
-
-fn list_failing_checks_cli_with(
-    mut command: impl FnMut() -> Command,
-    timeout: std::time::Duration,
-    repo_slug: &str,
-    head_sha: &str,
-) -> Result<Vec<FailingCheck>, String> {
-    // Resolve the PR by its commit: a fork can use the same branch name.
-    let mut list_cmd = command();
-    list_cmd.args([
-        "pr",
-        "list",
-        "--repo",
-        repo_slug,
-        "--state",
-        "open",
-        "--limit",
-        "100",
-        "--json",
-        "number,headRefOid",
-    ]);
-    crate::cli::apply_no_window(&mut list_cmd);
-    let prs = crate::git_cli::output_with_deadline(&mut list_cmd, timeout).map_err(|error| {
-        tracing::warn!(
-            source = "fetch_ci_failure_logs_impl",
-            ?error,
-            "gh pr list failed"
-        );
-        format!("gh pr list failed: {error}")
-    })?;
-    if !prs.status.success() {
-        let error = format!(
-            "gh pr list failed: {}",
-            sanitize_ci_logs(&String::from_utf8_lossy(&prs.stderr))
-        );
-        tracing::warn!(source = "fetch_ci_failure_logs_impl", ?error);
-        return Err(error);
-    }
-    let prs_json: serde_json::Value = serde_json::from_slice(&prs.stdout).map_err(|error| {
-        tracing::warn!(
-            source = "fetch_ci_failure_logs_impl",
-            ?error,
-            "failed to parse gh pr list output"
-        );
-        format!("Failed to parse gh pr list output: {error}")
-    })?;
-    let Some(pr_number) = pr_number_for_head(&prs_json, head_sha) else {
-        return Ok(Vec::new());
-    };
-    let mut cmd = command();
-    cmd.args([
-        "pr",
-        "checks",
-        "--repo",
-        repo_slug,
-        "--json",
-        "name,bucket,link",
-        "--",
-        &pr_number.to_string(),
-    ]);
-    crate::cli::apply_no_window(&mut cmd);
-    let output = crate::git_cli::output_with_deadline(&mut cmd, timeout).map_err(|error| {
-        tracing::warn!(
-            source = "fetch_ci_failure_logs_impl",
-            ?error,
-            "gh pr checks failed"
-        );
-        format!("gh pr checks failed: {error}")
-    })?;
-    // Failing checks make gh exit non-zero, but its JSON is still usable.
-    let json: serde_json::Value = serde_json::from_slice(&output.stdout).map_err(|error| {
-        let message = format!(
-            "gh pr checks failed: {error}; {}",
-            sanitize_ci_logs(&String::from_utf8_lossy(&output.stderr))
-        );
-        tracing::warn!(source = "fetch_ci_failure_logs_impl", ?message);
-        message
-    })?;
-    if !json.is_array() {
-        tracing::warn!(
-            source = "fetch_ci_failure_logs_impl",
-            "gh pr checks returned a non-array response"
-        );
-        return Err("gh pr checks returned an invalid response".to_string());
-    }
-    Ok(failing_checks_from_json(&json))
-}
-
-fn pr_number_for_head(prs: &serde_json::Value, head_sha: &str) -> Option<u64> {
-    prs.as_array()?
-        .iter()
-        .find(|pr| pr["headRefOid"].as_str() == Some(head_sha))?
-        .get("number")?
-        .as_u64()
-}
 
 fn normalize_ci_head_sha(head_sha: &str, selected: bool) -> Result<String, String> {
     if head_sha.len() != 40 || !head_sha.bytes().all(|byte| byte.is_ascii_hexdigit()) {
@@ -3338,6 +3207,7 @@ fn fetch_ci_failure_logs_impl(
     branch: &str,
     check_url: Option<&str>,
     selected_head_sha: Option<&str>,
+    failing_checks: impl FnOnce(&str) -> Result<Vec<FailingCheck>, String>,
 ) -> Result<CiLogsOutcome, String> {
     let repo_path_buf = PathBuf::from(repo_path);
 
@@ -3479,7 +3349,7 @@ fn fetch_ci_failure_logs_impl(
     // A selected PR row must use that exact backend-listed external check even
     // when GitHub Actions also failed. Unselected auto-heal keeps GHA priority.
     let failing = if check_url.is_some() || failed_jobs.is_empty() {
-        list_failing_checks_cli(&gh, &repo_slug, &head_sha)?
+        failing_checks(&head_sha)?
     } else {
         Vec::new()
     };
@@ -3551,7 +3421,7 @@ pub(crate) async fn fetch_ci_failure_logs_with_state(
     branch: String,
     check_url: Option<String>,
     head_sha: Option<String>,
-    _state: Arc<AppState>,
+    state: Arc<AppState>,
 ) -> Result<String, String> {
     #[cfg(test)]
     let test_fixture = CI_LOGS_TEST_FIXTURES
@@ -3561,6 +3431,7 @@ pub(crate) async fn fetch_ci_failure_logs_with_state(
     let blocking_fixture = test_fixture.clone();
     let selected = check_url.clone();
     let selected_sha = if selected.is_some() { head_sha } else { None };
+    let runtime = tokio::runtime::Handle::current();
     let outcome = tokio::task::spawn_blocking(move || {
         #[cfg(test)]
         if let Some(fixture) = blocking_fixture {
@@ -3575,6 +3446,12 @@ pub(crate) async fn fetch_ci_failure_logs_with_state(
             &branch,
             selected.as_deref(),
             selected_sha.as_deref(),
+            |sha| {
+                runtime.block_on(async {
+                    let api = crate::github_pr_api::RepoApi::resolve(&state, &repo_path).await?;
+                    ci_checks::list_failing_checks_with(&api, &api.owner, &api.repo, sha).await
+                })
+            },
         )
     })
     .await
@@ -3686,16 +3563,6 @@ mod tests {
     }
 
     #[test]
-    fn circleci_pr_selection_uses_head_sha_not_branch_name() {
-        let prs = serde_json::json!([
-            {"number": 10, "headRefName": "feature", "headRefOid": "fork-sha"},
-            {"number": 11, "headRefName": "feature", "headRefOid": "local-sha"}
-        ]);
-        assert_eq!(pr_number_for_head(&prs, "local-sha"), Some(11));
-        assert_eq!(pr_number_for_head(&prs, "missing-sha"), None);
-    }
-
-    #[test]
     fn selected_ci_head_sha_is_normalized_and_invalid_sha_is_rejected() {
         let upper = "AB".repeat(20);
         assert_eq!(
@@ -3715,10 +3582,10 @@ mod tests {
     #[test]
     fn selected_circleci_row_uses_only_its_log_when_actions_also_fail() {
         let selected = "https://circleci.com/gh/acme/widget/42";
-        let checks = failing_checks_from_json(&serde_json::json!([
-            {"name":"GHA", "bucket":"fail", "link":"https://github.com/acme/widget/actions/runs/1"},
-            {"name":"other CircleCI", "bucket":"fail", "link":"https://circleci.com/gh/acme/widget/41"},
-            {"name":"selected CircleCI", "bucket":"fail", "link":selected}
+        let checks = ci_checks::failing_checks_from_rollup(&serde_json::json!([
+            {"name":"GHA", "__typename":"CheckRun", "status":"COMPLETED", "conclusion":"FAILURE", "detailsUrl":"https://github.com/acme/widget/actions/runs/1"},
+            {"name":"other CircleCI", "__typename":"CheckRun", "status":"COMPLETED", "conclusion":"FAILURE", "detailsUrl":"https://circleci.com/gh/acme/widget/41"},
+            {"name":"selected CircleCI", "__typename":"CheckRun", "status":"COMPLETED", "conclusion":"FAILURE", "detailsUrl":selected}
         ]));
         let source = choose_ci_log_source(Some(selected), true, checks).unwrap();
         match source {
@@ -3733,8 +3600,8 @@ mod tests {
 
     #[test]
     fn unselected_ci_heal_keeps_github_actions_priority() {
-        let checks = failing_checks_from_json(&serde_json::json!([
-            {"name":"CircleCI", "bucket":"fail", "link":"https://circleci.com/gh/acme/widget/42"}
+        let checks = ci_checks::failing_checks_from_rollup(&serde_json::json!([
+            {"name":"CircleCI", "__typename":"CheckRun", "status":"COMPLETED", "conclusion":"FAILURE", "detailsUrl":"https://circleci.com/gh/acme/widget/42"}
         ]));
         assert!(matches!(
             choose_ci_log_source(None, true, checks),
@@ -3744,8 +3611,8 @@ mod tests {
 
     #[test]
     fn unknown_selected_check_does_not_fall_back_to_actions() {
-        let checks = failing_checks_from_json(&serde_json::json!([
-            {"name":"GHA", "bucket":"fail", "link":"https://github.com/acme/widget/actions/runs/1"}
+        let checks = ci_checks::failing_checks_from_rollup(&serde_json::json!([
+            {"name":"GHA", "__typename":"CheckRun", "status":"COMPLETED", "conclusion":"FAILURE", "detailsUrl":"https://github.com/acme/widget/actions/runs/1"}
         ]));
         assert!(
             choose_ci_log_source(Some("https://circleci.com/gh/acme/widget/42"), true, checks)
@@ -3764,11 +3631,11 @@ mod tests {
     #[test]
     fn failing_external_checks_keep_their_detail_links() {
         let checks = serde_json::json!([
-            {"name": "ci/circleci: test", "bucket": "fail", "link": "https://circleci.com/gh/acme/widget/42"},
-            {"name": "lint", "bucket": "pass", "link": "https://example.test/lint"}
+            {"name": "ci/circleci: test", "__typename": "CheckRun", "status": "COMPLETED", "conclusion": "FAILURE", "detailsUrl": "https://circleci.com/gh/acme/widget/42"},
+            {"name": "lint", "__typename": "CheckRun", "status": "COMPLETED", "conclusion": "SUCCESS", "detailsUrl": "https://example.test/lint"}
         ]);
 
-        let failing = failing_checks_from_json(&checks);
+        let failing = ci_checks::failing_checks_from_rollup(&checks);
         assert_eq!(failing.len(), 1);
         assert_eq!(failing[0].name, "ci/circleci: test");
         assert_eq!(failing[0].link, "https://circleci.com/gh/acme/widget/42");
@@ -3881,49 +3748,53 @@ mod tests {
 
     #[test]
     fn sanitizes_check_names_before_returning_errors_or_logs() {
-        let checks = failing_checks_from_json(&serde_json::json!([{
+        let checks = ci_checks::failing_checks_from_rollup(&serde_json::json!([{
             "name": "safe\n\u{1b}]52;c;clipboard\u{7}\u{202e}check",
-            "bucket": "fail",
-            "link": "https://circleci.com/gh/acme/widget/42"
+            "__typename": "CheckRun", "status": "COMPLETED", "conclusion": "FAILURE",
+            "detailsUrl": "https://circleci.com/gh/acme/widget/42"
         }]));
         assert_eq!(external_ci_names(&checks), "safecheck");
         assert!(circleci_token_not_configured_error(&checks).contains("safecheck"));
     }
 
     #[test]
-    fn pr_list_spawn_failure_is_not_a_clean_ci_result() {
-        let missing = tempfile::tempdir().unwrap().path().join("missing-gh");
-        let error =
-            list_failing_checks_cli(missing.to_str().unwrap(), "acme/widget", &"a".repeat(40))
-                .unwrap_err();
-        assert!(error.contains("gh pr list failed"));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn hanging_gh_pr_list_has_a_deadline() {
-        let target = Path::new(env!("CARGO_MANIFEST_DIR")).join("target");
-        std::fs::create_dir_all(&target).unwrap();
-        let scratch = tempfile::tempdir_in(target).unwrap();
-        let script = scratch.path().join("hanging-gh.sh");
-        // `sh <script>` avoids executing a newly written inode. `exec` makes
-        // sleep the direct child that output_with_deadline kills on timeout.
-        std::fs::write(&script, "exec sleep 60\n").unwrap();
-        let started = std::time::Instant::now();
-        let error = list_failing_checks_cli_with(
-            || {
-                let mut command = Command::new("sh");
-                command.arg(&script);
-                command
-            },
-            std::time::Duration::from_millis(150),
-            "acme/widget",
-            &"a".repeat(40),
-        )
-        .unwrap_err();
-        assert!(error.contains("gh pr list failed"));
-        assert!(error.contains("timed out"));
-        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    fn rollup_fixture_keeps_failed_checks_and_discards_stale_reruns() {
+        let pages: serde_json::Value =
+            serde_json::from_str(include_str!("../fixtures/github-ci/rollup-curl-23347.json"))
+                .unwrap();
+        let nodes: Vec<_> = pages
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|page| {
+                page.pointer("/data/repository/object/statusCheckRollup/contexts/nodes")
+                    .unwrap()
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .cloned()
+            })
+            .collect();
+        let checks = ci_checks::failing_checks_from_rollup(&serde_json::Value::Array(nodes));
+        let actions = checks
+            .iter()
+            .find(|check| check.name == "autotools & cmake")
+            .expect("failed Actions check must survive commit lookup");
+        assert!(actions.is_github_actions);
+        assert_eq!(
+            actions.link,
+            "https://github.com/curl/curl/actions/runs/38128270079/job/114437069229"
+        );
+        assert!(!checks.iter().any(|check| check.name == "AM awslc"));
+        let external = checks
+            .iter()
+            .find(|check| check.name == "AppVeyor CI")
+            .expect("failed external StatusContext must survive pagination");
+        assert!(!external.is_github_actions);
+        assert_eq!(
+            external.link,
+            "https://ci.appveyor.com/project/curlorg/curl/builds/54874752"
+        );
     }
 
     #[test]
@@ -3937,9 +3808,14 @@ mod tests {
         )
         .unwrap();
         let before = crate::git_cli::git_cmd_forks(repo.path());
-        let error =
-            fetch_ci_failure_logs_impl(repo.path().to_str().unwrap(), "missing", None, None)
-                .unwrap_err();
+        let error = fetch_ci_failure_logs_impl(
+            repo.path().to_str().unwrap(),
+            "missing",
+            None,
+            None,
+            |_| unreachable!(),
+        )
+        .unwrap_err();
         assert!(error.contains("Failed to resolve branch head"));
         assert_eq!(crate::git_cli::git_cmd_forks(repo.path()), before + 1);
     }
@@ -6148,8 +6024,14 @@ mod tests {
         );
         bindings.save(&RepoBindingStore::default()).unwrap();
 
-        let err =
-            fetch_ci_failure_logs_impl(repo.to_str().unwrap(), "main", None, None).unwrap_err();
+        let err = fetch_ci_failure_logs_impl(
+            repo.to_str().unwrap(),
+            "main",
+            None,
+            None,
+            |_| unreachable!(),
+        )
+        .unwrap_err();
         assert!(
             err.contains("github.com accounts"),
             "expected gh-CLI-disabled message, got: {err}"
