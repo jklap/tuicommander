@@ -13,6 +13,7 @@ use crate::AppState;
 pub(crate) struct StartBody {
     session_id: String,
     browser: Option<String>,
+    url: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -36,7 +37,7 @@ pub(crate) async fn start(
     State(state): State<Arc<AppState>>,
     Json(body): Json<StartBody>,
 ) -> Response {
-    response(super::start(&state, body.session_id, body.browser).await)
+    response(super::start(&state, body.session_id, body.browser, body.url).await)
 }
 
 pub(crate) async fn stop(

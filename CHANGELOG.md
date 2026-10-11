@@ -7,6 +7,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- Start Design Mode directly from terminal HTTP(S) links, bound to the agent that printed them. HTTP/IPC start accepts an optional URL; MCP `design_mode` exposes URL-aware start, stop and status (#1722-f02d).
+
+### Added
 - Long-press mobile Send to queue the current agent draft for its next ready window (#1717-efd3).
 
 - Automation run worktree provenance and explicit cleanup with existing integration, archive and live-session safety checks (#1623-8b2a).

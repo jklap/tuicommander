@@ -3,6 +3,7 @@ import { lastMenuActionTime } from "../../menuDedup";
 import { isMacOS, isWindows } from "../../platform";
 import { pluginRegistry } from "../../plugins/pluginRegistry";
 import { appLogger } from "../../stores/appLogger";
+import { designModeBrowsers } from "../../stores/designMode";
 import { settingsStore } from "../../stores/settings";
 import { reclaimParkedTerminal } from "../../stores/terminalOwnership";
 import { terminalsStore } from "../../stores/terminals";
@@ -3673,6 +3674,33 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 							if (t) copyLink(t);
 						},
 					},
+					...(/^https?:\/\//i.test(linkMenuTarget()?.path ?? "")
+						? [
+								{
+									label: "Start in Design Mode",
+									action: () => {},
+									children: designModeBrowsers.map((browser) => ({
+										label: browser.label,
+										action: () => {
+											const target = linkMenuTarget();
+											if (!target || !invokeRef) return;
+											void invokeRef("start_design_mode", {
+												sessionId: props.sessionId,
+												browser: browser.id,
+												url: target.path,
+											}).catch((error) => {
+												appLogger.error("terminal", "Failed to start Design Mode", error);
+												toastsStore.add(
+													"Design Mode failed",
+													error instanceof Error ? error.message : String(error),
+													"error",
+												);
+											});
+										},
+									})),
+								},
+							]
+						: []),
 				]}
 				x={linkMenu.position().x}
 				y={linkMenu.position().y}

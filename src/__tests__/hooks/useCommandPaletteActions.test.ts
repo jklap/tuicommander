@@ -107,19 +107,22 @@ describe("useCommandPaletteActions", () => {
 			id === "term-1" ? { sessionId: "active-session", agentType: "claude" } : undefined,
 		);
 		mockTerminals.findTerminalWithSession.mockReturnValue({ sessionId: "other-session", agentType: "claude" });
-		const action = renderActions()("start-design-mode");
+		const byId = renderActions();
+        // Catches: a duplicate generic start hiding browser choice.
+        expect(byId("start-design-mode")).toBeUndefined();
+        const action = byId("start-design-mode-edge");
 		expect(action).toBeDefined();
 		action?.execute();
 		await Promise.resolve();
-		expect(invoke).toHaveBeenCalledWith("start_design_mode", { sessionId: "active-session" });
+		expect(invoke).toHaveBeenCalledWith("start_design_mode", { sessionId: "active-session", browser: "edge" });
 	});
 
 	it("hides design mode when the active tab is not an agent terminal", () => {
 		mockTerminals.findTerminalWithSession.mockReturnValue({ sessionId: "other-session", agentType: "claude" });
 		mockTerminals.get.mockReturnValue(undefined);
-		expect(renderActions()("start-design-mode")).toBeUndefined();
+		expect(renderActions()("start-design-mode-edge")).toBeUndefined();
 		mockTerminals.get.mockReturnValue({ sessionId: "shell-session", agentType: null });
-		expect(renderActions()("start-design-mode")).toBeUndefined();
+		expect(renderActions()("start-design-mode-edge")).toBeUndefined();
 	});
 
 	it("offers Stop instead of Start while the active agent's repository is armed", async () => {
@@ -131,7 +134,7 @@ describe("useCommandPaletteActions", () => {
 		push?.({ payload: { repo_path: "/repo", session_id: "session-1", status: "armed" } } as never);
 
 		// Start again would silently rebind the armed repository to this session.
-		expect(byId("start-design-mode")).toBeUndefined();
+		expect(byId("start-design-mode-edge")).toBeUndefined();
 		const stop = byId("stop-design-mode");
 		expect(stop?.label).toBe("Stop Design Mode");
 		stop?.execute();
@@ -139,7 +142,7 @@ describe("useCommandPaletteActions", () => {
 
 		push?.({ payload: { repo_path: "/repo", session_id: "session-1", status: "stopped" } } as never);
 		expect(byId("stop-design-mode")).toBeUndefined();
-		expect(byId("start-design-mode")).toBeDefined();
+		expect(byId("start-design-mode-edge")).toBeDefined();
 	});
 
 	it("reports a design mode start failure with the backend message", async () => {
@@ -155,7 +158,7 @@ describe("useCommandPaletteActions", () => {
 			});
 		});
 		actions?.()
-			.find((entry) => entry.id === "start-design-mode")
+			.find((entry) => entry.id === "start-design-mode-edge")
 			?.execute();
 		await Promise.resolve();
 		expect(toastsStore.add).toHaveBeenCalledWith(expect.any(String), "No dev server", "error");
@@ -175,7 +178,7 @@ describe("useCommandPaletteActions", () => {
 			});
 		});
 		actions?.()
-			.find((entry) => entry.id === "start-design-mode")
+			.find((entry) => entry.id === "start-design-mode-edge")
 			?.execute();
 		await Promise.resolve();
 		expect(notice.getByText("Browser opened on the host machine.")).toBeVisible();

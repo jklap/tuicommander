@@ -306,6 +306,18 @@ describe("transport", () => {
 				path: "/design-mode/start",
 				body: { sessionId: "agent-1", browser: "edge" },
 			});
+			// Catches: link URL being dropped by the HTTP transport.
+			expect(
+				mapCommandToHttp("start_design_mode", {
+					sessionId: "agent-1",
+					browser: "chrome",
+					url: "http://localhost:5173/page#target",
+				}),
+			).toEqual({
+				method: "POST",
+				path: "/design-mode/start",
+				body: { sessionId: "agent-1", browser: "chrome", url: "http://localhost:5173/page#target" },
+			});
 			expect(mapCommandToHttp("stop_design_mode", { repoPath: "/repo" })).toEqual({
 				method: "POST",
 				path: "/design-mode/stop",
