@@ -3922,7 +3922,6 @@ export const settingsCatalogue = {
         "enum": [
           "github_com_oauth",
           "github_com_env",
-          "github_com_gh_cli",
           "ghe_pat"
         ]
       },
@@ -3935,7 +3934,6 @@ export const settingsCatalogue = {
         "values": [
           "github_com_oauth",
           "github_com_env",
-          "github_com_gh_cli",
           "ghe_pat"
         ]
       },
@@ -8437,6 +8435,39 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
+    "voice.hands_free_listening": {
+      "id": "voice.hands_free_listening",
+      "store": "voice",
+      "owner": "machine",
+      "area": "voice",
+      "group": "hands_free_listening",
+      "order": 14,
+      "path": "/hands_free_listening",
+      "labelKey": "settings.catalogue.voice.hands_free_listening.label",
+      "helpKey": "settings.catalogue.voice.hands_free_listening.help",
+      "label": "hands free listening",
+      "schema": {
+        "description": "Capture speech hands-free. Off is a replies-only conversation:\ninput stays push-to-talk, and the microphone is never opened by the\nconversation. Absent from every config written before this field\nexisted, which reads as on — today's behaviour.",
+        "type": "boolean",
+        "default": true
+      },
+      "nullable": false,
+      "default": true,
+      "availability": {
+        "status": "unavailable",
+        "reason": "This build has no native dictation backend"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Updates hands free listening for the current owner; applies to the next conversation.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
     "voice.hands_free_notify_model": {
       "id": "voice.hands_free_notify_model",
       "store": "voice",
@@ -8476,7 +8507,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "voice",
       "group": "hands_free_spoken_replies",
-      "order": 14,
+      "order": 15,
       "path": "/hands_free_spoken_replies",
       "labelKey": "settings.catalogue.voice.hands_free_spoken_replies.label",
       "helpKey": "settings.catalogue.voice.hands_free_spoken_replies.help",
@@ -8681,7 +8712,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "voice",
       "group": "model_idle_unload_minutes",
-      "order": 21,
+      "order": 22,
       "path": "/model_idle_unload_minutes",
       "labelKey": "settings.catalogue.voice.model_idle_unload_minutes.label",
       "helpKey": "settings.catalogue.voice.model_idle_unload_minutes.help",
@@ -8786,7 +8817,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "voice",
       "group": "speech_command",
-      "order": 15,
+      "order": 16,
       "path": "/speech_command",
       "labelKey": "settings.catalogue.voice.speech_command.label",
       "helpKey": "settings.catalogue.voice.speech_command.help",
@@ -8822,7 +8853,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "voice",
       "group": "speech_edge_voice",
-      "order": 17,
+      "order": 18,
       "path": "/speech_edge_voice",
       "labelKey": "settings.catalogue.voice.speech_edge_voice.label",
       "helpKey": "settings.catalogue.voice.speech_edge_voice.help",
@@ -8862,7 +8893,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "voice",
       "group": "speech_engine",
-      "order": 16,
+      "order": 17,
       "path": "/speech_engine",
       "labelKey": "settings.catalogue.voice.speech_engine.label",
       "helpKey": "settings.catalogue.voice.speech_engine.help",
@@ -8895,7 +8926,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "voice",
       "group": "speech_levelling",
-      "order": 20,
+      "order": 21,
       "path": "/speech_levelling",
       "labelKey": "settings.catalogue.voice.speech_levelling.label",
       "helpKey": "settings.catalogue.voice.speech_levelling.help",
@@ -8931,7 +8962,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "voice",
       "group": "speech_voice",
-      "order": 18,
+      "order": 19,
       "path": "/speech_voice",
       "labelKey": "settings.catalogue.voice.speech_voice.label",
       "helpKey": "settings.catalogue.voice.speech_voice.help",
@@ -8971,7 +9002,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "voice",
       "group": "speech_volume_db",
-      "order": 19,
+      "order": 20,
       "path": "/speech_volume_db",
       "labelKey": "settings.catalogue.voice.speech_volume_db.label",
       "helpKey": "settings.catalogue.voice.speech_volume_db.help",
@@ -9642,11 +9673,6 @@ export const settingsCatalogue = {
                 "description": "github.com via `GH_TOKEN`/`GITHUB_TOKEN` environment variable.",
                 "type": "string",
                 "const": "github_com_env"
-              },
-              {
-                "description": "github.com via `gh` CLI.",
-                "type": "string",
-                "const": "github_com_gh_cli"
               },
               {
                 "description": "GitHub Enterprise Server via pasted Personal Access Token.",

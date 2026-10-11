@@ -10,6 +10,26 @@ async function call(message) {
 const node = (tag, text, className) => {
   const element = document.createElement(tag); if (text) element.textContent = text; if (className) element.className = className; return element;
 };
+function renderErrors(draft, errors, selection) {
+  $('errors').replaceChildren();
+  if (!errors.length) return;
+  const section = node('details', undefined, 'card'); section.open = true;
+  const badge = node('span', String(errors.length), 'badge'); badge.setAttribute('aria-label', `${errors.length} page errors`);
+  const summary = node('summary', 'Errors '); summary.append(badge);
+  const attach = document.createElement('input'); attach.type = 'checkbox'; attach.checked = draft.attachErrors === true;
+  attach.onchange = () => call({kind:'attach_errors',tabId:draft.tabId,attach:attach.checked}).then(render).catch((error)=>status(error.message,true));
+  const label = node('label', ' Attach to feedback'); label.prepend(attach);
+  const list = node('pre', errors.map((error) => `[${error.kind}] ${error.message}${error.source ? `\n  at ${error.source}${error.line === undefined ? '' : `:${error.line}${error.column === undefined ? '' : `:${error.column}`}`}` : ''}`).join('\n'));
+  const only = node('button', 'Send errors only', 'primary'); only.disabled = !selection;
+  only.onclick = async () => {
+    only.disabled = true;
+    try { const result = await call({kind:'send',tabId:draft.tabId,errorsOnly:true}); render(result.draft); status(result.outcome.typed ? 'Errors delivered now.' : 'Errors queued for the next idle window.'); }
+    catch (error) { status(error.message,true); await refresh(); }
+  };
+  const clear = node('button', 'Clear errors'); clear.onclick = () => call({kind:'clear_errors',tabId:draft.tabId}).then(render).catch((error)=>status(error.message,true));
+  section.append(summary, list, label, only, clear);
+  $('errors').append(section);
+}
 function render(draft) {
   if (!draft) return;
   current = draft;
@@ -38,7 +58,9 @@ function render(draft) {
   if (!draft.agents?.length) { const reason = draft.connection.startsWith('Connected') ? 'No live agents in this repository' : 'Connection unavailable — see reason above'; const option=node('option',reason); option.value=''; $('agent').append(option); }
   if (!selection && draft.agents?.length) { const option=node('option','Choose another agent'); option.value=''; $('agent').prepend(option); }
   $('agent').value=selection;
-  $('send').disabled = !selection || !draft.picks.some((pick)=>pick.comment.trim());
+  const errors = draft.errors ?? [];
+  $('send').disabled = !selection || !(draft.picks.some((pick)=>pick.comment.trim()) || (draft.attachErrors && errors.length));
+  renderErrors(draft, errors, selection);
   // Cards are keyed by pick id and never rebuilt or moved, so a comment being typed keeps its focus/caret
   // while later picks are appended. Picks only append or disappear, so the order is preserved.
   const ids = new Set(draft.picks.map((pick) => pick.id));

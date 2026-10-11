@@ -1,4 +1,5 @@
 //! Live listener discovery. Ownership uses path components, never string prefixes.
+use futures_util::StreamExt;
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -61,9 +62,48 @@ fn owner<'a>(cwd: &Path, roots: &'a [PathBuf]) -> Option<&'a PathBuf> {
 fn candidates(listing: &str, cwds: &str, roots: &[PathBuf]) -> Vec<Value> {
     let paths = cwd_map(cwds);
     listeners(listing).into_iter().filter_map(|listener| {
+        if listener.pid == std::process::id() { return None; }
         let cwd=paths.get(&listener.pid)?;let root=owner(cwd,roots)?;
         Some(json!({"url":format!("http://localhost:{}/",listener.port),"source":"listener","pid":listener.pid,"process":listener.name,"worktreePath":root,"cwd":cwd}))
     }).collect()
+}
+// Verify the page, not the runtime name: node/python also host non-web sockets.
+// Eight concurrent 750ms probes cost at most ceil(N / 8) * 750ms; the whole
+// scan has a 3s budget so a repository with many silent listeners stays bounded.
+async fn html_servers(candidates: Vec<Value>) -> Vec<Value> {
+    let Ok(client) = reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_millis(750))
+        .build()
+    else {
+        return Vec::new();
+    };
+    let mut probes = futures_util::stream::iter(candidates.into_iter().map(|candidate| {
+        let client = &client;
+        async move {
+            let response = client.get(candidate["url"].as_str()?).send().await.ok()?;
+            let content_type = response
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)?
+                .to_str()
+                .ok()?;
+            (response.status().is_success()
+                && content_type
+                    .split(';')
+                    .next()?
+                    .trim()
+                    .eq_ignore_ascii_case("text/html"))
+            .then_some(candidate)
+        }
+    }))
+    .buffered(8);
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+    let mut found = Vec::new();
+    while let Ok(Some(result)) = tokio::time::timeout_at(deadline, probes.next()).await {
+        found.extend(result);
+    }
+    found
 }
 fn command_owners(output: &str, roots: &[PathBuf]) -> HashMap<u32, PathBuf> {
     let mut owners = HashMap::new();
@@ -109,6 +149,39 @@ fn settings(repo: &Path) -> Option<crate::config::RepoSettingsEntry> {
             .then_some(value)
         })
 }
+fn attributed_candidates(
+    listing: &str,
+    cwds: &mut String,
+    commands: &str,
+    roots: &[PathBuf],
+) -> Vec<Value> {
+    let known = cwd_map(cwds);
+    for (pid, root) in command_owners(commands, roots) {
+        if known
+            .get(&pid)
+            .is_none_or(|cwd| owner(cwd, roots).is_none())
+        {
+            cwds.push_str(&format!("p{pid}\nfcwd\nn{}\n", root.display()));
+        }
+    }
+    candidates(listing, cwds, roots)
+}
+#[cfg(unix)]
+async fn live_candidates(roots: &[PathBuf]) -> Result<Vec<Value>, String> {
+    let listing = command("lsof", &["-nP", "-iTCP", "-sTCP:LISTEN", "-Fpcn"]).await?;
+    let ids = listeners(&listing)
+        .iter()
+        .map(|listener| listener.pid.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    if !ids.is_empty() {
+        let mut cwds = command("lsof", &["-a", "-p", &ids, "-d", "cwd", "-Fn"]).await?;
+        let commands = command("ps", &["-p", &ids, "-o", "pid=,command="]).await?;
+        return Ok(attributed_candidates(&listing, &mut cwds, &commands, roots));
+    }
+    Ok(Vec::new())
+}
+
 /// Only trusted TUIC settings supply scripts; .tuic.json cannot silently execute code.
 pub(super) fn run_script(repo: &Path) -> Option<String> {
     settings(repo)
@@ -116,7 +189,48 @@ pub(super) fn run_script(repo: &Path) -> Option<String> {
         .or_else(|| Some(crate::config::load_repo_defaults().run_script))
         .filter(|script| !script.trim().is_empty())
 }
-pub(crate) async fn discover(state: &crate::AppState, repo: &Path) -> Result<Value, String> {
+/// The worktree of the session being edited: Design Mode lists only that session's servers.
+fn session_root(
+    state: &crate::AppState,
+    session: Option<&str>,
+    roots: &[PathBuf],
+) -> Option<PathBuf> {
+    let entry = state.session_maps.sessions.get(session?)?;
+    let cwd = entry.lock().cwd.clone()?;
+    owner(Path::new(&cwd), roots).cloned()
+}
+pub(crate) async fn discover(
+    state: &crate::AppState,
+    repo: &Path,
+    session: Option<&str>,
+) -> Result<Value, String> {
+    discover_with_source(state, repo, session, |roots| {
+        let roots = roots.to_vec();
+        async move {
+            #[cfg(unix)]
+            {
+                live_candidates(&roots).await
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = roots;
+                Ok(Vec::new())
+            }
+        }
+    })
+    .await
+}
+
+async fn discover_with_source<F, Fut>(
+    state: &crate::AppState,
+    repo: &Path,
+    session: Option<&str>,
+    source: F,
+) -> Result<Value, String>
+where
+    F: FnOnce(&[PathBuf]) -> Fut,
+    Fut: std::future::Future<Output = Result<Vec<Value>, String>>,
+{
     let repo = repo.canonicalize().map_err(|e| e.to_string())?;
     let path = repo.to_str().ok_or("Repository path is not UTF-8")?;
     let worktrees = command("git", &["-C", path, "worktree", "list", "--porcelain"]).await?;
@@ -136,30 +250,19 @@ pub(crate) async fn discover(state: &crate::AppState, repo: &Path) -> Result<Val
         }
         servers.push(json!({"url":url,"source":"configured"}));
     }
-    #[cfg(unix)]
     {
-        let listing = command("lsof", &["-nP", "-iTCP", "-sTCP:LISTEN", "-Fpcn"]).await?;
-        let ids = listeners(&listing)
-            .iter()
-            .map(|listener| listener.pid.to_string())
-            .collect::<Vec<_>>()
-            .join(",");
-        if !ids.is_empty() {
-            let mut cwds = command("lsof", &["-a", "-p", &ids, "-d", "cwd", "-Fn"]).await?;
-            let known = cwd_map(&cwds);
-            let commands = command("ps", &["-p", &ids, "-o", "pid=,command="]).await?;
-            for (pid, root) in command_owners(&commands, &roots) {
-                if known
-                    .get(&pid)
-                    .is_none_or(|cwd| owner(cwd, &roots).is_none())
-                {
-                    cwds.push_str(&format!("p{pid}\nfcwd\nn{}\n", root.display()));
-                }
-            }
-            servers.extend(candidates(&listing, &cwds, &roots));
-        }
+        let mut owned = source(&roots).await?;
+        let scope = session_root(state, session, &roots);
+        owned.retain(|row| {
+            scope
+                .as_ref()
+                .is_some_and(|root| row["worktreePath"] == json!(root))
+        });
+        servers.extend(html_servers(owned).await);
     }
-    let hints = super::hints::advertised(state, &roots, &servers);
+    let hints = session.map_or_else(Vec::new, |sid| {
+        super::hints::advertised(state, sid, &servers)
+    });
     servers.extend(hints);
     let mut seen = HashSet::new();
     servers.retain(|server| seen.insert(server["url"].as_str().unwrap_or_default().to_owned()));

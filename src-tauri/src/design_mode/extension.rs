@@ -68,7 +68,14 @@ pub(crate) async fn message(
         match body["action"].as_str() {
             Some("hello") => Ok(json!({"version":"2.0.0"})),
             Some("list_dev_servers") => match body["repoPath"].as_str() {
-                Some(repo) => super::discovery::discover(&state, std::path::Path::new(repo)).await,
+                Some(repo) => {
+                    super::discovery::discover(
+                        &state,
+                        std::path::Path::new(repo),
+                        body["sessionId"].as_str(),
+                    )
+                    .await
+                }
                 None => Err("Missing repository".into()),
             },
             Some("start_dev_server") => match body["repoPath"].as_str() {

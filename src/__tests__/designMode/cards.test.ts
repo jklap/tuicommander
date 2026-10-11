@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 // Extension modules run directly in Chromium; no build step changes their state model.
-// @ts-expect-error plain MV3 module
-import { addPick, deletePick, draftForTab, editPick } from "../../../browser-extension/design-mode/cards.js";
+import {
+	addPick,
+	deletePick,
+	draftForTab,
+	editPick,
+	serverSession,
+	// @ts-expect-error plain MV3 module
+} from "../../../browser-extension/design-mode/cards.js";
 
 describe("Design Mode drafts", () => {
 	// Catches: editing/deleting one pick overwriting another tab's feedback.
@@ -127,5 +133,73 @@ describe("Design feedback delivery", () => {
 		expect(batches).toEqual([expect.objectContaining({ idempotencyKey: "batch-1", sessionId: "X" })]);
 		expect(result.typed).toBe(false);
 		expect(stored.picks).toEqual([expect.objectContaining({ id: "two" })]);
+	});
+	// Catches: the dev-server list keyed to the launching session (binding.json) instead of the selected agent.
+	it("lists servers for the agent selected in the dropdown, not the launcher", () => {
+		const agents = [{ sessionId: "launcher" }, { sessionId: "B" }];
+		const selected = { picks: [], selectedSessionId: "B", selectionInitialized: true, armedFor: "launcher" };
+		expect(serverSession(selected, agents, "launcher")).toBe("B");
+		expect(serverSession({ picks: [] }, agents, "launcher")).toBe("launcher");
+		expect(serverSession({ ...selected, selectedSessionId: "gone" }, agents, "launcher")).toBe("");
+	});
+});
+
+describe("Design Mode page errors", () => {
+	const load = async () =>
+		// @ts-expect-error plain MV3 module
+		(await import("../../../browser-extension/design-mode/cards.js")) as Record<string, (...args: unknown[]) => never>;
+	// Catches: duplicate or unbounded errors exhausting storage, and page-supplied fields being trusted.
+	it("deduplicates by message and source, keeps the last 50 and re-validates fields", async () => {
+		const { addError } = await load();
+		let draft = addError({ picks: [] }, { kind: "error", message: "boom", source: "a.js" }, 1) as never as {
+			errors: { message: string }[];
+		};
+		expect(
+			(addError(draft, { kind: "error", message: "boom", source: "a.js" }, 2) as typeof draft).errors,
+		).toHaveLength(1);
+		expect(
+			(addError(draft, { kind: "error", message: "boom", source: "b.js" }, 2) as typeof draft).errors,
+		).toHaveLength(2);
+		for (let n = 0; n < 60; n++) draft = addError(draft, { message: `m${n}` }, n) as typeof draft;
+		expect(draft.errors).toHaveLength(50);
+		expect(draft.errors.at(-1)?.message).toBe("m59");
+		const hostile = (
+			addError(
+				{ picks: [] },
+				{ kind: "<script>", message: "x".repeat(5000), line: -1, column: "7", stack: 5 },
+				9,
+			) as typeof draft
+		).errors[0] as never as Record<string, unknown>;
+		expect(hostile).toMatchObject({ kind: "error", line: undefined, column: undefined, stack: "", timestamp: 9 });
+		expect((hostile.message as string).length).toBe(1024);
+	});
+	// Catches: errors-only send needing a commented pick; attach toggle ignored; sent errors resent or new ones lost.
+	it("sends errors alone or attached and clears only the errors that were sent", async () => {
+		const { addError, prepareSend, completeSend } = await load();
+		const base = {
+			selectedSessionId: "S",
+			picks: [
+				{ id: "p", comment: "Fix it", raw: {} },
+				{ id: "q", comment: "", raw: {} },
+			],
+		};
+		type Draft = Record<string, never>;
+		const draft = addError(base, { message: "first" }, 1) as unknown as Draft;
+		expect(() => prepareSend(base, "k")).not.toThrow();
+		expect((prepareSend(draft, "k") as never as { pendingSend: { errors: unknown[] } }).pendingSend.errors).toEqual([]);
+		const alone = prepareSend(draft, "k", true) as never as { pendingSend: { picks: unknown[]; errors: unknown[] } };
+		expect(alone.pendingSend.picks).toEqual([]);
+		expect(alone.pendingSend.errors).toHaveLength(1);
+		const attached = prepareSend({ ...draft, attachErrors: true }, "k") as never as {
+			pendingSend: { picks: unknown[]; errors: unknown[] };
+		};
+		expect(attached.pendingSend.picks).toHaveLength(1);
+		expect(attached.pendingSend.errors).toHaveLength(1);
+		expect(() => prepareSend({ selectedSessionId: "S", picks: [] }, "k", true)).toThrow("No page errors");
+		// An error that arrives while the batch is in flight survives completion.
+		const inflight = addError(alone, { message: "second" }, 2) as never as Draft;
+		const done = completeSend(inflight) as never as { errors: { message: string }[]; picks: unknown[] };
+		expect(done.errors.map((e) => e.message)).toEqual(["second"]);
+		expect(done.picks).toHaveLength(2);
 	});
 });

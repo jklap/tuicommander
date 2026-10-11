@@ -3674,7 +3674,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 							if (t) copyLink(t);
 						},
 					},
-					...(/^https?:\/\//i.test(linkMenuTarget()?.path ?? "")
+					...(/^https?:\/\//i.test(linkMenuTarget()?.path ?? "") && terminalsStore.get(props.terminalId)?.agentType
 						? [
 								{
 									label: "Start in Design Mode",

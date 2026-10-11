@@ -257,7 +257,7 @@ pub(crate) async fn github_poll_add_account_impl(
 }
 
 /// Log out of GitHub OAuth. Deletes the token from keyring and clears
-/// the runtime state. Falls back to env/gh CLI tokens if available.
+/// the runtime state. Falls back to env tokens if available.
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) async fn github_logout(state: State<'_, Arc<AppState>>) -> Result<(), String> {
@@ -269,13 +269,13 @@ pub(crate) async fn github_logout_impl(state: &Arc<AppState>) -> Result<(), Stri
         .await
         .map_err(|e| format!("keyring task panicked: {e}"))??;
 
-    // Re-resolve token from remaining sources (env vars, gh CLI)
+    // Re-resolve token from remaining sources (env vars)
     let (token, source) = tokio::task::spawn_blocking(resolve_token_with_source)
         .await
         .map_err(|e| format!("token resolve task panicked: {e}"))?;
     *state.github.token.write() = token;
     *state.github.token_source.write() = source;
-    // The fallback token (env / gh CLI) is very likely a different user.
+    // The fallback token (env) is very likely a different user.
     crate::github::invalidate_viewer_login(state);
 
     tracing::info!(
@@ -287,7 +287,7 @@ pub(crate) async fn github_logout_impl(state: &Arc<AppState>) -> Result<(), Stri
 }
 
 /// Disconnect from GitHub entirely, clearing the runtime token regardless
-/// of source. Does NOT delete env vars or gh CLI config — only clears the
+/// of source. Does NOT delete env vars — only clears the
 /// in-memory token so the app stops using it until restart or re-login.
 #[cfg(feature = "desktop")]
 #[tauri::command]
@@ -470,7 +470,6 @@ pub(crate) async fn github_auth_status_impl(state: &Arc<AppState>) -> Result<Aut
                 match source {
                     TokenSource::Env => "environment variable",
                     TokenSource::OAuth => "OAuth",
-                    TokenSource::GhCli => "gh CLI",
                     TokenSource::Pat => "Personal Access Token",
                     TokenSource::None => "current",
                 }
@@ -536,99 +535,6 @@ pub(crate) async fn github_auth_status_impl(state: &Arc<AppState>) -> Result<Aut
 // Token resolution with source tracking
 // ---------------------------------------------------------------------------
 
-/// How long any probe waits for a `gh auth token` subprocess.
-///
-/// `gh` reads the OS credential store, which is not guaranteed to answer: a
-/// locked macOS keychain puts up a modal, a wedged credential helper never
-/// returns. The token is optional; a probe that never returns is not. A
-/// timeout is reported as "no token", exactly like a `gh` that is absent.
-const GH_CLI_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
-
-/// Number of `gh auth token` subprocesses this module has started.
-///
-/// A source that short-circuits leaves no other trace — the returned token is
-/// the same either way — so the spawn count is what a test asserts on.
-#[cfg(test)]
-static GH_CLI_SPAWNS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-
-/// Run `gh auth token` CLI to get the current token from gh's secure storage.
-/// This works even when env vars are empty/unset, because gh reads from the
-/// system keychain on macOS or credential store on other platforms.
-pub(crate) fn token_from_gh_cli() -> Option<String> {
-    let mut cmd = std::process::Command::new(crate::agent::resolve_cli("gh"));
-    cmd.args(["auth", "token"]);
-    crate::cli::apply_no_window(&mut cmd);
-    token_from_cli_command(cmd, GH_CLI_TIMEOUT)
-}
-
-/// Run a prepared token command, read its stdout, and give up after `timeout`.
-///
-/// The command is the seam a test drives: `resolve_cli` probes fixed system
-/// directories, so a stub `gh` on PATH would never be picked up, and the
-/// give-up path would go untested.
-fn token_from_cli_command(
-    mut cmd: std::process::Command,
-    timeout: std::time::Duration,
-) -> Option<String> {
-    #[cfg(test)]
-    GH_CLI_SPAWNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-
-    cmd.stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null());
-    let mut child = cmd.spawn().ok()?;
-
-    let deadline = std::time::Instant::now() + timeout;
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) => {}
-            Err(_) => return None,
-        }
-        if std::time::Instant::now() >= deadline {
-            // We own this child, so end it here — an abandoned `gh` would sit
-            // on the credential store for as long as the app runs.
-            let _ = child.kill();
-            let _ = child.wait();
-            tracing::warn!(
-                source = "github",
-                timeout_ms = timeout.as_millis(),
-                "`gh auth token` did not answer in time — continuing without a CLI token"
-            );
-            return None;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    };
-    if !status.success() {
-        return None;
-    }
-
-    // A token is orders of magnitude below the pipe buffer, so reading only
-    // after exit cannot deadlock.
-    let mut stdout = child.stdout.take()?;
-    let mut out = String::new();
-    std::io::Read::read_to_string(&mut stdout, &mut out).ok()?;
-    let token = out.trim().to_string();
-    if token.is_empty() { None } else { Some(token) }
-}
-
-/// Run `f` on a detached thread and stop waiting after `timeout`.
-///
-/// For work we cannot cancel: `gh_token::get()` shells out to `gh auth token`
-/// itself, with no handle to kill and no timeout to set, so the only way to
-/// bound it is to stop waiting. The thread is abandoned on purpose — it is
-/// parked in `waitpid` on a `gh` that is not coming back.
-fn bounded<T: Send + 'static>(
-    timeout: std::time::Duration,
-    f: impl FnOnce() -> T + Send + 'static,
-) -> Option<T> {
-    let (tx, rx) = std::sync::mpsc::sync_channel(1);
-    std::thread::spawn(move || {
-        let _ = tx.send(f());
-    });
-    rx.recv_timeout(timeout).ok()
-}
-
 /// Read a non-empty token from an environment variable.
 fn env_token(var: &str) -> Option<String> {
     std::env::var(var).ok().filter(|t| !t.is_empty())
@@ -636,7 +542,7 @@ fn env_token(var: &str) -> Option<String> {
 
 /// Collect all non-empty GitHub token candidates with their source, in priority order.
 /// Single source of truth for token priority — used at startup, fallback, and logout.
-/// Priority: GH_TOKEN env → GITHUB_TOKEN env → keyring OAuth → gh_token crate → gh CLI.
+/// Priority: GH_TOKEN env → GITHUB_TOKEN env → keyring OAuth.
 pub(crate) fn resolve_all_candidates() -> Vec<(String, TokenSource)> {
     resolve_all_candidates_inner(true)
 }
@@ -651,43 +557,25 @@ fn resolve_all_candidates_inner(include_keychain: bool) -> Vec<(String, TokenSou
     } else {
         None
     };
-    // `gh_token::get()` shells out to `gh auth token` on its own whenever
-    // hosts.yml holds no plaintext oauth_token — the normal shape once gh
-    // keeps tokens in the keyring — so it needs the same bound as our probe.
-    let gh_token_crate = bounded(GH_CLI_TIMEOUT, || {
-        gh_token::get().ok().filter(|t| !t.is_empty())
-    })
-    .flatten();
-    let gh_cli = token_from_gh_cli();
-    order_token_candidates(
-        gh_token_env,
-        github_token_env,
-        keychain_oauth,
-        gh_token_crate,
-        gh_cli,
-    )
+    order_token_candidates(gh_token_env, github_token_env, keychain_oauth)
 }
 
 /// Pure priority-ordering + value-dedup of token candidates.
 ///
 /// Seam pinned by the Step 0 characterization net so the github.com fallback
 /// order can't drift during the multi-account refactor. Order is fixed:
-/// GH_TOKEN env → GITHUB_TOKEN env → keyring OAuth → gh_token crate → gh CLI.
+/// GH_TOKEN env → GITHUB_TOKEN env → keyring OAuth.
 /// A later source is dropped when its token value already appeared earlier.
 pub(crate) fn order_token_candidates(
     gh_token_env: Option<String>,
     github_token_env: Option<String>,
     keychain_oauth: Option<String>,
-    gh_token_crate: Option<String>,
-    gh_cli: Option<String>,
 ) -> Vec<(String, TokenSource)> {
     let mut candidates: Vec<(String, TokenSource)> = Vec::new();
     for (tok, src) in [
         (gh_token_env, TokenSource::Env),
         (github_token_env, TokenSource::Env),
         (keychain_oauth, TokenSource::OAuth),
-        (gh_token_crate, TokenSource::GhCli),
-        (gh_cli, TokenSource::GhCli),
     ] {
         if let Some(t) = tok
             && !candidates.iter().any(|(existing, _)| existing == &t)
@@ -710,16 +598,14 @@ fn first_of(candidates: Vec<(String, TokenSource)>) -> (Option<String>, TokenSou
 /// Resolve a token from the environment alone.
 ///
 /// This is the only part of the chain that costs nothing: every source below
-/// the two env vars either reads the OS credential store or spawns `gh`, and
-/// a stuck `gh` would hold back whatever is waiting on the answer. Boot takes
+/// the two env vars reads the OS credential store, which may not answer, and
+/// that would hold back whatever is waiting on the answer. Boot takes
 /// this synchronously and leaves the rest to
 /// [`spawn_deferred_token_resolution`].
 pub(crate) fn resolve_token_from_env() -> (Option<String>, TokenSource) {
     first_of(order_token_candidates(
         env_token("GH_TOKEN"),
         env_token("GITHUB_TOKEN"),
-        None,
-        None,
         None,
     ))
 }
@@ -729,7 +615,7 @@ pub(crate) fn resolve_token_from_env() -> (Option<String>, TokenSource) {
 ///
 /// Withholding them from the first pass is sound because every one of them
 /// ranks *below* both env vars in `order_token_candidates`: when an env token
-/// exists it is the answer whatever the others hold, so spawning `gh` to learn
+/// exists it is the answer whatever the others hold, so reading the credential store to learn
 /// a value that cannot win is pure latency.
 fn first_candidate(include_keychain: bool) -> (Option<String>, TokenSource) {
     let (token, source) = resolve_token_from_env();
@@ -783,7 +669,7 @@ pub(crate) fn spawn_deferred_token_resolution(state: Arc<AppState>) {
         let Some(token) = token else {
             tracing::info!(
                 source = "github",
-                "No GitHub token from env/CLI — keychain deferred until first use"
+                "No GitHub token from environment — keychain deferred until first use"
             );
             return;
         };
@@ -811,7 +697,7 @@ pub(crate) fn spawn_deferred_token_resolution(state: Arc<AppState>) {
 
 /// Resolve the token for a specific account.
 ///
-/// - The ambient github.com default runs the EXISTING env→keyring-OAuth→gh chain
+/// - The ambient github.com default runs the EXISTING env→keyring-OAuth chain
 ///   unchanged (so a single-account user sees no behavior change).
 /// - Every NAMED account (a GHE PAT or an additional github.com account) returns
 ///   ONLY its own per-account vault token — never the ambient chain. This anchors
@@ -887,7 +773,7 @@ mod tests {
         assert_eq!(*state.github.token.read(), None);
     }
 
-    /// Logout falls back to whatever env/gh CLI token is around — very likely a
+    /// Logout falls back to whatever env token is around — very likely a
     /// different user, so the cached login must not survive it either. The token
     /// the fallback resolves to depends on the machine and is deliberately not
     /// asserted; only the invalidation is.
@@ -1140,96 +1026,19 @@ mod tests {
         }
     }
 
-    /// A `gh` that never answers is abandoned, not waited out.
-    ///
-    /// The bound under test is the 300ms budget passed in. The assertion is
-    /// deliberately far looser than that budget and far below the stub's 120s
-    /// sleep: it only has to tell "gave up" apart from "sat on the child", and
-    /// sizing it that way means a loaded machine cannot make it fire.
-    #[cfg(unix)]
-    #[test]
-    fn a_hung_gh_is_abandoned_rather_than_waited_out() {
-        let mut cmd = std::process::Command::new("sleep");
-        cmd.arg("120");
-
-        let started = std::time::Instant::now();
-        let token = token_from_cli_command(cmd, std::time::Duration::from_millis(300));
-        let elapsed = started.elapsed();
-
-        assert_eq!(token, None, "a killed probe reports no token");
-        assert!(
-            elapsed < std::time::Duration::from_secs(30),
-            "probe waited {elapsed:?} — it sat on the child instead of giving up at its budget"
-        );
-    }
-
-    /// The timeout must not cost the ordinary path: a `gh` that answers is
-    /// still read, and its trailing newline still trimmed.
-    #[cfg(unix)]
-    #[test]
-    fn a_responsive_gh_still_yields_its_token() {
-        let mut cmd = std::process::Command::new("echo");
-        cmd.arg("ghp_from_stub");
-
-        assert_eq!(
-            token_from_cli_command(cmd, std::time::Duration::from_secs(30)),
-            Some("ghp_from_stub".to_string())
-        );
-    }
-
-    /// A non-zero exit means "no token", not an empty one.
-    #[cfg(unix)]
-    #[test]
-    fn a_failing_gh_yields_no_token() {
-        assert_eq!(
-            token_from_cli_command(
-                std::process::Command::new("false"),
-                std::time::Duration::from_secs(30)
-            ),
-            None
-        );
-    }
-
-    /// GH_TOKEN outranks every other source, so resolving it must not reach the
-    /// subprocess at all. The returned token is the same either way — the spawn
-    /// is the only difference, and it is the whole cost of the chain.
+    /// The synchronous boot path reads the environment only, so it cannot hold
+    /// the window back: with no env token it answers `None`, it does not look
+    /// further.
     #[test]
     #[serial_test::serial]
-    fn a_set_gh_token_never_spawns_the_cli() {
-        let _gh = EnvVar::set("GH_TOKEN", "ghp_env_wins");
-        let _github = EnvVar::unset("GITHUB_TOKEN");
-
-        let before = GH_CLI_SPAWNS.load(std::sync::atomic::Ordering::Relaxed);
-        let (token, source) = resolve_token_without_keychain();
-
-        assert_eq!(token.as_deref(), Some("ghp_env_wins"));
-        assert_eq!(source, TokenSource::Env);
-        assert_eq!(
-            GH_CLI_SPAWNS.load(std::sync::atomic::Ordering::Relaxed),
-            before,
-            "GH_TOKEN already decided the answer — spawning `gh` only adds latency"
-        );
-    }
-
-    /// The synchronous boot path spawns nothing — with or without an env token.
-    /// That is what makes a wedged `gh` unable to hold the window back: the
-    /// window never waits on a process that was never started.
-    #[test]
-    #[serial_test::serial]
-    fn the_boot_path_spawns_nothing_even_with_no_env_token() {
+    fn the_boot_path_reads_only_the_environment() {
         let _gh = EnvVar::unset("GH_TOKEN");
         let _github = EnvVar::unset("GITHUB_TOKEN");
 
-        let before = GH_CLI_SPAWNS.load(std::sync::atomic::Ordering::Relaxed);
         let (token, source) = resolve_token_from_env();
 
         assert_eq!(token, None);
         assert_eq!(source, TokenSource::None);
-        assert_eq!(
-            GH_CLI_SPAWNS.load(std::sync::atomic::Ordering::Relaxed),
-            before,
-            "boot must not spawn `gh` — that spawn is what used to block the window"
-        );
     }
 
     /// Installing the token is not enough. `get_all_batch_impl` skips the
@@ -1273,7 +1082,7 @@ mod tests {
     }
 
     /// The deferred probe must not overwrite a token that arrived while it ran:
-    /// an explicit login is a stronger statement than whatever `gh` reports.
+    /// an explicit login is a stronger statement than the deferred environment probe.
     #[test]
     fn the_deferred_probe_skips_a_state_that_already_has_a_token() {
         let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
@@ -1294,7 +1103,7 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn resolve_for_github_com_delegates_to_existing_chain() {
-        // github.com accounts must run the existing env→OAuth→gh chain verbatim,
+        // github.com accounts must run the existing env→OAuth chain verbatim,
         // so the result is identical to resolve_token_with_source(). Serialized
         // against the env-mutating token tests so the global env is stable across
         // the two resolutions below.
@@ -1331,8 +1140,8 @@ mod tests {
     #[test]
     fn resolve_for_named_github_com_uses_own_token_not_chain() {
         // An additional named github.com account resolves ONLY from its own
-        // per-account vault slot — never the ambient env→OAuth→gh chain — so a
-        // `gh auth switch` cannot drift its identity. Source is OAuth (its
+        // per-account vault slot — never the ambient env→OAuth chain — so an
+        // environment change cannot drift its identity. Source is OAuth (its
         // device-flow token), distinct from a GHE PAT.
         let acc = GitHubAccount::github_com_named("named-anchor-test");
         crate::credentials::set(Credential::GithubToken(&acc.id), "gho_named_anchor").unwrap();
@@ -1347,7 +1156,7 @@ mod tests {
     #[test]
     fn resolve_for_named_github_com_missing_token_is_none() {
         // No ambient fallback: a named github.com account with no stored token
-        // resolves to None, it does NOT silently fall back to env/gh.
+        // resolves to None, it does NOT silently fall back to env/OAuth.
         let acc = GitHubAccount::github_com_named("named-missing-test");
         let _ = crate::credentials::delete(Credential::GithubToken(&acc.id));
 

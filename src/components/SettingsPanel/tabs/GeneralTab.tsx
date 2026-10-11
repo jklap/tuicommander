@@ -8,6 +8,7 @@ import { updaterStore } from "../../../stores/updater";
 import { isTauri } from "../../../transport";
 import { openDialog } from "../../../utils/nativeDialog";
 import { ExpertSetting } from "../ExpertSetting";
+import { InfoBadge } from "../InfoBadge";
 import { SettingInput, SettingSelect, SettingSlider, SettingToggle } from "../SettingFields";
 import s from "../Settings.module.css";
 import { SETTINGS_SECTION_EGO } from "../sections";
@@ -300,15 +301,12 @@ export const GeneralTab: Component = () => {
 			<Show when={isTauri() && cliStatus()}>
 				<h3>
 					{t("general.heading.cli", "TUIC CLI")}
-					<span class={s.infoBadge}>
-						?
-						<span class={s.infoBadgeTip}>
-							{t(
-								"general.hint.cliInfo",
-								"The TUIC CLI lets you control TUICommander from any terminal or script. Open files and URLs as tabs, manage PTY sessions (create, list, send input, read output), and query repository status. Useful for scripting automation.",
-							)}
-						</span>
-					</span>
+					<InfoBadge>
+						{t(
+							"general.hint.cliInfo",
+							"The TUIC CLI lets you control TUICommander from any terminal or script. Open files and URLs as tabs, manage PTY sessions (create, list, send input, read output), and query repository status. Useful for scripting automation.",
+						)}
+					</InfoBadge>
 				</h3>
 
 				<div class={s.group}>
@@ -364,15 +362,12 @@ export const GeneralTab: Component = () => {
 			<Show when={isTauri()}>
 				<h3>
 					{t("general.heading.codeIntelligence", "Code Intelligence")}
-					<span class={s.infoBadge}>
-						?
-						<span class={s.infoBadgeTip}>
-							{t(
-								"general.hint.codeIntelligenceInfo",
-								"Integrates with MDKB to provide code navigation features in the editor: Cmd+Click go-to-definition, Shift+F12 find references, and symbol outline. Also serves as a persistent memory manager for AI agents, fully integrated with TUICommander. MDKB indexes your repositories and exposes a local daemon for fast lookups.",
-							)}
-						</span>
-					</span>
+					<InfoBadge>
+						{t(
+							"general.hint.codeIntelligenceInfo",
+							"Integrates with MDKB to provide code navigation features in the editor: Cmd+Click go-to-definition, Shift+F12 find references, and symbol outline. Also serves as a persistent memory manager for AI agents, fully integrated with TUICommander. MDKB indexes your repositories and exposes a local daemon for fast lookups.",
+						)}
+					</InfoBadge>
 				</h3>
 
 				<div class={s.group}>
@@ -421,15 +416,12 @@ export const GeneralTab: Component = () => {
 
 			<h3 id={SETTINGS_SECTION_EGO}>
 				{t("general.heading.ego", "ego")}
-				<span class={s.infoBadge}>
-					?
-					<span class={s.infoBadgeTip}>
-						{t(
-							"general.hint.aiChatInfo",
-							"The AI Chat panel talks to the ego binary over ACP. Select the ego executable to enable it.",
-						)}
-					</span>
-				</span>
+				<InfoBadge>
+					{t(
+						"general.hint.aiChatInfo",
+						"The AI Chat panel talks to the ego binary over ACP. Select the ego executable to enable it.",
+					)}
+				</InfoBadge>
 			</h3>
 
 			{/* The native picker exists only on desktop; a browser client names the path by hand. */}

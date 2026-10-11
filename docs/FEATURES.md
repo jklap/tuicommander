@@ -381,7 +381,7 @@ Right-click the main worktree row → **Switch Branch** submenu to checkout a di
 
 ### 2.6 Quick Branch Switcher
 - Hold `Cmd+Ctrl` (macOS) or `Ctrl+Alt` (Win/Linux): show numbered overlay
-- `Cmd+Ctrl+1-9`: switch to branch by index
+- `Cmd+Ctrl+1-9`: switch to branch by index (in the Global Workspace: switch to tab N)
 
 ### 2.7 Park Repos
 - Right-click any repo in the sidebar to park or unpark it
@@ -1227,9 +1227,9 @@ re-derived later.
 - API budget: ~2 calls/min/repo
 
 ### 8.12 Token Resolution
-- Priority: `GH_TOKEN` env → `GITHUB_TOKEN` env → OAuth keyring token → `gh_token` crate → `gh auth token` CLI
-- `gh_token` crate with empty-string bug workaround
-- Fallback to `gh auth token` CLI
+- Priority: `GH_TOKEN` env → `GITHUB_TOKEN` env → OAuth keyring token
+- Empty environment variables are ignored
+- The `gh` CLI login is not a token source
 
 ### 8.13 OAuth Device Flow Login
 - One-click GitHub authentication from the Settings > Git & GitHub page
@@ -1237,7 +1237,7 @@ re-derived later.
 - Token stored in OS keyring (macOS Keychain, Windows Credential Manager, Linux Secret Service)
 - Requested scope: `repo`
 - Shows user avatar, login name, and token source after authentication
-- Logout removes OAuth token, falls back to env/gh CLI
+- Logout removes OAuth token, falls back to the env tokens
 - On 401: auto-clears invalid OAuth token and prompts re-auth
 
 PR creation, issue creation, and review submission use account-aware REST requests for the bound repository, including GitHub Enterprise, without spawning `gh`.
@@ -1246,7 +1246,7 @@ PR creation, issue creation, and review submission use account-aware REST reques
 GitHub integration is **account-centric**: TUICommander can manage N accounts and each workspace repo is explicitly bound to the account that monitors it (a persisted binding, not derived live from `origin`).
 
 **Account kinds**
-- **Ambient github.com default** — the account you authenticate with via the OAuth device flow above (or `GH_TOKEN`/`gh` CLI). Behaves exactly as before; a github.com-only user sees zero change.
+- **Ambient github.com default** — the account you authenticate with via the OAuth device flow above (or `GH_TOKEN`/`GITHUB_TOKEN`). Behaves exactly as before; a github.com-only user sees zero change.
 - **Additional github.com accounts** — extra named github.com logins added via the device flow (Settings → Git & GitHub → *Additional GitHub Accounts* → "Add another github.com account").
 - **GitHub Enterprise Server (GHE)** — added by host + a pasted **Personal Access Token** (no per-host OAuth App). Validated against `https://{host}/api/v3/user`; PAT stored in the OS keyring under `github/account/{id}/token`.
 
@@ -1260,7 +1260,7 @@ GitHub integration is **account-centric**: TUICommander can manage N accounts an
 - Cooldown keys are account-scoped (`{account_id}:owner/repo` for GHE; `owner/repo` unchanged for cloud); github.com logout clears only cloud cooldowns; removing an account drops only its token, record, bindings, and caches.
 
 **Limitations**
-- REST + GraphQL (PRs, CI, issues, merge, approve, issue comments) work against bound GHE repos. `gh`-CLI-assisted CI-failure-log fetching (CI Auto-Heal) is disabled with a clear message for non-github.com accounts.
+- REST + GraphQL (PRs, CI, issues, merge, approve, issue comments) work against bound GHE repos. CI Auto-Heal fetches Actions logs over REST using the bound GHE account; downloads keep bounded failure tails and share one 60-second sweep deadline.
 
 Backend: `github_account.rs` (`GitHubHost`, account model, binding store, `resolve_repo_account`), commands `github_list_accounts` / `github_remove_account` / `github_bind_repo` / `github_unbind_repo` / `github_list_bindings` / `github_resolve_repo`.
 
@@ -1330,6 +1330,7 @@ The `tuic-dictation` Rust crate implements audio, transcription and speech; the 
 - Sources and licensing: the graphs come from a public Hugging Face export of Kyutai's Pocket TTS weights; the voices come from Kyutai's ungated repository without the voice-cloning weights. Both are CC-BY-4.0, attributed in `THIRD_PARTY_NOTICES.md`.
 
 ### 9.8 Spoken Replies
+- **Hands-free listening and spoken replies are independent.** Settings → Voice has a toggle for each (mobile Settings too): listening only, replies only (push-to-talk dictation, answers spoken), both, or none. Existing users keep listening on. The dictation toast carries a speaker button that turns spoken replies on and off for the next reply and stops one that is playing.
 - **Spoken replies** defaults on and can be disabled from Voice Settings or mobile Settings. Off keeps dictation armed, cancels the speech queue, and enforces text replies server-side. Edge 401/403 rejections start a five-minute cool-down across conversations.
 - Arming hands-free also opens a **reply queue** for that conversation, so the model can answer out loud. Arming without a working voice still works — that is ordinary dictation — and the reason is reported rather than discovered on the first reply.
 - **The user can talk over a reply.** Speaking stops the moment the capture loop hears them, and their words land in the new turn rather than behind the sentence they interrupted. Echo cancellation runs first, so a reply never interrupts itself on its own voice coming back through the microphone.
@@ -1854,7 +1855,7 @@ Buffer eviction is reported; it does not create another output store.
 | Shortcut | Action |
 |----------|--------|
 | Hold `Cmd+Ctrl` | Show quick switcher overlay |
-| `Cmd+Ctrl+1-9` | Switch to branch by index |
+| `Cmd+Ctrl+1-9` | Switch to branch by index (in the Global Workspace: switch to tab N; only the tab hints show) |
 
 ### Voice Dictation
 | Shortcut | Action |

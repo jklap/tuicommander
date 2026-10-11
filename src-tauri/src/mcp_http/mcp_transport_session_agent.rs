@@ -2249,7 +2249,8 @@ pub(super) fn handle_agent_with_parent_cwd(
                     initial_cwd: effective_cwd.clone(),
                     cwd: effective_cwd.clone(),
                     display_name: requested_name.clone(),
-                    display_name_is_custom: false,
+                    // A spawn name is pinned like `rename is_custom=true`.
+                    display_name_is_custom: requested_name.is_some(),
                     display_name_from_spawn: requested_name.is_some(),
                     is_remote: true,
                     shell: binary_path.clone(),

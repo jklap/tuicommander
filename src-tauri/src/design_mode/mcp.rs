@@ -47,10 +47,11 @@ async fn execute(state: &Arc<AppState>, args: &Value) -> Result<Value, String> {
     match args["action"].as_str() {
         Some("start") => {
             let reference = required("session_id")?;
+            let (browser, url) = (optional("browser")?, optional("url")?);
             let session = state
                 .resolve_session_ref_checked(&reference)?
                 .ok_or("Agent session no longer exists")?;
-            super::start(state, session, optional("browser")?, optional("url")?).await
+            super::start(state, session, browser, url).await
         }
         Some("stop") => super::stop(state, &required("repo_path")?).await,
         Some("reload") => super::reload(state, &required("repo_path")?).await,
@@ -66,13 +67,19 @@ mod tests {
     async fn mcp_rejects_invalid_start_fields_without_launching() {
         // Catches: omitted or incorrectly typed fields reaching native launch.
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
-        for args in [
-            json!({"action":"start"}),
-            json!({"action":"stop"}),
-            json!({"action":"unknown"}),
-            json!({"action":"start","session_id":"missing","url":4}),
+        for (args, expected) in [
+            (json!({"action":"start"}), "session_id is required"),
+            (json!({"action":"stop"}), "repo_path is required"),
+            (
+                json!({"action":"unknown"}),
+                "Choose Design Mode start, stop or status",
+            ),
+            (
+                json!({"action":"start","session_id":"missing","url":4}),
+                "url must be a string",
+            ),
         ] {
-            assert!(handle(&state, &args).await.get("error").is_some());
+            assert_eq!(handle(&state, &args).await["error"], expected, "{args}");
         }
     }
     #[tokio::test]

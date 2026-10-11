@@ -102,7 +102,7 @@ App.tsx (central orchestrator)
 ├── BranchSwitcher/           # Quick branch switcher (held-key overlay)
 ├── BranchPopover/            # Branch selection popover
 ├── TipOfTheDay/              # Startup tip notification
-├── DictationToast/           # Dictation recording/transcribing indicator
+├── DictationToast/           # Dictation recording/transcribing indicator, hands-free meter, reply controls and the spoken-replies toggle
 ├── ConfirmDialog/            # Reusable in-app confirmation dialog
 ├── RenameBranchDialog/       # Branch rename dialog
 ├── CreateWorktreeDialog/     # Worktree creation dialog
@@ -401,7 +401,7 @@ one group under a shared label.
 
 #### DictationSettings (`SettingsPanel/DictationSettings.tsx`)
 
-Spoken replies is a standard toggle, also available in the mobile conversation
+Hands-free listening is a standard toggle beside it (also in mobile Settings); off arms a replies-only conversation. The `DictationToast` carries a speaker button (`aria-pressed`) that flips the same spoken-replies setting while recording or while a conversation is armed. Spoken replies is a standard toggle, also available in the mobile conversation
 header and mobile Settings. It stays visible in browser mode and saves the
 backend device preference; it does not stop microphone dictation.
 
