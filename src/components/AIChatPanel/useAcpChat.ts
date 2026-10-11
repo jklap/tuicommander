@@ -107,6 +107,7 @@ export type AcpChatClient = Pick<
 	| "disconnect"
 	| "newSession"
 	| "loadSession"
+	| "closeSession"
 	| "listSessions"
 	| "prompt"
 	| "cancel"
@@ -511,6 +512,40 @@ export function createAcpChat(
 				})),
 		],
 		tabs: () => aiChatTabs.ids(TABS),
+
+		/**
+		 * Give up on the conversation the agent refused to reopen: close it on the
+		 * agent, drop its tab and clear the refusal, so a new session replaces it.
+		 */
+		async closeFailed(): Promise<void> {
+			const id = connectionId();
+			const session = failedSession ?? sessionId();
+			failedSession = null;
+			setError(null);
+			if (!session) return;
+			if (id) {
+				try {
+					await client.closeSession(id, session);
+				} catch (failure) {
+					// The agent may already have dropped it; the new chat must still open.
+					appLogger.warn("ai-chat", "closing the refused session failed", failure);
+				}
+			}
+			aiChatTabs.close(TABS, session);
+			if (binding?.sessionId === session) binding.sessionId = null;
+			setSessionId(null);
+			// The last tab survives aiChatTabs.close; a launch would restore the refused
+			// session, so the new chat reuses the default connection instead.
+			if (!binding) {
+				const target = await chatRoot();
+				setRoot(target);
+				const current = await guard("connecting to ego", () => connectDefault(target));
+				if (current) {
+					binding = current;
+					setConnectionId(current.connectionId);
+				}
+			}
+		},
 
 		async closeTab(tab: AcpSessionId): Promise<void> {
 			const active = aiChatTabs.close(TABS, tab);
