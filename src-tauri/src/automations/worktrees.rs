@@ -3,7 +3,7 @@ use super::{model::Workspace, run::AutomationRun, store::RunStore};
 use crate::{state::AppState, worktree};
 use serde::Serialize;
 use serde_json::{Value, json};
-use std::path::Path;
+use std::{path::Path, sync::Arc};
 use tuic_git::worktree::{WorkspaceCommitStatus, WorkspaceRemovalSafety};
 
 #[derive(Serialize)]
@@ -20,7 +20,7 @@ pub(crate) struct CleanupPreview {
 
 /// Read provenance from the immutable saved snapshot, never a caller-supplied path.
 pub(crate) fn execute(
-    state: &AppState,
+    state: &Arc<AppState>,
     runs: &RunStore,
     id: &str,
     remove: bool,
@@ -46,6 +46,7 @@ pub(crate) fn execute(
         return Err("Worktree has live sessions".into());
     }
     let outcome = worktree::remove_worktree_with_presence_confirmation(
+        state,
         &run.definition.repository,
         workspace_id,
         true,
@@ -65,7 +66,7 @@ pub(crate) fn execute(
     )
 }
 
-fn inspect(state: &AppState, run: &AutomationRun) -> CleanupPreview {
+fn inspect(state: &Arc<AppState>, run: &AutomationRun) -> CleanupPreview {
     let mut preview = CleanupPreview {
         automation_id: run.definition.id.clone(),
         run_id: run.id.clone(),
@@ -112,7 +113,7 @@ fn inspect(state: &AppState, run: &AutomationRun) -> CleanupPreview {
         if !clean || !integrated || live {
             return Err("Worktree must be clean, integrated and free of live sessions".into());
         }
-        let integration = worktree::branch_integration(repo, &resolved.branch)?;
+        let integration = worktree::branch_integration(state, repo, &resolved.branch)?;
         if !integration.integrated || (integration.archive_required && !integration.archived) {
             return Err("Integration proof requires a current-tip archive before cleanup".into());
         }

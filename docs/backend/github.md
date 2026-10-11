@@ -4,7 +4,12 @@
 
 Integrates with GitHub via GraphQL API for PR status, CI checks, and batch queries. Supports OAuth Device Flow login as an alternative to gh CLI tokens, plus **multiple accounts** (additional github.com logins and GitHub Enterprise Server) with per-repo bindings.
 
-Worktree deletion has a separate fail-closed `gh api graphql` proof. When Git
+Worktree deletion has a fail-closed, account-aware HTTP GraphQL proof through
+`RepoApi::resolve` and `graphql_pages`. It uses the repository binding and host,
+the shared HTTP client, and account-scoped breaker/rate-limit accounting.
+Pagination must finish within 100 pages; errors, malformed page info, and repeated
+cursors leave the lookup unknown and uncached. Synchronous Git callbacks bridge
+through the Tokio runtime only from blocking tasks. When Git
 ancestry does not reach the default or checked-out integration branch, it reads
 merged PRs for the worktree branch and accepts one only when its recorded head
 contains the local tip. Missing heads are fetched from `refs/pull/N/head` and
@@ -19,6 +24,14 @@ flow. The builder pins `User-Agent: TUICommander`, the requested Accept media ty
 and `X-GitHub-Api-Version: 2022-11-28`. GraphQL uses the same User-Agent. Each caller
 keeps its status/error wording and existing circuit-breaker handling. A production
 source guard ratchets the remaining `gh` spawn sites until their HTTP migrations land.
+
+PR creation, issue creation, and review submission use account-aware `RepoApi::rest`
+POST requests to `pulls`, `issues`, and `pulls/{number}/reviews`. The repository
+binding selects the host and token, including GitHub Enterprise. These writes no
+longer require the `gh` executable or pass tokens to child processes. Review inline
+comments retain their side (default `RIGHT`). REST errors retain the HTTP status
+and response body as `GitHub API failed ({status}): {body}`. IPC and HTTP request
+and response shapes are unchanged.
 
 ## Multi-Account Model (`github_account.rs`)
 
@@ -88,7 +101,7 @@ The active token source is tracked in `AppState.github_token_source` as a `Token
 ### Circuit breaker coverage
 
 **Every** call out to GitHub goes through the account's circuit breaker:
-GraphQL via `graphql_with_retry`, `gh api` writes via `run_gh_write`, and direct
+GraphQL via `graphql_with_retry`, PR/issue/review writes via `RepoApi::rest`, and direct
 REST via `send_rest_with_breaker` (close/reopen issue, merge PR, approve PR,
 `fetch_github_json`, PR diff, PR refs). The availability breaker counts transport
 errors and `5xx` responses, not deterministic `4xx` caller outcomes such as a

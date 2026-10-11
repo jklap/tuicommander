@@ -16,6 +16,51 @@ pub(crate) trait PrApi: Sync {
     ) -> impl std::future::Future<Output = Result<Value, String>> + Send;
 }
 
+/// Read a complete connection; incomplete pagination is an error, never evidence.
+/// `connection_ptr` addresses the connection in the full GraphQL response.
+pub(crate) async fn graphql_pages(
+    api: &impl PrApi,
+    query: &str,
+    mut variables: Value,
+    connection_ptr: &str,
+    max_pages: usize,
+) -> Result<Vec<Value>, String> {
+    let mut pages = Vec::new();
+    let mut cursors = std::collections::HashSet::new();
+    variables["endCursor"] = Value::Null;
+    for _ in 0..max_pages {
+        let page = api.graphql(query, variables.clone()).await?;
+        if page.get("errors").is_some_and(|errors| !errors.is_null()) {
+            return Err("GitHub returned incomplete GraphQL data".into());
+        }
+        let info = page
+            .pointer(connection_ptr)
+            .and_then(|connection| connection.get("pageInfo"))
+            .ok_or("GitHub response is missing connection pageInfo")?;
+        let has_next = info["hasNextPage"]
+            .as_bool()
+            .ok_or("GitHub response is missing hasNextPage")?;
+        let cursor = if has_next {
+            let cursor = info["endCursor"]
+                .as_str()
+                .filter(|value| !value.is_empty())
+                .ok_or("GitHub response is missing the next cursor")?;
+            if !cursors.insert(cursor.to_owned()) {
+                return Err("GitHub pagination repeated a cursor".into());
+            }
+            Some(cursor.to_owned())
+        } else {
+            None
+        };
+        pages.push(page);
+        match cursor {
+            Some(cursor) => variables["endCursor"] = Value::String(cursor),
+            None => return Ok(pages),
+        }
+    }
+    Err("GitHub pagination exceeded the page limit".into())
+}
+
 pub(crate) struct RepoApi<'a> {
     pub state: &'a AppState,
     pub account: GitHubAccount,

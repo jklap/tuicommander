@@ -2,6 +2,8 @@
 
 TUICommander monitors your GitHub PRs and CI status automatically.
 
+PR creation, issue creation, and review submission use the repository's selected account over HTTP, including GitHub Enterprise. These writes do not require an installed `gh` executable.
+
 ## Authentication
 
 TUICommander needs a GitHub token to access PRs and CI status. You have two options:
@@ -304,3 +306,8 @@ own default: PR sections start collapsed when empty, Issues starts open.
 **Stale data:**
 - Click the refresh button or switch away and back to the branch
 - Polling updates every 60 seconds automatically
+
+Merged-PR evidence for worktree and local-branch cleanup uses the GitHub account
+and host selected for that repository. It no longer depends on the GitHub CLI
+login. If the complete PR history cannot be read, cleanup does not treat that
+lookup as proof that a branch was merged.

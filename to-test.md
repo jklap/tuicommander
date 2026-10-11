@@ -1,3 +1,7 @@
+## Merged GitHub PR proof (1711-67a7) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, check sidebar lifecycle and cleanup of a squash-merged throwaway worktree for a bound cloud account and an enterprise account. The proof now uses that repository's account over HTTP GraphQL and must not trust an incomplete response. Targeted stub tests cover pagination, retryability and the blocking-thread bridge; live account requests remain unverified. Rust does not hot-reload; no desktop instance was started or restarted by this peer.
+
 ## GitHub REST headers (1709-e9f4) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, confirm issue close/reopen, PR approve/close/update and diff retrieval work for a bound cloud account and an enterprise account. Requests now share the account host/token and pinned API headers. Targeted request and error/breaker tests cover the contract; live GitHub operations remain unverified. Rust does not hot-reload; no desktop instance was started or restarted by this peer.
@@ -5066,3 +5070,7 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
   Covered by tests: rpc test for a `text/html` 200 answer to `get_home_directory`; transport and picker tests (321), full run 8581. Not verified: the root cause on the real server (version, base URL, route) and the home-directory listing; both need the real Verification server URL and an authenticated path.
 
 - [ ] After Boss restarts the Rust backend: verify Enterprise account creation through the core account manager and native secret form, and that existing accounts still list and resolve repo bindings. The legacy PAT add IPC command and POST /github/accounts route are removed.
+
+## GitHub HTTP writes (1710-124a) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, create a PR, create an issue, and submit a review with inline comments on a throwaway repository bound to the intended GitHub/GHE account. Confirm the bound identity is used without a `gh` executable and validation errors retain HTTP status/body. Targeted tests cover request coordinates, fields, review validation, and error propagation; no desktop instance was launched or restarted.
