@@ -61,10 +61,11 @@ impl LinkStore {
     ) -> Result<(), String> {
         validate(repo_path, branch, &link)?;
         self.file.update_with_strict(|links| {
-            let changed = links.get(repo_path).and_then(|b| b.get(branch)) != Some(&link);
+            let key = stored_key(links, repo_path);
+            let changed = links.get(&key).and_then(|b| b.get(branch)) != Some(&link);
             if changed {
                 links
-                    .entry(repo_path.to_string())
+                    .entry(key)
                     .or_default()
                     .insert(branch.to_string(), link);
             }
@@ -75,16 +76,39 @@ impl LinkStore {
     /// Returns whether a link existed. A missing link does not touch the file.
     pub(crate) fn unlink(&self, repo_path: &str, branch: &str) -> Result<bool, String> {
         self.file.update_with_strict(|links| {
-            let Some(branches) = links.get_mut(repo_path) else {
+            let key = stored_key(links, repo_path);
+            let Some(branches) = links.get_mut(&key) else {
                 return Ok((false, false));
             };
             let removed = branches.remove(branch).is_some();
             if branches.is_empty() {
-                links.remove(repo_path);
+                links.remove(&key);
             }
             Ok((removed, removed))
         })
     }
+}
+
+/// The spelling of a repository that identifies it: symlinks resolved, and a
+/// trailing separator dropped when the path no longer exists.
+fn repo_identity(path: &str) -> std::path::PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| {
+        std::path::PathBuf::from(path.trim_end_matches(['/', '\\']).to_string())
+    })
+}
+
+/// The key already stored for the same repository, else `repo_path` as given, so
+/// the frontend keeps finding links under the spelling it used.
+fn stored_key(links: &WorkItemLinks, repo_path: &str) -> String {
+    if links.contains_key(repo_path) {
+        return repo_path.to_string();
+    }
+    let identity = repo_identity(repo_path);
+    links
+        .keys()
+        .find(|key| repo_identity(key) == identity)
+        .cloned()
+        .unwrap_or_else(|| repo_path.to_string())
 }
 
 /// Reject input that the badge would render or open unsafely.
