@@ -3,11 +3,57 @@ import type { AgentType } from "../../agents";
 
 export interface AgentIconProps {
 	agent: AgentType;
+	/** Model provider the session runs on. Only `ego` reads it: ego is a harness over many providers. */
+	provider?: string | null;
 	size?: number;
 }
 
+interface IconPath {
+	viewBox: string;
+	d: string;
+	evenodd?: boolean;
+}
+
+/** Icons for model providers that no agent type already owns. */
+const PROVIDER_ONLY_PATHS = {
+	// Generic ego: ring around an epsilon. Also the fallback for a provider with no icon.
+	ego: {
+		viewBox: "0 0 24 24",
+		evenodd: true,
+		d: "M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 2a8 8 0 1 1 0 16 8 8 0 0 1 0-16zM15 8.5H11a2 2 0 0 0-2 2v3a2 2 0 0 0 2 2h4V14h-3.5a.5.5 0 0 1-.5-.5v-.75h3.5v-1.5H11v-.75a.5.5 0 0 1 .5-.5H15z",
+	},
+	// GitHub Copilot: simplified goggled face
+	copilot: {
+		viewBox: "0 0 24 24",
+		evenodd: true,
+		d: "M12 3C7.6 3 4 5.500 4 9v3c0 1 .6 2 1.600 2.400C6.700 17.900 9.100 20 12 20s5.300-2.100 6.400-5.600c1-.4 1.600-1.400 1.600-2.400V9c0-3.500-3.600-6-8-6zM8.500 10.500a1.500 1.500 0 1 1 0 3 1.500 1.500 0 0 1 0-3zm7 0a1.500 1.500 0 1 1 0 3 1.500 1.500 0 0 1 0-3z",
+	},
+	// xAI / Grok: ring cut by a slash
+	grok: {
+		viewBox: "0 0 24 24",
+		evenodd: true,
+		d: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zm0 2a7 7 0 1 1 0 14 7 7 0 0 1 0-14zM19 2.600L21.400 5 5 21.400 2.600 19z",
+	},
+	// OpenRouter: two routes merging into one arrow
+	openrouter: {
+		viewBox: "0 0 24 24",
+		d: "M2 7h5.200c1.300 0 2.500.6 3.300 1.600l1.500 1.800-1.200 1.500-1.700-2.100A2 2 0 0 0 7.200 9H2zM2 15h5.200c.6 0 1.200-.3 1.600-.8l5.600-7C15.600 5.700 17 5 18.600 5H19V3l4 3.500-4 3.500V8h-.4c-.9 0-1.700.4-2.200 1.100l-5.600 7c-1.100 1.300-2.700 2-4.400 2H2z",
+	},
+} satisfies Record<string, IconPath>;
+
+/** ego provider id (the first segment of its `provider/model`) → icon key. */
+const EGO_PROVIDER_ICON: Record<string, AgentType | keyof typeof PROVIDER_ONLY_PATHS> = {
+	anthropic: "claude",
+	"github-copilot": "copilot",
+	openai: "codex",
+	"openai-codex": "codex",
+	gemini: "gemini",
+	xai: "grok",
+	openrouter: "openrouter",
+};
+
 /** SVG path data for agents with official brand icons */
-const AGENT_PATHS: Partial<Record<AgentType, { viewBox: string; d: string }>> = {
+const AGENT_PATHS: Partial<Record<AgentType, IconPath>> = {
 	// Claude sparkle/asterisk (source: simpleicons.org)
 	claude: {
 		viewBox: "0 0 24 24",
@@ -45,17 +91,26 @@ const AGENT_PATHS: Partial<Record<AgentType, { viewBox: string; d: string }>> = 
 	},
 };
 
+/** The icon to draw: an ego session shows its provider's, any other agent its own. */
+export function resolveAgentIcon(agent: AgentType, provider?: string | null): IconPath | undefined {
+	if (agent !== "ego") return AGENT_PATHS[agent];
+	const key = EGO_PROVIDER_ICON[provider ?? ""] ?? "ego";
+	return key in PROVIDER_ONLY_PATHS
+		? PROVIDER_ONLY_PATHS[key as keyof typeof PROVIDER_ONLY_PATHS]
+		: AGENT_PATHS[key as AgentType];
+}
+
 /** Returns an inline SVG string for the given agent, or null if no icon exists. */
-export function getAgentIconSvg(agent: AgentType, size = 14): string | null {
-	const icon = AGENT_PATHS[agent];
+export function getAgentIconSvg(agent: AgentType, size = 14, provider?: string | null): string | null {
+	const icon = resolveAgentIcon(agent, provider);
 	if (!icon) return null;
-	return `<svg viewBox="${icon.viewBox}" width="${size}" height="${size}" fill="currentColor" style="vertical-align:middle;flex-shrink:0"><path d="${icon.d}"/></svg>`;
+	return `<svg viewBox="${icon.viewBox}" width="${size}" height="${size}" fill="currentColor" style="vertical-align:middle;flex-shrink:0"><path${icon.evenodd ? ' fill-rule="evenodd"' : ""} d="${icon.d}"/></svg>`;
 }
 
 /** Renders the brand icon for a given AI agent. Falls back to a capital letter when no SVG exists. */
 export const AgentIcon: Component<AgentIconProps> = (props): JSX.Element => {
 	const size = () => props.size ?? 14;
-	const icon = () => AGENT_PATHS[props.agent];
+	const icon = () => resolveAgentIcon(props.agent, props.provider);
 
 	return (
 		<Show when={icon()} fallback={<span style={{ "font-weight": "700" }}>{props.agent[0].toUpperCase()}</span>}>
@@ -67,7 +122,7 @@ export const AgentIcon: Component<AgentIconProps> = (props): JSX.Element => {
 					fill="currentColor"
 					style={{ "vertical-align": "middle", "flex-shrink": "0" }}
 				>
-					<path d={svg().d} />
+					<path fill-rule={svg().evenodd ? "evenodd" : undefined} d={svg().d} />
 				</svg>
 			)}
 		</Show>

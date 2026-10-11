@@ -1,3 +1,7 @@
+## ego provider sidebar icon (1736-76a4) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, run `ego` in a terminal tab and confirm the sidebar icon matches the provider of its `model` (anthropic → Claude, openai/openai-codex → OpenAI, gemini, github-copilot, xai, openrouter; anything else → ring with epsilon). Copilot, xAI, OpenRouter and generic ego are hand-drawn stand-ins, not official brand paths. The provider is read from the manifest of the session leased to the ego pid; manifest refresh after an in-session model switch is unverified. Rust does not hot-reload; no desktop instance was started by this peer.
+
 ## Commit failing checks (1712-b11c) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, select a failing external check in a throwaway PR and confirm auto-heal uses its exact head and detail link. Confirm a successful rerun removes the stale failure. The lookup uses the bound repository account over GraphQL and does not depend on the first 100 open PRs. Recorded GitHub fixtures cover CheckRuns, external StatusContexts and pagination on rb; live account requests remain unverified. No desktop instance was started or restarted by this peer.
