@@ -5086,3 +5086,5 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 
 - [ ] After a manual backend restart, right-click a localhost/HTTPS terminal link and select Start in Design Mode. Confirm the dedicated browser opens the exact path/query/fragment and its sidebar connects that terminal agent; start a second link while armed and confirm it navigates rather than stops. New backend code does not hot-reload.
 - [ ] Mobile browser dictation (#1718-c32a): on iPhone, dictate and stop three times; edit a dictated draft, then dictate again. Confirm no repeated `aborted` toast and no lost or duplicated text. Browser error/end timing requires device replay.
+
+- [ ] After a manual backend restart and extension reload (#1735-080b): start Design Mode on a static page under `.tmp`, run MCP `design_mode action=reload repo_path=<repo>` and confirm the tab reloads once; close the browser and confirm the D badge clears within about 60 s. New backend code does not hot-reload.

@@ -21,7 +21,7 @@ Cards retain selectors, DOM paths, snippets, selected styles, CSS tokens and ava
 
 Discovery orders the configured **Dev Server URL** first, then live listeners attributed by process directory or an absolute command path to this repository’s worktrees. Fresh PTY URLs are accepted only when their port has a live owned listener. Multiple candidates are listed instead of automatically choosing one. Windows native host registration currently targets Edge and awaits Chrome/multi-profile validation. Windows discovery offers configured URLs and the address bar; listener attribution is not claimed there. Repo-local `.tuic.json` cannot silently supply executable scripts.
 
-The pilot has browser evidence from Chrome for Testing. Native Edge Load unpacked persistence, toolbar-granted screenshot permissions and sidebar restoration still need an Edge check. Automatic post-agent reload and everyday-profile installation are later work; this pilot uses the dev server’s own HMR or the browser’s Reload button.
+The pilot has browser evidence from Chrome for Testing. Native Edge Load unpacked persistence, toolbar-granted screenshot permissions and sidebar restoration still need an Edge check. Agents ask the browser to reload the reviewed tab with MCP `design_mode` `action: "reload"` (for static pages without HMR). The extension also tells TUICommander it is alive every 5 s: Design Mode stops by itself 60 s after the browser goes away. Everyday-profile installation is later work.
 
 ### Start from a link or coordinator
 
