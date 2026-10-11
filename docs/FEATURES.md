@@ -15,6 +15,13 @@ Desktop AI Chat uses the terminal composer’s pin and blue play buttons. The pi
 
 AI Chat image paste discovers capabilities on first use and shares clipboard precedence with Ideas, terminal Compose, and terminal input: Finder image filenames allow attachments, while substantive text takes priority.
 
+## Tasks list component
+
+The generic Tasks list renders data-only work-item providers with account-scoped
+sources, saved presets, field filters, debounced search, sorting, virtual rows,
+and provider cursor pagination. Failed refreshes retain rows with a stale label.
+The component is available for Tasks shell integration; it does not add a tab by itself.
+
 ## ego Perimeter Settings
 
 - Settings > AI Chat edits ego roots, root access, read allowlists, writable
