@@ -47,6 +47,7 @@ export function TasksCreate(props: TasksCreateProps) {
 				{(id) => (
 					<input
 						id={id}
+						type="text"
 						aria-required="true"
 						value={model.title()}
 						disabled={model.submitting()}

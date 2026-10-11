@@ -16,10 +16,7 @@ export function TaskCreateField(props: {
 }) {
 	const label = () => `${props.schema.name}${props.schema.required ? " *" : ""}`;
 	const text = () => (typeof props.value === "string" ? props.value : "");
-	const hint = () =>
-		props.schema.required && !props.schema.options.length
-			? "The provider offers no choices for this field."
-			: undefined;
+	const hint = () => (props.schema.options.length ? undefined : "The provider offers no choices for this field.");
 	return (
 		<Switch
 			fallback={
