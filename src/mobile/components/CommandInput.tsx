@@ -455,20 +455,6 @@ export function CommandInput(props: CommandInputProps) {
 					onClose={closeSlashMenu}
 				/>
 			</Show>
-			<textarea
-				ref={textareaEl}
-				class={styles.input}
-				placeholder="Type a command..."
-				onInput={handleInput}
-				onKeyDown={handleKeyDown}
-				autocomplete="off"
-				autocorrect="off"
-				spellcheck={false}
-				autocapitalize="off"
-				inputmode="text"
-				rows={1}
-				disabled={props.sessionExists === false || submitting()}
-			/>
 			<input
 				ref={fileInput}
 				type="file"
@@ -499,71 +485,87 @@ export function CommandInput(props: CommandInputProps) {
 					<path d="M20 11.5l-8.6 8.6a5 5 0 0 1-7.1-7.1L13 4.3a3.5 3.5 0 0 1 5 5l-8.7 8.7a2 2 0 0 1-2.8-2.8l8-8" />
 				</svg>
 			</button>
-			<Show when={browserDictation.available}>
+			<div class={styles.composer}>
+				<textarea
+					ref={textareaEl}
+					class={styles.input}
+					placeholder="Type a command..."
+					onInput={handleInput}
+					onKeyDown={handleKeyDown}
+					autocomplete="off"
+					autocorrect="off"
+					spellcheck={false}
+					autocapitalize="off"
+					inputmode="text"
+					rows={1}
+					disabled={props.sessionExists === false || submitting()}
+				/>
+				<Show when={browserDictation.available}>
+					<button
+						class={styles.dictate}
+						type="button"
+						aria-label={
+							browserDictation.recording()
+								? t("mobile.dictation.stop", "Stop dictation")
+								: t("mobile.dictation.start", "Dictate into draft")
+						}
+						aria-pressed={browserDictation.recording()}
+						disabled={submitting() || !!props.serverVoiceRecording || props.sessionExists === false}
+						onPointerDown={(event) => event.preventDefault()}
+						onClick={browserDictation.toggle}
+					>
+						<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+							<path d="M12 15a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v7a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.93V22h2v-3.07A7 7 0 0 0 19 12Z" />
+						</svg>
+					</button>
+				</Show>
+				<Show when={queueMenu()}>
+					<div
+						class={styles.queueMenu}
+						role="menu"
+						onKeyDown={(event) => {
+							if (event.key === "Escape") setQueueMenu(false);
+						}}
+					>
+						<button
+							type="button"
+							role="menuitem"
+							disabled={submitting() || !!uploading() || !value().trim()}
+							onClick={queueDraft}
+						>
+							Queue
+						</button>
+					</div>
+				</Show>
 				<button
-					class={styles.dictate}
+					class={styles.send}
 					type="button"
-					aria-label={
-						browserDictation.recording()
-							? t("mobile.dictation.stop", "Stop dictation")
-							: t("mobile.dictation.start", "Dictate into draft")
-					}
-					aria-pressed={browserDictation.recording()}
-					disabled={submitting() || !!props.serverVoiceRecording || props.sessionExists === false}
-					onPointerDown={(event) => event.preventDefault()}
-					onClick={browserDictation.toggle}
-				>
-					<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-						<path d="M12 15a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v7a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.93V22h2v-3.07A7 7 0 0 0 19 12Z" />
-					</svg>
-				</button>
-			</Show>
-			<Show when={queueMenu()}>
-				<div
-					class={styles.queueMenu}
-					role="menu"
-					onKeyDown={(event) => {
-						if (event.key === "Escape") setQueueMenu(false);
+					aria-label="Send"
+					disabled={props.sessionExists === false || submitting()}
+					aria-haspopup="menu"
+					aria-expanded={queueMenu()}
+					onPointerDown={startPress}
+					onPointerUp={cancelPress}
+					onPointerLeave={cancelPress}
+					onPointerCancel={() => {
+						cancelPress();
+						held = true;
+					}}
+					onContextMenu={(event) => event.preventDefault()}
+					onClick={() => {
+						if (held) {
+							held = false;
+							return;
+						}
+						setQueueMenu(false);
+						void send();
 					}}
 				>
-					<button
-						type="button"
-						role="menuitem"
-						disabled={submitting() || !!uploading() || !value().trim()}
-						onClick={queueDraft}
-					>
-						Queue
-					</button>
-				</div>
-			</Show>
-			<button
-				class={styles.send}
-				type="button"
-				aria-label="Send"
-				disabled={props.sessionExists === false || submitting()}
-				aria-haspopup="menu"
-				aria-expanded={queueMenu()}
-				onPointerDown={startPress}
-				onPointerUp={cancelPress}
-				onPointerLeave={cancelPress}
-				onPointerCancel={() => {
-					cancelPress();
-					held = true;
-				}}
-				onContextMenu={(event) => event.preventDefault()}
-				onClick={() => {
-					if (held) {
-						held = false;
-						return;
-					}
-					setQueueMenu(false);
-					void send();
-				}}
-			>
-				<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-					<path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
-				</svg>
-			</button>
+					<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+						<path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
+					</svg>
+				</button>
+			</div>
 		</div>
 	);
 }
