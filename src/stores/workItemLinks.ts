@@ -8,15 +8,22 @@ import { appLogger } from "./appLogger";
 export function createWorkItemLinksStore() {
 	const [links, setLinks] = createSignal<WorkItemLinks>({});
 	let inflight: Promise<void> | null = null;
-	// A local mutation bumps this, so a list response started before it cannot undo it.
-	let generation = 0;
+	// Local changes made while a list request is in flight. The response predates
+	// them, so they are replayed over it: it can neither undo them nor hide the
+	// links they did not touch.
+	let pending: Array<(all: WorkItemLinks) => WorkItemLinks> = [];
+
+	function mutate(change: (all: WorkItemLinks) => WorkItemLinks) {
+		if (inflight) pending.push(change);
+		setLinks(change);
+	}
 
 	function refresh(): Promise<void> {
 		if (inflight) return inflight;
-		const started = generation;
+		pending = [];
 		inflight = invoke<WorkItemLinks>("list_workitem_links")
 			.then((next) => {
-				if (started === generation) setLinks(next ?? {});
+				setLinks(pending.reduce((all, change) => change(all), next ?? {}));
 			})
 			.catch((err) => appLogger.warn("store", "Failed to load work-item links", err))
 			.finally(() => {
@@ -53,14 +60,12 @@ export function createWorkItemLinksStore() {
 
 	async function link(repoPath: string, branch: string, value: WorkItemLink): Promise<void> {
 		await invoke("link_workitem", { repoPath, branch, link: value });
-		generation++;
-		setLinks((all) => ({ ...all, [repoPath]: { ...all[repoPath], [branch]: value } }));
+		mutate((all) => ({ ...all, [repoPath]: { ...all[repoPath], [branch]: value } }));
 	}
 
 	async function unlink(repoPath: string, branch: string): Promise<boolean> {
 		const removed = await invoke<boolean>("unlink_workitem", { repoPath, branch });
-		generation++;
-		setLinks((all) => {
+		mutate((all) => {
 			if (!all[repoPath]?.[branch]) return all;
 			const { [branch]: _gone, ...rest } = all[repoPath];
 			const next = { ...all, [repoPath]: rest };

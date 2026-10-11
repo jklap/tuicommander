@@ -74,6 +74,50 @@ impl Drop for IdentityTerminal {
     }
 }
 
+// Catches: a replacement PTY overwrites a surviving restored tab's identity,
+// then its cleanup removes the sole binding and MCP reconnect never restores it.
+#[test]
+fn replacement_pty_cleanup_reconnect_restores_surviving_parent_identity() {
+    let state = test_state();
+    let _parent = IdentityTerminal::new(&state, "surviving-parent", TEST_UUID_A);
+    let mut parent_command = CommandBuilder::new("cat");
+    crate::pty::bind_pty_identity(
+        &state,
+        &mut parent_command,
+        "surviving-parent",
+        Some(TEST_UUID_A),
+    );
+    refresh_mcp_session(&state, "mcp-parent", false, Some(TEST_UUID_A));
+
+    let replacement = IdentityTerminal::new(&state, "replacement", TEST_UUID_A);
+    let mut replacement_command = CommandBuilder::new("cat");
+    crate::pty::bind_pty_identity(
+        &state,
+        &mut replacement_command,
+        "replacement",
+        Some(TEST_UUID_A),
+    );
+    let rows = crate::mcp_http::session::local_session_rows(&state);
+    assert_eq!(
+        rows.iter()
+            .find(|row| row.session_id == "surviving-parent")
+            .unwrap()
+            .tuic_session,
+        None,
+        "replacement spawn overwrites the original binding",
+    );
+    crate::pty::cleanup_session("replacement", &state);
+    drop(replacement);
+    assert!(state.session_maps.sessions.contains_key("surviving-parent"));
+    assert!(state.live_pty_for_peer(TEST_UUID_A).is_none());
+
+    refresh_mcp_session(&state, "mcp-parent", false, Some(TEST_UUID_A));
+    let rows = crate::mcp_http::session::local_session_rows(&state);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].session_id, "surviving-parent");
+    assert_eq!(rows[0].tuic_session.as_deref(), Some(TEST_UUID_A));
+}
+
 // Catches: first MCP attachment registers a terminal-less peer despite a live
 // process carrying its identity; an existing MCP route bypasses the same repair.
 #[test]

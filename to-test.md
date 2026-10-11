@@ -2,6 +2,9 @@
 
 - [ ] After Boss restarts `make dev` or installs `make build`: send `PUT /workitem-links` to :9876 with `{"repoPath":"<a repo>","branch":"<a worktree branch>","link":{"reference":{"providerId":"jira","accountId":"a","id":"1"},"key":"ACME-1","title":"t","url":"https://example.com/ACME-1","state":{"id":"1","name":"In Progress","tone":"info"}}}`, reload the window, and confirm the branch row shows an `ACME-1` chip in the info colour. Clicking it opens the URL and neither selects the branch nor toggles its agents. Remove the worktree from the sidebar and confirm `GET /workitem-links` no longer lists it. `GET /repo/remotes?path=<repo>` lists every remote without userinfo. No desktop instance was launched by this peer.
 
+## Window resize background (1678-158c / GitHub #125) — Boss build required
+
+- [ ] After Boss runs `make build` (or manually restarts `make dev`), rapidly enlarge and shrink the main window on macOS. Repeat with Commander, VS Code Light, and a theme with different terminal/app backgrounds. Confirm exposed resize areas use the app background; switch themes and reopen secondary/panel windows. Also cold-start with a saved light theme. Rust does not hot-reload. Regression tests cover native window/webview color requests for all bundled themes and saved-theme resolution; actual native paint remains unverified. A headless Chrome startup-document screenshot attempt timed out after 50 seconds without an image. No TUIC instance was launched, restarted or killed by this peer.
 ## Automation precheck context editor (1624-c5f5)
 
 - [ ] In the Automations dialog, enable a precheck: stdout context starts off. Save with it on, reopen, and confirm it remains on without changing prompt whitespace. Turning the precheck off and back on resets consent. Uses the already-landed backend; this change adds no production Rust behavior and does not require a backend restart. _(Visual capture unavailable: two bundled headless Chrome attempts timed out without a screenshot.)_
@@ -4968,6 +4971,10 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 
 - [ ] After the next Rust rebuild/restart, verify Design Mode sends a captured crop as a readable image and lets retained feedback reach a replacement after its original recipient exits (#1672-cd3d). Rust does not hot-reload.
 
+- [ ] Work-item setting controls: after integration, verify the five controls in their consuming settings and Tasks forms; account Add requires the separate native account sink. The dev-only field preview covers the controls independently.
+- [ ] Settings catalogue foundation: after Boss's next manual `make dev` restart or release build, later settings adapters must use the Rust descriptors, retain unavailable voice fields and refuse cutover while inventory gaps remain. This commit adds internal definitions only; no new MCP tool or UI control is exposed yet.
+- [ ] Settings transaction foundation: after Boss's next manual restart/build and the later transport cutover, verify stale revisions conflict, a rejected batch writes nothing, and persisted listener changes report pending/recovery until applied. Internal service only at this stage; no new tool is exposed.
+- [ ] After the next manual Rust restart/build, verify an explicitly saved 24h remote session lifetime survives reload; legacy unmarked files migrate only once (#1676-1230).
 - [ ] After the next manual Rust restart, verify Tasks integration against the A4 contract when its UI/transport stream is installed. A4 itself adds a library contract and local provider only; no new visible surface.
 - [ ] Mobile session history (#1681-507e): after Boss manually restarts `make dev` or rebuilds release, verify a long-running Claude Code session keeps completed output above its live region while scrolling on iPhone. Rust does not hot-reload; this peer did not restart Boss's app.
 - [ ] After Boss restarts `make dev` or rebuilds release: check MCP/CLI automation list, enabled-only update and Once preview use the shared HTTP/IPC shapes; confirm bound creator provenance is retained (#1630-cbfa, #1621-5dce). Rust changes require a restart.

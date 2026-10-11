@@ -6,6 +6,7 @@ use crate::automations::{
 };
 use crate::test_support::{fail_with_stderr_script, sleep_script, test_temp_root};
 use parking_lot::Mutex;
+use std::sync::Arc;
 use tuic_test_support::{print_file_script, touch_script};
 
 #[derive(Default)]
@@ -91,7 +92,7 @@ impl DispatchEffects for Effects {
 struct Fixture {
     _root: tempfile::TempDir,
     _owner: RunOwner,
-    dispatcher: Dispatcher<Effects>,
+    dispatcher: Arc<Dispatcher<Effects>>,
 }
 
 impl Fixture {
@@ -125,7 +126,7 @@ impl Fixture {
                 .unwrap()
                 .id
         };
-        let dispatcher = Dispatcher {
+        let dispatcher = Arc::new(Dispatcher {
             definitions,
             runs: owner.store().clone(),
             effects: Effects {
@@ -134,7 +135,7 @@ impl Fixture {
                 writer: Some(owner.store().clone()),
                 ..Default::default()
             },
-        };
+        });
         (
             Self {
                 _root: root,
@@ -300,8 +301,10 @@ async fn dispatch_rechecks_definition_before_effects_and_again_before_spawn() {
                     .unwrap();
             }
             _ => {
-                fixture.dispatcher.effects.pause_during_workspace =
-                    Some(fixture._root.path().join("automations.json"))
+                Arc::get_mut(&mut fixture.dispatcher)
+                    .unwrap()
+                    .effects
+                    .pause_during_workspace = Some(fixture._root.path().join("automations.json"))
             }
         }
         fixture.dispatcher.dispatch(&id).await.unwrap();
@@ -317,8 +320,14 @@ async fn dispatch_rechecks_definition_before_effects_and_again_before_spawn() {
 async fn dispatch_records_workspace_and_spawn_failure() {
     for workspace_error in [true, false] {
         let (mut fixture, id) = Fixture::new(None, false);
-        fixture.dispatcher.effects.fail_workspace = workspace_error;
-        fixture.dispatcher.effects.fail_launch = !workspace_error;
+        Arc::get_mut(&mut fixture.dispatcher)
+            .unwrap()
+            .effects
+            .fail_workspace = workspace_error;
+        Arc::get_mut(&mut fixture.dispatcher)
+            .unwrap()
+            .effects
+            .fail_launch = !workspace_error;
         fixture.dispatcher.dispatch(&id).await.unwrap();
         let saved = fixture.saved(&id);
         assert_eq!(saved.status, RunStatus::Failed);
@@ -371,7 +380,10 @@ async fn phase_one_admission_consumes_once_but_never_dispatches_cron() {
 #[tokio::test]
 async fn dispatch_stops_only_owned_child_when_binding_loses_terminal_transition() {
     let (mut fixture, id) = Fixture::new(None, false);
-    fixture.dispatcher.effects.stop_during_launch = true;
+    Arc::get_mut(&mut fixture.dispatcher)
+        .unwrap()
+        .effects
+        .stop_during_launch = true;
     fixture.dispatcher.dispatch(&id).await.unwrap();
     let saved = fixture.saved(&id);
     assert_eq!(saved.status, RunStatus::Interrupted);
@@ -384,3 +396,5 @@ async fn dispatch_stops_only_owned_child_when_binding_loses_terminal_transition(
 
 #[path = "context_tests.rs"]
 mod context_tests;
+
+mod lifecycle;
