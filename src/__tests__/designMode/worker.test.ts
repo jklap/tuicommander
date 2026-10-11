@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-type Reply = { ok: boolean; result?: any; error?: string };
+type Snapshot = { selectedSessionId?: string; servers: { servers: { url: string }[] } };
+type Reply = { ok: boolean; result?: Snapshot; error?: string };
 const PANEL = "chrome-extension://ext/panel.html";
 const calls: { action: string; sessionId?: string }[] = [];
 const serversOf: Record<string, string[]> = { A: ["http://localhost:3001/"], B: ["http://localhost:3002/"] };
@@ -28,10 +29,21 @@ async function boot() {
 		runtime: {
 			getURL: (p: string) => `chrome-extension://ext/${p}`,
 			sendMessage: async () => {},
-			onMessage: { addListener: (fn: typeof listener) => { listener = fn; } },
+			onMessage: {
+				addListener: (fn: typeof listener) => {
+					listener = fn;
+				},
+			},
 		},
 		sidePanel: { setPanelBehavior: () => {} },
-		storage: { local: { get: async () => ({ ...store }), set: async (v: Record<string, unknown>) => { Object.assign(store, v); } } },
+		storage: {
+			local: {
+				get: async () => ({ ...store }),
+				set: async (v: Record<string, unknown>) => {
+					Object.assign(store, v);
+				},
+			},
+		},
 		tabs: {
 			query: async () => [{ id: 7 }],
 			sendMessage: async () => {},
@@ -41,9 +53,9 @@ async function boot() {
 			onRemoved: { addListener: () => {} },
 		},
 	});
+	// @ts-expect-error plain MV3 module without declarations
 	await import("../../../browser-extension/design-mode/worker.js");
-	const send = (message: object) =>
-		new Promise<Reply>((resolve) => listener(message, { url: PANEL }, resolve));
+	const send = (message: object) => new Promise<Reply>((resolve) => listener(message, { url: PANEL }, resolve));
 	return { send, tabsUpdate };
 }
 
@@ -58,11 +70,11 @@ describe("Design Mode worker dev-server wiring", () => {
 	it("shows the servers of the agent picked in the dropdown at once", async () => {
 		const { send } = await boot();
 		const first = await send({ kind: "snapshot" });
-		expect(first.result.servers.servers.map((s: { url: string }) => s.url)).toEqual(serversOf.A);
+		expect(first.result?.servers.servers.map((s: { url: string }) => s.url)).toEqual(serversOf.A);
 
 		const picked = await send({ kind: "select", tabId: 7, sessionId: "B" });
-		expect(picked.result.selectedSessionId).toBe("B");
-		expect(picked.result.servers.servers.map((s: { url: string }) => s.url)).toEqual(serversOf.B);
+		expect(picked.result?.selectedSessionId).toBe("B");
+		expect(picked.result?.servers.servers.map((s: { url: string }) => s.url)).toEqual(serversOf.B);
 		expect(calls.filter((c) => c.action === "list_dev_servers").map((c) => c.sessionId)).toEqual(["A", "B"]);
 	});
 

@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 // Extension modules run directly in Chromium; no build step changes their state model.
-// @ts-expect-error plain MV3 module
 import {
 	addPick,
 	deletePick,
 	draftForTab,
 	editPick,
 	serverSession,
+	// @ts-expect-error plain MV3 module
 } from "../../../browser-extension/design-mode/cards.js";
 
 describe("Design Mode drafts", () => {
