@@ -108,9 +108,9 @@ describe("useCommandPaletteActions", () => {
 		);
 		mockTerminals.findTerminalWithSession.mockReturnValue({ sessionId: "other-session", agentType: "claude" });
 		const byId = renderActions();
-        // Catches: a duplicate generic start hiding browser choice.
-        expect(byId("start-design-mode")).toBeUndefined();
-        const action = byId("start-design-mode-edge");
+		// Catches: a duplicate generic start hiding browser choice.
+		expect(byId("start-design-mode")).toBeUndefined();
+		const action = byId("start-design-mode-edge");
 		expect(action).toBeDefined();
 		action?.execute();
 		await Promise.resolve();
