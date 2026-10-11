@@ -2803,3 +2803,11 @@ Automation agent surface (#1630-cbfa, #1621-5dce): MCP `automations` and
 `tuic automations` share the HTTP/IPC action parser, definition results, schedule
 previews, run history, summaries and Run Now runtime. Enabled-only updates and
 Once definitions work identically; MCP creation retains host-bound provenance.
+
+## Tasks board component
+
+The core Tasks board component renders provider-declared columns and virtualized
+lanes. Cards support drag and drop and a keyboard-accessible move menu. Pending
+moves cannot be repeated; rejected actions restore the card and show the error.
+This component is available to the Tasks host; provider registration and the
+Tasks navigation surface determine where it is shown.

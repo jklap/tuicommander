@@ -761,6 +761,35 @@ Tasks shell mounting remains a separate integration step.
 | Module not found | main field must match filename |
 | Changes not reflecting | Save again or restart app |
 | `default export` error | Must export default { id, onload, onunload } |
+
+## Tasks board
+
+The core renders `TasksBoard` with Solid controls, never plugin HTML or an iframe.
+Declare boards as `{id,name,fieldId,columns:[{id,name,action}]}`. Each column's
+`action` is a nullable default for simple field boards. Workflow transitions can differ
+per item: column IDs and transition IDs are distinct.
+
+`provider.board(id, query, signal)` returns `{board,lanes,nextCursor}`. Each lane
+contains `{columnId,cards:[{item,moves:[{columnId,action}]}]}`. Supply authoritative
+lane assignments and per-item move actions from core/provider data. The view never
+infers transitions from display names. Dispatch the matching card move action,
+never a guessed transition ID or the column default. Unknown or forbidden columns
+cannot be selected or dropped onto. Cards are virtualized inside each lane.
+
+Pointer capture keeps dragging stable across the board. Pointer cancellation,
+lost capture, Escape, window blur, hiding the document and unmount clean up the
+ghost without dispatching a move. A native move menu provides the same action
+with a keyboard or touch. Pending cards cannot be moved twice. The view shows
+an optimistic placement, retains the authoritative item state, and restores
+the origin on rejection. Errors are visible and successful moves are announced.
+
+Consumers pass a provider/account/query `scopeKey`, board and lane projections,
+`onMove(reference, action)` and `onUpdated(result)` to refresh the projection.
+Changing the scope discards pending presentation state; late responses cannot
+change the new board. Accepted cards await a fresh projection before another
+move, so stale transition permissions are never reused. The board writes no
+story files and sends no terminal commands.
+
 "###;
 
 #[cfg(test)]
