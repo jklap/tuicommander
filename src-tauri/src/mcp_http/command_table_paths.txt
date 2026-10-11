@@ -282,6 +282,7 @@
 /repo/recent-branches
 /repo/recent-commits
 /repo/remote-url
+/repo/remotes
 /repo/remove-orphan
 /repo/run-git
 /repo/stage
@@ -365,6 +366,7 @@
 /watchers/repo
 /workflows/definition/action
 /workflows/run/action
+/workitem-links
 /worktrees
 /worktrees/dir
 /worktrees/finalize

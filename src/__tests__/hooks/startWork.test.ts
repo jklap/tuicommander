@@ -169,6 +169,20 @@ describe("start work", () => {
 		expect(writes).not.toContain("\r");
 	});
 
+	// Catches: the production link store never bound at startup, so Start Work logs and drops the link.
+	it("start_work_persists_the_link_through_the_production_store", async () => {
+		const { workflow } = coordinators();
+		const link = {
+			reference: { providerId: "p", accountId: "a", id: "7" },
+			key: "PROJ-7",
+			title: "T",
+			url: "https://x/7",
+			state: null,
+		};
+		await workflow.handleStartWork({ repoPath: REPO, branch: BRANCH, prompt: "Fix it", agentType: "codex", link });
+		expect(mockInvoke).toHaveBeenCalledWith("link_workitem", { repoPath: REPO, branch: BRANCH, link });
+	});
+
 	// Catches: a link store failure after the worktree exists leaving the agent without its brief.
 	it("link_failure_is_reported_and_the_brief_is_still_typed", async () => {
 		const { workflow } = coordinators();
