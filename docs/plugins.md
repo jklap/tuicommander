@@ -1459,6 +1459,22 @@ The Browse row shows registry name, version, description, author, tags and minim
 
 ### Settings schema and Tasks views
 
+#### Tasks list
+
+Core `TasksList` consumes the async `WorkItemProvider` port. Providers supply
+account and provider IDs, a display name, field descriptors, saved filters and
+`list(query, signal)`. Core renders Solid controls and virtual rows; providers
+return data only. Source selection partitions cached pages by provider and
+account. Queries include filters, saved-filter ID, search, sort and cursor.
+Search waits 250 ms after input; sorting and filters run in the provider.
+Grouping calls `grouped(query, signal)` with `groupBy`; core renders the returned
+group names and members without inferring membership.
+`nextCursor` enables Load more; repeated cursors stop pagination, and repeated
+item references update the existing row. The cache holds at most 32 pages.
+An obsolete request cannot replace current rows. A failed refresh retains
+available rows and marks them stale. Detail data is requested by the detail
+view after the host receives `onOpen(reference)`. Shell mounting is separate.
+
 The current PluginManifest has no settings schema, field-kind union or generic Tasks-view declaration. Core does not render schema-driven plugin settings or generic plugin Tasks views. Do not invent manifest fields or import core Settings components. Plugins can open their own UI with `host.openPanel` or `host.openMarkdownPanel`. When a settings schema or Tasks-view API is added, document its fields, kinds and core-rendered controls here and extend the source-derived UX drift check to its real schema/renderer. The manifest field and host method inventories fail on new API entries until the guide is updated.
 
 ## Plugin Management (Settings > Plugins)
@@ -1763,6 +1779,14 @@ Available from the [plugin registry](https://github.com/sstraus/tuicommander-plu
 | Module not found | `main` field doesn't match filename | Ensure `"main": "main.js"` matches your actual file |
 | Changes not reflecting | Hot reload cache | Save the file again, or restart the app |
 | `default export` error | Module doesn't `export default { ... }` | Ensure your module has a default export with `id`, `onload`, `onunload` |
+
+## Core setting controls
+
+The core provides account, editable-list, multiselect, read-only status and action
+button controls for catalogue-backed settings and work-item forms. Plugins do not
+import these Solid components or gain new manifest fields from them. The host
+owns account selection and native secret entry; no token enters a plugin prop.
+See `plugin_dev_guide` → **Settings field kinds** for the core-rendered contracts.
 
 ## Tasks data contract (Phase A4)
 

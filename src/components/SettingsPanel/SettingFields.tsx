@@ -1,6 +1,12 @@
 import { type Component, For, type JSX, Show } from "solid-js";
 import s from "./Settings.module.css";
 
+export { SettingAccount, type SettingAccountOption, type SettingAccountProps } from "./fields/SettingAccount";
+export { SettingButton, type SettingButtonProps } from "./fields/SettingButton";
+export { SettingList, type SettingListProps, type SettingListRow } from "./fields/SettingList";
+export { SettingMultiSelect, type SettingMultiSelectProps } from "./fields/SettingMultiSelect";
+export { SettingStatus, type SettingStatusProps } from "./fields/SettingStatus";
+
 export const SettingToggle: Component<{
 	checked: boolean;
 	onChange: (checked: boolean) => void;
