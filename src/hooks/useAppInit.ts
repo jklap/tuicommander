@@ -834,7 +834,7 @@ export async function initApp(deps: AppInitDeps) {
 
 		mdTabsStore.closeMcpFile(id);
 		editorTabsStore.closeMcpFile(id);
-		mdTabsStore.openUiTab(id, title, html, pinned, url, focus ?? true, origin_repo_path);
+		mdTabsStore.openUiTab(id, title, html, pinned, url, focus ?? false, origin_repo_path);
 	}).catch((err) => appLogger.error("app", "Failed to register ui-tab listener", err));
 
 	// Keep remoteSessionTabs consistent if the user closes a remote tab manually
