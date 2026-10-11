@@ -1,3 +1,8 @@
+## Settings info badge tips stay in view (1741-36e5)
+
+- [ ] [VISUAL] Settings > MCP, narrow window: hover the "?" badge of the automations native tool. The tip shows its full text, inside the window, not cut at the right edge.
+- [ ] [VISUAL] Settings > General: hover the "?" next to "TUIC CLI", "Code Intelligence" and "ego" at a narrow width. Each tip stays inside the window; near the bottom edge it opens above the badge.
+
 ## GitHub token chain without gh (1714-1c1d) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, start TUIC with `GH_TOKEN` and `GITHUB_TOKEN` unset and no OAuth login, while `gh auth login` is still valid. Confirm Settings > Git & GitHub shows "Not connected" and that no `gh auth token` process starts (`ps` during boot and polling). Sign in with OAuth and confirm PR status, CI rings and PR writes work. Then set `GH_TOKEN` and confirm the tab shows "Environment variable". An account record saved earlier with `auth_source: gh_cli` must load as the OAuth github.com account. Targeted rb tests cover the chain order, the record load and the empty `gh` spawn allowlist; a live GitHub call is unverified. No desktop instance was started or restarted by this peer.
