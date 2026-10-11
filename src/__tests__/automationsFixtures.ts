@@ -17,6 +17,10 @@ export const definition: AutomationDefinition = {
 };
 export function fakeAdapter(overrides: Partial<AutomationAdapter> = {}): AutomationAdapter {
 	return {
+		templates: async () => [],
+		template: async () => {
+			throw new Error("Unexpected template request");
+		},
 		run: (id) => invoke<AutomationRun>("automation_action", { input: { action: "run", id } }),
 		list: async () => [{ definition, next_run_ms: 1791568800000, last_status: "skipped_overlap" }],
 		save: async (value) => value,

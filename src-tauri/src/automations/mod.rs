@@ -24,6 +24,7 @@ pub(crate) mod runtime;
 
 pub(crate) mod api;
 pub(crate) mod completion;
+pub(crate) mod templates;
 
 pub(crate) mod context;
 pub(crate) mod notifications;

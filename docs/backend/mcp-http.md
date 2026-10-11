@@ -2178,3 +2178,9 @@ The PR action routes (`/repo/pr-action-state`, `/repo/pr-auto-merge`, `/repo/pr-
 ## Core accounts owner surface
 
 IPC `account_action` and HTTP `POST /accounts/action` share one Rust service and presence-only replies. Both HTTP routers require loopback or authenticated API access. The Settings MCP adapter can consume the owner service/schema after integration; account actions are not a new standalone MCP tool or an unrestricted plugin invoke grant. See [Shared account registry](github.md#shared-account-registry).
+
+Automation templates (#1622-be11): the shared automation action accepts
+**templates** (catalogue) and **template** (draft). Draft inputs are template_id,
+repository, run_config and optional timezone (host local by default).
+Drafts have fresh ids and start disabled; no definition or run is created until
+an explicit create action. These actions match across HTTP, IPC, MCP and CLI.

@@ -2960,6 +2960,8 @@ the identical message. Malformed HTTP JSON/envelopes use Axum extraction errors.
 
 | Action | Input fields besides `action` | Success |
 |---|---|---|
+| templates | None | Built-in recipe array with id, name, cron and prompt |
+| template | template_id, repository, run_config, optional/null timezone | Fresh unsaved AutomationDefinition with enabled:false; omitted zone uses host local IANA zone |
 | `list` | None | Array of `{definition,next_run_ms,last_status}` |
 | `get` | `id` | Stored definition |
 | `create` | `definition` | Stored definition, including resolved timezone |

@@ -154,7 +154,6 @@ export function createAutomationsStore(adapter: AutomationAdapter) {
 					: await adapter.preview(value.cron, value.timezone);
 			if (epoch !== previewEpoch) return;
 			setSchedulePreview(reply);
-			// Only fill an omitted creation zone with the backend's resolved local zone.
 			if (!value.timezone) setDraft((current) => (current ? { ...current, timezone: reply.timezone } : current));
 		} catch (cause) {
 			if (epoch === previewEpoch) {
@@ -180,6 +179,17 @@ export function createAutomationsStore(adapter: AutomationAdapter) {
 		}
 	}
 	return {
+		templates: adapter.templates,
+		applyTemplate: (id: string) =>
+			mutate(async () => {
+				const value = draft();
+				if (!value || !isNew()) return;
+				const epoch = selectionEpoch;
+				const reply = await adapter.template(id, value.repository, value.run_config, value.timezone);
+				if (epoch !== selectionEpoch || draft() !== value) return;
+				select(reply, true);
+				await preview();
+			}),
 		openRun,
 		allRuns,
 		summaries,

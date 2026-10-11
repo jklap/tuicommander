@@ -3,6 +3,7 @@ import { t } from "../../i18n";
 import type { AutomationsStore } from "../../stores/automations";
 import s from "./AutomationsDialog.module.css";
 import { ScheduleFields } from "./ScheduleFields";
+import { TemplatePicker } from "./TemplatePicker";
 
 export function DefinitionEditor(props: { store: AutomationsStore }) {
 	const store = props.store;
@@ -47,6 +48,9 @@ export function DefinitionEditor(props: { store: AutomationsStore }) {
 							/>
 						</label>
 					</fieldset>
+					<Show when={store.isNew()}>
+						<TemplatePicker store={store} />
+					</Show>
 					<ScheduleFields store={store} />
 					<fieldset class={s.group} disabled={store.busy()}>
 						<legend>{t("automations.workspace", "Workspace and limits")}</legend>

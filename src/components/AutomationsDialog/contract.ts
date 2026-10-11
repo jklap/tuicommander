@@ -78,7 +78,18 @@ export interface RunSummary {
 	total: number;
 	by_status: Partial<Record<RunStatus, number>>;
 }
+export interface AutomationTemplate {
+	id: string;
+	name: string;
+}
 export interface AutomationAdapter {
+	templates(): Promise<AutomationTemplate[]>;
+	template(
+		template_id: string,
+		repository: string,
+		run_config: string,
+		timezone: string,
+	): Promise<AutomationDefinition>;
 	list(): Promise<AutomationListItem[]>;
 	run(id: string): Promise<AutomationRun>;
 	save(definition: AutomationDefinition, create: boolean): Promise<AutomationDefinition>;
@@ -94,7 +105,8 @@ export interface AutomationAdapter {
 
 /** Request contract for automation_action; serde model payloads are unchanged. */
 export type AutomationAction =
-	| { action: "list" }
+	| { action: "list" | "templates" }
+	| { action: "template"; template_id: string; repository: string; run_config: string; timezone: string | null }
 	| { action: "create" | "update"; definition: AutomationDefinition }
 	| { action: "update"; id: string; enabled: boolean }
 	| { action: "get" | "run"; id: string }
