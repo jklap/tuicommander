@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - GitHub token chain no longer reads the `gh` CLI login (`gh auth token`, `gh-token` crate); use OAuth login or `GH_TOKEN`/`GITHUB_TOKEN`. TUIC spawns no `gh` process (#1714-1c1d).
 
 ### Fixed
+- A console that stops reading the backend's stderr (for example the `make dev` pipe) no longer blocks every thread that logs, the main thread included; console output is now non-blocking and lossy, while retention in the existing lossy file log and bounded `/logs` ring is unchanged (#1638-c94c).
 - Design Mode lists only the dev servers of the session being edited (HTML-serving listeners of its worktree, URLs it printed, the configured URL) and excludes TUIC itself (#1723-4a21).
 
 ### Added
