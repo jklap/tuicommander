@@ -876,6 +876,7 @@ function createPluginRegistry() {
 					method: options?.method ?? null,
 					headers: options?.headers ?? null,
 					body: options?.body ?? null,
+					account: options?.account ?? null,
 					pluginId,
 				});
 			},

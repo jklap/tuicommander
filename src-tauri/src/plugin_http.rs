@@ -6,6 +6,12 @@
 
 use std::collections::HashMap;
 
+#[path = "plugin_http_account.rs"]
+mod account;
+#[cfg(test)]
+#[path = "plugin_http_account_tests.rs"]
+mod account_tests;
+
 /// Maximum response body size (10 MB).
 const MAX_RESPONSE_BYTES: usize = 10 * 1024 * 1024;
 
@@ -61,12 +67,24 @@ fn describe_error(e: &(dyn std::error::Error + 'static)) -> String {
 /// redirect hop) is not caught. Closing that needs a custom `dns_resolver`
 /// that checks resolved addresses before connecting — deferred as a larger
 /// refactor; this fix covers the literal-IP case for every hop.
-fn client_for(allowed_urls: Vec<String>) -> Result<reqwest::Client, String> {
+///
+/// `account_base` (an account request) also admits hops under the account API
+/// base, the same rule the initial URL passed.
+fn client_for(
+    allowed_urls: Vec<String>,
+    account_base: Option<url::Url>,
+) -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(DEFAULT_TIMEOUT_SECS))
         .redirect(reqwest::redirect::Policy::custom(move |attempt| {
             if attempt.previous().len() > MAX_REDIRECTS {
                 return attempt.error(RedirectRejected("too many redirects".into()));
+            }
+            if account_base
+                .as_ref()
+                .is_some_and(|base| account::is_under(attempt.url(), base))
+            {
+                return attempt.follow();
             }
             match validate_url(attempt.url().as_str(), &allowed_urls) {
                 Ok(()) => attempt.follow(),
@@ -176,6 +194,7 @@ fn url_matches_pattern(url: &str, pattern: &str) -> bool {
 /// - `method` — HTTP method (GET, POST, PUT, DELETE, etc.)
 /// - `headers` — Request headers
 /// - `body` — Optional request body
+/// - `account` — Optional account id; Rust injects its credential
 /// - `plugin_id` — The requesting plugin's ID (also the manifest lookup key)
 #[cfg(feature = "desktop")]
 #[tauri::command]
@@ -184,10 +203,11 @@ pub async fn plugin_http_fetch(
     method: Option<String>,
     headers: Option<HashMap<String, String>>,
     body: Option<String>,
+    account: Option<String>,
     plugin_id: String,
     state: tauri::State<'_, std::sync::Arc<crate::AppState>>,
 ) -> Result<HttpResponse, String> {
-    plugin_http_fetch_impl(&state, url, method, headers, body, plugin_id).await
+    plugin_http_fetch_impl(&state, url, method, headers, body, account, plugin_id).await
 }
 
 pub(crate) async fn plugin_http_fetch_impl(
@@ -196,6 +216,7 @@ pub(crate) async fn plugin_http_fetch_impl(
     method: Option<String>,
     headers: Option<HashMap<String, String>>,
     body: Option<String>,
+    account: Option<String>,
     plugin_id: String,
 ) -> Result<HttpResponse, String> {
     crate::plugins::check_plugin_capability(state, &plugin_id, "net:http")?;
@@ -204,6 +225,8 @@ pub(crate) async fn plugin_http_fetch_impl(
     // caller-supplied parameter — otherwise a scoped plugin could widen its own
     // allowlist and bypass the SSRF guard.
     let manifest = crate::plugins::read_single_manifest(&plugin_id)?;
+    let _ = account;
+    let auth: Option<account::AccountAuth> = None;
     validate_url(&url, &manifest.allowed_urls)?;
 
     let method_str = method.as_deref().unwrap_or("GET");
@@ -211,13 +234,19 @@ pub(crate) async fn plugin_http_fetch_impl(
         .parse()
         .map_err(|_| format!("Invalid HTTP method: {method_str}"))?;
 
-    let client = client_for(manifest.allowed_urls.clone())?;
+    let client = client_for(manifest.allowed_urls.clone(), auth.as_ref().map(|a| a.base()))?;
     let mut request = client.request(http_method, &url);
 
     if let Some(ref hdrs) = headers {
         for (key, value) in hdrs {
+            if auth.is_some() && key.eq_ignore_ascii_case("authorization") {
+                return Err("An account request must not set Authorization".into());
+            }
             request = request.header(key.as_str(), value.as_str());
         }
+    }
+    if let Some(ref auth) = auth {
+        request = request.header(reqwest::header::AUTHORIZATION, auth.header());
     }
 
     if let Some(ref b) = body {
@@ -240,10 +269,14 @@ pub(crate) async fn plugin_http_fetch_impl(
         ));
     }
 
+    let redact = |text: String| match &auth {
+        Some(auth) => auth.redact(text),
+        None => text,
+    };
     let resp_headers: HashMap<String, String> = response
         .headers()
         .iter()
-        .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
+        .map(|(k, v)| (k.to_string(), redact(v.to_str().unwrap_or("").to_string())))
         .collect();
 
     // Stream the body with a running-total cap. Content-Length is optional for
@@ -263,7 +296,7 @@ pub(crate) async fn plugin_http_fetch_impl(
         body_bytes.extend_from_slice(&chunk);
     }
 
-    let body_str = String::from_utf8_lossy(&body_bytes).to_string();
+    let body_str = redact(String::from_utf8_lossy(&body_bytes).to_string());
 
     Ok(HttpResponse {
         status,
@@ -519,6 +552,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             plugin_id.to_string(),
         )
         .await
@@ -529,6 +563,7 @@ mod tests {
         let ssrf = plugin_http_fetch_impl(
             &state,
             "http://169.254.169.254/latest/meta-data/".to_string(),
+            None,
             None,
             None,
             None,
@@ -595,6 +630,7 @@ mod tests {
         let err = plugin_http_fetch_impl(
             &state,
             format!("http://127.0.0.1:{port}/start"),
+            None,
             None,
             None,
             None,
@@ -681,6 +717,7 @@ mod tests {
         let err = plugin_http_fetch_impl(
             &state,
             format!("http://127.0.0.1:{port}/big"),
+            None,
             None,
             None,
             None,

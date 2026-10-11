@@ -5,17 +5,21 @@ use super::{store, verify};
 use crate::state::AppState;
 use std::sync::Arc;
 
-async fn test_account(id: String, state: &AppState) -> Result<AccountView, String> {
-    let id_for_load = id.clone();
-    let (mut account, token) = tokio::task::spawn_blocking(move || {
+/// Resolve an account and its credential. Re-read on every call, never cached, so a
+/// re-entered token applies to the next request (the `resolve_bearer` rule).
+pub(crate) async fn load_credential(
+    id: String,
+    state: &AppState,
+) -> Result<(super::model::Account, String), String> {
+    let (account, token) = tokio::task::spawn_blocking(move || {
         let account = store::snapshot()?
             .accounts
-            .remove(&id_for_load)
+            .remove(&id)
             .ok_or("Account not found")?;
         let token = if account.kind == AuthKind::Ambient {
             None
         } else {
-            store::read_token(&id_for_load)?
+            store::read_token(&id)?
         };
         Ok::<_, String>((account, token))
     })
@@ -27,6 +31,11 @@ async fn test_account(id: String, state: &AppState) -> Result<AccountView, Strin
         token
     }
     .ok_or("Account has no credential; authenticate it first")?;
+    Ok((account, token))
+}
+
+async fn test_account(id: String, state: &AppState) -> Result<AccountView, String> {
+    let (mut account, token) = load_credential(id.clone(), state).await?;
     let login = verify::verify(&account, &token).await?;
     let updated = account.clone();
     let login_for_save = login.clone();

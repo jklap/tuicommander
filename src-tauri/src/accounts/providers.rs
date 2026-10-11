@@ -1,11 +1,11 @@
-//! Trusted registration seam; plugin manifests are wired by the host-API stream.
+//! Trusted registration seam; plugin manifests register through `plugins::register_loaded_plugin_impl`.
 use super::model::AuthKind;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::{LazyLock, RwLock};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct VerifyRequest {
     /// Relative API path, resolved under the site base URL.
     pub path: String,
@@ -25,8 +25,6 @@ pub(crate) struct ProviderDescriptor {
 static PROVIDERS: LazyLock<RwLock<BTreeMap<String, (String, ProviderDescriptor)>>> =
     LazyLock::new(|| RwLock::new(BTreeMap::new()));
 
-// DEFERRED (2026-10-11) — runtime caller arrives with story 1697-4cdc (plugin manifest provider declarations); ungate there.
-#[cfg(test)]
 /// Register a descriptor from a trusted core caller after manifest validation.
 /// Non-core providers support tokens only; no OAuth machinery or arbitrary headers.
 pub(crate) fn register_provider(owner: &str, descriptor: ProviderDescriptor) -> Result<(), String> {
@@ -60,8 +58,6 @@ pub(crate) fn register_provider(owner: &str, descriptor: ProviderDescriptor) -> 
     Ok(())
 }
 
-// DEFERRED (2026-10-11) — runtime caller arrives with story 1697-4cdc (plugin manifest provider declarations); ungate there.
-#[cfg(test)]
 /// Plugin unload removes only that owner's descriptors, never persisted accounts.
 pub(crate) fn unregister_providers(owner: &str) {
     PROVIDERS
@@ -90,8 +86,6 @@ pub(crate) fn descriptor(id: &str) -> Result<ProviderDescriptor, String> {
         .ok_or_else(|| "Account provider is unavailable; load its plugin first".into())
 }
 
-// DEFERRED (2026-10-11) — runtime caller arrives with story 1697-4cdc (plugin manifest provider declarations); ungate there.
-#[cfg(test)]
 pub(crate) fn valid_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 128
@@ -100,8 +94,6 @@ pub(crate) fn valid_id(id: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
 }
 
-// DEFERRED (2026-10-11) — runtime caller arrives with story 1697-4cdc (plugin manifest provider declarations); ungate there.
-#[cfg(test)]
 fn valid_path(path: &str) -> bool {
     path.starts_with('/')
         && !path.starts_with("//")

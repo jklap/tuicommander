@@ -1655,6 +1655,23 @@ describe("PluginHost — Tier 3c httpFetch capability gating", () => {
 		);
 		expect(httpCall?.[1]).not.toHaveProperty("allowedUrls");
 	});
+
+	// Catches: the account option dropped before IPC, so Rust sends the request unauthenticated.
+	it("forwards the account id to the Rust command", async () => {
+		let host: PluginHost | null = null;
+		await pluginRegistry.register(
+			makePlugin("ext", (h) => {
+				host = h;
+			}),
+			["net:http"],
+		);
+		await host!.httpFetch("https://jira.example.test/rest/api/3/myself", { account: "acct-1" });
+		const { invoke } = await import("../../invoke");
+		expect(invoke).toHaveBeenCalledWith(
+			"plugin_http_fetch",
+			expect.objectContaining({ account: "acct-1", pluginId: "ext" }),
+		);
+	});
 });
 
 // ---------------------------------------------------------------------------

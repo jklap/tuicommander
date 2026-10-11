@@ -251,6 +251,7 @@ pub(super) struct HttpFetchBody {
     pub method: Option<String>,
     pub headers: Option<HashMap<String, String>>,
     pub body: Option<String>,
+    pub account: Option<String>,
 }
 
 pub(super) async fn plugin_http_fetch(
@@ -265,6 +266,7 @@ pub(super) async fn plugin_http_fetch(
             body.method,
             body.headers,
             body.body,
+            body.account,
             plugin_id,
         )
         .await,

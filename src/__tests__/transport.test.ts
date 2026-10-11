@@ -2039,14 +2039,17 @@ describe("transport", () => {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: "{}",
+				account: "acct-1",
 			});
 			expect(hf.method).toBe("POST");
 			expect(hf.path).toBe("/api/plugins/my-plugin/http");
+			// The account must cross the HTTP transport too, or browser mode sends unauthenticated.
 			expect(hf.body).toEqual({
 				url: "https://api.example.com/data",
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: "{}",
+				account: "acct-1",
 			});
 
 			// plugin_read_session_output — with and without maxLines

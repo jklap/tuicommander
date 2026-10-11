@@ -381,6 +381,11 @@ export interface HttpFetchOptions {
 	headers?: Record<string, string>;
 	/** Request body */
 	body?: string;
+	/**
+	 * Account id. Rust injects the account credential; the URL must be under the
+	 * account host, and the manifest must declare the account's provider.
+	 */
+	account?: string;
 }
 
 // ---------------------------------------------------------------------------
