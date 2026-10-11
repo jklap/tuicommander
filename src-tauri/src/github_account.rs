@@ -18,9 +18,10 @@ pub(crate) use tuic_git::github_account::*;
 /// Does NOT include the implicit github.com default account — that is
 /// synthesized from the existing token-source chain so a github.com-only user
 /// has an empty registry and unchanged behavior.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct GitHubAccountRegistry {
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates accounts for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}, "x-collection-key" = "id"))]
     accounts: Vec<GitHubAccount>,
 }
 
@@ -94,12 +95,16 @@ const GITHUB_BINDINGS_FILE: &str = "github_bindings.json";
 /// Persisted (not derived live from the origin remote) so a repo's account is
 /// stable even if its remotes change — drift is then surfaced to the user
 /// rather than silently re-routing API calls.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct RepoBinding {
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates account id for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) account_id: GitHubAccountId,
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates owner for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) owner: String,
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates repo for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) repo: String,
     /// Which git remote the owner/repo came from (origin, upstream, …).
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates remote name for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) remote_name: String,
 }
 
@@ -107,9 +112,10 @@ pub(crate) struct RepoBinding {
 ///
 /// Worktrees of the same repo resolve to the same canonical root and therefore
 /// share one binding.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct RepoBindingStore {
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates bindings for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     bindings: std::collections::HashMap<String, RepoBinding>,
 }
 

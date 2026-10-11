@@ -15,6 +15,13 @@ Desktop AI Chat uses the terminal composer’s pin and blue play buttons. The pi
 
 AI Chat image paste discovers capabilities on first use and shares clipboard precedence with Ideas, terminal Compose, and terminal input: Finder image filenames allow attachments, while substantive text takes priority.
 
+## Tasks list component
+
+The generic Tasks list renders data-only work-item providers with account-scoped
+sources, saved presets, field filters, debounced search, sorting, virtual rows,
+and provider cursor pagination. Failed refreshes retain rows with a stale label.
+The component is available for Tasks shell integration; it does not add a tab by itself.
+
 ## ego Perimeter Settings
 
 - Settings > AI Chat edits ego roots, root access, read allowlists, writable
@@ -2789,3 +2796,12 @@ Account credential entry uses a private native form with one-time nonce and
 window identity checks. Settings sends account metadata only and receives status
 only; Enterprise PATs go directly to the account vault after verification.
 Account forms have no browser/mobile entry capability.
+
+### Tasks contract foundation
+
+Provider-neutral Rust DTOs and generated TypeScript cover work-item queries, fields, comments, actions and boards. A deterministic local provider supports development; visible Tasks views and remote providers are separate integration work. See [plugin guide](plugins.md#tasks-data-contract-phase-a4).
+
+Automation agent surface (#1630-cbfa, #1621-5dce): MCP `automations` and
+`tuic automations` share the HTTP/IPC action parser, definition results, schedule
+previews, run history, summaries and Run Now runtime. Enabled-only updates and
+Once definitions work identically; MCP creation retains host-bound provenance.

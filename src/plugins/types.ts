@@ -484,6 +484,9 @@ export const INVOKE_WHITELIST: readonly string[] = [
  * - Tier 4: Scoped Tauri invoke (whitelisted commands only)
  */
 export interface PluginHost {
+	/** Register a data-only Tasks provider; auto-disposed on unload. */
+	registerWorkItemProvider(provider: import("./workItemProvider").WorkItemProvider): Disposable;
+
 	// -- Tier 0: Logging (always available) --
 
 	/** Write a message to this plugin's log (visible in Settings > Plugins). */

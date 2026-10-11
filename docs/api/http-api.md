@@ -2996,6 +2996,13 @@ truncation is marked and stderr is excluded. Empty output and manual bypasses
 inject nothing. The run ledger records `precheck_context: {injected, bytes}` for
 the prepared launch prompt, counting escaped stdout bytes before framing/marker.
 
+The MCP `automations` tool and `tuic automations '<action JSON>'` use the same
+action table, parser and result values as this endpoint. MCP receives the action
+object directly; HTTP wraps it in `input`. MCP creation additionally requires a
+bound caller identity and records it in `created_by_session`. CLI sends the
+unchanged action through HTTP-over-IPC MCP, prints JSON on success and reports
+the same backend error text on stderr with exit 1.
+
 ## Account actions
 
 `POST /accounts/action` accepts the tagged core account action directly, without an IPC `request` envelope. It is registered identically on desktop and headless routers with the loopback-or-authenticated route guard. TCP listeners additionally require transport authentication, including loopback requests. Reads return metadata and credential presence only; no action returns a token. List/add/test/remove, site operations and write-only token replacement/clear share the Rust account owner service. See [the account action table](../backend/github.md#shared-account-registry). Frontend mapping lives in `src/transport/commandTable.ts`.

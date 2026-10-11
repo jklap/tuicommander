@@ -9,6 +9,102 @@ use axum::{
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
+// Catches: MCP keeping a separate parser/result contract from HTTP and CLI's MCP wire.
+#[tokio::test]
+async fn automation_mcp_http_cli_wire_cannot_drift() {
+    use crate::mcp_http::mcp_transport::handle_mcp_tool_call;
+    use axum::extract::ConnectInfo;
+    let state = test_state();
+    state.config.write().disabled_native_tools.clear();
+    state
+        .mcp
+        .to_session
+        .insert("parity-cli".into(), "creator".into());
+    let definitions = crate::automations::definitions::DefinitionStore::new();
+    let definition = json!({"id":"parity","name":"Review","prompt":"Review repository",
+        "run_config":"codex","repository":"/project","workspace":{"mode":"existing"},
+        "cron":"0 9 * * *","timezone":"UTC","enabled":false,"grace_secs":43200,
+        "overlap":"skip","max_duration_secs":3600});
+    definitions
+        .create(serde_json::from_value(definition.clone()).unwrap())
+        .unwrap();
+    let mut invalid = definition.clone();
+    invalid["id"] = json!("invalid");
+    invalid["prompt"] = json!(" ");
+    for input in [
+        json!({"action":"update","id":"absent","enabled":false}),
+        json!({"action":"create","definition":invalid}),
+        json!({"action":"update","definition":definition}),
+        json!({"action":"update","id":"parity","enabled":false}),
+        json!({"action":"get","id":"parity"}),
+        json!({"action":"list","unexpected":true}),
+        json!({"action":"preview","cron":"invalid","timezone":"UTC"}),
+        json!({"action":"preset","preset":{"kind":"daily","hour":9,"minute":30}}),
+        json!({"action":"list"}),
+        json!({"action":"get","id":"absent"}),
+        json!({"action":"list_runs","limit":0}),
+        json!({"action":"list_runs","limit":1}),
+        json!({"action":"summary","window":"7d"}),
+        json!({"action":"run","id":"absent"}),
+        json!({"action":"run_now","id":"absent"}),
+        json!({"action":"preview_definition","definition":{
+            "id":"once","name":"Review","prompt":"Review repository","run_config":"codex",
+            "repository":"/project","workspace":{"mode":"existing"},"cron":"",
+            "once_local":"2099-10-10T09:00:00","timezone":"UTC","enabled":true,
+            "grace_secs":43200,"overlap":"skip","max_duration_secs":3600}}),
+    ] {
+        let response = build_router(state.clone(), false, true)
+            .oneshot(
+                Request::post("/automations/action")
+                    .header("content-type", "application/json")
+                    .body(Body::from(json!({"input":input}).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let http: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        let mcp = handle_mcp_tool_call(
+            &state,
+            "127.0.0.1:1234".parse().unwrap(),
+            "automations",
+            &input,
+            Some("parity-cli"),
+        )
+        .await;
+        // CLI's generic MCP command sends this exact tools/call envelope.
+        let mut request = Request::post("/mcp")
+            .header("content-type", "application/json")
+            .header("mcp-session-id", "parity-cli")
+            .body(Body::from(
+                json!({"jsonrpc":"2.0","id":2,"method":"tools/call",
+                "params":{"name":"automations","arguments":input}})
+                .to_string(),
+            ))
+            .unwrap();
+        request.extensions_mut().insert(ConnectInfo(
+            "127.0.0.1:1234".parse::<std::net::SocketAddr>().unwrap(),
+        ));
+        let response = build_router(state.clone(), false, true)
+            .oneshot(request)
+            .await
+            .unwrap();
+        let envelope: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        let cli: Value = serde_json::from_str(
+            envelope["result"]["content"][0]["text"]
+                .as_str()
+                .expect("CLI tool payload"),
+        )
+        .unwrap();
+        assert_eq!(mcp, http, "MCP parity: {input}");
+        assert_eq!(cli, http, "CLI wire parity: {input}");
+    }
+    definitions.remove("parity").unwrap();
+}
+
 // Catches: HTTP envelope drift, validation bypass, or dispatch on a non-owning backend.
 #[tokio::test]
 async fn automation_http_matches_shared_ipc_results_and_errors() {

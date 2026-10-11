@@ -1,4 +1,4 @@
-//! Shared HTTP and IPC boundary; all state belongs to the addressed backend.
+//! Shared HTTP, IPC, MCP and CLI boundary; all state belongs to the addressed backend.
 use super::{
     actions::{self, DefinitionAction},
     definitions::DefinitionStore,
@@ -78,16 +78,43 @@ fn preview_count() -> usize {
 
 /// Parse the same input and return the same errors on either transport.
 pub(crate) async fn execute(input: Value, state: Arc<AppState>) -> Result<Value, String> {
+    execute_as(input, state, Caller::Client).await
+}
+
+pub(crate) enum Caller {
+    Client,
+    Agent(Option<String>),
+}
+
+impl Caller {
+    fn creator(&self, action: &AutomationAction) -> Result<Option<&str>, String> {
+        match self {
+            Self::Agent(None) if matches!(action, AutomationAction::Create { .. }) => {
+                Err("Automation creation requires a bound agent session".into())
+            }
+            Self::Agent(session) => Ok(session.as_deref()),
+            Self::Client => Ok(None),
+        }
+    }
+}
+
+pub(crate) async fn execute_as(
+    input: Value,
+    state: Arc<AppState>,
+    caller: Caller,
+) -> Result<Value, String> {
     let action = parse(input)?;
+    caller.creator(&action)?;
     if let AutomationAction::RunNow { id } = action {
         return value(AutomationRuntime::run_now(&state, &id).await?);
     }
     tokio::task::spawn_blocking(move || {
-        execute_stored(
+        execute_stored_as(
             &DefinitionStore::new(),
             &RunStore::open()?,
             action,
             Utc::now(),
+            caller,
         )
     })
     .await
@@ -98,12 +125,24 @@ pub(crate) fn parse(input: Value) -> Result<AutomationAction, String> {
     serde_json::from_value(input).map_err(|error| format!("Invalid automation action: {error}"))
 }
 
+#[cfg(test)]
 pub(crate) fn execute_stored(
     definitions: &DefinitionStore,
     runs: &RunStore,
     action: AutomationAction,
     now: DateTime<Utc>,
 ) -> Result<Value, String> {
+    execute_stored_as(definitions, runs, action, now, Caller::Client)
+}
+
+pub(crate) fn execute_stored_as(
+    definitions: &DefinitionStore,
+    runs: &RunStore,
+    action: AutomationAction,
+    now: DateTime<Utc>,
+    caller: Caller,
+) -> Result<Value, String> {
+    let creator = caller.creator(&action)?;
     match action {
         AutomationAction::List {} => {
             let mut items = Vec::new();
@@ -126,7 +165,11 @@ pub(crate) fn execute_stored(
         AutomationAction::Get { id } => value(definitions.get(&id)?),
         AutomationAction::Create { definition } => {
             let id = definition.id.clone();
-            actions::execute(definitions, DefinitionAction::Create { definition }, None)?;
+            actions::execute(
+                definitions,
+                DefinitionAction::Create { definition },
+                creator,
+            )?;
             value(definitions.get(&id)?)
         }
         AutomationAction::Update {

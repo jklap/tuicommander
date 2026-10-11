@@ -47,6 +47,7 @@ import type {
 	TuiPlugin,
 } from "./types";
 import { INVOKE_WHITELIST, NOTIFICATION_SOUNDS, PluginCapabilityError } from "./types";
+import { workItemProviderRegistry } from "./workItemProviderRegistry";
 
 /**
  * Central plugin lifecycle manager.
@@ -285,6 +286,10 @@ function createPluginRegistry() {
 			},
 
 			// -- Tier 1: Activity Center + watchers + providers --
+
+			registerWorkItemProvider(provider) {
+				return track(workItemProviderRegistry.register(provider));
+			},
 
 			registerSection(section) {
 				return track(activityStore.registerSection({ ...section, pluginId }));
