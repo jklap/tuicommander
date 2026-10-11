@@ -1,3 +1,7 @@
+## GitHub token chain without gh (1714-1c1d) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, start TUIC with `GH_TOKEN` and `GITHUB_TOKEN` unset and no OAuth login, while `gh auth login` is still valid. Confirm Settings > Git & GitHub shows "Not connected" and that no `gh auth token` process starts (`ps` during boot and polling). Sign in with OAuth and confirm PR status, CI rings and PR writes work. Then set `GH_TOKEN` and confirm the tab shows "Environment variable". An account record saved earlier with `auth_source: gh_cli` must load as the OAuth github.com account. Targeted rb tests cover the chain order, the record load and the empty `gh` spawn allowlist; a live GitHub call is unverified. No desktop instance was started or restarted by this peer.
+
 ## Design Mode dev servers (1723-4a21) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, reload the Design Mode extension and refresh servers. Confirm TUIC, non-HTML listeners and servers of other worktrees are absent, and only the bound session’s servers are listed. No desktop instance was started or restarted by this peer.

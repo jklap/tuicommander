@@ -1223,9 +1223,9 @@ re-derived later.
 - API budget: ~2 calls/min/repo
 
 ### 8.12 Token Resolution
-- Priority: `GH_TOKEN` env → `GITHUB_TOKEN` env → OAuth keyring token → `gh_token` crate → `gh auth token` CLI
-- `gh_token` crate with empty-string bug workaround
-- Fallback to `gh auth token` CLI
+- Priority: `GH_TOKEN` env → `GITHUB_TOKEN` env → OAuth keyring token
+- Empty environment variables are ignored
+- The `gh` CLI login is not a token source
 
 ### 8.13 OAuth Device Flow Login
 - One-click GitHub authentication from the Settings > Git & GitHub page
@@ -1233,7 +1233,7 @@ re-derived later.
 - Token stored in OS keyring (macOS Keychain, Windows Credential Manager, Linux Secret Service)
 - Requested scope: `repo`
 - Shows user avatar, login name, and token source after authentication
-- Logout removes OAuth token, falls back to env/gh CLI
+- Logout removes OAuth token, falls back to the env tokens
 - On 401: auto-clears invalid OAuth token and prompts re-auth
 
 PR creation, issue creation, and review submission use account-aware REST requests for the bound repository, including GitHub Enterprise, without spawning `gh`.
@@ -1242,7 +1242,7 @@ PR creation, issue creation, and review submission use account-aware REST reques
 GitHub integration is **account-centric**: TUICommander can manage N accounts and each workspace repo is explicitly bound to the account that monitors it (a persisted binding, not derived live from `origin`).
 
 **Account kinds**
-- **Ambient github.com default** — the account you authenticate with via the OAuth device flow above (or `GH_TOKEN`/`gh` CLI). Behaves exactly as before; a github.com-only user sees zero change.
+- **Ambient github.com default** — the account you authenticate with via the OAuth device flow above (or `GH_TOKEN`/`GITHUB_TOKEN`). Behaves exactly as before; a github.com-only user sees zero change.
 - **Additional github.com accounts** — extra named github.com logins added via the device flow (Settings → Git & GitHub → *Additional GitHub Accounts* → "Add another github.com account").
 - **GitHub Enterprise Server (GHE)** — added by host + a pasted **Personal Access Token** (no per-host OAuth App). Validated against `https://{host}/api/v3/user`; PAT stored in the OS keyring under `github/account/{id}/token`.
 

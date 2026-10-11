@@ -2,7 +2,7 @@
 
 **Modules:** `src-tauri/crates/tuic-git/src/{github,github_account,github_auth,github_poller,circleci,pr_review,changelog,github_debug}.rs` contains GitHub data types and pure decisions. The matching modules under `src-tauri/src/` keep API clients, credential and config storage, polling, event emission, ego calls, and Tauri commands; they re-export the domain items at their existing paths.
 
-Integrates with GitHub via GraphQL API for PR status, CI checks, and batch queries. Supports OAuth Device Flow login as an alternative to gh CLI tokens, plus **multiple accounts** (additional github.com logins and GitHub Enterprise Server) with per-repo bindings.
+Integrates with GitHub via GraphQL API for PR status, CI checks, and batch queries. Supports OAuth Device Flow login as an alternative to environment tokens, plus **multiple accounts** (additional github.com logins and GitHub Enterprise Server) with per-repo bindings.
 
 Worktree deletion has a fail-closed, account-aware HTTP GraphQL proof through
 `RepoApi::resolve` and `graphql_pages`. It uses the repository binding and host,
@@ -23,7 +23,7 @@ REST requests use `github::github_rest_request` with the host and token selected
 flow. The builder pins `User-Agent: TUICommander`, the requested Accept media type,
 and `X-GitHub-Api-Version: 2022-11-28`. GraphQL uses the same User-Agent. Each caller
 keeps its status/error wording and existing circuit-breaker handling. A production
-source guard ratchets the remaining `gh` spawn sites until their HTTP migrations land.
+source guard (`production_code_spawns_no_gh`) fails when production code spawns `gh`; its allowlist is empty.
 
 PR creation, issue creation, and review submission use account-aware `RepoApi::rest`
 POST requests to `pulls`, `issues`, and `pulls/{number}/reviews`. The repository
@@ -65,10 +65,8 @@ Priority order (first non-empty wins) for the ambient github.com account:
 1. `GH_TOKEN` environment variable
 2. `GITHUB_TOKEN` environment variable
 3. OAuth keyring token (`github_auth.rs` — stored in OS keyring via `keyring` crate)
-4. `gh_token` crate (reads `~/.config/gh/hosts.yml`)
-5. `gh auth token` CLI subprocess
 
-The active token source is tracked in `AppState.github_token_source` as a `TokenSource` enum (`Env`, `OAuth`, `GhCli`, `Pat`, `None`). `resolve_token_for_account(&GitHubAccount)` runs this exact chain for github.com and returns the vault PAT (`TokenSource::Pat`) for GHE accounts.
+The active token source is tracked in `AppState.github_token_source` as a `TokenSource` enum (`Env`, `OAuth`, `Pat`, `None`). `resolve_token_for_account(&GitHubAccount)` runs this exact chain for github.com and returns the vault PAT (`TokenSource::Pat`) for GHE accounts.
 
 ## Tauri Commands — Authentication (`github_auth.rs`)
 
@@ -76,7 +74,7 @@ The active token source is tracked in `AppState.github_token_source` as a `Token
 |---------|-----------|-------------|
 | `github_start_login` | `() -> DeviceCodeResponse` | Start OAuth Device Flow, returns user code |
 | `github_poll_login` | `(device_code: String) -> PollResult` | Poll for token, saves to keyring on success |
-| `github_logout` | `() -> ()` | Delete OAuth token from keyring, fall back to env/CLI |
+| `github_logout` | `() -> ()` | Delete OAuth token from keyring, fall back to environment tokens |
 | `github_auth_status` | `() -> AuthStatus` | Current auth status with login, avatar, source |
 | `github_disconnect` | `() -> ()` | Disconnect GitHub — clear all tokens from keyring and env cache |
 | `github_diagnostics` | `() -> Value` | Diagnostics: token sources, scopes, API connectivity |
@@ -428,8 +426,8 @@ step after the accounts module lands; the module does not edit the shared catalo
 
 The first registry operation imports all `github_accounts.json` entries with
 unchanged account IDs, hosts, login and auth provenance. The implicit
-`github.com` record still resolves the existing env → OAuth vault → gh chain;
-env/CLI tokens are not copied into the vault. The legacy metadata file is retained
+`github.com` record still resolves the existing env → OAuth vault chain;
+env tokens are not copied into the vault. The legacy metadata file is retained
 for recovery and is not re-imported after the migration marker is committed.
 `github_bindings.json` stays authoritative, so existing repo bindings remain valid.
 All GitHub registry writers now use the shared registry.

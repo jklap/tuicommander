@@ -3922,7 +3922,6 @@ export const settingsCatalogue = {
         "enum": [
           "github_com_oauth",
           "github_com_env",
-          "github_com_gh_cli",
           "ghe_pat"
         ]
       },
@@ -3935,7 +3934,6 @@ export const settingsCatalogue = {
         "values": [
           "github_com_oauth",
           "github_com_env",
-          "github_com_gh_cli",
           "ghe_pat"
         ]
       },
@@ -9642,11 +9640,6 @@ export const settingsCatalogue = {
                 "description": "github.com via `GH_TOKEN`/`GITHUB_TOKEN` environment variable.",
                 "type": "string",
                 "const": "github_com_env"
-              },
-              {
-                "description": "github.com via `gh` CLI.",
-                "type": "string",
-                "const": "github_com_gh_cli"
               },
               {
                 "description": "GitHub Enterprise Server via pasted Personal Access Token.",

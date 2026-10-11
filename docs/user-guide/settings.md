@@ -202,7 +202,7 @@ repository and worktree defaults.
 | **CircleCI** | Store or remove a read-only CircleCI token for failed job logs. The saved token is never displayed again. |
 | **Repository Bindings** | Which account each workspace repo resolves to |
 
-Token priority: `GH_TOKEN` env → `GITHUB_TOKEN` env → OAuth keyring → `gh` CLI config → `gh auth token` subprocess.
+Token priority: `GH_TOKEN` env → `GITHUB_TOKEN` env → OAuth keyring. The `gh` CLI login is not used.
 
 ## AI
 
