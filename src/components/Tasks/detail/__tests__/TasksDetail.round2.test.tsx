@@ -27,6 +27,8 @@ it("a committed comment clears its draft even when reloading an opened page fail
 		comments: { entries: [], nextCursor: "older" },
 	};
 	let committed = false;
+	let historyUnavailable = true;
+	const updated = { ...initial, item: { ...initial.item, title: "Comment committed" } };
 	const unused = async (): Promise<never> => {
 		throw new Error("Unused provider operation");
 	};
@@ -41,14 +43,14 @@ it("a committed comment clears its draft even when reloading an opened page fail
 		board: unused,
 		grouped: unused,
 		list: unused,
-		detail: async () => initial,
+		detail: async () => (committed ? updated : initial),
 		comments: async () => {
-			if (committed) throw new Error("Comment history temporarily unavailable");
+			if (committed && historyUnavailable) throw new Error("Comment history temporarily unavailable");
 			return { entries: [], nextCursor: null };
 		},
 		act: async () => {
 			committed = true;
-			return { kind: "item", value: { ...initial, item: { ...initial.item, title: "Comment committed" } } };
+			return { kind: "item", value: updated };
 		},
 	};
 	const view = render(() => <TasksDetail provider={provider} reference={reference} />);
@@ -60,5 +62,13 @@ it("a committed comment clears its draft even when reloading an opened page fail
 	await waitFor(() => expect(view.getByRole("alert").textContent).toContain("Comment history temporarily unavailable"));
 	expect(committed).toBe(true);
 	expect((view.getByLabelText("New comment") as HTMLTextAreaElement).value).toBe("");
+	expect(view.getByText("Comment committed")).toBeTruthy();
+	expect(view.getByRole("alert").textContent).toContain("The change was saved, but comment history could not refresh");
+
+	// Catches: losing the opened-page count prevents Retry from restoring comment history.
+	historyUnavailable = false;
+	fireEvent.click(view.getByRole("button", { name: "Retry" }));
+	await waitFor(() => expect(view.queryByRole("button", { name: "Load more comments" })).toBeNull());
+	expect(view.queryByRole("alert")).toBeNull();
 	expect(view.getByText("Comment committed")).toBeTruthy();
 });

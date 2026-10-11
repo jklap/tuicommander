@@ -109,7 +109,16 @@ export function useTasksDetail(props: {
 			const result = await source.act(target, action, controller.signal);
 			if (currentEpoch !== epoch) return false;
 			if (result.kind !== "item") throw new Error("The provider did not return an updated work item.");
-			const value = await withOpenPages(result.value, source, target, controller.signal);
+			let value = result.value;
+			try {
+				value = await withOpenPages(value, source, target, controller.signal);
+			} catch (cause) {
+				// The mutation is committed even when its comment history cannot refresh.
+				if (currentEpoch === epoch) {
+					const message = cause instanceof Error ? cause.message : String(cause);
+					setError(`The change was saved, but comment history could not refresh: ${message}`);
+				}
+			}
 			if (currentEpoch !== epoch) return false;
 			accept(value);
 			return true;

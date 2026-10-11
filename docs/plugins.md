@@ -1860,6 +1860,9 @@ through `ContentRenderer` with `untrustedContent`. Markdown, tables, images and
 `<details>` survive; scripts, event handlers and provider CSS do not. Review
 threads show file/line and resolved state. The provider's comment cursor drives
 Load more. Add comment retains its draft on rejection.
+An accepted comment clears its draft even if reloading opened comment pages
+fails. Core keeps the returned item, reports the history error and lets Retry
+reload those pages.
 
 Transition buttons use declared IDs and disabled reasons. The pending action
 label appears immediately while the authoritative state ID stays intact.
