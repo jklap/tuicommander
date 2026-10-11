@@ -20,6 +20,8 @@ export interface CommandPaletteProps {
 	actions: ActionEntry[];
 	/** Browser clients expose only actions whose implementation is available over HTTP or in the web UI. */
 	browserMode?: boolean;
+	/** Entries for a pasted work-item URL (see `urlPaste.ts`), listed above the commands. */
+	urlActions?: (text: string, signal: AbortSignal) => Promise<ActionEntry[]>;
 }
 
 /**
@@ -160,12 +162,28 @@ export const CommandPalette: Component<CommandPaletteProps> = (props) => {
 		buildIndex(availableActions().map((a) => ({ item: a, text: `${a.label} ${a.category}` }))),
 	);
 
+	// A pasted URL is offered to plugin resolvers; their entries lead the list.
+	const [urlEntries, setUrlEntries] = createSignal<ActionEntry[]>([]);
+	createEffect(() => {
+		const query = commandPaletteStore.state.query;
+		setUrlEntries([]);
+		if (!props.urlActions || mode() !== "command" || !/^\s*https?:\/\//i.test(query)) return;
+		const controller = new AbortController();
+		onCleanup(() => controller.abort());
+		props
+			.urlActions(query, controller.signal)
+			.then((entries) => {
+				if (!controller.signal.aborted) setUrlEntries(entries);
+			})
+			.catch((err) => appLogger.warn("app", "Pasted URL could not be resolved", err));
+	});
+
 	/**
 	 * Empty query → recent actions first, then alphabetical.
 	 * Non-empty query → BM25 ranked; ties and non-matches fall back to the
 	 * recency/alphabetical order so frequently used commands stay reachable.
 	 */
-	const filteredActions = createMemo(() => {
+	const rankedActions = createMemo(() => {
 		if (mode() !== "command") return [];
 		const query = commandPaletteStore.state.query;
 		const recent = commandPaletteStore.state.recentActions;
@@ -192,6 +210,8 @@ export const CommandPalette: Component<CommandPaletteProps> = (props) => {
 			})
 			.map((r) => r.item);
 	});
+
+	const filteredActions = createMemo(() => [...urlEntries(), ...rankedActions()]);
 
 	/** Item count for the current mode */
 	const itemCount = () => {

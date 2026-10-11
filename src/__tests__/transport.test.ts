@@ -646,6 +646,26 @@ describe("transport", () => {
 			expect(result.body).toEqual({ base, config });
 		});
 
+		// Catches: the HTTP mapper dropping add-time secrets or edit intent.
+		it("carries upstream credentials and explicit replacement intent to HTTP", () => {
+			const credentials = [{ server_id: "new", token: "dummy-secret" }];
+			const base = { servers: [] };
+			const config = { servers: [{ id: "new" }] };
+			expect(mapCommandToHttp("save_mcp_upstreams", { base, config, credentials }).body).toEqual({
+				base,
+				config,
+				credentials,
+			});
+			expect(
+				mapCommandToHttp("save_mcp_upstream_credential", {
+					name: "existing",
+					token: "dummy-replacement",
+					url: "https://example.com",
+					replace: true,
+				}).body,
+			).toEqual({ name: "existing", token: "dummy-replacement", url: "https://example.com", replace: true });
+		});
+
 		it("throws for unknown commands", () => {
 			expect(() => mapCommandToHttp("unknown_cmd", {})).toThrow("No HTTP mapping for command: unknown_cmd");
 		});

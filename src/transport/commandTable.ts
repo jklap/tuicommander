@@ -159,7 +159,7 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		map: (args) => ({
 			method: "PUT",
 			path: "/mcp/upstreams",
-			body: { base: args.base, config: args.config },
+			body: { base: args.base, config: args.config, ...(args.credentials ? { credentials: args.credentials } : {}) },
 		}),
 	},
 	reconnect_mcp_upstream: {
@@ -169,7 +169,13 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		map: (args) => ({
 			method: "POST",
 			path: "/mcp/upstreams/credential",
-			body: { name: args.name, token: args.token, url: args.url, ...(args.header ? { header: args.header } : {}) },
+			body: {
+				name: args.name,
+				token: args.token,
+				url: args.url,
+				...(args.header ? { header: args.header } : {}),
+				...(args.replace !== undefined ? { replace: args.replace } : {}),
+			},
 		}),
 	},
 	delete_mcp_upstream_credential: {

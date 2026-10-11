@@ -2788,6 +2788,13 @@ the prepared launch prompt, counting escaped stdout bytes before framing/marker.
 
 The Automations **Runs** view shows backend 24h/7d counts, paginated history, distinct needs-you/unknown/interrupted states, and saved output after definition deletion. View run focuses only an available terminal on the owning daemon; otherwise it shows the saved report and workspace details without launching a replacement.
 
+### Reusable setting fields
+
+Core form controls support account selection with a host-owned Add action,
+stable-ID editable rows, checkbox multiselect, read-only status tones and action
+buttons. They are controlled rendering components for settings and work-item
+forms; adding them does not add a settings page or a plugin manifest API.
+
 ### Tasks contract foundation
 
 Provider-neutral Rust DTOs and generated TypeScript cover work-item queries, fields, comments, actions and boards. A deterministic local provider supports development; visible Tasks views and remote providers are separate integration work. See [plugin guide](plugins.md#tasks-data-contract-phase-a4).
@@ -2804,3 +2811,11 @@ Automation agent surface (#1630-cbfa, #1621-5dce): MCP `automations` and
 `tuic automations` share the HTTP/IPC action parser, definition results, schedule
 previews, run history, summaries and Run Now runtime. Enabled-only updates and
 Once definitions work identically; MCP creation retains host-bound provenance.
+
+## Tasks board component
+
+The core Tasks board component renders provider-declared columns and virtualized
+lanes. Cards support drag and drop and a keyboard-accessible move menu. Pending
+moves cannot be repeated; rejected actions restore the card and show the error.
+This component is available to the Tasks host; provider registration and the
+Tasks navigation surface determine where it is shown.

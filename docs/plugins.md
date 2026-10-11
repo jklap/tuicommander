@@ -1780,6 +1780,14 @@ Available from the [plugin registry](https://github.com/sstraus/tuicommander-plu
 | Changes not reflecting | Hot reload cache | Save the file again, or restart the app |
 | `default export` error | Module doesn't `export default { ... }` | Ensure your module has a default export with `id`, `onload`, `onunload` |
 
+## Core setting controls
+
+The core provides account, editable-list, multiselect, read-only status and action
+button controls for catalogue-backed settings and work-item forms. Plugins do not
+import these Solid components or gain new manifest fields from them. The host
+owns account selection and native secret entry; no token enters a plugin prop.
+See `plugin_dev_guide` → **Settings field kinds** for the core-rendered contracts.
+
 ## Tasks data contract (Phase A4)
 
 Register via `host.registerWorkItemProvider(provider)`, returning an auto-cleaned
@@ -1858,3 +1866,22 @@ Refresh is manual and periodic (60 seconds by default) while the detail, Tasks
 view and document are visible. Refresh preserves disclosure state and reloads
 comment pages already opened. Switching items rejects stale responses.
 
+## Start work and URL paste
+
+`host.startWork({ repoPath, branch, baseRef?, prompt, agentType?, delivery?, link? })`
+(capability `pty:write`) creates a worktree on a new `branch` (from `baseRef`, default
+the repo's default branch) and opens an agent in it. The agent is `agentType` or, when
+omitted, the first enabled agent with a run config on the repo's machine; that run
+config supplies the command and env. The prompt is never a shell argument: the host
+waits for the agent's composer and types it there, inside an `<untrusted-content>`
+block, control bytes removed, capped at 12000 characters. `delivery: "draft"`
+(default) leaves Enter to the user; `"submit"` sends it. `link` links the item to the
+new worktree. It resolves to `{ repoPath, workspaceId, branch, worktreePath }`.
+The GitHub Auto-fix action uses the same path with `delivery: "submit"`.
+
+`host.registerUrlResolver((url, signal) => ...)` claims URLs pasted in the command
+palette. Return `null` for a URL that is not yours, or `{ link, startWork? }`.
+Resolvers run in registration order; the first non-null result wins and a resolver
+that throws is skipped. When a worktree is already linked to `link.reference`, the
+palette offers **Open worktree**; otherwise it offers **Start work** with your
+request (`repoPath` defaults to the active repository).
