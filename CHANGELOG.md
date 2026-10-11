@@ -13,6 +13,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Design Mode lists only the dev servers of the session being edited (HTML-serving listeners of its worktree, URLs it printed, the configured URL) and excludes TUIC itself (#1723-4a21).
 
 ### Added
+
+- Design Mode extension heartbeats expire stale sessions and deliver agent-requested page reloads once per sequence (#1735-080b).
+
+### Added
 - Start Design Mode directly from terminal HTTP(S) links, bound to the agent that printed them. HTTP/IPC start accepts an optional URL; MCP `design_mode` exposes URL-aware start, stop and status (#1722-f02d).
 
 ### Added

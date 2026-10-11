@@ -123,7 +123,7 @@ async fn dispatch(config: &Value, message: &Value) -> Result<Value, String> {
             )?))
         }
         // Feedback and discovery stay in the core backend. No generic proxy is exposed.
-        Some("pick" | "send" | "list_dev_servers" | "start_dev_server") => {
+        Some("pick" | "send" | "list_dev_servers" | "start_dev_server" | "heartbeat") => {
             let reply = ipc(endpoint, "POST", "/design-mode/extension", Some(message)).await?;
             if reply["ok"] == true {
                 Ok(reply["result"].clone())
@@ -255,6 +255,79 @@ fn host_manifest(host: &Path) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Catches: heartbeat omitted from the native host allowlist or its reply envelope changed.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn native_host_forwards_heartbeat_to_the_configured_instance() {
+        let dir = tempfile::tempdir().unwrap();
+        let endpoint = dir.path().join("beat.sock");
+        let listener = tokio::net::UnixListener::bind(&endpoint).unwrap();
+        let message = json!({"version":"2.0.0","action":"heartbeat","repoPath":"/repo"});
+        let expected = message.clone();
+        let server = tokio::spawn(async move {
+            for result in [
+                json!({"instance_id":"test"}),
+                json!({"ok":true,"result":{"armed":true,"reloadSeq":2}}),
+            ] {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut bytes = Vec::new();
+                let mut chunk = [0; 4096];
+                loop {
+                    let n = stream.read(&mut chunk).await.unwrap();
+                    assert!(n > 0);
+                    bytes.extend_from_slice(&chunk[..n]);
+                    let text = String::from_utf8_lossy(&bytes);
+                    if let Some((headers, body)) = text.split_once("\r\n\r\n") {
+                        let length = headers
+                            .lines()
+                            .find_map(|line| {
+                                line.to_ascii_lowercase()
+                                    .strip_prefix("content-length: ")
+                                    .and_then(|value| value.parse::<usize>().ok())
+                            })
+                            .unwrap_or(0);
+                        if body.len() >= length {
+                            if result.get("result").is_some() {
+                                assert!(headers.starts_with("POST /design-mode/extension "));
+                                assert_eq!(serde_json::from_str::<Value>(body).unwrap(), expected);
+                            } else {
+                                assert!(headers.starts_with("GET /health "));
+                            }
+                            break;
+                        }
+                    }
+                }
+                let body = result.to_string();
+                stream
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}",
+                            body.len(),
+                            body
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+            }
+        });
+        assert_eq!(
+            dispatch(
+                &json!({"repoPath":"/repo","endpoint":endpoint,"instanceId":"test"}),
+                &message
+            )
+            .await
+            .unwrap(),
+            json!({"armed":true,"reloadSeq":2})
+        );
+        server.await.unwrap();
+        assert!(
+            super::super::native_assets::ASSETS
+                .iter()
+                .any(|(name, _)| *name == "heartbeat.js")
+        );
+    }
+
     // Catches: fragmented reads truncating Unicode or interpreting the next frame as payload.
     #[test]
     fn native_frames_preserve_unicode_and_reject_truncation_and_oversize() {

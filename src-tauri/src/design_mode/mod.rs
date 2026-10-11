@@ -6,6 +6,8 @@ pub(crate) mod extension;
 #[cfg(feature = "desktop")]
 mod legacy;
 #[cfg(feature = "desktop")]
+mod liveness;
+#[cfg(feature = "desktop")]
 pub(crate) mod manager;
 mod page_errors;
 mod payload;

@@ -36,6 +36,14 @@ pub(crate) async fn manager(state: &Arc<AppState>) -> &mode_manager::DesignModeM
                     }
                 }
             });
+            let sweeper = manager.clone();
+            tokio::spawn(async move {
+                let mut tick = tokio::time::interval(super::liveness::SWEEP_INTERVAL);
+                loop {
+                    tick.tick().await;
+                    sweeper.stop_expired().await;
+                }
+            });
             manager
         })
         .await
@@ -140,6 +148,19 @@ pub(crate) async fn stop(
         .await?
         .ok_or("Design Mode is not running for this repository")?;
     Ok(status_json(&status))
+}
+
+/// Asks the extension to reload the reviewed tab; it sees the new sequence on its next beat.
+pub(crate) async fn reload(
+    state: &Arc<AppState>,
+    repo_path: &str,
+) -> Result<serde_json::Value, String> {
+    let seq = manager(state)
+        .await
+        .request_reload(repo_path)
+        .await
+        .ok_or("Design Mode is not running for this repository")?;
+    Ok(serde_json::json!({"repoPath": repo_path, "reloadSeq": seq}))
 }
 
 pub(crate) async fn statuses(state: &Arc<AppState>) -> Vec<serde_json::Value> {

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type Snapshot = { selectedSessionId?: string; servers: { servers: { url: string }[] } };
 type Reply = { ok: boolean; result?: Snapshot; error?: string };
@@ -23,6 +23,7 @@ vi.mock("../../../browser-extension/design-mode/native.js", () => ({
 async function boot() {
 	let listener: (m: unknown, s: unknown, r: (x: Reply) => void) => boolean | undefined = () => undefined;
 	const store: Record<string, unknown> = {};
+	const sessionStore: Record<string, unknown> = {};
 	const tabsUpdate = vi.fn(async () => {});
 	vi.stubGlobal("fetch", async () => ({ ok: true, json: async () => ({ repoPath: "/repo", sessionId: "A" }) }));
 	vi.stubGlobal("chrome", {
@@ -37,6 +38,12 @@ async function boot() {
 		},
 		sidePanel: { setPanelBehavior: () => {} },
 		storage: {
+			session: {
+				get: async () => ({ ...sessionStore }),
+				set: async (v: Record<string, unknown>) => {
+					Object.assign(sessionStore, v);
+				},
+			},
 			local: {
 				get: async () => ({ ...store }),
 				set: async (v: Record<string, unknown>) => {
@@ -62,7 +69,14 @@ async function boot() {
 describe("Design Mode worker dev-server wiring", () => {
 	beforeEach(() => {
 		vi.resetModules();
+		vi.useFakeTimers();
 		calls.length = 0;
+	});
+
+	afterEach(() => {
+		vi.clearAllTimers();
+		vi.useRealTimers();
+		vi.unstubAllGlobals();
 	});
 
 	// Catches: the dropdown pick changing the recipient while the list stays on the launching

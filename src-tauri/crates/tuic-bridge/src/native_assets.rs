@@ -32,6 +32,10 @@ pub(crate) const ASSETS: &[(&str, &str)] = &[
         include_str!("../../../../browser-extension/design-mode/native.js"),
     ),
     (
+        "heartbeat.js",
+        include_str!("../../../../browser-extension/design-mode/heartbeat.js"),
+    ),
+    (
         "worker.js",
         include_str!("../../../../browser-extension/design-mode/worker.js"),
     ),

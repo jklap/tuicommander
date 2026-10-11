@@ -1,6 +1,7 @@
 import {addPick, editPick, deletePick, addError, clearErrors, draftForTab, recipient, deliverDraft, serverSession} from './cards.js';
 import {reviewAgents} from './reviewAgents.js';
 import {connectNative, nativeRequest} from './native.js';
+import {HEARTBEAT_MS, heartbeatReply} from './heartbeat.js';
 let connection = 'Connecting…';
 let bound;
 let agents = [];
@@ -31,6 +32,18 @@ async function refreshConnection(tabId) {
     catch(error) { serversBySession.set(sessionId, {...noServers,scanNotice:error.message}); }
   } catch (error) { agents = []; connection = error.message; }
 }
+let reviewedTab;
+let beating = false;
+async function beat() {
+  if (beating) return;
+  beating = true;
+  try {
+    const reply = await request('heartbeat');
+    await heartbeatReply(reply, chrome.storage.session, chrome.tabs, reviewedTab);
+  } catch { /* The backend expires the mode when beats stop. Retry reload on the next beat. */ }
+  finally { beating = false; }
+}
+setInterval(beat, HEARTBEAT_MS);
 let serial = Promise.resolve();
 const binding = fetch(chrome.runtime.getURL('binding.json')).then((response) => {
   if (!response.ok) throw new Error('Open Design Mode from TUICommander to bind this profile.');
@@ -63,6 +76,8 @@ async function activeTab() {
   return tab;
 }
 async function snapshot(tabId) {
+  reviewedTab = tabId;
+  await chrome.storage.session.set({reviewedTab: tabId});
   const all = await drafts();
   const draft = draftForTab(all, tabId);
   const selection = connection.startsWith('Connected') ? recipient(draft, agents, armed ?? bound?.sessionId) : {};

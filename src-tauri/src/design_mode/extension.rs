@@ -42,6 +42,22 @@ pub(super) fn pick_evidence_with_image(
     ))
 }
 
+/// Extension liveness beat. An unarmed repository is a normal reply, not an error.
+async fn heartbeat(state: &Arc<AppState>, body: &Value) -> Result<Value, String> {
+    let repo = body["repoPath"].as_str().ok_or("Missing repository")?;
+    #[cfg(feature = "desktop")]
+    let seq = match state.design_mode.get() {
+        Some(manager) => manager.heartbeat(repo).await,
+        None => None,
+    };
+    #[cfg(not(feature = "desktop"))]
+    let seq: Option<u64> = {
+        let _ = (state, repo);
+        None
+    };
+    Ok(json!({"armed": seq.is_some(), "reloadSeq": seq.unwrap_or(0)}))
+}
+
 pub(crate) async fn message(
     State(state): State<Arc<AppState>>,
     Json(body): Json<Value>,
@@ -76,6 +92,7 @@ pub(crate) async fn message(
                 },
                 None => Err("Missing repository".into()),
             },
+            Some("heartbeat") => heartbeat(&state, &body).await,
             Some("send") => super::send::send(state, body.clone()).await,
             Some("pick") => pick_evidence(&body["raw"]).map(Value::String),
             _ => Err("Unknown Design Mode action".into()),
@@ -132,5 +149,41 @@ pub(crate) mod tests {
         .await;
         assert_eq!(rejected["ok"], false);
         assert_eq!(rejected["error"], "Pick URL must use HTTP or HTTPS");
+    }
+
+    // Catches: the heartbeat reply dropping the reload sequence or repeating a request.
+    #[cfg(feature = "desktop")]
+    #[tokio::test]
+    async fn heartbeat_reply_carries_each_reload_request_once() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let beat = |state: Arc<AppState>| async move {
+            request(
+                state,
+                json!({"version":"2.0.0","action":"heartbeat","repoPath":"/repo"}),
+            )
+            .await["result"]
+                .clone()
+        };
+        assert_eq!(
+            beat(state.clone()).await,
+            json!({"armed":false,"reloadSeq":0})
+        );
+        let manager = super::super::manager(&state).await;
+        manager.arm_extension("/repo".into(), "agent".into()).await;
+        assert_eq!(
+            beat(state.clone()).await,
+            json!({"armed":true,"reloadSeq":0})
+        );
+        super::super::reload(&state, "/repo").await.unwrap();
+        assert_eq!(
+            beat(state.clone()).await,
+            json!({"armed":true,"reloadSeq":1})
+        );
+        assert_eq!(
+            beat(state.clone()).await,
+            json!({"armed":true,"reloadSeq":1})
+        );
+        manager.stop("/repo").await.unwrap();
+        assert_eq!(beat(state).await, json!({"armed":false,"reloadSeq":0}));
     }
 }
