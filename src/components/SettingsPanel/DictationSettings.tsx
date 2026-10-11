@@ -1173,6 +1173,23 @@ const HandsFreeControls: Component = () => {
 			</ExpertSetting>
 
 			<div class={s.group}>
+				<label>{t("dictation.handsFreeListeningLabel", "Hands-free listening")}</label>
+				<div class={s.toggle}>
+					<input
+						type="checkbox"
+						checked={dictationStore.state.handsFreeListening}
+						onChange={(e) => dictationStore.setHandsFreeListening(e.currentTarget.checked)}
+					/>
+					<span>
+						{t(
+							"dictation.handsFreeListeningHint",
+							"Keep the microphone open and send each utterance by itself. Turn off to dictate with push-to-talk only; with spoken replies on, the agent still answers out loud. Applies to the next conversation.",
+						)}
+					</span>
+				</div>
+			</div>
+
+			<div class={s.group}>
 				<label>{t("dictation.spokenRepliesLabel", "Spoken replies")}</label>
 				<div class={s.toggle}>
 					<input

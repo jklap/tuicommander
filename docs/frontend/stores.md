@@ -463,7 +463,7 @@ transcription; blur releases a held hotkey if its key-up event was lost.
 `useDictation` shows that reason in the status. A final transcription gate's
 specific reason reaches both; an empty successful pass shows `no speech detected`.
 
-spokenReplies reads and saves hands_free_spoken_replies through the existing
+handsFreeListening reads and saves hands_free_listening the same way (`setHandsFreeListening`); `armHandsFree` passes it to `connectBrowserVoice` so a replies-only browser tab opens no microphone. spokenReplies reads and saves hands_free_spoken_replies through the existing
 load/base/delta configuration path. Browser clients refresh configuration when
 voice controls load; mobile Settings and conversation controls use the same
 store action. Rust owns enforcement and cool-down decisions.

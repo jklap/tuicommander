@@ -82,6 +82,13 @@ mod dictation_config {
         #[serde(default = "default_earcons")]
         #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates hands free earcons for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
         pub hands_free_earcons: bool,
+        /// Capture speech hands-free. Off is a replies-only conversation:
+        /// input stays push-to-talk, and the microphone is never opened by the
+        /// conversation. Absent from every config written before this field
+        /// existed, which reads as on — today's behaviour.
+        #[serde(default = "default_true")]
+        #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates hands free listening for the current owner; applies to the next conversation.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+        pub hands_free_listening: bool,
         /// Allow spoken replies for this device's hands-free conversation.
         #[serde(default = "default_true")]
         #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates hands free spoken replies for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
@@ -241,6 +248,7 @@ mod dictation_config {
                 hands_free_notify_model: default_notify_model(),
                 hands_free_start_notice: String::new(),
                 hands_free_earcons: default_earcons(),
+                hands_free_listening: true,
                 hands_free_spoken_replies: true,
                 speech_command: Vec::new(),
                 speech_engine: String::new(),

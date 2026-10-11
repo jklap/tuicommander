@@ -134,10 +134,14 @@ export function encodeCapture(samples: Float32Array): ArrayBuffer {
  * there: Rust refuses an owner with no client rather than falling back to its
  * own microphone, so a tab that armed first would be told its own name is
  * unknown.
+ *
+ * `listen` false is a replies-only conversation: the socket and the speaker
+ * are opened, the microphone is not.
  */
 export async function connectBrowserVoice(
 	owner: string,
 	deps: BrowserVoiceDeps = browserDeps,
+	listen = true,
 ): Promise<BrowserVoiceSession> {
 	// Everything up to the first `await` runs inside the arming gesture, which
 	// is the only place iOS lets a context leave `suspended` (and the only place
@@ -148,7 +152,7 @@ export async function connectBrowserVoice(
 	const session = deps.audioSession();
 	// The default category is `auto`, which on iOS plays the reply at ringer
 	// volume or not at all once the microphone is open.
-	if (session) session.type = "play-and-record";
+	if (session) session.type = listen ? "play-and-record" : "playback";
 	const context = deps.createContext(CAPTURE_SAMPLE_RATE);
 	const resumed = context.resume();
 	// Observed below; this keeps a rejection during the mic prompt from being reported as unhandled.
@@ -156,7 +160,7 @@ export async function connectBrowserVoice(
 
 	let stream: MediaStream | undefined;
 	try {
-		stream = await deps.getUserMedia();
+		if (listen) stream = await deps.getUserMedia();
 		await resumed;
 		if (context.state === "suspended") await context.resume();
 	} catch (err) {
@@ -168,23 +172,25 @@ export async function connectBrowserVoice(
 		void context.close();
 		throw err;
 	}
-	const source = context.createMediaStreamSource(stream);
+	const source = stream ? context.createMediaStreamSource(stream) : undefined;
 	// `ScriptProcessorNode` rather than an `AudioWorklet`: a worklet needs a
 	// separate module URL, which the packaged frontend serves from a path the
 	// plugin loader also owns, and this node is deprecated rather than absent.
 	// The work per callback is a copy, not a computation.
-	const capture = context.createScriptProcessor(FRAME_SAMPLES, 1, 1);
+	const capture = source ? context.createScriptProcessor(FRAME_SAMPLES, 1, 1) : undefined;
 
-	capture.onaudioprocess = (event) => {
-		if (socket.readyState !== WebSocket.OPEN) return;
-		socket.send(encodeCapture(event.inputBuffer.getChannelData(0)));
-	};
-	source.connect(capture);
-	// A `ScriptProcessorNode` only runs while it is connected to a
-	// destination. Nothing is *heard* from it — it emits the silence its
-	// output buffer was created with — but without this the callback above
-	// never fires and the conversation hears nothing.
-	capture.connect(context.destination);
+	if (capture && source) {
+		capture.onaudioprocess = (event) => {
+			if (socket.readyState !== WebSocket.OPEN) return;
+			socket.send(encodeCapture(event.inputBuffer.getChannelData(0)));
+		};
+		source.connect(capture);
+		// A `ScriptProcessorNode` only runs while it is connected to a
+		// destination. Nothing is *heard* from it — it emits the silence its
+		// output buffer was created with — but without this the callback above
+		// never fires and the conversation hears nothing.
+		capture.connect(context.destination);
+	}
 
 	let playing: AudioBufferSourceNode | null = null;
 	// The reply being played or held, where it started and whether it is held.
@@ -262,10 +268,12 @@ export async function connectBrowserVoice(
 	return {
 		stop() {
 			stopPlayback();
-			capture.onaudioprocess = null;
-			capture.disconnect();
-			source.disconnect();
-			for (const track of stream.getTracks()) track.stop();
+			if (capture) {
+				capture.onaudioprocess = null;
+				capture.disconnect();
+			}
+			source?.disconnect();
+			for (const track of stream?.getTracks() ?? []) track.stop();
 			void context.close();
 			socket.close();
 		},
