@@ -22,6 +22,7 @@ const CommandOverview = lazy(() =>
 const GithubOpsDashboard = lazy(() =>
 	import("../GithubOpsDashboard").then((module) => ({ default: module.GithubOpsDashboard })),
 );
+const TasksShell = lazy(() => import("../Tasks/TasksShell").then((module) => ({ default: module.TasksShell })));
 const HtmlPreviewTab = lazy(() => import("../HtmlPreviewTab").then((module) => ({ default: module.HtmlPreviewTab })));
 const MarkdownTab = lazy(() => import("../MarkdownTab").then((module) => ({ default: module.MarkdownTab })));
 const PluginPanel = lazy(() => import("../PluginPanel").then((module) => ({ default: module.PluginPanel })));
@@ -39,6 +40,7 @@ export const MdTabContent: Component<{ tab: MdTabData; onClose: () => void; visi
 				if (tab.type === "grok-usage") return <GrokUsageDashboard />;
 				if (tab.type === "github-ops") return <GithubOpsDashboard repoPath={(tab as GithubOpsTabData).repoPath} />;
 				if (tab.type === "command-overview") return <CommandOverview />;
+				if (tab.type === "tasks") return <TasksShell visible={props.visible} />;
 				if (tab.type === "plugin-panel")
 					return <PluginPanel tab={tab} onClose={props.onClose} visible={props.visible} />;
 				if (tab.type === "pr-diff") {

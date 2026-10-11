@@ -7,6 +7,7 @@
 
 import type { ShortcutHandlers } from "../hooks/useKeyboardShortcuts";
 import type { ActionName } from "../keybindingDefaults";
+import { workItemProviderRegistry } from "../plugins/workItemProviderRegistry";
 import { automationsUi } from "../stores/automations";
 import { dictationStore } from "../stores/dictation";
 import { keybindingsStore } from "../stores/keybindings";
@@ -97,6 +98,7 @@ const ACTION_META: Partial<Record<ActionName, ActionMeta>> = {
 	"open-path": { label: "Open path…", category: "File" },
 	"open-secondary-window": { label: "Open secondary window", category: "Navigation" },
 	"command-overview": { label: "Command overview", category: "Panels" },
+	"open-tasks": { label: "Open Tasks", category: "Panels" },
 	"detach-activity-dashboard": { label: "Open Activity Dashboard in separate window", category: "Navigation" },
 	"toggle-tunnels": { label: "SSH Tunnels", category: "Panels" },
 	"process-manager": { label: "Process Manager", category: "Navigation" },
@@ -180,6 +182,7 @@ export function getActionEntries(handlers: ShortcutHandlers): ActionEntry[] {
 		"open-folder": handlers.openFolder,
 		"open-path": handlers.openPath,
 		"command-overview": handlers.toggleCommandOverview,
+		"open-tasks": handlers.openTasks,
 		"detach-activity-dashboard": handlers.detachActivityDashboard,
 		"toggle-tunnels": () => tunnelPanelStore.toggle(),
 		"process-manager": handlers.toggleProcessManager,
@@ -201,6 +204,8 @@ export function getActionEntries(handlers: ShortcutHandlers): ActionEntry[] {
 	for (const [actionId, meta] of Object.entries(ACTION_META)) {
 		if (!meta) continue;
 		if (seen.has(actionId)) continue;
+		// The Tasks tab has nothing to show until a work-item provider plugin has registered.
+		if (actionId === "open-tasks" && workItemProviderRegistry.list().length === 0) continue;
 		if (actionId === "toggle-ai-chat" && !settingsStore.isAiChatEnabled()) continue;
 		// A browser tab never loads the dictation config (`refreshConfig` is
 		// desktop-only), so there the backend's answer to arming is the gate.
