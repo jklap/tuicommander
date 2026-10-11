@@ -225,9 +225,16 @@ pub(crate) async fn plugin_http_fetch_impl(
     // caller-supplied parameter — otherwise a scoped plugin could widen its own
     // allowlist and bypass the SSRF guard.
     let manifest = crate::plugins::read_single_manifest(&plugin_id)?;
-    let _ = account;
-    let auth: Option<account::AccountAuth> = None;
-    validate_url(&url, &manifest.allowed_urls)?;
+    // An account request is bound by the account host rule instead: the user
+    // chose that site when they created the account (a LAN Jira DC included).
+    let auth = match account.as_deref() {
+        Some(id) => Some(account::resolve(state, &manifest, id).await?),
+        None => None,
+    };
+    match &auth {
+        Some(auth) => auth.check_url(&url)?,
+        None => validate_url(&url, &manifest.allowed_urls)?,
+    }
 
     let method_str = method.as_deref().unwrap_or("GET");
     let http_method: reqwest::Method = method_str

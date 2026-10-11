@@ -88,7 +88,7 @@ pub(super) fn is_under(url: &url::Url, base: &url::Url) -> bool {
 
 impl AccountAuth {
     /// The account host rule: the credential goes only under the account API base.
-    pub(super) fn check_url(&self, url: &str) -> Result<url::Url, String> {
+    pub(super) fn check_url(&self, url: &str) -> Result<(), String> {
         let parsed = url::Url::parse(url).map_err(|e| format!("Invalid URL: {e}"))?;
         if !is_under(&parsed, &self.base) {
             return Err(format!(
@@ -96,7 +96,7 @@ impl AccountAuth {
                 self.base.as_str()
             ));
         }
-        Ok(parsed)
+        Ok(())
     }
 
     pub(super) fn base(&self) -> url::Url {
