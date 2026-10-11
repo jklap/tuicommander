@@ -26,6 +26,11 @@ export function recipient(draft, agents, preferredSessionId) {
   return {selectedSessionId: agents[0]?.sessionId ?? '', selectionInitialized: agents.length > 0, agentNotice: ''};
 }
 
+// Dev servers belong to the agent that Send will reach, never to the launching session.
+export function serverSession(draft, agents, preferredSessionId) {
+  return recipient(draft, agents, preferredSessionId).selectedSessionId;
+}
+
 // Persist this batch before requesting delivery; retry the exact batch after a lost reply.
 export function prepareSend(draft, key) {
   if (draft.pendingSend?.sessionId === draft.selectedSessionId) return draft;

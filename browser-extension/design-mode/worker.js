@@ -1,14 +1,15 @@
-import {addPick, editPick, deletePick, draftForTab, recipient, deliverDraft} from './cards.js';
+import {addPick, editPick, deletePick, draftForTab, recipient, deliverDraft, serverSession} from './cards.js';
 import {reviewAgents} from './reviewAgents.js';
 import {connectNative, nativeRequest} from './native.js';
 let connection = 'Connecting…';
 let bound;
 let agents = [];
-let servers = {servers:[],canStart:false};
+const noServers = {servers:[],canStart:false};
+const serversBySession = new Map();
 let lastRefresh = 0;
 let lastMode;
 let armed;
-async function refreshConnection() {
+async function refreshConnection(tabId) {
   if (Date.now() - lastRefresh < 5000) return;
   lastRefresh = Date.now();
   try {
@@ -25,8 +26,9 @@ async function refreshConnection() {
       // TUIC is the authority on which session started Design Mode; binding.json is only the install-time copy.
       armed=mode?.status==='armed'?mode.sessionId:undefined;
     } catch(error) { connection=`${connection} · Status unavailable: ${error.message}`; }
-    try { servers=await request('list_dev_servers'); }
-    catch(error) { servers={servers:[],canStart:false,scanNotice:error.message}; }
+    const sessionId = await selectedSession(tabId);
+    try { serversBySession.set(sessionId, await request('list_dev_servers',{sessionId})); }
+    catch(error) { serversBySession.set(sessionId, {...noServers,scanNotice:error.message}); }
   } catch (error) { agents = []; connection = error.message; }
 }
 let serial = Promise.resolve();
@@ -42,6 +44,9 @@ async function request(action, fields = {}) {
   const config = await binding;
   connectNative((error) => { connection = error; notify(); });
   return nativeRequest({action, repoPath: config.repoPath, version: '2.0.0', ...fields});
+}
+async function selectedSession(tabId) {
+  return serverSession(draftForTab(await drafts(), tabId), agents, armed ?? bound.sessionId);
 }
 async function drafts() { return (await chrome.storage.local.get('drafts')).drafts ?? {}; }
 async function mutate(tabId, change) {
@@ -59,7 +64,7 @@ async function snapshot(tabId) {
   const draft = draftForTab(all, tabId);
   const selection = connection.startsWith('Connected') ? recipient(draft, agents, armed ?? bound?.sessionId) : {};
   if (Object.keys(selection).some((key) => draft[key] !== selection[key])) { all[String(tabId)] = {...draft,...selection}; await chrome.storage.local.set({drafts:all}); }
-  return {tabId, ...draft, ...selection, repoPath: bound?.repoPath, connection, agents, servers, armedSessionId: armed ?? bound?.sessionId};
+  return {tabId, ...draft, ...selection, repoPath: bound?.repoPath, connection, agents, servers: serversBySession.get(selection.selectedSessionId ?? '') ?? noServers, armedSessionId: armed ?? bound?.sessionId};
 }
 async function capture(message, sender) {
   if (sender.frameId !== 0) return {captureError: 'Frame screenshot omitted; DOM evidence retained.'};
@@ -100,19 +105,19 @@ async function handle(message, sender) {
   // Content scripts never get a path to sends, host configuration or draft edits.
   if (sender.tab || sender.url !== chrome.runtime.getURL('panel.html')) return;
   const tab = await activeTab();
-  if (message.kind === 'snapshot') { await refreshConnection(); return snapshot(tab.id); }
+  if (message.kind === 'snapshot') { await refreshConnection(tab.id); return snapshot(tab.id); }
   if (message.kind === 'arm') {
     await mutate(tab.id, (draft) => ({...draft, multi: message.multi === true}));
     await chrome.tabs.sendMessage(tab.id, {kind:'arm',multi:message.multi === true});
     return snapshot(tab.id);
   }
   if (message.kind === 'open_server') {
-    const fresh=await request('list_dev_servers');
+    const fresh=await request('list_dev_servers',{sessionId:await selectedSession(tab.id)});
     if(!fresh.servers.some((server)=>server.url===message.url)) throw new Error('That server is no longer available. Refresh the list.');
     await chrome.tabs.update(tab.id,{url:message.url});
   }
-  if (message.kind === 'start_server') { await request('start_dev_server');lastRefresh=0;await refreshConnection(); }
-  if (message.kind === 'refresh') { lastRefresh=0;await refreshConnection(); }
+  if (message.kind === 'start_server') { await request('start_dev_server');lastRefresh=0;await refreshConnection(tab.id); }
+  if (message.kind === 'refresh') { lastRefresh=0;await refreshConnection(tab.id); }
   if (message.kind === 'send') {
     const draft=draftForTab(await drafts(),message.tabId);
     const outcome=await deliverDraft(draft,(batch)=>request('send',batch),
@@ -121,7 +126,7 @@ async function handle(message, sender) {
   }
   if (message.kind === 'stop') await chrome.tabs.sendMessage(tab.id,{kind:'stop'});
   if (message.kind === 'edit') await mutate(message.tabId, (draft) => editPick(draft,message.id,message.comment));
-  if (message.kind === 'select') await mutate(message.tabId, (draft) => ({...draft,selectedSessionId:message.sessionId,selectionInitialized:true,agentNotice:''}));
+  if (message.kind === 'select') { await mutate(message.tabId, (draft) => ({...draft,selectedSessionId:message.sessionId,selectionInitialized:true,agentNotice:''})); lastRefresh=0; await refreshConnection(message.tabId); }
   if (message.kind === 'delete') await mutate(message.tabId, (draft) => deletePick(draft,message.id));
   return snapshot(tab.id);
 }
