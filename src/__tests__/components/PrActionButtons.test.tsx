@@ -62,11 +62,11 @@ describe("PrActionButtons", () => {
 
 	// Catches: "Enable" still shown while auto-merge is already on, or the head not pinned.
 	it("auto-merge button follows the backend state and pins the reviewed head", async () => {
-		stubBackend({ auto_merge_request: null, merge_queue_entry: null, queue_required: false });
+		stubBackend({ autoMergeRequest: null, mergeQueueEntry: null, queueRequired: false });
 		render(() => <PrActionButtons repoPath="/r" pr={pr()} checks={[]} />);
 		const enable = await screen.findByRole("button", { name: "Enable auto-merge" });
 		await waitFor(() => expect(enable).not.toBeDisabled());
-		stubBackend({ auto_merge_request: { enabledAt: "now" }, merge_queue_entry: null, queue_required: false });
+		stubBackend({ autoMergeRequest: { enabledAt: "now" }, mergeQueueEntry: null, queueRequired: false });
 		fireEvent.click(enable);
 		expect(await screen.findByRole("button", { name: "Disable auto-merge" })).toBeInTheDocument();
 		expect(writes()).toEqual([
@@ -79,13 +79,13 @@ describe("PrActionButtons", () => {
 
 	// Catches: queue button on a repo without a queue, or "Add" shown for a PR already queued.
 	it("queue button appears only when the queue is required and toggles by entry", async () => {
-		stubBackend({ queue_required: false });
+		stubBackend({ queueRequired: false });
 		const { unmount } = render(() => <PrActionButtons repoPath="/r" pr={pr()} checks={[]} />);
 		await screen.findByRole("button", { name: "Enable auto-merge" });
 		expect(screen.queryByRole("button", { name: /merge queue/ })).toBeNull();
 		unmount();
 
-		stubBackend({ queue_required: true, merge_queue_entry: null });
+		stubBackend({ queueRequired: true, mergeQueueEntry: null });
 		render(() => <PrActionButtons repoPath="/r" pr={pr()} checks={[]} />);
 		fireEvent.click(await screen.findByRole("button", { name: "Add to merge queue" }));
 		await screen.findByRole("status");
@@ -95,7 +95,7 @@ describe("PrActionButtons", () => {
 	});
 
 	it("a queued PR offers removal through set_pr_merge_queue", async () => {
-		stubBackend({ queue_required: true, merge_queue_entry: { id: "q1" } });
+		stubBackend({ queueRequired: true, mergeQueueEntry: { id: "q1" } });
 		render(() => <PrActionButtons repoPath="/r" pr={pr()} checks={[]} />);
 		fireEvent.click(await screen.findByRole("button", { name: "Remove from merge queue" }));
 		await screen.findByRole("status");
@@ -144,12 +144,50 @@ describe("PrActionButtons", () => {
 
 	// Catches: merge-type actions offered on a draft, and any action on a closed PR.
 	it("hides merge actions on a draft and everything on a merged PR", () => {
-		stubBackend({ queue_required: true });
+		stubBackend({ queueRequired: true });
 		const draft = render(() => <PrActionButtons repoPath="/r" pr={pr({ is_draft: true })} checks={[]} />);
 		expect(screen.queryByRole("button", { name: /auto-merge|merge queue/ })).toBeNull();
 		expect(screen.getByRole("button", { name: "Request changes" })).toBeInTheDocument();
 		draft.unmount();
 		render(() => <PrActionButtons repoPath="/r" pr={pr({ state: "MERGED" })} checks={[failed(5)]} />);
 		expect(screen.queryByRole("button")).toBeNull();
+	});
+});
+
+/** Serialized shape of Rust `PrActionState` (`#[serde(rename_all = "camelCase")]`, github_pr_actions.rs). */
+const wire = (over: Record<string, unknown>) => ({
+	id: "PR_1",
+	headSha: HEAD,
+	baseRefName: "main",
+	state: "OPEN",
+	isDraft: false,
+	autoMergeRequest: null,
+	mergeQueueEntry: null,
+	queueRequired: false,
+	...over,
+});
+
+describe("PrActionButtons against the real backend wire shape", () => {
+	beforeEach(() => {
+		mockInvoke.mockReset();
+	});
+
+	it("shows Disable auto-merge when the backend reports autoMergeRequest — catches: reading snake_case keys the backend never sends", async () => {
+		stubBackend(wire({ autoMergeRequest: { enabledAt: "2026-10-11" } }));
+		render(() => <PrActionButtons repoPath="/repo" pr={pr()} checks={[]} />);
+		expect(await screen.findByText("Disable auto-merge")).toBeTruthy();
+	});
+
+	it("offers the merge queue when the backend reports queueRequired — catches: queue button unreachable", async () => {
+		stubBackend(wire({ queueRequired: true }));
+		render(() => <PrActionButtons repoPath="/repo" pr={pr()} checks={[]} />);
+		await waitFor(() => expect(mockInvoke).toHaveBeenCalledWith("get_pr_action_state", expect.anything()));
+		expect(await screen.findByText("Add to merge queue")).toBeTruthy();
+	});
+
+	it("offers Remove from merge queue when the backend reports mergeQueueEntry — catches: cannot leave a queue", async () => {
+		stubBackend(wire({ mergeQueueEntry: { position: 1 } }));
+		render(() => <PrActionButtons repoPath="/repo" pr={pr()} checks={[]} />);
+		expect(await screen.findByText("Remove from merge queue")).toBeTruthy();
 	});
 });

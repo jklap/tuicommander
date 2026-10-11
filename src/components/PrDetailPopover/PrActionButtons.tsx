@@ -10,9 +10,9 @@ import s from "./PrDetailPopover.module.css";
 
 /** Backend `PrActionState` (github_pr_actions.rs); only the fields the buttons read. */
 interface PrActionState {
-	auto_merge_request?: unknown;
-	merge_queue_entry?: unknown;
-	queue_required?: boolean;
+	autoMergeRequest?: unknown;
+	mergeQueueEntry?: unknown;
+	queueRequired?: boolean;
 }
 
 const RUN_ID = /\/actions\/runs\/(\d+)/;
@@ -52,9 +52,9 @@ export const PrActionButtons: Component<PrActionButtonsProps> = (props) => {
 	const open = () => props.pr.state?.toUpperCase() === "OPEN";
 	const mergeable = () => open() && !props.pr.is_draft;
 	const runIds = () => failedRunIds(props.checks);
-	const autoMergeOn = () => Boolean(actionState()?.auto_merge_request);
-	const queueRequired = () => actionState()?.queue_required === true;
-	const queued = () => Boolean(actionState()?.merge_queue_entry);
+	const autoMergeOn = () => Boolean(actionState()?.autoMergeRequest);
+	const queueRequired = () => actionState()?.queueRequired === true;
+	const queued = () => Boolean(actionState()?.mergeQueueEntry);
 	const mergeMethod = () => effectiveMergeMethod(props.pr, preferredMergeStrategy(props.repoPath));
 
 	async function run(success: string, work: () => Promise<unknown>, after?: () => void) {
