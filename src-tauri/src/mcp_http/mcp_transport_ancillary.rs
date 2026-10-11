@@ -202,12 +202,14 @@ async fn handle_worktree_with_caller(
             if single && branch.is_none() {
                 return serde_json::json!({"error":"Action 'branch_integration' requires 'branch' parameter"});
             }
+            let proof_state = Arc::clone(state);
             match tokio::task::spawn_blocking(move || {
                 let repo = std::path::Path::new(&path);
                 if let Some(branch) = branch.filter(|_| single) {
-                    crate::worktree::branch_integration(repo, &branch).map(to_json_or_error)
+                    crate::worktree::branch_integration(&proof_state, repo, &branch)
+                        .map(to_json_or_error)
                 } else {
-                    crate::worktree::branch_integrations(repo).map(to_json_or_error)
+                    crate::worktree::branch_integrations(&proof_state, repo).map(to_json_or_error)
                 }
             })
             .await
@@ -238,8 +240,10 @@ async fn handle_worktree_with_caller(
             let mut lifecycle_handles = Vec::with_capacity(wts.len());
             for workspace_id in wts.keys().cloned().collect::<Vec<_>>() {
                 let base_repo = path.clone();
+                let proof_state = Arc::clone(state);
                 lifecycle_handles.push(tokio::task::spawn_blocking(move || {
                     let lifecycle = crate::worktree::inspect_workspace_lifecycle(
+                        &proof_state,
                         std::path::Path::new(&base_repo),
                         &workspace_id,
                     );
@@ -413,6 +417,7 @@ async fn handle_worktree_with_caller(
                 .warnings;
                 let archive = crate::worktree::resolve_archive_script(&path_for_remove);
                 let outcome = crate::worktree::remove_worktree_by_workspace_id_with_confirmation(
+                    &preview_state,
                     &path_for_remove,
                     &workspace_id_for_remove,
                     delete_branch,
@@ -481,8 +486,9 @@ async fn handle_worktree_with_caller(
             let Some(branch) = args["branch"].as_str().map(str::to_owned) else {
                 return serde_json::json!({"error":"Action 'branch_delete' requires 'branch' parameter"});
             };
+            let proof_state = Arc::clone(state);
             match tokio::task::spawn_blocking(move || {
-                crate::worktree::delete_integrated_local_branch(&path, &branch)
+                crate::worktree::delete_integrated_local_branch(&proof_state, &path, &branch)
             })
             .await
             {
