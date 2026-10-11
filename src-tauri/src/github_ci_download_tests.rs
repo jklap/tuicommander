@@ -68,9 +68,72 @@ async fn text_download_error_keeps_status_and_sanitized_bounded_tail() {
     let error = download_text_tail(&state, &account, request, 32)
         .await
         .unwrap_err();
-    assert!(error.starts_with("GitHub API failed (404 Not Found): "));
+    assert!(error.starts_with("GitHub API error (404 Not Found): "));
     assert!(error.ends_with("gone"));
     assert!(!error.contains('\x1b'));
     assert!(error.len() < 80);
     response.assert_async().await;
+}
+
+async fn rest_json_error(status: usize, headers: &[(&str, &str)], body: &str) -> String {
+    let mut server = Server::new_async().await;
+    let mut mock = server.mock("GET", "/x").with_status(status).with_body(body);
+    for (name, value) in headers {
+        mock = mock.with_header(*name, value);
+    }
+    let mock = mock.create_async().await;
+    let state = crate::state::tests_support::make_test_app_state();
+    let account = GitHubAccount::ghe_pat(GitHubHost::new("ghe.acme.com").unwrap(), None);
+    let request = state.http_client.get(format!("{}/x", server.url()));
+    let error = rest_json(&state, &account, request).await.unwrap_err();
+    mock.assert_async().await;
+    error
+}
+
+// Catches: REST paths keep their own "GitHub API failed" wording, so the same
+// 401/403/404 reads differently from the GraphQL layer's "GitHub API error".
+#[tokio::test]
+async fn rest_errors_use_the_graphql_layer_wording() {
+    for (status, body, expected) in [
+        (
+            401,
+            r#"{"message":"Bad credentials"}"#,
+            "GitHub API error (401 Unauthorized): Bad credentials",
+        ),
+        (
+            403,
+            r#"{"message":"Resource not accessible by integration"}"#,
+            "GitHub API error (403 Forbidden): Resource not accessible by integration",
+        ),
+        (
+            404,
+            r#"{"message":"Not Found"}"#,
+            "GitHub API error (404 Not Found): Not Found",
+        ),
+        (
+            502,
+            "<html>\n Bad gateway\n</html>",
+            "GitHub API error (502 Bad Gateway): <html> Bad gateway </html>",
+        ),
+    ] {
+        assert_eq!(rest_json_error(status, &[], body).await, expected);
+    }
+}
+
+// Catches: a rate limit surfacing as an ordinary failure instead of the shared
+// "rate-limit:" classification the UI and breaker key on.
+#[tokio::test]
+async fn rest_rate_limits_keep_the_shared_rate_limit_classification() {
+    let limited = rest_json_error(429, &[("retry-after", "30")], "{}").await;
+    assert!(limited.starts_with("rate-limit:"), "{limited}");
+    let exhausted = rest_json_error(
+        403,
+        &[
+            ("x-ratelimit-remaining", "0"),
+            ("x-ratelimit-reset", "99999999999"),
+        ],
+        r#"{"message":"API rate limit exceeded"}"#,
+    )
+    .await;
+    assert!(exhausted.starts_with("rate-limit:"), "{exhausted}");
 }
