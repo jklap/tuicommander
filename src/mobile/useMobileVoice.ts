@@ -19,7 +19,7 @@ export function useMobileVoice(sessionId: Accessor<string>, enabled: Accessor<bo
 	const [store, setStore] = createSignal<DictationStore | null>(null);
 	const [available, setAvailable] = createSignal(false);
 	let module: DictationModule | null = null;
-	let arming = false;
+	const [arming, setArming] = createSignal(false);
 	let disposed = false;
 
 	createEffect(() => {
@@ -57,14 +57,14 @@ export function useMobileVoice(sessionId: Accessor<string>, enabled: Accessor<bo
 			return;
 		}
 		// A second tap while the mic prompt is open must not open a second conversation.
-		if (arming) return;
-		arming = true;
+		if (arming() || !enabled()) return;
+		setArming(true);
 		let ok: boolean;
 		try {
 			// No `await` before this call: see the note on the hook.
 			ok = await current.armHandsFree(sessionId());
 		} finally {
-			arming = false;
+			setArming(false);
 		}
 		// The screen was left while the permission prompt was open.
 		if (ok && disposed) {
@@ -88,6 +88,7 @@ export function useMobileVoice(sessionId: Accessor<string>, enabled: Accessor<bo
 		available,
 		armed,
 		phase,
+		recording: () => arming() || !!store()?.state.handsFree?.armed,
 		toggle,
 		spokenReplies: () => store()?.state.spokenReplies ?? true,
 		setSpokenReplies: (value: boolean) => store()?.setSpokenReplies(value),

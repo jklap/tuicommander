@@ -540,6 +540,33 @@ fn register_peer_identity(
     }
 }
 
+/// Recover a missing spawn-time binding from the process that actually owns it.
+/// A UUID header alone cannot identify a terminal, and cwd/name matches are not
+/// unique. Duplicate process identities are ambiguous, so leave them unbound.
+fn pty_with_process_identity(state: &AppState, identity: &str) -> Option<String> {
+    let sessions: Vec<String> = state
+        .session_maps
+        .sessions
+        .iter()
+        .map(|entry| entry.key().clone())
+        .collect();
+    let mut matched = None;
+    for session_id in sessions {
+        let Some(pid) = crate::pty::session_leaf_pid(state, &session_id) else {
+            continue;
+        };
+        if crate::process_env::read_process_env_var(pid, "TUIC_SESSION").as_deref()
+            == Some(identity)
+        {
+            if matched.is_some() {
+                return None;
+            }
+            matched = Some(session_id);
+        }
+    }
+    matched
+}
+
 /// Auto-bind an MCP session to the `x-tuic-session` identity asserted by the
 /// bridge. PTY agents inherit it from the terminal; ACP ego receives it from
 /// the host's durable conversation binding.
@@ -560,12 +587,22 @@ pub(super) fn apply_initialize_identity(
     if !is_valid_uuid(asserted) {
         return false;
     }
+    // MCP reconnect used to restore only peer routing. A live restored PTY
+    // whose spawn-time association was lost then stayed terminal-less forever,
+    // even though every bridge request asserted its real inherited identity.
+    let recovered_pty =
+        if state.live_pty_for_peer(asserted).is_none() && state.acp.peer_root(asserted).is_none() {
+            pty_with_process_identity(state, asserted)
+        } else {
+            None
+        };
     // Steady state for a connected bridge: it already routes to the identity and
     // already owns it, so both branches below would rewrite the values that are
     // there. Every bridge asserts this header on a `ping` every 3s, so without
     // this the liveness poll serialises N terminals on a process-global mutex to
     // do nothing. Any disagreement between the maps still takes the lock.
-    if mcp_session_routes_to(state, mcp_sid, asserted)
+    if recovered_pty.is_none()
+        && mcp_session_routes_to(state, mcp_sid, asserted)
         && state
             .peer_agents
             .get(asserted)
@@ -583,6 +620,12 @@ pub(super) fn apply_initialize_identity(
         return true;
     }
     let _bind_guard = PEER_IDENTITY_BIND_LOCK.lock();
+    if let Some(session_id) = recovered_pty
+        && state.live_pty_for_peer(asserted).is_none()
+        && state.session_maps.sessions.contains_key(&session_id)
+    {
+        state.bind_live_pty(asserted, &session_id);
+    }
     let canonical = state.peer_identity_for_live_pty(asserted);
     let tuic = canonical.as_deref().unwrap_or(asserted);
     retire_stale_identity_sessions_locked(state, tuic, mcp_sid);

@@ -593,6 +593,14 @@ second initialize response to the client.
 
 On reconnect, a peer may reclaim its stable TUIC identity after the prior MCP protocol session has no live SSE subscriber and has missed the bridge activity grace period. The takeover retires the old forward and reverse routing entries atomically.
 
+When the asserted identity has no live PTY binding, the first MCP request also
+checks the foreground processes of local terminals. Exactly one process whose
+actual `TUIC_SESSION` matches the header restores that terminal association.
+This repairs a missing restore-time binding even when the MCP route already
+exists, so session lists publish the parent's identity and mobile can nest its
+children. Existing live bindings stay intact; unrelated or ambiguous matches
+remain terminal-less. ACP conversation identities do not acquire a terminal.
+
 On normal stdio EOF, the bridge sends `DELETE /mcp` after its in-flight requests settle, releasing that protocol session immediately. Each fresh initialize for an existing `x-tuic-session` identity also retires protocol metadata, routes, and message channels of stale sibling sessions left by abrupt exits. Subscribed and recently active siblings remain intact. Sessions without a stable identity still use the hourly maintenance sweep after an abrupt exit.
 
 After a failed upstream initialize, the bridge waits before trying again. The pause starts at one second, doubles up to eight seconds on consecutive failures, and resets after a successful connection. Request-triggered, downstream initialize, and background retries share this limit within one bridge process.
@@ -2123,22 +2131,25 @@ serialization regressions cover these shared contracts.
 
 ### MCP Tool: `automations`
 
-The native `automations` tool supports `list`, `get`, `create`, `update`, `pause`,
-`resume`, and `delete`. Pass `action` at the top level. `get`, `update`, `pause`,
-`resume`, and `delete` require `id`; `create` and `update` require a complete
-`definition` with the stored snake_case fields. `list` returns an array, `get`
-returns one definition, and mutations return `{ "ok": true }`. Errors use
-`{ "error": "..." }` with the shared DefinitionStore validation text.
+The native `automations` tool accepts the same top-level action object as
+`automation_action` IPC and the `input` in `POST /automations/action`.
+Actions include `list`, `get`, `create`, `update`, `pause`, `resume`, `delete`,
+`run_now`, `run`, `list_runs`, `summary`, `preview`, `preview_definition` and `preset`.
+See the HTTP API Automations table for fields and results. List returns rows
+with `definition`, `next_run_ms` and `last_status`; create/update return the saved
+definition. Update accepts a full definition (optional id), or id and enabled.
+Errors use `{ "error": "..." }` with the identical backend validation text.
 
 Creation requires a bound agent session. The host sets `created_by_session`;
 input cannot impersonate a creator, and updates preserve the original creator.
-Pause/resume edit only `enabled` under the store lock. Deleting a definition does
-not touch the separate run ledger. Existing definitions without provenance remain
-readable. These actions manage definitions; they do not launch runs.
+Pause/resume edit only `enabled` under the store lock. Deleting a definition
+retains run history. `run_now` uses the same runtime owner and refusal rules as
+HTTP/IPC. All adapters call `automations::api`; MCP does not parse a second
+action enum or implement scheduler logic. The MCP endpoint is `POST /mcp`.
 
-The shared entry point is `automations::actions::execute(store, action,
-creator_session)`, using `DefinitionAction`. Plan Step 8 owns HTTP/IPC/CLI wiring
-and the Route Parity Gate. The MCP endpoint is `POST /mcp`.
+`tuic automations '<action JSON>'` (or `tuic automations -` for stdin) forwards
+unchanged arguments over HTTP-over-IPC MCP into this same API. CLI failures
+print the backend message on stderr and exit nonzero; successes print JSON.
 
 ### Automation HTTP/IPC adapter
 
@@ -2147,9 +2158,9 @@ The shared desktop/headless router exposes `POST /automations/action` with
 implementation; stores, schedule rules, aggregates and execution ownership stay
 in Rust. `COMMAND_TABLE.automation_action` maps the same input without renaming
 fields. Route snapshots and registered-route PATCH probes cover this route.
-The existing MCP `automations` tool retains its definition-only contract and
-shares `DefinitionStore` actions with the API; this change does not add MCP run
-controls. HTTP application error messages match IPC rejections.
+MCP and CLI use this same action parser, runtime owner and result contract.
+HTTP application error messages match IPC rejections and MCP/CLI errors;
+MCP additionally requires a bound creator identity for creation.
 
 Automation precheck context (#1631-45bf): definitions can opt in with
 `precheck.inject_output: true` (default false). Proceeding checks prefix the

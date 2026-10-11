@@ -1,8 +1,26 @@
 # PTY Management
 
+Stable `TUIC_SESSION` identities are attached at spawn. If the live association
+is missing when a bridge reconnects, MCP identity attachment repairs it from
+one uniquely matching foreground process environment. Session-list consumers
+use the repaired association for parent-child routing; they do not infer it
+from terminal names or working directories.
+
 **Module:** `src-tauri/src/pty.rs`
 
 Manages pseudo-terminal sessions for all terminal tabs in the application.
+
+## Identity loss during replacement
+
+A restored tab reuses its saved `tuicSession`. If reconnect falls back to a
+fresh PTY while the original remains alive, `bind_pty_identity` assigns that
+identity to the replacement. Closing the replacement removes the sole binding;
+the original process still carries `TUIC_SESSION`, but its session row has none.
+The next MCP attachment repairs this association from the surviving process.
+`replacement_pty_cleanup_reconnect_restores_surviving_parent_identity` reproduces
+this lifecycle through spawn binding, cleanup, reconnect and session publication.
+It fails on the pre-repair revision `1137eeb6f`. This proves a reachable removal
+path, not that this sequence caused the historical incident in story 1673.
 
 ## Session Lifecycle
 
@@ -374,7 +392,7 @@ impl OutputRingBuffer {
 
 ### VtLogBuffer
 
-**Module:** `src-tauri/src/state.rs`
+**Module:** `src-tauri/crates/tuic-terminal/src/vt_log.rs`
 
 VT100-aware extractor that captures clean log lines from PTY output. Designed for mobile/browser clients that need readable text without ANSI noise or TUI screen garbage.
 
@@ -409,7 +427,7 @@ struct ChangedRow {
 
 1. Owns the session's `TerminalGrid`, backed by Alacritty (24 rows × 220 cols default); the same grid supplies rendered frames, scrollback, copy and search
 2. On each `process()` call, compares current screen rows against previous snapshot
-3. Newly scrolled primary-history rows are extracted into the separate `LogLine` log
+3. Newly scrolled primary-history rows are extracted into the separate `LogLine` log. The extraction cursor uses the primary grid origin (`total_scrolled`), including evicted rows; bounded history length stops at 10,000 and would otherwise freeze this log while the live screen keeps changing
 4. **Separate alternate-screen contracts:** changed rows are still returned while a TUI app owns the alternate screen, so status/intent/question parsers keep working. Durable log extraction reads only primary-screen history, so fullscreen repaint noise never reaches mobile/MCP logs
 5. The grid retains 10,000 history rows per screen; the separate log is bounded by `VT_LOG_BUFFER_CAPACITY` (10,000 lines). Oldest entries are dropped when each buffer is full. The grid history cannot be reduced as an independent log scratch buffer
 6. **Monotonic cursor:** `total_lines()` returns a monotonically increasing count of all lines ever pushed (not the current buffer length). Clients use this as a stable cursor for paginated reads via `lines_since_owned(offset, limit)`. If a client's saved offset falls in the evicted range, it is clamped to `oldest_offset()`
