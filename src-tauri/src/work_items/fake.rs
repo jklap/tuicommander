@@ -70,6 +70,9 @@ impl InMemoryWorkItemProvider {
                     "create requires no item and a title".into(),
                 ));
             }
+            if !self.item_types().contains(&create.item_type) {
+                return Err(WorkItemError::Action("unknown item type".into()));
+            }
             super::validation::validate_fields(&self.fields, &create.fields)?;
             let id = self.next_id.to_string();
             let mut detail = WorkItemDetail {

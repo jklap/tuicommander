@@ -698,6 +698,11 @@ are rejected. The async port lives in `src/plugins/workItemProvider.ts`. It expo
 list/detail/comments/act, dynamic createFields, grouped pages and board projections
 with per-card moves (columnId and action); core renders those projections without guessing legality.
 
+`createFields()` without a type returns one enum field with id `itemType` whose options are
+the creatable item types (a single-type provider returns one option). `createFields(type)`
+returns the create schema of that type, without title or body fields: `WorkItemCreate`
+carries those. An unknown type is an error, and `create` rejects an undeclared `itemType`.
+
 Core owns the Solid Tasks views; provider plugins supply data, schemas and actions,
 never view HTML. A4 defines DTOs only: registration, transport and visible views
 are delivered by the following integration steps.
@@ -752,6 +757,7 @@ core executes the existing worktree/agent workflow and owns errors/rollback.
 
 `work_items::demo::demo_provider()` supplies deterministic local-only data with
 list, detail, comments, schemas, saved filters, board columns and mutations.
+Its item types are the types of its seed items.
 It touches no network, credentials, filesystem or subprocesses. It is a development
 provider, not a fixture proving GitHub/Jira/GitLab API compatibility. Its search is
 literal text; sort supports key/title/updatedAt. Its cursor expires on mutation.

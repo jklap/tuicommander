@@ -266,3 +266,44 @@ fn field_wire_contract_rejects_unknown_shapes_and_preserves_all_kinds() {
         .is_err()
     );
 }
+
+// Catches: the fake ignores the item type, so a create form built on it never meets the itemType contract.
+#[test]
+fn create_fields_lists_item_types_and_rejects_unknown_types() {
+    let mut provider = demo_provider();
+    let picker = provider.create_fields(None).unwrap();
+    assert_eq!(picker.len(), 1);
+    assert_eq!(picker[0].id, "itemType");
+    assert_eq!(picker[0].kind, WorkItemFieldKind::Enum);
+    assert_eq!(
+        picker[0]
+            .options
+            .iter()
+            .map(|o| o.id.as_str())
+            .collect::<Vec<_>>(),
+        ["issue"]
+    );
+    assert_eq!(
+        provider.create_fields(Some("issue")).unwrap(),
+        provider.fields
+    );
+    assert!(provider.create_fields(Some("epic")).is_err());
+    let mut fields = std::collections::BTreeMap::new();
+    fields.insert(
+        "priority".to_string(),
+        Some(WorkItemFieldValue::Enum("low".into())),
+    );
+    let create = |item_type: &str| {
+        WorkItemAction::Create(WorkItemCreate {
+            title: "Typed".into(),
+            body: String::new(),
+            item_type: item_type.into(),
+            fields: fields.clone(),
+        })
+    };
+    assert_eq!(
+        provider.act(None, create("epic")).unwrap_err(),
+        WorkItemError::Action("unknown item type".into())
+    );
+    assert!(provider.act(None, create("issue")).is_ok());
+}

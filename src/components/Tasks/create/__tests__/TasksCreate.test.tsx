@@ -21,7 +21,7 @@ const schemas: Record<string, WorkItemFieldSchema[]> = {
 	task: [priority, { id: "component", name: "Component", kind: "text", required: true, editable: true, options: [] }],
 };
 
-/** The A4 fake with per-type create schemas; `act` records the create request instead of applying it. */
+/** The A4 fake has one schema for every type; two types with different required fields need a wrapper. */
 function typedProvider(overrides: Partial<WorkItemProvider> = {}) {
 	const fake = createInMemoryWorkItemProvider();
 	const created: WorkItemAction[] = [];
@@ -164,13 +164,8 @@ describe("TasksCreate", () => {
 	// Catches: the created item is not handed to the host, so it never opens; checked end to end on the A4 fake.
 	it("created_item_opens_from_the_fake_provider", async () => {
 		const fake = createInMemoryWorkItemProvider();
-		const provider: WorkItemProvider = {
-			...fake,
-			createFields: async (itemType, signal) =>
-				itemType ? fake.createFields(itemType, signal) : [enumField("itemType", "Type", true, ["issue"])],
-		};
 		const onCreated = vi.fn<(detail: WorkItemDetail) => void>();
-		render(() => <TasksCreate provider={provider} onCreated={onCreated} />);
+		render(() => <TasksCreate provider={fake} onCreated={onCreated} />);
 		await screen.findByLabelText("Priority *");
 		expect((screen.getByLabelText("Type *") as HTMLSelectElement).value).toBe("issue");
 		type("Title *", "Created from the form");
@@ -185,7 +180,9 @@ describe("TasksCreate", () => {
 
 	// Catches: a provider without the itemType picker leaves a silent empty form instead of an error.
 	it("provider_without_item_types_reports_it", async () => {
-		render(() => <TasksCreate provider={createInMemoryWorkItemProvider()} onCreated={() => {}} />);
+		const fake = createInMemoryWorkItemProvider();
+		const provider: WorkItemProvider = { ...fake, createFields: async () => structuredClone([...fake.fields]) };
+		render(() => <TasksCreate provider={provider} onCreated={() => {}} />);
 		expect((await screen.findByRole("alert")).textContent).toContain("declares no item types");
 		expect(createButton()).toBeDisabled();
 	});

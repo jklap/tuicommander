@@ -1,5 +1,5 @@
 import { For, Show } from "solid-js";
-import { SettingField } from "../../SettingsPanel/SettingFields";
+import { SettingField } from "../../SettingsPanel/fields/SettingField";
 import { TaskCreateField } from "./TaskCreateField";
 import styles from "./TasksCreate.module.css";
 import { type TasksCreateOptions, useTasksCreate } from "./useTasksCreate";

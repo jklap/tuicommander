@@ -1,6 +1,7 @@
 import { For, Match, Switch } from "solid-js";
 import type { WorkItemFieldSchema } from "../../../types/work-items.gen";
-import { SettingField, SettingMultiSelect } from "../../SettingsPanel/SettingFields";
+import { SettingField } from "../../SettingsPanel/fields/SettingField";
+import { SettingMultiSelect } from "../../SettingsPanel/SettingFields";
 import type { DraftValue } from "./createDraft";
 
 const inputType = (kind: WorkItemFieldSchema["kind"]) =>

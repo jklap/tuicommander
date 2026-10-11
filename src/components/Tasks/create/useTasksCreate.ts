@@ -90,13 +90,13 @@ export function useTasksCreate(props: TasksCreateOptions) {
 		if (!title().trim()) return "Title";
 		if (!itemType() || loaded().type !== itemType()) return "Type";
 		const result = collected();
-		return "blocker" in result ? result.blocker : null;
+		return result.ok ? null : result.blocker;
 	};
 	const canSubmit = () => !loading() && !submitting() && blocker() === null;
 
 	async function submit() {
 		const result = collected();
-		if (!canSubmit() || !("fields" in result)) return;
+		if (!canSubmit() || !result.ok) return;
 		setSubmitting(true);
 		setError(null);
 		try {

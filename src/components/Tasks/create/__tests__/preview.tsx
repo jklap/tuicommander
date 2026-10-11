@@ -19,30 +19,20 @@ const due: WorkItemFieldSchema = {
 	editable: true,
 	options: [],
 };
-const types: WorkItemFieldSchema = {
-	id: "itemType",
-	name: "Type",
-	kind: "enum",
-	required: true,
-	editable: true,
-	options: [
-		{ id: "issue", name: "Issue" },
-		{ id: "incident", name: "Incident" },
-	],
-};
-// The A4 fake has one schema for every type; the fixture adds a required date to incidents and
-// strips it before the fake validates the create, which rejects fields it does not declare.
+// The A4 fake has one type and one schema; the fixture adds an Incident type with a required date
+// and creates it as an issue without that date, because the fake rejects fields it does not declare.
 const provider: WorkItemProvider = {
 	...fake,
 	createFields: async (itemType, signal) => {
-		if (!itemType) return [types];
+		if (itemType === "incident") return [...(await fake.createFields("issue", signal)), due];
 		const fields = await fake.createFields(itemType, signal);
-		return itemType === "incident" ? [...fields, due] : fields;
+		if (itemType) return fields;
+		return fields.map((picker) => ({ ...picker, options: [...picker.options, { id: "incident", name: "Incident" }] }));
 	},
 	act: (reference, action, signal) => {
-		if (action.kind !== "create") return fake.act(reference, action, signal);
+		if (action.kind !== "create" || action.value.itemType !== "incident") return fake.act(reference, action, signal);
 		const { due: _due, ...fields } = action.value.fields;
-		return fake.act(reference, { kind: "create", value: { ...action.value, fields } }, signal);
+		return fake.act(reference, { kind: "create", value: { ...action.value, itemType: "issue", fields } }, signal);
 	},
 };
 

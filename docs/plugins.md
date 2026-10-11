@@ -1939,7 +1939,8 @@ optional `onCancel`. Providers supply types and schemas; they do not render the 
 
 `createFields()` without a type must return an enum field with id `itemType` that
 lists the creatable types; a single type is preselected. `createFields(type)`
-returns the fields of that type. Title and Description are fixed inputs, so a
+returns the fields of that type (an unknown type is an error, and `create`
+rejects an undeclared `itemType`). Title and Description are fixed inputs, so a
 schema does not repeat them. Only editable fields render.
 
 A type change reloads the schema; values survive only for the same field id and

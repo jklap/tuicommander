@@ -3,7 +3,7 @@
 set -euo pipefail
 pnpm install --offline --frozen-lockfile
 pnpm exec tsc --noEmit
-scripts/with-test-tmp.sh pnpm vitest run src/components/Tasks/create/__tests__
+scripts/with-test-tmp.sh pnpm vitest run src/components/Tasks/create/__tests__ src/__tests__/work-item-provider.test.ts src/__tests__/work-item-critic.test.ts
 export PLAYWRIGHT_BROWSERS_PATH=/home/rb/Gits/.tmp/pw/browsers
 /home/rb/Gits/.tmp/pw/node_modules/.bin/playwright-core install webkit
 mkdir -p reports/visual
@@ -16,4 +16,4 @@ for (( attempt = 0; attempt < 120; attempt++ )); do
 	sleep 0.5
 done
 node src/components/Tasks/create/__tests__/visual.mjs
-scripts/with-test-tmp.sh bash -c 'cd src-tauri && cargo nextest run --lib -E "test(plugin_docs)"'
+scripts/with-test-tmp.sh bash -c 'cd src-tauri && cargo nextest run --lib -E "test(plugin_docs) | test(work_items::)"'

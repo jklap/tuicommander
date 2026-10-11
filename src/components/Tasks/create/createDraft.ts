@@ -54,12 +54,16 @@ export function toFieldValue(
 }
 
 /** Field values for `WorkItemCreate`, or the name of the first field that blocks submission. */
-export function collectFields(schema: readonly WorkItemFieldSchema[], draft: Draft) {
+export type Collected =
+	| { ok: true; fields: Record<string, WorkItemFieldValue | null> }
+	| { ok: false; blocker: string };
+
+export function collectFields(schema: readonly WorkItemFieldSchema[], draft: Draft): Collected {
 	const fields: Record<string, WorkItemFieldValue | null> = {};
 	for (const field of schema) {
 		const value = toFieldValue(field, draft[field.id]);
-		if (value === undefined || (value === null && field.required)) return { blocker: field.name } as const;
+		if (value === undefined || (value === null && field.required)) return { ok: false, blocker: field.name };
 		fields[field.id] = value;
 	}
-	return { fields } as const;
+	return { ok: true, fields };
 }
