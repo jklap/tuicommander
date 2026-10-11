@@ -1,12 +1,12 @@
 .tabs {
   display: flex;
   align-items: stretch;
-  height: 56px;
+  height: calc(56px + var(--safe-bottom, env(safe-area-inset-bottom, 0px)));
   background: rgba(37, 37, 38, 0.85);
   border-top: 1px solid var(--border);
   flex-shrink: 0;
   will-change: transform;
-  padding-bottom: 0;
+  padding-bottom: var(--safe-bottom, env(safe-area-inset-bottom, 0px));
 }
 
 .tab {

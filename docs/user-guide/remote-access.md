@@ -134,6 +134,10 @@ for one session can replace its earlier one; tapping either remaining session
 notification opens that session.
 
 ### Mobile Features
+Tap the attachment icon to the left of the session input to choose a photo or file. The
+file name appears while uploading, then its path is added to the draft. Queue
+is unavailable until the upload finishes. Smaller mic and Send controls sit inside the input border on the right.
+
 Hold Send with a finger or mouse, then select **Queue** to hold your current agent prompt until its next ready window. A normal tap still sends immediately. Queue clears the input after acceptance and shows a notice. If the result is uncertain, check the agent session before trying again.
 
 

@@ -333,6 +333,41 @@ describe("mobile prose reflow", () => {
 		expect(reflowDisplayLines(lines).map(lineText)).toEqual(lines.map(lineText));
 	});
 
+	describe("Claude tool bullet blink (1747-ea9e)", () => {
+		// Claude repaints the leading ⏺ as a space while it pulses; the rows below
+		// are byte-identical in both frames.
+		const body = "Bash(cd ~/Gits/personal/orchestrator && B=~/Gits/.tmp/brief.md; printf x; the worktree is…)";
+		const frame = (lead: string): LogLine[] => [
+			row(`${lead} ${body}`, 120),
+			row("  ⎿  Running… (1m 21s · timeout 5m)", 120),
+			row("     (ctrl+b to run in background)", 120),
+		];
+
+		it("keeps the same rows whether the bullet is shown or blank", () => {
+			const on = reflowDisplayLines(frame("⏺")).map(lineText);
+			const off = reflowDisplayLines(frame(" ")).map(lineText);
+			expect(off).toHaveLength(on.length);
+			expect(off.map((t) => t.replace(/^[⏺ ]/, ""))).toEqual(on.map((t) => t.replace(/^[⏺ ]/, "")));
+		});
+
+		it("never folds a ⎿ result row into the tool row above", () => {
+			for (const lead of ["⏺", " "]) {
+				expect(reflowDisplayLines(frame(lead)).map(lineText)).toEqual(frame(lead).map(lineText));
+			}
+		});
+
+		it("joins a wrapped continuation of a bulleted row identically in both frames", () => {
+			const wrapped = (lead: string): LogLine[] => [
+				row(`${lead} Il mio giudizio ragionato richiede ancora una misura prima di`, 120),
+				row("  trasformarlo in un dato.", 120),
+			];
+			const on = reflowDisplayLines(wrapped("⏺")).map(lineText);
+			const off = reflowDisplayLines(wrapped(" ")).map(lineText);
+			expect(on).toHaveLength(1);
+			expect(off).toHaveLength(1);
+		});
+	});
+
 	it("reuses an unchanged joined line and keeps continuation styling", () => {
 		const lines = [
 			row("  Il mio giudizio ragionato richiede ancora una misura prima di"),
