@@ -20,20 +20,31 @@ impl Stub {
 }
 
 impl PrApi for Stub {
-    async fn graphql(&self, _: &str, variables: Value) -> Result<Value, String> {
+    fn graphql(
+        &self,
+        _: &str,
+        variables: Value,
+    ) -> impl std::future::Future<Output = Result<Value, String>> + Send {
         self.cursors
             .lock()
             .unwrap()
             .push(variables["endCursor"].clone());
-        self.pages
-            .lock()
-            .unwrap()
-            .pop_front()
-            .expect("bounded requests")
+        std::future::ready(
+            self.pages
+                .lock()
+                .unwrap()
+                .pop_front()
+                .expect("bounded requests"),
+        )
     }
 
-    async fn rest(&self, _: &str, _: &str, _: Value) -> Result<Value, String> {
-        panic!("merged PR proof must use GraphQL")
+    fn rest(
+        &self,
+        _: &str,
+        _: &str,
+        _: Value,
+    ) -> impl std::future::Future<Output = Result<Value, String>> + Send {
+        std::future::ready(Err("merged PR proof must use GraphQL".to_string()))
     }
 }
 
