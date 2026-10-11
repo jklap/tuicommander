@@ -8,7 +8,7 @@ use super::{
     scheduler,
     store::RunStore,
 };
-use std::{future::Future, path::Path};
+use std::{future::Future, path::Path, sync::Arc};
 
 pub(crate) mod native;
 
@@ -55,7 +55,10 @@ pub(crate) struct Dispatcher<E> {
 impl<E: DispatchEffects> Dispatcher<E> {
     /// Shared manual boundary: paused Once definitions may run, but capacity
     /// and overlap refusals are recorded immediately rather than queued.
-    pub async fn run_now(&self, id: &str) -> Result<AutomationRun, String> {
+    pub async fn run_now(self: &Arc<Self>, id: &str) -> Result<AutomationRun, String>
+    where
+        E: 'static,
+    {
         let config = self.definitions.load()?;
         let definition = config
             .definitions
@@ -64,8 +67,17 @@ impl<E: DispatchEffects> Dispatcher<E> {
             .ok_or("Automation not found")?;
         require_once(definition)?;
         let run = scheduler::run_now(&self.runs, &config, id, chrono::Utc::now())?;
-        self.dispatch(&run.id).await?;
-        self.runs.get(&run.id)
+        // Admission and task creation have no intervening yield. The task holds
+        // the writer/owner lock until dispatch settles, even if the caller drops.
+        let dispatcher = self.clone();
+        tokio::spawn(async move {
+            dispatcher.dispatch(&run.id).await.inspect_err(|error| {
+                tracing::warn!(source="automations", %error, run_id=%run.id, "Automation dispatch persistence failed");
+            })?;
+            dispatcher.runs.get(&run.id)
+        })
+        .await
+        .map_err(|error| format!("Automation dispatch task failed: {error}"))?
     }
 
     /// The runtime uses this admission boundary on every 30-second wake.
@@ -73,6 +85,7 @@ impl<E: DispatchEffects> Dispatcher<E> {
         &self,
         now: chrono::DateTime<chrono::Utc>,
     ) -> Result<Vec<AutomationRun>, String> {
+        self.runs.prune(now.timestamp_millis(), None)?;
         let mut config = self.definitions.load()?;
         config.definitions.retain(|d| d.once_local.is_some());
         scheduler::tick(&self.runs, &config, now)

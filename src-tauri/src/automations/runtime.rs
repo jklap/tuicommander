@@ -128,11 +128,11 @@ impl AutomationRuntime {
             .lock()
             .clone()
             .ok_or("Automation executor unavailable: this process is not the owner")?;
-        Dispatcher {
+        Arc::new(Dispatcher {
             definitions: DefinitionStore::new(),
             runs,
             effects: NativeEffects(state.clone()),
-        }
+        })
         .run_now(id)
         .await
     }

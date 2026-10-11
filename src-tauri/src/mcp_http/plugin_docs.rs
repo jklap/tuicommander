@@ -159,7 +159,7 @@ These inventories are checked against the capability validator, the host object 
 `credentials:read`, `exec:cli`, `fs:delete`, `fs:list`, `fs:read`, `fs:rename`, `fs:scan`, `fs:watch`, `fs:write`, `git:read`, `invoke:list_markdown_files`, `invoke:read_file`, `net:http`, `pty:read`, `pty:write`, `ui:context-menu`, `ui:file-icons`, `ui:file-preview`, `ui:markdown`, `ui:panel`, `ui:sidebar`, `ui:sound`, `ui:ticker`.
 
 ### Host method inventory
-`addItem`, `clearTicker`, `deleteBuildArtifact`, `execCli`, `getActiveRepo`, `getActiveRepoPath`, `getActiveTerminalSessionId`, `getClaudeProjectDir`, `getGitBranches`, `getGitDiff`, `getPrNotifications`, `getRecentCommits`, `getRepoPathForSession`, `getRepos`, `getSessionCwd`, `getSettings`, `getTerminalState`, `httpFetch`, `invoke`, `listDirectory`, `log`, `onStateChange`, `openEditorTab`, `openMarkdownFile`, `openMarkdownFileBackground`, `openMarkdownPanel`, `openPanel`, `playNotificationSound`, `readCredential`, `readFile`, `readFileBase64`, `readFileTail`, `readFiles`, `readSessionOutput`, `registerCommand`, `registerContextMenuAction`, `registerDashboard`, `registerFileIconProvider`, `registerFilePreview`, `registerMarkdownProvider`, `registerOutputWatcher`, `registerSection`, `registerSidebarPanel`, `registerStructuredEventHandler`, `registerTerminalAction`, `removeItem`, `renamePath`, `scanBuildArtifacts`, `sendAgentInput`, `setTicker`, `trimBuildArtifact`, `updateItem`, `watchPath`, `writeFile`, `writeFileBase64`, `writePty`.
+`addItem`, `clearTicker`, `deleteBuildArtifact`, `execCli`, `getActiveRepo`, `getActiveRepoPath`, `getActiveTerminalSessionId`, `getClaudeProjectDir`, `getGitBranches`, `getGitDiff`, `getPrNotifications`, `getRecentCommits`, `getRepoPathForSession`, `getRepos`, `getSessionCwd`, `getSettings`, `getTerminalState`, `httpFetch`, `invoke`, `listDirectory`, `log`, `onStateChange`, `openEditorTab`, `openMarkdownFile`, `openMarkdownFileBackground`, `openMarkdownPanel`, `openPanel`, `playNotificationSound`, `readCredential`, `readFile`, `readFileBase64`, `readFileTail`, `readFiles`, `readSessionOutput`, `registerCommand`, `registerContextMenuAction`, `registerDashboard`, `registerFileIconProvider`, `registerFilePreview`, `registerMarkdownProvider`, `registerOutputWatcher`, `registerSection`, `registerSidebarPanel`, `registerStructuredEventHandler`, `registerTerminalAction`, `registerWorkItemProvider`, `removeItem`, `renamePath`, `scanBuildArtifacts`, `sendAgentInput`, `setTicker`, `trimBuildArtifact`, `updateItem`, `watchPath`, `writeFile`, `writeFileBase64`, `writePty`.
 
 ### Base CSS class inventory
 `badge`, `badge-accent`, `badge-error`, `badge-muted`, `badge-p1`, `badge-p2`, `badge-p3`, `badge-success`, `badge-warning`, `btn`, `btn-danger`, `btn-primary`, `card`, `critical`, `danger`, `dash-header`, `dash-meter`, `dash-meter-fill`, `dash-section`, `dash-section-hint`, `dash-section-title`, `dash-stat`, `dash-stat-grid`, `dash-stat-label`, `dash-stat-sub`, `dash-stat-value`, `dash-subtitle`, `dash-title`, `dashboard`, `empty-state`, `error`, `filter-bar`, `hint`, `num`, `ok`, `primary`, `show`, `success`, `toast`, `warn`.
@@ -412,6 +412,28 @@ The Browse row shows registry name, version, description, author, tags and minim
 
 The current PluginManifest has no settings schema, field-kind union or generic Tasks-view declaration. Core does not render schema-driven plugin settings or generic plugin Tasks views. Do not invent manifest fields or import core Settings components. Plugins can open their own UI with `host.openPanel` or `host.openMarkdownPanel`. When a settings schema or Tasks-view API is added, document its fields, kinds and core-rendered controls here and extend the source-derived UX drift check to its real schema/renderer. The manifest field and host method inventories fail on new API entries until the guide is updated.
 
+### Settings field kinds
+
+These are reusable core Solid controls, not manifest fields or plugin imports. The catalogue renderer owns persistence and maps its JSON schema and choices to controls. All controls take `label` and optional `hint` and `disabled`. They never save settings directly.
+
+### Settings control inventory
+`SettingAccount`, `SettingButton`, `SettingList`, `SettingMultiSelect`, `SettingStatus`.
+
+#### SettingAccount
+Takes `provider`, `value` (account ID), and `onInput(id)`. Loads the A1 secret-safe account list through `account_action` with `{request:{action:"list"}}` and displays only labels for the selected provider. `onAdd(provider)` opens the host's native secret-entry flow; it receives no token and resolves after save or cancel, then the control reloads the list. `listAccounts` can supply a host-owned list port. Backend error text is never rendered. No credential is accepted as a control prop.
+
+#### SettingList
+Takes `rows: {id,values:Record<string,string>}[]`, `columns: {id,label,placeholder?}[]`, and `onChange(rows)`. Edits and removal use stable row IDs. Optional `onAdd()` supplies a new row with a unique stable ID and initial values. The caller owns validation, defaults and persistence.
+
+#### SettingMultiSelect
+Takes `value:string[]`, `options:{value,label}[]`, and `onInput(values)`. Checkbox choices support keyboard and touch interaction; changing one choice preserves the other selected values.
+
+#### SettingStatus
+Read-only `value` text with optional `tone:neutral|info|success|warning|danger`. The text communicates the state as well as its colour.
+
+#### SettingButton
+Takes `value` (button text) and `onClick()`. It does not submit an enclosing form; the caller handles the action and its pending state with `disabled`.
+
 ## Structured Event Types
 
 The Rust OutputParser detects patterns in terminal output and emits typed events. Handle them with `host.registerStructuredEventHandler(type, handler)`.
@@ -661,6 +683,67 @@ GET /worktrees/dir?repo_path=/path/to/repo
 Returns the directory where worktrees for this repo will be created (based on user config).
 Useful for informational purposes — do not use this to construct paths yourself.
 
+## Tasks data contract (Phase A4)
+
+Register via `host.registerWorkItemProvider(provider)`; its Disposable is automatically
+cleaned on plugin unload. Registrations are scoped by providerId/accountId and duplicates
+are rejected. The async port lives in `src/plugins/workItemProvider.ts`. It exposes
+list/detail/comments/act, dynamic createFields, grouped pages and board projections
+with per-card moves (columnId and action); core renders those projections without guessing legality.
+
+Core owns the Solid Tasks views; provider plugins supply data, schemas and actions,
+never view HTML. A4 defines DTOs only: registration, transport and visible views
+are delivered by the following integration steps.
+
+### Work-item field kind inventory
+`text`, `markdown`, `enum`, `user`, `labels`, `date`, `number`, `link`
+
+- `text`: a plain text input; `markdown`: the shared markdown renderer/editor.
+- `enum`: a select using provider option IDs; `user`: a user picker, multiple users.
+- `labels`: multiple labels with stable IDs; `date`: ISO-8601 date input.
+- `number`: finite numeric input; `link`: URL/link control.
+
+The canonical DTOs are `work_items::model` and `work_items::protocol` in Rust.
+Generate their TypeScript declarations with
+`python3 scripts/generate-work-item-types.py`; import from
+`src/types/work-items.gen.ts`. Fields use camelCase; discriminated unions use
+`{kind, value}` with snake_case kinds. `WorkItemRef` scopes opaque item IDs by
+`providerId` and `accountId`. Missing field keys mean not loaded; null means unset.
+
+`WorkItemQuery` carries ANDed filters (values are ORed), saved filter ID, native
+search, sort, bounded page size and opaque cursor. Providers must bind cursors to
+the account/query; selecting a preset starts with no cursor. `WorkItemPage`
+contains items and `nextCursor`. Details load body, field schemas, allowed action
+descriptors and a separately paginated comment page on open. Comment entries are
+`normal`, `review_thread` (resolved, path, line and reviewed commitId), or
+`review_summary` (state and reviewed commitId). Bodies are markdown, not trusted HTML.
+
+Actions are `create`, `edit_field`, `transition`, `comment`, and `start_work`.
+Transitions use provider action IDs, not state display names. Board columns may carry a default edit/transition action or null; per-card moves
+carry the actual legal action to dispatch on drop (workflow IDs can vary by item). Start-work carries repoPath,
+branch, optional baseRef, prompt, agentType and explicit draft/submit delivery;
+core executes the existing worktree/agent workflow and owns errors/rollback.
+
+`work_items::demo::demo_provider()` supplies deterministic local-only data with
+list, detail, comments, schemas, saved filters, board columns and mutations.
+It touches no network, credentials, filesystem or subprocesses. It is a development
+provider, not a fixture proving GitHub/Jira/GitLab API compatibility. Its search is
+literal text; sort supports key/title/updatedAt. Its cursor expires on mutation.
+
+## Tasks list
+
+Core TasksList consumes WorkItemProvider data, never plugin HTML or iframes.
+Providers supply providerId, accountId, name, fields, savedFilters, and async list(query, signal).
+Core renders source and preset selectors, descriptor filters, 250 ms debounced search,
+provider sorting, virtual rows, and Load more using nextCursor.
+Queries carry filters, savedFilterId, search, sort, groupBy, cursor and limit.
+Grouped results come from grouped(query, signal); core renders provider group names and members.
+The LRU cache holds at most 32 pages, partitioned by provider, account and query.
+Obsolete responses cannot replace newer results. Repeated references update a row;
+repeated cursors stop pagination. Failed refreshes retain rows marked Stale results.
+Opening an item calls the host onOpen(reference); list rendering does not fetch detail.
+Tasks shell mounting remains a separate integration step.
+
 ## Troubleshooting
 
 | Error | Fix |
@@ -684,6 +767,8 @@ mod tests {
     const HOST: &str = include_str!("../../../src/plugins/pluginRegistry.ts");
     const CSS: &str = include_str!("../../../src/components/PluginPanel/pluginBaseStyles.ts");
     const UX: &str = include_str!("../../../src/components/SettingsPanel/tabs/PluginsTab.tsx");
+    const SETTING_FIELDS: &str =
+        include_str!("../../../src/components/SettingsPanel/SettingFields.tsx");
 
     fn captures(source: &str, pattern: &str) -> BTreeSet<String> {
         Regex::new(pattern)
@@ -757,9 +842,36 @@ mod tests {
         );
     }
 
+    // Catches: newly added Tasks field kinds are missing from the plugin authoring guide.
+    #[test]
+    fn plugin_docs_matches_work_item_field_kinds() {
+        let model = include_str!("../work_items/model.rs");
+        let kinds = section(model, "pub enum WorkItemFieldKind {", "\n}");
+        let expected = captures(kinds, r"(?m)^    ([A-Za-z]+),")
+            .into_iter()
+            .map(|kind| kind.to_lowercase())
+            .collect();
+        assert_inventory(
+            PLUGIN_DOCS,
+            "### Work-item field kind inventory\n",
+            expected,
+        );
+    }
+
     // Catches: new manifest-driven UI or core plugin components are absent from the UX guide.
     #[test]
     fn plugin_docs_matches_core_plugin_ux() {
+        assert_inventory(
+            PLUGIN_DOCS,
+            "### Settings control inventory\n",
+            captures(SETTING_FIELDS, r"(?m)^export \{ (Setting[A-Za-z]+),"),
+        );
+        for control in inventory(PLUGIN_DOCS, "### Settings control inventory\n") {
+            assert!(
+                PLUGIN_DOCS.contains(&format!("#### {control}\n")),
+                "each setting control needs UX instructions: {control}"
+            );
+        }
         let manifest = section(PLUGINS, "pub struct PluginManifest {", "\n}");
         let field = Regex::new(r#"(?s)(?:#\[serde\(([^]]*)\)\]\s*)?pub ([a-z_]+):"#).unwrap();
         let fields = field

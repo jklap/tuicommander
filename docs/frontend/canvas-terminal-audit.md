@@ -3,7 +3,7 @@
 **Last updated:** 2026-09-21
 **Branch:** refactor/solid-architecture
 
-CanvasTerminal is the sole terminal renderer. xterm.js has been fully removed. The renderer is powered by `alacritty_terminal` (Rust) sending binary grid frames over a Tauri Channel (desktop) or WebSocket (browser/PWA).
+CanvasTerminal renders desktop and full-terminal browser sessions. The dedicated phone session screen instead uses `SessionDetailScreen` → `OutputView`: HTTP/WS log lines append to DOM history while screen frames replace its live region. Its durable log must continue advancing after the grid history cap. xterm.js has been fully removed. The renderer is powered by `alacritty_terminal` (Rust) sending binary grid frames over a Tauri Channel (desktop) or WebSocket (browser/PWA).
 
 Remote grid streams report handshake, initial-replay timeout (15 seconds), decode and unexpected-close failures through the WS-only `onStreamError` callback (never a Tauri PTY listener). CanvasTerminal displays a persistent error toast. Reconnect health resets only after the renderer receives a frame or the server explicitly finishes an empty replay, not at socket open; intentional teardown cancels replay and reconnect timers. No silence deadline applies after initial replay. Replay timeouts detach the socket and schedule recovery directly, even when its close handshake never completes. The recorded idle remote replay regression asserts visible viewport text after reconnect without new PTY output. The backend WS attach regression separately verifies existing scrollback text at both the live viewport and a history offset without publishing a new frame (story 1421-733e); these prove recovery and replay, not attribution of the historical blank pane.
 

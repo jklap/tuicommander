@@ -2,6 +2,7 @@ import { createSignal } from "solid-js";
 import { invoke, listen } from "./invoke";
 import { appLogger } from "./stores/appLogger";
 import { DEFAULT_THEME, FONT_FAMILIES, type FontType, settingsStore } from "./stores/settings";
+import { syncWindowBackground } from "./utils/windowBackground";
 
 /** Terminal color theme (mirrors xterm.js ITheme keys used by CanvasTerminal) */
 export interface TerminalTheme {
@@ -314,6 +315,7 @@ export function applyAppTheme(key: string, syncAnsi = true): void {
 	}
 	const theme = getAppTheme(key);
 	const root = document.documentElement.style;
+	syncWindowBackground(theme.bgPrimary);
 	for (const [prop, value] of Object.entries(theme)) {
 		root.setProperty(camelToKebab(prop), value);
 	}
