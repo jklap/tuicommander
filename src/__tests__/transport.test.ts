@@ -486,6 +486,18 @@ describe("transport", () => {
 			expect(result.body).toEqual({ data: "hello" });
 		});
 
+		it("catches dropping expectedDraft at the mobile queue transport boundary", () => {
+			const result = mapCommandToHttp("enqueue_agent_command", {
+				sessionId: "abc",
+				text: "later",
+				expectedDraft: "later ",
+			});
+			expect(result).toEqual({
+				method: "POST",
+				path: "/sessions/abc/queue",
+				body: { text: "later", expectedDraft: "later " },
+			});
+		});
 		it("maps enqueue_agent_command to POST /sessions/{id}/queue", () => {
 			const result = mapCommandToHttp("enqueue_agent_command", { sessionId: "abc", text: "run tests" });
 			expect(result.method).toBe("POST");

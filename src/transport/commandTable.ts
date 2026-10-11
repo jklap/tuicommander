@@ -415,7 +415,11 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		map: (args) => ({
 			method: "POST",
 			path: `/sessions/${args.sessionId}/queue`,
-			body: { text: args.text, ...(args.idempotencyKey != null ? { idempotencyKey: args.idempotencyKey } : {}) },
+			body: {
+				text: args.text,
+				...(args.expectedDraft != null ? { expectedDraft: args.expectedDraft } : {}),
+				...(args.idempotencyKey != null ? { idempotencyKey: args.idempotencyKey } : {}),
+			},
 		}),
 	},
 	clear_queued_agent_commands: {
