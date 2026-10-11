@@ -4,10 +4,7 @@ use std::sync::Mutex;
 
 struct Stub {
     pr: Value,
-    rules: Value,
     writes: Mutex<Vec<Value>>,
-    rules_fail: bool,
-    later_rules: Option<Value>,
 }
 impl Stub {
     fn recorded() -> Self {
@@ -17,13 +14,7 @@ impl Stub {
         .unwrap();
         Self {
             pr: data["data"]["repository"]["pullRequests"]["nodes"][0].clone(),
-            rules: serde_json::from_str(include_str!(
-                "../fixtures/github-review/actions-rules-recorded.json"
-            ))
-            .unwrap(),
             writes: Mutex::new(vec![]),
-            rules_fail: false,
-            later_rules: None,
         }
     }
     fn head(&self) -> &str {
@@ -31,9 +22,13 @@ impl Stub {
     }
 }
 impl PrApi for Stub {
-    async fn graphql(&self, query: &str, vars: Value) -> Result<Value, String> {
+    fn graphql(
+        &self,
+        query: &str,
+        vars: Value,
+    ) -> impl std::future::Future<Output = Result<Value, String>> + Send {
         if !query.contains("mutation") {
-            return Ok(json!({"repository":{"pullRequest":self.pr}}));
+            return std::future::ready(Ok(json!({"repository":{"pullRequest":self.pr}})));
         }
         self.writes
             .lock()
@@ -43,10 +38,10 @@ impl PrApi for Stub {
         // local effects, not claims that a write was made to the recorded PR.
         let entry = json!({"id":"local-queue-entry","position":1,"state":"QUEUED"});
         if query.contains("enqueuePullRequest(") {
-            return Ok(json!({"enqueuePullRequest":{"mergeQueueEntry":entry}}));
+            return std::future::ready(Ok(json!({"enqueuePullRequest":{"mergeQueueEntry":entry}})));
         }
         if query.contains("dequeuePullRequest(") {
-            return Ok(json!({"dequeuePullRequest":{"mergeQueueEntry":entry}}));
+            return std::future::ready(Ok(json!({"dequeuePullRequest":{"mergeQueueEntry":entry}})));
         }
         let enabled = query.contains("enablePullRequestAutoMerge(");
         let operation = if enabled {
@@ -54,33 +49,29 @@ impl PrApi for Stub {
         } else {
             "disablePullRequestAutoMerge"
         };
-        Ok(
+        std::future::ready(Ok(
             json!({operation:{"pullRequest":{"id":self.pr["id"],"autoMergeRequest":if enabled {json!({"enabledAt":"2026-10-11T00:00:00Z","mergeMethod":"SQUASH"})} else {Value::Null}}}}),
-        )
+        ))
     }
-    async fn rest(&self, method: &str, endpoint: &str, body: Value) -> Result<Value, String> {
-        if method == "GET" {
-            if self.rules_fail {
-                return Err("GitHub rules unavailable".into());
-            }
-            if endpoint.ends_with("page=2") {
-                if let Some(rules) = &self.later_rules {
-                    return Ok(rules.clone());
-                }
-            }
-            return Ok(self.rules.clone());
-        }
+    fn rest(
+        &self,
+        method: &str,
+        endpoint: &str,
+        body: Value,
+    ) -> impl std::future::Future<Output = Result<Value, String>> + Send {
         self.writes
             .lock()
             .unwrap()
             .push(json!({"method":method,"endpoint":endpoint,"body":body}));
         if method == "PUT" {
-            return serde_json::from_str(include_str!(
-                "../fixtures/github-review/merge-documented.json"
-            ))
-            .map_err(|e| e.to_string());
+            return std::future::ready(
+                serde_json::from_str(include_str!(
+                    "../fixtures/github-review/merge-documented.json"
+                ))
+                .map_err(|e| e.to_string()),
+            );
         }
-        Ok(Value::Null)
+        std::future::ready(Ok(Value::Null))
     }
 }
 
@@ -157,25 +148,11 @@ async fn request_changes_requires_body() {
     assert!(validate_review_event("Explain the required fix", "REQUEST_CHANGES").is_ok());
 }
 
-// Catches: fallback to direct merge when effective policy cannot be established.
-#[tokio::test]
-async fn unavailable_branch_rules_prevent_any_merge_write() {
-    let mut api = Stub::recorded();
-    api.rules_fail = true;
-    assert!(
-        merge_or_enqueue(&api, json!({}), 7, "squash", api.head())
-            .await
-            .unwrap_err()
-            .contains("rules unavailable")
-    );
-    assert!(api.writes.lock().unwrap().is_empty());
-}
-
 // Catches: missing sha protection on a direct merge when no queue is required.
 #[tokio::test]
 async fn unprotected_branch_merges_with_reviewed_sha() {
     let mut api = Stub::recorded();
-    api.rules = json!([]);
+    api.pr["isMergeQueueEnabled"] = json!(false);
     let response = merge_or_enqueue(&api, json!({}), 7, "squash", api.head())
         .await
         .unwrap();
@@ -254,24 +231,21 @@ async fn queue_state_and_dequeue_are_server_backed() {
     );
 }
 
-// Catches: checking only the first page and missing a later merge_queue rule.
+// Catches: unknown merge-queue policy falling through to a direct merge write.
 #[tokio::test]
-async fn queue_rule_on_later_page_still_enqueues() {
+async fn missing_merge_queue_policy_prevents_any_merge_write() {
     let mut api = Stub::recorded();
-    let ordinary = api
-        .rules
-        .as_array()
+    api.pr
+        .as_object_mut()
         .unwrap()
-        .iter()
-        .find(|r| r["type"] != "merge_queue")
-        .unwrap()
-        .clone();
-    api.later_rules = Some(api.rules.clone());
-    api.rules = json!(vec![ordinary; 100]);
-    let response = merge_or_enqueue(&api, json!({}), 7, "squash", api.head())
-        .await
-        .unwrap();
-    assert_eq!(response["action"], "enqueued");
+        .remove("isMergeQueueEnabled");
+    assert!(
+        merge_or_enqueue(&api, json!({}), 7, "squash", api.head())
+            .await
+            .unwrap_err()
+            .contains("merge queue policy")
+    );
+    assert!(api.writes.lock().unwrap().is_empty());
 }
 
 mod critic {

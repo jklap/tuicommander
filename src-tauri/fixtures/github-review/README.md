@@ -16,11 +16,10 @@ Contracts: [review creation](https://docs.github.com/en/rest/pulls/reviews#creat
 Recorded read-only on 2026-10-11:
 
 - `actions-pr-recorded.json`: GraphQL `github/docs` → `pullRequests(last:1, states:OPEN)` selecting number/id/headRefOid/baseRefName/state/isDraft/isMergeQueueEnabled/autoMergeRequest/mergeQueueEntry.
-- `actions-rules-recorded.json`: REST `GET repos/github/docs/rules/branches/main`. Includes an active `merge_queue` rule inherited alongside other rules.
 - `actions-run-recorded.json`: REST `GET repos/github/docs/actions/runs?status=failure&per_page=1`, retaining id/status/conclusion/run_attempt/head_sha/html_url.
 - `actions-schema-recorded.json`: introspection of PullRequest fields and EnablePullRequestAutoMergeInput (including expectedHeadOid).
 - `queue-payload-schema-recorded.json`: enqueue/dequeue payload fields. Both return mergeQueueEntry.
 - `queue-entries-recorded.json`: current `github/docs` main merge queue was empty at recording time.
 - `merge-documented.json`: exact success example from [GitHub's merge endpoint](https://docs.github.com/en/rest/pulls/pulls#merge-a-pull-request).
 
-Mutation stub ids and timestamps describe local stub effects only. They are not live GitHub recordings. Branch policy uses [active effective branch rules](https://docs.github.com/en/rest/repos/rules#get-rules-for-a-branch); failed reruns use [rerun failed jobs](https://docs.github.com/en/rest/actions/workflow-runs#re-run-failed-jobs-from-a-workflow-run), which includes dependent jobs. No live write was performed.
+Mutation stub ids and timestamps describe local stub effects only. They are not live GitHub recordings. Merge queue policy is the PR field `isMergeQueueEnabled` (covers rulesets and classic branch protection); failed reruns use [rerun failed jobs](https://docs.github.com/en/rest/actions/workflow-runs#re-run-failed-jobs-from-a-workflow-run), which includes dependent jobs. No live write was performed.

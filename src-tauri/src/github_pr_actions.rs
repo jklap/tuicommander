@@ -3,7 +3,7 @@ use crate::github_pr_api::PrApi;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-const PR_FIELDS: &str = "id headRefOid baseRefName state isDraft autoMergeRequest { enabledAt mergeMethod } mergeQueueEntry { id position state }";
+const PR_FIELDS: &str = "id headRefOid baseRefName state isDraft autoMergeRequest { enabledAt mergeMethod } mergeQueueEntry { id position state } isMergeQueueEnabled";
 
 /// Shared by legacy review posting and head-pinned draft submission.
 pub(crate) fn validate_review_event(body: &str, event: &str) -> Result<(), String> {
@@ -51,32 +51,10 @@ async fn read_pr(api: &impl PrApi, variables: Value) -> Result<Value, String> {
     if !pr["isDraft"].is_boolean() {
         return Err("GitHub response missing draft state".into());
     }
-    Ok(pr)
-}
-
-/// Active effective rules include inherited organization rules and exclude evaluate/disabled rules.
-/// Exhaust all pages; failure to establish policy must never fall through to direct merge.
-async fn queue_required(api: &impl PrApi, branch: &str) -> Result<bool, String> {
-    let branch: String = url::form_urlencoded::byte_serialize(branch.as_bytes()).collect();
-    for page in 1..=10 {
-        let rules = api
-            .rest(
-                "GET",
-                &format!("rules/branches/{branch}?per_page=100&page={page}"),
-                Value::Null,
-            )
-            .await?;
-        let rules = rules
-            .as_array()
-            .ok_or("GitHub response missing branch rules")?;
-        if rules.iter().any(|r| r["type"] == "merge_queue") {
-            return Ok(true);
-        }
-        if rules.len() < 100 {
-            return Ok(false);
-        }
+    if !pr["isMergeQueueEnabled"].is_boolean() {
+        return Err("GitHub response missing merge queue policy".into());
     }
-    Err("Branch rule pagination limit reached; merge policy is incomplete".into())
+    Ok(pr)
 }
 
 pub(crate) async fn action_state(
@@ -95,7 +73,7 @@ pub(crate) async fn action_state(
             .then(|| pr["autoMergeRequest"].clone()),
         merge_queue_entry: (!pr["mergeQueueEntry"].is_null())
             .then(|| pr["mergeQueueEntry"].clone()),
-        queue_required: queue_required(api, base).await?,
+        queue_required: pr["isMergeQueueEnabled"] == true,
     })
 }
 
@@ -210,8 +188,7 @@ pub(crate) async fn merge_or_enqueue(
     merge_method(Some(method))?;
     let pr = read_pr(api, variables).await?;
     reviewed_head(&pr, Some(expected))?;
-    let base = pr["baseRefName"].as_str().ok_or("Missing base branch")?;
-    if queue_required(api, base).await? {
+    if pr["isMergeQueueEnabled"] == true {
         let result = mutate(api, &pr, PrAction::Enqueue, Some(expected), None).await?;
         return Ok(json!({"action":"enqueued","mergeQueueEntry":result["mergeQueueEntry"]}));
     }
