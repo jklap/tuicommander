@@ -49,3 +49,24 @@ describe("Design Mode heartbeat reload delivery", () => {
 		expect(HEARTBEAT_MS).toBe(5000);
 	});
 });
+
+// Catches: a backend restart leaves the browser acknowledgement ahead of all new reload requests.
+it("reload_after_backend_restart_is_not_suppressed_by_previous_sequence", async () => {
+	const values: Record<string, unknown> = { reloadSeq: 3, reviewedTab: 42 };
+	const storage = {
+		get: async () => ({ ...values }),
+		set: async (next: Record<string, unknown>) => {
+			Object.assign(values, next);
+		},
+	};
+	const reloaded: number[] = [];
+	const tabs = {
+		reload: async (id: number) => {
+			reloaded.push(id);
+		},
+		query: async () => [{ id: 42 }],
+	};
+	await heartbeatReply({ armed: true, reloadSeq: 0 }, storage, tabs);
+	await heartbeatReply({ armed: true, reloadSeq: 1 }, storage, tabs);
+	expect(reloaded).toEqual([42]);
+});
