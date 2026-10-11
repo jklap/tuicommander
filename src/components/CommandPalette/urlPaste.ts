@@ -73,18 +73,16 @@ export async function urlPasteActions(text: string, deps: UrlPasteDeps, signal: 
 	const { link } = resolved;
 
 	const linked = deps.links()?.findByItem(link.reference);
-	if (linked) {
+	// A link outlives a worktree removed outside TUIC: with no workspace left, offer start work instead.
+	const workspaceId = linked ? deps.workspaceIdOnBranch(linked.repoPath, linked.branch) : null;
+	if (linked && workspaceId) {
 		return [
 			{
 				id: `url-paste:open:${url}`,
 				label: `Open worktree ${linked.branch} (${link.key})`,
 				category: "Work item",
 				keybinding: "",
-				execute: () =>
-					deps.openWorkspace(
-						linked.repoPath,
-						deps.workspaceIdOnBranch(linked.repoPath, linked.branch) ?? linked.branch,
-					),
+				execute: () => deps.openWorkspace(linked.repoPath, workspaceId),
 			},
 		];
 	}

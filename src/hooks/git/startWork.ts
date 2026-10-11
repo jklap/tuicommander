@@ -176,10 +176,11 @@ export function createStartWork(deps: StartWorkDeps) {
 		if (deps.creatingWorktreeRepos().has(repoPath)) {
 			throw new Error(`A worktree is already being created in ${repoPath}`);
 		}
-		const seed = await resolveStartWorkAgent(repoPath, request.agentType);
 		deps.setCreatingWorktreeRepos((prev) => new Set([...prev, repoPath]));
+		let seed: AgentSeed;
 		let result: PendingCreation["result"] & { status: "ok" };
 		try {
+			seed = await resolveStartWorkAgent(repoPath, request.agentType);
 			let base = request.baseRef ?? undefined;
 			if (!base) {
 				const baseRefs = await deps.listBaseRefOptions(repoPath);
@@ -197,8 +198,13 @@ export function createStartWork(deps: StartWorkDeps) {
 		}
 
 		if (request.link) {
-			if (linkPort) await linkPort.link(repoPath, result.branch, request.link);
-			else appLogger.warn("git", `No work-item link store: ${request.link.key} is not linked to ${result.branch}`);
+			try {
+				if (linkPort) await linkPort.link(repoPath, result.branch, request.link);
+				else appLogger.warn("git", `No work-item link store: ${request.link.key} is not linked to ${result.branch}`);
+			} catch (err) {
+				appLogger.error("git", `Start work: failed to link ${request.link.key} to ${result.branch}`, err);
+				deps.setStatusInfo(`Start work: ${request.link.key} was not linked to ${result.branch}: ${err}`);
+			}
 		}
 
 		const termId = repositoriesStore
@@ -213,8 +219,9 @@ export function createStartWork(deps: StartWorkDeps) {
 
 async function deliverWhenReady(termId: string, brief: string, submit: boolean, deps: StartWorkDeps): Promise<void> {
 	try {
-		await waitForAgentComposer(termId);
-		if (!(await deliverBrief(termId, brief, submit))) {
+		const ready = await waitForAgentComposer(termId);
+		// A timeout means a startup dialog may still be open: Enter would answer it, so degrade to a draft.
+		if (!(await deliverBrief(termId, brief, submit && ready))) {
 			deps.setStatusInfo("Start work: the agent is not running, so the brief was not typed");
 		}
 	} catch (err) {

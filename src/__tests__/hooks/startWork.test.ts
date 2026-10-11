@@ -2,7 +2,7 @@ import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createWorktreeCreationCoordinator } from "../../hooks/git/createWorktreeCreationCoordinator";
 import { createWorktreeWorkflowCoordinator } from "../../hooks/git/createWorktreeWorkflowCoordinator";
-import { untrustedBrief } from "../../hooks/git/startWork";
+import { setWorkItemLinkPort, untrustedBrief } from "../../hooks/git/startWork";
 import * as platform from "../../platform";
 import { pluginRegistry } from "../../plugins/pluginRegistry";
 import { PluginCapabilityError, type PluginHost } from "../../plugins/types";
@@ -167,6 +167,46 @@ describe("start work", () => {
 		await vi.waitFor(() => expect(writes.some((w) => w.includes("Fix the login"))).toBe(true));
 		await new Promise((resolve) => setTimeout(resolve, 300));
 		expect(writes).not.toContain("\r");
+	});
+
+	// Catches: a link store failure after the worktree exists leaving the agent without its brief.
+	it("link_failure_is_reported_and_the_brief_is_still_typed", async () => {
+		const { workflow } = coordinators();
+		const unbind = setWorkItemLinkPort({
+			link: vi.fn().mockRejectedValue(new Error("corrupt links file")),
+			findByItem: vi.fn(),
+		});
+		try {
+			const link = {
+				reference: { providerId: "p", accountId: "a", id: "7" },
+				key: "PROJ-7",
+				title: "T",
+				url: "https://x/7",
+				state: null,
+			};
+			await workflow.handleStartWork({
+				repoPath: REPO,
+				branch: BRANCH,
+				prompt: "Fix the login",
+				agentType: "codex",
+				link,
+			});
+			agentReachesComposer(agentTerminal().id);
+			await vi.waitFor(() => expect(writes.some((w) => w.includes("Fix the login"))).toBe(true));
+		} finally {
+			unbind();
+		}
+	});
+
+	// Catches: the in-progress guard set only after the agent lookup, so two quick calls both pass it.
+	it("second_start_work_on_the_same_repo_is_rejected_while_the_first_resolves_its_agent", async () => {
+		const { workflow, createWorktree } = coordinators();
+		const first = workflow.handleStartWork({ repoPath: REPO, branch: BRANCH, prompt: "a", agentType: "codex" });
+		await expect(
+			workflow.handleStartWork({ repoPath: REPO, branch: "item/PROJ-8", prompt: "b", agentType: "codex" }),
+		).rejects.toThrow(/already being created/);
+		await first;
+		expect(createWorktree).toHaveBeenCalledTimes(1);
 	});
 
 	// Catches: the auto-fix call site losing its submit after the extraction.
