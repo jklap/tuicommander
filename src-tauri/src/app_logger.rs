@@ -443,11 +443,13 @@ fn build_subscriber(
 ) {
     // The console goes through `non_blocking` too, never written from the
     // calling thread. Under `make dev` stderr is a 64 KiB pipe drained by the
-    // Tauri CLI; when that consumer stopped reading on 2026-10-09, every thread
-    // that logged blocked in write(2) for 73s — the AppKit main thread with
-    // them, so no IPC was served and the WebView heartbeat stopped. The writer
-    // is lossy: a stalled console drops lines (the file and the ring keep
-    // them) instead of stalling the process.
+    // Tauri CLI; an unread full pipe blocks synchronous writes from any thread
+    // that logs, including the AppKit main thread that serves Tauri IPC.
+    // The 2026-10-09 log silence, burst, and delayed events support this as a
+    // historical stall hypothesis, not a proven cause. The console writer is
+    // lossy: a saturated queue drops lines instead of stalling the process.
+    // File retention remains unchanged with its existing lossy writer, as does
+    // the ring's LOG_RING_CAPACITY limit (1000 events).
     let (console_writer, console_guard) = tracing_appender::non_blocking(console);
     let fmt_layer = tracing_subscriber::fmt::layer()
         .with_target(true)
@@ -722,8 +724,10 @@ mod tests {
     /// Catches: the console layer writing to stderr synchronously from the
     /// calling thread. Once the console consumer stops reading, every thread
     /// that logs blocks in write(2) — the AppKit main thread included, which
-    /// then serves no Tauri IPC. That is the 2026-10-09 18:22Z heartbeat gap:
-    /// no backend log line for 73s, then 218 within half a second.
+    /// then serves no Tauri IPC. This proves the unread-pipe mechanism, not
+    /// the cause of the 2026-10-09 18:22Z heartbeat gap. The 73s log silence,
+    /// 218-line burst within half a second, and delayed events support that
+    /// historical attribution as a hypothesis.
     #[test]
     fn a_console_that_stops_reading_does_not_block_logging() {
         // ~150 bytes a line: 2000 lines are ~300 KiB, far past a 64 KiB pipe.
@@ -734,11 +738,11 @@ mod tests {
         );
     }
 
-    /// Catches: a fix that keeps logging moving by losing lines from the
-    /// sinks diagnosis depends on. The console may drop lines it cannot
-    /// deliver; the file log and the `/logs` ring must not.
+    /// Catches: console backpressure preventing file delivery or the newest
+    /// ring event. This workload fits the existing lossy file writer's queue;
+    /// the ring retains only its newest LOG_RING_CAPACITY events (1000).
     #[test]
-    fn a_stalled_console_still_leaves_every_line_in_the_file_log_and_the_ring() {
+    fn a_stalled_console_still_delivers_file_lines_and_the_newest_ring_event() {
         let (finished, buffer, dir) = log_with_an_unread_console(2_000);
         assert!(finished, "logging blocked on a console nobody reads");
 
@@ -748,7 +752,7 @@ mod tests {
             .filter_map(|entry| std::fs::read_to_string(entry.path()).ok())
             .map(|contents| contents.matches("console stall line").count())
             .sum();
-        assert_eq!(file_lines, 2_000, "the file log must keep every line");
+        assert_eq!(file_lines, 2_000, "the file log must receive this workload");
 
         let ring = buffer.lock().get_entries(0);
         let last = ring.last().expect("ring buffer received the events");
