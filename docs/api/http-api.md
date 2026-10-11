@@ -1116,12 +1116,15 @@ DELETE /circleci/token                         -> null
 POST /github/pr-hide-drafts   { hide }          -> null
 POST /github/auth/start                         -> DeviceCodeResponse
 POST /github/auth/poll        { deviceCode }    -> PollResult (default login)
+GET  /github/accounts                           -> GitHubAccount[]
 POST /github/accounts/poll    { deviceCode }    -> PollResult (named account; preserves default login)
 POST /github/auth/logout                        -> null
 POST /github/auth/disconnect                    -> null
 GET  /github/auth/status                        -> AuthStatus
 GET  /github/diagnostics                        -> GitHubDiagnostics
 ```
+
+Enterprise account creation uses the core account manager and `account_secret_form`. The legacy `POST /github/accounts` PAT endpoint is removed.
 
 Auth commands share the desktop `*_impl` (device-code flow + OS-keyring token via
 `crate::credentials`). `get_all_issues` is intentionally unmapped — it has no frontend

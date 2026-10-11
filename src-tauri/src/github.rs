@@ -6104,20 +6104,17 @@ mod tests {
 
     #[test]
     fn ci_logs_disabled_for_ghe_bound_repo() {
-        use crate::github_account::{
-            GitHubAccount, GitHubAccountRegistry, GitHubHost, RepoBinding, RepoBindingStore,
-        };
+        use crate::github_account::{GitHubAccount, GitHubHost, RepoBinding, RepoBindingStore};
         let dir = tempfile::tempdir().expect("tempdir");
         let _guard = crate::config::set_config_dir_override(dir.path().join("cfg"));
         let repo = dir.path().join("repo");
         std::fs::create_dir_all(repo.join(".git")).expect("mkdir .git");
 
-        let mut registry = GitHubAccountRegistry::default();
-        registry.upsert(GitHubAccount::ghe_pat(
-            GitHubHost::new("ghe.acme.com").unwrap(),
+        crate::accounts::upsert_github(
+            GitHubAccount::ghe_pat(GitHubHost::new("ghe.acme.com").unwrap(), None),
             None,
-        ));
-        registry.save(&GitHubAccountRegistry::default()).unwrap();
+        )
+        .unwrap();
         let mut bindings = RepoBindingStore::default();
         bindings.set_binding(
             &repo,

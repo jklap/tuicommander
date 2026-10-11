@@ -24,8 +24,6 @@ pub(crate) use model::{Account, AccountAction, AuthKind, NewAccount};
 #[cfg(test)]
 pub(crate) use providers::VerifyRequest;
 pub(crate) use providers::{ProviderDescriptor, register_provider, unregister_providers};
-#[cfg(test)]
-pub(crate) use store::save_github_delta;
 pub(crate) use store::{github_accounts, remove, upsert_github};
 
 #[cfg(feature = "desktop")]
