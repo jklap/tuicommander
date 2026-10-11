@@ -43,9 +43,10 @@ it("does not queue an incomplete prompt while its selected attachment is still u
 	await Promise.resolve();
 	// The selected attachment belongs to this prompt, not an unrelated producer.
 	// Submitting now can run the agent without the file and erase its later receipt.
-	expect(vi.mocked(rpc).mock.calls.filter(([command]) => command === "enqueue_agent_command")).toEqual([]);
+	const queuedBeforeUpload = vi.mocked(rpc).mock.calls.filter(([command]) => command === "enqueue_agent_command");
+	// Settle the external operation before asserting, even on the failing path.
 	finishUpload({ path: "/repo/.tuic/attachments/notes.txt", size: 17 });
-	await Promise.resolve();
-	await Promise.resolve();
+	await vi.advanceTimersByTimeAsync(0);
+	expect(queuedBeforeUpload).toEqual([]);
 	expect(input.value).toBe("Review this file @/repo/.tuic/attachments/notes.txt");
 });
