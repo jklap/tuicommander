@@ -867,7 +867,7 @@ pub fn parse_pr_refs(pr_json: &serde_json::Value) -> Option<PrRefs> {
 
 /// Maximum characters returned from CI failure logs to avoid overwhelming
 /// the agent's context window.
-const CI_LOG_MAX_CHARS: usize = 4000;
+pub const CI_LOG_MAX_CHARS: usize = 4000;
 
 /// Truncate log text to the last [`CI_LOG_MAX_CHARS`] characters, splitting
 /// at a newline boundary to avoid cutting mid-line.
@@ -912,7 +912,7 @@ pub fn format_ci_logs(logs: &str) -> String {
     truncate_ci_logs(&sanitize_ci_logs(logs))
 }
 
-/// Return the failed job IDs and names from `gh run view --json jobs` output.
+/// Return failed job IDs and names from the Actions REST jobs response.
 pub fn failed_jobs_from_run_json(value: &serde_json::Value) -> Vec<(u64, String)> {
     value
         .get("jobs")
@@ -921,7 +921,7 @@ pub fn failed_jobs_from_run_json(value: &serde_json::Value) -> Vec<(u64, String)
         .flatten()
         .filter(|job| job.get("conclusion").and_then(serde_json::Value::as_str) == Some("failure"))
         .filter_map(|job| {
-            let id = job.get("databaseId")?.as_u64()?;
+            let id = job.get("id")?.as_u64()?;
             let name = job
                 .get("name")
                 .and_then(serde_json::Value::as_str)

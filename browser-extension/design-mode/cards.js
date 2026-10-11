@@ -13,12 +13,22 @@ export function draftForTab(drafts, tabId) {
   return drafts[String(tabId)] ?? {picks: []};
 }
 
+// The session that started Design Mode wins once per Start; a manual choice then holds until the next Start.
 export function recipient(draft, agents, preferredSessionId) {
+  const alive = (id) => agents.some((agent) => agent.sessionId === id);
+  if (preferredSessionId && preferredSessionId !== draft.armedFor && alive(preferredSessionId)) {
+    return {selectedSessionId: preferredSessionId, selectionInitialized: true, armedFor: preferredSessionId, agentNotice: ''};
+  }
   const wanted = draft.selectionInitialized ? draft.selectedSessionId : preferredSessionId;
-  if (wanted && agents.some((agent) => agent.sessionId === wanted)) return {selectedSessionId: wanted, selectionInitialized: true, agentNotice: ''};
+  if (wanted && alive(wanted)) return {selectedSessionId: wanted, selectionInitialized: true, agentNotice: ''};
   if (wanted) return {selectedSessionId: '', selectionInitialized: true, agentNotice: 'The selected agent exited. Choose another agent.'};
   if (draft.selectionInitialized) return {selectedSessionId: '', selectionInitialized: true, agentNotice: draft.agentNotice ?? ''};
   return {selectedSessionId: agents[0]?.sessionId ?? '', selectionInitialized: agents.length > 0, agentNotice: ''};
+}
+
+// Dev servers belong to the agent that Send will reach, never to the launching session.
+export function serverSession(draft, agents, preferredSessionId) {
+  return recipient(draft, agents, preferredSessionId).selectedSessionId;
 }
 
 // Persist this batch before requesting delivery; retry the exact batch after a lost reply.

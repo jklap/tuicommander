@@ -62,6 +62,7 @@ import { terminalsStore } from "../../stores/terminals";
 import { toastsStore } from "../../stores/toasts";
 import { uiStore } from "../../stores/ui";
 import * as transport from "../../transport";
+import { keyFor } from "../../utils/hotkey";
 
 describe("TabBar", () => {
 	beforeEach(() => {
@@ -1725,6 +1726,8 @@ describe("TabBar", () => {
 			));
 			const badges = container.querySelectorAll(".shortcutBadge");
 			expect(badges.length).toBe(2);
+			// The badge names the chord that is held (Cmd+Ctrl+N), not plain Cmd+N.
+			expect(badges[0].textContent).toBe(keyFor("switch-branch-1"));
 		});
 	});
 

@@ -97,7 +97,7 @@ pub(crate) async fn launch(
             String::from_utf8_lossy(&output.stderr)
         ));
     }
-    let discovery = super::discovery::discover(state, repo).await;
+    let discovery = super::discovery::discover(state, repo, Some(session)).await;
     let selected = discovery
         .as_ref()
         .ok()

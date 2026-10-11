@@ -4,12 +4,14 @@ import { normalizeCombo } from "../keybindingDefaults";
 import { lastMenuActionTime } from "../menuDedup";
 import { isMacOS, isQuickSwitcherActive } from "../platform";
 import { pluginRegistry } from "../plugins/pluginRegistry";
+import { globalWorkspaceStore } from "../stores/globalWorkspace";
 import { keybindingsStore } from "../stores/keybindings";
 import { paneLayoutStore } from "../stores/paneLayout";
 import { progressStore } from "../stores/progress";
 import { settingsStore } from "../stores/settings";
 import { terminalsStore } from "../stores/terminals";
 import { isTauri } from "../transport";
+import { globalWorkspaceTabIds } from "../utils/paneTabOrder";
 
 /**
  * Normalized combos that are reserved by browsers and should not be intercepted
@@ -89,6 +91,7 @@ export interface ShortcutHandlers {
 	openPath: () => void;
 	openSecondaryWindow: () => void;
 	toggleCommandOverview: () => void;
+	openTasks: () => void;
 	toggleComposePanel: () => void;
 	detachActivityDashboard: () => void;
 	toggleProcessManager: () => void;
@@ -344,6 +347,9 @@ function dispatchAction(action: ActionName, handlers: ShortcutHandlers): boolean
 		case "command-overview":
 			handlers.toggleCommandOverview();
 			return true;
+		case "open-tasks":
+			handlers.openTasks();
+			return true;
 		case "toggle-compose-panel":
 			handlers.toggleComposePanel();
 			return true;
@@ -394,8 +400,7 @@ function dispatchAction(action: ActionName, handlers: ShortcutHandlers): boolean
 			const tabMatch = action.match(/^switch-tab-(\d)$/);
 			if (tabMatch) {
 				const index = parseInt(tabMatch[1], 10) - 1;
-				const ids = handlers.terminalIds();
-				if (index < ids.length) handlers.handleTerminalSelect(ids[index]);
+				selectTabByIndex(handlers, index);
 				return true;
 			}
 
@@ -409,6 +414,13 @@ function dispatchAction(action: ActionName, handlers: ShortcutHandlers): boolean
 			return false;
 		}
 	}
+}
+
+/** Select the tab at `index` (0-based) as displayed: the workspace tabs in the
+ *  global workspace, the active branch's terminals otherwise. */
+function selectTabByIndex(handlers: ShortcutHandlers, index: number): void {
+	const ids = globalWorkspaceTabIds() ?? handlers.terminalIds();
+	if (index < ids.length) handlers.handleTerminalSelect(ids[index]);
 }
 
 /** Register keyboard shortcuts. Returns cleanup function. */
@@ -441,9 +453,13 @@ export function useKeyboardShortcuts(handlers: ShortcutHandlers): () => void {
 
 		// Quick switch to branch by index (Cmd+Ctrl+N on macOS, Ctrl+Alt+N on Win/Linux)
 		// This uses platform-specific modifier detection, handled separately
+		// The chord's hints are shown on the tabs in the global workspace (App.tsx),
+		// so there it selects tab N and never leaves the workspace.
 		if (isQuickSwitcherActive(e) && e.key >= "1" && e.key <= "9") {
 			e.preventDefault();
-			handlers.switchToBranchByIndex(parseInt(e.key, 10));
+			const index = parseInt(e.key, 10);
+			if (globalWorkspaceStore.isActive()) selectTabByIndex(handlers, index - 1);
+			else handlers.switchToBranchByIndex(index);
 			return;
 		}
 
