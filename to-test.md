@@ -4976,6 +4976,7 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 
 - [ ] After the next Rust rebuild/restart, verify Design Mode sends a captured crop as a readable image and lets retained feedback reach a replacement after its original recipient exits (#1672-cd3d). Rust does not hot-reload.
 
+- [ ] After a manual `make dev` restart or `make build`, verify account removal rejects the github.com default and its site; use `clear_secret` to log out and confirm login keeps the default listed (#1679-1419).
 - [ ] Work-item setting controls: after integration, verify the five controls in their consuming settings and Tasks forms; account Add requires the separate native account sink. The dev-only field preview covers the controls independently.
 - [ ] Settings catalogue foundation: after Boss's next manual `make dev` restart or release build, later settings adapters must use the Rust descriptors, retain unavailable voice fields and refuse cutover while inventory gaps remain. This commit adds internal definitions only; no new MCP tool or UI control is exposed yet.
 - [ ] Settings transaction foundation: after Boss's next manual restart/build and the later transport cutover, verify stale revisions conflict, a rejected batch writes nothing, and persisted listener changes report pending/recovery until applied. Internal service only at this stage; no new tool is exposed.

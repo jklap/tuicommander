@@ -183,6 +183,10 @@ pub(crate) fn read_token(id: &str) -> Result<Option<String>, String> {
 }
 
 pub(crate) fn remove(id: &str) -> Result<Option<Account>, String> {
+    // Every removal path reaches this point, the legacy GitHub command included.
+    if id == GitHubAccount::GITHUB_COM_ID {
+        return Err("The github.com default cannot be removed; use clear_secret to log out".into());
+    }
     with_registry(|registry| {
         if !registry.accounts.contains_key(id) {
             return Ok((None, false));
