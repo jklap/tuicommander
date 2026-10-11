@@ -1780,6 +1780,14 @@ Available from the [plugin registry](https://github.com/sstraus/tuicommander-plu
 | Changes not reflecting | Hot reload cache | Save the file again, or restart the app |
 | `default export` error | Module doesn't `export default { ... }` | Ensure your module has a default export with `id`, `onload`, `onunload` |
 
+## Core setting controls
+
+The core provides account, editable-list, multiselect, read-only status and action
+button controls for catalogue-backed settings and work-item forms. Plugins do not
+import these Solid components or gain new manifest fields from them. The host
+owns account selection and native secret entry; no token enters a plugin prop.
+See `plugin_dev_guide` → **Settings field kinds** for the core-rendered contracts.
+
 ## Tasks data contract (Phase A4)
 
 Register via `host.registerWorkItemProvider(provider)`, returning an auto-cleaned
