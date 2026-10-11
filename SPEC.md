@@ -932,7 +932,7 @@ Once previews, run history, summaries and Run Now on the addressed backend.
 MCP create requires host-bound creator provenance. CLI exposes these actions as
 `tuic automations '<JSON>'` or stdin via `-`; results and validation text match.
 
-GitHub line review backend supports paginated thread/comment reads, reply, resolve/unresolve and head-pinned draft submission on both transports. UI integration is tracked separately.
+GitHub line review backend supports paginated thread/comment reads, reply, resolve/unresolve and head-pinned draft submission on both transports. The PR Files tab (`PrDiffTab`) shows the threads on the existing diff, with replies, resolution and a head-pinned draft review.
 
 GitHub PR action backend supports failed-job reruns, head-pinned auto-merge and queue entry, queue removal/state and active-rule-aware merge. Legacy review submission validates REQUEST_CHANGES bodies. Frontend action integration remains separate.
 
