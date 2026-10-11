@@ -117,7 +117,18 @@ impl PromptReceipt {
     }
 
     pub(super) fn push(&mut self, mut section: PromptSection) {
-        if section.status == "served" && self.sections.iter().any(|s| s.source == section.source) {
+        // A served response is identified by its text: every bridge reconnect
+        // serves a fresh response with its own source, and only the first of
+        // identical ones is a distinct observation. The stored copy may have
+        // been cut by the receipt cap, so compare it as a prefix.
+        if section.status == "served"
+            && self.sections.iter().any(|s| {
+                s.status == "served"
+                    && s.label == section.label
+                    && s.bytes == section.bytes
+                    && section.text.starts_with(&s.text)
+            })
+        {
             return;
         }
         if self.sections.len() >= SECTION_COUNT_CAP {

@@ -46,10 +46,7 @@ mod tests {
             }
         }
         // Ratchet: subsequent HTTP migrations lower these counts before removing code.
-        let allowed = BTreeMap::from([
-            ("src/github.rs".to_string(), 1),
-            ("src/github_auth.rs".to_string(), 2),
-        ]);
+        let allowed = BTreeMap::from([("src/github_auth.rs".to_string(), 2)]);
         assert_eq!(
             actual, allowed,
             "production gh spawn sites changed; migrate to HTTP"

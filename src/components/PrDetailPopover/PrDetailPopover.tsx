@@ -9,7 +9,6 @@ import { appLogger } from "../../stores/appLogger";
 import { githubStore } from "../../stores/github";
 import { mdTabsStore } from "../../stores/mdTabs";
 import type { SavedPrompt } from "../../stores/promptLibrary";
-import { repoDefaultsStore } from "../../stores/repoDefaults";
 import { repoSettingsStore } from "../../stores/repoSettings";
 import { repositoriesStore } from "../../stores/repositories";
 import { terminalsStore } from "../../stores/terminals";
@@ -18,6 +17,7 @@ import { cx } from "../../utils";
 import { prepareAgentLaunchCommand } from "../../utils/agentSession";
 import { handleOpenUrl } from "../../utils/openUrl";
 import { isAlreadyMerged, mergeWithFallback } from "../../utils/prMerge";
+import { preferredMergeStrategy } from "../../utils/prMergeStrategy";
 import { prContextVariables } from "../../utils/promptContext";
 import { getRepoTextColor } from "../../utils/repoColor";
 import { interpolateTemplate } from "../../utils/templateInterpolation";
@@ -201,8 +201,7 @@ export const PrDetailPopover: Component<PrDetailPopoverProps> = (props) => {
 		setMerging(true);
 		setMergeError(null);
 		try {
-			const preferred =
-				repoSettingsStore.getEffective?.(props.repoPath)?.prMergeStrategy ?? repoDefaultsStore.state.prMergeStrategy;
+			const preferred = preferredMergeStrategy(props.repoPath);
 			const startMethod = effectiveMergeMethod(pr, preferred);
 			try {
 				const usedMethod = await mergeWithFallback(props.repoPath, pr.number, startMethod, pr.head_ref_oid);
@@ -248,8 +247,7 @@ export const PrDetailPopover: Component<PrDetailPopoverProps> = (props) => {
 	const mergeLabel = () => {
 		const pr = prData();
 		if (!pr) return t("prDetail.merge", "Merge");
-		const preferred =
-			repoSettingsStore.getEffective?.(props.repoPath)?.prMergeStrategy ?? repoDefaultsStore.state.prMergeStrategy;
+		const preferred = preferredMergeStrategy(props.repoPath);
 		const method = effectiveMergeMethod(pr, preferred);
 		if (method === "squash") return t("prDetail.mergeSquash", "Squash & Merge");
 		if (method === "rebase") return t("prDetail.mergeRebase", "Rebase & Merge");
