@@ -932,7 +932,7 @@ Once previews, run history, summaries and Run Now on the addressed backend.
 MCP create requires host-bound creator provenance. CLI exposes these actions as
 `tuic automations '<JSON>'` or stdin via `-`; results and validation text match.
 
-GitHub line review backend supports paginated thread/comment reads, reply, resolve/unresolve and head-pinned draft submission on both transports. UI integration is tracked separately.
+GitHub line review backend supports paginated thread/comment reads, reply, resolve/unresolve and head-pinned draft submission on both transports. The PR Files tab (`PrDiffTab`) shows the threads on the existing diff, with replies, resolution and a head-pinned draft review.
 
 GitHub PR action backend supports failed-job reruns, head-pinned auto-merge and queue entry, queue removal/state and active-rule-aware merge. Legacy review submission validates REQUEST_CHANGES bodies. Frontend action integration remains separate.
 
@@ -947,3 +947,13 @@ host to open. A rejection keeps the draft. Tasks shell mounting is separate.
 
 
 Automation worktree cleanup (#1623-8b2a): Automation runs retain automation/run IDs and the exact created workspace path and ID in their saved snapshot, including after definition deletion. Worktree cleanup is explicit and limited to final runs. The backend resolves the saved identity and rechecks shared Git integration/archive proof, dirt, submodule commits and live sessions; it never forces removal or closes sessions. Shared `automation_action` actions `worktree_preview` and `cleanup_worktree` accept a saved run `id` on IPC, HTTP, MCP and CLI.
+### Built-in automation templates
+
+New automation drafts offer weekday repository audit, release readiness, daily
+change review and hourly maintenance review templates. Enter the repository and
+run config, then select **Apply template**. Rust supplies the literal prompt,
+cadence, limits and zone (the backend host's local IANA zone unless selected).
+Review and edit the draft, then select **Save**. Templates start paused; applying
+one never persists a definition or starts a run. **Resume** is a separate action.
+Templates use the existing checkout with no precheck and do not change agent
+permissions. Recurring cadence previews retain the existing runtime limitations.

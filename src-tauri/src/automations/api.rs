@@ -18,6 +18,13 @@ use std::sync::Arc;
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum AutomationAction {
     List {},
+    Templates {},
+    Template {
+        template_id: String,
+        repository: String,
+        run_config: String,
+        timezone: Option<String>,
+    },
     Get {
         id: String,
     },
@@ -183,6 +190,18 @@ pub(crate) fn execute_stored_as(
             }
             Ok(Value::Array(items))
         }
+        AutomationAction::Templates {} => value(super::templates::TEMPLATES),
+        AutomationAction::Template {
+            template_id,
+            repository,
+            run_config,
+            timezone,
+        } => value(super::templates::draft(
+            &template_id,
+            repository,
+            run_config,
+            timezone.as_deref(),
+        )?),
         AutomationAction::Get { id } => value(definitions.get(&id)?),
         AutomationAction::Create { definition } => {
             let id = definition.id.clone();

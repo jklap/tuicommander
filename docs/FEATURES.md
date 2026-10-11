@@ -1252,7 +1252,7 @@ GitHub integration is **account-centric**: TUICommander can manage N accounts an
 **Limitations**
 - REST + GraphQL (PRs, CI, issues, merge, approve, issue comments) work against bound GHE repos. `gh`-CLI-assisted CI-failure-log fetching (CI Auto-Heal) is disabled with a clear message for non-github.com accounts.
 
-Backend: `github_account.rs` (`GitHubHost`, account model, binding store, `resolve_repo_account`), commands `github_list_accounts` / `github_add_account` / `github_remove_account` / `github_bind_repo` / `github_unbind_repo` / `github_list_bindings` / `github_resolve_repo`.
+Backend: `github_account.rs` (`GitHubHost`, account model, binding store, `resolve_repo_account`), commands `github_list_accounts` / `github_remove_account` / `github_bind_repo` / `github_unbind_repo` / `github_list_bindings` / `github_resolve_repo`.
 
 ---
 
@@ -2830,7 +2830,7 @@ Automation agent surface (#1630-cbfa, #1621-5dce): MCP `automations` and
 previews, run history, summaries and Run Now runtime. Enabled-only updates and
 Once definitions work identically; MCP creation retains host-bound provenance.
 
-GitHub backend: paginated line review threads and replies, resolve/unresolve, and draft review submission pinned to the reviewed head are available through IPC and HTTP.
+GitHub backend: paginated line review threads and replies, resolve/unresolve, and draft review submission pinned to the reviewed head are available through IPC and HTTP. The PR Files tab draws them on the diff lines: outdated threads are listed above their file, pending comments are added from the line gutter, and Submit review is refused once the PR head moves.
 
 GitHub backend: failed-job reruns, auto-merge enable/disable, merge queue state/entry/removal and queue-aware merge are available over IPC and HTTP. Request changes requires review text.
 
@@ -2851,3 +2851,13 @@ the created item. The Tasks shell integrates this component separately.
 
 
 Automation worktree cleanup (#1623-8b2a): Automation runs retain automation/run IDs and the exact created workspace path and ID in their saved snapshot, including after definition deletion. Worktree cleanup is explicit and limited to final runs. The backend resolves the saved identity and rechecks shared Git integration/archive proof, dirt, submodule commits and live sessions; it never forces removal or closes sessions. Shared `automation_action` actions `worktree_preview` and `cleanup_worktree` accept a saved run `id` on IPC, HTTP, MCP and CLI.
+### Built-in automation templates
+
+New automation drafts offer weekday repository audit, release readiness, daily
+change review and hourly maintenance review templates. Enter the repository and
+run config, then select **Apply template**. Rust supplies the literal prompt,
+cadence, limits and zone (the backend host's local IANA zone unless selected).
+Review and edit the draft, then select **Save**. Templates start paused; applying
+one never persists a definition or starts a run. **Resume** is a separate action.
+Templates use the existing checkout with no precheck and do not change agent
+permissions. Recurring cadence previews retain the existing runtime limitations.

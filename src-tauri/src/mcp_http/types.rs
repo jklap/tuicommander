@@ -712,12 +712,6 @@ pub(super) struct GithubPollLoginRequest {
 }
 
 #[derive(Deserialize)]
-pub(super) struct GithubAddAccountRequest {
-    pub host: String,
-    pub pat: String,
-}
-
-#[derive(Deserialize)]
 pub(super) struct GithubRemoveAccountRequest {
     pub id: String,
 }

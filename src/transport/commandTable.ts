@@ -1240,9 +1240,6 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	github_list_accounts: {
 		map: () => ({ method: "GET", path: "/github/accounts" }),
 	},
-	github_add_account: {
-		map: (args) => ({ method: "POST", path: "/github/accounts", body: { host: args.host, pat: args.pat } }),
-	},
 	github_remove_account: {
 		map: (args) => ({ method: "POST", path: "/github/accounts/remove", body: { id: args.id } }),
 	},

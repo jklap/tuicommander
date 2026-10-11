@@ -202,7 +202,7 @@ receive it on `/events`.
 | `close_pr` | `repo_path, pr_number` | `()` | Close a PR without merging |
 | `merge_pr_via_github` | `repo_path, pr_number, merge_method, expected_head_sha` | `String` | Merge PR via GitHub API, pinned to the reviewed head |
 | `get_all_pr_statuses` | `path` | `Vec<BranchPrStatus>` | Batch PR status for all branches (includes merged) |
-| `get_pr_diff` | `repo_path, pr_number` | `String` | Get PR diff content |
+| `get_pr_diff` | `repo_path, pr_number` | `{diff, headSha}` | Get PR diff content and the head it was read at |
 | `get_merged_prs` | `repo_path, since_tag?` | `Vec<MergedPr>` | Merged PRs via GraphQL, optionally since a tag's date |
 | `start_conflict_assist` | `repo_path, pr_number` | `ConflictAssistResult` | Worktree on PR head + rebase onto base; reports verified/unverified clean or conflicts, base provenance/warning, and agent prompt (push gated, never auto-merge) |
 | `fetch_ci_failure_logs` | `repo_path, branch, check_url?, head_sha?` | `String` | Fetch failed-job logs for the local branch head, or select a check at the supplied PR head SHA |
@@ -944,3 +944,8 @@ do not expose a mobile capability or accept HTTP bootstrap/submission.
 
 
 Automation worktree cleanup (#1623-8b2a): Automation runs retain automation/run IDs and the exact created workspace path and ID in their saved snapshot, including after definition deletion. Worktree cleanup is explicit and limited to final runs. The backend resolves the saved identity and rechecks shared Git integration/archive proof, dirt, submodule commits and live sessions; it never forces removal or closes sessions. Shared `automation_action` actions `worktree_preview` and `cleanup_worktree` accept a saved run `id` on IPC, HTTP, MCP and CLI.
+Automation templates (#1622-be11): the shared automation action accepts
+**templates** (catalogue) and **template** (draft). Draft inputs are template_id,
+repository, run_config and optional timezone (host local by default).
+Drafts have fresh ids and start disabled; no definition or run is created until
+an explicit create action. These actions match across HTTP, IPC, MCP and CLI.

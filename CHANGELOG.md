@@ -9,9 +9,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 - Automation run worktree provenance and explicit cleanup with existing integration, archive and live-session safety checks (#1623-8b2a).
 
+- Add built-in automation templates as editable, paused drafts using the selected repository, run config and host local zone; applying a template never saves or starts a run (#1622-be11).
 - Added GitHub PR action backend APIs for failed-job reruns, auto-merge and queue-aware merging; empty request-changes reviews now fail validation.
 
 - Added GitHub line review backend APIs for paginated threads, replies, resolve/unresolve and head-pinned draft submission.
+- Added line review threads to the PR Files tab: threads on diff lines with outdated/resolved state, replies, resolve/unresolve and a draft review submitted against the head the diff was opened at (#1691-bdff). Fixed diff file rows overlapping when a file section was taller than the 320 px estimate.
 - Add the generic Tasks roadmap component with month/quarter zoom, local-calendar date spans, virtual rows, provider pagination and an undated side list. Tasks shell mounting remains separate (#1690-5d98).
 
 - GitHub Enterprise PAT entry now opens a private native window and writes

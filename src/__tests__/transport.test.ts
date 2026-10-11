@@ -1788,11 +1788,6 @@ describe("transport", () => {
 			expect(mapCommandToHttp("github_list_accounts", {}).method).toBe("GET");
 			expect(mapCommandToHttp("github_list_accounts", {}).path).toBe("/github/accounts");
 
-			const add = mapCommandToHttp("github_add_account", { host: "ghe.acme.com", pat: "ghp_x" });
-			expect(add.method).toBe("POST");
-			expect(add.path).toBe("/github/accounts");
-			expect(add.body).toEqual({ host: "ghe.acme.com", pat: "ghp_x" });
-
 			const rm = mapCommandToHttp("github_remove_account", { id: "ghe.acme.com" });
 			expect(rm.method).toBe("POST");
 			expect(rm.path).toBe("/github/accounts/remove");

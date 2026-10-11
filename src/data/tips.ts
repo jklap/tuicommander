@@ -622,4 +622,10 @@ export const TIPS: Tip[] = [
 			"Let Claude or Gemini report status through their own hooks for precise busy/idle/waiting state — enable per agent in Settings → Agents. TUIC installs and removes the hooks cleanly and never touches your own.",
 		shortcut: null,
 	},
+	{
+		feature: "Automation Templates",
+		description:
+			"Choose a built-in template in a new automation draft after entering its repository and run config. Review it and save it paused before enabling runs.",
+		shortcut: null,
+	},
 ];
