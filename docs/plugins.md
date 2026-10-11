@@ -1799,6 +1799,26 @@ import these Solid components or gain new manifest fields from them. The host
 owns account selection and native secret entry; no token enters a plugin prop.
 See `plugin_dev_guide` → **Settings field kinds** for the core-rendered contracts.
 
+## Tasks roadmap
+
+Core `TasksRoadmap` renders `WorkItemProvider.list` pages and the provider's date
+descriptors. The host passes `provider`, `onOpen(reference)`, optional `query`,
+`visible`, `initialDate`, `startFieldId` and `targetFieldId`. Absent field IDs use
+the first and second `kind: "date"` descriptors in provider order. Field names are
+never guessed. Provider-declared start/target roles need a later contract extension.
+
+Month/quarter zoom and Previous, Next and Today navigate the local calendar.
+ISO date-only values retain their calendar day. Timestamps must carry an explicit
+offset and display in the viewer's local time zone. Bars include the target day
+and clip to the visible period. A single endpoint gives a one-day milestone.
+Missing, invalid or reversed dates stay clickable in the **Without usable dates**
+side list; out-of-period tasks stay listed in the timeline.
+
+Both lists use virtual rows. **Load more** follows provider cursors. Failed
+refreshes retain stale results; obsolete provider responses cannot replace the
+active view. This component adds no manifest, IPC or HTTP API. Tasks shell mounting
+is a separate integration step.
+
 ## Tasks data contract (Phase A4)
 
 Register via `host.registerWorkItemProvider(provider)`, returning an auto-cleaned

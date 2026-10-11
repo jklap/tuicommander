@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Added GitHub PR action backend APIs for failed-job reruns, auto-merge and queue-aware merging; empty request-changes reviews now fail validation.
 
 - Added GitHub line review backend APIs for paginated threads, replies, resolve/unresolve and head-pinned draft submission.
+- Add the generic Tasks roadmap component with month/quarter zoom, local-calendar date spans, virtual rows, provider pagination and an undated side list. Tasks shell mounting remains separate (#1690-5d98).
+
 - GitHub Enterprise PAT entry now opens a private native window and writes
   directly to the account vault; Settings no longer holds the PAT.
 

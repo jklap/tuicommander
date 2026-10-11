@@ -9,6 +9,8 @@ mod store;
 mod verify;
 pub(crate) use verify::read_verified_identity;
 #[cfg(test)]
+mod critic_tests;
+#[cfg(test)]
 mod tests;
 
 pub(crate) use api::execute;
