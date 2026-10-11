@@ -161,22 +161,6 @@ pub(crate) fn upsert_github(account: GitHubAccount, token: Option<&str>) -> Resu
     })
 }
 
-#[cfg(test)]
-pub(crate) fn save_github_delta(
-    changed: Vec<GitHubAccount>,
-    removed: Vec<String>,
-) -> Result<(), String> {
-    with_registry(|registry| {
-        for id in removed {
-            registry.accounts.remove(&id);
-        }
-        for account in changed {
-            upsert_github_metadata(registry, account)?;
-        }
-        Ok(((), true))
-    })
-}
-
 pub(crate) fn read_token(id: &str) -> Result<Option<String>, String> {
     crate::credentials::get(Credential::AccountToken(id))
         .map_err(|_| "Account credential storage is unavailable".into())

@@ -27,10 +27,11 @@ The integration is **account-centric**: the primary key is a stable `GitHubAccou
 
 ### Multi-account commands
 
+Create Enterprise accounts through the core account manager and enter PATs through `account_secret_form`. The legacy PAT add command and `POST /github/accounts` route are removed; `GET /github/accounts` remains available.
+
 | Command | Signature | Description |
 |---------|-----------|-------------|
 | `github_list_accounts` | `() -> Vec<GitHubAccount>` | Additional accounts beyond the ambient github.com default |
-| `github_add_account` | `(host: String, pat: String) -> GitHubAccount` | Validate PAT against `{rest_base}/user`, store token + record (github.com rejected → device flow) |
 | `github_remove_account` | `(id: String) -> ()` | Cascade-remove token + record + bindings + per-account caches |
 | `github_bind_repo` | `(repo_path, account_id, remote_name) -> ()` | Persist a repo→account binding |
 | `github_unbind_repo` | `(repo_path: String) -> ()` | Remove a repo binding |

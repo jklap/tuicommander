@@ -2131,10 +2131,7 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
     // tuic-remote (#094-ec55 remote-target fix).
     #[cfg(feature = "desktop")]
     let routes = routes
-        .route(
-            "/github/accounts",
-            get(github_routes::github_list_accounts).post(github_routes::github_add_account),
-        )
+        .route("/github/accounts", get(github_routes::github_list_accounts))
         .route(
             "/github/accounts/remove",
             post(github_routes::github_remove_account),
