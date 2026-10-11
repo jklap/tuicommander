@@ -261,3 +261,12 @@ The `github_pr_action_commands` wrappers are async. GraphQL/REST work stays off 
 ## Account actions
 
 `accounts::account_action` is async. Shared `execute` moves registry/vault/file-lock work to `spawn_blocking`; token verification awaits bounded HTTP without following redirects. The HTTP account action calls the same service. No account filesystem or keychain work runs on the IPC main thread.
+
+## Merged-PR proof (2026-10-11)
+
+Worktree lifecycle, removal, branch integration/deletion, and sidebar monitoring
+pass `AppState` to the account-aware HTTP GraphQL proof. The synchronous domain
+callback uses `Handle::block_on` only on `spawn_blocking` threads; the domain crate
+remains independent of Tokio. `merge_and_archive_worktree` is now an async Tauri
+command and moves its complete merge/cleanup implementation to `spawn_blocking`,
+matching its HTTP twin and `finalize_merged_worktree`.
