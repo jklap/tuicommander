@@ -908,7 +908,7 @@ const App: Component = () => {
 			<div id="app-body">
 				{/* Sidebar - always mounted, hidden via CSS */}
 				<Sidebar
-					quickSwitcherActive={quickSwitcherVisible()}
+					quickSwitcherActive={quickSwitcherVisible() && !globalWorkspaceStore.isActive()}
 					onBranchSelect={gitOps.handleBranchSelect}
 					onAddTerminal={gitOps.handleAddTerminalToWorkspace}
 					onRemoveBranch={gitOps.handleRemoveWorkspace}
@@ -968,7 +968,7 @@ const App: Component = () => {
 					{/* Tab bar */}
 					<div id="tab-bar">
 						<TabBar
-							quickSwitcherActive={quickSwitcherVisible()}
+							quickSwitcherActive={quickSwitcherVisible() && globalWorkspaceStore.isActive()}
 							onTabSelect={terminalLifecycle.handleTerminalSelect}
 							onTabClose={terminalLifecycle.closeTerminal}
 							onCloseOthers={terminalLifecycle.closeOtherTabs}

@@ -241,7 +241,7 @@ export const TerminalTabView: Component<TerminalTabViewProps> = (props) => {
 					</button>
 				</Show>
 				<Show when={props.quickSwitcherActive && props.index < 9}>
-					<span class={s.shortcutBadge}>{keyFor(`switch-tab-${props.index + 1}`)}</span>
+					<span class={s.shortcutBadge}>{keyFor(`switch-branch-${props.index + 1}`)}</span>
 				</Show>
 				<Show when={props.showWorkspaceMetadata && hovered() && globalWorkspaceStore.isActive() && repoName()}>
 					<span class={s.repoOverlay}>{repoName()}</span>

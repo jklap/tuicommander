@@ -377,7 +377,7 @@ Right-click the main worktree row → **Switch Branch** submenu to checkout a di
 
 ### 2.6 Quick Branch Switcher
 - Hold `Cmd+Ctrl` (macOS) or `Ctrl+Alt` (Win/Linux): show numbered overlay
-- `Cmd+Ctrl+1-9`: switch to branch by index
+- `Cmd+Ctrl+1-9`: switch to branch by index (in the Global Workspace: switch to tab N)
 
 ### 2.7 Park Repos
 - Right-click any repo in the sidebar to park or unpark it
@@ -1850,7 +1850,7 @@ Buffer eviction is reported; it does not create another output store.
 | Shortcut | Action |
 |----------|--------|
 | Hold `Cmd+Ctrl` | Show quick switcher overlay |
-| `Cmd+Ctrl+1-9` | Switch to branch by index |
+| `Cmd+Ctrl+1-9` | Switch to branch by index (in the Global Workspace: switch to tab N; only the tab hints show) |
 
 ### Voice Dictation
 | Shortcut | Action |

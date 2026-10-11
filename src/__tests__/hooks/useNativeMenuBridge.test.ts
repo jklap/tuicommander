@@ -1,8 +1,8 @@
 import { createRoot } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { handlers, mockListen, mockSetLastMenuActionTime, mockSettings, mockStores, mockTogglePanel } = vi.hoisted(
-	() => ({
+const { handlers, mockListen, mockSetLastMenuActionTime, mockSettings, mockStores, mockTogglePanel, mockWorkspace } =
+	vi.hoisted(() => ({
 		handlers: new Map<string, (event: { payload: string }) => void>(),
 		mockListen: vi.fn(),
 		mockSetLastMenuActionTime: vi.fn(),
@@ -30,8 +30,8 @@ const { handlers, mockListen, mockSetLastMenuActionTime, mockSettings, mockStore
 			updater: { checkForUpdate: vi.fn().mockResolvedValue(undefined) },
 		},
 		mockTogglePanel: vi.fn(),
-	}),
-);
+		mockWorkspace: { active: false, ids: [] as string[] },
+	}));
 
 vi.mock("../../invoke", () => ({ listen: mockListen }));
 vi.mock("../../menuDedup", () => ({ setLastMenuActionTime: mockSetLastMenuActionTime }));
@@ -40,6 +40,9 @@ vi.mock("../../stores/appLogger", () => ({ appLogger: { error: vi.fn(), warn: vi
 vi.mock("../../stores/commandPalette", () => ({ commandPaletteStore: mockStores.commandPalette }));
 vi.mock("../../stores/diffTabs", () => ({ diffTabsStore: mockStores.diffTabs }));
 vi.mock("../../stores/errorLog", () => ({ errorLogStore: mockStores.errorLog }));
+vi.mock("../../stores/globalWorkspace", () => ({
+	globalWorkspaceStore: { isActive: () => mockWorkspace.active, getPromotedIds: () => mockWorkspace.ids },
+}));
 vi.mock("../../stores/mcpPopup", () => ({ mcpPopupStore: mockStores.mcpPopup }));
 vi.mock("../../stores/promptLibrary", () => ({ promptLibraryStore: mockStores.promptLibrary }));
 vi.mock("../../stores/repositories", () => ({ repositoriesStore: mockStores.repositories }));
@@ -144,6 +147,19 @@ describe("native menu bridge", () => {
 		expect(options.terminalLifecycle.navigateTab).toHaveBeenCalledWith("next");
 		expect(options.gitOps.handleRunCommand).toHaveBeenCalledWith(false, expect.any(Function));
 		expect(options.terminalLifecycle.handleTerminalSelect).toHaveBeenCalledWith("tab-2");
+	});
+
+	it("switch-tab-N selects the Nth global workspace tab while the workspace is active", () => {
+		const options = createOptions();
+		mockWorkspace.active = true;
+		mockWorkspace.ids = ["w1", "w2", "w3"];
+		try {
+			dispatchNativeMenuAction("switch-tab-3", options as never);
+		} finally {
+			mockWorkspace.active = false;
+			mockWorkspace.ids = [];
+		}
+		expect(options.terminalLifecycle.handleTerminalSelect).toHaveBeenCalledWith("w3");
 	});
 
 	it("shows quit confirmation only when configured terminals are active", () => {
