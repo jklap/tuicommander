@@ -1484,6 +1484,20 @@ view after the host receives `onOpen(reference)`. Shell mounting is separate.
 
 The current PluginManifest has no settings schema, field-kind union or generic Tasks-view declaration. Core does not render schema-driven plugin settings or generic plugin Tasks views. Do not invent manifest fields or import core Settings components. Plugins can open their own UI with `host.openPanel` or `host.openMarkdownPanel`. When a settings schema or Tasks-view API is added, document its fields, kinds and core-rendered controls here and extend the source-derived UX drift check to its real schema/renderer. The manifest field and host method inventories fail on new API entries until the guide is updated.
 
+### GitHub Work adapter status
+
+`plugins/github-work/provider.js` exports `createGitHubProvider` against the A4
+contract and an injected account-scoped fetch port. It returns data only; core owns
+rendering and start-work execution. Recorded GitHub fixtures cover REST read shapes.
+The adapter does not receive tokens or maintain a separate rate limiter.
+
+This module is not yet an installable plugin. Story 1697-4cdc must provide the
+account-aware host fetch wiring before lifecycle, manifest and catalog registration
+are added. B6/B7 core ports and the duplicate-picker consumer also need integration.
+The current `host.invoke` whitelist must not be bypassed to reach core PR commands.
+Projects v2 success paths remain unverified because the recording credential lacks
+`read:project`. See the module README for the open integration tasks.
+
 ## Plugin Management (Settings > Plugins)
 
 The Settings panel has a **Plugins** tab with two sub-tabs:

@@ -2841,3 +2841,7 @@ lanes. Cards support drag and drop and a keyboard-accessible move menu. Pending
 moves cannot be repeated; rejected actions restore the card and show the error.
 This component is available to the Tasks host; provider registration and the
 Tasks navigation surface determine where it is shown.
+
+### GitHub Work adapter — runtime integration pending
+
+The `github-work` provider adapter supports account-scoped qualifier search, issue/PR identity, detail, paged comments and review summaries, create metadata, duplicate candidates, close reasons and host start-work intents. It is tested against recorded GitHub reads. Authenticated host wiring, installation/catalog registration, the duplicate-picker UI and core PR-action binding remain pending; this is not yet an installable plugin. Projects v2 success-path verification needs a GitHub credential with `read:project`.

@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Add the injected-fetch GitHub Work adapter and recorded-fixture tests; authenticated runtime/catalog integration and Projects v2 success-path verification remain pending (#1693-a816).
+
 - Added GitHub PR action backend APIs for failed-job reruns, auto-merge and queue-aware merging; empty request-changes reviews now fail validation.
 
 - Added GitHub line review backend APIs for paginated threads, replies, resolve/unresolve and head-pinned draft submission.

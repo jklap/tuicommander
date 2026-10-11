@@ -935,3 +935,7 @@ MCP create requires host-bound creator provenance. CLI exposes these actions as
 GitHub line review backend supports paginated thread/comment reads, reply, resolve/unresolve and head-pinned draft submission on both transports. UI integration is tracked separately.
 
 GitHub PR action backend supports failed-job reruns, head-pinned auto-merge and queue entry, queue removal/state and active-rule-aware merge. Legacy review submission validates REQUEST_CHANGES bodies. Frontend action integration remains separate.
+
+## GitHub Work adapter — integration pending (#1693-a816)
+
+The data-only GitHub adapter uses an injected account-scoped fetch port and the A4 contract. REST fixtures cover search, issue/PR identity, details, comments and repository create metadata. It is not installable until authenticated host wiring, lifecycle/manifest/catalog registration, duplicate-picker integration and B6/B7 binding are complete. Projects v2 success-path evidence requires `read:project`; no successful Projects response has been recorded.

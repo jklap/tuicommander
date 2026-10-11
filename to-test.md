@@ -5003,3 +5003,8 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
   `{"action":"rotate","id":"<account id>"}` to the test instance; confirm
   presence remains set and provider requests use the replacement credential.
 - [ ] Confirm native entry has no mobile link or developer tools.
+
+## GitHub Work desktop load (1693-a816) — runtime integration pending
+
+- [ ] After 1697-4cdc and the GitHub adapter lifecycle/manifest/catalog integration land, load `github-work` in an isolated test instance. Confirm account-scoped search, an issue and a PR URL, paged normal/review comments, duplicate candidates and draft start-work intent. Verify registered-provider cleanup on unload. Desktop load and Chromium/WebKit screenshots are not yet available; no runtime plugin was installed and no desktop instance was launched by this peer.
+- [ ] With `read:project`, record a successful Projects v2 read and verify board moves edit the Status field without closing the issue; verify roadmap date/number fields round-trip. The current credential returns `INSUFFICIENT_SCOPES`; this item has no success evidence.
