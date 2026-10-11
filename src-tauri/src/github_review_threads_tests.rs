@@ -20,7 +20,11 @@ impl Stub {
     }
 }
 impl PrApi for Stub {
-    async fn graphql(&self, query: &str, vars: Value) -> Result<Value, String> {
+    fn graphql(
+        &self,
+        query: &str,
+        vars: Value,
+    ) -> impl std::future::Future<Output = Result<Value, String>> + Send {
         if query.contains("ThreadResolution") {
             self.writes.lock().unwrap().push(vars.clone());
             let resolved = !query.contains("unresolveReviewThread(");
@@ -32,22 +36,39 @@ impl PrApi for Stub {
             } else {
                 "unresolveReviewThread"
             };
-            return Ok(json!({operation:{"thread":thread}}));
+            return std::future::ready(Ok(json!({operation:{"thread":thread}})));
         }
         if query.contains("ReplyToThread") {
             self.writes.lock().unwrap().push(vars.clone());
             let mut comment = self.pr["reviewThreads"]["nodes"][0]["comments"]["nodes"][0].clone();
             comment["body"] = vars["input"]["body"].clone();
-            return Ok(json!({"addPullRequestReviewThreadReply":{"comment":comment}}));
+            return std::future::ready(Ok(
+                json!({"addPullRequestReviewThreadReply":{"comment":comment}}),
+            ));
         }
         if query.contains("ThreadComments") {
-            return Ok(
+            return std::future::ready(Ok(
                 json!({"node":{"comments":self.pr["reviewThreads"]["nodes"][0]["comments"]}}),
-            );
+            ));
         }
-        Ok(json!({"repository":{"pullRequest":self.pr}}))
+        if query.contains("ReviewThreadDetails") {
+            // The recorded thread is outdated: only a query that selects these
+            // fields can render it as such.
+            for field in ["isOutdated", "line", "originalLine"] {
+                let selected = query.split_whitespace().any(|t| t == field);
+                if !selected {
+                    return std::future::ready(Err(format!("query does not select {field}")));
+                }
+            }
+        }
+        std::future::ready(Ok(json!({"repository":{"pullRequest":self.pr}})))
     }
-    async fn rest(&self, method: &str, endpoint: &str, body: Value) -> Result<Value, String> {
+    fn rest(
+        &self,
+        method: &str,
+        endpoint: &str,
+        body: Value,
+    ) -> impl std::future::Future<Output = Result<Value, String>> + Send {
         self.writes
             .lock()
             .unwrap()
@@ -56,7 +77,7 @@ impl PrApi for Stub {
             "../fixtures/github-review/reviews-recorded.json"
         ))
         .unwrap();
-        Ok(reviews[0].clone())
+        std::future::ready(Ok(reviews[0].clone()))
     }
 }
 fn draft(head: &str) -> DraftReview {
