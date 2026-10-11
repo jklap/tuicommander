@@ -420,7 +420,7 @@ The Browse row shows registry name, version, description, author, tags and minim
 
 ### Settings schema and Tasks views
 
-The current PluginManifest has no settings schema, field-kind union or generic Tasks-view declaration. Core does not render schema-driven plugin settings or generic plugin Tasks views. Do not invent manifest fields or import core Settings components. Plugins can open their own UI with `host.openPanel` or `host.openMarkdownPanel`. When a settings schema or Tasks-view API is added, document its fields, kinds and core-rendered controls here and extend the source-derived UX drift check to its real schema/renderer. The manifest field and host method inventories fail on new API entries until the guide is updated.
+PluginManifest has no plugin settings schema or settings field-kind union. Core does not yet render schema-driven plugin settings. Do not invent manifest fields or import core Settings components. Plugins can open their own UI with `host.openPanel` or `host.openMarkdownPanel`. Core does render the generic Tasks views described below; plugins register data-only WorkItemProvider ports with `host.registerWorkItemProvider(provider)`, not manifest view declarations. The source-derived UX drift check covers the real Tasks components, work-item DTO fields and roadmap date roles. Extend it to the real plugin settings schema when that API lands.
 
 ### Settings field kinds
 
@@ -707,8 +707,8 @@ returns the create schema of that type, without title or body fields: `WorkItemC
 carries those. An unknown type is an error, and `create` rejects an undeclared `itemType`.
 
 Core owns the Solid Tasks views; provider plugins supply data, schemas and actions,
-never view HTML. A4 defines DTOs only: registration, transport and visible views
-are delivered by the following integration steps.
+never view HTML. The Tasks shell mounts the registered providers and their list, board, roadmap, create
+and detail views. Provider registration supplies runtime descriptors, not manifest fields.
 
 ### Work-item links (Phase A3b)
 
@@ -765,6 +765,110 @@ It touches no network, credentials, filesystem or subprocesses. It is a developm
 provider, not a fixture proving GitHub/Jira/GitLab API compatibility. Its search is
 literal text; sort supports key/title/updatedAt. Its cursor expires on mutation.
 
+## Tasks core UX contracts
+
+### Tasks component inventory
+`BoardLane`, `RoadmapTimeline`, `TaskComment`, `TaskCreateField`, `TaskField`, `TaskMarkdown`, `TaskRows`, `TasksBoard`, `TasksBoardView`, `TasksCreate`, `TasksDetail`, `TasksList`, `TasksRoadmap`, `TasksShell`.
+
+### Tasks DTO field inventory
+`WorkItem.assignees`, `WorkItem.fields`, `WorkItem.itemType`, `WorkItem.key`, `WorkItem.labels`, `WorkItem.reference`, `WorkItem.state`, `WorkItem.title`, `WorkItem.updatedAt`, `WorkItem.url`, `WorkItemActionDescriptor.disabledReason`, `WorkItemActionDescriptor.enabled`, `WorkItemActionDescriptor.id`, `WorkItemActionDescriptor.kind`, `WorkItemActionDescriptor.name`, `WorkItemBoard.columns`, `WorkItemBoard.fieldId`, `WorkItemBoard.id`, `WorkItemBoard.name`, `WorkItemBoardCard.item`, `WorkItemBoardCard.moves`, `WorkItemBoardColumn.action`, `WorkItemBoardColumn.id`, `WorkItemBoardColumn.name`, `WorkItemBoardLane.cards`, `WorkItemBoardLane.columnId`, `WorkItemBoardMove.action`, `WorkItemBoardMove.columnId`, `WorkItemBoardPage.board`, `WorkItemBoardPage.lanes`, `WorkItemBoardPage.nextCursor`, `WorkItemComment.author`, `WorkItemComment.body`, `WorkItemComment.createdAt`, `WorkItemComment.id`, `WorkItemComment.url`, `WorkItemCommentPage.entries`, `WorkItemCommentPage.nextCursor`, `WorkItemCreate.body`, `WorkItemCreate.fields`, `WorkItemCreate.itemType`, `WorkItemCreate.title`, `WorkItemDetail.actions`, `WorkItemDetail.body`, `WorkItemDetail.comments`, `WorkItemDetail.fields`, `WorkItemDetail.item`, `WorkItemEdit.fieldId`, `WorkItemEdit.value`, `WorkItemFieldSchema.editable`, `WorkItemFieldSchema.id`, `WorkItemFieldSchema.kind`, `WorkItemFieldSchema.name`, `WorkItemFieldSchema.options`, `WorkItemFieldSchema.required`, `WorkItemFilter.fieldId`, `WorkItemFilter.values`, `WorkItemGroup.id`, `WorkItemGroup.items`, `WorkItemGroup.name`, `WorkItemGroupedPage.groups`, `WorkItemGroupedPage.nextCursor`, `WorkItemOption.id`, `WorkItemOption.name`, `WorkItemPage.items`, `WorkItemPage.nextCursor`, `WorkItemProviderSnapshot.accountId`, `WorkItemProviderSnapshot.boards`, `WorkItemProviderSnapshot.fields`, `WorkItemProviderSnapshot.items`, `WorkItemProviderSnapshot.name`, `WorkItemProviderSnapshot.providerId`, `WorkItemProviderSnapshot.savedFilters`, `WorkItemQuery.cursor`, `WorkItemQuery.filters`, `WorkItemQuery.groupBy`, `WorkItemQuery.limit`, `WorkItemQuery.savedFilterId`, `WorkItemQuery.search`, `WorkItemQuery.sort`, `WorkItemRef.accountId`, `WorkItemRef.id`, `WorkItemRef.providerId`, `WorkItemReviewSummary.comment`, `WorkItemReviewSummary.commitId`, `WorkItemReviewSummary.state`, `WorkItemReviewThread.comments`, `WorkItemReviewThread.commitId`, `WorkItemReviewThread.id`, `WorkItemReviewThread.line`, `WorkItemReviewThread.path`, `WorkItemReviewThread.resolved`, `WorkItemSavedFilter.id`, `WorkItemSavedFilter.name`, `WorkItemSavedFilter.query`, `WorkItemSort.descending`, `WorkItemSort.fieldId`, `WorkItemStartWork.agentType`, `WorkItemStartWork.baseRef`, `WorkItemStartWork.branch`, `WorkItemStartWork.delivery`, `WorkItemStartWork.prompt`, `WorkItemStartWork.repoPath`, `WorkItemState.id`, `WorkItemState.name`, `WorkItemState.tone`, `WorkItemUser.avatarUrl`, `WorkItemUser.id`, `WorkItemUser.name`.
+
+### Tasks shell view inventory
+`board`, `list`, `roadmap`.
+
+### Roadmap date role inventory
+`startFieldId`, `targetFieldId`.
+
+All DTO fields above use the runtime provider contract, not PluginManifest settings.
+The list, create, detail and board descriptions below explain their controls and actions.
+`WorkItemRef` uses `providerId`, `accountId` and opaque `id` for identity.
+`WorkItemUser` supplies `id`, `name`, `avatarUrl`; `WorkItemOption` supplies `id`, `name`.
+`WorkItemState` supplies authoritative `id`, visible `name` and semantic `tone`.
+`WorkItemFieldSchema` supplies `id`, `name`, `kind`, `required`, `editable`, `options`.
+`WorkItem` supplies `reference`, `key`, `title`, `itemType`, `state`, `assignees`,
+`labels`, `updatedAt`, `url` and typed `fields` (missing means unloaded, null means unset).
+`WorkItemQuery` supplies `filters`, `savedFilterId`, `search`, `sort`, `groupBy`, `cursor`,
+`limit`; `WorkItemFilter` supplies `fieldId`, ORed `values`; `WorkItemSort` supplies
+`fieldId`, `descending`. `WorkItemSavedFilter` supplies `id`, `name`, cursor-free `query`.
+`WorkItemPage` supplies `items`, `nextCursor`; `WorkItemGroupedPage` supplies `groups`,
+`nextCursor`; `WorkItemGroup` supplies stable `id`, display `name`, authoritative `items`.
+`WorkItemDetail` supplies `item`, Markdown `body`, `fields`, `actions`, `comments`.
+`WorkItemActionDescriptor` supplies action `id`, `name`, `kind`, `enabled`, `disabledReason`.
+`WorkItemCreate` supplies `title`, `body`, `itemType`, `fields`; `WorkItemEdit` supplies
+`fieldId`, nullable typed `value`. `WorkItemStartWork` supplies `repoPath`, `branch`,
+`baseRef`, `prompt`, `agentType`, explicit `delivery` for host-owned execution.
+`WorkItemCommentPage` supplies `entries`, `nextCursor`; `WorkItemComment` supplies
+`id`, `author`, Markdown `body`, `createdAt`, optional `url`.
+`WorkItemReviewThread` supplies `id`, `resolved`, `path`, optional `line`, `commitId`,
+`comments`; `WorkItemReviewSummary` supplies `comment`, review `state`, `commitId`.
+`WorkItemBoard` supplies `id`, `name`, `fieldId`, `columns`; `WorkItemBoardColumn`
+supplies `id`, `name`, nullable default `action`. `WorkItemBoardPage` supplies `board`,
+`lanes`, `nextCursor`; `WorkItemBoardLane` supplies `columnId`, `cards`;
+`WorkItemBoardCard` supplies `item`, legal `moves`; `WorkItemBoardMove` supplies
+`columnId`, dispatchable `action`. `WorkItemProviderSnapshot` supplies `providerId`,
+`accountId`, `name`, `fields`, `savedFilters`, `boards`, initial detail `items`.
+
+#### TasksShell
+
+The core Tasks tab selects a registered provider by `providerId` and `accountId`,
+displays its `name`, and offers List, Board, Roadmap and New task. Changing the source
+clears the create/detail selection. New task mounts TasksCreate; opening a reference
+mounts TasksDetail alongside the current view. `visible` gates hidden-view work.
+
+#### TasksBoardView
+
+The shell's board loader selects `provider.boards` by `id` and displays `name`.
+It calls `board(id, query, signal)` with an all-items query limited to 50, then passes
+`board` and `lanes` to TasksBoard. Moves call `act(reference, action)` and reload the
+projection. Provider changes abort old requests; only the latest response is adopted.
+No boards and provider errors are visible. This loader currently does not expose
+Load more for a board page's `nextCursor`.
+
+#### BoardLane
+
+Renders a column's `id`, `name` and virtualized `cards`. Cards display item `key`,
+`title` and state `name`/`tone`. The move selector enables only destinations allowed
+by that card's `moves`; pending cards show pending state instead of duplicate moves.
+
+#### TaskRows
+
+Virtualized rows render item `key`, `title`, state `name`/`tone` and open `reference`.
+Grouped rows use the provider's group `id`, `name` and `items`, not inferred membership.
+Query changes reset scrolling; `loading` marks the results busy.
+
+#### RoadmapTimeline
+
+Virtualized dated rows show item `key`, `title` and local start/target calendar days.
+They use the host projection's spans and window, month/quarter zoom and `onOpen(reference)`.
+The provider's typed date values and the explicit `startFieldId`/`targetFieldId` roles
+(or the first two date descriptors) drive placement, not display names.
+
+#### TaskCreateField
+
+The create schema's `name`, `kind`, `required` and `options` select shared inputs:
+Markdown textarea, enum select, user/labels multiselect, or text/number/date/URL input.
+Option IDs are saved, not names. `disabled` reflects pending form work; the caller
+owns draft values and validation. Only editable fields are mounted by TasksCreate.
+
+#### TaskField
+
+Detail schema `name`, `kind`, `required`, `editable` and `options` drive its control.
+Typed `value` initializes the draft. `canEdit` additionally requires an enabled
+edit action; Save sends the typed value (or null), rejects invalid required/number
+values, and adopts the authoritative value after success.
+
+#### TaskComment
+
+Renders the tagged comment entry: normal comment, review thread or review summary.
+Author `name`, `createdAt` and Markdown `body` label comments. Threads add `path`,
+`line`, `resolved` and their `comments`; summaries add review `state` and `comment`.
+Reviewed `commitId` stays provider data; core does not guess a current commit.
+
+#### TaskMarkdown
+
+Renders provider body/comment Markdown with ContentRenderer's untrusted-content mode.
+It strips executable HTML and preserves reader-owned disclosure expansion on refresh.
+
 ## Tasks detail
 
 ### Tasks detail component inventory
@@ -772,7 +876,7 @@ literal text; sort supports key/title/updatedAt. Its cursor expires on mutation.
 
 #### TasksDetail
 
-Core renders work-item detail with Solid controls. Providers supply `WorkItemDetail` through the async `WorkItemProvider` port; they do not supply a view or iframe. The Tasks shell mounts `TasksDetail` with a provider and `{providerId, accountId, id}` reference, and passes `visible=false` when hidden. Shell/provider registration is a separate integration step.
+Core renders work-item detail with Solid controls. Providers supply `WorkItemDetail` through the async `WorkItemProvider` port; they do not supply a view or iframe. The Tasks shell mounts `TasksDetail` with a provider and `{providerId, accountId, id}` reference, and passes `visible=false` when hidden. TasksShell selects the registered provider and mounts the detail alongside the active view.
 
 - Header: key, title, type, authoritative state, updated time and provider link.
 - Fields: the detail's descriptors select text, Markdown, enum, user, labels, date, number or link controls. Only editable fields with an enabled `edit_field` action can be saved. Values use the tagged field-value union; required empty values cannot be submitted.
@@ -798,6 +902,8 @@ Core renders the create form with the shared setting controls (`SettingField`, `
 
 ## Tasks list
 
+#### TasksList
+
 Core TasksList consumes WorkItemProvider data, never plugin HTML or iframes.
 Providers supply providerId, accountId, name, fields, savedFilters, and async list(query, signal).
 Core renders source and preset selectors, descriptor filters, 250 ms debounced search,
@@ -808,9 +914,11 @@ The LRU cache holds at most 32 pages, partitioned by provider, account and query
 Obsolete responses cannot replace newer results. Repeated references update a row;
 repeated cursors stop pagination. Failed refreshes retain rows marked Stale results.
 Opening an item calls the host onOpen(reference); list rendering does not fetch detail.
-Tasks shell mounting remains a separate integration step.
+TasksShell mounts this view for the selected provider.
 
 ## Tasks roadmap
+
+#### TasksRoadmap
 
 Core TasksRoadmap renders WorkItemProvider.list pages and provider.fields date descriptors.
 The host passes provider, onOpen(reference), optional query/visible/initialDate and optional
@@ -823,7 +931,8 @@ One unset endpoint gives a one-day milestone. Missing, invalid or reversed dates
 clickable in the Without usable dates side list. Out-of-period tasks remain listed.
 Both lists use virtual rows. Load more follows provider cursors; failed refreshes retain
 stale results, and obsolete provider responses cannot replace the current view.
-No new manifest, IPC or HTTP API is introduced. Tasks shell mounting remains separate.
+TasksShell mounts this view for the selected provider without explicit date role IDs.
+No manifest view declaration is needed.
 
 ## Troubleshooting
 
@@ -838,6 +947,8 @@ No new manifest, IPC or HTTP API is introduced. Tasks shell mounting remains sep
 | `default export` error | Must export default { id, onload, onunload } |
 
 ## Tasks board
+
+#### TasksBoard
 
 The core renders `TasksBoard` with Solid controls, never plugin HTML or an iframe.
 Declare boards as `{id,name,fieldId,columns:[{id,name,action}]}`. Each column's
@@ -970,9 +1081,97 @@ mod tests {
         );
     }
 
-    // Catches: new manifest-driven UI or core plugin components are absent from the UX guide.
+    fn tasks_components(directory: &std::path::Path) -> BTreeSet<String> {
+        let mut components = BTreeSet::new();
+        for entry in std::fs::read_dir(directory).expect("Tasks sources must exist") {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                if path.file_name().unwrap() != "__tests__" {
+                    components.extend(tasks_components(&path));
+                }
+            } else if path.extension().is_some_and(|extension| extension == "tsx") {
+                let source = std::fs::read_to_string(&path).unwrap();
+                // Only exported production components, not test/harness entry points.
+                if !path
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .contains(".test.")
+                {
+                    components.extend(captures(
+                        &source,
+                        r"(?m)^export function ([A-Z][A-Za-z]+)\(",
+                    ));
+                    components.extend(captures(
+                        &source,
+                        r"(?m)^export const ([A-Z][A-Za-z]+): Component",
+                    ));
+                }
+            }
+        }
+        components
+    }
+
+    // Catches: a new Tasks view or field ships undocumented (or removed entries remain).
     #[test]
     fn plugin_docs_matches_core_plugin_ux() {
+        assert_inventory(
+            PLUGIN_DOCS,
+            "### Tasks component inventory\n",
+            tasks_components(
+                &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/components/Tasks"),
+            ),
+        );
+        for component in inventory(PLUGIN_DOCS, "### Tasks component inventory\n") {
+            assert!(
+                PLUGIN_DOCS.contains(&format!("#### {component}\n")),
+                "each Tasks component needs UX instructions: {component}"
+            );
+        }
+        assert_inventory(
+            PLUGIN_DOCS,
+            "### Tasks shell view inventory\n",
+            captures(
+                section(
+                    include_str!("../../../src/components/Tasks/TasksShell.tsx"),
+                    "const VIEWS:",
+                    "\n];",
+                ),
+                r#"id: "([^"]+)""#,
+            ),
+        );
+        let structs = Regex::new(r"(?ms)^pub struct (WorkItem[A-Za-z]*) \{(.*?)^\}").unwrap();
+        let mut fields = BTreeSet::new();
+        for source in [
+            include_str!("../work_items/model.rs"),
+            include_str!("../work_items/protocol.rs"),
+        ] {
+            for schema in structs.captures_iter(source) {
+                for field in captures(&schema[2], r"(?m)^    pub ([a-z_]+):") {
+                    let mut parts = field.split('_');
+                    let mut name = parts.next().unwrap().to_owned();
+                    for part in parts {
+                        let mut chars = part.chars();
+                        name.extend(chars.next().unwrap().to_uppercase());
+                        name.push_str(chars.as_str());
+                    }
+                    fields.insert(format!("{}.{name}", &schema[1]));
+                }
+            }
+        }
+        assert_inventory(PLUGIN_DOCS, "### Tasks DTO field inventory\n", fields);
+        assert_inventory(
+            PLUGIN_DOCS,
+            "### Roadmap date role inventory\n",
+            captures(
+                section(
+                    include_str!("../../../src/components/Tasks/roadmap/calendar.ts"),
+                    "export interface RoadmapDateFields {",
+                    "\n}",
+                ),
+                r"(?m)^\t([A-Za-z]+)\?:",
+            ),
+        );
         assert_inventory(
             PLUGIN_DOCS,
             "### Settings control inventory\n",

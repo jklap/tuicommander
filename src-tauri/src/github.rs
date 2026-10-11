@@ -350,6 +350,20 @@ fn describe_reqwest_error(e: &reqwest::Error) -> String {
     out
 }
 
+/// The `message` field of a GitHub error body, else a bounded snippet of it.
+fn error_body_message(body: &[u8]) -> String {
+    serde_json::from_slice::<serde_json::Value>(body)
+        .ok()
+        .and_then(|j| j["message"].as_str().map(str::to_string))
+        .unwrap_or_else(|| body_snippet(body))
+}
+
+/// User-facing text for a non-success GitHub HTTP response. The one wording
+/// shared by the GraphQL layer and the REST paths (#1708-a7a5).
+pub(crate) fn http_error_message(status: reqwest::StatusCode, body: &[u8]) -> String {
+    format!("GitHub API error ({status}): {}", error_body_message(body))
+}
+
 /// Single-line, length-capped preview of a response body for error messages.
 /// GitHub/proxy error pages are HTML — a snippet identifies them instantly.
 fn body_snippet(body: &[u8]) -> String {
@@ -445,11 +459,8 @@ pub(crate) async fn graphql_request(
     let parsed: Option<serde_json::Value> = serde_json::from_slice(&body).ok();
 
     if !status.is_success() {
-        let msg = parsed
-            .as_ref()
-            .and_then(|j| j["message"].as_str().map(str::to_string))
-            .unwrap_or_else(|| body_snippet(&body));
-        let err_msg = format!("GitHub API error ({status}): {msg}");
+        let msg = error_body_message(&body);
+        let err_msg = http_error_message(status, &body);
 
         if status.as_u16() == 401 {
             return Err(GqlError::Auth(err_msg));
