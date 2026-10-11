@@ -93,9 +93,7 @@ export function TasksCreate(props: TasksCreateProps) {
 				)}
 			</Show>
 			<div class={styles.actions}>
-				<Show when={!busy() && model.blocker()}>
-					{(field) => <span class={styles.muted}>{field()}</span>}
-				</Show>
+				<Show when={!busy() && model.blocker()}>{(field) => <span class={styles.muted}>{field()}</span>}</Show>
 				<Show when={props.onCancel}>
 					<button type="button" onClick={props.onCancel} disabled={model.submitting()}>
 						Cancel

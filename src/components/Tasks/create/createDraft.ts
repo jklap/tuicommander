@@ -27,7 +27,8 @@ export function carryOver(
 		const value = draft[field.id];
 		if (kinds.get(field.id) !== field.kind || value === undefined) return emptyValue(field);
 		if (field.kind === "enum") return typeof value === "string" && offered(field, value) ? value : emptyValue(field);
-		if (isMulti(field) && Array.isArray(value) && field.options.length > 0) return value.filter((id) => offered(field, id));
+		if (isMulti(field) && Array.isArray(value) && field.options.length > 0)
+			return value.filter((id) => offered(field, id));
 		return value;
 	};
 	return Object.fromEntries(next.map((field) => [field.id, carried(field)]));

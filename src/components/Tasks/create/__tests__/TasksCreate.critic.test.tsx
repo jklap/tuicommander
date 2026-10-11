@@ -51,21 +51,35 @@ it("drops a carried enum value the new type does not offer", async () => {
 	fireEvent.change(bugPriority, { target: { value: "p1" } });
 	fireEvent.change(type, { target: { value: "issue" } });
 	await waitFor(() =>
-		expect(
-			[...(screen.getByLabelText(/Priority/) as HTMLSelectElement).options].map((option) => option.value),
-		).toEqual(["", "low", "high"]),
+		expect([...(screen.getByLabelText(/Priority/) as HTMLSelectElement).options].map((option) => option.value)).toEqual(
+			["", "low", "high"],
+		),
 	);
 	fireEvent.input(screen.getByLabelText(/Title/), { target: { value: "Crash" } });
 	const create = screen.getByRole("button", { name: "Create" }) as HTMLButtonElement;
 	await waitFor(() => expect(create.disabled).toBe(false));
 	fireEvent.click(create);
 	await waitFor(() => expect(act).toHaveBeenCalledTimes(1));
-	expect(act.mock.calls[0][1]).toMatchObject({ kind: "create", value: { itemType: "issue", fields: { priority: null } } });
+	expect(act.mock.calls[0][1]).toMatchObject({
+		kind: "create",
+		value: { itemType: "issue", fields: { priority: null } },
+	});
 });
 
 // Catches: an invalid value on an optional field is reported as required, which tells the user to fill a field they may leave empty.
 it("collectFields reports an invalid optional number as invalid, not required", () => {
-	const points: WorkItemFieldSchema = { id: "points", name: "Points", kind: "number", required: false, editable: true, options: [] };
+	const points: WorkItemFieldSchema = {
+		id: "points",
+		name: "Points",
+		kind: "number",
+		required: false,
+		editable: true,
+		options: [],
+	};
 	expect(collectFields([points], { points: "abc" })).toEqual({ ok: false, blocker: "Points", invalid: true });
-	expect(collectFields([{ ...points, required: true }], { points: "" })).toEqual({ ok: false, blocker: "Points", invalid: false });
+	expect(collectFields([{ ...points, required: true }], { points: "" })).toEqual({
+		ok: false,
+		blocker: "Points",
+		invalid: false,
+	});
 });
