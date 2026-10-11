@@ -1,9 +1,10 @@
 import { type Component, lazy, Suspense } from "solid-js";
-import type {
-	ClaudeUsageTab as ClaudeUsageTabData,
-	GithubOpsTab as GithubOpsTabData,
-	MdTabData,
-	PrDiffTab as PrDiffTabData,
+import {
+	type ClaudeUsageTab as ClaudeUsageTabData,
+	type GithubOpsTab as GithubOpsTabData,
+	type MdTabData,
+	mdTabsStore,
+	type PrDiffTab as PrDiffTabData,
 } from "../../stores/mdTabs";
 
 const ClaudeUsageDashboard = lazy(() =>
@@ -42,7 +43,16 @@ export const MdTabContent: Component<{ tab: MdTabData; onClose: () => void; visi
 					return <PluginPanel tab={tab} onClose={props.onClose} visible={props.visible} />;
 				if (tab.type === "pr-diff") {
 					const pr = tab as PrDiffTabData;
-					return <PrDiffTab prNumber={pr.prNumber} prTitle={pr.prTitle} diff={pr.diff} repoPath={pr.repoPath} />;
+					return (
+						<PrDiffTab
+							prNumber={pr.prNumber}
+							prTitle={pr.prTitle}
+							diff={pr.diff}
+							headSha={pr.headSha}
+							onPin={(sha) => mdTabsStore.pinPrDiffHead(pr.id, sha)}
+							repoPath={pr.repoPath}
+						/>
+					);
 				}
 				if (tab.type === "html-preview") return <HtmlPreviewTab tab={tab} onClose={props.onClose} />;
 				return <MarkdownTab tab={tab} onClose={props.onClose} />;

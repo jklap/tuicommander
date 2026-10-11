@@ -9,11 +9,11 @@ pub(super) struct CircleCiSetTokenRequest {
 }
 
 use super::types::{
-    ChangelogQuery, CiChecksQuery, CiFailureLogsQuery, GithubAddAccountRequest,
-    GithubBindRepoRequest, GithubPollLoginRequest, GithubRemoveAccountRequest, GithubRepoPathBody,
-    GithubResolveRepoQuery, GithubResolveReposRequest, GithubSetHideDraftsRequest,
-    IssueActionRequest, IssuesQuery, PathQuery, PollRepoRequest, PrDiffQuery, SetVisibilityRequest,
-    StartPollingRequest, UpdatePathsRequest,
+    ChangelogQuery, CiChecksQuery, CiFailureLogsQuery, GithubBindRepoRequest,
+    GithubPollLoginRequest, GithubRemoveAccountRequest, GithubRepoPathBody, GithubResolveRepoQuery,
+    GithubResolveReposRequest, GithubSetHideDraftsRequest, IssueActionRequest, IssuesQuery,
+    PathQuery, PollRepoRequest, PrDiffQuery, SetVisibilityRequest, StartPollingRequest,
+    UpdatePathsRequest,
 };
 use super::{err_500, json_result, upstream_json_result, validate_repo_path};
 use crate::github_poller::PollerCmd;
@@ -192,10 +192,7 @@ pub(super) async fn repo_pr_diff(
     }
     let path = q.path;
     let pr = q.pr;
-    match crate::github::get_pr_diff_impl(&path, pr, &state).await {
-        Ok(diff) => diff.into_response(),
-        Err(e) => (axum::http::StatusCode::BAD_GATEWAY, e).into_response(),
-    }
+    upstream_json_result(crate::github::get_pr_diff_pinned_impl(&path, pr, &state).await)
 }
 
 pub(super) async fn repo_merged_prs(
@@ -519,14 +516,6 @@ pub(super) async fn github_list_accounts() -> Response {
 // #[cfg(feature = "desktop")] (keychain-backed). The remote daemon never serves
 // GitHub routes (build_remote_router omits them), so gate these handlers to match
 // their impls and keep the always-compiled lib building for tuic-remote (#094-ec55).
-#[cfg(feature = "desktop")]
-pub(super) async fn github_add_account(
-    State(state): State<Arc<AppState>>,
-    Json(body): Json<GithubAddAccountRequest>,
-) -> Response {
-    json_result(crate::github_account::github_add_account_impl(&state, body.host, body.pat).await)
-}
-
 #[cfg(feature = "desktop")]
 pub(super) async fn github_remove_account(
     State(state): State<Arc<AppState>>,

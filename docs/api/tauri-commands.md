@@ -202,7 +202,7 @@ receive it on `/events`.
 | `close_pr` | `repo_path, pr_number` | `()` | Close a PR without merging |
 | `merge_pr_via_github` | `repo_path, pr_number, merge_method, expected_head_sha` | `String` | Merge PR via GitHub API, pinned to the reviewed head |
 | `get_all_pr_statuses` | `path` | `Vec<BranchPrStatus>` | Batch PR status for all branches (includes merged) |
-| `get_pr_diff` | `repo_path, pr_number` | `String` | Get PR diff content |
+| `get_pr_diff` | `repo_path, pr_number` | `{diff, headSha}` | Get PR diff content and the head it was read at |
 | `get_merged_prs` | `repo_path, since_tag?` | `Vec<MergedPr>` | Merged PRs via GraphQL, optionally since a tag's date |
 | `start_conflict_assist` | `repo_path, pr_number` | `ConflictAssistResult` | Worktree on PR head + rebase onto base; reports verified/unverified clean or conflicts, base provenance/warning, and agent prompt (push gated, never auto-merge) |
 | `fetch_ci_failure_logs` | `repo_path, branch, check_url?, head_sha?` | `String` | Fetch failed-job logs for the local branch head, or select a check at the supplied PR head SHA |
