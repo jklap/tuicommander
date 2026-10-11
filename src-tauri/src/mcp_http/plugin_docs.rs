@@ -708,6 +708,20 @@ It touches no network, credentials, filesystem or subprocesses. It is a developm
 provider, not a fixture proving GitHub/Jira/GitLab API compatibility. Its search is
 literal text; sort supports key/title/updatedAt. Its cursor expires on mutation.
 
+## Tasks list
+
+Core TasksList consumes WorkItemProvider data, never plugin HTML or iframes.
+Providers supply providerId, accountId, name, fields, savedFilters, and async list(query, signal).
+Core renders source and preset selectors, descriptor filters, 250 ms debounced search,
+provider sorting, virtual rows, and Load more using nextCursor.
+Queries carry filters, savedFilterId, search, sort, groupBy, cursor and limit.
+Grouped results come from grouped(query, signal); core renders provider group names and members.
+The LRU cache holds at most 32 pages, partitioned by provider, account and query.
+Obsolete responses cannot replace newer results. Repeated references update a row;
+repeated cursors stop pagination. Failed refreshes retain rows marked Stale results.
+Opening an item calls the host onOpen(reference); list rendering does not fetch detail.
+Tasks shell mounting remains a separate integration step.
+
 ## Troubleshooting
 
 | Error | Fix |
