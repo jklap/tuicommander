@@ -1357,6 +1357,26 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	get_remote_url: {
 		map: (_args, p) => ({ method: "GET", path: `/repo/remote-url?path=${p("path")}` }),
 	},
+	get_git_remotes: {
+		map: (_args, p) => ({ method: "GET", path: `/repo/remotes?path=${p("path")}` }),
+	},
+	list_workitem_links: {
+		map: () => ({ method: "GET", path: "/workitem-links" }),
+	},
+	link_workitem: {
+		map: (args) => ({
+			method: "PUT",
+			path: "/workitem-links",
+			body: { repoPath: args.repoPath, branch: args.branch, link: args.link },
+		}),
+	},
+	unlink_workitem: {
+		map: (args) => ({
+			method: "DELETE",
+			path: "/workitem-links",
+			body: { repoPath: args.repoPath, branch: args.branch },
+		}),
+	},
 	get_git_panel_context: {
 		map: (_args, p) => ({ method: "GET", path: `/repo/panel-context?path=${p("path")}` }),
 	},

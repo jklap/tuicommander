@@ -4033,3 +4033,28 @@ describe("automation command transport", () => {
 		});
 	});
 });
+
+// Catches: a work-item link losing its payload or its repo/branch key between IPC and HTTP.
+describe("work-item link command transport", () => {
+	it("maps link CRUD and remotes onto the same keys as IPC", () => {
+		const link = {
+			reference: { providerId: "jira", accountId: "acme", id: "10001" },
+			key: "ACME-1",
+			title: "Fix",
+			url: "https://acme.atlassian.net/browse/ACME-1",
+			state: null,
+		};
+		expect(mapCommandToHttp("list_workitem_links", {})).toMatchObject({ method: "GET", path: "/workitem-links" });
+		expect(mapCommandToHttp("link_workitem", { repoPath: "/r", branch: "feat/a", link })).toEqual({
+			method: "PUT",
+			path: "/workitem-links",
+			body: { repoPath: "/r", branch: "feat/a", link },
+		});
+		expect(mapCommandToHttp("unlink_workitem", { repoPath: "/r", branch: "feat/a" })).toEqual({
+			method: "DELETE",
+			path: "/workitem-links",
+			body: { repoPath: "/r", branch: "feat/a" },
+		});
+		expect(mapCommandToHttp("get_git_remotes", { path: "/r a" }).path).toBe("/repo/remotes?path=%2Fr%20a");
+	});
+});
