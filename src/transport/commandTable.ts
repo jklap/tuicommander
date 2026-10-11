@@ -2272,6 +2272,7 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 				method: args.method,
 				headers: args.headers,
 				body: args.body,
+				account: args.account,
 			},
 		}),
 	},
