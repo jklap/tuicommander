@@ -15,5 +15,7 @@ for (( attempt = 0; attempt < 120; attempt++ )); do
 	if ! kill -0 "$vite_pid" 2>/dev/null; then cat reports/visual/tasks-create-vite.log; exit 1; fi
 	sleep 0.5
 done
-node src/components/Tasks/create/__tests__/visual.mjs
+# The list stream's WebKit launcher is committed without the exec bit; set it in this disposable replica.
+chmod +x src/components/Tasks/list/webkit-run.sh
+LD_LIBRARY_PATH="/home/rb/Gits/.tmp/pw/libs/usr/lib/aarch64-linux-gnu:${LD_LIBRARY_PATH:-}" node src/components/Tasks/create/__tests__/visual.mjs
 scripts/with-test-tmp.sh bash -c 'cd src-tauri && cargo nextest run --lib -E "test(plugin_docs) | test(work_items::)"'

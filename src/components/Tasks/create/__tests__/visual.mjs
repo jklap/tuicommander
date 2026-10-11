@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
 import { createRequire } from "node:module";
+import { resolve } from "node:path";
 const require = createRequire("/home/rb/Gits/.tmp/pw/");
 const { chromium, webkit, devices } = require("playwright-core");
 const url = "http://127.0.0.1:4180/src/components/Tasks/create/__tests__/preview.html";
@@ -10,7 +11,9 @@ for (const [name, engine, options] of [
 	["chromium-desktop", chromium, { viewport: { width: 1280, height: 900 } }],
 	["webkit-iphone", webkit, devices["iPhone 13"]],
 ]) {
-	const browser = await engine.launch({ headless: true });
+	// rb lacks WebKit's system libraries; the list stream's launcher loads the workspace copies.
+	const executablePath = engine === webkit ? resolve("src/components/Tasks/list/webkit-run.sh") : undefined;
+	const browser = await engine.launch({ headless: true, executablePath });
 	try {
 		const page = await browser.newPage(options);
 		const errors = [];
