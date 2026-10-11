@@ -944,3 +944,14 @@ change keeps only same-id, same-kind values and drops late schemas of an earlier
 type. Create stays disabled until Title, Type and every required field hold a
 valid value; it dispatches one `create` action and hands the returned item to the
 host to open. A rejection keeps the draft. Tasks shell mounting is separate.
+
+### Built-in automation templates
+
+New automation drafts offer weekday repository audit, release readiness, daily
+change review and hourly maintenance review templates. Enter the repository and
+run config, then select **Apply template**. Rust supplies the literal prompt,
+cadence, limits and zone (the backend host's local IANA zone unless selected).
+Review and edit the draft, then select **Save**. Templates start paused; applying
+one never persists a definition or starts a run. **Resume** is a separate action.
+Templates use the existing checkout with no precheck and do not change agent
+permissions. Recurring cadence previews retain the existing runtime limitations.

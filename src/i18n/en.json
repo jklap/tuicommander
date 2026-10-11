@@ -1,4 +1,13 @@
 {
+	"automations.templates": "Built-in templates",
+	"automations.template": "Template",
+	"automations.chooseTemplate": "Choose a template",
+	"automations.templateHint": "Enter a repository and run config above, then apply a template. Review the draft and save it paused; Resume enables scheduled runs.",
+	"automations.applyTemplate": "Apply template",
+	"automations.templateNames.weekday_audit": "Weekday repository audit",
+	"automations.templateNames.release_readiness": "Release readiness",
+	"automations.templateNames.daily_review": "Daily change review",
+	"automations.templateNames.hourly_maintenance": "Hourly maintenance review",
 	"mobile.dictation.error": "Dictation failed",
 	"mobile.dictation.start": "Dictate into draft",
 	"mobile.dictation.stop": "Stop dictation",

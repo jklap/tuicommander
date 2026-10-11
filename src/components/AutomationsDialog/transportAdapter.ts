@@ -6,6 +6,7 @@ import type {
 	AutomationDefinition,
 	AutomationListItem,
 	AutomationRun,
+	AutomationTemplate,
 	DefinitionSchedulePreview,
 	RunReceipt,
 	RunSummary,
@@ -20,6 +21,15 @@ export function createAutomationAdapter(connectionId?: string): AutomationAdapte
 			: invoke<T>("automation_action", { input });
 	}
 	return {
+		templates: () => call<AutomationTemplate[]>({ action: "templates" }),
+		template: (template_id, repository, run_config, timezone) =>
+			call<AutomationDefinition>({
+				action: "template",
+				template_id,
+				repository,
+				run_config,
+				timezone: timezone || null,
+			}),
 		list: () => call<AutomationListItem[]>({ action: "list" }),
 		run: (id) => call<AutomationRun>({ action: "run", id }),
 		save: (definition, create) => call<AutomationDefinition>({ action: create ? "create" : "update", definition }),

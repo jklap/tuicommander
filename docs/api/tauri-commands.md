@@ -941,3 +941,9 @@ The request is `{action:"add",account:{provider,host,kind,label,username?}}` or
 `{names:[],status:"stored"|"declined"|"failed"}`. `secret_form_bootstrap` and
 `secret_form_submit` require the active native window identity. Account forms
 do not expose a mobile capability or accept HTTP bootstrap/submission.
+
+Automation templates (#1622-be11): the shared automation action accepts
+**templates** (catalogue) and **template** (draft). Draft inputs are template_id,
+repository, run_config and optional timezone (host local by default).
+Drafts have fresh ids and start disabled; no definition or run is created until
+an explicit create action. These actions match across HTTP, IPC, MCP and CLI.

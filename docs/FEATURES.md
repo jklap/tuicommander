@@ -2848,3 +2848,14 @@ Core provides a generic work-item create form. The provider declares the item
 types and the fields of each type; the form uses the shared setting controls,
 blocks Create until the required fields of the current type are set, and opens
 the created item. The Tasks shell integrates this component separately.
+
+### Built-in automation templates
+
+New automation drafts offer weekday repository audit, release readiness, daily
+change review and hourly maintenance review templates. Enter the repository and
+run config, then select **Apply template**. Rust supplies the literal prompt,
+cadence, limits and zone (the backend host's local IANA zone unless selected).
+Review and edit the draft, then select **Save**. Templates start paused; applying
+one never persists a definition or starts a run. **Resume** is a separate action.
+Templates use the existing checkout with no precheck and do not change agent
+permissions. Recurring cadence previews retain the existing runtime limitations.
