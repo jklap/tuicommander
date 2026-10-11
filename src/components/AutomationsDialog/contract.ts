@@ -51,6 +51,7 @@ export interface AutomationRun {
 	task_id: string | null;
 	session_id: string | null;
 	workspace: string | null;
+	workspace_id?: string | null;
 	stdout: SavedOutput;
 	stderr: SavedOutput;
 	reason: string | null;
@@ -109,7 +110,7 @@ export type AutomationAction =
 	| { action: "template"; template_id: string; repository: string; run_config: string; timezone: string | null }
 	| { action: "create" | "update"; definition: AutomationDefinition }
 	| { action: "update"; id: string; enabled: boolean }
-	| { action: "get" | "run"; id: string }
+	| { action: "get" | "run" | "worktree_preview" | "cleanup_worktree"; id: string }
 	| { action: "summary"; window: "24h" | "7d" }
 	| { action: "delete" | "run_now" | "pause" | "resume"; id: string }
 	| { action: "list_runs"; id?: string; limit: number; offset?: number }

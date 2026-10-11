@@ -58,6 +58,12 @@ pub(crate) enum AutomationAction {
         #[serde(default)]
         offset: u32,
     },
+    WorktreePreview {
+        id: String,
+    },
+    CleanupWorktree {
+        id: String,
+    },
     Summary {
         window: SummaryWindow,
     },
@@ -114,6 +120,21 @@ pub(crate) async fn execute_as(
     caller.creator(&action)?;
     if let AutomationAction::RunNow { id } = action {
         return value(AutomationRuntime::run_now(&state, &id).await?);
+    }
+    if matches!(
+        action,
+        AutomationAction::WorktreePreview { .. } | AutomationAction::CleanupWorktree { .. }
+    ) {
+        return tokio::task::spawn_blocking(move || {
+            let (id, remove) = match action {
+                AutomationAction::WorktreePreview { id } => (id, false),
+                AutomationAction::CleanupWorktree { id } => (id, true),
+                _ => unreachable!(),
+            };
+            super::worktrees::execute(&state, &RunStore::open()?, &id, remove)
+        })
+        .await
+        .map_err(|error| format!("Automation cleanup task failed: {error}"))?;
     }
     tokio::task::spawn_blocking(move || {
         execute_stored_as(
@@ -254,6 +275,9 @@ pub(crate) fn execute_stored_as(
             )?)
         }
         AutomationAction::Preset { preset } => Ok(json!({"cron": preset.cron()?})),
+        AutomationAction::WorktreePreview { .. } | AutomationAction::CleanupWorktree { .. } => {
+            Err("Worktree cleanup requires local session state".into())
+        }
         AutomationAction::RunNow { .. } => Err("Run Now requires the runtime owner".into()),
     }
 }

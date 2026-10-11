@@ -28,3 +28,5 @@ pub(crate) mod templates;
 
 pub(crate) mod context;
 pub(crate) mod notifications;
+
+pub(crate) mod worktrees;

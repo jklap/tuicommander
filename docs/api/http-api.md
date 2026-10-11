@@ -2973,6 +2973,8 @@ the identical message. Malformed HTTP JSON/envelopes use Axum extraction errors.
 | `delete` | `id` | `{ok:true}`; history retained |
 | `run_now` | `id` | Full persisted run, including status and reason |
 | `list_runs` | Optional `id`, `limit` (default 50, 1–100), `offset` (default 0) | Newest-first run snapshots, including deleted definitions |
+| `worktree_preview` | Saved run `id` | `{automation_id,run_id,repository,workspace,workspace_id,can_remove,reason,safety}` |
+| `cleanup_worktree` | Saved run `id` | `{removed:true,run_id,branch_delete_warning}`; unsafe workspaces return an error |
 | `summary` | `window`: `24h` or `7d` | `{total,by_status}` over elapsed UTC windows |
 | `preview` | `cron`, optional/null `timezone`, `count` (default 4, 1–20) | `{cron,timezone,occurrences}` with UTC ISO timestamps |
 | `preview_definition` | `definition`, `count` (default 4, 1–20) | Preview plus `once_local,completed`; respects the durable cursor |

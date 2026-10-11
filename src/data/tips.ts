@@ -235,6 +235,12 @@ export const TIPS: Tip[] = [
 		shortcut: null,
 	},
 	{
+		feature: "Automation worktree cleanup",
+		description:
+			"Open Automations → Runs to inspect a completed run’s worktree and remove it when the backend confirms it is safe.",
+		shortcut: null,
+	},
+	{
 		feature: "Worktree Manager",
 		description: "Create, delete, and merge worktrees in a unified panel.",
 		shortcut: `${mod}+Shift+W`,

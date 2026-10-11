@@ -180,7 +180,9 @@ fn mcp_automation_tool_is_discoverable_with_all_definition_actions() {
             "preview_definition",
             "preset",
             "templates",
-            "template"
+            "template",
+            "worktree_preview",
+            "cleanup_worktree"
         ])
     );
 }

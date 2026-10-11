@@ -448,3 +448,6 @@ Working-tree changed-file listings read untracked names with
 used literally, including tabs, newlines and boundary spaces, so line counts
 and file-diff consumers open the actual file. Staged and committed scopes
 do not include untracked files.
+
+
+Automation worktree cleanup (#1623-8b2a): Automation runs retain automation/run IDs and the exact created workspace path and ID in their saved snapshot, including after definition deletion. Worktree cleanup is explicit and limited to final runs. The backend resolves the saved identity and rechecks shared Git integration/archive proof, dirt, submodule commits and live sessions; it never forces removal or closes sessions. Shared `automation_action` actions `worktree_preview` and `cleanup_worktree` accept a saved run `id` on IPC, HTTP, MCP and CLI.
