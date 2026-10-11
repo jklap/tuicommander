@@ -1,5 +1,7 @@
 # HTTP API Reference
 
+`POST /sessions/:id/queue` optionally accepts `expectedDraft`. It must match the tracked live composer and trim to `text`; the server clears that draft before using the existing ready-window queue. Preflight rejection writes nothing. A later error may have cleared the composer, so clients must report uncertainty and must not automatically retry this transfer.
+
 ## Request authentication and browser boundary
 
 Every TCP request validates its Host and Origin before reaching a handler, including login, health and preflight requests. Unknown/missing/duplicate Host or foreign/opaque Origin returns 403. Allowed hosts are localhost, loopback/private IP literals, local interface IPs and the detected Tailscale FQDN. Allowed origins are the exact bundled WebView origins, Vite `http://127.0.0.1:1421`/`http://localhost:1421`, and the HTTP/HTTPS origin of the validated Host. Cross-site requests are rejected except for the explicit WebView/development origins.
@@ -939,6 +941,24 @@ GET /repo/branches?path=/path/to/repo
 
 Returns sorted branch list.
 
+### Remotes
+
+```
+GET /repo/remotes?path=/path/to/repo
+```
+
+Returns `[{ "name": "origin", "url": "https://github.com/acme/app.git" }]`. Userinfo (an embedded token) is removed from every URL. IPC twin: `get_git_remotes`.
+
+### Work-item links
+
+```
+GET    /workitem-links
+PUT    /workitem-links   {"repoPath": "/repo", "branch": "feat/x", "link": WorkItemLink}
+DELETE /workitem-links   {"repoPath": "/repo", "branch": "feat/x"}
+```
+
+`GET` returns `{ repoPath: { branch: WorkItemLink } }`. `WorkItemLink` is `{ reference: { providerId, accountId, id }, key, title, url, state: { id, name, tone } | null }`. `PUT` answers 400 for a relative `repoPath`, an empty key or a non-http(s) `url`. `DELETE` returns `true` when a link existed. Stored in `workitem_links.json` in the config dir; TUIC drops the link when it removes the worktree. IPC twins: `list_workitem_links`, `link_workitem`, `unlink_workitem`.
+
 ### Repo Summary
 
 ```
@@ -1098,12 +1118,15 @@ DELETE /circleci/token                         -> null
 POST /github/pr-hide-drafts   { hide }          -> null
 POST /github/auth/start                         -> DeviceCodeResponse
 POST /github/auth/poll        { deviceCode }    -> PollResult (default login)
+GET  /github/accounts                           -> GitHubAccount[]
 POST /github/accounts/poll    { deviceCode }    -> PollResult (named account; preserves default login)
 POST /github/auth/logout                        -> null
 POST /github/auth/disconnect                    -> null
 GET  /github/auth/status                        -> AuthStatus
 GET  /github/diagnostics                        -> GitHubDiagnostics
 ```
+
+Enterprise account creation uses the core account manager and `account_secret_form`. The legacy `POST /github/accounts` PAT endpoint is removed.
 
 Auth commands share the desktop `*_impl` (device-code flow + OS-keyring token via
 `crate::credentials`). `get_all_issues` is intentionally unmapped — it has no frontend
@@ -1217,10 +1240,10 @@ Returns `{"bot": N, "human": M}`: unresolved review threads of one PR (first 50)
 ### PR Diff
 
 ```
-GET /repo/pr-diff?path=/path/to/repo
+GET /repo/pr-diff?path=/path/to/repo&pr=42
 ```
 
-Returns diff for the current branch's open PR.
+Returns `{"diff": "...", "headSha": "..."}`. `headSha` is the commit the diff was read at; the call fails with 502 if the PR head moves while the diff loads.
 
 ### Conflict Assist
 
@@ -1580,7 +1603,9 @@ The tab's verdict on a `session action=suspend` request announced by the `sessio
 
 ### MCP Upstream Credentials
 
-`POST /mcp/upstreams/credential` accepts `{name, token, url, header?}`. Without `header`, it saves the existing Bearer credential. With `header: {name, credential_ref}`, it saves a secret header value in the upstream-scoped OS credential vault. `credential_ref` must be a UUID. `url` is required and must be HTTP or HTTPS. The vault entry binds the secret to that URL origin; requests to a different origin fail before sending. Old unbound credentials require re-saving or authorization. Names and values are validated without echoing values in errors.
+`PUT /mcp/upstreams` accepts optional write-only `credentials: [{server_id, token, header?}]` alongside `base` and `config`. Each credential must target a newly added HTTP server, with matching header metadata or Bearer auth. The backend validates the merged configuration under its cross-process lock before creating vault entries. Duplicate names and existing vault entries are rejected without replacement. Partial vault writes and config-save failures roll back new entries; a successful save then hot-reloads the upstream. Secrets never enter the config file.
+
+`POST /mcp/upstreams/credential` accepts `{name, token, url, header?, replace?}`. It refuses to overwrite an existing vault entry by default. Use `replace: true` only for an explicit credential edit. Without `header`, it saves a Bearer credential. With `header: {name, credential_ref}`, it saves a secret header value in the upstream-scoped OS credential vault. `credential_ref` must be a UUID. `url` is required and must be HTTP or HTTPS. The vault entry binds the secret to that URL origin; requests to a different origin fail before sending. Old unbound credentials require re-saving or authorization. Names and values are validated without echoing values in errors.
 
 `DELETE /mcp/upstreams/credential` accepts `{name, header?}` and removes that credential. Both return JSON `null` on success, matching IPC unit results. `POST /mcp/upstreams/reconnect` also returns JSON `null` on success. Config entries carry only `headers: [{name, credential_ref}]`; the API never returns header values.
 
@@ -2311,7 +2336,7 @@ POST /api/plugins/:plugin_id/build-artifacts/scan   { repoPaths, forceRefresh? }
 POST /api/plugins/:plugin_id/build-artifacts/delete { path, repoPaths } -> { ok }
 POST /api/plugins/:plugin_id/build-artifacts/trim   { path, repoPaths } -> { ok }   (intermediates only; keeps executables)
 POST /api/plugins/:plugin_id/exec        { binary, args, cwd? }   -> string        (plugin_exec_cli)
-POST /api/plugins/:plugin_id/http        { url, method?, headers?, body?, allowedUrls } -> HttpResponse
+POST /api/plugins/:plugin_id/http        { url, method?, headers?, body?, account? } -> HttpResponse
 GET  /api/plugins/:plugin_id/pty/output?sessionId=<id>&maxLines=  -> string        (plugin_read_session_output)
 POST /api/plugins/:plugin_id/register    { capabilities }         -> { ok }
 POST /api/plugins/:plugin_id/unregister                           -> { ok }
@@ -2940,6 +2965,8 @@ the identical message. Malformed HTTP JSON/envelopes use Axum extraction errors.
 
 | Action | Input fields besides `action` | Success |
 |---|---|---|
+| templates | None | Built-in recipe array with id, name, cron and prompt |
+| template | template_id, repository, run_config, optional/null timezone | Fresh unsaved AutomationDefinition with enabled:false; omitted zone uses host local IANA zone |
 | `list` | None | Array of `{definition,next_run_ms,last_status}` |
 | `get` | `id` | Stored definition |
 | `create` | `definition` | Stored definition, including resolved timezone |
@@ -2948,6 +2975,8 @@ the identical message. Malformed HTTP JSON/envelopes use Axum extraction errors.
 | `delete` | `id` | `{ok:true}`; history retained |
 | `run_now` | `id` | Full persisted run, including status and reason |
 | `list_runs` | Optional `id`, `limit` (default 50, 1–100), `offset` (default 0) | Newest-first run snapshots, including deleted definitions |
+| `worktree_preview` | Saved run `id` | `{automation_id,run_id,repository,workspace,workspace_id,can_remove,reason,safety}` |
+| `cleanup_worktree` | Saved run `id` | `{removed:true,run_id,branch_delete_warning}`; unsafe workspaces return an error |
 | `summary` | `window`: `24h` or `7d` | `{total,by_status}` over elapsed UTC windows |
 | `preview` | `cron`, optional/null `timezone`, `count` (default 4, 1–20) | `{cron,timezone,occurrences}` with UTC ISO timestamps |
 | `preview_definition` | `definition`, `count` (default 4, 1–20) | Preview plus `once_local,completed`; respects the durable cursor |
@@ -2995,3 +3024,51 @@ literal prompt with delimited, escaped untrusted stdout capped at 16 KiB;
 truncation is marked and stderr is excluded. Empty output and manual bypasses
 inject nothing. The run ledger records `precheck_context: {injected, bytes}` for
 the prepared launch prompt, counting escaped stdout bytes before framing/marker.
+
+The MCP `automations` tool and `tuic automations '<action JSON>'` use the same
+action table, parser and result values as this endpoint. MCP receives the action
+object directly; HTTP wraps it in `input`. MCP creation additionally requires a
+bound caller identity and records it in `created_by_session`. CLI sends the
+unchanged action through HTTP-over-IPC MCP, prints JSON on success and reports
+the same backend error text on stderr with exit 1.
+
+### PR line reviews
+
+Desktop command arguments and HTTP bodies use the same camelCase fields.
+
+| Method | Route | Arguments |
+|---|---|---|
+| GET | `/repo/pr-line-threads` | `repoPath`, `prNumber`, optional `after` |
+| GET | `/repo/pr-thread-comments` | `repoPath`, `threadId`, optional `after` |
+| POST | `/repo/pr-thread-resolved` | `{repoPath, threadId, resolved}` |
+| POST | `/repo/pr-thread-reply` | `{repoPath, threadId, body}` |
+| POST | `/repo/pr-draft-review` | `{repoPath, prNumber, draft:{headSha, body, event, comments}}` |
+
+Draft submission rejects a moved reviewed head and pins REST `commit_id`. Thread and comment connections expose pagination; outdated threads retain null current lines.
+
+### PR actions
+
+| Method | Route | Arguments |
+|---|---|---|
+| GET | `/repo/pr-action-state` | `repoPath`, `prNumber` |
+| POST | `/repo/pr-auto-merge` | `{repoPath, prNumber, enabled, mergeMethod?, expectedHeadSha?}` |
+| POST | `/repo/pr-merge-queue` | `{repoPath, prNumber, enqueued, expectedHeadSha?}` |
+| POST | `/repo/pr-merge-or-enqueue` | `{repoPath, prNumber, mergeMethod, expectedHeadSha}` |
+| POST | `/repo/pr-rerun-failed` | `{repoPath, runId}` |
+
+The routes share desktop command results. Enabling auto-merge and queue entry require the reviewed head. Merge policy read failures stop writes. The legacy `/repo/post-pr-review` and pinned `/repo/pr-draft-review` reject empty REQUEST_CHANGES bodies.
+
+## Account actions
+
+`POST /accounts/action` accepts the tagged core account action directly, without an IPC `request` envelope. It is registered identically on desktop and headless routers with the loopback-or-authenticated route guard. TCP listeners additionally require transport authentication, including loopback requests. Reads return metadata and credential presence only; no action returns a token. List/add/test/remove, site operations and write-only token replacement/clear share the Rust account owner service. See [the account action table](../backend/github.md#shared-account-registry). Frontend mapping lives in `src/transport/commandTable.ts`.
+
+### Account credential entry
+
+`POST /accounts/secret-form` accepts the same metadata-only request as
+`account_secret_form` (see the Tauri command reference). It requires local or
+authenticated access and a desktop host; a headless host returns an error. The
+request waits for native entry and returns status only, with `Cache-Control:
+no-store`. It never returns a nonce or credential. Account forms cannot be read
+through `GET /secrets/forms/{nonce}` or submitted through
+`POST /secrets/forms/submit`, even with the correct nonce. Ordinary secret forms
+retain their existing mobile capability support.

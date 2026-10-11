@@ -142,6 +142,7 @@ File: `~/.config/com.tuic.commander/plugins/{id}/manifest.json`
 | `allowedUrls` | string[] | for `net:http` | Non-empty URL patterns required for HTTP access (e.g. `["https://api.example.com/*"]`) |
 | `agentTypes` | string[] | no | Agent types this plugin targets (e.g. `["claude"]`). Omit or `[]` for universal plugins. |
 | `binaries` | string[] | no | CLI binaries this plugin may execute via `exec:cli` (e.g. `["rtk", "mdkb"]`) |
+| `providers` | (string \| object)[] | no | Account providers for `httpFetch({account})`; requires `net:http`. A core id (`"github"`) or a token-only descriptor registered on load (see [Core account registry integration](#core-account-registry-integration)) |
 
 ### Validation Rules
 
@@ -426,6 +427,13 @@ const commits = await host.getRecentCommits("/Users/me/project", 5);
 ```typescript
 const diff = await host.getGitDiff("/Users/me/project", "staged");
 // Returns unified diff string
+```
+
+#### `host.getRemotes(repoPath) -> Promise<Array<{ name, url }>>`
+
+```typescript
+const remotes = await host.getRemotes("/Users/me/project");
+// [{ name: "origin", url: "https://github.com/acme/app.git" }] — credentials in URLs are removed
 ```
 
 ### Tier 3: Write Actions (capability-gated)
@@ -1163,6 +1171,12 @@ interface HttpResponse {
 }
 ```
 
+**Account requests:** `httpFetch(url, { account: "<account id>" })` makes Rust inject that account's credential (`Authorization: Bearer <token>`, or `Basic` for Basic accounts). The plugin never sees the token. Rules: the manifest `providers` list must contain the account's provider; the URL must be under the account host (same scheme, host and port, path prefix of the site URL; GitHub accounts use their API base, `https://api.github.com/` or `https://<ghe>/api/`); the account host rule replaces the `allowedUrls` check for the first URL; you must not set `Authorization` yourself. Each redirect hop must be under the account host or match `allowedUrls`, and a hop to another scheme, host or port loses the `Authorization` header. The token is read again for each request, so a re-entered credential applies at once; a 401 comes back to you as a normal response. Token values in the response body and headers are replaced with `[redacted]`.
+
+```typescript
+const me = await host.httpFetch(`${site}/rest/api/3/myself`, { account: accountId });
+```
+
 **Security and limits:**
 - `file://`, `data://`, `ftp://` schemes are blocked
 - 30-second timeout, 10 MB response limit, max 5 redirects
@@ -1299,7 +1313,7 @@ Capabilities gate access to Tier 3 and Tier 4 methods. Declare them in `manifest
 | `fs:scan` | `host.scanBuildArtifacts()` | Can recursively scan registered repos for build-artifact directories (read-only; ignores `.gitignore`) |
 | `fs:delete` | `host.deleteBuildArtifact()`, `host.trimBuildArtifact()` | Can delete a build-artifact directory inside a registered repo (guarded `remove_dir_all`), or remove just its intermediates |
 | `exec:cli` | `host.execCli()` | Can execute CLI binaries declared in manifest `binaries` field |
-| `git:read` | `host.getGitBranches()`, `host.getRecentCommits()`, `host.getGitDiff()` | Read-only access to git repository state |
+| `git:read` | `host.getGitBranches()`, `host.getRecentCommits()`, `host.getGitDiff()`, `host.getRemotes()` | Read-only access to git repository state |
 | `ui:context-menu` | `host.registerTerminalAction()` | Can add actions to the terminal right-click "Actions" submenu |
 | `ui:sidebar` | `host.registerSidebarPanel()` | Can register collapsible panel sections in the sidebar |
 | `ui:file-icons` | `host.registerFileIconProvider()` | Can provide file/folder icons for the file browser (e.g. VS Code icon themes) |
@@ -1436,14 +1450,14 @@ my-plugin/
 Core renders the following Solid components. Plugins supply manifest metadata and host registrations; they do not import or mount these components.
 
 ### Manifest UX field inventory
-`agentTypes`, `allowedUrls`, `author`, `binaries`, `capabilities`, `description`, `id`, `main`, `minAppVersion`, `name`, `version`.
+`agentTypes`, `allowedUrls`, `author`, `binaries`, `capabilities`, `description`, `id`, `main`, `minAppVersion`, `name`, `providers`, `version`.
 
 ### Core UX component inventory
 `BrowseRow`, `PluginLogViewer`, `PluginRow`, `PluginsTab`.
 
 #### PluginsTab
 
-Settings > Plugins has Installed and Browse views. Installed lists loaded/discovered plugin state. Browse reads community registry entries and offers install, update and refresh actions. Installation accepts ZIP archives. The manifest `id` identifies the package, `main` selects its module, and `minAppVersion` controls compatibility. `author` is optional metadata. `allowedUrls`, `agentTypes` and `binaries` drive host access/event routing, not editable settings controls.
+Settings > Plugins has Installed and Browse views. Installed lists loaded/discovered plugin state. Browse reads community registry entries and offers install, update and refresh actions. Installation accepts ZIP archives. The manifest `id` identifies the package, `main` selects its module, and `minAppVersion` controls compatibility. `author` is optional metadata. `allowedUrls`, `agentTypes`, `binaries` and `providers` drive host access/event routing, not editable settings controls.
 
 #### PluginRow
 
@@ -1458,6 +1472,22 @@ The expanded Logs view shows the plugin ring buffer's timestamp, level and messa
 The Browse row shows registry name, version, description, author, tags and minimum app version. It offers Install for an absent package, Update when a newer version is available, or Installed for the current version. Registry metadata is separate from the installed manifest.
 
 ### Settings schema and Tasks views
+
+#### Tasks list
+
+Core `TasksList` consumes the async `WorkItemProvider` port. Providers supply
+account and provider IDs, a display name, field descriptors, saved filters and
+`list(query, signal)`. Core renders Solid controls and virtual rows; providers
+return data only. Source selection partitions cached pages by provider and
+account. Queries include filters, saved-filter ID, search, sort and cursor.
+Search waits 250 ms after input; sorting and filters run in the provider.
+Grouping calls `grouped(query, signal)` with `groupBy`; core renders the returned
+group names and members without inferring membership.
+`nextCursor` enables Load more; repeated cursors stop pagination, and repeated
+item references update the existing row. The cache holds at most 32 pages.
+An obsolete request cannot replace current rows. A failed refresh retains
+available rows and marks them stale. Detail data is requested by the detail
+view after the host receives `onOpen(reference)`. Shell mounting is separate.
 
 The current PluginManifest has no settings schema, field-kind union or generic Tasks-view declaration. Core does not render schema-driven plugin settings or generic plugin Tasks views. Do not invent manifest fields or import core Settings components. Plugins can open their own UI with `host.openPanel` or `host.openMarkdownPanel`. When a settings schema or Tasks-view API is added, document its fields, kinds and core-rendered controls here and extend the source-derived UX drift check to its real schema/renderer. The manifest field and host method inventories fail on new API entries until the guide is updated.
 
@@ -1763,3 +1793,168 @@ Available from the [plugin registry](https://github.com/sstraus/tuicommander-plu
 | Module not found | `main` field doesn't match filename | Ensure `"main": "main.js"` matches your actual file |
 | Changes not reflecting | Hot reload cache | Save the file again, or restart the app |
 | `default export` error | Module doesn't `export default { ... }` | Ensure your module has a default export with `id`, `onload`, `onunload` |
+
+## Core account registry integration
+
+Provider accounts and sites are core-owned. Metadata reads expose credential presence only. Manifest `providers` descriptors (`{id,label,kinds,verify:{path,loginPointer}}`) register with `accounts::register_provider(<plugin id>, descriptor)` when the plugin loads; non-core providers use bearer/basic tokens only. Unload unregisters descriptors but keeps accounts and credentials.
+
+`providers`: optional account providers this plugin may use with `httpFetch({account})`; requires `net:http`. An entry is either a core provider id (only `"github"`) or a token-only descriptor that core registers when the plugin loads and removes when it unloads (accounts and credentials stay): `{ "id": "jira", "label": "Jira", "kinds": ["basic", "bearer"], "verify": { "path": "/rest/api/3/myself", "loginPointer": "/displayName" } }`. `kinds` accepts `bearer` and `basic`; `verify.path` is a path under the site URL that the account Test calls, and `loginPointer` is the JSON Pointer of the viewer name in its response. An id may appear once; a declared descriptor must not use a core id.
+
+Authenticated HTTP goes through `host.httpFetch(url, { account })` (see Tier 3h). Account actions are not currently a grant in `host.invoke`. Secret entry belongs in the core private native sink, which calls the write-only account service; plugins must never receive token values. See [Shared account registry](backend/github.md#shared-account-registry).
+
+## Core setting controls
+
+The core provides account, editable-list, multiselect, read-only status and action
+button controls for catalogue-backed settings and work-item forms. Plugins do not
+import these Solid components or gain new manifest fields from them. The host
+owns account selection and native secret entry; no token enters a plugin prop.
+See `plugin_dev_guide` → **Settings field kinds** for the core-rendered contracts.
+
+## Tasks roadmap
+
+Core `TasksRoadmap` renders `WorkItemProvider.list` pages and the provider's date
+descriptors. The host passes `provider`, `onOpen(reference)`, optional `query`,
+`visible`, `initialDate`, `startFieldId` and `targetFieldId`. Absent field IDs use
+the first and second `kind: "date"` descriptors in provider order. Field names are
+never guessed. Provider-declared start/target roles need a later contract extension.
+
+Month/quarter zoom and Previous, Next and Today navigate the local calendar.
+ISO date-only values retain their calendar day. Timestamps must carry an explicit
+offset and display in the viewer's local time zone. Bars include the target day
+and clip to the visible period. A single endpoint gives a one-day milestone.
+Missing, invalid or reversed dates stay clickable in the **Without usable dates**
+side list; out-of-period tasks stay listed in the timeline.
+
+Both lists use virtual rows. **Load more** follows provider cursors. Failed
+refreshes retain stale results; obsolete provider responses cannot replace the
+active view. This component adds no manifest, IPC or HTTP API. Tasks shell mounting
+is a separate integration step.
+
+## Tasks data contract (Phase A4)
+
+Register via `host.registerWorkItemProvider(provider)`, returning an auto-cleaned
+Disposable. Provider/account pairs must be unique; core consumers use
+`workItemProviderRegistry.get(providerId, accountId)` or `.list(providerId?)`.
+The async `WorkItemProvider` port includes list/detail/comments/act, dynamic
+createFields(itemType?), grouped(query) and board(id, query). Grouping uses query.groupBy;
+board lanes include per-card moves (columnId and action) so UI never guesses legal moves.
+The test/development fake is `createInMemoryWorkItemProvider()` in
+`src/plugins/testing/inMemoryWorkItemProvider.ts`, seeded from the same synthetic
+JSON as the Rust fake. No fake routes or IPC commands are installed.
+
+
+Core owns the Solid Tasks views; provider plugins supply data, schemas and actions,
+never view HTML. A4 defines DTOs only: registration, transport and visible views
+are delivered by the following integration steps.
+
+### Work-item links (Phase A3b)
+
+`host.linkItem(repoPath, branch, link)` persists a link from a worktree branch to a
+work item; `host.unlinkItem(repoPath, branch)` removes it and resolves `true` when a
+link existed. No capability is required. `link` is
+`{ reference: { providerId, accountId, id }, key, title, url, state: { id, name, tone } | null }`;
+`url` must be http(s). The sidebar branch row shows `key` coloured by `state.tone`;
+hovering refreshes the state through the provider's `detail(reference)`, and a click
+opens `url` without selecting the branch. TUIC drops the link when it removes the
+worktree. `repoPath` is the main repository path, `branch` the worktree branch name.
+
+### Work-item field kind inventory
+`text`, `markdown`, `enum`, `user`, `labels`, `date`, `number`, `link`
+
+- `text`: a plain text input; `markdown`: the shared markdown renderer/editor.
+- `enum`: a select using provider option IDs; `user`: a user picker, multiple users.
+- `labels`: multiple labels with stable IDs; `date`: ISO-8601 date input.
+- `number`: finite numeric input; `link`: URL/link control.
+
+The canonical DTOs are `work_items::model` and `work_items::protocol` in Rust.
+Generate their TypeScript declarations with
+`python3 scripts/generate-work-item-types.py`; import from
+`src/types/work-items.gen.ts`. Fields use camelCase; discriminated unions use
+`{kind, value}` with snake_case kinds. `WorkItemRef` scopes opaque item IDs by
+`providerId` and `accountId`. Missing field keys mean not loaded; null means unset.
+
+`WorkItemQuery` carries ANDed filters (values are ORed), saved filter ID, native
+search, sort, bounded page size and opaque cursor. Providers must bind cursors to
+the account/query; selecting a preset starts with no cursor. `WorkItemPage`
+contains items and `nextCursor`. Details load body, field schemas, allowed action
+descriptors and a separately paginated comment page on open. Comment entries are
+`normal`, `review_thread` (resolved, path, line and reviewed commitId), or
+`review_summary` (state and reviewed commitId). Bodies are markdown, not trusted HTML.
+
+Actions are `create`, `edit_field`, `transition`, `comment`, and `start_work`.
+Transitions use provider action IDs, not state display names. Board columns may carry a default edit/transition action or null; per-card moves
+carry the actual legal action to dispatch on drop (workflow IDs can vary by item). Start-work carries repoPath,
+branch, optional baseRef, prompt, agentType and explicit draft/submit delivery;
+core executes the existing worktree/agent workflow and owns errors/rollback.
+
+`work_items::demo::demo_provider()` supplies deterministic local-only data with
+list, detail, comments, schemas, saved filters, board columns and mutations.
+It touches no network, credentials, filesystem or subprocesses. It is a development
+provider, not a fixture proving GitHub/Jira/GitLab API compatibility. Its search is
+literal text; sort supports key/title/updatedAt. Its cursor expires on mutation.
+
+## Tasks detail
+
+Core's `TasksDetail` consumes the async `WorkItemProvider` port and a `WorkItemRef`.
+The Tasks shell supplies the selected provider/reference and `visible` state.
+Providers supply data and declared actions; they do not render this view.
+
+The header shows key, title, type, state and updated time. Detail field schemas
+select text, Markdown, enum, user, labels, date, number and link controls. Saving
+requires an editable field and an enabled `edit_field` action. Required fields
+cannot be cleared. Values retain their tagged field-value shape.
+
+Descriptions and normal comments, review threads and review summaries render
+through `ContentRenderer` with `untrustedContent`. Markdown, tables, images and
+`<details>` survive; scripts, event handlers and provider CSS do not. Review
+threads show file/line and resolved state. The provider's comment cursor drives
+Load more. Add comment retains its draft on rejection.
+An accepted comment clears its draft even if reloading opened comment pages
+fails. Core keeps the returned item, reports the history error and lets Retry
+reload those pages.
+
+Transition buttons use declared IDs and disabled reasons. The pending action
+label appears immediately while the authoritative state ID stays intact.
+Success adopts the returned detail; rejection restores the state label and
+shows the error. Core does not infer a target state from a transition name.
+
+Refresh is manual and periodic (60 seconds by default) while the detail, Tasks
+view and document are visible. Refresh preserves disclosure state and reloads
+comment pages already opened. Switching items rejects stale responses.
+
+## Start work and URL paste
+
+`host.startWork({ repoPath, branch, baseRef?, prompt, agentType?, delivery?, link? })`
+(capability `pty:write`) creates a worktree on a new `branch` (from `baseRef`, default
+the repo's default branch) and opens an agent in it. The agent is `agentType` or, when
+omitted, the first enabled agent with a run config on the repo's machine; that run
+config supplies the command and env. The prompt is never a shell argument: the host
+waits for the agent's composer and types it there, inside an `<untrusted-content>`
+block, control bytes removed, capped at 12000 characters. `delivery: "draft"`
+(default) leaves Enter to the user; `"submit"` sends it. `link` links the item to the
+new worktree. It resolves to `{ repoPath, workspaceId, branch, worktreePath }`.
+The GitHub Auto-fix action uses the same path with `delivery: "submit"`.
+
+`host.registerUrlResolver((url, signal) => ...)` claims URLs pasted in the command
+palette. Return `null` for a URL that is not yours, or `{ link, startWork? }`.
+Resolvers run in registration order; the first non-null result wins and a resolver
+that throws is skipped. When a worktree is already linked to `link.reference`, the
+palette offers **Open worktree**; otherwise it offers **Start work** with your
+request (`repoPath` defaults to the active repository).
+
+## Tasks create
+
+Core's `TasksCreate` consumes `createFields` and `act` of the `WorkItemProvider` port.
+The host supplies `provider`, `onCreated(detail)` to open the created item, and
+optional `onCancel`. Providers supply types and schemas; they do not render the form.
+
+`createFields()` without a type must return an enum field with id `itemType` that
+lists the creatable types; a single type is preselected. `createFields(type)`
+returns the fields of that type (an unknown type is an error, and `create`
+rejects an undeclared `itemType`). Title and Description are fixed inputs, so a
+schema does not repeat them. Only editable fields render.
+
+A type change reloads the schema; values survive only for the same field id and
+kind, and a late schema of an earlier type is dropped. Create stays disabled until
+Title, Type and every required field of the current type are set. Submit sends one
+`create` action with every current field (unset is null). A rejection keeps the draft.

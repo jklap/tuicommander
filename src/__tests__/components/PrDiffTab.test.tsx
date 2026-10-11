@@ -33,6 +33,7 @@ describe("PrDiffTab collapsing", () => {
 		mockInvoke.mockReset();
 		mockInvoke.mockImplementation(async (cmd: string) => {
 			if (cmd === "read_file") return "gen/** linguist-generated\n";
+			if (cmd === "get_pr_line_threads") return { headSha: "abc", threads: [], hasNextPage: false, endCursor: null };
 			return undefined;
 		});
 	});

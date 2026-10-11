@@ -2,6 +2,8 @@
 
 TUICommander monitors your GitHub PRs and CI status automatically.
 
+PR creation, issue creation, and review submission use the repository's selected account over HTTP, including GitHub Enterprise. These writes do not require an installed `gh` executable.
+
 ## Authentication
 
 TUICommander needs a GitHub token to access PRs and CI status. You have two options:
@@ -171,7 +173,11 @@ The PR panel also shows the number of unresolved review threads, split into huma
 
 ## CI Auto-Heal
 
+Actions log fetching uses the repository account on github.com or GitHub Enterprise and does not require the GitHub CLI. It keeps failure tails and stops the log sweep after 60 seconds.
+
 Enable **Auto-heal** in a blocked PR's detail popover to send failed GitHub Actions or configured CircleCI job logs to the agent terminal assigned to that branch. A completed failed job can trigger healing while other jobs in the same workflow are still running. The displayed three-attempt budget counts only prompts successfully delivered to the agent; log-fetch and terminal-delivery errors do not consume it.
+
+Auto-heal reads failing checks directly from the selected or local head commit, including external CI links. It uses the repository's GitHub account and reads every check page before discarding older reruns; the number of open PRs does not limit this lookup.
 
 Set a read-only CircleCI token in **Settings > Git & GitHub > CircleCI**. The token is never shown again. The Log button on a failed CircleCI check also works for remote-only PRs.
 
@@ -304,3 +310,8 @@ own default: PR sections start collapsed when empty, Issues starts open.
 **Stale data:**
 - Click the refresh button or switch away and back to the branch
 - Polling updates every 60 seconds automatically
+
+Merged-PR evidence for worktree and local-branch cleanup uses the GitHub account
+and host selected for that repository. It no longer depends on the GitHub CLI
+login. If the complete PR history cannot be read, cleanup does not treat that
+lookup as proof that a branch was merged.

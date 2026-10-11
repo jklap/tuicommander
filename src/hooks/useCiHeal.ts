@@ -81,7 +81,7 @@ function isExpectedHealFailure(message: string): boolean {
  * Auto-heal a blocked PR by handing the problem to an agent terminal.
  *
  * Triggers on two transitions when auto-heal is enabled on the branch:
- * - CI failure (`ci`): fetches `gh run view --log-failed` and asks the agent to fix.
+ * - CI failure (`ci`): fetches account-scoped CI logs over HTTP and asks the agent to fix.
  * - Merge conflict (`conflict`): asks the agent to resolve conflicts with the base branch.
  *
  * In both cases it waits for the agent to be idle/awaiting input, writes the fix

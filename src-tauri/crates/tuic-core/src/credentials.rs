@@ -101,6 +101,8 @@ pub enum Credential<'a> {
     /// default account keeps using `GithubOauthToken` instead — this slot is for
     /// additional accounts (GitHub Enterprise Server) only.
     GithubToken(&'a str),
+    /// Core account token; no plugin/model read transport exposes this slot.
+    AccountToken(&'a str),
     McpUpstream(&'a str),
     /// Basic Auth password for a remote `tuic-remote` daemon, keyed by the
     /// connection's UUID. `connections.json` holds the username and never this.
@@ -115,12 +117,12 @@ impl Credential<'_> {
         match self {
             Self::AiChatApiKey => "ai-chat/api-key".into(),
             Self::LlmApiKey => "llm-api/api-key".into(),
-            Self::GithubOauthToken => "github/oauth-token".into(),
+            Self::GithubOauthToken => "account/github.com".into(),
             Self::CircleCiToken => "circleci/token".into(),
             Self::RemoteSessionToken => "remote/session-token".into(),
             Self::RelayToken => "remote/relay-token".into(),
             Self::PushVapidPrivateKey => "remote/push-vapid-private-key".into(),
-            Self::GithubToken(id) => format!("github/account/{id}/token"),
+            Self::GithubToken(id) | Self::AccountToken(id) => format!("account/{id}"),
             Self::McpUpstream(name) => format!("mcp/{name}"),
             Self::RemoteConnection(id) => format!("remote/connection/{id}/password"),
             Self::RemotePairingToken(id) => {
@@ -139,6 +141,7 @@ impl Credential<'_> {
             | Self::RelayToken
             | Self::PushVapidPrivateKey
             | Self::GithubToken(_)
+            | Self::AccountToken(_)
             | Self::CircleCiToken
             | Self::RemoteConnection(_)
             | Self::RemotePairingToken(_) => None,
@@ -240,6 +243,26 @@ fn load(guard: &mut VaultGuard<'_>) -> Result<(), String> {
         None => HashMap::new(),
     };
 
+    // Migrate in one vault commit. Canonical slots win; retain every legacy copy
+    // until persistence succeeds, including the ambient github.com OAuth token.
+    let old_tokens: Vec<_> = vault
+        .iter()
+        .filter_map(|(key, value)| {
+            let id = if key == "github/oauth-token" {
+                Some("github.com")
+            } else {
+                key.strip_prefix("github/account/")
+                    .and_then(|key| key.strip_suffix("/token"))
+            }?;
+            Some((key.clone(), format!("account/{id}"), value.clone()))
+        })
+        .collect();
+    let migrated_tokens = !old_tokens.is_empty();
+    for (old_key, new_key, value) in old_tokens {
+        vault.entry(new_key).or_insert(value);
+        vault.remove(&old_key);
+    }
+
     // The default instance always sweeps legacy entries — handles stragglers when
     // its vault was created before all legacy keys were migrated. Persist the
     // merged vault BEFORE deleting any legacy copy, so a persist failure (locked
@@ -260,7 +283,7 @@ fn load(guard: &mut VaultGuard<'_>) -> Result<(), String> {
             }
         }
     }
-    if !to_delete.is_empty() {
+    if migrated_tokens || !to_delete.is_empty() {
         // vault is necessarily non-empty here (we or_insert'd for each swept
         // entry). Persist first; only then remove the legacy copies.
         persist(&vault)?;
@@ -632,7 +655,7 @@ mod tests {
         assert_eq!(Credential::LlmApiKey.vault_key(), "llm-api/api-key");
         assert_eq!(
             Credential::GithubOauthToken.vault_key(),
-            "github/oauth-token"
+            "account/github.com"
         );
         assert_eq!(Credential::McpUpstream("foo").vault_key(), "mcp/foo");
         assert_eq!(Credential::CircleCiToken.vault_key(), "circleci/token");
@@ -675,7 +698,7 @@ mod tests {
     fn github_token_vault_key_is_account_scoped() {
         assert_eq!(
             Credential::GithubToken("ghe.acme.com").vault_key(),
-            "github/account/ghe.acme.com/token"
+            "account/ghe.acme.com"
         );
     }
 
@@ -686,7 +709,7 @@ mod tests {
         assert!(Credential::GithubToken("acc1").legacy_entry().is_none());
         assert_eq!(
             Credential::GithubOauthToken.vault_key(),
-            "github/oauth-token"
+            "account/github.com"
         );
     }
 
@@ -946,5 +969,82 @@ mod tests {
         );
 
         reset_circuit_breaker();
+    }
+    // Catches: account-vault migration dropping legacy tokens or overwriting canonical credentials.
+    #[test]
+    fn account_token_migration_preserves_every_legacy_slot_and_canonical_precedence() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        reset_vault();
+        let mut legacy = Vault::new();
+        legacy.insert("github/oauth-token".into(), "legacy-default".into());
+        legacy.insert("github/account/alice/token".into(), "legacy-alice".into());
+        legacy.insert(
+            "github/account/enterprise/token".into(),
+            "legacy-enterprise".into(),
+        );
+        legacy.insert("account/alice".into(), "canonical-alice".into());
+        persist(&legacy).unwrap();
+        simulate_restart();
+        assert_eq!(
+            get(Credential::AccountToken("github.com"))
+                .unwrap()
+                .as_deref(),
+            Some("legacy-default")
+        );
+        assert_eq!(
+            get(Credential::GithubToken("alice")).unwrap().as_deref(),
+            Some("canonical-alice")
+        );
+        assert_eq!(
+            get(Credential::AccountToken("enterprise"))
+                .unwrap()
+                .as_deref(),
+            Some("legacy-enterprise")
+        );
+        assert!(
+            lock()
+                .as_ref()
+                .unwrap()
+                .keys()
+                .all(|key| !key.starts_with("github/"))
+        );
+        simulate_restart();
+        assert_eq!(
+            get(Credential::GithubOauthToken).unwrap().as_deref(),
+            Some("legacy-default")
+        );
+        assert_eq!(
+            get(Credential::GithubToken("enterprise"))
+                .unwrap()
+                .as_deref(),
+            Some("legacy-enterprise")
+        );
+        reset_vault();
+    }
+
+    // Catches: a failed vault commit deleting the only durable copy of a GitHub token.
+    #[test]
+    fn account_token_migration_write_failure_leaves_legacy_copy_recoverable() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        reset_vault();
+        let mut legacy = Vault::new();
+        legacy.insert(
+            "github/account/recoverable/token".into(),
+            "recoverable-token".into(),
+        );
+        persist(&legacy).unwrap();
+        simulate_restart();
+        MOCK_FAIL_WRITES.store(true, std::sync::atomic::Ordering::SeqCst);
+        let failed = get(Credential::AccountToken("recoverable"));
+        MOCK_FAIL_WRITES.store(false, std::sync::atomic::Ordering::SeqCst);
+        assert!(failed.is_err());
+        simulate_restart();
+        assert_eq!(
+            get(Credential::AccountToken("recoverable"))
+                .unwrap()
+                .as_deref(),
+            Some("recoverable-token")
+        );
+        reset_vault();
     }
 }

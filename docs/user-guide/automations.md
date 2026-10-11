@@ -30,8 +30,11 @@ occurrence while a previous run remains open. An optional precheck runs before
 scheduled launches: exit 0 allows the agent to run; other exits skip quietly.
 Save the definition before running it.
 
-To pass what the precheck found to the agent, set `inject_output: true` in the
-precheck object through the definition API or MCP, for example:
+To pass what the precheck found to the agent, enable **Include precheck stdout in
+the agent prompt** in the Precheck section and save. The checkbox starts off and
+can be changed for each definition. Turning the precheck off and on resets consent.
+The same setting is `inject_output: true` in the precheck object through the
+definition API or MCP, for example:
 
 ```json
 {"command":"git status --short","timeout_secs":30,"inject_output":true}
@@ -90,3 +93,22 @@ independently; this guide does not claim an installed scheduler is available.
 The dialog addresses the daemon that owns the active repository when you open it (or this machine for a local repository). Switch repository and reopen to view another owner. Select **Runs** to view all persisted runs, including runs of deleted automations. The 24h and 7d counts come from the backend and use elapsed UTC windows, not local calendar days. **Previous runs** and **Next runs** page through history. Each row retains its original automation name, repository and status. `needs_you`, `unknown` and `interrupted` are distinct; none implies success.
 
 **View run** focuses the owning live terminal when it is present in this client. If the terminal is absent, suspended, exited or belongs to another daemon, the dialog shows saved stdout/stderr, truncation warnings, the recorded workspace and run configuration. A missing or removed workspace is not recreated. Viewing a run never starts another run. History and output retention remain backend-controlled.
+
+Agents and scripts can use MCP `automations` or `tuic automations '<action JSON>'`
+for the same operations. List returns definition rows with next-run/last-status
+metadata; create/update return the saved definition. Agent-created definitions
+record the bound session. See the CLI guide for examples and the HTTP API
+Automations table for fields.
+
+
+In **Runs**, select **Inspect worktree cleanup** for a run that created a worktree. Review its recorded path and safety result, then select **Remove safe worktree and branch**. Cleanup retains the saved report and run provenance. Open runs, existing repositories, dirty or unmerged work, missing required archives, locked worktrees and live sessions are preserved. A stale preview cannot authorize unsafe removal.
+### Built-in automation templates
+
+New automation drafts offer weekday repository audit, release readiness, daily
+change review and hourly maintenance review templates. Enter the repository and
+run config, then select **Apply template**. Rust supplies the literal prompt,
+cadence, limits and zone (the backend host's local IANA zone unless selected).
+Review and edit the draft, then select **Save**. Templates start paused; applying
+one never persists a definition or starts a run. **Resume** is a separate action.
+Templates use the existing checkout with no precheck and do not change agent
+permissions. Recurring cadence previews retain the existing runtime limitations.

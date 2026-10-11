@@ -6,12 +6,45 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+- Design Mode lists only the dev servers of the session being edited (HTML-serving listeners of its worktree, URLs it printed, the configured URL) and excludes TUIC itself (#1723-4a21).
+
+### Added
+- Long-press mobile Send to queue the current agent draft for its next ready window (#1717-efd3).
+
+- Automation run worktree provenance and explicit cleanup with existing integration, archive and live-session safety checks (#1623-8b2a).
+
+- Add built-in automation templates as editable, paused drafts using the selected repository, run config and host local zone; applying a template never saves or starts a run (#1622-be11).
+- Added GitHub PR action backend APIs for failed-job reruns, auto-merge and queue-aware merging; empty request-changes reviews now fail validation.
+
+- Added GitHub line review backend APIs for paginated threads, replies, resolve/unresolve and head-pinned draft submission.
+- Added line review threads to the PR Files tab: threads on diff lines with outdated/resolved state, replies, resolve/unresolve and a draft review submitted against the head the diff was opened at (#1691-bdff). Fixed diff file rows overlapping when a file section was taller than the 320 px estimate.
+- Add the generic Tasks roadmap component with month/quarter zoom, local-calendar date spans, virtual rows, provider pagination and an undated side list. Tasks shell mounting remains separate (#1690-5d98).
+
+- GitHub Enterprise PAT entry now opens a private native window and writes
+  directly to the account vault; Settings no longer holds the PAT.
+
+- Add the core shared account/site registry with write-only tokens, generic provider verification and GitHub migration; omit tokens from OAuth replies (#1679-1419).
+- Match native window and webview resize backgrounds to the selected theme, including light themes (Fixes #125; #1678-158c).
+- Added the provider-neutral Tasks data contract and a local in-memory development provider; visible Tasks integration follows separately.
+- Add the core Tasks detail component with field editing, rich paged comments, status-action rollback and refresh while visible (#1687-27a3).
+- Add the core Tasks create form: item types and per-type field schemas from the provider, required-field validation and single submit (#1688-518d).
+- Add the generic Tasks list component with account-scoped sources, provider presets and filters, debounced search, sorting, virtual rows and cursor pagination. Shell mounting remains a separate integration step (#1686-ce77).
+
+
+- Keep mobile session history advancing after the terminal reaches its 10,000-row history cap, so live redraws do not erase already displayed output (#1681-507e).
+
+- Unify MCP automation actions with HTTP/IPC validation and results; add `tuic automations` for definitions, previews, history, summaries and Run Now (#1630-cbfa, #1621-5dce).
+- Add the core Tasks detail component with field editing, rich paged comments, status-action rollback and refresh while visible (#1687-27a3).
+- Add the generic Tasks list component with account-scoped sources, provider presets and filters, debounced search, sorting, virtual rows and cursor pagination. Shell mounting remains a separate integration step (#1686-ce77).
+
 - Restore missing live PTY identity bindings on MCP requests so spawned children remain linked to their parent in session lists (#1673-da49).
 
 - Preserve current automation settings when opening an old run notice; show deleted definitions as run details without an editor (#1620-82ae).
 
 - Notify once when an automation needs input or fails, with saved run and owning-session navigation; retain durable per-channel delivery claims (#1620-82ae).
 - Add the Design Mode v2 unpacked-extension pilot: one-shot picks, per-pick comments, same-repository recipients, queued feedback, native messaging and dev-server discovery (#1672-cd3d).
+- Expose the existing precheck stdout context opt-in in the Automations editor, off by default and saved per definition (#1624-c5f5).
 - Add opt-in automation precheck stdout context with a 16 KiB escaped payload cap, untrusted delimiters and durable injection metadata; exclude stderr (#1631-45bf).
 
 - Remove the Design Mode tab badge when inspection stops (#1671-812f).
@@ -44,6 +77,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Add the Rust foundation for Once automation schedules with IANA timezone validation, a single preview instant and durable occurrence deduplication (#1629-2262).
 
 ### Fixed
+- Reap child processes launched by built-in apps, custom tools and macOS microphone settings without waiting for the launched application to close (#1707-bd40).
 - Preserve Design Mode screenshot evidence and send retained feedback to an explicitly chosen replacement agent (#1672-cd3d).
 - Attach saved AI Chat tabs when selected, show connection failures with Retry and pending model controls, and name tabs from conversation titles or prompts (#1628-4459).
 

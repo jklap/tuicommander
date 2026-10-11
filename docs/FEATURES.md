@@ -1,5 +1,7 @@
 # TUICommander — Complete Feature Reference
 
+Mobile terminal Send supports long-press Queue for the next agent ready window.
+
 Published story workflows can start in Plans and Stories through the owning daemon. Run history renders graph positions, decisions, evidence and paged event payloads, with explicit graph recovery and cancellation. IPC/HTTP and the generated `workflow_run` MCP schema share the native run service. Plan start remains visibly unavailable pending plan dispatch.
 
 > Canonical capability inventory. Update this file when adding, changing, or removing user-visible features.
@@ -14,6 +16,22 @@ Published story workflows can start in Plans and Stories through the owning daem
 Desktop AI Chat uses the terminal composer’s pin and blue play buttons. The pin highlights a parked draft; tooltips identify Park, Restore, Swap, Send and Queue.
 
 AI Chat image paste discovers capabilities on first use and shares clipboard precedence with Ideas, terminal Compose, and terminal input: Finder image filenames allow attachments, while substantive text takes priority.
+
+## Tasks roadmap component
+
+The host-rendered roadmap shows provider date fields on a month or quarter timeline.
+Date-only values retain their day; timestamps use the viewer's local time zone.
+Undated or invalid schedules stay in a side list, and single dates show as milestones.
+Both lists use virtual rows and provider cursor pagination. The host can choose start
+and target field IDs; the fallback uses the first two date descriptors in order.
+The component is ready for Tasks shell integration and does not add a tab by itself.
+
+## Tasks list component
+
+The generic Tasks list renders data-only work-item providers with account-scoped
+sources, saved presets, field filters, debounced search, sorting, virtual rows,
+and provider cursor pagination. Failed refreshes retain rows with a stale label.
+The component is available for Tasks shell integration; it does not add a tab by itself.
 
 ## ego Perimeter Settings
 
@@ -359,7 +377,7 @@ Right-click the main worktree row → **Switch Branch** submenu to checkout a di
 
 ### 2.6 Quick Branch Switcher
 - Hold `Cmd+Ctrl` (macOS) or `Ctrl+Alt` (Win/Linux): show numbered overlay
-- `Cmd+Ctrl+1-9`: switch to branch by index
+- `Cmd+Ctrl+1-9`: switch to branch by index (in the Global Workspace: switch to tab N)
 
 ### 2.7 Park Repos
 - Right-click any repo in the sidebar to park or unpark it
@@ -1050,6 +1068,7 @@ re-derived later.
   - Desktop IPC, HTTP, and MCP creation payloads report `warm_artifacts.status` (`pending` until the background copy finishes) and state the linked-worktree isolation semantics; workspace path listing reports the current status. A cancelled create marks warming failed; removal and archive cancel queued copies
   - Removal without force keeps dirty worktrees and submodules, refuses an in-progress Git operation, and keeps a branch that changed after the removal check. Submodule commits, stash history, and reflog-only commits receive durable refs in the initialized main-checkout module repository. An uninitialized, misdirected, or deinitialized module with retained Git history stops removal, including nested modules with names different from their paths. A registered checkout whose directory is missing has an explicit lifecycle verdict and needs confirmed force to prune its registration; cleanup skips its inaccessible archive script. Dirty-file force still proves branch safety and never overrides a lock by itself
   - Branch deletion accepts default-branch ancestry, ancestry in the checked-out integration branch, patch equivalence, or a merged GitHub PR whose fetched head contains the local tip
+  - Merged-PR proof uses paginated HTTP GraphQL with the repository-bound account and host; incomplete reads remain unknown and retryable
   - MCP `repo action=branch_delete` removes an integrated local branch without a worktree after the same safety proof; it preserves remote refs and refuses checked-out, current, default, or changed local refs
   - **Worktree Manager panel** (`Cmd+Shift+W` or Command Palette → "Worktree manager"):
   - Dedicated overlay listing all worktrees across all repos with metadata: branch name, repo badge, PR state (open/merged/closed), dirty stats, last commit timestamp
@@ -1131,6 +1150,7 @@ re-derived later.
 - TriStateToggle component: 3-position pill switch (left=hide, center=default, right=show) matching existing toggle style
 
 ### 8.5 Auto-Heal
+- Auto-heal resolves failing checks from the exact commit over account-bound GraphQL, including external CI; check pagination and newest-rerun deduplication do not depend on the open PR count.
 - When a PR on a branch with an active agent terminal becomes blocked, auto-heal hands the problem to the agent:
   - **CI failure** — fetches failure logs and injects them with a fix prompt
   - **Merge conflict** (`mergeable === "CONFLICTING"`) — injects a resolve-conflicts prompt
@@ -1216,6 +1236,8 @@ re-derived later.
 - Logout removes OAuth token, falls back to env/gh CLI
 - On 401: auto-clears invalid OAuth token and prompts re-auth
 
+PR creation, issue creation, and review submission use account-aware REST requests for the bound repository, including GitHub Enterprise, without spawning `gh`.
+
 ### 8.14 Multiple Accounts (github.com + GitHub Enterprise)
 GitHub integration is **account-centric**: TUICommander can manage N accounts and each workspace repo is explicitly bound to the account that monitors it (a persisted binding, not derived live from `origin`).
 
@@ -1234,9 +1256,9 @@ GitHub integration is **account-centric**: TUICommander can manage N accounts an
 - Cooldown keys are account-scoped (`{account_id}:owner/repo` for GHE; `owner/repo` unchanged for cloud); github.com logout clears only cloud cooldowns; removing an account drops only its token, record, bindings, and caches.
 
 **Limitations**
-- REST + GraphQL (PRs, CI, issues, merge, approve, issue comments) work against bound GHE repos. `gh`-CLI-assisted CI-failure-log fetching (CI Auto-Heal) is disabled with a clear message for non-github.com accounts.
+- REST + GraphQL (PRs, CI, issues, merge, approve, issue comments) work against bound GHE repos. CI Auto-Heal fetches Actions logs over REST using the bound GHE account; downloads keep bounded failure tails and share one 60-second sweep deadline.
 
-Backend: `github_account.rs` (`GitHubHost`, account model, binding store, `resolve_repo_account`), commands `github_list_accounts` / `github_add_account` / `github_remove_account` / `github_bind_repo` / `github_unbind_repo` / `github_list_bindings` / `github_resolve_repo`.
+Backend: `github_account.rs` (`GitHubHost`, account model, binding store, `resolve_repo_account`), commands `github_list_accounts` / `github_remove_account` / `github_bind_repo` / `github_unbind_repo` / `github_list_bindings` / `github_resolve_repo`.
 
 ---
 
@@ -1828,7 +1850,7 @@ Buffer eviction is reported; it does not create another output store.
 | Shortcut | Action |
 |----------|--------|
 | Hold `Cmd+Ctrl` | Show quick switcher overlay |
-| `Cmd+Ctrl+1-9` | Switch to branch by index |
+| `Cmd+Ctrl+1-9` | Switch to branch by index (in the Global Workspace: switch to tab N; only the tab hints show) |
 
 ### Voice Dictation
 | Shortcut | Action |
@@ -2141,6 +2163,8 @@ Phone-optimized progressive web app for monitoring AI agents remotely. Separate 
 - `font-variant-emoji: text` on output view — forces Unicode symbols (●, ○, ◉) to render as monochrome text glyphs instead of colorful emoji
 
 ### 18.11 Standalone CSS
+- The mobile composer offers browser dictation directly next to Send (44 px touch targets) when `SpeechRecognition` or `webkitSpeechRecognition` is available. Interim and final speech append to the draft without focusing the textarea or sending; tap again to stop. Editing the draft cancels recognition and keeps the edit exactly; the mic becomes available again when the browser confirms the previous session has ended. Errors also retain the microphone claim until that confirmation, so repeated taps cannot overlap recognition sessions. Late results from the cancelled recording are ignored. Errors keep the draft and show a toast. It uses the configured dictation language, falling back to the browser language for automatic detection. Browser dictation and server hands-free conversation cannot record together.
+- iPhone Home Screen availability remains device-dependent: [WebKit bug 225298](https://bugs.webkit.org/show_bug.cgi?id=225298#c3) documents the historical standalone restriction; Safari's [14.1 release notes](https://webkit.org/blog/11648/new-webkit-features-in-safari-14-1/) require Siri enabled. Feature detection and error handling apply; Safari tab support does not prove PWA support.
 - Mobile PWA uses its own standalone stylesheet (`src/mobile/mobile.css`), independent from the desktop `global.css`
 - Shares core color palette and border radius tokens; differs in font stacks, layout approach, and iOS-specific rules
 - WebSocket state deduplication: duplicate state pushes are filtered to reduce unnecessary re-renders
@@ -2766,6 +2790,8 @@ deadlines. Reconciliation reports the stop errors after processing those runs.
 Blocked runs remain active; idle alone does not prove success. Rust restart required.
 
 Automation needs-you and failure notices use durable per-run/status/channel claims, existing notification preferences, and canonical saved-run/owning-session bell navigation. Unknown and interrupted outcomes remain history, not success. Notice navigation edits only the current definition; deleted definitions retain read-only run details.
+The Automations editor exposes **Include precheck stdout in the agent prompt**,
+off by default, using the same saved definition flag (#1624-c5f5).
 Automation precheck context (#1631-45bf): definitions can opt in with
 `precheck.inject_output: true` (default false). Proceeding checks prefix the
 literal prompt with delimited, escaped untrusted stdout capped at 16 KiB;
@@ -2776,3 +2802,68 @@ the prepared launch prompt, counting escaped stdout bytes before framing/marker.
 ### Automation runs view
 
 The Automations **Runs** view shows backend 24h/7d counts, paginated history, distinct needs-you/unknown/interrupted states, and saved output after definition deletion. View run focuses only an available terminal on the owning daemon; otherwise it shows the saved report and workspace details without launching a replacement.
+
+### Reusable setting fields
+
+Core form controls support account selection with a host-owned Add action,
+stable-ID editable rows, checkbox multiselect, read-only status tones and action
+buttons. They are controlled rendering components for settings and work-item
+forms; adding them does not add a settings page or a plugin manifest API.
+
+## Shared provider accounts
+
+Core account/site list, add, Test and remove use one registry with write-only credential storage. GitHub metadata/tokens migrate without changing account IDs or repo bindings; core retains the GitHub provider and ambient auth chain. Generic provider descriptors allow token/basic verification for plugin providers. Native Settings secret entry and plugin-manifest/authenticated-request wiring are separate integration steps.
+
+Account credential entry uses a private native form with one-time nonce and
+window identity checks. Settings sends account metadata only and receives status
+only; Enterprise PATs go directly to the account vault after verification.
+Account forms have no browser/mobile entry capability.
+
+### Tasks contract foundation
+
+Provider-neutral Rust DTOs and generated TypeScript cover work-item queries, fields, comments, actions and boards. A deterministic local provider supports development; visible Tasks views and remote providers are separate integration work. See [plugin guide](plugins.md#tasks-data-contract-phase-a4).
+
+## Tasks detail component
+
+Core provides a generic work-item detail component with descriptor-driven field
+editors, sanitized descriptions and comments, review threads and summaries,
+cursor pagination, add comment, and declared status actions with rollback.
+Visible details refresh every 60 seconds and preserve expanded sections.
+The Tasks shell and provider registration integrate this component separately.
+
+Automation agent surface (#1630-cbfa, #1621-5dce): MCP `automations` and
+`tuic automations` share the HTTP/IPC action parser, definition results, schedule
+previews, run history, summaries and Run Now runtime. Enabled-only updates and
+Once definitions work identically; MCP creation retains host-bound provenance.
+
+GitHub backend: paginated line review threads and replies, resolve/unresolve, and draft review submission pinned to the reviewed head are available through IPC and HTTP. The PR Files tab draws them on the diff lines: outdated threads are listed above their file, pending comments are added from the line gutter, and Submit review is refused once the PR head moves.
+
+GitHub backend: failed-job reruns, auto-merge enable/disable, merge queue state/entry/removal and queue-aware merge are available over IPC and HTTP. Request changes requires review text.
+
+## Tasks board component
+
+The core Tasks board component renders provider-declared columns and virtualized
+lanes. Cards support drag and drop and a keyboard-accessible move menu. Pending
+moves cannot be repeated; rejected actions restore the card and show the error.
+This component is available to the Tasks host; provider registration and the
+Tasks navigation surface determine where it is shown.
+
+## Tasks create component
+
+Core provides a generic work-item create form. The provider declares the item
+types and the fields of each type; the form uses the shared setting controls,
+blocks Create until the required fields of the current type are set, and opens
+the created item. The Tasks shell integrates this component separately.
+
+
+Automation worktree cleanup (#1623-8b2a): Automation runs retain automation/run IDs and the exact created workspace path and ID in their saved snapshot, including after definition deletion. Worktree cleanup is explicit and limited to final runs. The backend resolves the saved identity and rechecks shared Git integration/archive proof, dirt, submodule commits and live sessions; it never forces removal or closes sessions. Shared `automation_action` actions `worktree_preview` and `cleanup_worktree` accept a saved run `id` on IPC, HTTP, MCP and CLI.
+### Built-in automation templates
+
+New automation drafts offer weekday repository audit, release readiness, daily
+change review and hourly maintenance review templates. Enter the repository and
+run config, then select **Apply template**. Rust supplies the literal prompt,
+cadence, limits and zone (the backend host's local IANA zone unless selected).
+Review and edit the draft, then select **Save**. Templates start paused; applying
+one never persists a definition or starts a run. **Resume** is a separate action.
+Templates use the existing checkout with no precheck and do not change agent
+permissions. Recurring cadence previews retain the existing runtime limitations.

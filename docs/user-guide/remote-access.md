@@ -134,6 +134,8 @@ for one session can replace its earlier one; tapping either remaining session
 notification opens that session.
 
 ### Mobile Features
+Hold Send with a finger or mouse, then select **Queue** to hold your current agent prompt until its next ready window. A normal tap still sends immediately. Queue clears the input after acceptance and shows a notice. If the result is uncertain, check the agent session before trying again.
+
 
 - **Sessions list** — See all running agents with status (idle, busy, question, rate-limited, error)
 - **Session detail** — Live output streaming, quick-reply chips (Yes/No/Enter/Ctrl-C), text input. The terminal keybar Ctrl button opens Ctrl+C, Ctrl+B, Ctrl+D and Ctrl+Enter. A choice sends once and closes; tap outside or press Escape to dismiss. Ctrl+C and Ctrl+D use danger colours. Ctrl+Enter is agent-aware: it submits in Claude Code and ego, and inserts a newline in Codex, OpenCode, Goose, Grok and pi. Other agents use documented or conservative fallback keys; ordinary Enter remains the submit key.
@@ -481,6 +483,8 @@ opened on a remote repository launches with **that machine's** `agents.json`: th
 its arguments, its environment and the `CC_ENV_FLAGS` that reach the PTY. The same rule
 covers the agent hook toggles (`hook_instrumentation`, `native_status_signals`) and the
 upstream MCP servers, which are dialled by the backend that holds them.
+
+Adding an upstream MCP server saves its configuration and credentials on the selected machine. A rejected duplicate name preserves that machine’s existing credentials. Use the existing server’s Edit form to replace a credential.
 
 The frontend keeps one copy per machine, read the first time that machine is needed and
 dropped whenever its connection changes state — a daemon that went away and came back may

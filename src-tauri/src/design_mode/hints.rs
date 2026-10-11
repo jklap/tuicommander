@@ -1,48 +1,31 @@
 //! PTY advertisements are hints only, and require a current owned listener.
 use crate::AppState;
 use serde_json::{Value, json};
-use std::path::PathBuf;
 use std::sync::LazyLock;
 use std::sync::atomic::Ordering;
 static URLS: LazyLock<regex::Regex> = LazyLock::new(|| {
     regex::Regex::new(r#"https?://(?:localhost|127\.0\.0\.1|\[::1\])(?::[0-9]+)?[^\s<>\"']*"#)
         .expect("URL hint regex")
 });
-pub(super) fn advertised(state: &AppState, roots: &[PathBuf], live: &[Value]) -> Vec<Value> {
+pub(super) fn advertised(state: &AppState, sid: &str, live: &[Value]) -> Vec<Value> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64;
-    let mut found = Vec::new();
-    for entry in state.session_maps.sessions.iter() {
-        let sid = entry.key();
-        if state
-            .session_maps
-            .last_output_ms
-            .get(sid)
-            .is_none_or(|timestamp| now.saturating_sub(timestamp.load(Ordering::Relaxed)) >= 60_000)
-        {
-            continue;
-        }
-        let cwd = {
-            let session = entry.lock();
-            session.cwd.clone()
-        };
-        if !cwd.as_ref().is_some_and(|cwd| {
-            roots
-                .iter()
-                .any(|root| std::path::Path::new(cwd).starts_with(root))
-        }) {
-            continue;
-        }
-        let Some(buffer) = state.session_maps.output_buffers.get(sid) else {
-            continue;
-        };
-        let bytes = buffer.lock().read_last(8192).0;
-        let text = tuic_terminal::output_watchers::clean_line(&String::from_utf8_lossy(&bytes));
-        found.extend(validated(&text, live));
+    if state
+        .session_maps
+        .last_output_ms
+        .get(sid)
+        .is_none_or(|timestamp| now.saturating_sub(timestamp.load(Ordering::Relaxed)) >= 60_000)
+    {
+        return Vec::new();
     }
-    found
+    let Some(buffer) = state.session_maps.output_buffers.get(sid) else {
+        return Vec::new();
+    };
+    let bytes = buffer.lock().read_last(8192).0;
+    let text = tuic_terminal::output_watchers::clean_line(&String::from_utf8_lossy(&bytes));
+    validated(&text, live)
 }
 fn validated(text: &str, live: &[Value]) -> Vec<Value> {
     URLS.find_iter(text).filter_map(|matched| {
@@ -54,7 +37,7 @@ fn validated(text: &str, live: &[Value]) -> Vec<Value> {
 }
 #[cfg(all(test, unix))]
 mod tests {
-    use super::super::discovery::tests::{Server, offered, repository};
+    use super::super::discovery::tests::{Server, offered_to, repository};
     use super::*;
     use std::sync::{Arc, atomic::AtomicU64};
     // Catches: discovery offering stale, foreign-host, or unowned PTY advertisements.
@@ -81,7 +64,7 @@ mod tests {
             .session_maps
             .last_output_ms
             .insert(sid.into(), AtomicU64::new(now));
-        let found = offered(state.clone(), repo.path()).await;
+        let found = offered_to(state.clone(), repo.path(), sid, repo.path()).await;
         let hints: Vec<_> = found
             .iter()
             .filter(|row| row["source"] == "fresh PTY")
@@ -91,6 +74,27 @@ mod tests {
             hints[0]["url"],
             format!("http://127.0.0.1:{}/preview", server.port)
         );
+        // Another agent in the same repository prints its own URL: it is not this session's.
+        let other = "design-other-agent";
+        crate::test_support::insert_recording_session(&state, other);
+        let mut chatter = crate::OutputRingBuffer::new(8192);
+        chatter.write(format!("http://localhost:{}/other-session", server.port).as_bytes());
+        state
+            .session_maps
+            .output_buffers
+            .insert(other.into(), parking_lot::Mutex::new(chatter));
+        state
+            .session_maps
+            .last_output_ms
+            .insert(other.into(), AtomicU64::new(now));
+        assert!(
+            !offered_to(state.clone(), repo.path(), sid, repo.path())
+                .await
+                .iter()
+                .any(|row| row["url"]
+                    .as_str()
+                    .is_some_and(|url| url.contains("other-session")))
+        );
         state
             .session_maps
             .last_output_ms
@@ -98,7 +102,7 @@ mod tests {
             .unwrap()
             .store(0, Ordering::Relaxed);
         assert!(
-            !offered(state.clone(), repo.path())
+            !offered_to(state.clone(), repo.path(), sid, repo.path())
                 .await
                 .iter()
                 .any(|row| row["source"] == "fresh PTY")
@@ -111,7 +115,7 @@ mod tests {
             .store(now, Ordering::Relaxed);
         drop(server);
         assert!(
-            !offered(state, repo.path())
+            !offered_to(state, repo.path(), sid, repo.path())
                 .await
                 .iter()
                 .any(|row| row["source"] == "fresh PTY")

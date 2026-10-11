@@ -40,6 +40,7 @@
 
 .input {
   flex: 1;
+  min-width: 0;
   min-height: 40px;
   max-height: 120px;
   padding: 8px 12px;
@@ -65,12 +66,13 @@
   outline: none;
 }
 
-.send {
+.send,
+.dictate {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 40px;
-  height: 40px;
+  width: 44px;
+  height: 44px;
   border-radius: var(--radius-full);
   border: none;
   background: var(--accent);
@@ -82,4 +84,41 @@
 
 .send:active {
   opacity: 0.7;
+}
+
+.dictate {
+  background: var(--bg-tertiary);
+  color: var(--fg-muted);
+}
+
+.dictate[aria-pressed="true"] {
+  color: var(--error);
+}
+
+.dictate:disabled {
+  opacity: 0.5;
+}
+
+.queueMenu {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  right: 12px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  z-index: 10;
+}
+
+.queueMenu button {
+  min-height: 44px;
+  padding: 8px 16px;
+  border: none;
+  background: transparent;
+  color: var(--fg-primary);
+  cursor: pointer;
+}
+
+.queueMenu button:hover {
+  background: var(--bg-highlight);
 }

@@ -312,6 +312,7 @@ pub(super) async fn remove_worktree_http(
         .warnings;
         let archive = crate::worktree::resolve_archive_script(&repo_path);
         let outcome = crate::worktree::remove_worktree_with_presence_confirmation(
+            &preview_state,
             &repo_path,
             &workspace_id,
             delete_branch,

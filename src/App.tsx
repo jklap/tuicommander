@@ -2,6 +2,7 @@ import { type Component, createSignal, lazy, Show, Suspense } from "solid-js";
 import { ApplicationOverlays } from "./components/ApplicationOverlays/ApplicationOverlays";
 import { BranchSwitcher } from "./components/BranchSwitcher/BranchSwitcher";
 import { CommandPalette } from "./components/CommandPalette";
+import { urlPasteActions } from "./components/CommandPalette/urlPaste";
 import { createContextMenu } from "./components/ContextMenu";
 import { PanelOrchestrator } from "./components/PanelOrchestrator";
 import type { CleanupStep, StepId, StepStatus } from "./components/PostMergeCleanupDialog/PostMergeCleanupDialog";
@@ -17,6 +18,7 @@ import { TerminalArea } from "./components/TerminalArea";
 import { Toolbar } from "./components/Toolbar";
 import { executeCleanup } from "./hooks/usePostMergeCleanup";
 import { editorTabsStore } from "./stores/editorTabs";
+import { getAppTheme } from "./themes";
 
 const ActivityDashboard = lazy(() =>
 	import("./components/ActivityDashboard").then((m) => ({ default: m.ActivityDashboard })),
@@ -32,6 +34,7 @@ import { McpPopup } from "./components/McpPopup/McpPopup";
 import { MobileViewBanner } from "./components/MobileViewBanner";
 import { ToastContainer } from "./components/ToastContainer/ToastContainer";
 import { type WorktreeActions, WorktreeManager } from "./components/WorktreeManager";
+import { getWorkItemLinkPort, startWork } from "./hooks/git/startWork";
 import { useActiveTerminalSync } from "./hooks/useActiveTerminalSync";
 import { useAgentDetection } from "./hooks/useAgentDetection";
 import { useAgentPolling } from "./hooks/useAgentPolling";
@@ -113,6 +116,7 @@ import { openFileAction, openTerminalFilePath } from "./utils/filePreview";
 import { markdownDocumentPanelId } from "./utils/markdownDocumentPanelId";
 import { navigateToTerminal } from "./utils/navigateToTerminal";
 import { initPaneTabAssignment } from "./utils/paneTabAssign";
+import { quickSwitcherHints } from "./utils/quickSwitcherHints";
 import { getShellFamily, sendCommand } from "./utils/sendCommand";
 
 const getDefaultFontSize = () => settingsStore.state.defaultFontSize;
@@ -687,6 +691,7 @@ const App: Component = () => {
 			height: 600,
 			center: true,
 			decorations: true,
+			backgroundColor: getAppTheme(settingsStore.state.theme).bgPrimary,
 		});
 
 		floatingWin.once("tauri://destroyed", () => {
@@ -811,6 +816,23 @@ const App: Component = () => {
 		executeSmartPrompt: smartPrompts.executeSmartPrompt,
 	});
 
+	const paletteUrlActions = (text: string, signal: AbortSignal) =>
+		urlPasteActions(
+			text,
+			{
+				activeRepoPath: () => repositoriesStore.state.activeRepoPath,
+				links: getWorkItemLinkPort,
+				workspaceIdOnBranch: (repoPath, branch) => repositoriesStore.workspaceIdOnBranch(repoPath, branch),
+				openWorkspace: (repoPath, workspaceId) => {
+					repositoriesStore.setActive(repoPath);
+					void gitOps.handleBranchSelect(repoPath, workspaceId);
+				},
+				startWork,
+				notify: setStatusInfo,
+			},
+			signal,
+		);
+
 	useShortcutRegistration(shortcutHandlers);
 
 	useNativeMenuBridge({
@@ -887,7 +909,7 @@ const App: Component = () => {
 			<div id="app-body">
 				{/* Sidebar - always mounted, hidden via CSS */}
 				<Sidebar
-					quickSwitcherActive={quickSwitcherVisible()}
+					quickSwitcherActive={quickSwitcherHints(quickSwitcherVisible(), globalWorkspaceStore.isActive()).sidebar}
 					onBranchSelect={gitOps.handleBranchSelect}
 					onAddTerminal={gitOps.handleAddTerminalToWorkspace}
 					onRemoveBranch={gitOps.handleRemoveWorkspace}
@@ -947,7 +969,7 @@ const App: Component = () => {
 					{/* Tab bar */}
 					<div id="tab-bar">
 						<TabBar
-							quickSwitcherActive={quickSwitcherVisible()}
+							quickSwitcherActive={quickSwitcherHints(quickSwitcherVisible(), globalWorkspaceStore.isActive()).tabBar}
 							onTabSelect={terminalLifecycle.handleTerminalSelect}
 							onTabClose={terminalLifecycle.closeTerminal}
 							onCloseOthers={terminalLifecycle.closeOtherTabs}
@@ -1045,7 +1067,7 @@ const App: Component = () => {
 			<PromptDrawer />
 
 			{/* Browser mode uses the same palette with its HTTP-safe action subset. */}
-			<CommandPalette actions={actionEntries()} browserMode={!isTauri()} />
+			<CommandPalette actions={actionEntries()} browserMode={!isTauri()} urlActions={paletteUrlActions} />
 
 			{/* Quick branch switcher */}
 			<BranchSwitcher

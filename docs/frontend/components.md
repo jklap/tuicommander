@@ -1,8 +1,32 @@
 # Components
 
+`Tasks/detail/TasksDetail` is the core work-item detail surface. Its props are
+`provider`, `reference`, optional `visible`, `onClose` and `onItemChange`.
+It renders schema-driven fields, sanitized Markdown, all declared comment
+variants, cursor pagination, a comment composer and provider transition actions.
+The shell must pass visibility to pause the default 60-second refresh timer.
+`useTasksDetail` fences responses by item generation and serializes mutations.
+Committed mutations remain accepted if reloading opened comment pages fails;
+the view reports the history error and Retry reloads those pages.
+`TaskMarkdown` preserves reader disclosure state across provider refreshes.
+Shell mounting and provider registration are owned by the Tasks integration.
+
+`Tasks/create/TasksCreate` is the core work-item create form. Its props are
+`provider`, `onCreated(detail)` and optional `onCancel`. It renders the item-type
+picker and per-type fields with `SettingField` and `SettingMultiSelect`.
+`useTasksCreate` fences schema responses by generation and submits once;
+`createDraft` converts control values to tagged field values.
+
 Slice F exposes `start_graph {target:{type:story|plan,id},expected_revision?,definition_id,definition_revision,request_id,limits?}` through the existing owning-daemon service. Story starts require the current native revision and pin the selected publication; the request ID is bound to its payload. Omitted limits use Rust defaults. Plan dispatch remains unavailable in this build and its start control says so. The `workflow_run` MCP tool uses an inline schema generated from `RunAction` and the public `RunCommand` variants; it returns the same scoped snapshots and cursor-ordered events as IPC/HTTP. Run history shows pinned activations, decisions/evidence, repair counters, pause targets and complete event payloads across pages. Graph recovery uses `resume_graph {execution_id,activation_id,resolution}` after answering pending input; pause and cancel use the existing sequence-fenced commands. Legacy runs offer inspection and cancellation in the UI. No new persistence or client scheduler is added.
 
 All components are SolidJS functional components in `src/components/`.
+
+`Tasks/roadmap/TasksRoadmap` consumes a data-only `WorkItemProvider`, optional host
+start/target date field IDs and an item-opening callback. It reuses `createTasksQuery`
+and the list's virtual rows for undated items; `RoadmapTimeline` virtualizes dated rows.
+Month/quarter controls navigate local calendar geometry from `calendar.ts`. The default
+field mapping uses the first two date descriptors in provider order. Missing, invalid
+or reversed dates stay in the side list. Shell mounting is a separate integration step.
 
 `MobileViewBanner` offers browser clients a link to `/mobile`. On tablets it remains visible, even if previously dismissed on a phone, so users who chose desktop in mobile Settings can return. Switching clears the device-local desktop preference; native Tauri never renders the banner.
 
@@ -697,3 +721,30 @@ only provisional command-envelope boundary; tests inject `AutomationAdapter`.
 No schedules or launch decisions are calculated in TypeScript.
 
 `RunsView` in the Automations dialog renders all-history pages and backend 24h/7d summaries. `RunOutput` renders saved stdout/stderr and immutable workspace details. View run only focuses a live terminal with matching daemon ownership; unavailable sessions never launch a replacement.
+
+### Reusable setting field controls
+
+`SettingsPanel/SettingFields.tsx` exports `SettingAccount`, `SettingList`,
+`SettingMultiSelect`, `SettingStatus` and `SettingButton`. The implementations in
+`SettingsPanel/fields/` share the existing label and hint layout. Editable rows use
+stable IDs; multiselect uses checkboxes; status is read-only. The account picker
+loads the core account list and delegates Add to a token-free native-flow callback.
+These controlled components do not persist settings or define catalogue fields.
+The dev-only `fields/preview.html` mounts the actual controls for visual checks.
+
+The Precheck section includes a default-off stdout context checkbox. It edits
+`precheck.inject_output` through the existing store and shared save API, without
+changing prompt text. Disabling and re-enabling the precheck resets the flag.
+
+### Mobile composer browser dictation
+
+`CommandInput` mounts `useBrowserDictation`, a feature-detected browser interaction hook. Its mic is directly before Send in the existing row; interim hypotheses are replaced and final speech stays in the current draft without focus or automatic Enter. `SessionDetailScreen` excludes server hands-free while browser recognition is pending or active, and `useMobileVoice.recording` blocks browser starts during server arming/recording. Manual typing or keybar text insertion cancels recognition and preserves the edited draft. The mic stays claimed until the browser emits `end`, including after an error; queued results from that recording are ignored. Tap the mic to resume after `end`. Browser failures are logged as well as toasted. The hook also stops on send, session end, or unmount. No setting or backend route is added.
+
+## Tasks board
+
+`Tasks/board/TasksBoard.tsx` renders the provider/core board projection. Each lane
+has a virtualized card list. Pointer capture supports drag and drop; the native
+move menu provides keyboard and touch access. Moves dispatch the provider's per-card
+action, show pending feedback, and restore the origin on rejection. Cancellation
+and scope changes clean up drag state. Consumers refresh the projection after a
+successful move; the view does not infer workflow transitions.

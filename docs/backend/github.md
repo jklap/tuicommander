@@ -4,7 +4,12 @@
 
 Integrates with GitHub via GraphQL API for PR status, CI checks, and batch queries. Supports OAuth Device Flow login as an alternative to gh CLI tokens, plus **multiple accounts** (additional github.com logins and GitHub Enterprise Server) with per-repo bindings.
 
-Worktree deletion has a separate fail-closed `gh api graphql` proof. When Git
+Worktree deletion has a fail-closed, account-aware HTTP GraphQL proof through
+`RepoApi::resolve` and `graphql_pages`. It uses the repository binding and host,
+the shared HTTP client, and account-scoped breaker/rate-limit accounting.
+Pagination must finish within 100 pages; errors, malformed page info, and repeated
+cursors leave the lookup unknown and uncached. Synchronous Git callbacks bridge
+through the Tokio runtime only from blocking tasks. When Git
 ancestry does not reach the default or checked-out integration branch, it reads
 merged PRs for the worktree branch and accepts one only when its recorded head
 contains the local tip. Missing heads are fetched from `refs/pull/N/head` and
@@ -12,6 +17,21 @@ checked against the API SHA before ancestry is trusted. An API/auth/fetch
 failure leaves the branch unproved; patch-equivalence remains a local fallback.
 The MCP local-branch deletion action uses the same merged-PR evidence when a
 branch has no worktree.
+
+REST requests use `github::github_rest_request` with the host and token selected by
+`resolve_repo_for_rest` (registry and per-repo binding) or by the account identity
+flow. The builder pins `User-Agent: TUICommander`, the requested Accept media type,
+and `X-GitHub-Api-Version: 2022-11-28`. GraphQL uses the same User-Agent. Each caller
+keeps its status/error wording and existing circuit-breaker handling. A production
+source guard ratchets the remaining `gh` spawn sites until their HTTP migrations land.
+
+PR creation, issue creation, and review submission use account-aware `RepoApi::rest`
+POST requests to `pulls`, `issues`, and `pulls/{number}/reviews`. The repository
+binding selects the host and token, including GitHub Enterprise. These writes no
+longer require the `gh` executable or pass tokens to child processes. Review inline
+comments retain their side (default `RIGHT`). REST errors retain the HTTP status
+and response body as `GitHub API failed ({status}): {body}`. IPC and HTTP request
+and response shapes are unchanged.
 
 ## Multi-Account Model (`github_account.rs`)
 
@@ -23,14 +43,15 @@ The integration is **account-centric**: the primary key is a stable `GitHubAccou
 - **Repo bindings** — `{repo_path → account_id, owner, repo, remote_name}` persisted per canonical repo root (worktrees resolve to the main root). `resolve_repo_account(repo_path)` returns `RepoResolution::{Bound | NeedsBind(candidates) | NeedsAccount | Unmonitored}` — binding-first, single-candidate auto-confirm, ambiguity surfaces all candidates (never a silent `origin` pick).
 - **Concurrent saves** — Binding maps use `ConfigFile::save_delta`, so changes to different repositories compose. Account additions and removals mutate the latest registry under `ConfigFile::update_with`; the on-disk array is never replaced from a stale account snapshot.
 - **Per-account isolation (hybrid)** — github.com keeps the global breaker/viewer/rate/cooldown fields byte-for-byte; GHE accounts get isolated `ghe_state: DashMap<AccountId, GheAccountState>`. The poller groups repos by resolved account and runs one batch per account, so a fault on one never opens another's breaker. Cooldown keys: `owner/repo` (cloud, unchanged) vs `{account_id}:owner/repo` (GHE).
-- **Limitation** — `fetch_ci_failure_logs` (gh-CLI-assisted) is disabled with a clear message for non-github.com accounts; all REST + GraphQL paths route through `github_rest_url(host, path)` / account-scoped tokens (no hardcoded `api.github.com` outside `GitHubHost` + tests).
+- **CI logs** — github.com and GitHub Enterprise use the repo-resolved account token and REST host. Actions runs, jobs and logs use the account circuit breaker. Log redirects remove bearer credentials when the storage host changes.
 
 ### Multi-account commands
+
+Create Enterprise accounts through the core account manager and enter PATs through `account_secret_form`. The legacy PAT add command and `POST /github/accounts` route are removed; `GET /github/accounts` remains available.
 
 | Command | Signature | Description |
 |---------|-----------|-------------|
 | `github_list_accounts` | `() -> Vec<GitHubAccount>` | Additional accounts beyond the ambient github.com default |
-| `github_add_account` | `(host: String, pat: String) -> GitHubAccount` | Validate PAT against `{rest_base}/user`, store token + record (github.com rejected → device flow) |
 | `github_remove_account` | `(id: String) -> ()` | Cascade-remove token + record + bindings + per-account caches |
 | `github_bind_repo` | `(repo_path, account_id, remote_name) -> ()` | Persist a repo→account binding |
 | `github_unbind_repo` | `(repo_path: String) -> ()` | Remove a repo binding |
@@ -72,15 +93,25 @@ The active token source is tracked in `AppState.github_token_source` as a `Token
 | `update_pr_branch` | `(repo_path: String, pr_number: i64, expected_head_sha: String) -> ()` | Merge the base branch into the PR branch (REST `PUT /pulls/{n}/update-branch`, same operation as GraphQL `updatePullRequestBranch`), pinned to the head the UI showed; 422 head mismatch → `PR head changed` |
 | `close_pr` | `(repo_path: String, pr_number: i64) -> ()` | Close a PR without merging (REST `PATCH /pulls/{n}` `state=closed`) |
 | `get_all_pr_statuses` | `(paths: Vec<String>, include_merged: bool) -> HashMap<String, Vec<BranchPrStatus>>` | Batch PR status across many repos in one GraphQL call |
-| `get_pr_diff` | `(repo_path: String, pr_number: i64) -> String` | Get PR diff content; falls back to a local-clone `git diff` when GitHub rejects oversized diffs |
+| `get_pr_diff` | `(repo_path: String, pr_number: i64) -> PrDiff {diff, headSha}` | Get PR diff content and the head commit it was read at (head read before and after the diff; a push in between is an error); falls back to a local-clone `git diff` when GitHub rejects oversized diffs |
 | `merge_pr_via_github` | `(repo_path: String, pr_number: i64, merge_method: String, expected_head_sha: String) -> String` | Merge PR via GitHub API, pinned to the reviewed head (409 → `PR head changed`) |
 | `fetch_ci_failure_logs` | `(repo_path: String, branch: String, check_url?: String, head_sha?: String) -> String` | Fetch failure logs for the local branch head during auto-heal or for a selected check at the PR head SHA |
 | `create_issue_from_proposal` | `(repo_path: String, proposal: ImprovementProposal) -> CreatedIssue` | Explicit issue creation from a proposal; scan never creates issues automatically |
 
+### Failing checks for auto-heal
+
+Failing checks are read from the exact commit's `statusCheckRollup.contexts`,
+through `RepoApi::resolve` and account-bound GraphQL with breaker accounting.
+The lookup does not search open PRs. It combines up to 100 pages before keeping
+the newest check per name, then returns failed CheckRuns and external
+StatusContexts with their detail links. An incomplete response is an error;
+a commit with a null rollup has no checks. CI job log retrieval remains a
+separate operation.
+
 ### Circuit breaker coverage
 
 **Every** call out to GitHub goes through the account's circuit breaker:
-GraphQL via `graphql_with_retry`, `gh api` writes via `run_gh_write`, and direct
+GraphQL via `graphql_with_retry`, PR/issue/review writes via `RepoApi::rest`, and direct
 REST via `send_rest_with_breaker` (close/reopen issue, merge PR, approve PR,
 `fetch_github_json`, PR diff, PR refs). The availability breaker counts transport
 errors and `5xx` responses, not deterministic `4xx` caller outcomes such as a
@@ -309,6 +340,14 @@ PR diff reads use the GitHub REST diff representation first. If GitHub returns t
 
 ### CI Auto-Heal (`fetch_ci_failure_logs`)
 
+Actions logs use REST runs filtered by `head_sha`, then jobs with `filter=latest`.
+Each list has a ten-page cap (100 entries per page). A run with unavailable or
+incomplete jobs is skipped. Downloads retain only the last 4,000 bytes per job,
+with at most 100 job logs retained; output is sanitized before agent use.
+One 60-second async deadline covers the sweep and any external CI downloads.
+Only local Git head resolution uses a blocking worker; HTTP work is cancellable.
+
+
 Resolves the local branch head for auto-heal, or uses the supplied PR head SHA for a selected check, then lists matching workflow runs, inspects their jobs, and downloads logs for every completed failed job through the GitHub Actions jobs API. Job-level retrieval works while sibling jobs are still running, before the containing workflow has a final `failure` conclusion. Used by the CI auto-heal hook (`useCiHeal`) to inject failure context into agent terminals for automatic fix cycles (up to 3 delivered attempts per cycle).
 
 GitHub Actions jobs are downloaded through GitHub's jobs API. CircleCI checks are selected from a PR whose head SHA matches the local branch for auto-heal or the supplied PR head SHA for a selected check, including remote-only PRs, restricted to the repository's GitHub owner/repository, and fetched only when a CircleCI token is configured. A selected CircleCI check takes precedence over failed GitHub Actions jobs; an unselected auto-heal request keeps GitHub Actions priority. Every `gh` and `git` process on this path has a 30-second deadline; a timeout returns an error and auto-heal clears its in-flight state. The CircleCI job's `vcs_revision` must match that SHA. CircleCI API and action-log requests never follow redirects; pre-signed action-log downloads accept only Amazon S3 HTTPS hosts and do not receive that token. The JSON action output is parsed as a stream, retaining at most 64 KiB of recent message text before the shared sanitiser and 4,000-character output limit; a 16 MiB download ceiling bounds transient parser memory. Other external providers return a clear error naming the checks instead of the misleading "no jobs found". The auto-heal hook surfaces that message as a warn toast and does **not** consume an attempt (attempts increment only after a fix prompt is delivered).
@@ -318,3 +357,108 @@ GitHub Actions jobs are downloaded through GitHub's jobs API. CircleCI checks ar
 When `include_merged` is true, `get_repo_pr_statuses` includes recently merged PRs. Stale merged PRs are filtered: if a branch has been recreated after a PR was merged (detected via branch creation timestamp vs PR merge timestamp), the old merged PR is excluded to prevent ghost badges.
 
 Browser add-account polling uses `POST /github/accounts/poll` and the same `github_poll_add_account_impl` as desktop IPC. Success persists a named account without replacing the default runtime token. Default login continues to use `POST /github/auth/poll`.
+
+### Line review backend
+
+The additive `github_review_threads` API reads paginated line threads with current/original line, diff side, resolved and outdated state, plus paginated replies. The existing `get_pr_review_threads` badge-count API is unchanged. Resolve/unresolve returns the confirmed GitHub thread; reply returns the posted comment. Draft submission checks the reviewed head against GitHub and posts through the existing review body builder/parser with `commit_id` pinned. A moved head returns `review-head-changed`; refresh before resubmitting. All calls resolve the repository account and use its host, token and circuit breaker.
+
+### PR action backend
+
+`github_pr_actions` exposes auto-merge enable/disable, merge queue enqueue/dequeue/state and failed-job reruns. `merge_or_enqueue_pr` reads the PR's `isMergeQueueEnabled` field and enqueues when the base branch has a merge queue; otherwise it merges with a pinned REST SHA. A missing or non-boolean queue-policy field stops the write. Queue entry and auto-merge enable mutations carry `expectedHeadOid`. Failed reruns use the Actions `rerun-failed-jobs` endpoint, which also reruns dependent jobs. The legacy review post and draft API both reject REQUEST_CHANGES with an empty body before account/network work. These additive commands require frontend consumers to opt in; the existing merge command is unchanged.
+
+## Shared account registry
+
+Core owns provider sites and accounts in `accounts.json`. Tokens are stored only
+in the instance credential vault under `account/{id}`. Reads return account
+metadata and `secret: {status: "set" | "unset" | "unavailable"}`. Persisted registry, site and account records tolerate unknown fields from newer builds. Vault errors
+are unavailable, never an absent credential. No account action reveals tokens.
+
+`account_action` (IPC) and `POST /accounts/action` (HTTP) call the same Rust owner
+service. IPC takes `{request: <action>}`; HTTP takes the action directly. HTTP
+uses the loopback-or-authenticated route guard on both routers. TCP listeners
+additionally require transport authentication, including loopback requests. The future Settings MCP adapter uses this service; this change
+does not add an unrestricted plugin `invoke` grant or a standalone MCP tool.
+
+| Action | Input | Reply |
+|---|---|---|
+| `list` | Optional `provider` | AccountView array |
+| `list_sites` | Optional `provider` | Site array |
+| `add` | `account: {provider, host, kind, label, username?}`, `token` | Verified AccountView |
+| `test` | `id` | Verified AccountView |
+| `remove` | `id` | `{removed:true}`; rejects the durable github.com default |
+| `add_site` | `provider`, `host`, `label` | Site |
+| `remove_site` | Site `id` | `{removed:true}`; removes its accounts, credentials and GitHub bindings; rejects the default github.com site before any removal |
+| `set_secret` | `id`, `token` | Verified AccountView; token/basic accounts only |
+| `clear_secret` | `id` | `{cleared:true}`; retains account metadata |
+| `set_label` | `id`, `label` | `{updated:true}`; renames an account |
+| `set_site_label` | `id`, `label` | `{updated:true}`; renames a site |
+
+AccountView fields: `id`, `provider`, `site_id`, `host`, `kind`, `label`, `login`,
+`username`, `created_at`, `auth_source`, `secret`. Site fields: `id`, `provider`,
+`host`, `label`. IDs are stable; new non-GitHub accounts receive UUIDs. Multiple
+accounts may share one provider/site. Site URLs include their HTTP(S) origin and
+optional context path; userinfo, query strings, fragments and traversal are
+rejected. Verification uses a 30-second deadline, a 64 KiB response cap, no
+redirects, and returns only a selected viewer identity. Error bodies are never
+returned. Tests use a controlled protocol server, not live Jira/GitLab credentials.
+
+Core registers GitHub and reuses its provider. Cloud login still requires device
+flow; PAT input cannot bypass it. Non-core `ProviderDescriptor` registration is
+restricted to `bearer` and `basic` token authentication. A descriptor declares
+`id`, `label`, `kinds`, and `verify: {path, login_pointer}`. The trusted manifest
+adapter calls `accounts::register_provider(owner, descriptor)`; unload calls
+`unregister_providers(owner)`. Unload retains persisted accounts and credentials.
+Verification of an unloaded provider returns unavailable; metadata remains readable.
+Plugin manifest wiring and authenticated plugin HTTP requests are delivered by
+the host-API stream, not this registry change.
+
+Native secret-entry integration is separate. Its sink calls
+`accounts::add_account(NewAccount, token)` directly. The core Settings control
+must not collect or forward token values through plugin JavaScript. This change
+provides the write-only service/input transport; it does not claim native
+secret-entry privacy before that sink is integrated.
+
+`accounts::catalogue_schema()` returns an inline Rust schema without reading
+files, credentials or providers. The logical token leaf has secret sensitivity,
+no default or examples, and `get`/`set_secret`/`clear_secret` operations. Get is
+presence-only. Catalogue aggregate registration is a serial Settings integration
+step after the accounts module lands; the module does not edit the shared catalogue.
+
+### GitHub migration and recovery
+
+The first registry operation imports all `github_accounts.json` entries with
+unchanged account IDs, hosts, login and auth provenance. The implicit
+`github.com` record still resolves the existing env → OAuth vault → gh chain;
+env/CLI tokens are not copied into the vault. The legacy metadata file is retained
+for recovery and is not re-imported after the migration marker is committed.
+`github_bindings.json` stays authoritative, so existing repo bindings remain valid.
+All GitHub registry writers now use the shared registry.
+
+On vault load, `github/oauth-token` and `github/account/{id}/token` migrate to
+`account/{id}` in one persisted blob. Existing canonical credentials win. Old
+copies disappear only after persistence succeeds; a failed migration can retry.
+GitHub credential enum variants address the same canonical slots, including OAuth
+login/logout and per-account token resolution. OAuth replies and Debug output
+omit `access_token`.
+
+Metadata updates use the existing cross-process ConfigFile lock and atomic file
+replacement. Corrupt account metadata is rejected and retained for operator
+repair. Vault and metadata are separate stores: a vault change followed by a
+metadata persistence failure may leave a credential phase committed. An operation
+error is not a guarantee of cross-store rollback; inspect presence and retry the
+owner action after repairing storage. Site removal can stop after removing some
+accounts if a later credential/binding operation fails; retry the site action.
+Rust changes load only after Boss manually restarts `make dev` or installs a
+`make build`; this work does not launch or restart the app.
+
+### Private account token sink
+
+Enterprise PAT entry in Settings launches `account_secret_form` with account
+metadata only. The private native form sends its one-time nonce and token to
+Rust; the account sink calls `accounts::add_account` or `accounts::set_secret`.
+The token never enters Settings state or the general secret-command environment.
+Provider validation precedes persistence. Decline or close before submission
+writes no account or credential. After Submit is accepted, verification and storage
+finish even if the window closes; a consumed nonce cannot be replayed. Rotation
+invalidates the same GitHub Enterprise runtime cache as the account owner API.
+Native inspection remains blocked until the private window is destroyed.

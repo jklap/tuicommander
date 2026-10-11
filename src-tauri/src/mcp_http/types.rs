@@ -107,6 +107,8 @@ pub(super) struct SetNameRequest {
 #[derive(Deserialize)]
 pub(super) struct EnqueueCommandRequest {
     pub text: String,
+    #[serde(default, rename = "expectedDraft")]
+    pub expected_draft: Option<String>,
     #[serde(default, rename = "idempotencyKey")]
     pub idempotency_key: Option<String>,
 }
@@ -709,12 +711,6 @@ pub(super) struct GithubSetHideDraftsRequest {
 pub(super) struct GithubPollLoginRequest {
     #[serde(rename = "deviceCode")]
     pub device_code: String,
-}
-
-#[derive(Deserialize)]
-pub(super) struct GithubAddAccountRequest {
-    pub host: String,
-    pub pat: String,
 }
 
 #[derive(Deserialize)]

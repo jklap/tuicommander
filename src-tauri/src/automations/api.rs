@@ -1,4 +1,4 @@
-//! Shared HTTP and IPC boundary; all state belongs to the addressed backend.
+//! Shared HTTP, IPC, MCP and CLI boundary; all state belongs to the addressed backend.
 use super::{
     actions::{self, DefinitionAction},
     definitions::DefinitionStore,
@@ -18,6 +18,13 @@ use std::sync::Arc;
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum AutomationAction {
     List {},
+    Templates {},
+    Template {
+        template_id: String,
+        repository: String,
+        run_config: String,
+        timezone: Option<String>,
+    },
     Get {
         id: String,
     },
@@ -51,6 +58,12 @@ pub(crate) enum AutomationAction {
         #[serde(default)]
         offset: u32,
     },
+    WorktreePreview {
+        id: String,
+    },
+    CleanupWorktree {
+        id: String,
+    },
     Summary {
         window: SummaryWindow,
     },
@@ -78,16 +91,58 @@ fn preview_count() -> usize {
 
 /// Parse the same input and return the same errors on either transport.
 pub(crate) async fn execute(input: Value, state: Arc<AppState>) -> Result<Value, String> {
+    execute_as(input, state, Caller::Client).await
+}
+
+pub(crate) enum Caller {
+    Client,
+    Agent(Option<String>),
+}
+
+impl Caller {
+    fn creator(&self, action: &AutomationAction) -> Result<Option<&str>, String> {
+        match self {
+            Self::Agent(None) if matches!(action, AutomationAction::Create { .. }) => {
+                Err("Automation creation requires a bound agent session".into())
+            }
+            Self::Agent(session) => Ok(session.as_deref()),
+            Self::Client => Ok(None),
+        }
+    }
+}
+
+pub(crate) async fn execute_as(
+    input: Value,
+    state: Arc<AppState>,
+    caller: Caller,
+) -> Result<Value, String> {
     let action = parse(input)?;
+    caller.creator(&action)?;
     if let AutomationAction::RunNow { id } = action {
         return value(AutomationRuntime::run_now(&state, &id).await?);
     }
+    if matches!(
+        action,
+        AutomationAction::WorktreePreview { .. } | AutomationAction::CleanupWorktree { .. }
+    ) {
+        return tokio::task::spawn_blocking(move || {
+            let (id, remove) = match action {
+                AutomationAction::WorktreePreview { id } => (id, false),
+                AutomationAction::CleanupWorktree { id } => (id, true),
+                _ => unreachable!(),
+            };
+            super::worktrees::execute(&state, &RunStore::open()?, &id, remove)
+        })
+        .await
+        .map_err(|error| format!("Automation cleanup task failed: {error}"))?;
+    }
     tokio::task::spawn_blocking(move || {
-        execute_stored(
+        execute_stored_as(
             &DefinitionStore::new(),
             &RunStore::open()?,
             action,
             Utc::now(),
+            caller,
         )
     })
     .await
@@ -98,12 +153,24 @@ pub(crate) fn parse(input: Value) -> Result<AutomationAction, String> {
     serde_json::from_value(input).map_err(|error| format!("Invalid automation action: {error}"))
 }
 
+#[cfg(test)]
 pub(crate) fn execute_stored(
     definitions: &DefinitionStore,
     runs: &RunStore,
     action: AutomationAction,
     now: DateTime<Utc>,
 ) -> Result<Value, String> {
+    execute_stored_as(definitions, runs, action, now, Caller::Client)
+}
+
+pub(crate) fn execute_stored_as(
+    definitions: &DefinitionStore,
+    runs: &RunStore,
+    action: AutomationAction,
+    now: DateTime<Utc>,
+    caller: Caller,
+) -> Result<Value, String> {
+    let creator = caller.creator(&action)?;
     match action {
         AutomationAction::List {} => {
             let mut items = Vec::new();
@@ -123,10 +190,26 @@ pub(crate) fn execute_stored(
             }
             Ok(Value::Array(items))
         }
+        AutomationAction::Templates {} => value(super::templates::TEMPLATES),
+        AutomationAction::Template {
+            template_id,
+            repository,
+            run_config,
+            timezone,
+        } => value(super::templates::draft(
+            &template_id,
+            repository,
+            run_config,
+            timezone.as_deref(),
+        )?),
         AutomationAction::Get { id } => value(definitions.get(&id)?),
         AutomationAction::Create { definition } => {
             let id = definition.id.clone();
-            actions::execute(definitions, DefinitionAction::Create { definition }, None)?;
+            actions::execute(
+                definitions,
+                DefinitionAction::Create { definition },
+                creator,
+            )?;
             value(definitions.get(&id)?)
         }
         AutomationAction::Update {
@@ -192,6 +275,9 @@ pub(crate) fn execute_stored(
             )?)
         }
         AutomationAction::Preset { preset } => Ok(json!({"cron": preset.cron()?})),
+        AutomationAction::WorktreePreview { .. } | AutomationAction::CleanupWorktree { .. } => {
+            Err("Worktree cleanup requires local session state".into())
+        }
         AutomationAction::RunNow { .. } => Err("Run Now requires the runtime owner".into()),
     }
 }

@@ -10,6 +10,18 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "Mobile prompt queue",
+		description:
+			"Hold Send and select Queue to submit your current agent draft at its next ready window. Tap Send to submit now.",
+		shortcut: null,
+	},
+	{
+		feature: "Tasks roadmap",
+		description:
+			"Switch Month or Quarter in the Tasks roadmap to change the timeline scale. Tasks without usable dates stay in the side list.",
+		shortcut: null,
+	},
+	{
 		feature: "Design Mode",
 		description:
 			"Start Design Mode from an agent tab, open its browser sidebar, pick elements and comment before sending. Busy agents receive feedback at their next idle window.",
@@ -30,7 +42,7 @@ export const TIPS: Tip[] = [
 	{
 		feature: "Automations",
 		description:
-			"Open Automations from the command palette to edit schedules. Select Runs for 24h/7d counts, history and saved output. Needs-you and failure bell items open the saved run and its owning session.",
+			"Open Automations from the command palette to edit schedules. Enable Include precheck stdout in the agent prompt to add bounded check results before your unchanged prompt. Select Runs for history and saved output.",
 		shortcut: null,
 	},
 	{
@@ -226,6 +238,12 @@ export const TIPS: Tip[] = [
 	{
 		feature: "Pin Tab",
 		description: "Right-click any tab and select Pin — pinned tabs stay visible when you switch branches.",
+		shortcut: null,
+	},
+	{
+		feature: "Automation worktree cleanup",
+		description:
+			"Open Automations → Runs to inspect a completed run’s worktree and remove it when the backend confirms it is safe.",
 		shortcut: null,
 	},
 	{
@@ -608,6 +626,12 @@ export const TIPS: Tip[] = [
 		feature: "Native Agent Hooks",
 		description:
 			"Let Claude or Gemini report status through their own hooks for precise busy/idle/waiting state — enable per agent in Settings → Agents. TUIC installs and removes the hooks cleanly and never touches your own.",
+		shortcut: null,
+	},
+	{
+		feature: "Automation Templates",
+		description:
+			"Choose a built-in template in a new automation draft after entering its repository and run config. Review it and save it paused before enabling runs.",
 		shortcut: null,
 	},
 ];

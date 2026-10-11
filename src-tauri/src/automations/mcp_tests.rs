@@ -45,8 +45,8 @@ fn mcp_lifecycle_retains_other_definitions_and_original_creator() {
         let mut input = definition(id);
         input["created_by_session"] = json!("forged");
         assert_eq!(
-            call(json!({"action":"create","definition":input})),
-            json!({"ok":true})
+            call(json!({"action":"create","definition":input}))["id"],
+            id
         );
     }
     assert_eq!(
@@ -57,8 +57,8 @@ fn mcp_lifecycle_retains_other_definitions_and_original_creator() {
     edited["prompt"] = json!("Updated prompt");
     edited["created_by_session"] = json!("replacement");
     assert_eq!(
-        call(json!({"action":"update","id":"first","definition":edited})),
-        json!({"ok":true})
+        call(json!({"action":"update","id":"first","definition":edited}))["prompt"],
+        "Updated prompt"
     );
     for (action, enabled) in [("pause", false), ("resume", true)] {
         assert_eq!(
@@ -165,7 +165,24 @@ fn mcp_automation_tool_is_discoverable_with_all_definition_actions() {
     assert_eq!(
         tool["inputSchema"]["properties"]["action"]["enum"],
         json!([
-            "list", "get", "create", "update", "pause", "resume", "delete"
+            "list",
+            "get",
+            "create",
+            "update",
+            "pause",
+            "resume",
+            "delete",
+            "run_now",
+            "run",
+            "list_runs",
+            "summary",
+            "preview",
+            "preview_definition",
+            "preset",
+            "templates",
+            "template",
+            "worktree_preview",
+            "cleanup_worktree"
         ])
     );
 }
@@ -184,8 +201,8 @@ fn mcp_precheck_context_opt_in_round_trips_and_can_be_disabled() {
             &store,
             json!({"action":"create","definition":value}),
             Some("creator")
-        ),
-        json!({"ok":true})
+        )["id"],
+        "context"
     );
     let saved = super::mcp::execute(&store, json!({"action":"get","id":"context"}), None);
     assert_eq!(saved["precheck"]["inject_output"], true);
@@ -199,8 +216,8 @@ fn mcp_precheck_context_opt_in_round_trips_and_can_be_disabled() {
             &store,
             json!({"action":"update","id":"context","definition":update}),
             None
-        ),
-        json!({"ok":true})
+        )["precheck"]["inject_output"],
+        false
     );
     let saved = super::mcp::execute(&store, json!({"action":"get","id":"context"}), None);
     assert_eq!(saved["precheck"]["inject_output"], false);

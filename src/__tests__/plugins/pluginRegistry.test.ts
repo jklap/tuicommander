@@ -4,8 +4,10 @@ import { dashboardRegistry } from "../../plugins/dashboardRegistry";
 import { filePreviewRegistry } from "../../plugins/filePreviewRegistry";
 import { markdownProviderRegistry } from "../../plugins/markdownProviderRegistry";
 import { pluginRegistry } from "../../plugins/pluginRegistry";
+import { createInMemoryWorkItemProvider } from "../../plugins/testing/inMemoryWorkItemProvider";
 import type { PluginHost, TuiPlugin } from "../../plugins/types";
 import { PluginCapabilityError } from "../../plugins/types";
+import { workItemProviderRegistry } from "../../plugins/workItemProviderRegistry";
 import { activityStore } from "../../stores/activityStore";
 import { contextMenuActionsStore } from "../../stores/contextMenuActionsStore";
 import { mdTabsStore } from "../../stores/mdTabs";
@@ -1093,6 +1095,21 @@ describe("PluginHost — git:read capability gating", () => {
 		await expect(host!.getGitDiff("/some/repo", "staged")).resolves.toBeDefined();
 	});
 
+	// Catches: getRemotes left outside the git:read consent gate.
+	it("external plugin without git:read throws on getRemotes and never invokes", async () => {
+		const { invoke: mockInvoke } = await import("../../invoke");
+		(mockInvoke as ReturnType<typeof vi.fn>).mockClear();
+		let host: PluginHost | null = null;
+		await pluginRegistry.register(
+			makePlugin("ext", (h) => {
+				host = h;
+			}),
+			[],
+		);
+		await expect(host!.getRemotes("/some/repo")).rejects.toThrow(PluginCapabilityError);
+		expect(mockInvoke).not.toHaveBeenCalledWith("get_git_remotes", expect.anything());
+	});
+
 	it("built-in plugin can call git:read methods without capability", async () => {
 		let host: PluginHost | null = null;
 		pluginRegistry.register(
@@ -1637,6 +1654,23 @@ describe("PluginHost — Tier 3c httpFetch capability gating", () => {
 			(c) => c[0] === "plugin_http_fetch",
 		);
 		expect(httpCall?.[1]).not.toHaveProperty("allowedUrls");
+	});
+
+	// Catches: the account option dropped before IPC, so Rust sends the request unauthenticated.
+	it("forwards the account id to the Rust command", async () => {
+		let host: PluginHost | null = null;
+		await pluginRegistry.register(
+			makePlugin("ext", (h) => {
+				host = h;
+			}),
+			["net:http"],
+		);
+		await host!.httpFetch("https://jira.example.test/rest/api/3/myself", { account: "acct-1" });
+		const { invoke } = await import("../../invoke");
+		expect(invoke).toHaveBeenCalledWith(
+			"plugin_http_fetch",
+			expect.objectContaining({ account: "acct-1", pluginId: "ext" }),
+		);
 	});
 });
 
@@ -2254,4 +2288,16 @@ describe("PluginHost — getActiveRepoPath", () => {
 		repositoriesStore.setActive(null);
 		repositoriesStore.remove("/my/repo");
 	});
+});
+
+// Catches: plugin unload leaks Tasks providers after their owning plugin is removed.
+it("unregisters work-item providers when their plugin unloads", async () => {
+	await pluginRegistry.register(
+		makePlugin("tasks-provider", (host) => {
+			host.registerWorkItemProvider(createInMemoryWorkItemProvider());
+		}),
+	);
+	expect(workItemProviderRegistry.get("demo", "local")).toBeDefined();
+	pluginRegistry.unregister("tasks-provider");
+	expect(workItemProviderRegistry.get("demo", "local")).toBeUndefined();
 });

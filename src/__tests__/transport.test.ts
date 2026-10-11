@@ -486,6 +486,18 @@ describe("transport", () => {
 			expect(result.body).toEqual({ data: "hello" });
 		});
 
+		it("catches dropping expectedDraft at the mobile queue transport boundary", () => {
+			const result = mapCommandToHttp("enqueue_agent_command", {
+				sessionId: "abc",
+				text: "later",
+				expectedDraft: "later ",
+			});
+			expect(result).toEqual({
+				method: "POST",
+				path: "/sessions/abc/queue",
+				body: { text: "later", expectedDraft: "later " },
+			});
+		});
 		it("maps enqueue_agent_command to POST /sessions/{id}/queue", () => {
 			const result = mapCommandToHttp("enqueue_agent_command", { sessionId: "abc", text: "run tests" });
 			expect(result.method).toBe("POST");
@@ -644,6 +656,26 @@ describe("transport", () => {
 			expect(result.method).toBe("PUT");
 			expect(result.path).toBe("/mcp/upstreams");
 			expect(result.body).toEqual({ base, config });
+		});
+
+		// Catches: the HTTP mapper dropping add-time secrets or edit intent.
+		it("carries upstream credentials and explicit replacement intent to HTTP", () => {
+			const credentials = [{ server_id: "new", token: "dummy-secret" }];
+			const base = { servers: [] };
+			const config = { servers: [{ id: "new" }] };
+			expect(mapCommandToHttp("save_mcp_upstreams", { base, config, credentials }).body).toEqual({
+				base,
+				config,
+				credentials,
+			});
+			expect(
+				mapCommandToHttp("save_mcp_upstream_credential", {
+					name: "existing",
+					token: "dummy-replacement",
+					url: "https://example.com",
+					replace: true,
+				}).body,
+			).toEqual({ name: "existing", token: "dummy-replacement", url: "https://example.com", replace: true });
 		});
 
 		it("throws for unknown commands", () => {
@@ -1744,14 +1776,29 @@ describe("transport", () => {
 			expect(mapCommandToHttp("github_diagnostics", {}).path).toBe("/github/diagnostics");
 		});
 
+		// Catches: the {request} wrapper being forwarded as the body, or the launch reaching a different endpoint.
+		it("maps metadata-only account secret launch to the shared native host endpoint", () => {
+			const request = { action: "rotate", id: "account-id" };
+			expect(mapCommandToHttp("account_secret_form", { request })).toEqual({
+				method: "POST",
+				path: "/accounts/secret-form",
+				body: request,
+			});
+		});
+
+		// Catches: IPC wrapping being forwarded to HTTP instead of the tagged account action.
+		it("maps account_action to the shared presence-only owner endpoint", () => {
+			const request = { action: "list", provider: "github" };
+			expect(mapCommandToHttp("account_action", { request })).toEqual({
+				method: "POST",
+				path: "/accounts/action",
+				body: request,
+			});
+		});
+
 		it("maps multi-account accounts + repo bindings", () => {
 			expect(mapCommandToHttp("github_list_accounts", {}).method).toBe("GET");
 			expect(mapCommandToHttp("github_list_accounts", {}).path).toBe("/github/accounts");
-
-			const add = mapCommandToHttp("github_add_account", { host: "ghe.acme.com", pat: "ghp_x" });
-			expect(add.method).toBe("POST");
-			expect(add.path).toBe("/github/accounts");
-			expect(add.body).toEqual({ host: "ghe.acme.com", pat: "ghp_x" });
 
 			const rm = mapCommandToHttp("github_remove_account", { id: "ghe.acme.com" });
 			expect(rm.method).toBe("POST");
@@ -1999,14 +2046,17 @@ describe("transport", () => {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: "{}",
+				account: "acct-1",
 			});
 			expect(hf.method).toBe("POST");
 			expect(hf.path).toBe("/api/plugins/my-plugin/http");
+			// The account must cross the HTTP transport too, or browser mode sends unauthenticated.
 			expect(hf.body).toEqual({
 				url: "https://api.example.com/data",
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: "{}",
+				account: "acct-1",
 			});
 
 			// plugin_read_session_output — with and without maxLines
@@ -3991,5 +4041,30 @@ describe("automation command transport", () => {
 			path: "/automations/action",
 			body: { input },
 		});
+	});
+});
+
+// Catches: a work-item link losing its payload or its repo/branch key between IPC and HTTP.
+describe("work-item link command transport", () => {
+	it("maps link CRUD and remotes onto the same keys as IPC", () => {
+		const link = {
+			reference: { providerId: "jira", accountId: "acme", id: "10001" },
+			key: "ACME-1",
+			title: "Fix",
+			url: "https://acme.atlassian.net/browse/ACME-1",
+			state: null,
+		};
+		expect(mapCommandToHttp("list_workitem_links", {})).toMatchObject({ method: "GET", path: "/workitem-links" });
+		expect(mapCommandToHttp("link_workitem", { repoPath: "/r", branch: "feat/a", link })).toEqual({
+			method: "PUT",
+			path: "/workitem-links",
+			body: { repoPath: "/r", branch: "feat/a", link },
+		});
+		expect(mapCommandToHttp("unlink_workitem", { repoPath: "/r", branch: "feat/a" })).toEqual({
+			method: "DELETE",
+			path: "/workitem-links",
+			body: { repoPath: "/r", branch: "feat/a" },
+		});
+		expect(mapCommandToHttp("get_git_remotes", { path: "/r a" }).path).toBe("/repo/remotes?path=%2Fr%20a");
 	});
 });

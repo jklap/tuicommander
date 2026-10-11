@@ -55,7 +55,7 @@ grid-cell coordinates. Both match the stored sequence without normalization.
 | `create_pty_with_worktree` | `pty_config, worktree_config` | `WorktreeResult` | Create worktree + PTY |
 | `write_pty` | `session_id, data` | `()` | Write to PTY |
 | `write_pty_parts` | `session_id, parts: Vec<String>` | `()` | Write several inputs under one writer lock. The parts stay separate on purpose: post-write bookkeeping runs once per part, and it is not a function of the joined bytes (a lone `/` opens slash mode, an exact option key answers a choice prompt) |
-| `enqueue_agent_command` | `session_id, text, idempotency_key?` | `{ accepted, typed, queued }` | Queue for the next idle window; optional key (1–128 UTF-8 bytes, wire name `idempotencyKey`) recognizes the last 128 accepted keys per live PTY without resubmitting; acceptance is not a model-turn receipt |
+| `enqueue_agent_command` | `session_id, text, idempotency_key?, expected_draft?` | `{ accepted, typed, queued }` | Queue for the next idle window; optional `expectedDraft` validates and clears the live composer first (errors after clearing are uncertain; do not retry automatically); optional key (1–128 UTF-8 bytes, wire name `idempotencyKey`) recognizes the last 128 accepted keys per live PTY without resubmitting; acceptance is not a model-turn receipt |
 | `clear_queued_agent_commands` | `session_id` | `usize` | Drop every queued command; returns how many |
 | `list_queued_agent_commands` | `session_id` | `[{ id, text }]` | The queued user commands in delivery order; peer messages excluded |
 | `remove_queued_agent_command` | `session_id, command_id` | `bool` | Drop one queued command by id; false when it already drained |
@@ -139,6 +139,10 @@ receive it on `/events`.
 | `get_gutter_changes` | `path, file, scope?` | `Vec<GutterChange>` | Per-line editor gutter/scrollbar change markers (diff parsed in Rust); empty for an untracked file |
 | `get_git_branches` | `path` | `Vec<JSON>` | All branches (sorted) |
 | `get_recent_commits` | `path` | `Vec<JSON>` | Recent git commits |
+| `get_git_remotes` | `path` | `Vec<{name,url}>` | Every remote; credentials in URLs removed (`workitem_links.rs`) |
+| `list_workitem_links` | — | `{repoPath: {branch: WorkItemLink}}` | Work-item links of worktree branches (`workitem_links.rs`) |
+| `link_workitem` | `repoPath, branch, link` | `()` | Link a worktree branch to a work item; url must be http(s) |
+| `unlink_workitem` | `repoPath, branch` | `bool` | Remove a link; true when one existed |
 | `rename_branch` | `path, old_name, new_name` | `()` | Rename branch |
 | `check_is_main_branch` | `branch` | `bool` | Is main/master/develop |
 | `get_initials` | `name` | `String` | 2-char repo initials |
@@ -198,10 +202,10 @@ receive it on `/events`.
 | `close_pr` | `repo_path, pr_number` | `()` | Close a PR without merging |
 | `merge_pr_via_github` | `repo_path, pr_number, merge_method, expected_head_sha` | `String` | Merge PR via GitHub API, pinned to the reviewed head |
 | `get_all_pr_statuses` | `path` | `Vec<BranchPrStatus>` | Batch PR status for all branches (includes merged) |
-| `get_pr_diff` | `repo_path, pr_number` | `String` | Get PR diff content |
+| `get_pr_diff` | `repo_path, pr_number` | `{diff, headSha}` | Get PR diff content and the head it was read at |
 | `get_merged_prs` | `repo_path, since_tag?` | `Vec<MergedPr>` | Merged PRs via GraphQL, optionally since a tag's date |
 | `start_conflict_assist` | `repo_path, pr_number` | `ConflictAssistResult` | Worktree on PR head + rebase onto base; reports verified/unverified clean or conflicts, base provenance/warning, and agent prompt (push gated, never auto-merge) |
-| `fetch_ci_failure_logs` | `repo_path, branch, check_url?, head_sha?` | `String` | Fetch failed-job logs for the local branch head, or select a check at the supplied PR head SHA |
+| `fetch_ci_failure_logs` | `repo_path, branch, check_url?, head_sha?` | `String` | Fetch failed-job logs for the local branch head, or select a check at the supplied PR head SHA; failing checks come from the paginated commit rollup and Actions logs from REST using the repository account on github.com or GHE; one 60-second sweep deadline |
 | `circleci_token_status` | — | `CircleCiTokenStatus` | Report token presence and source without returning the token |
 | `circleci_set_token` | `token` | `()` | Store a read-only CircleCI token |
 | `circleci_delete_token` | — | `()` | Remove the stored CircleCI token |
@@ -220,14 +224,14 @@ reached is an error carrying ego's own sentence, never an empty result.
 | `run_pr_review` | `repo_path, pr_number` | `PrReviewResult` | Review a PR's diff. Findings under the confidence threshold (default `0.7`, `TUIC_REVIEW_CONFIDENCE_THRESHOLD` overrides) are dropped before the result is built. Emits `review-progress` |
 | `generate_changelog` | `repo_path, since_tag?` | `ChangelogResult` | Changelog over the merged PRs since a tag. `{ markdown, json }`; `json` is `null` when ego answered in prose only |
 | `run_improvement_scan` | `repo_path, focus` | `ImprovementScanResult` | Up to five proposals for `refactor`, `testing` or `perf`. Emits `proposals-ready` |
-| `create_issue_from_proposal` | `repo_path, proposal` | `CreatedIssue` | File one proposal as a GitHub issue through `gh`. No model call |
+| `create_issue_from_proposal` | `repo_path, proposal` | `CreatedIssue` | File one proposal as a GitHub issue through account-aware REST. No model call |
 
 ## Worktree Management (`worktree.rs`)
 
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
 | `create_worktree` | `base_repo, branch_name, create_branch?, base_ref?` | `{ status: "ok", name, path, workspace_id, branch, base_repo, instructions }` | Create a linked worktree and start warming in the background. `instructions.warm_artifacts.status` is `pending`, matching HTTP/MCP. Parent tracked changes are not carried over. |
-| `remove_worktree` | `repo_path, workspace_id, delete_branch?, force?, override_lock?, expected_fingerprint?, confirm_missing_checkout?` | `{ branch_delete_warning?: string, branch: string, removal_rule: string }` | Remove a linked worktree by `workspace_id`. Branch deletion defaults to true, or false when force is true. Without force, a clean checkout and submodules with no Git operation in progress are required even when the branch is kept. `force` permits discarding dirty files but does not skip branch proof or override a lock; `override_lock` is separate. A live checkout requires `expected_fingerprint` for force removal. A missing registered checkout instead requires `force` and explicit `confirm_missing_checkout`; its absence is rechecked before cleanup and module refs are preserved before pruning. Branch deletion uses the same integration proof as MCP, including no-op merges, corroborated squash messages and archived content heuristics, alongside ancestry, patch equivalence and verified merged GitHub PRs; it uses the captured OID and warns if the proof fails or the ref moves. Keeping the branch skips only branch proof. Before Git removes a live checkout, owner write permission is restored inside it so read-only ignored artifacts cannot block deletion. A leftover unregistered directory is reported with its path. `removal_rule` names the matching rule. |
+| `remove_worktree` | `repo_path, workspace_id, delete_branch?, force?, override_lock?, expected_fingerprint?, confirm_missing_checkout?` | `{ branch_delete_warning?: string, branch: string, removal_rule: string }` | Remove a linked worktree by `workspace_id`. Branch deletion defaults to true, or false when force is true. Without force, a clean checkout and submodules with no Git operation in progress are required even when the branch is kept. `force` permits discarding dirty files but does not skip branch proof or override a lock; `override_lock` is separate. A live checkout requires `expected_fingerprint` for force removal. A missing registered checkout instead requires `force` and explicit `confirm_missing_checkout`; its absence is rechecked before cleanup and module refs are preserved before pruning. Branch deletion uses the same integration proof as MCP, including no-op merges, corroborated squash messages and archived content heuristics, alongside ancestry, patch equivalence and verified merged GitHub PRs fetched over account-aware, fully paginated HTTP GraphQL; it uses the captured OID and warns if the proof fails or the ref moves. Keeping the branch skips only branch proof. Before Git removes a live checkout, owner write permission is restored inside it so read-only ignored artifacts cannot block deletion. A leftover unregistered directory is reported with its path. `removal_rule` names the matching rule. |
 | `delete_local_branch` | `repo_path, branch_name, workspace_id, keep_worktree?` | `()` | Delete a local branch and dispose of the workspace `workspace_id` names. Two identifiers because there are two objects: `branch_name` is the ref to delete, `workspace_id` the checkout holding it. Refuses to delete the default branch, and refuses when the resolved workspace is on a different branch than the one asked for. Uses safe `git branch -d` |
 | `check_worktree_dirty` | `repo_path, workspace_id` | `bool` | Check if the workspace `workspace_id` names has uncommitted changes. Addressed by id because the answer gates an irreversible cleanup — a sibling on the same branch being clean must never authorise destroying this one. Returns false if the id resolves to no checkout. When git cannot answer (the `worktree list` or `status` call fails) it returns an **error**, never `false` — callers that gate a destructive action must see the failure |
 | `get_worktree_paths` | `repo_path` | `HashMap<String, { branch, path, kind: "worktree", warm_artifacts }>` | Every linked worktree of a repo, keyed by workspace id. `warm_artifacts.status` is `pending`, `done`, or `failed`. |
@@ -402,10 +406,10 @@ Commands for managing upstream MCP servers proxied through TUICommander's `/mcp`
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
 | `load_mcp_upstreams` | -- | `UpstreamMcpConfig` | Load upstream config from `mcp-upstreams.json` |
-| `save_mcp_upstreams` | `base: UpstreamMcpConfig, config: UpstreamMcpConfig` | `()` | Apply the caller's ID-keyed base-to-config delta to the latest locked `mcp-upstreams.json`, validate it, and hot-reload the exact persisted change. Removing a server or its optional `auth` field is an explicit deletion; unrelated concurrent changes are preserved |
+| `save_mcp_upstreams` | `base: UpstreamMcpConfig, config: UpstreamMcpConfig, credentials?: {server_id, token, header?}[]` | `()` | Add-time credentials are validated and created under the config lock; failures roll back new vault entries. Apply the caller's ID-keyed base-to-config delta to the latest locked `mcp-upstreams.json`, validate it, and hot-reload the exact persisted change. Removing a server or its optional `auth` field is an explicit deletion; unrelated concurrent changes are preserved |
 | `reconnect_mcp_upstream` | `name: String` | `()` | Disconnect and reconnect a single upstream by name. Useful after credential changes or transient failures |
 | `get_mcp_upstream_status` | -- | `Vec<UpstreamStatus>` | Get live status of all upstream MCP servers. Status values: `connecting`, `ready`, `circuit_open`, `disabled`, `failed`, `authenticating`, `needs_auth` |
-| `save_mcp_upstream_credential` | `name: String, token: String, url: String, header?: {name, credential_ref}` | `()` | Store a Bearer token or scoped header secret with its intended HTTP origin in the OS credential vault |
+| `save_mcp_upstream_credential` | `name: String, token: String, url: String, header?: {name, credential_ref}, replace?: boolean` | `()` | Refuse to overwrite an existing entry unless `replace: true` explicitly requests an edit. Store a Bearer token or scoped header secret with its intended HTTP origin in the OS credential vault |
 | `delete_mcp_upstream_credential` | `name: String, header?: {name, credential_ref}` | `()` | Remove a Bearer/OAuth token or a scoped custom header secret (idempotent) |
 
 ### UpstreamMcpConfig schema
@@ -618,7 +622,7 @@ JavaScript `String.slice` semantics for ASCII, accented text, and non-BMP emoji.
 
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
-| `plugin_http_fetch` | `url, method?, headers?, body?, allowed_urls, plugin_id` | `HttpResponse` | Make HTTP request (validated against allowed_urls) |
+| `plugin_http_fetch` | `url, method?, headers?, body?, account?, plugin_id` | `HttpResponse` | Make HTTP request (validated against the on-disk manifest `allowedUrls`; with `account`, Rust injects that account's credential under the account host rule) |
 
 ## Code Intelligence / MDKB (`mdkb_commands.rs`)
 
@@ -902,3 +906,46 @@ literal prompt with delimited, escaped untrusted stdout capped at 16 KiB;
 truncation is marked and stderr is excluded. Empty output and manual bypasses
 inject nothing. The run ledger records `precheck_context: {injected, bytes}` for
 the prepared launch prompt, counting escaped stdout bytes before framing/marker.
+
+### PR line review commands
+
+- `get_pr_line_threads(repoPath, prNumber, after?)`: `{headSha, threads, hasNextPage, endCursor}`. Threads retain GitHub `line`, `originalLine`, `diffSide`, `isOutdated`, `isResolved`, and `comments` connection.
+- `get_pr_thread_comments(repoPath, threadId, after?)`: GitHub comments connection.
+- `set_pr_thread_resolved(repoPath, threadId, resolved)`: confirmed thread.
+- `reply_pr_thread(repoPath, threadId, body)`: posted comment.
+- `submit_pr_draft_review(repoPath, prNumber, draft)`: posted review. Draft `{headSha, body, event, comments}` accepts COMMENT, APPROVE, REQUEST_CHANGES; request changes needs a body. Inline comments retain path/line/side/body.
+
+### PR action commands
+
+- `get_pr_action_state(repoPath, prNumber)`: `{id, headSha, baseRefName, state, isDraft, autoMergeRequest, mergeQueueEntry, queueRequired}`. Queue entries retain id/position/state; auto-merge requests retain enabledAt/mergeMethod.
+- `set_pr_auto_merge(repoPath, prNumber, enabled, mergeMethod?, expectedHeadSha?)`: confirmed GraphQL payload. Enabling needs a valid merge/squash/rebase method and reviewed head.
+- `set_pr_merge_queue(repoPath, prNumber, enqueued, expectedHeadSha?)`: confirmed GraphQL payload with mergeQueueEntry. Enqueue needs reviewed head; dequeue does not.
+- `merge_or_enqueue_pr(repoPath, prNumber, mergeMethod, expectedHeadSha)`: `{action:"enqueued", mergeQueueEntry}` or `{action:"merged", sha}`. Queue-required branches enqueue.
+- `rerun_failed_pr_jobs(repoPath, runId)`: `{accepted:true, runId}` after GitHub accepts the failed-job rerun, not a claim the new run finished.
+
+`post_pr_review` and `submit_pr_draft_review` require a nonempty body for REQUEST_CHANGES and reject unsupported event values.
+
+## Core account command
+
+| Command | Arguments | Result | HTTP equivalent |
+|---|---|---|---|
+| `account_action` | `request: AccountAction` | Metadata/presence-only action reply | `POST /accounts/action`, body = request |
+
+The async command delegates to the same owner service as HTTP; disk/vault work runs on the blocking pool. See [the account action table](../backend/github.md#shared-account-registry).
+
+### Private account credential entry
+
+`account_secret_form {request}` opens the existing isolated native secret window.
+The request is `{action:"add",account:{provider,host,kind,label,username?}}` or
+`{action:"rotate",id}`; it accepts no credential. The reply contains only
+`{names:[],status:"stored"|"declined"|"failed"}`. `secret_form_bootstrap` and
+`secret_form_submit` require the active native window identity. Account forms
+do not expose a mobile capability or accept HTTP bootstrap/submission.
+
+
+Automation worktree cleanup (#1623-8b2a): Automation runs retain automation/run IDs and the exact created workspace path and ID in their saved snapshot, including after definition deletion. Worktree cleanup is explicit and limited to final runs. The backend resolves the saved identity and rechecks shared Git integration/archive proof, dirt, submodule commits and live sessions; it never forces removal or closes sessions. Shared `automation_action` actions `worktree_preview` and `cleanup_worktree` accept a saved run `id` on IPC, HTTP, MCP and CLI.
+Automation templates (#1622-be11): the shared automation action accepts
+**templates** (catalogue) and **template** (draft). Draft inputs are template_id,
+repository, run_config and optional timezone (host local by default).
+Drafts have fresh ids and start disabled; no definition or run is created until
+an explicit create action. These actions match across HTTP, IPC, MCP and CLI.

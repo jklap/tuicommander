@@ -288,7 +288,10 @@ export const UpstreamMcpPanel: Component = () => {
 		}),
 	);
 
-	async function saveUpstreams(servers: UpstreamMcpServer[]): Promise<boolean> {
+	async function saveUpstreams(
+		servers: UpstreamMcpServer[],
+		credentials: { server_id: string; token: string; header?: UpstreamHeader }[] = [],
+	): Promise<boolean> {
 		setSaving(true);
 		setError("");
 		const base = { servers: [...upstreams()] };
@@ -297,7 +300,7 @@ export const UpstreamMcpPanel: Component = () => {
 				serverCount: servers.length,
 				names: servers.map((s) => s.name),
 			});
-			await rpc("save_mcp_upstreams", { base, config: { servers } }, machine());
+			await rpc("save_mcp_upstreams", { base, config: { servers }, credentials }, machine());
 			appLogger.info("mcp", "saveUpstreams: RPC succeeded");
 			setUpstreams(servers);
 			return true;
@@ -369,24 +372,19 @@ export const UpstreamMcpPanel: Component = () => {
 
 		server.auth = authFromUpstreamForm(f);
 
-		try {
-			if (f.transportType === "http") {
-				server.headers = await saveHeaderRows(server.name, f.url.trim(), f.headers);
-				if (f.credential && f.authMethod === "bearer") {
-					await rpc(
-						"save_mcp_upstream_credential",
-						{ name: server.name, url: f.url.trim(), token: f.credential },
-						machine(),
-					);
-					server.auth = { type: "bearer", token: "" };
-				}
+		const credentials: { server_id: string; token: string; header?: UpstreamHeader }[] = [];
+		if (f.transportType === "http") {
+			server.headers = f.headers.map((row) => {
+				const header = { name: row.name, credential_ref: row.value ? crypto.randomUUID() : row.credential_ref };
+				if (row.value) credentials.push({ server_id: server.id, token: row.value, header });
+				return header;
+			});
+			if (f.credential && f.authMethod === "bearer") {
+				credentials.push({ server_id: server.id, token: f.credential });
+				server.auth = { type: "bearer", token: "" };
 			}
-		} catch {
-			setError("Failed to save upstream credentials");
-			return;
 		}
-
-		const ok = await saveUpstreams([...upstreams(), server]);
+		const ok = await saveUpstreams([...upstreams(), server], credentials);
 		if (!ok) return;
 		setForm(emptyForm());
 		setShowAdd(false);
@@ -515,7 +513,7 @@ export const UpstreamMcpPanel: Component = () => {
 			if (replaceBearer)
 				await rpc(
 					"save_mcp_upstream_credential",
-					{ name: server.name, url: f.url.trim(), token: f.credential },
+					{ name: server.name, url: f.url.trim(), token: f.credential, replace: true },
 					machine(),
 				);
 			else if (methodChanged) await rpc("delete_mcp_upstream_credential", { name: server.name }, machine());

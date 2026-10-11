@@ -227,24 +227,79 @@ pub(crate) fn delete_upstream_credential(upstream_name: &str) -> Result<(), Stri
 // Tauri commands
 // ---------------------------------------------------------------------------
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn save_mcp_upstream_credential(
     name: String,
     token: String,
     header: Option<crate::mcp_upstream_config::UpstreamHeader>,
     url: String,
 ) -> Result<(), String> {
-    validate_keyring_name(&name)?;
+    save_mcp_upstream_credential_with_replace(name, token, header, url, false)
+}
+
+pub(crate) fn save_mcp_upstream_credential_with_replace(
+    name: String,
+    token: String,
+    header: Option<crate::mcp_upstream_config::UpstreamHeader>,
+    url: String,
+    replace: bool,
+) -> Result<(), String> {
+    crate::config::ConfigFile::<crate::mcp_upstream_config::UpstreamMcpConfig>::new(
+        crate::mcp_upstream_config::UPSTREAMS_FILE,
+    )
+    .update_with_strict(|config| {
+        if !replace && header.is_none() && config.servers.iter().any(|s| s.name == name) {
+            return Err(
+                "Upstream already exists; saving its credential requires an explicit edit".into(),
+            );
+        }
+        write_credential(&name, &token, header.as_ref(), &url, replace)?;
+        Ok(((), false))
+    })
+}
+
+/// Caller holds the upstream config lock, including across vault check/write.
+pub(crate) fn write_credential(
+    name: &str,
+    token: &str,
+    header: Option<&crate::mcp_upstream_config::UpstreamHeader>,
+    url: &str,
+    replace: bool,
+) -> Result<String, String> {
+    validate_keyring_name(name)?;
     let key = if let Some(header) = header {
         header.validate()?;
-        reqwest::header::HeaderValue::from_str(&token)
+        reqwest::header::HeaderValue::from_str(token)
             .map_err(|_| "Invalid custom header value".to_string())?;
-        header.credential_key(&name)
+        header.credential_key(name)
     } else {
-        name
+        name.to_string()
     };
-    save_credential_for_url(&key, &token, &url)
-        .map_err(|_| "Failed to save upstream credential".to_string())
+    if !replace && crate::credentials::get(Credential::McpUpstream(&key))?.is_some() {
+        return Err(
+            "Upstream credential already exists; replacement requires an explicit edit".into(),
+        );
+    }
+    save_credential_for_url(&key, token, url)
+        .map_err(|_| "Failed to save upstream credential".to_string())?;
+    Ok(key)
+}
+
+#[cfg(feature = "desktop")]
+pub(crate) mod commands {
+    #[tauri::command]
+    pub(crate) fn save_mcp_upstream_credential(
+        name: String,
+        token: String,
+        header: Option<crate::mcp_upstream_config::UpstreamHeader>,
+        url: String,
+        replace: Option<bool>,
+    ) -> Result<(), String> {
+        if replace.unwrap_or(false) {
+            super::save_mcp_upstream_credential_with_replace(name, token, header, url, true)
+        } else {
+            super::save_mcp_upstream_credential(name, token, header, url)
+        }
+    }
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
@@ -269,6 +324,64 @@ pub(crate) fn delete_mcp_upstream_credential(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Catches: a duplicate add replacing the existing upstream's vault entry
+    // before config validation rejects the duplicate name.
+    #[test]
+    #[serial_test::serial]
+    fn duplicate_upstream_credential_write_preserves_existing_secret() {
+        let tmp = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(tmp.path().to_path_buf());
+        let name = "duplicate-add-regression";
+        let original_url = "https://original.example/mcp";
+        save_credential_for_url(name, "original-secret", original_url).unwrap();
+
+        let result = save_mcp_upstream_credential(
+            name.into(),
+            "replacement-secret".into(),
+            None,
+            "https://different.example/mcp".into(),
+        );
+
+        assert_eq!(
+            read_credential_for_url(name, original_url).unwrap(),
+            Some("original-secret".into()),
+            "a rejected add must preserve the original secret and origin",
+        );
+        assert!(result.is_err(), "replacement requires an explicit edit");
+        delete_upstream_credential(name).unwrap();
+    }
+
+    // Catches: same-origin duplicate writes replacing OAuth, or the explicit
+    // edit path becoming unable to replace a credential after safe defaults.
+    #[test]
+    #[serial_test::serial]
+    fn same_origin_duplicate_requires_explicit_credential_replacement() {
+        let tmp = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(tmp.path().to_path_buf());
+        let name = "explicit-replacement-regression";
+        let url = "https://example.com/mcp";
+        save_oauth_tokens(name, &sample_oauth_token_set(), url).unwrap();
+        let original = read_credential_for_url(name, url).unwrap();
+        assert!(
+            save_mcp_upstream_credential(name.into(), "replacement".into(), None, url.into())
+                .is_err()
+        );
+        assert_eq!(read_credential_for_url(name, url).unwrap(), original);
+        save_mcp_upstream_credential_with_replace(
+            name.into(),
+            "replacement".into(),
+            None,
+            url.into(),
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            read_credential_for_url(name, url).unwrap().as_deref(),
+            Some("replacement")
+        );
+        delete_upstream_credential(name).unwrap();
+    }
 
     // These tests interact with the real OS keyring. Write tests are #[ignore]
     // because macOS prompts for Keychain access interactively, blocking CI/automated runs.

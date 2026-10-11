@@ -1403,12 +1403,14 @@ TUICommander can proxy upstream MCP servers (stdio or HTTP) and aggregate their 
 ### Upstream configuration save contract
 
 IPC `save_mcp_upstreams` and HTTP `PUT /mcp/upstreams` both accept
-`{ base, config }`: the snapshot the caller loaded and its desired result. The
+`{ base, config, credentials? }`: the snapshot the caller loaded, its desired result, and optional write-only secrets for newly added servers. The
 backend indexes servers by stable `id`, derives the semantic base-to-desired
 delta, and applies that delta to the latest on-disk configuration inside the
 cross-process `ConfigFile` lock. It validates and atomically persists the merged
 result while still holding that lock instead of replacing the file with a stale
 UI snapshot.
+
+Add-time credentials identify their new server by `server_id`. The locked merged config is validated before any vault writes. Existing vault entries are never overwritten by an add; failed partial writes or config persistence roll back new entries. The standalone credential endpoint defaults to refusing replacement and accepts `replace: true` for an explicit edit.
 
 Absence has explicit semantics relative to `base`: omitting a former server from
 `config` removes that ID, and omitting its former optional `auth` field clears
@@ -2131,22 +2133,25 @@ serialization regressions cover these shared contracts.
 
 ### MCP Tool: `automations`
 
-The native `automations` tool supports `list`, `get`, `create`, `update`, `pause`,
-`resume`, and `delete`. Pass `action` at the top level. `get`, `update`, `pause`,
-`resume`, and `delete` require `id`; `create` and `update` require a complete
-`definition` with the stored snake_case fields. `list` returns an array, `get`
-returns one definition, and mutations return `{ "ok": true }`. Errors use
-`{ "error": "..." }` with the shared DefinitionStore validation text.
+The native `automations` tool accepts the same top-level action object as
+`automation_action` IPC and the `input` in `POST /automations/action`.
+Actions include `list`, `get`, `create`, `update`, `pause`, `resume`, `delete`,
+`run_now`, `run`, `list_runs`, `summary`, `preview`, `preview_definition` and `preset`.
+See the HTTP API Automations table for fields and results. List returns rows
+with `definition`, `next_run_ms` and `last_status`; create/update return the saved
+definition. Update accepts a full definition (optional id), or id and enabled.
+Errors use `{ "error": "..." }` with the identical backend validation text.
 
 Creation requires a bound agent session. The host sets `created_by_session`;
 input cannot impersonate a creator, and updates preserve the original creator.
-Pause/resume edit only `enabled` under the store lock. Deleting a definition does
-not touch the separate run ledger. Existing definitions without provenance remain
-readable. These actions manage definitions; they do not launch runs.
+Pause/resume edit only `enabled` under the store lock. Deleting a definition
+retains run history. `run_now` uses the same runtime owner and refusal rules as
+HTTP/IPC. All adapters call `automations::api`; MCP does not parse a second
+action enum or implement scheduler logic. The MCP endpoint is `POST /mcp`.
 
-The shared entry point is `automations::actions::execute(store, action,
-creator_session)`, using `DefinitionAction`. Plan Step 8 owns HTTP/IPC/CLI wiring
-and the Route Parity Gate. The MCP endpoint is `POST /mcp`.
+`tuic automations '<action JSON>'` (or `tuic automations -` for stdin) forwards
+unchanged arguments over HTTP-over-IPC MCP into this same API. CLI failures
+print the backend message on stderr and exit nonzero; successes print JSON.
 
 ### Automation HTTP/IPC adapter
 
@@ -2155,9 +2160,9 @@ The shared desktop/headless router exposes `POST /automations/action` with
 implementation; stores, schedule rules, aggregates and execution ownership stay
 in Rust. `COMMAND_TABLE.automation_action` maps the same input without renaming
 fields. Route snapshots and registered-route PATCH probes cover this route.
-The existing MCP `automations` tool retains its definition-only contract and
-shares `DefinitionStore` actions with the API; this change does not add MCP run
-controls. HTTP application error messages match IPC rejections.
+MCP and CLI use this same action parser, runtime owner and result contract.
+HTTP application error messages match IPC rejections and MCP/CLI errors;
+MCP additionally requires a bound creator identity for creation.
 
 Automation precheck context (#1631-45bf): definitions can opt in with
 `precheck.inject_output: true` (default false). Proceeding checks prefix the
@@ -2165,3 +2170,19 @@ literal prompt with delimited, escaped untrusted stdout capped at 16 KiB;
 truncation is marked and stderr is excluded. Empty output and manual bypasses
 inject nothing. The run ledger records `precheck_context: {injected, bytes}` for
 the prepared launch prompt, counting escaped stdout bytes before framing/marker.
+
+PR line review routes (`/repo/pr-line-threads`, `/repo/pr-thread-comments`, `/repo/pr-thread-resolved`, `/repo/pr-thread-reply`, `/repo/pr-draft-review`) share account resolution and backend behavior with their desktop commands.
+
+The PR action routes (`/repo/pr-action-state`, `/repo/pr-auto-merge`, `/repo/pr-merge-queue`, `/repo/pr-merge-or-enqueue`, `/repo/pr-rerun-failed`) share account-aware backend logic with IPC. Successful rerun means accepted, not completed.
+
+## Core accounts owner surface
+
+IPC `account_action` and HTTP `POST /accounts/action` share one Rust service and presence-only replies. Both HTTP routers require loopback or authenticated API access. The Settings MCP adapter can consume the owner service/schema after integration; account actions are not a new standalone MCP tool or an unrestricted plugin invoke grant. See [Shared account registry](github.md#shared-account-registry).
+
+
+Automation worktree cleanup (#1623-8b2a): Automation runs retain automation/run IDs and the exact created workspace path and ID in their saved snapshot, including after definition deletion. Worktree cleanup is explicit and limited to final runs. The backend resolves the saved identity and rechecks shared Git integration/archive proof, dirt, submodule commits and live sessions; it never forces removal or closes sessions. Shared `automation_action` actions `worktree_preview` and `cleanup_worktree` accept a saved run `id` on IPC, HTTP, MCP and CLI.
+Automation templates (#1622-be11): the shared automation action accepts
+**templates** (catalogue) and **template** (draft). Draft inputs are template_id,
+repository, run_config and optional timezone (host local by default).
+Drafts have fresh ids and start disabled; no definition or run is created until
+an explicit create action. These actions match across HTTP, IPC, MCP and CLI.

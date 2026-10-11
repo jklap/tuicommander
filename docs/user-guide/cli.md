@@ -361,3 +361,31 @@ config paths and IPC names through `tuic-ipc`; CLI and bridge also share HTTP
 request and response framing.
 
 If TUICommander is not running, `tuic open` and `tuic new` will launch it automatically.
+
+## Automations
+
+`tuic automations` accepts a backend action JSON object. It uses the selected
+instance's MCP endpoint and the same validation, results and errors as HTTP/IPC.
+
+```bash
+tuic automations '{"action":"list"}'
+tuic automations '{"action":"update","id":"review","enabled":false}'
+tuic automations '{"action":"run_now","id":"review"}'
+tuic automations '{"action":"list_runs","id":"review","limit":10}'
+tuic --instance staging automations '{"action":"summary","window":"7d"}'
+cat definition-action.json | tuic automations -
+```
+
+Actions: list, get, create, update, pause, resume, delete, run_now, run, list_runs,
+summary, preview, preview_definition and preset. See the HTTP API Automations
+table for the shared input/result shapes. Create and update accept a complete
+definition; update also accepts id and enabled instead. Creation records the
+bound caller session, including an external MCP identity when run outside TUIC.
+Success prints JSON; backend rejection prints its exact message after `tuic:`
+on stderr and exits 1. Invalid CLI JSON exits 2.
+
+Automation templates (#1622-be11): the shared automation action accepts
+**templates** (catalogue) and **template** (draft). Draft inputs are template_id,
+repository, run_config and optional timezone (host local by default).
+Drafts have fresh ids and start disabled; no definition or run is created until
+an explicit create action. These actions match across HTTP, IPC, MCP and CLI.

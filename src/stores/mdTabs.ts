@@ -99,6 +99,8 @@ export interface PrDiffTab extends BaseTab {
 	prTitle: string;
 	/** Raw unified diff content */
 	diff: string;
+	/** PR head the diff was fetched at; replaced whenever the diff is reopened */
+	headSha?: string;
 }
 
 /** HTML preview tab (renders HTML in a sandboxed iframe) */
@@ -673,7 +675,7 @@ function createMdTabsStore() {
 		},
 
 		/** Add a PR diff tab (or reuse existing for same repo+prNumber, updating diff content) */
-		addPrDiff(repoPath: string, prNumber: number, prTitle: string, diff: string): string {
+		addPrDiff(repoPath: string, prNumber: number, prTitle: string, diff: string, headSha?: string): string {
 			const existing = Object.values(base.state.tabs).find(
 				(tab) =>
 					tab.type === "pr-diff" &&
@@ -683,6 +685,7 @@ function createMdTabsStore() {
 			if (existing) {
 				// Update diff content in case it changed
 				base._setState("tabs", existing.id, "diff" as keyof MdTabData, diff as MdTabData[keyof MdTabData]);
+				base._setState("tabs", existing.id, "headSha" as keyof MdTabData, headSha as MdTabData[keyof MdTabData]);
 				base.setActive(existing.id);
 				return existing.id;
 			}
@@ -697,9 +700,15 @@ function createMdTabsStore() {
 				prNumber,
 				prTitle,
 				diff,
+				headSha,
 				pinned: false,
 			} as PrDiffTab);
 			return tabId;
+		},
+
+		/** Record the head a PR diff tab was first reviewed at, when its fetch did not supply one */
+		pinPrDiffHead(id: string, headSha: string): void {
+			base._setState("tabs", id, "headSha" as keyof MdTabData, headSha as MdTabData[keyof MdTabData]);
 		},
 
 		/** Add an HTML preview tab (or return existing if same file already open) */

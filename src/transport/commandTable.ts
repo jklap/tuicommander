@@ -25,6 +25,8 @@ type CommandTableEntry = { map: (args: Record<string, unknown>, p: ArgEncoder) =
  * The `p` helper encodes a required argument for URL usage (throws if missing).
  */
 export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
+	account_secret_form: { map: (args) => ({ method: "POST", path: "/accounts/secret-form", body: args.request }) },
+	account_action: { map: (args) => ({ method: "POST", path: "/accounts/action", body: args.request }) },
 	telegram_settings: { map: () => ({ method: "GET", path: "/config/telegram" }) },
 	telegram_setup: { map: (args) => ({ method: "PUT", path: "/config/telegram", body: { change: args.change } }) },
 	secret_form_submit: { map: (args) => ({ method: "POST", path: "/secrets/forms/submit", body: args.submission }) },
@@ -159,7 +161,7 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		map: (args) => ({
 			method: "PUT",
 			path: "/mcp/upstreams",
-			body: { base: args.base, config: args.config },
+			body: { base: args.base, config: args.config, ...(args.credentials ? { credentials: args.credentials } : {}) },
 		}),
 	},
 	reconnect_mcp_upstream: {
@@ -169,7 +171,13 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		map: (args) => ({
 			method: "POST",
 			path: "/mcp/upstreams/credential",
-			body: { name: args.name, token: args.token, url: args.url, ...(args.header ? { header: args.header } : {}) },
+			body: {
+				name: args.name,
+				token: args.token,
+				url: args.url,
+				...(args.header ? { header: args.header } : {}),
+				...(args.replace !== undefined ? { replace: args.replace } : {}),
+			},
 		}),
 	},
 	delete_mcp_upstream_credential: {
@@ -407,7 +415,11 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		map: (args) => ({
 			method: "POST",
 			path: `/sessions/${args.sessionId}/queue`,
-			body: { text: args.text, ...(args.idempotencyKey != null ? { idempotencyKey: args.idempotencyKey } : {}) },
+			body: {
+				text: args.text,
+				...(args.expectedDraft != null ? { expectedDraft: args.expectedDraft } : {}),
+				...(args.idempotencyKey != null ? { idempotencyKey: args.idempotencyKey } : {}),
+			},
 		}),
 	},
 	clear_queued_agent_commands: {
@@ -1082,6 +1094,89 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			body: { repoPath: args.repoPath, title: args.title, body: args.body },
 		}),
 	},
+	get_pr_action_state: {
+		map: (_args, p) => ({
+			method: "GET",
+			path: `/repo/pr-action-state?repoPath=${p("repoPath")}&prNumber=${p("prNumber")}`,
+		}),
+	},
+	set_pr_auto_merge: {
+		map: (args) => ({
+			method: "POST",
+			path: "/repo/pr-auto-merge",
+			body: {
+				repoPath: args.repoPath,
+				prNumber: args.prNumber,
+				enabled: args.enabled,
+				mergeMethod: args.mergeMethod,
+				expectedHeadSha: args.expectedHeadSha,
+			},
+		}),
+	},
+	set_pr_merge_queue: {
+		map: (args) => ({
+			method: "POST",
+			path: "/repo/pr-merge-queue",
+			body: {
+				repoPath: args.repoPath,
+				prNumber: args.prNumber,
+				enqueued: args.enqueued,
+				expectedHeadSha: args.expectedHeadSha,
+			},
+		}),
+	},
+	merge_or_enqueue_pr: {
+		map: (args) => ({
+			method: "POST",
+			path: "/repo/pr-merge-or-enqueue",
+			body: {
+				repoPath: args.repoPath,
+				prNumber: args.prNumber,
+				mergeMethod: args.mergeMethod,
+				expectedHeadSha: args.expectedHeadSha,
+			},
+		}),
+	},
+	rerun_failed_pr_jobs: {
+		map: (args) => ({
+			method: "POST",
+			path: "/repo/pr-rerun-failed",
+			body: { repoPath: args.repoPath, runId: args.runId },
+		}),
+	},
+	get_pr_line_threads: {
+		map: (args, p) => ({
+			method: "GET",
+			path: `/repo/pr-line-threads?repoPath=${p("repoPath")}&prNumber=${p("prNumber")}${args.after ? `&after=${p("after")}` : ""}`,
+		}),
+	},
+	get_pr_thread_comments: {
+		map: (args, p) => ({
+			method: "GET",
+			path: `/repo/pr-thread-comments?repoPath=${p("repoPath")}&threadId=${p("threadId")}${args.after ? `&after=${p("after")}` : ""}`,
+		}),
+	},
+	set_pr_thread_resolved: {
+		map: (args) => ({
+			method: "POST",
+			path: "/repo/pr-thread-resolved",
+			body: { repoPath: args.repoPath, threadId: args.threadId, resolved: args.resolved },
+		}),
+	},
+	reply_pr_thread: {
+		map: (args) => ({
+			method: "POST",
+			path: "/repo/pr-thread-reply",
+			body: { repoPath: args.repoPath, threadId: args.threadId, body: args.body },
+		}),
+	},
+	submit_pr_draft_review: {
+		map: (args) => ({
+			method: "POST",
+			path: "/repo/pr-draft-review",
+			body: { repoPath: args.repoPath, prNumber: args.prNumber, draft: args.draft },
+		}),
+	},
 	post_pr_review: {
 		map: (args) => ({
 			method: "POST",
@@ -1148,9 +1243,6 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	// Multi-account: accounts + repo bindings
 	github_list_accounts: {
 		map: () => ({ method: "GET", path: "/github/accounts" }),
-	},
-	github_add_account: {
-		map: (args) => ({ method: "POST", path: "/github/accounts", body: { host: args.host, pat: args.pat } }),
 	},
 	github_remove_account: {
 		map: (args) => ({ method: "POST", path: "/github/accounts/remove", body: { id: args.id } }),
@@ -1348,6 +1440,26 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	},
 	get_remote_url: {
 		map: (_args, p) => ({ method: "GET", path: `/repo/remote-url?path=${p("path")}` }),
+	},
+	get_git_remotes: {
+		map: (_args, p) => ({ method: "GET", path: `/repo/remotes?path=${p("path")}` }),
+	},
+	list_workitem_links: {
+		map: () => ({ method: "GET", path: "/workitem-links" }),
+	},
+	link_workitem: {
+		map: (args) => ({
+			method: "PUT",
+			path: "/workitem-links",
+			body: { repoPath: args.repoPath, branch: args.branch, link: args.link },
+		}),
+	},
+	unlink_workitem: {
+		map: (args) => ({
+			method: "DELETE",
+			path: "/workitem-links",
+			body: { repoPath: args.repoPath, branch: args.branch },
+		}),
 	},
 	get_git_panel_context: {
 		map: (_args, p) => ({ method: "GET", path: `/repo/panel-context?path=${p("path")}` }),
@@ -2161,6 +2273,7 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 				method: args.method,
 				headers: args.headers,
 				body: args.body,
+				account: args.account,
 			},
 		}),
 	},

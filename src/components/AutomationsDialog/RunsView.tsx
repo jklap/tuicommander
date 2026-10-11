@@ -7,6 +7,7 @@ import { navigateToTerminal } from "../../utils/navigateToTerminal";
 import s from "./AutomationsDialog.module.css";
 import type { AutomationRun } from "./contract";
 import { zonedTime } from "./ScheduleFields";
+import { WorktreeCleanup } from "./WorktreeCleanup";
 
 /** Never resurrect a historical session or navigate to a different daemon. */
 export function focusAutomationRun(run: AutomationRun, connectionId?: string): boolean {
@@ -114,6 +115,7 @@ export function RunsView(props: { store: AutomationsStore; connectionId?: string
 							<Show when={run.reason}>
 								<p>{run.reason}</p>
 							</Show>
+							<WorktreeCleanup run={run} connectionId={props.connectionId} />
 							<button
 								type="button"
 								onClick={() => {

@@ -428,20 +428,19 @@ pub(crate) async fn github_auth_status_impl(state: &Arc<AppState>) -> Result<Aut
     // Call GitHub /user to get login + avatar. This validates the github.com
     // global token, so it uses the cloud REST base (routed through GitHubHost
     // rather than hardcoding api.github.com).
-    let user_url = crate::github_account::github_rest_url(
-        &crate::github_account::GitHubHost::new("github.com").expect("github.com is valid"),
-        "/user",
-    );
+    let host = crate::github_account::GitHubHost::new("github.com").expect("github.com is valid");
+    let user_url = crate::github_account::github_rest_url(&host, "/user");
     crate::github_debug::log_api("GET", &user_url, "validate_token_impl");
-    let resp = state
-        .http_client
-        .get(&user_url)
-        .header("Authorization", format!("Bearer {token}"))
-        .header("Accept", "application/vnd.github+json")
-        .header("User-Agent", "TUICommander")
-        .header("X-GitHub-Api-Version", "2022-11-28")
-        .send()
-        .await;
+    let resp = crate::github::github_rest_request(
+        &state.http_client,
+        reqwest::Method::GET,
+        &host,
+        "/user",
+        &token,
+        crate::github::GITHUB_JSON,
+    )
+    .send()
+    .await;
 
     match resp {
         Ok(r) if r.status().is_success() => {
@@ -1066,7 +1065,7 @@ mod tests {
         };
         let json = serde_json::to_string(&success).unwrap();
         assert!(json.contains(r#""status":"success"#));
-        assert!(json.contains(r#""access_token":"gho_abc"#));
+        assert!(!json.contains("access_token") && !json.contains("gho_abc"));
     }
 
     #[test]

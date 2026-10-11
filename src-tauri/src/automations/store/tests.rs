@@ -465,3 +465,35 @@ fn live_transitions_reject_backwards_state_and_time_but_needs_you_stays_active()
         RunStatus::Running
     );
 }
+
+// Catches: one retention wake deleting unbounded history, or deleting schedule cursors.
+#[test]
+fn retention_prunes_bounded_batches_without_replaying_consumed_schedules() {
+    let (_dir, owner) = owner();
+    let store = owner.store();
+    let mut conn = store.connect().unwrap();
+    let tx = conn.transaction().unwrap();
+    for at in 0..257 {
+        reserve_in(
+            &tx,
+            &definition(),
+            RunTrigger::Manual,
+            RunStatus::Failed,
+            at,
+        )
+        .unwrap();
+    }
+    tx.execute(
+        "INSERT INTO automation_cursors(automation_id,occurrence_ms) VALUES('daily',123)",
+        [],
+    )
+    .unwrap();
+    tx.commit().unwrap();
+    let now = 100 * SummaryWindow::Day.millis();
+    assert_eq!(store.prune(now, None).unwrap(), 256);
+    assert_eq!(store.history(None, 100, 0).unwrap().len(), 1);
+    assert_eq!(store.scheduled_cursor("daily").unwrap(), Some(123));
+    assert_eq!(store.prune(now, None).unwrap(), 1);
+    assert_eq!(store.prune(now, None).unwrap(), 0);
+    assert_eq!(store.scheduled_cursor("daily").unwrap(), Some(123));
+}
