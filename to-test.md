@@ -5026,6 +5026,8 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 
 - [ ] After the Tasks shell is integrated and a provider plugin that follows the `itemType` convention is installed, open the create form, choose a type, fill its required fields and create. Confirm the created item opens in Tasks detail. Component behavior is covered by the targeted create tests and the rb browser fixture; this item covers the shell and real-provider integration.
 
+- [ ] Automation worktree cleanup (#1623-8b2a): after Boss restarts `make dev` or installs a new release, inspect and remove a safe final-run workspace in Runs. Confirm a live session and dirty/unmerged work block removal; saved output remains available. Rust changes require a manual restart to load.
+- [ ] After Boss restarts make dev (Rust has no hot reload), open Automations → New automation, enter a repository and run config, apply each built-in template, and confirm the draft stays unsaved and paused until Save; Resume is separate (#1622-be11). Confirm on IPC and browser mode. Never use a live production repository to execute a verification run.
 ## Hands-free dictation keeps the whole sentence (1164-ee4b) — Rust restart required
 
 - [HUMAN] After a manual `make dev` restart, arm hands-free on a Claude terminal and say "computer, <phrase one>, <short breath>, <phrase two>". The terminal receives one message holding both phrases, equal to the transcript box. Say the keyword plus a phrase, wait 4 s, then speak again without the keyword: the second phrase joins the same message. After 5 s of silence the message is sent.
