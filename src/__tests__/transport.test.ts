@@ -646,6 +646,26 @@ describe("transport", () => {
 			expect(result.body).toEqual({ base, config });
 		});
 
+		// Catches: the HTTP mapper dropping add-time secrets or edit intent.
+		it("carries upstream credentials and explicit replacement intent to HTTP", () => {
+			const credentials = [{ server_id: "new", token: "dummy-secret" }];
+			const base = { servers: [] };
+			const config = { servers: [{ id: "new" }] };
+			expect(mapCommandToHttp("save_mcp_upstreams", { base, config, credentials }).body).toEqual({
+				base,
+				config,
+				credentials,
+			});
+			expect(
+				mapCommandToHttp("save_mcp_upstream_credential", {
+					name: "existing",
+					token: "dummy-replacement",
+					url: "https://example.com",
+					replace: true,
+				}).body,
+			).toEqual({ name: "existing", token: "dummy-replacement", url: "https://example.com", replace: true });
+		});
+
 		it("throws for unknown commands", () => {
 			expect(() => mapCommandToHttp("unknown_cmd", {})).toThrow("No HTTP mapping for command: unknown_cmd");
 		});
@@ -1742,6 +1762,26 @@ describe("transport", () => {
 			expect(mapCommandToHttp("github_auth_status", {}).path).toBe("/github/auth/status");
 			expect(mapCommandToHttp("github_auth_status", {}).method).toBe("GET");
 			expect(mapCommandToHttp("github_diagnostics", {}).path).toBe("/github/diagnostics");
+		});
+
+		// Catches: the {request} wrapper being forwarded as the body, or the launch reaching a different endpoint.
+		it("maps metadata-only account secret launch to the shared native host endpoint", () => {
+			const request = { action: "rotate", id: "account-id" };
+			expect(mapCommandToHttp("account_secret_form", { request })).toEqual({
+				method: "POST",
+				path: "/accounts/secret-form",
+				body: request,
+			});
+		});
+
+		// Catches: IPC wrapping being forwarded to HTTP instead of the tagged account action.
+		it("maps account_action to the shared presence-only owner endpoint", () => {
+			const request = { action: "list", provider: "github" };
+			expect(mapCommandToHttp("account_action", { request })).toEqual({
+				method: "POST",
+				path: "/accounts/action",
+				body: request,
+			});
 		});
 
 		it("maps multi-account accounts + repo bindings", () => {

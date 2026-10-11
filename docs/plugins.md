@@ -1787,6 +1787,10 @@ Available from the [plugin registry](https://github.com/sstraus/tuicommander-plu
 | Changes not reflecting | Hot reload cache | Save the file again, or restart the app |
 | `default export` error | Module doesn't `export default { ... }` | Ensure your module has a default export with `id`, `onload`, `onunload` |
 
+## Core account registry integration
+
+Provider accounts and sites are core-owned. Metadata reads expose credential presence only. A trusted manifest adapter registers `ProviderDescriptor {id,label,kinds,verify:{path,login_pointer}}` with `accounts::register_provider(owner, descriptor)`; non-core providers use bearer/basic tokens only. Unload unregisters descriptors but keeps accounts and credentials. Account actions are not currently a grant in `host.invoke`; the scoped plugin host adapter and authenticated HTTP injection are separate host-API work. Secret entry belongs in the core private native sink, which calls the write-only account service; plugins must never receive token values. See [Shared account registry](backend/github.md#shared-account-registry).
+
 ## Core setting controls
 
 The core provides account, editable-list, multiselect, read-only status and action
@@ -1857,6 +1861,32 @@ list, detail, comments, schemas, saved filters, board columns and mutations.
 It touches no network, credentials, filesystem or subprocesses. It is a development
 provider, not a fixture proving GitHub/Jira/GitLab API compatibility. Its search is
 literal text; sort supports key/title/updatedAt. Its cursor expires on mutation.
+
+## Tasks detail
+
+Core's `TasksDetail` consumes the async `WorkItemProvider` port and a `WorkItemRef`.
+The Tasks shell supplies the selected provider/reference and `visible` state.
+Providers supply data and declared actions; they do not render this view.
+
+The header shows key, title, type, state and updated time. Detail field schemas
+select text, Markdown, enum, user, labels, date, number and link controls. Saving
+requires an editable field and an enabled `edit_field` action. Required fields
+cannot be cleared. Values retain their tagged field-value shape.
+
+Descriptions and normal comments, review threads and review summaries render
+through `ContentRenderer` with `untrustedContent`. Markdown, tables, images and
+`<details>` survive; scripts, event handlers and provider CSS do not. Review
+threads show file/line and resolved state. The provider's comment cursor drives
+Load more. Add comment retains its draft on rejection.
+
+Transition buttons use declared IDs and disabled reasons. The pending action
+label appears immediately while the authoritative state ID stays intact.
+Success adopts the returned detail; rejection restores the state label and
+shows the error. Core does not infer a target state from a transition name.
+
+Refresh is manual and periodic (60 seconds by default) while the detail, Tasks
+view and document are visible. Refresh preserves disclosure state and reloads
+comment pages already opened. Switching items rejects stale responses.
 
 ## Start work and URL paste
 

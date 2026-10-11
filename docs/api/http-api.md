@@ -1598,7 +1598,9 @@ The tab's verdict on a `session action=suspend` request announced by the `sessio
 
 ### MCP Upstream Credentials
 
-`POST /mcp/upstreams/credential` accepts `{name, token, url, header?}`. Without `header`, it saves the existing Bearer credential. With `header: {name, credential_ref}`, it saves a secret header value in the upstream-scoped OS credential vault. `credential_ref` must be a UUID. `url` is required and must be HTTP or HTTPS. The vault entry binds the secret to that URL origin; requests to a different origin fail before sending. Old unbound credentials require re-saving or authorization. Names and values are validated without echoing values in errors.
+`PUT /mcp/upstreams` accepts optional write-only `credentials: [{server_id, token, header?}]` alongside `base` and `config`. Each credential must target a newly added HTTP server, with matching header metadata or Bearer auth. The backend validates the merged configuration under its cross-process lock before creating vault entries. Duplicate names and existing vault entries are rejected without replacement. Partial vault writes and config-save failures roll back new entries; a successful save then hot-reloads the upstream. Secrets never enter the config file.
+
+`POST /mcp/upstreams/credential` accepts `{name, token, url, header?, replace?}`. It refuses to overwrite an existing vault entry by default. Use `replace: true` only for an explicit credential edit. Without `header`, it saves a Bearer credential. With `header: {name, credential_ref}`, it saves a secret header value in the upstream-scoped OS credential vault. `credential_ref` must be a UUID. `url` is required and must be HTTP or HTTPS. The vault entry binds the secret to that URL origin; requests to a different origin fail before sending. Old unbound credentials require re-saving or authorization. Names and values are validated without echoing values in errors.
 
 `DELETE /mcp/upstreams/credential` accepts `{name, header?}` and removes that credential. Both return JSON `null` on success, matching IPC unit results. `POST /mcp/upstreams/reconnect` also returns JSON `null` on success. Config entries carry only `headers: [{name, credential_ref}]`; the API never returns header values.
 
@@ -3020,3 +3022,18 @@ object directly; HTTP wraps it in `input`. MCP creation additionally requires a
 bound caller identity and records it in `created_by_session`. CLI sends the
 unchanged action through HTTP-over-IPC MCP, prints JSON on success and reports
 the same backend error text on stderr with exit 1.
+
+## Account actions
+
+`POST /accounts/action` accepts the tagged core account action directly, without an IPC `request` envelope. It is registered identically on desktop and headless routers with the loopback-or-authenticated route guard. TCP listeners additionally require transport authentication, including loopback requests. Reads return metadata and credential presence only; no action returns a token. List/add/test/remove, site operations and write-only token replacement/clear share the Rust account owner service. See [the account action table](../backend/github.md#shared-account-registry). Frontend mapping lives in `src/transport/commandTable.ts`.
+
+### Account credential entry
+
+`POST /accounts/secret-form` accepts the same metadata-only request as
+`account_secret_form` (see the Tauri command reference). It requires local or
+authenticated access and a desktop host; a headless host returns an error. The
+request waits for native entry and returns status only, with `Cache-Control:
+no-store`. It never returns a nonce or credential. Account forms cannot be read
+through `GET /secrets/forms/{nonce}` or submitted through
+`POST /secrets/forms/submit`, even with the correct nonce. Ordinary secret forms
+retain their existing mobile capability support.

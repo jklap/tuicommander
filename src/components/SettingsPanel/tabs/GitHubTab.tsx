@@ -14,6 +14,7 @@ import { repositoriesStore } from "../../../stores/repositories";
 import { settingsStore } from "../../../stores/settings";
 import { rpc } from "../../../transport";
 import type { IssueFilterMode } from "../../../types";
+import type { AccountSecretFormStatus, AccountSecretRequest } from "../../../types/accounts";
 import { cx } from "../../../utils";
 import { writeClipboard } from "../../../utils/clipboard";
 import { handleOpenUrl } from "../../../utils/openUrl";
@@ -32,7 +33,6 @@ interface DeviceCodeResponse {
 
 interface PollResult {
 	status: "pending" | "slow_down" | "success" | "expired" | "access_denied";
-	access_token?: string;
 	scope?: string;
 }
 
@@ -111,7 +111,6 @@ export const GitHubTab: Component = () => {
 	// github.com accounts added via device-flow, plus GitHub Enterprise (PAT).
 	const [accounts, setAccounts] = createSignal<GitHubAccount[]>([]);
 	const [newHost, setNewHost] = createSignal("");
-	const [newPat, setNewPat] = createSignal("");
 	const [addingAccount, setAddingAccount] = createSignal(false);
 	const [accountError, setAccountError] = createSignal<string | null>(null);
 	// Device-flow "add account" mode (vs the primary login) + the disclosure that
@@ -180,17 +179,27 @@ export const GitHubTab: Component = () => {
 
 	async function addAccount() {
 		const host = newHost().trim();
-		const pat = newPat().trim();
-		if (!host || !pat) {
-			setAccountError("Host and Personal Access Token are required");
+		if (!host) {
+			setAccountError("Host is required");
 			return;
 		}
 		setAccountError(null);
 		setAddingAccount(true);
 		try {
-			await rpc<GitHubAccount>("github_add_account", { host, pat });
+			const request: AccountSecretRequest = {
+				action: "add",
+				account: {
+					provider: "github",
+					host,
+					kind: "bearer",
+					label: host,
+					username: null,
+				},
+			};
+			const result = await rpc<AccountSecretFormStatus>("account_secret_form", { request });
+			if (result.status === "declined") return;
+			if (result.status !== "stored") throw new Error("Account verification or storage failed");
 			setNewHost("");
-			setNewPat("");
 			await fetchAccounts();
 		} catch (e) {
 			setAccountError(e instanceof Error ? e.message : String(e));
@@ -929,12 +938,6 @@ export const GitHubTab: Component = () => {
 							placeholder="ghe.example.com"
 							value={newHost()}
 							onInput={(e) => setNewHost(e.currentTarget.value)}
-						/>
-						<input
-							type="password"
-							placeholder="Personal Access Token"
-							value={newPat()}
-							onInput={(e) => setNewPat(e.currentTarget.value)}
 						/>
 						<div class={g.actions}>
 							<button class={cx(g.btn, g.btnPrimary)} onClick={addAccount} disabled={addingAccount()}>
