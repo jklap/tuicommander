@@ -140,3 +140,57 @@ fn git_remotes_strip_credentials() {
         ]
     );
 }
+
+// Critic regressions: equivalent spellings must identify the same repository.
+#[test]
+fn removed_worktree_with_trailing_slash_does_not_leave_item_link() {
+    let dir = tempfile::tempdir_in(tuic_test_support::test_temp_root()).unwrap();
+    let repo = dir.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    let path = repo.to_string_lossy().into_owned();
+    let store = super::LinkStore::at_path(dir.path().join("links.json"));
+    let link: super::WorkItemLink = serde_json::from_value(serde_json::json!({
+        "reference": {"providerId": "jira", "accountId": "me", "id": "7"},
+        "key": "APP-7", "title": "Fix login", "url": "https://example.com/APP-7", "state": null
+    }))
+    .unwrap();
+    store.link(&path, "feat/login", link).unwrap();
+    // notify_worktree_removed forwards the removal caller's spelling unchanged.
+    assert!(
+        store.unlink(&format!("{path}/"), "feat/login").unwrap(),
+        "removing the same repository with a trailing slash must remove its item link"
+    );
+    assert!(
+        store.list().unwrap().is_empty(),
+        "removed worktree left an orphan item link"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn removed_worktree_through_symlink_does_not_leave_item_link() {
+    let dir = tempfile::tempdir_in(tuic_test_support::test_temp_root()).unwrap();
+    let repo = dir.path().join("repo");
+    let alias = dir.path().join("alias");
+    std::fs::create_dir(&repo).unwrap();
+    std::os::unix::fs::symlink(&repo, &alias).unwrap();
+    let store = super::LinkStore::at_path(dir.path().join("links.json"));
+    let link: super::WorkItemLink = serde_json::from_value(serde_json::json!({
+        "reference": {"providerId": "jira", "accountId": "me", "id": "7"},
+        "key": "APP-7", "title": "Fix login", "url": "https://example.com/APP-7", "state": null
+    }))
+    .unwrap();
+    store
+        .link(&repo.to_string_lossy(), "feat/login", link)
+        .unwrap();
+    assert!(
+        store
+            .unlink(&alias.to_string_lossy(), "feat/login")
+            .unwrap(),
+        "removing through a repository symlink must remove the original item link"
+    );
+    assert!(
+        store.list().unwrap().is_empty(),
+        "removed worktree left an orphan item link"
+    );
+}
