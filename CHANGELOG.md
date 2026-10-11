@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Add the generic Tasks roadmap component with month/quarter zoom, local-calendar date spans, virtual rows, provider pagination and an undated side list. Tasks shell mounting remains separate (#1690-5d98).
+
 - Match native window and webview resize backgrounds to the selected theme, including light themes (Fixes #125; #1678-158c).
 - Added the provider-neutral Tasks data contract and a local in-memory development provider; visible Tasks integration follows separately.
 - Add the generic Tasks list component with account-scoped sources, provider presets and filters, debounced search, sorting, virtual rows and cursor pagination. Shell mounting remains a separate integration step (#1686-ce77).
