@@ -298,6 +298,7 @@ While a context menu is open, pressing a menu item's shortcut chord (modifier + 
 | `open-path` | `Cmd+Alt+O` | Open path… |
 | `open-secondary-window` | — | Open secondary window |
 | `command-overview` | — | Command overview |
+| `open-tasks` | — | Open Tasks (listed only while a work-item provider plugin is loaded) |
 | `toggle-outline` | `Cmd+Alt+L` | Toggle outline panel |
 | `toggle-compose-panel` | `Cmd+I` | Toggle compose panel |
 | `detach-activity-dashboard` | — | Open Activity Dashboard in separate window |

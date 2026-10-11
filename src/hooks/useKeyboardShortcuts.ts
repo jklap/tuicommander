@@ -91,6 +91,7 @@ export interface ShortcutHandlers {
 	openPath: () => void;
 	openSecondaryWindow: () => void;
 	toggleCommandOverview: () => void;
+	openTasks: () => void;
 	toggleComposePanel: () => void;
 	detachActivityDashboard: () => void;
 	toggleProcessManager: () => void;
@@ -345,6 +346,9 @@ function dispatchAction(action: ActionName, handlers: ShortcutHandlers): boolean
 			return true;
 		case "command-overview":
 			handlers.toggleCommandOverview();
+			return true;
+		case "open-tasks":
+			handlers.openTasks();
 			return true;
 		case "toggle-compose-panel":
 			handlers.toggleComposePanel();
