@@ -5114,3 +5114,7 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 ## Tasks shell (#1737-29f7)
 
 - [ ] [HUMAN] After a restart with a work-item provider plugin loaded (github-work, jira or gitlab with an account): Command Palette shows "Open Tasks"; the tab lists items, opens a detail pane, creates an item, shows the board and the roadmap. Without a provider the action is absent. _(Unit tests use the in-memory demo provider only.)_
+
+## Compact mobile attachment (1719-ff5d)
+
+- [ ] On iPhone, tap the attachment icon left of the session composer, choose a photo/file, confirm upload status then its path in the draft, and confirm Queue stays disabled during upload. Smaller mic and Send controls remain inside the right input border.
