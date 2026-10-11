@@ -325,7 +325,7 @@ The additive `github_review_threads` API reads paginated line threads with curre
 
 ### PR action backend
 
-`github_pr_actions` exposes auto-merge enable/disable, merge queue enqueue/dequeue/state and failed-job reruns. `merge_or_enqueue_pr` reads active effective branch rules, including inherited rules, and enqueues when `merge_queue` is required; otherwise it merges with a pinned REST SHA. Unknown/incomplete rules stop the write. Queue entry and auto-merge enable mutations carry `expectedHeadOid`. Failed reruns use the Actions `rerun-failed-jobs` endpoint, which also reruns dependent jobs. The legacy review post and draft API both reject REQUEST_CHANGES with an empty body before account/network work. These additive commands require frontend consumers to opt in; the existing merge command is unchanged.
+`github_pr_actions` exposes auto-merge enable/disable, merge queue enqueue/dequeue/state and failed-job reruns. `merge_or_enqueue_pr` reads the PR's `isMergeQueueEnabled` field and enqueues when the base branch has a merge queue; otherwise it merges with a pinned REST SHA. A missing or non-boolean queue-policy field stops the write. Queue entry and auto-merge enable mutations carry `expectedHeadOid`. Failed reruns use the Actions `rerun-failed-jobs` endpoint, which also reruns dependent jobs. The legacy review post and draft API both reject REQUEST_CHANGES with an empty body before account/network work. These additive commands require frontend consumers to opt in; the existing merge command is unchanged.
 
 ## Shared account registry
 
