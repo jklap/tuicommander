@@ -66,6 +66,8 @@ impl GitHubAccountRegistry {
         self.accounts.iter().find(|a| a.id == id)
     }
 
+    // DEFERRED (2026-10-11) — test-only until the legacy registry is removed or rewired (coordinator, 2026-10-11).
+    #[cfg(test)]
     /// Insert a new account or replace the existing one with the same id.
     pub(crate) fn upsert(&mut self, account: GitHubAccount) {
         if let Some(slot) = self.accounts.iter_mut().find(|a| a.id == account.id) {
@@ -75,6 +77,7 @@ impl GitHubAccountRegistry {
         }
     }
 
+    #[cfg(test)]
     /// Remove the account with `id`; returns whether one was removed.
     pub(crate) fn remove(&mut self, id: &str) -> bool {
         let before = self.accounts.len();

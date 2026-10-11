@@ -16,6 +16,8 @@ import { locateFile, repositoriesStore } from "../stores/repositories";
 import { sidebarPluginStore } from "../stores/sidebarPluginStore";
 import { statusBarTicker } from "../stores/statusBarTicker";
 import { terminalsStore } from "../stores/terminals";
+import { workItemLinksStore } from "../stores/workItemLinks";
+import type { GitRemote } from "../types/workItemLinks";
 import { randomId } from "../utils/randomId";
 import { sanitizeSvgIcon } from "../utils/sanitizeSvg";
 import { getShellFamily, sendCommand } from "../utils/sendCommand";
@@ -293,6 +295,14 @@ function createPluginRegistry() {
 				return track(workItemProviderRegistry.register(provider));
 			},
 
+			linkItem(repoPath, branch, link) {
+				return workItemLinksStore.link(repoPath, branch, link);
+			},
+
+			unlinkItem(repoPath, branch) {
+				return workItemLinksStore.unlink(repoPath, branch);
+			},
+
 			async startWork(request) {
 				requireCapability(pluginId, capabilities, "pty:write");
 				if (isPluginPaused(pluginId)) throw new Error(`Plugin ${pluginId} is paused`);
@@ -497,6 +507,11 @@ function createPluginRegistry() {
 				requireCapability(pluginId, capabilities, "git:read");
 				const raw = await invoke<string>("get_git_diff", { path: repoPath, scope: scope ?? null });
 				return raw ?? "";
+			},
+
+			async getRemotes(repoPath: string): Promise<GitRemote[]> {
+				requireCapability(pluginId, capabilities, "git:read");
+				return (await invoke<GitRemote[]>("get_git_remotes", { path: repoPath })) ?? [];
 			},
 
 			// -- Tier 3: Write actions (capability-gated) --

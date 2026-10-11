@@ -139,6 +139,10 @@ receive it on `/events`.
 | `get_gutter_changes` | `path, file, scope?` | `Vec<GutterChange>` | Per-line editor gutter/scrollbar change markers (diff parsed in Rust); empty for an untracked file |
 | `get_git_branches` | `path` | `Vec<JSON>` | All branches (sorted) |
 | `get_recent_commits` | `path` | `Vec<JSON>` | Recent git commits |
+| `get_git_remotes` | `path` | `Vec<{name,url}>` | Every remote; credentials in URLs removed (`workitem_links.rs`) |
+| `list_workitem_links` | — | `{repoPath: {branch: WorkItemLink}}` | Work-item links of worktree branches (`workitem_links.rs`) |
+| `link_workitem` | `repoPath, branch, link` | `()` | Link a worktree branch to a work item; url must be http(s) |
+| `unlink_workitem` | `repoPath, branch` | `bool` | Remove a link; true when one existed |
 | `rename_branch` | `path, old_name, new_name` | `()` | Rename branch |
 | `check_is_main_branch` | `branch` | `bool` | Is main/master/develop |
 | `get_initials` | `name` | `String` | 2-char repo initials |
@@ -902,6 +906,24 @@ literal prompt with delimited, escaped untrusted stdout capped at 16 KiB;
 truncation is marked and stderr is excluded. Empty output and manual bypasses
 inject nothing. The run ledger records `precheck_context: {injected, bytes}` for
 the prepared launch prompt, counting escaped stdout bytes before framing/marker.
+
+### PR line review commands
+
+- `get_pr_line_threads(repoPath, prNumber, after?)`: `{headSha, threads, hasNextPage, endCursor}`. Threads retain GitHub `line`, `originalLine`, `diffSide`, `isOutdated`, `isResolved`, and `comments` connection.
+- `get_pr_thread_comments(repoPath, threadId, after?)`: GitHub comments connection.
+- `set_pr_thread_resolved(repoPath, threadId, resolved)`: confirmed thread.
+- `reply_pr_thread(repoPath, threadId, body)`: posted comment.
+- `submit_pr_draft_review(repoPath, prNumber, draft)`: posted review. Draft `{headSha, body, event, comments}` accepts COMMENT, APPROVE, REQUEST_CHANGES; request changes needs a body. Inline comments retain path/line/side/body.
+
+### PR action commands
+
+- `get_pr_action_state(repoPath, prNumber)`: `{id, headSha, baseRefName, state, isDraft, autoMergeRequest, mergeQueueEntry, queueRequired}`. Queue entries retain id/position/state; auto-merge requests retain enabledAt/mergeMethod.
+- `set_pr_auto_merge(repoPath, prNumber, enabled, mergeMethod?, expectedHeadSha?)`: confirmed GraphQL payload. Enabling needs a valid merge/squash/rebase method and reviewed head.
+- `set_pr_merge_queue(repoPath, prNumber, enqueued, expectedHeadSha?)`: confirmed GraphQL payload with mergeQueueEntry. Enqueue needs reviewed head; dequeue does not.
+- `merge_or_enqueue_pr(repoPath, prNumber, mergeMethod, expectedHeadSha)`: `{action:"enqueued", mergeQueueEntry}` or `{action:"merged", sha}`. Queue-required branches enqueue.
+- `rerun_failed_pr_jobs(repoPath, runId)`: `{accepted:true, runId}` after GitHub accepts the failed-job rerun, not a claim the new run finished.
+
+`post_pr_review` and `submit_pr_draft_review` require a nonempty body for REQUEST_CHANGES and reject unsupported event values.
 
 ## Core account command
 

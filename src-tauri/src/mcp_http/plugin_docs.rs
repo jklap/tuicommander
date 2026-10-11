@@ -159,7 +159,7 @@ These inventories are checked against the capability validator, the host object 
 `credentials:read`, `exec:cli`, `fs:delete`, `fs:list`, `fs:read`, `fs:rename`, `fs:scan`, `fs:watch`, `fs:write`, `git:read`, `invoke:list_markdown_files`, `invoke:read_file`, `net:http`, `pty:read`, `pty:write`, `ui:context-menu`, `ui:file-icons`, `ui:file-preview`, `ui:markdown`, `ui:panel`, `ui:sidebar`, `ui:sound`, `ui:ticker`.
 
 ### Host method inventory
-`addItem`, `clearTicker`, `deleteBuildArtifact`, `execCli`, `getActiveRepo`, `getActiveRepoPath`, `getActiveTerminalSessionId`, `getClaudeProjectDir`, `getGitBranches`, `getGitDiff`, `getPrNotifications`, `getRecentCommits`, `getRepoPathForSession`, `getRepos`, `getSessionCwd`, `getSettings`, `getTerminalState`, `httpFetch`, `invoke`, `listDirectory`, `log`, `onStateChange`, `openEditorTab`, `openMarkdownFile`, `openMarkdownFileBackground`, `openMarkdownPanel`, `openPanel`, `playNotificationSound`, `readCredential`, `readFile`, `readFileBase64`, `readFileTail`, `readFiles`, `readSessionOutput`, `registerCommand`, `registerContextMenuAction`, `registerDashboard`, `registerFileIconProvider`, `registerFilePreview`, `registerMarkdownProvider`, `registerOutputWatcher`, `registerSection`, `registerSidebarPanel`, `registerStructuredEventHandler`, `registerTerminalAction`, `registerUrlResolver`, `registerWorkItemProvider`, `removeItem`, `renamePath`, `scanBuildArtifacts`, `sendAgentInput`, `setTicker`, `startWork`, `trimBuildArtifact`, `updateItem`, `watchPath`, `writeFile`, `writeFileBase64`, `writePty`.
+`addItem`, `clearTicker`, `deleteBuildArtifact`, `execCli`, `getActiveRepo`, `getActiveRepoPath`, `getActiveTerminalSessionId`, `getClaudeProjectDir`, `getGitBranches`, `getGitDiff`, `getPrNotifications`, `getRecentCommits`, `getRemotes`, `getRepoPathForSession`, `getRepos`, `getSessionCwd`, `getSettings`, `getTerminalState`, `httpFetch`, `invoke`, `linkItem`, `listDirectory`, `log`, `onStateChange`, `openEditorTab`, `openMarkdownFile`, `openMarkdownFileBackground`, `openMarkdownPanel`, `openPanel`, `playNotificationSound`, `readCredential`, `readFile`, `readFileBase64`, `readFileTail`, `readFiles`, `readSessionOutput`, `registerCommand`, `registerContextMenuAction`, `registerDashboard`, `registerFileIconProvider`, `registerFilePreview`, `registerMarkdownProvider`, `registerOutputWatcher`, `registerSection`, `registerSidebarPanel`, `registerStructuredEventHandler`, `registerTerminalAction`, `registerUrlResolver`, `registerWorkItemProvider`, `removeItem`, `renamePath`, `scanBuildArtifacts`, `sendAgentInput`, `setTicker`, `startWork`, `trimBuildArtifact`, `unlinkItem`, `updateItem`, `watchPath`, `writeFile`, `writeFileBase64`, `writePty`.
 
 ### Base CSS class inventory
 `badge`, `badge-accent`, `badge-error`, `badge-muted`, `badge-p1`, `badge-p2`, `badge-p3`, `badge-success`, `badge-warning`, `btn`, `btn-danger`, `btn-primary`, `card`, `critical`, `danger`, `dash-header`, `dash-meter`, `dash-meter-fill`, `dash-section`, `dash-section-hint`, `dash-section-title`, `dash-stat`, `dash-stat-grid`, `dash-stat-label`, `dash-stat-sub`, `dash-stat-value`, `dash-subtitle`, `dash-title`, `dashboard`, `empty-state`, `error`, `filter-bar`, `hint`, `num`, `ok`, `primary`, `show`, `success`, `toast`, `warn`.
@@ -241,6 +241,7 @@ Final shell/awaiting transitions emitted together with session teardown retain t
 host.getGitBranches(repoPath)           // [{ name, isCurrent }]
 host.getRecentCommits(repoPath, count?) // [{ hash, message, author, date }]
 host.getGitDiff(repoPath, scope?)       // unified diff string (scope: "staged" | "unstaged")
+host.getRemotes(repoPath)               // [{ name, url }] — every remote; credentials in URLs are removed
 ```
 
 ### Tier 3: Write Actions (capability-gated)
@@ -701,6 +702,25 @@ Core owns the Solid Tasks views; provider plugins supply data, schemas and actio
 never view HTML. A4 defines DTOs only: registration, transport and visible views
 are delivered by the following integration steps.
 
+### Work-item links (Phase A3b)
+
+Link a worktree branch to a work item. The link persists across restarts and the
+sidebar branch row shows its key, coloured by `state.tone`; a click opens `url`.
+TUIC drops the link when it removes that worktree.
+
+```typescript
+await host.linkItem(repoPath, branch, {
+  reference: { providerId, accountId, id }, // WorkItemRef of your provider
+  key: "ACME-7", title: "Fix login",
+  url: "https://acme.atlassian.net/browse/ACME-7", // http(s) only, else rejected
+  state: { id: "3", name: "In Progress", tone: "info" }, // or null
+});
+await host.unlinkItem(repoPath, branch) // true when a link existed
+```
+
+`repoPath` is the main repository path; `branch` is the worktree branch name. On hover
+the badge refreshes the state through your provider's `detail(reference)`.
+
 ### Work-item field kind inventory
 `text`, `markdown`, `enum`, `user`, `labels`, `date`, `number`, `link`
 
@@ -765,6 +785,21 @@ Obsolete responses cannot replace newer results. Repeated references update a ro
 repeated cursors stop pagination. Failed refreshes retain rows marked Stale results.
 Opening an item calls the host onOpen(reference); list rendering does not fetch detail.
 Tasks shell mounting remains a separate integration step.
+
+## Tasks roadmap
+
+Core TasksRoadmap renders WorkItemProvider.list pages and provider.fields date descriptors.
+The host passes provider, onOpen(reference), optional query/visible/initialDate and optional
+startFieldId/targetFieldId. Absent IDs use the first and second kind=date descriptors in
+provider order; field names are never guessed. Provider-declared date roles are deferred.
+Month/quarter zoom, previous/next and Today navigate the local calendar. ISO date-only
+values keep their calendar day; timestamps require an explicit offset and display in the
+viewer local time zone. Bars include the target day and clip to the visible period.
+One unset endpoint gives a one-day milestone. Missing, invalid or reversed dates remain
+clickable in the Without usable dates side list. Out-of-period tasks remain listed.
+Both lists use virtual rows. Load more follows provider cursors; failed refreshes retain
+stale results, and obsolete provider responses cannot replace the current view.
+No new manifest, IPC or HTTP API is introduced. Tasks shell mounting remains separate.
 
 ## Troubleshooting
 

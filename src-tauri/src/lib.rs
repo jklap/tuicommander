@@ -77,6 +77,11 @@ pub(crate) mod github_account;
 pub(crate) mod github_auth;
 #[cfg(test)]
 mod github_compat_tests;
+#[cfg(feature = "desktop")]
+pub(crate) mod github_pr_action_commands;
+pub(crate) mod github_pr_actions;
+pub(crate) mod github_pr_api;
+pub(crate) mod github_review_threads;
 pub(crate) use tuic_git::github_debug;
 pub(crate) mod github_poller;
 #[cfg(feature = "desktop")]
@@ -181,6 +186,7 @@ pub(crate) mod tunnels;
 mod updater;
 pub(crate) mod webview_recovery;
 pub(crate) mod workflows;
+pub(crate) mod workitem_links;
 pub(crate) mod worktree;
 
 use std::path::{Path, PathBuf};
@@ -2071,6 +2077,10 @@ pub fn run() {
             worktree::get_worktrees_dir,
             git::get_repo_info,
             git::get_remote_url,
+            workitem_links::get_git_remotes,
+            workitem_links::list_workitem_links,
+            workitem_links::link_workitem,
+            workitem_links::unlink_workitem,
             git::get_git_diff,
             git::get_diff_stats,
             git::get_changed_files,
@@ -2194,6 +2204,16 @@ pub fn run() {
             github::create_pr,
             github::create_issue,
             github::post_pr_review,
+            github_pr_action_commands::get_pr_action_state,
+            github_pr_action_commands::set_pr_auto_merge,
+            github_pr_action_commands::set_pr_merge_queue,
+            github_pr_action_commands::merge_or_enqueue_pr,
+            github_pr_action_commands::rerun_failed_pr_jobs,
+            github_review_threads::get_pr_line_threads,
+            github_review_threads::get_pr_thread_comments,
+            github_review_threads::set_pr_thread_resolved,
+            github_review_threads::reply_pr_thread,
+            github_review_threads::submit_pr_draft_review,
             github::get_merged_prs,
             pr_review::run_pr_review,
             changelog::generate_changelog,

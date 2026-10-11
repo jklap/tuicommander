@@ -11,6 +11,8 @@ mod dictation_routes;
 mod ego_routes;
 mod fs_routes;
 mod git_routes;
+mod github_pr_action_routes;
+mod github_review_routes;
 mod github_routes;
 mod guards;
 mod log_routes;
@@ -36,6 +38,7 @@ mod system_routes;
 mod telegram_routes;
 pub(crate) mod types;
 mod watcher_routes;
+mod workitem_link_routes;
 mod worktree_routes;
 mod ws_compression;
 
@@ -881,6 +884,7 @@ const API_PREFIXES: &[&str] = &[
     "tunnels",
     "watchers",
     "workflows",
+    "workitem-links",
     "worktrees",
 ];
 
@@ -1148,6 +1152,13 @@ fn shared_routes() -> Router<Arc<AppState>> {
         // Git operations
         .route("/repo/info", get(git_routes::repo_info))
         .route("/repo/remote-url", get(git_routes::remote_url))
+        .route("/repo/remotes", get(workitem_link_routes::remotes))
+        .route(
+            "/workitem-links",
+            get(workitem_link_routes::list)
+                .put(workitem_link_routes::link)
+                .delete(workitem_link_routes::unlink),
+        )
         .route("/repo/diff", get(git_routes::repo_diff))
         .route("/repo/diff-stats", get(git_routes::repo_diff_stats))
         .route("/repo/files", get(git_routes::repo_changed_files))
@@ -1618,6 +1629,31 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             "/repo/pr-review-threads",
             get(github_routes::repo_pr_review_threads),
         )
+        .route("/repo/pr-action-state", get(github_pr_action_routes::state))
+        .route(
+            "/repo/pr-auto-merge",
+            post(github_pr_action_routes::auto_merge),
+        )
+        .route("/repo/pr-merge-queue", post(github_pr_action_routes::queue))
+        .route(
+            "/repo/pr-merge-or-enqueue",
+            post(github_pr_action_routes::merge),
+        )
+        .route(
+            "/repo/pr-rerun-failed",
+            post(github_pr_action_routes::rerun),
+        )
+        .route("/repo/pr-line-threads", get(github_review_routes::threads))
+        .route(
+            "/repo/pr-thread-comments",
+            get(github_review_routes::comments),
+        )
+        .route(
+            "/repo/pr-thread-resolved",
+            post(github_review_routes::resolve),
+        )
+        .route("/repo/pr-thread-reply", post(github_review_routes::reply))
+        .route("/repo/pr-draft-review", post(github_review_routes::submit))
         .route("/repo/pr-diff", get(github_routes::repo_pr_diff))
         .route("/repo/merged-prs", get(github_routes::repo_merged_prs))
         .route(
@@ -4117,6 +4153,8 @@ mod tests {
             "/metrics",
             "/process/stats",
             "/repo/info",
+            "/repo/remotes",
+            "/workitem-links",
             "/repo/diff",
             "/repo/files",
             "/repo/branches",

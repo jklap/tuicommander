@@ -15,6 +15,13 @@ Slice F exposes `start_graph {target:{type:story|plan,id},expected_revision?,def
 
 All components are SolidJS functional components in `src/components/`.
 
+`Tasks/roadmap/TasksRoadmap` consumes a data-only `WorkItemProvider`, optional host
+start/target date field IDs and an item-opening callback. It reuses `createTasksQuery`
+and the list's virtual rows for undated items; `RoadmapTimeline` virtualizes dated rows.
+Month/quarter controls navigate local calendar geometry from `calendar.ts`. The default
+field mapping uses the first two date descriptors in provider order. Missing, invalid
+or reversed dates stay in the side list. Shell mounting is a separate integration step.
+
 `MobileViewBanner` offers browser clients a link to `/mobile`. On tablets it remains visible, even if previously dismissed on a phone, so users who chose desktop in mobile Settings can return. Switching clears the device-local desktop preference; native Tauri never renders the banner.
 
 ## Component Tree

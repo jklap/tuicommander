@@ -319,11 +319,19 @@ When `include_merged` is true, `get_repo_pr_statuses` includes recently merged P
 
 Browser add-account polling uses `POST /github/accounts/poll` and the same `github_poll_add_account_impl` as desktop IPC. Success persists a named account without replacing the default runtime token. Default login continues to use `POST /github/auth/poll`.
 
+### Line review backend
+
+The additive `github_review_threads` API reads paginated line threads with current/original line, diff side, resolved and outdated state, plus paginated replies. The existing `get_pr_review_threads` badge-count API is unchanged. Resolve/unresolve returns the confirmed GitHub thread; reply returns the posted comment. Draft submission checks the reviewed head against GitHub and posts through the existing review body builder/parser with `commit_id` pinned. A moved head returns `review-head-changed`; refresh before resubmitting. All calls resolve the repository account and use its host, token and circuit breaker.
+
+### PR action backend
+
+`github_pr_actions` exposes auto-merge enable/disable, merge queue enqueue/dequeue/state and failed-job reruns. `merge_or_enqueue_pr` reads the PR's `isMergeQueueEnabled` field and enqueues when the base branch has a merge queue; otherwise it merges with a pinned REST SHA. A missing or non-boolean queue-policy field stops the write. Queue entry and auto-merge enable mutations carry `expectedHeadOid`. Failed reruns use the Actions `rerun-failed-jobs` endpoint, which also reruns dependent jobs. The legacy review post and draft API both reject REQUEST_CHANGES with an empty body before account/network work. These additive commands require frontend consumers to opt in; the existing merge command is unchanged.
+
 ## Shared account registry
 
 Core owns provider sites and accounts in `accounts.json`. Tokens are stored only
 in the instance credential vault under `account/{id}`. Reads return account
-metadata and `secret: {status: "set" | "unset" | "unavailable"}`. Vault errors
+metadata and `secret: {status: "set" | "unset" | "unavailable"}`. Persisted registry, site and account records tolerate unknown fields from newer builds. Vault errors
 are unavailable, never an absent credential. No account action reveals tokens.
 
 `account_action` (IPC) and `POST /accounts/action` (HTTP) call the same Rust owner
@@ -338,10 +346,9 @@ does not add an unrestricted plugin `invoke` grant or a standalone MCP tool.
 | `list_sites` | Optional `provider` | Site array |
 | `add` | `account: {provider, host, kind, label, username?}`, `token` | Verified AccountView |
 | `test` | `id` | Verified AccountView |
-| `remove` | `id` | `{removed:true}` |
+| `remove` | `id` | `{removed:true}`; rejects the durable github.com default |
 | `add_site` | `provider`, `host`, `label` | Site |
-| `test_site` | Site `id`, `account_id` belonging to that site | Verified AccountView |
-| `remove_site` | Site `id` | `{removed:true}`; removes its accounts, credentials and GitHub bindings |
+| `remove_site` | Site `id` | `{removed:true}`; removes its accounts, credentials and GitHub bindings; rejects the default github.com site before any removal |
 | `set_secret` | `id`, `token` | Verified AccountView; token/basic accounts only |
 | `clear_secret` | `id` | `{cleared:true}`; retains account metadata |
 | `set_label` | `id`, `label` | `{updated:true}`; renames an account |

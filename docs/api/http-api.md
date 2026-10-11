@@ -939,6 +939,24 @@ GET /repo/branches?path=/path/to/repo
 
 Returns sorted branch list.
 
+### Remotes
+
+```
+GET /repo/remotes?path=/path/to/repo
+```
+
+Returns `[{ "name": "origin", "url": "https://github.com/acme/app.git" }]`. Userinfo (an embedded token) is removed from every URL. IPC twin: `get_git_remotes`.
+
+### Work-item links
+
+```
+GET    /workitem-links
+PUT    /workitem-links   {"repoPath": "/repo", "branch": "feat/x", "link": WorkItemLink}
+DELETE /workitem-links   {"repoPath": "/repo", "branch": "feat/x"}
+```
+
+`GET` returns `{ repoPath: { branch: WorkItemLink } }`. `WorkItemLink` is `{ reference: { providerId, accountId, id }, key, title, url, state: { id, name, tone } | null }`. `PUT` answers 400 for a relative `repoPath`, an empty key or a non-http(s) `url`. `DELETE` returns `true` when a link existed. Stored in `workitem_links.json` in the config dir; TUIC drops the link when it removes the worktree. IPC twins: `list_workitem_links`, `link_workitem`, `unlink_workitem`.
+
 ### Repo Summary
 
 ```
@@ -3004,6 +3022,32 @@ object directly; HTTP wraps it in `input`. MCP creation additionally requires a
 bound caller identity and records it in `created_by_session`. CLI sends the
 unchanged action through HTTP-over-IPC MCP, prints JSON on success and reports
 the same backend error text on stderr with exit 1.
+
+### PR line reviews
+
+Desktop command arguments and HTTP bodies use the same camelCase fields.
+
+| Method | Route | Arguments |
+|---|---|---|
+| GET | `/repo/pr-line-threads` | `repoPath`, `prNumber`, optional `after` |
+| GET | `/repo/pr-thread-comments` | `repoPath`, `threadId`, optional `after` |
+| POST | `/repo/pr-thread-resolved` | `{repoPath, threadId, resolved}` |
+| POST | `/repo/pr-thread-reply` | `{repoPath, threadId, body}` |
+| POST | `/repo/pr-draft-review` | `{repoPath, prNumber, draft:{headSha, body, event, comments}}` |
+
+Draft submission rejects a moved reviewed head and pins REST `commit_id`. Thread and comment connections expose pagination; outdated threads retain null current lines.
+
+### PR actions
+
+| Method | Route | Arguments |
+|---|---|---|
+| GET | `/repo/pr-action-state` | `repoPath`, `prNumber` |
+| POST | `/repo/pr-auto-merge` | `{repoPath, prNumber, enabled, mergeMethod?, expectedHeadSha?}` |
+| POST | `/repo/pr-merge-queue` | `{repoPath, prNumber, enqueued, expectedHeadSha?}` |
+| POST | `/repo/pr-merge-or-enqueue` | `{repoPath, prNumber, mergeMethod, expectedHeadSha}` |
+| POST | `/repo/pr-rerun-failed` | `{repoPath, runId}` |
+
+The routes share desktop command results. Enabling auto-merge and queue entry require the reviewed head. Merge policy read failures stop writes. The legacy `/repo/post-pr-review` and pinned `/repo/pr-draft-review` reject empty REQUEST_CHANGES bodies.
 
 ## Account actions
 

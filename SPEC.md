@@ -22,6 +22,16 @@ Unknown evidence remains unverified, and off+online never passes vacuously. Exis
 
 ## Overview
 
+### Tasks roadmap component — Implemented (#1690-5d98)
+
+`TasksRoadmap` renders provider list pages using explicit host start/target field IDs,
+or the first two date descriptors in provider order when IDs are absent. Month/quarter
+zoom and previous/next/Today navigate a local calendar. Date-only values preserve
+their day; zoned timestamps use local dates, with inclusive target days and clipped bars.
+One endpoint gives a milestone; unset, invalid or reversed dates remain in a side list.
+Virtual rows and the list query controller retain pagination and stale-response protection.
+Provider-declared date roles and Tasks shell mounting remain separate integration work.
+
 ### Tasks list component — Implemented (#1686-ce77)
 
 `TasksList` is a host-rendered Solid component backed by the data-only work-item
@@ -921,3 +931,7 @@ Step 8 API. The same action JSON controls definitions, enabled-only updates,
 Once previews, run history, summaries and Run Now on the addressed backend.
 MCP create requires host-bound creator provenance. CLI exposes these actions as
 `tuic automations '<JSON>'` or stdin via `-`; results and validation text match.
+
+GitHub line review backend supports paginated thread/comment reads, reply, resolve/unresolve and head-pinned draft submission on both transports. UI integration is tracked separately.
+
+GitHub PR action backend supports failed-job reruns, head-pinned auto-merge and queue entry, queue removal/state and active-rule-aware merge. Legacy review submission validates REQUEST_CHANGES bodies. Frontend action integration remains separate.

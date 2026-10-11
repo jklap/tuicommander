@@ -428,6 +428,13 @@ const diff = await host.getGitDiff("/Users/me/project", "staged");
 // Returns unified diff string
 ```
 
+#### `host.getRemotes(repoPath) -> Promise<Array<{ name, url }>>`
+
+```typescript
+const remotes = await host.getRemotes("/Users/me/project");
+// [{ name: "origin", url: "https://github.com/acme/app.git" }] — credentials in URLs are removed
+```
+
 ### Tier 3: Write Actions (capability-gated)
 
 These methods require declaring capabilities in `manifest.json`. Calling without the required capability throws `PluginCapabilityError`.
@@ -1299,7 +1306,7 @@ Capabilities gate access to Tier 3 and Tier 4 methods. Declare them in `manifest
 | `fs:scan` | `host.scanBuildArtifacts()` | Can recursively scan registered repos for build-artifact directories (read-only; ignores `.gitignore`) |
 | `fs:delete` | `host.deleteBuildArtifact()`, `host.trimBuildArtifact()` | Can delete a build-artifact directory inside a registered repo (guarded `remove_dir_all`), or remove just its intermediates |
 | `exec:cli` | `host.execCli()` | Can execute CLI binaries declared in manifest `binaries` field |
-| `git:read` | `host.getGitBranches()`, `host.getRecentCommits()`, `host.getGitDiff()` | Read-only access to git repository state |
+| `git:read` | `host.getGitBranches()`, `host.getRecentCommits()`, `host.getGitDiff()`, `host.getRemotes()` | Read-only access to git repository state |
 | `ui:context-menu` | `host.registerTerminalAction()` | Can add actions to the terminal right-click "Actions" submenu |
 | `ui:sidebar` | `host.registerSidebarPanel()` | Can register collapsible panel sections in the sidebar |
 | `ui:file-icons` | `host.registerFileIconProvider()` | Can provide file/folder icons for the file browser (e.g. VS Code icon themes) |
@@ -1792,6 +1799,26 @@ import these Solid components or gain new manifest fields from them. The host
 owns account selection and native secret entry; no token enters a plugin prop.
 See `plugin_dev_guide` → **Settings field kinds** for the core-rendered contracts.
 
+## Tasks roadmap
+
+Core `TasksRoadmap` renders `WorkItemProvider.list` pages and the provider's date
+descriptors. The host passes `provider`, `onOpen(reference)`, optional `query`,
+`visible`, `initialDate`, `startFieldId` and `targetFieldId`. Absent field IDs use
+the first and second `kind: "date"` descriptors in provider order. Field names are
+never guessed. Provider-declared start/target roles need a later contract extension.
+
+Month/quarter zoom and Previous, Next and Today navigate the local calendar.
+ISO date-only values retain their calendar day. Timestamps must carry an explicit
+offset and display in the viewer's local time zone. Bars include the target day
+and clip to the visible period. A single endpoint gives a one-day milestone.
+Missing, invalid or reversed dates stay clickable in the **Without usable dates**
+side list; out-of-period tasks stay listed in the timeline.
+
+Both lists use virtual rows. **Load more** follows provider cursors. Failed
+refreshes retain stale results; obsolete provider responses cannot replace the
+active view. This component adds no manifest, IPC or HTTP API. Tasks shell mounting
+is a separate integration step.
+
 ## Tasks data contract (Phase A4)
 
 Register via `host.registerWorkItemProvider(provider)`, returning an auto-cleaned
@@ -1808,6 +1835,17 @@ JSON as the Rust fake. No fake routes or IPC commands are installed.
 Core owns the Solid Tasks views; provider plugins supply data, schemas and actions,
 never view HTML. A4 defines DTOs only: registration, transport and visible views
 are delivered by the following integration steps.
+
+### Work-item links (Phase A3b)
+
+`host.linkItem(repoPath, branch, link)` persists a link from a worktree branch to a
+work item; `host.unlinkItem(repoPath, branch)` removes it and resolves `true` when a
+link existed. No capability is required. `link` is
+`{ reference: { providerId, accountId, id }, key, title, url, state: { id, name, tone } | null }`;
+`url` must be http(s). The sidebar branch row shows `key` coloured by `state.tone`;
+hovering refreshes the state through the provider's `detail(reference)`, and a click
+opens `url` without selecting the branch. TUIC drops the link when it removes the
+worktree. `repoPath` is the main repository path, `branch` the worktree branch name.
 
 ### Work-item field kind inventory
 `text`, `markdown`, `enum`, `user`, `labels`, `date`, `number`, `link`
