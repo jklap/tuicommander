@@ -1,3 +1,6 @@
+#[cfg(any(feature = "desktop", test))]
+pub(crate) mod window_background;
+
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 

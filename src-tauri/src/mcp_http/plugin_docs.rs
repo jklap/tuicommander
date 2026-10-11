@@ -724,6 +724,20 @@ Core renders work-item detail with Solid controls. Providers supply `WorkItemDet
 - Status: buttons use the declared transition action IDs, enabled state and disabled reasons. The pending action label appears immediately; state IDs are never inferred from the label. Success adopts the returned detail; rejection restores the authoritative label and reports the error.
 - Refresh: manual Refresh plus a 60-second timer, enabled by default only while open, the Tasks view is visible and the document is visible. Already-loaded comment pages are refreshed too. Old-item responses cannot replace the current item.
 
+## Tasks list
+
+Core TasksList consumes WorkItemProvider data, never plugin HTML or iframes.
+Providers supply providerId, accountId, name, fields, savedFilters, and async list(query, signal).
+Core renders source and preset selectors, descriptor filters, 250 ms debounced search,
+provider sorting, virtual rows, and Load more using nextCursor.
+Queries carry filters, savedFilterId, search, sort, groupBy, cursor and limit.
+Grouped results come from grouped(query, signal); core renders provider group names and members.
+The LRU cache holds at most 32 pages, partitioned by provider, account and query.
+Obsolete responses cannot replace newer results. Repeated references update a row;
+repeated cursors stop pagination. Failed refreshes retain rows marked Stale results.
+Opening an item calls the host onOpen(reference); list rendering does not fetch detail.
+Tasks shell mounting remains a separate integration step.
+
 ## Troubleshooting
 
 | Error | Fix |

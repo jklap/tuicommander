@@ -1,42 +1,54 @@
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
-#[cfg(feature = "dictation")]
 mod dictation_config {
     use super::*;
 
     /// Dictation configuration persisted to <config_dir>/dictation-config.json
-    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
     pub struct DictationConfig {
         #[serde(default)]
+        #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates enabled for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
         pub enabled: bool,
         #[serde(default = "default_hotkey")]
+        #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates hotkey for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
         pub hotkey: String,
         #[serde(default = "default_language")]
+        #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates language for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
         pub language: String,
         /// Selected whisper model name (e.g. "large-v3-turbo", "small")
         #[serde(default = "default_model")]
+        #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates model for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+        #[schemars(extend("x-choice-resolver" = "voice_models"))]
         pub model: String,
         /// Selected audio input device name. None or empty = system default.
         #[serde(default)]
+        #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"live","effect":"Updates device for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+        #[schemars(extend("x-choice-resolver" = "audio_inputs"))]
         pub device: Option<String>,
         /// Long-press threshold in milliseconds for push-to-talk activation.
         /// A short press (below this duration) passes through as normal input.
         #[serde(default = "default_long_press_ms")]
+        #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates long press ms for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
         pub long_press_ms: u32,
         /// Automatically send (press Enter) after injecting transcribed text.
         /// On by default; a stored `false` is kept.
         #[serde(default = "default_auto_send")]
+        #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates auto send for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
         pub auto_send: bool,
         /// Minimum RMS before audio is sent to Whisper. See [`VoiceGates`].
         #[serde(default = "default_rms_threshold")]
+        #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates rms threshold for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
         pub rms_threshold: f32,
         /// Maximum `no_speech_probability` accepted for a segment. See [`VoiceGates`].
         #[serde(default = "default_no_speech_threshold")]
+        #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates no speech threshold for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+        #[schemars(range(min = 0.0, max = 1.0))]
         pub no_speech_threshold: f32,
         /// Visible hold-back between a hands-free transcript and its enqueue, in
         /// milliseconds. Zero would send every utterance the instant it lands, so a
         /// config written before hands-free existed takes the default instead.
         #[serde(default = "default_hold_back_ms")]
+        #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates hands free hold back ms for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
         pub hands_free_hold_back_ms: u32,
         /// Optional activation phrase for hands-free dictation. Empty means every
         /// recognised utterance is a turn. Set, it must open each new turn: the
@@ -44,6 +56,7 @@ mod dictation_config {
         /// before anything is submitted, so a model never reads it and unrelated
         /// speech never leaves the machine.
         #[serde(default)]
+        #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates hands free activation phrase for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
         pub hands_free_activation_phrase: String,
         /// Tell the bound model when hands-free starts and when it stops.
         ///
@@ -53,27 +66,32 @@ mod dictation_config {
         /// notices and nothing else; disarming still revokes speech, because that
         /// is a fact about this machine rather than a message to a model.
         #[serde(default = "default_notify_model")]
+        #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates hands free notify model for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
         pub hands_free_notify_model: bool,
         /// The start notice sent when `hands_free_notify_model` is on. Empty means
         /// the built-in text, which [`get_hands_free_default_notice`] returns so a
         /// settings surface can show it and reset to it. Folded to one line before
         /// it is sent — see [`continuous::entry_hint_text`].
         #[serde(default)]
+        #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates hands free start notice for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
         pub hands_free_start_notice: String,
         /// Play a short sound on the owning client when a spoken turn reaches the
         /// agent, and a softer one when the activation phrase drops it. On by
         /// default. Read by the frontend only; the backend reports the turns
         /// either way (`HandsFreeStatus::delivered_turns`).
         #[serde(default = "default_earcons")]
+        #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates hands free earcons for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
         pub hands_free_earcons: bool,
         /// Allow spoken replies for this device's hands-free conversation.
         #[serde(default = "default_true")]
+        #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates hands free spoken replies for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
         pub hands_free_spoken_replies: bool,
         /// A speech engine the user supplies, as argv rather than a shell line.
         /// Used when `speech_engine` is `external`. See
         /// [`crate::dictation::speech::external`](crate::dictation::speech::external) for the
         /// markers and for what it means that this runs as the user.
         #[serde(default)]
+        #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"live","effect":"Updates speech command for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
         pub speech_command: Vec<String>,
         /// The engine that speaks replies: `edge` (Microsoft Edge neural voices,
         /// the default), `pocket` (the bundled Pocket TTS) or `external` (the
@@ -81,34 +99,45 @@ mod dictation_config {
         /// answers it from what the installation already holds, see
         /// `dictation::commands::legacy_speech_engine`.
         #[serde(default)]
+        #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates speech engine for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
         pub speech_engine: String,
         /// The Edge voice, such as `it-IT-IsabellaNeural`. Empty means the
         /// language's default. A voice that does not speak the conversation's
         /// language is replaced by that default for the reply.
         #[serde(default)]
+        #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates speech edge voice for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+        #[schemars(extend("x-choice-resolver" = "edge_voices"))]
         pub speech_edge_voice: String,
         /// Which of the language's voices to speak with. Empty means the first one
         /// it ships, which is what a configuration written before this setting
         /// existed says. Ignored by a user-supplied engine, which names its own
         /// voices inside its command template. See [`choose_voice`].
         #[serde(default)]
+        #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates speech voice for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+        #[schemars(extend("x-choice-resolver" = "installed_voices"))]
         pub speech_voice: String,
         /// The speech level every reply is brought to, in dBFS (-30..=-12). See
         /// [`crate::dictation::loudness`](crate::dictation::loudness).
         #[serde(default = "default_speech_volume_db")]
+        #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates speech volume db for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+        #[schemars(range(min = -30.0, max = -12.0))]
         pub speech_volume_db: f32,
         /// How strongly a reply is levelled within itself: 0 is off, 1 is 4:1.
         #[serde(default = "default_speech_levelling")]
+        #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates speech levelling for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+        #[schemars(range(min = 0.0, max = 1.0))]
         pub speech_levelling: f32,
         /// Minutes without any transcription (default 20, Boss 2026-09-30) before the Whisper model is
         /// released from memory (it holds ~1.5 GiB for large-v3-turbo). The next
         /// dictation reloads it lazily (~0.5 s). 0 keeps it loaded for the life
         /// of the process. No UI control.
         #[serde(default = "default_model_idle_unload_minutes")]
+        #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates model idle unload minutes for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
         pub model_idle_unload_minutes: u32,
         /// Set only on a read response when malformed fields were replaced by
         /// defaults. It is cleared before persistence.
         #[serde(default)]
+        #[schemars(extend("x-not-setting" = "Read-response corruption diagnostic; cleared before persistence."))]
         pub recovered_from_corruption: bool,
     }
 
@@ -134,11 +163,11 @@ mod dictation_config {
     }
 
     pub(crate) fn default_rms_threshold() -> f32 {
-        crate::dictation::transcribe::DEFAULT_RMS_THRESHOLD
+        tuic_core::voice_defaults::DEFAULT_RMS_THRESHOLD
     }
 
     pub(crate) fn default_no_speech_threshold() -> f32 {
-        crate::dictation::transcribe::DEFAULT_NO_SPEECH_THRESHOLD
+        tuic_core::voice_defaults::DEFAULT_NO_SPEECH_THRESHOLD
     }
 
     /// Long enough to read a transcript and stop it, short enough not to feel like
@@ -171,6 +200,7 @@ mod dictation_config {
         0.67
     }
 
+    #[cfg(feature = "dictation")]
     impl DictationConfig {
         /// The speech gates this configuration asks for.
         pub fn gates(&self) -> crate::dictation::transcribe::VoiceGates {
@@ -225,7 +255,6 @@ mod dictation_config {
     }
 }
 
-#[cfg(feature = "dictation")]
 pub use dictation_config::DictationConfig;
 #[cfg(feature = "dictation")]
 pub(crate) use dictation_config::default_hold_back_ms;
@@ -555,7 +584,7 @@ pub(crate) fn persist_atomic_with_mode(
 // ---------------------------------------------------------------------------
 
 /// Whether split terminal panes get separate tabs or share a unified tab
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum SplitTabMode {
     #[default]
@@ -564,7 +593,7 @@ pub(crate) enum SplitTabMode {
 }
 
 /// Tab ordering mode for the tab bar
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum TabOrderingMode {
     #[default]
@@ -574,7 +603,7 @@ pub(crate) enum TabOrderingMode {
 }
 
 /// Where to create worktree directories
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum WorktreeStorage {
     /// `~/dev/myrepo__wt/feat-123` — sibling dir next to repo
@@ -589,7 +618,7 @@ pub(crate) enum WorktreeStorage {
 }
 
 /// How to handle orphan worktrees (branch deleted)
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum OrphanCleanup {
     /// Auto-remove worktree + prune
@@ -602,7 +631,7 @@ pub(crate) enum OrphanCleanup {
 }
 
 /// Git merge strategy for PRs
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum MergeStrategy {
     Merge,
@@ -614,7 +643,7 @@ pub(crate) enum MergeStrategy {
 }
 
 /// What to do with a worktree after its branch is merged
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum WorktreeAfterMerge {
     /// Move to __archived/ subdir
@@ -627,7 +656,7 @@ pub(crate) enum WorktreeAfterMerge {
 }
 
 /// Auto-delete local branch when PR is merged/closed
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum AutoDeleteOnPrClose {
     #[default]
@@ -640,13 +669,16 @@ pub(crate) enum AutoDeleteOnPrClose {
 // ServicesConfig — nested config for remote access, auth, relay, push
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct ServerConfig {
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"service_restart","effect":"Reconfigures the owning service after persistence; a failed apply must report recovery.","operations":["get","set"],"confirmationClass":"network_exposure"}))]
     pub(crate) enabled: bool,
     #[serde(default = "default_remote_port")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"service_restart","effect":"Reconfigures the owning service after persistence; a failed apply must report recovery.","operations":["get","set"],"confirmationClass":"execution_authority"}))]
     pub(crate) port: u16,
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"service_restart","effect":"Reconfigures the owning service after persistence; a failed apply must report recovery.","operations":["get","set"],"confirmationClass":"execution_authority"}))]
     pub(crate) ipv6_enabled: bool,
 }
 
@@ -660,23 +692,31 @@ impl Default for ServerConfig {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct AuthConfig {
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"service_restart","effect":"Reconfigures the owning service after persistence; a failed apply must report recovery.","operations":["get","set"],"confirmationClass":"execution_authority"}))]
     pub(crate) username: String,
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"derived_secret","apply":"service_restart","effect":"Derived remote-access verifier; replacement must use the password owner service.","operations":["get"],"confirmationClass":"execution_authority"}))]
     pub(crate) password_hash: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[schemars(extend("x-setting" = {"sensitivity":"secret","apply":"service_restart","effect":"Reconfigures the owning service after persistence; a failed apply must report recovery.","operations":["get","set_secret","clear_secret"],"confirmationClass":"execution_authority"}))]
     pub(crate) session_token: String,
     #[serde(default, skip_serializing_if = "is_false")]
+    #[schemars(extend("x-not-setting" = "Read-only redaction presence marker, not a persisted setting."))]
     pub(crate) session_token_exists: bool,
     #[serde(default = "default_session_token_duration_secs")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"service_restart","effect":"Reconfigures the owning service after persistence; a failed apply must report recovery.","operations":["get","set"],"confirmationClass":"execution_authority"}))]
     pub(crate) session_token_duration_secs: u64,
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"service_restart","effect":"Reconfigures the owning service after persistence; a failed apply must report recovery.","operations":["get","set"],"confirmationClass":"execution_authority"}))]
     pub(crate) lan_auth_bypass: bool,
     #[serde(default = "default_auth_rate_limit_max")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"service_restart","effect":"Reconfigures the owning service after persistence; a failed apply must report recovery.","operations":["get","set"],"confirmationClass":"network_exposure"}))]
     pub(crate) auth_rate_limit_max: u32,
     #[serde(default = "default_auth_rate_limit_window_secs")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"service_restart","effect":"Reconfigures the owning service after persistence; a failed apply must report recovery.","operations":["get","set"],"confirmationClass":"network_exposure"}))]
     pub(crate) auth_rate_limit_window_secs: u64,
 }
 
@@ -702,13 +742,15 @@ impl Default for AuthConfig {
     }
 }
 
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, Serialize, schemars::JsonSchema)]
 #[serde(tag = "mode", rename_all = "lowercase")]
 pub(crate) enum TlsConfig {
     #[default]
     Off,
     Manual {
+        #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"service_restart","effect":"Reconfigures the owning service after persistence; a failed apply must report recovery.","operations":["get","set"],"confirmationClass":"execution_authority"}))]
         cert_path: String,
+        #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"service_restart","effect":"Reconfigures the owning service after persistence; a failed apply must report recovery.","operations":["get","set"],"confirmationClass":"execution_authority"}))]
         key_path: String,
     },
 }
@@ -743,13 +785,16 @@ impl<'de> serde::Deserialize<'de> for TlsConfig {
     }
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct RelayConfig {
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"service_restart","effect":"Reconfigures the owning service after persistence; a failed apply must report recovery.","operations":["get","set"],"confirmationClass":"network_exposure"}))]
     pub(crate) enabled: bool,
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"service_restart","effect":"Reconfigures the owning service after persistence; a failed apply must report recovery.","operations":["get","set"],"confirmationClass":"execution_authority"}))]
     pub(crate) url: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[schemars(extend("x-setting" = {"sensitivity":"secret","apply":"service_restart","effect":"Reconfigures the owning service after persistence; a failed apply must report recovery.","operations":["get","set_secret","clear_secret"],"confirmationClass":"execution_authority"}))]
     pub(crate) token: String,
     // `Option<bool>` (unlike the plain `bool` used by session_token_exists /
     // vapid_private_key_exists) so a partial JSON payload that OMITS this key
@@ -759,22 +804,29 @@ pub(crate) struct RelayConfig {
     // relies on that distinction to avoid silently deleting the stored relay
     // token — see DATA-1.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("x-not-setting" = "Read-only redaction presence marker, not a persisted setting."))]
     pub(crate) token_exists: Option<bool>,
     #[serde(default)]
+    #[schemars(extend("x-not-setting" = "Relay-issued session identity, not a user preference."))]
     pub(crate) session_id: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct PushConfig {
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"service_restart","effect":"Reconfigures the owning service after persistence; a failed apply must report recovery.","operations":["get","set"],"confirmationClass":"network_exposure"}))]
     pub(crate) enabled: bool,
     #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[schemars(extend("x-setting" = {"sensitivity":"secret","apply":"service_restart","effect":"Reconfigures the owning service after persistence; a failed apply must report recovery.","operations":["get","set_secret","clear_secret"],"confirmationClass":"network_exposure"}))]
     pub(crate) vapid_private_key: String,
     #[serde(default, skip_serializing_if = "is_false")]
+    #[schemars(extend("x-not-setting" = "Read-only redaction presence marker, not a persisted setting."))]
     pub(crate) vapid_private_key_exists: bool,
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"service_restart","effect":"Reconfigures the owning service after persistence; a failed apply must report recovery.","operations":["get","set"],"confirmationClass":"network_exposure"}))]
     pub(crate) vapid_public_key: String,
     #[serde(default = "default_vapid_subject")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"service_restart","effect":"Reconfigures the owning service after persistence; a failed apply must report recovery.","operations":["get","set"],"confirmationClass":"network_exposure"}))]
     pub(crate) vapid_subject: String,
 }
 
@@ -790,40 +842,63 @@ impl Default for PushConfig {
     }
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct ServicesConfig {
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates server for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) server: ServerConfig,
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates auth for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) auth: AuthConfig,
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates tls for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) tls: TlsConfig,
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates relay for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) relay: RelayConfig,
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates push for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) push: PushConfig,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct AppConfig {
+    /// Internal one-shot legacy-default migration state; never a user setting.
+    #[serde(default)]
+    #[schemars(extend("x-not-setting" = "Internal legacy session-duration migration marker"))]
+    pub(crate) session_duration_migrated: bool,
+    #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"next_session","effect":"Used when the next session or process starts; existing sessions retain their launch configuration.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) shell: Option<String>,
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"next_session","effect":"Used when the next session or process starts; existing sessions retain their launch configuration.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    #[schemars(extend("x-choice-resolver" = "system_fonts"))]
     pub(crate) font_family: String,
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates font size for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    #[schemars(range(min = 1))]
     pub(crate) font_size: u16,
     /// Terminal font weight (100–900, e.g. 200 = ExtraLight, 400 = Regular)
     #[serde(default = "default_font_weight")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates font weight for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    #[schemars(range(min = 100, max = 900))]
     pub(crate) font_weight: u16,
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates theme for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    #[schemars(extend("x-choice-resolver" = "themes"))]
     pub(crate) theme: String,
     /// Enable MCP HTTP API on localhost for external tool integration
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates mcp server enabled for the current owner.","operations":["get","set"],"confirmationClass":"execution_authority"}))]
     pub(crate) mcp_server_enabled: bool,
     /// Fixed port for MCP server (0 = OS-assigned)
     #[serde(default = "default_mcp_port")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates mcp port for the current owner.","operations":["get","set"],"confirmationClass":"execution_authority"}))]
     pub(crate) mcp_port: u16,
     /// Whether MCP config has been auto-installed in agent configs
     #[serde(default)]
+    #[schemars(extend("x-not-setting" = "One-time MCP installation migration marker, not a user preference."))]
     pub(crate) mcp_config_installed: bool,
     /// Preferred IDE (e.g. "vscode", "cursor")
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates ide for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    #[schemars(extend("x-choice-resolver" = "installed_ides"))]
     pub(crate) ide: String,
     /// Absolute path to the one ego executable this host may launch for ACP.
     ///
@@ -834,125 +909,168 @@ pub(crate) struct AppConfig {
     /// field here. Empty means ACP is not configured on this host and every
     /// connect is refused.
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"next_session","effect":"Selects the trusted executable for new ACP connections.","operations":["get","set"],"confirmationClass":"execution_authority"}))]
     pub(crate) ego_executable: String,
     /// Optional user-config profile passed to ego at ACP launch.
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"next_session","effect":"Used when the next session or process starts; existing sessions retain their launch configuration.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) ego_profile: String,
     /// Directory every AI Chat conversation runs in. Empty means the user's home
     /// directory. Must be absolute; a missing directory is created at connect.
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"next_session","effect":"Used when the next session or process starts; existing sessions retain their launch configuration.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) ai_chat_workspace: String,
     /// Last selected ego conversation for each repository root.
     #[serde(default)]
+    #[schemars(extend("x-not-setting" = "Conversation selection history; not launch configuration."))]
     pub(crate) ai_chat_sessions: HashMap<String, String>,
     /// Host-issued peer UUID for the AI Chat conversation at each root.
     #[serde(default)]
+    #[schemars(extend("x-not-setting" = "Host-issued durable conversation identity; never caller-editable."))]
     pub(crate) ai_chat_peer_ids: HashMap<String, String>,
     /// Launch options and durable peer identity for individually configured chats.
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates ai chat launches for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) ai_chat_launches: HashMap<String, crate::acp_chat::ChatLaunch>,
     /// Default font size for new terminals
     #[serde(default = "default_font_size")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"next_session","effect":"Used when the next session or process starts; existing sessions retain their launch configuration.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    #[schemars(range(min = 1))]
     pub(crate) default_font_size: u16,
     /// Maximum binary attachment upload, in bytes (must be positive).
     #[serde(default = "default_attachment_max_bytes")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates attachment max bytes for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    #[schemars(range(min = 1))]
     pub(crate) attachment_max_bytes: u64,
     /// Remove uploaded files older than this many days when their session closes.
     #[serde(default = "default_attachment_retention_days")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates attachment retention days for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) attachment_retention_days: u32,
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates services for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) services: ServicesConfig,
     /// Show confirmation dialog when quitting with active terminals
     #[serde(default = "default_true")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates confirm before quit for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) confirm_before_quit: bool,
     /// Show confirmation dialog when closing a terminal tab
     #[serde(default = "default_true")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates confirm before closing tab for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) confirm_before_closing_tab: bool,
     /// Maximum characters for tab names before truncation
     #[serde(default = "default_max_tab_name_length")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates max tab name length for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) max_tab_name_length: u32,
     /// Split tab mode: separate (each pane gets a tab) or unified (one shared tab)
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates split tab mode for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) split_tab_mode: SplitTabMode,
     /// Tab ordering mode: grouped-by-type, terminals-first, or free
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates tab ordering mode for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) tab_ordering_mode: TabOrderingMode,
     /// Cycle through all tab types (terminals + diff/md/editor) with prev/next, not just terminals
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates tab cycling all types for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) tab_cycling_all_types: bool,
     /// Show a branch's open terminals as a nested list under its sidebar row
     /// Opt-in, off by default; available whenever a branch has an open terminal.
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates tab tree enabled for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) tab_tree_enabled: bool,
     /// Auto-show PR detail popover when a branch has PR data
     #[serde(default = "default_true")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates auto show pr popover for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) auto_show_pr_popover: bool,
     /// Prevent system sleep while any terminal session is busy
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates prevent sleep when busy for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) prevent_sleep_when_busy: bool,
     /// Automatically check for app updates on startup
     #[serde(default = "default_true")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates auto update enabled for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) auto_update_enabled: bool,
     /// Automatically check for plugin updates on startup
     #[serde(default = "default_true")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates auto update plugins enabled for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) auto_update_plugins_enabled: bool,
     /// UI language code (e.g. "en", "it", "de")
     #[serde(default = "default_language")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates language for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) language: String,
     /// Plugin IDs that the user has disabled (not loaded on startup)
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates disabled plugin ids for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) disabled_plugin_ids: Vec<String>,
     /// Update channel: "stable" or "nightly"
     #[serde(default = "default_update_channel")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates update channel for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    #[schemars(extend("enum" = ["stable","nightly"]))]
     pub(crate) update_channel: String,
     /// Agent types disabled by the user (won't appear in sidebar "Add Agent" menu)
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates disabled agents for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) disabled_agents: Vec<String>,
     /// Agent types whose MCP bridge config is disabled (ensure_mcp_configs skips these)
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates disabled mcp agents for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) disabled_mcp_agents: Vec<String>,
     /// Native MCP tool names disabled by the user (excluded from tools/list response)
     #[serde(default = "default_disabled_native_tools")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates disabled native tools for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) disabled_native_tools: Vec<String>,
     /// Collapse all MCP tools into 3 meta-tools (search_tools, get_tool_schema, call_tool).
     /// Reduces AI context from ~35k to ~500 tokens. Default: false (individual tools exposed).
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates collapse tools for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) collapse_tools: bool,
     /// Show agent intent as tab title (from `intent: text (title)` tokens)
     #[serde(default = "default_true")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates intent tab title for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) intent_tab_title: bool,
     /// Show suggested follow-up actions from agents (from `suggest: A | B | C` tokens)
     #[serde(default = "default_true")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates suggest followups for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) suggest_followups: bool,
     /// Collect the Progress journal: the `progress` tool, its `initialize`
     /// obligation, and `intent:` capture. One flag governs all of them, which
     /// is why pause/resume of collection does not exist.
     #[serde(default = "default_true")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates progress tracking for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) progress_tracking: bool,
     /// Auto-copy terminal selection to clipboard
     #[serde(default = "default_true")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates copy on select for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) copy_on_select: bool,
     /// Honor OSC 52 clipboard-write sequences from terminal output. Disable to
     /// ignore clipboard writes emitted by displayed files/logs. Frontend-gated
     /// (the OSC 52 write executes in the renderer); stored here for persistence.
     #[serde(default = "default_true")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates osc52 clipboard for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) osc52_clipboard: bool,
     /// Show last prompt overlay bar at the top of the terminal
     #[serde(default = "default_true")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates show last prompt for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) show_last_prompt: bool,
     /// Terminal bell style: "none", "visual", "sound", or "both"
     #[serde(default = "default_bell_style")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates bell style for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    #[schemars(extend("enum" = ["none","visual","sound","both"]))]
     pub(crate) bell_style: String,
     /// Global OS-level hotkey combo to toggle window visibility (e.g. "CommandOrControl+Shift+T")
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates global hotkey for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) global_hotkey: Option<String>,
     /// Default issue filter mode: "assigned", "created", "mentioned", "all", or "disabled"
     #[serde(default = "default_issue_filter")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates issue filter for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    #[schemars(extend("enum" = ["assigned","created","mentioned","all","disabled"]))]
     pub(crate) issue_filter: String,
     /// Master toggle for experimental features. Its three AI sub-flags went with
     /// the embedded engine (#784-0aec); what it still gates is the SSH Tunnels
     /// panel.
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates experimental features enabled for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) experimental_features_enabled: bool,
     /// Sub-flag: reflow scrollback history on column resize. Keeps scrollback
     /// readable when side panels temporarily narrow the terminal, without
@@ -962,12 +1080,17 @@ pub(crate) struct AppConfig {
     /// existed: the grid reflowed unconditionally until this flag gained a
     /// consumer, so anything else would silently change behaviour on upgrade.
     #[serde(default = "default_true")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates scrollback reflow for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) scrollback_reflow: bool,
     /// Terminal cursor style: "bar" (default), "block", "underline"
     #[serde(default = "default_cursor_style")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates cursor style for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    #[schemars(extend("enum" = ["bar","block","underline"]))]
     pub(crate) cursor_style: String,
     /// Terminal renderer: "webgl" (default, GPU-accelerated) or "canvas" (CPU, no atlas bugs)
     #[serde(default = "default_terminal_renderer")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates terminal renderer for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    #[schemars(extend("enum" = ["webgl","canvas","native"]))]
     pub(crate) terminal_renderer: String,
     /// Label each command block with its elapsed time while Ctrl+Cmd is held.
     /// Frontend-gated (the label is painted in the renderer); stored here so the
@@ -975,16 +1098,21 @@ pub(crate) struct AppConfig {
     /// every `save_config`, which is exactly what happened to these three
     /// before they had a Settings toggle.
     #[serde(default = "default_true")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates show block timestamps for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) show_block_timestamps: bool,
     /// Draw command-block marks on the terminal scrollbar. Frontend-gated.
     #[serde(default = "default_true")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates show scrollbar marks for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) show_scrollbar_marks: bool,
     /// Let the block-fold shortcut collapse a command block's output.
     /// Frontend-gated.
     #[serde(default = "default_true")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates block folding enabled for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) block_folding_enabled: bool,
     /// Content index pre-warm strategy: "active_and_switch" (default), "active_only", "all_sequential"
     #[serde(default = "default_index_strategy")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates index strategy for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    #[schemars(extend("enum" = ["active_and_switch","active_only","all_sequential"]))]
     pub(crate) index_strategy: String,
     /// Total heap the BM25 content indices may hold, in MB, before the least
     /// recently used are dropped (`content_index::enforce_memory_budget`).
@@ -993,15 +1121,19 @@ pub(crate) struct AppConfig {
     /// hot-reload: retuning a constant would cost the user every live PTY
     /// session, while this is read from the in-memory config on every build.
     #[serde(default = "default_index_memory_budget_mb")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates index memory budget mb for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) index_memory_budget_mb: usize,
     /// Minutes of idle + unfocused before SIGSTOP on process group. 0 = disabled.
     #[serde(default = "default_standby_timeout")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates standby timeout minutes for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) standby_timeout_minutes: u16,
     /// User-defined launchers shown in the "Open in" menu alongside built-ins.
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates custom launchers for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}, "x-collection-key" = "id"))]
     pub(crate) custom_launchers: Vec<CustomLauncher>,
     /// Show GitLens-style inline git blame on the active line in the code editor.
     #[serde(default = "default_true")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates inline blame enabled for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) inline_blame_enabled: bool,
 }
 
@@ -1009,17 +1141,24 @@ pub(crate) struct AppConfig {
 /// with `args`, each of which may contain `{path}`/`{file}`/`{line}`/`{column}`
 /// placeholders (expanded in `agent::open_in_custom`). No icon field — custom
 /// launchers share a single generic icon in the UI.
-#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default, schemars::JsonSchema)]
 pub(crate) struct CustomLauncher {
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates id for the current owner.","operations":["get"],"confirmationClass":"ordinary"}))]
     pub(crate) id: String,
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates name for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) name: String,
+    #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"next_session","effect":"Used when the next session or process starts; existing sessions retain their launch configuration.","operations":["get","set"],"confirmationClass":"execution_authority"}))]
     pub(crate) executable: String,
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"next_session","effect":"Used when the next session or process starts; existing sessions retain their launch configuration.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) args: Vec<String>,
     #[serde(default = "default_true")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates enabled for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) enabled: bool,
     /// Optional platform filter: "macos" | "windows" | "linux". None = all.
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates platform for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    #[schemars(extend("enum" = ["macos","windows","linux",null]))]
     pub(crate) platform: Option<String>,
 }
 
@@ -1119,6 +1258,7 @@ fn default_remote_port() -> u16 {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
+            session_duration_migrated: true,
             shell: None,
             font_family: "JetBrains Mono".to_string(),
             font_size: 14,
@@ -1185,20 +1325,26 @@ impl Default for AppConfig {
 // NotificationConfig
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct NotificationSounds {
     #[serde(default = "default_true")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates question for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) question: bool,
     #[serde(default = "default_true")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates error for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) error: bool,
     #[serde(default = "default_true")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates completion for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) completion: bool,
     #[serde(default = "default_true")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates warning for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) warning: bool,
     #[serde(default = "default_true")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates info for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) info: bool,
     /// Buzzer an agent can raise over MCP when it needs the user back.
     #[serde(default = "default_true")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates attention for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) attention: bool,
 }
 
@@ -1215,30 +1361,39 @@ impl Default for NotificationSounds {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct NotificationConfig {
     #[serde(default = "default_true")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates enabled for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) enabled: bool,
     #[serde(default = "default_volume")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Sets notification playback volume between zero and one.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    #[schemars(range(min = 0.0, max = 1.0))]
     pub(crate) volume: f64,
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates sounds for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) sounds: NotificationSounds,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"live","effect":"Updates audio device for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    #[schemars(extend("x-choice-resolver" = "audio_outputs"))]
     pub(crate) audio_device: Option<String>,
     /// Drop the completion chime for sessions created over MCP/HTTP (`session
     /// create`, `agent spawn`). An orchestration of many agents otherwise turns
     /// every finished worker into a beep. Visual signals (activity item, badge,
     /// OS notification) are unaffected.
     #[serde(default = "default_true")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates silence remote completions for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) silence_remote_completions: bool,
     /// Mirror every toast into the toolbar bell, so a message that auto-dismissed
     /// while the user looked elsewhere is still readable afterwards. Off means
     /// toasts stay transient — they appear, they fade, they leave no trace.
     #[serde(default = "default_true")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates toasts in bell for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) toasts_in_bell: bool,
     /// OS notification when a PR becomes ready, fails CI, gets changes requested
     /// or is merged. The bell alone is invisible while another app has focus.
     #[serde(default = "default_true")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates pr native notifications for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) pr_native_notifications: bool,
 }
 
@@ -1268,64 +1423,91 @@ impl Default for NotificationConfig {
 // UIPrefsConfig — sidebar, panel sizes, settings nav width
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct UIPrefsConfig {
     #[serde(default = "default_true")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates sidebar visible for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) sidebar_visible: bool,
     #[serde(default = "default_sidebar_width")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates sidebar width for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) sidebar_width: u32,
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates diff panel visible for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) diff_panel_visible: bool,
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates markdown panel visible for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) markdown_panel_visible: bool,
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates notes panel visible for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) notes_panel_visible: bool,
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates file browser panel visible for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) file_browser_panel_visible: bool,
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates plan panel visible for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) plan_panel_visible: bool,
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates git panel visible for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) git_panel_visible: bool,
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates outline panel visible for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) outline_panel_visible: bool,
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates references panel visible for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) references_panel_visible: bool,
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates ai chat panel visible for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) ai_chat_panel_visible: bool,
     /// File browser listing: "flat" or "tree".
     #[serde(default = "default_file_browser_view_mode")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates file browser view mode for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    #[schemars(extend("enum" = ["flat","tree"]))]
     pub(crate) file_browser_view_mode: String,
     /// Sidebar layout: "auto" (rich for a short list or a finger), "compact" or "rich".
     #[serde(default = "default_sidebar_density")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates sidebar density for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    #[schemars(extend("enum" = ["auto","compact","rich"]))]
     pub(crate) sidebar_density: String,
     /// Appearance used by the mobile PWA; independent of the desktop terminal theme.
     #[serde(default = "default_mobile_theme")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates mobile theme for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) mobile_theme: String,
     #[serde(default = "default_panel_width")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates diff panel width for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) diff_panel_width: u32,
     #[serde(default = "default_panel_width")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates markdown panel width for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) markdown_panel_width: u32,
     #[serde(default = "default_notes_panel_width")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates notes panel width for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) notes_panel_width: u32,
     #[serde(default = "default_plan_panel_width")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates plan panel width for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) plan_panel_width: u32,
     #[serde(default = "default_git_panel_width")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates git panel width for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) git_panel_width: u32,
     #[serde(default = "default_settings_nav_width")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates settings nav width for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) settings_nav_width: u32,
     /// Settings "expert mode": when on, every control is visible regardless of
     /// its default/modified state. Off by default — a control at its default
     /// value stays hidden until switched on or until the value changes.
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates settings expert mode for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) settings_expert_mode: bool,
     /// Diff viewer mode: "split" (side-by-side) or "unified" (inline).
     #[serde(default = "default_diff_view_mode")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates diff view mode for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    #[schemars(extend("enum" = ["split","unified"]))]
     pub(crate) diff_view_mode: String,
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates detached panels for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) detached_panels: std::collections::HashMap<String, String>,
     /// Collapsed state of the GitHub panel sections, keyed by section id
     /// (`my-prs`, `prs`, `issues`). Absent key = the section's own default.
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates github section collapsed for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) github_section_collapsed: std::collections::HashMap<String, bool>,
 }
 
@@ -1402,36 +1584,48 @@ fn default_settings_nav_width() -> u32 {
 /// Settings loaded from `.tuic.json` at the repository root.
 /// These are team-shareable (committed to the repo) and override global defaults
 /// but are overridden by per-repo app settings.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct RepoLocalConfig {
     /// Selected by the repository, bounded by the machine ego profile over ACP.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"next_session","effect":"Used when the next session or process starts; existing sessions retain their launch configuration.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) ego_profile: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates base branch for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) base_branch: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates copy ignored files for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) copy_ignored_files: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates copy untracked files for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) copy_untracked_files: Option<bool>,
     // Script fields (setup_script, run_script, archive_script) intentionally
     // omitted — executing repo-committed scripts without TOFU prompt is unsafe.
     // Re-add when trust-on-first-use confirmation is implemented.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates worktree storage for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) worktree_storage: Option<WorktreeStorage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates delete branch on remove for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) delete_branch_on_remove: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates auto archive merged for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) auto_archive_merged: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates orphan cleanup for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) orphan_cleanup: Option<OrphanCleanup>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates pr merge strategy for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) pr_merge_strategy: Option<MergeStrategy>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates after merge for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) after_merge: Option<WorktreeAfterMerge>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates auto delete on pr close for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) auto_delete_on_pr_close: Option<AutoDeleteOnPrClose>,
     /// Allowlist of upstream MCP server names relevant to this repo (None = all)
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates mcp upstreams for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) mcp_upstreams: Option<Vec<String>>,
 }
 
@@ -1459,65 +1653,87 @@ pub(crate) fn load_repo_local_config_from_path(
 // RepoSettingsMap — per-repo settings keyed by repo path
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Default, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct RepoSettingsEntry {
+    #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"live","effect":"Updates path for the current owner.","operations":["get"],"confirmationClass":"ordinary"}))]
     pub(crate) path: String,
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates display name for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) display_name: String,
     /// null = inherit from global repo defaults
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates base branch for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) base_branch: Option<String>,
     /// null = inherit from global repo defaults
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates copy ignored files for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) copy_ignored_files: Option<bool>,
     /// null = inherit from global repo defaults
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates copy untracked files for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) copy_untracked_files: Option<bool>,
     /// null = inherit from global repo defaults
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"live","effect":"Updates setup script for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) setup_script: Option<String>,
     /// null = inherit from global repo defaults
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"live","effect":"Updates run script for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) run_script: Option<String>,
     /// null = inherit from global repo defaults
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"live","effect":"Updates archive script for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) archive_script: Option<String>,
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates color for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) color: String,
     // -- Worktree settings (null = inherit from global) --
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates worktree storage for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) worktree_storage: Option<WorktreeStorage>,
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates prompt on create for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) prompt_on_create: Option<bool>,
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates delete branch on remove for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) delete_branch_on_remove: Option<bool>,
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates auto archive merged for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) auto_archive_merged: Option<bool>,
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates orphan cleanup for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) orphan_cleanup: Option<OrphanCleanup>,
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates pr merge strategy for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) pr_merge_strategy: Option<MergeStrategy>,
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates after merge for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) after_merge: Option<WorktreeAfterMerge>,
     /// Auto-fetch interval in minutes (0 or None = disabled)
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates auto fetch interval minutes for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) auto_fetch_interval_minutes: Option<u32>,
     /// Auto-delete local branch when PR is merged/closed
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates auto delete on pr close for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) auto_delete_on_pr_close: Option<AutoDeleteOnPrClose>,
     /// Allowlist of upstream MCP server names relevant to this repo (None = all)
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates mcp upstreams for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) mcp_upstreams: Option<Vec<String>>,
     /// Human-readable labels for branches/worktrees, keyed by branch name
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates branch labels for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) branch_labels: HashMap<String, String>,
     /// Gather every worktree of this repo into one consolidated screen (#e767).
     /// Repo-specific, not inheritable: it describes how you want to look at THIS
     /// repo, and a global default would consolidate repos you never asked about.
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates auto consolidate worktrees for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) auto_consolidate_worktrees: bool,
     /// Repo-specific browser URL for Design Mode; never exported to .tuic.json.
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"live","effect":"Updates dev server url for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) dev_server_url: Option<String>,
 }
 
@@ -1548,42 +1764,58 @@ impl RepoSettingsEntry {
 }
 
 /// Global defaults applied to all repos unless overridden per-repo
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct RepoDefaultsConfig {
     #[serde(default = "default_base_branch")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates base branch for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) base_branch: String,
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates copy ignored files for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) copy_ignored_files: bool,
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates copy untracked files for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) copy_untracked_files: bool,
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"live","effect":"Updates setup script for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) setup_script: String,
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"live","effect":"Updates run script for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) run_script: String,
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"live","effect":"Updates archive script for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) archive_script: String,
     // -- Worktree settings --
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates worktree storage for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) worktree_storage: WorktreeStorage,
     #[serde(default = "default_true")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates prompt on create for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) prompt_on_create: bool,
     #[serde(default = "default_true")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates delete branch on remove for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) delete_branch_on_remove: bool,
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates auto archive merged for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) auto_archive_merged: bool,
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates orphan cleanup for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) orphan_cleanup: OrphanCleanup,
     #[serde(default = "default_orphan_cleanup_countdown_seconds")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates orphan cleanup countdown seconds for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) orphan_cleanup_countdown_seconds: u32,
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates pr merge strategy for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) pr_merge_strategy: MergeStrategy,
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates after merge for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) after_merge: WorktreeAfterMerge,
     /// Auto-fetch interval in minutes (0 = disabled)
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates auto fetch interval minutes for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) auto_fetch_interval_minutes: u32,
     /// Auto-delete local branch when PR is merged/closed
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates auto delete on pr close for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) auto_delete_on_pr_close: AutoDeleteOnPrClose,
 }
 
@@ -1619,9 +1851,10 @@ fn default_base_branch() -> String {
 }
 
 /// Map of repo path -> settings
-#[derive(Clone, Serialize, Deserialize, Default)]
+#[derive(Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
 pub(crate) struct RepoSettingsMap {
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates repos for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) repos: HashMap<String, RepoSettingsEntry>,
 }
 
@@ -1629,20 +1862,25 @@ pub(crate) struct RepoSettingsMap {
 // PromptLibraryConfig
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Serialize, Deserialize, Default)]
+#[derive(Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
 pub(crate) struct PromptEntry {
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates id for the current owner.","operations":["get"],"confirmationClass":"ordinary"}))]
     pub(crate) id: String,
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates label for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) label: String,
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"live","effect":"Updates text for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) text: String,
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates pinned for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) pinned: bool,
 }
 
-#[derive(Clone, Serialize, Deserialize, Default)]
+#[derive(Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
 pub(crate) struct PromptLibraryConfig {
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates prompts for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}, "x-collection-key" = "id"))]
     pub(crate) prompts: Vec<PromptEntry>,
 }
 
@@ -1650,17 +1888,24 @@ pub(crate) struct PromptLibraryConfig {
 // AgentsConfig — per-agent run configurations
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct AgentRunConfig {
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates name for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) name: String,
+    #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"next_session","effect":"Used when the next session or process starts; existing sessions retain their launch configuration.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) command: String,
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"next_session","effect":"Used when the next session or process starts; existing sessions retain their launch configuration.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) args: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates model for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    #[schemars(extend("x-choice-resolver" = "agent_models"))]
     pub(crate) model: Option<String>,
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"secret","apply":"next_session","effect":"Used when the next session or process starts; existing sessions retain their launch configuration.","operations":["get","set_secret","clear_secret"],"confirmationClass":"ordinary"}))]
     pub(crate) env: HashMap<String, String>,
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates is default for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) is_default: bool,
 }
 
@@ -1670,7 +1915,7 @@ fn default_idle_close_minutes() -> u32 {
     DEFAULT_IDLE_CLOSE_MINUTES
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum EgoPermissionMode {
     Plan,
@@ -1692,7 +1937,7 @@ impl EgoPermissionMode {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum EgoSandbox {
     Ro,
@@ -1718,50 +1963,63 @@ where
     Ok(serde_json::from_value(value).ok())
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct AgentSettings {
     /// One-time migration marker: a removed bypass must stay removed.
     #[serde(default)]
+    #[schemars(extend("x-not-setting" = "One-time bypass migration marker; cannot be edited to rerun migration."))]
     pub(crate) codex_bypass_migrated: bool,
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates run configs for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}, "x-collection-key" = "name"))]
     pub(crate) run_configs: Vec<AgentRunConfig>,
     /// Minutes a finished managed child stays available for follow-up. Zero disables cleanup.
     #[serde(default = "default_idle_close_minutes")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates idle close minutes for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) idle_close_minutes: u32,
     /// Automatically retry on server errors (5xx) by injecting "continue" into the session.
     /// Retries up to 3 times with exponential backoff (5s, 15s, 30s).
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates auto retry on error for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) auto_retry_on_error: bool,
     /// Shell command template for headless (one-shot) prompt execution.
     /// Placeholders like `{prompt}` are replaced before invocation.
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"next_session","effect":"Used when the next session or process starts; existing sessions retain their launch configuration.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) headless_template: Option<String>,
     /// Environment feature flags — key→value pairs injected into every spawn of this agent.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    #[schemars(extend("x-setting" = {"sensitivity":"secret","apply":"next_session","effect":"Used when the next session or process starts; existing sessions retain their launch configuration.","operations":["get","set_secret","clear_secret"],"confirmationClass":"ordinary"}))]
     pub(crate) env_flags: HashMap<String, String>,
     /// Per-agent override for intent tab title. None = use agent-aware default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates intent tab title for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) intent_tab_title: Option<bool>,
     /// Per-agent override for suggested follow-ups. None = use global default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates suggest followups for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) suggest_followups: Option<bool>,
     /// Per-agent override for the Progress journal. None = use global default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates progress tracking for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) progress_tracking: Option<bool>,
     /// Opt-in: drive busy/idle/awaiting from the agent's native hooks instead of
     /// output heuristics. Enabling installs hooks into the agent's settings file;
     /// disabling removes only TUIC's entries. None/false = heuristics (default).
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"next_session","effect":"Used when the next session or process starts; existing sessions retain their launch configuration.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) hook_instrumentation: Option<bool>,
     /// Launch-scoped native status signals. Missing means enabled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"next_session","effect":"Used when the next session or process starts; existing sessions retain their launch configuration.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) native_status_signals: Option<bool>,
     /// Prefer native terminal scrollback for supported agent CLIs. Missing means enabled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"next_session","effect":"Used when the next session or process starts; existing sessions retain their launch configuration.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) prevent_alt_screen: Option<bool>,
     /// Accept the agent's workspace trust dialog on MCP-managed spawns only.
     /// Missing means enabled; user-opened terminals retain the CLI's behavior.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"next_session","effect":"Used when the next session or process starts; existing sessions retain their launch configuration.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) skip_trust_dialog: Option<bool>,
     /// Launch-only ego permission overrides. Missing leaves ego configuration in control.
     #[serde(
@@ -1769,12 +2027,14 @@ pub(crate) struct AgentSettings {
         deserialize_with = "deserialize_ego_choice",
         skip_serializing_if = "Option::is_none"
     )]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"next_session","effect":"Used when the next session or process starts; existing sessions retain their launch configuration.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) ego_mode: Option<EgoPermissionMode>,
     #[serde(
         default,
         deserialize_with = "deserialize_ego_choice",
         skip_serializing_if = "Option::is_none"
     )]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"next_session","effect":"Used when the next session or process starts; existing sessions retain their launch configuration.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) ego_sandbox: Option<EgoSandbox>,
 }
 
@@ -1800,13 +2060,15 @@ impl Default for AgentSettings {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, Default)]
+#[derive(Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
 pub(crate) struct AgentsConfig {
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates agents for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) agents: HashMap<String, AgentSettings>,
     /// Which agent CLI to use for headless (one-shot) prompt execution when no
     /// agent is running in the active terminal. Chosen by the user in Settings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates headless agent for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) headless_agent: Option<String>,
 }
 
@@ -1821,6 +2083,15 @@ pub(crate) struct ConfigSaveRequest<T> {
 // ---------------------------------------------------------------------------
 
 const APP_CONFIG_FILE: &str = "config.json";
+
+// Internal foundation; transport registration is deliberately deferred to cutover.
+#[path = "settings/app.rs"]
+#[allow(
+    dead_code,
+    reason = "owner seam is consumed by the later settings cutover"
+)]
+pub(crate) mod settings_app;
+
 const NOTIFICATION_CONFIG_FILE: &str = "notifications.json";
 const UI_PREFS_FILE: &str = "ui-prefs.json";
 const REPO_SETTINGS_FILE: &str = "repo-settings.json";
@@ -2102,6 +2373,8 @@ impl AppSecretSnapshot {
 }
 
 fn config_for_disk(mut config: AppConfig) -> Result<AppConfig, String> {
+    // All writes express current intent, including callers omitting this internal field.
+    config.session_duration_migrated = true;
     config.services.auth.session_token_exists = persist_secret(
         crate::credentials::Credential::RemoteSessionToken,
         &config.services.auth.session_token,
@@ -2771,15 +3044,16 @@ fn read_app_config_unlocked(
     }
 }
 
-/// Move the old 24h default to the new 30-day default. Returns `true` when changed.
-/// Any other value is a deliberate choice and stays. Once persisted the value no
-/// longer matches, so this runs once.
+/// Migrate legacy files once, persisting completion even for non-legacy durations.
+/// Later explicit 24h choices must survive every reader and writer.
 fn migrate_legacy_session_token_duration(config: &mut AppConfig) -> bool {
-    let auth = &mut config.services.auth;
-    if auth.session_token_duration_secs != LEGACY_SESSION_TOKEN_DURATION_SECS {
+    if config.session_duration_migrated {
         return false;
     }
-    auth.session_token_duration_secs = default_session_token_duration_secs();
+    if config.services.auth.session_token_duration_secs == LEGACY_SESSION_TOKEN_DURATION_SECS {
+        config.services.auth.session_token_duration_secs = default_session_token_duration_secs();
+    }
+    config.session_duration_migrated = true;
     true
 }
 
@@ -4862,12 +5136,20 @@ mod tests {
 
         assert_eq!(second.services.auth.session_token_duration_secs, 2_592_000);
         assert_eq!(fs::read_to_string(&path).unwrap(), after_first);
+        let mut explicit = second;
+        explicit.services.auth.session_token_duration_secs = 86_400;
+        save_app_config(explicit).unwrap();
+        assert_eq!(
+            load_app_config().services.auth.session_token_duration_secs,
+            86_400
+        );
     }
 
     #[test]
     fn app_config_round_trip() {
         let dir = TempDir::new().unwrap();
         let cfg = AppConfig {
+            session_duration_migrated: true,
             shell: Some("/bin/zsh".to_string()),
             progress_tracking: false,
             font_family: "Fira Code".to_string(),
@@ -9122,6 +9404,9 @@ mod tests {
                 // `assert_no_field_default_drift_except` and
                 // `app_config_serde_default_for_new_fields`.
                 "mcp_server_enabled",
+                // A missing marker means a legacy file that still needs the
+                // one-shot duration migration; a fresh config has nothing to migrate.
+                "session_duration_migrated",
             ],
         );
     }
