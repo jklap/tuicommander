@@ -1,7 +1,9 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { type ActionEntry, getActionEntries } from "../../actions/actionRegistry";
 import * as handsFree from "../../actions/handsFreeConversation";
+import { listDemo } from "../../components/Tasks/list/demo";
 import type { ShortcutHandlers } from "../../hooks/useKeyboardShortcuts";
+import { workItemProviderRegistry } from "../../plugins/workItemProviderRegistry";
 import { automationsUi } from "../../stores/automations";
 import { dictationStore } from "../../stores/dictation";
 import { progressStore } from "../../stores/progress";
@@ -76,6 +78,7 @@ function createMockHandlers(): ShortcutHandlers {
 		openPath: vi.fn(),
 		openSecondaryWindow: vi.fn(),
 		toggleCommandOverview: vi.fn(),
+		openTasks: vi.fn(),
 		toggleComposePanel: vi.fn(),
 		detachActivityDashboard: vi.fn(),
 		toggleProcessManager: vi.fn(),
@@ -120,6 +123,19 @@ describe("actionRegistry", () => {
 			expect(ids).toContain("command-palette");
 			expect(ids).toContain("quick-branch-switch");
 			expect(ids).toContain("toggle-focus-mode");
+		});
+
+		// Catches: a Tasks entry that opens an empty tab when no provider plugin is loaded.
+		it("open-tasks is offered only while a work-item provider is registered", () => {
+			const ids = () => getActionEntries(createMockHandlers()).map((entry) => entry.id);
+			expect(ids()).not.toContain("open-tasks");
+			const registration = workItemProviderRegistry.register(listDemo(1));
+			try {
+				expect(ids()).toContain("open-tasks");
+			} finally {
+				registration.dispose();
+			}
+			expect(ids()).not.toContain("open-tasks");
 		});
 
 		it("Progress action advertises its shortcut and opens the active repository", () => {

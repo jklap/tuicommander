@@ -5094,3 +5094,7 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 
 - [ ] S5 CI logs: after Boss restarts the backend, check auto-heal on github.com and a GHE-bound repo without `gh`; verify failure tails and selected external CI logs. The Rust change requires a manual `make dev` restart or `make build`.
 - [ ] Mobile browser dictation (#1718-c32a): on iPhone, dictate and stop three times; edit a dictated draft, then dictate again. Confirm no repeated `aborted` toast and no lost or duplicated text. Browser error/end timing requires device replay.
+
+## Tasks shell (#1737-29f7)
+
+- [ ] [HUMAN] After a restart with a work-item provider plugin loaded (github-work, jira or gitlab with an account): Command Palette shows "Open Tasks"; the tab lists items, opens a detail pane, creates an item, shows the board and the roadmap. Without a provider the action is absent. _(Unit tests use the in-memory demo provider only.)_
