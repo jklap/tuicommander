@@ -401,18 +401,11 @@ pub(crate) fn init_tracing(buffer: Arc<Mutex<LogRingBuffer>>) {
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
 
-    let fmt_layer = tracing_subscriber::fmt::layer()
-        .with_target(true)
-        .with_thread_ids(false)
-        .with_writer(std::io::stderr);
-
-    let ring_layer = RingBufferLayer { buffer };
-
     let log_dir = crate::config::config_dir().join("logs");
     let _ = std::fs::create_dir_all(&log_dir);
     cleanup_old_logs(&log_dir);
 
-    let (file_writer, file_guard) = non_blocking_file_writer(&log_dir);
+    let (subscriber, guards) = build_subscriber(env_filter, std::io::stderr(), buffer, &log_dir);
     // Held in LOG_GUARD, not leaked: `flush_logs_on_exit` takes and drops it
     // on every graceful shutdown path (desktop `RunEvent::Exit`, or the end
     // of a headless/remote entry point) so the last buffered log lines — the
@@ -421,35 +414,58 @@ pub(crate) fn init_tracing(buffer: Arc<Mutex<LogRingBuffer>>) {
     // I/O on every log call, including from async tokio tasks; wrapping it in
     // `non_blocking` moved that I/O off the caller, but its buffered writes
     // are silently dropped unless the guard is flushed before exit).
-    *LOG_GUARD.lock() = Some(file_guard);
+    *LOG_GUARD.lock() = guards;
+
+    #[cfg(feature = "tokio-console")]
+    {
+        let console_layer = console_subscriber::spawn();
+        subscriber.with(console_layer).init();
+    }
+    #[cfg(not(feature = "tokio-console"))]
+    {
+        subscriber.init();
+    }
+}
+
+/// The layered subscriber `init_tracing` installs, writing its console output
+/// to `console`. Split out so a test can drive the real layer stack against a
+/// console it controls. The guards must outlive every log call.
+fn build_subscriber(
+    env_filter: tracing_subscriber::EnvFilter,
+    console: impl std::io::Write + Send + 'static,
+    buffer: Arc<Mutex<LogRingBuffer>>,
+    log_dir: &std::path::Path,
+) -> (
+    impl tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a> + Send + Sync,
+    Vec<tracing_appender::non_blocking::WorkerGuard>,
+) {
+    let fmt_layer = tracing_subscriber::fmt::layer()
+        .with_target(true)
+        .with_thread_ids(false)
+        .with_writer(std::sync::Mutex::new(console));
+
+    let ring_layer = RingBufferLayer { buffer };
+
+    let (file_writer, file_guard) = non_blocking_file_writer(log_dir);
     let file_layer = tracing_subscriber::fmt::layer()
         .with_target(true)
         .with_thread_ids(true)
         .with_ansi(false)
         .with_writer(file_writer);
 
-    let registry = tracing_subscriber::registry()
+    let subscriber = tracing_subscriber::registry()
         .with(env_filter)
         .with(fmt_layer)
         .with(ring_layer)
         .with(file_layer);
-
-    #[cfg(feature = "tokio-console")]
-    {
-        let console_layer = console_subscriber::spawn();
-        registry.with(console_layer).init();
-    }
-    #[cfg(not(feature = "tokio-console"))]
-    {
-        registry.init();
-    }
+    (subscriber, vec![file_guard])
 }
 
-/// Holds the file-appender's flush guard for the process lifetime. Populated
-/// once by `init_tracing`, taken and dropped exactly once by
+/// Holds the non-blocking writers' flush guards for the process lifetime.
+/// Populated once by `init_tracing`, taken and dropped exactly once by
 /// `flush_logs_on_exit` — whichever shutdown path runs first wins; the rest
-/// find `None` and no-op.
-static LOG_GUARD: Mutex<Option<tracing_appender::non_blocking::WorkerGuard>> = Mutex::new(None);
+/// find it empty and no-op.
+static LOG_GUARD: Mutex<Vec<tracing_appender::non_blocking::WorkerGuard>> = Mutex::new(Vec::new());
 
 /// Flush and drop the file appender's `WorkerGuard`, forcing
 /// `tracing_appender::non_blocking`'s buffered writes to disk before the
@@ -458,7 +474,7 @@ static LOG_GUARD: Mutex<Option<tracing_appender::non_blocking::WorkerGuard>> = M
 /// `run_remote`); a call after the guard was already taken is a no-op
 /// (story #672-c1a3).
 pub(crate) fn flush_logs_on_exit() {
-    LOG_GUARD.lock().take();
+    drop(std::mem::take(&mut *LOG_GUARD.lock()));
 }
 
 /// Build a daily-rotated file writer that never blocks the calling thread.
@@ -618,7 +634,7 @@ mod tests {
         writer
             .write_all(b"story672-non-blocking-marker\n")
             .expect("write through non-blocking writer");
-        *LOG_GUARD.lock() = Some(guard);
+        LOG_GUARD.lock().push(guard);
 
         // WorkerGuard::drop (triggered by flush_logs_on_exit taking the
         // Option) sends a Shutdown message and waits (bounded, up to 1.1s)
@@ -642,7 +658,7 @@ mod tests {
         // there is nothing left to flush or drop twice.
         flush_logs_on_exit();
         assert!(
-            LOG_GUARD.lock().is_none(),
+            LOG_GUARD.lock().is_empty(),
             "flush_logs_on_exit must be idempotent — guard stays taken"
         );
     }
