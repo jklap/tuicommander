@@ -219,6 +219,7 @@ async fn native_tool_definitions_are_the_one_surviving_family() {
         names,
         vec![
             "automations",
+            "design_mode",
             "secret",
             "telegram",
             "session",

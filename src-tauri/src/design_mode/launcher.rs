@@ -40,7 +40,7 @@ fn escape(value: &str) -> String {
 fn onboarding(profile: &Path, folder: &Path) -> Result<String, String> {
     let path = profile.join("design-mode.html");
     let html = format!(
-        "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><title>Set up Design Mode</title><style>body{{font:16px system-ui;max-width:780px;margin:8vh auto;background:#1e1e1e;color:#ccc;line-height:1.6}}code{{overflow-wrap:anywhere;color:#59a8dd}}h1{{font-size:28px}}li{{margin:16px 0}}</style><h1>Design Mode</h1><p>Set up this repository’s dedicated browser profile once.</p><ol><li>Open <code>chrome://extensions</code> (Edge: <code>edge://extensions</code>).</li><li>Enable Developer mode, choose <b>Load unpacked</b>, and select:<br><code>{}</code></li><li>Click the TUICommander extension icon to open the sidebar. Choose a running dev server there, or enter your page URL in the address bar.</li></ol><p>The sidebar collects your picks and comments before you send them to an agent. Ordinary browsing works until you click Pick element.</p></html>",
+        "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><title>Set up Design Mode</title><style>body{{font:16px system-ui;max-width:780px;margin:8vh auto;background:#1e1e1e;color:#ccc;line-height:1.6}}code{{overflow-wrap:anywhere;color:#59a8dd}}h1{{font-size:28px}}li{{margin:16px 0}}</style><h1>Design Mode</h1><p>Set up this repository’s dedicated browser profile once.</p><ol><li>Open <code>chrome://extensions</code> (Edge: <code>edge://extensions</code>).</li><li>Enable Developer mode, choose <b>Load unpacked</b>, and select:<br><code>{}</code></li><li>Open the Extensions (puzzle) menu and pin <b>TUICommander Design Mode</b>. Click its icon to open the sidebar, or press <b>Option+Shift+D</b> (Windows/Linux: <b>Alt+Shift+D</b>). Choose a running dev server there, or enter your page URL in the address bar.</li></ol><p>The sidebar collects your picks and comments before you send them to an agent. Ordinary browsing works until you click Pick element.</p></html>",
         escape(&folder.to_string_lossy())
     );
     std::fs::write(&path, html).map_err(|e| e.to_string())?;
@@ -64,7 +64,9 @@ pub(crate) async fn launch(
     repo: &Path,
     session: &str,
     choice: Option<&str>,
+    url: Option<&str>,
 ) -> Result<Value, String> {
+    validate_url(url)?;
     let (kind, executable) = browser(choice)?;
     let profile = super::browser::profile_dir(repo).join(&kind);
     let bridge = crate::agent_mcp::locate_bridge_binary()
@@ -95,7 +97,7 @@ pub(crate) async fn launch(
             String::from_utf8_lossy(&output.stderr)
         ));
     }
-    let discovery = super::discovery::discover(state, repo).await;
+    let discovery = super::discovery::discover(state, repo, Some(session)).await;
     let selected = discovery
         .as_ref()
         .ok()
@@ -104,7 +106,9 @@ pub(crate) async fn launch(
         .and_then(|servers| servers[0]["url"].as_str())
         .map(str::to_owned);
     let setup = onboarding(&profile, &profile.join("tuic-design-extension"))?;
-    let target = if installed(&profile) {
+    let target = if let Some(url) = url {
+        url.to_owned()
+    } else if installed(&profile) {
         selected.unwrap_or(setup)
     } else {
         setup
@@ -138,23 +142,31 @@ mod tests {
             let _config = crate::config::set_config_dir_override(root.join("<script>\"&"));
             let state = Arc::new(crate::state::tests_support::make_test_app_state());
             *state.bound_socket_path.write() = root.join("socket");
-            let bridge = root.join(".local/bin/tuic-bridge");
+            let bridge = root.join(".cargo/bin/tuic-bridge");
             assert_eq!(crate::agent_mcp::locate_bridge_binary(), Some(bridge));
             let response = launch(
                 &state,
                 &root.join("repo"),
                 "launching-agent",
                 Some("chrome"),
+                std::env::var("TUIC_DESIGN_LAUNCH_URL").ok().as_deref(),
             )
             .await
             .unwrap();
             let target = response["url"].as_str().unwrap();
-            let path = url::Url::parse(target).unwrap().to_file_path().unwrap();
-            let html = std::fs::read_to_string(path).unwrap();
-            assert!(target.starts_with("file:"));
-            assert!(html.contains("Load unpacked"));
-            assert!(html.contains("&lt;script&gt;&quot;&amp;"));
-            assert!(!html.contains("about:blank"));
+            if let Ok(requested) = std::env::var("TUIC_DESIGN_LAUNCH_URL") {
+                // Catches: onboarding/discovery replacing an explicit URL on first start.
+                assert_eq!(target, requested);
+                assert_eq!(response["sessionId"], "launching-agent");
+                assert_eq!(response["status"], "armed");
+            } else {
+                let path = url::Url::parse(target).unwrap().to_file_path().unwrap();
+                let html = std::fs::read_to_string(path).unwrap();
+                assert!(target.starts_with("file:"));
+                assert!(html.contains("Load unpacked"));
+                assert!(html.contains("&lt;script&gt;&quot;&amp;"));
+                assert!(!html.contains("about:blank"));
+            }
             let captured = root.join("browser-args");
             while !captured.exists() {
                 tokio::task::yield_now().await;
@@ -167,10 +179,10 @@ mod tests {
         // Environment-based browser/sidecar discovery is isolated from other libtest threads.
         let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
         let root = dir.path();
-        std::fs::create_dir_all(root.join(".local/bin")).unwrap();
+        std::fs::create_dir_all(root.join(".cargo/bin")).unwrap();
         std::fs::create_dir(root.join("repo")).unwrap();
         super::super::discovery::tests::git(&root.join("repo"), &["init"]);
-        let bridge = root.join(".local/bin/tuic-bridge");
+        let bridge = root.join(".cargo/bin/tuic-bridge");
         std::fs::write(
             &bridge,
             "#!/bin/sh\nmkdir -p \"$2/tuic-design-extension\"\n",
@@ -181,15 +193,62 @@ mod tests {
         for path in [&bridge, &browser] {
             std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
-        let output = tokio::process::Command::new(std::env::current_exe().unwrap())
+        for requested in [None, Some("http://localhost:5173/page?x=1#element")] {
+            let _ = std::fs::remove_file(root.join("browser-args"));
+            let mut command = tokio::process::Command::new(std::env::current_exe().unwrap());
+            if let Some(requested) = requested {
+                command.env("TUIC_DESIGN_LAUNCH_URL", requested);
+            }
+            let output = command
             .args(["--exact", "design_mode::launcher::tests::first_run_page_is_useful_without_a_server_and_escapes_paths", "--nocapture"])
-            .env(ROLE, root).env("HOME", root).env("TUIC_DESIGN_CHROME", browser)
+            .env(ROLE, root).env("HOME", root).env("TUIC_DESIGN_CHROME", &browser)
             .output().await.unwrap();
-        assert!(
-            output.status.success(),
-            "{}\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
+}
+
+/// Check the navigation contract before any native host or browser side effects.
+pub(crate) fn validate_url(url: Option<&str>) -> Result<(), String> {
+    let Some(url) = url else {
+        return Ok(());
+    };
+    let parsed = url::Url::parse(url)
+        .map_err(|_| "Design Mode URL must be an absolute HTTP or HTTPS URL")?;
+    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+        return Err("Design Mode URL must be an absolute HTTP or HTTPS URL".into());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod url_tests {
+    use super::*;
+
+    #[test]
+    fn url_contract_rejects_non_web_navigation_before_launch() {
+        // Catches: file/custom schemes or empty URL reaching a browser launch.
+        for url in [
+            "",
+            "localhost:3000",
+            "file:///tmp/page.html",
+            "javascript:alert(1)",
+            "ftp://example.com",
+        ] {
+            assert!(validate_url(Some(url)).is_err(), "{url}");
+        }
+        for url in [
+            "http://localhost:3000/page?x=1#target",
+            "https://example.com/path",
+            "http://127.0.0.1:5173",
+        ] {
+            assert!(validate_url(Some(url)).is_ok(), "{url}");
+        }
+        assert!(validate_url(None).is_ok());
     }
 }

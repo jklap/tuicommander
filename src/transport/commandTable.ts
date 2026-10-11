@@ -2126,7 +2126,11 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		map: (args) => ({
 			method: "POST",
 			path: "/design-mode/start",
-			body: { sessionId: args.sessionId, ...(args.browser ? { browser: args.browser } : {}) },
+			body: {
+				sessionId: args.sessionId,
+				...(args.browser ? { browser: args.browser } : {}),
+				...(args.url !== undefined ? { url: args.url } : {}),
+			},
 		}),
 	},
 	stop_design_mode: {

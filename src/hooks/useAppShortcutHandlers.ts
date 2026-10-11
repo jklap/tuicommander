@@ -223,6 +223,7 @@ export function useAppShortcutHandlers(options: AppShortcutHandlerOptions): Shor
 			);
 		},
 		toggleCommandOverview: mdTabsStore.addCommandOverview,
+		openTasks: mdTabsStore.addTasks,
 		toggleComposePanel: () => terminalsStore.getActive()?.ref?.toggleCompose(),
 		detachActivityDashboard: () => {
 			if (!isTauri()) return;

@@ -1,6 +1,9 @@
 ## ego provider sidebar icon (1736-76a4) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, run `ego` in a terminal tab and confirm the sidebar icon matches the provider of its `model` (anthropic → Claude, openai/openai-codex → OpenAI, gemini, github-copilot, xai, openrouter; anything else → ring with epsilon). Copilot, xAI, OpenRouter and generic ego are hand-drawn stand-ins, not official brand paths. The provider is read from the manifest of the session leased to the ego pid; manifest refresh after an in-session model switch is unverified. Rust does not hot-reload; no desktop instance was started by this peer.
+## Design Mode dev servers (1723-4a21) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, reload the Design Mode extension and refresh servers. Confirm TUIC, non-HTML listeners and servers of other worktrees are absent, and only the bound session’s servers are listed. No desktop instance was started or restarted by this peer.
 
 ## Commit failing checks (1712-b11c) — Rust restart required
 
@@ -5088,5 +5091,13 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 
 - [ ] After landing, Boss must manually restart `make dev` or install `make build` to load the Rust fix. Open a built-in editor, a custom tool and macOS microphone settings, then use the desktop normally for a day. Confirm its child processes contain no zombie older than one minute. Real-process regression tests cover immediate exit and retained wait ownership; the day-long production observation remains pending. No desktop instance was started or restarted by this peer.
 
+- [ ] After a manual backend restart, right-click a localhost/HTTPS terminal link and select Start in Design Mode. Confirm the dedicated browser opens the exact path/query/fragment and its sidebar connects that terminal agent; start a second link while armed and confirm it navigates rather than stops. New backend code does not hot-reload.
 - [ ] S5 CI logs: after Boss restarts the backend, check auto-heal on github.com and a GHE-bound repo without `gh`; verify failure tails and selected external CI logs. The Rust change requires a manual `make dev` restart or `make build`.
 - [ ] Mobile browser dictation (#1718-c32a): on iPhone, dictate and stop three times; edit a dictated draft, then dictate again. Confirm no repeated `aborted` toast and no lost or duplicated text. Browser error/end timing requires device replay.
+
+## PR action buttons (#1738-eb5e)
+
+- [ ] [HUMAN] After a restart, on a PR of a throwaway repository: "Re-run failed jobs" (failed Actions check), "Enable/Disable auto-merge", "Add to / Remove from merge queue" (queue-protected branch only) and "Request changes" (blank body is blocked) reach GitHub and show the outcome. Unit tests stub the invoke boundary; no live write was made.
+## Tasks shell (#1737-29f7)
+
+- [ ] [HUMAN] After a restart with a work-item provider plugin loaded (github-work, jira or gitlab with an account): Command Palette shows "Open Tasks"; the tab lists items, opens a detail pane, creates an item, shows the board and the roadmap. Without a provider the action is absent. _(Unit tests use the in-memory demo provider only.)_

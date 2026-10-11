@@ -570,6 +570,26 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 		}
 	};
 
+	// The focused element is the non-scrolling wrapper, so the browser never pages
+	// the .content child on its own. Handle the bare paging keys here; leave
+	// modified keys (Shift+PageUp = terminal scroll) and form controls alone.
+	const handlePagingKey = (ev: KeyboardEvent) => {
+		const el = scrollEl();
+		if (!el || liveMode() || ev.defaultPrevented || ev.shiftKey || ev.ctrlKey || ev.altKey || ev.metaKey) return;
+		const target = ev.target as HTMLElement;
+		if (target.closest("input, textarea, select, [contenteditable]")) return;
+		const page = Math.max(el.clientHeight - 40, 1);
+		const top = {
+			PageDown: el.scrollTop + page,
+			PageUp: el.scrollTop - page,
+			Home: 0,
+			End: el.scrollHeight - el.clientHeight,
+		}[ev.key];
+		if (top === undefined) return;
+		ev.preventDefault();
+		el.scrollTop = top;
+	};
+
 	const handleCopyPath = () => {
 		const path = fullPath();
 		if (!path) return;
@@ -583,7 +603,14 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 	};
 
 	return (
-		<div ref={wrapperRef} class={s.wrapper} tabIndex={-1} data-focus-target="md-tab" data-tab-id={props.tab.id}>
+		<div
+			ref={wrapperRef}
+			class={s.wrapper}
+			tabIndex={-1}
+			data-focus-target="md-tab"
+			data-tab-id={props.tab.id}
+			onKeyDown={handlePagingKey}
+		>
 			<div class={e.header} onContextMenu={handleHeaderContextMenu}>
 				<span class={e.filename} title={displayPath()}>
 					{displayPath()}
