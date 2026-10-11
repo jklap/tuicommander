@@ -175,6 +175,8 @@ The PR panel also shows the number of unresolved review threads, split into huma
 
 Enable **Auto-heal** in a blocked PR's detail popover to send failed GitHub Actions or configured CircleCI job logs to the agent terminal assigned to that branch. A completed failed job can trigger healing while other jobs in the same workflow are still running. The displayed three-attempt budget counts only prompts successfully delivered to the agent; log-fetch and terminal-delivery errors do not consume it.
 
+Auto-heal reads failing checks directly from the selected or local head commit, including external CI links. It uses the repository's GitHub account and reads every check page before discarding older reruns; the number of open PRs does not limit this lookup.
+
 Set a read-only CircleCI token in **Settings > Git & GitHub > CircleCI**. The token is never shown again. The Log button on a failed CircleCI check also works for remote-only PRs.
 
 ## Review State Classification

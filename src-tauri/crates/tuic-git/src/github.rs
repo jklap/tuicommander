@@ -269,14 +269,14 @@ pub fn count_review_threads(nodes: &serde_json::Value) -> ReviewThreadCounts {
 
 /// Classification of a single check node for summary counting.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum CheckCategory {
+pub enum CheckCategory {
     Passed,
     Failed,
     Pending,
 }
 
 /// Map a deduped statusCheckRollup node (CheckRun or StatusContext) to a summary category.
-fn classify_check_node(node: &serde_json::Value) -> CheckCategory {
+pub fn classify_check_node(node: &serde_json::Value) -> CheckCategory {
     if node["__typename"].as_str() == Some("CheckRun") {
         // `conclusion` is only meaningful once `status` is COMPLETED.
         if node["status"].as_str().unwrap_or("").to_uppercase() != "COMPLETED" {
