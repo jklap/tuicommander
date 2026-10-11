@@ -47,7 +47,7 @@ mod tests {
         }
         // Ratchet: subsequent HTTP migrations lower these counts before removing code.
         let allowed = BTreeMap::from([
-            ("src/github.rs".to_string(), 2),
+            ("src/github.rs".to_string(), 1),
             ("src/worktree.rs".to_string(), 1),
             ("src/github_auth.rs".to_string(), 2),
         ]);

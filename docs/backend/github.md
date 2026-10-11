@@ -20,6 +20,14 @@ and `X-GitHub-Api-Version: 2022-11-28`. GraphQL uses the same User-Agent. Each c
 keeps its status/error wording and existing circuit-breaker handling. A production
 source guard ratchets the remaining `gh` spawn sites until their HTTP migrations land.
 
+PR creation, issue creation, and review submission use account-aware `RepoApi::rest`
+POST requests to `pulls`, `issues`, and `pulls/{number}/reviews`. The repository
+binding selects the host and token, including GitHub Enterprise. These writes no
+longer require the `gh` executable or pass tokens to child processes. Review inline
+comments retain their side (default `RIGHT`). REST errors retain the HTTP status
+and response body as `GitHub API failed ({status}): {body}`. IPC and HTTP request
+and response shapes are unchanged.
+
 ## Multi-Account Model (`github_account.rs`)
 
 The integration is **account-centric**: the primary key is a stable `GitHubAccountId`, not the host. This keeps github.com behaving exactly as before behind an "ambient default" account while enabling additional accounts.
@@ -88,7 +96,7 @@ The active token source is tracked in `AppState.github_token_source` as a `Token
 ### Circuit breaker coverage
 
 **Every** call out to GitHub goes through the account's circuit breaker:
-GraphQL via `graphql_with_retry`, `gh api` writes via `run_gh_write`, and direct
+GraphQL via `graphql_with_retry`, PR/issue/review writes via `RepoApi::rest`, and direct
 REST via `send_rest_with_breaker` (close/reopen issue, merge PR, approve PR,
 `fetch_github_json`, PR diff, PR refs). The availability breaker counts transport
 errors and `5xx` responses, not deterministic `4xx` caller outcomes such as a
