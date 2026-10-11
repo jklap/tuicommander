@@ -813,11 +813,12 @@ mod tests {
                 assert_eq!(received["x-consumer-key"], "DUMMY_HEADER_SENTINEL");
             }
         }
-        crate::mcp_upstream_credentials::save_mcp_upstream_credential(
+        crate::mcp_upstream_credentials::save_mcp_upstream_credential_with_replace(
             name.into(),
             "DUMMY_ROTATED_SENTINEL".into(),
             Some(headers[0].clone()),
             client.url.clone(),
+            true,
         )
         .unwrap();
         client.health_check().await.unwrap();

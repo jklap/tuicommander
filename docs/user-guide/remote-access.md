@@ -482,6 +482,8 @@ its arguments, its environment and the `CC_ENV_FLAGS` that reach the PTY. The sa
 covers the agent hook toggles (`hook_instrumentation`, `native_status_signals`) and the
 upstream MCP servers, which are dialled by the backend that holds them.
 
+Adding an upstream MCP server saves its configuration and credentials on the selected machine. A rejected duplicate name preserves that machine’s existing credentials. Use the existing server’s Edit form to replace a credential.
+
 The frontend keeps one copy per machine, read the first time that machine is needed and
 dropped whenever its connection changes state — a daemon that went away and came back may
 have been reconfigured, or be a different box behind the same name. A local repository

@@ -292,6 +292,8 @@ The keyring service name is `tuicommander-mcp`. The account name is the upstream
 
 `read_upstream_credential(name)` returns `None` (not an error) when no credential exists.
 
+Adding a server submits its secrets with the config save. The backend validates the latest locked config before writing new vault entries and rolls those entries back if the save fails. Duplicate names cannot replace an existing Bearer or OAuth credential, including at the same origin. Standalone credential writes require `replace: true` to edit an existing entry.
+
 ## Hot-Reload
 
 `apply_config_diff(old, new)` compares two configs using server `id` as the stable identifier:
