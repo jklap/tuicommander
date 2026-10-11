@@ -15,6 +15,7 @@ import { tunnelPanelStore } from "../stores/tunnelPanel";
 import { uiStore } from "../stores/ui";
 import { updaterStore } from "../stores/updater";
 import { handleOpenUrl } from "../utils/openUrl";
+import { globalWorkspaceTabIds } from "../utils/paneTabOrder";
 import type { useGitOperations } from "./useGitOperations";
 import type { ShortcutHandlers } from "./useKeyboardShortcuts";
 import type { useSplitPanes } from "./useSplitPanes";
@@ -237,7 +238,7 @@ export function dispatchNativeMenuAction(action: string, options: NativeMenuBrid
 			const tabMatch = action.match(/^switch-tab-(\d)$/);
 			if (!tabMatch) break;
 			const index = Number.parseInt(tabMatch[1], 10) - 1;
-			const ids = terminalLifecycle.terminalIds();
+			const ids = globalWorkspaceTabIds() ?? terminalLifecycle.terminalIds();
 			if (index < ids.length) terminalLifecycle.handleTerminalSelect(ids[index]);
 		}
 	}
