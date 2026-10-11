@@ -763,3 +763,64 @@ describe("MarkdownTab agent review actions", () => {
 		}
 	});
 });
+
+describe("MarkdownTab preview paging keys", () => {
+	beforeEach(() => {
+		mockInvoke.mockReset();
+		mockInvoke.mockImplementation((command: string) =>
+			Promise.resolve(command === "read_file" || command === "read_external_file" ? "# Long document" : undefined),
+		);
+		mdTabsStore.clearAll();
+	});
+
+	afterEach(() => {
+		cleanup();
+		vi.restoreAllMocks();
+		mdTabsStore.clearAll();
+	});
+
+	// jsdom has no layout: give the scroll container a 500px viewport over 2000px of content.
+	async function renderPreview() {
+		const tabId = mdTabsStore.add("/repo", "docs/long.md");
+		const { container } = render(() => <MarkdownTab tab={mdTabsStore.get(tabId) as FileTab} />);
+		await waitFor(() => expect(container.textContent).toContain("Long document"));
+		const wrapper = container.querySelector<HTMLElement>('[data-focus-target="md-tab"]') as HTMLElement;
+		const scroller = container.querySelector<HTMLElement>("[class*='content']") as HTMLElement;
+		Object.defineProperty(scroller, "clientHeight", { configurable: true, value: 500 });
+		Object.defineProperty(scroller, "scrollHeight", { configurable: true, value: 2000 });
+		return { wrapper, scroller };
+	}
+
+	it("PageDown on the focused wrapper scrolls the preview down by one visible page", async () => {
+		const { wrapper, scroller } = await renderPreview();
+		wrapper.focus();
+		fireEvent.keyDown(wrapper, { key: "PageDown" });
+		expect(scroller.scrollTop).toBeGreaterThan(0);
+		expect(scroller.scrollTop).toBeLessThanOrEqual(500);
+	});
+
+	it("PageUp scrolls back up and Home/End jump to the ends", async () => {
+		const { wrapper, scroller } = await renderPreview();
+		fireEvent.keyDown(wrapper, { key: "End" });
+		expect(scroller.scrollTop).toBe(1500);
+		fireEvent.keyDown(wrapper, { key: "PageUp" });
+		expect(scroller.scrollTop).toBeLessThan(1500);
+		expect(scroller.scrollTop).toBeGreaterThan(900);
+		fireEvent.keyDown(wrapper, { key: "Home" });
+		expect(scroller.scrollTop).toBe(0);
+	});
+
+	it("leaves modified keys (Shift+PageDown terminal scroll) alone", async () => {
+		const { wrapper, scroller } = await renderPreview();
+		fireEvent.keyDown(wrapper, { key: "PageDown", shiftKey: true });
+		expect(scroller.scrollTop).toBe(0);
+	});
+
+	it("does not hijack paging keys typed in a form control", async () => {
+		const { wrapper, scroller } = await renderPreview();
+		const input = document.createElement("input");
+		wrapper.appendChild(input);
+		fireEvent.keyDown(input, { key: "PageDown" });
+		expect(scroller.scrollTop).toBe(0);
+	});
+});
