@@ -329,6 +329,35 @@ afterEach(() => {
 	cleanupToasts();
 });
 
+// Catches: replacing a refused push-linked conversation restores that same refused tab instead of opening a new one.
+it("starts a new chat after closing a refused push-linked conversation in a fresh document", async () => {
+	aiChatTabs.add("global", SECOND_SESSION);
+	client.loadSession.mockRejectedValueOnce(
+		new Error(
+			'RPC acp_session_load failed: 502 {"kind":"agent_error","message":"the session last run has an uncertain effect; close it with session/close and start a new chat","retryable":false}',
+		),
+	);
+	let dispose = () => {};
+	const chat = createRoot((cleanup) => {
+		dispose = cleanup;
+		return createAcpChat(
+			() => ROOT,
+			() => true,
+			client,
+		);
+	});
+	try {
+		await chat.selectSession(SECOND_SESSION);
+		expect(chat.error()).toContain("uncertain effect");
+		await chat.closeFailed();
+		await chat.startSession();
+		expect(chat.sessionId()).toBe(SESSION);
+		expect(chat.error()).toBeNull();
+	} finally {
+		dispose();
+	}
+});
+
 describe("AIChatPanel: repository profile warnings", () => {
 	// Catches an authoritative ego clamp silently discarded by the chat host.
 	it("shows recorded ego clamp warnings once for the attached conversation", async () => {
