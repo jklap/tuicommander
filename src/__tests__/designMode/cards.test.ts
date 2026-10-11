@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 // Extension modules run directly in Chromium; no build step changes their state model.
-// @ts-expect-error plain MV3 module
-import { addPick, deletePick, draftForTab, editPick } from "../../../browser-extension/design-mode/cards.js";
+import {
+	addPick,
+	deletePick,
+	draftForTab,
+	editPick,
+	serverSession,
+	// @ts-expect-error plain MV3 module
+} from "../../../browser-extension/design-mode/cards.js";
 
 describe("Design Mode drafts", () => {
 	// Catches: editing/deleting one pick overwriting another tab's feedback.
@@ -35,12 +41,35 @@ describe("Design Mode agent selection", () => {
 		];
 		expect(recipient({ picks: [] }, agents, "X").selectedSessionId).toBe("X");
 		expect(
-			recipient({ picks: [], selectionInitialized: true, selectedSessionId: "Y" }, agents, "X").selectedSessionId,
+			recipient({ picks: [], selectionInitialized: true, selectedSessionId: "Y", armedFor: "X" }, agents, "X")
+				.selectedSessionId,
 		).toBe("Y");
 		const exited = recipient({ picks: [], selectionInitialized: true, selectedSessionId: "X" }, [agents[0]], "X");
 		expect(exited.selectedSessionId).toBe("");
 		expect(exited.agentNotice).toContain("exited");
 		expect(recipient({ picks: [] }, agents).selectedSessionId).toBe("Y");
+	});
+
+	// Catches: the default recipient staying on the session bound at extension start after Boss starts Design Mode elsewhere.
+	it("recipient_follows_newly_armed_session", async () => {
+		// @ts-expect-error plain MV3 module
+		const { recipient } = await import("../../../browser-extension/design-mode/cards.js");
+		const agents = [
+			{ sessionId: "X", label: "First starter" },
+			{ sessionId: "Y", label: "Manual choice" },
+			{ sessionId: "Z", label: "New starter" },
+		];
+		const chosen = { picks: [], selectionInitialized: true, selectedSessionId: "Y", armedFor: "X" };
+		expect(recipient(chosen, agents, "Z")).toMatchObject({ selectedSessionId: "Z", armedFor: "Z" });
+		// A draft from before armedFor existed adopts the armed session once.
+		expect(
+			recipient({ picks: [], selectionInitialized: true, selectedSessionId: "Y" }, agents, "X").selectedSessionId,
+		).toBe("X");
+		// An armed session not yet listed leaves the choice alone and is retried later.
+		expect({ ...chosen, ...recipient(chosen, agents.slice(0, 2), "Q") }).toMatchObject({
+			selectedSessionId: "Y",
+			armedFor: "X",
+		});
 	});
 });
 
@@ -104,6 +133,14 @@ describe("Design feedback delivery", () => {
 		expect(batches).toEqual([expect.objectContaining({ idempotencyKey: "batch-1", sessionId: "X" })]);
 		expect(result.typed).toBe(false);
 		expect(stored.picks).toEqual([expect.objectContaining({ id: "two" })]);
+	});
+	// Catches: the dev-server list keyed to the launching session (binding.json) instead of the selected agent.
+	it("lists servers for the agent selected in the dropdown, not the launcher", () => {
+		const agents = [{ sessionId: "launcher" }, { sessionId: "B" }];
+		const selected = { picks: [], selectedSessionId: "B", selectionInitialized: true, armedFor: "launcher" };
+		expect(serverSession(selected, agents, "launcher")).toBe("B");
+		expect(serverSession({ picks: [] }, agents, "launcher")).toBe("launcher");
+		expect(serverSession({ ...selected, selectedSessionId: "gone" }, agents, "launcher")).toBe("");
 	});
 });
 

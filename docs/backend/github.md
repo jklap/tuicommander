@@ -43,7 +43,7 @@ The integration is **account-centric**: the primary key is a stable `GitHubAccou
 - **Repo bindings** — `{repo_path → account_id, owner, repo, remote_name}` persisted per canonical repo root (worktrees resolve to the main root). `resolve_repo_account(repo_path)` returns `RepoResolution::{Bound | NeedsBind(candidates) | NeedsAccount | Unmonitored}` — binding-first, single-candidate auto-confirm, ambiguity surfaces all candidates (never a silent `origin` pick).
 - **Concurrent saves** — Binding maps use `ConfigFile::save_delta`, so changes to different repositories compose. Account additions and removals mutate the latest registry under `ConfigFile::update_with`; the on-disk array is never replaced from a stale account snapshot.
 - **Per-account isolation (hybrid)** — github.com keeps the global breaker/viewer/rate/cooldown fields byte-for-byte; GHE accounts get isolated `ghe_state: DashMap<AccountId, GheAccountState>`. The poller groups repos by resolved account and runs one batch per account, so a fault on one never opens another's breaker. Cooldown keys: `owner/repo` (cloud, unchanged) vs `{account_id}:owner/repo` (GHE).
-- **Limitation** — `fetch_ci_failure_logs` (gh-CLI-assisted) is disabled with a clear message for non-github.com accounts; all REST + GraphQL paths route through `github_rest_url(host, path)` / account-scoped tokens (no hardcoded `api.github.com` outside `GitHubHost` + tests).
+- **CI logs** — github.com and GitHub Enterprise use the repo-resolved account token and REST host. Actions runs, jobs and logs use the account circuit breaker. Log redirects remove bearer credentials when the storage host changes.
 
 ### Multi-account commands
 
@@ -339,6 +339,14 @@ sent through `send_rest_with_breaker`. Used by the remote-only PR popover.
 PR diff reads use the GitHub REST diff representation first. If GitHub returns the oversized-diff `406 Not Acceptable` response, the backend fetches the PR refs into the local clone and returns a local `git diff base...head` unified diff instead, so AI Review can still run on PRs that exceed GitHub's rendered diff file cap.
 
 ### CI Auto-Heal (`fetch_ci_failure_logs`)
+
+Actions logs use REST runs filtered by `head_sha`, then jobs with `filter=latest`.
+Each list has a ten-page cap (100 entries per page). A run with unavailable or
+incomplete jobs is skipped. Downloads retain only the last 4,000 bytes per job,
+with at most 100 job logs retained; output is sanitized before agent use.
+One 60-second async deadline covers the sweep and any external CI downloads.
+Only local Git head resolution uses a blocking worker; HTTP work is cancellable.
+
 
 Resolves the local branch head for auto-heal, or uses the supplied PR head SHA for a selected check, then lists matching workflow runs, inspects their jobs, and downloads logs for every completed failed job through the GitHub Actions jobs API. Job-level retrieval works while sibling jobs are still running, before the containing workflow has a final `failure` conclusion. Used by the CI auto-heal hook (`useCiHeal`) to inject failure context into agent terminals for automatic fix cycles (up to 3 delivered attempts per cycle).
 

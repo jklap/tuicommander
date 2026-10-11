@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../mocks/tauri";
 import { type ShortcutHandlers, useKeyboardShortcuts } from "../../hooks/useKeyboardShortcuts";
+import { globalWorkspaceStore } from "../../stores/globalWorkspace";
 import { paneLayoutStore, resetGroupCounter } from "../../stores/paneLayout";
 import { progressStore } from "../../stores/progress";
 import { repositoriesStore } from "../../stores/repositories";
@@ -76,6 +77,7 @@ function createMockHandlers(): ShortcutHandlers {
 		openPath: vi.fn(),
 		openSecondaryWindow: vi.fn(),
 		toggleCommandOverview: vi.fn(),
+		openTasks: vi.fn(),
 		toggleComposePanel: vi.fn(),
 		detachActivityDashboard: vi.fn(),
 		toggleProcessManager: vi.fn(),
@@ -348,6 +350,49 @@ describe("useKeyboardShortcuts", () => {
 		it("Cmd+Shift+R edits run command", () => {
 			fireKeydown("R", { metaKey: true, shiftKey: true });
 			expect(handlers.handleRunCommand).toHaveBeenCalledWith(true);
+		});
+	});
+
+	describe("Cmd+Ctrl+N chord ownership", () => {
+		const promote = (ids: string[]) => {
+			for (const id of ids) {
+				globalWorkspaceStore.promote(id);
+			}
+			globalWorkspaceStore.activate();
+		};
+
+		afterEach(() => {
+			globalWorkspaceStore.deactivate();
+			for (const id of globalWorkspaceStore.getPromotedIds()) globalWorkspaceStore.unpromote(id);
+		});
+
+		it("in the global workspace Cmd+Ctrl+2 selects tab 2 and keeps the workspace active", () => {
+			promote(["t1", "t2", "t3"]);
+			const event = fireKeydown("2", { metaKey: true, ctrlKey: true });
+			expect(handlers.handleTerminalSelect).toHaveBeenCalledWith("t2");
+			expect(handlers.switchToBranchByIndex).not.toHaveBeenCalled();
+			expect(globalWorkspaceStore.isActive()).toBe(true);
+			expect(event.defaultPrevented).toBe(true);
+		});
+
+		it("in the global workspace Cmd+Ctrl+N past the last tab does nothing", () => {
+			promote(["t1", "t2", "t3"]);
+			fireKeydown("5", { metaKey: true, ctrlKey: true });
+			expect(handlers.handleTerminalSelect).not.toHaveBeenCalled();
+			expect(handlers.switchToBranchByIndex).not.toHaveBeenCalled();
+		});
+
+		it("in the global workspace Cmd+2 selects the second workspace tab, not a branch tab", () => {
+			(handlers.terminalIds as ReturnType<typeof vi.fn>).mockReturnValue(["b1", "b2"]);
+			promote(["t1", "t2", "t3"]);
+			fireKeydown("2", { metaKey: true });
+			expect(handlers.handleTerminalSelect).toHaveBeenCalledWith("t2");
+		});
+
+		it("outside the global workspace Cmd+Ctrl+2 still switches to branch 2", () => {
+			fireKeydown("2", { metaKey: true, ctrlKey: true });
+			expect(handlers.switchToBranchByIndex).toHaveBeenCalledWith(2);
+			expect(handlers.handleTerminalSelect).not.toHaveBeenCalled();
 		});
 	});
 
