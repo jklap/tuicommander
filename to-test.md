@@ -5007,3 +5007,7 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
   `{"action":"rotate","id":"<account id>"}` to the test instance; confirm
   presence remains set and provider requests use the replacement credential.
 - [ ] Confirm native entry has no mobile link or developer tools.
+
+## Tasks create integration (#1688-518d)
+
+- [ ] After the Tasks shell is integrated and a provider plugin that follows the `itemType` convention is installed, open the create form, choose a type, fill its required fields and create. Confirm the created item opens in Tasks detail. Component behavior is covered by the targeted create tests and the rb browser fixture; this item covers the shell and real-provider integration.

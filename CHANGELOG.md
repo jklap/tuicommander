@@ -18,6 +18,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Match native window and webview resize backgrounds to the selected theme, including light themes (Fixes #125; #1678-158c).
 - Added the provider-neutral Tasks data contract and a local in-memory development provider; visible Tasks integration follows separately.
 - Add the core Tasks detail component with field editing, rich paged comments, status-action rollback and refresh while visible (#1687-27a3).
+- Add the core Tasks create form: item types and per-type field schemas from the provider, required-field validation and single submit (#1688-518d).
 - Add the generic Tasks list component with account-scoped sources, provider presets and filters, debounced search, sorting, virtual rows and cursor pagination. Shell mounting remains a separate integration step (#1686-ce77).
 
 

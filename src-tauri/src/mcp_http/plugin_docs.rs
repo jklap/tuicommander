@@ -701,6 +701,11 @@ are rejected. The async port lives in `src/plugins/workItemProvider.ts`. It expo
 list/detail/comments/act, dynamic createFields, grouped pages and board projections
 with per-card moves (columnId and action); core renders those projections without guessing legality.
 
+`createFields()` without a type returns one enum field with id `itemType` whose options are
+the creatable item types (a single-type provider returns one option). `createFields(type)`
+returns the create schema of that type, without title or body fields: `WorkItemCreate`
+carries those. An unknown type is an error, and `create` rejects an undeclared `itemType`.
+
 Core owns the Solid Tasks views; provider plugins supply data, schemas and actions,
 never view HTML. A4 defines DTOs only: registration, transport and visible views
 are delivered by the following integration steps.
@@ -755,6 +760,7 @@ core executes the existing worktree/agent workflow and owns errors/rollback.
 
 `work_items::demo::demo_provider()` supplies deterministic local-only data with
 list, detail, comments, schemas, saved filters, board columns and mutations.
+Its item types are the types of its seed items.
 It touches no network, credentials, filesystem or subprocesses. It is a development
 provider, not a fixture proving GitHub/Jira/GitLab API compatibility. Its search is
 literal text; sort supports key/title/updatedAt. Its cursor expires on mutation.
@@ -774,6 +780,21 @@ Core renders work-item detail with Solid controls. Providers supply `WorkItemDet
 - Comments: `normal`, `review_thread` (file, line and resolved state), and `review_summary` (review state) render together. Load more uses `comments(reference,cursor,50)` and the provider cursor. Add comment dispatches `comment`; a rejected request keeps the draft.
 - Status: buttons use the declared transition action IDs, enabled state and disabled reasons. The pending action label appears immediately; state IDs are never inferred from the label. Success adopts the returned detail; rejection restores the authoritative label and reports the error.
 - Refresh: manual Refresh plus a 60-second timer, enabled by default only while open, the Tasks view is visible and the document is visible. Already-loaded comment pages are refreshed too. Old-item responses cannot replace the current item.
+
+## Tasks create
+
+### Tasks create component inventory
+`TasksCreate`.
+
+#### TasksCreate
+
+Core renders the create form with the shared setting controls (`SettingField`, `SettingMultiSelect`). Providers supply item types and field schemas through `createFields`; they do not supply a view or iframe. The host mounts `TasksCreate` with `provider`, `onCreated(detail)` and optional `onCancel`, and opens the returned item.
+
+- Item types: `createFields()` without a type MUST return an enum field with id `itemType` whose options are the creatable types. One option is preselected. Without it the form reports that the provider declares no item types.
+- Fields: `createFields(type)` returns the schema of that type. The form renders its editable fields; `itemType` is never a field. Title and Description are fixed inputs mapped to `WorkItemCreate.title` and `body`, so do not return title, summary or description fields.
+- Type change: the form reloads the schema. A value survives only where the new type has the same field id and kind. A late schema for an earlier type is dropped.
+- Validation: Create stays disabled until Title, Type and every required field of the current type hold a value; numbers must be finite and enum values must be declared options.
+- Submit: dispatches `act(null, {kind: "create", value: {title, body, itemType, fields}})` once. `fields` holds every schema field of the current type; unset values are null. A rejection shows the error and keeps the draft. A `{kind: "item"}` result goes to `onCreated`.
 
 ## Tasks list
 
@@ -857,6 +878,7 @@ mod tests {
     const CSS: &str = include_str!("../../../src/components/PluginPanel/pluginBaseStyles.ts");
     const UX: &str = include_str!("../../../src/components/SettingsPanel/tabs/PluginsTab.tsx");
     const TASK_DETAIL: &str = include_str!("../../../src/components/Tasks/detail/TasksDetail.tsx");
+    const TASK_CREATE: &str = include_str!("../../../src/components/Tasks/create/TasksCreate.tsx");
     const SETTING_FIELDS: &str =
         include_str!("../../../src/components/SettingsPanel/SettingFields.tsx");
 
@@ -995,6 +1017,14 @@ mod tests {
             captures(TASK_DETAIL, r"(?m)^export function ([A-Za-z]+)\("),
         );
         for component in inventory(PLUGIN_DOCS, "### Tasks detail component inventory\n") {
+            assert!(PLUGIN_DOCS.contains(&format!("#### {component}\n")));
+        }
+        assert_inventory(
+            PLUGIN_DOCS,
+            "### Tasks create component inventory\n",
+            captures(TASK_CREATE, r"(?m)^export function ([A-Za-z]+)\("),
+        );
+        for component in inventory(PLUGIN_DOCS, "### Tasks create component inventory\n") {
             assert!(PLUGIN_DOCS.contains(&format!("#### {component}\n")));
         }
     }

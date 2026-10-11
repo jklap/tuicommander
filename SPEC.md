@@ -935,3 +935,12 @@ MCP create requires host-bound creator provenance. CLI exposes these actions as
 GitHub line review backend supports paginated thread/comment reads, reply, resolve/unresolve and head-pinned draft submission on both transports. UI integration is tracked separately.
 
 GitHub PR action backend supports failed-job reruns, head-pinned auto-merge and queue entry, queue removal/state and active-rule-aware merge. Legacy review submission validates REQUEST_CHANGES bodies. Frontend action integration remains separate.
+
+## Tasks create — Component implemented (#1688-518d)
+
+The generic Tasks create form reads item types from the `itemType` enum field of
+an untyped `createFields()`, then loads the schema of the chosen type. A type
+change keeps only same-id, same-kind values and drops late schemas of an earlier
+type. Create stays disabled until Title, Type and every required field hold a
+valid value; it dispatches one `create` action and hands the returned item to the
+host to open. A rejection keeps the draft. Tasks shell mounting is separate.
