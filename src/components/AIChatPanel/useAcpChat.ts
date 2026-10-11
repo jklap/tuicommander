@@ -534,6 +534,17 @@ export function createAcpChat(
 			aiChatTabs.close(TABS, session);
 			if (binding?.sessionId === session) binding.sessionId = null;
 			setSessionId(null);
+			// The last tab survives aiChatTabs.close; a launch would restore the refused
+			// session, so the new chat reuses the default connection instead.
+			if (!binding) {
+				const target = await chatRoot();
+				setRoot(target);
+				const current = await guard("connecting to ego", () => connectDefault(target));
+				if (current) {
+					binding = current;
+					setConnectionId(current.connectionId);
+				}
+			}
 		},
 
 		async closeTab(tab: AcpSessionId): Promise<void> {

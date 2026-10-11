@@ -9,9 +9,10 @@ const KEYBOARD_MIN_PX = 120;
 
 /**
  * Where the fixed shell sits. With no keyboard it takes `auto` height between
- * top 0 and bottom 0, so it reaches the physical bottom edge: on an iOS
- * standalone PWA `visualViewport.height` is the layout height minus the top
- * inset, and a shell sized by it leaves a band under the tabs. Above a keyboard
+ * top 0 and bottom 0, so it reaches the physical bottom edge. Assumption, not
+ * yet measured on a device: on an iOS standalone PWA `visualViewport.height`
+ * may be the layout height minus the top inset, which would leave a band under
+ * the tabs if the shell were sized by it. Above a keyboard
  * the shell follows `visualViewport`, and the home indicator is not there.
  */
 export function shellViewport(vv: { height: number; offsetTop: number }, layoutHeight: number): ShellViewport {
