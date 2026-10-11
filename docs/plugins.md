@@ -1771,3 +1771,55 @@ button controls for catalogue-backed settings and work-item forms. Plugins do no
 import these Solid components or gain new manifest fields from them. The host
 owns account selection and native secret entry; no token enters a plugin prop.
 See `plugin_dev_guide` → **Settings field kinds** for the core-rendered contracts.
+
+## Tasks data contract (Phase A4)
+
+Register via `host.registerWorkItemProvider(provider)`, returning an auto-cleaned
+Disposable. Provider/account pairs must be unique; core consumers use
+`workItemProviderRegistry.get(providerId, accountId)` or `.list(providerId?)`.
+The async `WorkItemProvider` port includes list/detail/comments/act, dynamic
+createFields(itemType?), grouped(query) and board(id, query). Grouping uses query.groupBy;
+board lanes include per-card moves (columnId and action) so UI never guesses legal moves.
+The test/development fake is `createInMemoryWorkItemProvider()` in
+`src/plugins/testing/inMemoryWorkItemProvider.ts`, seeded from the same synthetic
+JSON as the Rust fake. No fake routes or IPC commands are installed.
+
+
+Core owns the Solid Tasks views; provider plugins supply data, schemas and actions,
+never view HTML. A4 defines DTOs only: registration, transport and visible views
+are delivered by the following integration steps.
+
+### Work-item field kind inventory
+`text`, `markdown`, `enum`, `user`, `labels`, `date`, `number`, `link`
+
+- `text`: a plain text input; `markdown`: the shared markdown renderer/editor.
+- `enum`: a select using provider option IDs; `user`: a user picker, multiple users.
+- `labels`: multiple labels with stable IDs; `date`: ISO-8601 date input.
+- `number`: finite numeric input; `link`: URL/link control.
+
+The canonical DTOs are `work_items::model` and `work_items::protocol` in Rust.
+Generate their TypeScript declarations with
+`python3 scripts/generate-work-item-types.py`; import from
+`src/types/work-items.gen.ts`. Fields use camelCase; discriminated unions use
+`{kind, value}` with snake_case kinds. `WorkItemRef` scopes opaque item IDs by
+`providerId` and `accountId`. Missing field keys mean not loaded; null means unset.
+
+`WorkItemQuery` carries ANDed filters (values are ORed), saved filter ID, native
+search, sort, bounded page size and opaque cursor. Providers must bind cursors to
+the account/query; selecting a preset starts with no cursor. `WorkItemPage`
+contains items and `nextCursor`. Details load body, field schemas, allowed action
+descriptors and a separately paginated comment page on open. Comment entries are
+`normal`, `review_thread` (resolved, path, line and reviewed commitId), or
+`review_summary` (state and reviewed commitId). Bodies are markdown, not trusted HTML.
+
+Actions are `create`, `edit_field`, `transition`, `comment`, and `start_work`.
+Transitions use provider action IDs, not state display names. Board columns may carry a default edit/transition action or null; per-card moves
+carry the actual legal action to dispatch on drop (workflow IDs can vary by item). Start-work carries repoPath,
+branch, optional baseRef, prompt, agentType and explicit draft/submit delivery;
+core executes the existing worktree/agent workflow and owns errors/rollback.
+
+`work_items::demo::demo_provider()` supplies deterministic local-only data with
+list, detail, comments, schemas, saved filters, board columns and mutations.
+It touches no network, credentials, filesystem or subprocesses. It is a development
+provider, not a fixture proving GitHub/Jira/GitLab API compatibility. Its search is
+literal text; sort supports key/title/updatedAt. Its cursor expires on mutation.

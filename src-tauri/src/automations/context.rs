@@ -27,6 +27,12 @@ pub(super) fn inject_context(
     // Escape delimiters before budgeting: expansion must not exceed the cap,
     // and output must not be able to terminate or nest the untrusted block.
     for character in result.stdout.chars() {
+        // Precheck stdout is data, not PTY key input: ESC can end bracketed
+        // paste, other controls can act as keys, and NUL breaks argv launches.
+        // Preserve text layout without changing the user's original prompt.
+        if character.is_control() && !matches!(character, '\n' | '\t') {
+            continue;
+        }
         let mut utf8 = [0; 4];
         let encoded = match character {
             '&' => "&amp;",

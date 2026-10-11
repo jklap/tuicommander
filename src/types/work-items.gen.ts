@@ -23,22 +23,9 @@ export interface WorkItemState {
 	tone: WorkItemTone;
 }
 
-export type WorkItemTone =
-	| "neutral"
-	| "info"
-	| "success"
-	| "warning"
-	| "danger";
+export type WorkItemTone = "neutral" | "info" | "success" | "warning" | "danger";
 
-export type WorkItemFieldKind =
-	| "text"
-	| "markdown"
-	| "enum"
-	| "user"
-	| "labels"
-	| "date"
-	| "number"
-	| "link";
+export type WorkItemFieldKind = "text" | "markdown" | "enum" | "user" | "labels" | "date" | "number" | "link";
 
 export type WorkItemFieldValue =
 	| { kind: "text"; value: string }
@@ -105,6 +92,7 @@ export interface WorkItemQuery {
 	savedFilterId: string | null;
 	search: string;
 	sort: WorkItemSort | null;
+	groupBy: string | null;
 	cursor: string | null;
 	limit: number;
 }
@@ -143,12 +131,7 @@ export interface WorkItemDetail {
 	comments: WorkItemCommentPage;
 }
 
-export type WorkItemActionKind =
-	| "create"
-	| "edit_field"
-	| "transition"
-	| "comment"
-	| "start_work";
+export type WorkItemActionKind = "create" | "edit_field" | "transition" | "comment" | "start_work";
 
 export interface WorkItemActionDescriptor {
 	id: string;
@@ -179,9 +162,7 @@ export interface WorkItemStartWork {
 	delivery: WorkItemDelivery;
 }
 
-export type WorkItemDelivery =
-	| "draft"
-	| "submit";
+export type WorkItemDelivery = "draft" | "submit";
 
 export type WorkItemAction =
 	| { kind: "create"; value: WorkItemCreate }
@@ -197,7 +178,7 @@ export type WorkItemActionResult =
 export interface WorkItemBoardColumn {
 	id: string;
 	name: string;
-	action: WorkItemAction;
+	action: WorkItemAction | null;
 }
 
 export interface WorkItemBoard {
@@ -205,4 +186,46 @@ export interface WorkItemBoard {
 	name: string;
 	fieldId: string;
 	columns: Array<WorkItemBoardColumn>;
+}
+
+export interface WorkItemBoardCard {
+	item: WorkItem;
+	moves: Array<WorkItemBoardMove>;
+}
+
+export interface WorkItemBoardLane {
+	columnId: string;
+	cards: Array<WorkItemBoardCard>;
+}
+
+export interface WorkItemBoardPage {
+	board: WorkItemBoard;
+	lanes: Array<WorkItemBoardLane>;
+	nextCursor: string | null;
+}
+
+export interface WorkItemProviderSnapshot {
+	providerId: string;
+	accountId: string;
+	name: string;
+	fields: Array<WorkItemFieldSchema>;
+	savedFilters: Array<WorkItemSavedFilter>;
+	boards: Array<WorkItemBoard>;
+	items: Array<WorkItemDetail>;
+}
+
+export interface WorkItemGroup {
+	id: string;
+	name: string;
+	items: Array<WorkItem>;
+}
+
+export interface WorkItemGroupedPage {
+	groups: Array<WorkItemGroup>;
+	nextCursor: string | null;
+}
+
+export interface WorkItemBoardMove {
+	columnId: string;
+	action: WorkItemAction;
 }

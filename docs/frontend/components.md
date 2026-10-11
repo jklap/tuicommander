@@ -707,3 +707,11 @@ stable IDs; multiselect uses checkboxes; status is read-only. The account picker
 loads the core account list and delegates Add to a token-free native-flow callback.
 These controlled components do not persist settings or define catalogue fields.
 The dev-only `fields/preview.html` mounts the actual controls for visual checks.
+
+The Precheck section includes a default-off stdout context checkbox. It edits
+`precheck.inject_output` through the existing store and shared save API, without
+changing prompt text. Disabling and re-enabling the precheck resets the flag.
+
+### Mobile composer browser dictation
+
+`CommandInput` mounts `useBrowserDictation`, a feature-detected browser interaction hook. Its mic is directly before Send in the existing row; interim hypotheses are replaced and final speech stays in the current draft without focus or automatic Enter. `SessionDetailScreen` excludes server hands-free while browser recognition is pending or active, and `useMobileVoice.recording` blocks browser starts during server arming/recording. Manual typing or keybar text insertion cancels recognition, preserves the edited draft, and returns the mic to idle; queued results from that recording are ignored. Tap the mic to resume. The hook also stops on send, session end, or unmount. No setting or backend route is added.

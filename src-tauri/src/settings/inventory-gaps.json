@@ -1,0 +1,158 @@
+[
+  {
+    "store": "github_accounts",
+    "path": "/accounts/{id}/credential",
+    "ownerStep": "Step 3a",
+    "reason": "Recoverable credential presence and typed login/rotation actions need the account owner schema; registry metadata alone is not coverage."
+  },
+  {
+    "store": "ego",
+    "path": "/providers/{id}",
+    "ownerStep": "Step 3b",
+    "reason": "Discover installed ego provider/model/auth capabilities through the configured binary; never infer an external schema or read its credential files."
+  },
+  {
+    "store": "ego",
+    "path": "/profiles/{id}/perimeter",
+    "ownerStep": "Step 3b",
+    "reason": "Installed-owner perimeter and stored/effective/source schema must be recorded from ego with the trusted workspace/profile."
+  },
+  {
+    "store": "repositories_registration",
+    "path": "/repos/{path}",
+    "ownerStep": "Step 4d",
+    "reason": "repositories.json uses untyped JSON for registration/groups/branch display preferences; classify runtime fields individually and define the owner's stable identities."
+  },
+  {
+    "store": "repositories_registration",
+    "path": "/groups/{id}",
+    "ownerStep": "Step 4d",
+    "reason": "Repository group settings are currently untyped JSON and must receive an owner schema."
+  },
+  {
+    "store": "keybindings",
+    "path": "/{action}",
+    "ownerStep": "Step 4g",
+    "reason": "Keybindings are untyped serde_json::Value; move the action/key record and dynamic-action choices into the owner schema."
+  },
+  {
+    "store": "pane_layout",
+    "path": "/root",
+    "ownerStep": "Step 4g",
+    "reason": "Recursive geometry is currently frontend-owned JSON; define a bounded Rust schema with stable node IDs."
+  },
+  {
+    "store": "pane_layout",
+    "path": "/groups/{id}",
+    "ownerStep": "Step 4g",
+    "reason": "Tab/group layout references and active group are currently frontend-owned JSON; separate settings from runtime tab identities."
+  },
+  {
+    "store": "pane_layout",
+    "path": "/activeGroupId",
+    "ownerStep": "Step 4g",
+    "reason": "Review whether active pane selection is a setting or runtime selection, then describe or individually exclude it."
+  },
+  {
+    "store": "connections",
+    "path": "/{id}/credential",
+    "ownerStep": "Step 4f",
+    "reason": "Connection credentials live outside the RemoteConnection record and require the credential-reference owner schema."
+  },
+  {
+    "store": "upstreams",
+    "path": "/servers/{id}/credentials",
+    "ownerStep": "Step 4e",
+    "reason": "Vault-backed bearer/OAuth/header operations need the upstream owner schema; persisted credential references do not cover credential actions."
+  },
+  {
+    "store": "telegram",
+    "path": "/bot.token",
+    "ownerStep": "Step 4h",
+    "reason": "Private bot token is stored separately from Config and requires the setup owner's secret-action DTO."
+  },
+  {
+    "store": "telegram",
+    "path": "/allowed_chat_ids/{chatId}",
+    "ownerStep": "Step 4h",
+    "reason": "Chat allowlist is a separate private text file; use the existing setup owner, not raw file editing."
+  },
+  {
+    "store": "plugins.telegram-notifier",
+    "path": "/botToken",
+    "ownerStep": "Step 5",
+    "reason": "Plugin-private JS configuration has no scoped settings schema or credential migration yet."
+  },
+  {
+    "store": "plugins.telegram-notifier",
+    "path": "/chatId",
+    "ownerStep": "Step 5",
+    "reason": "Plugin-private JS configuration requires scoped schema registration."
+  },
+  {
+    "store": "plugins.telegram-notifier",
+    "path": "/events/{eventId}",
+    "ownerStep": "Step 5",
+    "reason": "Plugin-private enabled/silent event records require scoped schema registration and callbacks."
+  },
+  {
+    "store": "plugins",
+    "path": "/{pluginId}/{settingId}",
+    "ownerStep": "Step 5",
+    "reason": "Runtime-installed plugin schema enumeration and unload parity are not yet supported; registration must fail closed."
+  },
+  {
+    "store": "app",
+    "path": "/font_family",
+    "ownerStep": "Step 4g",
+    "reason": "System font choices need an explicit dynamic resolver; schema string is not an authoritative choice list."
+  },
+  {
+    "store": "app",
+    "path": "/theme",
+    "ownerStep": "Step 4g",
+    "reason": "Theme choices are frontend-owned; move them to an owner resolver before UI parity."
+  },
+  {
+    "store": "app",
+    "path": "/ide",
+    "ownerStep": "Step 4g",
+    "reason": "IDE availability choices need a host resolver; no implicit process probing during describe."
+  },
+  {
+    "store": "voice",
+    "path": "/device",
+    "ownerStep": "Step 4b",
+    "reason": "Audio input choices need explicit available/unavailable resolver results."
+  },
+  {
+    "store": "voice",
+    "path": "/model",
+    "ownerStep": "Step 4b",
+    "reason": "Installed/downloadable voice asset choices and actions require the voice owner."
+  },
+  {
+    "store": "voice",
+    "path": "/speech_voice",
+    "ownerStep": "Step 4b",
+    "reason": "Voice choices depend on installed engine/language capabilities and require the voice owner."
+  },
+  {
+    "store": "voice",
+    "path": "/speech_edge_voice",
+    "ownerStep": "Step 4b",
+    "reason": "Edge voice choices require the voice owner resolver without an implicit network refresh."
+  },
+  {
+    "store": "notifications",
+    "path": "/audio_device",
+    "ownerStep": "Step 4a",
+    "reason": "Output-device choices need explicit available/unavailable resolver results."
+  },
+  {
+    "store": "agents",
+    "path": "/agents/{key}/run_configs/{name}/model",
+    "ownerStep": "Step 4c",
+    "reason": "Agent model availability requires the owning CLI capability resolver, without launching on save."
+  }
+]
