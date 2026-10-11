@@ -1649,7 +1649,11 @@ pub fn tick(
         Err(error) => return disarmed_or_not_armed(mode.lock().note_device_failed(error)),
     };
     if samples.is_empty() {
-        if now_ms.saturating_sub(capture.last_audio_ms) > capture.device_silence_timeout_ms {
+        // A replies-only conversation opens no capture device, so silence from
+        // it is the design and not a dead microphone.
+        if mode.lock().listening()
+            && now_ms.saturating_sub(capture.last_audio_ms) > capture.device_silence_timeout_ms
+        {
             return disarmed_or_not_armed(mode.lock().note_device_failed(format!(
                 "The capture device delivered no audio for {}s",
                 capture.device_silence_timeout_ms / 1_000
