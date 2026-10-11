@@ -3,7 +3,7 @@
 import { cleanup, render } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SessionsScreen } from "../screens/SessionsScreen";
-import type { SessionInfo } from "../useSessions";
+import { reconcileSessions, type SessionInfo } from "../useSessions";
 import { nestUnderParents } from "../utils/sessionTree";
 
 const session = (id: string, name: string, extra: Partial<SessionInfo> = {}, agent = "claude"): SessionInfo => ({
@@ -90,5 +90,24 @@ describe("sub-agent rows on the Sessions screen", () => {
 			.sort((a, b) => (a.node.compareDocumentPosition(b.node) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1))
 			.map((e) => e.n);
 		expect(order).toEqual(names);
+	});
+});
+
+describe("live /sessions capture (#1698-46a8)", () => {
+	// catches: the payload the backend really sends for a spawned child renders flat on the phone
+	it("nests all nine spawned agents under COORDINATOR, through reconcile and the screen", async () => {
+		const live = (await import("./fixtures/sessions-live-1698.json")).default as unknown as SessionInfo[];
+		const polled = reconcileSessions([], live);
+		const coordinator = polled.find((s) => s.display_name === "COORDINATOR");
+		const children = polled.filter((s) => s.parent_session === coordinator?.tuic_session);
+		expect(children).toHaveLength(9);
+		const rows = nestUnderParents(polled);
+		const at = rows.findIndex((r) => r.session === coordinator);
+		expect(rows.slice(at + 1, at + 10).map((r) => r.depth)).toEqual(Array(9).fill(1));
+		expect(rows.filter((r) => r.depth === 1)).toHaveLength(9);
+
+		const view = renderScreen(polled);
+		expect(view.getAllByTestId("subagent-row")).toHaveLength(9);
+		expect(view.getAllByRole("img", { name: "Spawned by COORDINATOR" })).toHaveLength(9);
 	});
 });
