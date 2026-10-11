@@ -1784,6 +1784,14 @@ Available from the [plugin registry](https://github.com/sstraus/tuicommander-plu
 
 Provider accounts and sites are core-owned. Metadata reads expose credential presence only. A trusted manifest adapter registers `ProviderDescriptor {id,label,kinds,verify:{path,login_pointer}}` with `accounts::register_provider(owner, descriptor)`; non-core providers use bearer/basic tokens only. Unload unregisters descriptors but keeps accounts and credentials. Account actions are not currently a grant in `host.invoke`; the scoped plugin host adapter and authenticated HTTP injection are separate host-API work. Secret entry belongs in the core private native sink, which calls the write-only account service; plugins must never receive token values. See [Shared account registry](backend/github.md#shared-account-registry).
 
+## Core setting controls
+
+The core provides account, editable-list, multiselect, read-only status and action
+button controls for catalogue-backed settings and work-item forms. Plugins do not
+import these Solid components or gain new manifest fields from them. The host
+owns account selection and native secret entry; no token enters a plugin prop.
+See `plugin_dev_guide` → **Settings field kinds** for the core-rendered contracts.
+
 ## Tasks data contract (Phase A4)
 
 Register via `host.registerWorkItemProvider(provider)`, returning an auto-cleaned

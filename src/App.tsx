@@ -17,6 +17,7 @@ import { TerminalArea } from "./components/TerminalArea";
 import { Toolbar } from "./components/Toolbar";
 import { executeCleanup } from "./hooks/usePostMergeCleanup";
 import { editorTabsStore } from "./stores/editorTabs";
+import { getAppTheme } from "./themes";
 
 const ActivityDashboard = lazy(() =>
 	import("./components/ActivityDashboard").then((m) => ({ default: m.ActivityDashboard })),
@@ -687,6 +688,7 @@ const App: Component = () => {
 			height: 600,
 			center: true,
 			decorations: true,
+			backgroundColor: getAppTheme(settingsStore.state.theme).bgPrimary,
 		});
 
 		floatingWin.once("tauri://destroyed", () => {

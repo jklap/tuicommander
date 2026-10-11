@@ -2788,6 +2788,13 @@ the prepared launch prompt, counting escaped stdout bytes before framing/marker.
 
 The Automations **Runs** view shows backend 24h/7d counts, paginated history, distinct needs-you/unknown/interrupted states, and saved output after definition deletion. View run focuses only an available terminal on the owning daemon; otherwise it shows the saved report and workspace details without launching a replacement.
 
+### Reusable setting fields
+
+Core form controls support account selection with a host-owned Add action,
+stable-ID editable rows, checkbox multiselect, read-only status tones and action
+buttons. They are controlled rendering components for settings and work-item
+forms; adding them does not add a settings page or a plugin manifest API.
+
 ## Shared provider accounts
 
 Core account/site list, add, Test and remove use one registry with write-only credential storage. GitHub metadata/tokens migrate without changing account IDs or repo bindings; core retains the GitHub provider and ambient auth chain. Generic provider descriptors allow token/basic verification for plugin providers. Native Settings secret entry and plugin-manifest/authenticated-request wiring are separate integration steps.

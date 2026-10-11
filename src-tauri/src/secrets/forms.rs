@@ -123,7 +123,7 @@ pub(super) async fn ask_with_sink(
         let label = format!("secret-{}", form.id);
         *state.secrets.window.lock() = Some(label.clone());
         tracing::info!(source = "secrets", "Creating private secret window");
-        let built = tauri::WebviewWindowBuilder::new(
+        let builder = tauri::WebviewWindowBuilder::new(
             &handle,
             &label,
             tauri::WebviewUrl::App("index.html#/secret-form".into()),
@@ -141,7 +141,11 @@ pub(super) async fn ask_with_sink(
                         && url.scheme() == "http"
                         && url.host_str() == Some("127.0.0.1")
                         && url.port() == Some(1421)))
-        })
+        });
+        let built = crate::themes::window_background::configure(
+            builder,
+            crate::themes::window_background::current(&handle),
+        )
         .build();
         let window = match built {
             Ok(window) => window,
