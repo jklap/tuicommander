@@ -224,6 +224,37 @@ pub struct PluginManifest {
     /// Each entry is a plain binary name (e.g. "rtk", "mdkb").
     #[serde(default)]
     pub binaries: Vec<String>,
+    /// Account providers whose accounts `httpFetch({account})` may use: a core
+    /// provider id (`"github"`) or a token-only descriptor registered on load.
+    #[serde(default)]
+    pub providers: Vec<ManifestProvider>,
+}
+
+/// One manifest `providers` entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub(crate) enum ManifestProvider {
+    Core(String),
+    Declared(crate::accounts::ProviderDescriptor),
+}
+
+/// Account providers that core registers itself; a manifest may only reference them.
+const CORE_ACCOUNT_PROVIDERS: &[&str] = &["github"];
+
+impl ManifestProvider {
+    fn id(&self) -> &str {
+        match self {
+            Self::Core(id) => id,
+            Self::Declared(descriptor) => &descriptor.id,
+        }
+    }
+}
+
+impl PluginManifest {
+    /// Manifest consent: may this plugin authenticate with accounts of `provider`?
+    pub(crate) fn declares_provider(&self, provider: &str) -> bool {
+        self.providers.iter().any(|entry| entry.id() == provider)
+    }
 }
 
 /// Binary name prefixes that are never permitted in plugin manifests.
@@ -331,6 +362,44 @@ fn validate_manifest(manifest: &PluginManifest, dir_name: &str) -> Result<(), St
     // binaries requires exec:cli capability
     if !manifest.binaries.is_empty() && !manifest.capabilities.contains(&"exec:cli".to_string()) {
         return Err("manifest declares binaries but lacks exec:cli capability".into());
+    }
+    validate_providers(manifest)
+}
+
+/// Accounts are used only through `httpFetch`, so `providers` requires `net:http`.
+fn validate_providers(manifest: &PluginManifest) -> Result<(), String> {
+    if !manifest.providers.is_empty() && !manifest.capabilities.iter().any(|c| c == "net:http") {
+        return Err("manifest declares providers but lacks net:http capability".into());
+    }
+    let mut seen = std::collections::HashSet::new();
+    for entry in &manifest.providers {
+        let id = entry.id();
+        let core = CORE_ACCOUNT_PROVIDERS.contains(&id);
+        if matches!(entry, ManifestProvider::Core(_)) != core {
+            return Err(format!(
+                "provider \"{id}\" must be a core id or a new declared descriptor"
+            ));
+        }
+        if !seen.insert(id) {
+            return Err(format!("provider \"{id}\" is declared twice"));
+        }
+    }
+    Ok(())
+}
+
+/// Register the manifest's declared descriptors, owned by the plugin id. All or
+/// nothing: a rejected descriptor removes the ones registered before it.
+fn register_manifest_providers(manifest: &PluginManifest) -> Result<(), String> {
+    for entry in &manifest.providers {
+        if let ManifestProvider::Declared(descriptor) = entry
+            && let Err(e) = crate::accounts::register_provider(&manifest.id, descriptor.clone())
+        {
+            crate::accounts::unregister_providers(&manifest.id);
+            return Err(format!(
+                "Plugin \"{}\" provider \"{}\": {e}",
+                manifest.id, descriptor.id
+            ));
+        }
     }
     Ok(())
 }
@@ -575,6 +644,7 @@ pub(crate) fn register_loaded_plugin_impl(
     // each reload leaks a watcher set and MAX_WATCHERS_PER_PLUGIN caps out
     // after a handful of reloads (#649-56fb). Idempotent: a no-op on first load.
     dispose_plugin_runtime_state(state, &plugin_id);
+    register_manifest_providers(&manifest)?;
 
     state.loaded_plugins.insert(plugin_id, capabilities);
     Ok(())
@@ -606,6 +676,7 @@ pub fn unregister_loaded_plugin(
 
 pub(crate) fn unregister_loaded_plugin_impl(state: &crate::AppState, plugin_id: &str) {
     state.loaded_plugins.remove(plugin_id);
+    crate::accounts::unregister_providers(plugin_id);
 }
 
 // ---------------------------------------------------------------------------
@@ -1077,6 +1148,8 @@ pub(crate) fn dispose_plugin_runtime_state(state: &crate::AppState, id: &str) {
     state.loaded_plugins.remove(id);
     // Clear the exec:cli sliding-window rate-limiter entry for this id.
     crate::plugin_exec::clear_rate_limit(id);
+    // Descriptors leave with the plugin; accounts and their credentials stay.
+    crate::accounts::unregister_providers(id);
 }
 
 /// Remove a plugin and all its files (including data/).
@@ -1561,6 +1634,7 @@ mod tests {
             allowed_urls: vec![],
             agent_types: vec![],
             binaries: vec![],
+            providers: vec![],
         }
     }
 

@@ -2331,7 +2331,7 @@ POST /api/plugins/:plugin_id/build-artifacts/scan   { repoPaths, forceRefresh? }
 POST /api/plugins/:plugin_id/build-artifacts/delete { path, repoPaths } -> { ok }
 POST /api/plugins/:plugin_id/build-artifacts/trim   { path, repoPaths } -> { ok }   (intermediates only; keeps executables)
 POST /api/plugins/:plugin_id/exec        { binary, args, cwd? }   -> string        (plugin_exec_cli)
-POST /api/plugins/:plugin_id/http        { url, method?, headers?, body?, allowedUrls } -> HttpResponse
+POST /api/plugins/:plugin_id/http        { url, method?, headers?, body?, account? } -> HttpResponse
 GET  /api/plugins/:plugin_id/pty/output?sessionId=<id>&maxLines=  -> string        (plugin_read_session_output)
 POST /api/plugins/:plugin_id/register    { capabilities }         -> { ok }
 POST /api/plugins/:plugin_id/unregister                           -> { ok }

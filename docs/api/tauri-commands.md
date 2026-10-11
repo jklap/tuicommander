@@ -622,7 +622,7 @@ JavaScript `String.slice` semantics for ASCII, accented text, and non-BMP emoji.
 
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
-| `plugin_http_fetch` | `url, method?, headers?, body?, allowed_urls, plugin_id` | `HttpResponse` | Make HTTP request (validated against allowed_urls) |
+| `plugin_http_fetch` | `url, method?, headers?, body?, account?, plugin_id` | `HttpResponse` | Make HTTP request (validated against the on-disk manifest `allowedUrls`; with `account`, Rust injects that account's credential under the account host rule) |
 
 ## Code Intelligence / MDKB (`mdkb_commands.rs`)
 
