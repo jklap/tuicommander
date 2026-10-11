@@ -55,7 +55,6 @@ pub(crate) async fn start(
     browser: Option<String>,
     url: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    super::launcher::validate_url(url.as_deref())?;
     let agent = state
         .session_maps
         .session_states
