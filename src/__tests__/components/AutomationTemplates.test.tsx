@@ -1,7 +1,14 @@
 import { fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
-import { expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { AutomationsDialog } from "../../components/AutomationsDialog/AutomationsDialog";
+import { repositoriesStore } from "../../stores/repositories";
 import { definition, fakeAdapter } from "../automationsFixtures";
+
+beforeEach(() => {
+	for (const path of Object.keys(repositoriesStore.state.repositories)) repositoriesStore.remove(path);
+	repositoriesStore.add({ path: "/chosen", displayName: "Chosen" });
+	repositoriesStore.add({ path: "/other", displayName: "Other" });
+});
 
 // Catches: applying a template saving/running without consent, dropping backend
 // content or selected inputs, and displaying run controls for an unsaved draft.
@@ -39,8 +46,7 @@ it("applies a backend draft only after repository and config selection, then sav
 	fireEvent.click(screen.getByRole("button", { name: "New automation" }));
 	await screen.findByRole("option", { name: "Daily change review" });
 	fireEvent.change(screen.getByLabelText("Template"), { target: { value: "daily_review" } });
-	expect(screen.getByRole("button", { name: "Apply template" })).toBeDisabled();
-	fireEvent.input(screen.getByLabelText("Repository"), { target: { value: "/chosen" } });
+	fireEvent.change(screen.getByLabelText("Repository"), { target: { value: "/chosen" } });
 	fireEvent.input(screen.getByLabelText("Run config"), { target: { value: "my-config" } });
 	fireEvent.click(screen.getByRole("button", { name: "Apply template" }));
 	await waitFor(() => expect(screen.getByLabelText("Prompt")).toHaveValue("Backend literal prompt"));
@@ -80,4 +86,34 @@ it("shows a failed template catalogue and allows an explicit retry", async () =>
 	fireEvent.click(retry);
 	await screen.findByRole("option", { name: "Daily change review" });
 	expect(screen.queryByText("Templates unavailable")).toBeNull();
+});
+
+// Catches: Apply template being a dead, disabled button that never says what is missing.
+it("explains why a selected template cannot be applied yet and requests nothing", async () => {
+	const template = vi.fn();
+	render(() => (
+		<AutomationsDialog
+			onClose={() => {}}
+			adapter={fakeAdapter({ templates: async () => [{ id: "daily_review", name: "Daily change review" }], template })}
+		/>
+	));
+	fireEvent.click(screen.getByRole("button", { name: "New automation" }));
+	await screen.findByRole("option", { name: "Daily change review" });
+	fireEvent.change(screen.getByLabelText("Template"), { target: { value: "daily_review" } });
+	const apply = screen.getByRole("button", { name: "Apply template" });
+	expect(apply).not.toBeDisabled();
+	fireEvent.click(apply);
+	expect((await screen.findByRole("alert")).textContent).toContain("repository");
+	expect(template).not.toHaveBeenCalled();
+});
+
+// Catches: the repository field staying free text instead of offering the known repositories.
+it("offers the known repositories in the repository picker", async () => {
+	render(() => <AutomationsDialog onClose={() => {}} adapter={fakeAdapter()} />);
+	fireEvent.click(screen.getByRole("button", { name: "New automation" }));
+	const picker = await screen.findByLabelText("Repository");
+	expect(picker.tagName).toBe("SELECT");
+	expect([...picker.querySelectorAll("option")].map((o) => o.getAttribute("value"))).toEqual(
+		expect.arrayContaining(["/chosen", "/other"]),
+	);
 });

@@ -101,12 +101,12 @@ export function AutomationsDialog(props: { onClose: () => void; adapter?: Automa
 					</button>
 				</header>
 				<Show when={store.error()}>
-					<div role="alert" class={s.error}>
+					<div role="alert" class={`${s.error} ${s.banner}`}>
 						{store.error()}
 					</div>
 				</Show>
 				<Show when={store.notice()}>
-					<div role="status" class={s.notice}>
+					<div role="status" class={`${s.notice} ${s.banner}`}>
 						{store.notice()}
 					</div>
 				</Show>
