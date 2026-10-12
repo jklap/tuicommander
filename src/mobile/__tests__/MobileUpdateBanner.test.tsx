@@ -9,7 +9,9 @@ const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock("../../transport", () => ({ rpc }));
 vi.mock("../../invoke", () => ({ invoke: vi.fn() }));
 vi.mock("../../stores/appLogger", () => ({ appLogger: { debug: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
-vi.mock("../../stores/settings", () => ({ settingsStore: { hydrate: vi.fn(async () => {}) } }));
+vi.mock("../../stores/settings", () => ({
+	settingsStore: { hydrate: vi.fn(async () => {}), state: { chatMuteIntermediateText: true } },
+}));
 vi.mock("../../stores/ideas", () => ({ ideasStore: { hydrate: vi.fn() } }));
 vi.mock("../../components/AIChatPanel/useAcpChat", () => ({
 	createAcpChat: () => ({

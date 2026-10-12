@@ -269,6 +269,12 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		labelKey: "appearance.label.maxTabNameLength",
 	},
 	{ tab: "appearance", section: "Chat", label: "New text indicator", labelKey: "appearance.label.newTextIndicator" },
+	{
+		tab: "appearance",
+		section: "Chat",
+		label: "Mute Intermediate Text",
+		labelKey: "appearance.label.chatMuteIntermediateText",
+	},
 	// tabs/NotificationsTab.tsx
 	{ tab: "notifications", section: "Notification Settings", sectionKey: "notifications.heading.notificationSettings" },
 	{

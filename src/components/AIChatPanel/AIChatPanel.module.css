@@ -320,6 +320,17 @@
   line-height: 1.5;
 }
 
+.assistantMsg.intermediateMsg {
+  color: var(--fg-muted);
+  font-size: var(--font-sm);
+}
+
+/* #markdown-content sets its own color and size; inherit so the muted style reaches the prose. */
+.assistantMsg.intermediateMsg :global(#markdown-content) {
+  color: inherit;
+  font-size: inherit;
+}
+
 .systemNotice {
   color: var(--fg-muted);
   font-size: var(--font-xs);
