@@ -1,3 +1,8 @@
+## Mobile title and compact AI Chat composer (1746-aa9e)
+
+- [ ] [VISUAL] After the TUIC restart, reload the iPhone PWA. Park/Restore/Swap and Stop should share the input row with Attach and Send; the bottom tabs should meet the screen edge. Headless Chromium geometry and screenshots cover 360/390px with 62/34px safe-area overrides; the actual iPhone remains unverified.
+- [ ] [VISUAL] Inspect the title on the iPhone with the menu closed and open. The reported screenshot has progressive blur over the title and connection dot, with a crisp subtitle. TopBar, shell and mobile global CSS contain no title/ancestor blur, mask, text-shadow or opacity; the app opts into a translucent iOS status bar in `mobile.html`. The likely cause is WebKit's native scroll-edge effect, which is outside page CSS ([WebKit scroll view](https://github.com/WebKit/WebKit/blob/main/Source/WebKit/UIProcess/ios/WKScrollView.mm) and [native edge wrapper](https://github.com/WebKit/WebKit/blob/main/Source/WebKit/UIProcess/ios/WKUIScrollEdgeEffect.mm)). This is an inference, not a confirmed device diagnosis. Do not add guessed spacing or filter overrides until device inspection identifies the native layer.
+
 ## Design Mode dev-server list collapsed (1727-0338)
 
 - [ ] [VISUAL] In Boss's Edge profile, reload the Design Mode extension and open the side panel with many dev servers. The list is collapsed under "Dev servers (N)" and a new pick card shows without scrolling. Vitest and a real side panel in Chrome for Testing with a stub native host (DOM evidence, no screenshot) cover it.
