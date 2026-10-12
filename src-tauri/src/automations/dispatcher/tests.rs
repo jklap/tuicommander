@@ -343,37 +343,89 @@ async fn dispatch_records_workspace_and_spawn_failure() {
     }
 }
 
-// Catches: the boot admission path silently continuing to execute recurring cron schedules.
-#[tokio::test]
-async fn phase_one_admission_consumes_once_but_never_dispatches_cron() {
-    let (fixture, _) = Fixture::new(None, true);
+/// Adds an enabled every-minute cron definition next to the fixture's Once one.
+fn add_recurring(fixture: &Fixture) {
     let mut recurring = fixture.dispatcher.definitions.get("once").unwrap();
     recurring.id = "recurring".into();
     recurring.once_local = None;
     recurring.cron = "* * * * *".into();
     fixture.dispatcher.definitions.create(recurring).unwrap();
-    let now = "2099-01-01T12:00:01Z".parse().unwrap();
+}
+
+// Catches: the phase-1 gate left on, so a due recurring cron never reaches launch.
+#[tokio::test]
+async fn cron_occurrence_dispatches_once_per_occurrence() {
+    let (fixture, _) = Fixture::new(None, true);
+    add_recurring(&fixture);
+    // Dispatch stamps wall-clock time, so the tick must not run in the future.
+    let now = chrono::Utc::now();
+    let occurrence_ms = now.timestamp() / 60 * 60_000;
     let due = fixture.dispatcher.reserve_due(now).unwrap();
-    assert_eq!(due.len(), 1);
-    assert_eq!(due[0].definition.id, "once");
-    assert!(fixture.dispatcher.reserve_due(now).unwrap().is_empty());
+    let cron: Vec<_> = due
+        .iter()
+        .filter(|run| run.definition.id == "recurring")
+        .collect();
+    assert_eq!(cron.len(), 1, "one reservation for the due occurrence");
+    assert!(matches!(
+        cron[0].trigger,
+        RunTrigger::Scheduled { occurrence_ms: got } if got == occurrence_ms
+    ));
+    fixture.dispatcher.dispatch(&cron[0].id).await.unwrap();
+    assert_eq!(fixture.saved(&cron[0].id).status, RunStatus::Running);
+    assert_eq!(fixture.dispatcher.effects.calls.lock().len(), 1);
+    // The same occurrence is consumed: a second tick reserves nothing for it.
     assert!(
+        fixture
+            .dispatcher
+            .reserve_due(now)
+            .unwrap()
+            .iter()
+            .all(|run| run.definition.id != "recurring")
+    );
+    // The cursor advanced, so the next run is the following minute.
+    assert_eq!(
         fixture
             .dispatcher
             .runs
             .scheduled_cursor("recurring")
-            .unwrap()
-            .is_none()
+            .unwrap(),
+        Some(occurrence_ms)
     );
-    assert!(
-        fixture
-            .dispatcher
-            .run_now("recurring")
-            .await
-            .unwrap_err()
-            .contains("Only Once")
-    );
-    assert!(fixture.dispatcher.effects.calls.lock().is_empty());
+}
+
+// Catches: a next-occurrence tick launching a second agent while the first still runs.
+#[tokio::test]
+async fn cron_overlap_skip_refuses_second_occurrence_while_first_runs() {
+    let (fixture, _) = Fixture::new(None, true);
+    add_recurring(&fixture);
+    let first = chrono::Utc::now();
+    let id = fixture
+        .dispatcher
+        .reserve_due(first)
+        .unwrap()
+        .into_iter()
+        .find(|run| run.definition.id == "recurring")
+        .unwrap()
+        .id;
+    fixture.dispatcher.dispatch(&id).await.unwrap();
+    let next = first + chrono::Duration::seconds(60);
+    for run in fixture.dispatcher.reserve_due(next).unwrap() {
+        if run.definition.id == "recurring" {
+            assert_eq!(run.status, RunStatus::SkippedOverlap);
+        }
+    }
+    assert_eq!(fixture.dispatcher.effects.calls.lock().len(), 1);
+}
+
+// Catches: Run Now refused for a recurring definition by the Once-only gate.
+#[tokio::test]
+async fn run_now_accepts_cron_definition() {
+    let (fixture, _) = Fixture::new(None, true);
+    add_recurring(&fixture);
+    let run = fixture.dispatcher.run_now("recurring").await.unwrap();
+    assert_eq!(run.status, RunStatus::Running);
+    assert_eq!(run.definition.id, "recurring");
+    assert_eq!(fixture.dispatcher.effects.calls.lock().len(), 1);
 }
 
 // Catches: an agent surviving unbound when a final transition wins during launch.

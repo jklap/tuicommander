@@ -4,9 +4,8 @@ The backend Once runtime starts on desktop and headless hosts. It records
 precheck decisions before launching the saved agent profile with the literal
 prompt. Precheck output is saved in history. It is not added to the prompt unless
 the definition opts in with `precheck.inject_output: true`.
-Recurring dispatch, public execution controls, completion detection and maximum
-duration enforcement are not yet available. Use isolated test definitions until
-the remaining execution integration is complete.
+Recurring cron definitions dispatch once per due occurrence and Run Now works for
+them. Overlap `skip` still refuses an occurrence while the previous run is open.
 
 Open the command palette and select **Automations**. This dialog manages runs
 on this machine. It does not dispatch onto a different saved remote connection.

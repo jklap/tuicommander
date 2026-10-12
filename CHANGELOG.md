@@ -18,6 +18,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - GitHub token chain no longer reads the `gh` CLI login (`gh auth token`, `gh-token` crate); use OAuth login or `GH_TOKEN`/`GITHUB_TOKEN`. TUIC spawns no `gh` process (#1714-1c1d).
 
 ### Fixed
+- Recurring cron Automations now dispatch once per due occurrence and Run Now works for them (#1794-f0bb).
 - Restored mobile dictation drafts reconcile with the current terminal line on Send or first edit, preserving words if the desktop cleared the line and avoiding duplicate replay (#1768-a83f).
 - Mobile output stops following after a small upward scroll and ignores queued follow frames after the user scrolls away (#1745-63b0).
 - Mobile ego questions show Input and open a full, wrapping question card from the header; selecting an option sends one answer (#1759-6047).
