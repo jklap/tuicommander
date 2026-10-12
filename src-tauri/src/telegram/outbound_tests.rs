@@ -389,6 +389,25 @@ async fn outbound_permanent_errors_latch_and_rate_limits_do_not_retry_early() {
     }
 }
 
+// Catches: a 409 latches the outbound worker, so telegram send keeps failing
+// after the other getUpdates poller is gone (story 1765-2c6a).
+#[tokio::test]
+async fn outbound_conflict_does_not_latch_later_sends() {
+    let (_dir, paths) = setup();
+    let server = FakeServer::start(vec![
+        (StatusCode::CONFLICT, json!({"ok":false,"error_code":409})),
+        (StatusCode::OK, json!({"ok":true,"result":{"message_id":9}})),
+    ])
+    .await;
+    let mut outbound = Outbound::new(paths.clone(), BotApi::loopback(paths, server.address));
+    assert_eq!(
+        outbound.send(1111111, "first", None).await.unwrap_err(),
+        Error::Conflict
+    );
+    assert!(outbound.send(1111111, "second", None).await.is_ok());
+    assert_eq!(server.requests().len(), 2);
+}
+
 // Catches: begin reads the raw cached agent_state (unset in production)
 // instead of the authoritative snapshot derived from foreground/shell state.
 #[cfg(unix)]

@@ -2033,6 +2033,8 @@ Agent-scoped plugin (`agentTypes: ["claude"]`) that wakes Claude Code when it st
 
 ## 18. Mobile Companion UI
 
+Waiting terminal ego questions show **Input**. Tap the question icon in the session header to open or close the full question and its wrapping options. The card overlays the terminal without reserving rows. Prior suggested actions are hidden while a human answer is pending.
+
 Phone-optimized progressive web app for monitoring AI agents remotely. Separate SolidJS entry point (`src/mobile/`) served by the existing HTTP server at `/mobile`.
 
 ### 18.1 Architecture
@@ -2883,3 +2885,5 @@ Review and edit the draft, then select **Save**. Templates start paused; applyin
 one never persists a definition or starts a run. **Resume** is a separate action.
 Templates use the existing checkout with no precheck and do not change agent
 permissions. Recurring cadence previews retain the existing runtime limitations.
+
+- Finished worktree recycling: explicit completion permits safe reuse with a new branch and path while ignored build artifacts remain intact. Fresh allocations stay reserved.

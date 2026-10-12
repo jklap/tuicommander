@@ -204,7 +204,8 @@ checkout into `__archived`, runs `git worktree repair`, and repairs initialized
 submodule gitfiles and `core.worktree` paths. The Git administration directory,
 HEAD, and reflogs remain registered; the workspace mapper hides archived paths
 from active UI listings. A repair failure rolls the checkout back to its old
-path. The archive path is never unlocked and never pruned.
+path. Allocation or rename-journal failures also restore the original path and
+allocation state. The archive path is never unlocked and never pruned.
 
 Orphan pruning accepts only a registered detached linked checkout with no Git
 operation in progress. Immediately before removal it checks detached HEAD
@@ -454,3 +455,19 @@ do not include untracked files.
 
 
 Automation worktree cleanup (#1623-8b2a): Automation runs retain automation/run IDs and the exact created workspace path and ID in their saved snapshot, including after definition deletion. Worktree cleanup is explicit and limited to final runs. The backend resolves the saved identity and rechecks shared Git integration/archive proof, dirt, submodule commits and live sessions; it never forces removal or closes sessions. Shared `automation_action` actions `worktree_preview` and `cleanup_worktree` accept a saved run `id` on IPC, HTTP, MCP and CLI.
+
+### Finished checkout recycling
+
+Workspace creation writes a durable `reserved` allocation marker in the linked checkout
+Git administration directory before it returns. Only explicit archive or safe removal
+writes `finished`; merged ancestry or missing sessions alone does not release a checkout.
+Creation can rename and reuse a finished checkout from the same repository when Git
+proves it clean and integrated, with no unpushed submodule commits, lock, operation,
+pending warm, or live session. Ignored artifacts stay in place. Git registration and
+submodule paths are repaired. The old workspace removal event precedes the new creation
+event. A durable `tuic-worktree-renames.jsonl` journal lets external registry consumers
+reconcile paths. Allocation uses a blocking OS file lock in the Git common directory;
+concurrent creates wait, and a process exit releases the lock. A failed recycle restores
+the old checkout path, registration, branch and finished allocation state before returning
+the error. Live sessions prevent recycling; fingerprint-confirmed forced deletion keeps
+the existing deletion contract.
