@@ -69,10 +69,41 @@ describe("DictationToast", () => {
 	describe("spoken replies toggle", () => {
 		const SAVED_CONFIG = { hands_free_spoken_replies: true, hands_free_listening: true };
 
+		const armedStatus = {
+			armed: true,
+			listening: true,
+			phase: "waiting",
+			sessionId: "s1",
+			owner: "desktop",
+			generation: 1,
+			pendingText: null,
+			holdBackMs: 1500,
+			error: null,
+		};
+
+		/** Bug caught: the toggle is shown in push-to-talk, where no reply is ever spoken and it has no effect. */
+		it("is not offered during push-to-talk dictation", async () => {
+			mockInvoke.mockImplementation((cmd: string) => {
+				if (cmd === "get_dictation_config") return Promise.resolve({ ...SAVED_CONFIG });
+				return Promise.resolve(undefined);
+			});
+
+			await testInScopeAsync(async () => {
+				const { container } = render(() => <DictationToast />);
+				await dictationStore.startRecording();
+
+				expect(dictationStore.state.recording).toBe(true);
+				expect(dictationStore.state.handsFree?.armed).not.toBe(true);
+				expect(container.querySelector(".toast")).not.toBeNull();
+				expect(container.querySelector('button[aria-label="Spoken replies"]')).toBeNull();
+			});
+		});
+
 		/** Bug caught: the toast flips a local flag, so Settings and the backend never see the change. */
-		it("flips the persisted setting from the toast while recording and reflects the new state", async () => {
+		it("flips the persisted setting from the toast while a hands-free conversation is armed", async () => {
 			let stored = { ...SAVED_CONFIG };
 			mockInvoke.mockImplementation((cmd: string, args?: { config?: typeof stored }) => {
+				if (cmd === "arm_hands_free_dictation" || cmd === "get_hands_free_status") return Promise.resolve(armedStatus);
 				if (cmd === "get_dictation_config") return Promise.resolve({ ...stored });
 				if (cmd === "set_dictation_config" && args?.config) {
 					stored = { ...args.config };
@@ -82,7 +113,7 @@ describe("DictationToast", () => {
 
 			await testInScopeAsync(async () => {
 				const { container } = render(() => <DictationToast />);
-				await dictationStore.startRecording();
+				expect(await dictationStore.armHandsFree("s1")).toBe(true);
 
 				const toggle = container.querySelector<HTMLButtonElement>('button[aria-label="Spoken replies"]');
 				expect(toggle).not.toBeNull();
@@ -96,6 +127,8 @@ describe("DictationToast", () => {
 				toggle?.click();
 				await vi.waitFor(() => expect(toggle?.getAttribute("aria-pressed")).toBe("true"));
 				expect(stored.hands_free_spoken_replies).toBe(true);
+
+				await dictationStore.disarmHandsFree();
 			});
 		});
 

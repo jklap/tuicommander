@@ -159,30 +159,32 @@ export function DictationToast() {
 						</button>
 					</span>
 				</Show>
-				<button
-					type="button"
-					class={styles.control}
-					classList={{ [styles.controlOff]: !spokenReplies() }}
-					aria-label={t("dictation.spokenRepliesToggle", "Spoken replies")}
-					aria-pressed={spokenReplies()}
-					title={
-						spokenReplies()
-							? t("dictation.spokenRepliesOnTitle", "Spoken replies on: click to turn off")
-							: t("dictation.spokenRepliesOffTitle", "Spoken replies off: click to turn on")
-					}
-					onClick={() => dictationStore.setSpokenReplies(!spokenReplies())}
-				>
-					<svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true">
-						<path d="M2 6h2.5L8 3v10L4.5 10H2z" />
-						<Show
-							when={spokenReplies()}
-							fallback={<path d="M10.5 6.2l3 3.6m0-3.6l-3 3.6" stroke="currentColor" stroke-width="1.4" fill="none" />}
-						>
-							<path d="M10.2 5.8a3.2 3.2 0 0 1 0 4.4" stroke="currentColor" stroke-width="1.4" fill="none" />
-							<path d="M11.9 4.2a5.5 5.5 0 0 1 0 7.6" stroke="currentColor" stroke-width="1.4" fill="none" />
-						</Show>
-					</svg>
-				</button>
+					<Show when={handsFreeArmed()}>
+					<button
+						type="button"
+						class={styles.control}
+						classList={{ [styles.controlOff]: !spokenReplies() }}
+						aria-label={t("dictation.spokenRepliesToggle", "Spoken replies")}
+						aria-pressed={spokenReplies()}
+						title={
+							spokenReplies()
+								? t("dictation.spokenRepliesOnTitle", "Spoken replies on: click to turn off")
+								: t("dictation.spokenRepliesOffTitle", "Spoken replies off: click to turn on")
+						}
+						onClick={() => dictationStore.setSpokenReplies(!spokenReplies())}
+					>
+						<svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true">
+							<path d="M2 6h2.5L8 3v10L4.5 10H2z" />
+							<Show
+								when={spokenReplies()}
+								fallback={<path d="M10.5 6.2l3 3.6m0-3.6l-3 3.6" stroke="currentColor" stroke-width="1.4" fill="none" />}
+							>
+								<path d="M10.2 5.8a3.2 3.2 0 0 1 0 4.4" stroke="currentColor" stroke-width="1.4" fill="none" />
+								<path d="M11.9 4.2a5.5 5.5 0 0 1 0 7.6" stroke="currentColor" stroke-width="1.4" fill="none" />
+							</Show>
+						</svg>
+					</button>
+					</Show>
 			</div>
 		</Show>
 	);
