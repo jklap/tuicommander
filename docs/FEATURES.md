@@ -2898,3 +2898,7 @@ Templates use the existing checkout with no precheck and do not change agent
 permissions. Recurring cadence previews retain the existing runtime limitations.
 
 - Finished worktree recycling: explicit completion permits safe reuse with a new branch and path while ignored build artifacts remain intact. Fresh allocations stay reserved.
+
+### History-anchored viewport scrolling
+
+Terminal gestures hold the requested history row even when output arrives before the backend applies the scroll. If capped scrollback evicts that row, the viewport clamps to the oldest retained row.

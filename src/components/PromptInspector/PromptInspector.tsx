@@ -12,8 +12,16 @@ export interface PromptReceipt {
 		text: string;
 		status: string;
 		truncated: boolean;
+		count: number;
+		firstSeenMs: number;
+		lastSeenMs: number;
 	}[];
 	captureLimited: boolean;
+}
+
+/** The backend rejection text (a string over IPC, an Error over HTTP) says why the read failed. */
+function errorText(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
 }
 
 export const PromptInspector: Component<{ sessionId: string | null; onClose: () => void }> = (props) => {
@@ -46,7 +54,7 @@ export const PromptInspector: Component<{ sessionId: string | null; onClose: () 
 							<p>Loading launch receipt…</p>
 						</Show>
 						<Show when={receipt.error}>
-							<p role="alert">Could not read the launch receipt. The session may have ended.</p>
+							<p role="alert">Could not read the launch receipt: {errorText(receipt.error)}</p>
 						</Show>
 						<Show when={!receipt.loading && !receipt.error && receipt()}>
 							{(data) => (
@@ -72,6 +80,12 @@ export const PromptInspector: Component<{ sessionId: string | null; onClose: () 
 																	? "Served in MCP initialize"
 																	: "Sent at launch"}
 												</p>
+												<Show when={section.count > 1}>
+													<p class={s.note}>
+														Served {section.count} times; showing the latest, last seen{" "}
+														{new Date(section.lastSeenMs).toLocaleString()}.
+													</p>
+												</Show>
 												<Show when={section.truncated}>
 													<p class={s.note}>Truncated redacted preview (32 KiB per section, 64 KiB per receipt).</p>
 												</Show>

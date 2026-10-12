@@ -429,6 +429,23 @@ fn is_path_escape(relative: &str) -> bool {
     false
 }
 
+/// Drops a leading `~v<digits>/` load-version segment from a plugin file path.
+/// Any other leading segment, including `~v` alone or `~vx`, is a real directory.
+fn strip_load_version(file: &str) -> &str {
+    let Some(rest) = file.strip_prefix("~v") else {
+        return file;
+    };
+    match rest.split_once('/') {
+        Some((digits, tail))
+            if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) =>
+        {
+            tail
+        }
+        None if !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()) => "",
+        _ => file,
+    }
+}
+
 /// Resolve a `plugin://{id}/{file}` URI to a filesystem path within the
 /// plugins directory. Returns `None` if the path is invalid or escapes.
 fn resolve_plugin_path(uri_path: &str) -> Option<PathBuf> {
@@ -443,6 +460,13 @@ fn resolve_plugin_path(uri_path: &str) -> Option<PathBuf> {
     let (plugin_id, file) = trimmed.split_once('/')?;
 
     if plugin_id.is_empty() || file.is_empty() {
+        return None;
+    }
+
+    // The frontend loads a plugin under `/{id}/~v{n}/` so that every relative import
+    // of one load shares a URL the WebView has not cached. The segment is not on disk.
+    let file = strip_load_version(file);
+    if file.is_empty() {
         return None;
     }
 
@@ -470,8 +494,8 @@ fn resolve_plugin_path(uri_path: &str) -> Option<PathBuf> {
 /// Serves JS files from `{config_dir}/plugins/{id}/{file}` with the
 /// `application/javascript` MIME type. Rejects path traversal attempts.
 ///
-/// The `?t=<timestamp>` query parameter is accepted (and ignored) to allow
-/// cache-busting for hot-reload.
+/// A leading `~v<digits>/` path segment (the frontend's per-load cache-busting
+/// version for hot reload, see `strip_load_version`) is accepted and ignored.
 pub fn register_plugin_protocol(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> {
     builder.register_uri_scheme_protocol("plugin", |_ctx, request| {
         let uri = request.uri();
@@ -1605,6 +1629,41 @@ mod tests {
         let result = resolve_plugin_path("/my-plugin/dist/bundle.js");
         assert!(result.is_some());
         assert!(result.unwrap().ends_with("my-plugin/dist/bundle.js"));
+    }
+
+    #[test]
+    fn resolve_strips_the_load_version_segment() {
+        // The frontend loads a whole plugin under `/{id}/~v{n}/`, so relative imports
+        // inherit the version. The file on disk has no such directory.
+        let versioned = resolve_plugin_path("/my-plugin/~v1791828000000/provider.js").unwrap();
+        assert_eq!(
+            versioned,
+            resolve_plugin_path("/my-plugin/provider.js").unwrap()
+        );
+        let nested = resolve_plugin_path("/my-plugin/~v7/lib/model.js").unwrap();
+        assert!(nested.ends_with("my-plugin/lib/model.js"));
+    }
+
+    #[test]
+    fn resolve_versioned_path_still_rejects_traversal_and_empty_files() {
+        assert!(resolve_plugin_path("/my-plugin/~v1/../../secret").is_none());
+        assert!(resolve_plugin_path("/my-plugin/~v1/").is_none());
+        assert!(resolve_plugin_path("/my-plugin/~v1").is_none());
+    }
+
+    #[test]
+    fn resolve_keeps_a_directory_that_only_looks_like_a_version() {
+        // Only `~v<digits>` is a load version; any other name is a real directory.
+        assert!(
+            resolve_plugin_path("/my-plugin/~vx/a.js")
+                .unwrap()
+                .ends_with("my-plugin/~vx/a.js")
+        );
+        assert!(
+            resolve_plugin_path("/my-plugin/~v/a.js")
+                .unwrap()
+                .ends_with("my-plugin/~v/a.js")
+        );
     }
 
     #[test]

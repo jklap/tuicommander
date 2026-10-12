@@ -2133,6 +2133,14 @@ impl TerminalGrid {
         }
     }
 
+    /// Scroll to an eviction-stable all-time row, or follow the tail with None.
+    /// Output between request and apply cannot shift a retained anchor; trimmed
+    /// rows clamp to the oldest retained row.
+    pub fn scroll_to_anchor(&mut self, anchor: Option<usize>) {
+        let offset = anchor.map_or(0, |row| self.screen_origin().saturating_sub(row));
+        self.scroll_to_offset(offset);
+    }
+
     /// Total number of lines (screen + scrollback history).
     pub fn total_lines(&self) -> usize {
         self.term.grid().history_size() + self.term.grid().screen_lines()
@@ -5357,6 +5365,39 @@ mod tests {
             .map(|i| format!("l{i}"))
             .collect();
         assert_eq!(seen, expected);
+    }
+
+    /// Catches: converting an all-time anchor to an offset before output wins the lock.
+    #[test]
+    fn scroll_anchor_keeps_requested_rows_after_delayed_output() {
+        let mut grid = TerminalGrid::new(3, 20, 100);
+        let _ = grid.process(b"l0\r\nl1\r\nl2\r\nl3\r\nl4\r\nl5\r\nl6");
+        // The client saw origin 4 and requested row 2. Output arrives before apply.
+        let _ = grid.process(b"\r\nl7\r\nl8\r\nl9\r\nl10\r\nl11");
+        grid.scroll_to_anchor(Some(2));
+        assert_eq!(grid.get_row_text(0), "l2");
+        let _ = grid.process(b"\r\nl12\r\nl13");
+        assert_eq!(grid.get_row_text(0), "l2");
+    }
+
+    /// Catches: capped scrollback reinterprets an evicted anchor as a newer retained row.
+    #[test]
+    fn scroll_anchor_clamps_evicted_rows_and_can_resume_tail() {
+        let mut grid = TerminalGrid::new(3, 20, 4);
+        for i in 0..12 {
+            let sep = if i == 11 { "" } else { "\r\n" };
+            let _ = grid.process(format!("l{i}{sep}").as_bytes());
+        }
+        grid.scroll_to_anchor(Some(2));
+        assert_eq!(grid.get_row_text(0), "l5");
+        grid.scroll_to_anchor(Some(7));
+        assert_eq!(grid.get_row_text(0), "l7");
+        grid.scroll_to_anchor(Some(usize::MAX));
+        assert_eq!(grid.get_row_text(0), "l9");
+        grid.scroll_to_anchor(None);
+        let _ = grid.process(b"\r\nl12");
+        assert_eq!(grid.display_offset(), 0);
+        assert_eq!(grid.get_row_text(0), "l10");
     }
 
     #[test]

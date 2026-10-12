@@ -322,7 +322,7 @@
 
 .assistantMsg.intermediateMsg {
   color: var(--fg-muted);
-  font-size: var(--font-sm);
+  font-size: var(--font-sm, 0.875em);
 }
 
 /* #markdown-content sets its own color and size; inherit so the muted style reaches the prose. */
