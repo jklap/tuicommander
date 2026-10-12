@@ -6,7 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-- Add the injected-fetch GitHub Work adapter and recorded-fixture tests; authenticated runtime/catalog integration and Projects v2 success-path verification remain pending (#1693-a816).
+### Fixed
+
+- GitHub OAuth now requests `read:project` for Projects v2 reads. Existing logins need reauthorization.
+
+- Add the GitHub Work adapter, account-authenticated runtime, catalog entry and recorded-fixture tests; core PR-action binding and Projects v2 success-path verification remain pending (#1693-a816).
 
 ### Fixed
 - Preserve beta installs in the macOS terminal installer and normalize release tag prefixes for default and pinned downloads.

@@ -460,3 +460,5 @@ writes no account or credential. After Submit is accepted, verification and stor
 finish even if the window closes; a consumed nonce cannot be replayed. Rotation
 invalidates the same GitHub Enterprise runtime cache as the account owner API.
 Native inspection remains blocked until the private window is destroyed.
+
+GitHub OAuth device flow requests `repo read:project`. Existing account tokens retain their previous scopes until the user signs in again. GitHub Projects v2 permission failures retain the API error, including `INSUFFICIENT_SCOPES`; they are not empty boards.

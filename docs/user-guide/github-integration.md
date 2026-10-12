@@ -17,7 +17,7 @@ TUICommander needs a GitHub token to access PRs and CI status. You have two opti
 5. Paste the code and authorize
 6. Done — the token is stored securely in your OS keyring
 
-This method automatically requests the correct scope (`repo`) and works with private repositories and organization repos.
+This method automatically requests the correct scopes (`repo` and `read:project`) and works with private repositories and organization repos.
 
 ### Option 2: Environment variable
 
@@ -316,3 +316,5 @@ Merged-PR evidence for worktree and local-branch cleanup uses the GitHub account
 and host selected for that repository. It no longer depends on the GitHub CLI
 login. If the complete PR history cannot be read, cleanup does not treat that
 lookup as proof that a branch was merged.
+
+GitHub logins created before Projects v2 support must sign in again to consent to `read:project`. Existing credentials are not upgraded automatically; a Projects read can return `INSUFFICIENT_SCOPES` until reauthorization.
