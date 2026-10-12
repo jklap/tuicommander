@@ -5195,6 +5195,7 @@ Visual evidence: worktree Vite fixture mounted the real NotificationsTab and Toa
 
 - [ ] Desktop dictation in terminal Chat: select transcript text, hold Fn and dictate, then confirm Compose receives the text with its draft preserved. Move focus or switch tabs during the final pass; confirm delivery stays with the original target. Close the original tab; confirm the transcript stays in the error message and Messages bell (#1773-5b69). Automated target/Compose tests cover routing; native Fn and microphone observation remain for Boss's normal app session.
 
+- [ ] Beta update channel after backend rebuild: Settings → General → Expert Mode → Update Channel offers Beta and preserves it after restart. Before the first beta feed exists, Check for Updates reports no beta release (or offers a newer stable). After a beta tag workflow completes, beta.1 offers beta.2 from its immutable download page; after 2.0.0 publishes, it offers the final in-app. Stable channel stays on stable. Rust changes require Boss's manual restart to load.
 - [x] Shared form controls: Tasks create fields align at 36px; the type picker remains native. _(verified: worktree Vite fixture, agent-browser before/after screenshots under ~/Gits/.tmp/results/form-controls/)_
 
 ## Shared form controls (1815-01c9)
