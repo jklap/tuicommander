@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Fixed
+- Discard obsolete plan, story and dashboard results after repository switches or plugin unloads; refresh the MDKB ticker on repository switches.
 - Preserve beta installs in the macOS terminal installer and normalize release tag prefixes for default and pinned downloads.
 
 ### Added

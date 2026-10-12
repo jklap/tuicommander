@@ -106,3 +106,6 @@ See the [Plugin Authoring Guide](../plugins.md) for the full API reference, mani
 | "Requires capability X" | Add the capability to the `capabilities` array in `manifest.json` |
 | Changes not taking effect | Save the file again to trigger hot reload, or restart the app |
 | Plugin errors | Check Settings → Plugins → Logs for the plugin's error log |
+
+Repository-aware plugins discard scans started before a repository switch or unload.
+The MDKB status ticker refreshes when you select another repository.
