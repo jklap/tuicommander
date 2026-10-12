@@ -3550,11 +3550,12 @@ export const settingsCatalogue = {
       "helpKey": "settings.catalogue.app.update_channel.help",
       "label": "update channel",
       "schema": {
-        "description": "Update channel: \"stable\" or \"nightly\"",
+        "description": "Update channel: \"stable\", \"beta\" or \"nightly\"",
         "type": "string",
         "default": "stable",
         "enum": [
           "stable",
+          "beta",
           "nightly"
         ]
       },
@@ -3567,6 +3568,7 @@ export const settingsCatalogue = {
         "kind": "static",
         "values": [
           "stable",
+          "beta",
           "nightly"
         ]
       },
