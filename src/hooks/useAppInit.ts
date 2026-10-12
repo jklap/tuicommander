@@ -566,8 +566,16 @@ export async function initApp(deps: AppInitDeps) {
 	}
 
 	replaceMcpToastListener((event) => {
-		const { title, message, level, sound, urgency, origin_repo_path, origin_session_id, __tuic_origin: origin } =
-			event.payload;
+		const {
+			title,
+			message,
+			level,
+			sound,
+			urgency,
+			origin_repo_path,
+			origin_session_id,
+			__tuic_origin: origin,
+		} = event.payload;
 		if (origin && (typeof title !== "string" || (message !== null && typeof message !== "string"))) {
 			appLogger.debug("app", "Discarding malformed mirrored MCP toast");
 			return;
