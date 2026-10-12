@@ -35,6 +35,7 @@ vi.mock("../../transport", () => ({
 
 // Mock settings store — default to "stable" channel
 const mockSettingsState = { updateChannel: "stable" as string };
+let mockAppVersion = "0.0.1";
 vi.mock("../../stores/settings", () => ({
 	settingsStore: { state: mockSettingsState },
 }));
@@ -51,11 +52,12 @@ describe("updaterStore", () => {
 		mockRelaunch.mockReset().mockResolvedValue(undefined);
 		mockRpc.mockReset().mockResolvedValue(undefined);
 		mockSettingsState.updateChannel = "stable";
+		mockAppVersion = "0.0.1";
 		pendingPromises.length = 0;
 
 		vi.doMock("@tauri-apps/plugin-updater", () => ({ check: mockCheck }));
 		vi.doMock("@tauri-apps/plugin-process", () => ({ relaunch: mockRelaunch }));
-		vi.doMock("@tauri-apps/api/app", () => ({ getVersion: vi.fn().mockResolvedValue("0.0.1") }));
+		vi.doMock("@tauri-apps/api/app", () => ({ getVersion: vi.fn(async () => mockAppVersion) }));
 		vi.doMock("../../transport", () => ({ isTauri: () => true, rpc: mockRpc }));
 		vi.doMock("../../stores/settings", () => ({
 			settingsStore: { state: mockSettingsState },
@@ -110,6 +112,38 @@ describe("updaterStore", () => {
 				expect(store.state.version).toBe("1.2.3");
 				expect(store.state.body).toBe("fixes");
 				expect(store.state.downloadUrl).toBeNull();
+			});
+		});
+
+		it("offers the final release to a beta user (catches: 2.0.0 stripped equal to 2.0.0-beta.1)", async () => {
+			mockAppVersion = "2.0.0-beta.1";
+			mockCheck.mockResolvedValue({ version: "2.0.0", body: "final", downloadAndInstall: vi.fn() });
+
+			await testInScopeAsync(async () => {
+				await store.checkForUpdate();
+				expect(store.state.available).toBe(true);
+				expect(store.state.version).toBe("2.0.0");
+			});
+		});
+
+		it("offers a later beta to a beta user (catches: beta.2 stripped equal to beta.1)", async () => {
+			mockAppVersion = "2.0.0-beta.1";
+			mockCheck.mockResolvedValue({ version: "2.0.0-beta.2", body: "beta", downloadAndInstall: vi.fn() });
+
+			await testInScopeAsync(async () => {
+				await store.checkForUpdate();
+				expect(store.state.available).toBe(true);
+				expect(store.state.version).toBe("2.0.0-beta.2");
+			});
+		});
+
+		it("never offers a beta to a user on its final release", async () => {
+			mockAppVersion = "2.0.0";
+			mockCheck.mockResolvedValue({ version: "2.0.0-beta.2", body: "beta", downloadAndInstall: vi.fn() });
+
+			await testInScopeAsync(async () => {
+				await store.checkForUpdate();
+				expect(store.state.available).toBe(false);
 			});
 		});
 
@@ -344,10 +378,10 @@ describe("updaterStore", () => {
 			});
 		});
 
-		it("treats prerelease as NOT newer than same base version", async () => {
+		it("offers a nightly built after the installed release (catches: nightly ranked before its base)", async () => {
 			mockSettingsState.updateChannel = "nightly";
 			mockCheck.mockResolvedValue(null);
-			// Nightly version has same base as current (0.0.1 from mock getVersion)
+			// patch-nightly-version.sh stamps <released version>-nightly.*, built after 0.0.1 shipped
 			mockRpc.mockResolvedValue({
 				available: true,
 				version: "0.0.1-nightly.5",
@@ -358,8 +392,64 @@ describe("updaterStore", () => {
 
 			await testInScopeAsync(async () => {
 				await store.checkForUpdate();
-				// 0.0.1-nightly.5 strips to 0.0.1 which is NOT newer than 0.0.1
+				expect(store.state.available).toBe(true);
+				expect(store.state.version).toBe("0.0.1-nightly.5");
+			});
+		});
+
+		it("does not offer a nightly user the release their nightly was built after (catches: same-base stable masks newer nightly)", async () => {
+			mockSettingsState.updateChannel = "nightly";
+			mockAppVersion = "1.8.0-nightly.20261012.t0900";
+			mockCheck.mockResolvedValue({ version: "1.8.0", body: "stable", downloadAndInstall: vi.fn() });
+			mockRpc.mockResolvedValue({
+				available: true,
+				version: "1.8.0-nightly.20261013.t0900",
+				notes: "Nightly",
+				release_page: "https://example.com",
+				not_found: false,
+			});
+
+			await testInScopeAsync(async () => {
+				await store.checkForUpdate();
+				expect(store.state.available).toBe(true);
+				expect(store.state.version).toBe("1.8.0-nightly.20261013.t0900");
+			});
+		});
+
+		it("does not re-offer the installed nightly", async () => {
+			mockSettingsState.updateChannel = "nightly";
+			mockAppVersion = "1.8.0-nightly.20261012.t0900";
+			mockCheck.mockResolvedValue(null);
+			mockRpc.mockResolvedValue({
+				available: true,
+				version: "1.8.0-nightly.20261012.t0900",
+				notes: "Nightly",
+				release_page: "https://example.com",
+				not_found: false,
+			});
+
+			await testInScopeAsync(async () => {
+				await store.checkForUpdate();
 				expect(store.state.available).toBe(false);
+			});
+		});
+
+		it("offers a later nightly to a nightly user (catches: nightly suffix stripped before comparing)", async () => {
+			mockSettingsState.updateChannel = "nightly";
+			mockAppVersion = "0.0.1-nightly.20261011.t0300";
+			mockCheck.mockResolvedValue(null);
+			mockRpc.mockResolvedValue({
+				available: true,
+				version: "0.0.1-nightly.20261012.t0300",
+				notes: "Nightly",
+				release_page: "https://example.com",
+				not_found: false,
+			});
+
+			await testInScopeAsync(async () => {
+				await store.checkForUpdate();
+				expect(store.state.available).toBe(true);
+				expect(store.state.version).toBe("0.0.1-nightly.20261012.t0300");
 			});
 		});
 	});
