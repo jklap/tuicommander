@@ -684,6 +684,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		expert: true,
 		configKey: "app.progress_tracking",
 	},
+	{ tab: "agents", section: "Agents", label: "Launch instructions" },
 	{ tab: "agents", section: "ego permissions", label: "Permissions" },
 	{ tab: "agents", section: "ego permissions", label: "Filesystem sandbox" },
 	// tabs/AiChatTab.tsx — the inlined former ProvidersTab content, in file order.

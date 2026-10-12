@@ -371,23 +371,8 @@ pub(super) fn resolve_marker_flags(
 /// already knows the agent (a live session, the marker diagnostics) does not
 /// have to reverse-engineer a client name to ask the question (#4421).
 pub(crate) fn marker_flags_for_agent(state: &AppState, agent_type: Option<&str>) -> (bool, bool) {
-    let global_intent = state.config.read().intent_tab_title;
-    let global_suggest = state.config.read().suggest_followups;
-
     let agents_cfg = crate::config::load_agents_config();
-    let agent_settings = agent_type.and_then(|t| agents_cfg.agents.get(t));
-
-    let show_intent = global_intent
-        && agent_settings
-            .and_then(|s| s.intent_tab_title)
-            .unwrap_or(true);
-
-    let show_suggest = global_suggest
-        && agent_settings
-            .and_then(|s| s.suggest_followups)
-            .unwrap_or(true);
-
-    (show_intent, show_suggest)
+    crate::launch_instructions::marker_flags(&state.config.read(), &agents_cfg, agent_type)
 }
 
 /// SIMP-1: Drain registered HTML tabs for a closing/killed/exited session and

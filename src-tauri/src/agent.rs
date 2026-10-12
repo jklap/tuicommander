@@ -1445,9 +1445,15 @@ pub(crate) async fn spawn_agent(
                 launch_args.push(spawn_agent_config.prompt.clone());
             }
             let agent_type = spawn_agent_config.agent_type.as_deref().unwrap_or("claude");
-            let final_args = crate::agent_hook_launch::augment_args(
+            let final_args = crate::agent_hook_launch::launch_args(
                 agent_type,
                 &spawn_binary_path,
+                &launch_args,
+                &crate::config::config_dir(),
+            );
+            crate::launch_instructions::apply_env(
+                &mut cmd,
+                agent_type,
                 &launch_args,
                 &crate::config::config_dir(),
             );

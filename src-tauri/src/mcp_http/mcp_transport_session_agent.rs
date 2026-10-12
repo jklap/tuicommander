@@ -2087,9 +2087,15 @@ pub(super) fn handle_agent_with_parent_cwd(
                 }
             }
             if let Some(agent_type) = effective_agent_type.as_deref() {
-                launch_args = crate::agent_hook_launch::augment_args(
+                launch_args = crate::agent_hook_launch::launch_args(
                     agent_type,
                     &binary_path,
+                    &launch_args,
+                    &crate::config::config_dir(),
+                );
+                crate::launch_instructions::apply_env(
+                    &mut cmd,
+                    agent_type,
                     &launch_args,
                     &crate::config::config_dir(),
                 );
