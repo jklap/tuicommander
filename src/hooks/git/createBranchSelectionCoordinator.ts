@@ -6,12 +6,12 @@ import { repoSettingsStore } from "../../stores/repoSettings";
 import { repositoriesStore } from "../../stores/repositories";
 import { paneLayoutKey, savedPaneLayouts } from "../../stores/savedPaneLayouts";
 import { terminalsStore } from "../../stores/terminals";
+import type { SavedTerminal } from "../../types";
 import { resolveAgentResume, verifyAndBuildResumeCommand } from "../../utils/agentSession";
 import { assignTabToActiveGroup } from "../../utils/paneTabAssign";
 import { markPerf } from "../../utils/perfTrace";
-import { disarmEagerResume, isEagerResumeArmed } from "../../utils/updateRestart";
-import type { SavedTerminal } from "../../types";
 import { filterValidTerminals } from "../../utils/terminalFilter";
+import { disarmEagerResume, isEagerResumeArmed } from "../../utils/updateRestart";
 
 interface BranchSelectionCoordinatorDeps {
 	repo: {
