@@ -194,6 +194,17 @@ export function pluginModuleBaseUrl(id: string, main: string, windows: boolean):
 	return windows ? `http://plugin.localhost/${relPath}` : `plugin://${relPath}`;
 }
 
+/**
+ * Entry URL of one load of a plugin. The version is a path segment (`~v<n>`) right
+ * after the id, not a query: the WebView resolves a relative `import "./x.js"`
+ * against the importing module's URL, drops the query, and keys its module map on
+ * the result. A query would bust `main.js` only and leave every sub-module on the
+ * copy from the first load. `register_plugin_protocol()` strips the segment.
+ */
+export function pluginModuleUrl(id: string, main: string, windows: boolean, version: number): string {
+	return pluginModuleBaseUrl(id, `~v${version}/${main}`, windows);
+}
+
 async function loadPlugin(manifest: PluginManifest): Promise<void> {
 	const logger = pluginStore.getLogger(manifest.id);
 
@@ -221,8 +232,8 @@ async function loadPlugin(manifest: PluginManifest): Promise<void> {
 	// supplies. A per-plugin token was considered and rejected: same-realm JS can
 	// read, proxy or monkey-patch it, so it would be a boundary in name only.
 	//
-	// `?t=` cache-busts for hot reload.
-	const url = `${pluginModuleBaseUrl(manifest.id, manifest.main, isWindows())}?t=${Date.now()}`;
+	// A fresh `~v<n>` path version per load cache-busts the whole module graph for hot reload.
+	const url = pluginModuleUrl(manifest.id, manifest.main, isWindows(), Date.now());
 	let mod: unknown;
 	try {
 		mod = await import(/* @vite-ignore */ url);

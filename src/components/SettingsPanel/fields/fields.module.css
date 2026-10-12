@@ -1,10 +1,11 @@
 .list, .choices { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .row { display: flex; align-items: end; gap: 8px; min-width: 0; flex-wrap: wrap; }
 .row select, .cell { flex: 1; min-width: 160px; }
+.row .cell { margin-bottom: 0; }
 .choices .choice { display: flex; align-items: center; gap: 8px; margin: 0; }
 .choice input { accent-color: var(--accent); }
 .button {
-  min-height: 32px; padding: 6px 12px; width: fit-content;
+  min-height: var(--control-height, 36px); padding: 6px 12px; width: fit-content;
   border: 1px solid var(--border); border-radius: var(--radius-sm);
   background: var(--bg-tertiary); color: var(--fg-primary); cursor: pointer;
 }
@@ -18,5 +19,5 @@
 .status[data-tone="danger"] { color: var(--error); }
 @media (max-width: 600px) {
   .button { min-height: 44px; }
-  .cell input, .row select { font-size: 16px; min-height: 44px; }
+
 }

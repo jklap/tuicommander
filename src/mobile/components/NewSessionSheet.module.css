@@ -50,18 +50,7 @@
   font-size: 12px;
 }
 
-.field {
-  display: block;
-  width: calc(100% - 32px);
-  min-height: 44px;
-  margin: 0 16px;
-  padding: 0 12px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--bg-primary);
-  color: var(--fg-primary);
-  font: inherit;
-}
+.field { --control-height: 44px; display: block; width: calc(100% - 32px); margin: 0 16px; }
 
 .empty {
   padding: 24px 16px;

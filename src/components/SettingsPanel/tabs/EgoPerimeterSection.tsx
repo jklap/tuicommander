@@ -3,6 +3,9 @@ import { t } from "../../../i18n";
 import { type EgoPerimeterClient, egoPerimeterCli } from "../../../services/egoCli";
 import { appLogger } from "../../../stores/appLogger";
 import { asEgoCliError, type EgoPerimeterView, type EgoRootAccess, type EgoRootsEdit } from "../../../types/ego";
+import { Input } from "../../ui/Input";
+import { Select } from "../../ui/Select";
+import { Textarea } from "../../ui/Textarea";
 import s from "../Settings.module.css";
 
 export const EgoPerimeterSection: Component<{ client?: EgoPerimeterClient }> = (props) => {
@@ -69,7 +72,7 @@ export const EgoPerimeterSection: Component<{ client?: EgoPerimeterClient }> = (
 						</p>
 						<div class={s.group}>
 							<label for="ego-root-dir">{t("perimeter.label.rootDir", "Root directory")}</label>
-							<input
+							<Input
 								type="text"
 								id="ego-root-dir"
 								value={draft().rootDir}
@@ -86,7 +89,7 @@ export const EgoPerimeterSection: Component<{ client?: EgoPerimeterClient }> = (
 						</div>
 						<div class={s.group}>
 							<label for="ego-root-access">{t("perimeter.label.rootAccess", "Root access")}</label>
-							<select
+							<Select
 								id="ego-root-access"
 								value={draft().rootAccess}
 								disabled={busy()}
@@ -97,11 +100,11 @@ export const EgoPerimeterSection: Component<{ client?: EgoPerimeterClient }> = (
 							>
 								<option value="read-write">{t("perimeter.readWrite", "Read and write")}</option>
 								<option value="read">{t("perimeter.read", "Read only")}</option>
-							</select>
+							</Select>
 						</div>
 						<div class={s.group}>
 							<label for="ego-read-roots">{t("perimeter.label.readAllowlist", "Read allowlist")}</label>
-							<textarea
+							<Textarea
 								id="ego-read-roots"
 								rows={2}
 								value={draft().readAllowlist}
@@ -111,7 +114,7 @@ export const EgoPerimeterSection: Component<{ client?: EgoPerimeterClient }> = (
 						</div>
 						<div class={s.group}>
 							<label for="ego-write-roots">{t("perimeter.label.writableDirs", "Extra writable directories")}</label>
-							<textarea
+							<Textarea
 								id="ego-write-roots"
 								rows={2}
 								value={draft().writableDirs}

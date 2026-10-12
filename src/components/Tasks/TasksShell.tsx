@@ -1,6 +1,8 @@
 import { createMemo, createSignal, For, Match, Show, Switch } from "solid-js";
 import { workItemProviderRegistry } from "../../plugins/workItemProviderRegistry";
 import type { WorkItemRef } from "../../types/work-items.gen";
+import { SegmentedControl } from "../ui/SegmentedControl";
+import { Select } from "../ui/Select";
 import { TasksCreate } from "./create/TasksCreate";
 import { TasksDetail } from "./detail/TasksDetail";
 import { TasksList } from "./list/TasksList";
@@ -44,7 +46,7 @@ export function TasksShell(props: { visible?: () => boolean }) {
 							<Show when={providers().length > 1}>
 								<label>
 									Source
-									<select
+									<Select
 										aria-label="Tasks source"
 										value={sourceKey(current().providerId, current().accountId)}
 										onChange={(event) => chooseSource(event.currentTarget.value)}
@@ -52,26 +54,18 @@ export function TasksShell(props: { visible?: () => boolean }) {
 										<For each={providers()}>
 											{(entry) => <option value={sourceKey(entry.providerId, entry.accountId)}>{entry.name}</option>}
 										</For>
-									</select>
+									</Select>
 								</label>
 							</Show>
-							<div class={s.views} role="tablist" aria-label="Tasks view">
-								<For each={VIEWS}>
-									{(entry) => (
-										<button
-											type="button"
-											role="tab"
-											aria-selected={!creating() && view() === entry.id}
-											onClick={() => {
-												setCreating(false);
-												setView(entry.id);
-											}}
-										>
-											{entry.label}
-										</button>
-									)}
-								</For>
-							</div>
+							<SegmentedControl
+								options={VIEWS}
+								value={creating() ? undefined : view()}
+								aria-label="Tasks view"
+								onChange={(id) => {
+									setCreating(false);
+									setView(id);
+								}}
+							/>
 							<button type="button" class={s.create} onClick={() => setCreating(true)}>
 								New task
 							</button>

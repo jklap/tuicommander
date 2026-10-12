@@ -2,6 +2,9 @@ import { For, Match, Switch } from "solid-js";
 import type { WorkItemFieldSchema } from "../../../types/work-items.gen";
 import { SettingField } from "../../SettingsPanel/fields/SettingField";
 import { SettingMultiSelect } from "../../SettingsPanel/SettingFields";
+import { Input } from "../../ui/Input";
+import { Select } from "../../ui/Select";
+import { Textarea } from "../../ui/Textarea";
 import type { DraftValue } from "./createDraft";
 
 const inputType = (kind: WorkItemFieldSchema["kind"]) =>
@@ -22,7 +25,7 @@ export function TaskCreateField(props: {
 			fallback={
 				<SettingField label={label()}>
 					{(id, hintId) => (
-						<input
+						<Input
 							id={id}
 							aria-describedby={hintId}
 							aria-required={props.schema.required}
@@ -39,7 +42,7 @@ export function TaskCreateField(props: {
 			<Match when={props.schema.kind === "markdown"}>
 				<SettingField label={label()}>
 					{(id, hintId) => (
-						<textarea
+						<Textarea
 							id={id}
 							aria-describedby={hintId}
 							aria-required={props.schema.required}
@@ -53,7 +56,7 @@ export function TaskCreateField(props: {
 			<Match when={props.schema.kind === "enum"}>
 				<SettingField label={label()} hint={hint()}>
 					{(id, hintId) => (
-						<select
+						<Select
 							id={id}
 							aria-describedby={hintId}
 							aria-required={props.schema.required}
@@ -70,7 +73,7 @@ export function TaskCreateField(props: {
 									</option>
 								)}
 							</For>
-						</select>
+						</Select>
 					)}
 				</SettingField>
 			</Match>

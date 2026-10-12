@@ -42,6 +42,9 @@ pub(super) fn pick_evidence_with_image(
     ))
 }
 
+#[cfg(not(feature = "desktop"))]
+type HeadlessHeartbeat<'a> = (Option<u64>, Option<(u64, Option<String>)>, Option<&'a str>);
+
 /// Extension liveness beat. An unarmed repository is a normal reply, not an error.
 async fn heartbeat(state: &Arc<AppState>, body: &Value) -> Result<Value, String> {
     let repo = body["repoPath"].as_str().ok_or("Missing repository")?;
@@ -55,11 +58,7 @@ async fn heartbeat(state: &Arc<AppState>, body: &Value) -> Result<Value, String>
         None => (None, None, None),
     };
     #[cfg(not(feature = "desktop"))]
-    let (seq, navigate, backend_id): (
-        Option<u64>,
-        Option<(u64, Option<String>)>,
-        Option<&str>,
-    ) = {
+    let (seq, navigate, backend_id): HeadlessHeartbeat<'_> = {
         let _ = (state, repo);
         (None, None, None)
     };
