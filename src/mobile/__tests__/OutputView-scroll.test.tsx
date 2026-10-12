@@ -120,4 +120,14 @@ describe("mobile output follow", () => {
 		paint();
 		expect(viewport.scrollTop).toBe(viewport.scrollHeight - viewport.clientHeight);
 	});
+	it("keeps following when output grows between its own scroll-to-bottom and the scroll event it caused", async () => {
+		const { viewport, chunk } = await mountOutput();
+		chunk();
+		paint(); // follow scroll: scrollTop = bottom, scroll event not yet delivered
+		chunk(); // next chunk lands before the browser dispatches that scroll event
+		fireEvent.scroll(viewport); // the follow scroll's own event, now measured against grown content
+		chunk();
+		paint();
+		expect(viewport.scrollTop).toBe(viewport.scrollHeight - viewport.clientHeight);
+	});
 });
