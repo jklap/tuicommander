@@ -48,9 +48,19 @@ jobs:
           # cannot compile at all.
           submodules: recursive
 
+      # shell: bash — the Windows leg defaults to pwsh, where "$GITHUB_REF_NAME"
+      # and "$GITHUB_OUTPUT" are unset PowerShell variables.
       - name: Check tag matches version
         if: github.ref_type == 'tag'
+        shell: bash
         run: bash scripts/check-release-tag.sh "$GITHUB_REF_NAME"
+
+      # A prerelease version (2.0.0-beta.1) must never become "latest": the stable
+      # updater endpoint and install scripts read releases/latest.
+      - name: Release flags
+        id: flags
+        shell: bash
+        run: bash scripts/release-flags.sh "$(jq -r '.version' src-tauri/tauri.conf.json)" >> "$GITHUB_OUTPUT"
 
       - name: Install Linux dependencies
         if: matrix.platform == 'ubuntu-22.04'
@@ -202,7 +212,7 @@ jobs:
           releaseName: 'TUICommander v__VERSION__'
           releaseBody: 'Download the appropriate installer for your platform.'
           releaseDraft: true
-          prerelease: false
+          prerelease: ${{ steps.flags.outputs.prerelease == 'true' }}
           includeUpdaterJson: true
           # tauri.conf.json enables the non-default dictation feature for bundles.
           args: ${{ matrix.args }}
@@ -302,4 +312,9 @@ jobs:
           FOOTER
           } > .tmp/tuic-tests/release-body.md
 
-          gh release edit "${TAG}" --notes-file .tmp/tuic-tests/release-body.md --draft=false
+          # A stable release leaves "latest" to GitHub, as before; a prerelease never takes it.
+          eval "$(bash scripts/release-flags.sh "${VERSION}")"
+          latest_flag=()
+          [[ "${latest}" == false ]] && latest_flag=(--latest=false)
+          gh release edit "${TAG}" --notes-file .tmp/tuic-tests/release-body.md --draft=false \
+            --prerelease="${prerelease}" "${latest_flag[@]}"

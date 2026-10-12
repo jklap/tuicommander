@@ -12,6 +12,7 @@ import { appLogger } from "../stores/appLogger";
 import { pluginStore } from "../stores/pluginStore";
 import { terminalsStore } from "../stores/terminals";
 import { isTauri } from "../transport";
+import { compareAppVersion } from "../utils/semver";
 import { updateAppConfig } from "../utils/updateAppConfig";
 import { pluginRegistry } from "./pluginRegistry";
 import type { TuiPlugin } from "./types";
@@ -58,19 +59,6 @@ export interface PluginManifest {
 // Validation
 // ---------------------------------------------------------------------------
 
-/** Simple semver comparison: returns -1, 0, or 1 */
-export function compareSemver(a: string, b: string): number {
-	const pa = a.split(".").map(Number);
-	const pb = b.split(".").map(Number);
-	for (let i = 0; i < 3; i++) {
-		const va = pa[i] ?? 0;
-		const vb = pb[i] ?? 0;
-		if (va < vb) return -1;
-		if (va > vb) return 1;
-	}
-	return 0;
-}
-
 /**
  * Validate a plugin manifest. Returns null if valid, error string if invalid.
  */
@@ -81,7 +69,7 @@ export function validateManifest(manifest: PluginManifest): string | null {
 	if (!manifest.main) return "manifest: main is required";
 
 	if (!manifest.minAppVersion) return "manifest: minAppVersion is required";
-	if (compareSemver(manifest.minAppVersion, APP_VERSION) > 0) {
+	if (compareAppVersion(manifest.minAppVersion, APP_VERSION) > 0) {
 		return `plugin "${manifest.id}" requires app version ${manifest.minAppVersion}, current is ${APP_VERSION}`;
 	}
 

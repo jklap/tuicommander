@@ -12,6 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Show agent toast cards only while their origin terminal tab is active, with a default-on per-client Notifications toggle. Urgent notices always show a card (#1760-bab7).
 ### Fixed
 - Desktop dictation in terminal Chat inserts into Compose instead of the hidden CLI. The destination and selection are captured before recording yields; undelivered transcripts stay in Messages for recovery (#1773-5b69).
+- A prerelease tag such as `v2.0.0-beta.1` publishes as a GitHub prerelease, never as "latest", and does not update the Homebrew tap. The updater and plugin checks use semver precedence: a beta user is offered later betas and the final release, and a nightly user is offered later nightlies (#1799-d6be).
 
 ### Removed
 - Remove the duplicate AI Chat control-bar + button; New chat tab still starts a conversation (#1755-7709).
