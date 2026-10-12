@@ -46,7 +46,7 @@ pub(super) async fn changed(paths: &Paths, previous: &[Option<std::time::SystemT
         }
     }
 }
-pub(super) fn paths() -> Result<Paths, Error> {
+pub(crate) fn paths() -> Result<Paths, Error> {
     let home = dirs::home_dir().ok_or(Error::Config)?;
     Ok(Paths::new(home.join(".config/tuic-telegram")))
 }
@@ -321,6 +321,35 @@ async fn change_at(_state: &Arc<AppState>, paths: Paths, change: Change) -> Resu
     drop(setup);
     CHANGED.notify_one();
     Ok(json!({"ok":true}))
+}
+
+/// Wake the running owner so it re-reads `config.json`; never starts a poller itself.
+pub(crate) fn notify_changed() {
+    CHANGED.notify_one();
+}
+
+/// Read-modify-write `config.json` under the same locks as `change_at`, so a settings-service
+/// edit cannot race the desktop save or daemon pairing. `edit` returns the value to hand back and
+/// the config to persist (`None` = unchanged, nothing is written). A token or chat allowlist
+/// is never read here: `enabled` is gated on the token file merely existing.
+pub(crate) fn update_config<R, E>(
+    paths: &Paths,
+    edit: impl FnOnce(&Config, bool) -> Result<(R, Option<Config>), E>,
+) -> Result<Result<R, E>, Error> {
+    ensure_directory(paths)?;
+    let lock = super::config::private_open(&paths.file("setup.lock"), true)?;
+    lock.try_lock().map_err(|_| Error::AlreadyOwned)?;
+    let _setup = STATE.lock().map_err(|_| Error::State)?;
+    let current = config(paths)?;
+    let token_set = super::config::private_open(&paths.file("bot.token"), false).is_ok();
+    Ok(match edit(&current, token_set) {
+        Ok((value, Some(next))) => {
+            save_config(paths, &next)?;
+            Ok(value)
+        }
+        Ok((value, None)) => Ok(value),
+        Err(error) => Err(error),
+    })
 }
 
 /// Consume the credential before parsing ordinary mail: it never reaches an agent.
