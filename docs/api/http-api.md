@@ -1994,6 +1994,10 @@ anything is spawned. Returns `null` on success, matching the `open_in_app` comma
 
 ## Dictation Endpoints
 
+Native macOS Fn capture remains active through window focus changes while the
+key is physically held. Release detection is native; it changes no HTTP route
+or response. HTTP clients still stop through `/dictation/stop`.
+
 The HTTP routes and Tauri commands share the root dictation adapter. The `tuic-dictation` crate supplies the audio and speech domain without changing these route shapes.
 
 Desktop-only: audio capture and the whisper model live behind the `desktop`

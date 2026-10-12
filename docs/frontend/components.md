@@ -401,6 +401,10 @@ one group under a shared label.
 
 #### DictationSettings (`SettingsPanel/DictationSettings.tsx`)
 
+The existing enable and hotkey controls also govern native macOS Fn dictation.
+Holding Fn keeps recording through window focus changes; physical release ends
+capture even when another window has focus. This needs no extra control.
+
 Hands-free listening is a standard toggle beside it (also in mobile Settings); off arms a replies-only conversation. The `DictationToast` carries a speaker button (`aria-pressed`) that flips the same spoken-replies setting while recording or while a conversation is armed. Spoken replies is a standard toggle, also available in the mobile conversation
 header and mobile Settings. It stays visible in browser mode and saves the
 backend device preference; it does not stop microphone dictation.
