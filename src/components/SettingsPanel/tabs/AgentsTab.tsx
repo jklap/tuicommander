@@ -26,6 +26,7 @@ import { editorTabsStore } from "../../../stores/editorTabs";
 import { remoteConnectionsStore } from "../../../stores/remoteConnections";
 import { repositoriesStore } from "../../../stores/repositories";
 import { settingsStore } from "../../../stores/settings";
+import { settingsExpertStore } from "../../../stores/settingsExpert";
 import { isTauri, rpc } from "../../../transport";
 import { onClickKeyDown } from "../../../utils/a11y";
 import { buildEnvFromEntries, findDuplicateEnvKeys } from "../../../utils/envVars";
@@ -52,8 +53,12 @@ import {
 	useAgentConfig,
 	useMachine,
 } from "./agentConfigContext";
+import { LaunchInstructionsEditor } from "./LaunchInstructionsEditor";
 
 const ALL_AGENT_TYPES = AGENT_TYPES.filter((t): t is AgentType => t !== "git" && t !== "api");
+
+/** Agents with a launch-time instruction channel (Rust `launch_instructions::AGENTS`). */
+const LAUNCH_INSTRUCTION_AGENTS: readonly AgentType[] = ["claude", "codex", "grok", "opencode", "goose", "pi", "ego"];
 
 /**
  * Build the set of lowercased run-config names across all agent groups,
@@ -1129,6 +1134,19 @@ const AgentRow: Component<{
 						</ExpertSetting>
 					</Show>
 
+					<Show when={LAUNCH_INSTRUCTION_AGENTS.includes(props.agentType) && settingsExpertStore.launchInstructions()}>
+						{(defaults) => (
+							<LaunchInstructionsEditor
+								id={`launch-instructions-${props.agentType}`}
+								label={`Launch instructions for ${agent().name}`}
+								value={configStore.getAgentLaunchInstructions(props.agentType)}
+								fallback={configStore.getLaunchInstructions() ?? defaults().default_text}
+								requiredMarkers={defaults().required_markers}
+								onSave={(text) => void configStore.setAgentLaunchInstructions(props.agentType, text)}
+							/>
+						)}
+					</Show>
+
 					{/* Headless Command Template — compared by the stored override, not
 					    the built-in template the input falls back to. */}
 					<ExpertSetting
@@ -1398,6 +1416,19 @@ export const AgentsTab: Component<AgentsTabProps> = (props) => {
 							hint="Keep a per-project journal of what agents finished, what blocked them, and what they set out to do. Off removes the progress tool from every agent."
 						/>
 					</ExpertSetting>
+
+					<Show when={settingsExpertStore.launchInstructions()}>
+						{(defaults) => (
+							<LaunchInstructionsEditor
+								id="launch-instructions-global"
+								label="Launch instructions"
+								value={activeStore().getLaunchInstructions()}
+								fallback={defaults().default_text}
+								requiredMarkers={defaults().required_markers}
+								onSave={(text) => void activeStore().setLaunchInstructions(text)}
+							/>
+						)}
+					</Show>
 
 					<div class={a.agentList}>
 						<For each={sortedAgents()}>

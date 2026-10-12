@@ -23,6 +23,7 @@ pub(crate) mod ai_agent;
 pub(crate) mod attachments;
 #[cfg(feature = "desktop")]
 pub(crate) mod audio_enumeration;
+pub(crate) mod launch_instructions;
 pub(crate) mod prompt_receipt;
 pub mod work_items;
 pub use tuic_core::app_instance;

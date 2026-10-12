@@ -4288,16 +4288,61 @@ fn make_agents_config() -> crate::config::AgentsConfig {
     );
     AgentsConfig {
         agents,
+        launch_instructions: None,
         headless_agent: None,
     }
 }
 
+/// The bypass and task-position cases below pin argv with launch
+/// instructions off; `mcp_codex_spawn_carries_launch_instructions` covers them on.
 #[cfg(unix)]
 async fn capture_codex_spawn(
     args: &[&str],
     prompt: &str,
     command_name: &str,
     requested_agent: &str,
+) -> (Vec<String>, serde_json::Value, Option<String>) {
+    capture_codex_spawn_with(args, prompt, command_name, requested_agent, "").await
+}
+
+// Catches: a public MCP spawn of a resumed or interactive Codex launched without
+// the TUIC marker instructions (story 1810-c28c).
+#[cfg(unix)]
+#[tokio::test]
+async fn mcp_codex_spawn_carries_launch_instructions() {
+    let (argv, _, _) = capture_codex_spawn_with(
+        &["resume", "--last"],
+        "perform the task",
+        "codex",
+        "codex",
+        "MARKERS v{VER}",
+    )
+    .await;
+    let instructions = format!(
+        "developer_instructions=\"MARKERS v{}\"",
+        env!("CARGO_PKG_VERSION")
+    );
+    assert_eq!(
+        argv,
+        [
+            "-c",
+            "check_for_update_on_startup=false",
+            "-c",
+            instructions.as_str(),
+            "resume",
+            "--last",
+            "perform the task"
+        ]
+    );
+}
+
+#[cfg(unix)]
+async fn capture_codex_spawn_with(
+    args: &[&str],
+    prompt: &str,
+    command_name: &str,
+    requested_agent: &str,
+    launch_instructions: &str,
 ) -> (Vec<String>, serde_json::Value, Option<String>) {
     use std::os::unix::fs::PermissionsExt;
     let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
@@ -4310,7 +4355,9 @@ async fn capture_codex_spawn(
     .unwrap();
     std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
     let _config = crate::config::set_config_dir_override(root.path().join("config"));
-    let cfg = serde_json::from_value(serde_json::json!({"agents": {"codex": {
+    let cfg = serde_json::from_value(serde_json::json!({
+        "launch_instructions": launch_instructions,
+        "agents": {"codex": {
         "codex_bypass_migrated": true, "prevent_alt_screen": false,
         "skip_trust_dialog": false, "native_status_signals": false,
         "run_configs": [{"name": "Recorded Codex", "command": binary,

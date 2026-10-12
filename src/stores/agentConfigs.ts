@@ -62,10 +62,13 @@ interface AgentConfigsState {
 			skip_trust_dialog?: boolean;
 			ego_mode?: EgoPermissionMode;
 			ego_sandbox?: EgoSandbox;
+			launch_instructions?: string;
 		}
 	>;
 	/** Which agent CLI to use for headless prompt execution (user-chosen in Settings) */
 	headless_agent: HeadlessAgentChoice | null;
+	/** Global launch instructions override; null = the shipped default. */
+	launch_instructions: string | null;
 	loaded: boolean;
 	loadError: string | null;
 }
@@ -82,6 +85,7 @@ export function createAgentConfigsStore(io: AgentConfigIO = defaultIO) {
 	const [state, setState] = createStore<AgentConfigsState>({
 		agents: {},
 		headless_agent: null,
+		launch_instructions: null,
 		loaded: false,
 		loadError: null,
 	});
@@ -93,6 +97,7 @@ export function createAgentConfigsStore(io: AgentConfigIO = defaultIO) {
 			const full: AgentsConfig = {
 				agents: clone(state.agents),
 				headless_agent: state.headless_agent ?? undefined,
+				launch_instructions: state.launch_instructions ?? undefined,
 			};
 			const write = async () => {
 				if (!savedBase) throw new Error("Agent config has not loaded; save refused");
@@ -125,6 +130,7 @@ export function createAgentConfigsStore(io: AgentConfigIO = defaultIO) {
 					produce((s) => {
 						s.agents = config.agents ?? {};
 						s.headless_agent = config.headless_agent ?? null;
+						s.launch_instructions = config.launch_instructions ?? null;
 						s.loaded = true;
 						s.loadError = null;
 					}),
@@ -283,6 +289,43 @@ export function createAgentConfigsStore(io: AgentConfigIO = defaultIO) {
 		/** Get the headless command template for an agent (user override or built-in default) */
 		getHeadlessTemplate(type: AgentType): string | undefined {
 			return state.agents[type]?.headless_template ?? AGENTS[type]?.defaultHeadlessTemplate;
+		},
+
+		/** Global launch instructions override (undefined = shipped default). */
+		getLaunchInstructions(): string | undefined {
+			return state.launch_instructions ?? undefined;
+		},
+
+		/** Set the global launch instructions. Pass undefined to reset to the default. */
+		async setLaunchInstructions(text: string | undefined): Promise<void> {
+			setState("launch_instructions", text ?? null);
+			try {
+				await saveToDisk();
+			} catch (_err) {
+				// saveToDisk already logged the error
+			}
+		},
+
+		/** Per-agent launch instructions override (undefined = the global text). */
+		getAgentLaunchInstructions(type: AgentType): string | undefined {
+			return state.agents[type]?.launch_instructions;
+		},
+
+		/** Set per-agent launch instructions. Pass undefined to reset to the global text. */
+		async setAgentLaunchInstructions(type: AgentType, text: string | undefined): Promise<void> {
+			setState(
+				produce((s) => {
+					if (!s.agents[type]) {
+						s.agents[type] = { run_configs: [] };
+					}
+					s.agents[type].launch_instructions = text;
+				}),
+			);
+			try {
+				await saveToDisk();
+			} catch (_err) {
+				// saveToDisk already logged the error
+			}
 		},
 
 		/** Get the globally configured headless agent */
