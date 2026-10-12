@@ -1,6 +1,4 @@
 [
-  "components/AIChatPanel/Interactions.tsx",
-  "components/AIChatPanel/SessionControls.tsx",
   "components/ClaudeUsageDashboard/ClaudeUsageDashboard.tsx",
   "components/ErrorLogPanel/ErrorLogPanel.tsx",
   "components/IdeasPanel/IdeasPanel.tsx",
