@@ -5158,6 +5158,9 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 
 - [ ] On iPhone, tap the attachment icon left of the session composer, choose a photo/file, confirm upload status then its path in the draft, and confirm Queue stays disabled during upload. Smaller mic and Send controls remain inside the right input border.
 
+## Mobile ego questions (1759-6047) — Rust restart required
+
+- [ ] After rebuilding/restarting TUIC and updating ego, ask ego a real single-choice question from a terminal. On iPhone confirm **Input**, tap the header question icon, read the full question and both long options, and tap one option. Confirm one answer, continued output and no terminal-height loss. Browser rendering uses the recorded real ego question; real phone touch remains to check.
 - [ ] Chat new-text indicator (#1757-c6a9): after restart, scroll up in terminal Chat and AI Chat while output streams; confirm the pill appears above the composer, returns to the bottom on click, clears on manual bottom, and respects the per-client Appearance > Chat toggle. On mobile/PWA, check the same behavior and the mobile Settings toggle.
 - [ ] AI Chat control bar (#1755-7709): after restart, confirm its duplicate + is gone and New chat tab still opens a conversation.
 - [ ] #1762-c772: After loading the UI batch, open Automations with a long definition name/path. Check the one-line Active badge, short repository tooltip, readable schedule/next run, tabs with arrow keys, one-row toolbar and first-selection opt-out across reopen.
