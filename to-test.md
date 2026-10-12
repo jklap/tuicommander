@@ -1,3 +1,7 @@
+## Child bridge instance binding (1811-a0fe) — Rust restart required
+
+- [ ] After Boss restarts `make dev` or installs `make build`, newly opened agent terminals must send MCP calls to their spawning TUIC instance. Existing terminals keep their previous environment. Native PTY regression covers named, default and fallback socket paths; bridge integration covers socket override routing. Do not test isolated agents against Boss's live sessions.
+
 ## Plugin hot reload re-reads sub-modules (1809-010d) — Rust restart required
 
 - [ ] After the restart, edit an export in `github-work/provider.js` (or any file a plugin's `main.js` imports) and save: the plugin reloads and the new export is live without a WebView reload. In Tasks > New task for GitHub, the type picker shows and Create enables (stale-realm symptom of 1743-4776).
