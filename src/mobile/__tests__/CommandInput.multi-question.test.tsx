@@ -34,6 +34,26 @@ const form = (title: string, labels: string[]): ChoicePrompt => ({
 const buttonFor = (container: HTMLElement, label: string) =>
 	Array.from(container.querySelectorAll("button")).find((button) => button.textContent?.includes(label))!;
 
+// Catches: a highlight redraw unlocks an in-flight answer, letting a second
+// tap interleave arrow keys and Enter and choose the wrong answer.
+it("keeps the current question locked during a highlight-only redraw", async () => {
+	const [prompt, setPrompt] = createSignal<ChoicePrompt>(form("Which list?", ["Lista A", "Lista B"]));
+	const { container } = render(() => (
+		<CommandInput sessionId="disposable" agentType="claude" choicePrompt={prompt()} />
+	));
+
+	fireEvent.click(buttonFor(container, "Lista B"));
+	// The arrow redraw reaches the phone before the write acknowledgement.
+	const redraw = form("Which list?", ["Lista A", "Lista B"]);
+	redraw.options[0].highlighted = false;
+	redraw.options[1].highlighted = true;
+	setPrompt(redraw);
+	fireEvent.click(buttonFor(container, "Lista A"));
+
+	await waitFor(() => expect(writes).toContain("\r"));
+	expect(writes).toEqual(["\x1b[B", "\r"]);
+});
+
 // Catches: the buttons stay locked after the first answer because Claude swaps
 // the first question for the next one without an empty prompt in between.
 it("answers every tab of a Claude multi-question form, Submit included", async () => {
