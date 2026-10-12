@@ -458,7 +458,9 @@ settings panel renders.
 The backend crate split leaves its IPC and HTTP response shapes unchanged.
 `startRecording(source)` sends the same origin over IPC or HTTP. A native Fn
 release stops capture before the frontend's `stopRecording()` awaits the final
-transcription; blur releases a held hotkey if its key-up event was lost.
+transcription. DOM hotkeys release on blur if key-up was lost. Native macOS Fn
+keeps recording across focus loss while physically held; Rust detects its
+release outside the main window and sends the same `fn-key-up` event.
 `stopRecording()` stores the response's `skip_reason` as `lastSkipReason`, and
 `useDictation` shows that reason in the status. A final transcription gate's
 specific reason reaches both; an empty successful pass shows `no speech detected`.
@@ -755,3 +757,6 @@ Automation all-run history uses 20-row pages plus one backend lookahead row. `lo
 ### Automatic agent toast cards (#1760-bab7)
 
 MCP toast notices show a transient card when their origin terminal is not active or the window is unfocused. Settings → Notifications → **Show cards from other terminals** defaults on and is saved per client; turning it off restores urgent-only cards. Urgent notices always show a card, and notices without an origin session remain bell-only unless urgent. The listener reads `terminalsStore.state.activeId` and `document.hasFocus()` at arrival; `notificationsStore.state.autoToastCards` is stored under `tui-commander-auto-toast-cards` in localStorage. Bell deduplication, sound and terminal navigation are preserved.
+### Transcript view preference
+
+`transcriptPreferences` stores the shared terminal Chat and AI Chat new-text indicator toggle in client localStorage (`tui-commander-new-text-indicator`, default on). Desktop Appearance → Chat and mobile Settings edit the same client preference. It does not write backend configuration. The Transcript compares entry identities and text lengths to detect arrivals while detached, clears unread state when content is replaced, and follows in-place streamed text while attached.

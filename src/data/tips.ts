@@ -16,6 +16,12 @@ export const TIPS: Tip[] = [
 		shortcut: null,
 	},
 	{
+		feature: "New chat text",
+		description:
+			"While reading earlier chat messages, select New text below to return to the latest reply. Toggle the indicator in Settings > Appearance > Chat.",
+		shortcut: null,
+	},
+	{
 		feature: "Mobile prompt queue",
 		description:
 			"Hold Send and select Queue to submit your current agent draft at its next ready window. Tap Send to submit now.",
