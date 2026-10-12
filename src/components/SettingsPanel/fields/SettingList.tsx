@@ -1,3 +1,4 @@
+import { Input } from "../../ui/Input";
 import { type Component, For, Show } from "solid-js";
 import s from "./fields.module.css";
 import { SettingField, type SettingFieldProps } from "./SettingField";
@@ -26,7 +27,7 @@ export const SettingList: Component<SettingListProps> = (props) => (
 								{(column) => (
 									<label class={s.cell}>
 										<span>{column.label}</span>
-										<input
+										<Input
 											type="text"
 											value={props.rows[index()]?.values[column.id] ?? ""}
 											placeholder={column.placeholder}

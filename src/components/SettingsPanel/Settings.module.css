@@ -582,16 +582,7 @@
   cursor: default;
 }
 
-.groupNameInput {
-  flex: 1;
-  padding: 4px 8px;
-  background: var(--bg-secondary);
-  border: 1px solid var(--accent);
-  border-radius: var(--radius-md);
-  color: var(--fg-primary);
-  font-size: var(--font-sm);
-  outline: none;
-}
+.groupNameInput { flex: 1; }
 
 .groupDeleteBtn {
   width: 24px;
@@ -709,7 +700,7 @@
 }
 
 /* ── Services Tab (MCP) ── */
-.input {
+.input:not([data-form-control]) {
   width: 100%;
   padding: 8px 12px;
   background: var(--bg-tertiary);
@@ -719,7 +710,7 @@
   font-size: var(--font-sm);
 }
 
-.input:focus {
+.input:not([data-form-control]):focus {
   outline: none;
   border-color: var(--accent);
 }
@@ -1393,21 +1384,9 @@
   pointer-events: none;
 }
 
-.searchBox input {
-  width: 100%;
-  padding: 4px 22px 4px 24px;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--fg-primary);
-  font-size: var(--font-sm);
-  font-family: var(--font-ui);
-}
+.searchBox input { width: 100%; padding: 4px 22px 4px 24px; font-family: var(--font-ui); }
 
-.searchBox input:focus {
-  outline: none;
-  border-color: var(--accent);
-}
+
 
 .searchClear {
   position: absolute;
@@ -1482,3 +1461,5 @@
   font-size: var(--font-xs);
   color: var(--fg-muted);
 }
+
+.group [data-form-control], .input[data-form-control] { width: 100%; }

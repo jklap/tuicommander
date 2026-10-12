@@ -1,3 +1,4 @@
+import { Select } from "../../ui/Select";
 import { type Component, createSignal, For, Match, onMount, Show, Switch } from "solid-js";
 import { t } from "../../../i18n";
 import { type EgoCliClient, egoCli } from "../../../services/egoCli";
@@ -170,7 +171,7 @@ export const AiChatTab: Component<{
 						{(loaded) => (
 							<div class={s.group}>
 								<label>{t("providers.label.defaultModel", "Default model")}</label>
-								<select
+								<Select
 									disabled={busy()}
 									value={loaded().defaultModel ?? ""}
 									onChange={(event) => choose(event.currentTarget.value)}
@@ -194,7 +195,7 @@ export const AiChatTab: Component<{
 											</optgroup>
 										)}
 									</For>
-								</select>
+								</Select>
 							</div>
 						)}
 					</Match>

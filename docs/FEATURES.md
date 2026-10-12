@@ -19,7 +19,7 @@ AI Chat image paste discovers capabilities on first use and shares clipboard pre
 
 ## Shared form controls
 
-Tasks uses shared native Select, Input and Textarea controls with consistent
+Tasks and Settings use shared native Select, Input and Textarea controls with consistent
 36px fields, theme colours, visible focus and touch sizing. Its List, Board and
 Roadmap switch supports arrow keys, Home and End.
 

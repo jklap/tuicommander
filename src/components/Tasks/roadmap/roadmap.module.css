@@ -43,7 +43,7 @@
 	.navigation { flex-basis: 100%; }
 	.navigation h2 { flex: 1; font-size: var(--font-md); }
 	.roadmap button { min-height: 44px; }
-	
+
 	.content { flex-direction: column; }
 	.dated { min-height: 140px; }
 	.roadmap .undated { flex: 0 0 35%; border-left: 0; border-top: 1px solid var(--border); }

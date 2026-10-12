@@ -7,7 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
-- Shared themed form controls give Tasks consistent field sizing; List, Board and Roadmap use a keyboard-accessible segmented switch (#1815-01c9).
+- Shared themed form controls give Tasks and Settings consistent field sizing; List, Board and Roadmap use a keyboard-accessible segmented switch (#1815-01c9).
 - Chat mutes intermediate assistant text (text followed by a tool call in the same turn) in the terminal Chat view, AI Chat and mobile; **Settings → Appearance → Chat → Mute Intermediate Text** turns it off (#1769-89dc).
 
 - Show agent toast cards only while their origin terminal tab is active, with a default-on per-client Notifications toggle. Urgent notices always show a card (#1760-bab7).

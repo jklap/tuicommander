@@ -1,3 +1,5 @@
+import { Select } from "../../ui/Select";
+import { Input } from "../../ui/Input";
 import { type Component, For, Show } from "solid-js";
 import { t } from "../../../i18n";
 import { isMacOS } from "../../../platform";
@@ -62,7 +64,7 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 
 			<div class={s.group}>
 				<label>{t("repoWorktree.label.displayName", "Display Name")}</label>
-				<input
+				<Input
 					type="text"
 					value={props.settings.displayName ?? ""}
 					onInput={(e) => props.onUpdate("displayName", e.currentTarget.value)}
@@ -83,7 +85,7 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 
 			<div class={s.group}>
 				<label>{t("repoWorktree.label.autoFetchInterval", "Auto-Fetch Interval")}</label>
-				<select
+				<Select
 					value={
 						props.settings.autoFetchIntervalMinutes != null ? String(props.settings.autoFetchIntervalMinutes) : INHERIT
 					}
@@ -105,7 +107,7 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 					<option value="15">15 min</option>
 					<option value="30">30 min</option>
 					<option value="60">60 min</option>
-				</select>
+				</Select>
 				<p class={s.hint}>
 					{t("repoWorktree.hint.autoFetch", "Periodically fetch from remote to keep branch stats fresh")}
 				</p>
@@ -115,14 +117,14 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 
 			<div class={s.group}>
 				<label>{t("repoWorktree.label.branchFrom", "Branch From")}</label>
-				<select value={baseBranchValue()} onChange={(e) => handleBaseBranchChange(e.currentTarget.value)}>
+				<Select value={baseBranchValue()} onChange={(e) => handleBaseBranchChange(e.currentTarget.value)}>
 					<option value={INHERIT}>
 						{t("repoWorktree.baseBranch.useGlobalDefault", "Use global default ({default})", {
 							default: props.defaults.baseBranch,
 						})}
 					</option>
 					<For each={branchOptions}>{(opt) => <option value={opt.value}>{opt.label}</option>}</For>
-				</select>
+				</Select>
 				<p class={s.hint}>{t("repoWorktree.hint.branchFrom", "Base branch for new worktrees")}</p>
 			</div>
 
@@ -162,7 +164,7 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 
 			<div class={s.group}>
 				<label>{t("repoWorktree.label.worktreeStorage", "Storage Strategy")}</label>
-				<select
+				<Select
 					value={props.settings.worktreeStorage ?? INHERIT}
 					onChange={(e) =>
 						props.onUpdate(
@@ -184,7 +186,7 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 					<option value="claude-code-default">
 						{t("repoWorktree.worktreeStorage.claudeCodeDefault", "Claude Code default (.claude/worktrees)")}
 					</option>
-				</select>
+				</Select>
 			</div>
 
 			<div class={s.group}>
@@ -250,7 +252,7 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 
 			<div class={s.group}>
 				<label>{t("repoWorktree.label.orphanCleanup", "Orphan Worktree Cleanup")}</label>
-				<select
+				<Select
 					value={props.settings.orphanCleanup ?? INHERIT}
 					onChange={(e) =>
 						props.onUpdate(
@@ -267,12 +269,12 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 					<option value="ask">{t("repoWorktree.orphanCleanup.ask", "Ask before removing")}</option>
 					<option value="on">{t("repoWorktree.orphanCleanup.on", "Auto-remove")}</option>
 					<option value="off">{t("repoWorktree.orphanCleanup.off", "Keep (mark as detached)")}</option>
-				</select>
+				</Select>
 			</div>
 
 			<div class={s.group}>
 				<label>{t("repoWorktree.label.prMergeStrategy", "PR Merge Strategy")}</label>
-				<select
+				<Select
 					value={props.settings.prMergeStrategy ?? INHERIT}
 					onChange={(e) =>
 						props.onUpdate(
@@ -289,12 +291,12 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 					<option value="merge">{t("repoWorktree.mergeStrategy.merge", "Merge")}</option>
 					<option value="squash">{t("repoWorktree.mergeStrategy.squash", "Squash")}</option>
 					<option value="rebase">{t("repoWorktree.mergeStrategy.rebase", "Rebase")}</option>
-				</select>
+				</Select>
 			</div>
 
 			<div class={s.group}>
 				<label>{t("repoWorktree.label.afterMerge", "After Merge Behavior")}</label>
-				<select
+				<Select
 					value={props.settings.afterMerge ?? INHERIT}
 					onChange={(e) =>
 						props.onUpdate(
@@ -311,12 +313,12 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 					<option value="archive">{t("repoWorktree.afterMerge.archive", "Archive worktree")}</option>
 					<option value="delete">{t("repoWorktree.afterMerge.delete", "Delete worktree")}</option>
 					<option value="ask">{t("repoWorktree.afterMerge.ask", "Ask each time")}</option>
-				</select>
+				</Select>
 			</div>
 
 			<div class={s.group}>
 				<label>{t("repoWorktree.label.autoDeleteOnPrClose", "Auto-Delete on PR Close")}</label>
-				<select
+				<Select
 					value={props.settings.autoDeleteOnPrClose ?? INHERIT}
 					onChange={(e) =>
 						props.onUpdate(
@@ -333,7 +335,7 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 					<option value="off">{t("repoWorktree.autoDelete.off", "Off")}</option>
 					<option value="ask">{t("repoWorktree.autoDelete.ask", "Ask before deleting")}</option>
 					<option value="auto">{t("repoWorktree.autoDelete.auto", "Auto-delete silently")}</option>
-				</select>
+				</Select>
 				<p class={s.hint}>{t("repoWorktree.hint.autoDelete", "Delete local branch when its PR is merged or closed")}</p>
 			</div>
 

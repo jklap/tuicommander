@@ -1,3 +1,4 @@
+import { Input } from "../../ui/Input";
 import { type Component, createMemo, createSignal, For, Show } from "solid-js";
 import { useNativeKeyCombo } from "../../../hooks/useNativeKeyCombo";
 import { t } from "../../../i18n";
@@ -603,7 +604,7 @@ export const KeyboardShortcutsTab: Component = () => {
 			</Show>
 
 			<div class={s.group}>
-				<input
+				<Input
 					ref={inputRef}
 					type="text"
 					placeholder={t("helpPanel.searchPlaceholder", "Search shortcuts...")}

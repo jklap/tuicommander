@@ -1,3 +1,5 @@
+import { Textarea } from "../../ui/Textarea";
+import { Input } from "../../ui/Input";
 import { type Component, createEffect, createSignal, For, onMount, Show } from "solid-js";
 import { AVAILABLE_LOCALES, localeName, t } from "../../../i18n";
 import { invoke } from "../../../invoke";
@@ -534,7 +536,7 @@ export const GeneralTab: Component = () => {
 										title={t("general.label.launcherEnabled", "Enabled")}
 										onChange={(e) => updateLauncher(launcher.id, { enabled: e.currentTarget.checked })}
 									/>
-									<input
+									<Input
 										type="text"
 										value={launcher.name}
 										placeholder={t("general.placeholder.launcherName", "Name")}
@@ -545,14 +547,14 @@ export const GeneralTab: Component = () => {
 										{t("general.btn.remove", "Remove")}
 									</button>
 								</div>
-								<input
+								<Input
 									type="text"
 									value={launcher.executable}
 									placeholder={t("general.placeholder.launcherExec", "Executable (e.g. code, or /usr/local/bin/code)")}
 									onInput={(e) => updateLauncher(launcher.id, { executable: e.currentTarget.value })}
 									style={{ width: "100%", "margin-bottom": "6px" }}
 								/>
-								<textarea
+								<Textarea
 									value={launcher.args.join("\n")}
 									placeholder={"--goto\n{file}:{line}:{column}"}
 									rows={3}

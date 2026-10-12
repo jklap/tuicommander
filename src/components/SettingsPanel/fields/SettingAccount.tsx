@@ -1,3 +1,4 @@
+import { Select } from "../../ui/Select";
 import { type Component, createResource, createSignal, For, Show } from "solid-js";
 import { invoke } from "../../../invoke";
 import s from "./fields.module.css";
@@ -28,6 +29,9 @@ export const SettingAccount: Component<SettingAccountProps> = (props) => {
 		() => props.provider,
 		async () => (props.listAccounts ?? listAccounts)(),
 	);
+	// Keep the error guard and resource read in one computation. JSX ternaries
+	// passed to a component can become independent memos that read a failed resource.
+	const selectedAccount = () => (accounts.error ? "" : accounts()?.length ? props.value : "");
 	const add = async () => {
 		setAdding(true);
 		setAddFailed(false);
@@ -46,9 +50,9 @@ export const SettingAccount: Component<SettingAccountProps> = (props) => {
 			{(id, hintId) => (
 				<div class={s.list}>
 					<div class={s.row}>
-						<select
+						<Select
 							id={id}
-							value={accounts.error ? "" : accounts()?.length ? props.value : ""}
+							value={selectedAccount()}
 							aria-describedby={hintId}
 							disabled={props.disabled || accounts.loading || adding()}
 							onChange={(e) => props.onInput(e.currentTarget.value)}
@@ -57,7 +61,7 @@ export const SettingAccount: Component<SettingAccountProps> = (props) => {
 							<For each={accounts.error ? [] : accounts()?.filter((account) => account.provider === props.provider)}>
 								{(account) => <option value={account.id}>{account.label}</option>}
 							</For>
-						</select>
+						</Select>
 						<button type="button" class={s.button} disabled={props.disabled || adding()} onClick={() => void add()}>
 							Add account
 						</button>

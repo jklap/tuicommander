@@ -1,3 +1,5 @@
+import { Select } from "../../../ui/Select";
+import { Input } from "../../../ui/Input";
 import QRCode from "qrcode";
 import { type Component, createEffect, createResource, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { t } from "../../../../i18n";
@@ -221,7 +223,7 @@ export const RemoteAccessPanel: Component = () => {
 						<ExpertSetting configKey="app.services.server.port" value={raPort()}>
 							<div class={s.group}>
 								<label>{t("services.label.port", "Port")}</label>
-								<input
+								<Input
 									type="number"
 									class={s.input}
 									value={raPort()}
@@ -242,7 +244,7 @@ export const RemoteAccessPanel: Component = () => {
 						<div class={s.credentialsRow}>
 							<div class={s.group} style={{ flex: "1", "min-width": 0 }}>
 								<label>{t("services.label.username", "Username")}</label>
-								<input
+								<Input
 									type="text"
 									class={s.input}
 									value={raUsername()}
@@ -261,7 +263,7 @@ export const RemoteAccessPanel: Component = () => {
 							<div class={s.group} style={{ flex: "1", "min-width": 0 }}>
 								<label>{t("services.label.password", "Password")}</label>
 								<div class={s.passwordRow}>
-									<input
+									<Input
 										type={raShowPassword() ? "text" : "password"}
 										class={s.input}
 										value={raPassword()}
@@ -306,7 +308,7 @@ export const RemoteAccessPanel: Component = () => {
 							<div class={s.group}>
 								<label>{t("services.label.networkInterface", "Network Interface")}</label>
 								<Show when={(localIps()?.length ?? 0) > 1} fallback={<code class={s.url}>{activeIp() ?? "…"}</code>}>
-									<select class={s.input} value={selectedIp()} onChange={(e) => setSelectedIp(e.currentTarget.value)}>
+									<Select class={s.input} value={selectedIp()} onChange={(e) => setSelectedIp(e.currentTarget.value)}>
 										<For each={localIps()}>
 											{(entry) => (
 												<option value={entry.ip}>
@@ -314,7 +316,7 @@ export const RemoteAccessPanel: Component = () => {
 												</option>
 											)}
 										</For>
-									</select>
+									</Select>
 								</Show>
 								<p class={s.hint} style={{ "margin-top": "4px" }}>
 									{t("services.hint.qrScan", "Scan the QR code to connect from another device")}
@@ -543,7 +545,7 @@ export const RemoteAccessPanel: Component = () => {
 				<div class={s.group}>
 					<label>{t("services.label.relaySessionId", "Session ID")}</label>
 					<div class={s.passwordRow}>
-						<input type="text" class={s.input} value={relaySessionId()} readOnly />
+						<Input type="text" class={s.input} value={relaySessionId()} readOnly />
 						<button
 							class={s.toggleBtn}
 							onClick={() => {

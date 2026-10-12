@@ -1,3 +1,5 @@
+import { Select } from "../../../ui/Select";
+import { Input } from "../../../ui/Input";
 import { type Component, createSignal, For, onMount, Show } from "solid-js";
 import { appLogger } from "../../../../stores/appLogger";
 import {
@@ -342,7 +344,7 @@ export const RemoteMachinesPanel: Component = () => {
 	}) {
 		return (
 			<>
-				<select
+				<Select
 					class={s.input}
 					value={props.formData.transportType}
 					onChange={(e) =>
@@ -351,9 +353,9 @@ export const RemoteMachinesPanel: Component = () => {
 				>
 					<option value="Ssh">SSH</option>
 					<option value="Direct">Direct</option>
-				</select>
+				</Select>
 				<Show when={props.formData.transportType === "Ssh"}>
-					<input
+					<Input
 						type="text"
 						class={s.input}
 						list={props.hostListId}
@@ -375,7 +377,7 @@ export const RemoteMachinesPanel: Component = () => {
 					<div style={{ display: "flex", gap: "8px" }}>
 						<div style={{ flex: 1 }}>
 							<label style={{ "font-size": "12px", color: "var(--text-dimmed)" }}>Port</label>
-							<input
+							<Input
 								type="number"
 								class={s.input}
 								value={props.formData.sshPort}
@@ -388,7 +390,7 @@ export const RemoteMachinesPanel: Component = () => {
 						</div>
 						<div style={{ flex: 2 }}>
 							<label style={{ "font-size": "12px", color: "var(--text-dimmed)" }}>User</label>
-							<input
+							<Input
 								type="text"
 								class={s.input}
 								placeholder="SSH user"
@@ -397,7 +399,7 @@ export const RemoteMachinesPanel: Component = () => {
 							/>
 						</div>
 					</div>
-					<input
+					<Input
 						type="text"
 						class={s.input}
 						placeholder="Identity file (optional, e.g. ~/.ssh/id_rsa)"
@@ -408,7 +410,7 @@ export const RemoteMachinesPanel: Component = () => {
 						<label style={{ "font-size": "12px", color: "var(--text-dimmed)", "white-space": "nowrap" }}>
 							Remote daemon port
 						</label>
-						<input
+						<Input
 							type="number"
 							class={s.input}
 							value={props.formData.remoteDaemonPort}
@@ -422,7 +424,7 @@ export const RemoteMachinesPanel: Component = () => {
 					</div>
 				</Show>
 				<Show when={props.formData.transportType === "Direct"}>
-					<input
+					<Input
 						type="text"
 						class={s.input}
 						placeholder="URL (e.g. http://192.168.1.100:9876)"
@@ -433,7 +435,7 @@ export const RemoteMachinesPanel: Component = () => {
 				<Show when={props.formData.transportType === "Ssh"}>
 					<label style={{ display: "grid", gap: "4px" }}>
 						<span>Deployment</span>
-						<select
+						<Select
 							class={s.input}
 							value={props.formData.deploy}
 							onChange={(e) => props.setFormData((f) => ({ ...f, deploy: e.currentTarget.value as DeployMode }))}
@@ -441,11 +443,11 @@ export const RemoteMachinesPanel: Component = () => {
 							<option value="never">Never deploy</option>
 							<option value="on_connect">Deploy on connect</option>
 							<option value="installed">Installed service</option>
-						</select>
+						</Select>
 					</label>
 					<label style={{ display: "grid", gap: "4px" }}>
 						<span>Keep ephemeral daemon alive (minutes)</span>
-						<input
+						<Input
 							type="number"
 							class={s.input}
 							min={1}
@@ -468,14 +470,14 @@ export const RemoteMachinesPanel: Component = () => {
 						onChange={(e) => props.setFormData((f) => ({ ...f, autoUpdate: e.currentTarget.checked }))}
 					/>
 				</label>
-				<input
+				<Input
 					type="text"
 					class={s.input}
 					placeholder="Auth username (for TUIC API authentication)"
 					value={props.formData.authUsername}
 					onInput={(e) => props.setFormData((f) => ({ ...f, authUsername: e.currentTarget.value }))}
 				/>
-				<input
+				<Input
 					type="password"
 					class={s.input}
 					autocomplete="off"
@@ -595,7 +597,7 @@ export const RemoteMachinesPanel: Component = () => {
 					style={{ background: "var(--bg-secondary, rgba(255,255,255,0.03))", padding: "12px", "border-radius": "6px" }}
 				>
 					<div style={{ display: "grid", gap: "8px" }}>
-						<input
+						<Input
 							type="text"
 							class={s.input}
 							placeholder="Name (e.g. dev-server, staging)"

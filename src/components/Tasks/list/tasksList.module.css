@@ -29,7 +29,7 @@
 .empty { padding: 16px; color: var(--fg-secondary); }
 .more { align-self: center; margin: 8px; }
 @media (max-width: 600px) {
-	
+
 	.list button { min-height: 44px; }
 	.toolbar, .filters { padding: 8px; }
 	.toolbar label { flex: 1 1 140px; }

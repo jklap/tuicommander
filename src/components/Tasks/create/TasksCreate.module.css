@@ -13,7 +13,7 @@
 .error button { margin-left: 8px; }
 @media (max-width: 600px) {
 	.create { padding: 12px; }
-	
+
 	.create button { min-height: 44px; }
 }
 

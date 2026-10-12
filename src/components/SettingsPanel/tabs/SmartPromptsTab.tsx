@@ -1,3 +1,6 @@
+import { Select } from "../../ui/Select";
+import { Textarea } from "../../ui/Textarea";
+import { Input } from "../../ui/Input";
 import { type Component, createMemo, createSignal, For, onMount, Show } from "solid-js";
 import { AGENT_TYPES, AGENTS, type AgentType, toHeadlessAgentChoice } from "../../../agents";
 import { SMART_PROMPTS_BUILTIN } from "../../../data/smartPromptsBuiltIn";
@@ -292,7 +295,7 @@ const PromptEditor: Component<{
 			{/* Name */}
 			<div class={sp.editorSection}>
 				<label class={sp.editorLabel}>Name *</label>
-				<input
+				<Input
 					class={sp.editorInput}
 					type="text"
 					value={props.prompt.name}
@@ -304,7 +307,7 @@ const PromptEditor: Component<{
 			{/* Description */}
 			<div class={sp.editorSection}>
 				<label class={sp.editorLabel}>Description</label>
-				<input
+				<Input
 					class={sp.editorInput}
 					type="text"
 					value={props.prompt.description ?? ""}
@@ -316,7 +319,7 @@ const PromptEditor: Component<{
 			{/* Content + Variable dropdown */}
 			<div class={sp.editorSection}>
 				<label class={sp.editorLabel}>Content *</label>
-				<textarea
+				<Textarea
 					class={sp.editorTextarea}
 					value={props.prompt.content}
 					onInput={(e) => handleContentChange(e.currentTarget.value)}
@@ -348,7 +351,7 @@ const PromptEditor: Component<{
 			<div class={sp.editorRow}>
 				<div class={sp.editorSection} style={{ flex: "1" }}>
 					<label class={sp.editorLabel}>Execution Mode</label>
-					<select
+					<Select
 						class={sp.editorInput}
 						value={props.prompt.executionMode ?? "inject"}
 						onChange={(e) => {
@@ -368,13 +371,13 @@ const PromptEditor: Component<{
 						<option value="shell">Shell script (direct run)</option>
 						<option value="headless">Headless (one-shot CLI)</option>
 						<option value="api">API (via ego)</option>
-					</select>
+					</Select>
 				</div>
 
 				<Show when={(props.prompt.executionMode ?? "inject") === "inject"}>
 					<div class={sp.editorSection} style={{ flex: "1" }}>
 						<label class={sp.editorLabel}>Target</label>
-						<select
+						<Select
 							class={sp.editorInput}
 							value={props.prompt.injectTarget ?? "compose"}
 							onChange={(e) => {
@@ -386,7 +389,7 @@ const PromptEditor: Component<{
 						>
 							<option value="compose">Compose box (review)</option>
 							<option value="terminal">Terminal (send to agent)</option>
-						</select>
+						</Select>
 						<p class={sp.fieldHint}>
 							Compose fills the input for review; Terminal sends to the agent and waits for idle
 						</p>
@@ -414,7 +417,7 @@ const PromptEditor: Component<{
 			<Show when={props.prompt.executionMode === "headless"}>
 				<div class={sp.editorSection}>
 					<label class={sp.editorLabel}>Preferred Agent</label>
-					<select
+					<Select
 						class={sp.editorInput}
 						value={props.prompt.preferredAgent ?? ""}
 						onChange={(e) => {
@@ -429,7 +432,7 @@ const PromptEditor: Component<{
 							{(type) => <option value={type}>{AGENTS[type]?.name ?? type}</option>}
 						</For>
 						<option value="api">API (via ego)</option>
-					</select>
+					</Select>
 					<p class={sp.fieldHint}>Override the global headless agent for this prompt</p>
 				</div>
 			</Show>
@@ -453,7 +456,7 @@ const PromptEditor: Component<{
 			<Show when={(props.prompt.executionMode ?? "inject") !== "inject"}>
 				<div class={sp.editorSection}>
 					<label class={sp.editorLabel}>Output Target</label>
-					<select
+					<Select
 						class={sp.editorInput}
 						value={props.prompt.outputTarget ?? ""}
 						onChange={(e) => {
@@ -468,7 +471,7 @@ const PromptEditor: Component<{
 						<option value="clipboard">Clipboard</option>
 						<option value="toast">Notification</option>
 						<option value="panel">Panel</option>
-					</select>
+					</Select>
 				</div>
 			</Show>
 
@@ -476,7 +479,7 @@ const PromptEditor: Component<{
 			<Show when={props.prompt.executionMode === "api"}>
 				<div class={sp.editorSection}>
 					<label class={sp.editorLabel}>System Prompt</label>
-					<textarea
+					<Textarea
 						class={sp.editorTextarea}
 						rows={3}
 						value={props.prompt.systemPrompt ?? ""}
@@ -683,7 +686,7 @@ export const SmartPromptsTab: Component = () => {
 
 			<div class={s.group}>
 				<label>Headless Agent</label>
-				<select
+				<Select
 					value={agentConfigsStore.getHeadlessAgent() ?? ""}
 					onChange={(e) => agentConfigsStore.setHeadlessAgent(toHeadlessAgentChoice(e.currentTarget.value))}
 				>
@@ -709,7 +712,7 @@ export const SmartPromptsTab: Component = () => {
 						}}
 					</For>
 					<option value="api">API (via ego)</option>
-				</select>
+				</Select>
 				<p class={s.hint}>
 					Default agent for headless prompts. Individual prompts can override this in their settings.
 					{detection.loading() ? " Detecting..." : ""}

@@ -1,3 +1,4 @@
+import { Select } from "../../ui/Select";
 import { type Component, createSignal, For, Show } from "solid-js";
 import { t } from "../../../i18n";
 import { invoke } from "../../../invoke";
@@ -191,7 +192,7 @@ export const NotificationsTab: Component = () => {
 									</>
 								}
 							>
-								<select
+								<Select
 									value={notificationsStore.state.config.audio_device ?? ""}
 									onChange={(e) => {
 										const val = e.currentTarget.value;
@@ -207,7 +208,7 @@ export const NotificationsTab: Component = () => {
 											</option>
 										)}
 									</For>
-								</select>
+								</Select>
 								<button
 									class={s.testBtn}
 									style={{ "margin-top": "6px" }}

@@ -8,10 +8,10 @@ Published story workflows can start in Plans and Stories through the owning daem
 **Version:** 1.8.0
 **Last Updated:** 2026-09-16
 
-## Shared form controls — Tasks implemented (#1815-01c9)
+## Shared form controls — Tasks and Settings implemented (#1815-01c9)
 
 Native Select, Input and Textarea wrappers and a keyboard-accessible segmented
-view switch share theme-based form styling. Tasks uses these primitives.
+view switch share theme-based form styling. Tasks and Settings use these primitives.
 The source guard rejects native selects outside ui except explicit pending migrations.
 
 ## ego Perimeter Settings — Implemented (#1401-ab1c)

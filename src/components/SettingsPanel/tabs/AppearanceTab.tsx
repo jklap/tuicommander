@@ -1,3 +1,4 @@
+import { Input } from "../../ui/Input";
 import { type Component, createSignal, For, Show } from "solid-js";
 import { t } from "../../../i18n";
 import type { RepoGroup } from "../../../stores/repositories";
@@ -54,7 +55,7 @@ const GroupSettingsItem: Component<{
 						</span>
 					}
 				>
-					<input
+					<Input
 						class={s.groupNameInput}
 						value={editName()}
 						onInput={(e) => {

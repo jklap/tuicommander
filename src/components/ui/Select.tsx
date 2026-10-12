@@ -15,7 +15,8 @@ export function Select(props: SelectProps) {
 	// Solid spreads children before attributes. Apply multiple before inserting
 	// options, then value afterwards, or the browser drops the initial selection.
 	createRenderEffect(() => {
-		if (local.value !== undefined) element.value = String(local.value);
+		const value = local.value;
+		if (value !== undefined) element.value = String(value);
 	});
 	return element;
 }
