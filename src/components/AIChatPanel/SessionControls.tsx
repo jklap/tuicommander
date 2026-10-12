@@ -278,17 +278,6 @@ export const SessionControls: Component<{ chat: AcpChat }> = (props) => {
 				</button>
 			</Show>
 
-			<button
-				type="button"
-				class={s.headerBtn}
-				aria-label="Start another conversation"
-				title="Start another conversation"
-				onClick={() => void props.chat.startSession()}
-			>
-				<svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor" aria-hidden="true">
-					<path d="M6.4 1h1.2v5.4H13v1.2H7.6V13H6.4V7.6H1V6.4h5.4z" />
-				</svg>
-			</button>
 			<Show when={settingsOpen()}>
 				<SessionSettingsDialog chat={props.chat} options={selectOptions()} onClose={() => setSettingsOpen(false)} />
 			</Show>

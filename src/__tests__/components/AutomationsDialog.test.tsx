@@ -107,7 +107,13 @@ describe("AutomationsDialog", () => {
 		render(() => <AutomationsDialog adapter={fakeAdapter()} onClose={close} />);
 		await screen.findByText("Sentry");
 		const first = screen.getByRole("button", { name: "Close automations" });
-		const last = screen.getByRole("button", { name: /Sentry/ });
+		await screen.findByLabelText("Name");
+		const controls = screen
+			.getByRole("dialog")
+			.querySelectorAll<HTMLElement>(
+				'button:not(:disabled):not([tabindex="-1"]), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), [tabindex="0"]',
+			);
+		const last = [...controls].at(-1)!;
 		last.focus();
 		fireEvent.keyDown(last, { key: "Tab" });
 		expect(document.activeElement).toBe(first);
