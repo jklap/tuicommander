@@ -646,11 +646,7 @@ fn merged_tools_collapse_true_hides_disabled_progress() {
 /// keeps trying. Both directions are asserted here so neither can drift.
 #[test]
 fn the_progress_obligation_and_the_progress_tool_appear_and_vanish_together() {
-    let ctx = InstructionContext {
-        repos: Vec::new(),
-        sessions: Vec::new(),
-        peer_count: 0,
-    };
+    let ctx = InstructionContext::default();
     let markers = (true, true);
 
     let on = render_mcp_instructions(None, false, markers, true, &ctx);
@@ -1197,15 +1193,13 @@ fn meta_tools_do_not_demand_a_schema_the_caller_already_has() {
 fn mcp_instruction_surface_bytes_stay_within_budget() {
     let state = test_state();
 
-    let empty = InstructionContext {
-        repos: Vec::new(),
-        sessions: Vec::new(),
-        peer_count: 0,
-    };
+    let empty = InstructionContext::default();
     let loaded = InstructionContext {
-        repos: (0..8)
-            .map(|i| (format!("repo-{i}"), format!("/Users/dev/src/repo-{i}")))
-            .collect(),
+        repos: RepoSummary {
+            total: 8,
+            groups: vec![("work".into(), 5)],
+            remote: Vec::new(),
+        },
         sessions: (0..12)
             .map(|i| {
                 (
@@ -1216,6 +1210,7 @@ fn mcp_instruction_surface_bytes_stay_within_budget() {
             })
             .collect(),
         peer_count: 6,
+        ..Default::default()
     };
 
     let mut dump = serde_json::Map::new();
@@ -1775,5 +1770,271 @@ mod secret_form_dispatch {
                 .contains("private secret form"),
             "{response}"
         );
+    }
+}
+
+// ---- initialize message: capability map, repo counts, child markers (1754-071d) ----
+
+fn repo_document(local: usize, remote: usize) -> serde_json::Value {
+    let paths: Vec<String> = (0..local + remote)
+        .map(|i| format!("/Users/dev/src/some-long-repository-name-{i}"))
+        .collect();
+    let mut repos = serde_json::Map::new();
+    for (i, path) in paths.iter().enumerate() {
+        let entry = if i < local {
+            serde_json::json!({})
+        } else {
+            serde_json::json!({"connectionId": "ssh-box"})
+        };
+        repos.insert(path.clone(), entry);
+    }
+    serde_json::json!({
+        "repoOrder": paths,
+        "repos": repos,
+        "groups": {"g1": {"name": "work", "repoOrder": paths[..local.min(3)]}},
+    })
+}
+
+fn tools(names: &[&str]) -> Vec<String> {
+    names.iter().map(|n| n.to_string()).collect()
+}
+
+// Catches: a path list leaking back into the instructions, or counts that
+// ignore groups and remote connections.
+#[test]
+fn repos_render_as_one_count_line_with_group_and_connection_counts() {
+    let ctx = InstructionContext {
+        repos: summarize_repos(&repo_document(37, 3)),
+        ..Default::default()
+    };
+    let out = render_mcp_instructions(None, false, (true, true), true, &ctx);
+    assert!(!out.contains("/Users/dev"), "no repo path may be rendered");
+    assert!(
+        out.contains("40 repositories (group work 3, remote ssh-box 3)"),
+        "{out}"
+    );
+    assert!(out.contains("`repo action=list`"));
+    let collapsed = render_mcp_instructions(None, true, (true, true), true, &ctx);
+    assert!(collapsed.contains("call_tool tool_name=repo arguments={action:list}"));
+}
+
+// Catches: repo-specific text (paths, names) in the instructions, which made
+// every added repository a new prompt-inspector row.
+#[test]
+fn adding_a_repo_changes_only_the_count() {
+    let render = |n| {
+        let ctx = InstructionContext {
+            repos: summarize_repos(&repo_document(n, 0)),
+            ..Default::default()
+        };
+        render_mcp_instructions(None, false, (true, true), true, &ctx)
+    };
+    let (a, b) = (render(10), render(11));
+    assert_eq!(
+        a.replace("10 repositories", "N repositories"),
+        b.replace("11 repositories", "N repositories")
+    );
+}
+
+// Catches: a remote repo row without its connection, or a local one claiming one.
+#[test]
+fn only_remote_repo_rows_carry_a_connection_id() {
+    let doc = repo_document(1, 1);
+    let order = doc["repoOrder"].as_array().unwrap();
+    let mut local = serde_json::json!({"path": order[0]});
+    let mut remote = serde_json::json!({"path": order[1]});
+    tag_repo_connection(&mut local, doc["repos"].get(order[0].as_str().unwrap()));
+    tag_repo_connection(&mut remote, doc["repos"].get(order[1].as_str().unwrap()));
+    assert!(local.get("connection_id").is_none());
+    assert_eq!(remote["connection_id"], "ssh-box");
+    let mut absent = serde_json::json!({});
+    tag_repo_connection(&mut absent, None);
+    assert!(absent.get("connection_id").is_none());
+}
+
+// Catches: a capability map naming a tool this install did not register (voice
+// without dictation), omitting a registered one, or inventing upstream servers.
+#[test]
+fn capability_map_names_exactly_the_registered_tools_and_upstreams() {
+    let registered = tools(&[
+        "ui",
+        "session",
+        "agent",
+        "repo",
+        "plugin_dev_guide",
+        "telegram",
+    ]);
+    let ctx = InstructionContext {
+        native_tools: registered.clone(),
+        upstreams: vec![("quill".into(), 4), ("maccontrol".into(), 7)],
+        ..Default::default()
+    };
+    let out = render_mcp_instructions(Some("claude-code"), false, (true, true), true, &ctx);
+    for name in &registered {
+        assert!(out.contains(&format!("`{name}`")), "{name} missing: {out}");
+    }
+    for absent in ["voice", "automations", "secret", "story"] {
+        assert!(
+            !out.contains(&format!("`{absent}`")),
+            "{absent} is not registered"
+        );
+    }
+    assert!(out.contains("`quill` (4 tools), `maccontrol` (7 tools)"));
+    assert!(out.contains("ToolSearch"));
+    assert!(out.contains("urgency=urgent"));
+    let collapsed = render_mcp_instructions(None, true, (true, true), true, &ctx);
+    assert!(collapsed.contains("`search_tools query=<server>`"));
+    let plain = render_mcp_instructions(None, false, (true, true), true, &ctx);
+    assert!(plain.contains("<server>__<tool>"));
+    assert!(!plain.contains("ToolSearch"));
+}
+
+// Catches: an upstream line (or the whole map) rendered when nothing backs it.
+#[test]
+fn no_upstreams_means_no_upstream_line_and_no_tools_means_no_map() {
+    let ctx = InstructionContext {
+        native_tools: tools(&["session"]),
+        ..Default::default()
+    };
+    let out = render_mcp_instructions(None, false, (true, true), true, &ctx);
+    assert!(out.contains("## What TUIC gives you"));
+    assert!(!out.contains("Other MCP servers"));
+    let bare = render_mcp_instructions(
+        None,
+        false,
+        (true, true),
+        true,
+        &InstructionContext::default(),
+    );
+    assert!(!bare.contains("## What TUIC gives you"));
+}
+
+// Catches: the live build listing tools that tools/list does not serve, or
+// ignoring the disabled-tools setting and the connected upstreams.
+#[test]
+fn built_instructions_follow_the_served_tool_list_and_ready_upstreams() {
+    let state = test_state();
+    state.config.write().disabled_native_tools = vec!["telegram".into()];
+    state
+        .mcp
+        .upstream_registry
+        .inject_ready_upstream("quill", &["a", "b"]);
+    let out = build_mcp_instructions_for_mode(&state, Some("claude-code"), false);
+    let served = filtered_native_tools(&state);
+    assert!(!served.is_empty());
+    for tool in &served {
+        let name = tool["name"].as_str().unwrap();
+        assert!(
+            out.contains(&format!("`{name}`")),
+            "{name} is served but unnamed"
+        );
+    }
+    assert!(
+        !out.contains("`telegram`"),
+        "disabled tool must not be named"
+    );
+    assert!(out.contains("`quill` (2 tools)"));
+}
+
+// Catches: a size regression — the map plus count line must cost less than the
+// path list it replaces (the pre-change output is the bare text plus that list).
+#[test]
+fn instructions_with_forty_repos_and_six_upstreams_are_smaller_than_before() {
+    let registered: Vec<String> = native_tool_definitions()
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap().to_string())
+        .collect();
+    let ctx = InstructionContext {
+        repos: summarize_repos(&repo_document(40, 0)),
+        native_tools: registered,
+        upstreams: (0..6).map(|i| (format!("server-{i}"), 10)).collect(),
+        ..Default::default()
+    };
+    let old_repos_section = {
+        let mut s = String::from("## Repos\n\n");
+        for i in 0..40 {
+            s.push_str(&format!(
+                "- **some-long-repository-name-{i}** `/Users/dev/src/some-long-repository-name-{i}`\n"
+            ));
+        }
+        s.push('\n');
+        s
+    };
+    for collapse in [false, true] {
+        let bare = render_mcp_instructions(
+            None,
+            collapse,
+            (true, true),
+            true,
+            &InstructionContext::default(),
+        );
+        let new = render_mcp_instructions(None, collapse, (true, true), true, &ctx);
+        assert!(
+            new.len() < bare.len() + old_repos_section.len(),
+            "collapse={collapse}: {} >= {}",
+            new.len(),
+            bare.len() + old_repos_section.len()
+        );
+    }
+}
+
+// Catches: spawned children receiving the suggest marker nobody sees, or the
+// root session losing it.
+#[test]
+fn suggest_marker_is_for_root_sessions_only() {
+    let render = |spawned_child| {
+        let ctx = InstructionContext {
+            spawned_child,
+            ..Default::default()
+        };
+        render_mcp_instructions(None, false, (true, true), true, &ctx)
+    };
+    assert!(render(false).contains("- `suggest:`"));
+    assert!(!render(true).contains("suggest:"));
+    assert!(render(true).contains("- `intent:"), "other markers stay");
+}
+
+// Catches: the child check reading the wrong identity so a real spawned child
+// still gets suggest (or a root loses it).
+#[test]
+fn live_child_session_gets_no_suggest_and_root_does() {
+    const ROOT: &str = "11111111-1111-4111-8111-111111111111";
+    const CHILD: &str = "22222222-2222-4222-8222-222222222222";
+    let state = test_state();
+    for (tuic, mcp) in [(ROOT, "mcp-root"), (CHILD, "mcp-child")] {
+        handle_messaging(
+            &state,
+            &serde_json::json!({"action": "register", "tuic_session": tuic, "name": mcp}),
+            Some(mcp),
+        );
+    }
+    state
+        .session_maps
+        .session_parent
+        .insert(CHILD.to_string(), ROOT.to_string());
+    let root = build_mcp_instructions_for_session(&state, None, false, Some("mcp-root"));
+    let child = build_mcp_instructions_for_session(&state, None, false, Some("mcp-child"));
+    assert!(root.contains("- `suggest:`"));
+    assert!(!child.contains("suggest:"));
+}
+
+// Catches: a claim the server cannot know (the user is away) or a platform
+// name in generic wording, in any rendering of the instructions.
+#[test]
+fn instructions_make_no_claim_about_the_user_or_the_platform() {
+    let ctx = InstructionContext {
+        native_tools: tools(&["ui", "voice", "telegram", "progress", "session"]),
+        upstreams: vec![("quill".into(), 1)],
+        ..Default::default()
+    };
+    for collapse in [false, true] {
+        for client in [None, Some("claude-code")] {
+            let out = render_mcp_instructions(client, collapse, (true, true), true, &ctx);
+            for banned in ["away", "Mac"] {
+                assert!(!out.contains(banned), "{banned:?} in: {out}");
+            }
+        }
     }
 }

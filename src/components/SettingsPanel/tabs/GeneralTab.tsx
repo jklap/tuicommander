@@ -147,6 +147,7 @@ export const GeneralTab: Component = () => {
 
 	const updateChannelOptions = [
 		{ value: "stable", label: t("general.channel.stable", "Stable") },
+		{ value: "beta", label: t("general.channel.beta", "Beta") },
 		{ value: "nightly", label: t("general.channel.nightly", "Nightly") },
 	];
 
@@ -264,7 +265,7 @@ export const GeneralTab: Component = () => {
 					options={updateChannelOptions}
 					hint={
 						settingsStore.state.updateChannel !== "stable"
-							? t("general.hint.updateChannelWarning", "Nightly builds may be unstable")
+							? t("general.hint.updateChannelWarning", "Beta and nightly builds may be unstable")
 							: t("general.hint.updateChannel", "Choose which release channel to receive updates from")
 					}
 					hintStyle={settingsStore.state.updateChannel !== "stable" ? { color: "var(--warning, #e5c07b)" } : undefined}

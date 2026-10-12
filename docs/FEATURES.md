@@ -1672,6 +1672,7 @@ All data persisted to platform config directory via Rust:
 
 ### 14.1 Auto-Update
 - Check for updates on startup via `tauri-plugin-updater`
+- Stable, Beta and Nightly channels. Beta automatically checks the next beta and final stable; beta downloads open the versioned release page, and stable updates install in-app. Fresh beta installations default to Beta; saved channel choices stay unchanged
 - Status bar badge with version
 - Download progress percentage
 - One-click install and relaunch
