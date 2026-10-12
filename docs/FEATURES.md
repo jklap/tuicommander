@@ -2090,7 +2090,7 @@ Phone-optimized progressive web app for monitoring AI agents remotely. Separate 
 
 ### 18.3 Session Detail Screen
 - Mirrored sessions stream through the connected desktop server to their owning daemon, so the phone stays on its HTTPS origin; the session kill action reaches that owner too
-- Live output via WebSocket with `format=log` (VT100-extracted clean lines, auto-scrolling, 500-line buffer)
+- Live output via WebSocket with `format=log` (VT100-extracted clean lines, auto-scrolling, 500-line live tail). Scrolling up or touching retains the reading window and fetched history; the next log update after returning to the bottom restores the live tail.
 - HTTP and HTTPS links in output open in the phone's external browser; Markdown path controls open the Files editor.
 - Source-width prose rows are rejoined before the phone wraps them; short lines, lists, and box-drawing blocks retain their layout
 - When a mobile output line wraps, its continuation keeps the line's leading spaces or tabs; unindented prose and horizontally scrolling box-drawing blocks retain their layout
