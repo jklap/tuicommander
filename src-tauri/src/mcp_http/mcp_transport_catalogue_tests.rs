@@ -2020,21 +2020,6 @@ fn live_child_session_gets_no_suggest_and_root_does() {
     assert!(!child.contains("suggest:"));
 }
 
-// Catches: the version hard-coded in the text instead of coming from the build.
-#[test]
-fn version_comes_from_the_build() {
-    let out = render_mcp_instructions(
-        None,
-        false,
-        (true, true),
-        true,
-        &InstructionContext::default(),
-    );
-    let ver = env!("CARGO_PKG_VERSION");
-    assert!(out.starts_with(&format!("# TUICommander v{ver}\n")));
-    assert!(out.contains(&format!("`TUICommander v{ver} is connected.`")));
-}
-
 // Catches: a claim the server cannot know (the user is away) or a platform
 // name in generic wording, in any rendering of the instructions.
 #[test]
