@@ -4421,6 +4421,51 @@ async fn external_channel_mail_remains_available_to_wait_before_cursor_advances(
     assert_eq!(waited["next_since"], u64::MAX - 1);
 }
 
+/// 1818-3fe7: mail that landed between two waits is owned by the terminal (a
+/// payload-free wake). A later wait returns a newer message and moves the
+/// implicit cursor past it, so the mail was never returned by any wait and the
+/// omitted-`since` read could not reach it either.
+#[tokio::test]
+async fn agent_wait_returns_terminal_owned_mail_the_cursor_would_skip_exactly_once() {
+    let state = test_state();
+    register_peer(&state, TEST_UUID_A, "sender", "mcp-sender");
+    register_peer(&state, TEST_UUID_B, "recipient", "mcp-recipient");
+    let push = |id: &str, timestamp: u64| {
+        state.push_agent_inbox(
+            TEST_UUID_B,
+            crate::state::AgentMessage {
+                id: id.into(),
+                from_tuic_session: TEST_UUID_A.into(),
+                from_name: "sender".into(),
+                content: format!("content of {id}"),
+                timestamp,
+                delivered_via_channel: false,
+            },
+        );
+    };
+    push("between-waits-mail", 100);
+    assert_eq!(
+        state.assign_agent_delivery(TEST_UUID_B, "between-waits-mail", true),
+        crate::state::AgentDeliveryAssignment::Terminal
+    );
+    state.mark_terminal_delivery_dispatched(TEST_UUID_B, "between-waits-mail");
+    push("later-lifecycle", 200);
+
+    let args = serde_json::json!({"action": "wait", "timeout_ms": 1});
+    let wait = || handle_agent_wait(&state, &args, Some("mcp-recipient"));
+    let first = wait().await;
+    assert_eq!(first["messages"].as_array().unwrap().len(), 1);
+    assert_eq!(first["messages"][0]["id"], "later-lifecycle");
+
+    let second = wait().await;
+    assert_eq!(second["messages"].as_array().unwrap().len(), 1);
+    assert_eq!(second["messages"][0]["id"], "between-waits-mail");
+    assert!(second["next_since"].as_u64() > first["next_since"].as_u64());
+
+    let third = wait().await;
+    assert_eq!(third["met"], false, "the mail must be returned once only");
+}
+
 #[tokio::test]
 async fn agent_wait_requeues_an_older_terminal_failure_after_advancing_its_cursor() {
     let state = test_state();
