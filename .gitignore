@@ -65,6 +65,8 @@ scripts/*
 !scripts/generate-release-notes.sh
 !scripts/third-party-notices.mjs
 !scripts/check-release-tag.sh
+!scripts/release-flags.sh
+!scripts/test-release-flags.sh
 !scripts/patch-nightly-version.sh
 !scripts/check-gitlink-reachable.sh
 !scripts/test-check-gitlink-reachable.sh
