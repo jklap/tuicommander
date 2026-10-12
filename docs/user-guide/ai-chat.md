@@ -72,8 +72,8 @@ If desktop and mobile open the chat together, they attach to the same running eg
 
 ego starts when you send the first message, click **+**, or select a saved tab; opening the panel
 starts nothing. There is one ego for the app: a reloaded window or the phone
-gets the one already running, and quitting TUICommander ends it. **New** in the
-control bar starts another conversation; the picker beside it lists previous
+gets the one already running, and quitting TUICommander ends it. **New chat tab** in the
+tab bar starts another conversation; the conversation picker lists previous
 conversations by title, newest first. Selecting one loads its history. The open
 tabs and the selected tab are restored after restarting TUICommander, and their
 history is replayed when ego starts. Selecting a saved tab connects and loads it
@@ -192,7 +192,7 @@ read its full command and output.
   conversation when it reaches ego; steering appears when ego echoes it.
 - **Session settings** are published by the current conversation. The control bar
   shows the model's short name and the current mode. Its summary shortens before
-  the icon controls, so Pause, Resume, Compact and New stay on one row. Each
+  the icon controls, so Pause, Resume and Compact stay on one row. Each
   control has a tooltip and a name for assistive technology. The settings button opens a dialog with
   labeled choices and descriptions for every select option ego offers, including
   reasoning effort and sandbox when available. Changes apply to this conversation

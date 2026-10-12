@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Removed
+- Remove the duplicate AI Chat control-bar + button; New chat tab still starts a conversation (#1755-7709).
 - GitHub token chain no longer reads the `gh` CLI login (`gh auth token`, `gh-token` crate); use OAuth login or `GH_TOKEN`/`GITHUB_TOKEN`. TUIC spawns no `gh` process (#1714-1c1d).
 
 ### Fixed
