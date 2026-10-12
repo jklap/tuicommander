@@ -3,7 +3,6 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 import ts from "@typescript/typescript6";
-import allowlist from "./nativeSelectAllowlist.json";
 
 const root = join(import.meta.dirname, "..");
 function nativeSelectFiles(directory: string): string[] {
@@ -26,7 +25,7 @@ function nativeSelectFiles(directory: string): string[] {
 
 describe("shared form control boundary", () => {
 	// Catches: a new screen bypassing shared sizing, focus and disabled styling with a native select.
-	it("rejects native selects outside ui except explicitly pending migrations", () => {
-		expect(nativeSelectFiles(root).sort()).toEqual([...allowlist].sort());
+	it("rejects native selects outside ui", () => {
+		expect(nativeSelectFiles(root).sort()).toEqual([]);
 	});
 });

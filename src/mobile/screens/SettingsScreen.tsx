@@ -1,3 +1,4 @@
+import { Select } from "../../components/ui/Select";
 import { createSignal, onMount, Show } from "solid-js";
 import { TelegramTab } from "../../components/SettingsPanel/tabs/TelegramTab";
 import { appLogger } from "../../stores/appLogger";
@@ -276,7 +277,7 @@ export function SettingsScreen(props: SettingsScreenProps) {
 				</div>
 				<label class={styles.row}>
 					<span class={styles.label}>Theme</span>
-					<select
+					<Select
 						class={styles.select}
 						aria-label="Theme"
 						value={theme()}
@@ -298,7 +299,7 @@ export function SettingsScreen(props: SettingsScreenProps) {
 					>
 						<option value="commander">Dark</option>
 						<option value="vscode-light">Light</option>
-					</select>
+					</Select>
 				</label>
 				<Show when={themeError()}>
 					<div class={styles.hint} role="alert" style={{ color: "var(--error)" }}>

@@ -1,3 +1,4 @@
+import { Select } from "../../components/ui/Select";
 import { createEffect, createSignal, For, onMount, Show } from "solid-js";
 import { Composer } from "../../components/AIChatPanel/Composer";
 import { chatErrorView } from "../../components/AIChatPanel/chatError";
@@ -135,7 +136,7 @@ export function MobileChatScreen(props: { onOpenFile?: (candidate: string, cwd: 
 				<div class={styles.controls}>
 					<label>
 						Conversation
-						<select
+						<Select
 							aria-label="Conversation"
 							value={chat.sessionId() ?? ""}
 							onChange={(event) => void chat.selectSession(event.currentTarget.value)}
@@ -147,7 +148,7 @@ export function MobileChatScreen(props: { onOpenFile?: (candidate: string, cwd: 
 									</option>
 								)}
 							</For>
-						</select>
+						</Select>
 					</label>
 					<button type="button" onClick={() => void chat.startSession()}>
 						New
