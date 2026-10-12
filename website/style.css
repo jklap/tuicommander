@@ -794,72 +794,6 @@ section {
   overflow-x: auto;
 }
 
-/* ============================================
-   COMPARISON TABLE
-   ============================================ */
-.comparison {
-  padding: var(--section-gap) 0;
-}
-.comparison h2 {
-  text-align: center;
-  font-size: 1.8rem;
-  margin-bottom: 12px;
-}
-.comparison-note {
-  text-align: center;
-  color: var(--fg-muted);
-  font-size: 0.9rem;
-  margin-bottom: 48px;
-}
-.comparison-table-wrap {
-  overflow-x: auto;
-  -webkit-overflow-scrolling: touch;
-}
-.comparison-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.9rem;
-}
-.comparison-table th,
-.comparison-table td {
-  padding: 14px 20px;
-  text-align: left;
-  border-bottom: 1px solid var(--border);
-}
-.comparison-table th {
-  color: var(--fg-muted);
-  font-weight: 400;
-  font-size: 0.8rem;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-.comparison-table th:first-child {
-  color: var(--fg-primary);
-  font-weight: 600;
-  text-transform: none;
-  letter-spacing: 0;
-  font-size: 0.9rem;
-}
-.comparison-table td:first-child {
-  font-weight: 500;
-}
-.comparison-table .highlight-col {
-  background: rgba(89, 168, 221, 0.06);
-}
-.comparison-table th.highlight-col {
-  color: var(--accent);
-  font-weight: 600;
-}
-.check {
-  color: var(--success);
-}
-.cross {
-  color: var(--error);
-  opacity: 0.6;
-}
-.partial {
-  color: var(--warning);
-}
 .badge-beta {
   display: inline-block;
   font-size: 0.55em;
@@ -1237,13 +1171,6 @@ section {
   .workflow-steps {
     grid-template-columns: 1fr;
     gap: 16px;
-  }
-  .comparison-table {
-    font-size: 0.8rem;
-  }
-  .comparison-table th,
-  .comparison-table td {
-    padding: 10px 12px;
   }
   .agent-grid {
     gap: 10px;

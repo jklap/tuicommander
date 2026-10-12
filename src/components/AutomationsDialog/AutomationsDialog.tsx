@@ -1,26 +1,41 @@
 import { createEffect, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { t } from "../../i18n";
+import { appLogger } from "../../stores/appLogger";
 import { automationsUi, createAutomationsStore } from "../../stores/automations";
 import { registerModal } from "../../stores/modalStack";
+import { AutomationCard } from "./AutomationCard";
 import s from "./AutomationsDialog.module.css";
 import type { AutomationAdapter } from "./contract";
 import { DefinitionEditor } from "./DefinitionEditor";
 import { DetailHistory } from "./DetailHistory";
+import { DialogTabs } from "./DialogTabs";
 import { RunsView } from "./RunsView";
-import { zonedTime } from "./ScheduleFields";
 import { createAutomationAdapter } from "./transportAdapter";
 
 export function AutomationsDialog(props: { onClose: () => void; adapter?: AutomationAdapter; connectionId?: string }) {
 	const store = createAutomationsStore(props.adapter ?? createAutomationAdapter(props.connectionId));
 	const [tab, setTab] = createSignal("definitions");
 	const [search, setSearch] = createSignal("");
+	const preferenceKey = "tuic-automations-select-first";
+	const [selectFirst, setSelectFirst] = createSignal(
+		(() => {
+			try {
+				return localStorage.getItem(preferenceKey) !== "false";
+			} catch {
+				return true;
+			}
+		})(),
+	);
 	const [confirmDelete, setConfirmDelete] = createSignal(false);
 	let panel: HTMLDivElement | undefined, searchInput: HTMLInputElement | undefined;
 	const priorFocus = document.activeElement;
 	registerModal(props.onClose);
 	onMount(() => {
 		searchInput?.focus();
-		void store.refresh();
+		void store.refresh().then(() => {
+			const first = store.items()[0];
+			if (selectFirst() && first && !store.draft() && !automationsUi.requestedRun()) choose(first.definition);
+		});
 	});
 	onCleanup(() => {
 		store.dispose();
@@ -46,7 +61,7 @@ export function AutomationsDialog(props: { onClose: () => void; adapter?: Automa
 		if (event.key !== "Tab") return;
 		const controls = [
 			...(panel?.querySelectorAll<HTMLElement>(
-				'button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), [tabindex="0"]',
+				'button:not(:disabled):not([tabindex="-1"]), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), [tabindex="0"]',
 			) ?? []),
 		];
 		const first = controls[0],
@@ -86,53 +101,66 @@ export function AutomationsDialog(props: { onClose: () => void; adapter?: Automa
 					</button>
 				</header>
 				<Show when={store.error()}>
-					<div role="alert" class={s.error}>
+					<div role="alert" class={`${s.error} ${s.banner}`}>
 						{store.error()}
 					</div>
 				</Show>
 				<Show when={store.notice()}>
-					<div role="status" class={s.notice}>
+					<div role="status" class={`${s.notice} ${s.banner}`}>
 						{store.notice()}
 					</div>
 				</Show>
-				<div class={s.row}>
-					<button type="button" aria-pressed={tab() === "definitions"} onClick={() => setTab("definitions")}>
-						{t("automations.list", "Automation definitions")}
-					</button>
-					<button
-						type="button"
-						aria-pressed={tab() === "runs"}
-						onClick={() => {
-							setTab("runs");
-							void store.loadRuns();
-						}}
-					>
-						{t("automations.runs", "Runs")}
-					</button>
-				</div>
+				<DialogTabs
+					selected={tab()}
+					onSelect={(value) => {
+						setTab(value);
+						if (value === "runs") void store.loadRuns();
+					}}
+				/>
 				<Show when={tab() === "runs"}>
-					<main class={s.detail}>
+					<main class={s.detail} role="tabpanel" id="automations-panel-runs" aria-labelledby="automations-tab-runs">
 						<RunsView store={store} connectionId={props.connectionId} onNavigate={props.onClose} />
 					</main>
 				</Show>
 				<Show when={tab() === "definitions"}>
-					<div class={s.content}>
-						<aside class={s.sidebar} aria-label={t("automations.list", "Automation definitions")}>
-							<div class={s.row}>
-								<button type="button" disabled={store.busy()} onClick={() => store.create()}>
-									{t("automations.new", "New automation")}
-								</button>
-								<button type="button" disabled={store.busy() || store.loading()} onClick={() => void store.refresh()}>
-									{t("automations.refresh", "Refresh")}
-								</button>
-							</div>
+					<div class={s.toolbar}>
+						<button type="button" disabled={store.busy()} onClick={() => store.create()}>
+							{t("automations.new", "New automation")}
+						</button>
+						<button type="button" disabled={store.busy() || store.loading()} onClick={() => void store.refresh()}>
+							{t("automations.refresh", "Refresh")}
+						</button>
+						<input
+							ref={searchInput}
+							aria-label={t("automations.search", "Search automations")}
+							placeholder={t("automations.search", "Search automations")}
+							value={search()}
+							onInput={(event) => setSearch(event.currentTarget.value)}
+						/>
+						<label class={s.check}>
 							<input
-								ref={searchInput}
-								aria-label={t("automations.search", "Search automations")}
-								placeholder={t("automations.search", "Search automations")}
-								value={search()}
-								onInput={(event) => setSearch(event.currentTarget.value)}
+								type="checkbox"
+								checked={selectFirst()}
+								onChange={(event) => {
+									const value = event.currentTarget.checked;
+									setSelectFirst(value);
+									try {
+										localStorage.setItem(preferenceKey, String(value));
+									} catch (error) {
+										appLogger.warn("settings", "Could not save automation selection preference", error);
+									}
+								}}
 							/>
+							{t("automations.selectFirst", "Select first automation on open")}
+						</label>
+					</div>
+					<div
+						class={s.content}
+						role="tabpanel"
+						id="automations-panel-definitions"
+						aria-labelledby="automations-tab-definitions"
+					>
+						<aside class={s.sidebar} aria-label={t("automations.list", "Automation definitions")}>
 							<Show when={store.loading()}>
 								<p role="status">{t("automations.loading", "Loading automations…")}</p>
 							</Show>
@@ -151,35 +179,12 @@ export function AutomationsDialog(props: { onClose: () => void; adapter?: Automa
 									)}
 							>
 								{(item) => (
-									<button
-										type="button"
+									<AutomationCard
+										item={item}
+										selected={store.draft()?.id === item.definition.id}
 										disabled={store.busy()}
-										class={s.item}
-										aria-pressed={store.draft()?.id === item.definition.id}
-										onClick={() => choose(item.definition)}
-									>
-										<span class={s.itemTitle}>
-											{item.definition.name}
-											<small>
-												{item.definition.enabled
-													? t("automations.active", "Active")
-													: t("automations.paused", "Paused")}
-											</small>
-										</span>
-										<span>{item.definition.repository}</span>
-										<code>
-											{item.definition.once_local != null
-												? `${t("automations.once", "Once")} ${item.definition.once_local}`
-												: item.definition.cron}
-										</code>
-										<span>{item.definition.timezone}</span>
-										<Show when={item.next_run_ms !== null}>
-											<time>{zonedTime(item.next_run_ms as number, item.definition.timezone)}</time>
-										</Show>
-										<Show when={item.last_status}>
-											<strong>{item.last_status}</strong>
-										</Show>
-									</button>
+										onSelect={() => choose(item.definition)}
+									/>
 								)}
 							</For>
 							<Show

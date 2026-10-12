@@ -716,6 +716,8 @@ Some frontend-only stores persist to localStorage:
 - [x] AI Chat image paste — supported images stage removable previews and become ACP image content blocks when the agent advertises image prompts
 - [x] AI Chat session details — ACP title updates rename the header and picker; context-window use and reported cost appear in the footer; a session settings dialog labels every select option and the one-row control bar summarizes the model's short name and mode beside named icon actions
 - [x] AI Chat transcript and tabs — selectable messages, with message Copy on hover or keyboard focus; sent prompts reconciled with ego's chunked echo; copyable code and tool output; trailing `suggest:` tokens rendered as reply buttons; terminal-shared web and file link handlers; parallel ACP sessions with independent drafts and transcripts; only running tool calls pulse
+- [x] AI Chat control bar has no duplicate + action; New chat tab creates conversations (#1755-7709).
+- [x] Shared terminal Chat and AI Chat new-text pill — detached content arrivals offer a return to the bottom; search alone does not trigger it; desktop/mobile provide a per-client opt-out (#1757-c6a9).
 - [x] AI Chat transcript polish — collapsed tool rows show short names, message Copy keeps its own space, and streaming follows the bottom until the reader scrolls up
 - [x] Desktop AI Chat composer actions reuse the terminal composer pin/play icons and button sizes; tooltips and accessible names distinguish Send, Queue and parked drafts.
 
@@ -961,3 +963,15 @@ Review and edit the draft, then select **Save**. Templates start paused; applyin
 one never persists a definition or starts a run. **Resume** is a separate action.
 Templates use the existing checkout with no precheck and do not change agent
 permissions. Recurring cadence previews retain the existing runtime limitations.
+
+
+### Automatic agent toast cards (#1760-bab7)
+
+MCP toast notices show a transient card only while their origin terminal tab is active. Settings → Notifications → **Show cards from the active terminal** defaults on and is saved per client; turning it off restores urgent-only cards. Urgent notices always show a card, and notices without an origin session remain bell-only unless urgent. The listener reads `terminalsStore.state.activeId` at arrival; `notificationsStore.state.autoToastCards` is stored under `tui-commander-auto-toast-cards` in localStorage. Bell deduplication, sound and terminal navigation are preserved.
+
+## Finished worktree recycling
+
+Use a durable per-checkout allocation marker. Creation reserves the checkout before
+returning it. Explicit archive or safe removal marks it finished. Reuse requires fresh
+clean and integration evidence and no live session. Rename the registered checkout and
+repair Git and submodule paths; preserve ignored artifacts and publish lifecycle events.

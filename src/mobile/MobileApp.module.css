@@ -5,8 +5,7 @@
   top: var(--app-top, 0px);
   left: 0;
   right: 0;
-  bottom: 0;
-  height: var(--app-height, auto);
+  height: var(--app-height, 100dvh);
   padding-top: env(safe-area-inset-top, 0px);
   background: var(--bg-primary);
   color: var(--fg-primary);

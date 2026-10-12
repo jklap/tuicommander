@@ -91,6 +91,7 @@ describe("initApp", () => {
 		vi.useFakeTimers();
 		vi.mocked(listen).mockReset().mockResolvedValue(vi.fn());
 		resetStores();
+		notificationsStore.setAutoToastCards(true);
 		sessionStorage.clear();
 	});
 
@@ -2580,6 +2581,7 @@ describe("initApp", () => {
 			message: string | null;
 			level: string;
 			sound: string | null;
+			urgency?: string;
 			origin_repo_path?: string;
 			origin_session_id?: string;
 			__tuic_origin?: { connection: string; name?: string };
@@ -2596,6 +2598,90 @@ describe("initApp", () => {
 			}) as unknown as typeof listen);
 			return { getCallback: () => callback };
 		}
+
+		// Catches: inverted origin routing shows normal cards on unrelated tabs and hides them on the active origin.
+		it.each([
+			{ condition: "inactive origin", activeOrigin: false, cards: 0 },
+			{ condition: "active origin", activeOrigin: true, cards: 1 },
+		])("1760 regression normal toast from $condition yields $cards cards", async ({ activeOrigin, cards }) => {
+			const { getCallback } = captureMcpToast();
+			await initApp(createMockDeps());
+			const origin = terminalsStore.add(makeTerminal({ sessionId: "auto-card-origin" }));
+			const other = terminalsStore.add(makeTerminal({ sessionId: "auto-card-other" }));
+			terminalsStore.setActive(activeOrigin ? origin : other);
+			const focus = vi.spyOn(document, "hasFocus").mockReturnValue(true);
+			getCallback()!({
+				payload: {
+					title: "Background notice",
+					message: "Done",
+					level: "info",
+					sound: null,
+					origin_session_id: "auto-card-origin",
+				},
+			});
+			expect(toastsStore.toasts).toHaveLength(cards);
+			expect(activityStore.getForSection("messages")).toHaveLength(1);
+			focus.mockRestore();
+		});
+
+		// Catches: automatic routing ignores the opt-out, non-terminal tabs, unknown origins, or urgent bypass.
+		it.each([
+			{ name: "active unfocused origin", enabled: true, origin: "active", focused: false, urgent: false, cards: 1 },
+			{ name: "disabled active origin", enabled: false, origin: "active", focused: true, urgent: false, cards: 0 },
+			{ name: "inactive unfocused origin", enabled: true, origin: "other", focused: false, urgent: false, cards: 0 },
+			{ name: "urgent inactive origin", enabled: false, origin: "other", focused: true, urgent: true, cards: 1 },
+			{ name: "urgent with toggle off", enabled: false, origin: "active", focused: true, urgent: true, cards: 1 },
+			{ name: "urgent without origin", enabled: false, origin: undefined, focused: true, urgent: true, cards: 1 },
+			{ name: "no origin in background", enabled: true, origin: undefined, focused: false, urgent: false, cards: 0 },
+			{ name: "unknown origin", enabled: true, origin: "unknown", focused: true, urgent: false, cards: 0 },
+			{
+				name: "normal on non-terminal tab",
+				enabled: true,
+				origin: "active",
+				focused: true,
+				urgent: false,
+				cards: 0,
+				nonTerminal: true,
+			},
+			{
+				name: "urgent on non-terminal tab",
+				enabled: false,
+				origin: "active",
+				focused: true,
+				urgent: true,
+				cards: 1,
+				nonTerminal: true,
+			},
+		])(
+			"1760 routes $name without duplicating the bell or stealing focus",
+			async ({ enabled, origin, focused, urgent, cards, nonTerminal }) => {
+				const { getCallback } = captureMcpToast();
+				await initApp(createMockDeps());
+				const active = terminalsStore.add(makeTerminal({ sessionId: "active" }));
+				terminalsStore.add(makeTerminal({ sessionId: "other" }));
+				terminalsStore.setActive(active);
+				if (nonTerminal) mdTabsStore.openUiTab("toast-other-tab", "Other", "<p>Other</p>", false);
+				const activeBefore = terminalsStore.state.activeId;
+				notificationsStore.setAutoToastCards(enabled);
+				const focus = vi.spyOn(document, "hasFocus").mockReturnValue(focused);
+				const event = {
+					payload: {
+						title: "Notice",
+						message: "Done",
+						level: "info",
+						sound: null,
+						origin_session_id: origin,
+						urgency: urgent ? "urgent" : "normal",
+					},
+				};
+				getCallback()!(event);
+				getCallback()!(event);
+				expect(toastsStore.toasts).toHaveLength(cards);
+				expect(activityStore.getForSection("messages")).toHaveLength(1);
+				expect(terminalsStore.state.activeId).toBe(activeBefore);
+				focus.mockRestore();
+			},
+		);
 
 		// Catches: malformed remote fields create a bell item/sound or leak their content into logs.
 		it.each([
@@ -2806,7 +2892,7 @@ describe("initApp", () => {
 			play.mockRestore();
 		});
 
-		it("1397 scopes the bell-only notification to the repository resolved from the caller cwd", async () => {
+		it("1397 scopes the notification to the repository resolved from the caller cwd", async () => {
 			repositoriesStore.add({ path: "/Gits/personal/tuicommander", displayName: "TUICommander" });
 			const { getCallback } = captureMcpToast();
 			const deps = createMockDeps();
@@ -2831,6 +2917,46 @@ describe("initApp", () => {
 				severity: "info",
 			});
 			expect(activityStore.getForSection("messages")[0].onClick).toBeTypeOf("function");
+		});
+
+		it("1752 an urgent notice shows a card and a bell item; a normal one only the bell item", async () => {
+			// catches: urgency ignored by the listener, or normal notices popping up as cards again
+			const { getCallback } = captureMcpToast();
+			await initApp(createMockDeps());
+			for (const toast of [...toastsStore.toasts]) toastsStore.remove(toast.id);
+			const base = { message: "body", level: "info", sound: null };
+
+			getCallback()!({ payload: { ...base, title: "Quiet", urgency: "normal" } });
+			getCallback()!({ payload: { ...base, title: "Legacy" } });
+			expect(toastsStore.toasts).toHaveLength(0);
+
+			getCallback()!({ payload: { ...base, title: "Loud", urgency: "urgent" } });
+			expect(toastsStore.toasts.map((t) => t.title)).toEqual(["Loud"]);
+			expect(
+				activityStore
+					.getForSection("messages")
+					.map((i) => i.title)
+					.sort(),
+			).toEqual(["Legacy", "Loud", "Quiet"]);
+		});
+
+		it("1752 a mirrored urgent notice keeps its connection prefix on the card and is not duplicated", async () => {
+			// catches: remote urgent toast loses the [connection] label, or a redelivery stacks cards
+			const { getCallback } = captureMcpToast();
+			await initApp(createMockDeps());
+			for (const toast of [...toastsStore.toasts]) toastsStore.remove(toast.id);
+			const payload: ToastPayload = {
+				title: "Answer",
+				message: "42",
+				level: "info",
+				sound: null,
+				urgency: "urgent",
+				__tuic_origin: { connection: "mint", name: "mac-mint" },
+			};
+			getCallback()!({ payload });
+			getCallback()!({ payload });
+			expect(toastsStore.toasts.map((t) => t.title)).toEqual(["[mac-mint] Answer"]);
+			expect(activityStore.getForSection("messages")).toHaveLength(1);
 		});
 	});
 

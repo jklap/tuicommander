@@ -142,6 +142,18 @@ describe("notificationsStore", () => {
 		});
 	});
 
+	// Catches: opting out is lost on reload, or the missing preference unexpectedly defaults off.
+	it("persists automatic card opt-out across store reloads and resets to on", async () => {
+		expect(store.state.autoToastCards).toBe(true);
+		store.setAutoToastCards(false);
+		vi.resetModules();
+		const reloaded = (await import("../../stores/notifications")).notificationsStore;
+		expect(reloaded.state.autoToastCards).toBe(false);
+		reloaded.reset();
+		vi.resetModules();
+		expect((await import("../../stores/notifications")).notificationsStore.state.autoToastCards).toBe(true);
+	});
+
 	describe("ACP interaction notifications", () => {
 		async function withUnfocusedDesktop(run: () => Promise<void>) {
 			vi.stubGlobal("__TAURI_INTERNALS__", {});

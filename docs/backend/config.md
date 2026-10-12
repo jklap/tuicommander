@@ -312,6 +312,7 @@ cleartext copy does not survive on disk.
 | `language` | `String` | `"en"` | UI language code |
 | `max_tab_name_length` | `u32` | `25` | Max tab name display length |
 | `tab_cycling_all_types` | `bool` | `false` | When true, next/prev-tab shortcuts cycle file/diff/markdown/editor tabs too (default cycles terminals only) |
+| `chat_mute_intermediate_text` | `bool` | `true` | Chat (terminal Chat view, AI Chat, mobile) draws assistant text that a tool call follows in the same turn smaller and dimmer. The final text of a turn keeps the normal style. Applies immediately. |
 | `tab_tree_enabled` | `bool` | `false` | Opt-in sidebar activity cards. `false` renders no activity caret, card, or nested agent/session rows. `true` lets every branch with an open terminal session expand its assigned sessions. Applies immediately; no restart is required. |
 | `prevent_sleep_when_busy` | `bool` | `false` | Prevent macOS sleep when terminal is busy |
 | `suggest_followups` | `bool` | `true` | Show `suggest:` follow-up actions |

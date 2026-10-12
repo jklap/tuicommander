@@ -319,7 +319,7 @@ export const ComposePanel: Component<ComposePanelProps> = (props) => {
 			class={cx(s.panel, props.isOpen() && s.panelOpen, props.pinned() && s.panelPinned)}
 			onMouseDown={(e) => e.stopPropagation()}
 		>
-			<div class={s.editor} ref={ref} />
+			<div class={s.editor} data-compose-editor ref={ref} />
 			<Show when={queueOpen() && props.queuedCount() > 0}>
 				<div class={s.queueList}>
 					<div class={s.queueListHeader}>

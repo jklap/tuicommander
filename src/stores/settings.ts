@@ -42,6 +42,7 @@ interface RustAppConfig {
 	tab_ordering_mode: string;
 	tab_cycling_all_types: boolean;
 	tab_tree_enabled: boolean;
+	chat_mute_intermediate_text: boolean;
 	auto_show_pr_popover: boolean;
 	prevent_sleep_when_busy: boolean;
 	auto_update_enabled: boolean;
@@ -288,6 +289,8 @@ interface SettingsStoreState {
 	tabOrderingMode: TabOrderingMode;
 	tabCyclingAllTypes: boolean;
 	tabTreeEnabled: boolean;
+	/** Draw assistant text that a tool call follows in the same turn muted, in Chat. */
+	chatMuteIntermediateText: boolean;
 	autoShowPrPopover: boolean;
 	preventSleepWhenBusy: boolean;
 	autoUpdateEnabled: boolean;
@@ -347,6 +350,7 @@ function createSettingsStore() {
 		tabOrderingMode: "grouped-by-type",
 		tabCyclingAllTypes: false,
 		tabTreeEnabled: false,
+		chatMuteIntermediateText: true,
 		autoShowPrPopover: true,
 		preventSleepWhenBusy: false,
 		autoUpdateEnabled: true,
@@ -417,6 +421,7 @@ function createSettingsStore() {
 		config.tab_ordering_mode = state.tabOrderingMode;
 		config.tab_cycling_all_types = state.tabCyclingAllTypes;
 		config.tab_tree_enabled = state.tabTreeEnabled;
+		config.chat_mute_intermediate_text = state.chatMuteIntermediateText;
 		config.auto_show_pr_popover = state.autoShowPrPopover;
 		config.prevent_sleep_when_busy = state.preventSleepWhenBusy;
 		config.auto_update_enabled = state.autoUpdateEnabled;
@@ -519,6 +524,7 @@ function createSettingsStore() {
 				setState("tabOrderingMode", tom === "terminals-first" || tom === "free" ? tom : "grouped-by-type");
 				setState("tabCyclingAllTypes", config.tab_cycling_all_types ?? false);
 				setState("tabTreeEnabled", config.tab_tree_enabled ?? false);
+				setState("chatMuteIntermediateText", config.chat_mute_intermediate_text ?? true);
 				setState("autoShowPrPopover", config.auto_show_pr_popover ?? true);
 				setState("preventSleepWhenBusy", config.prevent_sleep_when_busy ?? false);
 				setState("autoUpdateEnabled", config.auto_update_enabled ?? true);
@@ -635,6 +641,11 @@ function createSettingsStore() {
 
 		setTabTreeEnabled(enabled: boolean): void {
 			setState("tabTreeEnabled", enabled);
+			save();
+		},
+
+		setChatMuteIntermediateText(enabled: boolean): void {
+			setState("chatMuteIntermediateText", enabled);
 			save();
 		},
 
@@ -925,6 +936,7 @@ registerDebugSnapshot("settings", () => {
 		tabOrderingMode: s.tabOrderingMode,
 		tabCyclingAllTypes: s.tabCyclingAllTypes,
 		tabTreeEnabled: s.tabTreeEnabled,
+		chatMuteIntermediateText: s.chatMuteIntermediateText,
 		bellStyle: s.bellStyle,
 		updateChannel: s.updateChannel,
 		intentTabTitle: s.intentTabTitle,

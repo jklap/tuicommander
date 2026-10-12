@@ -107,8 +107,10 @@ never all expert: in basic mode it would show an empty page.
 | **Cycle All Tab Types** | Off | When on, next/prev-tab shortcuts also cycle file/diff/markdown/editor tabs (ordered like the tab bar). Off cycles terminals only. |
 | **Nested Terminal Tabs** | Off | Opt in to collapsible branch activity cards. When off, the sidebar shows no activity caret or nested agent/session rows. When on, branches with open sessions show agent status, current activity, and last-update age. Applies immediately. |
 | **Max Tab Name Length** | — | 10–60 slider |
+| **New text indicator** | On | Show **New text below** when terminal Chat or AI Chat receives content while you read earlier messages. Saved on this client; mobile Settings offers the same toggle. |
 | **Repository Groups** | — | Create, rename, delete, and color-code groups |
 | **Reset Panel Sizes** | — | Restore sidebar and panel widths to defaults (**Layout** section) |
+| **Mute Intermediate Text** | On | **Chat** section. In the terminal Chat view, AI Chat and the mobile chat, assistant text that is followed by a tool call in the same turn is drawn smaller and dimmer, so status lines such as "Pump restart." are not mistaken for the answer. The last text of a turn keeps the normal style. Copy and Find work on muted text. Applies immediately. |
 | **UI Legend** | — | Visual reference for colors, symbols, and badges used in the app |
 
 The terminal and app color theme is on the [Terminal](#terminal) page. Native window and webview backgrounds use the same theme color at startup and when the theme changes, including light themes. The mobile PWA offers a separate Dark/Light choice in its Settings screen, saved on the server for connected mobile clients; the screen also shows app and server versions.
@@ -136,6 +138,7 @@ After you enable the setting, a branch gets an activity caret when it has at lea
 - **Silence orchestration completions** — Remote HTTP/MCP workers still appear in Activity and update their tab state, but do not play a completion chime. The remote classification survives frontend reloads, and each busy cycle can notify at most once even when idle and process exit arrive separately.
 - **Reset to Defaults** — Restore default notification settings
 - **Keep toasts in the bell** — Retain user-action toasts in the toolbar bell's **MESSAGES** section, including their level and explicit action. Turning this off leaves ordinary user feedback transient; agent/MCP notices and agent spawns still go directly to the bell (identical consecutive notices within five seconds are deduplicated), and overflow from the two-card limit is retained there regardless of this setting. Dedicated-domain toasts that explicitly opt out of Messages remain visible or queued. Transient cards sit top-right of the terminal, clear of docked panels and bottom input; same-kind bursts within five seconds show ×N and restart their dismissal timer. Errors take priority over informational cards, and tall cards scroll to keep actions reachable. This setting is visual and remains available without audio output.
+- **Automatic agent toast cards** — MCP toast notices show a transient card only while their origin terminal tab is active. Settings → Notifications → **Show cards from the active terminal** defaults on and is saved per client; turning it off restores urgent-only cards. Urgent notices always show a card, and notices without an origin session remain bell-only unless urgent.
 
 **Attention** is the distinct call-back-to-keyboard sound available to agent
 toasts. Native playback and the browser fallback share a triangular G4→G4→E5

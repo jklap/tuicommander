@@ -79,6 +79,7 @@ beforeEach(() => {
 
 afterEach(() => {
 	cleanup();
+	localStorage.clear();
 	vi.clearAllMocks();
 	voice.setStatus(null);
 });
@@ -182,7 +183,8 @@ it("appends interim and final speech without focusing, duplicating hypotheses or
 	fireEvent.input(input, { target: { value: "Review" } });
 	rpc.mockClear();
 	const mic = screen.getByRole("button", { name: "Dictate into draft" });
-	expect(mic.nextElementSibling).toBe(screen.getByRole("button", { name: "Send" }));
+	// Send sits outside the composer box, right after the box that holds the mic.
+	expect(mic.parentElement?.nextElementSibling).toBe(screen.getByRole("button", { name: "Send" }));
 	fireEvent.click(mic);
 	FakeRecognition.latest.result("the diff");
 	expect(input.value).toBe("Review the diff");
@@ -197,24 +199,29 @@ it("appends interim and final speech without focusing, duplicating hypotheses or
 	expect(FakeRecognition.latest.stop).toHaveBeenCalledTimes(1);
 });
 
-it.each(["not-allowed", "network", "no-speech"])(
-	"keeps the draft and toasts the %s recognition error",
-	async (error) => {
-		// Catches: silently discarding the draft on browser/service permission failures.
-		browserSpeech();
-		const { container } = mount();
-		await screen.findByRole("button", { name: "Start voice conversation" });
-		const input = container.querySelector("textarea")!;
-		fireEvent.input(input, { target: { value: "Keep this" } });
-		fireEvent.click(screen.getByRole("button", { name: "Dictate into draft" }));
-		FakeRecognition.latest.onerror?.({ error });
-		FakeRecognition.latest.onend?.();
-		expect(input.value).toBe("Keep this");
-		expect(toastAdd).toHaveBeenCalledWith("Dictation failed", error, "error", true);
-		expect(appLogger.warn).toHaveBeenCalledWith("dictation", "Browser dictation failed", error);
-		expect(screen.getByRole("button", { name: "Dictate into draft" }).getAttribute("aria-pressed")).toBe("false");
-	},
-);
+it.each([
+	["not-allowed", "Microphone or speech recognition permission denied"],
+	["network", "Speech service unavailable (network)"],
+	["no-speech", "No speech detected"],
+])("keeps the draft and toasts the %s recognition error", async (error, plainWords) => {
+	// Catches: silently discarding the draft on browser/service permission failures.
+	browserSpeech();
+	const { container } = mount();
+	await screen.findByRole("button", { name: "Start voice conversation" });
+	const input = container.querySelector("textarea")!;
+	fireEvent.input(input, { target: { value: "Keep this" } });
+	fireEvent.click(screen.getByRole("button", { name: "Dictate into draft" }));
+	FakeRecognition.latest.onerror?.({ error });
+	FakeRecognition.latest.onend?.();
+	expect(input.value).toBe("Keep this");
+	expect(toastAdd).toHaveBeenCalledWith("Dictation failed", plainWords, "error", true);
+	expect(appLogger.warn).toHaveBeenCalledWith(
+		"dictation",
+		`Browser dictation failed: ${error}`,
+		expect.objectContaining({ code: error }),
+	);
+	expect(screen.getByRole("button", { name: "Dictate into draft" }).getAttribute("aria-pressed")).toBe("false");
+});
 
 it.each(["it", "auto"])("uses configured language %s or the navigator fallback", async (language) => {
 	// Catches: ignoring the shared dictation language or passing Whisper's auto token to Web Speech.

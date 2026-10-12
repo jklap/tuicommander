@@ -13,7 +13,7 @@ Published story workflows can start in Plans and Stories through the owning daem
 **Last verified:** 2026-09-16  
 **Recent feature delta:** See the [Unreleased](https://github.com/sstraus/tuicommander/blob/main/CHANGELOG.md#unreleased) and [1.7.7](https://github.com/sstraus/tuicommander/blob/main/CHANGELOG.md#177---2026-09-16) changelog sections for what changed recently. Keep this page focused on the current state; do not duplicate the full changelog here.
 
-Desktop AI Chat uses the terminal composer’s pin and blue play buttons. The pin highlights a parked draft; tooltips identify Park, Restore, Swap, Send and Queue.
+Desktop AI Chat uses the terminal composer’s pin and blue play buttons. The pin highlights a parked draft; tooltips identify Park, Restore, Swap, Send and Queue. Mobile Park and Stop share the input row with Attach and Send.
 
 AI Chat image paste discovers capabilities on first use and shares clipboard precedence with Ideas, terminal Compose, and terminal input: Finder image filenames allow attachments, while substantive text takes priority.
 
@@ -113,6 +113,7 @@ Right-click an HTTP(S) terminal link (including localhost) and choose **Start in
 - **Remote replay health** — Stream failure, unreadable frames and initial replay stalls show a persistent error toast. Reconnect success requires a delivered frame; healthy idle terminals have no output-silence deadline.
 
 - **CLI / Chat view** — Claude terminals switch between the grid and a conversation view with docked Compose input, built from the agent's session file (including older prompts, human text/image follow-ups queued while Claude is busy, replies, folded tool cards, image/PDF markers and model-change cards). The grid is hidden, never unmounted.
+- **Intermediate Chat text** — Assistant text that a tool call follows in the same turn renders smaller and dimmer in the terminal Chat view, AI Chat and the mobile chat; the last text of a turn keeps the normal style. Switch it off in **Settings → Appearance → Chat → Mute Intermediate Text** (`chat_mute_intermediate_text`, default on).
 - **Chat transcript presentation** — Harness notices use compact system notes, image placeholders use attachment chips, adjacent thinking blocks share a disclosure, and TUIC answers retain the CLI highlight. Historical tool cards show status without fabricated execution timing.
 
 ### 1.2 Tab Bar
@@ -692,6 +693,7 @@ Tabbed side panel with four tabs: Changes, Log, Stashes, Branches. Replaces the 
 - **Git section** — background git operation results (push, pull, fetch) with success/failure status
 - **Worktrees section** — worktree creation events (from MCP/agent)
 - **Messages section** — agent/MCP notices and agent spawns go directly to the bell, with repository scope and an explicit **Open terminal** action when a session is known. Consecutive identical notices from the same origin within five seconds produce one item and one requested sound. User-action toasts are also retained when **Keep toasts in the bell** is enabled. Overflow from the two-card limit is retained even with that setting off; dedicated-domain toasts that explicitly opt out of Messages stay visible or queued.
+- **Automatic agent toast cards** — MCP toast notices show a transient card only while their origin terminal tab is active. Settings → Notifications → **Show cards from the active terminal** defaults on and is saved per client; turning it off restores urgent-only cards. Urgent notices always show a card, and notices without an origin session remain bell-only unless urgent.
 - **Transient toast placement** — top-right of the terminal area, offset left of a docked panel, with at most two visible cards. Same-kind notices in the same repository/session within five seconds show a ×N summary; every new member restarts its dismissal timer. Errors take a visible slot ahead of informational cards. Tall cards scroll within the upper region so their action buttons remain reachable without covering the bottom input. Clicking a card dismisses it; navigation uses its explicit action.
 - **Plugin activity sections** — registered by plugins via activityStore
 - Click PR notification: opens full PR detail popover for that branch
@@ -930,6 +932,10 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 - **Durable task handles**: `agent action=spawn` returns `task_id` and `poll_interval_ms` alongside `session_id`. The `task` MCP tool polls that handle without blocking — `task action=get` returns `{task_id, status, status_message?, result?, error_detail?, poll_interval_ms}` where status is `working|input_required|completed|failed|cancelled` (the last three final), and `task action=cancel` marks the task cancelled **without** killing the agent (`session action=kill` does that). Use this instead of `agent action=wait` / `session action=wait` when work runs past their 300 s cap or when the client may reconnect: the outcome is recorded by the session exit path whether or not anyone was listening. Tasks live for the TUICommander process only — they are deliberately not persisted, because a restart tears down every PTY
 
 ### 6.14 AI Chat Panel (`Cmd+Alt+A`) — ego over ACP
+
+When new content arrives while you read earlier messages, **New text below** appears above the composer. Select it to return to the bottom and resume following. Scrolling to the bottom also clears it; a search jump alone does not show it. Terminal Chat shares this behavior. Disable **New text indicator** in Settings → Appearance → Chat, or mobile Settings. The preference stays on the current client.
+
+Start conversations with **New chat tab** in the tab bar. The session control bar contains no duplicate + action.
 **The conversation lives in ego, not in TUICommander.** There is no LLM client
 here: no provider, no API key, no tool loop, no sandbox. TUICommander launches
 one configured ego binary and speaks ACP to it, per
@@ -1285,10 +1291,13 @@ The `tuic-dictation` Rust crate implements audio, transcription and speech; the 
 | large-v3-turbo | ~1.6 GB | Best (recommended, default) |
 
 ### 9.3 Push-to-Talk
+- **Native macOS Fn** stays recording across window focus changes while held.
+  Physical release stops capture even when another app has focus.
 - Default hotkey: `F5` (configurable, registered globally)
 - Mic button in status bar: hold to record, release to transcribe
-- On macOS, releasing Fn stops microphone capture in Rust before the WebView handles the event. Losing window focus releases a held hotkey; a late Fn start is refused. The file log records release-to-stop latency without storing spoken text.
-- Transcribed text inserts into the focused input element (textarea, input, contenteditable); falls back to active terminal PTY when no text input has focus. Focus target captured at key-press time.
+- On macOS, releasing Fn stops microphone capture in Rust before the WebView handles the event. A late Fn start is refused. DOM hotkeys release on blur if key-up was lost; native Fn follows physical key state. The file log records release-to-stop latency without storing spoken text.
+- The destination and selection are captured at key-press time, before asynchronous work. Explicit editors take priority. In terminal Chat, transcript or BODY focus delivers to Compose through a CodeMirror transaction; CLI uses the captured PTY session with existing auto-send behavior. Focus and tab changes do not redirect the text.
+- If the target disappears or the draft changes before delivery, the transcript stays in a sticky error message and the Messages bell for recovery. Delivery logs contain metadata without spoken text.
 
 ### 9.4 Streaming Transcription
 - Real-time partial results during push-to-talk via adaptive sliding windows
@@ -2026,6 +2035,8 @@ Agent-scoped plugin (`agentTypes: ["claude"]`) that wakes Claude Code when it st
 
 ## 18. Mobile Companion UI
 
+Waiting terminal ego questions show **Input**. Tap the question icon in the session header to open or close the full question and its wrapping options. The card overlays the terminal without reserving rows. Prior suggested actions are hidden while a human answer is pending.
+
 Phone-optimized progressive web app for monitoring AI agents remotely. Separate SolidJS entry point (`src/mobile/`) served by the existing HTTP server at `/mobile`.
 
 ### 18.1 Architecture
@@ -2161,7 +2172,7 @@ Phone-optimized progressive web app for monitoring AI agents remotely. Separate 
 - In the desktop app, an unfocused agent question also sends a native OS notification naming its terminal. The Tauri notification plugin handles desktop delivery; macOS retains the native response handle through a desktop command so a click returns to the terminal. Permission is checked once, and focused windows and repeated notices within five seconds are suppressed
 - **Sounds:** `question` (C5→E5 chime), `completion` (C5→E5→G5 arpeggio), `error` (E4→C4), `warning` (A4 double-tap), `info` (single G5 pluck), and `attention` — a triangular G4→G4→E5 callback with two short knocks and a longer rise. Native and browser/PWA playback share the motif and 0.8 gain; each engine applies its own envelope. The repeated opening is immediately recognizable while the softer timbre avoids the old square buzzer's harshness. Meant for an agent that is working unattended and is blocked on the user
 - Each sound has its own on/off toggle and Test button in Settings > Notifications, and all of them honour the global volume and chosen output device
-- **Agents can raise them over MCP**: `ui action=toast sound="attention"` (see 19.x `ui` tool). `sound: true` still means "the tone matching `level`"; a name overrides it. These agent notices appear in the bell rather than as transient toasts; consecutive identical notices within five seconds play once. The sound plays through this scheme, so a muted sound stays muted no matter who asked for it
+- **Agents can raise them over MCP**: `ui action=toast sound="attention"` (see 19.x `ui` tool). `sound: true` still means "the tone matching `level`"; a name overrides it. These agent notices appear in the bell and also show a card only while their origin terminal tab is active (configurable); `urgency="urgent"` always shows a transient card; consecutive identical notices within five seconds play once. The sound plays through this scheme, so a muted sound stays muted no matter who asked for it
 
 ### 18.10 Visual Polish
 - Frosted glass bottom tabs: `backdrop-filter: blur(20px) saturate(1.8)` with semi-transparent background
@@ -2171,6 +2182,7 @@ Phone-optimized progressive web app for monitoring AI agents remotely. Separate 
 
 ### 18.11 Standalone CSS
 - The mobile composer offers browser dictation directly next to Send (44 px touch targets) when `SpeechRecognition` or `webkitSpeechRecognition` is available. Interim and final speech append to the draft without focusing the textarea or sending; tap again to stop. Editing the draft cancels recognition and keeps the edit exactly; the mic becomes available again when the browser confirms the previous session has ended. Errors also retain the microphone claim until that confirmation, so repeated taps cannot overlap recognition sessions. Late results from the cancelled recording are ignored. Errors keep the draft and show a toast. It uses the configured dictation language, falling back to the browser language for automatic detection. Browser dictation and server hands-free conversation cannot record together.
+- Dictated mobile drafts survive reload without automatic terminal input. Send or the first edit reconciles the restored draft with the current terminal line, preserving cleared text without duplicating text still present.
 - iPhone Home Screen availability remains device-dependent: [WebKit bug 225298](https://bugs.webkit.org/show_bug.cgi?id=225298#c3) documents the historical standalone restriction; Safari's [14.1 release notes](https://webkit.org/blog/11648/new-webkit-features-in-safari-14-1/) require Siri enabled. Feature detection and error handling apply; Safari tab support does not prove PWA support.
 - Mobile PWA uses its own standalone stylesheet (`src/mobile/mobile.css`), independent from the desktop `global.css`
 - Shares core color palette and border radius tokens; differs in font stacks, layout approach, and iOS-specific rules
@@ -2781,13 +2793,15 @@ prechecks, workspace and duration controls, pause/resume, Run now, confirmed
 delete and recent status history. Open **Automations** from the command palette.
 Step 8 API integration is required before use; see [Automations](user-guide/automations.md).
 
+The Automations palette action also matches **scheduler** and **schedule**. Automations cards show the repository name (full path on hover), common schedules in plain language, secondary cron and the backend next run in its named timezone. Definitions and Runs use keyboard tabs (Left/Right, Home/End). The single toolbar includes **Select first automation on open**, enabled by default and saved for this browser/WebView. Turning it off restores manual selection. Refresh keeps unsaved edits.
+
 ### Automation transport availability
 
 Automations definition management, pause/resume, schedule previews/presets,
 retained run history and UTC aggregates are available through matching Tauri IPC
 and HTTP on desktop/headless hosts. Browser/PWA uses the same command mapping.
-Run Now uses the addressed machine's runtime owner and supports paused Once
-schedules; recurring execution remains outside phase 1. Full run replies retain
+Run Now uses the addressed machine's runtime owner and supports paused Once and
+cron schedules; a due cron occurrence dispatches once. Full run replies retain
 output, workspace and task/session evidence.
 
 Automation execution now reconciles task, PTY and progress completion evidence,
@@ -2874,6 +2888,8 @@ Review and edit the draft, then select **Save**. Templates start paused; applyin
 one never persists a definition or starts a run. **Resume** is a separate action.
 Templates use the existing checkout with no precheck and do not change agent
 permissions. Recurring cadence previews retain the existing runtime limitations.
+
+- Finished worktree recycling: explicit completion permits safe reuse with a new branch and path while ignored build artifacts remain intact. Fresh allocations stay reserved.
 
 ### History-anchored viewport scrolling
 

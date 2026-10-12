@@ -955,6 +955,9 @@ dual-emitted — Tauri `emit` for the desktop WebView **and** the event bus for
 SSE clients; a bus-only send never reaches the desktop, which has no bus→window
 forwarder.
 
+**`ui action=toast` urgency.** `urgency` accepts `normal` (default) or `urgent`, the same names as `agent action=send`. Other values are rejected; the value rides the `mcp-toast` event on both transports. MCP toast notices show a transient card only while their origin terminal tab is active. Settings → Notifications → **Show cards from the active terminal** defaults on and is saved per client; turning it off restores urgent-only cards. Urgent notices always show a card, and notices without an origin session remain bell-only unless urgent.
+
+
 The toast also resolves the calling MCP session to its peer project, PTY cwd, or
 session repository metadata (in that order). The resulting `origin_repo_path` is
 dual-emitted with the toast so clients can show its source and scope retained

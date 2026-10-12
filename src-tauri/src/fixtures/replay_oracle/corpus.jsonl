@@ -1,6 +1,7 @@
 {"fixture":"src-tauri/crates/tuic-terminal/src/fixtures/claude-resize-1407/idle.tcap","events":264}
 {"fixture":"src-tauri/crates/tuic-terminal/src/fixtures/claude-resize-1407/streaming.tcap","events":236}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/claude-askuser-esc-20260929.tcap","events":203}
+{"fixture":"src-tauri/src/fixtures/agent_prompts/claude-askuser-multi-question-20261012.tcap","events":205}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/claude-quoted-ink-footer.tcap","events":127}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/claude-ready-idle-notify-statement.tcap","events":24}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/claude-ready-idle-notify.tcap","events":16}
@@ -18,6 +19,7 @@
 {"fixture":"src-tauri/src/fixtures/agent_prompts/codex-queued-wake-stuck-20260929.tcap","events":14}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/codex-request-user-input-20260929.tcap","events":5659}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/codex-streaming-intent-20260924.tcap","events":1274}
+{"fixture":"src-tauri/src/fixtures/agent_prompts/ego-single-question-20261012.tcap","events":20}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/goose-1.49.0-idle.tcap","events":97}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/goose-1.49.0-interrupted.tcap","events":80}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/goose-1.49.0-mid-turn.tcap","events":137}

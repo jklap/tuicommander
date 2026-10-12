@@ -26,6 +26,7 @@
  */
 
 import { appLogger } from "../stores/appLogger";
+import { holdScreenAwake } from "./screenWakeLock";
 
 /** The rate Whisper wants, and therefore the rate the socket carries. */
 const CAPTURE_SAMPLE_RATE = 16_000;
@@ -172,6 +173,8 @@ export async function connectBrowserVoice(
 		void context.close();
 		throw err;
 	}
+	// Held only once the microphone is open: a failed start above never took it.
+	const releaseScreen = stream ? holdScreenAwake() : () => {};
 	const source = stream ? context.createMediaStreamSource(stream) : undefined;
 	// `ScriptProcessorNode` rather than an `AudioWorklet`: a worklet needs a
 	// separate module URL, which the packaged frontend serves from a path the
@@ -267,6 +270,7 @@ export async function connectBrowserVoice(
 
 	return {
 		stop() {
+			releaseScreen();
 			stopPlayback();
 			if (capture) {
 				capture.onaudioprocess = null;

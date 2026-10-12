@@ -6,6 +6,8 @@ on:
 
 jobs:
   notify:
+    # The tap formula tracks stable releases; a beta or nightly must not replace it.
+    if: ${{ !github.event.release.prerelease }}
     timeout-minutes: 10
     runs-on: ubuntu-latest
     steps:

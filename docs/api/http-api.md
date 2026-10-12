@@ -862,7 +862,7 @@ the server is back to the filter the connection was opened with.
 | `plugin-watcher-lines` | `{session_id, lines}` | A batch of assembled PTY lines for the plugin OutputWatchers; each line is `{text, matched_ids}`, where `text` is the cleaned text the match was made on |
 | `plugin-changed` | `{plugin_ids}` | Plugin(s) installed/removed/updated |
 | `upstream-status-changed` | `{name, status}` | MCP upstream server status change |
-| `mcp-toast` | `{title, message, level, sound, origin_repo_path?, origin_session_id?}` | Toast notification from MCP layer, including the caller repository/cwd and the caller's TUIC session when known. Clients use the session id to focus the terminal that raised the toast |
+| `mcp-toast` | `{title, message, level, sound, urgency, origin_repo_path?, origin_session_id?}` | Toast notification from MCP layer, including the caller repository/cwd and the caller's TUIC session when known. Clients use the session id to focus the terminal that raised the toast. `urgency` is `normal` (bell only) or `urgent` (bell plus a transient card); clients treat an absent field as `normal` |
 | `session-state-changed` | `{session_id, state}` — `state` is the same object `GET /sessions` returns per session (`shell_state`, `agent_state`, `awaiting_input`, `question_confident`, `background_work`, `queued_commands`, …), snake_case, with the fields serde skips at their zero value omitted | A session's derived lifecycle state moved. Published by the session-state accumulator (`state.rs publish_session_state_change`) once per real transition, deduped by `SessionState`'s `PartialEq` — a repaint that changes only `last_activity_ms` publishes nothing. Dual-emitted on the Tauri window under the same name and with the same payload, so `useAgentPolling.ts` consumes both transports with one handler instead of polling `list_active_sessions`. Absence of a field means its zero value, not "unknown" |
 | `dictation-download-progress` | `{downloaded, total, percent}` | A Whisper model is downloading. Dual-emitted on the Tauri window with the identical body |
 | `speech-download-progress` | `{asset, downloaded, total, percent}`, then `{asset, done: true}` | A speech asset is downloading; the `done` event ends it, success or failure. `asset` is the only difference from the line above, and it is what a client joins the bar against |
@@ -3008,8 +3008,8 @@ for weekly (Sunday 0 or 7). Blank create/definition-preview zones and omitted
 cron-preview zones resolve to the backend's local IANA zone.
 
 Paused or consumed Once definitions have a null `next_run_ms`. List computes
-future cron occurrences but phase 1 execution remains Once-only. Run Now requires
-the runtime owner, allows paused Once definitions, bypasses prechecks and records
+future cron occurrences and the scheduler dispatches each due one. Run Now requires
+the runtime owner, allows paused Once and cron definitions, bypasses prechecks and records
 overlap/capacity refusals without queueing. No execution retry is introduced.
 
 Automation runtime transitions are streamed on `/events` as

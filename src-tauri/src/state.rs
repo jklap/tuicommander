@@ -298,6 +298,9 @@ pub enum AppEvent {
         message: Option<String>,
         level: String,
         sound: Option<String>,
+        /// `normal` (bell only) or `urgent` (bell plus a transient card), the
+        /// same names `agent action=send` uses.
+        urgency: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         origin_repo_path: Option<String>,
         /// The TUIC session that raised the toast, when the caller is bound to

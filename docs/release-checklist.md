@@ -9,6 +9,10 @@ When Boss asks to tag a release:
 5. **GitHub release** — create via `gh release create vX.Y.Z --generate-notes`
 6. **Milestone** — close the matching milestone if one exists, create the next one
 
+## Prereleases (betas)
+
+Use `make bump V=2.0.0-beta.1` and tag `v2.0.0-beta.1`. `scripts/release-flags.sh` makes `release.yml` publish any version with a `-` suffix as a prerelease that is never "latest", and `notify-tap.yml` skips prereleases. The stable updater endpoint (`releases/latest/download/latest.json`) and the install scripts read "latest", so stable users stay on stable. There is no beta update channel: testers install a beta manually from its release page. After that, the stable updater offers them the final release.
+
 ## GitHub Issue Management
 
 - **Labels**: Use `type:`, `P0-P3:`, `area:`, `effort:` prefixes. Apply `needs triage` to new issues.

@@ -319,6 +319,7 @@ pub(super) fn alert(state: &AppState, error: Error) {
         message: Some(error.to_string()),
         level: "error".into(),
         sound: None,
+        urgency: "normal".into(),
         origin_repo_path: None,
         origin_session_id: None,
     });

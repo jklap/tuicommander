@@ -1,3 +1,24 @@
+## Mute intermediate Chat text (1769-89dc)
+
+- [ ] [VISUAL] Terminal Chat view, AI Chat and mobile chat: text followed by a tool call in the same turn is smaller and dimmer; the last text of the turn keeps normal weight. Needs a `make dev` restart (Rust config field `chat_mute_intermediate_text`).
+- [ ] Settings > Appearance > Chat > Mute Intermediate Text off restores normal weight at once. Copy and Find still work on muted text.
+## Screen stays awake while dictating (1767-3071)
+
+- [ ] [HUMAN] On the iPhone home-screen PWA (iOS 18.4 or later), dictate into the draft, and separately run hands-free, for longer than the Auto-Lock time. The screen must stay on and the recording must continue; after Stop it must lock as usual. Turn "Keep screen awake while dictating" off in mobile Settings and confirm the screen locks again. Before iOS 18.4 the API does not work in home-screen web apps ([WebKit bug 254545](https://bugs.webkit.org/show_bug.cgi?id=254545)), so a failure on 18.3 or earlier is expected. Vitest covers acquire, release, re-acquire and the setting; the device is unverified.
+
+## Fn dictation through focus changes (1763-3361) — Rust restart required
+
+- [ ] [HUMAN] After Boss manually restarts `make dev` or installs `make build`, dictate for over 60 seconds with short pauses while holding Fn. Let a toast or new tab appear, then move focus to another window while continuing to hold Fn. Recording must continue; release Fn in that window and confirm the microphone stops, the text arrives once, and both its opening and ending words are present. Check the file log for `Fn focus loss observed` with `physically_down=true`, followed by a real native key-up or `origin="fn-state-poll"`. Native adapter and AppKit timer tests cover retention and one release; real microphone/Fn hardware and the complete long transcript require this check. Do not restart Boss's running TUIC from an agent.
+## Mobile keyboard, tab bar and session cards (1795-a710)
+
+- [ ] [HUMAN] On the iPhone home-screen PWA, focus the command input of a session: it must sit directly above the keyboard without a manual scroll, and the view must not bounce. The iOS keyboard cannot be emulated; Vitest covers the shell variables from a fake visualViewport.
+- [ ] [VISUAL] Sessions list: the tab bar is 56 px tall and the + button sits above it; cards end about 16 px sooner and the close button still answers a tap on its 44 px area. A band of about 62 px under the tabs remains on the standalone PWA: it is the 1746 band, present before and after cc21c0945 (Boss's screenshots 5 and 6, 2026-10-12), and it needs device measurement before a fix.
+
+## Mobile title and compact AI Chat composer (1746-aa9e)
+
+- [ ] [VISUAL] After the TUIC restart, reload the iPhone PWA. Park/Restore/Swap and Stop should share the input row with Attach and Send; the bottom tabs should meet the screen edge _(NOTE: refuted on the device on 2026-10-12; see 1795-a710)_. Headless Chromium geometry and screenshots cover 360/390px with 62/34px safe-area overrides; the actual iPhone remains unverified.
+- [ ] [VISUAL] Inspect the title on the iPhone with the menu closed and open. The reported screenshot has progressive blur over the title and connection dot, with a crisp subtitle. TopBar, shell and mobile global CSS contain no title/ancestor blur, mask, text-shadow or opacity; the app opts into a translucent iOS status bar in `mobile.html`. The likely cause is WebKit's native scroll-edge effect, which is outside page CSS ([WebKit scroll view](https://github.com/WebKit/WebKit/blob/main/Source/WebKit/UIProcess/ios/WKScrollView.mm) and [native edge wrapper](https://github.com/WebKit/WebKit/blob/main/Source/WebKit/UIProcess/ios/WKUIScrollEdgeEffect.mm)). This is an inference, not a confirmed device diagnosis. Do not add guessed spacing or filter overrides until device inspection identifies the native layer.
+
 ## Design Mode dev-server list collapsed (1727-0338)
 
 - [ ] [VISUAL] In Boss's Edge profile, reload the Design Mode extension and open the side panel with many dev servers. The list is collapsed under "Dev servers (N)" and a new pick card shows without scrolling. Vitest and a real side panel in Chrome for Testing with a stub native host (DOM evidence, no screenshot) cover it.
@@ -5151,3 +5172,22 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] On iPhone, tap the attachment icon left of the session composer, choose a photo/file, confirm upload status then its path in the draft, and confirm Queue stays disabled during upload. Smaller mic and Send controls remain inside the right input border.
 
 - [ ] [VISUAL] #1264-89c8: after a manual Rust restart, scroll up gently during sustained agent output, stop the gesture, then use scrollbar drag and return to the bottom. Verify no forward jump or gap, including capped history. Rust does not hot-reload; restart only when ready to lose the current session.
+- [ ] Mobile: Claude multi-question AskUserQuestion (two questions + Submit) — answer each tab and the Submit review from the phone overlay; needs the TUIC restart for the Rust parser change (#1766-9311)
+
+## Automatic agent toast cards (#1760-bab7)
+
+- [ ] After landing, raise a normal MCP toast from another terminal, then the active terminal: only the active origin terminal shows a card, regardless of window focus. Urgent notices show a card on every tab, including non-terminal tabs.
+- [ ] Disable Settings → Notifications → Show cards from the active terminal and reload: normal notices remain bell-only; urgent notices still show a card. The preference is per client.
+
+Visual evidence: worktree Vite fixture mounted the real NotificationsTab and ToastContainer; agent-browser snapshot showed the new default-checked toggle, hint and card. Screenshot and subsequent toggle probes timed out (exit 142); bundled Chrome headless also produced no image within 40 seconds. Actual desktop window-focus behavior and screenshot remain unverified. Targeted tests prove routing and stored opt-out/reset.
+- [ ] After a manual rebuild/restart, create a new worktree after safe removal of a clean integrated one. Confirm that its ignored artifacts persist, its new branch appears, and the old sidebar row is gone. Rust does not hot-reload.
+- [ ] After Boss rebuilds/restarts the Rust backend, verify overlapping worktree creates both succeed, a rename-journal error leaves the original checkout usable, and fingerprint-confirmed forced deletion still works with a live session (#1705-67b3).
+## Mobile ego questions (1759-6047) — Rust restart required
+
+- [ ] After rebuilding/restarting TUIC and updating ego, ask ego a real single-choice question from a terminal. On iPhone confirm **Input**, tap the header question icon, read the full question and both long options, and tap one option. Confirm one answer, continued output and no terminal-height loss. Browser rendering uses the recorded real ego question; real phone touch remains to check.
+- [ ] Chat new-text indicator (#1757-c6a9): after restart, scroll up in terminal Chat and AI Chat while output streams; confirm the pill appears above the composer, returns to the bottom on click, clears on manual bottom, and respects the per-client Appearance > Chat toggle. On mobile/PWA, check the same behavior and the mobile Settings toggle.
+- [ ] AI Chat control bar (#1755-7709): after restart, confirm its duplicate + is gone and New chat tab still opens a conversation.
+- [ ] #1762-c772: After loading the UI batch, open Automations with a long definition name/path. Check the one-line Active badge, short repository tooltip, readable schedule/next run, tabs with arrow keys, one-row toolbar and first-selection opt-out across reopen.
+- [ ] Bell: with only At-Capacity Retry status and no unread outcomes, no badge appears. With unread Progress, Mark as read clears that count while the journal and other notifications remain (#1764-862a).
+
+- [ ] Desktop dictation in terminal Chat: select transcript text, hold Fn and dictate, then confirm Compose receives the text with its draft preserved. Move focus or switch tabs during the final pass; confirm delivery stays with the original target. Close the original tab; confirm the transcript stays in the error message and Messages bell (#1773-5b69). Automated target/Compose tests cover routing; native Fn and microphone observation remain for Boss's normal app session.

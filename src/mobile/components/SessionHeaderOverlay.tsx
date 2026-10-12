@@ -2,7 +2,7 @@ import { createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { appLogger } from "../../stores/appLogger";
 import type { ProgressEntry, ProgressList } from "../../stores/progress";
 import { rpc } from "../../transport";
-import { displayTask } from "../../utils/activitySnapshot";
+import { displayTask } from "../../utils/displayTask";
 import type { SessionInfo, SessionState } from "../useSessions";
 import styles from "./SessionHeaderOverlay.module.css";
 
