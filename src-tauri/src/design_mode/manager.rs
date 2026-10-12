@@ -145,6 +145,7 @@ struct Mode {
 
 #[derive(Clone)]
 pub(crate) struct DesignModeManager {
+    pub(crate) heartbeat_id: String,
     modes: Arc<Mutex<HashMap<String, Mode>>>,
     liveness: Arc<std::sync::Mutex<super::liveness::Liveness>>,
     #[cfg_attr(
@@ -169,6 +170,7 @@ pub(crate) struct DesignModeManager {
 impl DesignModeManager {
     pub(crate) fn new(grab_dir: PathBuf, prefill: Prefill, notify: Notify) -> Self {
         Self {
+            heartbeat_id: uuid::Uuid::new_v4().to_string(),
             modes: Arc::new(Mutex::new(HashMap::new())),
             liveness: Arc::default(),
             grab_dir,
@@ -225,6 +227,19 @@ impl DesignModeManager {
     pub(crate) async fn request_reload(&self, repo_path: &str) -> Option<u64> {
         let _modes = self.modes.lock().await;
         self.liveness.lock().unwrap().request_reload(repo_path)
+    }
+
+    pub(crate) async fn request_navigate(&self, repo_path: &str, url: String) -> Option<u64> {
+        let _modes = self.modes.lock().await;
+        self.liveness
+            .lock()
+            .unwrap()
+            .request_navigate(repo_path, url)
+    }
+
+    pub(crate) async fn pending_navigate(&self, repo_path: &str) -> Option<(u64, Option<String>)> {
+        let _modes = self.modes.lock().await;
+        self.liveness.lock().unwrap().pending_navigate(repo_path)
     }
 
     /// Stops every armed mode whose browser stopped beating.

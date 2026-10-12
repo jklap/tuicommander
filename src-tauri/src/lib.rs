@@ -2517,6 +2517,8 @@ pub fn run() {
             tunnels::tauri_commands::get_tunnel_audit,
             design_mode::tauri_commands::start_design_mode,
             design_mode::tauri_commands::stop_design_mode,
+            design_mode::tauri_commands::reload_design_mode,
+            design_mode::tauri_commands::navigate_design_mode,
             design_mode::tauri_commands::get_design_mode_status,
             acp_commands::acp_workspace_root,
             acp_commands::acp_connect,

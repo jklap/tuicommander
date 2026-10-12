@@ -1,3 +1,7 @@
+## Design Mode navigation restart (1724-fe7e) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, reload the Design Mode extension and request navigation to a local page. Confirm the first navigation reaches the reviewed tab, with and without an idle heartbeat before the request. Automated heartbeat boundary tests cover delivery and failed-update retry; no desktop instance was started by this peer.
+
 ## Settings info badge tips stay in view (1741-36e5)
 
 - [ ] [VISUAL] Settings > MCP, narrow window: hover the "?" badge of the automations native tool. The tip shows its full text, inside the window, not cut at the right edge.

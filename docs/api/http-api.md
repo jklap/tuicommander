@@ -624,6 +624,20 @@ Content-Type: application/json
 { "repoPath": "/path/to/repository" }
 ```
 
+### Reload or navigate the reviewed tab
+
+```
+POST /design-mode/reload
+{ "repoPath": "/path/to/repository" }
+
+POST /design-mode/navigate
+{ "repoPath": "/path/to/repository", "url": "http://localhost:5173/page" }
+```
+
+Both need an armed Design Mode and answer `400 {"error": ...}` otherwise. `url` must be
+HTTP(S) on `localhost`, `127.0.0.1` or `[::1]` without credentials. The extension applies
+each request once on its next heartbeat (about 5 s).
+
 ### Read status
 
 ```
@@ -3009,7 +3023,7 @@ Automation action `run` accepts `{id: "<run id>"}` and returns the canonical sav
 (and the existing authenticated remote transport). The native host uses this
 route; it introduces no TCP listener. Requests carry `id`, `action`, `version`
 (`2.x`) and `repoPath`. Replies are `{id, ok, result}` or `{id, ok:false, error}`.
-`heartbeat` records extension liveness and returns `{armed, reloadSeq}`. It runs every five seconds; armed modes expire after 60 seconds without a beat, or 600 seconds from Start when no beat arrived. MCP `design_mode action=reload repo_path=<repoPath>` increments the sequence; unchanged replies do not repeat a successful reload.
+`heartbeat` records extension liveness and returns `{armed, reloadSeq, navigate: {seq, url?}, backendId?}`. The navigation sequence is included without a pending URL. `backendId` identifies the manager lifetime so the extension resets its navigation acknowledgement after a backend restart, even when a command arrives before an idle beat. It runs every five seconds; armed modes expire after 60 seconds without a beat, or 600 seconds from Start when no beat arrived. MCP `design_mode action=reload repo_path=<repoPath>` increments the sequence; unchanged replies do not repeat a successful reload.
 
 `hello` checks the major version. `pick` accepts `raw` DOM extraction and returns
 bounded, redacted, fenced evidence. Non-HTTP(S) page URLs are rejected. Page data
