@@ -22,8 +22,7 @@
 .group { display: flex; flex-direction: column; gap: 12px; min-width: 0; padding: 16px; border: 1px solid var(--border); border-radius: var(--radius-lg); }
 .group legend { font-weight: 600; padding: 0 8px; }
 .dialog label { display: flex; flex-direction: column; gap: 4px; color: var(--fg-secondary); }
-.dialog input:not([type="checkbox"]), .dialog textarea, .dialog select { width: 100%; box-sizing: border-box; height: 36px; padding: 8px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-tertiary); color: var(--fg-primary); font: inherit; }
-.dialog textarea { height: auto; min-height: 36px; resize: vertical; }
+.dialog [data-form-control] { width: 100%; }
 .dialog .check { flex-direction: row; align-items: center; gap: 8px; }
 .dialog :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .hint, .empty { color: var(--fg-muted); line-height: 1.5; margin: 0; }

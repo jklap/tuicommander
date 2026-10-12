@@ -9,11 +9,29 @@ pub struct Prepared {
     pub reply: CommitReply,
 }
 
+/// Key order is not part of a document: a `HashMap` field serializes in a different order on
+/// every call, which would otherwise make two reads of one file carry different revisions.
+fn sorted(value: &Value) -> Value {
+    match value {
+        Value::Object(map) => {
+            let mut keys: Vec<_> = map.keys().collect();
+            keys.sort();
+            Value::Object(
+                keys.into_iter()
+                    .map(|k| (k.clone(), sorted(&map[k])))
+                    .collect(),
+            )
+        }
+        Value::Array(items) => Value::Array(items.iter().map(sorted).collect()),
+        other => other.clone(),
+    }
+}
+
 /// Process-private salt prevents offline guesses of secret values from revision tokens.
 /// Tokens deliberately expire on host restart; another process's file writes still conflict.
 pub fn revision(value: &Value) -> Result<String, Failure> {
     static KEY: OnceLock<[u8; 32]> = OnceLock::new();
-    let bytes = serde_json::to_vec(value).map_err(|_| Error::new("", "store_failed"))?;
+    let bytes = serde_json::to_vec(&sorted(value)).map_err(|_| Error::new("", "store_failed"))?;
     let mut digest = Sha256::new();
     digest.update(b"TUIC settings revision v1\0");
     digest.update(bytes);

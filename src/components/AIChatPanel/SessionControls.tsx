@@ -1,3 +1,4 @@
+import { Select } from "../ui/Select";
 /**
  * The knobs a session publishes, and the three verbs ego adds to a turn.
  *
@@ -60,7 +61,7 @@ export function conversationLabel(session: Pick<AcpListedSession, "sessionId" | 
 }
 
 const ConfigSelect: Component<{ option: SelectOption; chat: AcpChat }> = (props) => (
-	<select
+	<Select
 		class={s.sessionSettingSelect}
 		aria-label={props.option.name}
 		disabled={props.chat.busy()}
@@ -92,7 +93,7 @@ const ConfigSelect: Component<{ option: SelectOption; chat: AcpChat }> = (props)
 				</optgroup>
 			)}
 		</For>
-	</select>
+	</Select>
 );
 
 const SessionSettingsDialog: Component<{ chat: AcpChat; options: SelectOption[]; onClose: () => void }> = (props) => {
@@ -187,7 +188,7 @@ export const SessionControls: Component<{ chat: AcpChat }> = (props) => {
 			</Show>
 
 			<Show when={sessions().length > 1}>
-				<select
+				<Select
 					class={s.modelPicker}
 					title="Conversation"
 					value={props.chat.sessionId() ?? ""}
@@ -211,7 +212,7 @@ export const SessionControls: Component<{ chat: AcpChat }> = (props) => {
 							</option>
 						)}
 					</For>
-				</select>
+				</Select>
 			</Show>
 
 			<span class={s.controlSpacer} />

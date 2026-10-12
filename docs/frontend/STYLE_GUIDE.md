@@ -426,21 +426,19 @@ All follow the same structure:
 
 ### Form Controls
 
-```css
-input, select, textarea {
-  height: 36px;                        /* standard height */
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  color: var(--fg-primary);
-  font-size: var(--font-md);
-  padding: 0 8px;
-}
-input:focus, select:focus, textarea:focus {
-  border-color: var(--accent);
-  outline: none;
-}
-```
+Use `Select`, `Input` and `Textarea` from `src/components/ui` for form fields.
+They forward native attributes, refs, options and events. `Input` is for text,
+numeric and date fields; toggles, ranges, colour and file pickers keep their
+specialised controls. `FormControls.module.css` owns their presentation:
+`--control-height` (36px), `--control-padding-x` (8px), theme colours,
+`--radius-lg` and `--font-md`. Containers own width and alignment, never
+control height, padding, borders or colours. Textareas resize vertically;
+multiple selects keep native listbox behavior. At widths up to 600px,
+controls have a 44px minimum height and 16px text to prevent iOS zoom.
+
+`SegmentedControl` is the shared view switch. It uses a named tablist, one
+keyboard tab stop, and Arrow Left/Right, Home and End to select and focus an
+enabled choice. Tasks uses it for List, Board and Roadmap.
 
 **Toggle switch**: 36×20px track, `--radius-full` (10px), off=`--bg-tertiary`, on=`--accent`. White thumb slides with 0.2s transition.
 

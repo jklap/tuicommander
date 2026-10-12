@@ -18,6 +18,9 @@ import type { AccountSecretFormStatus, AccountSecretRequest } from "../../../typ
 import { cx } from "../../../utils";
 import { writeClipboard } from "../../../utils/clipboard";
 import { handleOpenUrl } from "../../../utils/openUrl";
+import { Input } from "../../ui/Input";
+import { Select } from "../../ui/Select";
+import { Textarea } from "../../ui/Textarea";
 import { ExpertSetting } from "../ExpertSetting";
 import { SettingSelect, SettingToggle } from "../SettingFields";
 import s from "../Settings.module.css";
@@ -697,7 +700,7 @@ export const GitHubTab: Component = () => {
 
 				<div class={s.group}>
 					<label>Default Setup Script</label>
-					<textarea
+					<Textarea
 						value={repoDefaultsStore.state.setupScript}
 						onInput={(e) => repoDefaultsStore.setSetupScript(e.currentTarget.value)}
 						placeholder="#!/bin/bash&#10;npm install"
@@ -708,7 +711,7 @@ export const GitHubTab: Component = () => {
 
 				<div class={s.group}>
 					<label>Default Run Script</label>
-					<textarea
+					<Textarea
 						value={repoDefaultsStore.state.runScript}
 						onInput={(e) => repoDefaultsStore.setRunScript(e.currentTarget.value)}
 						placeholder="#!/bin/bash&#10;npm run dev"
@@ -719,7 +722,7 @@ export const GitHubTab: Component = () => {
 
 				<div class={s.group}>
 					<label>Default Archive Script</label>
-					<textarea
+					<Textarea
 						value={repoDefaultsStore.state.archiveScript}
 						onInput={(e) => repoDefaultsStore.setArchiveScript(e.currentTarget.value)}
 						placeholder="#!/bin/bash&#10;docker compose down"
@@ -929,7 +932,7 @@ export const GitHubTab: Component = () => {
 
 					<div class={s.group}>
 						<label>Add Enterprise account</label>
-						<input
+						<Input
 							type="text"
 							placeholder="ghe.example.com"
 							value={newHost()}
@@ -949,7 +952,7 @@ export const GitHubTab: Component = () => {
 				{t("github.circleCiHint", "Use a read-only CircleCI token. Stored tokens are never shown again.")}
 			</p>
 			<div class={s.group}>
-				<input
+				<Input
 					type="password"
 					placeholder={t("github.circleCiPlaceholder", "CircleCI read-only token")}
 					value={circleCiToken()}
@@ -1000,7 +1003,7 @@ export const GitHubTab: Component = () => {
 												<div class={g.tokenSource}>No account for this host — add one above.</div>
 											</Show>
 											<Show when={res().status === "needs-bind"}>
-												<select
+												<Select
 													class={g.bindSelect}
 													value={chosenRemote()[repo.path] ?? res().candidates?.[0]?.remote_name ?? ""}
 													onChange={(e) => setChosenRemote({ ...chosenRemote(), [repo.path]: e.currentTarget.value })}
@@ -1012,7 +1015,7 @@ export const GitHubTab: Component = () => {
 															</option>
 														)}
 													</For>
-												</select>
+												</Select>
 											</Show>
 										</div>
 										<div class={g.actions}>

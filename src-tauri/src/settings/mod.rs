@@ -4,6 +4,7 @@ pub mod model;
 
 pub mod native;
 pub mod notifications;
+pub mod preferences;
 pub mod registry;
 pub mod request;
 pub mod service;
@@ -26,6 +27,9 @@ mod validation_tests;
 
 #[cfg(test)]
 mod notifications_tests;
+
+#[cfg(test)]
+mod preferences_tests;
 
 #[cfg(test)]
 mod telegram_tests;

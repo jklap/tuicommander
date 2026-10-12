@@ -1,5 +1,7 @@
 import type { Component } from "solid-js";
 import { t } from "../../../i18n";
+import { Input } from "../../ui/Input";
+import { Textarea } from "../../ui/Textarea";
 import s from "../Settings.module.css";
 import type { RepoTabProps } from "./RepoWorktreeTab";
 
@@ -24,7 +26,7 @@ export const RepoScriptsTab: Component<RepoTabProps> = (props) => {
 			<h3>{t("repoScripts.heading.designMode", "Design Mode")}</h3>
 			<div class={s.group}>
 				<label for="repo-dev-server-url">{t("repoScripts.label.devServerUrl", "Dev Server URL")}</label>
-				<input
+				<Input
 					id="repo-dev-server-url"
 					type="url"
 					value={props.settings.devServerUrl ?? ""}
@@ -42,7 +44,7 @@ export const RepoScriptsTab: Component<RepoTabProps> = (props) => {
 
 			<div class={s.group}>
 				<label>{t("repoScripts.label.setupScript", "Setup Script")}</label>
-				<textarea
+				<Textarea
 					value={props.settings.setupScript ?? ""}
 					onInput={(e) => {
 						const val = e.currentTarget.value;
@@ -61,7 +63,7 @@ export const RepoScriptsTab: Component<RepoTabProps> = (props) => {
 
 			<div class={s.group}>
 				<label>{t("repoScripts.label.runScript", "Run Script")}</label>
-				<textarea
+				<Textarea
 					value={props.settings.runScript ?? ""}
 					onInput={(e) => {
 						const val = e.currentTarget.value;
@@ -80,7 +82,7 @@ export const RepoScriptsTab: Component<RepoTabProps> = (props) => {
 
 			<div class={s.group}>
 				<label>{t("repoScripts.label.archiveScript", "Archive Script")}</label>
-				<textarea
+				<Textarea
 					value={props.settings.archiveScript ?? ""}
 					onInput={(e) => {
 						const val = e.currentTarget.value;
