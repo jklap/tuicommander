@@ -142,6 +142,7 @@ export function OutputView(props: OutputViewProps) {
 
 	// Touch inertia guard: while the user is actively touching, don't auto-scroll
 	let touchActive = false;
+	let lastScrollTop = 0;
 	const handleTouchStart = () => {
 		touchActive = true;
 	};
@@ -164,7 +165,11 @@ export function OutputView(props: OutputViewProps) {
 		// scrollTop can be fractional while scrollHeight/clientHeight are rounded.
 		// Only tolerate rounding, not an upward gesture inside a near-bottom zone.
 		const atBottom = containerEl.scrollHeight - containerEl.scrollTop - containerEl.clientHeight <= 1;
-		userScrolledUp = !atBottom;
+		// Only an upward move detaches: the scroll event of our own follow scroll can be
+		// measured after a new chunk grew the content, and must not read as a detach.
+		if (atBottom) userScrolledUp = false;
+		else if (containerEl.scrollTop < lastScrollTop) userScrolledUp = true;
+		lastScrollTop = containerEl.scrollTop;
 		// Lazy-load older lines when scrolling near the top
 		if (containerEl.scrollTop < SCROLL_UP_THRESHOLD && oldestLoadedOffset > 0) {
 			fetchOlderLines();
