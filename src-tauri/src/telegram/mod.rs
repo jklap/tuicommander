@@ -46,10 +46,7 @@ impl Error {
     /// Faults that stop a worker until setup changes. A 409 is not one: it
     /// clears when the other process polling the same token leaves.
     pub(crate) fn is_fatal(self) -> bool {
-        matches!(
-            self,
-            Self::Unauthorized | Self::Rejected(403 | 404)
-        )
+        matches!(self, Self::Unauthorized | Self::Rejected(403 | 404))
     }
 }
 
@@ -66,7 +63,9 @@ impl std::fmt::Display for Error {
             Self::Transport => "telegram_transport_unavailable",
             Self::Protocol => "telegram_invalid_response",
             Self::Unauthorized => "telegram_unauthorized",
-            Self::Conflict => "telegram_owner_conflict: another process polls getUpdates with the same bot token",
+            Self::Conflict => {
+                "telegram_owner_conflict: another process polls getUpdates with the same bot token"
+            }
             Self::RateLimited(_) => "telegram_rate_limited",
             Self::Rejected(_) => "telegram_request_rejected",
         })
