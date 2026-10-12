@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Removed
+- Remove the duplicate AI Chat control-bar + button; New chat tab still starts a conversation (#1755-7709).
 - GitHub token chain no longer reads the `gh` CLI login (`gh auth token`, `gh-token` crate); use OAuth login or `GH_TOKEN`/`GITHUB_TOKEN`. TUIC spawns no `gh` process (#1714-1c1d).
 
 ### Fixed
@@ -22,6 +23,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Design Mode lists only the dev servers of the session being edited (HTML-serving listeners of its worktree, URLs it printed, the configured URL) and excludes TUIC itself (#1723-4a21).
 
 ### Added
+- Chat transcripts show New text below when content arrives while you read earlier messages. Select it to resume following; a per-client setting is available on desktop and mobile (#1757-c6a9).
 
 - Design Mode extension heartbeats expire stale sessions and deliver agent-requested page reloads once per sequence (#1735-080b).
 
