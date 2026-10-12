@@ -1,4 +1,4 @@
-import { createEffect, createSignal, onCleanup, onMount, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, onCleanup, onMount, Show } from "solid-js";
 import { t } from "../../i18n";
 import { uploadAttachment } from "../../services/uploadAttachment";
 import { appLogger } from "../../stores/appLogger";
@@ -109,8 +109,18 @@ export function CommandInput(props: CommandInputProps) {
 	const [codexNotesMode, setCodexNotesMode] = createSignal(false);
 	const atomicReply = () =>
 		props.managedSession && props.awaitingInput && !props.choicePrompt && !props.codexQuestionOpen && !codexNotesMode();
+	// A multi-question form replaces its prompt without an empty frame between
+	// the answered question and the next one, so a new prompt re-arms the buttons too.
+	// Keyed on content, not object identity: an identical snapshot redelivered
+	// while an answer is in flight must not re-arm the buttons.
+	const choiceSignature = createMemo(() => {
+		const prompt = props.choicePrompt;
+		if (!prompt) return null;
+		return JSON.stringify([prompt.title, prompt.options.map((option) => [option.key, option.label])]);
+	});
 	createEffect(() => {
-		if (!props.choicePrompt) setChoiceSending(false);
+		choiceSignature();
+		setChoiceSending(false);
 	});
 	let textareaEl: HTMLTextAreaElement | undefined;
 	let fileInput: HTMLInputElement | undefined;
