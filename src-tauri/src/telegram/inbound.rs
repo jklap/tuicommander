@@ -64,21 +64,22 @@ impl<P: MailPort> Inbound<P> {
         match self.poll_once().await {
             Ok(poll) => {
                 self.backoff.reset();
+                self.conflicted = false;
                 Ok(poll)
             }
             Err(error) => {
-                if matches!(
-                    error,
-                    Error::Unauthorized | Error::Conflict | Error::Rejected(403 | 404)
-                ) {
+                if error.is_fatal() {
                     self.stopped = Some(error);
                     tracing::error!(source="telegram",error=%error,
                         "Telegram polling stopped; restart after resolving the reported fault");
                     return Err(error);
                 }
                 let delay = self.backoff.failed(error);
+                self.conflicted = error == Error::Conflict;
                 match error {
-                    Error::RateLimited(_) | Error::Transport => Ok(Poll::Backoff(delay)),
+                    Error::RateLimited(_) | Error::Transport | Error::Conflict => {
+                        Ok(Poll::Backoff(delay))
+                    }
                     _ => Err(error),
                 }
             }
