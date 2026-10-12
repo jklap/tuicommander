@@ -6,12 +6,13 @@ started_at: "2026-10-09T16:15:32.401Z"
 ---
 # Plan: Automations scheduler
 
-**Created:** 2026-10-09 | **Status:** Approved for phased implementation | **Effort:** XL | **Branch:** feat/automations-core
+**Created:** 2026-10-09 | **Status:** Steps 1-15 complete (all linked stories `complete`); revision 2026-10-12 waits for Boss answers | **Effort:** XL + L (revision) | **Branch:** none (plan only)
 
 ## Summary
 
 - Add scheduled agent runs with friendly cadence controls, durable history and clear needs-you states.
-- This is a development assignment. Implement phase 1, then phase 2. Phase 3 is listed but not started; this peer stops after Step 1.
+- Steps 1-15 landed (phase 3 Steps 13-14 too: 1622-be11, 1623-8b2a complete). Cron is stored and previewed but does not dispatch (see Revision).
+- Revision 2026-10-12 (Boss, background-mode D5): routines and the scheduler are one Automations feature; a hook channel triggers a routine; a run can wake a hibernated agent.
 
 ## Architecture Context
 
@@ -22,7 +23,7 @@ started_at: "2026-10-09T16:15:32.401Z"
 - `create_daemon_workflow_worktree` delegates to the common worktree routes. An automation needs its configured base branch passed through that path.
 - `lib.rs` starts WorkflowRuntime in desktop and remote boot. The scheduler is another in-process runtime with no new daemon or plugin host.
 - `tasks.rs`, `event_bus` and progress supply evidence; idle is not universal proof. Final unknown is required when evidence is absent.
-- Fixed decisions: no session reuse; run-config permissions; one IANA zone per definition default local; overlap skip; global configurable limit default 2; max duration.
+- Fixed decisions: no session reuse in phase 1 (memory `automations-scheduler-assignment-20261009`: "no phase-one session reuse"; the revision below proposes it, QA1); run-config permissions; one IANA zone per definition default local; overlap skip; global configurable limit default 2; max duration.
 - ADR: reserve durably before dispatch and interrupt all open runs at boot without retry — prevents duplicate agent execution after a crash — transparent automatic retry rejected.
 
 ## Research Findings
@@ -40,7 +41,7 @@ started_at: "2026-10-09T16:15:32.401Z"
 - **Adopt, Steps 3/10/11:** saved output is the canonical report; notices link the run/session. Persist notification attempted/confirmed/unknown separately; deduplicate by run/transition/channel. Notification failures cannot change execution success. Do not replay ambiguous sends or historical notices on boot.
 - **Adopt, Steps 4/7:** bounded wake reconciliation, reserve before execution, finite duration and completion provenance. Keep TUIC's simple 30s tick.
 - **Adopt, Step 11:** precheck skips remain quiet; notify failure/needs-you through existing native/push/Telegram preferences. Completed output remains in history.
-- **Reject:** model heartbeats (cost/context coupling); session reuse/result injection into replacement conversations (fixed exclusion); stream watchers, interval/pacing and webhook/channel routing (YAGNI); automatic execution retries/restart dispatch (fixed no-retry decision); implicit last-conversation recipient (use run/session ownership).
+- **Reject:** model heartbeats (cost/context coupling); session reuse/result injection into replacement conversations (phase-1 exclusion; QA1 proposes an explicit `Target::Session`, not implicit reuse); stream watchers, interval/pacing and webhook/channel routing (YAGNI); automatic execution retries/restart dispatch (fixed no-retry decision); implicit last-conversation recipient (use run/session ownership).
 
 ## Security Considerations
 
@@ -85,6 +86,88 @@ started_at: "2026-10-09T16:15:32.401Z"
 | 15 | 1624-c5f5 | 1614-7e8f, 1615-57cf |
 
 - Acceptance criteria and concrete test cases for each step are recorded in the linked story files.
+
+## Revision 2026-10-12: one Automations feature — routines, triggers, session targets
+
+Boss on background-mode D5: "the scheduler must be able to revive them. We also need a hook channel to trigger a routine. The routine and the scheduler live together under Automations."
+
+### One plan or two
+
+Keep two plans, linked. The wake transition is session lifecycle and belongs to `plans/background-mode.md` → "Shared wake path" (`ensure_live`, Step 6). Automations only calls it. One merged plan would put tray, WebView unload and Linux packaging next to cron and hook semantics with no shared code. The single-path rule holds across the two plans: Automations adds no resume code.
+
+### Today (source, 2026-10-12)
+
+- **"Routine" does not exist as a concept.** An `AutomationDefinition` (`automations/model.rs:24-47`) already is the routine: prompt, run config, repository, workspace (`Existing | NewPerRun`) — plus exactly one schedule (`cron` or `once_local`). The revision names it a routine in user text only; no rename in code.
+- **Recurring cron never dispatches.** `Dispatcher::reserve_due` drops every non-Once definition (`automations/dispatcher.rs:90`), and `require_once` refuses dispatch and Run Now for cron (`dispatcher.rs:68,204,222-227`: "Only Once automations dispatch in phase 1"). The user guide says so (`docs/user-guide/automations.md:7`, `docs/FEATURES.md:2800`). "The scheduler wakes a hibernated agent" therefore needs cron dispatch first.
+- **Triggers:** `RunTrigger::{Scheduled{occurrence_ms}, Manual}` (`automations/run.rs:11-14`). Both use one admission with overlap and capacity (`scheduler.rs:14-65`, `store/admission.rs:12`).
+- **Every run spawns a new agent.** `NativeEffects::launch` → `managed_launch::launch_named` → `agent action=spawn` (`dispatcher/native.rs:45-72`, `mcp_http/managed_launch.rs:29-60`). Completion reads the bound task, progress and exit (`completion.rs:12-21`). Maximum duration **kills** the owned session (`completion.rs:39-45`).
+- **One transport-neutral API already exists:** `automations::api::execute` (`automations/api.rs:94-125`) behind MCP `automations` (`automations/mcp.rs:17`, 18 actions incl. `run_now`), HTTP `POST /automations/action` (`mcp_http/mod.rs:1010`, `mcp_http/automation_routes.rs:9-14`), IPC, and the CLI `tuic automations <json|->` (`crates/tuic-cli/src/main.rs:54-55`) over the local socket or named pipe (`crates/tuic-cli/src/ipc.rs:16-40`).
+- **Untrusted text into a prompt** already has one escaper: `context.rs:7-60` (16 KiB cap, control characters stripped, `<precheck-output untrusted="true">`).
+- The runtime is in Rust and independent of the WebView (`automations/runtime.rs:1`), booted on desktop and headless (`lib.rs:2651,2727`). It keeps working in background mode.
+
+### Hook channel: options compared
+
+| Option | What fires it | New surface | Fit |
+|---|---|---|---|
+| **(a) `trigger` action on the shared API** | anything that can run `tuic automations '{"action":"trigger",...}'`, call MCP or `POST /automations/action`: Claude Code / Codex hooks in the user's settings, git hooks, launchd, CI-local scripts, another agent | none: same API, same auth (local socket = OS user; remote HTTP = Basic Auth, `mcp_http/auth.rs`) | **recommended** |
+| (b) internal event triggers | `event_bus` events (`state.rs:167-215`: `HeadChanged`, `RepoChanged`, `SessionClosed`, `PtyExit`) matched by a filter in the definition | a filter language and a second admission source | later, only if (a) shows a need; TUIC's own agent hooks (`agent_hook_installer.rs`) emit OSC 7770 for agent state, not routine events |
+| (c) public webhook (GitHub, CI) | an internet caller | a public endpoint, per-hook secrets, replay protection | rejected (YAGNI, security); a GitHub Action can reach (a) through the existing remote access if Boss wants it |
+| (d) file watcher | a path changes | a watcher per definition | rejected |
+
+### Revised model
+
+```rust
+pub struct AutomationDefinition {        // existing fields kept
+    // cron / once_local become optional together: none = trigger or Run Now only
+    pub hook: Option<HookTrigger>,       // None = trigger action refused
+    pub target: Target,                  // default NewSession = today
+}
+pub struct HookTrigger { pub inject_payload: bool }
+pub enum Target { NewSession, Session { tuic_session: String } }
+pub enum RunTrigger { Scheduled { occurrence_ms: i64 }, Manual, Hook { source: String, key: Option<String> } }
+```
+
+- A trigger is admitted like a scheduled occurrence: enabled required, precheck runs, overlap and capacity apply, refusals are recorded (`skipped_overlap`, `skipped_concurrency`), never queued (QA4).
+- `key` deduplicates a retrying caller: one run per `(automation_id, key)`, kept with the run row.
+- The payload (if `inject_payload`) goes through the `context.rs` escaper as `<hook-payload untrusted="true">`, same 16 KiB cap; the ledger records bytes, not text (QA3).
+- `Target::Session`: dispatch calls `ensure_live(tuic_session, Automation)` (background-mode Step 6), then `enqueue_user_command` with the prompt. The run binds the session but does **not own** it: maximum duration records `timed_out` and leaves the session alone (QA5). Completion is evidence from that session after admission: `progress done|blocked` (already read, `completion.rs:19`) or the Protocol-rank turn end of the submitted turn; otherwise `unknown`.
+- A target that is working or awaiting a human at dispatch records `skipped_target_busy`; hibernated or idle targets proceed (QA6).
+- Validation at save: the target must be an agent tab with a resumable session; at dispatch a missing or non-resumable target fails the run with the `ensure_live` reason.
+
+### Revision steps (story-sized)
+
+| Id | Step | Size | Depends on |
+|---|---|---|---|
+| A1 | Recurring cron dispatch: remove `require_once` and the `reserve_due` filter; Run Now for cron. RED: `cron_occurrence_dispatches_once_per_occurrence` — catches: the phase-1 gate left on; `run_now_accepts_cron_definition` — catches: Run Now refused for cron | S | none (QA2) |
+| A2 | Optional schedule + `Target` and `hook` fields, `deny_unknown_fields` kept; version stays 1 with `#[serde(default)]`. RED: `trigger_only_definition_has_no_next_run` — catches: a hook-only routine refused or scheduled | M | A1 |
+| A3 | Hook channel (a): `trigger` action in `api.rs` + MCP schema + `tuic automations` docs; `RunTrigger::Hook`; payload injection; key dedupe. RED: `trigger_respects_pause_overlap_and_capacity` — catches: a hook bypassing admission; `same_key_admits_one_run` — catches: duplicate runs from a retrying hook; `payload_cannot_close_untrusted_block` — catches: prompt injection through the payload | M | A2 |
+| A4 | `Target::Session` through `ensure_live`. RED: `scheduled_run_wakes_hibernated_target_and_delivers_prompt_once`; `timeout_never_kills_borrowed_session`; `busy_target_records_skipped_target_busy` | L | A2, background-mode B6 |
+| A5 | Dialog: trigger section (schedule / hook / Run Now), target picker, copyable `tuic automations` hook snippet; Visual check | M | A3, A4 |
+
+Docs per `docs/sync-matrix.md`: user guide, `docs/api/http-api.md` (route snapshot unchanged — same route), FEATURES, CHANGELOG.
+
+### Open questions for Boss (Automations side)
+
+- **QA1. Session target** (lifts "no phase-one session reuse")
+  - (a) add `Target::Session`, run delivered into an existing — possibly hibernated — agent tab — **recommended** (without it "the scheduler wakes a hibernated agent" has nothing to wake: every run spawns a new agent)
+  - (b) new session per run only; "wake" means only that runs keep firing in background
+- **QA2. Enable recurring cron dispatch now (A1)**
+  - (a) yes, as the first revision story — **recommended** (phases 1-2 are complete; cron is stored and previewed but never runs)
+  - (b) keep Once-only
+- **QA3. Hook channel**
+  - (a) `trigger` action on the shared API (MCP, HTTP, IPC, `tuic` CLI) — **recommended**
+  - (b) (a) plus internal `event_bus` triggers
+  - (c) a public webhook endpoint
+- **QA4. A hook-triggered run behaves like**
+  - (a) a scheduled run: needs enabled, runs the precheck — **recommended** (a hook fires unattended)
+  - (b) Run Now: ignores pause and precheck
+- **QA5. Maximum duration on a session target**
+  - (a) record `timed_out`, leave the session running — **recommended** (it is Boss's tab)
+  - (b) interrupt the turn (Esc)
+  - (c) kill the session as for owned runs
+- **QA6. Session target busy at dispatch**
+  - (a) record `skipped_target_busy` — **recommended** (matches overlap skip, no backlog)
+  - (b) queue the prompt behind the current turn (idle gate)
 
 ## Steps
 

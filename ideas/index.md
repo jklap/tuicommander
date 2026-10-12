@@ -114,6 +114,7 @@ Feature concepts under evaluation for TUICommander. Each idea lives in its own f
 
 | Status | Idea | File |
 |--------|------|------|
+| `rejected` | PTY Holder: sessions survive a TUIC restart (abandoned by Boss 2026-10-12: a separate PTY process is not worth its cost) | [pty-holder-session-survival.md](pty-holder-session-survival.md) |
 | `rejected` | Multi-Instance Support | [multi-instance-support.md](multi-instance-support.md) |
 | `rejected` | Context Capture | [context-capture.md](context-capture.md) |
 | `rejected` | Structured Agent Output Protocol | [structured-agent-output.md](structured-agent-output.md) |

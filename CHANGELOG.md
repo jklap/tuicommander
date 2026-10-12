@@ -11,6 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - GitHub token chain no longer reads the `gh` CLI login (`gh auth token`, `gh-token` crate); use OAuth login or `GH_TOKEN`/`GITHUB_TOKEN`. TUIC spawns no `gh` process (#1714-1c1d).
 
 ### Fixed
+- Mobile ego questions show Input and open a full, wrapping question card from the header; selecting an option sends one answer (#1759-6047).
 - Native macOS Fn dictation keeps recording through window focus changes while the key is held and detects its release outside TUIC (#1763-3361).
 - Automations uses readable schedule cards, short repository names, keyboard tabs and a compact toolbar. The first definition opens automatically unless disabled in the dialog; the palette entry also matches scheduler and schedule (#1762-c772).
 - The bell no longer counts static plugin status rows; unread Progress outcomes have an explicit Mark as read action (#1764-862a).

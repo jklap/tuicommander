@@ -2638,6 +2638,8 @@ impl ChunkProcessor {
             let choice = if agent_type.as_deref() == Some("claude") {
                 crate::output_parser::parse_claude_ask_user_question(screen)
                     .or_else(|| crate::output_parser::parse_choice_prompt(screen))
+            } else if agent_type.as_deref() == Some("ego") {
+                crate::output_parser::parse_ego_question(screen)
             } else {
                 crate::output_parser::parse_choice_prompt(screen)
             };
