@@ -236,6 +236,26 @@ export const GeneralTab: Component = () => {
 				hint={t("general.hint.autoUpdateEnabled", "Download and install updates in the background")}
 			/>
 
+			<SettingToggle
+				checked={settingsStore.state.deferUpdateRelaunch}
+				onChange={(v) => settingsStore.setDeferUpdateRelaunch(v)}
+				label={t("general.toggle.deferUpdateRelaunch", "Wait for agents before restarting")}
+				hint={t(
+					"general.hint.deferUpdateRelaunch",
+					"After an update installs, restart only when no session is busy or waiting for input",
+				)}
+			/>
+
+			<SettingToggle
+				checked={settingsStore.state.eagerResumeAfterUpdate}
+				onChange={(v) => settingsStore.setEagerResumeAfterUpdate(v)}
+				label={t("general.toggle.eagerResumeAfterUpdate", "Resume all agents after an update")}
+				hint={t(
+					"general.hint.eagerResumeAfterUpdate",
+					"After the app restarts for an update, resume every agent tab with a confirmed session on every branch, without visiting each one",
+				)}
+			/>
+
 			<ExpertSetting configKey="app.update_channel" value={settingsStore.state.updateChannel}>
 				<SettingSelect
 					label={t("general.label.updateChannel", "Update Channel")}
