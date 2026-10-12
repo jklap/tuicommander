@@ -1,12 +1,14 @@
-import { Show } from "solid-js";
+import { For, Show } from "solid-js";
 import { t } from "../../i18n";
 import type { AutomationsStore } from "../../stores/automations";
+import { repositoriesStore } from "../../stores/repositories";
 import s from "./AutomationsDialog.module.css";
 import { ScheduleFields } from "./ScheduleFields";
 import { TemplatePicker } from "./TemplatePicker";
 
 export function DefinitionEditor(props: { store: AutomationsStore }) {
 	const store = props.store;
+	const knownRepos = () => repositoriesStore.getOrderedRepos();
 	return (
 		<Show when={store.draft()}>
 			{(draft) => (
@@ -20,10 +22,16 @@ export function DefinitionEditor(props: { store: AutomationsStore }) {
 						<div class={s.row}>
 							<label>
 								{t("automations.repository", "Repository")}
-								<input
+								<select
 									value={draft().repository}
-									onInput={(event) => store.edit({ repository: event.currentTarget.value })}
-								/>
+									onChange={(event) => store.edit({ repository: event.currentTarget.value })}
+								>
+									<option value="">{t("automations.chooseRepository", "Choose a repository")}</option>
+									<Show when={draft().repository && !knownRepos().some((repo) => repo.path === draft().repository)}>
+										<option value={draft().repository}>{draft().repository}</option>
+									</Show>
+									<For each={knownRepos()}>{(repo) => <option value={repo.path}>{repo.displayName}</option>}</For>
+								</select>
 							</label>
 							<label>
 								{t("automations.runConfig", "Run config")}
