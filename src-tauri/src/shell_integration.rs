@@ -348,12 +348,12 @@ case $name in
     exec "$real" -c "$(cat "$file")" "$@";;
   grok)
     flags="-p --single --rules"
-    has_flag "$@" || exec "$real" --rules "$(cat "$file")" "$@";;
+    has_flag "$@" || exec "$real" --rules="$(cat "$file")" "$@";;
   goose)
     case $1 in
       session|s)
         flags=--system
-        if ! has_flag "$@"; then first=$1; shift; exec "$real" "$first" --system "$(cat "$file")" "$@"; fi;;
+        if ! has_flag "$@"; then first=$1; shift; exec "$real" "$first" --system="$(cat "$file")" "$@"; fi;;
     esac;;
   pi)
     case $1 in install|remove|uninstall|update|list|config|auth) exec "$real" "$@";; esac
@@ -1294,10 +1294,10 @@ mod tests {
                 format!("-c developer_instructions=\"RULES-codex\" --model o3 {notify}"),
                 format!("-c developer_instructions=\"RULES-codex\" resume --last {notify}"),
                 format!("exec task {notify}"),
-                "--rules RULES-grok --continue".to_string(),
+                "--rules=RULES-grok --continue".to_string(),
                 "-p hi".to_string(),
-                "session --system RULES-goose --name wrapper-launch-test".to_string(),
-                "session --system RULES-goose --resume".to_string(),
+                "session --system=RULES-goose --name wrapper-launch-test".to_string(),
+                "session --system=RULES-goose --resume".to_string(),
                 "run --name wrapper-launch-test -t task".to_string(),
                 format!("--append-system-prompt {pi} --continue"),
                 "-p hi".to_string(),

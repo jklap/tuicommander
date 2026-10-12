@@ -97,9 +97,9 @@ TUICommander passes its output-marker rules (`intent:`, `suggest:`, `💬 `) to 
 |---|---|
 | Claude Code | `--append-system-prompt-file <config-dir>/agent-hooks/instructions-claude.md` |
 | Codex | `-c developer_instructions="<text>"` (a TOML string) |
-| Grok | `--rules "<text>"` |
+| Grok | `--rules=<text>` |
 | OpenCode | environment variable `OPENCODE_CONFIG_CONTENT={"instructions":["<file>"]}` |
-| Goose | `goose session --system "<text>"` |
+| Goose | `goose session --system=<text>` |
 | pi | `--append-system-prompt <file>` |
 | ego | `--append-system @<file>` |
 

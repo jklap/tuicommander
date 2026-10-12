@@ -230,13 +230,14 @@ pub(crate) fn args(agent: &str, args: Vec<String>, config_dir: &Path) -> Vec<Str
         return args;
     };
     let path = path.to_string_lossy().into_owned();
-    let flag: [String; 2] = match agent {
-        "claude" => ["--append-system-prompt-file".into(), path],
-        "codex" => ["-c".into(), content],
-        "grok" => ["--rules".into(), content],
-        "goose" => ["--system".into(), content],
-        "pi" => ["--append-system-prompt".into(), path],
-        "ego" => ["--append-system".into(), format!("@{path}")],
+    let flag: Vec<String> = match agent {
+        "claude" => vec!["--append-system-prompt-file".into(), path],
+        "codex" => vec!["-c".into(), content],
+        // Glued with `=`: a text that starts with `-` is not read as a flag.
+        "grok" => vec![format!("--rules={content}")],
+        "goose" => vec![format!("--system={content}")],
+        "pi" => vec!["--append-system-prompt".into(), path],
+        "ego" => vec!["--append-system".into(), format!("@{path}")],
         _ => return args,
     };
     let mut result = args;

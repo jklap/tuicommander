@@ -104,7 +104,7 @@ fn grok_composition() {
     let dir = dir.path();
     let text = text_of(dir, "grok");
     for typed in [vec![], strings(&["--continue"])] {
-        let mut expected = vec!["--rules".to_string(), text.clone()];
+        let mut expected = vec![format!("--rules={text}")];
         expected.extend(typed.clone());
         assert_eq!(args("grok", typed, dir), expected);
     }
@@ -146,7 +146,7 @@ fn goose_composition() {
     let text = text_of(dir, "goose");
     assert_eq!(
         args("goose", strings(&["session"]), dir),
-        ["session".to_string(), "--system".to_string(), text.clone()]
+        ["session".to_string(), format!("--system={text}")]
     );
     let resumed = args(
         "goose",
@@ -154,10 +154,10 @@ fn goose_composition() {
         dir,
     );
     assert_eq!(
-        resumed[..3],
-        ["session".to_string(), "--system".to_string(), text]
+        resumed[..2],
+        ["session".to_string(), format!("--system={text}")]
     );
-    assert_eq!(&resumed[3..], ["--resume", "--name", "n"]);
+    assert_eq!(&resumed[2..], ["--resume", "--name", "n"]);
     for unchanged in [
         strings(&["run", "-t", "task"]),
         strings(&["session", "--system", "mine"]),
@@ -294,7 +294,7 @@ fn text_flags_keep_a_dash_led_text_attached() {
             "{agent}: the instructions were not injected: {launched:?}"
         );
         assert!(
-            launched.iter().all(|arg| arg != "- intent: first"),
+            launched.iter().any(|arg| arg.ends_with("=- intent: first")),
             "{agent}: a dash-led value must be glued to its flag: {launched:?}"
         );
     }
