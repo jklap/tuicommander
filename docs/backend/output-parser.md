@@ -602,6 +602,10 @@ from parsed lifecycle events. Desktop remote tabs consume parsed events on the
 owning daemon's WebSocket instead of subscribing to local IPC. Identity comes
 from the authoritative backend `agent_type`, not from a title heuristic.
 
+### History-anchored viewport scrolling
+
+Viewport scroll requests do not alter parsed output. History-anchored scrolling resolves the requested all-time row after output processing, under the same VT lock; capped history clamps an evicted anchor to the oldest retained row.
+
 ### ego terminal questions
 
 The terminal ego CLI reports human-question waits with OSC 7770 awaiting and resumes busy after settlement. TUIC also recognizes its single-choice selector only for ego sessions, anchored to `Up/Down or number selects; Enter answers; Esc cancels.` and a highlighted numbered option. Wrapped question and option rows are joined in Rust into `choice-prompt`, using `navigate-enter` selection. This creates authoritative awaiting state even for older ego builds without the native signal. Multiple-choice and free-text questions keep the native awaiting signal and terminal/composer controls; they are not misrepresented as single-choice dialogs.

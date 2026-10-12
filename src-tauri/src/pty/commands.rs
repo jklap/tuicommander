@@ -1005,6 +1005,17 @@ pub(crate) fn terminal_scroll_to_offset(
     }
 }
 
+/// Coalesced eviction-stable history scroll. None resumes following output.
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) fn terminal_scroll_to_anchor(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    anchor: Option<usize>,
+) {
+    queue_scroll_anchor(&state, &session_id, anchor);
+}
+
 /// Fetch a range of styled rows by absolute index, to fill the frontend's
 /// client-side row cache for smooth local scroll rendering. Read-only; called in
 /// background chunks as the viewport approaches uncached rows, not per frame.
