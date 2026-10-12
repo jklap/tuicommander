@@ -1,5 +1,6 @@
 """Validate and execute developer-authored scenarios against the real HTTP API."""
 import math
+from pathlib import Path
 import re
 import time
 
@@ -32,6 +33,26 @@ def expand(value, values):
 def passthrough_env(scenario, environ):
     """Credentials the scenario names (env_passthrough) taken from the driver's own environment."""
     return {name: environ[name] for name in scenario.get("env_passthrough", []) if name in environ}
+
+
+def _cwd_files(files, allow_delete):
+    ok = isinstance(files, dict) and files and all(
+        isinstance(name, str) and name and not name.startswith("/") and ".." not in name.split("/")
+        and (isinstance(text, str) or (allow_delete and text is None))
+        for name, text in files.items())
+    if not ok:
+        raise ValueError("cwd_files must map relative paths to text" + (" or null" if allow_delete else ""))
+
+
+def write_cwd_files(directory, files, values):
+    """Create (text) or delete (None) instruction files in the agent's working directory."""
+    for name, text in files.items():
+        path = Path(directory) / name
+        if text is None:
+            path.unlink(missing_ok=True)
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(expand([text], values)[0] + "\n")
 
 
 def judge_reply(lines, prompt, answer, canary, ignore_prefixes=()):
@@ -138,6 +159,8 @@ def validate(scenario):
                 raise ValueError("restart requires explicit args")
             if "exit_text" in step:
                 _text(step, "exit_text")
+            if "cwd_files" in step:
+                _cwd_files(step["cwd_files"], True)
             if "env" in step and not (isinstance(step["env"], dict) and all(
                     isinstance(v, str) for v in step["env"].values())):
                 raise ValueError("restart env must map names to strings")
@@ -145,6 +168,8 @@ def validate(scenario):
             raise ValueError(f"unknown scenario action: {action}")
     if not isinstance(scenario.get("idle_gate", False), bool):
         raise ValueError("idle_gate must be boolean")
+    if "cwd_files" in scenario:
+        _cwd_files(scenario["cwd_files"], False)
     passthrough = scenario.get("env_passthrough", [])
     if not isinstance(passthrough, list) or not all(
             isinstance(n, str) and re.fullmatch(r"[A-Z_][A-Z0-9_]*", n) for n in passthrough):
@@ -211,7 +236,7 @@ def _working(api, session_id):
 
 def run_steps(api, session_id, steps, canary=None, relaunch=None, results=None, ignore_prefixes=(),
               idle_gate=False):
-    """Run steps; check verdicts go to results, restart calls relaunch(old_id, args, env, exit_text)."""
+    """Run steps; check verdicts go to results, restart calls relaunch(old_id, args, env, exit_text, cwd_files)."""
     observed = []
     for step in steps:
         action = step["action"]
@@ -243,7 +268,8 @@ def run_steps(api, session_id, steps, canary=None, relaunch=None, results=None, 
                 api("POST", f"/sessions/{session_id}/write", {"data": KEYS[step["key"]]})
         elif action == "restart":
             # env replaces the scenario env for this launch (e.g. resume without injection).
-            session_id = relaunch(session_id, step["args"], step.get("env"), step.get("exit_text"))
+            session_id = relaunch(session_id, step["args"], step.get("env"), step.get("exit_text"),
+                                 step.get("cwd_files"))
         elif action == "interrupt":
             api("POST", f"/sessions/{session_id}/write", {"data": "\x03"})
         elif action == "wait":

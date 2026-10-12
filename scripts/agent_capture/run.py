@@ -17,7 +17,7 @@ import time
 import urllib.error
 import urllib.request
 
-from scenario import AGENTS, exit_session, expand, passthrough_env, run_steps, validate
+from scenario import AGENTS, exit_session, expand, passthrough_env, run_steps, validate, write_cwd_files
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -147,6 +147,8 @@ def capture_run(args):
     placeholders = {"canary_rule": scenario.get("canary_rule", ""), "canary_file": str(rule_file),
                     "home": str(agent_home)}
     sessions, checks, markers = [], [], []
+    if scenario.get("cwd_files"):
+        write_cwd_files(output, scenario["cwd_files"], placeholders)
 
     def api(method, path, body=None):
         request = urllib.request.Request(
@@ -227,8 +229,10 @@ def capture_run(args):
                     if "HTTP 404" not in str(error):  # the agent already exited
                         raise
 
-            def relaunch(old_id, args, env, exit_text):
+            def relaunch(old_id, args, env, exit_text, cwd_files=None):
                 end(old_id, exit_text)
+                if cwd_files:
+                    write_cwd_files(output, cwd_files, placeholders)
                 return spawn(args, env)
 
             session_id = spawn(scenario["args"])
