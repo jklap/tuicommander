@@ -7,6 +7,8 @@ import type {
 	WorkItemQuery,
 	WorkItemRef,
 } from "../../../types/work-items.gen";
+import { Input } from "../../ui/Input";
+import { Select } from "../../ui/Select";
 import { TaskRows } from "./TaskRows";
 import s from "./tasksList.module.css";
 
@@ -123,7 +125,7 @@ export function TasksList(props: TasksListProps) {
 			<div class={s.toolbar}>
 				<label>
 					Source
-					<select
+					<Select
 						aria-label="Task source"
 						value={selectedKey()}
 						onChange={(event) => setSelectedSource(event.currentTarget.value)}
@@ -135,22 +137,22 @@ export function TasksList(props: TasksListProps) {
 								</option>
 							)}
 						</For>
-					</select>
+					</Select>
 				</label>
 				<label>
 					Preset
-					<select
+					<Select
 						aria-label="Task preset"
 						value={query().savedFilterId ?? ""}
 						onChange={(event) => applyPreset(event.currentTarget.value)}
 					>
 						<option value="">All items</option>
 						<For each={provider()?.savedFilters}>{(entry) => <option value={entry.id}>{entry.name}</option>}</For>
-					</select>
+					</Select>
 				</label>
 				<label class={s.search}>
 					Search
-					<input
+					<Input
 						type="search"
 						aria-label="Search tasks"
 						value={search()}
@@ -175,7 +177,7 @@ export function TasksList(props: TasksListProps) {
 									<Show
 										when={field.options.length > 0}
 										fallback={
-											<input
+											<Input
 												aria-label={`Filter ${field.name}`}
 												type={field.kind === "date" ? "date" : field.kind === "number" ? "number" : "text"}
 												value={selectedFilter(field.id)}
@@ -183,21 +185,21 @@ export function TasksList(props: TasksListProps) {
 											/>
 										}
 									>
-										<select
+										<Select
 											aria-label={`Filter ${field.name}`}
 											value={selectedFilter(field.id)}
 											onChange={(event) => applyFilter(field, event.currentTarget.value)}
 										>
 											<option value="">Any</option>
 											<For each={field.options}>{(option) => <option value={option.id}>{option.name}</option>}</For>
-										</select>
+										</Select>
 									</Show>
 								</label>
 							)}
 						</For>
 						<label>
 							Sort
-							<select
+							<Select
 								aria-label="Sort tasks"
 								value={query().sort?.fieldId ?? ""}
 								onChange={(event) => {
@@ -213,7 +215,7 @@ export function TasksList(props: TasksListProps) {
 								<option value="key">Key</option>
 								<option value="title">Title</option>
 								<option value="updatedAt">Updated</option>
-							</select>
+							</Select>
 						</label>
 						<button
 							type="button"
@@ -231,7 +233,7 @@ export function TasksList(props: TasksListProps) {
 						</button>
 						<label>
 							Group
-							<select
+							<Select
 								aria-label="Group tasks"
 								value={query().groupBy ?? ""}
 								onChange={(event) => {
@@ -241,7 +243,7 @@ export function TasksList(props: TasksListProps) {
 							>
 								<option value="">No grouping</option>
 								<For each={current().fields}>{(field) => <option value={field.id}>{field.name}</option>}</For>
-							</select>
+							</Select>
 						</label>
 					</div>
 				)}

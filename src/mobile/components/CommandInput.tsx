@@ -1,4 +1,4 @@
-import { createEffect, createSignal, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, onCleanup, onMount, Show } from "solid-js";
 import { t } from "../../i18n";
 import { uploadAttachment } from "../../services/uploadAttachment";
 import { appLogger } from "../../stores/appLogger";
@@ -7,6 +7,7 @@ import { HttpRpcError, rpc } from "../../transport";
 import { sendPtyKey, waitForAgentEnterGap } from "../../utils/sendCommand";
 import { useBrowserDictation } from "../useBrowserDictation";
 import type { ChoicePrompt, SlashMenuItem } from "../useSessions";
+import { clearDictationPartial, loadDictationPartial, saveDictationPartial } from "../utils/dictationPartial";
 import { retryWrite } from "../utils/retryWrite";
 import { ChoicePromptOverlay } from "./ChoicePromptOverlay";
 import styles from "./CommandInput.module.css";
@@ -40,21 +41,92 @@ interface CommandInputProps {
 }
 
 export function CommandInput(props: CommandInputProps) {
-	const [value, setValue] = createSignal("");
+	// Offer a restored dictated draft without writing on mount. The PTY may have
+	// changed while this client was away; reconcile it on the first explicit edit/send.
+	const restoredPartial = loadDictationPartial(props.sessionId);
+	let savedPartial = restoredPartial;
+	const [value, setValue] = createSignal(restoredPartial);
 	const [submitting, setSubmitting] = createSignal(false);
+	const [queueMenu, setQueueMenu] = createSignal(false);
+	let pressTimer: ReturnType<typeof setTimeout> | undefined;
+	let held = false;
+	function cancelPress() {
+		clearTimeout(pressTimer);
+		pressTimer = undefined;
+	}
+	onCleanup(cancelPress);
+	function startPress(event: PointerEvent) {
+		if (event.button !== 0 || submitting()) return;
+		cancelPress();
+		held = false;
+		pressTimer = setTimeout(() => {
+			held = true;
+			setQueueMenu(true);
+		}, 500);
+	}
+	async function queueDraft() {
+		const draft = textareaEl?.value ?? value();
+		const text = draft.trim();
+		if (!text || submitting() || uploading() || props.sessionExists === false) return;
+		cancelPress();
+		setQueueMenu(false);
+		browserDictation.cancel();
+		setSubmitting(true);
+		try {
+			await lastInputWrite;
+			const result = await rpc<{ accepted: boolean; typed: boolean }>("enqueue_agent_command", {
+				sessionId: props.sessionId,
+				text,
+				expectedDraft: draft,
+			});
+			if (!result.accepted) throw new Error("Queue was not accepted");
+			syncedText = "";
+			inputRequest = null;
+			lastSendAt = Date.now();
+			setValue("");
+			if (textareaEl) {
+				textareaEl.value = "";
+				textareaEl.style.height = "auto";
+			}
+			toastsStore.add(
+				"Prompt queued",
+				result.typed ? "Submitted at the ready window" : "Waiting for the next ready window",
+				"info",
+			);
+		} catch (error) {
+			toastsStore.add(
+				"Queue failed",
+				`Queue state uncertain, check the session. ${error instanceof Error ? error.message : String(error)}`,
+				"error",
+				true,
+			);
+		} finally {
+			setSubmitting(false);
+		}
+	}
 	const [uploading, setUploading] = createSignal<string | null>(null);
 	const [choiceSending, setChoiceSending] = createSignal(false);
 	const [codexNotesMode, setCodexNotesMode] = createSignal(false);
 	const atomicReply = () =>
 		props.managedSession && props.awaitingInput && !props.choicePrompt && !props.codexQuestionOpen && !codexNotesMode();
+	// A multi-question form replaces its prompt without an empty frame between
+	// the answered question and the next one, so a new prompt re-arms the buttons too.
+	// Keyed on content, not object identity: an identical snapshot redelivered
+	// while an answer is in flight must not re-arm the buttons.
+	const choiceSignature = createMemo(() => {
+		const prompt = props.choicePrompt;
+		if (!prompt) return null;
+		return JSON.stringify([prompt.title, prompt.options.map((option) => [option.key, option.label])]);
+	});
 	createEffect(() => {
-		if (!props.choicePrompt) setChoiceSending(false);
+		choiceSignature();
+		setChoiceSending(false);
 	});
 	let textareaEl: HTMLTextAreaElement | undefined;
 	let fileInput: HTMLInputElement | undefined;
 	// The local draft baseline, including explicitly requested PTY completions
 	// and history replacements. Every edit computes its delta from this text.
-	let syncedText = "";
+	let syncedText: string | null = restoredPartial ? null : "";
 	let inputRequest: { kind: "completion" | "history"; armed: boolean } | null = null;
 	// Timestamp of the last Enter (send()). Within POST_SEND_GUARD_MS, all
 	// incoming ptyInputLine updates are ignored to prevent a lagging echo of
@@ -91,7 +163,7 @@ export function CommandInput(props: CommandInputProps) {
 		if (!inputRequest?.armed || props.ptyInputLine == null) return;
 		if (inputRequest.kind === "completion") {
 			if (isPostSendGuardActive(Date.now(), lastSendAt)) return;
-			if (!isSupersetEcho(text, syncedText)) return;
+			if (!isSupersetEcho(text, syncedText ?? restoredPartial)) return;
 		}
 		inputRequest = null;
 		syncedText = text;
@@ -100,6 +172,16 @@ export function CommandInput(props: CommandInputProps) {
 			textareaEl.value = text;
 			autoResize();
 		}
+	});
+
+	onMount(() => {
+		if (!restoredPartial || !textareaEl) return;
+		textareaEl.value = restoredPartial;
+		autoResize();
+	});
+	// Any draft other than the one dictation saved (an edit, a send, Escape, history) retires the partial.
+	createEffect(() => {
+		if (value() !== savedPartial) clearDictationPartial(props.sessionId);
 	});
 
 	function autoResize() {
@@ -123,7 +205,7 @@ export function CommandInput(props: CommandInputProps) {
 	function syncDelta(newText: string) {
 		inputRequest = null;
 		if (atomicReply() || props.sessionExists === false) return;
-		const delta = computeInputDelta(syncedText, newText);
+		const delta = computeInputDelta(syncedText ?? props.ptyInputLine ?? restoredPartial, newText);
 		if (delta) writePty(delta);
 		syncedText = newText;
 	}
@@ -135,10 +217,12 @@ export function CommandInput(props: CommandInputProps) {
 	}
 
 	const browserDictation = useBrowserDictation({
-		blocked: () => !!props.serverVoiceRecording || props.sessionExists === false,
+		blocked: () => submitting() || !!props.serverVoiceRecording || props.sessionExists === false,
 		getDraft: () => textareaEl?.value ?? value(),
 		setDraft: (text) => {
 			if (textareaEl) textareaEl.value = text;
+			savedPartial = text;
+			saveDictationPartial(props.sessionId, text);
 			updateInput(text);
 		},
 		onRecording: (active) => props.onBrowserDictating?.(active),
@@ -150,7 +234,7 @@ export function CommandInput(props: CommandInputProps) {
 	}
 
 	function insertText(text: string) {
-		if (props.sessionExists === false || !textareaEl) return;
+		if (props.sessionExists === false || submitting() || !textareaEl) return;
 		browserDictation.cancel();
 		textareaEl.setRangeText(text, textareaEl.selectionStart, textareaEl.selectionEnd, "end");
 		updateInput(textareaEl.value);
@@ -211,7 +295,7 @@ export function CommandInput(props: CommandInputProps) {
 		if (atomicReply() || props.sessionExists === false) return;
 		const request =
 			key === "Tab"
-				? syncedText.length > 0
+				? (syncedText ?? restoredPartial).length > 0
 					? { kind: "completion" as const, armed: true }
 					: null
 				: { kind: "history" as const, armed: false };
@@ -283,6 +367,7 @@ export function CommandInput(props: CommandInputProps) {
 			return;
 		}
 
+		if (syncedText === null) syncDelta(textareaEl?.value ?? value());
 		lastSendAt = Date.now();
 		inputRequest = null;
 		syncedText = "";
@@ -398,20 +483,6 @@ export function CommandInput(props: CommandInputProps) {
 					onClose={closeSlashMenu}
 				/>
 			</Show>
-			<textarea
-				ref={textareaEl}
-				class={styles.input}
-				placeholder="Type a command..."
-				onInput={handleInput}
-				onKeyDown={handleKeyDown}
-				autocomplete="off"
-				autocorrect="off"
-				spellcheck={false}
-				autocapitalize="off"
-				inputmode="text"
-				rows={1}
-				disabled={props.sessionExists === false}
-			/>
 			<input
 				ref={fileInput}
 				type="file"
@@ -427,7 +498,7 @@ export function CommandInput(props: CommandInputProps) {
 				class={styles.attach}
 				type="button"
 				aria-label="Attach file"
-				disabled={!!uploading() || props.sessionExists === false || atomicReply()}
+				disabled={submitting() || !!uploading() || props.sessionExists === false || atomicReply()}
 				onClick={() => fileInput?.click()}
 			>
 				<svg
@@ -442,33 +513,84 @@ export function CommandInput(props: CommandInputProps) {
 					<path d="M20 11.5l-8.6 8.6a5 5 0 0 1-7.1-7.1L13 4.3a3.5 3.5 0 0 1 5 5l-8.7 8.7a2 2 0 0 1-2.8-2.8l8-8" />
 				</svg>
 			</button>
-			<Show when={browserDictation.available}>
-				<button
-					class={styles.dictate}
-					type="button"
-					aria-label={
-						browserDictation.recording()
-							? t("mobile.dictation.stop", "Stop dictation")
-							: t("mobile.dictation.start", "Dictate into draft")
-					}
-					aria-pressed={browserDictation.recording()}
-					disabled={!!props.serverVoiceRecording || props.sessionExists === false}
-					onPointerDown={(event) => event.preventDefault()}
-					onClick={browserDictation.toggle}
+			<div class={styles.composer}>
+				<textarea
+					ref={textareaEl}
+					class={styles.input}
+					placeholder="Type a command..."
+					onInput={handleInput}
+					onKeyDown={handleKeyDown}
+					autocomplete="off"
+					autocorrect="off"
+					spellcheck={false}
+					autocapitalize="off"
+					inputmode="text"
+					rows={1}
+					disabled={props.sessionExists === false || submitting()}
+				/>
+				<Show when={browserDictation.available}>
+					<button
+						class={styles.dictate}
+						type="button"
+						aria-label={
+							browserDictation.recording()
+								? t("mobile.dictation.stop", "Stop dictation")
+								: t("mobile.dictation.start", "Dictate into draft")
+						}
+						aria-pressed={browserDictation.recording()}
+						disabled={submitting() || !!props.serverVoiceRecording || props.sessionExists === false}
+						onPointerDown={(event) => event.preventDefault()}
+						onClick={browserDictation.toggle}
+					>
+						<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+							<path d="M12 15a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v7a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.93V22h2v-3.07A7 7 0 0 0 19 12Z" />
+						</svg>
+					</button>
+				</Show>
+			</div>
+			<Show when={queueMenu()}>
+				<div
+					class={styles.queueMenu}
+					role="menu"
+					onKeyDown={(event) => {
+						if (event.key === "Escape") setQueueMenu(false);
+					}}
 				>
-					<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-						<path d="M12 15a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v7a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.93V22h2v-3.07A7 7 0 0 0 19 12Z" />
-					</svg>
-				</button>
+					<button
+						type="button"
+						role="menuitem"
+						disabled={submitting() || !!uploading() || !value().trim()}
+						onClick={queueDraft}
+					>
+						Queue
+					</button>
+				</div>
 			</Show>
 			<button
 				class={styles.send}
 				type="button"
 				aria-label="Send"
-				disabled={props.sessionExists === false}
-				onClick={send}
+				disabled={props.sessionExists === false || submitting()}
+				aria-haspopup="menu"
+				aria-expanded={queueMenu()}
+				onPointerDown={startPress}
+				onPointerUp={cancelPress}
+				onPointerLeave={cancelPress}
+				onPointerCancel={() => {
+					cancelPress();
+					held = true;
+				}}
+				onContextMenu={(event) => event.preventDefault()}
+				onClick={() => {
+					if (held) {
+						held = false;
+						return;
+					}
+					setQueueMenu(false);
+					void send();
+				}}
 			>
-				<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+				<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
 					<path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
 				</svg>
 			</button>

@@ -383,3 +383,9 @@ definition; update also accepts id and enabled instead. Creation records the
 bound caller session, including an external MCP identity when run outside TUIC.
 Success prints JSON; backend rejection prints its exact message after `tuic:`
 on stderr and exits 1. Invalid CLI JSON exits 2.
+
+Automation templates (#1622-be11): the shared automation action accepts
+**templates** (catalogue) and **template** (draft). Draft inputs are template_id,
+repository, run_config and optional timezone (host local by default).
+Drafts have fresh ids and start disabled; no definition or run is created until
+an explicit create action. These actions match across HTTP, IPC, MCP and CLI.

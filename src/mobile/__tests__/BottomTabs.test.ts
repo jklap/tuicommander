@@ -19,3 +19,18 @@ describe("BottomTabs CSS", () => {
 		expect(match).toBeNull();
 	});
 });
+
+describe("BottomTabs height", () => {
+	const fabCss = readFileSync(resolve(__dirname, "../screens/SessionsScreen.module.css"), "utf-8");
+	const tabsRule = css.match(/\.tabs\s*\{([^}]*)\}/)?.[1] ?? "";
+
+	// Catches: the tab bar growing by the home-indicator inset (56 + 34 px) and covering the
+	// new-session button, which sits a fixed 76 px above the shell bottom.
+	it("keeps a fixed 56px bar that stays below the new-session button", () => {
+		expect(tabsRule).toMatch(/(^|[;\s])height:\s*56px;/);
+		expect(tabsRule).toMatch(/padding-bottom:\s*0;/);
+		const fabBottom = fabCss.match(/\.fab\s*\{[^}]*bottom:\s*calc\((\d+)px \+ (\d+)px\)/);
+		expect(fabBottom, "no .fab bottom offset found").toBeTruthy();
+		expect(Number(fabBottom![1]) + Number(fabBottom![2])).toBeGreaterThan(56);
+	});
+});

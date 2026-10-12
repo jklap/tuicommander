@@ -12,6 +12,14 @@ pub(crate) const ASSETS: &[(&str, &str)] = &[
         include_str!("../../../../browser-extension/design-mode/picker.js"),
     ),
     (
+        "errors.js",
+        include_str!("../../../../browser-extension/design-mode/errors.js"),
+    ),
+    (
+        "errorsBridge.js",
+        include_str!("../../../../browser-extension/design-mode/errorsBridge.js"),
+    ),
+    (
         "main.js",
         include_str!("../../../../browser-extension/design-mode/main.js"),
     ),
@@ -22,6 +30,10 @@ pub(crate) const ASSETS: &[(&str, &str)] = &[
     (
         "native.js",
         include_str!("../../../../browser-extension/design-mode/native.js"),
+    ),
+    (
+        "heartbeat.js",
+        include_str!("../../../../browser-extension/design-mode/heartbeat.js"),
     ),
     (
         "worker.js",

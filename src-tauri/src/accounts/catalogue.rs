@@ -4,6 +4,10 @@ use super::model::{Account, Site};
 use schemars::JsonSchema;
 use std::collections::BTreeMap;
 
+#[expect(
+    dead_code,
+    reason = "schema-only: fields are read by the JsonSchema derive; story 1675-ccd4 reads them"
+)]
 #[derive(JsonSchema)]
 struct AccountSettings {
     #[schemars(flatten)]
@@ -12,6 +16,10 @@ struct AccountSettings {
     token: Option<String>,
 }
 
+#[expect(
+    dead_code,
+    reason = "schema-only: fields are read by the JsonSchema derive; story 1675-ccd4 reads them"
+)]
 #[derive(JsonSchema)]
 struct AccountSettingsRegistry {
     #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"live","effect":"Creates or removes accounts through the account owner service.","operations":["get","create","remove"],"confirmationClass":"ordinary"}))]

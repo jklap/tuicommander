@@ -2,9 +2,14 @@
 
 **Modules:** `src-tauri/crates/tuic-git/src/{github,github_account,github_auth,github_poller,circleci,pr_review,changelog,github_debug}.rs` contains GitHub data types and pure decisions. The matching modules under `src-tauri/src/` keep API clients, credential and config storage, polling, event emission, ego calls, and Tauri commands; they re-export the domain items at their existing paths.
 
-Integrates with GitHub via GraphQL API for PR status, CI checks, and batch queries. Supports OAuth Device Flow login as an alternative to gh CLI tokens, plus **multiple accounts** (additional github.com logins and GitHub Enterprise Server) with per-repo bindings.
+Integrates with GitHub via GraphQL API for PR status, CI checks, and batch queries. Supports OAuth Device Flow login as an alternative to environment tokens, plus **multiple accounts** (additional github.com logins and GitHub Enterprise Server) with per-repo bindings.
 
-Worktree deletion has a separate fail-closed `gh api graphql` proof. When Git
+Worktree deletion has a fail-closed, account-aware HTTP GraphQL proof through
+`RepoApi::resolve` and `graphql_pages`. It uses the repository binding and host,
+the shared HTTP client, and account-scoped breaker/rate-limit accounting.
+Pagination must finish within 100 pages; errors, malformed page info, and repeated
+cursors leave the lookup unknown and uncached. Synchronous Git callbacks bridge
+through the Tokio runtime only from blocking tasks. When Git
 ancestry does not reach the default or checked-out integration branch, it reads
 merged PRs for the worktree branch and accepts one only when its recorded head
 contains the local tip. Missing heads are fetched from `refs/pull/N/head` and
@@ -12,6 +17,21 @@ checked against the API SHA before ancestry is trusted. An API/auth/fetch
 failure leaves the branch unproved; patch-equivalence remains a local fallback.
 The MCP local-branch deletion action uses the same merged-PR evidence when a
 branch has no worktree.
+
+REST requests use `github::github_rest_request` with the host and token selected by
+`resolve_repo_for_rest` (registry and per-repo binding) or by the account identity
+flow. The builder pins `User-Agent: TUICommander`, the requested Accept media type,
+and `X-GitHub-Api-Version: 2022-11-28`. GraphQL uses the same User-Agent. Each caller
+keeps its status/error wording and existing circuit-breaker handling. A production
+source guard (`production_code_spawns_no_gh`) fails when production code spawns `gh`; its allowlist is empty.
+
+PR creation, issue creation, and review submission use account-aware `RepoApi::rest`
+POST requests to `pulls`, `issues`, and `pulls/{number}/reviews`. The repository
+binding selects the host and token, including GitHub Enterprise. These writes no
+longer require the `gh` executable or pass tokens to child processes. Review inline
+comments retain their side (default `RIGHT`). REST errors retain the HTTP status
+and response body as `GitHub API failed ({status}): {body}`. IPC and HTTP request
+and response shapes are unchanged.
 
 ## Multi-Account Model (`github_account.rs`)
 
@@ -23,14 +43,15 @@ The integration is **account-centric**: the primary key is a stable `GitHubAccou
 - **Repo bindings** — `{repo_path → account_id, owner, repo, remote_name}` persisted per canonical repo root (worktrees resolve to the main root). `resolve_repo_account(repo_path)` returns `RepoResolution::{Bound | NeedsBind(candidates) | NeedsAccount | Unmonitored}` — binding-first, single-candidate auto-confirm, ambiguity surfaces all candidates (never a silent `origin` pick).
 - **Concurrent saves** — Binding maps use `ConfigFile::save_delta`, so changes to different repositories compose. Account additions and removals mutate the latest registry under `ConfigFile::update_with`; the on-disk array is never replaced from a stale account snapshot.
 - **Per-account isolation (hybrid)** — github.com keeps the global breaker/viewer/rate/cooldown fields byte-for-byte; GHE accounts get isolated `ghe_state: DashMap<AccountId, GheAccountState>`. The poller groups repos by resolved account and runs one batch per account, so a fault on one never opens another's breaker. Cooldown keys: `owner/repo` (cloud, unchanged) vs `{account_id}:owner/repo` (GHE).
-- **Limitation** — `fetch_ci_failure_logs` (gh-CLI-assisted) is disabled with a clear message for non-github.com accounts; all REST + GraphQL paths route through `github_rest_url(host, path)` / account-scoped tokens (no hardcoded `api.github.com` outside `GitHubHost` + tests).
+- **CI logs** — github.com and GitHub Enterprise use the repo-resolved account token and REST host. Actions runs, jobs and logs use the account circuit breaker. Log redirects remove bearer credentials when the storage host changes.
 
 ### Multi-account commands
+
+Create Enterprise accounts through the core account manager and enter PATs through `account_secret_form`. The legacy PAT add command and `POST /github/accounts` route are removed; `GET /github/accounts` remains available.
 
 | Command | Signature | Description |
 |---------|-----------|-------------|
 | `github_list_accounts` | `() -> Vec<GitHubAccount>` | Additional accounts beyond the ambient github.com default |
-| `github_add_account` | `(host: String, pat: String) -> GitHubAccount` | Validate PAT against `{rest_base}/user`, store token + record (github.com rejected → device flow) |
 | `github_remove_account` | `(id: String) -> ()` | Cascade-remove token + record + bindings + per-account caches |
 | `github_bind_repo` | `(repo_path, account_id, remote_name) -> ()` | Persist a repo→account binding |
 | `github_unbind_repo` | `(repo_path: String) -> ()` | Remove a repo binding |
@@ -44,10 +65,8 @@ Priority order (first non-empty wins) for the ambient github.com account:
 1. `GH_TOKEN` environment variable
 2. `GITHUB_TOKEN` environment variable
 3. OAuth keyring token (`github_auth.rs` — stored in OS keyring via `keyring` crate)
-4. `gh_token` crate (reads `~/.config/gh/hosts.yml`)
-5. `gh auth token` CLI subprocess
 
-The active token source is tracked in `AppState.github_token_source` as a `TokenSource` enum (`Env`, `OAuth`, `GhCli`, `Pat`, `None`). `resolve_token_for_account(&GitHubAccount)` runs this exact chain for github.com and returns the vault PAT (`TokenSource::Pat`) for GHE accounts.
+The active token source is tracked in `AppState.github_token_source` as a `TokenSource` enum (`Env`, `OAuth`, `Pat`, `None`). `resolve_token_for_account(&GitHubAccount)` runs this exact chain for github.com and returns the vault PAT (`TokenSource::Pat`) for GHE accounts.
 
 ## Tauri Commands — Authentication (`github_auth.rs`)
 
@@ -55,7 +74,7 @@ The active token source is tracked in `AppState.github_token_source` as a `Token
 |---------|-----------|-------------|
 | `github_start_login` | `() -> DeviceCodeResponse` | Start OAuth Device Flow, returns user code |
 | `github_poll_login` | `(device_code: String) -> PollResult` | Poll for token, saves to keyring on success |
-| `github_logout` | `() -> ()` | Delete OAuth token from keyring, fall back to env/CLI |
+| `github_logout` | `() -> ()` | Delete OAuth token from keyring, fall back to environment tokens |
 | `github_auth_status` | `() -> AuthStatus` | Current auth status with login, avatar, source |
 | `github_disconnect` | `() -> ()` | Disconnect GitHub — clear all tokens from keyring and env cache |
 | `github_diagnostics` | `() -> Value` | Diagnostics: token sources, scopes, API connectivity |
@@ -72,15 +91,25 @@ The active token source is tracked in `AppState.github_token_source` as a `Token
 | `update_pr_branch` | `(repo_path: String, pr_number: i64, expected_head_sha: String) -> ()` | Merge the base branch into the PR branch (REST `PUT /pulls/{n}/update-branch`, same operation as GraphQL `updatePullRequestBranch`), pinned to the head the UI showed; 422 head mismatch → `PR head changed` |
 | `close_pr` | `(repo_path: String, pr_number: i64) -> ()` | Close a PR without merging (REST `PATCH /pulls/{n}` `state=closed`) |
 | `get_all_pr_statuses` | `(paths: Vec<String>, include_merged: bool) -> HashMap<String, Vec<BranchPrStatus>>` | Batch PR status across many repos in one GraphQL call |
-| `get_pr_diff` | `(repo_path: String, pr_number: i64) -> String` | Get PR diff content; falls back to a local-clone `git diff` when GitHub rejects oversized diffs |
+| `get_pr_diff` | `(repo_path: String, pr_number: i64) -> PrDiff {diff, headSha}` | Get PR diff content and the head commit it was read at (head read before and after the diff; a push in between is an error); falls back to a local-clone `git diff` when GitHub rejects oversized diffs |
 | `merge_pr_via_github` | `(repo_path: String, pr_number: i64, merge_method: String, expected_head_sha: String) -> String` | Merge PR via GitHub API, pinned to the reviewed head (409 → `PR head changed`) |
 | `fetch_ci_failure_logs` | `(repo_path: String, branch: String, check_url?: String, head_sha?: String) -> String` | Fetch failure logs for the local branch head during auto-heal or for a selected check at the PR head SHA |
 | `create_issue_from_proposal` | `(repo_path: String, proposal: ImprovementProposal) -> CreatedIssue` | Explicit issue creation from a proposal; scan never creates issues automatically |
 
+### Failing checks for auto-heal
+
+Failing checks are read from the exact commit's `statusCheckRollup.contexts`,
+through `RepoApi::resolve` and account-bound GraphQL with breaker accounting.
+The lookup does not search open PRs. It combines up to 100 pages before keeping
+the newest check per name, then returns failed CheckRuns and external
+StatusContexts with their detail links. An incomplete response is an error;
+a commit with a null rollup has no checks. CI job log retrieval remains a
+separate operation.
+
 ### Circuit breaker coverage
 
 **Every** call out to GitHub goes through the account's circuit breaker:
-GraphQL via `graphql_with_retry`, `gh api` writes via `run_gh_write`, and direct
+GraphQL via `graphql_with_retry`, PR/issue/review writes via `RepoApi::rest`, and direct
 REST via `send_rest_with_breaker` (close/reopen issue, merge PR, approve PR,
 `fetch_github_json`, PR diff, PR refs). The availability breaker counts transport
 errors and `5xx` responses, not deterministic `4xx` caller outcomes such as a
@@ -309,6 +338,14 @@ PR diff reads use the GitHub REST diff representation first. If GitHub returns t
 
 ### CI Auto-Heal (`fetch_ci_failure_logs`)
 
+Actions logs use REST runs filtered by `head_sha`, then jobs with `filter=latest`.
+Each list has a ten-page cap (100 entries per page). A run with unavailable or
+incomplete jobs is skipped. Downloads retain only the last 4,000 bytes per job,
+with at most 100 job logs retained; output is sanitized before agent use.
+One 60-second async deadline covers the sweep and any external CI downloads.
+Only local Git head resolution uses a blocking worker; HTTP work is cancellable.
+
+
 Resolves the local branch head for auto-heal, or uses the supplied PR head SHA for a selected check, then lists matching workflow runs, inspects their jobs, and downloads logs for every completed failed job through the GitHub Actions jobs API. Job-level retrieval works while sibling jobs are still running, before the containing workflow has a final `failure` conclusion. Used by the CI auto-heal hook (`useCiHeal`) to inject failure context into agent terminals for automatic fix cycles (up to 3 delivered attempts per cycle).
 
 GitHub Actions jobs are downloaded through GitHub's jobs API. CircleCI checks are selected from a PR whose head SHA matches the local branch for auto-heal or the supplied PR head SHA for a selected check, including remote-only PRs, restricted to the repository's GitHub owner/repository, and fetched only when a CircleCI token is configured. A selected CircleCI check takes precedence over failed GitHub Actions jobs; an unselected auto-heal request keeps GitHub Actions priority. Every `gh` and `git` process on this path has a 30-second deadline; a timeout returns an error and auto-heal clears its in-flight state. The CircleCI job's `vcs_revision` must match that SHA. CircleCI API and action-log requests never follow redirects; pre-signed action-log downloads accept only Amazon S3 HTTPS hosts and do not receive that token. The JSON action output is parsed as a stream, retaining at most 64 KiB of recent message text before the shared sanitiser and 4,000-character output limit; a 16 MiB download ceiling bounds transient parser memory. Other external providers return a clear error naming the checks instead of the misleading "no jobs found". The auto-heal hook surfaces that message as a warn toast and does **not** consume an attempt (attempts increment only after a fix prompt is delivered).
@@ -389,8 +426,8 @@ step after the accounts module lands; the module does not edit the shared catalo
 
 The first registry operation imports all `github_accounts.json` entries with
 unchanged account IDs, hosts, login and auth provenance. The implicit
-`github.com` record still resolves the existing env → OAuth vault → gh chain;
-env/CLI tokens are not copied into the vault. The legacy metadata file is retained
+`github.com` record still resolves the existing env → OAuth vault chain;
+env tokens are not copied into the vault. The legacy metadata file is retained
 for recovery and is not re-imported after the migration marker is committed.
 `github_bindings.json` stays authoritative, so existing repo bindings remain valid.
 All GitHub registry writers now use the shared registry.

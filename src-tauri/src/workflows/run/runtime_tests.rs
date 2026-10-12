@@ -218,6 +218,7 @@ fn start_story_activates_first_successor() {
             .store
             .start_graph_run(&changed)
             .unwrap_err()
+            .to_string()
             .contains("different payload")
     );
     assert!(

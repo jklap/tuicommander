@@ -10,6 +10,7 @@ import { isTauri } from "../../../transport";
 import { comboToDisplay, keyFor } from "../../../utils/hotkey";
 import { keyEventToCombo, validateGlobalHotkeyCombo } from "../../../utils/keyRecorder";
 import { KeyComboCapture } from "../../shared/KeyComboCapture";
+import { Input } from "../../ui/Input";
 import s from "../Settings.module.css";
 
 /**
@@ -218,6 +219,7 @@ export function getShortcutSections(): ShortcutSection[] {
 					description: "Focus mode (hide sidebar & panels)",
 				},
 				{ action: "command-overview", keys: keyFor("command-overview"), description: "Command overview" },
+				{ action: "open-tasks", keys: keyFor("open-tasks"), description: "Open Tasks" },
 				{ action: "toggle-outline", keys: keyFor("toggle-outline"), description: "Toggle outline panel" },
 				{ action: "toggle-compose-panel", keys: keyFor("toggle-compose-panel"), description: "Toggle compose panel" },
 				{ action: "toggle-tunnels", keys: keyFor("toggle-tunnels"), description: "SSH Tunnels" },
@@ -602,7 +604,7 @@ export const KeyboardShortcutsTab: Component = () => {
 			</Show>
 
 			<div class={s.group}>
-				<input
+				<Input
 					ref={inputRef}
 					type="text"
 					placeholder={t("helpPanel.searchPlaceholder", "Search shortcuts...")}

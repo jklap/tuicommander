@@ -18,6 +18,13 @@ use std::sync::Arc;
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum AutomationAction {
     List {},
+    Templates {},
+    Template {
+        template_id: String,
+        repository: String,
+        run_config: String,
+        timezone: Option<String>,
+    },
     Get {
         id: String,
     },
@@ -50,6 +57,12 @@ pub(crate) enum AutomationAction {
         limit: u32,
         #[serde(default)]
         offset: u32,
+    },
+    WorktreePreview {
+        id: String,
+    },
+    CleanupWorktree {
+        id: String,
     },
     Summary {
         window: SummaryWindow,
@@ -108,6 +121,21 @@ pub(crate) async fn execute_as(
     if let AutomationAction::RunNow { id } = action {
         return value(AutomationRuntime::run_now(&state, &id).await?);
     }
+    if matches!(
+        action,
+        AutomationAction::WorktreePreview { .. } | AutomationAction::CleanupWorktree { .. }
+    ) {
+        return tokio::task::spawn_blocking(move || {
+            let (id, remove) = match action {
+                AutomationAction::WorktreePreview { id } => (id, false),
+                AutomationAction::CleanupWorktree { id } => (id, true),
+                _ => unreachable!(),
+            };
+            super::worktrees::execute(&state, &RunStore::open()?, &id, remove)
+        })
+        .await
+        .map_err(|error| format!("Automation cleanup task failed: {error}"))?;
+    }
     tokio::task::spawn_blocking(move || {
         execute_stored_as(
             &DefinitionStore::new(),
@@ -162,6 +190,18 @@ pub(crate) fn execute_stored_as(
             }
             Ok(Value::Array(items))
         }
+        AutomationAction::Templates {} => value(super::templates::TEMPLATES),
+        AutomationAction::Template {
+            template_id,
+            repository,
+            run_config,
+            timezone,
+        } => value(super::templates::draft(
+            &template_id,
+            repository,
+            run_config,
+            timezone.as_deref(),
+        )?),
         AutomationAction::Get { id } => value(definitions.get(&id)?),
         AutomationAction::Create { definition } => {
             let id = definition.id.clone();
@@ -235,6 +275,9 @@ pub(crate) fn execute_stored_as(
             )?)
         }
         AutomationAction::Preset { preset } => Ok(json!({"cron": preset.cron()?})),
+        AutomationAction::WorktreePreview { .. } | AutomationAction::CleanupWorktree { .. } => {
+            Err("Worktree cleanup requires local session state".into())
+        }
         AutomationAction::RunNow { .. } => Err("Run Now requires the runtime owner".into()),
     }
 }

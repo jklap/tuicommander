@@ -102,6 +102,8 @@
 /config/themes
 /config/ui-prefs
 /design-mode
+/design-mode/navigate
+/design-mode/reload
 /design-mode/start
 /design-mode/stop
 /diagnostics/capture
@@ -331,6 +333,7 @@
 /sessions/x/terminal/scroll
 /sessions/x/terminal/scroll-info
 /sessions/x/terminal/scroll-to
+/sessions/x/terminal/scroll-to-anchor
 /sessions/x/terminal/scroll-to-offset
 /sessions/x/terminal/search
 /sessions/x/terminal/search-buffer

@@ -226,11 +226,11 @@ export const RemoteOnlyPrPopover: Component<{
 	const handleViewDiff = async (pr: BranchPrStatus) => {
 		setDiffLoadingPr(pr.number);
 		try {
-			const diff = await invoke<string>("get_pr_diff", {
+			const { diff, headSha } = await invoke<{ diff: string; headSha: string }>("get_pr_diff", {
 				repoPath: props.repoPath,
 				prNumber: pr.number,
 			});
-			mdTabsStore.addPrDiff(props.repoPath, pr.number, pr.title, diff);
+			mdTabsStore.addPrDiff(props.repoPath, pr.number, pr.title, diff, headSha);
 		} catch (e) {
 			const msg = String(e);
 			appLogger.error("github", `Failed to load PR #${pr.number} diff`, { error: msg });

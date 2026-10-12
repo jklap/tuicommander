@@ -1224,7 +1224,7 @@ fn ui_tab_emits_event() {
             assert_eq!(html, "<p>hello</p>");
             assert!(url.is_none(), "url should be None for html tab");
             assert!(!pinned, "pinned should default to false");
-            assert!(focus, "focus should default to true");
+            assert!(!focus, "focus should default to false");
             assert!(
                 origin_repo_path.is_none(),
                 "origin_repo_path should be None when no mcp_session"
@@ -1504,6 +1504,25 @@ fn ui_tab_requires_fields() {
         None,
     );
     assert!(r["error"].as_str().unwrap().contains("not both"));
+}
+
+#[test]
+fn ui_tab_focus_true_is_respected() {
+    let state = test_state();
+    let mut rx = state.event_bus.subscribe();
+
+    handle_ui(
+        &state,
+        &serde_json::json!({"action": "tab", "id": "fg", "title": "Foreground", "html": "<p/>", "focus": true}),
+        None,
+    );
+
+    match rx.try_recv().expect("Expected UiTab event") {
+        crate::state::AppEvent::UiTab { focus, .. } => {
+            assert!(focus, "explicit focus=true should navigate");
+        }
+        other => panic!("Expected UiTab, got {:?}", other),
+    }
 }
 
 #[test]

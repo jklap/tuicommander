@@ -6,7 +6,6 @@
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
 #[cfg(feature = "desktop")]
@@ -14,8 +13,23 @@ use tauri::State;
 
 pub(crate) use tuic_git::worktree::*;
 
-pub(crate) fn merged_github_pr_proves_tip(repo: &Path, branch: &str, tip: &str) -> bool {
-    query_merged_github_pr(repo, branch, tip).unwrap_or(false)
+/// Call only on a blocking thread; the domain callback stays synchronous.
+pub(crate) fn pr_proof(
+    state: Arc<AppState>,
+    rt: tokio::runtime::Handle,
+) -> impl Fn(&Path, &str, &str) -> bool {
+    move |repo, branch, tip| {
+        rt.block_on(query_merged_github_pr(&state, repo, branch, tip))
+            .unwrap_or(false)
+    }
+}
+
+/// Capture the runtime before a domain wrapper fans out to scoped OS threads.
+fn merged_github_pr_proves_tip(state: &Arc<AppState>) -> impl Fn(&Path, &str, &str) -> bool {
+    let proof = tokio::runtime::Handle::try_current()
+        .ok()
+        .map(|rt| pr_proof(Arc::clone(state), rt));
+    move |repo, branch, tip| proof.as_ref().is_some_and(|proof| proof(repo, branch, tip))
 }
 
 /// How long the sidebar refresh trusts a GitHub answer for one branch tip.
@@ -30,12 +44,18 @@ static PR_PROOFS: std::sync::LazyLock<moka::sync::Cache<(PathBuf, String, String
     });
 
 /// Sidebar monitoring variant: every repository refresh asked GitHub about every
-/// unmerged branch (one `gh api graphql` each), many times a minute under agent
+/// unmerged branch (one paginated GraphQL lookup each), many times a minute under agent
 /// writes. A definitive answer is reused for `PR_PROOF_TTL`; a failed lookup is
 /// not remembered. Removal preflights keep the uncached function above.
-pub(crate) fn merged_github_pr_proves_tip_monitoring(repo: &Path, branch: &str, tip: &str) -> bool {
+pub(crate) fn merged_github_pr_proves_tip_monitoring(
+    state: &Arc<AppState>,
+    repo: &Path,
+    branch: &str,
+    tip: &str,
+) -> bool {
     cached_pr_proof(&PR_PROOFS, repo, branch, tip, || {
-        query_merged_github_pr(repo, branch, tip)
+        let rt = tokio::runtime::Handle::try_current().ok()?;
+        rt.block_on(query_merged_github_pr(state, repo, branch, tip))
     })
 }
 
@@ -60,9 +80,26 @@ fn cached_pr_proof(
 }
 
 /// `None` when GitHub could not be asked or did not answer.
-fn query_merged_github_pr(repo: &Path, branch: &str, tip: &str) -> Option<bool> {
-    let url = crate::git::read_remote_url(repo)?;
-    let (host, owner, name) = crate::github_account::parse_remote_url(&url)?;
+async fn query_merged_github_pr(
+    state: &AppState,
+    repo: &Path,
+    branch: &str,
+    tip: &str,
+) -> Option<bool> {
+    let api = crate::github_pr_api::RepoApi::resolve(state, repo.to_str()?)
+        .await
+        .ok()?;
+    let variables = serde_json::json!({"owner":api.owner, "name":api.repo, "branch":branch});
+    query_merged_github_pr_with(&api, variables, repo, branch, tip).await
+}
+
+async fn query_merged_github_pr_with(
+    api: &impl crate::github_pr_api::PrApi,
+    variables: serde_json::Value,
+    repo: &Path,
+    branch: &str,
+    tip: &str,
+) -> Option<bool> {
     let query = r#"query($owner: String!, $name: String!, $branch: String!, $endCursor: String) {
       repository(owner: $owner, name: $name) {
         pullRequests(first: 100, after: $endCursor, headRefName: $branch, states: [MERGED]) {
@@ -71,43 +108,31 @@ fn query_merged_github_pr(repo: &Path, branch: &str, tip: &str) -> Option<bool> 
         }
       }
     }"#;
-    let mut command = Command::new(crate::agent::resolve_cli("gh"));
-    command.current_dir(repo).args([
-        "api",
-        "graphql",
-        "--paginate",
-        "--slurp",
-        "--hostname",
-        host.as_str(),
-        "-f",
-        &format!("query={query}"),
-        "-f",
-        &format!("owner={owner}"),
-        "-f",
-        &format!("name={name}"),
-        "-f",
-        &format!("branch={branch}"),
-    ]);
-    crate::cli::apply_no_window(&mut command);
-    let output =
-        crate::git_cli::output_with_deadline(&mut command, Duration::from_secs(20)).ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let pages = serde_json::from_slice::<serde_json::Value>(&output.stdout).ok()?;
+    const MAX_PAGES: usize = 100;
+    let pages = crate::github_pr_api::graphql_pages(
+        api,
+        query,
+        variables,
+        "/data/repository/pullRequests",
+        MAX_PAGES,
+    )
+    .await
+    .ok()?;
+    let pages = serde_json::Value::Array(pages);
     Some(tuic_git::worktree::merged_pr_proof_from_pages(
         repo, branch, tip, &pages,
     ))
 }
 
 pub(crate) fn inspect_workspace_lifecycle(
+    state: &Arc<AppState>,
     base_repo: &Path,
     workspace_id: &str,
 ) -> WorkspaceLifecycleStatus {
     tuic_git::worktree::inspect_workspace_lifecycle_with_pr(
         base_repo,
         workspace_id,
-        merged_github_pr_proves_tip,
+        merged_github_pr_proves_tip(state),
     )
 }
 
@@ -156,11 +181,11 @@ pub(crate) fn live_sessions_in(state: &AppState, checkout: &Path) -> Vec<Worktre
 }
 
 pub(crate) fn inspect_worktree_removal(
-    state: &AppState,
+    state: &Arc<AppState>,
     repo_path: &Path,
     workspace_id: &str,
 ) -> WorktreeRemovalPreview {
-    let lifecycle = inspect_workspace_lifecycle(repo_path, workspace_id);
+    let lifecycle = inspect_workspace_lifecycle(state, repo_path, workspace_id);
     let worktree_path = resolve_any_workspace(repo_path, workspace_id)
         .ok()
         .map(|workspace| PathBuf::from(workspace.path));
@@ -223,7 +248,49 @@ pub(crate) fn inspect_worktree_removal(
     }
 }
 
+fn retain_finished_checkout(
+    state: &Arc<AppState>,
+    repo_path: &str,
+    workspace_id: &str,
+    delete_branch: bool,
+    archive_script: Option<&str>,
+    force: bool,
+) -> Result<Option<RemoveWorktreeOutcome>, String> {
+    if force || !delete_branch {
+        return Ok(None);
+    }
+    let repo = Path::new(repo_path);
+    let status = inspect_workspace_lifecycle(state, repo, workspace_id);
+    if status.dirty_files != Some(0)
+        || !status.submodule_unpushed_commits.is_empty()
+        || !matches!(
+            status.commit_status,
+            WorkspaceCommitStatus::Merged | WorkspaceCommitStatus::InSync
+        )
+    {
+        return Ok(None);
+    }
+    let workspace = resolve_any_workspace(repo, workspace_id)?;
+    if !live_sessions_in(state, Path::new(&workspace.path)).is_empty() {
+        return Err("Cannot recycle a checkout with a live session".into());
+    }
+    if operation_head_branch(&workspace.path).is_some() {
+        return Err("Cannot recycle a checkout during a Git operation".into());
+    }
+    archive_worktree(repo, workspace_id, archive_script)?;
+    Ok(Some(RemoveWorktreeOutcome {
+        branch_delete_warning: None,
+        removal_rule: "recyclable".into(),
+        branch: workspace.branch,
+    }))
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "flat safety-confirmation contract plus account state"
+)]
 pub(crate) fn remove_worktree_by_workspace_id_with_confirmation(
+    state: &Arc<AppState>,
     repo_path: &str,
     workspace_id: &str,
     delete_branch: bool,
@@ -232,6 +299,18 @@ pub(crate) fn remove_worktree_by_workspace_id_with_confirmation(
     override_lock: bool,
     expected_fingerprint: Option<&str>,
 ) -> Result<RemoveWorktreeOutcome, String> {
+    if expected_fingerprint.is_none()
+        && let Some(outcome) = retain_finished_checkout(
+            state,
+            repo_path,
+            workspace_id,
+            delete_branch,
+            archive_script,
+            force,
+        )?
+    {
+        return Ok(outcome);
+    }
     tuic_git::worktree::remove_worktree_by_workspace_id_with_confirmation_and_pr(
         repo_path,
         workspace_id,
@@ -240,7 +319,7 @@ pub(crate) fn remove_worktree_by_workspace_id_with_confirmation(
         force,
         override_lock,
         expected_fingerprint,
-        merged_github_pr_proves_tip,
+        merged_github_pr_proves_tip(state),
     )
 }
 
@@ -250,6 +329,7 @@ pub(crate) fn remove_worktree_by_workspace_id_with_confirmation(
     reason = "flat IPC safety-confirmation contract"
 )]
 pub(crate) fn remove_worktree_with_presence_confirmation(
+    state: &Arc<AppState>,
     repo_path: &str,
     workspace_id: &str,
     delete_branch: bool,
@@ -259,6 +339,19 @@ pub(crate) fn remove_worktree_with_presence_confirmation(
     expected_fingerprint: Option<&str>,
     confirm_missing_checkout: bool,
 ) -> Result<RemoveWorktreeOutcome, String> {
+    if expected_fingerprint.is_none()
+        && !confirm_missing_checkout
+        && let Some(outcome) = retain_finished_checkout(
+            state,
+            repo_path,
+            workspace_id,
+            delete_branch,
+            archive_script,
+            force,
+        )?
+    {
+        return Ok(outcome);
+    }
     tuic_git::worktree::remove_worktree_by_workspace_id_with_missing_confirmation_and_pr(
         repo_path,
         workspace_id,
@@ -268,26 +361,34 @@ pub(crate) fn remove_worktree_with_presence_confirmation(
         override_lock,
         expected_fingerprint,
         Some(confirm_missing_checkout),
-        merged_github_pr_proves_tip,
+        merged_github_pr_proves_tip(state),
     )
 }
 
-pub(crate) fn branch_integration(repo: &Path, branch: &str) -> Result<BranchIntegration, String> {
-    tuic_git::worktree::branch_integration_with_pr(repo, branch, merged_github_pr_proves_tip)
+pub(crate) fn branch_integration(
+    state: &Arc<AppState>,
+    repo: &Path,
+    branch: &str,
+) -> Result<BranchIntegration, String> {
+    tuic_git::worktree::branch_integration_with_pr(repo, branch, merged_github_pr_proves_tip(state))
 }
 
-pub(crate) fn branch_integrations(repo: &Path) -> Result<Vec<BranchIntegration>, String> {
-    tuic_git::worktree::branch_integrations_with_pr(repo, merged_github_pr_proves_tip)
+pub(crate) fn branch_integrations(
+    state: &Arc<AppState>,
+    repo: &Path,
+) -> Result<Vec<BranchIntegration>, String> {
+    tuic_git::worktree::branch_integrations_with_pr(repo, merged_github_pr_proves_tip(state))
 }
 
 pub(crate) fn delete_integrated_local_branch(
+    state: &Arc<AppState>,
     repo_path: &str,
     branch_name: &str,
 ) -> Result<tuic_git::worktree::DeletedBranch, String> {
     tuic_git::worktree::delete_integrated_local_branch_with_pr(
         repo_path,
         branch_name,
-        merged_github_pr_proves_tip,
+        merged_github_pr_proves_tip(state),
     )
 }
 
@@ -374,6 +475,32 @@ pub(crate) fn resolve_worktree_dir_for_repo(repo_path: &Path, app_worktrees_dir:
     resolve_worktree_dir(repo_path, &strategy, app_worktrees_dir)
 }
 
+/// Shared allocation adapter for IPC and HTTP/MCP. Finished checkouts never
+/// bypass the live-session guard, including descendants of the checkout root.
+pub(crate) fn allocate_workspace(
+    state: &Arc<AppState>,
+    directory: &Path,
+    config: &WorktreeConfig,
+    base_ref: Option<&str>,
+) -> Result<(CreatedWorkspace, Option<serde_json::Value>), String> {
+    let (workspace, recycled) = create_workspace_recycling(directory, config, base_ref, |path| {
+        live_sessions_in(state, path).is_empty()
+    })?;
+    let rename = recycled.as_ref().map(|old| {
+        serde_json::json!({
+            "old_path": old.path, "new_path": workspace.path.to_string_lossy()
+        })
+    });
+    if let Some(old) = recycled {
+        state.notify_worktree_removed(crate::state::WorktreeRemovedPayload {
+            repo_path: config.base_repo.clone(),
+            workspace_id: workspace_id_of_worktree(&old.branch),
+            branch: old.branch,
+        });
+    }
+    Ok((workspace, rename))
+}
+
 /// Create a linked worktree without a PTY session.
 #[cfg(feature = "desktop")]
 #[tauri::command]
@@ -392,21 +519,37 @@ pub(crate) async fn create_worktree(
     };
     let worktrees_dir =
         resolve_worktree_dir_for_repo(Path::new(&config.base_repo), &state.worktrees_dir);
-    let workspace = tokio::task::spawn_blocking(move || {
-        create_workspace_unwarmed(&worktrees_dir, &config, base_ref.as_deref())
+    let allocation_state = Arc::clone(&state);
+    let (workspace, recycled) = tokio::task::spawn_blocking(move || {
+        allocate_workspace(
+            &allocation_state,
+            &worktrees_dir,
+            &config,
+            base_ref.as_deref(),
+        )
     })
     .await
     .map_err(|error| format!("Task panic: {error}"))??;
 
     let token = begin_warm(&workspace.path);
-    spawn_background_warm(
-        PathBuf::from(&base_repo),
-        workspace.path.clone(),
-        token,
-        crate::cow::warm_worktree,
-    );
+    if recycled.is_some() {
+        finish_warm(
+            &workspace.path,
+            token,
+            serde_json::json!({"status": "done"}),
+        );
+    } else {
+        spawn_background_warm(
+            PathBuf::from(&base_repo),
+            workspace.path.clone(),
+            token,
+            crate::cow::warm_worktree,
+        );
+    }
     state.invalidate_repo_caches(&base_repo);
-    Ok(ipc_worktree_response(&workspace, &base_repo))
+    let mut response = ipc_worktree_response(&workspace, &base_repo);
+    response["worktree_rename"] = serde_json::json!(recycled);
+    Ok(response)
 }
 
 /// Get worktrees directory path.
@@ -465,8 +608,10 @@ pub(crate) async fn remove_worktree(
     let script = resolve_archive_script(&repo_path);
     let repo_path_clone = repo_path.clone();
     let workspace_id_clone = workspace_id.clone();
+    let proof_state = Arc::clone(&state);
     let result = tokio::task::spawn_blocking(move || {
         remove_worktree_with_presence_confirmation(
+            &proof_state,
             &repo_path_clone,
             &workspace_id_clone,
             delete_branch,
@@ -797,7 +942,7 @@ pub(crate) fn finalize_merged_worktree_impl(
 /// gate. Before the merge, an unmerged commit is expected; afterwards, only
 /// merged work may be cleaned up without an explicit confirmation.
 fn cleanup_needs_lifecycle_confirmation(
-    state: &AppState,
+    state: &Arc<AppState>,
     repo_path: &Path,
     workspace_id: &str,
     action: &str,
@@ -887,6 +1032,7 @@ pub(crate) fn finalize_merged_worktree_impl_with_confirmation(
         }
         "delete" => {
             let outcome = remove_worktree_by_workspace_id_with_confirmation(
+                state,
                 &repo_path,
                 &workspace_id,
                 true,
@@ -1086,6 +1232,7 @@ pub(crate) fn merge_and_archive_worktree_impl_with_confirmation(
         }
         "delete" => {
             let outcome = remove_worktree_by_workspace_id_with_confirmation(
+                state,
                 &repo_path,
                 &workspace_id,
                 true,
@@ -1134,7 +1281,7 @@ pub(crate) fn merge_and_archive_worktree_impl_with_confirmation(
     clippy::too_many_arguments,
     reason = "flat IPC safety-confirmation contract"
 )]
-pub(crate) fn merge_and_archive_worktree(
+pub(crate) async fn merge_and_archive_worktree(
     state: State<'_, Arc<AppState>>,
     repo_path: String,
     branch_name: String,
@@ -1149,16 +1296,21 @@ pub(crate) fn merge_and_archive_worktree(
             "force requires expected_fingerprint from the confirmed lifecycle status".into(),
         );
     }
-    merge_and_archive_worktree_impl_with_confirmation(
-        state.inner(),
-        repo_path,
-        branch_name,
-        workspace_id,
-        target_branch,
-        after_merge,
-        force.unwrap_or(false),
-        expected_fingerprint.as_deref(),
-    )
+    let state = Arc::clone(&state);
+    tokio::task::spawn_blocking(move || {
+        merge_and_archive_worktree_impl_with_confirmation(
+            &state,
+            repo_path,
+            branch_name,
+            workspace_id,
+            target_branch,
+            after_merge,
+            force.unwrap_or(false),
+            expected_fingerprint.as_deref(),
+        )
+    })
+    .await
+    .map_err(|e| format!("Task panic: {e}"))?
 }
 
 // --- Tauri wrappers over tuic_git::worktree ---
@@ -1636,7 +1788,7 @@ mod tests {
         fs::write(worktree.join("README.md"), "changed").expect("modified file");
         fs::write(worktree.join("new-a.txt"), "a").expect("first untracked file");
         fs::write(worktree.join("new-b.txt"), "b").expect("second untracked file");
-        let state = crate::state::tests_support::make_test_app_state();
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
         crate::state::tests_support::insert_dummy_session(&state, "pty-active");
         crate::state::tests_support::set_session_cwd(
             &state,
@@ -2598,3 +2750,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "worktree_pr_proof_tests.rs"]
+mod pr_proof_tests;

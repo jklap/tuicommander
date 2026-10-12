@@ -735,7 +735,11 @@ pub(crate) fn enqueue_agent_command(
     session_id: String,
     text: String,
     idempotency_key: Option<String>,
+    expected_draft: Option<String>,
 ) -> Result<EnqueuedCommand, String> {
+    if let Some(draft) = expected_draft {
+        return enqueue_owned_draft(&state, &session_id, &text, &draft);
+    }
     enqueue_user_command(&state, &session_id, &text, idempotency_key.as_deref())
 }
 
@@ -999,6 +1003,17 @@ pub(crate) fn terminal_scroll_to_offset(
     if let Some(d) = state.grid.frame_dirty.get(&session_id) {
         d.store(true, std::sync::atomic::Ordering::Relaxed);
     }
+}
+
+/// Coalesced eviction-stable history scroll. None resumes following output.
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) fn terminal_scroll_to_anchor(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    anchor: Option<usize>,
+) {
+    queue_scroll_anchor(&state, &session_id, anchor);
 }
 
 /// Fetch a range of styled rows by absolute index, to fill the frontend's

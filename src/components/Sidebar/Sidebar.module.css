@@ -12,7 +12,7 @@
   --row-h: 22px;
   --tree-indent: 10px;
   width: var(--sidebar-width);
-  min-width: 200px;
+  min-width: 300px;
   max-width: 500px;
   flex-shrink: 0;
   background: var(--bg-secondary);
@@ -23,6 +23,30 @@
   transition: width 0.2s ease, min-width 0.2s ease, opacity 0.15s ease;
   overflow: hidden;
 }
+
+/* Text step (#1751-6a7b): widening the sidebar steps its text up by 1px per
+   width threshold. data-text-step is set from the sidebar width by
+   sidebarTextStep(); the font tokens are redefined here only, so nothing outside
+   the sidebar changes. Fixed-height boxes that hold text add --text-step too. */
+.sidebar[data-text-step] {
+  --text-step: 0px;
+  --font-3xs: calc(8px + var(--text-step));
+  --font-2xs: calc(10px + var(--text-step));
+  --font-xs: calc(11px + var(--text-step));
+  --font-sm: calc(12px + var(--text-step));
+  --font-md: calc(13px + var(--text-step));
+  --font-base: calc(14px + var(--text-step));
+  --font-lg: calc(15px + var(--text-step));
+  --font-xl: calc(17px + var(--text-step));
+  --font-2xl: calc(20px + var(--text-step));
+  --font-3xl: calc(24px + var(--text-step));
+  --row-icon: calc(14px + var(--text-step));
+  --row-h: calc(22px + var(--text-step));
+}
+
+.sidebar[data-text-step="1"] { --text-step: 1px; }
+.sidebar[data-text-step="2"] { --text-step: 2px; }
+.sidebar[data-text-step="3"] { --text-step: 3px; }
 
 /* Rich adds facts without enlarging the compact navigation chrome. */
 .sidebar[data-density="rich"] .branchItem {
@@ -769,10 +793,10 @@
   align-items: center;
   justify-content: center;
   align-self: center;
-  width: 14px;
-  height: 14px;
+  width: calc(14px + var(--text-step, 0px));
+  height: calc(14px + var(--text-step, 0px));
   color: var(--fg-secondary);
-  font-size: 12px;
+  font-size: var(--font-sm);
   line-height: 1;
   flex-shrink: 0;
 }
@@ -1851,8 +1875,8 @@
 
 .ghSectionCount {
   margin-left: auto;
-  min-width: 18px;
-  height: 18px;
+  min-width: calc(18px + var(--text-step, 0px));
+  height: calc(18px + var(--text-step, 0px));
   padding: 0 4px;
   display: inline-flex;
   align-items: center;
@@ -2081,26 +2105,13 @@
   border-top: 1px solid var(--border);
 }
 
-.ghFilterSelect {
-  width: 100%;
-  padding: 4px 8px;
-  font-size: var(--font-xs);
-  background: var(--bg-tertiary);
-  color: var(--fg-secondary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-}
+.ghFilterSelect { width: 100%; }
 
-.ghFilterSelect:focus {
-  outline: none;
-  border-color: var(--accent);
-}
 
 /* ── GitHub badge button (replaces remoteOnlyBadgeBtn) ── */
 .ghBadgeBtn {
-  min-width: 18px;
-  height: 18px;
+  min-width: calc(18px + var(--text-step, 0px));
+  height: calc(18px + var(--text-step, 0px));
   width: auto;
   padding: 0 3px;
   /* Same size as the branch stats badges; the fixed 18px height and line-height 1
@@ -2257,7 +2268,7 @@
 }
 
 .pluginSectionChevron {
-  font-size: 8px;
+  font-size: var(--font-3xs);
   flex-shrink: 0;
   color: var(--fg-muted);
 }

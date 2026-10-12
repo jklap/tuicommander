@@ -1,11 +1,17 @@
-import { Show } from "solid-js";
+import { For, Show } from "solid-js";
 import { t } from "../../i18n";
 import type { AutomationsStore } from "../../stores/automations";
+import { repositoriesStore } from "../../stores/repositories";
+import { Input } from "../ui/Input";
+import { Select } from "../ui/Select";
+import { Textarea } from "../ui/Textarea";
 import s from "./AutomationsDialog.module.css";
 import { ScheduleFields } from "./ScheduleFields";
+import { TemplatePicker } from "./TemplatePicker";
 
 export function DefinitionEditor(props: { store: AutomationsStore }) {
 	const store = props.store;
+	const knownRepos = () => repositoriesStore.getOrderedRepos();
 	return (
 		<Show when={store.draft()}>
 			{(draft) => (
@@ -14,19 +20,25 @@ export function DefinitionEditor(props: { store: AutomationsStore }) {
 						<legend>{t("automations.definition", "Definition")}</legend>
 						<label>
 							{t("automations.name", "Name")}
-							<input value={draft().name} onInput={(event) => store.edit({ name: event.currentTarget.value })} />
+							<Input value={draft().name} onInput={(event) => store.edit({ name: event.currentTarget.value })} />
 						</label>
 						<div class={s.row}>
 							<label>
 								{t("automations.repository", "Repository")}
-								<input
+								<Select
 									value={draft().repository}
-									onInput={(event) => store.edit({ repository: event.currentTarget.value })}
-								/>
+									onChange={(event) => store.edit({ repository: event.currentTarget.value })}
+								>
+									<option value="">{t("automations.chooseRepository", "Choose a repository")}</option>
+									<Show when={draft().repository && !knownRepos().some((repo) => repo.path === draft().repository)}>
+										<option value={draft().repository}>{draft().repository}</option>
+									</Show>
+									<For each={knownRepos()}>{(repo) => <option value={repo.path}>{repo.displayName}</option>}</For>
+								</Select>
 							</label>
 							<label>
 								{t("automations.runConfig", "Run config")}
-								<input
+								<Input
 									value={draft().run_config}
 									onInput={(event) => store.edit({ run_config: event.currentTarget.value })}
 								/>
@@ -40,19 +52,22 @@ export function DefinitionEditor(props: { store: AutomationsStore }) {
 						</p>
 						<label>
 							{t("automations.prompt", "Prompt")}
-							<textarea
+							<Textarea
 								rows="5"
 								value={draft().prompt}
 								onInput={(event) => store.edit({ prompt: event.currentTarget.value })}
 							/>
 						</label>
 					</fieldset>
+					<Show when={store.isNew()}>
+						<TemplatePicker store={store} />
+					</Show>
 					<ScheduleFields store={store} />
 					<fieldset class={s.group} disabled={store.busy()}>
 						<legend>{t("automations.workspace", "Workspace and limits")}</legend>
 						<label>
 							{t("automations.workspaceMode", "Workspace")}
-							<select
+							<Select
 								value={draft().workspace.mode}
 								onChange={(event) =>
 									store.edit({
@@ -65,12 +80,12 @@ export function DefinitionEditor(props: { store: AutomationsStore }) {
 							>
 								<option value="existing">{t("automations.existing", "Existing checkout")}</option>
 								<option value="new_per_run">{t("automations.worktree", "New worktree per run")}</option>
-							</select>
+							</Select>
 						</label>
 						<Show when={draft().workspace.mode === "new_per_run"}>
 							<label>
 								{t("automations.baseBranch", "Base branch")}
-								<input
+								<Input
 									value={
 										draft().workspace.mode === "new_per_run"
 											? (draft().workspace as { base_branch: string }).base_branch
@@ -85,7 +100,7 @@ export function DefinitionEditor(props: { store: AutomationsStore }) {
 						<div class={s.row}>
 							<label>
 								{t("automations.maxDuration", "Maximum duration (seconds)")}
-								<input
+								<Input
 									type="number"
 									min="1"
 									value={draft().max_duration_secs}
@@ -94,7 +109,7 @@ export function DefinitionEditor(props: { store: AutomationsStore }) {
 							</label>
 							<label>
 								{t("automations.grace", "Catch-up grace (seconds)")}
-								<input
+								<Input
 									type="number"
 									min="1"
 									value={draft().grace_secs}
@@ -131,7 +146,7 @@ export function DefinitionEditor(props: { store: AutomationsStore }) {
 									<div class={s.row}>
 										<label>
 											{t("automations.precheckCommand", "Precheck command")}
-											<input
+											<Input
 												value={precheck().command}
 												onInput={(event) =>
 													store.edit({ precheck: { ...precheck(), command: event.currentTarget.value } })
@@ -140,7 +155,7 @@ export function DefinitionEditor(props: { store: AutomationsStore }) {
 										</label>
 										<label>
 											{t("automations.precheckTimeout", "Precheck timeout (seconds)")}
-											<input
+											<Input
 												type="number"
 												min="1"
 												value={precheck().timeout_secs}

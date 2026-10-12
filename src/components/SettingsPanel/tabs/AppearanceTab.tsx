@@ -3,10 +3,12 @@ import { t } from "../../../i18n";
 import type { RepoGroup } from "../../../stores/repositories";
 import { repositoriesStore } from "../../../stores/repositories";
 import { settingsStore } from "../../../stores/settings";
+import { transcriptPreferences } from "../../../stores/transcriptPreferences";
 import { uiStore } from "../../../stores/ui";
 import { UiLegend } from "../../HelpPanel/UiLegend";
 import { ColorSwatchPicker } from "../../shared/ColorSwatchPicker";
 import { DEFAULT_COLOR_PRESETS } from "../../shared/colorPresets";
+import { Input } from "../../ui/Input";
 import { SettingSelect, SettingSlider, SettingToggle } from "../SettingFields";
 import s from "../Settings.module.css";
 
@@ -53,7 +55,7 @@ const GroupSettingsItem: Component<{
 						</span>
 					}
 				>
-					<input
+					<Input
 						class={s.groupNameInput}
 						value={editName()}
 						onInput={(e) => {
@@ -152,6 +154,27 @@ export const AppearanceTab: Component = () => {
 				min={10}
 				max={60}
 				hint={t("appearance.hint.maxTabNameLength", "Maximum characters shown in tab names before truncating")}
+			/>
+
+			<h3>{t("appearance.heading.chat", "Chat")}</h3>
+			<SettingToggle
+				checked={transcriptPreferences.enabled()}
+				onChange={(value) => transcriptPreferences.setEnabled(value)}
+				label={t("appearance.label.newTextIndicator", "New text indicator")}
+				hint={t(
+					"appearance.hint.newTextIndicator",
+					"Show New text below when a chat receives content while you read earlier messages. Saved on this client.",
+				)}
+			/>
+
+			<SettingToggle
+				checked={settingsStore.state.chatMuteIntermediateText}
+				onChange={(v) => settingsStore.setChatMuteIntermediateText(v)}
+				label={t("appearance.label.chatMuteIntermediateText", "Mute Intermediate Text")}
+				hint={t(
+					"appearance.hint.chatMuteIntermediateText",
+					"Show assistant text that is followed by a tool call in the same turn smaller and dimmer, so the final answer stands out",
+				)}
 			/>
 
 			<h3>{t("appearance.heading.groups", "Repository Groups")}</h3>

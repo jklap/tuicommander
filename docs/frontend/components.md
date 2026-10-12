@@ -1,13 +1,27 @@
 # Components
 
+`ui/Select`, `ui/Input` and `ui/Textarea` forward native form attributes and events.
+`ui/SegmentedControl` provides a keyboard-accessible single-choice view switch.
+All four share `ui/FormControls.module.css`; screen CSS owns layout only.
+The native-select guard in `src/__tests__/nativeSelect.test.ts` rejects new raw
+selects outside `ui/` and requires the explicit pending-migration list to shrink.
+
 `Tasks/detail/TasksDetail` is the core work-item detail surface. Its props are
 `provider`, `reference`, optional `visible`, `onClose` and `onItemChange`.
 It renders schema-driven fields, sanitized Markdown, all declared comment
 variants, cursor pagination, a comment composer and provider transition actions.
 The shell must pass visibility to pause the default 60-second refresh timer.
 `useTasksDetail` fences responses by item generation and serializes mutations.
+Committed mutations remain accepted if reloading opened comment pages fails;
+the view reports the history error and Retry reloads those pages.
 `TaskMarkdown` preserves reader disclosure state across provider refreshes.
 Shell mounting and provider registration are owned by the Tasks integration.
+
+`Tasks/create/TasksCreate` is the core work-item create form. Its props are
+`provider`, `onCreated(detail)` and optional `onCancel`. It renders the item-type
+picker and per-type fields with `SettingField` and `SettingMultiSelect`.
+`useTasksCreate` fences schema responses by generation and submits once;
+`createDraft` converts control values to tagged field values.
 
 Slice F exposes `start_graph {target:{type:story|plan,id},expected_revision?,definition_id,definition_revision,request_id,limits?}` through the existing owning-daemon service. Story starts require the current native revision and pin the selected publication; the request ID is bound to its payload. Omitted limits use Rust defaults. Plan dispatch remains unavailable in this build and its start control says so. The `workflow_run` MCP tool uses an inline schema generated from `RunAction` and the public `RunCommand` variants; it returns the same scoped snapshots and cursor-ordered events as IPC/HTTP. Run history shows pinned activations, decisions/evidence, repair counters, pause targets and complete event payloads across pages. Graph recovery uses `resume_graph {execution_id,activation_id,resolution}` after answering pending input; pause and cancel use the existing sequence-fenced commands. Legacy runs offer inspection and cancellation in the UI. No new persistence or client scheduler is added.
 
@@ -94,7 +108,7 @@ App.tsx (central orchestrator)
 ├── BranchSwitcher/           # Quick branch switcher (held-key overlay)
 ├── BranchPopover/            # Branch selection popover
 ├── TipOfTheDay/              # Startup tip notification
-├── DictationToast/           # Dictation recording/transcribing indicator
+├── DictationToast/           # Dictation recording/transcribing indicator, hands-free meter, reply controls and the spoken-replies toggle
 ├── ConfirmDialog/            # Reusable in-app confirmation dialog
 ├── RenameBranchDialog/       # Branch rename dialog
 ├── CreateWorktreeDialog/     # Worktree creation dialog
@@ -178,6 +192,13 @@ prompts, and can remove any queued ID. The list follows ACP snapshots and
 events, so another window or a phone sees the same order and cancellations.
 
 ## Mobile Screens (`src/mobile/`)
+
+`OutputView` keeps a 500-line live tail while following. While the reader is
+scrolled up or touching the output, it retains the loaded rows instead of
+evicting the content being read. Older-history pages extend that reading window.
+The next log update after following resumes restores the 500-line tail.
+
+Terminal ego single-choice questions use the header question action to toggle the existing `ChoicePromptOverlay`. Full titles and option labels wrap within its scrollable overlay. Opening is explicit; the terminal keeps its full height. The composer uses the backend navigation selection mode and its existing in-flight guard to submit only once.
 
 The session composer has a 44 px paperclip in its existing row. It uploads a
 selected file and stages `@path` without Enter; the upload chip floats above
@@ -393,7 +414,7 @@ one group under a shared label.
 
 #### DictationSettings (`SettingsPanel/DictationSettings.tsx`)
 
-Spoken replies is a standard toggle, also available in the mobile conversation
+Hands-free listening is a standard toggle beside it (also in mobile Settings); off arms a replies-only conversation. The `DictationToast` carries a speaker button (`aria-pressed`) that flips the same spoken-replies setting while recording or while a conversation is armed. Spoken replies is a standard toggle, also available in the mobile conversation
 header and mobile Settings. It stays visible in browser mode and saves the
 backend device preference; it does not stop microphone dictation.
 
@@ -730,7 +751,9 @@ changing prompt text. Disabling and re-enabling the precheck resets the flag.
 
 ### Mobile composer browser dictation
 
-`CommandInput` mounts `useBrowserDictation`, a feature-detected browser interaction hook. Its mic is directly before Send in the existing row; interim hypotheses are replaced and final speech stays in the current draft without focus or automatic Enter. `SessionDetailScreen` excludes server hands-free while browser recognition is pending or active, and `useMobileVoice.recording` blocks browser starts during server arming/recording. Manual typing or keybar text insertion cancels recognition, preserves the edited draft, and returns the mic to idle; queued results from that recording are ignored. Tap the mic to resume. The hook also stops on send, session end, or unmount. No setting or backend route is added.
+Restored dictated drafts stay in the composer without writing to the terminal on mount. Send or the first edit reconciles the saved text with the current PTY input line through the existing delta path. Later edits use the local baseline so delayed terminal echoes do not replay text.
+
+`CommandInput` mounts `useBrowserDictation`, a feature-detected browser interaction hook. Its mic is directly before Send in the existing row; interim hypotheses are replaced and final speech stays in the current draft without focus or automatic Enter. `SessionDetailScreen` excludes server hands-free while browser recognition is pending or active, and `useMobileVoice.recording` blocks browser starts during server arming/recording. Manual typing or keybar text insertion cancels recognition and preserves the edited draft. The mic stays claimed until the browser emits `end`, including after an error; queued results from that recording are ignored. Tap the mic to resume after `end`. Browser failures are logged as well as toasted. The hook also stops on send, session end, or unmount. No setting or backend route is added.
 
 ## Tasks board
 

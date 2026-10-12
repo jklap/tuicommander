@@ -15,6 +15,8 @@ when you scroll, select, copy or search. Search matches the exact characters
 printed by the program: precomposed and decomposed spellings are not automatically
 normalized into each other.
 
+In the mobile session output, a small upward drag stops auto-follow. New output does not scroll the view until you return to the bottom.
+
 In the mobile session output, completed lines continue into history even after the terminal history fills, while the live region redraws below. Long text wraps to the phone width. A continuation
 keeps the original line's leading spaces or tabs, so indented lists and code
 remain readable. Claude tool-call status dots keep the same space while pulsing
@@ -61,7 +63,7 @@ In Chat, Compose stays docked and open after sending or queueing, clears the sub
 
 **Chat** is disabled, with the reason as its tooltip, when the terminal has no agent, the agent is not Claude, or TUICommander has not bound the agent to a session file yet. If the agent exits or the binding is lost while Chat is open, the terminal returns to CLI with a one-line notice.
 
-Chat follows new transcript entries while the agent writes. A replaced transcript resets the displayed conversation, including when the replacement keeps the same file name and size.
+Chat follows new transcript entries while the agent writes. When you scroll up and more content arrives, **New text below** appears above Compose. Select it to return to the bottom and resume following. Reaching the bottom by hand also clears it. Search jumps show no indicator until later content arrives. Turn the indicator off in **Settings → Appearance → Chat**; this preference is saved on the current client. A replaced transcript resets the displayed conversation, including when the replacement keeps the same file name and size.
 
 Older recorded prompts with a prompt ID also appear when Claude did not record a human-origin field. Command echoes, tool results and sidechain conversations stay out of user bubbles. Image and PDF tool outputs show `[image]` and `[document]` markers; a model fallback shows a **Model changed** card.
 
@@ -373,3 +375,17 @@ Use **Toggle answers-only view** (`Cmd+Alt+R` on macOS) to read selectable marke
 When old output leaves the scrollback, command boundaries and prompt ticks stay attached to their retained output. Ticks for discarded prompts disappear; answers-only history keeps the retained question and answer association.
 
 Terminal stream reconnect notices use the current terminal name when available and show the transport’s current attempt (up to 10). A received grid frame or confirmed empty replay removes only that stream notice; socket opening alone does not. Exhausted retries leave a persistent failure notice. Closing the terminal removes its notice, and late subscription failures cannot publish a notice after closure.
+
+### Open a terminal link in Design Mode
+
+Right-click an HTTP or HTTPS link, including a localhost dev server, then select **Start in Design Mode** and choose **Edge** or **Chrome**. The dedicated browser opens that URL and connects the agent in that terminal, not the focused tab. File and other non-web links retain Open and Copy link only. Browser extension setup is required once per repository profile.
+
+### History-anchored viewport scrolling
+
+Scrolling into history keeps the requested lines in view while an agent writes more output. If the scrollback limit removes those lines, the view stops at the oldest retained line. Scroll to the bottom to follow output again.
+
+### Desktop dictation in Chat
+
+Dictation inserts into Compose when focus is on the Chat transcript or page background. It replaces the selection that existed when you pressed the hotkey and keeps the rest of the draft. A focused search or form editor still receives dictation. In CLI, dictation keeps the usual terminal and auto-send behavior.
+
+Changing focus or tabs while transcription finishes does not change the destination. If the original editor or session closes, or its draft changes, recover the text from the sticky error message or Messages bell. The app does not send it to another terminal.

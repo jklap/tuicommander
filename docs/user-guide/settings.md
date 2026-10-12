@@ -70,7 +70,7 @@ never all expert: in basic mode it would show an empty page.
 | Notifications | Master Volume, Audio Output Device |
 | Terminal | Shell, Font Weight, Allow OSC 52 clipboard writes, Block folding, Show scrollbar marks, Reflow scrollback on resize |
 | Git & GitHub | Auto-Delete on PR Close, Copy ignored files, Copy untracked files, Storage Strategy, Auto-archive merged worktrees, Orphan Worktree Cleanup and safe cleanup countdown, After Merge Behavior, Auto-Fetch Interval, the **Add another GitHub account** button (shown while no additional account exists) |
-| Agents | Collect project progress (global); per agent: Close idle managed child after, Auto-retry on server errors, Prevent alternate screen, Accept workspace trust for managed spawns (Claude and Codex), Native status signals, Install hooks globally, Track agent intent, Collect progress, Show suggested follow-ups, Headless Command Template; Claude only: Environment Flags |
+| Agents | Collect project progress, Launch instructions (global); per agent: Launch instructions, Close idle managed child after, Auto-retry on server errors, Prevent alternate screen, Accept workspace trust for managed spawns (Claude and Codex), Native status signals, Install hooks globally, Track agent intent, Collect progress, Show suggested follow-ups, Headless Command Template; Claude only: Environment Flags |
 | Voice | Long-press threshold, Auto-send, Input device, Level gate, Speech confidence gate, Hold-back before sending, Notify model when hands-free changes, Start notice |
 | MCP | Collapse tools |
 | Remote Access | Port, Session Token Duration, Enable IPv6 (dual-stack) |
@@ -89,7 +89,9 @@ never all expert: in basic mode it would show an empty page.
 | **Auto-Standby Timeout** | Pause idle background sessions after this duration to save resources. Default 5 min; `0` disables it. |
 | **Content Indexing** | When to build search indexes: Disabled, Active repo only, Active + on switch, or All repos at boot |
 | **Automatically check for updates** | Check for new versions on startup |
-| **Update Channel** | Choose which release channel to receive updates from |
+| **Update Channel** | Stable, Beta or Nightly. Beta checks the next beta and final stable; beta downloads open their release page. New beta installs default to Beta; existing saved choices stay unchanged |
+| **Wait for agents before restarting** | After an update installs, restart only when no session is busy or awaiting input. The APP UPDATE notification shows the busy count and offers Restart now. Default on |
+| **Resume all agents after an update** | After the app restarts for an update, resume every agent tab with a confirmed session on every branch. Default on |
 | **TUIC CLI** | Install or uninstall the `tuic` command-line tool, with its status. Desktop app only. See [CLI](cli.md). |
 | **Code Intelligence** | Install and manage MDKB, which gives the editor go-to-definition, find references, and symbol outline, and serves as a memory manager for AI agents. Desktop app only. |
 | **ego executable** | Path to the ego binary the **AI Chat** panel talks to over ACP (**ego** section, directly after Code Intelligence). Always shown, also while Experimental Features is off. On the desktop it is laid out like the TUIC CLI section: a status line ("Configured at …") with **Select…** (native file picker) and **Clear**. A browser client, which has no native picker, gets a text field. While it is empty, ACP is not configured: every connect is refused in Rust and the panel says so rather than launching nothing. Read at each connect, so a correction takes effect without a restart. |
@@ -107,8 +109,10 @@ never all expert: in basic mode it would show an empty page.
 | **Cycle All Tab Types** | Off | When on, next/prev-tab shortcuts also cycle file/diff/markdown/editor tabs (ordered like the tab bar). Off cycles terminals only. |
 | **Nested Terminal Tabs** | Off | Opt in to collapsible branch activity cards. When off, the sidebar shows no activity caret or nested agent/session rows. When on, branches with open sessions show agent status, current activity, and last-update age. Applies immediately. |
 | **Max Tab Name Length** | — | 10–60 slider |
+| **New text indicator** | On | Show **New text below** when terminal Chat or AI Chat receives content while you read earlier messages. Saved on this client; mobile Settings offers the same toggle. |
 | **Repository Groups** | — | Create, rename, delete, and color-code groups |
 | **Reset Panel Sizes** | — | Restore sidebar and panel widths to defaults (**Layout** section) |
+| **Mute Intermediate Text** | On | **Chat** section. In the terminal Chat view, AI Chat and the mobile chat, assistant text that is followed by a tool call in the same turn is drawn smaller and dimmer, so status lines such as "Pump restart." are not mistaken for the answer. The last text of a turn keeps the normal style. Copy and Find work on muted text. Applies immediately. |
 | **UI Legend** | — | Visual reference for colors, symbols, and badges used in the app |
 
 The terminal and app color theme is on the [Terminal](#terminal) page. Native window and webview backgrounds use the same theme color at startup and when the theme changes, including light themes. The mobile PWA offers a separate Dark/Light choice in its Settings screen, saved on the server for connected mobile clients; the screen also shows app and server versions.
@@ -136,6 +140,7 @@ After you enable the setting, a branch gets an activity caret when it has at lea
 - **Silence orchestration completions** — Remote HTTP/MCP workers still appear in Activity and update their tab state, but do not play a completion chime. The remote classification survives frontend reloads, and each busy cycle can notify at most once even when idle and process exit arrive separately.
 - **Reset to Defaults** — Restore default notification settings
 - **Keep toasts in the bell** — Retain user-action toasts in the toolbar bell's **MESSAGES** section, including their level and explicit action. Turning this off leaves ordinary user feedback transient; agent/MCP notices and agent spawns still go directly to the bell (identical consecutive notices within five seconds are deduplicated), and overflow from the two-card limit is retained there regardless of this setting. Dedicated-domain toasts that explicitly opt out of Messages remain visible or queued. Transient cards sit top-right of the terminal, clear of docked panels and bottom input; same-kind bursts within five seconds show ×N and restart their dismissal timer. Errors take priority over informational cards, and tall cards scroll to keep actions reachable. This setting is visual and remains available without audio output.
+- **Automatic agent toast cards** — MCP toast notices show a transient card only while their origin terminal tab is active. Settings → Notifications → **Show cards from the active terminal** defaults on and is saved per client; turning it off restores urgent-only cards. Urgent notices always show a card, and notices without an origin session remain bell-only unless urgent.
 
 **Attention** is the distinct call-back-to-keyboard sound available to agent
 toasts. Native playback and the browser fallback share a triangular G4→G4→E5
@@ -202,7 +207,7 @@ repository and worktree defaults.
 | **CircleCI** | Store or remove a read-only CircleCI token for failed job logs. The saved token is never displayed again. |
 | **Repository Bindings** | Which account each workspace repo resolves to |
 
-Token priority: `GH_TOKEN` env → `GITHUB_TOKEN` env → OAuth keyring → `gh` CLI config → `gh auth token` subprocess.
+Token priority: `GH_TOKEN` env → `GITHUB_TOKEN` env → OAuth keyring. The `gh` CLI login is not used.
 
 ## AI
 
@@ -214,6 +219,12 @@ closure. User-created sessions are unaffected. Unread mail and background work
 keep a managed child open, and its parent receives an idle-timeout notice before
 closure. A child can also be marked keep-open at spawn or through the agent or
 session tool.
+
+**Launch instructions** is the TUIC output-marker text that TUIC passes to an
+agent at every launch and resume. Each agent row has its own override. Empty
+turns it off. A warning names every required marker (`intent:`, `suggest:`,
+`💬 `) that an edit removes. **Reset to default** removes the override. See
+[AI Agents](ai-agents.md#launch-instructions-tuic-output-markers).
 
 Each supported agent has an expandable row showing detection status, version, and MCP badge.
 

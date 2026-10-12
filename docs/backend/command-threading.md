@@ -49,6 +49,21 @@ IPC but not over HTTP.
 
 ## Audit (2026-08-18)
 
+### Application launchers (2026-10-11)
+
+`open_in_app`, `open_in_custom`, the Design Mode Chrome/Edge launcher and the
+macOS microphone settings opener use
+`tuic_core::child_reaping::spawn_reaped`. A named thread owns process creation
+and the subsequent OS wait. The caller receives the spawn result and returns
+while the application is still running; it does not wait for application exit.
+Creating the thread before the child prevents a thread creation failure from
+abandoning a child. Spawn errors reach the launcher caller, and wait errors are
+logged without command arguments. This lifecycle is shared by IPC and HTTP
+callers. Design Mode does not rely on Tokio orphan collection: its wait owner
+continues after the launch runtime ends, including for a short-lived browser
+handoff to an existing profile. It does not replace PTY child ownership or kill
+launched applications.
+
 ### Remote update (2026-09-26)
 
 `prepare_remote_update` and `update_and_restart_remote` are async commands.
@@ -261,3 +276,17 @@ The `github_pr_action_commands` wrappers are async. GraphQL/REST work stays off 
 ## Account actions
 
 `accounts::account_action` is async. Shared `execute` moves registry/vault/file-lock work to `spawn_blocking`; token verification awaits bounded HTTP without following redirects. The HTTP account action calls the same service. No account filesystem or keychain work runs on the IPC main thread.
+
+## Merged-PR proof (2026-10-11)
+
+Worktree lifecycle, removal, branch integration/deletion, and sidebar monitoring
+pass `AppState` to the account-aware HTTP GraphQL proof. The synchronous domain
+callback uses `Handle::block_on` only on `spawn_blocking` threads; the domain crate
+remains independent of Tokio. `merge_and_archive_worktree` is now an async Tauri
+command and moves its complete merge/cleanup implementation to `spawn_blocking`,
+matching its HTTP twin and `finalize_merged_worktree`.
+
+`open_default_app` is async and host-only. It validates the URL or path, builds
+the platform launcher, and hands spawn/wait ownership to the shared
+`tuic_core::child_reaping::spawn_reaped` thread. It never waits for application
+exit on the command caller.

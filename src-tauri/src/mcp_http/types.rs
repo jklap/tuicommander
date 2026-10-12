@@ -107,6 +107,8 @@ pub(super) struct SetNameRequest {
 #[derive(Deserialize)]
 pub(super) struct EnqueueCommandRequest {
     pub text: String,
+    #[serde(default, rename = "expectedDraft")]
+    pub expected_draft: Option<String>,
     #[serde(default, rename = "idempotencyKey")]
     pub idempotency_key: Option<String>,
 }
@@ -712,12 +714,6 @@ pub(super) struct GithubPollLoginRequest {
 }
 
 #[derive(Deserialize)]
-pub(super) struct GithubAddAccountRequest {
-    pub host: String,
-    pub pat: String,
-}
-
-#[derive(Deserialize)]
 pub(super) struct GithubRemoveAccountRequest {
     pub id: String,
 }
@@ -958,6 +954,11 @@ pub(super) struct TerminalThemeColorsRequest {
 #[derive(Deserialize)]
 pub(super) struct TerminalScrollToRequest {
     pub line: usize,
+}
+
+#[derive(Deserialize)]
+pub(super) struct TerminalScrollToAnchorRequest {
+    pub anchor: Option<usize>,
 }
 
 #[derive(Deserialize)]

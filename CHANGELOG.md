@@ -8,9 +8,64 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Add the injected-fetch GitHub Work adapter and recorded-fixture tests; authenticated runtime/catalog integration and Projects v2 success-path verification remain pending (#1693-a816).
 
+### Fixed
+- Preserve beta installs in the macOS terminal installer and normalize release tag prefixes for default and pinned downloads.
+
+### Added
+- Beta update channel: automatically check for the next beta and final stable release. Completed beta releases publish a rolling feed without changing stable updates.
+
+### Added
+- After an update restart, every agent tab with a session the agent confirmed resumes on its own, on every branch, not only the selected one; **Settings → General → Updates → Resume all agents after an update** (`eager_resume_after_update`, default on) turns it off. Tabs without a confirmed session keep the click-to-resume banner (#1772-25c5).
+- After an update installs, the app restart waits until no session is busy or awaiting input; **Settings → General → Updates → Wait for agents before restarting** (`defer_update_relaunch`, default on) turns it off, and the APP UPDATE notification offers Restart now with the busy-session count (#1771-c6fb).
+- Shared themed form controls unify desktop and mobile select fields and the Tasks, Settings, Automations, Git and chat forms; List, Board and Roadmap use a keyboard-accessible segmented switch (#1815-01c9).
+- Chat mutes intermediate assistant text (text followed by a tool call in the same turn) in the terminal Chat view, AI Chat and mobile; **Settings → Appearance → Chat → Mute Intermediate Text** turns it off (#1769-89dc).
+
+- Show agent toast cards only while their origin terminal tab is active, with a default-on per-client Notifications toggle. Urgent notices always show a card (#1760-bab7).
+### Fixed
+- Desktop dictation in terminal Chat inserts into Compose instead of the hidden CLI. The destination and selection are captured before recording yields; undelivered transcripts stay in Messages for recovery (#1773-5b69).
+- A prerelease tag such as `v2.0.0-beta.1` publishes as a GitHub prerelease, never as "latest", and does not update the Homebrew tap. The updater and plugin checks use semver precedence: a beta user is offered later betas and the final release, and a nightly user is offered later nightlies (#1799-d6be).
+
+### Removed
+- Remove the duplicate AI Chat control-bar + button; New chat tab still starts a conversation (#1755-7709).
+- GitHub token chain no longer reads the `gh` CLI login (`gh auth token`, `gh-token` crate); use OAuth login or `GH_TOKEN`/`GITHUB_TOKEN`. TUIC spawns no `gh` process (#1714-1c1d).
+
+### Fixed
+- Mobile PWA: the shell follows the visual viewport again, so the command input sits above the iOS keyboard; the bottom tab bar is 56 px again and no longer covers the + button; session cards lose the empty space under the close button (#1795-a710).
+- Recurring cron Automations now dispatch once per due occurrence and Run Now works for them (#1794-f0bb).
+- Restored mobile dictation drafts reconcile with the current terminal line on Send or first edit, preserving words if the desktop cleared the line and avoiding duplicate replay (#1768-a83f).
+- Mobile output stops following after a small upward scroll and ignores queued follow frames after the user scrolls away (#1745-63b0).
+- Mobile ego questions show Input and open a full, wrapping question card from the header; selecting an option sends one answer (#1759-6047).
+- Native macOS Fn dictation keeps recording through window focus changes while the key is held and detects its release outside TUIC (#1763-3361).
+- Automations uses readable schedule cards, short repository names, keyboard tabs and a compact toolbar. The first definition opens automatically unless disabled in the dialog; the palette entry also matches scheduler and schedule (#1762-c772).
+- The bell no longer counts static plugin status rows; unread Progress outcomes have an explicit Mark as read action (#1764-862a).
+- Mobile AI Chat keeps Park and Stop in the composer input row, removing the archive-only row above it (#1746-aa9e).
+- Default-app URL and file opens reap their launcher child instead of leaving a zombie process (#1749-f9a0).
+- Design Mode retains a wait owner for Chrome/Edge launches, including short-lived handoff processes, independently of the launch runtime (#1707-bd40).
+- Duplicate workflow starts report the active run ID instead of a raw SQLite constraint error (#1748-47b0).
+- Design Mode delivers the first navigation after a backend restart, including before the first idle heartbeat (#1724-fe7e).
+- A console that stops reading the backend's stderr (for example the `make dev` pipe) no longer blocks every thread that logs, the main thread included; console output is now non-blocking and lossy, while retention in the existing lossy file log and bounded `/logs` ring is unchanged (#1638-c94c).
+- Design Mode lists only the dev servers of the session being edited (HTML-serving listeners of its worktree, URLs it printed, the configured URL) and excludes TUIC itself (#1723-4a21).
+
+### Added
+- Chat transcripts show New text below when content arrives while you read earlier messages. Select it to resume following; a per-client setting is available on desktop and mobile (#1757-c6a9).
+
+- Design Mode extension heartbeats expire stale sessions and deliver agent-requested page reloads once per sequence (#1735-080b).
+
+### Added
+- Start Design Mode directly from terminal HTTP(S) links, bound to the agent that printed them. HTTP/IPC start accepts an optional URL; MCP `design_mode` exposes URL-aware start, stop and status (#1722-f02d).
+
+### Added
+- Hands-free listening and spoken replies are now separate settings, so replies-only (push-to-talk dictation with spoken answers) works, and the dictation toast has a spoken-replies toggle (#1729-f7f1).
+- Compact mobile session attachment icon and smaller in-field mic and Send controls for a wider draft (#1719-ff5d).
+- Long-press mobile Send to queue the current agent draft for its next ready window (#1717-efd3).
+
+- Automation run worktree provenance and explicit cleanup with existing integration, archive and live-session safety checks (#1623-8b2a).
+
+- Add built-in automation templates as editable, paused drafts using the selected repository, run config and host local zone; applying a template never saves or starts a run (#1622-be11).
 - Added GitHub PR action backend APIs for failed-job reruns, auto-merge and queue-aware merging; empty request-changes reviews now fail validation.
 
 - Added GitHub line review backend APIs for paginated threads, replies, resolve/unresolve and head-pinned draft submission.
+- Added line review threads to the PR Files tab: threads on diff lines with outdated/resolved state, replies, resolve/unresolve and a draft review submitted against the head the diff was opened at (#1691-bdff). Fixed diff file rows overlapping when a file section was taller than the 320 px estimate.
 - Add the generic Tasks roadmap component with month/quarter zoom, local-calendar date spans, virtual rows, provider pagination and an undated side list. Tasks shell mounting remains separate (#1690-5d98).
 
 - GitHub Enterprise PAT entry now opens a private native window and writes
@@ -20,6 +75,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Match native window and webview resize backgrounds to the selected theme, including light themes (Fixes #125; #1678-158c).
 - Added the provider-neutral Tasks data contract and a local in-memory development provider; visible Tasks integration follows separately.
 - Add the core Tasks detail component with field editing, rich paged comments, status-action rollback and refresh while visible (#1687-27a3).
+- Add the core Tasks create form: item types and per-type field schemas from the provider, required-field validation and single submit (#1688-518d).
 - Add the generic Tasks list component with account-scoped sources, provider presets and filters, debounced search, sorting, virtual rows and cursor pagination. Shell mounting remains a separate integration step (#1686-ce77).
 
 
@@ -68,6 +124,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Add the Rust foundation for Once automation schedules with IANA timezone validation, a single preview instant and durable occurrence deduplication (#1629-2262).
 
 ### Fixed
+- Reap child processes launched by built-in apps, custom tools and macOS microphone settings without waiting for the launched application to close (#1707-bd40).
 - Preserve Design Mode screenshot evidence and send retained feedback to an explicitly chosen replacement agent (#1672-cd3d).
 - Attach saved AI Chat tabs when selected, show connection failures with Retry and pending model controls, and name tabs from conversation titles or prompts (#1628-4459).
 
@@ -3082,3 +3139,5 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Tabs from all worktrees visible when switching branches (fix planned)
 
 - Add Telegram setup in desktop and mobile Settings: token check/replacement, expiring one-use pairing or explicit chat IDs, live agent selection and safe daemon status.
+
+- Reuse explicitly finished, clean, integrated worktrees while preserving ignored build artifacts. Reserve new allocations before returning them.

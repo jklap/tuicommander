@@ -279,3 +279,5 @@ fn canonical_run_lookup_survives_definition_deletion() {
     assert_eq!(reply["id"], run.id);
     assert_eq!(reply["definition"]["id"], "notice");
 }
+
+mod templates;

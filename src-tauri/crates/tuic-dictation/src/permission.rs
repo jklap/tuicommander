@@ -116,9 +116,11 @@ pub fn request() -> bool {
 /// Open the macOS System Settings pane for microphone privacy.
 #[cfg(target_os = "macos")]
 pub fn open_settings() {
-    let _ = std::process::Command::new("open")
-        .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")
-        .spawn();
+    let mut command = std::process::Command::new("open");
+    command.arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone");
+    if let Err(error) = tuic_core::child_reaping::spawn_reaped(command) {
+        tracing::warn!(source = "dictation", %error, "Failed to open microphone settings");
+    }
 }
 
 /// Non-macOS fallback: no-op.

@@ -6,7 +6,7 @@
   max-height: 60vh;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
-  background: rgba(37, 37, 38, 0.95);
+  background: #252526;
   border-top: 1px solid var(--border);
   border-radius: 12px 12px 0 0;
   z-index: 50;
@@ -18,6 +18,7 @@
   font-size: var(--font-sm);
   font-weight: 600;
   border-bottom: 1px solid var(--border);
+  overflow-wrap: anywhere;
 }
 
 .item {
@@ -67,6 +68,9 @@
 
 .label {
   flex: 1;
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
   font-weight: 500;
 }
 

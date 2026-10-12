@@ -6,13 +6,13 @@ import { rateLimitStore } from "../../stores/ratelimit";
 import { repositoriesStore } from "../../stores/repositories";
 import { terminalsStore } from "../../stores/terminals";
 import {
-	displayTask,
 	effectiveActivityState,
 	isActivityWorking,
 	projectName,
 	reconcileActivityOrder,
 	terminalStatusLabel,
 } from "../../utils/activitySnapshot";
+import { displayTask } from "../../utils/displayTask";
 import { navigateToTerminal } from "../../utils/navigateToTerminal";
 import { getRepoColor } from "../../utils/repoColor";
 import { formatRelativeTime } from "../../utils/time";

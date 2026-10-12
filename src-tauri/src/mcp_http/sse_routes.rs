@@ -452,6 +452,7 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
             message,
             level,
             sound,
+            urgency,
             origin_repo_path,
             origin_session_id,
         } => {
@@ -460,6 +461,7 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
                 "message": message,
                 "level": level,
                 "sound": sound,
+                "urgency": urgency,
                 "origin_repo_path": origin_repo_path,
                 "origin_session_id": origin_session_id,
             })

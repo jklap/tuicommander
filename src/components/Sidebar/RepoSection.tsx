@@ -22,8 +22,8 @@ import { settingsStore } from "../../stores/settings";
 import { sidebarPluginStore } from "../../stores/sidebarPluginStore";
 import { cx } from "../../utils";
 import { onClickKeyDown } from "../../utils/a11y";
-import { displayTask } from "../../utils/activitySnapshot";
 import { compareBranches } from "../../utils/branchSort";
+import { displayTask } from "../../utils/displayTask";
 import { keyFor } from "../../utils/hotkey";
 import { navigateToTerminal } from "../../utils/navigateToTerminal";
 import { handleOpenUrl } from "../../utils/openUrl";
@@ -539,7 +539,7 @@ const BranchTabList: Component<{ terminalIds: string[]; repoPath: string }> = (p
 							>
 								{(agent) => (
 									<span class={s.branchAgentIcon} aria-hidden="true">
-										<AgentIcon agent={agent()} size={14} />
+										<AgentIcon agent={agent()} provider={t().agentProvider} size={14} />
 									</span>
 								)}
 							</Show>

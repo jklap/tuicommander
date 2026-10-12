@@ -2,7 +2,7 @@ import { Show } from "solid-js";
 import { AGENT_DISPLAY, type AgentType } from "../../agents";
 import { AgentIcon } from "../../components/ui/AgentIcon";
 import { SubAgentIcon } from "../../components/ui/SubAgentIcon";
-import { displayTask } from "../../utils/activitySnapshot";
+import { displayTask } from "../../utils/displayTask";
 import type { SessionInfo } from "../useSessions";
 import { isKnownAgentType } from "../utils/sessionKind";
 import { useDebouncedStatus } from "../utils/useDebouncedStatus";

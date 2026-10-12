@@ -5,6 +5,7 @@ import { rpc } from "../../../../transport";
 import { cx } from "../../../../utils";
 import { writeClipboard } from "../../../../utils/clipboard";
 import { ExpertSetting } from "../../ExpertSetting";
+import { InfoBadge } from "../../InfoBadge";
 import s from "../../Settings.module.css";
 import { type AppConfig, saveConfigField, useMcpStatusPoll } from "./servicesShared";
 
@@ -147,14 +148,11 @@ export const LocalMcpPanel: Component = () => {
 						<label style={{ "font-weight": 500, "font-size": "13px", color: "inherit", margin: 0 }}>
 							Collapse tools — Speakeasy MCP (reduces AI context ~98%)
 						</label>
-						<span class={s.infoBadge}>
-							?
-							<span class={s.infoBadgeTip}>
-								When enabled, MCP clients only see three meta-tools (search_tools, get_tool_schema, call_tool) and
-								discover the full tool set on demand. Drastically reduces token usage for clients that don't need every
-								tool upfront.
-							</span>
-						</span>
+						<InfoBadge>
+							When enabled, MCP clients only see three meta-tools (search_tools, get_tool_schema, call_tool) and
+							discover the full tool set on demand. Drastically reduces token usage for clients that don't need every
+							tool upfront.
+						</InfoBadge>
 					</div>
 				</div>
 			</ExpertSetting>
@@ -192,9 +190,7 @@ export const LocalMcpPanel: Component = () => {
 									<span class={s.hint} style={{ margin: 0 }}>
 										{tool.summary}
 									</span>
-									<span class={s.infoBadge}>
-										?<span class={s.infoBadgeTip}>{tool.description}</span>
-									</span>
+									<InfoBadge>{tool.description}</InfoBadge>
 								</div>
 							</div>
 						);

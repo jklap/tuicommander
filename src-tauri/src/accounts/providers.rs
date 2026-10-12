@@ -1,11 +1,11 @@
-//! Trusted registration seam; plugin manifests are wired by the host-API stream.
+//! Trusted registration seam; plugin manifests register through `plugins::register_loaded_plugin_impl`.
 use super::model::AuthKind;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::{LazyLock, RwLock};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct VerifyRequest {
     /// Relative API path, resolved under the site base URL.
     pub path: String,

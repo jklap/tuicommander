@@ -1,13 +1,16 @@
-import {addPick, editPick, deletePick, draftForTab, recipient, deliverDraft} from './cards.js';
+import {addPick, editPick, deletePick, addError, clearErrors, draftForTab, recipient, deliverDraft, serverSession} from './cards.js';
 import {reviewAgents} from './reviewAgents.js';
 import {connectNative, nativeRequest} from './native.js';
+import {HEARTBEAT_MS, heartbeatReply} from './heartbeat.js';
 let connection = 'Connecting…';
 let bound;
 let agents = [];
-let servers = {servers:[],canStart:false};
+const noServers = {servers:[],canStart:false};
+const serversBySession = new Map();
 let lastRefresh = 0;
 let lastMode;
-async function refreshConnection() {
+let armed;
+async function refreshConnection(tabId) {
   if (Date.now() - lastRefresh < 5000) return;
   lastRefresh = Date.now();
   try {
@@ -21,11 +24,26 @@ async function refreshConnection() {
         for(const tab of await chrome.tabs.query({})) if(tab.id) chrome.tabs.sendMessage(tab.id,{kind:'stop'}).catch(()=>{});
       }
       lastMode=mode?.status;
+      // TUIC is the authority on which session started Design Mode; binding.json is only the install-time copy.
+      armed=mode?.status==='armed'?mode.sessionId:undefined;
     } catch(error) { connection=`${connection} · Status unavailable: ${error.message}`; }
-    try { servers=await request('list_dev_servers'); }
-    catch(error) { servers={servers:[],canStart:false,scanNotice:error.message}; }
+    const sessionId = await selectedSession(tabId);
+    try { serversBySession.set(sessionId, await request('list_dev_servers',{sessionId})); }
+    catch(error) { serversBySession.set(sessionId, {...noServers,scanNotice:error.message}); }
   } catch (error) { agents = []; connection = error.message; }
 }
+let reviewedTab;
+let beating = false;
+async function beat() {
+  if (beating) return;
+  beating = true;
+  try {
+    const reply = await request('heartbeat');
+    await heartbeatReply(reply, chrome.storage.session, chrome.tabs, reviewedTab);
+  } catch { /* The backend expires the mode when beats stop. Retry reload on the next beat. */ }
+  finally { beating = false; }
+}
+setInterval(beat, HEARTBEAT_MS);
 let serial = Promise.resolve();
 const binding = fetch(chrome.runtime.getURL('binding.json')).then((response) => {
   if (!response.ok) throw new Error('Open Design Mode from TUICommander to bind this profile.');
@@ -40,10 +58,16 @@ async function request(action, fields = {}) {
   connectNative((error) => { connection = error; notify(); });
   return nativeRequest({action, repoPath: config.repoPath, version: '2.0.0', ...fields});
 }
+async function selectedSession(tabId) {
+  return serverSession(draftForTab(await drafts(), tabId), agents, armed ?? bound.sessionId);
+}
 async function drafts() { return (await chrome.storage.local.get('drafts')).drafts ?? {}; }
 async function mutate(tabId, change) {
   const all = await drafts();
-  all[String(tabId)] = change(draftForTab(all, tabId));
+  const current = draftForTab(all, tabId);
+  const next = change(current);
+  if (next === current) return;
+  all[String(tabId)] = next;
   await chrome.storage.local.set({drafts: all}); notify();
 }
 async function activeTab() {
@@ -52,11 +76,13 @@ async function activeTab() {
   return tab;
 }
 async function snapshot(tabId) {
+  reviewedTab = tabId;
+  await chrome.storage.session.set({reviewedTab: tabId});
   const all = await drafts();
   const draft = draftForTab(all, tabId);
-  const selection = connection.startsWith('Connected') ? recipient(draft, agents, bound?.sessionId) : {};
+  const selection = connection.startsWith('Connected') ? recipient(draft, agents, armed ?? bound?.sessionId) : {};
   if (Object.keys(selection).some((key) => draft[key] !== selection[key])) { all[String(tabId)] = {...draft,...selection}; await chrome.storage.local.set({drafts:all}); }
-  return {tabId, ...draft, ...selection, repoPath: bound?.repoPath, connection, agents, servers};
+  return {tabId, ...draft, ...selection, repoPath: bound?.repoPath, connection, agents, servers: serversBySession.get(selection.selectedSessionId ?? '') ?? noServers, armedSessionId: armed ?? bound?.sessionId};
 }
 async function capture(message, sender) {
   if (sender.frameId !== 0) return {captureError: 'Frame screenshot omitted; DOM evidence retained.'};
@@ -94,31 +120,38 @@ async function handle(message, sender) {
     await mutate(sender.tab.id, (draft) => addPick(draft, pick));
     return snapshot(sender.tab.id);
   }
+  if (message.kind === 'page_error') {
+    if (!sender.tab?.id || typeof message.error !== 'object') throw new Error('Page error without a tab.');
+    await mutate(sender.tab.id, (draft) => addError(draft, message.error));
+    return;
+  }
   // Content scripts never get a path to sends, host configuration or draft edits.
   if (sender.tab || sender.url !== chrome.runtime.getURL('panel.html')) return;
   const tab = await activeTab();
-  if (message.kind === 'snapshot') { await refreshConnection(); return snapshot(tab.id); }
+  if (message.kind === 'snapshot') { await refreshConnection(tab.id); return snapshot(tab.id); }
   if (message.kind === 'arm') {
     await mutate(tab.id, (draft) => ({...draft, multi: message.multi === true}));
     await chrome.tabs.sendMessage(tab.id, {kind:'arm',multi:message.multi === true});
     return snapshot(tab.id);
   }
   if (message.kind === 'open_server') {
-    const fresh=await request('list_dev_servers');
+    const fresh=await request('list_dev_servers',{sessionId:await selectedSession(tab.id)});
     if(!fresh.servers.some((server)=>server.url===message.url)) throw new Error('That server is no longer available. Refresh the list.');
     await chrome.tabs.update(tab.id,{url:message.url});
   }
-  if (message.kind === 'start_server') { await request('start_dev_server');lastRefresh=0;await refreshConnection(); }
-  if (message.kind === 'refresh') { lastRefresh=0;await refreshConnection(); }
+  if (message.kind === 'start_server') { await request('start_dev_server');lastRefresh=0;await refreshConnection(tab.id); }
+  if (message.kind === 'refresh') { lastRefresh=0;await refreshConnection(tab.id); }
   if (message.kind === 'send') {
     const draft=draftForTab(await drafts(),message.tabId);
     const outcome=await deliverDraft(draft,(batch)=>request('send',batch),
-      (value)=>mutate(message.tabId,()=>value),crypto.randomUUID());
+      (value)=>mutate(message.tabId,()=>value),crypto.randomUUID(),message.errorsOnly === true);
     return {draft:await snapshot(message.tabId),outcome};
   }
   if (message.kind === 'stop') await chrome.tabs.sendMessage(tab.id,{kind:'stop'});
   if (message.kind === 'edit') await mutate(message.tabId, (draft) => editPick(draft,message.id,message.comment));
-  if (message.kind === 'select') await mutate(message.tabId, (draft) => ({...draft,selectedSessionId:message.sessionId,selectionInitialized:true,agentNotice:''}));
+  if (message.kind === 'select') { await mutate(message.tabId, (draft) => ({...draft,selectedSessionId:message.sessionId,selectionInitialized:true,agentNotice:''})); lastRefresh=0; await refreshConnection(message.tabId); }
+  if (message.kind === 'attach_errors') await mutate(message.tabId, (draft) => ({...draft,attachErrors:message.attach === true}));
+  if (message.kind === 'clear_errors') await mutate(message.tabId, clearErrors);
   if (message.kind === 'delete') await mutate(message.tabId, (draft) => deletePick(draft,message.id));
   return snapshot(tab.id);
 }
@@ -132,6 +165,10 @@ chrome.runtime.onMessage.addListener((message,sender,reply) => {
 });
 chrome.tabs.onActivated.addListener(notify);
 chrome.tabs.onUpdated.addListener((_id,change) => { if (change.status === 'complete') notify(); });
+// A new page load starts a new error list; the serial queue keeps it ordered before that page's errors.
+chrome.tabs.onUpdated.addListener((tabId,change) => {
+  if (change.status === 'loading') serial = serial.then(() => mutate(tabId, clearErrors)).catch(() => {});
+});
 chrome.tabs.onRemoved.addListener((tabId) => {
   serial = serial.then(async () => { const all=await drafts(); delete all[String(tabId)]; await chrome.storage.local.set({drafts:all}); }).catch(() => {});
 });

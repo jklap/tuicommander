@@ -182,6 +182,9 @@
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
   padding: 0;
+  /* 44px touch target with a 28px layout footprint: it reaches into the card padding
+     below and right, never left over the open-session button. */
+  margin: -8px -16px -8px 0;
 }
 
 .killBtn:active {

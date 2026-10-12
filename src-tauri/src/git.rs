@@ -291,7 +291,7 @@ async fn cached_worktree_paths(
 /// Core implementation of get_repo_summary, callable from both Tauri command and HTTP route.
 /// Shares the progressive loading caches, including their single-flight loaders.
 pub(crate) async fn get_repo_summary_impl(
-    state: &AppState,
+    state: &Arc<AppState>,
     repo_path: String,
 ) -> Result<RepoSummary, String> {
     let structure = get_repo_structure_impl(state, repo_path.clone()).await?;
@@ -351,7 +351,7 @@ pub(crate) async fn get_repo_structure(
 /// Per-worktree diff stats + last-commit timestamps.
 /// Used by progressive loading Phase 2 — runs after structure is already displayed.
 pub(crate) async fn get_repo_diff_stats_impl(
-    state: &AppState,
+    state: &Arc<AppState>,
     repo_path: String,
 ) -> Result<RepoDiffStats, String> {
     // Bound monitoring across repositories; the cache coalesces concurrent reads.
@@ -360,6 +360,7 @@ pub(crate) async fn get_repo_diff_stats_impl(
     // (`get_repo_structure`) of this same refresh already read them.
     let worktree_paths = cached_worktree_paths(state, repo_path.clone()).await?;
     let path = repo_path.clone();
+    let proof_state = Arc::clone(state);
     cached_try(
         state.git_cache.repo_diff_stats.clone(),
         repo_path,
@@ -376,7 +377,14 @@ pub(crate) async fn get_repo_diff_stats_impl(
                     tuic_git::worktree::inspect_workspace_monitoring_with_pr(
                         Path::new(&path),
                         workspace,
-                        crate::worktree::merged_github_pr_proves_tip_monitoring,
+                        |repo, branch, tip| {
+                            crate::worktree::merged_github_pr_proves_tip_monitoring(
+                                &proof_state,
+                                repo,
+                                branch,
+                                tip,
+                            )
+                        },
                     ),
                 );
             }
@@ -969,7 +977,7 @@ mod tests {
     async fn repo_structure_and_diff_stats_share_one_worktree_paths_read() {
         let (_dir, path) = setup_test_repo_with_commit();
         let repo = path.to_string_lossy().to_string();
-        let state = crate::state::tests_support::make_test_app_state();
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
 
         let structure = get_repo_structure_impl(&state, repo.clone())
             .await
@@ -1009,7 +1017,7 @@ mod tests {
     async fn monitoring_gitpoll_diff_cache_refreshes_dirty_badges_after_invalidation() {
         let (_dir, path) = setup_test_repo_with_commit();
         let repo = path.to_string_lossy().to_string();
-        let state = crate::state::tests_support::make_test_app_state();
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
         let first = get_repo_diff_stats_impl(&state, repo.clone())
             .await
             .unwrap();

@@ -19,6 +19,10 @@ it.each([false, true])("setting enabled=%s does not overwrite newer fields saved
 		precheck: null,
 	};
 	const adapter: AutomationAdapter = {
+		templates: async () => [],
+		template: async () => {
+			throw new Error("Unexpected template request");
+		},
 		run: async () => {
 			throw new Error("Unexpected run lookup in enabled-setting regression");
 		},

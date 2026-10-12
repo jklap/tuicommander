@@ -423,3 +423,43 @@ async fn owner_actions_replace_clear_and_report_unavailable_without_revealing_va
     server.abort();
     unregister_providers("a1-owner-actions");
 }
+
+// Catches: a record persisted with the removed `gh_cli` source fails to load, and the whole registry vanishes.
+#[test]
+fn a_stored_gh_cli_account_loads_as_the_ambient_oauth_account() {
+    let record = Account {
+        id: "github.com".into(),
+        provider: "github".into(),
+        site_id: "github-github.com".into(),
+        host: "https://github.com".into(),
+        kind: AuthKind::Ambient,
+        label: "github.com".into(),
+        login: Some("octocat".into()),
+        username: None,
+        created_at: 0,
+        auth_source: Some("gh_cli".into()),
+    };
+    let account = store::github_account(&record).expect("a github record always loads");
+    assert_eq!(
+        account.kind,
+        crate::github_account::AccountKind::GithubComOauth
+    );
+    assert_eq!(account.login.as_deref(), Some("octocat"));
+}
+
+// Catches: removing the gh CLI variant makes legacy github_accounts.json unreadable.
+#[test]
+fn legacy_gh_cli_kind_loads_as_oauth_without_losing_other_accounts() {
+    let accounts: Vec<crate::github_account::GitHubAccount> = serde_json::from_value(
+        serde_json::json!([
+            {"id":"github.com", "host":{"host":"github.com"}, "login":"octocat", "kind":"github_com_gh_cli"},
+            {"id":"enterprise.example", "host":{"host":"enterprise.example"}, "kind":"ghe_pat"}
+        ]),
+    ).unwrap();
+    assert_eq!(accounts.len(), 2);
+    assert_eq!(
+        accounts[0].kind,
+        crate::github_account::AccountKind::GithubComOauth
+    );
+    assert_eq!(accounts[1].kind, crate::github_account::AccountKind::GhePat);
+}

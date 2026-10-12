@@ -244,13 +244,23 @@ describe("uiStore", () => {
 
 	describe("hydrate()", () => {
 		it("loads sidebar state from Rust backend", async () => {
-			mockInvoke.mockResolvedValueOnce({ sidebar_visible: false, sidebar_width: 280 });
+			mockInvoke.mockResolvedValueOnce({ sidebar_visible: false, sidebar_width: 340 });
 
 			await testInScopeAsync(async () => {
 				await store.hydrate();
 				expect(store.state.sidebarVisible).toBe(false);
-				expect(store.state.sidebarWidth).toBe(280);
+				expect(store.state.sidebarWidth).toBe(340);
 				expect(mockInvoke).toHaveBeenCalledWith("load_ui_prefs");
+			});
+		});
+
+		// Catches: the load path skipping the clamp, so a width saved under the old 200px floor reopens narrower than 300.
+		it("loads a saved width below the 300 floor as 300", async () => {
+			mockInvoke.mockResolvedValueOnce({ sidebar_visible: true, sidebar_width: 220 });
+
+			await testInScopeAsync(async () => {
+				await store.hydrate();
+				expect(store.state.sidebarWidth).toBe(300);
 			});
 		});
 
@@ -346,15 +356,17 @@ describe("uiStore", () => {
 
 		it("setSidebarWidth updates width", () => {
 			testInScope(() => {
-				store.setSidebarWidth(250);
-				expect(store.state.sidebarWidth).toBe(250);
+				store.setSidebarWidth(350);
+				expect(store.state.sidebarWidth).toBe(350);
 			});
 		});
 
 		it("setSidebarWidth clamps to min/max", () => {
 			testInScope(() => {
 				store.setSidebarWidth(100);
-				expect(store.state.sidebarWidth).toBe(200);
+				expect(store.state.sidebarWidth).toBe(300);
+				store.setSidebarWidth(299);
+				expect(store.state.sidebarWidth).toBe(300);
 				store.setSidebarWidth(600);
 				expect(store.state.sidebarWidth).toBe(500);
 			});

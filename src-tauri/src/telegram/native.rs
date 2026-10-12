@@ -137,14 +137,28 @@ pub(crate) fn start(state: &Arc<AppState>) {
                 _ = super::settings::changed(&paths, &revision) => {},
                 _ = runtime.run_ref(&mut receive) => {},
                 error = async {
+                    let mut conflicted = false;
                     loop {
                         match inbound.poll().await {
-                            Ok(super::inbound::Poll::Backoff(delay)) => tokio::time::sleep(delay).await,
-                            Ok(super::inbound::Poll::Accepted(count)) => super::settings::status(&paths, true, None, count > 0),
+                            Ok(super::inbound::Poll::Backoff(delay)) => {
+                                // One alert per conflict episode; polling keeps retrying.
+                                if inbound.in_conflict() {
+                                    super::settings::status(&paths, false, Some(Error::Conflict), false);
+                                    if !conflicted {
+                                        conflicted = true;
+                                        super::runtime::alert(&state, Error::Conflict);
+                                    }
+                                }
+                                tokio::time::sleep(delay).await
+                            }
+                            Ok(super::inbound::Poll::Accepted(count)) => {
+                                conflicted = false;
+                                super::settings::status(&paths, true, None, count > 0)
+                            }
                             Err(error) => {
                                 super::settings::status(&paths, false, Some(error), false);
                                 super::runtime::alert(&state, error);
-                                if matches!(error, Error::Unauthorized | Error::Conflict | Error::Rejected(403 | 404)) {
+                                if error.is_fatal() {
                                     return error;
                                 }
                                 tokio::time::sleep(std::time::Duration::from_secs(1)).await;

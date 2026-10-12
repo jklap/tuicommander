@@ -134,13 +134,11 @@ fn batch_query_viewer_is_not_cross_contaminated() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn candidate_order_is_env_env_oauth_ghcli_ghcli() {
+fn candidate_order_is_env_env_oauth() {
     let got = github_auth::order_token_candidates(
         Some("gh".into()),
         Some("github".into()),
         Some("oauth".into()),
-        Some("ghtok".into()),
-        Some("ghcli".into()),
     );
     assert_eq!(
         got,
@@ -148,8 +146,6 @@ fn candidate_order_is_env_env_oauth_ghcli_ghcli() {
             ("gh".to_string(), TokenSource::Env),
             ("github".to_string(), TokenSource::Env),
             ("oauth".to_string(), TokenSource::OAuth),
-            ("ghtok".to_string(), TokenSource::GhCli),
-            ("ghcli".to_string(), TokenSource::GhCli),
         ]
     );
 }
@@ -161,8 +157,6 @@ fn candidate_order_dedupes_by_value_keeping_earliest() {
         Some("same".into()),
         Some("same".into()),
         Some("other".into()),
-        None,
-        None,
     );
     assert_eq!(
         got,
@@ -175,19 +169,14 @@ fn candidate_order_dedupes_by_value_keeping_earliest() {
 
 #[test]
 fn candidate_order_collapses_identical_across_all_sources() {
-    let got = github_auth::order_token_candidates(
-        None,
-        None,
-        Some("x".into()),
-        Some("x".into()),
-        Some("x".into()),
-    );
-    assert_eq!(got, vec![("x".to_string(), TokenSource::OAuth)]);
+    let got =
+        github_auth::order_token_candidates(Some("x".into()), Some("x".into()), Some("x".into()));
+    assert_eq!(got, vec![("x".to_string(), TokenSource::Env)]);
 }
 
 #[test]
 fn candidate_order_empty_when_no_sources() {
-    let got = github_auth::order_token_candidates(None, None, None, None, None);
+    let got = github_auth::order_token_candidates(None, None, None);
     assert!(got.is_empty());
 }
 

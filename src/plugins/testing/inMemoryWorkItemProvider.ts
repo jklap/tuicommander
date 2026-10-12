@@ -18,6 +18,8 @@ export function createInMemoryWorkItemProvider(seed: WorkItemProviderSnapshot = 
 	let revision = 0;
 	let nextId = items.size + 1;
 	const guard = (signal?: AbortSignal) => signal?.throwIfAborted();
+	// The fake has one schema; its creatable types are the types of its seed items.
+	const itemTypes = () => [...new Set(data.items.map((detail) => detail.item.itemType))].toSorted();
 	function detail(reference: WorkItemRef): WorkItemDetail {
 		const item = items.get(reference.id);
 		if (!item || reference.providerId !== data.providerId || reference.accountId !== data.accountId)
@@ -85,8 +87,21 @@ export function createInMemoryWorkItemProvider(seed: WorkItemProviderSnapshot = 
 		fields: data.fields,
 		savedFilters: data.savedFilters,
 		boards: data.boards,
-		async createFields(_itemType, signal) {
+		async createFields(itemType, signal) {
 			guard(signal);
+			// Contract: an untyped call lists the creatable types as the `itemType` enum field.
+			if (itemType === undefined)
+				return [
+					{
+						id: "itemType",
+						name: "Type",
+						kind: "enum",
+						required: true,
+						editable: true,
+						options: itemTypes().map((id) => ({ id, name: id.charAt(0).toUpperCase() + id.slice(1) })),
+					},
+				];
+			if (!itemTypes().includes(itemType)) throw new Error("Unknown item type");
 			return structuredClone(data.fields);
 		},
 		async list(query, signal) {
@@ -218,6 +233,7 @@ export function createInMemoryWorkItemProvider(seed: WorkItemProviderSnapshot = 
 			guard(signal);
 			if (action.kind === "create") {
 				if (reference !== null || !action.value.title.trim()) throw new Error("Create requires no item and a title");
+				if (!itemTypes().includes(action.value.itemType)) throw new Error("Unknown item type");
 				for (const id of Object.keys(action.value.fields))
 					if (!data.fields.some((s) => s.id === id)) throw new Error("Unknown field");
 				for (const schema of data.fields) validate(schema, action.value.fields[schema.id] ?? null);

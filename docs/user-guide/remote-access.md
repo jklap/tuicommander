@@ -134,6 +134,12 @@ for one session can replace its earlier one; tapping either remaining session
 notification opens that session.
 
 ### Mobile Features
+Tap the attachment icon to the left of the session input to choose a photo or file. The
+file name appears while uploading, then its path is added to the draft. Queue
+is unavailable until the upload finishes. Smaller mic and Send controls sit inside the input border on the right.
+
+Hold Send with a finger or mouse, then select **Queue** to hold your current agent prompt until its next ready window. A normal tap still sends immediately. Queue clears the input after acceptance and shows a notice. If the result is uncertain, check the agent session before trying again.
+
 
 - **Sessions list** — See all running agents with status (idle, busy, question, rate-limited, error)
 - **Session detail** — Live output streaming, quick-reply chips (Yes/No/Enter/Ctrl-C), text input. The terminal keybar Ctrl button opens Ctrl+C, Ctrl+B, Ctrl+D and Ctrl+Enter. A choice sends once and closes; tap outside or press Escape to dismiss. Ctrl+C and Ctrl+D use danger colours. Ctrl+Enter is agent-aware: it submits in Claude Code and ego, and inserts a newline in Codex, OpenCode, Goose, Grok and pi. Other agents use documented or conservative fallback keys; ordinary Enter remains the submit key.
