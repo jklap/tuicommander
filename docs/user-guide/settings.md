@@ -109,6 +109,7 @@ never all expert: in basic mode it would show an empty page.
 | **Max Tab Name Length** | — | 10–60 slider |
 | **Repository Groups** | — | Create, rename, delete, and color-code groups |
 | **Reset Panel Sizes** | — | Restore sidebar and panel widths to defaults (**Layout** section) |
+| **Mute Intermediate Text** | On | **Chat** section. In the terminal Chat view, AI Chat and the mobile chat, assistant text that is followed by a tool call in the same turn is drawn smaller and dimmer, so status lines such as "Pump restart." are not mistaken for the answer. The last text of a turn keeps the normal style. Copy and Find work on muted text. Applies immediately. |
 | **UI Legend** | — | Visual reference for colors, symbols, and badges used in the app |
 
 The terminal and app color theme is on the [Terminal](#terminal) page. Native window and webview backgrounds use the same theme color at startup and when the theme changes, including light themes. The mobile PWA offers a separate Dark/Light choice in its Settings screen, saved on the server for connected mobile clients; the screen also shows app and server versions.

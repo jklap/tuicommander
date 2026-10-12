@@ -161,11 +161,15 @@ function activityRows(
 	calls: Map<string, AcpToolCall[]>;
 	refusals: Map<string, string>;
 	thoughts: Map<string, string>;
+	intermediate: Set<string>;
 } {
 	const visible: AcpTranscriptEntry[] = [];
 	const calls = new Map<string, AcpToolCall[]>();
 	const refusals = new Map<string, string>();
 	const thoughts = new Map<string, string>();
+	const intermediate = new Set<string>();
+	// Assistant text of the open turn that no tool call has followed yet.
+	let pendingText: string[] = [];
 	let current: AcpToolCall[] | undefined;
 	for (const entry of entries) {
 		if (entry.kind === "agent") {
@@ -200,7 +204,11 @@ function activityRows(
 			}
 			refusals.set(entry.id, reply.join(" ").replace(/\s+/g, " ").trim());
 		}
+		if (entry.kind === "user" || entry.kind === "settled" || entry.kind === "failed") pendingText = [];
+		if (entry.kind === "agent") pendingText.push(entry.id);
 		if (entry.kind === "tool") {
+			for (const id of pendingText) intermediate.add(id);
+			pendingText = [];
 			if (!current) {
 				current = [];
 				calls.set(entry.id, current);
@@ -211,7 +219,7 @@ function activityRows(
 			visible.push(entry);
 		}
 	}
-	return { visible, calls, refusals, thoughts };
+	return { visible, calls, refusals, thoughts, intermediate };
 }
 
 export interface TranscriptSearchRef {
@@ -238,6 +246,8 @@ export interface TranscriptProps {
 	onFork?: (messageId: string) => void;
 	/** `open_result` opens its file. `answer` and `approve` have nothing to open: the open interaction is drawn at the end, and the transcript scrolls there. */
 	onNoticeAction?: (action: AcpNoticeAction) => void;
+	/** Draw assistant text that a tool call follows in the same turn as a muted status line. */
+	muteIntermediate?: boolean;
 	/** Absent for a read-only transcript: suggested replies are then not drawn. */
 	onSuggestion?: (text: string) => void;
 	/** Open questions, drawn at the end of the conversation they belong to. */
@@ -626,6 +636,8 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 								<Match when={entry.kind === "agent" && entry}>
 									{(agent) => {
 										const projected = createMemo(() => projectChatProtocolText(agent().text));
+										const intermediate = () =>
+											props.muteIntermediate !== false && activity().intermediate.has(agent().id);
 										let content: HTMLDivElement | undefined;
 										createEffect(() => {
 											projected().body;
@@ -639,7 +651,10 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 													(props.onSuggestion && projected().suggestions.length > 0)
 												}
 											>
-												<div class={s.assistantMsg}>
+												<div
+													class={cx(s.assistantMsg, intermediate() && s.intermediateMsg)}
+													data-intermediate={intermediate() ? "" : undefined}
+												>
 													<Show when={projected().intent}>
 														{(intent) => (
 															<div class={s.agentIntent} aria-label="Agent intent">

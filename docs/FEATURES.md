@@ -113,6 +113,7 @@ Right-click an HTTP(S) terminal link (including localhost) and choose **Start in
 - **Remote replay health** — Stream failure, unreadable frames and initial replay stalls show a persistent error toast. Reconnect success requires a delivered frame; healthy idle terminals have no output-silence deadline.
 
 - **CLI / Chat view** — Claude terminals switch between the grid and a conversation view with docked Compose input, built from the agent's session file (including older prompts, human text/image follow-ups queued while Claude is busy, replies, folded tool cards, image/PDF markers and model-change cards). The grid is hidden, never unmounted.
+- **Intermediate Chat text** — Assistant text that a tool call follows in the same turn renders smaller and dimmer in the terminal Chat view, AI Chat and the mobile chat; the last text of a turn keeps the normal style. Switch it off in **Settings → Appearance → Chat → Mute Intermediate Text** (`chat_mute_intermediate_text`, default on).
 - **Chat transcript presentation** — Harness notices use compact system notes, image placeholders use attachment chips, adjacent thinking blocks share a disclosure, and TUIC answers retain the CLI highlight. Historical tool cards show status without fabricated execution timing.
 
 ### 1.2 Tab Bar

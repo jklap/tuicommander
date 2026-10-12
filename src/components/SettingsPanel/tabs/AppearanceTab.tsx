@@ -181,6 +181,18 @@ export const AppearanceTab: Component = () => {
 				<p class={s.hint}>{t("appearance.hint.resetLayout", "Reset sidebar and panel widths to default values")}</p>
 			</div>
 
+			<h3>{t("appearance.heading.chat", "Chat")}</h3>
+
+			<SettingToggle
+				checked={settingsStore.state.chatMuteIntermediateText}
+				onChange={(v) => settingsStore.setChatMuteIntermediateText(v)}
+				label={t("appearance.label.chatMuteIntermediateText", "Mute Intermediate Text")}
+				hint={t(
+					"appearance.hint.chatMuteIntermediateText",
+					"Show assistant text that is followed by a tool call in the same turn smaller and dimmer, so the final answer stands out",
+				)}
+			/>
+
 			<h3>{t("appearance.heading.uiLegend", "UI Legend")}</h3>
 			<p class={s.hint} style={{ "margin-bottom": "12px" }}>
 				{t("appearance.hint.uiLegend", "Visual reference for colors, symbols, and badges used throughout the app")}

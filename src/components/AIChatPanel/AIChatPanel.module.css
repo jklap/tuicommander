@@ -294,6 +294,11 @@
   line-height: 1.5;
 }
 
+.assistantMsg.intermediateMsg {
+  color: var(--fg-muted);
+  font-size: var(--font-sm);
+}
+
 .systemNotice {
   color: var(--fg-muted);
   font-size: var(--font-xs);

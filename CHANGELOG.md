@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- Chat mutes intermediate assistant text (text followed by a tool call in the same turn) in the terminal Chat view, AI Chat and mobile; **Settings → Appearance → Chat → Mute Intermediate Text** turns it off (#1769-89dc).
+
 ### Removed
 - GitHub token chain no longer reads the `gh` CLI login (`gh auth token`, `gh-token` crate); use OAuth login or `GH_TOKEN`/`GITHUB_TOKEN`. TUIC spawns no `gh` process (#1714-1c1d).
 

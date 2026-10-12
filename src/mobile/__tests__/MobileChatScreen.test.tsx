@@ -9,7 +9,7 @@ const { invoke, hydrate, createAcpChat, answerPermission, selectSession } = vi.h
 	selectSession: vi.fn(async () => {}),
 }));
 vi.mock("../../invoke", () => ({ invoke }));
-vi.mock("../../stores/settings", () => ({ settingsStore: { hydrate } }));
+vi.mock("../../stores/settings", () => ({ settingsStore: { hydrate, state: { chatMuteIntermediateText: true } } }));
 vi.mock("../../components/AIChatPanel/useAcpChat", () => ({ createAcpChat }));
 
 import { aiChatDraft } from "../../components/AIChatPanel/draft";

@@ -1,3 +1,8 @@
+## Mute intermediate Chat text (1769-89dc)
+
+- [ ] [VISUAL] Terminal Chat view, AI Chat and mobile chat: text followed by a tool call in the same turn is smaller and dimmer; the last text of the turn keeps normal weight. Needs a `make dev` restart (Rust config field `chat_mute_intermediate_text`).
+- [ ] Settings > Appearance > Chat > Mute Intermediate Text off restores normal weight at once. Copy and Find still work on muted text.
+
 ## Mobile title and compact AI Chat composer (1746-aa9e)
 
 - [ ] [VISUAL] After the TUIC restart, reload the iPhone PWA. Park/Restore/Swap and Stop should share the input row with Attach and Send; the bottom tabs should meet the screen edge. Headless Chromium geometry and screenshots cover 360/390px with 62/34px safe-area overrides; the actual iPhone remains unverified.
