@@ -930,6 +930,10 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 - **Durable task handles**: `agent action=spawn` returns `task_id` and `poll_interval_ms` alongside `session_id`. The `task` MCP tool polls that handle without blocking — `task action=get` returns `{task_id, status, status_message?, result?, error_detail?, poll_interval_ms}` where status is `working|input_required|completed|failed|cancelled` (the last three final), and `task action=cancel` marks the task cancelled **without** killing the agent (`session action=kill` does that). Use this instead of `agent action=wait` / `session action=wait` when work runs past their 300 s cap or when the client may reconnect: the outcome is recorded by the session exit path whether or not anyone was listening. Tasks live for the TUICommander process only — they are deliberately not persisted, because a restart tears down every PTY
 
 ### 6.14 AI Chat Panel (`Cmd+Alt+A`) — ego over ACP
+
+When new content arrives while you read earlier messages, **New text below** appears above the composer. Select it to return to the bottom and resume following. Scrolling to the bottom also clears it; a search jump alone does not show it. Terminal Chat shares this behavior. Disable **New text indicator** in Settings → Appearance → Chat, or mobile Settings. The preference stays on the current client.
+
+Start conversations with **New chat tab** in the tab bar. The session control bar contains no duplicate + action.
 **The conversation lives in ego, not in TUICommander.** There is no LLM client
 here: no provider, no API key, no tool loop, no sandbox. TUICommander launches
 one configured ego binary and speaks ACP to it, per
@@ -1285,9 +1289,11 @@ The `tuic-dictation` Rust crate implements audio, transcription and speech; the 
 | large-v3-turbo | ~1.6 GB | Best (recommended, default) |
 
 ### 9.3 Push-to-Talk
+- **Native macOS Fn** stays recording across window focus changes while held.
+  Physical release stops capture even when another app has focus.
 - Default hotkey: `F5` (configurable, registered globally)
 - Mic button in status bar: hold to record, release to transcribe
-- On macOS, releasing Fn stops microphone capture in Rust before the WebView handles the event. Losing window focus releases a held hotkey; a late Fn start is refused. The file log records release-to-stop latency without storing spoken text.
+- On macOS, releasing Fn stops microphone capture in Rust before the WebView handles the event. A late Fn start is refused. DOM hotkeys release on blur if key-up was lost; native Fn follows physical key state. The file log records release-to-stop latency without storing spoken text.
 - Transcribed text inserts into the focused input element (textarea, input, contenteditable); falls back to active terminal PTY when no text input has focus. Focus target captured at key-press time.
 
 ### 9.4 Streaming Transcription
@@ -2025,6 +2031,8 @@ Agent-scoped plugin (`agentTypes: ["claude"]`) that wakes Claude Code when it st
 - **Capabilities:** `pty:write`, `pty:read`, `ui:ticker`, `ui:markdown`
 
 ## 18. Mobile Companion UI
+
+Waiting terminal ego questions show **Input**. Tap the question icon in the session header to open or close the full question and its wrapping options. The card overlays the terminal without reserving rows. Prior suggested actions are hidden while a human answer is pending.
 
 Phone-optimized progressive web app for monitoring AI agents remotely. Separate SolidJS entry point (`src/mobile/`) served by the existing HTTP server at `/mobile`.
 
@@ -2782,6 +2790,8 @@ prechecks, workspace and duration controls, pause/resume, Run now, confirmed
 delete and recent status history. Open **Automations** from the command palette.
 Step 8 API integration is required before use; see [Automations](user-guide/automations.md).
 
+The Automations palette action also matches **scheduler** and **schedule**. Automations cards show the repository name (full path on hover), common schedules in plain language, secondary cron and the backend next run in its named timezone. Definitions and Runs use keyboard tabs (Left/Right, Home/End). The single toolbar includes **Select first automation on open**, enabled by default and saved for this browser/WebView. Turning it off restores manual selection. Refresh keeps unsaved edits.
+
 ### Automation transport availability
 
 Automations definition management, pause/resume, schedule previews/presets,
@@ -2875,3 +2885,5 @@ Review and edit the draft, then select **Save**. Templates start paused; applyin
 one never persists a definition or starts a run. **Resume** is a separate action.
 Templates use the existing checkout with no precheck and do not change agent
 permissions. Recurring cadence previews retain the existing runtime limitations.
+
+- Finished worktree recycling: explicit completion permits safe reuse with a new branch and path while ignored build artifacts remain intact. Fresh allocations stay reserved.

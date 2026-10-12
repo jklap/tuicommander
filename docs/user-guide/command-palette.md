@@ -38,7 +38,8 @@ Run **Open Terminal Progress** to open the active terminal's journal in a dialog
 Use the selector to inspect another terminal or the whole repository.
 This action is available in desktop and browser mode. The same dialog opens from
 the always available **Terminal Progress** entry in the notification bell, or
-with `Cmd/Ctrl+Shift+P`. The bell badge still counts unread updates.
+with `Cmd/Ctrl+Shift+P`. The bell badge counts unread outcomes. Use **Mark as read**
+in the bell’s Progress section to clear that count without opening or deleting the journal.
 
 ### Powered by the Action Registry
 

@@ -141,9 +141,18 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 
 	const [openingQuestion, setOpeningQuestion] = createSignal(false);
 	const [codexQuestionOpen, setCodexQuestionOpen] = createSignal(false);
+	const [egoQuestionOpen, setEgoQuestionOpen] = createSignal(false);
 	createEffect(() => {
-		if (!sessionState()?.awaiting_input) setCodexQuestionOpen(false);
+		if (!sessionState()?.awaiting_input) {
+			setCodexQuestionOpen(false);
+			setEgoQuestionOpen(false);
+		}
 	});
+	const egoQuestionWaiting = () =>
+		sessionState()?.agent_type === "ego" &&
+		sessionState()?.awaiting_input &&
+		!!sessionState()?.choice_prompt &&
+		props.sessionExists;
 	const codexQuestionWaiting = () =>
 		sessionState()?.agent_type === "codex" &&
 		sessionState()?.awaiting_input &&
@@ -163,6 +172,10 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 		} finally {
 			setOpeningQuestion(false);
 		}
+	}
+	function openQuestion() {
+		if (egoQuestionWaiting()) setEgoQuestionOpen((open) => !open);
+		else void openCodexQuestion();
 	}
 
 	// Prefill value for CommandInput (set by slash menu selection).
@@ -287,14 +300,15 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 						<span class={styles.taskCount}>{sessionState()!.active_sub_tasks}</span>
 					</Show>
 				</button>
-				<Show when={codexQuestionWaiting()}>
+				<Show when={codexQuestionWaiting() || egoQuestionWaiting()}>
 					<button
 						type="button"
 						class={styles.headerAction}
-						onClick={openCodexQuestion}
+						onClick={openQuestion}
 						disabled={openingQuestion()}
-						aria-label="Open Codex question"
-						title="Open Codex question"
+						aria-label={egoQuestionWaiting() ? "Open ego question" : "Open Codex question"}
+						title={egoQuestionWaiting() ? "Open ego question" : "Open Codex question"}
+						aria-expanded={egoQuestionWaiting() ? egoQuestionOpen() : codexQuestionOpen()}
 					>
 						<svg
 							width="18"
@@ -437,7 +451,7 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 					</div>
 				</Show>
 			</div>
-			<Show when={sessionState()?.suggested_actions?.length}>
+			<Show when={!sessionState()?.awaiting_input && sessionState()?.suggested_actions?.length}>
 				<SuggestChips
 					sessionId={props.session.session_id}
 					items={sessionState()!.suggested_actions!}
@@ -466,7 +480,7 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 				ptyInputLine={ptyInputLine()}
 				agentType={sessionState()?.agent_type ?? null}
 				slashItems={sessionState()?.slash_menu_items}
-				choicePrompt={sessionState()?.choice_prompt}
+				choicePrompt={agentType() === "ego" && !egoQuestionOpen() ? undefined : sessionState()?.choice_prompt}
 				codexQuestionOpen={codexQuestionOpen()}
 				onRegisterInsertText={(fn) => {
 					insertComposerText = fn;

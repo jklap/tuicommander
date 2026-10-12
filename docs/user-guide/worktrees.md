@@ -294,3 +294,10 @@ Worktree names that sanitize to an existing checkout name produce an error when 
 Automatic sidebar refreshes are spaced at least five seconds apart for each repository. Changes during that window are collected into one refresh at its end, so the final update is retained. Badges can lag by five seconds plus the time needed to read Git state.
 
 Explicit repository additions, branch checkouts and merge cleanup refresh the affected repository immediately, while still waiting for any active refresh to finish.
+
+### Reuse of finished worktrees
+
+A safe removal keeps a clean, integrated checkout in the archive area for reuse.
+A later worktree creation can reuse it under the new branch name without copying
+ignored build artifacts. Freshly created worktrees stay reserved even before a session
+starts. Dirty, unmerged, locked, and live worktrees are not reused.

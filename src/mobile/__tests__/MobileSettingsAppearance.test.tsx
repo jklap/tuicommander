@@ -1,5 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { transcriptPreferences } from "../../stores/transcriptPreferences";
 import MobileApp from "../MobileApp";
 import { SettingsScreen } from "../screens/SettingsScreen";
 
@@ -80,6 +81,17 @@ afterEach(() => {
 });
 
 describe("mobile Settings", () => {
+	// Catches: mobile rendering the indicator without offering a working opt-out.
+	it("lets the mobile client disable and persist the new-text indicator", async () => {
+		transcriptPreferences.setEnabled(true);
+		render(() => <SettingsScreen isConnected />);
+		await screen.findByRole("combobox", { name: "Theme" });
+		fireEvent.click(screen.getByRole("button", { name: "New text indicator" }));
+		expect(screen.getByRole("button", { name: "New text indicator" }).getAttribute("aria-pressed")).toBe("false");
+		expect(localStorage.getItem("tui-commander-new-text-indicator")).toBe("false");
+		transcriptPreferences.setEnabled(true);
+	});
+
 	it("applies the desktop Paper theme and restores it after Settings remounts", async () => {
 		const first = render(() => <SettingsScreen isConnected />);
 		const theme = await screen.findByRole("combobox", { name: "Theme" });

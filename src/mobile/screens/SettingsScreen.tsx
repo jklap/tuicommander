@@ -1,6 +1,7 @@
 import { createSignal, onMount, Show } from "solid-js";
 import { TelegramTab } from "../../components/SettingsPanel/tabs/TelegramTab";
 import { appLogger } from "../../stores/appLogger";
+import { transcriptPreferences } from "../../stores/transcriptPreferences";
 import { KEEP_AWAKE_KEY } from "../../utils/screenWakeLock";
 import { setDesktopUI } from "../../utils/tabletRouting";
 import { loadMobileTheme, mobileTheme, setMobileTheme } from "../mobileTheme";
@@ -260,6 +261,19 @@ export function SettingsScreen(props: SettingsScreenProps) {
 
 			<section class={styles.section}>
 				<h3 class={styles.sectionTitle}>APPEARANCE</h3>
+				<div class={styles.row}>
+					<span class={styles.label}>New text indicator</span>
+					<button
+						type="button"
+						class={styles.toggle}
+						classList={{ [styles.toggleOn]: transcriptPreferences.enabled() }}
+						aria-label="New text indicator"
+						aria-pressed={transcriptPreferences.enabled()}
+						onClick={() => transcriptPreferences.setEnabled(!transcriptPreferences.enabled())}
+					>
+						<span class={styles.toggleThumb} />
+					</button>
+				</div>
 				<label class={styles.row}>
 					<span class={styles.label}>Theme</span>
 					<select

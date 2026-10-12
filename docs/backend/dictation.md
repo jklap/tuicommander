@@ -17,6 +17,15 @@ optional `audio-output` feature. The output-device selection is unchanged.
 
 Local voice-to-text using Whisper with Metal acceleration on macOS. Push-to-talk workflow with streaming partial results: hold hotkey to record, see partial transcriptions in real-time, release to finalize.
 
+On macOS, losing main-window focus does not release a physically held Fn key.
+The local event monitor still handles ordinary key-up. After focus loss, a
+temporary AppKit timer checks the current modifier flags every 50 ms, stops
+capture and emits key-up once Fn is released, then invalidates itself. The timer
+runs in common main-run-loop modes so menu tracking does not suspend it. It
+requests no global keyboard-monitor permission and does not poll while idle.
+The file log records `Fn focus loss observed` with the physical key state; a
+release found by the timer records `origin="fn-state-poll"`.
+
 ## Diagnose speech that also appears in the mobile composer
 
 Hands-free uses `pty::write_voice_turn` for its bound session. The mobile
