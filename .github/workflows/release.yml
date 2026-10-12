@@ -229,6 +229,9 @@ jobs:
     uses: ./.github/workflows/remote-daemon.yml
 
   finalize-release:
+    concurrency:
+      group: beta-feed-publish
+      cancel-in-progress: false
     timeout-minutes: 15
     needs: [build, remote-daemon]
     runs-on: ubuntu-latest
@@ -318,3 +321,8 @@ jobs:
           [[ "${latest}" == false ]] && latest_flag=(--latest=false)
           gh release edit "${TAG}" --notes-file .tmp/tuic-tests/release-body.md --draft=false \
             --prerelease="${prerelease}" "${latest_flag[@]}"
+
+      - name: Publish beta updater feed
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash scripts/publish-beta-feed.sh "$(jq -r '.version' src-tauri/tauri.conf.json)"

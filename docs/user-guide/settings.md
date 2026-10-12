@@ -89,7 +89,7 @@ never all expert: in basic mode it would show an empty page.
 | **Auto-Standby Timeout** | Pause idle background sessions after this duration to save resources. Default 5 min; `0` disables it. |
 | **Content Indexing** | When to build search indexes: Disabled, Active repo only, Active + on switch, or All repos at boot |
 | **Automatically check for updates** | Check for new versions on startup |
-| **Update Channel** | Choose which release channel to receive updates from |
+| **Update Channel** | Stable, Beta or Nightly. Beta checks the next beta and final stable; beta downloads open their release page. New beta installs default to Beta; existing saved choices stay unchanged |
 | **TUIC CLI** | Install or uninstall the `tuic` command-line tool, with its status. Desktop app only. See [CLI](cli.md). |
 | **Code Intelligence** | Install and manage MDKB, which gives the editor go-to-definition, find references, and symbol outline, and serves as a memory manager for AI agents. Desktop app only. |
 | **ego executable** | Path to the ego binary the **AI Chat** panel talks to over ACP (**ego** section, directly after Code Intelligence). Always shown, also while Experimental Features is off. On the desktop it is laid out like the TUIC CLI section: a status line ("Configured at …") with **Select…** (native file picker) and **Clear**. A browser client, which has no native picker, gets a text field. While it is empty, ACP is not configured: every connect is refused in Rust and the panel says so rather than launching nothing. Read at each connect, so a correction takes effect without a restart. |

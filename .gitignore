@@ -67,6 +67,9 @@ scripts/*
 !scripts/check-release-tag.sh
 !scripts/release-flags.sh
 !scripts/test-release-flags.sh
+!scripts/publish-beta-feed.sh
+!scripts/test-publish-beta-feed.sh
+!scripts/test-install-channel.sh
 !scripts/patch-nightly-version.sh
 !scripts/check-gitlink-reachable.sh
 !scripts/test-check-gitlink-reachable.sh

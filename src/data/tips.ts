@@ -10,6 +10,12 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "Beta updates",
+		description:
+			"Choose Beta in Settings > General > Expert Mode > Update Channel to receive the next beta and the final stable release.",
+		shortcut: null,
+	},
+	{
 		feature: "Agent toast cards",
 		description:
 			"Normal agent notices show a card only on their active origin terminal tab; other tabs receive bell entries only. Turn off Show cards from the active terminal in Settings > Notifications to keep only urgent cards.",

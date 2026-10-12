@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+- Preserve beta installs in the macOS terminal installer and normalize release tag prefixes for default and pinned downloads.
+
+### Added
+- Beta update channel: automatically check for the next beta and final stable release. Completed beta releases publish a rolling feed without changing stable updates.
+
 ### Added
 - Chat mutes intermediate assistant text (text followed by a tool call in the same turn) in the terminal Chat view, AI Chat and mobile; **Settings → Appearance → Chat → Mute Intermediate Text** turns it off (#1769-89dc).
 

@@ -127,8 +127,8 @@ function createUpdaterStore() {
 						setState({ available: false, version: null, body: null, downloadUrl: null });
 					}
 				} else {
-					// Nightly: check BOTH stable (via Tauri built-in) and nightly (via Rust)
-					// in parallel. Prefer stable if available — it supports in-app downloadAndInstall.
+					// Prerelease channels check stable (Tauri) and their feed (Rust)
+					// in parallel. Beta picks the newer version; nightly keeps stable-first behavior.
 					const currentVersion = await getVersion();
 
 					const [stableSettled, nightlySettled] = await Promise.allSettled([
@@ -160,8 +160,14 @@ function createUpdaterStore() {
 							nightlySettled.reason instanceof Error ? nightlySettled.reason.message : String(nightlySettled.reason);
 						appLogger.warn("app", "All update sources failed", raw);
 						setState({ error: raw, available: false, version: null, body: null, downloadUrl: null });
-					} else if (stableUpdate) {
-						// Prefer stable (in-app install) over nightly (browser download)
+					} else if (
+						stableUpdate &&
+						(channel !== "beta" ||
+							!nightlyResult?.available ||
+							!nightlyResult.version ||
+							compareAppVersion(stableUpdate.version, nightlyResult.version) >= 0)
+					) {
+						// Stable supports in-app install; prerelease feeds open their release page.
 						pendingUpdate = stableUpdate;
 						setState({
 							available: true,

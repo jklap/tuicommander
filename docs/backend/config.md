@@ -319,7 +319,7 @@ cleartext copy does not survive on disk.
 | `issue_filter` | `Option<String>` | `"assigned"` | GitHub Issues filter: "assigned", "created", "mentioned", "all", "disabled" |
 | `experimental_features_enabled` | `bool` | `false` | Opts in to the AI Chat panel shell and SSH Tunnels. It has no sub-flags: `ai_chat_enabled`, `ai_triage_enabled` and `ai_watchers_enabled` went with the embedded AI engine (#784-0aec). A `config.json` written before that upgrade still carries them and still loads — `AppConfig` has no `deny_unknown_fields`, and `a_config_written_before_the_ai_engine_was_deleted_still_loads` holds that open |
 | `auto_show_pr_popover` | `bool` | `false` | Auto-show PR popover when switching to a branch with a PR |
-| `update_channel` | `String` | `"stable"` | Update channel: "stable" or "nightly" |
+| `update_channel` | `String` | `"stable"` (`"beta"` in beta builds) | Update channel: "stable", "beta" or "nightly"; saved choices are preserved |
 | `inline_blame_enabled` | `bool` | `true` | Show GitLens-style inline git blame on the code editor's active line |
 | `show_block_timestamps` | `bool` | `true` | Label each command block with its elapsed time while Ctrl+Cmd is held. Frontend-gated (painted by the renderer); stored here for persistence |
 | `show_scrollbar_marks` | `bool` | `true` | Draw command-block marks on the terminal scrollbar. Frontend-gated, toggled from Settings > Terminal |

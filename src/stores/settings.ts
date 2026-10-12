@@ -272,7 +272,7 @@ export type TabOrderingMode = "grouped-by-type" | "terminals-first" | "free";
 export type TerminalRenderer = "webgl" | "canvas" | "native";
 
 /** Update channel */
-export type UpdateChannel = "stable" | "nightly";
+export type UpdateChannel = "stable" | "beta" | "nightly";
 
 /** Settings store state */
 interface SettingsStoreState {
@@ -532,7 +532,7 @@ function createSettingsStore() {
 				setState("language", config.language || "en");
 				setLocale(config.language || "en");
 				const channel = config.update_channel;
-				setState("updateChannel", channel === "nightly" ? channel : "stable");
+				setState("updateChannel", channel === "nightly" || channel === "beta" ? channel : "stable");
 				setState("disabledAgents", config.disabled_agents ?? []);
 				setState("intentTabTitle", config.intent_tab_title ?? true);
 				setState("progressTracking", config.progress_tracking ?? true);

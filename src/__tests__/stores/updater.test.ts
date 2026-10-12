@@ -235,6 +235,79 @@ describe("updaterStore", () => {
 		});
 	});
 
+	describe("checkForUpdate() — beta channel", () => {
+		// Catches: beta checks stable only, or lower stable hides the next beta.
+		it("offers beta.2 over a lower stable release to a beta-channel user", async () => {
+			mockSettingsState.updateChannel = "beta";
+			mockAppVersion = "1.7.4";
+			mockCheck.mockResolvedValue({ version: "1.7.6", downloadAndInstall: vi.fn() });
+			mockRpc.mockResolvedValue({
+				available: true,
+				version: "2.0.0-beta.2",
+				notes: "Beta notes",
+				release_page: "https://github.com/sstraus/tuicommander/releases/tag/v2.0.0-beta.2",
+				not_found: false,
+			});
+			await store.checkForUpdate();
+			expect(store.state.version).toBe("2.0.0-beta.2");
+			expect(store.state.downloadUrl).toBe("https://github.com/sstraus/tuicommander/releases/tag/v2.0.0-beta.2");
+		});
+
+		// Catches: suffix stripping suppresses beta.1 -> beta.2 on the actual beta feed.
+		it("offers the next beta when already running a beta", async () => {
+			mockSettingsState.updateChannel = "beta";
+			mockAppVersion = "2.0.0-beta.1";
+			mockCheck.mockResolvedValue(null);
+			mockRpc.mockResolvedValue({
+				available: true,
+				version: "2.0.0-beta.2",
+				notes: "Next beta",
+				release_page: "https://github.com/sstraus/tuicommander/releases/tag/v2.0.0-beta.2",
+				not_found: false,
+			});
+			await store.checkForUpdate();
+			expect(store.state.available).toBe(true);
+			expect(store.state.version).toBe("2.0.0-beta.2");
+		});
+
+		// Catches: the beta feed traps testers on a prerelease after the final ships.
+		it("installs the final release in-app even while the beta feed remains published", async () => {
+			mockSettingsState.updateChannel = "beta";
+			mockAppVersion = "2.0.0-beta.2";
+			const install = vi.fn().mockResolvedValue(undefined);
+			mockCheck.mockResolvedValue({ version: "2.0.0", downloadAndInstall: install });
+			mockRpc.mockResolvedValue({ available: true, version: "2.0.0-beta.2", not_found: false });
+			await store.checkForUpdate();
+			expect(store.state.version).toBe("2.0.0");
+			expect(store.state.downloadUrl).toBeNull();
+			await store.downloadAndInstall();
+			expect(install).toHaveBeenCalledOnce();
+			expect(mockRelaunch).toHaveBeenCalledOnce();
+		});
+
+		// Catches: opting into beta globally changes the endpoint for stable users.
+		it("keeps stable users on stable when a beta feed exists", async () => {
+			mockSettingsState.updateChannel = "stable";
+			mockAppVersion = "1.7.6";
+			mockCheck.mockResolvedValue(null);
+			mockRpc.mockResolvedValue({ available: true, version: "2.0.0-beta.2", not_found: false });
+			await store.checkForUpdate();
+			expect(store.state.available).toBe(false);
+			expect(mockRpc).not.toHaveBeenCalled();
+		});
+
+		// Catches: the first beta's absent feed hides a final stable update.
+		it("offers stable when the beta feed is missing", async () => {
+			mockSettingsState.updateChannel = "beta";
+			mockAppVersion = "2.0.0-beta.1";
+			mockCheck.mockResolvedValue({ version: "2.0.0", downloadAndInstall: vi.fn() });
+			mockRpc.mockResolvedValue({ available: false, version: null, not_found: true });
+			await store.checkForUpdate();
+			expect(store.state.version).toBe("2.0.0");
+			expect(store.state.noRelease).toBe(false);
+		});
+	});
+
 	describe("checkForUpdate() — nightly channel", () => {
 		it("prefers stable release over nightly when both available", async () => {
 			mockSettingsState.updateChannel = "nightly";
