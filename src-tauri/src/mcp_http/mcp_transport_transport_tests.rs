@@ -3802,6 +3802,48 @@ async fn ui_toast_puts_the_resolved_sound_on_the_bus() {
     }
 }
 
+async fn toast_urgency_on_bus(args: serde_json::Value) -> (serde_json::Value, Option<String>) {
+    let state = test_state();
+    let mut rx = state.event_bus.subscribe();
+    let r = handle_mcp_tool_call(&state, loopback_addr(), "ui", &args, None).await;
+    let urgency = match rx.try_recv() {
+        Ok(crate::state::AppEvent::McpToast { urgency, .. }) => Some(urgency),
+        _ => None,
+    };
+    (r, urgency)
+}
+
+#[tokio::test]
+async fn ui_toast_urgency_defaults_to_normal_and_passes_urgent_through() {
+    let (r, urgency) =
+        toast_urgency_on_bus(serde_json::json!({ "action": "toast", "title": "t" })).await;
+    assert_eq!(r["ok"], true);
+    assert_eq!(urgency.as_deref(), Some("normal"));
+    let (r, urgency) = toast_urgency_on_bus(
+        serde_json::json!({ "action": "toast", "title": "t", "urgency": "urgent" }),
+    )
+    .await;
+    assert_eq!(r["ok"], true);
+    assert_eq!(urgency.as_deref(), Some("urgent"));
+}
+
+#[tokio::test]
+async fn ui_toast_refuses_an_unknown_urgency_and_emits_nothing() {
+    for bad in [
+        serde_json::json!("high"),
+        serde_json::json!(true),
+        serde_json::json!("Urgent"),
+    ] {
+        let (r, urgency) = toast_urgency_on_bus(
+            serde_json::json!({ "action": "toast", "title": "t", "urgency": bad }),
+        )
+        .await;
+        let error = r["error"].as_str().expect("error for a bad urgency");
+        assert!(error.contains("normal, urgent"), "allowed values listed: {error}");
+        assert_eq!(urgency, None, "a refused toast must not reach the bus");
+    }
+}
+
 #[tokio::test]
 async fn ui_toast_includes_origin_repo_path_from_peer_agent() {
     use crate::state::PeerAgent;
