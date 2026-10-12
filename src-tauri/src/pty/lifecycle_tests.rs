@@ -1,3 +1,47 @@
+// Catches: child bridges escaping to the default instance or an inherited stale socket.
+#[cfg(unix)]
+#[test]
+fn child_env_points_the_bridge_at_the_spawning_instance() {
+    let dir = crate::test_support::short_socket_tempdir();
+    for socket_name in ["tuic-mcp-named.sock", "mcp.sock", "mcp-123.sock"] {
+        let listener = std::os::unix::net::UnixListener::bind(dir.path().join(socket_name))
+            .expect("bind spawning instance socket");
+        let socket = listener
+            .local_addr()
+            .unwrap()
+            .as_pathname()
+            .unwrap()
+            .to_path_buf();
+        let state = crate::state::tests_support::make_test_app_state();
+        *state.bound_socket_path.write() = socket.clone();
+        let output = dir.path().join("child-socket");
+        let (pair, mut child) = spawn_pty_pair_with_retry(
+            PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            },
+            || {
+                let mut cmd = CommandBuilder::new("/bin/sh");
+                cmd.args(["-c", r#"printf '%s' "$TUIC_SOCKET" > "$1""#, "child"]);
+                cmd.arg(&output);
+                cmd.env("TUIC_SOCKET", dir.path().join("stale-parent.sock"));
+                bind_pty_identity(&state, &mut cmd, "socket-child", None);
+                cmd
+            },
+        )
+        .expect("spawn child through production PTY path");
+        assert!(child.wait().unwrap().success());
+        drop(pair);
+        assert_eq!(
+            std::fs::read_to_string(&output).unwrap(),
+            socket.to_string_lossy(),
+            "child must reach the server socket actually bound: {socket_name}"
+        );
+    }
+}
+
 #[test]
 fn pty_identity_defaults_claude_to_native_scrollback() {
     let state = crate::state::tests_support::make_test_app_state();

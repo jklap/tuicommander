@@ -6,6 +6,13 @@ one uniquely matching foreground process environment. Session-list consumers
 use the repaired association for parent-child routing; they do not infer it
 from terminal names or working directories.
 
+On Unix, spawn binding also sets `TUIC_SOCKET` to the socket recorded after
+this server binds its IPC listener. Named instances, the default instance, and
+collision fallback sockets use this same path, so child agent bridges reach
+the spawning server even when the parent environment names another socket.
+Before the listener binds, no socket override is injected. Windows continues
+to use the shared named-pipe transport.
+
 **Module:** `src-tauri/src/pty.rs`
 
 Manages pseudo-terminal sessions for all terminal tabs in the application.
