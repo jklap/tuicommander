@@ -302,7 +302,7 @@ Right-click a terminal and select **Inspect Launch Instructions…**. Expand a s
 
 Capture starts with new managed launches after the backend update. It includes the final brief with TUIC peer context, `--system-prompt`/`--append-system-prompt` values, snapshots of explicitly supplied `--system-prompt-file`/`--append-system-prompt-file` files, and TUIC MCP initialize responses. File snapshots show the bytes available to TUIC before spawn, not confirmation of what the agent read. Shell-launched agents, older sessions and independently loaded files such as AGENTS.md are **Not observable by TUIC**. TUIC does not reconstruct them from current settings.
 
-Redacted text is limited to 32 KiB per section and 64 KiB across 16 captured sections. Larger text is labeled truncated; missing, non-regular, non-UTF-8 or over-1-MiB instruction files are labeled unavailable. Byte counts describe the original payload, not the shorter redacted preview. Receipts survive a frontend reload, but not session closure or a backend restart.
+Redacted text is limited to 32 KiB per section and 64 KiB across 16 captured sections. Larger text is labeled truncated; missing, non-regular, non-UTF-8 or over-1-MiB instruction files are labeled unavailable. Byte counts describe the original payload, not the shorter redacted preview. A reconnecting MCP bridge does not add rows: the row **MCP initialize instructions** holds the newest response and shows how many times it was served and when it was last seen. Served rows never use the 16-section limit, so launch sections stay visible. If the receipt cannot be read, the dialog shows the reason from the backend. Receipts survive a frontend reload, but not session closure or a backend restart.
 
 ### Answer terminal ego questions on mobile
 
