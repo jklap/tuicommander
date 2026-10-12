@@ -955,6 +955,12 @@ dual-emitted — Tauri `emit` for the desktop WebView **and** the event bus for
 SSE clients; a bus-only send never reaches the desktop, which has no bus→window
 forwarder.
 
+**`ui action=toast` urgency.** `urgency` accepts `normal` (default) or `urgent`, the
+same names as `agent action=send`. `normal` records the notice in the bell only;
+`urgent` also shows a transient card on the desktop window. The caller chooses; no
+heuristic picks it. Any other value is an error listing the allowed values. The
+value rides the `mcp-toast` event on both transports.
+
 The toast also resolves the calling MCP session to its peer project, PTY cwd, or
 session repository metadata (in that order). The resulting `origin_repo_path` is
 dual-emitted with the toast so clients can show its source and scope retained

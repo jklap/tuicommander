@@ -2580,6 +2580,7 @@ describe("initApp", () => {
 			message: string | null;
 			level: string;
 			sound: string | null;
+			urgency?: string;
 			origin_repo_path?: string;
 			origin_session_id?: string;
 			__tuic_origin?: { connection: string; name?: string };
@@ -2831,6 +2832,46 @@ describe("initApp", () => {
 				severity: "info",
 			});
 			expect(activityStore.getForSection("messages")[0].onClick).toBeTypeOf("function");
+		});
+
+		it("1752 an urgent notice shows a card and a bell item; a normal one only the bell item", async () => {
+			// catches: urgency ignored by the listener, or normal notices popping up as cards again
+			const { getCallback } = captureMcpToast();
+			await initApp(createMockDeps());
+			for (const toast of [...toastsStore.toasts]) toastsStore.remove(toast.id);
+			const base = { message: "body", level: "info", sound: null };
+
+			getCallback()!({ payload: { ...base, title: "Quiet", urgency: "normal" } });
+			getCallback()!({ payload: { ...base, title: "Legacy" } });
+			expect(toastsStore.toasts).toHaveLength(0);
+
+			getCallback()!({ payload: { ...base, title: "Loud", urgency: "urgent" } });
+			expect(toastsStore.toasts.map((t) => t.title)).toEqual(["Loud"]);
+			expect(
+				activityStore
+					.getForSection("messages")
+					.map((i) => i.title)
+					.sort(),
+			).toEqual(["Legacy", "Loud", "Quiet"]);
+		});
+
+		it("1752 a mirrored urgent notice keeps its connection prefix on the card and is not duplicated", async () => {
+			// catches: remote urgent toast loses the [connection] label, or a redelivery stacks cards
+			const { getCallback } = captureMcpToast();
+			await initApp(createMockDeps());
+			for (const toast of [...toastsStore.toasts]) toastsStore.remove(toast.id);
+			const payload: ToastPayload = {
+				title: "Answer",
+				message: "42",
+				level: "info",
+				sound: null,
+				urgency: "urgent",
+				__tuic_origin: { connection: "mint", name: "mac-mint" },
+			};
+			getCallback()!({ payload });
+			getCallback()!({ payload });
+			expect(toastsStore.toasts.map((t) => t.title)).toEqual(["[mac-mint] Answer"]);
+			expect(activityStore.getForSection("messages")).toHaveLength(1);
 		});
 	});
 

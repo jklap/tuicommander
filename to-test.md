@@ -1,3 +1,27 @@
+## Fn dictation through focus changes (1763-3361) — Rust restart required
+
+- [ ] [HUMAN] After Boss manually restarts `make dev` or installs `make build`, dictate for over 60 seconds with short pauses while holding Fn. Let a toast or new tab appear, then move focus to another window while continuing to hold Fn. Recording must continue; release Fn in that window and confirm the microphone stops, the text arrives once, and both its opening and ending words are present. Check the file log for `Fn focus loss observed` with `physically_down=true`, followed by a real native key-up or `origin="fn-state-poll"`. Native adapter and AppKit timer tests cover retention and one release; real microphone/Fn hardware and the complete long transcript require this check. Do not restart Boss's running TUIC from an agent.
+## Mobile title and compact AI Chat composer (1746-aa9e)
+
+- [ ] [VISUAL] After the TUIC restart, reload the iPhone PWA. Park/Restore/Swap and Stop should share the input row with Attach and Send; the bottom tabs should meet the screen edge. Headless Chromium geometry and screenshots cover 360/390px with 62/34px safe-area overrides; the actual iPhone remains unverified.
+- [ ] [VISUAL] Inspect the title on the iPhone with the menu closed and open. The reported screenshot has progressive blur over the title and connection dot, with a crisp subtitle. TopBar, shell and mobile global CSS contain no title/ancestor blur, mask, text-shadow or opacity; the app opts into a translucent iOS status bar in `mobile.html`. The likely cause is WebKit's native scroll-edge effect, which is outside page CSS ([WebKit scroll view](https://github.com/WebKit/WebKit/blob/main/Source/WebKit/UIProcess/ios/WKScrollView.mm) and [native edge wrapper](https://github.com/WebKit/WebKit/blob/main/Source/WebKit/UIProcess/ios/WKUIScrollEdgeEffect.mm)). This is an inference, not a confirmed device diagnosis. Do not add guessed spacing or filter overrides until device inspection identifies the native layer.
+
+## Design Mode dev-server list collapsed (1727-0338)
+
+- [ ] [VISUAL] In Boss's Edge profile, reload the Design Mode extension and open the side panel with many dev servers. The list is collapsed under "Dev servers (N)" and a new pick card shows without scrolling. Vitest and a real side panel in Chrome for Testing with a stub native host (DOM evidence, no screenshot) cover it.
+
+## Design Mode picks while a comment has focus (1731-3be4)
+
+- [ ] [VISUAL] In Boss's Edge profile, type in a pick card comment, then click more elements on the page. Each new pick appears in the side panel and the comment keeps its text and caret. Vitest and a real side panel in Chrome for Testing with a stub native host cover it.
+
+## Design Mode recipient follows the starter (1734-9785)
+
+- [ ] [VISUAL] In Boss's Edge profile, run Start Design Mode from a session (for example feat-1719). The side panel preselects that session labelled "started Design Mode" and lists other agents under "Other agents". A manual choice holds until the next Start. Vitest and a real side panel in Chrome for Testing with a stub native host cover it.
+
+## Automations worktree cleanup render (1623-8b2a)
+
+- [ ] [VISUAL] On the Mac, in Automations > Runs, open a saved run with a worktree: the cleanup preview renders inside the window, the clean worktree is removed, and the run stays in history. Unsafe worktrees (dirty, unmerged, live session) must refuse. Real Git tests on rb Linux and a Linux Chromium run cover it; Mac rendering is unverified.
+
 ## Default-app launcher reaping (1749-f9a0) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, open a URL and a trusted local file from the desktop. Confirm each opens with its default application, TUIC responds while that application remains open, and no zombie launcher remains under TUIC. Automated Linux tests exercise the actual default-app boundary with a harmless launcher; no Mac browser or live TUIC was touched.
@@ -5136,3 +5160,7 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 
 - [ ] After a manual rebuild/restart, create a new worktree after safe removal of a clean integrated one. Confirm that its ignored artifacts persist, its new branch appears, and the old sidebar row is gone. Rust does not hot-reload.
 - [ ] After Boss rebuilds/restarts the Rust backend, verify overlapping worktree creates both succeed, a rename-journal error leaves the original checkout usable, and fingerprint-confirmed forced deletion still works with a live session (#1705-67b3).
+- [ ] Chat new-text indicator (#1757-c6a9): after restart, scroll up in terminal Chat and AI Chat while output streams; confirm the pill appears above the composer, returns to the bottom on click, clears on manual bottom, and respects the per-client Appearance > Chat toggle. On mobile/PWA, check the same behavior and the mobile Settings toggle.
+- [ ] AI Chat control bar (#1755-7709): after restart, confirm its duplicate + is gone and New chat tab still opens a conversation.
+- [ ] #1762-c772: After loading the UI batch, open Automations with a long definition name/path. Check the one-line Active badge, short repository tooltip, readable schedule/next run, tabs with arrow keys, one-row toolbar and first-selection opt-out across reopen.
+- [ ] Bell: with only At-Capacity Retry status and no unread outcomes, no badge appears. With unread Progress, Mark as read clears that count while the journal and other notifications remain (#1764-862a).

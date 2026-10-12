@@ -1376,6 +1376,7 @@ fn emit_session_toast(
                 "message": message,
                 "level": level,
                 "sound": null,
+                "urgency": "normal",
                 "origin_session_id": session_id,
             }),
         );
@@ -1385,6 +1386,7 @@ fn emit_session_toast(
         message: Some(message),
         level: level.into(),
         sound: None,
+        urgency: "normal".into(),
         origin_repo_path: None,
         origin_session_id: Some(session_id.into()),
     });
