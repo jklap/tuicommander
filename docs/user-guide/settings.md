@@ -70,7 +70,7 @@ never all expert: in basic mode it would show an empty page.
 | Notifications | Master Volume, Audio Output Device |
 | Terminal | Shell, Font Weight, Allow OSC 52 clipboard writes, Block folding, Show scrollbar marks, Reflow scrollback on resize |
 | Git & GitHub | Auto-Delete on PR Close, Copy ignored files, Copy untracked files, Storage Strategy, Auto-archive merged worktrees, Orphan Worktree Cleanup and safe cleanup countdown, After Merge Behavior, Auto-Fetch Interval, the **Add another GitHub account** button (shown while no additional account exists) |
-| Agents | Collect project progress (global); per agent: Close idle managed child after, Auto-retry on server errors, Prevent alternate screen, Accept workspace trust for managed spawns (Claude and Codex), Native status signals, Install hooks globally, Track agent intent, Collect progress, Show suggested follow-ups, Headless Command Template; Claude only: Environment Flags |
+| Agents | Collect project progress, Launch instructions (global); per agent: Launch instructions, Close idle managed child after, Auto-retry on server errors, Prevent alternate screen, Accept workspace trust for managed spawns (Claude and Codex), Native status signals, Install hooks globally, Track agent intent, Collect progress, Show suggested follow-ups, Headless Command Template; Claude only: Environment Flags |
 | Voice | Long-press threshold, Auto-send, Input device, Level gate, Speech confidence gate, Hold-back before sending, Notify model when hands-free changes, Start notice |
 | MCP | Collapse tools |
 | Remote Access | Port, Session Token Duration, Enable IPv6 (dual-stack) |
@@ -217,6 +217,12 @@ closure. User-created sessions are unaffected. Unread mail and background work
 keep a managed child open, and its parent receives an idle-timeout notice before
 closure. A child can also be marked keep-open at spawn or through the agent or
 session tool.
+
+**Launch instructions** is the TUIC output-marker text that TUIC passes to an
+agent at every launch and resume. Each agent row has its own override. Empty
+turns it off. A warning names every required marker (`intent:`, `suggest:`,
+`💬 `) that an edit removes. **Reset to default** removes the override. See
+[AI Agents](ai-agents.md#launch-instructions-tuic-output-markers).
 
 Each supported agent has an expandable row showing detection status, version, and MCP badge.
 
