@@ -1,3 +1,4 @@
+import { Select } from "../../ui/Select";
 import { createEffect, createMemo, createSignal, onCleanup, Show, untrack } from "solid-js";
 import type { WorkItemProvider } from "../../../plugins/workItemProvider";
 import { createTasksQuery } from "../../../stores/tasksQuery";
@@ -72,14 +73,14 @@ export function TasksRoadmap(props: TasksRoadmapProps) {
 				</button>
 				<label>
 					Zoom
-					<select
+					<Select
 						aria-label="Roadmap zoom"
 						value={zoom()}
 						onChange={(event) => setZoom(event.currentTarget.value as RoadmapZoom)}
 					>
 						<option value="month">Month</option>
 						<option value="quarter">Quarter</option>
-					</select>
+					</Select>
 				</label>
 				<button
 					type="button"

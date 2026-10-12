@@ -21,8 +21,7 @@
 .field { display: flex; align-items: flex-end; gap: 8px; min-width: 0; }
 .fieldLabel { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 0; }
 .fieldLabel > span:first-child { color: var(--fg-secondary); font-size: var(--font-sm, 12px); }
-.detail input, .detail select, .detail textarea { width: 100%; box-sizing: border-box; min-height: 36px; padding: 8px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-tertiary); color: var(--fg-primary); font: inherit; }
-.detail textarea { min-height: 96px; resize: vertical; }
+.detail [data-form-control] { width: 100%; }
 .detail select[multiple] { min-height: 96px; }
 .detail button { min-height: 36px; padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-tertiary); color: var(--fg-secondary); font: inherit; cursor: pointer; }
 .detail button:hover:enabled { background: var(--bg-highlight); color: var(--fg-primary); }
@@ -40,7 +39,6 @@
 .error button { margin-left: 8px; }
 @media (max-width: 600px) {
 	.header, .content { padding: 12px; }
-	.detail input, .detail select, .detail textarea { font-size: 16px; }
 	.detail button { min-height: 44px; }
 	.statusRow { align-items: flex-start; }
 }

@@ -17,3 +17,8 @@ export type { BadgeVariant, BranchBadgeProps, CiBadgeProps, PrBadgeProps, Status
 export { BranchBadge, CiBadge, PrBadge, StatusBadge } from "./StatusBadge";
 export type { ZoomIndicatorProps } from "./ZoomIndicator";
 export { ZoomIndicator } from "./ZoomIndicator";
+
+export { Select, type SelectProps } from "./Select";
+export { Input, type InputProps } from "./Input";
+export { Textarea, type TextareaProps } from "./Textarea";
+export { SegmentedControl, type SegmentedControlProps, type SegmentOption } from "./SegmentedControl";

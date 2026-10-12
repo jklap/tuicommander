@@ -1,3 +1,6 @@
+import { Select } from "../../ui/Select";
+import { Input } from "../../ui/Input";
+import { Textarea } from "../../ui/Textarea";
 import { createEffect, createMemo, createSignal, For, Match, on, Show, Switch } from "solid-js";
 import type { WorkItemFieldSchema, WorkItemFieldValue } from "../../../types/work-items.gen";
 import { TaskMarkdown } from "./TaskMarkdown";
@@ -93,7 +96,7 @@ export function TaskField(props: {
 				>
 					<Switch
 						fallback={
-							<input
+							<Input
 								aria-label={props.schema.name}
 								value={text()}
 								disabled={props.disabled}
@@ -113,7 +116,7 @@ export function TaskField(props: {
 						}
 					>
 						<Match when={props.schema.kind === "markdown"}>
-							<textarea
+							<Textarea
 								aria-label={props.schema.name}
 								value={text()}
 								disabled={props.disabled}
@@ -122,7 +125,7 @@ export function TaskField(props: {
 							/>
 						</Match>
 						<Match when={props.schema.kind === "enum"}>
-							<select
+							<Select
 								aria-label={props.schema.name}
 								disabled={props.disabled}
 								required={props.schema.required}
@@ -138,10 +141,10 @@ export function TaskField(props: {
 										</option>
 									)}
 								</For>
-							</select>
+							</Select>
 						</Match>
 						<Match when={props.schema.kind === "user" || props.schema.kind === "labels"}>
-							<select
+							<Select
 								aria-label={props.schema.name}
 								multiple
 								disabled={props.disabled}
@@ -158,7 +161,7 @@ export function TaskField(props: {
 										</option>
 									)}
 								</For>
-							</select>
+							</Select>
 						</Match>
 					</Switch>
 				</Show>

@@ -1,3 +1,6 @@
+import { Select } from "../../ui/Select";
+import { Input } from "../../ui/Input";
+import { Textarea } from "../../ui/Textarea";
 import { For, Show } from "solid-js";
 import { SettingField } from "../../SettingsPanel/fields/SettingField";
 import { TaskCreateField } from "./TaskCreateField";
@@ -24,7 +27,7 @@ export function TasksCreate(props: TasksCreateProps) {
 			<h2>New task in {props.provider.name}</h2>
 			<SettingField label="Type *">
 				{(id) => (
-					<select
+					<Select
 						id={id}
 						aria-required="true"
 						disabled={model.submitting() || model.types().length < 2}
@@ -40,12 +43,12 @@ export function TasksCreate(props: TasksCreateProps) {
 								</option>
 							)}
 						</For>
-					</select>
+					</Select>
 				)}
 			</SettingField>
 			<SettingField label="Title *">
 				{(id) => (
-					<input
+					<Input
 						id={id}
 						type="text"
 						aria-required="true"
@@ -57,7 +60,7 @@ export function TasksCreate(props: TasksCreateProps) {
 			</SettingField>
 			<SettingField label="Description">
 				{(id) => (
-					<textarea
+					<Textarea
 						id={id}
 						value={model.body()}
 						disabled={model.submitting()}

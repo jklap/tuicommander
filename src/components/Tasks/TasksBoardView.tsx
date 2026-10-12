@@ -1,3 +1,4 @@
+import { Select } from "../ui/Select";
 import { createEffect, createSignal, For, onCleanup, Show } from "solid-js";
 import type { WorkItemProvider } from "../../plugins/workItemProvider";
 import type { WorkItemBoardPage, WorkItemQuery, WorkItemRef } from "../../types/work-items.gen";
@@ -55,9 +56,9 @@ export function TasksBoardView(props: {
 			<Show when={props.provider.boards.length > 1}>
 				<label class={s.boardPicker}>
 					Board
-					<select value={selected()?.id} onChange={(event) => setBoardId(event.currentTarget.value)}>
+					<Select value={selected()?.id} onChange={(event) => setBoardId(event.currentTarget.value)}>
 						<For each={props.provider.boards}>{(board) => <option value={board.id}>{board.name}</option>}</For>
-					</select>
+					</Select>
 				</label>
 			</Show>
 			<Show when={error()}>

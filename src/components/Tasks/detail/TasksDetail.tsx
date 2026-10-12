@@ -1,3 +1,4 @@
+import { Textarea } from "../../ui/Textarea";
 import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
 import type { WorkItemProvider } from "../../../plugins/workItemProvider";
 import type { WorkItemDetail, WorkItemRef } from "../../../types/work-items.gen";
@@ -156,7 +157,7 @@ export function TasksDetail(props: TasksDetailProps) {
 										<form class={styles.composer} onSubmit={submitComment}>
 											<label>
 												New comment
-												<textarea
+												<Textarea
 													aria-label="New comment"
 													placeholder="Write a comment in Markdown"
 													value={draft()}

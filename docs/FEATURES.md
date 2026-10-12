@@ -17,6 +17,12 @@ Desktop AI Chat uses the terminal composer’s pin and blue play buttons. The pi
 
 AI Chat image paste discovers capabilities on first use and shares clipboard precedence with Ideas, terminal Compose, and terminal input: Finder image filenames allow attachments, while substantive text takes priority.
 
+## Shared form controls
+
+Tasks uses shared native Select, Input and Textarea controls with consistent
+36px fields, theme colours, visible focus and touch sizing. Its List, Board and
+Roadmap switch supports arrow keys, Home and End.
+
 ## Tasks roadmap component
 
 The host-rendered roadmap shows provider date fields on a month or quarter timeline.

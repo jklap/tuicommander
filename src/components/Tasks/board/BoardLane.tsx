@@ -1,3 +1,4 @@
+import { Select } from "../../ui/Select";
 import { createVirtualizer } from "@tanstack/solid-virtual";
 import { type Component, For, Show } from "solid-js";
 import type { WorkItemBoardColumn } from "../../../types/work-items.gen";
@@ -68,7 +69,7 @@ export const BoardLane: Component<BoardLaneProps> = (props) => {
 											<Show
 												when={props.pending(cardKey(entry().item.reference))}
 												fallback={
-													<select
+													<Select
 														aria-label={`Move ${entry().item.key}`}
 														value={props.column.id}
 														onChange={(event) => {
@@ -86,7 +87,7 @@ export const BoardLane: Component<BoardLaneProps> = (props) => {
 																</option>
 															)}
 														</For>
-													</select>
+													</Select>
 												}
 											>
 												<span class={s.pending}>Moving {entry().item.key}…</span>
