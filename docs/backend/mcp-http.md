@@ -1438,6 +1438,11 @@ its one-time background tasks for the lifetime of the process. A configuration
 save may stop and replace the TCP listener, but the boot runtime remains parked
 after that shutdown so dropping it cannot silently kill local bridge IPC.
 
+PTY children receive `TUIC_SOCKET` from the server's actual bound Unix socket
+path. This includes named `tuic-remote --instance` sockets and collision
+fallbacks. `tuic-bridge` honors this environment override before instance-based
+socket discovery, keeping child MCP calls on the spawning server.
+
 ### Stdio transport
 
 `StdioMcpClient` spawns a child process and communicates via newline-delimited JSON-RPC over stdin/stdout. The handshake is: `initialize` → `notifications/initialized` → `tools/list`.

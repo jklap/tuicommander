@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Fixed
+- Keep child agent MCP bridges on the spawning instance, including isolated `tuic-remote` instances and fallback sockets (#1811-a0fe).
 - Preserve beta installs in the macOS terminal installer and normalize release tag prefixes for default and pinned downloads.
 
 ### Added
