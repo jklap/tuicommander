@@ -1,6 +1,9 @@
 ## Default-app launcher reaping (1749-f9a0) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, open a URL and a trusted local file from the desktop. Confirm each opens with its default application, TUIC responds while that application remains open, and no zombie launcher remains under TUIC. Automated Linux tests exercise the actual default-app boundary with a harmless launcher; no Mac browser or live TUIC was touched.
+## Design Mode child reaping (1707-bd40) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, use Design Mode normally, including repeated starts for the same browser profile. Sample direct children after a day and confirm no zombie is older than one minute. Automated Linux tests verify real shell children through the full launcher, including exit after the launch runtime ends; no browser or desktop instance was started by this peer.
 
 ## Duplicate workflow starts (1748-47b0) — Rust restart required
 
