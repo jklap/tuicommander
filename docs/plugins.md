@@ -1498,9 +1498,9 @@ contract and an injected account-scoped fetch port. It returns data only; core o
 rendering and start-work execution. Recorded GitHub fixtures cover REST read shapes.
 The adapter does not receive tokens or maintain a separate rate limiter.
 
-This module is not yet an installable plugin. Story 1697-4cdc must provide the
-account-aware host fetch wiring before lifecycle, manifest and catalog registration
-are added. B6/B7 core ports and the duplicate-picker consumer also need integration.
+The plugin lifecycle and manifest use `host.httpFetch(url, {account})` from
+story 1697-4cdc; the catalog lists GitHub Work. Configure `data/config.json` with
+account IDs and repositories as described in the module README. B6/B7 core ports and the duplicate-picker consumer also need integration.
 The current `host.invoke` whitelist must not be bypassed to reach core PR commands.
 Projects v2 success paths remain unverified because the recording credential lacks
 `read:project`. See the module README for the open integration tasks.
