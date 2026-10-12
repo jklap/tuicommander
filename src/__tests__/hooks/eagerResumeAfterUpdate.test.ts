@@ -173,18 +173,6 @@ describe("resuming agent tabs after an update restart", () => {
 		});
 	});
 
-	// Catches: a marker left by a failed relaunch arming a later manual restart.
-	it("ignores an update marker older than ten minutes", async () => {
-		await boot(String(Date.now() - 11 * 60_000));
-		await testInScope(async () => {
-			seedTwoBranches([], [saved({ cwd: "/Gits/alpha-feat", agentSessionId: "ok-feat" })]);
-
-			await coordinator().resumeAgentTabsAfterUpdate();
-
-			expect(terminalsStore.getIds()).toEqual([]);
-		});
-	});
-
 	// Catches: the setting being ignored.
 	it("does nothing when eager resume is switched off", async () => {
 		await boot(String(Date.now()));

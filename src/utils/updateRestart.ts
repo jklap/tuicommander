@@ -2,8 +2,6 @@ import { settingsStore } from "../stores/settings";
 
 /** localStorage key written just before an update relaunch. */
 const UPDATE_RESTART_KEY = "tuic.updateRestartAt";
-/** A marker older than this is a relaunch that never happened, not an update restart. */
-const MAX_MARKER_AGE_MS = 10 * 60_000;
 
 /** Read and remove the marker, so only the boot right after the relaunch sees it. */
 function consumeMarker(): boolean {
@@ -11,8 +9,7 @@ function consumeMarker(): boolean {
 		const raw = localStorage.getItem(UPDATE_RESTART_KEY);
 		if (raw === null) return false;
 		localStorage.removeItem(UPDATE_RESTART_KEY);
-		const at = Number(raw);
-		return Number.isFinite(at) && Date.now() - at <= MAX_MARKER_AGE_MS;
+		return true;
 	} catch {
 		return false;
 	}
