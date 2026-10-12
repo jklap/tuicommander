@@ -8,7 +8,6 @@ export function TemplatePicker(props: { store: AutomationsStore }) {
 	const [templates, setTemplates] = createSignal<AutomationTemplate[]>([]);
 	const [selected, setSelected] = createSignal("");
 	const [error, setError] = createSignal("");
-	const [attempted, setAttempted] = createSignal(false);
 	const missing = () => {
 		const draft = props.store.draft();
 		if (!draft?.repository.trim())
@@ -60,15 +59,12 @@ export function TemplatePicker(props: { store: AutomationsStore }) {
 				)}
 			</p>
 			<p role="alert" class={s.reserved}>
-				{attempted() ? missing() : ""}
+				{missing()}
 			</p>
 			<button
 				type="button"
-				disabled={!selected()}
-				onClick={() => {
-					setAttempted(true);
-					if (!missing()) void props.store.applyTemplate(selected());
-				}}
+				disabled={!selected() || !!missing()}
+				onClick={() => void props.store.applyTemplate(selected())}
 			>
 				{t("automations.applyTemplate", "Apply template")}
 			</button>

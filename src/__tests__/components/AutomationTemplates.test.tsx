@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { beforeEach, expect, it, vi } from "vitest";
 import { AutomationsDialog } from "../../components/AutomationsDialog/AutomationsDialog";
@@ -5,9 +7,13 @@ import { repositoriesStore } from "../../stores/repositories";
 import { definition, fakeAdapter } from "../automationsFixtures";
 
 beforeEach(() => {
+	// Seeding schedules a debounced save; drop it so no timer outlives the test.
+	vi.useFakeTimers();
 	for (const path of Object.keys(repositoriesStore.state.repositories)) repositoriesStore.remove(path);
 	repositoriesStore.add({ path: "/chosen", displayName: "Chosen" });
 	repositoriesStore.add({ path: "/other", displayName: "Other" });
+	vi.clearAllTimers();
+	vi.useRealTimers();
 });
 
 // Catches: applying a template saving/running without consent, dropping backend
@@ -46,6 +52,7 @@ it("applies a backend draft only after repository and config selection, then sav
 	fireEvent.click(screen.getByRole("button", { name: "New automation" }));
 	await screen.findByRole("option", { name: "Daily change review" });
 	fireEvent.change(screen.getByLabelText("Template"), { target: { value: "daily_review" } });
+	expect(screen.getByRole("button", { name: "Apply template" })).toBeDisabled();
 	fireEvent.change(screen.getByLabelText("Repository"), { target: { value: "/chosen" } });
 	fireEvent.input(screen.getByLabelText("Run config"), { target: { value: "my-config" } });
 	fireEvent.click(screen.getByRole("button", { name: "Apply template" }));
@@ -88,8 +95,8 @@ it("shows a failed template catalogue and allows an explicit retry", async () =>
 	expect(screen.queryByText("Templates unavailable")).toBeNull();
 });
 
-// Catches: Apply template being a dead, disabled button that never says what is missing.
-it("explains why a selected template cannot be applied yet and requests nothing", async () => {
+// Catches: a disabled Apply template button that never says what is missing.
+it("shows permanently why a selected template cannot be applied yet", async () => {
 	const template = vi.fn();
 	render(() => (
 		<AutomationsDialog
@@ -99,11 +106,12 @@ it("explains why a selected template cannot be applied yet and requests nothing"
 	));
 	fireEvent.click(screen.getByRole("button", { name: "New automation" }));
 	await screen.findByRole("option", { name: "Daily change review" });
-	fireEvent.change(screen.getByLabelText("Template"), { target: { value: "daily_review" } });
-	const apply = screen.getByRole("button", { name: "Apply template" });
-	expect(apply).not.toBeDisabled();
-	fireEvent.click(apply);
 	expect((await screen.findByRole("alert")).textContent).toContain("repository");
+	fireEvent.change(screen.getByLabelText("Template"), { target: { value: "daily_review" } });
+	expect(screen.getByRole("button", { name: "Apply template" })).toBeDisabled();
+	expect(screen.getByRole("alert").textContent).toContain("repository");
+	fireEvent.change(screen.getByLabelText("Repository"), { target: { value: "/chosen" } });
+	expect(screen.getByRole("alert").textContent).toContain("run config");
 	expect(template).not.toHaveBeenCalled();
 });
 
@@ -116,4 +124,18 @@ it("offers the known repositories in the repository picker", async () => {
 	expect([...picker.querySelectorAll("option")].map((o) => o.getAttribute("value"))).toEqual(
 		expect.arrayContaining(["/chosen", "/other"]),
 	);
+});
+
+// Catches: the absolutely positioned Saved/error banner covering the last controls of the
+// scrolling detail pane, because the pane reserves no room below its content for it.
+it("reserves room under the detail pane for the floating banner", () => {
+	const css = readFileSync(
+		resolve(__dirname, "../../components/AutomationsDialog/AutomationsDialog.module.css"),
+		"utf8",
+	);
+	const banner = /\.dialog \.banner \{[^}]*\bbottom: (\d+)px/.exec(css);
+	const detail = /\n\.detail \{[^}]*\bpadding: \d+px \d+px (\d+)px/.exec(css);
+	expect(banner && detail).toBeTruthy();
+	// A one-line banner is about 48px tall; a wrapped one is taller, so demand clear space beyond it.
+	expect(Number(detail?.[1])).toBeGreaterThanOrEqual(Number(banner?.[1]) + 48);
 });
