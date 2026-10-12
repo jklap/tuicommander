@@ -829,3 +829,7 @@ A reset carries an empty string. Titles do not change semantic session activity
 and bypass the lossless state queue. Authoritative lifecycle snapshots and pushes
 apply `agent_type` immediately, including removal when the shell returns; the
 30-second foreground probe remains a recovery/discovery path.
+
+### History-anchored viewport scrolling
+
+Coalesced scrolling uses one atomic latest-wins slot for both transports. `terminal_scroll_to_anchor` encodes an all-time row anchor in that slot; the ticker resolves it under the VT lock after pending output. Null follows output. Evicted anchors clamp to the oldest retained row. Offset commands share the slot, so mixed clients retain request order.

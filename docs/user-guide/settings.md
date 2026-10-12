@@ -90,6 +90,8 @@ never all expert: in basic mode it would show an empty page.
 | **Content Indexing** | When to build search indexes: Disabled, Active repo only, Active + on switch, or All repos at boot |
 | **Automatically check for updates** | Check for new versions on startup |
 | **Update Channel** | Stable, Beta or Nightly. Beta checks the next beta and final stable; beta downloads open their release page. New beta installs default to Beta; existing saved choices stay unchanged |
+| **Wait for agents before restarting** | After an update installs, restart only when no session is busy or awaiting input. The APP UPDATE notification shows the busy count and offers Restart now. Default on |
+| **Resume all agents after an update** | After the app restarts for an update, resume every agent tab with a confirmed session on every branch. Default on |
 | **TUIC CLI** | Install or uninstall the `tuic` command-line tool, with its status. Desktop app only. See [CLI](cli.md). |
 | **Code Intelligence** | Install and manage MDKB, which gives the editor go-to-definition, find references, and symbol outline, and serves as a memory manager for AI agents. Desktop app only. |
 | **ego executable** | Path to the ego binary the **AI Chat** panel talks to over ACP (**ego** section, directly after Code Intelligence). Always shown, also while Experimental Features is off. On the desktop it is laid out like the TUIC CLI section: a status line ("Configured at …") with **Select…** (native file picker) and **Clear**. A browser client, which has no native picker, gets a text field. While it is empty, ACP is not configured: every connect is refused in Rust and the panel says so rather than launching nothing. Read at each connect, so a correction takes effect without a restart. |

@@ -27,22 +27,7 @@
   min-width: 0;
 }
 
-.scopeSelect {
-  padding: 4px 8px;
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--fg-primary);
-  font-size: var(--font-sm);
-  cursor: pointer;
-  flex: 0 1 auto;
-  max-width: 100%;
-}
-
-.scopeSelect:focus {
-  outline: none;
-  border-color: var(--accent);
-}
+.scopeSelect { flex: 0 1 auto; max-width: 100%; }
 
 /* Rate limit section */
 .section {

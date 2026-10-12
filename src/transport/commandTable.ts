@@ -572,6 +572,13 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			body: { offset: args.offset },
 		}),
 	},
+	terminal_scroll_to_anchor: {
+		map: (args) => ({
+			method: "POST",
+			path: `/sessions/${args.sessionId}/terminal/scroll-to-anchor`,
+			body: { anchor: args.anchor },
+		}),
+	},
 	terminal_scroll_info: {
 		map: (args) => ({
 			method: "GET",

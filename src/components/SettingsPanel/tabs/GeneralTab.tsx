@@ -7,6 +7,8 @@ import { IDE_NAMES, settingsStore } from "../../../stores/settings";
 import { updaterStore } from "../../../stores/updater";
 import { isTauri } from "../../../transport";
 import { openDialog } from "../../../utils/nativeDialog";
+import { Input } from "../../ui/Input";
+import { Textarea } from "../../ui/Textarea";
 import { ExpertSetting } from "../ExpertSetting";
 import { InfoBadge } from "../InfoBadge";
 import { SettingInput, SettingSelect, SettingSlider, SettingToggle } from "../SettingFields";
@@ -233,6 +235,26 @@ export const GeneralTab: Component = () => {
 				onChange={(v) => settingsStore.setAutoUpdateEnabled(v)}
 				label={t("general.toggle.autoUpdateEnabled", "Automatically check for updates")}
 				hint={t("general.hint.autoUpdateEnabled", "Download and install updates in the background")}
+			/>
+
+			<SettingToggle
+				checked={settingsStore.state.deferUpdateRelaunch}
+				onChange={(v) => settingsStore.setDeferUpdateRelaunch(v)}
+				label={t("general.toggle.deferUpdateRelaunch", "Wait for agents before restarting")}
+				hint={t(
+					"general.hint.deferUpdateRelaunch",
+					"After an update installs, restart only when no session is busy or waiting for input",
+				)}
+			/>
+
+			<SettingToggle
+				checked={settingsStore.state.eagerResumeAfterUpdate}
+				onChange={(v) => settingsStore.setEagerResumeAfterUpdate(v)}
+				label={t("general.toggle.eagerResumeAfterUpdate", "Resume all agents after an update")}
+				hint={t(
+					"general.hint.eagerResumeAfterUpdate",
+					"After the app restarts for an update, resume every agent tab with a confirmed session on every branch, without visiting each one",
+				)}
 			/>
 
 			<ExpertSetting configKey="app.update_channel" value={settingsStore.state.updateChannel}>
@@ -535,7 +557,7 @@ export const GeneralTab: Component = () => {
 										title={t("general.label.launcherEnabled", "Enabled")}
 										onChange={(e) => updateLauncher(launcher.id, { enabled: e.currentTarget.checked })}
 									/>
-									<input
+									<Input
 										type="text"
 										value={launcher.name}
 										placeholder={t("general.placeholder.launcherName", "Name")}
@@ -546,14 +568,14 @@ export const GeneralTab: Component = () => {
 										{t("general.btn.remove", "Remove")}
 									</button>
 								</div>
-								<input
+								<Input
 									type="text"
 									value={launcher.executable}
 									placeholder={t("general.placeholder.launcherExec", "Executable (e.g. code, or /usr/local/bin/code)")}
 									onInput={(e) => updateLauncher(launcher.id, { executable: e.currentTarget.value })}
 									style={{ width: "100%", "margin-bottom": "6px" }}
 								/>
-								<textarea
+								<Textarea
 									value={launcher.args.join("\n")}
 									placeholder={"--goto\n{file}:{line}:{column}"}
 									rows={3}

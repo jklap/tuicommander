@@ -10,6 +10,8 @@ import {
 } from "../../../../transport";
 import { handleOpenUrl } from "../../../../utils/openUrl";
 import { ConfirmDialog } from "../../../ConfirmDialog";
+import { Input } from "../../../ui/Input";
+import { Select } from "../../../ui/Select";
 import { MachineSelector } from "../../MachineSelector";
 import s from "../../Settings.module.css";
 import { SETTINGS_SECTION_UPSTREAM_MCP } from "../../sections";
@@ -114,7 +116,7 @@ const HeaderRows: Component<{
 		<Index each={props.rows}>
 			{(row, index) => (
 				<div style={{ display: "grid", "grid-template-columns": "minmax(0, 1fr) minmax(0, 1fr) auto", gap: "8px" }}>
-					<input
+					<Input
 						type="text"
 						class={s.input}
 						aria-label={`Header name ${index + 1}`}
@@ -130,7 +132,7 @@ const HeaderRows: Component<{
 							props.onChange(props.rows.map((r, i) => (i === index ? { ...r, name: e.currentTarget.value } : r)))
 						}
 					/>
-					<input
+					<Input
 						type="password"
 						class={s.input}
 						aria-label={`Header secret ${index + 1}`}
@@ -602,7 +604,7 @@ export const UpstreamMcpPanel: Component = () => {
 					style={{ background: "var(--bg-secondary, rgba(255,255,255,0.03))", padding: "12px", "border-radius": "6px" }}
 				>
 					<div style={{ display: "grid", gap: "8px" }}>
-						<input
+						<Input
 							type="text"
 							class={s.input}
 							placeholder="Name (e.g. context7, github)"
@@ -613,16 +615,16 @@ export const UpstreamMcpPanel: Component = () => {
 								setForm((f) => ({ ...f, name: normalized }));
 							}}
 						/>
-						<select
+						<Select
 							class={s.input}
 							value={form().transportType}
 							onChange={(e) => setForm((f) => ({ ...f, transportType: e.currentTarget.value as "http" | "stdio" }))}
 						>
 							<option value="http">HTTP (Streamable MCP)</option>
 							<option value="stdio">stdio (process)</option>
-						</select>
+						</Select>
 						<Show when={form().transportType === "http"}>
-							<input
+							<Input
 								type="text"
 								class={s.input}
 								placeholder="URL (e.g. http://localhost:8080/mcp)"
@@ -633,7 +635,7 @@ export const UpstreamMcpPanel: Component = () => {
 								<label style={{ "font-size": "12px", color: "var(--text-dimmed)", "min-width": "90px" }}>
 									Authentication
 								</label>
-								<select
+								<Select
 									class={s.input}
 									value={form().authMethod}
 									onChange={(e) => setForm((f) => ({ ...f, authMethod: e.currentTarget.value as "bearer" | "oauth2" }))}
@@ -641,10 +643,10 @@ export const UpstreamMcpPanel: Component = () => {
 								>
 									<option value="bearer">Bearer token</option>
 									<option value="oauth2">OAuth 2.1</option>
-								</select>
+								</Select>
 							</div>
 							<Show when={form().authMethod === "bearer"}>
-								<input
+								<Input
 									type="password"
 									class={s.input}
 									placeholder="API key for remote MCP servers (optional, stored in OS keychain)"
@@ -658,21 +660,21 @@ export const UpstreamMcpPanel: Component = () => {
 								onChange={(headers) => setForm((f) => ({ ...f, headers }))}
 							/>
 							<Show when={form().authMethod === "oauth2"}>
-								<input
+								<Input
 									type="text"
 									class={s.input}
 									placeholder="Client ID (leave blank to auto-register)"
 									value={form().oauthClientId}
 									onInput={(e) => setForm((f) => ({ ...f, oauthClientId: e.currentTarget.value }))}
 								/>
-								<input
+								<Input
 									type="password"
 									class={s.input}
 									placeholder="Client Secret (optional, for confidential clients)"
 									value={form().oauthClientSecret}
 									onInput={(e) => setForm((f) => ({ ...f, oauthClientSecret: e.currentTarget.value }))}
 								/>
-								<input
+								<Input
 									type="text"
 									class={s.input}
 									placeholder="Scopes (optional, space-separated)"
@@ -685,21 +687,21 @@ export const UpstreamMcpPanel: Component = () => {
 							</Show>
 						</Show>
 						<Show when={form().transportType === "stdio"}>
-							<input
+							<Input
 								type="text"
 								class={s.input}
 								placeholder="Command (e.g. npx)"
 								value={form().command}
 								onInput={(e) => setForm((f) => ({ ...f, command: e.currentTarget.value }))}
 							/>
-							<input
+							<Input
 								type="text"
 								class={s.input}
 								placeholder="Args (space-separated, e.g. -y @modelcontextprotocol/server-filesystem /path)"
 								value={form().args}
 								onInput={(e) => setForm((f) => ({ ...f, args: e.currentTarget.value }))}
 							/>
-							<input
+							<Input
 								type="text"
 								class={s.input}
 								placeholder="Working directory (optional)"
@@ -709,7 +711,7 @@ export const UpstreamMcpPanel: Component = () => {
 						</Show>
 						<div style={{ display: "flex", gap: "8px", "align-items": "center" }}>
 							<label style={{ "font-size": "12px", color: "var(--text-dimmed)" }}>Timeout (s):</label>
-							<input
+							<Input
 								type="number"
 								class={s.input}
 								value={form().timeout}
@@ -945,7 +947,7 @@ export const UpstreamMcpPanel: Component = () => {
 										<Show when={editForm().transportType === "http"}>
 											<div>
 												<label style={{ "font-size": "12px", color: "var(--text-dimmed)" }}>URL</label>
-												<input
+												<Input
 													type="text"
 													class={s.input}
 													value={editForm().url}
@@ -954,7 +956,7 @@ export const UpstreamMcpPanel: Component = () => {
 											</div>
 											<div>
 												<label style={{ "font-size": "12px", color: "var(--text-dimmed)" }}>Authentication</label>
-												<select
+												<Select
 													class={s.input}
 													value={editForm().authMethod}
 													onChange={(e) =>
@@ -963,12 +965,12 @@ export const UpstreamMcpPanel: Component = () => {
 												>
 													<option value="bearer">Bearer token</option>
 													<option value="oauth2">OAuth 2.1</option>
-												</select>
+												</Select>
 											</div>
 											<Show when={editForm().authMethod === "bearer"}>
 												<div>
 													<label style={{ "font-size": "12px", color: "var(--text-dimmed)" }}>Bearer token</label>
-													<input
+													<Input
 														type="password"
 														class={s.input}
 														placeholder="Enter new token (leave blank to keep current)"
@@ -996,7 +998,7 @@ export const UpstreamMcpPanel: Component = () => {
 											<Show when={editForm().authMethod === "oauth2"}>
 												<div>
 													<label style={{ "font-size": "12px", color: "var(--text-dimmed)" }}>OAuth client ID</label>
-													<input
+													<Input
 														type="text"
 														class={s.input}
 														placeholder="Leave blank to auto-register"
@@ -1006,7 +1008,7 @@ export const UpstreamMcpPanel: Component = () => {
 												</div>
 												<div>
 													<label style={{ "font-size": "12px", color: "var(--text-dimmed)" }}>Client Secret</label>
-													<input
+													<Input
 														type="password"
 														class={s.input}
 														placeholder="Optional, for confidential clients"
@@ -1016,7 +1018,7 @@ export const UpstreamMcpPanel: Component = () => {
 												</div>
 												<div>
 													<label style={{ "font-size": "12px", color: "var(--text-dimmed)" }}>Scopes</label>
-													<input
+													<Input
 														type="text"
 														class={s.input}
 														placeholder="Optional, space-separated"
@@ -1029,7 +1031,7 @@ export const UpstreamMcpPanel: Component = () => {
 										<Show when={editForm().transportType === "stdio"}>
 											<div>
 												<label style={{ "font-size": "12px", color: "var(--text-dimmed)" }}>Command</label>
-												<input
+												<Input
 													type="text"
 													class={s.input}
 													value={editForm().command}
@@ -1038,7 +1040,7 @@ export const UpstreamMcpPanel: Component = () => {
 											</div>
 											<div>
 												<label style={{ "font-size": "12px", color: "var(--text-dimmed)" }}>Args</label>
-												<input
+												<Input
 													type="text"
 													class={s.input}
 													value={editForm().args}
@@ -1047,7 +1049,7 @@ export const UpstreamMcpPanel: Component = () => {
 											</div>
 											<div>
 												<label style={{ "font-size": "12px", color: "var(--text-dimmed)" }}>Working directory</label>
-												<input
+												<Input
 													type="text"
 													class={s.input}
 													value={editForm().cwd}
@@ -1058,7 +1060,7 @@ export const UpstreamMcpPanel: Component = () => {
 										</Show>
 										<div style={{ display: "flex", gap: "8px", "align-items": "center" }}>
 											<label style={{ "font-size": "12px", color: "var(--text-dimmed)" }}>Timeout (s):</label>
-											<input
+											<Input
 												type="number"
 												class={s.input}
 												value={editForm().timeout}

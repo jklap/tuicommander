@@ -47,6 +47,8 @@ interface RustAppConfig {
 	prevent_sleep_when_busy: boolean;
 	auto_update_enabled: boolean;
 	auto_update_plugins_enabled: boolean;
+	defer_update_relaunch: boolean;
+	eager_resume_after_update: boolean;
 	language: string;
 	update_channel: string;
 	services: {
@@ -295,6 +297,10 @@ interface SettingsStoreState {
 	preventSleepWhenBusy: boolean;
 	autoUpdateEnabled: boolean;
 	autoUpdatePluginsEnabled: boolean;
+	/** Hold the post-update restart until no session is busy or awaiting input */
+	deferUpdateRelaunch: boolean;
+	/** After an update restart, resume every agent tab with a confirmed session, on every branch */
+	eagerResumeAfterUpdate: boolean;
 	language: string;
 	updateChannel: UpdateChannel;
 	disabledAgents: string[];
@@ -355,6 +361,8 @@ function createSettingsStore() {
 		preventSleepWhenBusy: false,
 		autoUpdateEnabled: true,
 		autoUpdatePluginsEnabled: true,
+		deferUpdateRelaunch: true,
+		eagerResumeAfterUpdate: true,
 		language: "en",
 		updateChannel: "stable" as UpdateChannel,
 		disabledAgents: [],
@@ -426,6 +434,8 @@ function createSettingsStore() {
 		config.prevent_sleep_when_busy = state.preventSleepWhenBusy;
 		config.auto_update_enabled = state.autoUpdateEnabled;
 		config.auto_update_plugins_enabled = state.autoUpdatePluginsEnabled;
+		config.defer_update_relaunch = state.deferUpdateRelaunch;
+		config.eager_resume_after_update = state.eagerResumeAfterUpdate;
 		config.language = state.language;
 		config.update_channel = state.updateChannel;
 		config.disabled_agents = [...state.disabledAgents];
@@ -529,6 +539,8 @@ function createSettingsStore() {
 				setState("preventSleepWhenBusy", config.prevent_sleep_when_busy ?? false);
 				setState("autoUpdateEnabled", config.auto_update_enabled ?? true);
 				setState("autoUpdatePluginsEnabled", config.auto_update_plugins_enabled ?? true);
+				setState("deferUpdateRelaunch", config.defer_update_relaunch ?? true);
+				setState("eagerResumeAfterUpdate", config.eager_resume_after_update ?? true);
 				setState("language", config.language || "en");
 				setLocale(config.language || "en");
 				const channel = config.update_channel;
@@ -680,6 +692,18 @@ function createSettingsStore() {
 		/** Set auto-update-plugins-enabled preference */
 		setAutoUpdatePluginsEnabled(enabled: boolean): void {
 			setState("autoUpdatePluginsEnabled", enabled);
+			save();
+		},
+
+		/** Set defer-update-relaunch preference */
+		setDeferUpdateRelaunch(enabled: boolean): void {
+			setState("deferUpdateRelaunch", enabled);
+			save();
+		},
+
+		/** Set eager-resume-after-update preference */
+		setEagerResumeAfterUpdate(enabled: boolean): void {
+			setState("eagerResumeAfterUpdate", enabled);
 			save();
 		},
 
