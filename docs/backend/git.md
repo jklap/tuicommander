@@ -454,3 +454,16 @@ do not include untracked files.
 
 
 Automation worktree cleanup (#1623-8b2a): Automation runs retain automation/run IDs and the exact created workspace path and ID in their saved snapshot, including after definition deletion. Worktree cleanup is explicit and limited to final runs. The backend resolves the saved identity and rechecks shared Git integration/archive proof, dirt, submodule commits and live sessions; it never forces removal or closes sessions. Shared `automation_action` actions `worktree_preview` and `cleanup_worktree` accept a saved run `id` on IPC, HTTP, MCP and CLI.
+
+### Finished checkout recycling
+
+Workspace creation writes a durable `reserved` allocation marker in the linked checkout
+Git administration directory before it returns. Only explicit archive or safe removal
+writes `finished`; merged ancestry or missing sessions alone does not release a checkout.
+Creation can rename and reuse a finished checkout from the same repository when Git
+proves it clean and integrated, with no unpushed submodule commits, lock, operation,
+pending warm, or live session. Ignored artifacts stay in place. Git registration and
+submodule paths are repaired. The old workspace removal event precedes the new creation
+event. A durable `tuic-worktree-renames.jsonl` journal lets external registry consumers
+reconcile paths. Allocation is serialized with a Git-common-dir reservation directory;
+a stale directory after a process crash refuses allocation until repaired.

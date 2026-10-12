@@ -1598,6 +1598,171 @@ impl CreatedWorkspace {
     }
 }
 
+/// Durable allocation state lives in Git's per-checkout administration directory,
+/// outside the source tree and independent of session discovery.
+fn allocation_marker(base_repo: &Path, checkout: &Path) -> Result<PathBuf, String> {
+    registered_worktree_admin_dir(base_repo, checkout)?
+        .map(|admin| admin.join("tuic-allocation"))
+        .ok_or_else(|| "Cannot reserve an unregistered checkout".into())
+}
+
+pub fn reserve_worktree(base_repo: &Path, checkout: &Path) -> Result<(), String> {
+    write_allocation(base_repo, checkout, "reserved")
+}
+
+fn write_allocation(base_repo: &Path, checkout: &Path, state: &str) -> Result<(), String> {
+    let marker = allocation_marker(base_repo, checkout)?;
+    let mut file = tempfile::NamedTempFile::new_in(marker.parent().unwrap())
+        .map_err(|error| format!("Cannot create allocation marker: {error}"))?;
+    use std::io::Write;
+    file.write_all(state.as_bytes())
+        .and_then(|()| file.as_file().sync_all())
+        .map_err(|error| format!("Cannot write allocation marker: {error}"))?;
+    file.persist(marker)
+        .map_err(|error| format!("Cannot publish allocation marker: {error}"))?;
+    Ok(())
+}
+
+/// Explicit archive/removal is the completion source; an ancestor tip alone is not.
+pub fn finish_worktree(base_repo: &Path, checkout: &Path) -> Result<(), String> {
+    write_allocation(base_repo, checkout, "finished")
+}
+
+/// Serialize create/recycle within a repository. The directory is a cross-process
+/// reservation: a crashed allocator fails closed until its owner repairs it.
+struct AllocationGuard(PathBuf);
+impl Drop for AllocationGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir(&self.0);
+    }
+}
+fn allocation_guard(base_repo: &Path) -> Result<AllocationGuard, String> {
+    let common = rev_at(base_repo, "--git-common-dir")?;
+    let lock = base_repo.join(common).join("tuic-allocation-lock");
+    std::fs::create_dir(&lock).map_err(|error| {
+        format!(
+            "Cannot acquire worktree allocation lock {}: {error}",
+            lock.display()
+        )
+    })?;
+    Ok(AllocationGuard(lock))
+}
+
+/// At the domain boundary the app supplies authoritative live-session exclusion.
+/// Completed checkouts are reused only after fresh Git safety evidence passes.
+pub fn create_workspace_recycling(
+    worktrees_dir: &Path,
+    config: &WorktreeConfig,
+    base_ref: Option<&str>,
+    available: impl Fn(&Path) -> bool,
+) -> Result<(CreatedWorkspace, Option<WorkspaceWorktree>), String> {
+    let repo = Path::new(&config.base_repo);
+    let _allocation = allocation_guard(repo)?;
+    let branch = config
+        .branch
+        .clone()
+        .unwrap_or_else(|| sanitize_name(&config.task_name));
+    ensure_branch_has_no_workspace(repo, &branch)?;
+    let destination = worktrees_dir.join(sanitize_name(&config.task_name));
+    // An existing destination or ref keeps the established creation semantics.
+    if config.create_branch
+        && !destination.exists()
+        && rev_at(repo, &format!("refs/heads/{branch}")).is_err()
+    {
+        let listed = git_cmd(repo)
+            .args(["worktree", "list", "--porcelain"])
+            .run()
+            .map_err(|error| format!("Cannot list recycling candidates: {error}"))?;
+        for entry in parse_worktree_entries(&listed.stdout) {
+            let Some(old_branch) = entry.branch else {
+                continue;
+            };
+            let old_path = PathBuf::from(&entry.path);
+            let Ok(marker) = allocation_marker(repo, &old_path) else {
+                continue;
+            };
+            if std::fs::read_to_string(&marker).ok().as_deref() != Some("finished")
+                || !available(&old_path)
+                || has_operation_in_progress(&entry.path)
+                || marker.parent().unwrap().join("locked").exists()
+                || warm_status(&old_path)["status"] == "pending"
+            {
+                continue;
+            }
+            let clean = dirty_files_at(&old_path).ok() == Some(0);
+            let submodules_safe =
+                dirty_fingerprint_at(&old_path).is_ok_and(|(_, modules)| modules.is_empty());
+            let integrated = branch_integration_with_pr(repo, &old_branch, |_, _, _| false)
+                .is_ok_and(|proof| proof.integrated);
+            if !clean
+                || !submodules_safe
+                || !integrated
+                || rev_at(&old_path, "HEAD").ok()
+                    != rev_at(repo, &format!("refs/heads/{old_branch}")).ok()
+            {
+                continue;
+            }
+            let start = base_ref.unwrap_or("HEAD");
+            fetch_if_remote(&config.base_repo, start)?;
+            // Reserve before touching Git or paths; failures cannot expose it to another caller.
+            reserve_worktree(repo, &old_path)?;
+            std::fs::create_dir_all(worktrees_dir)
+                .map_err(|error| format!("Cannot create checkout parent: {error}"))?;
+            move_registered_checkout(repo, &old_path, &destination)?;
+            if let Err(error) = git_cmd(&destination)
+                .args(["switch", "-c", &branch, start])
+                .run()
+            {
+                let rollback = move_registered_checkout(repo, &destination, &old_path);
+                return Err(format!(
+                    "Cannot switch recycled checkout: {error}; rollback: {rollback:?}"
+                ));
+            }
+            git_cmd(&destination)
+                .args(["clean", "-fd"])
+                .run()
+                .map_err(|error| format!("Cannot clean recycled source: {error}"))?;
+            let old = WorkspaceWorktree {
+                branch: old_branch,
+                path: entry.path,
+                kind: WorkspaceKind::Worktree,
+                warm_artifacts: None,
+                lifecycle_status: None,
+            };
+            record_worktree_rename(repo, &old.path, &destination.to_string_lossy())?;
+            clear_warm(&old_path);
+            set_branch_base(&config.base_repo, &branch, start)?;
+            let warnings = initialize_submodules(repo, &destination);
+            return Ok((
+                CreatedWorkspace {
+                    workspace_id: workspace_id_of_worktree(&branch),
+                    path: destination,
+                    branch,
+                    kind: WorkspaceKind::Worktree,
+                    warnings,
+                    warmed_directories: 0,
+                },
+                Some(old),
+            ));
+        }
+    }
+    let workspace = create_workspace_unwarmed(worktrees_dir, config, base_ref)?;
+    Ok((workspace, None))
+}
+
+fn record_worktree_rename(repo: &Path, old: &str, new: &str) -> Result<(), String> {
+    let common = repo.join(rev_at(repo, "--git-common-dir")?);
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(common.join("tuic-worktree-renames.jsonl"))
+        .map_err(|error| format!("Cannot open checkout rename journal: {error}"))?;
+    use std::io::Write;
+    writeln!(file, "{}", serde_json::json!({"old": old, "new": new}))
+        .and_then(|()| file.sync_all())
+        .map_err(|error| format!("Cannot record checkout rename: {error}"))
+}
+
 /// Create the registered worktree and its required local inputs, but defer the
 /// expensive cache warm to the caller.
 pub fn create_workspace_unwarmed(
@@ -1612,6 +1777,7 @@ pub fn create_workspace_unwarmed(
         .unwrap_or_else(|| sanitize_name(&config.task_name));
     ensure_branch_has_no_workspace(&src, &branch)?;
     let worktree = create_worktree_with_stale_recovery(worktrees_dir, config, base_ref)?;
+    reserve_worktree(&src, &worktree.path)?;
     let branch = worktree.branch.unwrap_or(branch);
     let mut warnings = link_shared_stores(&src, &worktree.path);
     warnings.extend(initialize_submodules(&src, &worktree.path));
@@ -3736,6 +3902,55 @@ fn repair_archived_submodules(
     Ok(())
 }
 
+fn move_registered_checkout(
+    base_repo: &Path,
+    old: &Path,
+    destination: &Path,
+) -> Result<(), String> {
+    let submodules = git_cmd(old)
+        .args(["submodule", "status", "--recursive"])
+        .run()
+        .map_err(|error| format!("Cannot inspect submodules before archive: {error}"))?;
+    let mut module_gitdirs = Vec::new();
+    for line in submodules.stdout.lines() {
+        if line.starts_with('-') {
+            continue;
+        }
+        let (_, description) = line[1..]
+            .split_once(' ')
+            .ok_or_else(|| format!("Cannot parse submodule status before archive: {line}"))?;
+        let relative = description
+            .rsplit_once(" (")
+            .map_or(description, |(path, _)| path);
+        let module = old.join(relative);
+        module_gitdirs.push((relative.to_string(), rev_at(&module, "--absolute-git-dir")?));
+    }
+    std::fs::rename(old, destination)
+        .map_err(|e| format!("Failed to move worktree to archive: {e}"))?;
+    let repaired = (|| -> Result<(), String> {
+        git_cmd(base_repo)
+            .args(["worktree", "repair", &destination.to_string_lossy()])
+            .run()
+            .map_err(|error| format!("Cannot repair archived worktree: {error}"))?;
+        repair_archived_submodules(base_repo, destination, &module_gitdirs)
+    })();
+    if let Err(error) = repaired {
+        let rollback = (|| -> Result<(), String> {
+            std::fs::rename(destination, old)
+                .map_err(|error| format!("Cannot move checkout back: {error}"))?;
+            git_cmd(base_repo)
+                .args(["worktree", "repair", &old.to_string_lossy()])
+                .run()
+                .map_err(|error| format!("Cannot restore worktree registration: {error}"))?;
+            repair_archived_submodules(base_repo, old, &module_gitdirs)
+        })();
+        return Err(format!(
+            "Failed to repair archived worktree: {error}; rollback: {rollback:?}"
+        ));
+    }
+    Ok(())
+}
+
 pub fn archive_worktree(
     base_repo: &Path,
     workspace_id: &str,
@@ -3765,55 +3980,14 @@ pub fn archive_worktree(
     {
         run_script_in_dir(script, &wt_path).map_err(|e| format!("Archive script failed: {e}"))?;
     }
-    let submodules = git_cmd(&wt_path)
-        .args(["submodule", "status", "--recursive"])
-        .run()
-        .map_err(|error| format!("Cannot inspect submodules before archive: {error}"))?;
-    let mut module_gitdirs = Vec::new();
-    for line in submodules.stdout.lines() {
-        if line.starts_with('-') {
-            continue;
-        }
-        let (_, description) = line[1..]
-            .split_once(' ')
-            .ok_or_else(|| format!("Cannot parse submodule status before archive: {line}"))?;
-        let relative = description
-            .rsplit_once(" (")
-            .map_or(description, |(path, _)| path);
-        let module = wt_path.join(relative);
-        module_gitdirs.push((relative.to_string(), rev_at(&module, "--absolute-git-dir")?));
-    }
     let parent_dir = wt_path.parent().ok_or("Worktree has no parent directory")?;
     let archive_dir = parent_dir.join("__archived");
-    let sanitized = sanitize_name(&workspace.branch);
     std::fs::create_dir_all(&archive_dir)
-        .map_err(|e| format!("Failed to create archive directory: {e}"))?;
-    // Keep the linked checkout and its Git administration intact. Never clobber
-    // an earlier archive of the same branch.
-    let archive_dest = free_archive_dest(&archive_dir, &sanitized);
-    std::fs::rename(&wt_path, &archive_dest)
-        .map_err(|e| format!("Failed to move worktree to archive: {e}"))?;
-    let repaired = (|| -> Result<(), String> {
-        git_cmd(base_repo)
-            .args(["worktree", "repair", &archive_dest.to_string_lossy()])
-            .run()
-            .map_err(|error| format!("Cannot repair archived worktree: {error}"))?;
-        repair_archived_submodules(base_repo, &archive_dest, &module_gitdirs)
-    })();
-    if let Err(error) = repaired {
-        let rollback = (|| -> Result<(), String> {
-            std::fs::rename(&archive_dest, &wt_path)
-                .map_err(|error| format!("Cannot move checkout back: {error}"))?;
-            git_cmd(base_repo)
-                .args(["worktree", "repair", &wt_path.to_string_lossy()])
-                .run()
-                .map_err(|error| format!("Cannot restore worktree registration: {error}"))?;
-            repair_archived_submodules(base_repo, &wt_path, &module_gitdirs)
-        })();
-        return Err(format!(
-            "Failed to repair archived worktree: {error}; rollback: {rollback:?}"
-        ));
-    }
+        .map_err(|error| format!("Cannot create archive directory: {error}"))?;
+    let archive_dest = free_archive_dest(&archive_dir, &sanitize_name(&workspace.branch));
+    move_registered_checkout(base_repo, &wt_path, &archive_dest)?;
+    finish_worktree(base_repo, &archive_dest)?;
+    record_worktree_rename(base_repo, &workspace.path, &archive_dest.to_string_lossy())?;
     clear_warm(&wt_path);
 
     Ok(archive_dest.to_string_lossy().to_string())
@@ -3945,6 +4119,143 @@ mod tests {
     use std::process::Command;
     use tempfile::TempDir;
     use tuic_test_support::{fail_with_stderr_script, print_file_script, touch_script};
+
+    fn recycle_config(repo: &Path, branch: &str) -> WorktreeConfig {
+        WorktreeConfig {
+            task_name: branch.into(),
+            base_repo: repo.to_string_lossy().into_owned(),
+            branch: Some(branch.into()),
+            create_branch: true,
+        }
+    }
+
+    // Catches: a fresh ancestor branch recycled before its caller starts a session.
+    #[test]
+    fn recycling_reserved_fresh_ancestor_is_not_finished() {
+        let repo = setup_test_repo();
+        let directory = tempfile::tempdir().unwrap();
+        let tip = rev_at(repo.path(), "HEAD").unwrap();
+        let (first, _) = create_workspace_recycling(
+            directory.path(),
+            &recycle_config(repo.path(), "first"),
+            Some(&tip),
+            |_| true,
+        )
+        .unwrap();
+        let (second, reused) = create_workspace_recycling(
+            directory.path(),
+            &recycle_config(repo.path(), "second"),
+            Some(&tip),
+            |_| true,
+        )
+        .unwrap();
+        assert!(reused.is_none());
+        assert!(first.path.exists());
+        assert_ne!(first.path, second.path);
+        assert_eq!(
+            std::fs::read_to_string(allocation_marker(repo.path(), &first.path).unwrap()).unwrap(),
+            "reserved"
+        );
+    }
+
+    // Catches: dirty, unmerged, locked or live finished worktrees recycled despite safety evidence.
+    #[test]
+    fn recycling_dirty_unmerged_locked_or_live_checkout_is_never_selected() {
+        for scenario in ["dirty", "unmerged", "locked", "live"] {
+            let repo = setup_test_repo();
+            let directory = tempfile::tempdir().unwrap();
+            let (first, _) = create_workspace_recycling(
+                directory.path(),
+                &recycle_config(repo.path(), "first"),
+                None,
+                |_| true,
+            )
+            .unwrap();
+            finish_worktree(repo.path(), &first.path).unwrap();
+            match scenario {
+                "dirty" => std::fs::write(first.path.join("scratch"), "keep").unwrap(),
+                "unmerged" => {
+                    std::fs::write(first.path.join("work"), "keep").unwrap();
+                    git_cmd(&first.path).args(["add", "work"]).run().unwrap();
+                    git_cmd(&first.path)
+                        .args(["commit", "-m", "work"])
+                        .run()
+                        .unwrap();
+                }
+                "locked" => {
+                    git_cmd(repo.path())
+                        .args(["worktree", "lock", &first.path.to_string_lossy()])
+                        .run()
+                        .unwrap();
+                }
+                _ => {}
+            }
+            let (_, reused) = create_workspace_recycling(
+                directory.path(),
+                &recycle_config(repo.path(), "second"),
+                None,
+                |_| scenario != "live",
+            )
+            .unwrap();
+            assert!(reused.is_none(), "{scenario}");
+            assert!(first.path.exists(), "{scenario}");
+        }
+    }
+
+    // Catches: stale Git paths after rename, discarded ignored artifacts, or double allocation of a recycled checkout.
+    #[test]
+    fn recycling_finished_checkout_keeps_artifacts_and_removes_stale_paths() {
+        let repo = setup_test_repo();
+        std::fs::write(repo.path().join(".gitignore"), "cache/\n").unwrap();
+        git_cmd(repo.path())
+            .args(["add", ".gitignore"])
+            .run()
+            .unwrap();
+        git_cmd(repo.path())
+            .args(["commit", "-m", "ignore cache"])
+            .run()
+            .unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let (first, _) = create_workspace_recycling(
+            directory.path(),
+            &recycle_config(repo.path(), "first"),
+            None,
+            |_| true,
+        )
+        .unwrap();
+        std::fs::create_dir(first.path.join("cache")).unwrap();
+        std::fs::write(first.path.join("cache/artifact"), "retained").unwrap();
+        let archived = archive_worktree(repo.path(), "first", None).unwrap();
+        let (second, reused) = create_workspace_recycling(
+            directory.path(),
+            &recycle_config(repo.path(), "second"),
+            None,
+            |_| true,
+        )
+        .unwrap();
+        assert_eq!(reused.unwrap().path, archived);
+        assert!(!first.path.exists());
+        assert!(!Path::new(&archived).exists());
+        assert_eq!(
+            std::fs::read_to_string(second.path.join("cache/artifact")).unwrap(),
+            "retained"
+        );
+        let paths = get_worktree_paths_raw(&repo.path().to_string_lossy()).unwrap();
+        assert!(!paths.contains_key("first"));
+        assert_eq!(paths["second"].path, second.path.to_string_lossy());
+        assert_eq!(
+            rev_at(&second.path, "HEAD").unwrap(),
+            rev_at(repo.path(), "HEAD").unwrap()
+        );
+        let (_, reused_again) = create_workspace_recycling(
+            directory.path(),
+            &recycle_config(repo.path(), "third"),
+            None,
+            |_| true,
+        )
+        .unwrap();
+        assert!(reused_again.is_none());
+    }
 
     // Catches: cmd dropping an oversized duplicated PATH and losing Git lookup.
     #[test]

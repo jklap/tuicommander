@@ -248,6 +248,43 @@ pub(crate) fn inspect_worktree_removal(
     }
 }
 
+fn retain_finished_checkout(
+    state: &Arc<AppState>,
+    repo_path: &str,
+    workspace_id: &str,
+    delete_branch: bool,
+    archive_script: Option<&str>,
+    force: bool,
+) -> Result<Option<RemoveWorktreeOutcome>, String> {
+    if force || !delete_branch {
+        return Ok(None);
+    }
+    let repo = Path::new(repo_path);
+    let status = inspect_workspace_lifecycle(state, repo, workspace_id);
+    if status.dirty_files != Some(0)
+        || !status.submodule_unpushed_commits.is_empty()
+        || !matches!(
+            status.commit_status,
+            WorkspaceCommitStatus::Merged | WorkspaceCommitStatus::InSync
+        )
+    {
+        return Ok(None);
+    }
+    let workspace = resolve_any_workspace(repo, workspace_id)?;
+    if !live_sessions_in(state, Path::new(&workspace.path)).is_empty() {
+        return Err("Cannot recycle a checkout with a live session".into());
+    }
+    if operation_head_branch(&workspace.path).is_some() {
+        return Err("Cannot recycle a checkout during a Git operation".into());
+    }
+    archive_worktree(repo, workspace_id, archive_script)?;
+    Ok(Some(RemoveWorktreeOutcome {
+        branch_delete_warning: None,
+        removal_rule: "recyclable".into(),
+        branch: workspace.branch,
+    }))
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "flat safety-confirmation contract plus account state"
@@ -262,6 +299,23 @@ pub(crate) fn remove_worktree_by_workspace_id_with_confirmation(
     override_lock: bool,
     expected_fingerprint: Option<&str>,
 ) -> Result<RemoveWorktreeOutcome, String> {
+    if let Ok(workspace) = resolve_any_workspace(Path::new(repo_path), workspace_id)
+        && !live_sessions_in(state, Path::new(&workspace.path)).is_empty()
+    {
+        return Err("Cannot remove a checkout with a live session".into());
+    }
+    if expected_fingerprint.is_none()
+        && let Some(outcome) = retain_finished_checkout(
+            state,
+            repo_path,
+            workspace_id,
+            delete_branch,
+            archive_script,
+            force,
+        )?
+    {
+        return Ok(outcome);
+    }
     tuic_git::worktree::remove_worktree_by_workspace_id_with_confirmation_and_pr(
         repo_path,
         workspace_id,
@@ -290,6 +344,24 @@ pub(crate) fn remove_worktree_with_presence_confirmation(
     expected_fingerprint: Option<&str>,
     confirm_missing_checkout: bool,
 ) -> Result<RemoveWorktreeOutcome, String> {
+    if let Ok(workspace) = resolve_any_workspace(Path::new(repo_path), workspace_id)
+        && !live_sessions_in(state, Path::new(&workspace.path)).is_empty()
+    {
+        return Err("Cannot remove a checkout with a live session".into());
+    }
+    if expected_fingerprint.is_none()
+        && !confirm_missing_checkout
+        && let Some(outcome) = retain_finished_checkout(
+            state,
+            repo_path,
+            workspace_id,
+            delete_branch,
+            archive_script,
+            force,
+        )?
+    {
+        return Ok(outcome);
+    }
     tuic_git::worktree::remove_worktree_by_workspace_id_with_missing_confirmation_and_pr(
         repo_path,
         workspace_id,
@@ -413,6 +485,32 @@ pub(crate) fn resolve_worktree_dir_for_repo(repo_path: &Path, app_worktrees_dir:
     resolve_worktree_dir(repo_path, &strategy, app_worktrees_dir)
 }
 
+/// Shared allocation adapter for IPC and HTTP/MCP. Finished checkouts never
+/// bypass the live-session guard, including descendants of the checkout root.
+pub(crate) fn allocate_workspace(
+    state: &Arc<AppState>,
+    directory: &Path,
+    config: &WorktreeConfig,
+    base_ref: Option<&str>,
+) -> Result<(CreatedWorkspace, Option<serde_json::Value>), String> {
+    let (workspace, recycled) = create_workspace_recycling(directory, config, base_ref, |path| {
+        live_sessions_in(state, path).is_empty()
+    })?;
+    let rename = recycled.as_ref().map(|old| {
+        serde_json::json!({
+            "old_path": old.path, "new_path": workspace.path.to_string_lossy()
+        })
+    });
+    if let Some(old) = recycled {
+        state.notify_worktree_removed(crate::state::WorktreeRemovedPayload {
+            repo_path: config.base_repo.clone(),
+            workspace_id: workspace_id_of_worktree(&old.branch),
+            branch: old.branch,
+        });
+    }
+    Ok((workspace, rename))
+}
+
 /// Create a linked worktree without a PTY session.
 #[cfg(feature = "desktop")]
 #[tauri::command]
@@ -431,21 +529,37 @@ pub(crate) async fn create_worktree(
     };
     let worktrees_dir =
         resolve_worktree_dir_for_repo(Path::new(&config.base_repo), &state.worktrees_dir);
-    let workspace = tokio::task::spawn_blocking(move || {
-        create_workspace_unwarmed(&worktrees_dir, &config, base_ref.as_deref())
+    let allocation_state = Arc::clone(&state);
+    let (workspace, recycled) = tokio::task::spawn_blocking(move || {
+        allocate_workspace(
+            &allocation_state,
+            &worktrees_dir,
+            &config,
+            base_ref.as_deref(),
+        )
     })
     .await
     .map_err(|error| format!("Task panic: {error}"))??;
 
     let token = begin_warm(&workspace.path);
-    spawn_background_warm(
-        PathBuf::from(&base_repo),
-        workspace.path.clone(),
-        token,
-        crate::cow::warm_worktree,
-    );
+    if recycled.is_some() {
+        finish_warm(
+            &workspace.path,
+            token,
+            serde_json::json!({"status": "done"}),
+        );
+    } else {
+        spawn_background_warm(
+            PathBuf::from(&base_repo),
+            workspace.path.clone(),
+            token,
+            crate::cow::warm_worktree,
+        );
+    }
     state.invalidate_repo_caches(&base_repo);
-    Ok(ipc_worktree_response(&workspace, &base_repo))
+    let mut response = ipc_worktree_response(&workspace, &base_repo);
+    response["worktree_rename"] = serde_json::json!(recycled);
+    Ok(response)
 }
 
 /// Get worktrees directory path.

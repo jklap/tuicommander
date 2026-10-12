@@ -344,6 +344,7 @@ async fn handle_worktree_with_caller(
                         // transports cannot describe the same workspace
                         // differently (#734-ca73).
                         "instructions": &created.instructions,
+                        "worktree_rename": &created.instructions["worktree_rename"],
                     });
                     // Optionally spawn a PTY session in the new worktree
                     if args["spawn_session"].as_bool().unwrap_or(false) {
