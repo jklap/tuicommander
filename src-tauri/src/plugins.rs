@@ -436,7 +436,11 @@ fn strip_load_version(file: &str) -> &str {
         return file;
     };
     match rest.split_once('/') {
-        Some((digits, tail)) if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) => tail,
+        Some((digits, tail))
+            if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) =>
+        {
+            tail
+        }
         None if !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()) => "",
         _ => file,
     }
@@ -1632,7 +1636,10 @@ mod tests {
         // The frontend loads a whole plugin under `/{id}/~v{n}/`, so relative imports
         // inherit the version. The file on disk has no such directory.
         let versioned = resolve_plugin_path("/my-plugin/~v1791828000000/provider.js").unwrap();
-        assert_eq!(versioned, resolve_plugin_path("/my-plugin/provider.js").unwrap());
+        assert_eq!(
+            versioned,
+            resolve_plugin_path("/my-plugin/provider.js").unwrap()
+        );
         let nested = resolve_plugin_path("/my-plugin/~v7/lib/model.js").unwrap();
         assert!(nested.ends_with("my-plugin/lib/model.js"));
     }
@@ -1647,8 +1654,16 @@ mod tests {
     #[test]
     fn resolve_keeps_a_directory_that_only_looks_like_a_version() {
         // Only `~v<digits>` is a load version; any other name is a real directory.
-        assert!(resolve_plugin_path("/my-plugin/~vx/a.js").unwrap().ends_with("my-plugin/~vx/a.js"));
-        assert!(resolve_plugin_path("/my-plugin/~v/a.js").unwrap().ends_with("my-plugin/~v/a.js"));
+        assert!(
+            resolve_plugin_path("/my-plugin/~vx/a.js")
+                .unwrap()
+                .ends_with("my-plugin/~vx/a.js")
+        );
+        assert!(
+            resolve_plugin_path("/my-plugin/~v/a.js")
+                .unwrap()
+                .ends_with("my-plugin/~v/a.js")
+        );
     }
 
     #[test]
