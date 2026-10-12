@@ -5149,3 +5149,5 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 ## Compact mobile attachment (1719-ff5d)
 
 - [ ] On iPhone, tap the attachment icon left of the session composer, choose a photo/file, confirm upload status then its path in the draft, and confirm Queue stays disabled during upload. Smaller mic and Send controls remain inside the right input border.
+
+- [ ] Bell: with only At-Capacity Retry status and no unread outcomes, no badge appears. With unread Progress, Mark as read clears that count while the journal and other notifications remain (#1764-862a).
