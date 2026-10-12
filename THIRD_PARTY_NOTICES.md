@@ -60,6 +60,7 @@ authors and communities behind each project.
 | mime_guess | 2.0.5 | MIT |
 | moka | 0.12.15 | MIT OR Apache-2.0 AND Apache-2.0 |
 | notify | 8.2.0 | CC0-1.0 |
+| open | 5.4.0 | MIT |
 | ort | 2.0.0-rc.13 | MIT OR Apache-2.0 |
 | p256 | 0.13.2 | Apache-2.0 OR MIT |
 | parking_lot | 0.12.5 | MIT OR Apache-2.0 |
@@ -230,7 +231,7 @@ Counts below collapse equivalent SPDX expressions (`MIT OR Apache-2.0` ≡ `Apac
 | License | Count |
 |---------|-------|
 | MIT OR Apache-2.0 | 79 |
-| MIT | 66 |
+| MIT | 67 |
 | Apache-2.0 | 8 |
 | Unlicense OR MIT | 7 |
 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | 4 |

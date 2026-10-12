@@ -285,3 +285,8 @@ callback uses `Handle::block_on` only on `spawn_blocking` threads; the domain cr
 remains independent of Tokio. `merge_and_archive_worktree` is now an async Tauri
 command and moves its complete merge/cleanup implementation to `spawn_blocking`,
 matching its HTTP twin and `finalize_merged_worktree`.
+
+`open_default_app` is async and host-only. It validates the URL or path, builds
+the platform launcher, and hands spawn/wait ownership to the shared
+`tuic_core::child_reaping::spawn_reaped` thread. It never waits for application
+exit on the command caller.

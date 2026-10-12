@@ -2353,6 +2353,8 @@ export const INTENTIONALLY_UNMAPPED: ReadonlySet<string> = new Set<string>([
 	"upload_attachment",
 	// Multi-window management — secondary/panel windows are a desktop-only concept.
 	"open_secondary_window",
+	// Open on the client machine; remote HTTP must not launch host applications.
+	"open_default_app",
 	"open_panel_window",
 	"close_panel_window",
 	"focus_panel_window",
