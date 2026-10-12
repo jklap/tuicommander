@@ -5204,3 +5204,7 @@ Visual evidence: worktree Vite fixture mounted the real NotificationsTab and Toa
 - [x] Tasks create, Settings account/list fields, Automations, Git review, worktree creation, AI Chat elicitation, desktop filters and mobile New Session render with shared themed controls. _(verified: worktree Vite screenshots in `~/Gits/.tmp/results/form-controls/`, before/after per migration group; mobile 390×844 retains 44px fields.)_
 - [x] Native select keyboard/form behavior, reactive values, refs, change targets, multi-selection, disabled state and semantic classes remain intact; the Tasks view switch supports arrows/Home/End. _(verified: `src/__tests__/components/FormControls.test.tsx` and existing migrated-module suites.)_
 - [ ] #1753-f6b8 (Rust restart required): after restarting TUIC, open Inspect Launch Instructions on a session with 10+ MCP reconnects. Confirm one **MCP initialize instructions** row with a count and last-seen time, plus the Launch brief row; close the session and reopen: the error shows the backend reason.
+
+## Goose reply completion (1812-022d) — Rust restart required
+
+- [ ] After Boss restarts `make dev` or installs `make build`, send two prompts to Goose 1.49.0 with ollama. Each reply must return the tab to idle shortly after the ready composer appears; the second submit must be accepted without a five-minute wait or 409. The recorded first-turn replay covers the backend transition; this live check remains open until restart.

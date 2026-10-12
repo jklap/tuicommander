@@ -1875,7 +1875,11 @@ impl ChunkProcessor {
             //
             // `retain` in place: the filter used to rebuild the whole Vec even
             // when the cutoff dropped nothing.
-            let chrome_cutoff = if let Some(screen) = screen_ref
+            // Goose appends the reply BELOW its submitted `> prompt`; it has
+            // no fixed input-area border. Trimming there erases the reply's
+            // activity evidence and strands user-submit BUSY (#1812-022d).
+            let chrome_cutoff = if agent_type.as_deref() != Some("goose")
+                && let Some(screen) = screen_ref
                 && !changed.is_empty()
             {
                 let refs: Vec<&str> = screen.iter().map(String::as_str).collect();
