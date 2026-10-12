@@ -27,6 +27,17 @@ const OS_NOTIFICATION_TITLES: Record<NotificationSound, string> = {
 	attention: "Agent needs you",
 };
 
+// Card routing is a per-client view preference, like editor wrapping.
+const AUTO_TOAST_CARDS_KEY = "tui-commander-auto-toast-cards";
+
+function loadAutoToastCards(): boolean {
+	try {
+		return localStorage.getItem(AUTO_TOAST_CARDS_KEY) !== "false";
+	} catch {
+		return true;
+	}
+}
+
 const LEGACY_STORAGE_KEY = "tui-commander-notifications";
 const notificationWriter = createConfigDeltaWriter<NotificationConfig>("save_notification_config");
 
@@ -46,6 +57,7 @@ function saveConfig(config: NotificationConfig): void {
 
 /** Notifications store state */
 interface NotificationsState {
+	autoToastCards: boolean;
 	config: NotificationConfig;
 	isAvailable: boolean;
 	badgeCount: number;
@@ -59,11 +71,21 @@ function createNotificationsStore() {
 
 	const [state, setState] = createStore<NotificationsState>({
 		config: defaults,
+		autoToastCards: loadAutoToastCards(),
 		isAvailable: notificationManager.isAvailable(),
 		badgeCount: 0,
 	});
 
 	const actions = {
+		/** Show a card when an MCP notice arrives from a terminal the user is not viewing. */
+		setAutoToastCards(enabled: boolean): void {
+			setState("autoToastCards", enabled);
+			try {
+				localStorage.setItem(AUTO_TOAST_CARDS_KEY, String(enabled));
+			} catch (err) {
+				appLogger.warn("config", "Failed to persist automatic toast cards", err);
+			}
+		},
 		/** Send one native notice per pending ACP question; a notice still in flight is dropped once the question settles. */
 		syncAcpAttention(interactions: { id: string; kind: "permission" | "elicitation" }[]): void {
 			const pending = new Set(interactions.map((interaction) => interaction.id));
@@ -259,6 +281,7 @@ function createNotificationsStore() {
 
 		/** Reset to defaults */
 		reset(): void {
+			actions.setAutoToastCards(true);
 			const defaults = copyDefaults();
 			setState("config", defaults);
 			notificationManager.updateConfig(defaults);

@@ -2,6 +2,9 @@
 
 - [ ] [VISUAL] Terminal Chat view, AI Chat and mobile chat: text followed by a tool call in the same turn is smaller and dimmer; the last text of the turn keeps normal weight. Needs a `make dev` restart (Rust config field `chat_mute_intermediate_text`).
 - [ ] Settings > Appearance > Chat > Mute Intermediate Text off restores normal weight at once. Copy and Find still work on muted text.
+## Screen stays awake while dictating (1767-3071)
+
+- [ ] [HUMAN] On the iPhone home-screen PWA (iOS 18.4 or later), dictate into the draft, and separately run hands-free, for longer than the Auto-Lock time. The screen must stay on and the recording must continue; after Stop it must lock as usual. Turn "Keep screen awake while dictating" off in mobile Settings and confirm the screen locks again. Before iOS 18.4 the API does not work in home-screen web apps ([WebKit bug 254545](https://bugs.webkit.org/show_bug.cgi?id=254545)), so a failure on 18.3 or earlier is expected. Vitest covers acquire, release, re-acquire and the setting; the device is unverified.
 
 ## Fn dictation through focus changes (1763-3361) — Rust restart required
 
@@ -5163,7 +5166,22 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 
 - [ ] On iPhone, tap the attachment icon left of the session composer, choose a photo/file, confirm upload status then its path in the draft, and confirm Queue stays disabled during upload. Smaller mic and Send controls remain inside the right input border.
 
+- [ ] Mobile: Claude multi-question AskUserQuestion (two questions + Submit) — answer each tab and the Submit review from the phone overlay; needs the TUIC restart for the Rust parser change (#1766-9311)
+
+## Automatic agent toast cards (#1760-bab7)
+
+- [ ] After landing, raise a normal MCP toast from another terminal, then the active terminal: only the active origin terminal shows a card, regardless of window focus. Urgent notices show a card on every tab, including non-terminal tabs.
+- [ ] Disable Settings → Notifications → Show cards from the active terminal and reload: normal notices remain bell-only; urgent notices still show a card. The preference is per client.
+
+Visual evidence: worktree Vite fixture mounted the real NotificationsTab and ToastContainer; agent-browser snapshot showed the new default-checked toggle, hint and card. Screenshot and subsequent toggle probes timed out (exit 142); bundled Chrome headless also produced no image within 40 seconds. Actual desktop window-focus behavior and screenshot remain unverified. Targeted tests prove routing and stored opt-out/reset.
+- [ ] After a manual rebuild/restart, create a new worktree after safe removal of a clean integrated one. Confirm that its ignored artifacts persist, its new branch appears, and the old sidebar row is gone. Rust does not hot-reload.
+- [ ] After Boss rebuilds/restarts the Rust backend, verify overlapping worktree creates both succeed, a rename-journal error leaves the original checkout usable, and fingerprint-confirmed forced deletion still works with a live session (#1705-67b3).
+## Mobile ego questions (1759-6047) — Rust restart required
+
+- [ ] After rebuilding/restarting TUIC and updating ego, ask ego a real single-choice question from a terminal. On iPhone confirm **Input**, tap the header question icon, read the full question and both long options, and tap one option. Confirm one answer, continued output and no terminal-height loss. Browser rendering uses the recorded real ego question; real phone touch remains to check.
 - [ ] Chat new-text indicator (#1757-c6a9): after restart, scroll up in terminal Chat and AI Chat while output streams; confirm the pill appears above the composer, returns to the bottom on click, clears on manual bottom, and respects the per-client Appearance > Chat toggle. On mobile/PWA, check the same behavior and the mobile Settings toggle.
 - [ ] AI Chat control bar (#1755-7709): after restart, confirm its duplicate + is gone and New chat tab still opens a conversation.
 - [ ] #1762-c772: After loading the UI batch, open Automations with a long definition name/path. Check the one-line Active badge, short repository tooltip, readable schedule/next run, tabs with arrow keys, one-row toolbar and first-selection opt-out across reopen.
 - [ ] Bell: with only At-Capacity Retry status and no unread outcomes, no badge appears. With unread Progress, Mark as read clears that count while the journal and other notifications remain (#1764-862a).
+
+- [ ] Desktop dictation in terminal Chat: select transcript text, hold Fn and dictate, then confirm Compose receives the text with its draft preserved. Move focus or switch tabs during the final pass; confirm delivery stays with the original target. Close the original tab; confirm the transcript stays in the error message and Messages bell (#1773-5b69). Automated target/Compose tests cover routing; native Fn and microphone observation remain for Boss's normal app session.

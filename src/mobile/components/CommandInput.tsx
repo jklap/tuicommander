@@ -1,4 +1,4 @@
-import { createEffect, createSignal, onCleanup, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, onCleanup, onMount, Show } from "solid-js";
 import { t } from "../../i18n";
 import { uploadAttachment } from "../../services/uploadAttachment";
 import { appLogger } from "../../stores/appLogger";
@@ -7,6 +7,7 @@ import { HttpRpcError, rpc } from "../../transport";
 import { sendPtyKey, waitForAgentEnterGap } from "../../utils/sendCommand";
 import { useBrowserDictation } from "../useBrowserDictation";
 import type { ChoicePrompt, SlashMenuItem } from "../useSessions";
+import { clearDictationPartial, loadDictationPartial, saveDictationPartial } from "../utils/dictationPartial";
 import { retryWrite } from "../utils/retryWrite";
 import { ChoicePromptOverlay } from "./ChoicePromptOverlay";
 import styles from "./CommandInput.module.css";
@@ -40,7 +41,11 @@ interface CommandInputProps {
 }
 
 export function CommandInput(props: CommandInputProps) {
-	const [value, setValue] = createSignal("");
+	// Offer a restored dictated draft without writing on mount. The PTY may have
+	// changed while this client was away; reconcile it on the first explicit edit/send.
+	const restoredPartial = loadDictationPartial(props.sessionId);
+	let savedPartial = restoredPartial;
+	const [value, setValue] = createSignal(restoredPartial);
 	const [submitting, setSubmitting] = createSignal(false);
 	const [queueMenu, setQueueMenu] = createSignal(false);
 	let pressTimer: ReturnType<typeof setTimeout> | undefined;
@@ -104,14 +109,24 @@ export function CommandInput(props: CommandInputProps) {
 	const [codexNotesMode, setCodexNotesMode] = createSignal(false);
 	const atomicReply = () =>
 		props.managedSession && props.awaitingInput && !props.choicePrompt && !props.codexQuestionOpen && !codexNotesMode();
+	// A multi-question form replaces its prompt without an empty frame between
+	// the answered question and the next one, so a new prompt re-arms the buttons too.
+	// Keyed on content, not object identity: an identical snapshot redelivered
+	// while an answer is in flight must not re-arm the buttons.
+	const choiceSignature = createMemo(() => {
+		const prompt = props.choicePrompt;
+		if (!prompt) return null;
+		return JSON.stringify([prompt.title, prompt.options.map((option) => [option.key, option.label])]);
+	});
 	createEffect(() => {
-		if (!props.choicePrompt) setChoiceSending(false);
+		choiceSignature();
+		setChoiceSending(false);
 	});
 	let textareaEl: HTMLTextAreaElement | undefined;
 	let fileInput: HTMLInputElement | undefined;
 	// The local draft baseline, including explicitly requested PTY completions
 	// and history replacements. Every edit computes its delta from this text.
-	let syncedText = "";
+	let syncedText: string | null = restoredPartial ? null : "";
 	let inputRequest: { kind: "completion" | "history"; armed: boolean } | null = null;
 	// Timestamp of the last Enter (send()). Within POST_SEND_GUARD_MS, all
 	// incoming ptyInputLine updates are ignored to prevent a lagging echo of
@@ -148,7 +163,7 @@ export function CommandInput(props: CommandInputProps) {
 		if (!inputRequest?.armed || props.ptyInputLine == null) return;
 		if (inputRequest.kind === "completion") {
 			if (isPostSendGuardActive(Date.now(), lastSendAt)) return;
-			if (!isSupersetEcho(text, syncedText)) return;
+			if (!isSupersetEcho(text, syncedText ?? restoredPartial)) return;
 		}
 		inputRequest = null;
 		syncedText = text;
@@ -157,6 +172,16 @@ export function CommandInput(props: CommandInputProps) {
 			textareaEl.value = text;
 			autoResize();
 		}
+	});
+
+	onMount(() => {
+		if (!restoredPartial || !textareaEl) return;
+		textareaEl.value = restoredPartial;
+		autoResize();
+	});
+	// Any draft other than the one dictation saved (an edit, a send, Escape, history) retires the partial.
+	createEffect(() => {
+		if (value() !== savedPartial) clearDictationPartial(props.sessionId);
 	});
 
 	function autoResize() {
@@ -180,7 +205,7 @@ export function CommandInput(props: CommandInputProps) {
 	function syncDelta(newText: string) {
 		inputRequest = null;
 		if (atomicReply() || props.sessionExists === false) return;
-		const delta = computeInputDelta(syncedText, newText);
+		const delta = computeInputDelta(syncedText ?? props.ptyInputLine ?? restoredPartial, newText);
 		if (delta) writePty(delta);
 		syncedText = newText;
 	}
@@ -196,6 +221,8 @@ export function CommandInput(props: CommandInputProps) {
 		getDraft: () => textareaEl?.value ?? value(),
 		setDraft: (text) => {
 			if (textareaEl) textareaEl.value = text;
+			savedPartial = text;
+			saveDictationPartial(props.sessionId, text);
 			updateInput(text);
 		},
 		onRecording: (active) => props.onBrowserDictating?.(active),
@@ -268,7 +295,7 @@ export function CommandInput(props: CommandInputProps) {
 		if (atomicReply() || props.sessionExists === false) return;
 		const request =
 			key === "Tab"
-				? syncedText.length > 0
+				? (syncedText ?? restoredPartial).length > 0
 					? { kind: "completion" as const, armed: true }
 					: null
 				: { kind: "history" as const, armed: false };
@@ -340,6 +367,7 @@ export function CommandInput(props: CommandInputProps) {
 			return;
 		}
 
+		if (syncedText === null) syncDelta(textareaEl?.value ?? value());
 		lastSendAt = Date.now();
 		inputRequest = null;
 		syncedText = "";

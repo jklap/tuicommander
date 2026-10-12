@@ -10867,6 +10867,101 @@ async fn claude_askuser_esc_capture_retracts_awaiting_after_turn_done() {
     }
 }
 
+/// Live Claude 2.1.286 two-question AskUserQuestion (`Lista`, `Branch`, `Submit`
+/// tabs) answered with Enter, Down+Enter, Enter. Every step must expose the
+/// dialog that is on screen to the mobile overlay: the second question, and the
+/// Submit review whose rows carry no `Enter to select` footer (#1766-9311).
+#[tokio::test(flavor = "current_thread")]
+async fn claude_multi_question_capture_exposes_every_tab_to_mobile() {
+    let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(
+        "claude-askuser-multi-question-20261012.tcap",
+    ))
+    .expect("valid live capture");
+    let (rows, cols) = capture.geometry.expect("recorded terminal geometry");
+    let sid = "claude-multi-question";
+    let (state, silence) = chunk_trace_state(sid);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("claude".into());
+    state
+        .grid
+        .vt_log_buffers
+        .insert(sid.into(), Mutex::new(VtLogBuffer::new(rows, cols, 2000)));
+    crate::state::AppState::spawn_session_state_accumulator(state.clone());
+    let mut processor = ChunkProcessor::new(None, None);
+    let mut utf8 = Utf8ReadBuffer::new();
+    let mut escape = EscapeAwareBuffer::new();
+    let mut saw_wait = false;
+    let mut answers = 0;
+    for record in capture.records {
+        match record.direction {
+            crate::pty_capture::CaptureDirection::Output => {
+                let data = utf8.push(&record.data);
+                let data = escape.push(&data);
+                let (clean, _) = crate::state::strip_kitty_sequences(&data);
+                processor.process_chunk(&clean, &silence, sid, &state);
+                saw_wait |= clean.contains("Claude needs your permission");
+            }
+            crate::pty_capture::CaptureDirection::Input if saw_wait && record.data == b"\r" => {
+                // Each Enter answers the dialog currently on screen: check what
+                // the phone was offered just before it.
+                let (title, labels): (&str, &[&str]) = match answers {
+                    0 => ("Which list?", &["Lista A", "Lista B", "Lista C"]),
+                    1 => (
+                        "Where do I publish?",
+                        &["Merge in main", "Publish from branch", "No push"],
+                    ),
+                    _ => (
+                        "Ready to submit your answers?",
+                        &["Submit answers", "Cancel"],
+                    ),
+                };
+                // Catches: the overlay keeps the first question (or nothing)
+                // after Claude advances to the next tab or to the Submit review.
+                assert!(
+                    await_session(&state, sid, |s| {
+                        s.choice_prompt.as_ref().is_some_and(|prompt| {
+                            prompt.title == title
+                                && prompt.selection_mode
+                                    == Some(
+                                        crate::output_parser::ChoiceSelectionMode::NavigateEnter,
+                                    )
+                                && labels.iter().enumerate().all(|(i, label)| {
+                                    prompt.options.get(i).is_some_and(|o| o.label == *label)
+                                })
+                        })
+                    })
+                    .await,
+                    "step {answers} must expose {title:?} to mobile"
+                );
+                answers += 1;
+                crate::state::resolve_choice_prompt_input(&state, sid, "\r");
+            }
+            // Every PTY write passes through the same resolver in production.
+            crate::pty_capture::CaptureDirection::Input if saw_wait => {
+                crate::state::resolve_choice_prompt_input(
+                    &state,
+                    sid,
+                    std::str::from_utf8(&record.data).expect("captured keys are UTF-8"),
+                );
+            }
+            crate::pty_capture::CaptureDirection::Input => {}
+        }
+    }
+    assert_eq!(answers, 3, "capture must hold two answers and the submit");
+    // Catches: the Submit review stays latched as a waiting question after the
+    // answers were delivered.
+    assert!(
+        await_session(&state, sid, |s| s.choice_prompt.is_none()
+            && !s.awaiting_input)
+        .await,
+        "the submitted form must release the overlay"
+    );
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn protocol_awaiting_clears_on_protocol_busy_and_idle() {
     for (session_id, target, label) in [
@@ -11837,6 +11932,71 @@ fn captured_codex_request_user_input_reaches_choice_prompt() {
                 })
         }),
         "captured Codex question must reach the mobile choice-prompt state"
+    );
+}
+
+/// Catches: a real ego selector remaining Idle with no mobile question/options.
+#[test]
+fn captured_ego_question_reaches_awaiting_and_full_mobile_choices() {
+    let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(
+        "ego-single-question-20261012.tcap",
+    ))
+    .expect("recorded real ego question");
+    let (rows, cols) = capture.geometry.unwrap();
+    let sid = "ego-question-capture";
+    let (state, silence) = chunk_trace_state(sid);
+    state.grid.vt_log_buffers.insert(
+        sid.into(),
+        Mutex::new(crate::state::VtLogBuffer::new(rows, cols, 2000)),
+    );
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("ego".into());
+    let mut rx = state.event_bus.subscribe();
+    let mut processor = ChunkProcessor::new(None, None);
+    let mut utf8 = Utf8ReadBuffer::new();
+    let mut escape = EscapeAwareBuffer::new();
+    for record in capture.records {
+        if record.direction != crate::pty_capture::CaptureDirection::Output {
+            continue;
+        }
+        let data = escape.push(&utf8.push(&record.data));
+        let (clean, _) = crate::state::strip_kitty_sequences(&data);
+        processor.process_chunk(&clean, &silence, sid, &state);
+        while let Ok(event) = rx.try_recv() {
+            crate::state::tests_support::apply_replay_event(&state, &event);
+        }
+    }
+    let session = state.session_maps.session_states.get(sid).unwrap();
+    assert!(
+        session.awaiting_input,
+        "real ego human question was left Idle"
+    );
+    let prompt = session
+        .choice_prompt
+        .as_ref()
+        .expect("ego question must have mobile choices");
+    assert_eq!(
+        prompt.title,
+        "Does Boss authorize editing the orchestrator registry to integrate the finished mobile question fix?"
+    );
+    assert_eq!(
+        prompt
+            .options
+            .iter()
+            .map(|o| o.label.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "Yes, authorize registry integration and keep the complete question visible on mobile",
+            "No, leave the orchestrator registry unchanged and report the remaining work",
+        ]
+    );
+    assert_eq!(
+        prompt.selection_mode,
+        Some(crate::output_parser::ChoiceSelectionMode::NavigateEnter)
     );
 }
 
@@ -13747,7 +13907,7 @@ fn replay_oracle_all_committed_tcap_preserves_chunk_decisions() {
     for fixture in fixtures {
         let agent = [
             "claude", "codex", "grok", "goose", "opencode", "gemini", "aider", "pi", "amp",
-            "cursor", "droid",
+            "cursor", "droid", "ego",
         ]
         .into_iter()
         .find(|agent| {

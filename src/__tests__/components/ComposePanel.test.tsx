@@ -3,8 +3,10 @@ import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ComposePanel } from "../../components/ComposePanel/ComposePanel";
+import { captureDictationTarget } from "../../hooks/dictationTarget";
 import type { QueuedCommand } from "../../hooks/usePty";
 import { invoke } from "../../invoke";
+import { terminalsStore } from "../../stores/terminals";
 
 vi.mock("../../invoke", () => ({
 	invoke: vi.fn().mockResolvedValue(undefined),
@@ -66,6 +68,40 @@ function renderPanel(overrides: Partial<Parameters<typeof ComposePanel>[0]> = {}
 }
 
 describe("ComposePanel", () => {
+	// Catches: the mounted Compose editor is undiscoverable from transcript/BODY focus.
+	it("delivers Chat dictation into the mounted editor and publishes the changed draft", async () => {
+		const id = terminalsStore.add({
+			sessionId: "compose-dictation",
+			fontSize: 14,
+			name: "Chat",
+			cwd: null,
+			awaitingInput: null,
+		});
+		terminalsStore.setActive(id);
+		terminalsStore.setViewMode(id, "chat");
+		const onTextChange = vi.fn();
+		const { container } = renderPanel({ pinned: () => true, initialText: () => "before THIS after", onTextChange });
+		container.dataset.terminalId = id;
+		try {
+			await waitFor(() => expect(editorText(container)).toBe("before THIS after"));
+			const dom = container.querySelector<HTMLElement>(".cm-editor");
+			const view = dom && EditorView.findFromDOM(dom);
+			if (!view) throw new Error("Compose editor not mounted");
+			(document.activeElement as HTMLElement | null)?.blur();
+			expect(view.hasFocus).toBe(false);
+			view.dispatch({ selection: { anchor: 7, head: 11 } });
+			const target = captureDictationTarget();
+			const write = vi.fn();
+			await target.deliver("spoken words", write, true);
+			expect(editorText(container)).toBe("before spoken words after");
+			expect(onTextChange).toHaveBeenLastCalledWith("before spoken words after");
+			expect(view.state.selection.main.anchor).toBe(19);
+			expect(write).not.toHaveBeenCalled();
+		} finally {
+			terminalsStore.remove(id);
+		}
+	});
+
 	it("Ctrl+Enter sends now, Shift+Ctrl+Enter queues instead", async () => {
 		const { container, props } = renderPanel();
 		await waitFor(() => expect(container.querySelector(".cm-content")).not.toBeNull());
