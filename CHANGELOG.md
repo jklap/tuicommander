@@ -11,6 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 - Automations uses readable schedule cards, short repository names, keyboard tabs and a compact toolbar. The first definition opens automatically unless disabled in the dialog; the palette entry also matches scheduler and schedule (#1762-c772).
+- Mobile AI Chat keeps Park and Stop in the composer input row, removing the archive-only row above it (#1746-aa9e).
 - Default-app URL and file opens reap their launcher child instead of leaving a zombie process (#1749-f9a0).
 - Design Mode retains a wait owner for Chrome/Edge launches, including short-lived handoff processes, independently of the launch runtime (#1707-bd40).
 - Duplicate workflow starts report the active run ID instead of a raw SQLite constraint error (#1748-47b0).
