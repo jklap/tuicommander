@@ -2034,3 +2034,22 @@ fn version_comes_from_the_build() {
     assert!(out.starts_with(&format!("# TUICommander v{ver}\n")));
     assert!(out.contains(&format!("`TUICommander v{ver} is connected.`")));
 }
+
+// Catches: a claim the server cannot know (the user is away) or a platform
+// name in generic wording, in any rendering of the instructions.
+#[test]
+fn instructions_make_no_claim_about_the_user_or_the_platform() {
+    let ctx = InstructionContext {
+        native_tools: tools(&["ui", "voice", "telegram", "progress", "session"]),
+        upstreams: vec![("quill".into(), 1)],
+        ..Default::default()
+    };
+    for collapse in [false, true] {
+        for client in [None, Some("claude-code")] {
+            let out = render_mcp_instructions(client, collapse, (true, true), true, &ctx);
+            for banned in ["away", "Mac"] {
+                assert!(!out.contains(banned), "{banned:?} in: {out}");
+            }
+        }
+    }
+}

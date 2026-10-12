@@ -260,7 +260,7 @@ pub(super) fn render_mcp_instructions(
     if progress_tracking {
         out.push_str("## Progress — mandatory\n\n");
         out.push_str(
-            "Call `progress` to report work while the user is away. \
+            "Call `progress` to record finished or blocked work; the user reads it later. \
              `type=done` for finished `intent:` work or work continuing alongside user action; \
              `type=blocked` only when you stop and wait because you need the user.\n\n",
         );
