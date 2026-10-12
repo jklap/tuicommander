@@ -18,6 +18,8 @@ Slice F exposes `start_graph {target:{type:story|plan,id},expected_revision?,def
 
 The `command` action also accepts `answer_input {attempt_id,answer}` for a paused run. The answer is an idempotent durable event; graph runs resume separately with an explicit activation and resolution. An unanswered input request prevents resume.
 
+A distinct second start on a plan with a running or paused run is refused with `workflow run already active for plan <plan-id>: <active-run-id>`. The store returns the typed `RunStartError::AlreadyActive`; IPC, HTTP and MCP keep their existing string error envelope. The unique index remains the atomic admission boundary. Refusal does not change the active run or its events; a matching graph request ID still returns its existing run.
+
 `start_plan.limits` accepts `maxParallelStories` (default 2 when omitted, range 1–8). `start_attempt` conservatively serializes unknown or overlapping file scopes and refuses dependent stories lacking a current integration receipt at the accepted revision. `execute_check` runs only a check from the pinned story definition in its assigned worktree; `record_integration` verifies a completed non-fast-forward merge and runs the pinned checks again on the canonical result. `recertify_canonical` validates a later clean canonical tip and reruns those checks without claiming a new merge. `assign_worktree`, `record_check`, `record_integration`, and `record_recertification` as nested commands are internal and rejected on this operator API.
 
 ## Workflow definitions
@@ -624,6 +626,20 @@ Content-Type: application/json
 { "repoPath": "/path/to/repository" }
 ```
 
+### Reload or navigate the reviewed tab
+
+```
+POST /design-mode/reload
+{ "repoPath": "/path/to/repository" }
+
+POST /design-mode/navigate
+{ "repoPath": "/path/to/repository", "url": "http://localhost:5173/page" }
+```
+
+Both need an armed Design Mode and answer `400 {"error": ...}` otherwise. `url` must be
+HTTP(S) on `localhost`, `127.0.0.1` or `[::1]` without credentials. The extension applies
+each request once on its next heartbeat (about 5 s).
+
 ### Read status
 
 ```
@@ -846,7 +862,7 @@ the server is back to the filter the connection was opened with.
 | `plugin-watcher-lines` | `{session_id, lines}` | A batch of assembled PTY lines for the plugin OutputWatchers; each line is `{text, matched_ids}`, where `text` is the cleaned text the match was made on |
 | `plugin-changed` | `{plugin_ids}` | Plugin(s) installed/removed/updated |
 | `upstream-status-changed` | `{name, status}` | MCP upstream server status change |
-| `mcp-toast` | `{title, message, level, sound, origin_repo_path?, origin_session_id?}` | Toast notification from MCP layer, including the caller repository/cwd and the caller's TUIC session when known. Clients use the session id to focus the terminal that raised the toast |
+| `mcp-toast` | `{title, message, level, sound, urgency, origin_repo_path?, origin_session_id?}` | Toast notification from MCP layer, including the caller repository/cwd and the caller's TUIC session when known. Clients use the session id to focus the terminal that raised the toast. `urgency` is `normal` (bell only) or `urgent` (bell plus a transient card); clients treat an absent field as `normal` |
 | `session-state-changed` | `{session_id, state}` — `state` is the same object `GET /sessions` returns per session (`shell_state`, `agent_state`, `awaiting_input`, `question_confident`, `background_work`, `queued_commands`, …), snake_case, with the fields serde skips at their zero value omitted | A session's derived lifecycle state moved. Published by the session-state accumulator (`state.rs publish_session_state_change`) once per real transition, deduped by `SessionState`'s `PartialEq` — a repaint that changes only `last_activity_ms` publishes nothing. Dual-emitted on the Tauri window under the same name and with the same payload, so `useAgentPolling.ts` consumes both transports with one handler instead of polling `list_active_sessions`. Absence of a field means its zero value, not "unknown" |
 | `dictation-download-progress` | `{downloaded, total, percent}` | A Whisper model is downloading. Dual-emitted on the Tauri window with the identical body |
 | `speech-download-progress` | `{asset, downloaded, total, percent}`, then `{asset, done: true}` | A speech asset is downloading; the `done` event ends it, success or failure. `asset` is the only difference from the line above, and it is what a client joins the bar against |
@@ -3009,7 +3025,7 @@ Automation action `run` accepts `{id: "<run id>"}` and returns the canonical sav
 (and the existing authenticated remote transport). The native host uses this
 route; it introduces no TCP listener. Requests carry `id`, `action`, `version`
 (`2.x`) and `repoPath`. Replies are `{id, ok, result}` or `{id, ok:false, error}`.
-`heartbeat` records extension liveness and returns `{armed, reloadSeq}`. It runs every five seconds; armed modes expire after 60 seconds without a beat, or 600 seconds from Start when no beat arrived. MCP `design_mode action=reload repo_path=<repoPath>` increments the sequence; unchanged replies do not repeat a successful reload.
+`heartbeat` records extension liveness and returns `{armed, reloadSeq, navigate: {seq, url?}, backendId?}`. The navigation sequence is included without a pending URL. `backendId` identifies the manager lifetime so the extension resets its navigation acknowledgement after a backend restart, even when a command arrives before an idle beat. It runs every five seconds; armed modes expire after 60 seconds without a beat, or 600 seconds from Start when no beat arrived. MCP `design_mode action=reload repo_path=<repoPath>` increments the sequence; unchanged replies do not repeat a successful reload.
 
 `hello` checks the major version. `pick` accepts `raw` DOM extraction and returns
 bounded, redacted, fenced evidence. Non-HTTP(S) page URLs are rejected. Page data

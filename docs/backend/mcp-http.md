@@ -240,6 +240,8 @@ uncapping the server.
 |--------|------|-------------|
 | `POST` | `/design-mode/start` | Start/rebind the dedicated Edge/Chrome profile (`{sessionId, browser?}`) |
 | `POST` | `/design-mode/stop` | Stop inspection for a repository (`{repoPath}`) |
+| `POST` | `/design-mode/reload` | Ask the armed browser to reload the reviewed tab once (`{repoPath}`) |
+| `POST` | `/design-mode/navigate` | Ask the armed browser to open a localhost URL in the reviewed tab once (`{repoPath, url}`) |
 | `GET` | `/design-mode` | Read the array of per-repository Design Mode statuses |
 | `POST` | `/design-mode/extension` | Versioned native-host pick, send, discovery and configured server-start operations |
 
@@ -952,6 +954,12 @@ output device, per-sound mutes) rather than inventing a tone. The event is
 dual-emitted — Tauri `emit` for the desktop WebView **and** the event bus for
 SSE clients; a bus-only send never reaches the desktop, which has no bus→window
 forwarder.
+
+**`ui action=toast` urgency.** `urgency` accepts `normal` (default) or `urgent`, the
+same names as `agent action=send`. `normal` records the notice in the bell only;
+`urgent` also shows a transient card on the desktop window. The caller chooses; no
+heuristic picks it. Any other value is an error listing the allowed values. The
+value rides the `mcp-toast` event on both transports.
 
 The toast also resolves the calling MCP session to its peer project, PTY cwd, or
 session repository metadata (in that order). The resulting `origin_repo_path` is
@@ -2189,4 +2197,4 @@ an explicit create action. These actions match across HTTP, IPC, MCP and CLI.
 
 ### Design Mode lifecycle tool
 
-The native `design_mode` tool exposes `start`, `stop`, `status` and `reload` through normal discovery and dispatch. Start accepts `session_id`, optional `browser` (`chrome` or `edge`) and optional absolute HTTP(S) `url`. Session references resolve like the session tool. Stop accepts `repo_path` from start/status. Reload takes the same `repo_path` and bumps a per-repository reload sequence; the extension reloads the reviewed tab once on its next heartbeat. The extension posts `heartbeat` to `/design-mode/extension` every 5 s (reply `{armed, reloadSeq}`); an armed mode is stopped 60 s after the last heartbeat, or 10 min after Start when none arrived. The adapter uses the same lifecycle core as HTTP and IPC; headless builds return an explicit desktop-host-required error. URL-aware start is the default coordinator path for layout work.
+The native `design_mode` tool exposes `start`, `stop`, `status`, `reload` and `navigate` through normal discovery and dispatch. Start accepts `session_id`, optional `browser` (`chrome` or `edge`) and optional absolute HTTP(S) `url`. Session references resolve like the session tool. Stop accepts `repo_path` from start/status. Reload takes the same `repo_path` and bumps a per-repository reload sequence; the extension reloads the reviewed tab once on its next heartbeat. Navigate takes `repo_path` and `url` (HTTP(S) on `localhost`, `127.0.0.1` or `[::1]`, no credentials); the heartbeat reply then carries `navigate: {seq, url}` and the extension opens the URL in the reviewed tab once per sequence. The sequence survives a re-arm but the URL does not, so a new Start never replays an old navigation. Reload and navigate answer "Design Mode is not running for this repository" when nothing is armed. The extension posts `heartbeat` to `/design-mode/extension` every 5 s (reply `{armed, reloadSeq, navigate?}`); an armed mode is stopped 60 s after the last heartbeat, or 10 min after Start when none arrived. The adapter uses the same lifecycle core as HTTP and IPC; headless builds return an explicit desktop-host-required error. URL-aware start is the default coordinator path for layout work.

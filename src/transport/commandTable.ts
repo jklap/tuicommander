@@ -2136,6 +2136,16 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	stop_design_mode: {
 		map: (args) => ({ method: "POST", path: "/design-mode/stop", body: { repoPath: args.repoPath } }),
 	},
+	reload_design_mode: {
+		map: (args) => ({ method: "POST", path: "/design-mode/reload", body: { repoPath: args.repoPath } }),
+	},
+	navigate_design_mode: {
+		map: (args) => ({
+			method: "POST",
+			path: "/design-mode/navigate",
+			body: { repoPath: args.repoPath, url: args.url },
+		}),
+	},
 	get_design_mode_status: { map: () => ({ method: "GET", path: "/design-mode" }) },
 	list_tunnel_profiles: { map: () => ({ method: "GET", path: "/tunnels/profiles" }) },
 	save_tunnel_profile: { map: (args) => ({ method: "POST", path: "/tunnels/profiles", body: args.profile }) },
@@ -2343,6 +2353,8 @@ export const INTENTIONALLY_UNMAPPED: ReadonlySet<string> = new Set<string>([
 	"upload_attachment",
 	// Multi-window management — secondary/panel windows are a desktop-only concept.
 	"open_secondary_window",
+	// Open on the client machine; remote HTTP must not launch host applications.
+	"open_default_app",
 	"open_panel_window",
 	"close_panel_window",
 	"focus_panel_window",

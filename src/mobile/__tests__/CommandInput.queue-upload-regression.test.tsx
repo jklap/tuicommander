@@ -18,6 +18,7 @@ afterEach(() => {
 	vi.resetAllMocks();
 });
 
+// Catches: moving the attachment control disconnects its picker or permits Queue before the receipt arrives.
 it("does not queue an incomplete prompt while its selected attachment is still uploading", async () => {
 	vi.useFakeTimers();
 	let finishUpload!: (receipt: { path: string; size: number }) => void;
@@ -30,14 +31,21 @@ it("does not queue an incomplete prompt while its selected attachment is still u
 	const { container, getByRole } = render(() => <CommandInput sessionId="queue-upload" />);
 	const input = container.querySelector("textarea")!;
 	fireEvent.input(input, { target: { value: "Review this file" } });
-	fireEvent.change(container.querySelector('input[type="file"]')!, {
+	const picker = container.querySelector<HTMLInputElement>('input[type="file"]')!;
+	const openPicker = vi.spyOn(picker, "click");
+	fireEvent.click(getByRole("button", { name: "Attach file" }));
+	expect(openPicker).toHaveBeenCalledOnce();
+	fireEvent.change(picker, {
 		target: { files: [new File(["important context"], "notes.txt", { type: "text/plain" })] },
 	});
+	expect(getByRole("status").textContent).toBe("Uploading notes.txt…");
+	expect(getByRole("button", { name: "Attach file" })).toBeDisabled();
 	const send = getByRole("button", { name: "Send" });
 	fireEvent.pointerDown(send, { button: 0, pointerType: "touch" });
 	await vi.advanceTimersByTimeAsync(600);
 	fireEvent.pointerUp(send, { button: 0, pointerType: "touch" });
 	fireEvent.click(send);
+	expect(getByRole("menuitem", { name: "Queue" })).toBeDisabled();
 	fireEvent.click(getByRole("menuitem", { name: "Queue" }));
 	await Promise.resolve();
 	await Promise.resolve();
@@ -47,6 +55,8 @@ it("does not queue an incomplete prompt while its selected attachment is still u
 	// Settle the external operation before asserting, even on the failing path.
 	finishUpload({ path: "/repo/.tuic/attachments/notes.txt", size: 17 });
 	await vi.advanceTimersByTimeAsync(0);
+	expect(container.querySelector('[role="status"]')).toBeNull();
+	expect(getByRole("button", { name: "Attach file" })).not.toBeDisabled();
 	expect(queuedBeforeUpload).toEqual([]);
 	expect(input.value).toBe("Review this file @/repo/.tuic/attachments/notes.txt");
 });

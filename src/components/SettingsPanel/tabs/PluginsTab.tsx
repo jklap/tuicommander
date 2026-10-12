@@ -1,4 +1,3 @@
-import { openUrl } from "@tauri-apps/plugin-opener";
 import { type Component, createMemo, createSignal, For, onMount, Show } from "solid-js";
 import { useConfirmDialog } from "../../../hooks/useConfirmDialog";
 import { invoke } from "../../../invoke";
@@ -12,6 +11,7 @@ import { type RegistryEntry, registryStore } from "../../../stores/registryStore
 import { settingsStore } from "../../../stores/settings";
 import { isTauri } from "../../../transport";
 import { openDialog as open } from "../../../utils/nativeDialog";
+import { handleOpenUrl } from "../../../utils/openUrl";
 import { ConfirmDialog } from "../../ConfirmDialog";
 import { SettingToggle } from "../SettingFields";
 import s from "../Settings.module.css";
@@ -393,7 +393,7 @@ export const PluginsTab: Component<{ onClose?: () => void }> = (props) => {
 					class={ps.docsLink}
 					onClick={() => {
 						if (isTauri()) {
-							openUrl(PLUGIN_DOCS_URL).catch((err) => appLogger.error("plugin", "Failed to open URL", err));
+							handleOpenUrl(PLUGIN_DOCS_URL);
 						} else {
 							window.open(PLUGIN_DOCS_URL, "_blank");
 						}

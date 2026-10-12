@@ -143,21 +143,28 @@ impl PrApi for RepoApi<'_> {
         } else {
             request.json(&body)
         };
-        let response =
-            crate::github::send_rest_with_breaker(self.state, &self.account, request).await?;
-        let status = response.status();
-        let bytes = response.bytes().await.map_err(|e| e.to_string())?;
-        if !status.is_success() {
-            return Err(format!(
-                "GitHub API failed ({status}): {}",
-                String::from_utf8_lossy(&bytes)
-            ));
-        }
-        if bytes.is_empty() {
-            return Ok(Value::Null);
-        }
-        serde_json::from_slice(&bytes).map_err(|e| format!("Invalid GitHub response: {e}"))
+        rest_json(self.state, &self.account, request).await
     }
+}
+
+/// Send a REST request and parse its JSON body. Non-success statuses map to the
+/// same user-facing text as the GraphQL layer; rate limits are classified by
+/// `send_rest_with_breaker`.
+async fn rest_json(
+    state: &AppState,
+    account: &GitHubAccount,
+    request: reqwest::RequestBuilder,
+) -> Result<Value, String> {
+    let response = crate::github::send_rest_with_breaker(state, account, request).await?;
+    let status = response.status();
+    let bytes = response.bytes().await.map_err(|e| e.to_string())?;
+    if !status.is_success() {
+        return Err(crate::github::http_error_message(status, &bytes));
+    }
+    if bytes.is_empty() {
+        return Ok(Value::Null);
+    }
+    serde_json::from_slice(&bytes).map_err(|e| format!("Invalid GitHub response: {e}"))
 }
 
 /// Stream an Actions log without retaining its unbounded prefix. The shared
@@ -192,9 +199,9 @@ async fn download_text_tail(
         .unwrap_or(bytes.len());
     let text = String::from_utf8_lossy(&bytes[start..]).into_owned();
     if !status.is_success() {
-        return Err(format!(
-            "GitHub API failed ({status}): {}",
-            crate::github::sanitize_ci_logs(&text)
+        return Err(crate::github::http_error_message(
+            status,
+            crate::github::sanitize_ci_logs(&text).as_bytes(),
         ));
     }
     Ok(text)

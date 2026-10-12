@@ -2111,6 +2111,14 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
                 "/design-mode/stop",
                 post(crate::design_mode::commands::stop),
             )
+            .route(
+                "/design-mode/reload",
+                post(crate::design_mode::commands::reload),
+            )
+            .route(
+                "/design-mode/navigate",
+                post(crate::design_mode::commands::navigate),
+            )
             .route("/design-mode", get(crate::design_mode::commands::statuses));
     }
 

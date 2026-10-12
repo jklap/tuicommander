@@ -22,10 +22,14 @@ pub(crate) struct Liveness {
     entries: HashMap<String, Entry>,
     /// Kept across re-arms, so a new Start never looks like a reload request.
     reload_seq: HashMap<String, u64>,
+    /// Sequence kept like `reload_seq`; the URL is dropped when the mode is armed or stopped,
+    /// so a new Start never replays an old navigation.
+    navigate: HashMap<String, (u64, Option<String>)>,
 }
 
 impl Liveness {
     pub(crate) fn armed(&mut self, repo: &str, session_id: &str, now: Instant) {
+        self.drop_navigation(repo);
         self.entries.insert(
             repo.to_owned(),
             Entry {
@@ -38,6 +42,13 @@ impl Liveness {
 
     pub(crate) fn stopped(&mut self, repo: &str) {
         self.entries.remove(repo);
+        self.drop_navigation(repo);
+    }
+
+    fn drop_navigation(&mut self, repo: &str) {
+        if let Some((_, url)) = self.navigate.get_mut(repo) {
+            *url = None;
+        }
     }
 
     /// Records a beat for an armed repository and returns its reload sequence.
@@ -54,6 +65,22 @@ impl Liveness {
         let seq = self.reload_seq.entry(repo.to_owned()).or_default();
         *seq += 1;
         Some(*seq)
+    }
+
+    pub(crate) fn request_navigate(&mut self, repo: &str, url: String) -> Option<u64> {
+        if !self.entries.contains_key(repo) {
+            return None;
+        }
+        let entry = self.navigate.entry(repo.to_owned()).or_default();
+        entry.0 += 1;
+        entry.1 = Some(url);
+        Some(entry.0)
+    }
+
+    /// The navigation the extension has not necessarily applied yet, for an armed repository.
+    pub(crate) fn pending_navigate(&self, repo: &str) -> Option<(u64, Option<String>)> {
+        self.entries.get(repo)?;
+        Some(self.navigate.get(repo).cloned().unwrap_or_default())
     }
 
     /// Removes and returns `(repo, session)` for every mode whose browser went quiet.
@@ -143,5 +170,42 @@ mod tests {
         );
         live.stopped("/repo");
         assert_eq!(live.beat("/repo", now), None);
+    }
+
+    // Catches: a navigation lost, replayed after a re-arm or Stop, or accepted with nothing armed.
+    #[test]
+    fn navigation_is_pending_only_while_armed_and_never_replayed() {
+        let now = Instant::now();
+        let mut live = Liveness::default();
+        assert_eq!(
+            live.request_navigate("/repo", "http://localhost:1/".into()),
+            None
+        );
+        live.armed("/repo", "agent", now);
+        assert_eq!(live.pending_navigate("/repo"), Some((0, None)));
+        assert_eq!(
+            live.request_navigate("/repo", "http://localhost:1/a".into()),
+            Some(1)
+        );
+        assert_eq!(
+            live.request_navigate("/repo", "http://localhost:1/b".into()),
+            Some(2)
+        );
+        assert_eq!(
+            live.pending_navigate("/repo"),
+            Some((2, Some("http://localhost:1/b".into())))
+        );
+        live.armed("/repo", "other-agent", now);
+        assert_eq!(
+            live.pending_navigate("/repo"),
+            Some((2, None)),
+            "re-arming is not a navigation"
+        );
+        assert_eq!(
+            live.request_navigate("/repo", "http://localhost:1/c".into()),
+            Some(3)
+        );
+        live.stopped("/repo");
+        assert_eq!(live.pending_navigate("/repo"), None);
     }
 }

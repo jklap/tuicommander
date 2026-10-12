@@ -7,13 +7,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Removed
+- Remove the duplicate AI Chat control-bar + button; New chat tab still starts a conversation (#1755-7709).
 - GitHub token chain no longer reads the `gh` CLI login (`gh auth token`, `gh-token` crate); use OAuth login or `GH_TOKEN`/`GITHUB_TOKEN`. TUIC spawns no `gh` process (#1714-1c1d).
 
 ### Fixed
 - Mobile output stops following after a small upward scroll and ignores queued follow frames after the user scrolls away (#1745-63b0).
+- Mobile ego questions show Input and open a full, wrapping question card from the header; selecting an option sends one answer (#1759-6047).
+- Native macOS Fn dictation keeps recording through window focus changes while the key is held and detects its release outside TUIC (#1763-3361).
+- Automations uses readable schedule cards, short repository names, keyboard tabs and a compact toolbar. The first definition opens automatically unless disabled in the dialog; the palette entry also matches scheduler and schedule (#1762-c772).
+- The bell no longer counts static plugin status rows; unread Progress outcomes have an explicit Mark as read action (#1764-862a).
+- Mobile AI Chat keeps Park and Stop in the composer input row, removing the archive-only row above it (#1746-aa9e).
+- Default-app URL and file opens reap their launcher child instead of leaving a zombie process (#1749-f9a0).
+- Design Mode retains a wait owner for Chrome/Edge launches, including short-lived handoff processes, independently of the launch runtime (#1707-bd40).
+- Duplicate workflow starts report the active run ID instead of a raw SQLite constraint error (#1748-47b0).
+- Design Mode delivers the first navigation after a backend restart, including before the first idle heartbeat (#1724-fe7e).
+- A console that stops reading the backend's stderr (for example the `make dev` pipe) no longer blocks every thread that logs, the main thread included; console output is now non-blocking and lossy, while retention in the existing lossy file log and bounded `/logs` ring is unchanged (#1638-c94c).
 - Design Mode lists only the dev servers of the session being edited (HTML-serving listeners of its worktree, URLs it printed, the configured URL) and excludes TUIC itself (#1723-4a21).
 
 ### Added
+- Chat transcripts show New text below when content arrives while you read earlier messages. Select it to resume following; a per-client setting is available on desktop and mobile (#1757-c6a9).
 
 - Design Mode extension heartbeats expire stale sessions and deliver agent-requested page reloads once per sequence (#1735-080b).
 
@@ -22,6 +34,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 - Hands-free listening and spoken replies are now separate settings, so replies-only (push-to-talk dictation with spoken answers) works, and the dictation toast has a spoken-replies toggle (#1729-f7f1).
+- Compact mobile session attachment icon and smaller in-field mic and Send controls for a wider draft (#1719-ff5d).
 - Long-press mobile Send to queue the current agent draft for its next ready window (#1717-efd3).
 
 - Automation run worktree provenance and explicit cleanup with existing integration, archive and live-session safety checks (#1623-8b2a).
@@ -3104,3 +3117,5 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Tabs from all worktrees visible when switching branches (fix planned)
 
 - Add Telegram setup in desktop and mobile Settings: token check/replacement, expiring one-use pairing or explicit chat IDs, live agent selection and safe daemon status.
+
+- Reuse explicitly finished, clean, integrated worktrees while preserving ignored build artifacts. Reserve new allocations before returning them.

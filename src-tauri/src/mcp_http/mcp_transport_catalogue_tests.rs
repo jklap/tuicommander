@@ -1125,6 +1125,23 @@ fn ui_description_routes_semantic_outcomes_to_the_progress_tool() {
     );
 }
 
+/// `urgency` is a generic caller choice: the schema offers exactly the names
+/// `agent action=send` uses, and the description states both effects.
+#[test]
+fn ui_toast_documents_urgency_generically() {
+    let defs = native_tool_definitions();
+    let ui = tool_description(&defs, "ui");
+    assert!(ui.contains("urgency: normal (default) records the notice in the bell only"));
+    assert!(ui.contains("urgent also shows a transient card"));
+    let schema = &defs
+        .as_array()
+        .expect("tool definitions are an array")
+        .iter()
+        .find(|d| d["name"] == "ui")
+        .expect("ui tool")["inputSchema"]["properties"]["urgency"];
+    assert_eq!(schema["enum"], serde_json::json!(["normal", "urgent"]));
+}
+
 /// AC3: discovery must not be demanded for a definition the caller already
 /// holds, and must not be skipped for a name it has never seen.
 #[test]

@@ -358,7 +358,7 @@ fn start_plan_rejects_a_pinned_story_definition_without_checks() {
             RunLimits::default(),
         )
         .unwrap_err();
-    assert!(error.contains("required checks"), "{error}");
+    assert!(error.to_string().contains("required checks"), "{error}");
 }
 
 fn migrated_start_fixture() -> (
@@ -425,7 +425,7 @@ fn start_plan_checks_the_pinned_story_revision_not_the_latest_one() {
         )
         .unwrap_err();
     assert!(
-        error.contains("Story delivery") && error.contains("revision 1"),
+        error.to_string().contains("Story delivery") && error.to_string().contains("revision 1"),
         "{error}"
     );
     // catches: the rejection happening after the run row is written, leaving a Running run that

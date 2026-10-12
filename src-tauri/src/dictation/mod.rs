@@ -64,6 +64,8 @@ pub struct DictationState {
     pub recording: AtomicBool,
     /// Native Fn state survives a blocked or reloaded WebView.
     pub fn_down: AtomicBool,
+    #[cfg(target_os = "macos")]
+    pub fn_release_watch_active: AtomicBool,
     pub fn_capture: AtomicBool,
     pub native_release_pending: AtomicBool,
     pub stop_request: Mutex<Option<CaptureStopRequest>>,
@@ -217,6 +219,8 @@ impl DictationState {
             corrections: Arc::new(Mutex::new(corrections::TextCorrector::load_or_default())),
             recording: AtomicBool::new(false),
             fn_down: AtomicBool::new(false),
+            #[cfg(target_os = "macos")]
+            fn_release_watch_active: AtomicBool::new(false),
             fn_capture: AtomicBool::new(false),
             native_release_pending: AtomicBool::new(false),
             stop_request: Mutex::new(None),

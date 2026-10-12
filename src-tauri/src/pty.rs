@@ -1376,6 +1376,7 @@ fn emit_session_toast(
                 "message": message,
                 "level": level,
                 "sound": null,
+                "urgency": "normal",
                 "origin_session_id": session_id,
             }),
         );
@@ -1385,6 +1386,7 @@ fn emit_session_toast(
         message: Some(message),
         level: level.into(),
         sound: None,
+        urgency: "normal".into(),
         origin_repo_path: None,
         origin_session_id: Some(session_id.into()),
     });
@@ -2636,6 +2638,8 @@ impl ChunkProcessor {
             let choice = if agent_type.as_deref() == Some("claude") {
                 crate::output_parser::parse_claude_ask_user_question(screen)
                     .or_else(|| crate::output_parser::parse_choice_prompt(screen))
+            } else if agent_type.as_deref() == Some("ego") {
+                crate::output_parser::parse_ego_question(screen)
             } else {
                 crate::output_parser::parse_choice_prompt(screen)
             };

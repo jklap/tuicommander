@@ -344,6 +344,7 @@ async fn handle_worktree_with_caller(
                         // transports cannot describe the same workspace
                         // differently (#734-ca73).
                         "instructions": &created.instructions,
+                        "worktree_rename": &created.instructions["worktree_rename"],
                     });
                     // Optionally spawn a PTY session in the new worktree
                     if args["spawn_session"].as_bool().unwrap_or(false) {
@@ -1964,6 +1965,25 @@ pub(super) fn resolve_toast_sound(
     }
 }
 
+const TOAST_URGENCIES: [&str; 2] = ["normal", "urgent"];
+
+/// Resolve the `urgency` argument of `ui action=toast`. The names match
+/// `agent action=send`: `normal` keeps the notice in the bell, `urgent` also
+/// shows a transient card.
+fn resolve_toast_urgency(urgency: &serde_json::Value) -> Result<String, serde_json::Value> {
+    match urgency {
+        serde_json::Value::Null => Ok("normal".to_string()),
+        serde_json::Value::String(name) if TOAST_URGENCIES.contains(&name.as_str()) => {
+            Ok(name.clone())
+        }
+        other => Err(serde_json::json!({"error": format!(
+            "Invalid urgency {}. Must be one of: {}",
+            other,
+            TOAST_URGENCIES.join(", ")
+        )})),
+    }
+}
+
 fn handle_ui_toast(
     state: &Arc<AppState>,
     args: &serde_json::Value,
@@ -1993,6 +2013,10 @@ fn handle_ui_toast(
                 Ok(sound) => sound,
                 Err(e) => return e,
             };
+            let urgency = match resolve_toast_urgency(&args["urgency"]) {
+                Ok(urgency) => urgency,
+                Err(e) => return e,
+            };
             let origin_repo_path = resolve_mcp_origin_repo_path(state, mcp_session_id);
             let origin_session_id = resolve_mcp_origin_session(state, mcp_session_id);
             // Dual-emit. The bus only reaches SSE clients (browser/PWA); the
@@ -2009,6 +2033,7 @@ fn handle_ui_toast(
                         "message": message,
                         "level": level,
                         "sound": sound,
+                        "urgency": urgency,
                         "origin_repo_path": origin_repo_path,
                         "origin_session_id": origin_session_id,
                     }),
@@ -2019,6 +2044,7 @@ fn handle_ui_toast(
                 message,
                 level,
                 sound,
+                urgency,
                 origin_repo_path,
                 origin_session_id,
             });

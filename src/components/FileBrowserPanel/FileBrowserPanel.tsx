@@ -19,6 +19,7 @@ import type { ContentMatch, DirEntry } from "../../types/fs";
 import { cx } from "../../utils";
 import { onClickKeyDown } from "../../utils/a11y";
 import { copyPathToClipboard } from "../../utils/clipboard";
+import { openLocalPath } from "../../utils/openUrl";
 import { isAbsolutePath, joinPath, replaceBasename } from "../../utils/pathUtils";
 import { fileContextSmartMenuItem } from "../../utils/promptContext";
 import { ConfirmDialog } from "../ConfirmDialog";
@@ -1049,10 +1050,8 @@ export const FileBrowserPanel: Component<FileBrowserPanelProps> = (props) => {
 				action: () => {
 					const r = root();
 					if (!r) return;
-					import("@tauri-apps/plugin-opener").then(({ openPath }) => {
-						const abs = isAbsolutePath(entry.path) ? entry.path : joinPath(r, entry.path);
-						openPath(abs).catch((err) => appLogger.error("app", "Failed to open file with default app", err));
-					});
+					const abs = isAbsolutePath(entry.path) ? entry.path : joinPath(r, entry.path);
+					openLocalPath(abs);
 				},
 				separator: true,
 			});

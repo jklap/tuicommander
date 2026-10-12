@@ -323,6 +323,17 @@ describe("transport", () => {
 				path: "/design-mode/stop",
 				body: { repoPath: "/repo" },
 			});
+			// Catches: agent browser control reachable over IPC but missing on the HTTP transport.
+			expect(mapCommandToHttp("reload_design_mode", { repoPath: "/repo" })).toEqual({
+				method: "POST",
+				path: "/design-mode/reload",
+				body: { repoPath: "/repo" },
+			});
+			expect(mapCommandToHttp("navigate_design_mode", { repoPath: "/repo", url: "http://localhost:5173/x" })).toEqual({
+				method: "POST",
+				path: "/design-mode/navigate",
+				body: { repoPath: "/repo", url: "http://localhost:5173/x" },
+			});
 			expect(mapCommandToHttp("get_design_mode_status", {})).toEqual({
 				method: "GET",
 				path: "/design-mode",
@@ -4078,5 +4089,12 @@ describe("work-item link command transport", () => {
 			body: { repoPath: "/r", branch: "feat/a" },
 		});
 		expect(mapCommandToHttp("get_git_remotes", { path: "/r a" }).path).toBe("/repo/remotes?path=%2Fr%20a");
+	});
+});
+
+describe("default-app host boundary", () => {
+	it("does not map default-app opens to a remote host launcher", () => {
+		expect(INTENTIONALLY_UNMAPPED.has("open_default_app")).toBe(true);
+		expect(() => mapCommandToHttp("open_default_app", { target: "https://example.com", kind: "url" })).toThrow();
 	});
 });

@@ -6,7 +6,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { cleanup, render } from "@solidjs/testing-library";
-import { createSignal } from "solid-js";
+import { createRoot, createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanupToasts } from "../helpers/toasts";
 
@@ -97,6 +97,7 @@ const client = vi.hoisted(() => ({
 	disconnect: vi.fn(),
 	newSession: vi.fn(),
 	loadSession: vi.fn(),
+	closeSession: vi.fn(),
 	listSessions: vi.fn(),
 	prompt: vi.fn(),
 	cancel: vi.fn(),
@@ -118,7 +119,7 @@ import { emitTo } from "@tauri-apps/api/event";
 import { AIChatPanel } from "../../components/AIChatPanel/AIChatPanel";
 import { aiChatDraft } from "../../components/AIChatPanel/draft";
 import { elicitationFields } from "../../components/AIChatPanel/Interactions";
-import { resetAcpChatBindings } from "../../components/AIChatPanel/useAcpChat";
+import { createAcpChat, resetAcpChatBindings } from "../../components/AIChatPanel/useAcpChat";
 import { aiChatPanelAdapter } from "../../panelAdapters/aiChat";
 import { acpStore } from "../../stores/acp";
 import { acpTranscript } from "../../stores/acpTranscript";
@@ -307,6 +308,7 @@ beforeEach(() => {
 	for (const method of [
 		"disconnect",
 		"loadSession",
+		"closeSession",
 		"cancel",
 		"cancelQueued",
 		"answerPermission",
@@ -325,6 +327,35 @@ beforeEach(() => {
 afterEach(() => {
 	cleanup();
 	cleanupToasts();
+});
+
+// Catches: replacing a refused push-linked conversation restores that same refused tab instead of opening a new one.
+it("starts a new chat after closing a refused push-linked conversation in a fresh document", async () => {
+	aiChatTabs.add("global", SECOND_SESSION);
+	client.loadSession.mockRejectedValueOnce(
+		new Error(
+			'RPC acp_session_load failed: 502 {"kind":"agent_error","message":"the session last run has an uncertain effect; close it with session/close and start a new chat","retryable":false}',
+		),
+	);
+	let dispose = () => {};
+	const chat = createRoot((cleanup) => {
+		dispose = cleanup;
+		return createAcpChat(
+			() => ROOT,
+			() => true,
+			client,
+		);
+	});
+	try {
+		await chat.selectSession(SECOND_SESSION);
+		expect(chat.error()).toContain("uncertain effect");
+		await chat.closeFailed();
+		await chat.startSession();
+		expect(chat.sessionId()).toBe(SESSION);
+		expect(chat.error()).toBeNull();
+	} finally {
+		dispose();
+	}
 });
 
 describe("AIChatPanel: repository profile warnings", () => {
@@ -871,6 +902,8 @@ describe("AIChatPanel: one chat across repositories", () => {
 		expect(client.prompt).toHaveBeenCalledTimes(1);
 		(container.querySelector('button[aria-label="New chat tab"]') as HTMLButtonElement).click();
 		await settle();
+		// Catches: removal of the duplicate bar action also removing the tab action.
+		expect(container.querySelector('button[aria-label="Start another conversation"]')).toBeNull();
 		expect(client.newSession).toHaveBeenCalledTimes(2);
 		expect(client.newSession).toHaveBeenLastCalledWith(CONNECTION, CHAT_ROOT);
 		expect(client.connect).toHaveBeenCalledTimes(1);
@@ -999,6 +1032,32 @@ describe("AIChatPanel: parallel tabs", () => {
 		await settle();
 		expect(container.textContent).toContain("Model: Opus");
 		expect(container.textContent).not.toContain("Connecting conversation…");
+	});
+
+	// Catches: "Start new chat" after a refused load leaves the refused session open and
+	// selected, so the new chat reloads it or the dead tab stays.
+	it("closes the refused session on the agent and opens a new one in its place", async () => {
+		restoreTabs();
+		client.loadSession.mockRejectedValueOnce(new Error("uncertain effect"));
+		await createRoot(async (dispose) => {
+			const chat = createAcpChat(
+				() => ROOT,
+				() => true,
+			);
+			await chat.selectSession(SECOND_SESSION);
+			await settle();
+			expect(chat.error()).toContain("uncertain effect");
+			await chat.closeFailed();
+			expect(client.closeSession).toHaveBeenCalledWith(CONNECTION, SECOND_SESSION);
+			expect(chat.error()).toBeNull();
+			expect(aiChatTabs.ids("global")).not.toContain(SECOND_SESSION);
+			await chat.startSession();
+			await settle();
+			expect(client.newSession).toHaveBeenCalledTimes(1);
+			expect(client.loadSession.mock.calls.filter((call) => call[1] === SECOND_SESSION)).toHaveLength(1);
+			expect(chat.error()).toBeNull();
+			dispose();
+		});
 	});
 
 	// Catches: Retry clears the error without reattaching the saved tab that failed.
@@ -2336,7 +2395,7 @@ describe("AIChatPanel: durable conversations", () => {
 		expect(client.newSession).toHaveBeenCalledWith(CONNECTION, CHAT_ROOT);
 		expect(client.listSessions).not.toHaveBeenCalled();
 		expect(container.querySelector("textarea")).not.toBeNull();
-		const next = container.querySelector<HTMLButtonElement>('button[aria-label="Start another conversation"]');
+		const next = container.querySelector<HTMLButtonElement>('button[aria-label="New chat tab"]');
 		next?.click();
 		await settle();
 		expect(client.newSession).toHaveBeenCalledTimes(2);
@@ -3238,7 +3297,7 @@ describe("AIChatPanel: pause, resume and compact", () => {
 			const bar = container.querySelector<HTMLElement>(".controlBar")!;
 			expect(bar.querySelector(".sessionSettingsSummary")?.textContent).toBe("Model: gpt-6-sol");
 			expect(getComputedStyle(bar).flexWrap).toBe("nowrap");
-			for (const label of ["Pause the turn", "Compact the conversation", "Start another conversation"]) {
+			for (const label of ["Pause the turn", "Compact the conversation"]) {
 				const button = bar.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!;
 				expect(button.title).toBe(label);
 				expect(button.querySelector("svg")).not.toBeNull();
