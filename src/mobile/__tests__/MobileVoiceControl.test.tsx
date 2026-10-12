@@ -79,6 +79,7 @@ beforeEach(() => {
 
 afterEach(() => {
 	cleanup();
+	localStorage.clear();
 	vi.clearAllMocks();
 	voice.setStatus(null);
 });

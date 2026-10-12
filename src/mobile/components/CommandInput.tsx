@@ -1,4 +1,4 @@
-import { createEffect, createSignal, onCleanup, Show } from "solid-js";
+import { createEffect, createSignal, onCleanup, onMount, Show } from "solid-js";
 import { t } from "../../i18n";
 import { uploadAttachment } from "../../services/uploadAttachment";
 import { appLogger } from "../../stores/appLogger";
@@ -7,6 +7,7 @@ import { HttpRpcError, rpc } from "../../transport";
 import { sendPtyKey, waitForAgentEnterGap } from "../../utils/sendCommand";
 import { useBrowserDictation } from "../useBrowserDictation";
 import type { ChoicePrompt, SlashMenuItem } from "../useSessions";
+import { clearDictationPartial, loadDictationPartial, saveDictationPartial } from "../utils/dictationPartial";
 import { retryWrite } from "../utils/retryWrite";
 import { ChoicePromptOverlay } from "./ChoicePromptOverlay";
 import styles from "./CommandInput.module.css";
@@ -40,7 +41,12 @@ interface CommandInputProps {
 }
 
 export function CommandInput(props: CommandInputProps) {
-	const [value, setValue] = createSignal("");
+	// A dictated draft that survived a reload is offered back in the composer: never sent, never typed
+	// into the session. The terminal already holds it (the draft is streamed as it is dictated), so
+	// the sync baseline starts at the restored text.
+	const restoredPartial = loadDictationPartial(props.sessionId);
+	let savedPartial = restoredPartial;
+	const [value, setValue] = createSignal(restoredPartial);
 	const [submitting, setSubmitting] = createSignal(false);
 	const [queueMenu, setQueueMenu] = createSignal(false);
 	let pressTimer: ReturnType<typeof setTimeout> | undefined;
@@ -111,7 +117,7 @@ export function CommandInput(props: CommandInputProps) {
 	let fileInput: HTMLInputElement | undefined;
 	// The local draft baseline, including explicitly requested PTY completions
 	// and history replacements. Every edit computes its delta from this text.
-	let syncedText = "";
+	let syncedText = restoredPartial;
 	let inputRequest: { kind: "completion" | "history"; armed: boolean } | null = null;
 	// Timestamp of the last Enter (send()). Within POST_SEND_GUARD_MS, all
 	// incoming ptyInputLine updates are ignored to prevent a lagging echo of
@@ -159,6 +165,16 @@ export function CommandInput(props: CommandInputProps) {
 		}
 	});
 
+	onMount(() => {
+		if (!restoredPartial || !textareaEl) return;
+		textareaEl.value = restoredPartial;
+		autoResize();
+	});
+	// Any draft other than the one dictation saved (an edit, a send, Escape, history) retires the partial.
+	createEffect(() => {
+		if (value() !== savedPartial) clearDictationPartial(props.sessionId);
+	});
+
 	function autoResize() {
 		if (!textareaEl) return;
 		textareaEl.style.height = "auto";
@@ -196,6 +212,8 @@ export function CommandInput(props: CommandInputProps) {
 		getDraft: () => textareaEl?.value ?? value(),
 		setDraft: (text) => {
 			if (textareaEl) textareaEl.value = text;
+			savedPartial = text;
+			saveDictationPartial(props.sessionId, text);
 			updateInput(text);
 		},
 		onRecording: (active) => props.onBrowserDictating?.(active),

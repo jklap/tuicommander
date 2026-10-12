@@ -53,6 +53,7 @@ function mount() {
 
 afterEach(() => {
 	cleanup();
+	localStorage.clear();
 	vi.unstubAllGlobals();
 	Recognition.instances = [];
 	Recognition.failStart = false;
