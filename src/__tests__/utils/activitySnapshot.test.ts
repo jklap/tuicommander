@@ -275,11 +275,11 @@ describe("reconcileActivityOrder", () => {
 });
 
 describe("displayTask", () => {
-	let displayTask: typeof import("../../utils/activitySnapshot").displayTask;
+	let displayTask: typeof import("../../utils/displayTask").displayTask;
 
 	beforeEach(async () => {
 		vi.resetModules();
-		displayTask = (await import("../../utils/activitySnapshot")).displayTask;
+		displayTask = (await import("../../utils/displayTask")).displayTask;
 	});
 
 	it("drops a task that only restates the status badge next to it", () => {
