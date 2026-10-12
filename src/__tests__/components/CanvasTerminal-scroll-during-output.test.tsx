@@ -260,6 +260,35 @@ describe("CanvasTerminal scroll gesture during output", () => {
 		}
 	});
 
+	// Catches: an unreachable settle target suppresses live paints forever after scrollback is purged.
+	it("resumes live painting when scrollback is purged while a gesture settles", async () => {
+		layOutPane();
+		invoke.mockImplementation(async (cmd: string, args: { start?: number; count?: number }) => {
+			if (cmd !== "terminal_styled_rows") return undefined;
+			return styledRange(args.start ?? 0, args.count ?? 0, 104, 100, (abs) => `L${abs}`);
+		});
+		const view = render(() => <CanvasTerminal sessionId="purged-settle" terminalId="purged-settle" />);
+		try {
+			await waitFor(() => expect(frameSink.current).not.toBeNull());
+			frameSink.current?.(fullFrame({ historySize: 100, displayOffset: 0 }));
+			const canvas = view.container.querySelector('canvas[tabindex="0"]');
+			if (!canvas) throw new Error("terminal canvas not mounted");
+			wheel(canvas, -80);
+			await waitFor(() => expect(invoke.mock.calls.some(([cmd]) => cmd === "terminal_scroll_to_anchor")).toBe(true));
+			// The gesture end timer is 200 ms; let it enter settlement without an ack frame.
+			await new Promise((resolve) => setTimeout(resolve, 250));
+			paintGrid.mockClear();
+			// clear_history keeps all-time row ids, but removes every history row and returns to tail.
+			frameSink.current?.(fullFrame({ historyBase: 100, historySize: 0, displayOffset: 0 }));
+			frameSink.current?.(
+				fullFrame({ historyBase: 100, historySize: 0, displayOffset: 0, textOf: (abs) => `NEW${abs - 100}` }),
+			);
+			await waitFor(() => expect(paintedLines()).toEqual(["NEW0", "NEW1", "NEW2", "NEW3"]));
+		} finally {
+			view.unmount();
+		}
+	});
+
 	// catches: the gesture keeps its distance-from-bottom while the grid pushes
 	// output into history, so the next flush scrolls the backend forward by the
 	// output and those lines are skipped.

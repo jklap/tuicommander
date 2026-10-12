@@ -1532,6 +1532,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			return;
 		}
 		awaitingFullFrame = false;
+		// Purged history cannot acknowledge a gesture that still targets a removed row.
+		if (scroll.position != null && scroll.position > frame.historySize) resetSmoothScroll(false);
 
 		if (scrollChanged || geomChanged || screenChanged) {
 			if (hoveredLink) {
