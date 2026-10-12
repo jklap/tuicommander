@@ -84,11 +84,21 @@ fn isolate_git_config(root: &std::path::Path) {
 /// repository above the scratch root. A fixture whose `git init` failed used to
 /// fall through to the enclosing real checkout and rename or delete its
 /// branches. See [`git_ceiling_directories`].
+///
+/// The host temp dir is fenced too: it holds the `t.XXXXXX` socket roots,
+/// which live outside `root` to fit `sun_path`.
 fn fence_git_discovery(root: &std::path::Path) {
     let root = std::path::absolute(root).expect("absolute test temp root");
     let existing = std::env::var_os("GIT_CEILING_DIRECTORIES");
     let ceiling = git_ceiling_directories(&root, existing.as_deref())
         .unwrap_or_else(|err| panic!("fence git discovery at {}: {err}", root.display()));
+    let host = host_temp_dir();
+    let ceiling = if host.is_absolute() {
+        git_ceiling_with_dir(&host, Some(&ceiling))
+            .unwrap_or_else(|err| panic!("fence git discovery at {}: {err}", host.display()))
+    } else {
+        ceiling
+    };
     // SAFETY: called from the process constructor, before libtest starts threads.
     unsafe { std::env::set_var("GIT_CEILING_DIRECTORIES", ceiling) };
 }
@@ -111,13 +121,52 @@ pub fn git_ceiling_directories(
     root: &std::path::Path,
     existing: Option<&std::ffi::OsStr>,
 ) -> Result<std::ffi::OsString, String> {
+    let lexical = lexically_normal(root)?;
+    let parent = lexical
+        .parent()
+        .ok_or_else(|| format!("{} has no parent", root.display()))?
+        .to_path_buf();
+    // The parent of the canonical root, not the canonical parent: when `root`
+    // itself is a symlink, git compares against where it really lives.
+    let canonical = std::fs::canonicalize(&lexical)
+        .ok()
+        .and_then(|real| real.parent().map(std::path::Path::to_path_buf));
+    Ok(append_ceiling_entries(
+        existing,
+        std::iter::once(parent).chain(canonical),
+    ))
+}
+
+/// `existing` plus `dir` itself (not its parent), lexically and canonically,
+/// each added once: git may still discover a repository *below* `dir`, never
+/// one at or above it. Used for directories that hold scratch next to the
+/// test root rather than inside it (the host temp dir's socket roots).
+///
+/// # Errors
+///
+/// `dir` is relative.
+pub fn git_ceiling_with_dir(
+    dir: &std::path::Path,
+    existing: Option<&std::ffi::OsStr>,
+) -> Result<std::ffi::OsString, String> {
+    let lexical = lexically_normal(dir)?;
+    let canonical = std::fs::canonicalize(&lexical).ok();
+    Ok(append_ceiling_entries(
+        existing,
+        std::iter::once(lexical).chain(canonical),
+    ))
+}
+
+/// `path` with `.` and `..` resolved lexically; refuses a relative path, which
+/// git would silently ignore as a ceiling entry.
+fn lexically_normal(path: &std::path::Path) -> Result<std::path::PathBuf, String> {
     use std::path::{Component, PathBuf};
 
-    if !root.is_absolute() {
-        return Err(format!("{} is not absolute", root.display()));
+    if !path.is_absolute() {
+        return Err(format!("{} is not absolute", path.display()));
     }
     let mut lexical = PathBuf::new();
-    for component in root.components() {
+    for component in path.components() {
         match component {
             Component::CurDir => {}
             Component::ParentDir => {
@@ -126,21 +175,20 @@ pub fn git_ceiling_directories(
             other => lexical.push(other),
         }
     }
-    let parent = lexical
-        .parent()
-        .ok_or_else(|| format!("{} has no parent", root.display()))?
-        .to_path_buf();
-    let canonical = std::fs::canonicalize(&lexical)
-        .ok()
-        .and_then(|real| real.parent().map(std::path::Path::to_path_buf));
+    Ok(lexical)
+}
 
+fn append_ceiling_entries(
+    existing: Option<&std::ffi::OsStr>,
+    entries: impl IntoIterator<Item = std::path::PathBuf>,
+) -> std::ffi::OsString {
     let sep = if cfg!(windows) { ';' } else { ':' };
     let mut value = existing
         .map(|v| v.to_string_lossy().into_owned())
         .unwrap_or_default();
-    for entry in std::iter::once(parent).chain(canonical) {
+    for entry in entries {
         let entry = entry.to_string_lossy().into_owned();
-        if value.split(sep).any(|present| present == entry) {
+        if entry.is_empty() || value.split(sep).any(|present| present == entry) {
             continue;
         }
         if !value.is_empty() {
@@ -148,7 +196,7 @@ pub fn git_ceiling_directories(
         }
         value.push_str(&entry);
     }
-    Ok(value.into())
+    value.into()
 }
 
 fn non_empty_env(key: &str) -> Option<std::path::PathBuf> {
@@ -926,7 +974,7 @@ mod tests {
 
     /// The constructor fences this very process: git started in a repo-less
     /// dir under the test root finds nothing, even when that root sits inside
-    /// a real checkout (the default `<checkout>/.tmp/tuic-tests`).
+    /// a real checkout (the opt-in `TUIC_TEST_TMP_BASE=<checkout>/.tmp/tuic-tests`).
     #[test]
     fn git_in_a_test_process_cannot_leave_the_test_root() {
         let dir = tempfile::tempdir_in(super::test_temp_root()).unwrap();
@@ -943,6 +991,26 @@ mod tests {
             "ceiling must name the test root's parent {}",
             parent.display()
         );
+        // The socket roots' home, the host temp dir, is fenced as well.
+        let host = super::host_temp_dir();
+        assert!(
+            entries(inherited.as_deref().unwrap()).contains(&host),
+            "ceiling must name the host temp dir {}",
+            host.display()
+        );
+    }
+
+    #[test]
+    fn ceiling_with_dir_lists_the_dir_itself_once() {
+        let dir = tempfile::tempdir_in(super::test_temp_root()).unwrap();
+        let real = dir.path().canonicalize().unwrap();
+        let value = super::git_ceiling_with_dir(&real, None).unwrap();
+        assert_eq!(entries(&value), vec![real.clone()]);
+        assert_eq!(
+            super::git_ceiling_with_dir(&real, Some(&value)).unwrap(),
+            value
+        );
+        assert!(super::git_ceiling_with_dir(Path::new("relative"), None).is_err());
     }
 
     fn git_config_get(cwd: &std::path::Path, key: &str) -> Option<String> {

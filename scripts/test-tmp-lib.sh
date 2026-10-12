@@ -53,3 +53,24 @@ tuic_test_tmp_root() {
   mkdir -p "$_tuic_root"
   printf '%s\n' "$_tuic_root"
 }
+
+# Usage: tuic_git_ceiling_with <dir>... Prints $GIT_CEILING_DIRECTORIES with each
+# existing <dir> appended in its lexical and its physical spelling (macOS /var
+# vs /private/var), each entry once, never an empty one: git skips entries it
+# cannot compare and stops resolving symlinks after an empty entry. An outer
+# wrapper's value is kept verbatim, so a stricter ceiling survives. Git never
+# ascends INTO an entry, so pass the parent of the dir the fence protects.
+tuic_git_ceiling_with() {
+  _tuic_ceiling=${GIT_CEILING_DIRECTORIES:-}
+  for _tuic_dir in "$@"; do
+    for _tuic_entry in "$(CDPATH='' cd -- "$_tuic_dir" 2>/dev/null && pwd)" \
+      "$(CDPATH='' cd -- "$_tuic_dir" 2>/dev/null && pwd -P)"; do
+      [ -n "$_tuic_entry" ] || continue
+      case ":$_tuic_ceiling:" in
+        *":$_tuic_entry:"*) ;;
+        *) _tuic_ceiling=${_tuic_ceiling:+$_tuic_ceiling:}$_tuic_entry ;;
+      esac
+    done
+  done
+  printf '%s\n' "$_tuic_ceiling"
+}
