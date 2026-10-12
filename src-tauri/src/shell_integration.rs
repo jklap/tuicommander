@@ -496,7 +496,7 @@ fn install_agent_shim(bin: &Path) -> std::io::Result<()> {
     let shim = bin.join(SHIM_FILE);
     let content = render_shim();
     if std::fs::read_to_string(&shim).ok().as_deref() != Some(content.as_str()) {
-        let staging = bin.join(format!("{SHIM_FILE}.{}", std::process::id()));
+        let staging = bin.join(format!("{SHIM_FILE}.{}", uuid::Uuid::new_v4()));
         std::fs::write(&staging, &content)?;
         std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o755))?;
         std::fs::rename(&staging, &shim)?;
@@ -506,7 +506,7 @@ fn install_agent_shim(bin: &Path) -> std::io::Result<()> {
         if std::fs::read_link(&link).is_ok_and(|target| target == Path::new(SHIM_FILE)) {
             continue;
         }
-        let staging = bin.join(format!("{agent}.{}", std::process::id()));
+        let staging = bin.join(format!("{agent}.{}", uuid::Uuid::new_v4()));
         let _ = std::fs::remove_file(&staging);
         std::os::unix::fs::symlink(SHIM_FILE, &staging)?;
         std::fs::rename(&staging, &link)?;
