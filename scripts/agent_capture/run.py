@@ -17,7 +17,7 @@ import time
 import urllib.error
 import urllib.request
 
-from scenario import AGENTS, run_steps, validate
+from scenario import AGENTS, exit_session, expand, run_steps, validate
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -141,6 +141,12 @@ def capture_run(args):
     report = {"recorded_at": datetime.now(timezone.utc).isoformat(), "agent": agent, "binary": installed[agent]["binary"], "scenario": scenario,
               "expected_states": expected, "status": "unverified"}
     session_id = None
+    # One rule text per scenario, placed into args/env by {canary_rule}/{canary_file}.
+    rule_file = output / "canary-rule.md"
+    rule_file.write_text(scenario.get("canary_rule", "") + "\n")
+    placeholders = {"canary_rule": scenario.get("canary_rule", ""), "canary_file": str(rule_file),
+                    "home": str(agent_home)}
+    sessions, checks, markers = [], [], []
 
     def api(method, path, body=None):
         request = urllib.request.Request(
@@ -152,7 +158,16 @@ def capture_run(args):
                 return json.load(response)
         except urllib.error.HTTPError as error:
             # Never log response bodies: an agent may echo prompt or credential content.
-            raise RuntimeError(f"{method} {path}: HTTP {error.code}") from None
+            # A rejected submit names its cause in enum fields only; keep just those.
+            detail = ""
+            if error.code == 409:
+                try:
+                    body = json.load(error)
+                    detail = " " + " ".join(f"{key}={body[key]}" for key in ("reason", "composer_state")
+                                            if isinstance(body.get(key), str) and body[key].isidentifier())
+                except (ValueError, OSError):
+                    pass
+            raise RuntimeError(f"{method} {path}: HTTP {error.code}{detail.rstrip()}") from None
 
     with (output / "daemon.log").open("w") as log:
         process = subprocess.Popen([str(daemon), "--instance", instance, "--bind", "127.0.0.1",
@@ -180,17 +195,58 @@ def capture_run(args):
             enabled = api("POST", "/diagnostics/capture", {"enabled": True})
             if not enabled.get("enabled"):
                 raise RuntimeError("capture tap did not start")
-            session_id = api("POST", "/sessions/agent", {
-                "agent_type": agent, "binary_path": installed[agent]["binary"], "prompt": "",
-                "args": scenario["args"], "cwd": str(output), "rows": 41, "cols": 128,
-                "env": {"HOME": str(agent_home), "XDG_CONFIG_HOME": str(agent_home / ".config"),
-                        "XDG_CACHE_HOME": str(agent_home / ".cache"), "TMPDIR": str(output),
-                        "TMP": str(output), "TEMP": str(output)},
-            })["session_id"]
-            report["observed_states"] = run_steps(api, session_id, scenario["steps"])
+            def spawn(args, env=None):
+                new_id = api("POST", "/sessions/agent", {
+                    "agent_type": agent, "binary_path": installed[agent]["binary"], "prompt": "",
+                    "args": expand(args, placeholders), "cwd": str(output), "rows": 41, "cols": 128,
+                    "env": {"HOME": str(agent_home), "XDG_CONFIG_HOME": str(agent_home / ".config"),
+                            "XDG_CACHE_HOME": str(agent_home / ".cache"), "TMPDIR": str(output),
+                            "TMP": str(output), "TEMP": str(output),
+                            # The agent's TUIC MCP bridge must reach this isolated daemon,
+                            # never the user's running TUICommander.
+                            "TUIC_SOCKET": report["daemon_health"]["socket_path"],
+                            # Login-keychain lookups are keyed by account name.
+                            **{key: os.environ[key] for key in ("USER", "LOGNAME") if key in os.environ},
+                            **expand(scenario.get("env", {}) if env is None else env, placeholders)},
+                })["session_id"]
+                sessions.append(new_id)
+                return new_id
+
+            def end(old_id, exit_text=None):
+                # One compliance read per session, before it is gone (#4421 counters).
+                rows = api("GET", "/diagnostics/markers").get("sessions", [])
+                markers.append(next((row for row in rows if row.get("session_id") == old_id),
+                                    {"session_id": old_id, "missing": True}))
+                if exit_text:
+                    exit_session(api, old_id, exit_text)
+                try:
+                    api("DELETE", f"/sessions/{old_id}")
+                except RuntimeError as error:
+                    if "HTTP 404" not in str(error):  # the agent already exited
+                        raise
+
+            def relaunch(old_id, args, env, exit_text):
+                end(old_id, exit_text)
+                return spawn(args, env)
+
+            session_id = spawn(scenario["args"])
+            try:
+                report["observed_states"] = run_steps(api, session_id, scenario["steps"],
+                                                      canary=scenario.get("canary"),
+                                                      relaunch=relaunch, results=checks,
+                                                      ignore_prefixes=scenario.get("ignore_prefixes", ()),
+                                                      idle_gate=scenario.get("idle_gate", False))
+            finally:
+                report.update(checks=checks, markers=markers, sessions=list(sessions))
+            session_id = sessions[-1]
+            end(session_id)
+            session_id = None
             api("POST", "/diagnostics/capture", {"enabled": False})
-            recording = output / "raw" / f"{session_id}.tcap"
-            reject_login(recording_output(recording.read_bytes()))
+            for sid in sessions:
+                recording = output / "raw" / f"{sid}.tcap"
+                if recording.exists():
+                    reject_login(recording_output(recording.read_bytes()))
+            recording = output / "raw" / f"{sessions[0]}.tcap"
             report.update(status="captured", sha256=hashlib.sha256(recording.read_bytes()).hexdigest())
             report["capture"] = str(recording)
         except Exception as error:
@@ -199,9 +255,9 @@ def capture_run(args):
         finally:
             for method, path, body in [
                 ("POST", "/diagnostics/capture", {"enabled": False}),
-                ("DELETE", f"/sessions/{session_id}", None),
+                *(("DELETE", f"/sessions/{sid}", None) for sid in sessions if session_id),
             ]:
-                if process.poll() is None and (session_id or method == "POST"):
+                if process.poll() is None:
                     try:
                         api(method, path, body)
                     except (OSError, RuntimeError):

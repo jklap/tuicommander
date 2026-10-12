@@ -1,3 +1,6 @@
+## Plugin hot reload re-reads sub-modules (1809-010d) — Rust restart required
+
+- [ ] After the restart, edit an export in `github-work/provider.js` (or any file a plugin's `main.js` imports) and save: the plugin reloads and the new export is live without a WebView reload. In Tasks > New task for GitHub, the type picker shows and Create enables (stale-realm symptom of 1743-4776).
 ## Mute intermediate Chat text (1769-89dc)
 
 - [ ] [VISUAL] Terminal Chat view, AI Chat and mobile chat: text followed by a tool call in the same turn is smaller and dimmer; the last text of the turn keeps normal weight. Needs a `make dev` restart (Rust config field `chat_mute_intermediate_text`).
@@ -5171,6 +5174,7 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 
 - [ ] On iPhone, tap the attachment icon left of the session composer, choose a photo/file, confirm upload status then its path in the draft, and confirm Queue stays disabled during upload. Smaller mic and Send controls remain inside the right input border.
 
+- [ ] [VISUAL] #1264-89c8: after a manual Rust restart, scroll up gently during sustained agent output, stop the gesture, then use scrollbar drag and return to the bottom. Verify no forward jump or gap, including capped history. Rust does not hot-reload; restart only when ready to lose the current session.
 - [ ] Mobile: Claude multi-question AskUserQuestion (two questions + Submit) — answer each tab and the Submit review from the phone overlay; needs the TUIC restart for the Rust parser change (#1766-9311)
 
 ## Automatic agent toast cards (#1760-bab7)

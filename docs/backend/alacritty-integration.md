@@ -339,3 +339,7 @@ Resize-owned physical fragments retain their complete logical-record identity fr
 the post-resize WRAPLINE boundaries, before a redraw can erase a continuation still
 on screen. Replacement proof must match that complete record; a substring in a
 different replaced record never licenses deleting an omitted history record.
+
+### History-anchored viewport scrolling
+
+History-anchored scrolling uses `TerminalGrid::screen_origin()` (`total_scrolled`) and `scroll_to_anchor`; it resolves the all-time row to a display offset under the VT lock. The existing fork origin and history cap provide the coordinate; no new fork patch is required.

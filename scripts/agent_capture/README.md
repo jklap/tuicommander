@@ -43,6 +43,43 @@ to the installed CLI version. Steps are:
   cannot be inferred from output-only replay; capture submission/awaiting states
   and record the omitted timer dependency explicitly in the scenario.
 - `interrupt`: send Ctrl+C through the PTY write endpoint.
+- `settle`: wait until the terminal buffer tail stops changing for `quiet_secs`
+  (default 5). Use it after a launch, where state detection may not know the agent.
+- `slash`: submit a slash command (`text` must start with `/`, for example
+  `/compact`, `/clear`, `/new`), then settle as above.
+- `check`: submit `text` and judge the reply below its latest echo once `answer`
+  appears and the tail is quiet. The verdict is `followed` when the first reply
+  line holding the canary or the answer starts with the scenario `canary` (after
+  the agent's bullet glyph). Labels and prompts are unique and `answer` must not
+  occur in `text`, so neither replayed history nor the echo can pass a check. A
+  check that sees no answer records `followed: null`; it does not stop the run.
+- `restart`: optionally submit `exit_text`, then read the session's
+  `/diagnostics/markers` row, delete the session and launch a new one with the
+  step's explicit `args` (for example a resume flag). `env`, when present,
+  replaces the scenario `env` for that launch. Use `exit_text` (for example
+  `/quit`) when the agent holds a session lock that the new launch must take.
+- `dismiss`: press `key` only if `text` appears in the terminal tail within
+  `timeout_secs`. Use it for dialogs that do not always render (Claude's
+  external-import prompt, goose's `/compact` confirmation).
+
+Scenario options for checks: `ignore_prefixes` drops reply lines that start with
+a prefix (reasoning rows such as grok's `┃` or opencode's `Thinking:`) before
+judging. `idle_gate: true` waits until the agent state is not `working` before
+each submission, for agents that accept input while a turn still streams.
+
+A scenario with checks names a `canary` and a `canary_rule` containing it. The
+driver writes the rule to `<output>/canary-rule.md` and substitutes
+`{canary_rule}` (the text), `{canary_file}` (the path) and `{home}` (the agent
+HOME) in `args`, restart `args` and `env`, so every agent receives the same rule
+text. The driver sets `TUIC_SOCKET` to the isolated daemon socket, so an agent's
+TUIC MCP bridge talks to the capture daemon and never to the user's live TUIC. `capture.json`
+then holds `checks` (verdict, quoted reply line, buffer tail), `markers` (one
+`/diagnostics/markers` row per session) and `sessions`. These matrix captures
+have no expected states, so they can never be promoted.
+
+The `marker-<agent>.json` scenarios run the launch-time injection matrix: two
+warm-up turns (W), then two checks fresh (A), after compact (B), after clear or
+new (C), resumed with the injection (D) and resumed without it (E).
 
 Create separate scenarios for CLI-specific dialogs. Included smoke scenarios
 cover Claude (Haiku), Codex (default), pi (Gemini Flash, tools disabled) and goose

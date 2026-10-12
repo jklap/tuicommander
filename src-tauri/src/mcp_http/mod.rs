@@ -1090,6 +1090,10 @@ fn shared_routes() -> Router<Arc<AppState>> {
             post(session::terminal_scroll_to_offset),
         )
         .route(
+            "/sessions/{id}/terminal/scroll-to-anchor",
+            post(session::terminal_scroll_to_anchor),
+        )
+        .route(
             "/sessions/{id}/terminal/scroll-info",
             get(session::terminal_scroll_info),
         )
