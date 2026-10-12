@@ -902,6 +902,8 @@ describe("AIChatPanel: one chat across repositories", () => {
 		expect(client.prompt).toHaveBeenCalledTimes(1);
 		(container.querySelector('button[aria-label="New chat tab"]') as HTMLButtonElement).click();
 		await settle();
+		// Catches: removal of the duplicate bar action also removing the tab action.
+		expect(container.querySelector('button[aria-label="Start another conversation"]')).toBeNull();
 		expect(client.newSession).toHaveBeenCalledTimes(2);
 		expect(client.newSession).toHaveBeenLastCalledWith(CONNECTION, CHAT_ROOT);
 		expect(client.connect).toHaveBeenCalledTimes(1);
@@ -2393,7 +2395,7 @@ describe("AIChatPanel: durable conversations", () => {
 		expect(client.newSession).toHaveBeenCalledWith(CONNECTION, CHAT_ROOT);
 		expect(client.listSessions).not.toHaveBeenCalled();
 		expect(container.querySelector("textarea")).not.toBeNull();
-		const next = container.querySelector<HTMLButtonElement>('button[aria-label="Start another conversation"]');
+		const next = container.querySelector<HTMLButtonElement>('button[aria-label="New chat tab"]');
 		next?.click();
 		await settle();
 		expect(client.newSession).toHaveBeenCalledTimes(2);
@@ -3295,7 +3297,7 @@ describe("AIChatPanel: pause, resume and compact", () => {
 			const bar = container.querySelector<HTMLElement>(".controlBar")!;
 			expect(bar.querySelector(".sessionSettingsSummary")?.textContent).toBe("Model: gpt-6-sol");
 			expect(getComputedStyle(bar).flexWrap).toBe("nowrap");
-			for (const label of ["Pause the turn", "Compact the conversation", "Start another conversation"]) {
+			for (const label of ["Pause the turn", "Compact the conversation"]) {
 				const button = bar.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!;
 				expect(button.title).toBe(label);
 				expect(button.querySelector("svg")).not.toBeNull();

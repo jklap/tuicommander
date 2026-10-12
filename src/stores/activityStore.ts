@@ -195,7 +195,7 @@ function createActivityStore() {
 	}
 
 	/**
-	 * How many items the popover would show across these sections. The badge wants
+	 * How many dismissible notifications the popover shows across these sections. The badge wants
 	 * one number, so it walks the items once and never sorts — asking each section
 	 * for its list instead cost a scan and a sort per section, both discarded for
 	 * a `.length`.
@@ -205,7 +205,7 @@ function createActivityStore() {
 		const wanted = new Set(sectionIds);
 		let count = 0;
 		for (const item of state.items) {
-			if (wanted.has(item.sectionId) && isVisibleIn(item, item.sectionId, repoPath)) count++;
+			if (item.dismissible && wanted.has(item.sectionId) && isVisibleIn(item, item.sectionId, repoPath)) count++;
 		}
 		return count;
 	}

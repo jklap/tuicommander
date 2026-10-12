@@ -571,6 +571,11 @@ export const Toolbar: Component<ToolbarProps> = (props) => {
 						<div class={s.popover}>
 							<div class={s.sectionHeader}>
 								<span class={s.sectionLabel}>PROGRESS</span>
+								<Show when={progressStore.unreadCount > 0}>
+									<button class={s.dismissAll} onClick={() => progressStore.markRead()}>
+										{t("toolbar.markAsRead", "Mark as read")}
+									</button>
+								</Show>
 							</div>
 							<div
 								class={s.activityItem}

@@ -39,7 +39,7 @@ describe("automation runs", () => {
 				})}
 			/>
 		));
-		fireEvent.click(screen.getByRole("button", { name: "Runs" }));
+		fireEvent.click(screen.getByRole("tab", { name: "Runs" }));
 		await screen.findByText("Total runs: 73");
 		expect(screen.getByText("Total runs: 401")).toBeTruthy();
 		expect(screen.getAllByText("needs_you").length).toBeGreaterThan(0);
@@ -63,7 +63,7 @@ describe("automation runs", () => {
 			stderr: { text: "Saved error", truncated: false },
 		};
 		render(() => <AutomationsDialog onClose={() => {}} adapter={fakeAdapter({ history: async () => [run] })} />);
-		fireEvent.click(screen.getByRole("button", { name: "Runs" }));
+		fireEvent.click(screen.getByRole("tab", { name: "Runs" }));
 		fireEvent.click(await screen.findByRole("button", { name: "View run" }));
 		expect(screen.getByText("Saved report")).toBeTruthy();
 		expect(screen.getByText("Saved error")).toBeTruthy();
@@ -107,7 +107,7 @@ describe("automation runs", () => {
 			/>
 		));
 		try {
-			fireEvent.click(screen.getByRole("button", { name: "Runs" }));
+			fireEvent.click(screen.getByRole("tab", { name: "Runs" }));
 			fireEvent.click(await screen.findByRole("button", { name: "View run" }));
 			if (row.navigates) {
 				expect(terminalsStore.state.activeId).toBe(remoteTerminal);
