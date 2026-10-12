@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - GitHub token chain no longer reads the `gh` CLI login (`gh auth token`, `gh-token` crate); use OAuth login or `GH_TOKEN`/`GITHUB_TOKEN`. TUIC spawns no `gh` process (#1714-1c1d).
 
 ### Fixed
+- Automations uses readable schedule cards, short repository names, keyboard tabs and a compact toolbar. The first definition opens automatically unless disabled in the dialog (#1762-c772).
 - Default-app URL and file opens reap their launcher child instead of leaving a zombie process (#1749-f9a0).
 - Design Mode retains a wait owner for Chrome/Edge launches, including short-lived handoff processes, independently of the launch runtime (#1707-bd40).
 - Duplicate workflow starts report the active run ID instead of a raw SQLite constraint error (#1748-47b0).
