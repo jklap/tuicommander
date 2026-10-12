@@ -236,13 +236,15 @@ async fn adopted_sections_keep_capture_order_across_reads() {
             first_seen_ms,
             last_seen_ms: first_seen_ms,
         };
-    let mut seeded = crate::prompt_receipt::PromptReceipt::default();
     // Captured order is Late-by-source first; source order is the reverse.
-    seeded.sections = vec![
-        row("third", "a-source", 30),
-        row("first", "z-source", 10),
-        row("second", "m-source", 20),
-    ];
+    let seeded = crate::prompt_receipt::PromptReceipt {
+        sections: vec![
+            row("third", "a-source", 30),
+            row("first", "z-source", 10),
+            row("second", "m-source", 20),
+        ],
+        ..Default::default()
+    };
     for mut meta in state.mcp.sessions.iter_mut() {
         meta.prompt_instructions = Some(seeded.clone());
     }
