@@ -1,3 +1,4 @@
+pub use crate::ego_question::parse_ego_question;
 use serde::Serialize;
 
 fn expand_tilde(path: &str) -> String {

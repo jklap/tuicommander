@@ -601,3 +601,7 @@ OSC 0/2 title notifications use the terminal event path (`PtyTitle`), separately
 from parsed lifecycle events. Desktop remote tabs consume parsed events on the
 owning daemon's WebSocket instead of subscribing to local IPC. Identity comes
 from the authoritative backend `agent_type`, not from a title heuristic.
+
+### ego terminal questions
+
+The terminal ego CLI reports human-question waits with OSC 7770 awaiting and resumes busy after settlement. TUIC also recognizes its single-choice selector only for ego sessions, anchored to `Up/Down or number selects; Enter answers; Esc cancels.` and a highlighted numbered option. Wrapped question and option rows are joined in Rust into `choice-prompt`, using `navigate-enter` selection. This creates authoritative awaiting state even for older ego builds without the native signal. Multiple-choice and free-text questions keep the native awaiting signal and terminal/composer controls; they are not misrepresented as single-choice dialogs.

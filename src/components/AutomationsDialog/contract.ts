@@ -1,5 +1,5 @@
 /** Shared backend boundary. Rust model fields retain their serde spelling.
- * Keep API integration changes in transportAdapter.ts; UI never interprets cron.
+ * Keep API integration changes in transportAdapter.ts; Rust owns cron validation and occurrence calculation; UI may format labels.
  */
 export interface AutomationDefinition {
 	id: string;

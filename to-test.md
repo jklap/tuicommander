@@ -1,3 +1,11 @@
+## Fn dictation through focus changes (1763-3361) — Rust restart required
+
+- [ ] [HUMAN] After Boss manually restarts `make dev` or installs `make build`, dictate for over 60 seconds with short pauses while holding Fn. Let a toast or new tab appear, then move focus to another window while continuing to hold Fn. Recording must continue; release Fn in that window and confirm the microphone stops, the text arrives once, and both its opening and ending words are present. Check the file log for `Fn focus loss observed` with `physically_down=true`, followed by a real native key-up or `origin="fn-state-poll"`. Native adapter and AppKit timer tests cover retention and one release; real microphone/Fn hardware and the complete long transcript require this check. Do not restart Boss's running TUIC from an agent.
+## Mobile title and compact AI Chat composer (1746-aa9e)
+
+- [ ] [VISUAL] After the TUIC restart, reload the iPhone PWA. Park/Restore/Swap and Stop should share the input row with Attach and Send; the bottom tabs should meet the screen edge. Headless Chromium geometry and screenshots cover 360/390px with 62/34px safe-area overrides; the actual iPhone remains unverified.
+- [ ] [VISUAL] Inspect the title on the iPhone with the menu closed and open. The reported screenshot has progressive blur over the title and connection dot, with a crisp subtitle. TopBar, shell and mobile global CSS contain no title/ancestor blur, mask, text-shadow or opacity; the app opts into a translucent iOS status bar in `mobile.html`. The likely cause is WebKit's native scroll-edge effect, which is outside page CSS ([WebKit scroll view](https://github.com/WebKit/WebKit/blob/main/Source/WebKit/UIProcess/ios/WKScrollView.mm) and [native edge wrapper](https://github.com/WebKit/WebKit/blob/main/Source/WebKit/UIProcess/ios/WKUIScrollEdgeEffect.mm)). This is an inference, not a confirmed device diagnosis. Do not add guessed spacing or filter overrides until device inspection identifies the native layer.
+
 ## Design Mode dev-server list collapsed (1727-0338)
 
 - [ ] [VISUAL] In Boss's Edge profile, reload the Design Mode extension and open the side panel with many dev servers. The list is collapsed under "Dev servers (N)" and a new pick card shows without scrolling. Vitest and a real side panel in Chrome for Testing with a stub native host (DOM evidence, no screenshot) cover it.
@@ -5151,3 +5159,12 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] On iPhone, tap the attachment icon left of the session composer, choose a photo/file, confirm upload status then its path in the draft, and confirm Queue stays disabled during upload. Smaller mic and Send controls remain inside the right input border.
 
 - [ ] Mobile: Claude multi-question AskUserQuestion (two questions + Submit) — answer each tab and the Submit review from the phone overlay; needs the TUIC restart for the Rust parser change (#1766-9311)
+- [ ] After a manual rebuild/restart, create a new worktree after safe removal of a clean integrated one. Confirm that its ignored artifacts persist, its new branch appears, and the old sidebar row is gone. Rust does not hot-reload.
+- [ ] After Boss rebuilds/restarts the Rust backend, verify overlapping worktree creates both succeed, a rename-journal error leaves the original checkout usable, and fingerprint-confirmed forced deletion still works with a live session (#1705-67b3).
+## Mobile ego questions (1759-6047) — Rust restart required
+
+- [ ] After rebuilding/restarting TUIC and updating ego, ask ego a real single-choice question from a terminal. On iPhone confirm **Input**, tap the header question icon, read the full question and both long options, and tap one option. Confirm one answer, continued output and no terminal-height loss. Browser rendering uses the recorded real ego question; real phone touch remains to check.
+- [ ] Chat new-text indicator (#1757-c6a9): after restart, scroll up in terminal Chat and AI Chat while output streams; confirm the pill appears above the composer, returns to the bottom on click, clears on manual bottom, and respects the per-client Appearance > Chat toggle. On mobile/PWA, check the same behavior and the mobile Settings toggle.
+- [ ] AI Chat control bar (#1755-7709): after restart, confirm its duplicate + is gone and New chat tab still opens a conversation.
+- [ ] #1762-c772: After loading the UI batch, open Automations with a long definition name/path. Check the one-line Active badge, short repository tooltip, readable schedule/next run, tabs with arrow keys, one-row toolbar and first-selection opt-out across reopen.
+- [ ] Bell: with only At-Capacity Retry status and no unread outcomes, no badge appears. With unread Progress, Mark as read clears that count while the journal and other notifications remain (#1764-862a).
