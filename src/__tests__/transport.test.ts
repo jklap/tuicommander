@@ -4091,3 +4091,10 @@ describe("work-item link command transport", () => {
 		expect(mapCommandToHttp("get_git_remotes", { path: "/r a" }).path).toBe("/repo/remotes?path=%2Fr%20a");
 	});
 });
+
+describe("default-app host boundary", () => {
+	it("does not map default-app opens to a remote host launcher", () => {
+		expect(INTENTIONALLY_UNMAPPED.has("open_default_app")).toBe(true);
+		expect(() => mapCommandToHttp("open_default_app", { target: "https://example.com", kind: "url" })).toThrow();
+	});
+});

@@ -347,6 +347,7 @@ remote daemon.
 | `detect_all_agent_binaries` | `binaries` | `HashMap<String, AgentBinaryDetection>` | Detect the named binaries in parallel, path only (no version or screen-capability lookup) |
 | `detect_claude_binary` | -- | `String` | Detect Claude binary |
 | `detect_installed_ides` | -- | `Vec<String>` | Detect installed IDEs |
+| `open_default_app` | `target: String, kind: "url" \| "path"` | `()` | Host-only default application open; allows http/https/mailto/tel URLs, checks path metadata, returns after spawn and reaps the launcher through `tuic_core::child_reaping` |
 | `open_in_app` | `path, app, line?, col?` | `()` | Open path in application; `line`/`col` are used only by editors that support them |
 | `spawn_agent` | `pty_config, agent_config` | `String` (session ID) | Spawn agent in PTY |
 

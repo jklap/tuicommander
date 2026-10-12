@@ -182,3 +182,17 @@ focus and user-gesture restrictions and the macOS Paste confirmation pill.
 Failures reject the promise. Browser mode uses the client's `navigator.clipboard`;
 there is no HTTP route to the host clipboard. `copyPathToClipboard` keeps absolute
 paths and shortens the home directory to `~`.
+
+### Default-application opens
+
+`handleOpenUrl` accepts only HTTP, HTTPS and mailto URLs. Desktop calls use
+`open_default_app`; browser clients use `window.open` on their own machine.
+`openLocalPath` sends trusted local paths to the same desktop command and does
+not launch a host application in browser mode. Settings plugin documentation
+links and File Browser default-app actions use these helpers. Reveal in file
+manager remains the opener plugin's separate native reveal operation.
+
+The backend uses `open::commands` for platform selection and option-safe
+arguments, then `tuic_core::child_reaping::spawn_reaped` for each launch. It does
+not use the dependency's detached fork. It returns after spawning, preserves
+the application, and waits off the caller thread to reap the launcher.
