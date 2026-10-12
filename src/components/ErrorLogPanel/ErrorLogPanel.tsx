@@ -1,3 +1,5 @@
+import { Select } from "../ui/Select";
+import { Input } from "../ui/Input";
 import { type Component, createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import {
 	type AppLogAudience,
@@ -234,15 +236,15 @@ export const ErrorLogPanel: Component = () => {
 							</For>
 						</div>
 
-						<select
+						<Select
 							class={s.sourceSelect}
 							value={sourceFilter()}
 							onChange={(e) => setSourceFilter(e.currentTarget.value as AppLogSource | "all")}
 						>
 							<For each={SOURCE_OPTIONS}>{(opt) => <option value={opt.value}>{opt.label}</option>}</For>
-						</select>
+						</Select>
 
-						<input
+						<Input
 							ref={searchRef}
 							class={s.searchInput}
 							type="text"

@@ -1,3 +1,6 @@
+import { Select } from "../ui/Select";
+import { Textarea } from "../ui/Textarea";
+import { Input } from "../ui/Input";
 import { type Component, createEffect, createSignal, For, on, onMount, Show, untrack } from "solid-js";
 import { t } from "../../i18n";
 import { invoke } from "../../invoke";
@@ -705,7 +708,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 						>
 							<label>
 								Published workflow
-								<select
+								<Select
 									value={workflowChoice()}
 									onChange={(event) => {
 										setWorkflowChoice(event.currentTarget.value);
@@ -719,7 +722,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 											</option>
 										)}
 									</For>
-								</select>
+								</Select>
 							</label>
 							<button type="submit" disabled={busy() || !workflowChoice()}>
 								Start published workflow
@@ -799,7 +802,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 													<p>{attempt().report?.inputRequest?.question}</p>
 													<label>
 														Answer
-														<input
+														<Input
 															value={inputAnswer()}
 															onInput={(event) => setInputAnswer(event.currentTarget.value)}
 														/>
@@ -894,7 +897,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 											>
 												<label>
 													Execution
-													<select
+													<Select
 														value={recoveryExecution()}
 														onChange={(event) => {
 															setRecoveryExecution(event.currentTarget.value);
@@ -909,11 +912,11 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 																</option>
 															)}
 														</For>
-													</select>
+													</Select>
 												</label>
 												<label>
 													Resume activation
-													<select
+													<Select
 														value={recoveryActivation()}
 														onChange={(event) => setRecoveryActivation(event.currentTarget.value)}
 													>
@@ -931,11 +934,11 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 																</option>
 															)}
 														</For>
-													</select>
+													</Select>
 												</label>
 												<label>
 													Resolution
-													<textarea
+													<Textarea
 														value={resolution()}
 														onInput={(event) => setResolution(event.currentTarget.value)}
 														maxLength={4096}
@@ -1030,7 +1033,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 										<form class={s.manualForm} onSubmit={(event) => void createPlan(event)}>
 											<label>
 												{t("stories.planSource", "Plan document or link")}
-												<input
+												<Input
 													required
 													value={planSource()}
 													onInput={(event) => setPlanSource(event.currentTarget.value)}
@@ -1039,7 +1042,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 											<Show when={/^https?:\/\//i.test(planSource())}>
 												<label>
 													{t("stories.titleLabel", "Title")}
-													<input
+													<Input
 														required
 														maxlength="200"
 														value={planTitle()}
@@ -1083,7 +1086,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 								<form class={s.form} onSubmit={(event) => void createStory(event)}>
 									<label>
 										{t("stories.titleLabel", "Title")}
-										<input
+										<Input
 											required
 											maxlength="200"
 											value={storyTitle()}
@@ -1092,7 +1095,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 									</label>
 									<label>
 										{t("stories.criteriaInput", "Acceptance criteria, one per line")}
-										<textarea
+										<Textarea
 											required
 											value={criteriaText()}
 											onInput={(event) => setCriteriaText(event.currentTarget.value)}
@@ -1100,15 +1103,15 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 									</label>
 									<label>
 										{t("stories.scopeInput", "File scope, one relative path per line")}
-										<textarea value={scopeText()} onInput={(event) => setScopeText(event.currentTarget.value)} />
+										<Textarea value={scopeText()} onInput={(event) => setScopeText(event.currentTarget.value)} />
 									</label>
 									<label>
 										{t("stories.priority", "Priority")}
-										<select value={priority()} onChange={(event) => setPriority(Number(event.currentTarget.value))}>
+										<Select value={priority()} onChange={(event) => setPriority(Number(event.currentTarget.value))}>
 											<option value="1">P1</option>
 											<option value="2">P2</option>
 											<option value="3">P3</option>
-										</select>
+										</Select>
 									</label>
 									<button type="submit" disabled={busy()}>
 										{t("stories.createStory", "Create story")}
@@ -1230,7 +1233,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 											</Show>
 											<Show when={story().status === "ready" || story().status === "backlog"}>
 												<div class={s.inline}>
-													<select
+													<Select
 														aria-label={t("stories.addDependency", "Add dependency")}
 														value={dependencyId()}
 														onChange={(event) => setDependencyId(event.currentTarget.value)}
@@ -1244,7 +1247,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 														>
 															{(candidate) => <option value={candidate.id}>{candidate.title}</option>}
 														</For>
-													</select>
+													</Select>
 													<button type="button" disabled={!dependencyId() || busy()} onClick={addDependency}>
 														{t("stories.addDependency", "Add dependency")}
 													</button>

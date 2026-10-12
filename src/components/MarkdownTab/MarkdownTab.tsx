@@ -1,3 +1,4 @@
+import { Select } from "../ui/Select";
 import { type Component, createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { reviewAgents as repositoryReviewAgents } from "../../../browser-extension/design-mode/reviewAgents.js";
 import { usePty } from "../../hooks/usePty";
@@ -667,7 +668,7 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 							<label class={s.agentLabel} for={`review-agent-${props.tab.id}`}>
 								{t("markdownTab.agentLabel", "Agent")}
 							</label>
-							<select
+							<Select
 								id={`review-agent-${props.tab.id}`}
 								class={s.agentSelect}
 								aria-label={t("markdownTab.reviewAgent", "Review agent")}
@@ -679,7 +680,7 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 									<option value="">{t("markdownTab.noAgents", "No agents")}</option>
 								</Show>
 								<For each={reviewAgents()}>{(agent) => <option value={agent.sessionId}>{agent.label}</option>}</For>
-							</select>
+							</Select>
 							<button
 								class={e.btn}
 								disabled={!selectedAgentSession() || sendingChanges()}

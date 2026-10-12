@@ -42,8 +42,7 @@
 .form summary { cursor: pointer; }
 .manualForm { display: flex; flex-direction: column; gap: 8px; padding-top: 8px; }
 .form label { display: flex; flex-direction: column; gap: 4px; color: var(--fg-secondary); font-size: var(--font-xs); }
-.form input, .form textarea, .form select, .inline select { width: 100%; box-sizing: border-box; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-tertiary); color: var(--fg-primary); padding: 6px 8px; font: var(--font-sm) var(--font-ui); }
-.form textarea { min-height: 58px; resize: vertical; }
+.form input, .form textarea, .form select, .inline select { width: 100%; }
 .form input:focus-visible, .form textarea:focus-visible, .form select:focus-visible, .inline select:focus-visible, .item:focus-visible, .iconButton:focus-visible, .actions button:focus-visible, .columnHeader button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .detail { padding: 16px; }
 .detail section { margin-top: 20px; }

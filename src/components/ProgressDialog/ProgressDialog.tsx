@@ -1,3 +1,4 @@
+import { Select } from "../ui/Select";
 import { type Component, createEffect, createMemo, createSignal, For, Show } from "solid-js";
 import { registerModal } from "../../stores/modalStack";
 import {
@@ -136,7 +137,7 @@ export const ProgressDialog: Component<ProgressDialogProps> = (props) => {
 					<span class={s.project}>{displayName()}</span>
 				</div>
 				<Show when={props.embedded && (props.projects?.length ?? 0) > 0}>
-					<select
+					<Select
 						class={s.terminalSelect}
 						aria-label="Progress project"
 						value={project() ?? ""}
@@ -145,9 +146,9 @@ export const ProgressDialog: Component<ProgressDialogProps> = (props) => {
 						<For each={props.projects}>
 							{(path) => <option value={path}>{path.split(/[\\/]/).pop() || path}</option>}
 						</For>
-					</select>
+					</Select>
 				</Show>
-				<select
+				<Select
 					class={s.terminalSelect}
 					aria-label="Progress terminal"
 					onChange={(event) => progressStore.selectPty(event.currentTarget.value || null)}
@@ -162,7 +163,7 @@ export const ProgressDialog: Component<ProgressDialogProps> = (props) => {
 							</option>
 						)}
 					</For>
-				</select>
+				</Select>
 				<div class={s.viewToggle} role="group" aria-label="Progress view">
 					<button type="button" aria-pressed={!isFlow()} onClick={() => progressStore.setView("list")}>
 						List

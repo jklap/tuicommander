@@ -1,14 +1,4 @@
 [
-  "components/ClaudeUsageDashboard/ClaudeUsageDashboard.tsx",
-  "components/ErrorLogPanel/ErrorLogPanel.tsx",
-  "components/IdeasPanel/IdeasPanel.tsx",
-  "components/MarkdownTab/MarkdownTab.tsx",
-  "components/ProgressDialog/ProgressDialog.tsx",
-  "components/PromptDrawer/PromptDrawer.tsx",
-  "components/RemoteQrDialog/RemoteQrDialog.tsx",
-  "components/StoriesDialog/StoriesDialog.tsx",
-  "components/TunnelsPanel/TunnelEditorModal.tsx",
-  "components/WorkflowDesigner/WorkflowDesigner.tsx",
   "mobile/components/NewSessionSheet.tsx",
   "mobile/screens/MobileChatScreen.tsx",
   "mobile/screens/SettingsScreen.tsx"

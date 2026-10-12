@@ -1,3 +1,6 @@
+import { Select } from "../ui/Select";
+import { Textarea } from "../ui/Textarea";
+import { Input } from "../ui/Input";
 import { type Component, createEffect, createSignal, For, onCleanup, Show } from "solid-js";
 import { SMART_PROMPTS_BUILTIN, VARIABLE_DESCRIPTIONS } from "../../data/smartPromptsBuiltIn";
 import { useConfirmDialog } from "../../hooks/useConfirmDialog";
@@ -259,7 +262,7 @@ export const PromptDrawer: Component<PromptDrawerProps> = (props) => {
 
 						{/* Search */}
 						<div class={s.search}>
-							<input
+							<Input
 								type="text"
 								placeholder={t("promptDrawer.searchPlaceholder", "Search prompts... (type to filter)")}
 								value={promptLibraryStore.state.searchQuery}
@@ -430,7 +433,7 @@ export const PromptDrawer: Component<PromptDrawerProps> = (props) => {
 										<Show when={VARIABLE_DESCRIPTIONS[varName]}>
 											<span class={s.varDesc}>{VARIABLE_DESCRIPTIONS[varName]}</span>
 										</Show>
-										<input
+										<Input
 											type="text"
 											value={variableValues()[varName] || ""}
 											onInput={(e) => setVariableValues((v) => ({ ...v, [varName]: e.currentTarget.value }))}
@@ -691,7 +694,7 @@ const PromptEditor: Component<PromptEditorProps> = (props) => {
 				{/* Name */}
 				<div class={s.editorField}>
 					<label>Name *</label>
-					<input
+					<Input
 						type="text"
 						value={name()}
 						disabled={isBuiltIn()}
@@ -707,7 +710,7 @@ const PromptEditor: Component<PromptEditorProps> = (props) => {
 				{/* Description */}
 				<div class={s.editorField}>
 					<label>Description</label>
-					<input
+					<Input
 						type="text"
 						value={description()}
 						onInput={(e) => setDescription(e.currentTarget.value)}
@@ -718,7 +721,7 @@ const PromptEditor: Component<PromptEditorProps> = (props) => {
 				{/* Content + Variable dropdown */}
 				<div class={s.editorField}>
 					<label>Content *</label>
-					<textarea
+					<Textarea
 						ref={textareaRef}
 						value={content()}
 						onInput={(e) => setContent(e.currentTarget.value)}
@@ -747,7 +750,7 @@ const PromptEditor: Component<PromptEditorProps> = (props) => {
 				<div class={s.editorFieldRow}>
 					<div class={s.editorField}>
 						<label>Execution Mode</label>
-						<select
+						<Select
 							value={executionMode()}
 							onChange={(e) => {
 								const mode = e.currentTarget.value as "inject" | "headless" | "api" | "shell";
@@ -765,7 +768,7 @@ const PromptEditor: Component<PromptEditorProps> = (props) => {
 							<option value="shell">Shell script (direct run)</option>
 							<option value="headless">Headless (one-shot CLI)</option>
 							<option value="api">API (via ego)</option>
-						</select>
+						</Select>
 					</div>
 
 					<Show when={executionMode() === "inject"}>
@@ -784,7 +787,7 @@ const PromptEditor: Component<PromptEditorProps> = (props) => {
 				<Show when={executionMode() !== "inject"}>
 					<div class={s.editorField}>
 						<label>Output Target</label>
-						<select
+						<Select
 							value={outputTarget() ?? ""}
 							onChange={(e) => {
 								const val = e.currentTarget.value || undefined;
@@ -796,7 +799,7 @@ const PromptEditor: Component<PromptEditorProps> = (props) => {
 							<option value="clipboard">Clipboard</option>
 							<option value="toast">Notification</option>
 							<option value="panel">Panel</option>
-						</select>
+						</Select>
 					</div>
 				</Show>
 
@@ -804,7 +807,7 @@ const PromptEditor: Component<PromptEditorProps> = (props) => {
 				<Show when={executionMode() === "api"}>
 					<div class={s.editorField}>
 						<label>System Prompt</label>
-						<textarea
+						<Textarea
 							rows={3}
 							value={systemPrompt()}
 							placeholder="Instructions for the LLM (e.g. 'You are a Git expert.')"

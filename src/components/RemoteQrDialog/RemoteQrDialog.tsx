@@ -1,3 +1,4 @@
+import { Select } from "../ui/Select";
 import QRCode from "qrcode";
 import { type Component, createEffect, createResource, createSignal, For, onCleanup, Show } from "solid-js";
 import { appLogger } from "../../stores/appLogger";
@@ -113,7 +114,7 @@ export const RemoteQrDialog: Component<{ onClose: () => void }> = (props) => {
 					<Show when={(localIps()?.length ?? 0) > 1}>
 						<label class={s.ipRow}>
 							<span>Network</span>
-							<select value={activeIp() ?? ""} onChange={(e) => setSelectedIp(e.currentTarget.value)}>
+							<Select value={activeIp() ?? ""} onChange={(e) => setSelectedIp(e.currentTarget.value)}>
 								<For each={localIps()}>
 									{(entry) => (
 										<option value={entry.ip}>
@@ -121,7 +122,7 @@ export const RemoteQrDialog: Component<{ onClose: () => void }> = (props) => {
 										</option>
 									)}
 								</For>
-							</select>
+							</Select>
 						</label>
 					</Show>
 
