@@ -78,6 +78,22 @@ Source: `~/Gits/personal/orchestrator/reports/tuicommander/2026-10-12-background
 - [x] **1771-c6fb.** The update relaunch waits until agents are idle (can be forced).
 - [x] **1772-25c5.** After the update restart, every agent tab resumes at once.
 
+### Revision decisions (Boss, 2026-10-12)
+
+Source: `~/Gits/personal/orchestrator/reports/tuicommander/2026-10-12-bg-automations-revision.md`.
+
+- [x] **QB1.** Wake tabs on demand: a hibernated tab wakes when it is opened or when input, mail or a run targets it. The window show does not wake every tab.
+- [x] **QA1.** An Automation may target an existing session (`Target::Session`, possibly hibernated). This lifts the phase-one rule "every run spawns a new agent".
+- [x] **QA3.** The trigger action is on the existing API (MCP, HTTP, IPC, `tuic` CLI) **plus** internal event triggers (for example, "a branch landed" starts a routine). No public webhook.
+- [x] **QA6.** When the target session is busy at dispatch, the run is queued after the current turn (not skipped). This replaces the recommended `skipped_target_busy`.
+
+Coordinator decisions, already in the report:
+
+- [x] **QB2.** One resume path: 1772-25c5 uses `ensure_live`, after B6.
+- [x] **QA2.** Recurring cron dispatch is enabled now, as story A1 (a defect: `dispatcher.rs:90` filters cron out).
+- [x] **QA4.** A hook-triggered run behaves like a scheduled run: the definition must be enabled and its precheck runs.
+- [x] **QA5.** When a run on a session target times out, record `timed_out` and leave the tab alone.
+
 ## Shared wake path (one transition, one code path)
 
 Today a session can be "asleep" in two ways, and each has its own wake:
@@ -244,12 +260,7 @@ match e { RunEvent::ExitRequested { code: None, api, .. } if bg.is_hidden_or_unl
 
 ## Open questions for Boss (background side)
 
-- **QB1. "Resume on return" (D5): when does a hibernated tab come back after the window shows?**
-  - (a) when its tab is opened, or at once when input, mail or a run targets it — **recommended** (memory stays freed for tabs Boss does not look at)
-  - (b) every hibernated tab at window show (a burst of N agent starts, 120-350 MB each)
-- **QB2. Order of 1772-25c5**
-  - (a) after Step 6, as a caller of `ensure_live` — **recommended** (one resume path; 1772 itself is then S)
-  - (b) now, in `createBranchSelectionCoordinator.ts`, migrated in Step 6 — two resume paths until then, against the single-path rule
+Answered 2026-10-12: QB1 = (a) on demand; QB2 = (a) after Step 6. See "Revision decisions".
 
 ## Story breakdown (no stories created; 1776-0f46 creates them after the open questions)
 
