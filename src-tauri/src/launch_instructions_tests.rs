@@ -1,0 +1,290 @@
+use super::*;
+
+fn strings(args: &[&str]) -> Vec<String> {
+    args.iter().map(|arg| (*arg).to_string()).collect()
+}
+
+/// A config dir holding only defaults, so the default text is what launches get.
+fn config_dir() -> (tempfile::TempDir, impl Drop) {
+    let dir = tempfile::TempDir::new().unwrap();
+    assert!(
+        dir.path()
+            .starts_with(crate::test_support::test_temp_root())
+    );
+    let guard = tuic_core::config_dir::set_override(dir.path().to_path_buf());
+    write_files(dir.path()).unwrap();
+    (dir, guard)
+}
+
+fn path_of(dir: &Path, agent: &str) -> String {
+    file_path(dir, agent).to_string_lossy().into_owned()
+}
+
+fn text_of(dir: &Path, agent: &str) -> String {
+    std::fs::read_to_string(file_path(dir, agent)).unwrap()
+}
+
+/// Catches: a resumed Claude launched without the instructions, or the flag
+/// added to a subcommand or a headless run.
+#[test]
+fn claude_composition() {
+    let (dir, _guard) = config_dir();
+    let dir = dir.path();
+    let file = path_of(dir, "claude");
+    for typed in [
+        vec![],
+        strings(&["--model", "opus"]),
+        strings(&["--resume", "x"]),
+        strings(&["--continue"]),
+    ] {
+        let mut expected = typed.clone();
+        expected.extend(strings(&["--append-system-prompt-file", &file]));
+        assert_eq!(args("claude", typed.clone(), dir), expected, "{typed:?}");
+    }
+    // Never after a bare --, where the flag would become prompt text.
+    assert_eq!(
+        args("claude", strings(&["--model", "opus", "--", "text"]), dir),
+        strings(&[
+            "--model",
+            "opus",
+            "--append-system-prompt-file",
+            &file,
+            "--",
+            "text"
+        ])
+    );
+    for unchanged in [
+        strings(&["mcp", "list"]),
+        strings(&["-p", "hi"]),
+        strings(&["--print", "hi"]),
+        strings(&["--append-system-prompt", "mine"]),
+        strings(&["--append-system-prompt-file=/mine.md"]),
+        strings(&["--system-prompt", "mine"]),
+    ] {
+        assert_eq!(args("claude", unchanged.clone(), dir), unchanged);
+    }
+    assert!(text_of(dir, "claude").contains("intent: <desc> (<title>)"));
+}
+
+/// Catches: raw markdown passed to -c and parsed as TOML, or codex exec output
+/// polluted by markers.
+#[test]
+fn codex_composition() {
+    let (dir, _guard) = config_dir();
+    let dir = dir.path();
+    let fresh = args("codex", strings(&["--model", "o3"]), dir);
+    assert_eq!(fresh[0], "-c");
+    assert_eq!(&fresh[2..], ["--model", "o3"]);
+    // Codex parses the -c value as TOML; the multi-line text must survive it.
+    let parsed: toml::Table = toml::from_str(&fresh[1]).unwrap();
+    let app = crate::config::AppConfig::default();
+    let agents = crate::config::AgentsConfig::default();
+    assert_eq!(
+        parsed["developer_instructions"].as_str(),
+        Some(effective_text(&app, &agents, "codex").as_str())
+    );
+    let resume = args("codex", strings(&["resume", "--last"]), dir);
+    assert_eq!(&resume[2..], ["resume", "--last"]);
+    assert_eq!(resume[1], fresh[1]);
+    for unchanged in [
+        strings(&["exec", "task"]),
+        strings(&["e", "task"]),
+        strings(&["-c", "developer_instructions=\"mine\""]),
+        strings(&["-cdeveloper_instructions=\"mine\""]),
+        strings(&["--config=developer_instructions=\"mine\""]),
+    ] {
+        assert_eq!(args("codex", unchanged.clone(), dir), unchanged);
+    }
+}
+
+/// Catches: the rules flag on a single-turn run or a duplicate --rules.
+#[test]
+fn grok_composition() {
+    let (dir, _guard) = config_dir();
+    let dir = dir.path();
+    let text = text_of(dir, "grok");
+    for typed in [vec![], strings(&["--continue"])] {
+        let mut expected = vec!["--rules".to_string(), text.clone()];
+        expected.extend(typed.clone());
+        assert_eq!(args("grok", typed, dir), expected);
+    }
+    for unchanged in [
+        strings(&["-p", "hi"]),
+        strings(&["--single", "hi"]),
+        strings(&["--rules", "mine"]),
+    ] {
+        assert_eq!(args("grok", unchanged.clone(), dir), unchanged);
+    }
+}
+
+/// Catches: the instructions env missing on resume or set on opencode run.
+#[test]
+fn opencode_composition() {
+    let (dir, _guard) = config_dir();
+    let dir = dir.path();
+    let expected = Some((
+        "OPENCODE_CONFIG_CONTENT".to_string(),
+        serde_json::json!({"instructions": [path_of(dir, "opencode")]}).to_string(),
+    ));
+    for typed in [vec![], strings(&["-c"]), strings(&["--session", "s1"])] {
+        assert_eq!(
+            args("opencode", typed.clone(), dir),
+            typed,
+            "opencode takes no flag"
+        );
+        assert_eq!(env("opencode", &typed, dir), expected, "{typed:?}");
+    }
+    assert_eq!(env("opencode", &strings(&["run", "task"]), dir), None);
+    assert_eq!(env("claude", &[], dir), None);
+}
+
+/// Catches: --system placed before the session subcommand or added to goose run.
+#[test]
+fn goose_composition() {
+    let (dir, _guard) = config_dir();
+    let dir = dir.path();
+    let text = text_of(dir, "goose");
+    assert_eq!(
+        args("goose", strings(&["session"]), dir),
+        ["session".to_string(), "--system".to_string(), text.clone()]
+    );
+    let resumed = args(
+        "goose",
+        strings(&["session", "--resume", "--name", "n"]),
+        dir,
+    );
+    assert_eq!(
+        resumed[..3],
+        ["session".to_string(), "--system".to_string(), text]
+    );
+    assert_eq!(&resumed[3..], ["--resume", "--name", "n"]);
+    for unchanged in [
+        strings(&["run", "-t", "task"]),
+        strings(&["session", "--system", "mine"]),
+        vec![],
+    ] {
+        assert_eq!(args("goose", unchanged.clone(), dir), unchanged);
+    }
+}
+
+/// Catches: the instructions missing on resume or added to a print run.
+#[test]
+fn pi_composition() {
+    let (dir, _guard) = config_dir();
+    let dir = dir.path();
+    let file = path_of(dir, "pi");
+    for typed in [vec![], strings(&["--continue"]), strings(&["--resume"])] {
+        let mut expected = strings(&["--append-system-prompt", &file]);
+        expected.extend(typed.clone());
+        assert_eq!(args("pi", typed, dir), expected);
+    }
+    for unchanged in [
+        strings(&["-p", "hi"]),
+        strings(&["install", "x"]),
+        strings(&["--append-system-prompt", "mine"]),
+    ] {
+        assert_eq!(args("pi", unchanged.clone(), dir), unchanged);
+    }
+}
+
+/// Catches: --append-system after -- (becomes prompt text) or on a non-run verb.
+#[test]
+fn ego_composition() {
+    let (dir, _guard) = config_dir();
+    let dir = dir.path();
+    let flag = format!("@{}", path_of(dir, "ego"));
+    assert_eq!(
+        args("ego", vec![], dir),
+        ["--append-system".to_string(), flag.clone()]
+    );
+    assert_eq!(
+        args("ego", strings(&["resume", "id"]), dir),
+        strings(&["resume", "--append-system", &flag, "id"])
+    );
+    assert_eq!(
+        args("ego", strings(&["--", "--append-system"]), dir),
+        strings(&["--append-system", &flag, "--", "--append-system"])
+    );
+    for unchanged in [
+        strings(&["run", "task"]),
+        strings(&["doctor"]),
+        strings(&["--append-system", "mine"]),
+    ] {
+        assert_eq!(args("ego", unchanged.clone(), dir), unchanged);
+    }
+}
+
+/// Catches: a per-agent override ignored, an empty text still injected, or the
+/// default demanding a marker that the agent's toggle disabled.
+#[test]
+fn effective_text_follows_overrides_and_toggles() {
+    let app = crate::config::AppConfig::default();
+    let mut agents = crate::config::AgentsConfig::default();
+    let default = effective_text(&app, &agents, "claude");
+    assert!(
+        REQUIRED_MARKERS
+            .iter()
+            .all(|marker| default.contains(marker))
+    );
+    assert!(default.contains(&format!(
+        "TUICommander v{} is connected.",
+        env!("CARGO_PKG_VERSION")
+    )));
+    assert!(!default.contains("{VER}"));
+
+    agents.agents.insert(
+        "codex".into(),
+        crate::config::AgentSettings {
+            suggest_followups: Some(false),
+            ..Default::default()
+        },
+    );
+    let codex = effective_text(&app, &agents, "codex");
+    assert!(
+        !codex.contains("suggest:"),
+        "toggle off must drop the suggest rule"
+    );
+    assert!(codex.contains("intent:"));
+
+    agents.launch_instructions = Some("global v{VER}".into());
+    agents.agents.insert(
+        "grok".into(),
+        crate::config::AgentSettings {
+            launch_instructions: Some("grok only".into()),
+            ..Default::default()
+        },
+    );
+    assert_eq!(effective_text(&app, &agents, "grok"), "grok only");
+    assert_eq!(
+        effective_text(&app, &agents, "claude"),
+        format!("global v{}", env!("CARGO_PKG_VERSION"))
+    );
+
+    // An empty text turns injection off for that agent, and only that agent.
+    agents.agents.get_mut("grok").unwrap().launch_instructions = Some(String::new());
+    let dir = tempfile::TempDir::new().unwrap();
+    write_files_with(dir.path(), &app, &agents).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(file_path(dir.path(), "grok")).unwrap(),
+        ""
+    );
+    assert_eq!(
+        std::fs::read_to_string(file_path(dir.path(), "pi")).unwrap(),
+        effective_text(&app, &agents, "pi")
+    );
+}
+
+/// Catches: a Settings edit that launches keep ignoring until TUIC restarts.
+#[test]
+fn saving_agents_config_rewrites_the_launch_files() {
+    let (dir, _guard) = config_dir();
+    let base = crate::config::AgentsConfig::default();
+    let mut edited = base.clone();
+    edited.launch_instructions = Some("edited".into());
+    crate::config::save_agents_config(base, edited).unwrap();
+    assert_eq!(text_of(dir.path(), "claude"), "edited");
+    assert_eq!(
+        std::fs::read_to_string(file_path(dir.path(), "codex")).unwrap(),
+        "developer_instructions=\"edited\""
+    );
+}

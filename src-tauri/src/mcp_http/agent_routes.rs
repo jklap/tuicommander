@@ -347,9 +347,15 @@ pub(super) async fn spawn_agent_session(
                 launch_args.push(spawn_prompt.clone());
             }
             crate::pty::apply_agent_screen_env(&mut cmd, &spawn_env);
-            let final_args = crate::agent_hook_launch::augment_args(
+            let final_args = crate::agent_hook_launch::launch_args(
                 &spawn_agent_type,
                 &spawn_binary_path,
+                &launch_args,
+                &crate::config::config_dir(),
+            );
+            crate::launch_instructions::apply_env(
+                &mut cmd,
+                &spawn_agent_type,
                 &launch_args,
                 &crate::config::config_dir(),
             );

@@ -297,6 +297,40 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
+    "agents.agents.{key}.launch_instructions": {
+      "id": "agents.agents.{key}.launch_instructions",
+      "store": "agents",
+      "owner": "machine",
+      "area": "agents",
+      "group": "agents",
+      "order": 19,
+      "path": "/agents/{key}/launch_instructions",
+      "labelKey": "settings.catalogue.agents.agents.{key}.launch_instructions.label",
+      "helpKey": "settings.catalogue.agents.agents.{key}.launch_instructions.help",
+      "label": "launch instructions",
+      "schema": {
+        "description": "Per-agent launch instructions. Overrides the global text; empty turns injection off.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "nullable": true,
+      "default": null,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "next_session",
+      "effect": "Used when the next session or process starts; existing sessions retain their launch configuration.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
     "agents.agents.{key}.native_status_signals": {
       "id": "agents.agents.{key}.native_status_signals",
       "store": "agents",
@@ -663,7 +697,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "agents",
       "group": "headless_agent",
-      "order": 19,
+      "order": 20,
       "path": "/headless_agent",
       "labelKey": "settings.catalogue.agents.headless_agent.label",
       "helpKey": "settings.catalogue.agents.headless_agent.help",
@@ -684,6 +718,40 @@ export const settingsCatalogue = {
       "sensitivity": "public",
       "apply": "live",
       "effect": "Updates headless agent for the current owner.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "agents.launch_instructions": {
+      "id": "agents.launch_instructions",
+      "store": "agents",
+      "owner": "machine",
+      "area": "agents",
+      "group": "launch_instructions",
+      "order": 21,
+      "path": "/launch_instructions",
+      "labelKey": "settings.catalogue.agents.launch_instructions.label",
+      "helpKey": "settings.catalogue.agents.launch_instructions.help",
+      "label": "launch instructions",
+      "schema": {
+        "description": "Launch instructions for every agent TUIC starts. None = the shipped default\n(`launch_instructions::default_text`); empty turns injection off.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "nullable": true,
+      "default": null,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "next_session",
+      "effect": "Used when the next session or process starts; existing sessions retain their launch configuration.",
       "operations": [
         "get",
         "set",

@@ -16,6 +16,7 @@ use std::path::Path;
 const ZSH_INTEGRATION: &str = r#"# TUIC Shell Integration — OSC 133 command block markers + OSC 7770 helpers
 __tuic_precmd() {
   local ec=$?
+  [[ -z "$TUIC_AGENT_SHIM_DIR" || "$PATH" == "$TUIC_AGENT_SHIM_DIR:"* ]] || PATH="$TUIC_AGENT_SHIM_DIR:$PATH"
   if [[ -n "$__tuic_cmd" ]]; then
     printf '\e]133;D;%d\a' "$ec"
     unset __tuic_cmd
@@ -85,6 +86,7 @@ fi
 const BASH_INTEGRATION: &str = r#"# TUIC Shell Integration — OSC 133 command block markers + OSC 7770 helpers
 __tuic_precmd() {
   local ec=$?
+  [[ -z "$TUIC_AGENT_SHIM_DIR" || "$PATH" == "$TUIC_AGENT_SHIM_DIR:"* ]] || PATH="$TUIC_AGENT_SHIM_DIR:$PATH"
   if [[ -n "$__tuic_cmd" ]]; then
     printf '\e]133;D;%d\a' "$ec"
     unset __tuic_cmd
@@ -160,6 +162,9 @@ fi
 const FISH_INTEGRATION: &str = r#"# TUIC Shell Integration — OSC 133 command block markers + OSC 7770 helpers
 function __tuic_prompt --on-event fish_prompt
   set -l ec $status
+  if set -q TUIC_AGENT_SHIM_DIR; and test "$PATH[1]" != "$TUIC_AGENT_SHIM_DIR"
+    set -gx PATH $TUIC_AGENT_SHIM_DIR $PATH
+  end
   if set -q __tuic_cmd
     printf '\e]133;D;%d\a' $ec
     set -e __tuic_cmd
@@ -274,6 +279,105 @@ if set -q TUIC_SESSION
 end
 "#;
 
+/// POSIX sh shim for agents started by name in a TUIC shell (story 1810-c28c).
+///
+/// Every agent name below is a symlink to this one file in a TUIC-owned dir that
+/// `inject` puts first on `PATH`, and that the integration scripts move back to
+/// the front at every prompt (a user rc may prepend the agent's own dir later).
+/// So a typed command, an alias, a shell function's `command <agent>` and a
+/// wrapper script that runs the agent by name all reach it; an absolute path
+/// does not. It adds only the launch instructions, which are safe in any child
+/// process. The status hooks stay in the shell functions: they must apply only to
+/// a command typed in the tab, never to a `codex exec` an agent runs as a tool.
+///
+/// It reads the instruction file at exec time, so a Settings edit applies to the
+/// next launch without reopening the shell. An empty or missing file means off.
+const AGENT_SHIM: &str = r#"#!/bin/sh
+# TUIC agent shim: add TUIC's launch instructions, then exec the real agent.
+name=${0##*/}
+real=
+set -f
+old_ifs=$IFS
+IFS=:
+for dir in $PATH; do
+  [ -n "$dir" ] || dir=.
+  # Skip every TUIC shim dir, not only this one: a nested instance adds its own.
+  [ -e "$dir/tuic-agent-shim" ] && continue
+  if [ -f "$dir/$name" ] && [ -x "$dir/$name" ]; then real=$dir/$name; break; fi
+done
+IFS=$old_ifs
+set +f
+if [ -z "$real" ]; then
+  printf 'tuic: %s: command not found\n' "$name" >&2
+  exit 127
+fi
+ext=md
+[ "$name" = codex ] && ext=toml
+file=${TUIC_AGENT_INSTRUCTIONS_DIR:+$TUIC_AGENT_INSTRUCTIONS_DIR/instructions-$name.$ext}
+[ -n "$file" ] && [ -s "$file" ] || exec "$real" "$@"
+# True when an argument before a bare -- is one of $flags, alone or as flag=value.
+has_flag() {
+  for arg in "$@"; do
+    [ "$arg" = -- ] && return 1
+    for flag in $flags; do
+      case $arg in "$flag"|"$flag"=*) return 0;; esac
+    done
+  done
+  return 1
+}
+case $name in
+  claude)
+    case $1 in
+      ""|-*) ;;
+      remote-control) exec "$real" "$@";;
+      *)
+        help=$TUIC_CLAUDE_HELP
+        printf '%s\n' "$help" | awk '__TUIC_CLAUDE_HELP_USABLE__' || help=__TUIC_RECORDED_CLAUDE_HELP__
+        if printf '%s\n' "$help" | awk -v verb="$1" '/^Commands:/ {commands=1; next} commands && /^  [^ ]/ {split($1, names, "|"); for (i in names) if (names[i] == verb) found=1} END {exit !found}'; then exec "$real" "$@"; fi;;
+    esac
+    flags="-p --print --system-prompt --system-prompt-file --append-system-prompt --append-system-prompt-file"
+    has_flag "$@" || exec "$real" --append-system-prompt-file "$file" "$@";;
+  codex)
+    case $1 in exec|e) exec "$real" "$@";; esac
+    prev=
+    for arg in "$@"; do
+      [ "$prev" = -c ] && case $arg in developer_instructions=*) exec "$real" "$@";; esac
+      case $arg in -cdeveloper_instructions=*|--config=developer_instructions=*) exec "$real" "$@";; esac
+      prev=$arg
+    done
+    exec "$real" -c "$(cat "$file")" "$@";;
+  grok)
+    flags="-p --single --rules"
+    has_flag "$@" || exec "$real" --rules "$(cat "$file")" "$@";;
+  goose)
+    case $1 in
+      session|s)
+        flags=--system
+        if ! has_flag "$@"; then first=$1; shift; exec "$real" "$first" --system "$(cat "$file")" "$@"; fi;;
+    esac;;
+  pi)
+    case $1 in install|remove|uninstall|update|list|config|auth) exec "$real" "$@";; esac
+    flags="-p --print --append-system-prompt"
+    has_flag "$@" || exec "$real" --append-system-prompt "$file" "$@";;
+  ego)
+    flags=--append-system
+    has_flag "$@" && exec "$real" "$@"
+    case $1 in
+      resume) shift; exec "$real" resume --append-system "@$file" "$@";;
+      run|__TUIC_EGO_NON_RUN_COMMANDS__) ;;
+      *) exec "$real" --append-system "@$file" "$@";;
+    esac;;
+esac
+exec "$real" "$@"
+"#;
+
+/// Agents the shim serves. OpenCode is absent: TUIC shells export its native
+/// `OPENCODE_CONFIG_CONTENT`, which reaches absolute-path launches too.
+const SHIM_AGENTS: [&str; 6] = ["claude", "codex", "grok", "goose", "pi", "ego"];
+
+/// The marker file the shim looks for to skip a TUIC shim dir on `PATH`.
+const SHIM_FILE: &str = "tuic-agent-shim";
+
 /// Template for the ZDOTDIR `.zshenv` wrapper.  At runtime `{script}` is
 /// replaced with the absolute path to `tuic-integration.zsh`.
 const ZDOTDIR_ZSHENV: &str = r#"# TUIC ZDOTDIR wrapper — sources integration then restores real dotfiles
@@ -319,6 +423,7 @@ pub(crate) fn inject(app_data_dir: &Path, shell: &str, cmd: &mut portable_pty::C
     for (agent, _, _) in crate::agent_hook_launch::SCREEN_POLICIES {
         inject_screen_policy(cmd, &agents_config, agent, agent);
     }
+    inject_launch_instructions(app_data_dir, &base, shell, cmd);
 
     if crate::pty::is_wsl_shell(shell) {
         // WSL default shell is bash. Inject bash integration with
@@ -331,6 +436,87 @@ pub(crate) fn inject(app_data_dir: &Path, shell: &str, cmd: &mut portable_pty::C
     } else if shell.contains("fish") {
         inject_fish(&base, cmd);
     }
+}
+
+/// Launch instructions for agents started from this shell: OpenCode through its
+/// env var, the other agents through the PATH shim (unix shells only).
+fn inject_launch_instructions(
+    app_data_dir: &Path,
+    base: &Path,
+    shell: &str,
+    cmd: &mut portable_pty::CommandBuilder,
+) {
+    if let Some((key, value)) = crate::launch_instructions::env("opencode", &[], app_data_dir)
+        && cmd.get_env(&key).is_none()
+    {
+        cmd.env(key, value);
+    }
+    cmd.env(
+        "TUIC_AGENT_INSTRUCTIONS_DIR",
+        app_data_dir.join("agent-hooks"),
+    );
+    if cfg!(windows) || crate::pty::is_wsl_shell(shell) {
+        return;
+    }
+    let bin = base.join("bin");
+    if let Err(error) = install_agent_shim(&bin) {
+        tracing::error!(
+            source = "agent_hooks",
+            "Failed to install the agent shim: {error}"
+        );
+        return;
+    }
+    let path = cmd
+        .get_env("PATH")
+        .map(|path| path.to_os_string())
+        .or_else(|| std::env::var_os("PATH"))
+        .unwrap_or_default();
+    let mut entries = vec![bin.clone()];
+    entries.extend(std::env::split_paths(&path).filter(|entry| entry != &bin));
+    if let Ok(joined) = std::env::join_paths(entries) {
+        cmd.env("PATH", joined);
+    }
+    cmd.env("TUIC_AGENT_SHIM_DIR", bin);
+}
+
+/// The shim with the recorded Claude help and ego verbs filled in.
+fn render_shim() -> String {
+    render_integration(AGENT_SHIM).replace(
+        "__TUIC_EGO_NON_RUN_COMMANDS__",
+        &crate::agent_hook_launch::EGO_NON_RUN_COMMANDS.join("|"),
+    )
+}
+
+/// Write the shim once (an unchanged file keeps its inode, so the exec-time
+/// scan is paid once per content change) and link every served agent to it.
+#[cfg(unix)]
+fn install_agent_shim(bin: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::create_dir_all(bin)?;
+    let shim = bin.join(SHIM_FILE);
+    let content = render_shim();
+    if std::fs::read_to_string(&shim).ok().as_deref() != Some(content.as_str()) {
+        let staging = bin.join(format!("{SHIM_FILE}.{}", std::process::id()));
+        std::fs::write(&staging, &content)?;
+        std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o755))?;
+        std::fs::rename(&staging, &shim)?;
+    }
+    for agent in SHIM_AGENTS {
+        let link = bin.join(agent);
+        if std::fs::read_link(&link).is_ok_and(|target| target == Path::new(SHIM_FILE)) {
+            continue;
+        }
+        let staging = bin.join(format!("{agent}.{}", std::process::id()));
+        let _ = std::fs::remove_file(&staging);
+        std::os::unix::fs::symlink(SHIM_FILE, &staging)?;
+        std::fs::rename(&staging, &link)?;
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn install_agent_shim(_bin: &Path) -> std::io::Result<()> {
+    Ok(())
 }
 
 fn inject_screen_policy(
@@ -503,6 +689,64 @@ mod tests {
         );
     }
 
+    /// Catches: opencode started from a TUIC shell (absolute path included)
+    /// without the instructions, or a shell whose PATH misses the shim.
+    #[cfg(unix)]
+    #[test]
+    fn injected_shell_exports_launch_instructions_and_the_shim_first_on_path() {
+        let dir = tempfile::TempDir::new().unwrap();
+        assert!(
+            dir.path()
+                .starts_with(crate::test_support::test_temp_root())
+        );
+        let _guard = tuic_core::config_dir::set_override(dir.path().to_path_buf());
+        let mut cmd = portable_pty::CommandBuilder::new("zsh");
+        cmd.env("PATH", "/usr/bin:/bin");
+        inject(dir.path(), "zsh", &mut cmd);
+        let bin = dir.path().join("shell-integration/bin");
+        let opencode = dir.path().join("agent-hooks/instructions-opencode.md");
+        assert_eq!(
+            cmd.get_env("OPENCODE_CONFIG_CONTENT")
+                .and_then(|v| v.to_str()),
+            Some(
+                serde_json::json!({"instructions": [opencode.to_string_lossy()]})
+                    .to_string()
+                    .as_str()
+            )
+        );
+        assert!(
+            std::fs::read_to_string(&opencode)
+                .unwrap()
+                .contains("intent:")
+        );
+        assert_eq!(
+            cmd.get_env("TUIC_AGENT_INSTRUCTIONS_DIR"),
+            Some(dir.path().join("agent-hooks").as_os_str())
+        );
+        assert_eq!(cmd.get_env("TUIC_AGENT_SHIM_DIR"), Some(bin.as_os_str()));
+        let path = format!("{}:/usr/bin:/bin", bin.display());
+        assert_eq!(
+            cmd.get_env("PATH").and_then(|v| v.to_str()),
+            Some(path.as_str())
+        );
+        for agent in SHIM_AGENTS {
+            assert_eq!(
+                std::fs::read_link(bin.join(agent)).unwrap(),
+                Path::new(SHIM_FILE)
+            );
+        }
+        assert!(
+            !bin.join("opencode").exists(),
+            "opencode uses its env var, not the shim"
+        );
+        // A second shell must not stack a second copy of the dir.
+        inject(dir.path(), "zsh", &mut cmd);
+        assert_eq!(
+            cmd.get_env("PATH").and_then(|v| v.to_str()),
+            Some(path.as_str())
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn shell_environment_exports_only_supported_enabled_screen_policies() {
@@ -621,7 +865,8 @@ mod tests {
         // Named, not a glob: these constants live two modules up, and a glob of
         // the parent's own glob is easy to break by accident.
         use super::super::{
-            BASH_INTEGRATION, FISH_INTEGRATION, ZSH_INTEGRATION, render_integration,
+            BASH_INTEGRATION, FISH_INTEGRATION, ZSH_INTEGRATION, install_agent_shim,
+            render_integration,
         };
         use std::path::{Path, PathBuf};
         use std::process::Command;
@@ -678,7 +923,7 @@ mod tests {
                 });
             std::fs::create_dir_all(&dir).expect("create fake agent bin dir");
 
-            for agent in ["claude", "codex", "grok", "opencode"] {
+            for agent in ["claude", "codex", "grok", "opencode", "goose", "pi", "ego"] {
                 let link = dir.join(agent);
                 if std::fs::read_link(&link).is_ok_and(|target| target == Path::new(REAL_ECHO)) {
                     continue;
@@ -688,6 +933,40 @@ mod tests {
                 let staging = staging_path(&dir, agent);
                 std::os::unix::fs::symlink(REAL_ECHO, &staging).expect("stage agent symlink");
                 std::fs::rename(&staging, &link).expect("install agent symlink");
+            }
+            dir
+        }
+
+        /// The TUIC agent shim, installed by the production installer. It is an
+        /// executable, so it is written only when its content changes: the
+        /// exec-time scan is paid once, not per assertion.
+        fn shim_dir() -> PathBuf {
+            let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/fake-agent-shim");
+            install_agent_shim(&dir).expect("install agent shim");
+            dir
+        }
+
+        /// One-line instruction files, so the echoed argv stays on one line.
+        fn instructions_dir() -> PathBuf {
+            let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/fake-agent-instructions");
+            std::fs::create_dir_all(&dir).expect("create instructions dir");
+            for (name, content) in [
+                ("instructions-claude.md", "RULES-claude"),
+                (
+                    "instructions-codex.toml",
+                    "developer_instructions=\"RULES-codex\"",
+                ),
+                ("instructions-grok.md", "RULES-grok"),
+                ("instructions-goose.md", "RULES-goose"),
+                ("instructions-pi.md", "RULES-pi"),
+                ("instructions-ego.md", "RULES-ego"),
+            ] {
+                let path = dir.join(name);
+                if std::fs::read_to_string(&path).ok().as_deref() != Some(content) {
+                    let staging = staging_path(&dir, name);
+                    std::fs::write(&staging, content).expect("write instructions");
+                    std::fs::rename(&staging, &path).expect("install instructions");
+                }
             }
             dir
         }
@@ -773,9 +1052,17 @@ mod tests {
         ) -> Vec<String> {
             let script = integration_script(shell);
             let bin_dir = agent_bin_dir();
+            // The shim is always first, as `inject` puts it: with no instructions
+            // dir it passes every argv through, which the older cases pin.
+            let shim = shim_dir();
             let path = match std::env::var_os("PATH") {
-                Some(existing) => format!("{}:{}", bin_dir.display(), existing.to_string_lossy()),
-                None => bin_dir.display().to_string(),
+                Some(existing) => format!(
+                    "{}:{}:{}",
+                    shim.display(),
+                    bin_dir.display(),
+                    existing.to_string_lossy()
+                ),
+                None => format!("{}:{}", shim.display(), bin_dir.display()),
             };
 
             let mut cmd = Command::new(shell);
@@ -795,7 +1082,9 @@ mod tests {
                 .env_remove("TUIC_CODEX_NOTIFY")
                 .env_remove("TUIC_CODEX_SCREEN_FLAG")
                 .env_remove("TUIC_GROK_SCREEN_FLAG")
-                .env_remove("TUIC_OPENCODE_SCREEN_FLAG");
+                .env_remove("TUIC_OPENCODE_SCREEN_FLAG")
+                .env_remove("TUIC_AGENT_INSTRUCTIONS_DIR")
+                .env_remove("TUIC_AGENT_SHIM_DIR");
             for (key, value) in tuic_env {
                 cmd.env(key, value);
             }
@@ -889,6 +1178,182 @@ mod tests {
             unavailable_help_keeps_verbs_and_prompts_without_launch_probe,
             unavailable_help_preserves_recorded_auth_subcommand,
         );
+
+        launch_matrix!(
+            typed_launches_carry_the_instructions,
+            an_alias_reaches_the_wrapper_and_the_shim,
+            a_wrapper_script_by_name_reaches_the_shim,
+            an_absolute_path_bypasses_the_shim,
+            nested_shim_dirs_reach_the_real_binary,
+            the_prompt_puts_the_shim_back_in_front,
+        );
+
+        /// TUIC shell environment with the status signals and the instructions on.
+        fn instructions_on() -> Vec<(&'static str, String)> {
+            let dir = instructions_dir();
+            vec![
+                ("TUIC_CLAUDE_SETTINGS", CLAUDE_SETTINGS.to_string()),
+                ("TUIC_CODEX_NOTIFY", CODEX_NOTIFY.to_string()),
+                ("TUIC_AGENT_INSTRUCTIONS_DIR", dir.display().to_string()),
+                ("TUIC_AGENT_SHIM_DIR", shim_dir().display().to_string()),
+            ]
+        }
+
+        fn run_with_instructions(shell: &str, invocation: &str) -> Vec<String> {
+            require_shell(shell);
+            let env = instructions_on();
+            let env: Vec<(&str, &str)> = env.iter().map(|(k, v)| (*k, v.as_str())).collect();
+            wrapper_command_lines(shell, &env, invocation)
+        }
+
+        fn instruction_file(agent: &str) -> String {
+            let ext = if agent == "codex" { "toml" } else { "md" };
+            instructions_dir()
+                .join(format!("instructions-{agent}.{ext}"))
+                .display()
+                .to_string()
+        }
+
+        /// Catches: a typed agent launched without the marker flag (fresh or
+        /// resume), the flag on a headless or verb launch, or a second flag
+        /// when the user already passed one.
+        fn typed_launches_carry_the_instructions(shell: &str) {
+            let claude = instruction_file("claude");
+            let pi = instruction_file("pi");
+            let ego = format!("@{}", instruction_file("ego"));
+            let actual = run_with_instructions(
+                shell,
+                "claude --model opus\n\
+                 claude --resume x\n\
+                 claude -p hi\n\
+                 claude mcp list\n\
+                 claude --append-system-prompt-file /mine.md\n\
+                 codex --model o3\n\
+                 codex resume --last\n\
+                 codex exec task\n\
+                 grok --continue\n\
+                 grok -p hi\n\
+                 goose session\n\
+                 goose session --resume\n\
+                 goose run -t task\n\
+                 pi --continue\n\
+                 pi -p hi\n\
+                 ego\n\
+                 ego resume id\n\
+                 ego run task",
+            );
+            let notify = format!("-c notify=[\"{CODEX_NOTIFY}\"]");
+            let expected = [
+                format!(
+                    "--append-system-prompt-file {claude} --settings {CLAUDE_SETTINGS} --model opus"
+                ),
+                format!(
+                    "--append-system-prompt-file {claude} --settings {CLAUDE_SETTINGS} --resume x"
+                ),
+                format!("--settings {CLAUDE_SETTINGS} -p hi"),
+                "mcp list".to_string(),
+                format!("--settings {CLAUDE_SETTINGS} --append-system-prompt-file /mine.md"),
+                format!("-c developer_instructions=\"RULES-codex\" --model o3 {notify}"),
+                format!("-c developer_instructions=\"RULES-codex\" resume --last {notify}"),
+                format!("exec task {notify}"),
+                "--rules RULES-grok --continue".to_string(),
+                "-p hi".to_string(),
+                "session --system RULES-goose --name wrapper-launch-test".to_string(),
+                "session --system RULES-goose --resume".to_string(),
+                "run --name wrapper-launch-test -t task".to_string(),
+                format!("--append-system-prompt {pi} --continue"),
+                "-p hi".to_string(),
+                format!("--append-system {ego}"),
+                format!("resume --append-system {ego} id"),
+                "run task".to_string(),
+            ];
+            assert_eq!(actual, expected, "{shell}: typed launches");
+        }
+
+        /// Catches: an alias that resolves past the TUIC wrapper and shim.
+        fn an_alias_reaches_the_wrapper_and_the_shim(shell: &str) {
+            // zsh parses a whole -c string before it runs it, so the alias is
+            // used through eval; bash needs alias expansion turned on outside
+            // an interactive shell.
+            let invocation = match shell {
+                "bash" => "shopt -s expand_aliases\nalias c=claude\neval 'c --model opus'",
+                _ => "alias c=claude\neval 'c --model opus'",
+            };
+            let claude = instruction_file("claude");
+            assert_eq!(
+                run_with_instructions(shell, invocation),
+                [format!(
+                    "--append-system-prompt-file {claude} --settings {CLAUDE_SETTINGS} --model opus"
+                )],
+                "{shell}: alias"
+            );
+        }
+
+        /// Catches: a wrapper script (c2) that runs the agent by name launching
+        /// without the instructions. The status hooks stay with the typed
+        /// command on purpose, so the child gets the instructions only.
+        fn a_wrapper_script_by_name_reaches_the_shim(shell: &str) {
+            let claude = instruction_file("claude");
+            assert_eq!(
+                run_with_instructions(shell, "/bin/sh -c 'exec claude \"$@\"' c2 --model opus"),
+                [format!("--append-system-prompt-file {claude} --model opus")],
+                "{shell}: script wrapper"
+            );
+        }
+
+        /// Catches: a claim that absolute-path launches carry the instructions.
+        /// The shim cannot see them; this pins the documented miss.
+        fn an_absolute_path_bypasses_the_shim(shell: &str) {
+            let real = agent_bin_dir().join("claude");
+            assert_eq!(
+                run_with_instructions(shell, &format!("'{}' --model opus", real.display())),
+                ["--model opus"],
+                "{shell}: absolute path"
+            );
+        }
+
+        /// Catches: a shim that execs another TUIC shim (a nested instance's
+        /// dir) and loops instead of reaching the real binary.
+        fn nested_shim_dirs_reach_the_real_binary(shell: &str) {
+            let outer = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/fake-agent-shim-nested");
+            install_agent_shim(&outer).expect("install nested shim");
+            let claude = instruction_file("claude");
+            assert_eq!(
+                run_with_instructions(
+                    shell,
+                    &format!(
+                        "/bin/sh -c 'PATH=\"$0:$PATH\" exec claude --model opus' '{}'",
+                        outer.display()
+                    ),
+                ),
+                [format!("--append-system-prompt-file {claude} --model opus")],
+                "{shell}: nested shim dirs"
+            );
+        }
+
+        /// Catches: a user rc that prepends the agent's own dir after TUIC set
+        /// PATH, so the real binary shadows the shim for the whole session.
+        /// The `true` absorbs the OSC 133;C that bash's DEBUG trap prints for
+        /// the first command after a prompt.
+        fn the_prompt_puts_the_shim_back_in_front(shell: &str) {
+            let real = agent_bin_dir();
+            let invocation = match shell {
+                "fish" => format!(
+                    "set -gx PATH '{}' $PATH\n__tuic_prompt >/dev/null\n/bin/sh -c 'exec claude --model opus'",
+                    real.display()
+                ),
+                _ => format!(
+                    "PATH='{}':\"$PATH\"\n{{ __tuic_precmd; true; }} >/dev/null\n/bin/sh -c 'exec claude --model opus'",
+                    real.display()
+                ),
+            };
+            let claude = instruction_file("claude");
+            assert_eq!(
+                run_with_instructions(shell, &invocation),
+                [format!("--append-system-prompt-file {claude} --model opus")],
+                "{shell}: prompt re-prepends the shim"
+            );
+        }
 
         fn screen_flags_follow_manual_agent_commands(shell: &str) {
             let flags = [

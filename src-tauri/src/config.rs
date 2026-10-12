@@ -2049,6 +2049,10 @@ pub(crate) struct AgentSettings {
     )]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"next_session","effect":"Used when the next session or process starts; existing sessions retain their launch configuration.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) ego_sandbox: Option<EgoSandbox>,
+    /// Per-agent launch instructions. Overrides the global text; empty turns injection off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"next_session","effect":"Used when the next session or process starts; existing sessions retain their launch configuration.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    pub(crate) launch_instructions: Option<String>,
 }
 
 impl Default for AgentSettings {
@@ -2069,6 +2073,7 @@ impl Default for AgentSettings {
             skip_trust_dialog: None,
             ego_mode: None,
             ego_sandbox: None,
+            launch_instructions: None,
         }
     }
 }
@@ -2083,6 +2088,11 @@ pub(crate) struct AgentsConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates headless agent for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) headless_agent: Option<String>,
+    /// Launch instructions for every agent TUIC starts. None = the shipped default
+    /// (`launch_instructions::default_text`); empty turns injection off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"next_session","effect":"Used when the next session or process starts; existing sessions retain their launch configuration.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    pub(crate) launch_instructions: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -4418,7 +4428,16 @@ fn migrate_codex_bypass(config: &mut AgentsConfig) -> bool {
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn save_agents_config(base: AgentsConfig, config: AgentsConfig) -> Result<(), String> {
     let file: ConfigFile<AgentsConfig> = ConfigFile::new(AGENTS_CONFIG_FILE);
-    file.save_delta(&base, &config)
+    file.save_delta(&base, &config)?;
+    // The instruction files are what launches read; refresh them with the edit.
+    // The save itself succeeded, and every launch rewrites them again.
+    if let Err(error) = crate::launch_instructions::write_files(&config_dir()) {
+        tracing::error!(
+            source = "agent_hooks",
+            "Failed to write launch instructions: {error}"
+        );
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -4451,6 +4470,15 @@ pub(crate) struct ConfigDefaults {
     /// route is never registered there either (see `build_remote_router`).
     #[cfg(feature = "dictation")]
     pub(crate) dictation: DictationConfig,
+    /// The shipped launch-instruction text (`{VER}` unexpanded) and the marker
+    /// tokens the Settings editor warns about when an edit drops one.
+    pub(crate) launch_instructions: LaunchInstructionsDefaults,
+}
+
+#[derive(Serialize)]
+pub(crate) struct LaunchInstructionsDefaults {
+    pub(crate) default_text: String,
+    pub(crate) required_markers: Vec<&'static str>,
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
@@ -4471,6 +4499,10 @@ pub(crate) fn get_config_defaults() -> ConfigDefaults {
         dictation: DictationConfig {
             speech_engine: "edge".to_string(),
             ..DictationConfig::default()
+        },
+        launch_instructions: LaunchInstructionsDefaults {
+            default_text: crate::launch_instructions::default_text(true, true),
+            required_markers: crate::launch_instructions::REQUIRED_MARKERS.to_vec(),
         },
     }
 }
@@ -6306,6 +6338,7 @@ mod tests {
         agents.agents.insert(
             "claude".to_string(),
             AgentSettings {
+                launch_instructions: None,
                 run_configs: vec![
                     AgentRunConfig {
                         name: "Default".to_string(),
