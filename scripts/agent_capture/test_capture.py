@@ -7,7 +7,9 @@ import unittest
 from unittest.mock import patch
 
 import run
-from scenario import validate
+from scenario import expand, judge_reply, run_steps, validate
+
+CANARY = {"canary": "ZEBRA-7:", "canary_rule": "Start every reply with ZEBRA-7:"}
 
 
 class CaptureContractTests(unittest.TestCase):
@@ -112,6 +114,184 @@ class CaptureContractTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     run.promote(capture, metadata, "changed")
                 self.assertFalse(dest.with_name("codex-changed.tcap").exists())
+
+
+class InjectionMatrixTests(unittest.TestCase):
+    """Steps that prove whether a launch-time rule survives compact, clear and resume."""
+
+    base = {"agent": "claude", "args": ["--append-system-prompt", "{canary_rule}"], **CANARY}
+
+    # Catches: a typo such as "compact" is sent as an ordinary prompt and the
+    # moment is reported as "after compact" although nothing was compacted.
+    def test_slash_step_requires_a_slash_command(self):
+        self.assertEqual(validate({**self.base, "steps": [
+            {"action": "slash", "text": "/compact"},
+            {"action": "check", "label": "B1", "text": "What is 123+456?", "answer": "579"}]}), [])
+        for step in [{"action": "slash", "text": "compact"}, {"action": "slash", "text": ""},
+                     {"action": "slash", "text": "/clear", "quiet_secs": 0}]:
+            with self.subTest(step=step), self.assertRaises(ValueError):
+                validate({**self.base, "steps": [step]})
+
+    # Catches: a check whose answer occurs in its own prompt passes on the
+    # echoed prompt; a check without a canary has nothing to judge.
+    def test_check_step_rejects_unjudgeable_checks(self):
+        good = {"action": "check", "label": "A1", "text": "What is 123+456?", "answer": "579"}
+        self.assertEqual(validate({**self.base, "steps": [good]}), [])
+        for scenario in [{**self.base, "steps": [{**good, "answer": "123"}]},
+                         {**self.base, "steps": [{**good, "label": ""}]},
+                         {**self.base, "steps": [good, good]},
+                         {**self.base, "canary": "", "steps": [good]},
+                         {**self.base, "canary_rule": "no marker here", "steps": [good]}]:
+            with self.subTest(scenario=scenario), self.assertRaises(ValueError):
+                validate(scenario)
+
+    # Catches: a resume relaunch without explicit args, which would silently
+    # start a fresh session and report it as "resumed".
+    def test_restart_step_requires_explicit_args(self):
+        restart = {"action": "restart", "args": ["--continue"]}
+        check = {"action": "check", "label": "D1", "text": "What is 123+456?", "answer": "579"}
+        self.assertEqual(validate({**self.base, "steps": [restart, check]}), [])
+        for step in [{"action": "restart"}, {"action": "restart", "args": "--continue"},
+                     {**restart, "exit_text": ""}, {**restart, "env": {"CFG": 1}}]:
+            with self.subTest(step=step), self.assertRaises(ValueError):
+                validate({**self.base, "steps": [step, check]})
+
+    # Catches: the rule text is hard-coded per agent and drifts between agents,
+    # so the matrix compares different rules.
+    def test_expand_places_one_rule_text_in_args_and_env(self):
+        values = {"canary_rule": "Rule ZEBRA-7:", "canary_file": "/x/rule.md"}
+        self.assertEqual(expand(["-c", "developer_instructions={canary_rule}", "--x"], values),
+                         ["-c", "developer_instructions=Rule ZEBRA-7:", "--x"])
+        self.assertEqual(expand({"CFG": '{"instructions":["{canary_file}"]}'}, values),
+                         {"CFG": '{"instructions":["/x/rule.md"]}'})
+        with self.assertRaises(ValueError):
+            expand(["{unknown}"], values)
+
+    # Catches: the reply is judged on the wrong turn (an earlier reply that did
+    # follow the rule), on the echoed prompt, or misses the canary behind the
+    # agent's bullet glyph.
+    def test_judge_reads_only_the_reply_to_the_latest_prompt(self):
+        lines = ["> What is 123+456?", "⏺ ZEBRA-7: 579", "", "> What is 123+456?",
+                 "  ⎿ thinking", "⏺ 579", "", "────", "❯ "]
+        verdict = judge_reply(lines, "What is 123+456?", "579", "ZEBRA-7:")
+        self.assertEqual(verdict["followed"], False)
+        self.assertEqual(verdict["reply_line"], "⏺ 579")
+        followed = judge_reply(lines[:3], "What is 123+456?", "579", "ZEBRA-7:")
+        self.assertEqual(followed["followed"], True)
+        self.assertEqual(followed["reply_line"], "⏺ ZEBRA-7: 579")
+        self.assertIsNone(judge_reply(["> What is 123+456?", "⠋ Working"],
+                                      "What is 123+456?", "579", "ZEBRA-7:"))
+        self.assertIsNone(judge_reply(["⏺ 579"], "What is 123+456?", "579", "ZEBRA-7:"))
+        # Grok renders its reasoning in "┃" rows before the reply (real 1.0.50 layout).
+        grok = ["❯ What is 10+7?", "┃ The answer is 17. I will prefix the response.",
+                "ZEBRA-7:  💬 10 + 7 is 17."]
+        self.assertEqual(judge_reply(grok, "What is 10+7?", "17", "ZEBRA-7:", ["┃"])["followed"], True)
+        self.assertEqual(judge_reply(grok, "What is 10+7?", "17", "ZEBRA-7:")["followed"], True)
+        # A progress tool call quoting the result precedes the reply (real grok 1.0.50 layout).
+        tool = ["❯ What is 333+222?", "◆ Tuicommander Progress", "  text: 333+222 is 555.",
+                "ZEBRA-7:  💬 333 + 222 is 555."]
+        self.assertEqual(judge_reply(tool, "What is 333+222?", "555", "ZEBRA-7:")["reply_line"],
+                         "ZEBRA-7:  💬 333 + 222 is 555.")
+        tool[-1] = "💬 333 + 222 is 555."
+        self.assertEqual(judge_reply(tool, "What is 333+222?", "555", "ZEBRA-7:"),
+                         {"followed": False, "reply_line": "💬 333 + 222 is 555."})
+
+    # Catches: steps after a restart still address the dead session, or the
+    # restart never relaunches with the scenario's resume args.
+    def test_restart_relaunches_and_later_steps_use_the_new_session(self):
+        calls, launched = [], []
+
+        def api(method, path, body=None):
+            calls.append((method, path, body))
+            if path.endswith("/terminal/scroll-info"):
+                return {"total_lines": 3}
+            if "/terminal/lines" in path:
+                return {"lines": ["> What is 123+456?", "• ZEBRA-7: 579", "› "]}
+            return {"submitted": True}
+
+        def relaunch(old, args, env, exit_text):
+            launched.append((old, args, env, exit_text))
+            return "new-session"
+
+        results = []
+        with patch("scenario.time.sleep"):
+            run_steps(api, "old-session", [
+                {"action": "restart", "args": ["resume", "--last"], "env": {}},
+                {"action": "check", "label": "D1", "text": "What is 123+456?", "answer": "579",
+                 "quiet_secs": 0.5}], canary="ZEBRA-7:", relaunch=relaunch, results=results)
+        self.assertEqual(launched, [("old-session", ["resume", "--last"], {}, None)])
+        self.assertIn(("POST", "/sessions/new-session/submit", {"input": "What is 123+456?"}), calls)
+        self.assertFalse(any("old-session/submit" in path for _, path, _ in calls))
+        self.assertEqual([(r["label"], r["followed"], r["reply_line"]) for r in results],
+                         [("D1", True, "• ZEBRA-7: 579")])
+
+    # Catches: a check submitted while the agent still finishes the previous
+    # command (TUIC answers 409) aborts the whole matrix run.
+    def test_check_retries_a_busy_409_submission(self):
+        answers = [RuntimeError("POST /sessions/s/submit: HTTP 409"), {"submitted": True}]
+
+        def api(method, path, body=None):
+            if path.endswith("/submit"):
+                answer = answers.pop(0)
+                if isinstance(answer, Exception):
+                    raise answer
+                return answer
+            if path.endswith("/terminal/scroll-info"):
+                return {"total_lines": 2}
+            return {"lines": ["> What is 123+456?", "ZEBRA-7: 579"]}
+
+        results = []
+        with patch("scenario.time.sleep"):
+            run_steps(api, "s", [{"action": "check", "label": "A1", "text": "What is 123+456?",
+                                  "answer": "579", "quiet_secs": 0.5}], canary="ZEBRA-7:", results=results)
+        self.assertEqual(answers, [])
+        self.assertEqual(results[0]["followed"], True)
+
+    # Catches: an agent that queues input (ego) is judged while it is still
+    # working, so the previous turn's reply is read as this turn's.
+    def test_idle_gate_waits_until_tui_reports_the_agent_not_working(self):
+        states = ["working", "working", "idle"]
+
+        def api(method, path, body=None):
+            if path == "/sessions":
+                return [{"session_id": "s", "state": {"agent_state": states.pop(0) if len(states) > 1
+                                                      else states[0]}}]
+            if path.endswith("/terminal/scroll-info"):
+                return {"total_lines": 2}
+            if path.endswith("/submit"):
+                return {"submitted": True}
+            return {"lines": ["> What is 123+456?", "ZEBRA-7: 579"]}
+
+        results = []
+        with patch("scenario.time.sleep"):
+            run_steps(api, "s", [{"action": "check", "label": "A1", "text": "What is 123+456?",
+                                  "answer": "579", "quiet_secs": 0.5}], canary="ZEBRA-7:",
+                      results=results, idle_gate=True)
+        self.assertEqual(states, ["idle"])
+        self.assertEqual(results[0]["followed"], True)
+
+    # Catches: a dialog that only some launches show either blocks the run when
+    # absent, or is not answered when present.
+    def test_dismiss_answers_a_dialog_only_when_it_appears(self):
+        for screen, expected in [(["Allow external CLAUDE.md file imports?"], ["\r"]), (["❯ "], [])]:
+            writes = []
+
+            def api(method, path, body=None):
+                if path.endswith("/write"):
+                    writes.append(body["data"])
+                    return {}
+                if path.endswith("/terminal/scroll-info"):
+                    return {"total_lines": 1}
+                return {"lines": screen}
+
+            step = {"action": "dismiss", "text": "Allow external CLAUDE.md file imports?",
+                    "key": "enter", "timeout_secs": 1}
+            validate({**InjectionMatrixTests.base, "steps": [step, {"action": "check", "label": "A1",
+                      "text": "What is 1+2?", "answer": "3"}]})
+            with self.subTest(screen=screen), patch("scenario.time.sleep"), \
+                    patch("scenario.time.monotonic", side_effect=[0, 0, 0, 2, 2, 2]):
+                run_steps(api, "s", [step])
+            self.assertEqual(writes, expected)
 
 
 if __name__ == "__main__":
