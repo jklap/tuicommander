@@ -2118,6 +2118,8 @@ Phone-optimized progressive web app for monitoring AI agents remotely. Separate 
 - Open Desktop UI link
 
 ### 18.8 PWA Support
+- Mobile session attachments use a bare icon on the left. Smaller mic and
+  Send controls sit inside the input border on the right; compact gaps preserve draft width.
 - Mobile session and AI Chat composers accept camera photos and files from one
   picker. Binary files stream to `.tuic/attachments/` in the session working
   directory and are excluded from Git locally; older files are cleaned at close.

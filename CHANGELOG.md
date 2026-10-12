@@ -11,6 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 - Design Mode delivers the first navigation after a backend restart, including before the first idle heartbeat (#1724-fe7e).
+- A console that stops reading the backend's stderr (for example the `make dev` pipe) no longer blocks every thread that logs, the main thread included; console output is now non-blocking and lossy, while retention in the existing lossy file log and bounded `/logs` ring is unchanged (#1638-c94c).
 - Design Mode lists only the dev servers of the session being edited (HTML-serving listeners of its worktree, URLs it printed, the configured URL) and excludes TUIC itself (#1723-4a21).
 
 ### Added
@@ -22,6 +23,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 - Hands-free listening and spoken replies are now separate settings, so replies-only (push-to-talk dictation with spoken answers) works, and the dictation toast has a spoken-replies toggle (#1729-f7f1).
+- Compact mobile session attachment icon and smaller in-field mic and Send controls for a wider draft (#1719-ff5d).
 - Long-press mobile Send to queue the current agent draft for its next ready window (#1717-efd3).
 
 - Automation run worktree provenance and explicit cleanup with existing integration, archive and live-session safety checks (#1623-8b2a).

@@ -693,6 +693,7 @@ Some frontend-only stores persist to localStorage:
 - [x] Mobile terminal Ctrl menu (Ctrl+C, Ctrl+B, Ctrl+D, agent-aware Ctrl+Enter)
 - [x] Mobile Send long-press Queue transfers the live draft to the shared server ready-window queue; taps still submit immediately.
 - [x] Mobile Companion PWA (searchable sessions, live output, question reply including Codex interactive choices, activity feed)
+  - [x] Compact bare attachment icon left of the session composer; smaller mic and Send sit inside its right border (#1719-ff5d)
   - [x] Files tree search, hidden-folder ordering, long-path preview, and full-height wrapped editing
   - [x] Repository-relative Markdown images through an authenticated, repository-confined image route
   - [x] Expandable Progress messages, local Activity time and minute durations, version display, and a server-persisted mobile light theme separate from the desktop theme

@@ -10,6 +10,7 @@ import { QuestionBanner } from "./components/QuestionBanner";
 import { TopBar } from "./components/TopBar";
 import styles from "./MobileApp.module.css";
 import { SessionsScreen } from "./screens/SessionsScreen";
+import { shellViewport } from "./shellViewport";
 import { useMobileNotifications } from "./useMobileNotifications";
 import { useSessions } from "./useSessions";
 import { useVersionCheck } from "./useVersionCheck";
@@ -61,8 +62,11 @@ export default function MobileApp() {
 		const update = () => {
 			cancelAnimationFrame(raf);
 			raf = requestAnimationFrame(() => {
-				document.documentElement.style.setProperty("--app-height", `${vv.height}px`);
-				document.documentElement.style.setProperty("--app-top", `${vv.offsetTop}px`);
+				const shell = shellViewport(vv, window.innerHeight);
+				const root = document.documentElement.style;
+				root.setProperty("--app-height", shell.height);
+				root.setProperty("--app-top", shell.top);
+				root.setProperty("--safe-bottom", shell.bottomInset);
 			});
 		};
 		const pinScroll = () => {
