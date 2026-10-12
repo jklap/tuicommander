@@ -1,3 +1,7 @@
+## Default-app launcher reaping (1749-f9a0) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, open a URL and a trusted local file from the desktop. Confirm each opens with its default application, TUIC responds while that application remains open, and no zombie launcher remains under TUIC. Automated Linux tests exercise the actual default-app boundary with a harmless launcher; no Mac browser or live TUIC was touched.
+
 ## Duplicate workflow starts (1748-47b0) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, start a workflow on a throwaway plan and submit a distinct second start. Confirm the error names the existing run ID and its history does not change. Automated store tests cover both start paths, running and paused states, retries, cancellation and concurrent requests; no desktop instance was started.

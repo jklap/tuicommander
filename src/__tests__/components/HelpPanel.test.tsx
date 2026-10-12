@@ -1,13 +1,8 @@
 import { fireEvent, render } from "@solidjs/testing-library";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import { describe, expect, it, vi } from "vitest";
 import { DISCORD_URL } from "../../community";
 import { HelpPanel } from "../../components/HelpPanel/HelpPanel";
 import { mockInvoke } from "../mocks/tauri";
-
-vi.mock("@tauri-apps/plugin-opener", () => ({
-	openUrl: vi.fn().mockResolvedValue(undefined),
-}));
 
 describe("HelpPanel", () => {
 	const defaultProps = {
@@ -42,10 +37,10 @@ describe("HelpPanel", () => {
 	});
 
 	it("opens the community invite instead of routing support to GitHub", () => {
-		vi.mocked(openUrl).mockClear();
+		mockInvoke.mockClear().mockResolvedValue(undefined);
 		const { getByRole } = render(() => <HelpPanel {...defaultProps} />);
 		fireEvent.click(getByRole("button", { name: "Discord Community" }));
-		expect(openUrl).toHaveBeenCalledWith(DISCORD_URL);
+		expect(mockInvoke).toHaveBeenCalledWith("open_default_app", { target: DISCORD_URL, kind: "url" });
 	});
 
 	it("shows keyboard shortcuts button", () => {
