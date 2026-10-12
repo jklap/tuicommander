@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - GitHub token chain no longer reads the `gh` CLI login (`gh auth token`, `gh-token` crate); use OAuth login or `GH_TOKEN`/`GITHUB_TOKEN`. TUIC spawns no `gh` process (#1714-1c1d).
 
 ### Fixed
+- Mobile output stops following after a small upward scroll and ignores queued follow frames after the user scrolls away (#1745-63b0).
+- Mobile ego questions show Input and open a full, wrapping question card from the header; selecting an option sends one answer (#1759-6047).
 - Native macOS Fn dictation keeps recording through window focus changes while the key is held and detects its release outside TUIC (#1763-3361).
 - Automations uses readable schedule cards, short repository names, keyboard tabs and a compact toolbar. The first definition opens automatically unless disabled in the dialog; the palette entry also matches scheduler and schedule (#1762-c772).
 - The bell no longer counts static plugin status rows; unread Progress outcomes have an explicit Mark as read action (#1764-862a).
@@ -3115,3 +3117,5 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Tabs from all worktrees visible when switching branches (fix planned)
 
 - Add Telegram setup in desktop and mobile Settings: token check/replacement, expiring one-use pairing or explicit chat IDs, live agent selection and safe daemon status.
+
+- Reuse explicitly finished, clean, integrated worktrees while preserving ignored build artifacts. Reserve new allocations before returning them.

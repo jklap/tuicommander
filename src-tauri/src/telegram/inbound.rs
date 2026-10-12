@@ -17,6 +17,7 @@ pub(crate) struct Inbound<P: MailPort> {
     port: P,
     backoff: Backoff,
     stopped: Option<Error>,
+    conflicted: bool,
 }
 impl<P: MailPort> Inbound<P> {
     pub(crate) fn with_port(paths: Paths, port: P) -> Result<Option<Self>, Error> {
@@ -33,6 +34,7 @@ impl<P: MailPort> Inbound<P> {
             port,
             backoff: Backoff::default(),
             stopped: None,
+            conflicted: false,
         }))
     }
     #[cfg(test)]
@@ -46,6 +48,11 @@ impl<P: MailPort> Inbound<P> {
         Ok(inbound)
     }
 
+    /// True while another process polls the same bot token (HTTP 409).
+    pub(crate) fn in_conflict(&self) -> bool {
+        self.conflicted
+    }
+
     /// One bounded poll. Stops last for this owner lifetime; restarting retries.
     pub(crate) async fn poll(&mut self) -> Result<Poll, Error> {
         if let Some(error) = self.stopped {
@@ -57,21 +64,22 @@ impl<P: MailPort> Inbound<P> {
         match self.poll_once().await {
             Ok(poll) => {
                 self.backoff.reset();
+                self.conflicted = false;
                 Ok(poll)
             }
             Err(error) => {
-                if matches!(
-                    error,
-                    Error::Unauthorized | Error::Conflict | Error::Rejected(403 | 404)
-                ) {
+                if error.is_fatal() {
                     self.stopped = Some(error);
                     tracing::error!(source="telegram",error=%error,
                         "Telegram polling stopped; restart after resolving the reported fault");
                     return Err(error);
                 }
                 let delay = self.backoff.failed(error);
+                self.conflicted = error == Error::Conflict;
                 match error {
-                    Error::RateLimited(_) | Error::Transport => Ok(Poll::Backoff(delay)),
+                    Error::RateLimited(_) | Error::Transport | Error::Conflict => {
+                        Ok(Poll::Backoff(delay))
+                    }
                     _ => Err(error),
                 }
             }

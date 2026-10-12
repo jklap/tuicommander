@@ -11840,6 +11840,71 @@ fn captured_codex_request_user_input_reaches_choice_prompt() {
     );
 }
 
+/// Catches: a real ego selector remaining Idle with no mobile question/options.
+#[test]
+fn captured_ego_question_reaches_awaiting_and_full_mobile_choices() {
+    let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(
+        "ego-single-question-20261012.tcap",
+    ))
+    .expect("recorded real ego question");
+    let (rows, cols) = capture.geometry.unwrap();
+    let sid = "ego-question-capture";
+    let (state, silence) = chunk_trace_state(sid);
+    state.grid.vt_log_buffers.insert(
+        sid.into(),
+        Mutex::new(crate::state::VtLogBuffer::new(rows, cols, 2000)),
+    );
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("ego".into());
+    let mut rx = state.event_bus.subscribe();
+    let mut processor = ChunkProcessor::new(None, None);
+    let mut utf8 = Utf8ReadBuffer::new();
+    let mut escape = EscapeAwareBuffer::new();
+    for record in capture.records {
+        if record.direction != crate::pty_capture::CaptureDirection::Output {
+            continue;
+        }
+        let data = escape.push(&utf8.push(&record.data));
+        let (clean, _) = crate::state::strip_kitty_sequences(&data);
+        processor.process_chunk(&clean, &silence, sid, &state);
+        while let Ok(event) = rx.try_recv() {
+            crate::state::tests_support::apply_replay_event(&state, &event);
+        }
+    }
+    let session = state.session_maps.session_states.get(sid).unwrap();
+    assert!(
+        session.awaiting_input,
+        "real ego human question was left Idle"
+    );
+    let prompt = session
+        .choice_prompt
+        .as_ref()
+        .expect("ego question must have mobile choices");
+    assert_eq!(
+        prompt.title,
+        "Does Boss authorize editing the orchestrator registry to integrate the finished mobile question fix?"
+    );
+    assert_eq!(
+        prompt
+            .options
+            .iter()
+            .map(|o| o.label.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "Yes, authorize registry integration and keep the complete question visible on mobile",
+            "No, leave the orchestrator registry unchanged and report the remaining work",
+        ]
+    );
+    assert_eq!(
+        prompt.selection_mode,
+        Some(crate::output_parser::ChoiceSelectionMode::NavigateEnter)
+    );
+}
+
 /// Everything a refactor of `process_chunk` is allowed to leave unchanged.
 #[derive(Debug, PartialEq)]
 struct ChunkTrace {
@@ -13747,7 +13812,7 @@ fn replay_oracle_all_committed_tcap_preserves_chunk_decisions() {
     for fixture in fixtures {
         let agent = [
             "claude", "codex", "grok", "goose", "opencode", "gemini", "aider", "pi", "amp",
-            "cursor", "droid",
+            "cursor", "droid", "ego",
         ]
         .into_iter()
         .find(|agent| {
