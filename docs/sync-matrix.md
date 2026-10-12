@@ -858,6 +858,14 @@ When changing where tests, the wrapper, fixtures, scripts or agent skills put sc
 | `AGENTS.md`, `CONTRIBUTING.md` | The one-line test temp root descriptions |
 | `src-tauri/AGENTS.md` | "Tests (Rust)" exec-scan bullet and the in-checkout `find_repo_root` trap |
 
+### Process inspection (no `ps`/`pgrep`/`pkill` exec)
+When adding or removing a process-inspection call site, or the logged `ps` fallback:
+
+| File | What to update |
+|------|----------------|
+| `scripts/check-no-process-exec.mjs` | The `file::fn` allow-list (a stale entry fails `--self-test`); wired into `make check` and `.github/workflows/ci.yml` |
+| `docs/backend/pty.md` | Native process snapshot, the `ps` fallback and its removal plan |
+
 ### Config-instance scoping (`TUIC_APP_INSTANCE`)
 When changing which make target launches against which configuration directory:
 
