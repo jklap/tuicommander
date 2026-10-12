@@ -12,6 +12,7 @@ const tool = (id: string): AcpTranscriptEntry => ({
 	call: { toolCallId: id, title: "Read", status: "completed" },
 });
 const text = (id: string): AcpTranscriptEntry => ({ id, kind: "agent", text: `Text ${id}` });
+const answer = (id: string): AcpTranscriptEntry => ({ id, kind: "agent", text: `💬 Answer ${id}` });
 const user = (id: string): AcpTranscriptEntry => ({ id, kind: "user", text: `Prompt ${id}` });
 
 function mutedTexts(entries: AcpTranscriptEntry[], muteIntermediate?: boolean): string[] {
@@ -43,6 +44,16 @@ describe("intermediate assistant text", () => {
 	// Catches: a turn's closing answer being muted because the next turn uses tools.
 	it("does not carry a finished turn's answer into the next turn's tool calls", () => {
 		expect(mutedTexts([user("u1"), text("a"), user("u2"), tool("t"), text("b")])).toEqual([]);
+	});
+
+	// Catches: a 💬 answer written before a later tool call rendered grey on the green answer block.
+	it("never mutes a 💬 answer, even when a tool call follows it", () => {
+		expect(mutedTexts([user("u"), answer("a"), text("b"), tool("t"), text("c")])).toEqual(["Text b"]);
+	});
+
+	// Catches: the answer exemption being keyed on the whole turn instead of the marked message.
+	it("still mutes a plain message in the same turn as an answer", () => {
+		expect(mutedTexts([user("u"), text("a"), answer("b"), tool("t")])).toEqual(["Text a"]);
 	});
 
 	// Catches: a text block with no tool call after it being muted.

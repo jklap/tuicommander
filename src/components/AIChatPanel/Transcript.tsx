@@ -153,6 +153,9 @@ const ToolActivity: Component<{ calls: () => AcpToolCall[]; observeDuration?: bo
 	);
 };
 
+/** A 💬 line anywhere in the message: an answer is never intermediate text. */
+const ANSWER_LINE_RE = new RegExp(ANSWER_MARKER_RE.source, "m");
+
 /** Keep the first call as the stable row anchor; later calls belong to it. */
 function activityRows(
 	entries: AcpTranscriptEntry[],
@@ -206,7 +209,8 @@ function activityRows(
 			refusals.set(entry.id, reply.join(" ").replace(/\s+/g, " ").trim());
 		}
 		if (entry.kind === "user" || entry.kind === "settled" || entry.kind === "failed") pendingText = [];
-		if (entry.kind === "agent") pendingText.push(entry.id);
+		if (entry.kind === "agent" && !ANSWER_LINE_RE.test(projectChatProtocolText(entry.text).body))
+			pendingText.push(entry.id);
 		if (entry.kind === "tool") {
 			for (const id of pendingText) intermediate.add(id);
 			pendingText = [];
