@@ -131,7 +131,7 @@ permissions from first contact or `/start`. Refresh authorization after each lon
 poll and before outbound sends. Deployment normally configures one chat ID.
 
 Missing/disabled config returns before opening token or owner files. A process-held
-file lock permits one local polling owner; 409 stops a conflicting owner. Read the
+file lock permits one local polling owner; a 409 (another process polls the same bot token) backs off and retries while send stays available. Read the
 private regular token file for each API request, use fixed-host HTTPS without
 redirects or proxies, and report only typed errors. Source token/formatted request
 buffers are zeroized; reqwest URL copies are not, a remaining memory limitation.
@@ -140,7 +140,7 @@ Never log URLs, tokens, chat text or real chat IDs.
 Ordinary polling uses `getUpdates(limit=10)`, a 1 MiB response cap and a 25-second
 long poll with a larger HTTP timeout. Oversize/malformed data does not advance the
 cursor. Network faults, temporary rejections and capacity failures use bounded
-exponential backoff. 401/403/404/409 stop polling with a safe TUIC alert until
+exponential backoff. 401/403/404 stop polling with a safe TUIC alert until
 restart. 429 honors `retry_after`, clamped to one second–one hour.
 
 Persist only `next_offset`, atomically at mode 0600 after the complete batch is
