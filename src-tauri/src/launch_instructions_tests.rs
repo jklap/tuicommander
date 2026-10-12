@@ -274,6 +274,32 @@ fn effective_text_follows_overrides_and_toggles() {
     );
 }
 
+/// Catches: a custom text that starts with a bullet (`- intent: ...`) passed as
+/// a separate argv value, which grok and goose parse as an unknown flag and
+/// refuse to start.
+#[test]
+fn text_flags_keep_a_dash_led_text_attached() {
+    let (dir, _guard) = config_dir();
+    let base = crate::config::AgentsConfig::default();
+    let mut edited = base.clone();
+    edited.launch_instructions = Some("- intent: first".into());
+    crate::config::save_agents_config(base, edited).unwrap();
+    for (agent, typed) in [
+        ("grok", strings(&["--continue"])),
+        ("goose", strings(&["session"])),
+    ] {
+        let launched = args(agent, typed, dir.path());
+        assert!(
+            launched.len() > 1,
+            "{agent}: the instructions were not injected: {launched:?}"
+        );
+        assert!(
+            launched.iter().all(|arg| arg != "- intent: first"),
+            "{agent}: a dash-led value must be glued to its flag: {launched:?}"
+        );
+    }
+}
+
 /// Catches: a Settings edit that launches keep ignoring until TUIC restarts.
 #[test]
 fn saving_agents_config_rewrites_the_launch_files() {

@@ -747,6 +747,44 @@ mod tests {
         );
     }
 
+    /// Catches: two tabs restored at once (PTY spawns run on parallel threads of
+    /// one process) racing on a staging name keyed by the process id, so one
+    /// install fails and that tab gets no shim dir on PATH.
+    #[cfg(unix)]
+    #[test]
+    fn concurrent_shim_installs_all_succeed() {
+        for round in 0..20 {
+            let dir = tempfile::TempDir::new().unwrap();
+            assert!(
+                dir.path()
+                    .starts_with(crate::test_support::test_temp_root())
+            );
+            let bin = std::sync::Arc::new(dir.path().join(format!("bin{round}")));
+            let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+            let handles: Vec<_> = (0..8)
+                .map(|_| {
+                    let (bin, barrier) = (bin.clone(), barrier.clone());
+                    std::thread::spawn(move || {
+                        barrier.wait();
+                        install_agent_shim(&bin)
+                    })
+                })
+                .collect();
+            for handle in handles {
+                handle
+                    .join()
+                    .unwrap()
+                    .unwrap_or_else(|error| panic!("round {round}: {error}"));
+            }
+            for agent in SHIM_AGENTS {
+                assert_eq!(
+                    std::fs::read_link(bin.join(agent)).unwrap(),
+                    Path::new(SHIM_FILE)
+                );
+            }
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn shell_environment_exports_only_supported_enabled_screen_policies() {
