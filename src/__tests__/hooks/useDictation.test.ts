@@ -92,6 +92,26 @@ describe("useDictation", () => {
 	});
 
 	describe("handleDictationStart", () => {
+		// Catches: a refused overlapping mic/hotkey start makes release skip the active recording.
+		it("stops and delivers the original recording after a second start is refused", async () => {
+			const input = document.createElement("textarea");
+			document.body.appendChild(input);
+			input.focus();
+			mockDictationStore.stopRecording.mockImplementationOnce(async () => {
+				mockDictationStore.state.recording = false;
+				return transcribeOk("hello world");
+			});
+			try {
+				await dictation.handleDictationStart("fn");
+				await dictation.handleDictationStart("hotkey");
+				await dictation.handleDictationStop();
+				expect(mockDictationStore.state.recording).toBe(false);
+				expect(input.value).toBe("hello world");
+			} finally {
+				input.remove();
+			}
+		});
+
 		it("starts recording when enabled and ready", async () => {
 			await dictation.handleDictationStart("fn");
 
