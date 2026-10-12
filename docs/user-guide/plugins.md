@@ -113,3 +113,6 @@ The MDKB status ticker refreshes when you select another repository.
 Automatic retry and wakeup decisions are cancelled when the agent resumes work,
 user input or a dialog changes its state, the session closes, or the plugin unloads
 while the composer is being inspected.
+
+CSV, DOCX and XLSX previews keep files from different repositories in separate
+panels, even when their file names match. Reopening the same file reuses its panel.
