@@ -25,29 +25,84 @@ pub(super) fn build_mcp_instructions(state: &Arc<AppState>, client_name: Option<
 /// reads the user's `repositories.json` and the session list reads live PTYs,
 /// so a renderer that gathered its own inputs could only be measured against
 /// whatever happened to be open on the machine running the test.
+#[derive(Default)]
 pub(super) struct InstructionContext {
-    /// `(display name, absolute path)`, sorted by path.
-    pub(super) repos: Vec<(String, String)>,
+    pub(super) repos: RepoSummary,
     /// `(short session id, cwd, worktree branch)`, already defaulted to `—`.
     pub(super) sessions: Vec<(String, String, String)>,
     pub(super) peer_count: usize,
+    /// Names of the native tools registered on this install, in registration order.
+    pub(super) native_tools: Vec<String>,
+    /// `(name, tool count)` of the connected upstream servers this session may use.
+    pub(super) upstreams: Vec<(String, usize)>,
+    /// A spawned child: its suggestion buttons are never shown to anyone.
+    pub(super) spawned_child: bool,
 }
 
-fn instruction_context(state: &Arc<AppState>) -> InstructionContext {
-    let repo_settings = crate::config::load_repo_settings();
-    let mut repos: Vec<_> = repo_settings.repos.iter().collect();
-    repos.sort_by_key(|(path, _)| path.to_string());
-    let repos = repos
-        .into_iter()
-        .map(|(path, entry)| {
-            let name = if entry.display_name.is_empty() {
-                path.rsplit('/').next().unwrap_or(path)
-            } else {
-                &entry.display_name
-            };
-            (name.to_string(), path.to_string())
-        })
-        .collect();
+/// What the instructions say about the registered repositories: counts only,
+/// so adding a repository never changes the text beyond one number.
+#[derive(Default)]
+pub(super) struct RepoSummary {
+    pub(super) total: usize,
+    /// `(group name, repo count)`, sorted by name.
+    pub(super) groups: Vec<(String, usize)>,
+    /// `(connection id, repo count)` for repos on a remote connection, sorted by id.
+    pub(super) remote: Vec<(String, usize)>,
+}
+
+/// Summarize the `repositories.json` document that `repo action=list` serves:
+/// the same `repoOrder`, `groups` and `connectionId` fields.
+pub(super) fn summarize_repos(repo_data: &serde_json::Value) -> RepoSummary {
+    let order: Vec<&str> = repo_data["repoOrder"]
+        .as_array()
+        .map(|a| a.iter().filter_map(|p| p.as_str()).collect())
+        .unwrap_or_default();
+    let mut groups: std::collections::BTreeMap<String, usize> = Default::default();
+    if let Some(all) = repo_data["groups"].as_object() {
+        for group in all.values() {
+            let name = group["name"].as_str().unwrap_or("").to_string();
+            let members = group["repoOrder"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|p| p.as_str())
+                        .filter(|p| order.contains(p))
+                        .count()
+                })
+                .unwrap_or(0);
+            if members > 0 && !name.is_empty() {
+                *groups.entry(name).or_default() += members;
+            }
+        }
+    }
+    let mut remote: std::collections::BTreeMap<String, usize> = Default::default();
+    for path in &order {
+        if let Some(id) = repo_connection_id(&repo_data["repos"][*path]) {
+            *remote.entry(id.to_string()).or_default() += 1;
+        }
+    }
+    RepoSummary {
+        total: order.len(),
+        groups: groups.into_iter().collect(),
+        remote: remote.into_iter().collect(),
+    }
+}
+
+/// The remote connection a stored repository entry lives on, if any.
+fn repo_connection_id(stored: &serde_json::Value) -> Option<&str> {
+    stored["connectionId"].as_str().filter(|id| !id.is_empty())
+}
+
+/// Tag a `repo action=list` row with the connection its repository lives on.
+/// A local repository gets no `connection_id` key.
+pub(super) fn tag_repo_connection(row: &mut serde_json::Value, stored: Option<&serde_json::Value>) {
+    if let Some(id) = stored.and_then(repo_connection_id) {
+        row["connection_id"] = serde_json::json!(id);
+    }
+}
+
+fn instruction_context(state: &Arc<AppState>, mcp_session_id: Option<&str>) -> InstructionContext {
+    let repos = summarize_repos(&crate::config::load_repositories());
 
     let sessions = state
         .session_maps
@@ -68,11 +123,34 @@ fn instruction_context(state: &Arc<AppState>) -> InstructionContext {
         })
         .collect();
 
+    let native_tools = filtered_native_tools(state)
+        .iter()
+        .filter_map(|t| t["name"].as_str().map(str::to_string))
+        .collect();
+    let allowed = resolve_allowed_upstreams(state, mcp_session_id);
+    let upstreams = state
+        .mcp
+        .upstream_registry
+        .ready_upstreams(allowed.as_deref());
+
     InstructionContext {
         repos,
         sessions,
         peer_count: state.peer_agents.len(),
+        native_tools,
+        upstreams,
+        spawned_child: mcp_session_id.is_some_and(|id| is_spawned_child(state, id)),
     }
+}
+
+/// An MCP session bound to a peer that has a parent session: it was spawned
+/// by another agent rather than started by the user.
+fn is_spawned_child(state: &AppState, mcp_session_id: &str) -> bool {
+    state
+        .mcp
+        .to_session
+        .get(mcp_session_id)
+        .is_some_and(|peer| state.session_maps.session_parent.contains_key(peer.value()))
 }
 
 pub(super) fn build_mcp_instructions_for_mode(
@@ -80,12 +158,23 @@ pub(super) fn build_mcp_instructions_for_mode(
     client_name: Option<&str>,
     collapse_tools: bool,
 ) -> String {
+    build_mcp_instructions_for_session(state, client_name, collapse_tools, None)
+}
+
+/// Same, for the MCP session that is connecting: it decides which upstream
+/// servers are listed and whether the caller is a spawned child.
+pub(super) fn build_mcp_instructions_for_session(
+    state: &Arc<AppState>,
+    client_name: Option<&str>,
+    collapse_tools: bool,
+    mcp_session_id: Option<&str>,
+) -> String {
     render_mcp_instructions(
         client_name,
         collapse_tools,
         resolve_marker_flags(state, client_name),
         crate::progress::progress_tracking_enabled(state, resolve_agent_type(client_name)),
-        &instruction_context(state),
+        &instruction_context(state, mcp_session_id),
     )
 }
 
@@ -115,6 +204,8 @@ pub(super) fn render_mcp_instructions(
     // Wire-level tokens parsed by the host TUI. Concision rules do NOT apply —
     // dropping a marker breaks the UI (stale tab title, missing suggestion bar).
     let (show_intent, show_suggest) = markers;
+    // A spawned child's suggestion buttons are never shown to anyone.
+    let show_suggest = show_suggest && !ctx.spawned_child;
     out.push_str("## TUIC Protocol — Required Output Markers\n\n");
     out.push_str("Required even under concision rules; omission breaks the UI.\n\n");
     out.push_str(&format!(
@@ -131,6 +222,13 @@ pub(super) fn render_mcp_instructions(
     // starts with the marker followed by a space.
     out.push_str("- `💬 ` — prefix every sentence that directly answers the user's question with `💬 ` at row start (marker + space). Exclude status, tool and hook/task notices.\n");
     out.push('\n');
+
+    // ── Capability map ───────────────────────────────────────────────
+    out.push_str(&render_capability_map(
+        ctx,
+        collapse_tools,
+        detect_claude_code_client(client_name),
+    ));
 
     // ── Cross-tool rules ─────────────────────────────────────────────
     // NOT a tool catalogue: `tools/list` already carries every name, action and
@@ -191,12 +289,12 @@ pub(super) fn render_mcp_instructions(
     out.push('\n');
 
     // ── Dynamic: repos ──────────────────────────────────────────────
-    if !ctx.repos.is_empty() {
+    // Counts only: a path list changed with every added repository, which also
+    // made every reconnect a new row in the prompt inspector (#1753-f6b8).
+    if ctx.repos.total > 0 {
         out.push_str("## Repos\n\n");
-        for (name, path) in &ctx.repos {
-            out.push_str(&format!("- **{name}** `{path}`\n"));
-        }
-        out.push('\n');
+        out.push_str(&render_repo_line(&ctx.repos, collapse_tools));
+        out.push_str("\n\n");
     }
 
     // ── Dynamic: sessions ───────────────────────────────────────────
@@ -209,6 +307,116 @@ pub(super) fn render_mcp_instructions(
     }
 
     out
+}
+
+fn render_repo_line(repos: &RepoSummary, collapse_tools: bool) -> String {
+    let mut line = format!("{} repositories", repos.total);
+    let mut parts: Vec<String> = repos
+        .groups
+        .iter()
+        .map(|(name, n)| format!("group {name} {n}"))
+        .collect();
+    parts.extend(
+        repos
+            .remote
+            .iter()
+            .map(|(id, n)| format!("remote {id} {n}")),
+    );
+    if !parts.is_empty() {
+        line.push_str(&format!(" ({})", parts.join(", ")));
+    }
+    let list = if collapse_tools {
+        "`call_tool tool_name=repo arguments={action:list}`"
+    } else {
+        "`repo action=list`"
+    };
+    line.push_str(&format!(
+        ". {list} returns each with its path, group and, on a remote connection, its `connection_id`."
+    ));
+    line
+}
+
+/// Tools that reach the user, in display order.
+const USER_TOOLS: &[&str] = &["ui", "voice", "telegram", "progress", "secret"];
+/// Tools that drive the platform, in display order.
+const PLATFORM_TOOLS: &[&str] = &[
+    "session",
+    "agent",
+    "repo",
+    "story",
+    "task",
+    "automations",
+    "workflow_run",
+    "workflow_launch",
+    "workflow_report",
+    "workflow_story_create",
+];
+
+/// One line per purpose, naming only what this install registered. Deferred
+/// clients see tool names but no schema until they search, so without this
+/// map the tools that talk to the user drown among the aggregated upstreams.
+fn render_capability_map(
+    ctx: &InstructionContext,
+    collapse_tools: bool,
+    claude_code: bool,
+) -> String {
+    let has = |name: &str| ctx.native_tools.iter().any(|t| t == name);
+    let named = |names: &[&str]| -> String {
+        names
+            .iter()
+            .filter(|n| has(n))
+            .map(|n| match *n {
+                "ui" => "`ui` (toast — `urgency=urgent` shows it on screen, not only in the bell; confirm; tab)".to_string(),
+                other => format!("`{other}`"),
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let other: Vec<String> = ctx
+        .native_tools
+        .iter()
+        .filter(|t| !USER_TOOLS.contains(&t.as_str()) && !PLATFORM_TOOLS.contains(&t.as_str()))
+        .map(|t| format!("`{t}`"))
+        .collect();
+    let mut lines = String::new();
+    for (label, text) in [
+        ("Reach the user", named(USER_TOOLS)),
+        ("Drive the platform", named(PLATFORM_TOOLS)),
+        ("Also", other.join(", ")),
+    ] {
+        if !text.is_empty() {
+            lines.push_str(&format!("- **{label}:** {text}\n"));
+        }
+    }
+    if !ctx.upstreams.is_empty() {
+        let servers = ctx
+            .upstreams
+            .iter()
+            .map(|(name, tools)| format!("`{name}` ({tools} tools)"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let find = if collapse_tools {
+            "`search_tools query=<server>`"
+        } else if claude_code {
+            "ToolSearch `<server>`"
+        } else {
+            "tools named `<server>__<tool>`"
+        };
+        lines.push_str(&format!(
+            "- **Other MCP servers through TUIC:** {servers}. Find their tools with {find}.\n"
+        ));
+    }
+    if lines.is_empty() {
+        return lines;
+    }
+    let hint = if collapse_tools {
+        "Names below are `call_tool` targets; load a schema with `get_tool_schema` first."
+    } else if claude_code {
+        "Load a tool's schema before the first call (ToolSearch `select:mcp__tuicommander__<tool>`)."
+    } else {
+        "Read a tool's description before the first call."
+    };
+    format!("## What TUIC gives you\n\n{hint}\n\n{lines}\n")
 }
 
 /// Validate a repo path for MCP tool calls, returning a JSON error value on failure.

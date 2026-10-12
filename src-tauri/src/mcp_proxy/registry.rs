@@ -808,6 +808,29 @@ impl UpstreamRegistry {
         Ok(())
     }
 
+    /// `(name, tool count)` of every `Ready` upstream, sorted by name and
+    /// restricted to `allowed` when a per-repo allowlist applies. Counts the
+    /// tools that survive the upstream's own filter, like `aggregated_tools`.
+    pub(crate) fn ready_upstreams(&self, allowed: Option<&[String]>) -> Vec<(String, usize)> {
+        let mut result: Vec<(String, usize)> = self
+            .entries
+            .iter()
+            .filter(|e| *e.value().status.read() == UpstreamStatus::Ready)
+            .filter(|e| allowed.is_none_or(|a| a.iter().any(|n| n == &e.value().config.name)))
+            .map(|e| {
+                let entry = e.value();
+                let tools = entry.tools.read();
+                let n = tools
+                    .iter()
+                    .filter(|t| apply_filter(&t.original_name, &entry.config))
+                    .count();
+                (entry.config.name.clone(), n)
+            })
+            .collect();
+        result.sort();
+        result
+    }
+
     /// Names of all registered upstreams.
     #[allow(dead_code)]
     pub(crate) fn upstream_names(&self) -> Vec<String> {
