@@ -104,8 +104,13 @@ export function CommandInput(props: CommandInputProps) {
 	const [codexNotesMode, setCodexNotesMode] = createSignal(false);
 	const atomicReply = () =>
 		props.managedSession && props.awaitingInput && !props.choicePrompt && !props.codexQuestionOpen && !codexNotesMode();
+	// A multi-question form replaces its prompt without an empty frame between
+	// the answered question and the next one, so a new prompt re-arms the buttons too.
 	createEffect(() => {
-		if (!props.choicePrompt) setChoiceSending(false);
+		const prompt = props.choicePrompt;
+		void prompt?.title;
+		void prompt?.options.map((option) => option.label).join("\n");
+		setChoiceSending(false);
 	});
 	let textareaEl: HTMLTextAreaElement | undefined;
 	let fileInput: HTMLInputElement | undefined;
