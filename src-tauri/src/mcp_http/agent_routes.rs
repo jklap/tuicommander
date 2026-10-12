@@ -591,6 +591,17 @@ mod tests {
             "if [ \"$1\" = '--help' ]; then printf '%s\\n' '--no-alt-screen'; else printf 'ARGS=%s\\nTUIC_SESSION=%s\\n' \"$*\" \"$TUIC_SESSION\"; read unused; fi",
             "if \"%1\"==\"--help\" (echo --no-alt-screen) else (echo ARGS=%* & echo TUIC_SESSION=%TUIC_SESSION% & set /p HOLD=)",
         );
+        // Launch instructions off: this test pins the argv around the screen flag.
+        let config_root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _config = crate::config::set_config_dir_override(config_root.path().join("config"));
+        crate::config::save_agents_config(
+            crate::config::AgentsConfig::default(),
+            crate::config::AgentsConfig {
+                launch_instructions: Some(String::new()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
         let body: SpawnAgentRequest = serde_json::from_value(serde_json::json!({
             "rows": 24,
