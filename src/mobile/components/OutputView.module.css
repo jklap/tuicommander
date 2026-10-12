@@ -3,6 +3,8 @@
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
+  /* Following and history prepends manage their own viewport position. */
+  overflow-anchor: none;
   -webkit-overflow-scrolling: touch;
   touch-action: pan-y;
   background: var(--bg-primary);

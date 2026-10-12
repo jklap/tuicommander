@@ -6,6 +6,7 @@ import { appLogger } from "../../../stores/appLogger";
 import { toastsStore } from "../../../stores/toasts";
 import type { EgoCliError, EgoCredential, EgoProviders } from "../../../types/ego";
 import { asEgoCliError } from "../../../types/ego";
+import { Select } from "../../ui/Select";
 import s from "../Settings.module.css";
 import { EgoPerimeterSection } from "./EgoPerimeterSection";
 
@@ -170,7 +171,7 @@ export const AiChatTab: Component<{
 						{(loaded) => (
 							<div class={s.group}>
 								<label>{t("providers.label.defaultModel", "Default model")}</label>
-								<select
+								<Select
 									disabled={busy()}
 									value={loaded().defaultModel ?? ""}
 									onChange={(event) => choose(event.currentTarget.value)}
@@ -194,7 +195,7 @@ export const AiChatTab: Component<{
 											</optgroup>
 										)}
 									</For>
-								</select>
+								</Select>
 							</div>
 						)}
 					</Match>

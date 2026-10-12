@@ -8,6 +8,8 @@ import {
 } from "../../stores/appLogger";
 import { errorLogStore } from "../../stores/errorLog";
 import { writeClipboard } from "../../utils/clipboard";
+import { Input } from "../ui/Input";
+import { Select } from "../ui/Select";
 import s from "./ErrorLogPanel.module.css";
 
 /** Audience tabs. "User" (default) hides app-internal telemetry so it can't bury
@@ -234,15 +236,15 @@ export const ErrorLogPanel: Component = () => {
 							</For>
 						</div>
 
-						<select
+						<Select
 							class={s.sourceSelect}
 							value={sourceFilter()}
 							onChange={(e) => setSourceFilter(e.currentTarget.value as AppLogSource | "all")}
 						>
 							<For each={SOURCE_OPTIONS}>{(opt) => <option value={opt.value}>{opt.label}</option>}</For>
-						</select>
+						</Select>
 
-						<input
+						<Input
 							ref={searchRef}
 							class={s.searchInput}
 							type="text"

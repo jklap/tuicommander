@@ -8,7 +8,7 @@ RELEASE_URL="$API_URL/releases"
 
 OSX_HOME="${TUICOMMANDER_HOME:-/Applications}"
 
-if [ $# -gt 0 ] && [ "$1" == "-h" ] || [ "$1" == "--help" ]; then
+if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
     echo "usage: $0 [version]"
     exit 1
 fi
@@ -32,8 +32,11 @@ install_macos() {
     APP_HOME="$OSX_HOME/TUICommander.app"
   else
     # might not be in the usual place, but if the user has set up tuic we can find it from that
-    if [ -e $(command -v tuic) ]; then
-      local TUIC=$(readlink $(command -v tuic))
+    local TUIC_BIN
+    TUIC_BIN=$(command -v tuic || true)
+    if [ -n "$TUIC_BIN" ] && [ -L "$TUIC_BIN" ]; then
+      local TUIC
+      TUIC=$(readlink "$TUIC_BIN")
       APP_HOME="${TUIC%/Contents/MacOS/tuic}"
       OSX_HOME="${APP_HOME%/TUICommander.app}"
     fi
@@ -52,53 +55,53 @@ install_macos() {
   fi
 
   if [ -n "$APP_VER" ] && [ -z "$WANTED_VER" ]; then
-    # determine if the current installed version is a nightly as
-    # that has a slightly different version checking approach
-    echo "$APP_VER" | grep -q "nightly"
-    if [ $? -eq 0 ]; then
-      echo "Found current version to be a nightly version"
-      WANTED_VER="nightly"
-    fi
+    # An installed prerelease stays on its channel when no version is given.
+    case "$APP_VER" in
+      *-nightly*) WANTED_VER="nightly" ;;
+      *-beta.*) WANTED_VER="beta" ;;
+    esac
   fi
 
   # get the latest version from GitHub
   local LATEST_VER="unknown"
-  if [ "$WANTED_VER" == "nightly" ]; then
+  if [ "$WANTED_VER" = "nightly" ] || [ "$WANTED_VER" = "beta" ]; then
+    local CHANNEL="$WANTED_VER"
     # fetch the latest json for nightly so we can find the version string there
     # "version": "1.3.0-nightly.20260603.t2025",
     LATEST_VER=$(curl -sS --fail-with-body -L \
-        "https://github.com/${REPO}/releases/download/nightly/latest.json" \
-        | grep '"version"' \
-        | sed 's/^.*": "\([^"]*\)",$/\1/')
+        "https://github.com/${REPO}/releases/download/${CHANNEL}/latest.json" \
+        | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^" ]*\)".*/\1/p')
     if [ $? -ne 0 ]; then
-      echo "Unable to get the latest nightly version from GitHub"
+      echo "Unable to get the latest $CHANNEL version from GitHub"
       exit 1
     fi
-    echo "Found $LATEST_VER as latest nightly"
+    echo "Found $LATEST_VER as latest $CHANNEL"
 
     # nightly ver numbers can be slightly different between the actual app version found in Info.plist and the version found in latest.json
     # so we strip off the tail end of the version strings -- as nightly is supposed to be once a day, we should be ok
-    LATEST_VER="${LATEST_VER%.t*}"
-    APP_VER="${APP_VER%.t*}"
+    if [ "$CHANNEL" = "nightly" ]; then
+      LATEST_VER="${LATEST_VER%.t*}"
+      APP_VER="${APP_VER%.t*}"
+    else
+      # The rolling beta feed hosts only the manifest; installers are immutable.
+      WANTED_VER="v${LATEST_VER}"
+    fi
   elif [ -n "$WANTED_VER" ]; then
     # no need to check GitHub, the user specified the version they want
-    LATEST_VER="v${WANTED_VER}"
-    APP_VER="v${APP_VER}"
+    LATEST_VER="${WANTED_VER#v}"
+    WANTED_VER="v${LATEST_VER}"
   else
     # v1.3.0 -> 1.3.0
     LATEST_VER=$(curl -sS --fail-with-body -L \
         -H "Accept: application/vnd.github+json" \
         -H "X-GitHub-Api-Version: 2022-11-28" \
         "$RELEASE_URL/latest" \
-        | grep "tag_name" \
-        | sed 's/^.*": "v\([^"]*\)",$/\1/')
+        | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"v\([^" ]*\)".*/\1/p')
     if [ $? -ne 0 ]; then
       echo "Unable to get the latest version from GitHub"
       exit 1
     fi
     echo "Found ${LATEST_VER} as latest release version"
-    LATEST_VER="v${LATEST_VER}"
-    APP_VER="v${APP_VER}"
     WANTED_VER="v${LATEST_VER}"
   fi
 
@@ -107,7 +110,7 @@ install_macos() {
     exit 1
   fi
 
-  if [ "$LATEST_VER" == "$APP_VER" ]; then
+  if [ "$LATEST_VER" = "$APP_VER" ]; then
     echo "No need to update"
     exit 0
   fi

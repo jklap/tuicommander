@@ -223,6 +223,19 @@ export async function verifyAndBuildResumeCommand(
 	agentSessionId?: string | null,
 	launchCommand?: string | null,
 ): Promise<string | null> {
+	return (await resolveAgentResume(agentType, cwd, tuicSession, agentSessionId, launchCommand)).cmd;
+}
+
+/** The resume command plus whether the agent's own storage confirmed the session id.
+ *  `verified` is false for the static fallback (`--continue`), which resumes whatever
+ *  the agent considers latest and so must not be typed without the user's click. */
+export async function resolveAgentResume(
+	agentType: AgentType,
+	cwd: string | null,
+	tuicSession?: string | null,
+	agentSessionId?: string | null,
+	launchCommand?: string | null,
+): Promise<{ cmd: string | null; verified: boolean }> {
 	const disc = AGENTS[agentType].sessionDiscovery;
 
 	const sessionId = disc ? agentSessionId : (tuicSession ?? agentSessionId);
@@ -232,32 +245,34 @@ export async function verifyAndBuildResumeCommand(
 	await ensureAgentConfigsForRepo(cwd);
 
 	if (sessionId && cwd && disc) {
+		let exists: boolean | null = null;
 		try {
 			// At restore time the agent process has exited, so agentPid is null.
 			// Preserve profile-root overrides such as CODEX_HOME.
-			const exists = await rpc<boolean>("verify_agent_session", {
+			exists = await rpc<boolean>("verify_agent_session", {
 				agentType,
 				sessionId,
 				cwd,
 				agentPid: null,
 				envOverrides: resolveLaunchEnv(agentType, launchCommand, cwd),
 			});
-			if (exists) {
-				const cmd = disc.resumeWithId(sessionId);
-				return prepareAgentLaunchCommand(
-					applyDefaultRunConfig(agentType, cmd, launchCommand, cwd),
-					null,
-					agentType,
-					cwd,
-				);
-			}
-			return null;
 		} catch {
 			// verify_agent_session unavailable (browser mode) — fall through
+		}
+		if (exists !== null) {
+			if (!exists) return { cmd: null, verified: false };
+			const cmd = disc.resumeWithId(sessionId);
+			const prepared = await prepareAgentLaunchCommand(
+				applyDefaultRunConfig(agentType, cmd, launchCommand, cwd),
+				null,
+				agentType,
+				cwd,
+			);
+			return { cmd: prepared, verified: true };
 		}
 	}
 
 	// No verified session — fall back to static resumeCommand
 	const resumed = buildResumeCommand(agentType, agentSessionId, launchCommand, cwd);
-	return resumed ? prepareAgentLaunchCommand(resumed, null, agentType, cwd) : null;
+	return { cmd: resumed ? await prepareAgentLaunchCommand(resumed, null, agentType, cwd) : null, verified: false };
 }

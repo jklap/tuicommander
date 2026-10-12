@@ -9,6 +9,8 @@ import { formatRelativeTime } from "../../utils/time";
 import p from "../shared/panel.module.css";
 import { PanelResizeHandle } from "../ui/PanelResizeHandle";
 import { PanelWindowControls } from "../ui/PanelWindowControls";
+import { Select } from "../ui/Select";
+import { Textarea } from "../ui/Textarea";
 import s from "./IdeasPanel.module.css";
 
 export interface IdeasPanelProps {
@@ -248,7 +250,7 @@ export const IdeasPanel: Component<IdeasPanelProps> = (props) => {
 											</button>
 										}
 									>
-										<select
+										<Select
 											class={s.reassignSelect}
 											value={idea.repoPath ?? "__global__"}
 											onChange={(e) => handleReassign(idea.id, e.currentTarget.value)}
@@ -257,7 +259,7 @@ export const IdeasPanel: Component<IdeasPanelProps> = (props) => {
 										>
 											<option value="__global__">Global</option>
 											<For each={repoOptions()}>{(repo) => <option value={repo.path}>{repo.displayName}</option>}</For>
-										</select>
+										</Select>
 									</Show>
 								</div>
 							</div>
@@ -323,7 +325,7 @@ export const IdeasPanel: Component<IdeasPanelProps> = (props) => {
 						</For>
 					</div>
 				</Show>
-				<textarea
+				<Textarea
 					ref={textareaRef}
 					data-focus-target="notes"
 					class={s.input}

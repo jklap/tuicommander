@@ -2,6 +2,7 @@ import { type Component, createSignal, For, onCleanup, onMount, Show } from "sol
 import { t } from "../../../i18n";
 import { invoke } from "../../../invoke";
 import { HttpRpcError } from "../../../transport";
+import { Input } from "../../ui/Input";
 import { SettingToggle } from "../SettingFields";
 import s from "../Settings.module.css";
 import telegram from "./TelegramTab.module.css";
@@ -98,7 +99,7 @@ export const TelegramTab: Component = () => {
 						<div class={s.group}>
 							<label for="telegram-token">{t("telegram.token", "Bot token")}</label>
 							<p class={s.hint}>{data().token_set ? "Token set — enter a replacement" : "Token not set"}</p>
-							<input
+							<Input
 								id="telegram-token"
 								class={s.input}
 								type="password"
@@ -121,7 +122,7 @@ export const TelegramTab: Component = () => {
 						</div>
 						<div class={s.group}>
 							<label for="telegram-chat">{t("telegram.chat", "Authorized chats")}</label>
-							<input
+							<Input
 								id="telegram-chat"
 								class={s.input}
 								inputmode="numeric"

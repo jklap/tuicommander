@@ -70,6 +70,8 @@ use super::mcp_transport_catalogue::NATIVE_TOOL_SUMMARIES;
 #[cfg(test)]
 use super::mcp_transport_catalogue::REPO_ACTIONS;
 #[cfg(test)]
+use super::mcp_transport_catalogue::RepoSummary;
+#[cfg(test)]
 use super::mcp_transport_catalogue::SESSION_ACTIONS;
 #[cfg(test)]
 use super::mcp_transport_catalogue::TASK_ACTIONS;
@@ -79,6 +81,7 @@ use super::mcp_transport_catalogue::UI_ACTIONS;
 use super::mcp_transport_catalogue::VOICE_ACTIONS;
 use super::mcp_transport_catalogue::build_mcp_instructions;
 use super::mcp_transport_catalogue::build_mcp_instructions_for_mode;
+use super::mcp_transport_catalogue::build_mcp_instructions_for_session;
 #[cfg(test)]
 use super::mcp_transport_catalogue::filtered_native_tools;
 use super::mcp_transport_catalogue::handle_call_tool;
@@ -101,6 +104,10 @@ use super::mcp_transport_catalogue::resolve_allowed_upstreams;
 #[cfg(test)]
 use super::mcp_transport_catalogue::searchable_tool_definitions;
 pub(crate) use super::mcp_transport_catalogue::spawn_tool_search_index_updater;
+#[cfg(test)]
+use super::mcp_transport_catalogue::summarize_repos;
+#[cfg(test)]
+use super::mcp_transport_catalogue::tag_repo_connection;
 #[cfg(test)]
 use super::mcp_transport_catalogue::validate_mcp_repo_path;
 #[cfg(test)]
@@ -939,8 +946,12 @@ pub(super) async fn mcp_post(
             let protocol_version =
                 negotiate_protocol_version(body["params"]["protocolVersion"].as_str());
             let effective_collapse = state.config.read().collapse_tools || requires_meta_tools;
-            let instructions =
-                build_mcp_instructions_for_mode(&state, client_name, effective_collapse);
+            let instructions = build_mcp_instructions_for_session(
+                &state,
+                client_name,
+                effective_collapse,
+                Some(&session_id),
+            );
 
             crate::prompt_receipt::record_mcp_instructions(&state, &session_id, &instructions);
             let response = serde_json::json!({

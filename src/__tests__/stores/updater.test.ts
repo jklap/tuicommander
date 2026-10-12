@@ -34,10 +34,20 @@ vi.mock("../../transport", () => ({
 }));
 
 // Mock settings store — default to "stable" channel
-const mockSettingsState = { updateChannel: "stable" as string };
+const mockSettingsState = { updateChannel: "stable" as string, deferUpdateRelaunch: true };
+// Terminal sessions as the updater sees them: id -> debounced busy / awaiting-input flags
+const mockTerminals = new Map<string, { busy: boolean; awaitingInput: "question" | "error" | null }>();
 let mockAppVersion = "0.0.1";
 vi.mock("../../stores/settings", () => ({
 	settingsStore: { state: mockSettingsState },
+}));
+
+vi.mock("../../stores/terminals", () => ({
+	terminalsStore: {
+		getIds: () => [...mockTerminals.keys()],
+		isBusy: (id: string) => mockTerminals.get(id)?.busy ?? false,
+		get: (id: string) => mockTerminals.get(id),
+	},
 }));
 
 describe("updaterStore", () => {
@@ -52,6 +62,9 @@ describe("updaterStore", () => {
 		mockRelaunch.mockReset().mockResolvedValue(undefined);
 		mockRpc.mockReset().mockResolvedValue(undefined);
 		mockSettingsState.updateChannel = "stable";
+		mockSettingsState.deferUpdateRelaunch = true;
+		mockTerminals.clear();
+		localStorage.clear();
 		mockAppVersion = "0.0.1";
 		pendingPromises.length = 0;
 
@@ -61,6 +74,14 @@ describe("updaterStore", () => {
 		vi.doMock("../../transport", () => ({ isTauri: () => true, rpc: mockRpc }));
 		vi.doMock("../../stores/settings", () => ({
 			settingsStore: { state: mockSettingsState },
+		}));
+
+		vi.doMock("../../stores/terminals", () => ({
+			terminalsStore: {
+				getIds: () => [...mockTerminals.keys()],
+				isBusy: (id: string) => mockTerminals.get(id)?.busy ?? false,
+				get: (id: string) => mockTerminals.get(id),
+			},
 		}));
 
 		store = (await import("../../stores/updater")).updaterStore;
@@ -232,6 +253,79 @@ describe("updaterStore", () => {
 				await store.checkForUpdate(); // should no-op
 				expect(mockCheck).toHaveBeenCalledTimes(1);
 			});
+		});
+	});
+
+	describe("checkForUpdate() — beta channel", () => {
+		// Catches: beta checks stable only, or lower stable hides the next beta.
+		it("offers beta.2 over a lower stable release to a beta-channel user", async () => {
+			mockSettingsState.updateChannel = "beta";
+			mockAppVersion = "1.7.4";
+			mockCheck.mockResolvedValue({ version: "1.7.6", downloadAndInstall: vi.fn() });
+			mockRpc.mockResolvedValue({
+				available: true,
+				version: "2.0.0-beta.2",
+				notes: "Beta notes",
+				release_page: "https://github.com/sstraus/tuicommander/releases/tag/v2.0.0-beta.2",
+				not_found: false,
+			});
+			await store.checkForUpdate();
+			expect(store.state.version).toBe("2.0.0-beta.2");
+			expect(store.state.downloadUrl).toBe("https://github.com/sstraus/tuicommander/releases/tag/v2.0.0-beta.2");
+		});
+
+		// Catches: suffix stripping suppresses beta.1 -> beta.2 on the actual beta feed.
+		it("offers the next beta when already running a beta", async () => {
+			mockSettingsState.updateChannel = "beta";
+			mockAppVersion = "2.0.0-beta.1";
+			mockCheck.mockResolvedValue(null);
+			mockRpc.mockResolvedValue({
+				available: true,
+				version: "2.0.0-beta.2",
+				notes: "Next beta",
+				release_page: "https://github.com/sstraus/tuicommander/releases/tag/v2.0.0-beta.2",
+				not_found: false,
+			});
+			await store.checkForUpdate();
+			expect(store.state.available).toBe(true);
+			expect(store.state.version).toBe("2.0.0-beta.2");
+		});
+
+		// Catches: the beta feed traps testers on a prerelease after the final ships.
+		it("installs the final release in-app even while the beta feed remains published", async () => {
+			mockSettingsState.updateChannel = "beta";
+			mockAppVersion = "2.0.0-beta.2";
+			const install = vi.fn().mockResolvedValue(undefined);
+			mockCheck.mockResolvedValue({ version: "2.0.0", downloadAndInstall: install });
+			mockRpc.mockResolvedValue({ available: true, version: "2.0.0-beta.2", not_found: false });
+			await store.checkForUpdate();
+			expect(store.state.version).toBe("2.0.0");
+			expect(store.state.downloadUrl).toBeNull();
+			await store.downloadAndInstall();
+			expect(install).toHaveBeenCalledOnce();
+			expect(mockRelaunch).toHaveBeenCalledOnce();
+		});
+
+		// Catches: opting into beta globally changes the endpoint for stable users.
+		it("keeps stable users on stable when a beta feed exists", async () => {
+			mockSettingsState.updateChannel = "stable";
+			mockAppVersion = "1.7.6";
+			mockCheck.mockResolvedValue(null);
+			mockRpc.mockResolvedValue({ available: true, version: "2.0.0-beta.2", not_found: false });
+			await store.checkForUpdate();
+			expect(store.state.available).toBe(false);
+			expect(mockRpc).not.toHaveBeenCalled();
+		});
+
+		// Catches: the first beta's absent feed hides a final stable update.
+		it("offers stable when the beta feed is missing", async () => {
+			mockSettingsState.updateChannel = "beta";
+			mockAppVersion = "2.0.0-beta.1";
+			mockCheck.mockResolvedValue({ version: "2.0.0", downloadAndInstall: vi.fn() });
+			mockRpc.mockResolvedValue({ available: false, version: null, not_found: true });
+			await store.checkForUpdate();
+			expect(store.state.version).toBe("2.0.0");
+			expect(store.state.noRelease).toBe(false);
 		});
 	});
 
@@ -574,6 +668,116 @@ describe("updaterStore", () => {
 				store.dismiss();
 				await store.downloadAndInstall();
 				expect(fakeUpdate.downloadAndInstall).not.toHaveBeenCalled();
+			});
+		});
+	});
+
+	describe("relaunch deferral", () => {
+		const installedUpdate = () => ({
+			version: "1.0.0",
+			body: null,
+			downloadAndInstall: vi.fn().mockResolvedValue(undefined),
+		});
+
+		async function install(): Promise<void> {
+			mockCheck.mockResolvedValue(installedUpdate());
+			await store.checkForUpdate();
+			await store.downloadAndInstall();
+		}
+
+		it("does not relaunch while a session is busy and reports how many", async () => {
+			mockTerminals.set("a", { busy: true, awaitingInput: null });
+			mockTerminals.set("b", { busy: false, awaitingInput: null });
+			await testInScopeAsync(async () => {
+				await install();
+				expect(mockRelaunch).not.toHaveBeenCalled();
+				expect(store.state.restartPending).toBe(true);
+				expect(store.state.downloading).toBe(false);
+				expect(store.busyCount()).toBe(1);
+			});
+		});
+
+		it("counts a session awaiting input as busy", async () => {
+			mockTerminals.set("a", { busy: false, awaitingInput: "question" });
+			await testInScopeAsync(async () => {
+				await install();
+				expect(mockRelaunch).not.toHaveBeenCalled();
+				expect(store.busyCount()).toBe(1);
+			});
+		});
+
+		it("relaunches once the last busy session goes idle", async () => {
+			mockTerminals.set("a", { busy: true, awaitingInput: null });
+			mockTerminals.set("b", { busy: true, awaitingInput: null });
+			await testInScopeAsync(async () => {
+				await install();
+				mockTerminals.get("a")!.busy = false;
+				await vi.advanceTimersByTimeAsync(10_000);
+				expect(mockRelaunch).not.toHaveBeenCalled();
+				mockTerminals.get("b")!.busy = false;
+				await vi.advanceTimersByTimeAsync(10_000);
+				expect(mockRelaunch).toHaveBeenCalledTimes(1);
+			});
+		});
+
+		it("relaunches immediately when the deferral setting is off", async () => {
+			mockSettingsState.deferUpdateRelaunch = false;
+			mockTerminals.set("a", { busy: true, awaitingInput: null });
+			await testInScopeAsync(async () => {
+				await install();
+				expect(mockRelaunch).toHaveBeenCalledTimes(1);
+				expect(store.state.restartPending).toBe(false);
+			});
+		});
+
+		it("relaunches immediately when no session is busy", async () => {
+			mockTerminals.set("a", { busy: false, awaitingInput: null });
+			await testInScopeAsync(async () => {
+				await install();
+				expect(mockRelaunch).toHaveBeenCalledTimes(1);
+			});
+		});
+
+		it("restartNow() relaunches despite busy sessions and stops the idle watcher", async () => {
+			mockTerminals.set("a", { busy: true, awaitingInput: null });
+			await testInScopeAsync(async () => {
+				await install();
+				await store.restartNow();
+				expect(mockRelaunch).toHaveBeenCalledTimes(1);
+				mockTerminals.get("a")!.busy = false;
+				await vi.advanceTimersByTimeAsync(10_000);
+				expect(mockRelaunch).toHaveBeenCalledTimes(1);
+			});
+		});
+
+		// Catches: no marker at relaunch, so the next boot cannot tell an update restart
+		// from an ordinary one and eager resume never fires.
+		it("marks the restart as caused by an update before relaunching", async () => {
+			let markerAtRelaunch: string | null = null;
+			mockRelaunch.mockImplementation(async () => {
+				markerAtRelaunch = localStorage.getItem("tuic.updateRestartAt");
+			});
+			await testInScopeAsync(async () => {
+				await install();
+				expect(markerAtRelaunch).not.toBeNull();
+			});
+		});
+
+		// Catches: a stale marker after a failed relaunch arming a later manual restart.
+		it("clears the update marker when the relaunch fails", async () => {
+			mockRelaunch.mockRejectedValue(new Error("relaunch denied"));
+			await testInScopeAsync(async () => {
+				await install();
+				expect(localStorage.getItem("tuic.updateRestartAt")).toBeNull();
+			});
+		});
+
+		it("surfaces a failed relaunch instead of swallowing it", async () => {
+			mockRelaunch.mockRejectedValue(new Error("relaunch denied"));
+			await testInScopeAsync(async () => {
+				await install();
+				expect(store.state.error).toBe("relaunch denied");
+				expect(store.state.downloading).toBe(false);
 			});
 		});
 	});

@@ -4,6 +4,7 @@ import { chatErrorView } from "../../components/AIChatPanel/chatError";
 import { Interactions } from "../../components/AIChatPanel/Interactions";
 import { Transcript } from "../../components/AIChatPanel/Transcript";
 import { createAcpChat } from "../../components/AIChatPanel/useAcpChat";
+import { Select } from "../../components/ui/Select";
 import { acpTranscript } from "../../stores/acpTranscript";
 import { settingsStore } from "../../stores/settings";
 import type { AcpHostRequestId } from "../../types/acp";
@@ -135,7 +136,7 @@ export function MobileChatScreen(props: { onOpenFile?: (candidate: string, cwd: 
 				<div class={styles.controls}>
 					<label>
 						Conversation
-						<select
+						<Select
 							aria-label="Conversation"
 							value={chat.sessionId() ?? ""}
 							onChange={(event) => void chat.selectSession(event.currentTarget.value)}
@@ -147,7 +148,7 @@ export function MobileChatScreen(props: { onOpenFile?: (candidate: string, cwd: 
 									</option>
 								)}
 							</For>
-						</select>
+						</Select>
 					</label>
 					<button type="button" onClick={() => void chat.startSession()}>
 						New

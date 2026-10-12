@@ -3949,7 +3949,7 @@ pub(crate) fn spawn_reader_thread(
                 if let Some(target) = take_pending_scroll(&ticker_state, &ticker_sid)
                     && let Some(vt) = ticker_state.grid.vt_log_buffers.get(&ticker_sid)
                 {
-                    vt.lock().grid_scroll_to_offset(target);
+                    apply_scroll_target(&mut vt.lock(), target);
                 }
                 dirty_run = 0;
                 continue;
@@ -4076,7 +4076,7 @@ pub(crate) fn spawn_reader_thread(
             if let Some(vt) = ticker_state.grid.vt_log_buffers.get(&ticker_sid) {
                 let mut g = vt.lock();
                 if let Some(target) = take_pending_scroll(&ticker_state, &ticker_sid) {
-                    g.grid_scroll_to_offset(target);
+                    apply_scroll_target(&mut g, target);
                 }
                 // Cut before the delta, from the same locked state, so the rows the
                 // delta carries are already in it.
@@ -4361,13 +4361,35 @@ pub struct VtLogChunk {
 /// as an HTTP route) without taking the vt lock, and the frame ticker is the only
 /// reader — so the swap here is what makes "latest wins" true: whatever arrived
 /// since the last tick is applied once, and `-1` means nothing is pending.
-fn take_pending_scroll(state: &AppState, session_id: &str) -> Option<usize> {
+/// Nonnegative values are display offsets; <= -2 encodes an all-time row anchor.
+fn take_pending_scroll(state: &AppState, session_id: &str) -> Option<i64> {
     let target = state
         .grid
         .pending_scroll
         .get(session_id)?
         .swap(-1, Ordering::Relaxed);
-    (target >= 0).then_some(target as usize)
+    (target != -1).then_some(target)
+}
+
+/// Enqueue an anchored target in the same latest-wins slot as offset requests.
+/// -1 is empty, nonnegative values are offsets, <= -2 encode all-time anchors.
+/// None follows the tail. Saturation keeps untrusted usize values in range.
+pub(crate) fn queue_scroll_anchor(state: &AppState, session_id: &str, anchor: Option<usize>) {
+    let target = anchor.map_or(0, |row| -2 - row.min((i64::MAX - 1) as usize) as i64);
+    if let Some(pending) = state.grid.pending_scroll.get(session_id) {
+        pending.store(target, Ordering::Relaxed);
+    }
+    if let Some(dirty) = state.grid.frame_dirty.get(session_id) {
+        dirty.store(true, Ordering::Relaxed);
+    }
+}
+
+fn apply_scroll_target(vt: &mut crate::state::VtLogBuffer, target: i64) {
+    if target <= -2 {
+        vt.grid_scroll_to_anchor(Some((-2 - target) as usize));
+    } else {
+        vt.grid_scroll_to_offset(target as usize);
+    }
 }
 
 /// Is anyone waiting for this session's grid frames?
