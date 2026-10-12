@@ -957,6 +957,11 @@ pub(super) struct TerminalScrollToRequest {
 }
 
 #[derive(Deserialize)]
+pub(super) struct TerminalScrollToAnchorRequest {
+    pub anchor: Option<usize>,
+}
+
+#[derive(Deserialize)]
 pub(super) struct TerminalScrollToOffsetRequest {
     pub offset: usize,
 }

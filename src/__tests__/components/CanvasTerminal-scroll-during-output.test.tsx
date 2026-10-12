@@ -36,6 +36,9 @@ vi.mock("../../components/Terminal/gridRenderer", () => ({
 }));
 
 import CanvasTerminal from "../../components/Terminal/CanvasTerminal";
+import { terminalsStore } from "../../stores/terminals";
+
+const frameOrigins: Array<{ afterCalls: number; origin: number }> = [];
 
 const ROWS = 4;
 const COLS = 8;
@@ -51,6 +54,7 @@ function fullFrame(opts: {
 }): ArrayBuffer {
 	const historyBase = opts.historyBase ?? 0;
 	const top = historyBase + opts.historySize - opts.displayOffset;
+	frameOrigins.push({ afterCalls: invoke.mock.calls.length, origin: historyBase + opts.historySize });
 	const buffer = new ArrayBuffer(HEADER_SIZE + ROWS * (4 + COLS * CELL_SIZE));
 	const view = new DataView(buffer);
 	view.setUint16(0, ROWS, true);
@@ -168,9 +172,11 @@ function expectEveryPaintIsARunOf(truth: string[]) {
 }
 
 function sentOffsets(): number[] {
-	return invoke.mock.calls
-		.filter(([cmd]) => cmd === "terminal_scroll_to_offset")
-		.map(([, args]) => (args as { offset: number }).offset);
+	return invoke.mock.calls.flatMap(([cmd, args], index) => {
+		if (cmd !== "terminal_scroll_to_anchor") return [];
+		const origin = frameOrigins.findLast((frame) => frame.afterCalls <= index)?.origin ?? 0;
+		return [args.anchor == null ? 0 : origin - args.anchor];
+	});
 }
 
 function wheel(target: Element, deltaY: number) {
@@ -180,6 +186,7 @@ function wheel(target: Element, deltaY: number) {
 describe("CanvasTerminal scroll gesture during output", () => {
 	beforeEach(() => {
 		invoke.mockClear();
+		frameOrigins.length = 0;
 		frameSink.current = null;
 		Object.defineProperty(document, "fonts", {
 			configurable: true,
@@ -210,6 +217,47 @@ describe("CanvasTerminal scroll gesture during output", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
 		vi.unstubAllGlobals();
+	});
+
+	// Catches: delayed offset application plus the timed settle handoff skips history rows.
+	it("delayed scroll application never hands off to newer rows under sustained output", async () => {
+		layOutPane();
+		let history = 100;
+		let output = true;
+		invoke.mockImplementation(async (cmd: string, args: Record<string, number>) => {
+			if (cmd === "terminal_styled_rows")
+				return styledRange(args.start, args.count, history + ROWS, history, (abs) => `L${abs}`);
+			if (cmd === "terminal_scroll_to_offset" || cmd === "terminal_scroll_to_anchor") {
+				if (output) history += 5; // PTY output wins the lock before this request applies.
+				const offset = cmd === "terminal_scroll_to_anchor" ? history - args.anchor : args.offset;
+				frameSink.current?.(fullFrame({ historySize: history, displayOffset: offset }));
+			}
+		});
+		const terminalId = terminalsStore.add({
+			name: "scroll",
+			sessionId: "delayed-scroll",
+			fontSize: 14,
+			cwd: "/",
+			awaitingInput: null,
+		});
+		const view = render(() => <CanvasTerminal sessionId="delayed-scroll" terminalId={terminalId} />);
+		try {
+			await waitFor(() => expect(frameSink.current).not.toBeNull());
+			frameSink.current?.(fullFrame({ historySize: history, displayOffset: 20 }));
+			const canvas = view.container.querySelector('canvas[tabindex="0"]');
+			if (!canvas) throw new Error("terminal canvas not mounted");
+			wheel(canvas, -20);
+			await waitFor(() => expect(history).toBeGreaterThan(100));
+			// Exercise gesture end and the former 400 ms escape hatch.
+			await new Promise((resolve) => setTimeout(resolve, 700));
+			const top = paintedLines()[0];
+			expect(top).toMatch(/^L\d+$/);
+			expect(Number(top.slice(1))).toBeLessThanOrEqual(80);
+		} finally {
+			output = false;
+			view.unmount();
+			invoke.mockReset().mockResolvedValue(undefined);
+		}
 	});
 
 	// catches: the gesture keeps its distance-from-bottom while the grid pushes

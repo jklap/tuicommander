@@ -5149,3 +5149,5 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 ## Compact mobile attachment (1719-ff5d)
 
 - [ ] On iPhone, tap the attachment icon left of the session composer, choose a photo/file, confirm upload status then its path in the draft, and confirm Queue stays disabled during upload. Smaller mic and Send controls remain inside the right input border.
+
+- [ ] [VISUAL] #1264-89c8: after a manual Rust restart, scroll up gently during sustained agent output, stop the gesture, then use scrollbar drag and return to the bottom. Verify no forward jump or gap, including capped history. Rust does not hot-reload; restart only when ready to lose the current session.

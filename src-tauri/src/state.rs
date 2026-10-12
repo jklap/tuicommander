@@ -1879,7 +1879,7 @@ pub(crate) struct GridState {
     /// so an idle tick only takes the vt lock for sessions that can actually have
     /// a stalled update to flush.
     pub(crate) sync_update_active: DashMap<String, Arc<AtomicBool>>,
-    /// Pending coalesced scroll target (absolute display offset, -1 = none).
+    /// Pending coalesced scroll: >=0 offset, -1 none, <=-2 all-time anchor (-2 - row).
     /// Set by `terminal_scroll_to_offset` without taking the vt lock; applied by the
     /// frame ticker under the lock it already holds, so scroll never blocks on the
     /// PTY output processor.

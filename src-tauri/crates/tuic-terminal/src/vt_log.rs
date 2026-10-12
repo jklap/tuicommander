@@ -595,6 +595,10 @@ impl VtLogBuffer {
         self.grid.scroll_to_offset(offset);
     }
 
+    pub fn grid_scroll_to_anchor(&mut self, anchor: Option<usize>) {
+        self.grid.scroll_to_anchor(anchor);
+    }
+
     pub fn grid_display_offset(&self) -> usize {
         self.grid.display_offset()
     }

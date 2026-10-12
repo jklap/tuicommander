@@ -599,3 +599,7 @@ OSC 0/2 title notifications use the terminal event path (`PtyTitle`), separately
 from parsed lifecycle events. Desktop remote tabs consume parsed events on the
 owning daemon's WebSocket instead of subscribing to local IPC. Identity comes
 from the authoritative backend `agent_type`, not from a title heuristic.
+
+### History-anchored viewport scrolling
+
+Viewport scroll requests do not alter parsed output. History-anchored scrolling resolves the requested all-time row after output processing, under the same VT lock; capped history clamps an evicted anchor to the oldest retained row.

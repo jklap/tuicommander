@@ -377,3 +377,7 @@ Terminal stream reconnect notices use the current terminal name when available a
 ### Open a terminal link in Design Mode
 
 Right-click an HTTP or HTTPS link, including a localhost dev server, then select **Start in Design Mode** and choose **Edge** or **Chrome**. The dedicated browser opens that URL and connects the agent in that terminal, not the focused tab. File and other non-web links retain Open and Copy link only. Browser extension setup is required once per repository profile.
+
+### History-anchored viewport scrolling
+
+Scrolling into history keeps the requested lines in view while an agent writes more output. If the scrollback limit removes those lines, the view stops at the oldest retained line. Scroll to the bottom to follow output again.
