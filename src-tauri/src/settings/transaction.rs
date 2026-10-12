@@ -9,8 +9,6 @@ pub struct Prepared {
     pub reply: CommitReply,
 }
 
-/// Process-private salt prevents offline guesses of secret values from revision tokens.
-/// Tokens deliberately expire on host restart; another process's file writes still conflict.
 /// Key order is not part of a document: a `HashMap` field serializes in a different order on
 /// every call, which would otherwise make two reads of one file carry different revisions.
 fn sorted(value: &Value) -> Value {
@@ -29,6 +27,8 @@ fn sorted(value: &Value) -> Value {
     }
 }
 
+/// Process-private salt prevents offline guesses of secret values from revision tokens.
+/// Tokens deliberately expire on host restart; another process's file writes still conflict.
 pub fn revision(value: &Value) -> Result<String, Failure> {
     static KEY: OnceLock<[u8; 32]> = OnceLock::new();
     let bytes = serde_json::to_vec(&sorted(value)).map_err(|_| Error::new("", "store_failed"))?;

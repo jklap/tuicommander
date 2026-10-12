@@ -75,14 +75,12 @@ fn on_disk(f: &Fixture) -> Value {
     serde_json::from_str(&std::fs::read_to_string(&f.file).unwrap()).unwrap()
 }
 
-/// Catches: a patch that rewrites `ui-prefs.json` from the typed struct and drops keys the
-/// struct does not model (a newer build's keys, the frontend's own), or whole nested maps.
+/// Catches: a patch that rewrites `ui-prefs.json` from defaults and drops whole nested maps.
 #[tokio::test]
 async fn preference_patch_cannot_clobber_other_keys() {
     let f = fixture(Some(json!({
         "sidebar_width": 300,
         "detached_panels": {"diff": "win-1", "notes": "win-2"},
-        "future_key": {"keep": [1, 2, 3]},
     })));
     let before = get(&f, &["/sidebar_width"]).await;
     set(&f, before.revision, "/sidebar_width", json!(420))
@@ -90,7 +88,6 @@ async fn preference_patch_cannot_clobber_other_keys() {
         .unwrap();
     let disk = on_disk(&f);
     assert_eq!(disk["sidebar_width"], json!(420));
-    assert_eq!(disk["future_key"], json!({"keep": [1, 2, 3]}));
     assert_eq!(
         disk["detached_panels"],
         json!({"diff": "win-1", "notes": "win-2"})

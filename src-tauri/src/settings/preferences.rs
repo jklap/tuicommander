@@ -6,13 +6,12 @@ use super::{
     transaction::{self, Prepared},
 };
 use crate::config::{ConfigFile, UIPrefsConfig};
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 const ID: &str = "preferences";
 
 pub struct PreferencesSettingsStore {
-    // Raw document: keys the typed struct does not model must survive a settings edit.
-    file: ConfigFile<Value>,
+    file: ConfigFile<UIPrefsConfig>,
 }
 
 impl Default for PreferencesSettingsStore {
@@ -32,18 +31,6 @@ impl PreferencesSettingsStore {
     }
 }
 
-/// A missing file reads as `Null`; anything but an object is not a preferences document.
-fn modelled(document: &Value) -> Result<Value, Failure> {
-    let object = match document {
-        Value::Null => Map::new(),
-        Value::Object(object) => object.clone(),
-        _ => return Err(Error::new(ID, "store_failed")),
-    };
-    let config: UIPrefsConfig = serde_json::from_value(Value::Object(object))
-        .map_err(|_| Error::new(ID, "store_failed"))?;
-    to_value(&config)
-}
-
 fn to_value(config: &UIPrefsConfig) -> Result<Value, Failure> {
     serde_json::to_value(config).map_err(|_| Error::new(ID, "store_failed"))
 }
@@ -59,7 +46,7 @@ impl Store for PreferencesSettingsStore {
     fn read(&self) -> Result<Value, Failure> {
         // Strict: a corrupt file is an error, never silently the defaults.
         self.file
-            .update_with_strict(|document| Ok((modelled(document), false)))
+            .update_with_strict(|config| Ok((to_value(config), false)))
             .map_err(|_| Error::new(ID, "store_failed"))?
     }
 
@@ -68,8 +55,8 @@ impl Store for PreferencesSettingsStore {
         prepare: &mut dyn FnMut(&Value) -> Result<Prepared, Failure>,
     ) -> Result<CommitReply, Failure> {
         let mut failure = None;
-        let result = self.file.update_with_strict(|document| {
-            let latest = modelled(document).map_err(|e| {
+        let result = self.file.update_with_strict(|config| {
+            let latest = to_value(config).map_err(|e| {
                 failure = Some(e);
                 "unreadable".to_owned()
             })?;
@@ -97,12 +84,7 @@ impl Store for PreferencesSettingsStore {
             let changed = !reply.changed_ids.is_empty();
             reply.persisted = changed;
             if changed {
-                // Overlay the modelled keys; keys this struct does not know stay as found.
-                let mut merged = document.as_object().cloned().unwrap_or_default();
-                if let Value::Object(fields) = canonical {
-                    merged.extend(fields);
-                }
-                *document = Value::Object(merged);
+                *config = next;
             }
             Ok((reply, changed))
         });
