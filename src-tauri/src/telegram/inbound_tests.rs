@@ -55,28 +55,50 @@ async fn empty_bootstrap_persists_zero_without_reentering_discard_mode() {
     assert_eq!(adapter.pending().unwrap().len(), 1);
 }
 
-// Catches: 401/409 cause immediate retry loops instead of stopping the current owner.
+// Catches: 401 causes immediate retry loops instead of stopping the current owner.
 #[tokio::test]
-async fn unauthorized_and_conflict_stop_the_owner_until_restart() {
-    for (status, expected) in [
-        (StatusCode::UNAUTHORIZED, Error::Unauthorized),
-        (StatusCode::CONFLICT, Error::Conflict),
-    ] {
-        let (_dir, paths) = setup();
-        let server = FakeServer::start(vec![
-            updates(vec![]),
-            (status, json!({"description":"synthetic private body"})),
-        ])
-        .await;
-        let mut adapter = Inbound::loopback(paths.clone(), server.address).unwrap();
-        adapter.poll().await.unwrap();
-        assert!(matches!(adapter.poll().await,Err(e) if e==expected));
-        assert!(matches!(adapter.poll().await,Err(e) if e==expected));
-        drop(adapter);
-        let mut adapter = Inbound::loopback(paths, server.address).unwrap();
-        assert!(matches!(adapter.poll().await.unwrap(), Poll::Accepted(0)));
-        assert_eq!(server.requests().len(), 3);
-    }
+async fn unauthorized_stops_the_owner_until_restart() {
+    let (_dir, paths) = setup();
+    let server = FakeServer::start(vec![
+        updates(vec![]),
+        (
+            StatusCode::UNAUTHORIZED,
+            json!({"description":"synthetic private body"}),
+        ),
+    ])
+    .await;
+    let mut adapter = Inbound::loopback(paths.clone(), server.address).unwrap();
+    adapter.poll().await.unwrap();
+    assert!(matches!(adapter.poll().await,Err(e) if e==Error::Unauthorized));
+    assert!(matches!(adapter.poll().await,Err(e) if e==Error::Unauthorized));
+    drop(adapter);
+    let mut adapter = Inbound::loopback(paths, server.address).unwrap();
+    assert!(matches!(adapter.poll().await.unwrap(), Poll::Accepted(0)));
+    assert_eq!(server.requests().len(), 3);
+}
+
+// Catches: a 409 from another getUpdates poller is treated as a permanent stop,
+// so polling never resumes when the other poller goes away (story 1765-2c6a).
+#[tokio::test]
+async fn conflict_backs_off_then_polling_resumes_when_the_other_poller_leaves() {
+    let (_dir, paths) = setup();
+    let server = FakeServer::start(vec![
+        updates(vec![]),
+        (StatusCode::CONFLICT, json!({"description":"other poller"})),
+        updates(vec![text_update(5, 1111111, "after conflict")]),
+    ])
+    .await;
+    let mut adapter = Inbound::loopback(paths, server.address).unwrap();
+    adapter.poll().await.unwrap();
+    assert!(matches!(adapter.poll().await, Ok(Poll::Backoff(_))));
+    assert!(adapter.in_conflict());
+    // Inside the backoff window no request reaches Telegram.
+    assert!(matches!(adapter.poll().await, Ok(Poll::Backoff(_))));
+    assert_eq!(server.requests().len(), 2);
+    tokio::time::sleep(std::time::Duration::from_millis(1400)).await;
+    assert!(matches!(adapter.poll().await, Ok(Poll::Accepted(1))));
+    assert!(!adapter.in_conflict());
+    assert_eq!(adapter.pending().unwrap().len(), 1);
 }
 
 // Catches: retry_after or transport backoff is ignored by callers repeatedly invoking the poll port.

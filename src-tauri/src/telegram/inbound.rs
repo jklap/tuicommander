@@ -17,6 +17,7 @@ pub(crate) struct Inbound<P: MailPort> {
     port: P,
     backoff: Backoff,
     stopped: Option<Error>,
+    conflicted: bool,
 }
 impl<P: MailPort> Inbound<P> {
     pub(crate) fn with_port(paths: Paths, port: P) -> Result<Option<Self>, Error> {
@@ -33,6 +34,7 @@ impl<P: MailPort> Inbound<P> {
             port,
             backoff: Backoff::default(),
             stopped: None,
+            conflicted: false,
         }))
     }
     #[cfg(test)]
@@ -44,6 +46,11 @@ impl<P: MailPort> Inbound<P> {
         let mut inbound = Self::with_port(paths.clone(), port)?.ok_or(Error::Config)?;
         inbound.api = BotApi::loopback(paths, address);
         Ok(inbound)
+    }
+
+    /// True while another process polls the same bot token (HTTP 409).
+    pub(crate) fn in_conflict(&self) -> bool {
+        self.conflicted
     }
 
     /// One bounded poll. Stops last for this owner lifetime; restarting retries.
