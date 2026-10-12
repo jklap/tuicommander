@@ -57,6 +57,8 @@ interface McpToastPayload {
 	message: string | null;
 	level: string;
 	sound: string | null;
+	/** Absent on events from daemons older than the field; treated as normal. */
+	urgency?: string;
 	origin_repo_path?: string;
 	origin_session_id?: string;
 	__tuic_origin?: { connection: string; name?: string };
@@ -564,13 +566,23 @@ export async function initApp(deps: AppInitDeps) {
 	}
 
 	replaceMcpToastListener((event) => {
-		const { title, message, level, sound, origin_repo_path, origin_session_id, __tuic_origin: origin } = event.payload;
+		const {
+			title,
+			message,
+			level,
+			sound,
+			urgency,
+			origin_repo_path,
+			origin_session_id,
+			__tuic_origin: origin,
+		} = event.payload;
 		if (origin && (typeof title !== "string" || (message !== null && typeof message !== "string"))) {
 			appLogger.debug("app", "Discarding malformed mirrored MCP toast");
 			return;
 		}
 		const safeLevel = level === "warn" || level === "error" ? level : "info";
-		// Backend notifications stay in the bell; they never cover the active input.
+		// Backend notifications go to the bell. Only urgency=urgent adds a transient
+		// card; its container sits in the upper half and never covers the active input.
 		// Only a registered repo may scope a bell item.
 		const terminalId = origin_session_id ? terminalsStore.findBySessionId(origin_session_id) : undefined;
 		const repoPath = origin
@@ -599,6 +611,18 @@ export async function initApp(deps: AppInitDeps) {
 			origin_session_id,
 			origin?.connection,
 		);
+		if (noticeId !== -1 && urgency === "urgent")
+			toastsStore.add(
+				visibleTitle,
+				visibleMessage,
+				safeLevel,
+				false,
+				action,
+				undefined,
+				repoPath,
+				origin_session_id,
+				false,
+			);
 		if (noticeId !== -1 && isNotificationSound(sound)) void notificationsStore.play(sound);
 	});
 
