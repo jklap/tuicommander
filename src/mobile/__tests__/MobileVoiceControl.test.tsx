@@ -183,7 +183,8 @@ it("appends interim and final speech without focusing, duplicating hypotheses or
 	fireEvent.input(input, { target: { value: "Review" } });
 	rpc.mockClear();
 	const mic = screen.getByRole("button", { name: "Dictate into draft" });
-	expect(mic.nextElementSibling).toBe(screen.getByRole("button", { name: "Send" }));
+	// Send sits outside the composer box, right after the box that holds the mic.
+	expect(mic.parentElement?.nextElementSibling).toBe(screen.getByRole("button", { name: "Send" }));
 	fireEvent.click(mic);
 	FakeRecognition.latest.result("the diff");
 	expect(input.value).toBe("Review the diff");
