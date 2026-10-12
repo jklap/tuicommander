@@ -1,3 +1,19 @@
+## Design Mode dev-server list collapsed (1727-0338)
+
+- [ ] [VISUAL] In Boss's Edge profile, reload the Design Mode extension and open the side panel with many dev servers. The list is collapsed under "Dev servers (N)" and a new pick card shows without scrolling. Vitest and a real side panel in Chrome for Testing with a stub native host (DOM evidence, no screenshot) cover it.
+
+## Design Mode picks while a comment has focus (1731-3be4)
+
+- [ ] [VISUAL] In Boss's Edge profile, type in a pick card comment, then click more elements on the page. Each new pick appears in the side panel and the comment keeps its text and caret. Vitest and a real side panel in Chrome for Testing with a stub native host cover it.
+
+## Design Mode recipient follows the starter (1734-9785)
+
+- [ ] [VISUAL] In Boss's Edge profile, run Start Design Mode from a session (for example feat-1719). The side panel preselects that session labelled "started Design Mode" and lists other agents under "Other agents". A manual choice holds until the next Start. Vitest and a real side panel in Chrome for Testing with a stub native host cover it.
+
+## Automations worktree cleanup render (1623-8b2a)
+
+- [ ] [VISUAL] On the Mac, in Automations > Runs, open a saved run with a worktree: the cleanup preview renders inside the window, the clean worktree is removed, and the run stays in history. Unsafe worktrees (dirty, unmerged, live session) must refuse. Real Git tests on rb Linux and a Linux Chromium run cover it; Mac rendering is unverified.
+
 ## Default-app launcher reaping (1749-f9a0) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, open a URL and a trusted local file from the desktop. Confirm each opens with its default application, TUIC responds while that application remains open, and no zombie launcher remains under TUIC. Automated Linux tests exercise the actual default-app boundary with a harmless launcher; no Mac browser or live TUIC was touched.
