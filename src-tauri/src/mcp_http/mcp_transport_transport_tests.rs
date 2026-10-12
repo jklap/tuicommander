@@ -163,11 +163,9 @@ async fn current_bridge_tool_error_is_still_a_complete_result() {
     let result = &response["result"];
     assert_eq!(result["resultType"], "complete");
     assert_eq!(result["isError"], true);
-    assert!(
-        result["content"][0]["text"]
-            .as_str()
-            .is_some_and(|text| text.contains("requires non-empty 'query'"))
-    );
+    assert!(result["content"][0]["text"]
+        .as_str()
+        .is_some_and(|text| text.contains("requires non-empty 'query'")));
 }
 
 /// ego's stdio requests carry the revision only in `params._meta`; the
@@ -993,7 +991,7 @@ const TEST_UUID_B: &str = "550e8400-e29b-41d4-a716-446655440a02";
 #[cfg(unix)]
 fn insert_managed_test_session(state: &Arc<AppState>, session_id: &str, cwd: &str) {
     use crate::state::PtySession;
-    use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+    use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 
     let pair = native_pty_system()
         .openpty(PtySize {
@@ -1490,14 +1488,12 @@ async fn session_submit_slash_clear_uses_the_same_receipt_and_fsm() {
     assert_eq!(response["status"], "acknowledged");
     assert_eq!(response["turn_epoch"], 1);
     assert_eq!(bytes.lock().unwrap().as_slice(), b"\x15/clear\r");
-    assert!(
-        !state
-            .session_maps
-            .slash_mode
-            .get(session_id)
-            .unwrap()
-            .load(std::sync::atomic::Ordering::Relaxed)
-    );
+    assert!(!state
+        .session_maps
+        .slash_mode
+        .get(session_id)
+        .unwrap()
+        .load(std::sync::atomic::Ordering::Relaxed));
     assert_eq!(
         state
             .session_maps
@@ -1527,11 +1523,9 @@ async fn session_submit_is_rejected_before_io_for_non_loopback_callers() {
     )
     .await;
 
-    assert!(
-        response["error"]
-            .as_str()
-            .is_some_and(|error| error.contains("restricted to localhost"))
-    );
+    assert!(response["error"]
+        .as_str()
+        .is_some_and(|error| error.contains("restricted to localhost")));
     assert!(state.session_maps.sessions.is_empty());
 }
 
@@ -2168,11 +2162,9 @@ fn task_rejects_an_unknown_id_and_a_bad_action() {
         serde_json::json!({"action": "get"}),
         Some("mcp-a"),
     );
-    assert!(
-        no_id["error"]
-            .as_str()
-            .is_some_and(|e| e.contains("task_id"))
-    );
+    assert!(no_id["error"]
+        .as_str()
+        .is_some_and(|e| e.contains("task_id")));
 
     let bad = task_call(
         &state,
@@ -2769,11 +2761,9 @@ async fn mcp_run_history_matches_owner_event_cursor() {
         &serde_json::json!({"input":{"action":"list_plan_runs","plan_id":foreign.id,"limit":20}}),
         Some("run-mcp"),
     );
-    assert!(
-        result
-            .to_string()
-            .contains("plan does not belong to project")
-    );
+    assert!(result
+        .to_string()
+        .contains("plan does not belong to project"));
 }
 
 #[test]
@@ -3625,7 +3615,7 @@ impl portable_pty::MasterPty for FailingResizeMaster {
 #[tokio::test]
 async fn mcp_session_resize_reports_pty_failure_and_retries() {
     use crate::state::PtySession;
-    use portable_pty::{CommandBuilder, native_pty_system};
+    use portable_pty::{native_pty_system, CommandBuilder};
 
     let state = test_state();
     let pair = native_pty_system()
@@ -3839,7 +3829,10 @@ async fn ui_toast_refuses_an_unknown_urgency_and_emits_nothing() {
         )
         .await;
         let error = r["error"].as_str().expect("error for a bad urgency");
-        assert!(error.contains("normal, urgent"), "allowed values listed: {error}");
+        assert!(
+            error.contains("normal, urgent"),
+            "allowed values listed: {error}"
+        );
         assert_eq!(urgency, None, "a refused toast must not reach the bus");
     }
 }
@@ -4178,9 +4171,9 @@ fn session_output_redacts_a_secret_after_a_resize() {
 /// must survive, while transient per-session state must be reaped.
 #[test]
 fn mark_session_exited_preserves_tombstone_state() {
-    use crate::OutputRingBuffer;
     use crate::state::VtLogBuffer;
-    use std::sync::atomic::{AtomicU8, AtomicU64};
+    use crate::OutputRingBuffer;
+    use std::sync::atomic::{AtomicU64, AtomicU8};
 
     let state = test_state();
     let sid = "mark-exited-test".to_string();
@@ -4800,13 +4793,11 @@ async fn dropping_a_superseded_sse_stream_leaves_its_replacement_alive() {
     // The owner's own teardown still releases everything.
     drop(second);
     assert!(!state.session_maps.messaging_channels.contains_key(&sid));
-    assert!(
-        state
-            .mcp
-            .sessions
-            .get(&sid)
-            .is_some_and(|meta| !meta.has_sse_stream)
-    );
+    assert!(state
+        .mcp
+        .sessions
+        .get(&sid)
+        .is_some_and(|meta| !meta.has_sse_stream));
 }
 
 /// Generations come from one process-wide counter, not from the session.
