@@ -66,7 +66,7 @@
    button beside a select lines up with it. */
 .modelSelect,
 .modelDownload {
-  height: 32px;
+  height: var(--control-height, 36px);
   box-sizing: border-box;
   padding: 0 16px;
   border: 1px solid var(--border);
@@ -237,20 +237,9 @@
   align-items: center;
 }
 
-.correctionAdd input {
-  flex: 1;
-  padding: 6px 8px;
-  background: var(--bg-primary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--fg-primary);
-  font-size: var(--font-sm);
-}
+.correctionAdd input { flex: 1; }
 
-.correctionAdd input:focus {
-  outline: none;
-  border-color: var(--accent);
-}
+
 
 .correctionArrow {
   color: var(--fg-muted);

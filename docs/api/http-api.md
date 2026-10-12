@@ -18,6 +18,8 @@ Slice F exposes `start_graph {target:{type:story|plan,id},expected_revision?,def
 
 The `command` action also accepts `answer_input {attempt_id,answer}` for a paused run. The answer is an idempotent durable event; graph runs resume separately with an explicit activation and resolution. An unanswered input request prevents resume.
 
+A distinct second start on a plan with a running or paused run is refused with `workflow run already active for plan <plan-id>: <active-run-id>`. The store returns the typed `RunStartError::AlreadyActive`; IPC, HTTP and MCP keep their existing string error envelope. The unique index remains the atomic admission boundary. Refusal does not change the active run or its events; a matching graph request ID still returns its existing run.
+
 `start_plan.limits` accepts `maxParallelStories` (default 2 when omitted, range 1–8). `start_attempt` conservatively serializes unknown or overlapping file scopes and refuses dependent stories lacking a current integration receipt at the accepted revision. `execute_check` runs only a check from the pinned story definition in its assigned worktree; `record_integration` verifies a completed non-fast-forward merge and runs the pinned checks again on the canonical result. `recertify_canonical` validates a later clean canonical tip and reruns those checks without claiming a new merge. `assign_worktree`, `record_check`, `record_integration`, and `record_recertification` as nested commands are internal and rejected on this operator API.
 
 ## Workflow definitions
@@ -598,8 +600,9 @@ DELETE /sessions/:id?cleanup_worktree=false
 
 The inspector opens a dedicated Chrome window on the machine running
 TUICommander. It binds to an agent terminal, even when the request comes from
-a browser/PWA client. The page URL is read from the local per-repository
-`dev_server_url` setting; an unset URL opens `about:blank`.
+a browser/PWA client. Optional `url` opens an absolute HTTP(S) address directly,
+including localhost. Without it, start uses dev-server discovery and profile onboarding.
+Optional `browser` selects `chrome` or `edge`. Invalid URLs fail before browser side effects.
 
 ### Start or rebind inspection
 
@@ -607,7 +610,7 @@ a browser/PWA client. The page URL is read from the local per-repository
 POST /design-mode/start
 Content-Type: application/json
 
-{ "sessionId": "<agent session ID>" }
+{ "sessionId": "<agent session ID>", "url": "http://localhost:5173/page", "browser": "chrome" }
 ```
 
 Starting another terminal in the same repository reuses its Chrome window and
@@ -622,6 +625,20 @@ Content-Type: application/json
 
 { "repoPath": "/path/to/repository" }
 ```
+
+### Reload or navigate the reviewed tab
+
+```
+POST /design-mode/reload
+{ "repoPath": "/path/to/repository" }
+
+POST /design-mode/navigate
+{ "repoPath": "/path/to/repository", "url": "http://localhost:5173/page" }
+```
+
+Both need an armed Design Mode and answer `400 {"error": ...}` otherwise. `url` must be
+HTTP(S) on `localhost`, `127.0.0.1` or `[::1]` without credentials. The extension applies
+each request once on its next heartbeat (about 5 s).
 
 ### Read status
 
@@ -845,7 +862,7 @@ the server is back to the filter the connection was opened with.
 | `plugin-watcher-lines` | `{session_id, lines}` | A batch of assembled PTY lines for the plugin OutputWatchers; each line is `{text, matched_ids}`, where `text` is the cleaned text the match was made on |
 | `plugin-changed` | `{plugin_ids}` | Plugin(s) installed/removed/updated |
 | `upstream-status-changed` | `{name, status}` | MCP upstream server status change |
-| `mcp-toast` | `{title, message, level, sound, origin_repo_path?, origin_session_id?}` | Toast notification from MCP layer, including the caller repository/cwd and the caller's TUIC session when known. Clients use the session id to focus the terminal that raised the toast |
+| `mcp-toast` | `{title, message, level, sound, urgency, origin_repo_path?, origin_session_id?}` | Toast notification from MCP layer, including the caller repository/cwd and the caller's TUIC session when known. Clients use the session id to focus the terminal that raised the toast. `urgency` is `normal` (bell only) or `urgent` (bell plus a transient card); clients treat an absent field as `normal` |
 | `session-state-changed` | `{session_id, state}` — `state` is the same object `GET /sessions` returns per session (`shell_state`, `agent_state`, `awaiting_input`, `question_confident`, `background_work`, `queued_commands`, …), snake_case, with the fields serde skips at their zero value omitted | A session's derived lifecycle state moved. Published by the session-state accumulator (`state.rs publish_session_state_change`) once per real transition, deduped by `SessionState`'s `PartialEq` — a repaint that changes only `last_activity_ms` publishes nothing. Dual-emitted on the Tauri window under the same name and with the same payload, so `useAgentPolling.ts` consumes both transports with one handler instead of polling `list_active_sessions`. Absence of a field means its zero value, not "unknown" |
 | `dictation-download-progress` | `{downloaded, total, percent}` | A Whisper model is downloading. Dual-emitted on the Tauri window with the identical body |
 | `speech-download-progress` | `{asset, downloaded, total, percent}`, then `{asset, done: true}` | A speech asset is downloading; the `done` event ends it, success or failure. `asset` is the only difference from the line above, and it is what a client joins the bar against |
@@ -1986,7 +2003,7 @@ the matching `dictation::commands` Tauri command resolves to — a bare string f
 `src/stores/dictation.ts` reads both transports with the same code. Before the app
 handle is up, every state-touching route answers `503`.
 
-The dictation config field hands_free_spoken_replies (default true) is shared
+The dictation config field hands_free_listening (default true) selects hands-free capture versus a replies-only conversation, and hands_free_spoken_replies (default true) is shared
 by IPC and HTTP. Off cancels speech and refuses new replies without disarming
 capture. Speech status reports available=false and unavailableReason. The
 MCP voice tool includes these fields on refused speak requests. Edge HTTP
@@ -2159,7 +2176,7 @@ queue, so there is nothing to cancel and nothing typed can be taken back.
 Both bodies are the structs `dictation::commands` serializes, camelCase on the
 wire and identical on both transports:
 
-- `HandsFreeStatus { armed, phase, sessionId, owner, generation, pendingText, holdBackMs, error, deliveredTurns, droppedTurns }`
+- `HandsFreeStatus { armed, listening, phase, sessionId, owner, generation, pendingText, holdBackMs, error, deliveredTurns, droppedTurns }`
 - `HandsFreeDisarmed { wasArmed, generation, discardedPending, discardedCapture, status }`
 
 `pendingText` is the turn waiting out its hold-back, or held by a permission
@@ -2263,7 +2280,7 @@ GET /system/check-update?channel=nightly
 ```
 
 Returns `{ "available": bool, "version": string|null, "notes": string|null, "release_page": string|null, "not_found": bool }`.
-Channel URLs are hardcoded — no user-supplied URL is accepted. An unpublished
+Channels are `beta` and `nightly`. Beta returns the immutable versioned release page for downloads. Channel URLs are hardcoded — no user-supplied URL is accepted. An unpublished
 channel is `not_found: true`, not an error; an unknown channel name is a 500.
 
 ## Prompt Endpoints
@@ -2888,7 +2905,7 @@ The host ACP session list gathers all ego pages before ordering ancestry. Each r
 
 ## Launch instruction receipts
 
-`GET /sessions/{id}/prompt-receipt` mirrors `get_prompt_receipt`. Missing sessions return 404. The response is `{sections, captureLimited}`. Each section has `label`, `source`, `bytes` (original UTF-8 payload size, or null when unknown), `text` (redacted bounded preview), `status` (`sent`, `queued`, `served`, `file_snapshot`, or `not_observable`) and `truncated`. The endpoint reads live PTY/MCP metadata and never rebuilds text from settings. Capture/retention limits and unobservable cases are documented in [AI Agents](../user-guide/ai-agents.md#inspect-launch-instructions).
+`GET /sessions/{id}/prompt-receipt` mirrors `get_prompt_receipt`. Missing sessions return 404. The response is `{sections, captureLimited}`. Each section has `label`, `source`, `bytes` (original UTF-8 payload size, or null when unknown), `text` (redacted bounded preview), `status` (`sent`, `queued`, `served`, `file_snapshot`, or `not_observable`), `truncated`, `count` (observations folded into the row; one `served` row per label keeps the newest body), `firstSeenMs` and `lastSeenMs` (unix milliseconds). The endpoint reads live PTY/MCP metadata and never rebuilds text from settings. Capture/retention limits and unobservable cases are documented in [AI Agents](../user-guide/ai-agents.md#inspect-launch-instructions).
 
 ### Run incident projection
 
@@ -2991,8 +3008,8 @@ for weekly (Sunday 0 or 7). Blank create/definition-preview zones and omitted
 cron-preview zones resolve to the backend's local IANA zone.
 
 Paused or consumed Once definitions have a null `next_run_ms`. List computes
-future cron occurrences but phase 1 execution remains Once-only. Run Now requires
-the runtime owner, allows paused Once definitions, bypasses prechecks and records
+future cron occurrences and the scheduler dispatches each due one. Run Now requires
+the runtime owner, allows paused Once and cron definitions, bypasses prechecks and records
 overlap/capacity refusals without queueing. No execution retry is introduced.
 
 Automation runtime transitions are streamed on `/events` as
@@ -3008,6 +3025,8 @@ Automation action `run` accepts `{id: "<run id>"}` and returns the canonical sav
 (and the existing authenticated remote transport). The native host uses this
 route; it introduces no TCP listener. Requests carry `id`, `action`, `version`
 (`2.x`) and `repoPath`. Replies are `{id, ok, result}` or `{id, ok:false, error}`.
+`heartbeat` records extension liveness and returns `{armed, reloadSeq, navigate: {seq, url?}, backendId?}`. The navigation sequence is included without a pending URL. `backendId` identifies the manager lifetime so the extension resets its navigation acknowledgement after a backend restart, even when a command arrives before an idle beat. It runs every five seconds; armed modes expire after 60 seconds without a beat, or 600 seconds from Start when no beat arrived. MCP `design_mode action=reload repo_path=<repoPath>` increments the sequence; unchanged replies do not repeat a successful reload.
+
 `hello` checks the major version. `pick` accepts `raw` DOM extraction and returns
 bounded, redacted, fenced evidence. Non-HTTP(S) page URLs are rejected. Page data
 cannot invoke privileged operations: the worker accepts those only from its panel.
@@ -3072,3 +3091,7 @@ no-store`. It never returns a nonce or credential. Account forms cannot be read
 through `GET /secrets/forms/{nonce}` or submitted through
 `POST /secrets/forms/submit`, even with the correct nonce. Ordinary secret forms
 retain their existing mobile capability support.
+
+### History-anchored viewport scrolling
+
+`POST /sessions/:id/terminal/scroll-to-anchor` accepts `{ "anchor": number | null }` and returns `{ "ok": true }`. The anchor is an all-time row index including evicted rows, matching grid-frame `historyBase + historySize - displayOffset`. Null follows the tail; a trimmed anchor clamps to the oldest retained row. The request is coalesced with offset requests and applied under the ticker VT lock, so intervening output cannot move the target.

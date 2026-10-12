@@ -7,6 +7,7 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Instant;
 
 use base64::Engine;
 use chromiumoxide::cdp::browser_protocol::{css, dom, overlay, page};
@@ -144,7 +145,9 @@ struct Mode {
 
 #[derive(Clone)]
 pub(crate) struct DesignModeManager {
+    pub(crate) heartbeat_id: String,
     modes: Arc<Mutex<HashMap<String, Mode>>>,
+    liveness: Arc<std::sync::Mutex<super::liveness::Liveness>>,
     #[cfg_attr(
         not(test),
         expect(
@@ -167,7 +170,9 @@ pub(crate) struct DesignModeManager {
 impl DesignModeManager {
     pub(crate) fn new(grab_dir: PathBuf, prefill: Prefill, notify: Notify) -> Self {
         Self {
+            heartbeat_id: uuid::Uuid::new_v4().to_string(),
             modes: Arc::new(Mutex::new(HashMap::new())),
+            liveness: Arc::default(),
             grab_dir,
             prefill,
             notify,
@@ -181,7 +186,8 @@ impl DesignModeManager {
             session_id,
             status: "armed",
         };
-        let old = self.modes.lock().await.insert(
+        let mut modes = self.modes.lock().await;
+        let old = modes.insert(
             repo_path,
             Mode {
                 status: status.clone(),
@@ -190,6 +196,12 @@ impl DesignModeManager {
                 generation: 0,
             },
         );
+        self.liveness
+            .lock()
+            .unwrap()
+            .armed(&status.repo_path, &status.session_id, Instant::now());
+        (self.notify)(&status);
+        drop(modes);
         if let Some(mut mode) = old {
             if let Some(listener) = mode.listener.take() {
                 listener.abort();
@@ -200,8 +212,49 @@ impl DesignModeManager {
                 tracing::warn!(%error,"Could not stop previous inspector");
             }
         }
-        (self.notify)(&status);
         status
+    }
+
+    /// Extension heartbeat: the reload sequence, or `None` when nothing is armed.
+    pub(crate) async fn heartbeat(&self, repo_path: &str) -> Option<u64> {
+        let _modes = self.modes.lock().await;
+        self.liveness
+            .lock()
+            .unwrap()
+            .beat(repo_path, Instant::now())
+    }
+
+    pub(crate) async fn request_reload(&self, repo_path: &str) -> Option<u64> {
+        let _modes = self.modes.lock().await;
+        self.liveness.lock().unwrap().request_reload(repo_path)
+    }
+
+    pub(crate) async fn request_navigate(&self, repo_path: &str, url: String) -> Option<u64> {
+        let _modes = self.modes.lock().await;
+        self.liveness
+            .lock()
+            .unwrap()
+            .request_navigate(repo_path, url)
+    }
+
+    pub(crate) async fn pending_navigate(&self, repo_path: &str) -> Option<(u64, Option<String>)> {
+        let _modes = self.modes.lock().await;
+        self.liveness.lock().unwrap().pending_navigate(repo_path)
+    }
+
+    /// Stops every armed mode whose browser stopped beating.
+    pub(crate) async fn stop_expired(&self) {
+        let mut modes = self.modes.lock().await;
+        let expired = self.liveness.lock().unwrap().expire(Instant::now());
+        for (repo_path, _) in expired {
+            // Expiry and Start share the mode lock: an old deadline cannot stop a replacement.
+            if let Some(mode) = modes.get_mut(&repo_path) {
+                mode.status.status = "stopped";
+                mode.generation += 1;
+                tracing::info!(repo_path, "Design Mode extension went quiet; stopping");
+                (self.notify)(&mode.status);
+            }
+        }
     }
 
     pub(crate) async fn statuses(&self) -> Vec<ModeStatus> {
@@ -460,6 +513,10 @@ impl DesignModeManager {
                     mode.generation += 1;
                     listeners.extend(mode.listener.take());
                     browsers.extend(mode.browser.clone());
+                    self.liveness
+                        .lock()
+                        .unwrap()
+                        .stopped(&mode.status.repo_path);
                     changed.push(mode.status.clone());
                 }
             }
@@ -481,6 +538,7 @@ impl DesignModeManager {
     pub(crate) async fn stop(&self, repo_path: &str) -> Result<Option<ModeStatus>, String> {
         let (browser, status, changed) = {
             let mut modes = self.modes.lock().await;
+            self.liveness.lock().unwrap().stopped(repo_path);
             let Some(mode) = modes.get_mut(repo_path) else {
                 return Ok(None);
             };

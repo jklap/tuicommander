@@ -53,7 +53,7 @@ pub(crate) struct Dispatcher<E> {
 }
 
 impl<E: DispatchEffects> Dispatcher<E> {
-    /// Shared manual boundary: paused Once definitions may run, but capacity
+    /// Shared manual boundary: paused definitions may run, but capacity
     /// and overlap refusals are recorded immediately rather than queued.
     pub async fn run_now(self: &Arc<Self>, id: &str) -> Result<AutomationRun, String>
     where
@@ -65,7 +65,7 @@ impl<E: DispatchEffects> Dispatcher<E> {
             .iter()
             .find(|d| d.id == id)
             .ok_or("Automation not found")?;
-        require_once(definition)?;
+        definition.validate()?;
         let run = scheduler::run_now(&self.runs, &config, id, chrono::Utc::now())?;
         // Admission and task creation have no intervening yield. The task holds
         // the writer/owner lock until dispatch settles, even if the caller drops.
@@ -86,9 +86,7 @@ impl<E: DispatchEffects> Dispatcher<E> {
         now: chrono::DateTime<chrono::Utc>,
     ) -> Result<Vec<AutomationRun>, String> {
         self.runs.prune(now.timestamp_millis(), None)?;
-        let mut config = self.definitions.load()?;
-        config.definitions.retain(|d| d.once_local.is_some());
-        scheduler::tick(&self.runs, &config, now)
+        scheduler::tick(&self.runs, &self.definitions.load()?, now)
     }
 
     pub async fn dispatch(&self, id: &str) -> Result<(), String> {
@@ -201,7 +199,7 @@ impl<E: DispatchEffects> Dispatcher<E> {
     }
 
     fn require_current(&self, run: &AutomationRun) -> Result<(), String> {
-        require_once(&run.definition)?;
+        run.definition.validate()?;
         if self.runs.get(&run.id)?.status != RunStatus::Prechecking {
             return Err("Automation stopped before dispatch".into());
         }
@@ -217,13 +215,6 @@ impl<E: DispatchEffects> Dispatcher<E> {
         }
         Ok(())
     }
-}
-
-fn require_once(definition: &AutomationDefinition) -> Result<(), String> {
-    if definition.once_local.is_none() {
-        return Err("Only Once automations dispatch in phase 1".into());
-    }
-    definition.validate()
 }
 
 fn now_ms() -> i64 {

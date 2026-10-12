@@ -13,6 +13,12 @@ Design Mode collects elements and comments in a browser sidebar before sending f
 
 The D badge and Stop action remain on the launching terminal. Browsers open on the backend host, including when TUIC is controlled from a browser/PWA client. No debugging port or automation banner is requested by the v2 launcher.
 
+## Page JavaScript errors
+
+Design Mode records the current page's uncaught errors, unhandled promise rejections, `console.error` calls and failed `<script>`, `<link>` and `<img>` loads (a 404 module included), in every frame, from the start of the page load. Each record has a message, source URL, line and column, stack and time. The sidebar keeps the last 50 per tab, deduplicated by message and source, and clears them when the tab loads a new page.
+
+When errors exist, the sidebar shows an **Errors** section with a count badge. Tick **Attach to feedback** to send them with your next batch, or use **Send errors only** to send them alone, without any comment. Sent errors are removed from the list. They are untrusted page content: Rust strips terminal controls and URL queries, redacts recognised secrets, bounds the text and fences it, exactly like picks. Failed `fetch` and XHR requests are not observed.
+
 ## Connection and evidence
 
 The native host pins the extension identity, repository and exact TUIC instance. It relays a bounded set of operations over that instance’s local socket or named pipe. Reopen Design Mode after restarting TUIC to refresh its binding. Connection failures show the endpoint and reason. An older running backend can list agents but returns an explicit restart error for the new feedback/discovery route.
@@ -21,4 +27,12 @@ Cards retain selectors, DOM paths, snippets, selected styles, CSS tokens and ava
 
 Discovery lists only the dev servers of the agent selected in the side panel (initially the session that launched Design Mode; the list refreshes when you pick another agent): the configured **Dev Server URL**, live listeners attributed by process directory or an absolute command path to that session’s worktree, and URLs that session printed in its own terminal. Other worktrees of the repository and other sessions are not listed. Live listeners must answer HTTP GET `/` successfully with a `text/html` Content-Type within 750 ms. TUIC itself is excluded. Probes do not follow redirects; the scan has a 3-second budget. Fresh PTY URLs are accepted only when their port has a verified live owned HTML listener. Multiple candidates are listed instead of automatically choosing one. Windows native host registration currently targets Edge and awaits Chrome/multi-profile validation. Windows discovery offers configured URLs and the address bar; listener attribution is not claimed there. Repo-local `.tuic.json` cannot silently supply executable scripts.
 
-The pilot has browser evidence from Chrome for Testing. Native Edge Load unpacked persistence, toolbar-granted screenshot permissions and sidebar restoration still need an Edge check. Automatic post-agent reload and everyday-profile installation are later work; this pilot uses the dev server’s own HMR or the browser’s Reload button.
+The pilot has browser evidence from Chrome for Testing. Native Edge Load unpacked persistence, toolbar-granted screenshot permissions and sidebar restoration still need an Edge check. Agents ask the browser to reload the reviewed tab with MCP `design_mode` `action: "reload"` (for static pages without HMR). The extension also tells TUICommander it is alive every 5 s: Design Mode stops by itself 60 s after the browser goes away. Everyday-profile installation is later work.
+
+### Start from a link or coordinator
+
+Right-click a terminal HTTP(S) link and choose **Start in Design Mode**, then **Edge** or **Chrome**. This always starts or rebinds to that terminal agent and opens the exact URL, even if another agent is already connected. The D badge follows the bound session.
+
+For layout work, coordinators use MCP `design_mode` with `action: "start"`, `session_id` naming the live terminal agent, and `url` naming the HTTP(S) page. Optional `browser` selects `chrome` or `edge`. Use `action: "status"` for bindings and `action: "stop"` with the returned `repoPath` as `repo_path`. Browser launch happens on the host; an ACP coordinator does not become the terminal agent.
+
+If the sidebar icon is hidden, open the Extensions (puzzle) menu and pin **TUICommander Design Mode**. You can also press **Option+Shift+D** on macOS or **Alt+Shift+D** on Windows/Linux. Browser choice currently lists Edge and Chrome; launch reports if the chosen browser is not installed.

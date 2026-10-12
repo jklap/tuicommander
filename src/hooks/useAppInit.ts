@@ -57,6 +57,8 @@ interface McpToastPayload {
 	message: string | null;
 	level: string;
 	sound: string | null;
+	/** Absent on events from daemons older than the field; treated as normal. */
+	urgency?: string;
 	origin_repo_path?: string;
 	origin_session_id?: string;
 	__tuic_origin?: { connection: string; name?: string };
@@ -564,13 +566,23 @@ export async function initApp(deps: AppInitDeps) {
 	}
 
 	replaceMcpToastListener((event) => {
-		const { title, message, level, sound, origin_repo_path, origin_session_id, __tuic_origin: origin } = event.payload;
+		const {
+			title,
+			message,
+			level,
+			sound,
+			urgency,
+			origin_repo_path,
+			origin_session_id,
+			__tuic_origin: origin,
+		} = event.payload;
 		if (origin && (typeof title !== "string" || (message !== null && typeof message !== "string"))) {
 			appLogger.debug("app", "Discarding malformed mirrored MCP toast");
 			return;
 		}
 		const safeLevel = level === "warn" || level === "error" ? level : "info";
-		// Backend notifications stay in the bell; they never cover the active input.
+		// Backend notifications stay in the bell. Urgent notices always add a card;
+		// automatic cards surface normal notices only on their active origin terminal.
 		// Only a registered repo may scope a bell item.
 		const terminalId = origin_session_id ? terminalsStore.findBySessionId(origin_session_id) : undefined;
 		const repoPath = origin
@@ -599,6 +611,23 @@ export async function initApp(deps: AppInitDeps) {
 			origin_session_id,
 			origin?.connection,
 		);
+		const viewingOrigin =
+			terminalId !== undefined &&
+			terminalId === terminalsStore.state.activeId &&
+			(!origin || getSessionConnection(origin_session_id) === origin.connection);
+		const automaticCard = notificationsStore.state.autoToastCards && viewingOrigin;
+		if (noticeId !== -1 && (urgency === "urgent" || automaticCard))
+			toastsStore.add(
+				visibleTitle,
+				visibleMessage,
+				safeLevel,
+				false,
+				action,
+				undefined,
+				repoPath,
+				origin_session_id,
+				false,
+			);
 		if (noticeId !== -1 && isNotificationSound(sound)) void notificationsStore.play(sound);
 	});
 
@@ -632,10 +661,9 @@ export async function initApp(deps: AppInitDeps) {
 				(parsedAgentType
 					? `Session ${terminalsStore.getCount() + 1}`
 					: `PTY: Session ${terminalsStore.getCount() + 1}`),
-			// A spawn-assigned display name is the base title, not a manual rename:
-			// an intent title may refine it and a user rename replaces it, but the
-			// agent's own OSC title (Claude's session title) must not.
-			nameIsCustom: false,
+			// A spawn-assigned display name is pinned like a manual rename: neither
+			// an intent title nor the agent's OSC title may replace it.
+			nameIsCustom: Boolean(display_name),
 			nameFromSpawn: Boolean(display_name),
 			cwd: cwd ?? null,
 			awaitingInput: null,
@@ -834,7 +862,7 @@ export async function initApp(deps: AppInitDeps) {
 
 		mdTabsStore.closeMcpFile(id);
 		editorTabsStore.closeMcpFile(id);
-		mdTabsStore.openUiTab(id, title, html, pinned, url, focus ?? true, origin_repo_path);
+		mdTabsStore.openUiTab(id, title, html, pinned, url, focus ?? false, origin_repo_path);
 	}).catch((err) => appLogger.error("app", "Failed to register ui-tab listener", err));
 
 	// Keep remoteSessionTabs consistent if the user closes a remote tab manually

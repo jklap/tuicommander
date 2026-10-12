@@ -75,8 +75,8 @@ impl Outbound {
         if let Err(Error::RateLimited(seconds)) = result {
             self.next_send = Instant::now() + Duration::from_secs(seconds.clamp(1, 3600));
         }
-        if let Err(error @ (Error::Unauthorized | Error::Conflict | Error::Rejected(403 | 404))) =
-            result
+        if let Err(error) = result
+            && error.is_fatal()
         {
             self.stopped = Some(error);
             self.active = None;

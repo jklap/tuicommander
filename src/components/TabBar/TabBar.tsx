@@ -18,7 +18,7 @@ import { useSmartPrompts } from "../../hooks/useSmartPrompts";
 import { t } from "../../i18n";
 import { appLogger } from "../../stores/appLogger";
 import { contextMenuActionsStore } from "../../stores/contextMenuActionsStore";
-import { designModeStore } from "../../stores/designMode";
+import { designModeBrowsers, designModeStore } from "../../stores/designMode";
 import { diffTabsStore } from "../../stores/diffTabs";
 import { findPaneGroupAtPoint } from "../../stores/dragDrop";
 import { editorTabsStore } from "../../stores/editorTabs";
@@ -387,18 +387,19 @@ export const TabBar: Component<TabBarProps> = (props) => {
 					label: isArmed
 						? t("tabBar.stopDesignMode", "Stop Design Mode")
 						: t("tabBar.startDesignMode", "Start Design Mode"),
-					action: () => designModeStore.toggle(sessionId),
+					action: () => {
+						if (isArmed) designModeStore.toggle(sessionId);
+					},
+					...(!isArmed
+						? {
+								children: designModeBrowsers.map((browser) => ({
+									label: browser.label,
+									action: () => designModeStore.toggle(sessionId, browser.id),
+								})),
+							}
+						: {}),
 				},
 			);
-			if (!isArmed)
-				items.push({
-					label: "Choose Design Mode browser",
-					action: () => {},
-					children: [
-						{ label: "Open in Edge", action: () => designModeStore.toggle(sessionId, "edge") },
-						{ label: "Open in Chrome", action: () => designModeStore.toggle(sessionId, "chrome") },
-					],
-				});
 		}
 		if (isPerfDebug() && sessionId) {
 			const recording = ptyCaptureStore.isRecording(sessionId);

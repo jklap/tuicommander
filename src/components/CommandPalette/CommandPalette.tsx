@@ -29,7 +29,8 @@ export interface CommandPaletteProps {
  * until their HTTP or browser implementation has been verified explicitly.
  */
 const BROWSER_ACTION_IDS = new Set([
-	"start-design-mode",
+	"start-design-mode-edge",
+	"start-design-mode-chrome",
 	"stop-design-mode",
 	"new-terminal",
 	"close-terminal",
@@ -159,7 +160,7 @@ export const CommandPalette: Component<CommandPaletteProps> = (props) => {
 	 * allocation-free per keystroke.
 	 */
 	const bm25Index = createMemo(() =>
-		buildIndex(availableActions().map((a) => ({ item: a, text: `${a.label} ${a.category}` }))),
+		buildIndex(availableActions().map((a) => ({ item: a, text: `${a.label} ${a.category} ${a.keywords ?? ""}` }))),
 	);
 
 	// A pasted URL is offered to plugin resolvers; their entries lead the list.

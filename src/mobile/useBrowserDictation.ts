@@ -3,6 +3,7 @@ import { t } from "../i18n";
 import { appLogger } from "../stores/appLogger";
 import { toastsStore } from "../stores/toasts";
 import { rpc } from "../transport";
+import { holdScreenAwake } from "../utils/screenWakeLock";
 
 interface RecognitionResult {
 	isFinal: boolean;
@@ -22,6 +23,24 @@ interface BrowserRecognition {
 }
 
 type RecognitionConstructor = new () => BrowserRecognition;
+
+/** Plain words for the Web Speech error codes; an unknown code is shown as is. */
+function failureText(code: string): string {
+	switch (code) {
+		case "not-allowed":
+			return t("mobile.dictation.error.notAllowed", "Microphone or speech recognition permission denied");
+		case "service-not-allowed":
+			return t("mobile.dictation.error.serviceNotAllowed", "Speech recognition is not allowed on this device");
+		case "no-speech":
+			return t("mobile.dictation.error.noSpeech", "No speech detected");
+		case "audio-capture":
+			return t("mobile.dictation.error.audioCapture", "No microphone found, or it is in use");
+		case "network":
+			return t("mobile.dictation.error.network", "Speech service unavailable (network)");
+		default:
+			return code;
+	}
+}
 
 /** Browser input interaction only; server hands-free remains a separate conversation. */
 export function useBrowserDictation(options: {
@@ -49,14 +68,36 @@ export function useBrowserDictation(options: {
 			.catch((error) => appLogger.info("dictation", "Browser dictation uses browser language", error));
 	}
 
+	let releaseScreen: (() => void) | null = null;
+
 	function markRecording(active: boolean) {
+		// Every start, end, error and cancel passes here, so the lock cannot outlive the recording.
+		if (active) releaseScreen ??= holdScreenAwake();
+		else {
+			releaseScreen?.();
+			releaseScreen = null;
+		}
 		setRecording(active);
 		options.onRecording?.(active);
 	}
 
-	function fail(error: unknown) {
-		appLogger.warn("dictation", "Browser dictation failed", error);
-		toastsStore.add(t("mobile.dictation.error", "Dictation failed"), String(error), "error", true);
+	function fail(code: string, cause?: unknown) {
+		// The code is in the message: the logger coalesces equal messages and would drop the
+		// data of a second failure with another code before it reaches the server log.
+		appLogger.warn("dictation", `Browser dictation failed: ${code}`, {
+			code,
+			recording: !!recognition,
+			discarding,
+			partialChars: renderedSpeech.length,
+			language,
+			cause: cause === undefined ? undefined : String(cause),
+		});
+		toastsStore.add(t("mobile.dictation.error", "Dictation failed"), failureText(code), "error", true);
+	}
+
+	/** A thrown start/stop failure: its name is the code, the full error the cause. */
+	function failWith(error: unknown) {
+		fail(error instanceof Error ? error.name : "unknown", error);
 	}
 
 	function release() {
@@ -73,7 +114,7 @@ export function useBrowserDictation(options: {
 			recognition.abort();
 		} catch (error) {
 			release();
-			fail(error);
+			failWith(error);
 		}
 	}
 
@@ -89,7 +130,7 @@ export function useBrowserDictation(options: {
 				recognition.stop();
 			} catch (error) {
 				cancel();
-				fail(error);
+				failWith(error);
 			}
 			return;
 		}
@@ -129,7 +170,7 @@ export function useBrowserDictation(options: {
 		} catch (error) {
 			// A synchronous start failure has no running service to emit end.
 			release();
-			fail(error);
+			failWith(error);
 		}
 	}
 

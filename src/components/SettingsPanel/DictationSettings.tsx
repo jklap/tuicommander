@@ -10,6 +10,9 @@ import { isTauri } from "../../transport";
 import { cx } from "../../utils";
 import { handsFreePhaseLabel } from "../DictationToast/handsFreePhaseLabel";
 import { KeyComboCapture } from "../shared/KeyComboCapture";
+import { Input } from "../ui/Input";
+import { Select } from "../ui/Select";
+import { Textarea } from "../ui/Textarea";
 import d from "./DictationSettings.module.css";
 import { ExpertSetting } from "./ExpertSetting";
 import { SettingSlider } from "./SettingFields";
@@ -285,7 +288,7 @@ export const DictationSettings: Component = () => {
 				</Show>
 
 				<div class={d.correctionAdd}>
-					<input
+					<Input
 						type="text"
 						placeholder={t("dictation.correctionFromPlaceholder", "Heard text...")}
 						value={newFrom()}
@@ -293,7 +296,7 @@ export const DictationSettings: Component = () => {
 						onKeyDown={(e) => e.key === "Enter" && handleAddCorrection()}
 					/>
 					<span class={d.correctionArrow}>&rarr;</span>
-					<input
+					<Input
 						type="text"
 						placeholder={t("dictation.correctionToPlaceholder", "Replace with...")}
 						value={newTo()}
@@ -403,7 +406,7 @@ const SpeechRecognition: Component = () => {
 								</div>
 							}
 						>
-							<select
+							<Select
 								value={dictationStore.state.selectedDevice ?? ""}
 								onChange={(e) => {
 									const val = e.currentTarget.value;
@@ -414,7 +417,7 @@ const SpeechRecognition: Component = () => {
 								<For each={dictationStore.state.devices}>
 									{(device) => <option value={device.name}>{device.name}</option>}
 								</For>
-							</select>
+							</Select>
 							<p class={s.hint}>{t("dictation.microphoneHint", "Select the input device to use for dictation.")}</p>
 						</Show>
 					</div>
@@ -433,7 +436,7 @@ const SpeechRecognition: Component = () => {
 
 			<div class={s.group}>
 				<label>{t("dictation.languageLabel", "Language")}</label>
-				<select
+				<Select
 					value={dictationStore.state.language}
 					onChange={(e) => dictationStore.setLanguage(e.currentTarget.value)}
 				>
@@ -446,7 +449,7 @@ const SpeechRecognition: Component = () => {
 							</option>
 						)}
 					</For>
-				</select>
+				</Select>
 				<p class={s.hint}>{t("dictation.languageHint", "Auto-detect works well for most languages.")}</p>
 				<Show when={isVoiceless(dictationStore.state.language)}>
 					<p class={s.hint}>
@@ -672,14 +675,14 @@ const SpeechSetup: Component = () => {
 			<ExpertSetting configKey="dictation.speech_engine" value={engine()}>
 				<div class={s.group}>
 					<label>{t("dictation.speechEngineLabel", "Speech engine")}</label>
-					<select
+					<Select
 						value={engine()}
 						onChange={(e) => void dictationStore.setSpeechEngine(e.currentTarget.value as SpeechEngineId)}
 					>
 						<option value="edge">{t("dictation.engineEdge", "Microsoft Edge voices (online)")}</option>
 						<option value="pocket">{t("dictation.enginePocket", "Pocket TTS (local, downloads a model)")}</option>
 						<option value="external">{t("dictation.engineExternal", "External command")}</option>
-					</select>
+					</Select>
 					<p class={s.hint}>
 						{t(
 							"dictation.speechEngineHint",
@@ -693,7 +696,7 @@ const SpeechSetup: Component = () => {
 				<ExpertSetting configKey="dictation.speech_command" value={dictationStore.state.speechCommand}>
 					<div class={s.group}>
 						<label>{t("dictation.speechCommandLabel", "Speech command")}</label>
-						<textarea
+						<Textarea
 							rows={4}
 							value={dictationStore.state.speechCommand.join("\n")}
 							onChange={(e) =>
@@ -722,16 +725,16 @@ const SpeechSetup: Component = () => {
 						<Show
 							when={isEdge()}
 							fallback={
-								<select
+								<Select
 									value={dictationStore.state.speechVoice}
 									onChange={(e) => dictationStore.setSpeechVoice(e.currentTarget.value)}
 								>
 									<option value="">{t("dictation.voiceDefault", "Default for this language")}</option>
 									<For each={voiceChoices()}>{(voice) => <option value={voice}>{voice}</option>}</For>
-								</select>
+								</Select>
 							}
 						>
-							<select
+							<Select
 								value={dictationStore.state.speechEdgeVoice}
 								onChange={(e) => dictationStore.setSpeechEdgeVoice(e.currentTarget.value)}
 							>
@@ -739,7 +742,7 @@ const SpeechSetup: Component = () => {
 								<For each={dictationStore.state.edgeVoices}>
 									{(voice) => <option value={voice.id}>{voice.label}</option>}
 								</For>
-							</select>
+							</Select>
 						</Show>
 						<button class={d.modelDownload} onClick={listen}>
 							{t("dictation.listen", "Listen")}
@@ -1064,10 +1067,10 @@ const HandsFreeControls: Component = () => {
 						when={armed()}
 						fallback={
 							<>
-								<select value={target()} onChange={(e) => setTarget(e.currentTarget.value)}>
+								<Select value={target()} onChange={(e) => setTarget(e.currentTarget.value)}>
 									<option value="">{t("dictation.handsFreeNoTarget", "Choose a terminal…")}</option>
 									<For each={targets()}>{(term) => <option value={term.sessionId ?? ""}>{term.name}</option>}</For>
-								</select>
+								</Select>
 								<button class={cx(s.testBtn, d.startConversation)} onClick={start} disabled={!target()}>
 									{t("dictation.handsFreeStart", "Start conversation")}
 								</button>
@@ -1136,7 +1139,7 @@ const HandsFreeControls: Component = () => {
 
 			<div class={s.group}>
 				<label>{t("dictation.activationPhraseLabel", "Activation phrase")}</label>
-				<input
+				<Input
 					type="text"
 					value={dictationStore.state.handsFreeActivationPhrase}
 					placeholder={t("dictation.activationPhrasePlaceholder", "computer")}
@@ -1171,6 +1174,23 @@ const HandsFreeControls: Component = () => {
 					)}
 				/>
 			</ExpertSetting>
+
+			<div class={s.group}>
+				<label>{t("dictation.handsFreeListeningLabel", "Hands-free listening")}</label>
+				<div class={s.toggle}>
+					<input
+						type="checkbox"
+						checked={dictationStore.state.handsFreeListening}
+						onChange={(e) => dictationStore.setHandsFreeListening(e.currentTarget.checked)}
+					/>
+					<span>
+						{t(
+							"dictation.handsFreeListeningHint",
+							"Keep the microphone open and send each utterance by itself. Turn off to dictate with push-to-talk only; with spoken replies on, the agent still answers out loud. Applies to the next conversation.",
+						)}
+					</span>
+				</div>
+			</div>
 
 			<div class={s.group}>
 				<label>{t("dictation.spokenRepliesLabel", "Spoken replies")}</label>
@@ -1230,7 +1250,7 @@ const HandsFreeControls: Component = () => {
 				<ExpertSetting configKey="dictation.hands_free_start_notice" value={dictationStore.state.handsFreeStartNotice}>
 					<div class={s.group}>
 						<label>{t("dictation.startNoticeLabel", "Start notice")}</label>
-						<textarea
+						<Textarea
 							value={dictationStore.state.handsFreeStartNotice}
 							placeholder={defaultNotice()}
 							onChange={(e) => dictationStore.setHandsFreeStartNotice(e.currentTarget.value)}

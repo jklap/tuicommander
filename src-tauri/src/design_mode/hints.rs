@@ -64,7 +64,7 @@ mod tests {
             .session_maps
             .last_output_ms
             .insert(sid.into(), AtomicU64::new(now));
-        let found = offered_to(state.clone(), repo.path(), sid, repo.path()).await;
+        let found = offered_to(state.clone(), repo.path(), sid, repo.path(), &[&server]).await;
         let hints: Vec<_> = found
             .iter()
             .filter(|row| row["source"] == "fresh PTY")
@@ -88,7 +88,7 @@ mod tests {
             .last_output_ms
             .insert(other.into(), AtomicU64::new(now));
         assert!(
-            !offered_to(state.clone(), repo.path(), sid, repo.path())
+            !offered_to(state.clone(), repo.path(), sid, repo.path(), &[&server])
                 .await
                 .iter()
                 .any(|row| row["url"]
@@ -102,7 +102,7 @@ mod tests {
             .unwrap()
             .store(0, Ordering::Relaxed);
         assert!(
-            !offered_to(state.clone(), repo.path(), sid, repo.path())
+            !offered_to(state.clone(), repo.path(), sid, repo.path(), &[&server])
                 .await
                 .iter()
                 .any(|row| row["source"] == "fresh PTY")
@@ -115,7 +115,7 @@ mod tests {
             .store(now, Ordering::Relaxed);
         drop(server);
         assert!(
-            !offered_to(state, repo.path(), sid, repo.path())
+            !offered_to(state, repo.path(), sid, repo.path(), &[])
                 .await
                 .iter()
                 .any(|row| row["source"] == "fresh PTY")

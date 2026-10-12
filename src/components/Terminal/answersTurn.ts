@@ -40,7 +40,7 @@ export const PROMPT_MAX_ROWS = 50;
 
 /** Text of rows `[from, to]`: soft-wrapped rows concatenated, hard lines joined with a newline, indent under the bullet removed. */
 function joinAnswerRows(rows: readonly RowSnapshot[], from: number, to: number): string {
-	let text = rows[from].text.trimStart().replace(/^[●⏺]\s*/, "");
+	let text = rows[from].text.trimStart().replace(/^[●⏺•]\s*/, "");
 	for (let i = from + 1; i <= to; i++) {
 		text += rows[i].isWrapped ? rows[i].text : `\n${rows[i].text.replace(/^ {1,2}/, "").trimEnd()}`;
 	}

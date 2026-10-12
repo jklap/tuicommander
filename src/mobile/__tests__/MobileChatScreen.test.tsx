@@ -9,7 +9,7 @@ const { invoke, hydrate, createAcpChat, answerPermission, selectSession } = vi.h
 	selectSession: vi.fn(async () => {}),
 }));
 vi.mock("../../invoke", () => ({ invoke }));
-vi.mock("../../stores/settings", () => ({ settingsStore: { hydrate } }));
+vi.mock("../../stores/settings", () => ({ settingsStore: { hydrate, state: { chatMuteIntermediateText: true } } }));
 vi.mock("../../components/AIChatPanel/useAcpChat", () => ({ createAcpChat }));
 
 import { aiChatDraft } from "../../components/AIChatPanel/draft";
@@ -300,5 +300,64 @@ describe("mobile ego chat", () => {
 			[],
 			[{ name: "report.pdf", path: "/repo/.tuic/attachments/1-report.pdf" }],
 		);
+	});
+	// The browser transport throws `RPC <command> failed: <status> <body>`; this is the body Boss saw on his iPhone.
+	const UNCERTAIN_LOAD =
+		"RPC acp_session_load failed: 502 " +
+		JSON.stringify({
+			code: "agent_error",
+			message:
+				"the session's last run has an uncertain effect; close it with `session/close` and start a new chat with `session/new`",
+			connectionId: "01a12ce9-7cae-72bd-b367-1b7e3fcf4ce7",
+			sessionId: null,
+			operation: "load",
+			retryable: false,
+		});
+
+	it("shows a plain message and Start new chat, not raw JSON and Retry, for a refused uncertain session", async () => {
+		const current = {
+			...chat(),
+			error: () => UNCERTAIN_LOAD,
+			closeFailed: vi.fn(async () => {}),
+			startSession: vi.fn(),
+		};
+		createAcpChat.mockReturnValue(current);
+		const { container } = render(() => <MobileChatScreen />);
+		expect(container.textContent).not.toContain("agent_error");
+		expect(container.textContent).not.toContain("connectionId");
+		expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: "Start new chat" }));
+		await waitFor(() => expect(current.startSession).toHaveBeenCalledOnce());
+		expect(current.closeFailed).toHaveBeenCalledOnce();
+		expect(current.closeFailed.mock.invocationCallOrder[0]).toBeLessThan(
+			current.startSession.mock.invocationCallOrder[0],
+		);
+	});
+
+	it("keeps Retry for a retryable refusal and shows its own message", () => {
+		const body = JSON.stringify({ code: "transport_closed", message: "connection dropped", retryable: true });
+		const current = { ...chat(), error: () => `RPC acp_session_load failed: 502 ${body}` };
+		createAcpChat.mockReturnValue(current);
+		render(() => <MobileChatScreen />);
+		expect(screen.getByText(/connection dropped/)).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+		expect(current.recover).toHaveBeenCalledOnce();
+		expect(screen.queryByRole("button", { name: "Start new chat" })).toBeNull();
+	});
+
+	it("keeps Retry for an error that carries no structured body", () => {
+		createAcpChat.mockReturnValue({ ...chat(), error: () => "Saved conversation unavailable" });
+		render(() => <MobileChatScreen />);
+		expect(screen.getByText(/Saved conversation unavailable/)).toBeTruthy();
+		expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+	});
+
+	it("shows a non-retryable refusal without Retry or the new-chat action", () => {
+		const body = JSON.stringify({ code: "invalid_input", message: "workspace is not allowed", retryable: false });
+		createAcpChat.mockReturnValue({ ...chat(), error: () => `RPC acp_session_new failed: 400 ${body}` });
+		render(() => <MobileChatScreen />);
+		expect(screen.getByText(/workspace is not allowed/)).toBeTruthy();
+		expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+		expect(screen.queryByRole("button", { name: "Start new chat" })).toBeNull();
 	});
 });

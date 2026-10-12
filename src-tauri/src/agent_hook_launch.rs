@@ -144,8 +144,27 @@ pub(crate) fn regenerate_launch_assets(config_dir: &Path) -> Result<(), String> 
     let codex = codex_script(&codex_user_notify());
     let codex_path = dir.join("codex-notify.sh");
     crate::config::persist_atomic_with_mode(&codex_path, codex.as_bytes(), 0o700)?;
-    Ok(())
+    crate::launch_instructions::write_files(config_dir)
 }
+
+/// Administrative and ACP verbs from the recorded installed ego help.
+pub(crate) const EGO_NON_RUN_COMMANDS: &[&str] = &[
+    "fork",
+    "compact",
+    "export",
+    "ls",
+    "usage",
+    "models",
+    "hooks",
+    "doctor",
+    "acp",
+    "a2a",
+    "auth",
+    "mcp",
+    "config",
+    "rules",
+    "mcp-server",
+];
 
 /// Translate persisted ego choices once for terminal launches and MCP spawns.
 /// Configured choices replace raw overrides; `--` and its positional text are preserved.
@@ -163,27 +182,9 @@ fn ego_permission_args(config: &crate::config::AgentsConfig, args: &[String]) ->
     if options.iter().all(|(_, value)| value.is_none()) {
         return args.to_vec();
     }
-    // Administrative and ACP verbs from the recorded installed ego help.
-    const NON_RUN_COMMANDS: &[&str] = &[
-        "fork",
-        "compact",
-        "export",
-        "ls",
-        "usage",
-        "models",
-        "hooks",
-        "doctor",
-        "acp",
-        "a2a",
-        "auth",
-        "mcp",
-        "config",
-        "rules",
-        "mcp-server",
-    ];
     if args
         .first()
-        .is_some_and(|first| NON_RUN_COMMANDS.contains(&first.as_str()))
+        .is_some_and(|first| EGO_NON_RUN_COMMANDS.contains(&first.as_str()))
     {
         return args.to_vec();
     }
@@ -231,7 +232,47 @@ fn ego_permission_args(config: &crate::config::AgentsConfig, args: &[String]) ->
     result
 }
 
+/// Structured launches: status integration, then the marker instructions.
+pub(crate) fn launch_args(
+    agent_type: &str,
+    binary_path: &str,
+    args: &[String],
+    config_dir: &Path,
+) -> Vec<String> {
+    if is_claude_subcommand(agent_type, binary_path, args) {
+        return args.to_vec();
+    }
+    let result = augment_launch(agent_type, binary_path, args, config_dir);
+    crate::launch_instructions::args(agent_type, result, config_dir)
+}
+
+/// A Claude verb (`mcp list`, `auth status`) takes no launch flags. Probes the
+/// installed help only when the first argument could be one.
+fn is_claude_subcommand(agent_type: &str, binary_path: &str, args: &[String]) -> bool {
+    agent_type == "claude"
+        && args.first().is_some_and(|arg| !arg.starts_with('-'))
+        && claude_is_subcommand(
+            args,
+            &crate::agent::cli_help(binary_path).unwrap_or_default(),
+        )
+}
+
+/// The status integration alone, as the tests pin it.
+#[cfg(test)]
 pub(crate) fn augment_args(
+    agent_type: &str,
+    binary_path: &str,
+    args: &[String],
+    config_dir: &Path,
+) -> Vec<String> {
+    if enabled(agent_type) && is_claude_subcommand(agent_type, binary_path, args) {
+        return args.to_vec();
+    }
+    augment_launch(agent_type, binary_path, args, config_dir)
+}
+
+/// `augment_args` after the Claude verb check.
+fn augment_launch(
     agent_type: &str,
     binary_path: &str,
     args: &[String],
@@ -241,12 +282,6 @@ pub(crate) fn augment_args(
         return ego_permission_args(&crate::config::load_agents_config(), args);
     }
     let enabled = enabled(agent_type);
-    if enabled && agent_type == "claude" && args.first().is_some_and(|arg| !arg.starts_with('-')) {
-        let help = crate::agent::cli_help(binary_path).unwrap_or_default();
-        if claude_is_subcommand(args, &help) {
-            return args.to_vec();
-        }
-    }
     let result = augment_args_when(enabled, agent_type, args, config_dir);
     if screen_flag_candidate(agent_type, args).is_none() {
         return result;
@@ -323,7 +358,7 @@ fn add_screen_flag(
 /// Installed help owns advertised verbs. On probe failure, retain the verbs
 /// verified in the recorded help. The reported remote-control refusal proves
 /// that exact hidden command also rejects root launch settings.
-fn claude_is_subcommand(args: &[String], help: &str) -> bool {
+pub(crate) fn claude_is_subcommand(args: &[String], help: &str) -> bool {
     let Some(first) = args
         .first()
         .filter(|arg| !arg.is_empty() && !arg.starts_with('-'))

@@ -535,9 +535,7 @@ function createMdTabsStore() {
 						branchKeyFor(repoPath) as MdTabData[keyof MdTabData],
 					);
 				}
-				if (focus && repoPath && repoPath !== repositoriesStore.state.activeRepoPath)
-					repositoriesStore.setActive(repoPath);
-				if (focus) base.setActive(existing.id);
+				// An update never navigates: only the open that creates the tab may.
 				return existing.id;
 			}
 

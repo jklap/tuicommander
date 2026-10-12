@@ -1559,9 +1559,15 @@ describe("TabBar", () => {
 				node.textContent?.includes("Start Design Mode"),
 			);
 			expect(item).toBeDefined();
+			expect(container.textContent).not.toContain("Choose Design Mode browser");
 			fireEvent.click(item!);
+			const browser = Array.from(container.querySelectorAll(".item")).find(
+				(node) => node.textContent?.trim() === "Edge",
+			);
+			expect(browser).toBeDefined();
+			fireEvent.click(browser!);
 			await Promise.resolve();
-			expect(invoke).toHaveBeenCalledWith("start_design_mode", { sessionId: "second-session" });
+			expect(invoke).toHaveBeenCalledWith("start_design_mode", { sessionId: "second-session", browser: "edge" });
 		});
 
 		it("removes the Design Mode badge when the bound session stops (regression: stopped badge remains)", async () => {
@@ -1642,7 +1648,13 @@ describe("TabBar", () => {
 			const item = Array.from(container.querySelectorAll(".menu .item")).find((node) =>
 				node.textContent?.includes("Start Design Mode"),
 			);
+			expect(container.textContent).not.toContain("Choose Design Mode browser");
 			fireEvent.click(item!);
+			const browser = Array.from(container.querySelectorAll(".item")).find(
+				(node) => node.textContent?.trim() === "Edge",
+			);
+			expect(browser).toBeDefined();
+			fireEvent.click(browser!);
 			await Promise.resolve();
 			expect(addToast).toHaveBeenCalledWith(expect.any(String), "Chrome is unavailable", "error");
 			addToast.mockRestore();
@@ -1658,7 +1670,13 @@ describe("TabBar", () => {
 			const item = Array.from(container.querySelectorAll(".menu .item")).find((node) =>
 				node.textContent?.includes("Start Design Mode"),
 			);
+			expect(container.textContent).not.toContain("Choose Design Mode browser");
 			fireEvent.click(item!);
+			const browser = Array.from(container.querySelectorAll(".item")).find(
+				(node) => node.textContent?.trim() === "Edge",
+			);
+			expect(browser).toBeDefined();
+			fireEvent.click(browser!);
 			await Promise.resolve();
 			expect(notice.getByText("Browser opened on the host machine.")).toBeVisible();
 			expect(notice.getByText("Design Mode")).toBeVisible();

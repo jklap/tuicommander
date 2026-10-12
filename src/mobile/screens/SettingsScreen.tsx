@@ -1,6 +1,9 @@
 import { createSignal, onMount, Show } from "solid-js";
 import { TelegramTab } from "../../components/SettingsPanel/tabs/TelegramTab";
+import { Select } from "../../components/ui/Select";
 import { appLogger } from "../../stores/appLogger";
+import { transcriptPreferences } from "../../stores/transcriptPreferences";
+import { KEEP_AWAKE_KEY } from "../../utils/screenWakeLock";
 import { setDesktopUI } from "../../utils/tabletRouting";
 import { loadMobileTheme, mobileTheme, setMobileTheme } from "../mobileTheme";
 import { useMobileVoice } from "../useMobileVoice";
@@ -29,6 +32,7 @@ export function SettingsScreen(props: SettingsScreenProps) {
 	);
 	const [telegramOpen, setTelegramOpen] = createSignal(false);
 	const [soundEnabled, setSoundEnabled] = createSignal(localStorage.getItem(SOUND_KEY) !== "false");
+	const [keepAwake, setKeepAwake] = createSignal(localStorage.getItem(KEEP_AWAKE_KEY) !== "false");
 	const [serverUrl, setServerUrl] = createSignal("");
 	const [serverVersion, setServerVersion] = createSignal<string | null>(null);
 	const [theme, setTheme] = createSignal(mobileTheme());
@@ -180,6 +184,12 @@ export function SettingsScreen(props: SettingsScreenProps) {
 		localStorage.setItem(SOUND_KEY, String(next));
 	}
 
+	function toggleKeepAwake() {
+		const next = !keepAwake();
+		setKeepAwake(next);
+		localStorage.setItem(KEEP_AWAKE_KEY, String(next));
+	}
+
 	const pushStatusText = () => {
 		switch (pushState()) {
 			case "unsupported":
@@ -231,6 +241,14 @@ export function SettingsScreen(props: SettingsScreenProps) {
 			<Show when={voice.available()}>
 				<section class={styles.section}>
 					<h3 class={styles.sectionTitle}>VOICE</h3>
+					<label class={styles.row}>
+						<span class={styles.label}>Hands-free listening</span>
+						<input
+							type="checkbox"
+							checked={voice.listening()}
+							onChange={(e) => voice.setListening(e.currentTarget.checked)}
+						/>
+					</label>
 					<label class={`${styles.row} ${styles.spokenReplies}`}>
 						<span class={styles.label}>Spoken replies</span>
 						<input
@@ -244,9 +262,22 @@ export function SettingsScreen(props: SettingsScreenProps) {
 
 			<section class={styles.section}>
 				<h3 class={styles.sectionTitle}>APPEARANCE</h3>
+				<div class={styles.row}>
+					<span class={styles.label}>New text indicator</span>
+					<button
+						type="button"
+						class={styles.toggle}
+						classList={{ [styles.toggleOn]: transcriptPreferences.enabled() }}
+						aria-label="New text indicator"
+						aria-pressed={transcriptPreferences.enabled()}
+						onClick={() => transcriptPreferences.setEnabled(!transcriptPreferences.enabled())}
+					>
+						<span class={styles.toggleThumb} />
+					</button>
+				</div>
 				<label class={styles.row}>
 					<span class={styles.label}>Theme</span>
-					<select
+					<Select
 						class={styles.select}
 						aria-label="Theme"
 						value={theme()}
@@ -268,7 +299,7 @@ export function SettingsScreen(props: SettingsScreenProps) {
 					>
 						<option value="commander">Dark</option>
 						<option value="vscode-light">Light</option>
-					</select>
+					</Select>
 				</label>
 				<Show when={themeError()}>
 					<div class={styles.hint} role="alert" style={{ color: "var(--error)" }}>
@@ -308,6 +339,17 @@ export function SettingsScreen(props: SettingsScreenProps) {
 						classList={{ [styles.toggleOn]: soundEnabled() }}
 						onClick={toggleSound}
 						aria-pressed={soundEnabled()}
+					>
+						<span class={styles.toggleThumb} />
+					</button>
+				</div>
+				<div class={styles.row}>
+					<span class={styles.label}>Keep screen awake while dictating</span>
+					<button
+						class={styles.toggle}
+						classList={{ [styles.toggleOn]: keepAwake() }}
+						onClick={toggleKeepAwake}
+						aria-pressed={keepAwake()}
 					>
 						<span class={styles.toggleThumb} />
 					</button>

@@ -240,6 +240,8 @@ uncapping the server.
 |--------|------|-------------|
 | `POST` | `/design-mode/start` | Start/rebind the dedicated Edge/Chrome profile (`{sessionId, browser?}`) |
 | `POST` | `/design-mode/stop` | Stop inspection for a repository (`{repoPath}`) |
+| `POST` | `/design-mode/reload` | Ask the armed browser to reload the reviewed tab once (`{repoPath}`) |
+| `POST` | `/design-mode/navigate` | Ask the armed browser to open a localhost URL in the reviewed tab once (`{repoPath, url}`) |
 | `GET` | `/design-mode` | Read the array of per-repository Design Mode statuses |
 | `POST` | `/design-mode/extension` | Versioned native-host pick, send, discovery and configured server-start operations |
 
@@ -424,7 +426,7 @@ Client ──WebSocket──> /sessions/{session_id}/stream
 
 When sessions are created or closed (via HTTP, MCP, or PTY exit), the server broadcasts events through the SSE event bus:
 
-- **`session-created`** — Emitted when a new PTY session is created (both local and MCP-spawned). Carries `session_id`, `cwd`, `agent_type`, the optional stable `display_name`, and `parent_session` (the spawning agent's `$TUIC_SESSION`, present only for `agent action=spawn` by a caller with a registered identity — a `pending-mcp:` placeholder is never published; the UI marks such tabs with a shared robot icon). Frontend uses this to auto-add remote tabs; a spawn-assigned name may be refined by an `intent:` title or replaced by a user rename, but an agent's OSC 0/2 title (Claude Code's own session title) never replaces it, while session-list snapshots carry independent `display_name_is_custom`, `display_name_from_spawn` and `is_remote` flags, plus `parent_session` and the live `tuic_session` bound to each PTY, for reconnect and parent-name resolution.
+- **`session-created`** — Emitted when a new PTY session is created (both local and MCP-spawned). Carries `session_id`, `cwd`, `agent_type`, the optional stable `display_name`, and `parent_session` (the spawning agent's `$TUIC_SESSION`, present only for `agent action=spawn` by a caller with a registered identity — a `pending-mcp:` placeholder is never published; the UI marks such tabs with a shared robot icon). Frontend uses this to auto-add remote tabs; a spawn-assigned name is stored as a custom name (`display_name_is_custom`), like `session rename is_custom=true`: neither an `intent:` title nor an agent's OSC 0/2 title replaces it, only a user rename does, while session-list snapshots carry independent `display_name_is_custom`, `display_name_from_spawn` and `is_remote` flags, plus `parent_session` and the live `tuic_session` bound to each PTY, for reconnect and parent-name resolution.
 - **`term-alias-assigned`** — Emitted when a session receives its human-friendly alias. Carries `session_id` and `alias`. Published after `session-created` on the bus, and also as a desktop window event. Frontend uses this to update tab tooltips; it fires once, so after a reload the alias comes from the session list (`alias` on `GET /sessions` / `list_active_sessions`).
 - **`session-renamed`** — Emitted when MCP `session action=rename` changes a tab's display name. Carries `session_id`, `name` and `is_custom`. The desktop and browser UIs update the tab bar and sidebar from it. The name must be one line of at most 256 characters without control characters.
 - **`session-suspend-requested`** — Emitted when MCP `session action=suspend` passed the busy check. Carries `session_id` and `request_id`. The UI ends that tab's PTY and keeps the tab suspended.
@@ -664,6 +666,7 @@ the very next `tools/list` deliver the full one, for the identical request.
 The BM25 index lives in `AppState::tool_search_index` (`parking_lot::RwLock<ToolSearchIndex>`, backed by `src-tauri/src/tool_search.rs`). A background task subscribes to the `mcp_tools_changed` broadcast and rebuilds the index whenever the tool set changes (upstream connect/disconnect, `disabled_native_tools` edit, `collapse_tools` toggle).
 
 The MCP instructions string returned by `initialize` (`build_mcp_instructions`) swaps to a "lazy discovery" guide when `collapse_tools: true` or the connecting Grok session requires compatibility mode, so agents know to call `search_tools` first rather than looking for a flat tool table.
+The initialize instructions carry no repository paths. The `## Repos` section is one line: the repository count, the count per group and per remote connection, and the `repo action=list` call (the `call_tool` form when tools are collapsed). `repo action=list` returns each repository with its `group` and, for a repository on a remote connection, `connection_id`; local rows have no `connection_id`. The `## What TUIC gives you` section names the native tools registered on that install by purpose (reach the user, drive the platform, other) and the connected upstream servers with their tool counts and how to discover those tools (ToolSearch for Claude Code, `search_tools` when collapsed). It names only tools that `tools/list` serves and is omitted when there are none. The `suggest:` marker is omitted for a spawned child (an MCP session bound to a peer with a parent session); root sessions keep it. Upstream servers have no description field in their configuration, so only names are listed.
 The TUIC connection acknowledgment in those instructions is emitted exactly once per MCP connection or reconnect, never once per conversational turn. TUIC protocol context remains in initialize instructions and native core-tool descriptions only; upstream tool descriptions are preserved instead of receiving a repeated TUIC preamble.
 When intent markers are enabled for the connecting agent, initialize instructions require `intent:` on its own line, at the start of every user task and on material phase changes. "On its own line" is in the instruction because the ack sentence is required to open that same first message: an agent that runs the two together leaves the token mid-row, where the parser has to reach for it (see `docs/backend/output-parser.md` → Intent). The backend stores that dynamic intent independently from the spawn-time PTY description and the last submitted prompt.
 
@@ -679,7 +682,7 @@ on its first turn. Deferred tool discovery can expose them later.
 
 | Surface | Transport receipt | Model visibility | Owns |
 |---|---|---|---|
-| `initialize.instructions` (`render_mcp_instructions`) | Returned in the initialize response | Harness-dependent: Claude exposes a bounded system block; Codex exposes namespace metadata after discovery in the measured mode | Wire protocol markers, cross-tool rules, live state |
+| `initialize.instructions` (`render_mcp_instructions`) | Returned in the initialize response | Harness-dependent: Claude exposes a bounded system block; Codex exposes namespace metadata after discovery in the measured mode | Wire protocol markers, a capability map, cross-tool rules, live state |
 | tool `description` (`native_tool_definitions`) | Returned for advertised tools on `tools/list` | May be deferred by the harness; in Speakeasy mode native descriptions arrive through discovery | That tool's actions, arguments and semantics |
 
 **Pinned canary evidence (2026-10-04).** Claude Code **2.1.286**, with
@@ -952,6 +955,9 @@ output device, per-sound mutes) rather than inventing a tone. The event is
 dual-emitted — Tauri `emit` for the desktop WebView **and** the event bus for
 SSE clients; a bus-only send never reaches the desktop, which has no bus→window
 forwarder.
+
+**`ui action=toast` urgency.** `urgency` accepts `normal` (default) or `urgent`, the same names as `agent action=send`. Other values are rejected; the value rides the `mcp-toast` event on both transports. MCP toast notices show a transient card only while their origin terminal tab is active. Settings → Notifications → **Show cards from the active terminal** defaults on and is saved per client; turning it off restores urgent-only cards. Urgent notices always show a card, and notices without an origin session remain bell-only unless urgent.
+
 
 The toast also resolves the calling MCP session to its peer project, PTY cwd, or
 session repository metadata (in that order). The resulting `origin_repo_path` is
@@ -1573,7 +1579,7 @@ so callers cannot replace peer identity. Environment values are redacted from
 spawn logs.
 Managed Claude peers default to `CLAUDE_CODE_TMPDIR=$HOME/Gits/.tmp/claude/`; TUIC creates this directory before spawn and preserves an explicit inherited, run-config or caller value.
 
-`name` optionally assigns a non-empty peer and PTY display name at spawn time.
+`name` optionally assigns a non-empty peer and PTY display name at spawn time, pinned against later `intent:` and OSC titles.
 The parent-assigned name is stored before prompt delivery, returned in the spawn
 response, exposed as `name` by `agent action=list_peers` and as `display_name`
 by `session action=list`, and preserved when the child later auto-binds its MCP
@@ -2186,3 +2192,7 @@ Automation templates (#1622-be11): the shared automation action accepts
 repository, run_config and optional timezone (host local by default).
 Drafts have fresh ids and start disabled; no definition or run is created until
 an explicit create action. These actions match across HTTP, IPC, MCP and CLI.
+
+### Design Mode lifecycle tool
+
+The native `design_mode` tool exposes `start`, `stop`, `status`, `reload` and `navigate` through normal discovery and dispatch. Start accepts `session_id`, optional `browser` (`chrome` or `edge`) and optional absolute HTTP(S) `url`. Session references resolve like the session tool. Stop accepts `repo_path` from start/status. Reload takes the same `repo_path` and bumps a per-repository reload sequence; the extension reloads the reviewed tab once on its next heartbeat. Navigate takes `repo_path` and `url` (HTTP(S) on `localhost`, `127.0.0.1` or `[::1]`, no credentials); the heartbeat reply then carries `navigate: {seq, url}` and the extension opens the URL in the reviewed tab once per sequence. The sequence survives a re-arm but the URL does not, so a new Start never replays an old navigation. Reload and navigate answer "Design Mode is not running for this repository" when nothing is armed. The extension posts `heartbeat` to `/design-mode/extension` every 5 s (reply `{armed, reloadSeq, navigate?}`); an armed mode is stopped 60 s after the last heartbeat, or 10 min after Start when none arrived. The adapter uses the same lifecycle core as HTTP and IPC; headless builds return an explicit desktop-host-required error. URL-aware start is the default coordinator path for layout work.

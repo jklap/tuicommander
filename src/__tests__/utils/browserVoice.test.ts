@@ -215,6 +215,29 @@ describe("starting a browser voice session on iOS", () => {
 	});
 });
 
+describe("a replies-only browser voice session", () => {
+	it("opens the socket and the speaker but never the microphone", async () => {
+		// catches: replies-only still asks for the microphone, so a phone prompts
+		// for a device the user turned off and streams silence to the server.
+		const nodes = fakeContext();
+		const getUserMedia = vi.fn(async () => ({ getTracks: () => [] }) as unknown as MediaStream);
+		const session = { type: "auto" };
+		const deps: BrowserVoiceDeps = {
+			openSocket: () => new FakeSocket() as unknown as WebSocket,
+			getUserMedia,
+			createContext: () => nodes.context,
+			audioSession: () => session,
+		};
+
+		const voice = await connectBrowserVoice("b1", deps, false);
+
+		expect(getUserMedia).not.toHaveBeenCalled();
+		expect(nodes.capture.connect).not.toHaveBeenCalled();
+		expect(session.type).toBe("playback");
+		expect(() => voice.stop()).not.toThrow();
+	});
+});
+
 describe("openMicrophone", () => {
 	afterEach(() => vi.unstubAllGlobals());
 
@@ -362,5 +385,54 @@ describe("a browser voice session", () => {
 		expect(tracks[0].stop).toHaveBeenCalled();
 		expect(nodes.capture.disconnect).toHaveBeenCalled();
 		expect(socket.closed).toBe(true);
+	});
+});
+
+describe("the screen lock of a browser voice session", () => {
+	const lock = { release: vi.fn(async () => {}) };
+	const request = vi.fn(async () => lock);
+	const deps = (listen: boolean): BrowserVoiceDeps => ({
+		openSocket: () => new FakeSocket() as unknown as WebSocket,
+		getUserMedia: async () => {
+			if (!listen) throw new Error("replies-only must not open the microphone");
+			return { getTracks: () => [] } as unknown as MediaStream;
+		},
+		createContext: () => fakeContext().context,
+		audioSession: () => undefined,
+	});
+	const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+	beforeEach(() => {
+		localStorage.clear();
+		Object.defineProperty(navigator, "wakeLock", { configurable: true, value: { request } });
+	});
+	afterEach(() => {
+		Reflect.deleteProperty(navigator, "wakeLock");
+		vi.clearAllMocks();
+	});
+
+	// Catches: hands-free listening on a phone lets the screen lock and the conversation go deaf.
+	it("holds the lock while the microphone is open and releases it on stop", async () => {
+		const session = await connectBrowserVoice("b1", deps(true));
+		await flush();
+		expect(request).toHaveBeenCalledOnce();
+		session.stop();
+		expect(lock.release).toHaveBeenCalledOnce();
+	});
+
+	// Catches: a refused microphone start leaves the screen pinned awake.
+	it("takes no lock when the microphone fails to open", async () => {
+		const failing = { ...deps(true), getUserMedia: async () => Promise.reject(new Error("denied")) };
+		await expect(connectBrowserVoice("b1", failing)).rejects.toThrow("denied");
+		await flush();
+		expect(request).not.toHaveBeenCalled();
+	});
+
+	// Catches: a replies-only conversation, which captures nothing, keeps the screen on.
+	it("takes no lock in a replies-only conversation", async () => {
+		const session = await connectBrowserVoice("b1", deps(false), false);
+		await flush();
+		expect(request).not.toHaveBeenCalled();
+		session.stop();
 	});
 });

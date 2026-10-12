@@ -56,16 +56,7 @@
 	color: var(--fg-muted);
 }
 
-.ipRow select {
-	flex: 1;
-	min-width: 0;
-	padding: 6px 8px;
-	background: var(--bg-tertiary);
-	color: var(--fg-primary);
-	border: 1px solid var(--border);
-	border-radius: var(--radius-sm);
-	font-size: var(--font-sm);
-}
+.ipRow select { flex: 1; min-width: 0; }
 
 .url {
 	display: block;

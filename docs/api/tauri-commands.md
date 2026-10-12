@@ -112,7 +112,7 @@ that session's input draft without submitting it.
 
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
-| `start_design_mode` | `sessionId: String` | `DesignModeStatus` | Start or rebind inspection for an agent terminal; opens the repository's configured URL or `about:blank` |
+| `start_design_mode` | `sessionId: String, browser?: String, url?: String` | `DesignModeStatus` | Start or rebind an agent terminal; optional HTTP(S) `url` opens directly, otherwise uses discovery/onboarding |
 | `stop_design_mode` | `repoPath: String` | `DesignModeStatus` | Stop inspection for a repository |
 | `get_design_mode_status` | -- | `Vec<DesignModeStatus>` | Read the active per-repository modes |
 
@@ -347,6 +347,7 @@ remote daemon.
 | `detect_all_agent_binaries` | `binaries` | `HashMap<String, AgentBinaryDetection>` | Detect the named binaries in parallel, path only (no version or screen-capability lookup) |
 | `detect_claude_binary` | -- | `String` | Detect Claude binary |
 | `detect_installed_ides` | -- | `Vec<String>` | Detect installed IDEs |
+| `open_default_app` | `target: String, kind: "url" \| "path"` | `()` | Host-only default application open; allows http/https/mailto/tel URLs, checks path metadata, returns after spawn and reaps the launcher through `tuic_core::child_reaping` |
 | `open_in_app` | `path, app, line?, col?` | `()` | Open path in application; `line`/`col` are used only by editors that support them |
 | `spawn_agent` | `pty_config, agent_config` | `String` (session ID) | Spawn agent in PTY |
 
@@ -354,7 +355,7 @@ remote daemon.
 
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
-| `discover_agent_session` | `agent_type, cwd, claimed_ids, agent_pid, env_overrides` | `Option<{ sessionId, launchCommand }>` | Discover the agent's session UUID for session-aware resume. Claude and grok resolve it exactly from their pid→session registry when `agent_pid` is known; every other agent (and any Claude/grok too old to publish one) falls back to the newest unclaimed session file, which cannot tell two tabs in one folder apart. `launchCommand` is the command the live process really runs, rebuilt from its argv and env (`CLAUDE_CONFIG_DIR=… claude --dangerously-skip-permissions`) — a shell alias is expanded before `exec`, so it is the only record of which config dir holds the session. `null` for agents with no verified session-flag list, and on Windows, where argv is unreadable |
+| `discover_agent_session` | `agent_type, cwd, claimed_ids, agent_pid, env_overrides` | `Option<{ sessionId, launchCommand, provider }>` | Discover the agent's session UUID for session-aware resume. Claude and grok resolve it exactly from their pid→session registry when `agent_pid` is known; every other agent (and any Claude/grok too old to publish one) falls back to the newest unclaimed session file, which cannot tell two tabs in one folder apart. `launchCommand` is the command the live process really runs, rebuilt from its argv and env (`CLAUDE_CONFIG_DIR=… claude --dangerously-skip-permissions`) — a shell alias is expanded before `exec`, so it is the only record of which config dir holds the session. `null` for agents with no verified session-flag list, and on Windows, where argv is unreadable. `provider` is the model provider the session runs on, for ego only: the first segment of `model` in the pid-leased `<EGO_HOME>/sessions/<id>/manifest.json`; the sidebar picks the ego icon from it (`null` when unreadable, which shows the generic ego icon) |
 | `verify_agent_session` | `agent_type, session_id, cwd, agent_pid, env_overrides` | `bool` | Verify that the session file exists in the agent's selected profile. A live PID can supply process environment; saved launch environment selects the profile after restart. HTTP parity: `POST /agents/verify-session` |
 
 ## Panel Windows (`panel_window.rs`)
@@ -523,7 +524,7 @@ These commands stay in the root `dictation/commands.rs` adapter; their audio and
 | `list_audio_devices` | -- | `Vec<AudioDevice>` | List input devices |
 | `get_dictation_config` | -- | `DictationConfig` | Load saved config. With an activation phrase, the hands-free runtime applies at least 5000 ms of hold-back even when the saved `hands_free_hold_back_ms` is shorter; hands-free status reports the effective value |
 | `get_hands_free_default_notice` | -- | `string` | The built-in hands-free start notice, sent while `hands_free_start_notice` is empty |
-| `set_dictation_config` | `base, config` | `()` | Save only the changes between the loaded base and edited config. A changed `language`, `speechCommand` or `speech_voice` also drops the voice built for the previous one, cancelling what it was speaking; hands_free_spoken_replies=false also cancels it and refuses new speech while dictation stays armed. Edge 401/403 rejection makes speech unavailable for five minutes. Other fields leave the voice alone. `hands_free_earcons` (default true) turns the hands-free earcons off; only the frontend reads it. `hands_free_notify_model` (default true) is read at arm time only — turning it off mid-conversation does not cancel the end notice the model is already owed. `hands_free_start_notice` (default empty = built-in text) replaces the start notice, also at arm time only, folded to one line |
+| `set_dictation_config` | `base, config` | `()` | Save only the changes between the loaded base and edited config. A changed `language`, `speechCommand` or `speech_voice` also drops the voice built for the previous one, cancelling what it was speaking; hands_free_spoken_replies=false also cancels it and refuses new speech while dictation stays armed. Edge 401/403 rejection makes speech unavailable for five minutes. Other fields leave the voice alone. `hands_free_listening` (default true, read at arm time only; false arms a replies-only conversation with no microphone, and arming with it and `hands_free_spoken_replies` both false is refused). `hands_free_earcons` (default true) turns the hands-free earcons off; only the frontend reads it. `hands_free_notify_model` (default true) is read at arm time only — turning it off mid-conversation does not cancel the end notice the model is already owed. `hands_free_start_notice` (default empty = built-in text) replaces the start notice, also at arm time only, folded to one line |
 | `check_microphone_permission` | -- | `String` | Check macOS microphone TCC permission status |
 | `open_microphone_settings` | -- | `()` | Open macOS System Settings > Privacy > Microphone |
 
@@ -895,10 +896,10 @@ previews/presets, UTC run summaries and owner-guarded Run Now with
 `POST /automations/action`. Invoke with `{input:{action:"list"}}`; response values
 and application error messages match HTTP. See the HTTP Automations action table
 for every field and reply. Blocking storage/schedule work runs off the main
-thread. Run Now executes only on the addressed backend; phase 1 is Once-only.
+thread. Run Now executes only on the addressed backend; Once and cron definitions both run.
 
 `automation_action` also accepts `{input:{action:"run",id:"<run id>"}}` to fetch a canonical saved run for notification navigation. Native automation click targets are `{kind:"automation",id:"<run id>"}` on macOS.
-Design Mode v2: `start_design_mode(sessionId, browser?: "edge" | "chrome")` opens the dedicated browser profile and installs its native host. HTTP `POST /design-mode/start` accepts the identical camelCase body. Stop/status and the terminal badge retain their existing shapes. The browser opens on the backend host.
+Design Mode v2: `start_design_mode(sessionId, browser?: "edge" | "chrome", url?: string)` opens the dedicated browser profile and installs its native host. HTTP `POST /design-mode/start` accepts the identical camelCase body. Stop/status and the terminal badge retain their existing shapes. The browser opens on the backend host.
 
 Automation precheck context (#1631-45bf): definitions can opt in with
 `precheck.inject_output: true` (default false). Proceeding checks prefix the
@@ -949,3 +950,7 @@ Automation templates (#1622-be11): the shared automation action accepts
 repository, run_config and optional timezone (host local by default).
 Drafts have fresh ids and start disabled; no definition or run is created until
 an explicit create action. These actions match across HTTP, IPC, MCP and CLI.
+
+### History-anchored viewport scrolling
+
+`terminal_scroll_to_anchor` accepts `{ sessionId: string, anchor: number | null }` and returns `()`. The all-time row includes evicted rows, matching `historyBase + historySize - displayOffset`. Null follows output; a trimmed anchor clamps to the oldest retained row. HTTP uses `POST /sessions/:id/terminal/scroll-to-anchor` with the same anchor value.

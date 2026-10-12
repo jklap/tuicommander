@@ -34,6 +34,10 @@ impl<S: Store> Service<S> {
         Self { catalogue, owner }
     }
 
+    pub fn store_id(&self) -> &str {
+        self.owner.id()
+    }
+
     fn check_owner(&self, target: &Target, store: &str) -> Result<(), Failure> {
         if store != self.owner.id() || *target != self.owner.target() {
             // Use the registered store, never echo an arbitrary caller string.

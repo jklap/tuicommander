@@ -17,6 +17,15 @@ optional `audio-output` feature. The output-device selection is unchanged.
 
 Local voice-to-text using Whisper with Metal acceleration on macOS. Push-to-talk workflow with streaming partial results: hold hotkey to record, see partial transcriptions in real-time, release to finalize.
 
+On macOS, losing main-window focus does not release a physically held Fn key.
+The local event monitor still handles ordinary key-up. After focus loss, a
+temporary AppKit timer checks the current modifier flags every 50 ms, stops
+capture and emits key-up once Fn is released, then invalidates itself. The timer
+runs in common main-run-loop modes so menu tracking does not suspend it. It
+requests no global keyboard-monitor permission and does not poll while idle.
+The file log records `Fn focus loss observed` with the physical key state; a
+release found by the timer records `origin="fn-state-poll"`.
+
 ## Diagnose speech that also appears in the mobile composer
 
 Hands-free uses `pty::write_voice_turn` for its bound session. The mobile
@@ -63,6 +72,16 @@ bundle. A desktop rebuild does not replace JavaScript already loaded on a phone.
 | `echo/webrtc.rs` | The WebRTC AEC3 adapter |
 
 All unqualified files in this table are in `tuic-dictation/src/`. The domain crate has no Tauri or Tokio dependency. `DictationConfig` is defined in the root `config.rs` and re-exported at its previous command path. The root keeps the desktop feature gate, commands, downloads, PTY ports and event emission.
+
+## Screen wake lock while capturing
+
+`holdScreenAwake()` (`src/utils/screenWakeLock.ts`) owns the one Screen Wake Lock of a browser client.
+Browser hands-free (`connectBrowserVoice`, only when the microphone opens) and mobile push-to-talk
+(`useBrowserDictation`) take it at capture start and release it at stop, failure or cancel. The page
+releases it when hidden and requests it again on return while capture runs. The per-device setting
+`tuic-mobile-keep-awake` (mobile Settings, default on) turns it off. A missing API or a refused request
+is logged once and never blocks capture. Safari supports the API from 16.4, but home-screen web apps
+only from iOS 18.4 ([WebKit bug 254545](https://bugs.webkit.org/show_bug.cgi?id=254545)).
 
 ## Whisper build cache
 
@@ -164,6 +183,8 @@ The HTTP body of the import uses the same camelCase key as the IPC argument
 (`dataBase64`).
 
 ### Spoken replies
+
+**Hands-free listening and spoken replies are two independent settings** (`hands_free_listening`, `hands_free_spoken_replies`, both default true). Listening on, replies off: speech is captured and the model is told to answer in text. Listening off, replies on (*replies-only*): arming binds the terminal, opens the reply queue and sends the entry hint, but never opens a microphone — the runtime runs against a `MutedVoiceEndpoint` that only reports whether the owner is still there, so a closed terminal or lost client still ends the conversation. Input stays push-to-talk, and the language Whisper detects for a push-to-talk take is recorded on the conversation (`note_push_to_talk_language`) so `auto` can voice a reply. Both off: arming is refused. **Migration:** a config without `hands_free_listening` reads as true, so every existing user keeps today's behaviour (listening on, replies unchanged). `hands_free_listening` is read at arm time only; `HandsFreeStatus.listening` reports what the running conversation does.
 
 **Spoken replies** is on by default. The persisted hands_free_spoken_replies preference applies to the backend device and its armed conversation, shared by mobile and Settings. Turning it off cancels queued speech, refuses new replies before engine access, and makes the arming notice request text replies. Dictation continues.
 

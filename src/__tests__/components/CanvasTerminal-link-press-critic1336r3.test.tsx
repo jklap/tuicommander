@@ -31,6 +31,7 @@ vi.mock("../../components/Terminal/gridRenderer", () => ({
 }));
 
 import CanvasTerminal from "../../components/Terminal/CanvasTerminal";
+import { terminalsStore } from "../../stores/terminals";
 
 const ROWS = 2;
 const COLS = 30;
@@ -82,6 +83,7 @@ describe("CanvasTerminal link press, critic 1336 round 3", () => {
 	let lateFileExists = false;
 	let osc8Active = false;
 	let osc8Target = "followups.md";
+	let agentType: string | null = "claude";
 	let canvas: Element;
 	let unmount: () => void;
 
@@ -93,6 +95,11 @@ describe("CanvasTerminal link press, critic 1336 round 3", () => {
 		lateFileExists = false;
 		osc8Active = false;
 		osc8Target = "followups.md";
+		agentType = "claude";
+		const realGet = terminalsStore.get.bind(terminalsStore);
+		vi.spyOn(terminalsStore, "get").mockImplementation((id: string) =>
+			id === "link-1336r3" ? ({ agentType, commandBlocks: [], foldedBlocks: [] } as never) : realGet(id),
+		);
 		invoke.mockImplementation(
 			async (cmd: string, args: { candidate?: string; candidates?: string[]; col?: number; row?: number }) => {
 				if (cmd === "terminal_hyperlink_span") {
@@ -223,6 +230,51 @@ describe("CanvasTerminal link press, critic 1336 round 3", () => {
 		await waitFor(() => expect(onOpen).toHaveBeenCalledWith("/cwd/other.md", undefined, undefined));
 		expect(onOpen).not.toHaveBeenCalledWith("/cwd/followups.md", undefined, undefined);
 	});
+
+	// Catches: starting against the focused tab instead of the terminal that owns the link,
+	// or toggling an already-armed mode off instead of navigating to this URL.
+	it.each(["http://localhost:5173/page?x=1#target", "https://example.com/page"])(
+		"starts Design Mode with the resolved link and owning terminal: %s",
+		async (url) => {
+			await hoverOsc8();
+			osc8Target = url;
+			contextMenu(OSC8_COL);
+			await waitFor(() => expect(document.body.textContent ?? "").toContain("Start in Design Mode"));
+			const parent = Array.from(document.body.querySelectorAll(".item")).find((node) =>
+				node.textContent?.includes("Start in Design Mode"),
+			);
+			(parent as HTMLElement)?.click();
+			await waitFor(() => expect(document.body.textContent ?? "").toContain("Edge"));
+			clickMenuItem("Edge");
+			await waitFor(() =>
+				expect(invoke).toHaveBeenCalledWith("start_design_mode", { sessionId: "link-1336r3", browser: "edge", url }),
+			);
+			expect(invoke).not.toHaveBeenCalledWith("stop_design_mode", expect.anything());
+		},
+	);
+
+	// Catches: offering a Design Mode start on a plain shell, where it always fails with
+	// "Session is not running an agent".
+	it("does not offer Design Mode on a terminal without an agent", async () => {
+		agentType = null;
+		await hoverOsc8();
+		osc8Target = "http://localhost:5173/";
+		contextMenu(OSC8_COL);
+		await waitFor(() => expect(document.body.textContent ?? "").toContain("Copy link"));
+		expect(document.body.textContent ?? "").not.toContain("Start in Design Mode");
+	});
+
+	// Catches: offering browser inspection for a file/custom-scheme terminal link.
+	it.each(["followups.md", "file:///tmp/followups.md", "ftp://example.com/file"])(
+		"does not offer Design Mode for non-web link: %s",
+		async (url) => {
+			await hoverOsc8();
+			osc8Target = url;
+			contextMenu(OSC8_COL);
+			await waitFor(() => expect(document.body.textContent ?? "").toContain("Copy link"));
+			expect(document.body.textContent ?? "").not.toContain("Start in Design Mode");
+		},
+	);
 
 	// Catches: the hover-only menu opening but its Open item wired to nothing (menu target unset).
 	it("Open from a hover-only link menu opens the hovered link", async () => {

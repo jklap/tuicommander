@@ -18,7 +18,7 @@ impl RunStore {
     pub(crate) fn start_graph_run(
         &self,
         request: &GraphStartRequest,
-    ) -> Result<RunSnapshot, String> {
+    ) -> Result<RunSnapshot, RunStartError> {
         validate_key("start request id", &request.request_id)?;
         request.limits.validate()?;
         let owner = crate::progress::resolve_owning_project(Some(&request.project))?
@@ -171,9 +171,7 @@ impl RunStore {
             },
         };
         let snapshot = apply_event(None, &event)?;
-        tx.execute("INSERT INTO workflow_runs(id,project,plan_id,status,snapshot_json) VALUES (?1,?2,?3,?4,?5)",
-            params![snapshot.id, snapshot.project, snapshot.plan_id, snapshot.status.as_str(), encode(&snapshot)?])
-            .map_err(|e| format!("start graph run: {e}"))?;
+        insert_started_run(&tx, &snapshot, "start graph run")?;
         insert_event(
             &tx,
             &snapshot.id,

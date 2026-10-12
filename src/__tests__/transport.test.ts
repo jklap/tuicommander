@@ -67,6 +67,17 @@ describe("COMMAND_TABLE source scan", () => {
 	});
 });
 
+// Catches: HTTP maps history anchors to tail offsets or drops the null tail sentinel.
+it("maps anchored scrolling with the same row coordinate and tail sentinel as IPC", () => {
+	for (const anchor of [0, 123, null]) {
+		expect(mapCommandToHttp("terminal_scroll_to_anchor", { sessionId: "anchor", anchor })).toEqual({
+			method: "POST",
+			path: "/sessions/anchor/terminal/scroll-to-anchor",
+			body: { anchor },
+		});
+	}
+});
+
 describe("orphan cleanup transport", () => {
 	it("maps the assessment and pending answer to the same repo path", () => {
 		const repoPath = "/repo with space";
@@ -306,10 +317,33 @@ describe("transport", () => {
 				path: "/design-mode/start",
 				body: { sessionId: "agent-1", browser: "edge" },
 			});
+			// Catches: link URL being dropped by the HTTP transport.
+			expect(
+				mapCommandToHttp("start_design_mode", {
+					sessionId: "agent-1",
+					browser: "chrome",
+					url: "http://localhost:5173/page#target",
+				}),
+			).toEqual({
+				method: "POST",
+				path: "/design-mode/start",
+				body: { sessionId: "agent-1", browser: "chrome", url: "http://localhost:5173/page#target" },
+			});
 			expect(mapCommandToHttp("stop_design_mode", { repoPath: "/repo" })).toEqual({
 				method: "POST",
 				path: "/design-mode/stop",
 				body: { repoPath: "/repo" },
+			});
+			// Catches: agent browser control reachable over IPC but missing on the HTTP transport.
+			expect(mapCommandToHttp("reload_design_mode", { repoPath: "/repo" })).toEqual({
+				method: "POST",
+				path: "/design-mode/reload",
+				body: { repoPath: "/repo" },
+			});
+			expect(mapCommandToHttp("navigate_design_mode", { repoPath: "/repo", url: "http://localhost:5173/x" })).toEqual({
+				method: "POST",
+				path: "/design-mode/navigate",
+				body: { repoPath: "/repo", url: "http://localhost:5173/x" },
 			});
 			expect(mapCommandToHttp("get_design_mode_status", {})).toEqual({
 				method: "GET",
@@ -4066,5 +4100,12 @@ describe("work-item link command transport", () => {
 			body: { repoPath: "/r", branch: "feat/a" },
 		});
 		expect(mapCommandToHttp("get_git_remotes", { path: "/r a" }).path).toBe("/repo/remotes?path=%2Fr%20a");
+	});
+});
+
+describe("default-app host boundary", () => {
+	it("does not map default-app opens to a remote host launcher", () => {
+		expect(INTENTIONALLY_UNMAPPED.has("open_default_app")).toBe(true);
+		expect(() => mapCommandToHttp("open_default_app", { target: "https://example.com", kind: "url" })).toThrow();
 	});
 });

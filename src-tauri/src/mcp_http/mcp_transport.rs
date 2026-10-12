@@ -70,6 +70,8 @@ use super::mcp_transport_catalogue::NATIVE_TOOL_SUMMARIES;
 #[cfg(test)]
 use super::mcp_transport_catalogue::REPO_ACTIONS;
 #[cfg(test)]
+use super::mcp_transport_catalogue::RepoSummary;
+#[cfg(test)]
 use super::mcp_transport_catalogue::SESSION_ACTIONS;
 #[cfg(test)]
 use super::mcp_transport_catalogue::TASK_ACTIONS;
@@ -79,6 +81,7 @@ use super::mcp_transport_catalogue::UI_ACTIONS;
 use super::mcp_transport_catalogue::VOICE_ACTIONS;
 use super::mcp_transport_catalogue::build_mcp_instructions;
 use super::mcp_transport_catalogue::build_mcp_instructions_for_mode;
+use super::mcp_transport_catalogue::build_mcp_instructions_for_session;
 #[cfg(test)]
 use super::mcp_transport_catalogue::filtered_native_tools;
 use super::mcp_transport_catalogue::handle_call_tool;
@@ -101,6 +104,10 @@ use super::mcp_transport_catalogue::resolve_allowed_upstreams;
 #[cfg(test)]
 use super::mcp_transport_catalogue::searchable_tool_definitions;
 pub(crate) use super::mcp_transport_catalogue::spawn_tool_search_index_updater;
+#[cfg(test)]
+use super::mcp_transport_catalogue::summarize_repos;
+#[cfg(test)]
+use super::mcp_transport_catalogue::tag_repo_connection;
 #[cfg(test)]
 use super::mcp_transport_catalogue::validate_mcp_repo_path;
 #[cfg(test)]
@@ -364,23 +371,8 @@ pub(super) fn resolve_marker_flags(
 /// already knows the agent (a live session, the marker diagnostics) does not
 /// have to reverse-engineer a client name to ask the question (#4421).
 pub(crate) fn marker_flags_for_agent(state: &AppState, agent_type: Option<&str>) -> (bool, bool) {
-    let global_intent = state.config.read().intent_tab_title;
-    let global_suggest = state.config.read().suggest_followups;
-
     let agents_cfg = crate::config::load_agents_config();
-    let agent_settings = agent_type.and_then(|t| agents_cfg.agents.get(t));
-
-    let show_intent = global_intent
-        && agent_settings
-            .and_then(|s| s.intent_tab_title)
-            .unwrap_or(true);
-
-    let show_suggest = global_suggest
-        && agent_settings
-            .and_then(|s| s.suggest_followups)
-            .unwrap_or(true);
-
-    (show_intent, show_suggest)
+    crate::launch_instructions::marker_flags(&state.config.read(), &agents_cfg, agent_type)
 }
 
 /// SIMP-1: Drain registered HTML tabs for a closing/killed/exited session and
@@ -558,6 +550,7 @@ async fn dispatch_mcp_tool_call_with_context(
         .map(|meta| meta.is_claude_code)
         .unwrap_or(false);
     match name {
+        "design_mode" => crate::design_mode::mcp::handle(state, args).await,
         "automations" => {
             crate::automations::mcp::handle(
                 args,
@@ -953,8 +946,12 @@ pub(super) async fn mcp_post(
             let protocol_version =
                 negotiate_protocol_version(body["params"]["protocolVersion"].as_str());
             let effective_collapse = state.config.read().collapse_tools || requires_meta_tools;
-            let instructions =
-                build_mcp_instructions_for_mode(&state, client_name, effective_collapse);
+            let instructions = build_mcp_instructions_for_session(
+                &state,
+                client_name,
+                effective_collapse,
+                Some(&session_id),
+            );
 
             crate::prompt_receipt::record_mcp_instructions(&state, &session_id, &instructions);
             let response = serde_json::json!({

@@ -191,6 +191,37 @@ describe("dictationStore", () => {
 		});
 	});
 
+	describe("hands-free listening preference", () => {
+		it("reads a config written before the field existed as listening, and keeps an explicit off", async () => {
+			// catches: the migration turns every existing user into replies-only.
+			mockInvoke.mockResolvedValueOnce({ hands_free_spoken_replies: false });
+			await testInScopeAsync(async () => {
+				await store.refreshConfig();
+				expect(store.state.handsFreeListening).toBe(true);
+				expect(store.state.spokenReplies).toBe(false);
+				mockInvoke.mockResolvedValueOnce({ hands_free_listening: false, hands_free_spoken_replies: true });
+				await store.refreshConfig();
+				expect(store.state.handsFreeListening).toBe(false);
+				expect(store.state.spokenReplies).toBe(true);
+			});
+		});
+
+		it("saves listening and spoken replies as two independent fields", async () => {
+			// catches: one toggle writing both settings.
+			const stored = { hands_free_listening: true, hands_free_spoken_replies: true };
+			await testInScopeAsync(async () => {
+				mockInvoke.mockResolvedValueOnce(stored).mockResolvedValueOnce(undefined);
+				await store.saveConfig({ hands_free_listening: false });
+				expect(mockInvoke).toHaveBeenLastCalledWith("set_dictation_config", {
+					base: stored,
+					config: { ...stored, hands_free_listening: false },
+				});
+				expect(store.state.handsFreeListening).toBe(false);
+				expect(store.state.spokenReplies).toBe(true);
+			});
+		});
+	});
+
 	describe("refreshConfig()", () => {
 		it("loads config including model and device fields from backend", async () => {
 			mockInvoke.mockResolvedValueOnce({
@@ -1623,6 +1654,7 @@ describe("dictationStore", () => {
 	describe("hands-free earcons", () => {
 		const status = (overrides: Partial<HandsFreeStatus> = {}): HandsFreeStatus => ({
 			armed: true,
+			listening: true,
 			phase: "waiting",
 			sessionId: "sess-1",
 			owner: "desktop",

@@ -18,6 +18,9 @@ import type { AccountSecretFormStatus, AccountSecretRequest } from "../../../typ
 import { cx } from "../../../utils";
 import { writeClipboard } from "../../../utils/clipboard";
 import { handleOpenUrl } from "../../../utils/openUrl";
+import { Input } from "../../ui/Input";
+import { Select } from "../../ui/Select";
+import { Textarea } from "../../ui/Textarea";
 import { ExpertSetting } from "../ExpertSetting";
 import { SettingSelect, SettingToggle } from "../SettingFields";
 import s from "../Settings.module.css";
@@ -40,7 +43,7 @@ interface AuthStatus {
 	authenticated: boolean;
 	login: string | null;
 	avatar_url: string | null;
-	source: "env" | "oauth" | "gh_cli" | "none";
+	source: "env" | "oauth" | "none";
 	scopes: string | null;
 	error?: string | null;
 }
@@ -57,7 +60,7 @@ interface CircleCiTokenStatus {
 	source: "vault" | "env" | "cliconfig" | "none";
 }
 
-type AccountKind = "github_com_oauth" | "github_com_env" | "github_com_gh_cli" | "ghe_pat";
+type AccountKind = "github_com_oauth" | "github_com_env" | "ghe_pat";
 
 interface GitHubHost {
 	host: string;
@@ -89,7 +92,6 @@ interface RepoResolutionDto {
 const SOURCE_LABELS: Record<string, string> = {
 	oauth: "OAuth (Device Flow)",
 	env: "Environment variable",
-	gh_cli: "gh CLI",
 	pat: "Personal Access Token",
 	none: "Not connected",
 };
@@ -504,7 +506,7 @@ export const GitHubTab: Component = () => {
 					</div>
 				</div>
 
-				{/* Only show logout for OAuth tokens — env/CLI tokens are managed externally */}
+				{/* Only show logout for OAuth tokens — env tokens are managed externally */}
 				<Show when={authStatus()?.source === "oauth"}>
 					<div class={g.actions}>
 						<button class={cx(g.btn, g.btnDanger)} onClick={logout} disabled={loading()}>
@@ -513,11 +515,8 @@ export const GitHubTab: Component = () => {
 					</div>
 				</Show>
 
-				<Show when={authStatus()?.source === "env" || authStatus()?.source === "gh_cli"}>
-					<div class={s.hint}>
-						Token provided via{" "}
-						{authStatus()?.source === "env" ? "environment variable (GH_TOKEN or GITHUB_TOKEN)" : "gh CLI"}.
-					</div>
+				<Show when={authStatus()?.source === "env"}>
+					<div class={s.hint}>Token provided via environment variable (GH_TOKEN or GITHUB_TOKEN).</div>
 					<div class={g.actions}>
 						<button class={cx(g.btn)} onClick={() => startLogin()} disabled={loading()}>
 							{loading() ? "Starting..." : "Switch to OAuth"}
@@ -701,7 +700,7 @@ export const GitHubTab: Component = () => {
 
 				<div class={s.group}>
 					<label>Default Setup Script</label>
-					<textarea
+					<Textarea
 						value={repoDefaultsStore.state.setupScript}
 						onInput={(e) => repoDefaultsStore.setSetupScript(e.currentTarget.value)}
 						placeholder="#!/bin/bash&#10;npm install"
@@ -712,7 +711,7 @@ export const GitHubTab: Component = () => {
 
 				<div class={s.group}>
 					<label>Default Run Script</label>
-					<textarea
+					<Textarea
 						value={repoDefaultsStore.state.runScript}
 						onInput={(e) => repoDefaultsStore.setRunScript(e.currentTarget.value)}
 						placeholder="#!/bin/bash&#10;npm run dev"
@@ -723,7 +722,7 @@ export const GitHubTab: Component = () => {
 
 				<div class={s.group}>
 					<label>Default Archive Script</label>
-					<textarea
+					<Textarea
 						value={repoDefaultsStore.state.archiveScript}
 						onInput={(e) => repoDefaultsStore.setArchiveScript(e.currentTarget.value)}
 						placeholder="#!/bin/bash&#10;docker compose down"
@@ -933,7 +932,7 @@ export const GitHubTab: Component = () => {
 
 					<div class={s.group}>
 						<label>Add Enterprise account</label>
-						<input
+						<Input
 							type="text"
 							placeholder="ghe.example.com"
 							value={newHost()}
@@ -953,7 +952,7 @@ export const GitHubTab: Component = () => {
 				{t("github.circleCiHint", "Use a read-only CircleCI token. Stored tokens are never shown again.")}
 			</p>
 			<div class={s.group}>
-				<input
+				<Input
 					type="password"
 					placeholder={t("github.circleCiPlaceholder", "CircleCI read-only token")}
 					value={circleCiToken()}
@@ -1004,7 +1003,7 @@ export const GitHubTab: Component = () => {
 												<div class={g.tokenSource}>No account for this host — add one above.</div>
 											</Show>
 											<Show when={res().status === "needs-bind"}>
-												<select
+												<Select
 													class={g.bindSelect}
 													value={chosenRemote()[repo.path] ?? res().candidates?.[0]?.remote_name ?? ""}
 													onChange={(e) => setChosenRemote({ ...chosenRemote(), [repo.path]: e.currentTarget.value })}
@@ -1016,7 +1015,7 @@ export const GitHubTab: Component = () => {
 															</option>
 														)}
 													</For>
-												</select>
+												</Select>
 											</Show>
 										</div>
 										<div class={g.actions}>

@@ -23,6 +23,7 @@ pub(crate) mod ai_agent;
 pub(crate) mod attachments;
 #[cfg(feature = "desktop")]
 pub(crate) mod audio_enumeration;
+pub(crate) mod launch_instructions;
 pub(crate) mod prompt_receipt;
 pub mod work_items;
 pub use tuic_core::app_instance;
@@ -46,6 +47,8 @@ pub mod settings;
 pub(crate) use tuic_git::cow;
 pub(crate) mod cpu_watchdog;
 pub(crate) use tuic_core::credentials;
+#[cfg(feature = "desktop")]
+mod default_app;
 pub(crate) mod design_mode;
 // Tests of the sidecar config override that build.rs also compiles; a build
 // script has no test harness.
@@ -1621,10 +1624,9 @@ pub fn run() {
         tracing::error!(source = "app", "Failed to persist config: {e}");
     }
 
-    // Boot reads the environment and nothing else. Every other token source
-    // spawns `gh auth token` or reads the OS credential store, neither of which
-    // is guaranteed to answer, and this runs before the window is built — a
-    // wedged `gh` used to mean no window at all. `setup()` finishes the chain
+    // Boot reads the environment and nothing else. The other token source reads
+    // the OS credential store, which is not guaranteed to answer, and this runs
+    // before the window is built. `setup()` finishes the chain
     // once the window exists.
     let (github_token, github_token_source) = crate::github_auth::resolve_token_from_env();
 
@@ -2052,6 +2054,7 @@ pub fn run() {
             remote_deploy::service::install_remote_daemon,
             remote_deploy::service::uninstall_remote_daemon,
             open_secondary_window,
+            default_app::open_default_app,
             native_notification::show_native_notification,
             panel_window::open_panel_window,
             panel_window::focus_panel_window,
@@ -2112,6 +2115,7 @@ pub fn run() {
             pty::terminal_exit_alt_screen,
             pty::terminal_scroll,
             pty::terminal_scroll_to_offset,
+            pty::terminal_scroll_to_anchor,
             pty::terminal_styled_rows,
             pty::terminal_scroll_to,
             pty::terminal_get_block_rows,
@@ -2518,6 +2522,8 @@ pub fn run() {
             tunnels::tauri_commands::get_tunnel_audit,
             design_mode::tauri_commands::start_design_mode,
             design_mode::tauri_commands::stop_design_mode,
+            design_mode::tauri_commands::reload_design_mode,
+            design_mode::tauri_commands::navigate_design_mode,
             design_mode::tauri_commands::get_design_mode_status,
             acp_commands::acp_workspace_root,
             acp_commands::acp_connect,
@@ -3671,9 +3677,8 @@ mod tests {
         );
     }
 
-    /// `gh auth token` reads the OS credential store and can hang there. It ran
-    /// synchronously before the window was built, so a wedged `gh` meant no
-    /// window at all. Boot now takes only the env vars — which cost nothing and
+    /// The OS credential store can hang. Reading it synchronously before the
+    /// window was built meant no window at all. Boot now takes only the env vars — which cost nothing and
     /// outrank every other source — and `setup()` finishes the chain.
     #[test]
     fn boot_takes_only_the_env_github_token_and_defers_the_rest() {

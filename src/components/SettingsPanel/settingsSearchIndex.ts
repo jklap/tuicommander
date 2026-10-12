@@ -143,6 +143,18 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{
 		tab: "general",
 		section: "Updates",
+		label: "Wait for agents before restarting",
+		labelKey: "general.toggle.deferUpdateRelaunch",
+	},
+	{
+		tab: "general",
+		section: "Updates",
+		label: "Resume all agents after an update",
+		labelKey: "general.toggle.eagerResumeAfterUpdate",
+	},
+	{
+		tab: "general",
+		section: "Updates",
 		label: "Update Channel",
 		labelKey: "general.label.updateChannel",
 		expert: true,
@@ -239,6 +251,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	},
 	// tabs/AppearanceTab.tsx
 	{ tab: "appearance", section: "Tabs", sectionKey: "appearance.heading.tabs" },
+	{ tab: "appearance", section: "Chat", sectionKey: "appearance.heading.chat" },
 	{ tab: "appearance", section: "Repository Groups", sectionKey: "appearance.heading.groups" },
 	{ tab: "appearance", section: "Layout", sectionKey: "appearance.heading.layout" },
 	{ tab: "appearance", section: "UI Legend", sectionKey: "appearance.heading.uiLegend" },
@@ -266,6 +279,13 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		section: "Tabs",
 		label: "Max Tab Name Length",
 		labelKey: "appearance.label.maxTabNameLength",
+	},
+	{ tab: "appearance", section: "Chat", label: "New text indicator", labelKey: "appearance.label.newTextIndicator" },
+	{
+		tab: "appearance",
+		section: "Chat",
+		label: "Mute Intermediate Text",
+		labelKey: "appearance.label.chatMuteIntermediateText",
 	},
 	// tabs/NotificationsTab.tsx
 	{ tab: "notifications", section: "Notification Settings", sectionKey: "notifications.heading.notificationSettings" },
@@ -309,6 +329,12 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		section: "Notification Settings",
 		label: "Toolbar Bell",
 		labelKey: "notifications.label.toolbarBell",
+	},
+	{
+		tab: "notifications",
+		section: "Notification Settings",
+		label: "Show cards from the active terminal",
+		labelKey: "notifications.toggle.autoToastCards",
 	},
 	{
 		tab: "notifications",
@@ -419,6 +445,12 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		labelKey: "dictation.holdBackLabel",
 		expert: true,
 		configKey: "dictation.hands_free_hold_back_ms",
+	},
+	{
+		tab: "dictation",
+		section: "Hands-free conversation",
+		label: "Hands-free listening",
+		labelKey: "dictation.handsFreeListeningLabel",
 	},
 	{
 		tab: "dictation",
@@ -652,6 +684,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		expert: true,
 		configKey: "app.progress_tracking",
 	},
+	{ tab: "agents", section: "Agents", label: "Launch instructions" },
 	{ tab: "agents", section: "ego permissions", label: "Permissions" },
 	{ tab: "agents", section: "ego permissions", label: "Filesystem sandbox" },
 	// tabs/AiChatTab.tsx — the inlined former ProvidersTab content, in file order.

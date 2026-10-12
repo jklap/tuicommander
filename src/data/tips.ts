@@ -10,6 +10,18 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "Agent toast cards",
+		description:
+			"Normal agent notices show a card only on their active origin terminal tab; other tabs receive bell entries only. Turn off Show cards from the active terminal in Settings > Notifications to keep only urgent cards.",
+		shortcut: null,
+	},
+	{
+		feature: "New chat text",
+		description:
+			"While reading earlier chat messages, select New text below to return to the latest reply. Toggle the indicator in Settings > Appearance > Chat.",
+		shortcut: null,
+	},
+	{
 		feature: "Mobile prompt queue",
 		description:
 			"Hold Send and select Queue to submit your current agent draft at its next ready window. Tap Send to submit now.",
@@ -24,7 +36,7 @@ export const TIPS: Tip[] = [
 	{
 		feature: "Design Mode",
 		description:
-			"Start Design Mode from an agent tab, open its browser sidebar, pick elements and comment before sending. Busy agents receive feedback at their next idle window.",
+			"Right-click a terminal web link and choose Start in Design Mode to connect that agent and open the page directly. Pick elements and comment in the browser sidebar before sending.",
 		shortcut: null,
 	},
 	{

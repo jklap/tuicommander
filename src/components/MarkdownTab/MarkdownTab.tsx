@@ -34,6 +34,7 @@ import { DomSearchOverview } from "../shared/DomSearchOverview";
 import e from "../shared/editor-header.module.css";
 import { createSearchVisibility, SearchBar } from "../shared/SearchBar";
 import { ContentRenderer } from "../ui/ContentRenderer";
+import { Select } from "../ui/Select";
 import { CommentOverlay } from "./CommentOverlay";
 import { LiveMarkdownEditor } from "./LiveMarkdownEditor";
 import { liveModeSupported } from "./liveMarkdown";
@@ -667,7 +668,7 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 							<label class={s.agentLabel} for={`review-agent-${props.tab.id}`}>
 								{t("markdownTab.agentLabel", "Agent")}
 							</label>
-							<select
+							<Select
 								id={`review-agent-${props.tab.id}`}
 								class={s.agentSelect}
 								aria-label={t("markdownTab.reviewAgent", "Review agent")}
@@ -679,7 +680,7 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 									<option value="">{t("markdownTab.noAgents", "No agents")}</option>
 								</Show>
 								<For each={reviewAgents()}>{(agent) => <option value={agent.sessionId}>{agent.label}</option>}</For>
-							</select>
+							</Select>
 							<button
 								class={e.btn}
 								disabled={!selectedAgentSession() || sendingChanges()}

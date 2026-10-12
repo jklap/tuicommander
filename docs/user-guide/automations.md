@@ -4,9 +4,8 @@ The backend Once runtime starts on desktop and headless hosts. It records
 precheck decisions before launching the saved agent profile with the literal
 prompt. Precheck output is saved in history. It is not added to the prompt unless
 the definition opts in with `precheck.inject_output: true`.
-Recurring dispatch, public execution controls, completion detection and maximum
-duration enforcement are not yet available. Use isolated test definitions until
-the remaining execution integration is complete.
+Recurring cron definitions dispatch once per due occurrence and Run Now works for
+them. Overlap `skip` still refuses an occurrence while the previous run is open.
 
 Open the command palette and select **Automations**. This dialog manages runs
 on this machine. It does not dispatch onto a different saved remote connection.
@@ -112,3 +111,11 @@ Review and edit the draft, then select **Save**. Templates start paused; applyin
 one never persists a definition or starts a run. **Resume** is a separate action.
 Templates use the existing checkout with no precheck and do not change agent
 permissions. Recurring cadence previews retain the existing runtime limitations.
+
+### Reading the Automations dialog
+
+Search for **Automations**, **scheduler** or **schedule** in the command palette to open the dialog.
+
+Definition cards show a short repository name; hover it for the full path. Daily, weekly, hourly and every-N-minute schedules have plain-language labels. Other expressions retain their cron text. Next-run times come from the backend and use the definition's timezone.
+
+Use Left/Right or Home/End on the Definitions and Runs tabs. New automation, Refresh and search share a toolbar. **Select first automation on open** is enabled by default; clear it to select definitions manually. This preference is saved for the current browser/WebView. Refresh does not replace unsaved edits.

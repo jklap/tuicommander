@@ -1,3 +1,4 @@
+pub use crate::ego_question::parse_ego_question;
 use serde::Serialize;
 
 fn expand_tilde(path: &str) -> String {
@@ -2302,13 +2303,32 @@ pub fn parse_choice_prompt(screen_rows: &[String]) -> Option<ParsedEvent> {
     })
 }
 
+/// Exclusive end of a Claude multi-question Submit review: the separator row
+/// after the tab bar `← ☒ A  ☒ B  ✔ Submit →`, which Claude draws full-bleed at
+/// column zero like the dialog footer, or the end of the screen.
+fn submit_review_end(screen_rows: &[String]) -> Option<usize> {
+    let tab_bar = screen_rows
+        .iter()
+        .rposition(|row| row.starts_with('←') && row.contains("✔ Submit"))?;
+    let end = screen_rows[tab_bar + 1..]
+        .iter()
+        .position(|row| row.starts_with("──"))
+        .map_or(screen_rows.len(), |offset| tab_bar + 1 + offset);
+    Some(end)
+}
+
 /// Claude Ink AskUserQuestion uses arrow navigation and Enter, even though its
 /// displayed options are numbered. Parse only while its column-zero footer is
 /// present; descriptions and wrapped text may separate option rows.
+///
+/// The Submit review that closes a multi-question form (`← ☒ A  ☒ B  ✔ Submit →`
+/// over `Ready to submit your answers?`) has no footer. It is anchored on that
+/// column-zero tab bar instead and ends at the next separator row.
 pub fn parse_claude_ask_user_question(screen_rows: &[String]) -> Option<ParsedEvent> {
     let footer = screen_rows
         .iter()
-        .rposition(|row| is_ink_dialog_footer_row(row))?;
+        .rposition(|row| is_ink_dialog_footer_row(row))
+        .or_else(|| submit_review_end(screen_rows))?;
     let title = (0..footer)
         .rev()
         .find(|&idx| screen_rows[idx].trim_end().ends_with('?'))?;

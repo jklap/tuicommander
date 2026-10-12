@@ -1,6 +1,7 @@
 import { createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { t } from "../../i18n";
 import type { AutomationsStore } from "../../stores/automations";
+import { Select } from "../ui/Select";
 import s from "./AutomationsDialog.module.css";
 import type { AutomationTemplate } from "./contract";
 
@@ -8,6 +9,14 @@ export function TemplatePicker(props: { store: AutomationsStore }) {
 	const [templates, setTemplates] = createSignal<AutomationTemplate[]>([]);
 	const [selected, setSelected] = createSignal("");
 	const [error, setError] = createSignal("");
+	const missing = () => {
+		const draft = props.store.draft();
+		if (!draft?.repository.trim())
+			return t("automations.templateNeedsRepository", "Choose a repository before applying a template.");
+		if (!draft.run_config.trim())
+			return t("automations.templateNeedsRunConfig", "Enter a run config before applying a template.");
+		return "";
+	};
 	let disposed = false;
 	onCleanup(() => {
 		disposed = true;
@@ -37,22 +46,25 @@ export function TemplatePicker(props: { store: AutomationsStore }) {
 			</Show>
 			<label>
 				{t("automations.template", "Template")}
-				<select value={selected()} onChange={(event) => setSelected(event.currentTarget.value)}>
+				<Select value={selected()} onChange={(event) => setSelected(event.currentTarget.value)}>
 					<option value="">{t("automations.chooseTemplate", "Choose a template")}</option>
 					<For each={templates()}>
 						{(item) => <option value={item.id}>{t("automations.templateNames." + item.id, item.name)}</option>}
 					</For>
-				</select>
+				</Select>
 			</label>
 			<p class={s.hint}>
 				{t(
 					"automations.templateHint",
-					"Enter a repository and run config above, then apply a template. Review the draft and save it paused; Resume enables scheduled runs.",
+					"Choose a repository and enter a run config above, then apply a template. Review the draft and save it paused; Resume enables scheduled runs.",
 				)}
+			</p>
+			<p role="alert" class={s.reserved}>
+				{missing()}
 			</p>
 			<button
 				type="button"
-				disabled={!selected() || !props.store.draft()?.repository.trim() || !props.store.draft()?.run_config.trim()}
+				disabled={!selected() || !!missing()}
 				onClick={() => void props.store.applyTemplate(selected())}
 			>
 				{t("automations.applyTemplate", "Apply template")}

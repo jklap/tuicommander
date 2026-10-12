@@ -3,6 +3,7 @@ import { lastMenuActionTime } from "../../menuDedup";
 import { isMacOS, isWindows } from "../../platform";
 import { pluginRegistry } from "../../plugins/pluginRegistry";
 import { appLogger } from "../../stores/appLogger";
+import { designModeBrowsers } from "../../stores/designMode";
 import { settingsStore } from "../../stores/settings";
 import { reclaimParkedTerminal } from "../../stores/terminalOwnership";
 import { terminalsStore } from "../../stores/terminals";
@@ -1008,8 +1009,14 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		const target = scroll.pendingOffset;
 		scroll.pendingOffset = null;
 		scroll.inFlight = true;
-		invokeRef?.("terminal_scroll_to_offset", { sessionId: props.sessionId, offset: target })
-			.catch(ipcErr("terminal_scroll_to_offset"))
+		const frame = currentFrame;
+		if (!frame) {
+			scroll.inFlight = false;
+			return;
+		}
+		const anchor = target === 0 ? null : frame.historyBase + frame.historySize - target;
+		invokeRef?.("terminal_scroll_to_anchor", { sessionId: props.sessionId, anchor })
+			.catch(ipcErr("terminal_scroll_to_anchor"))
 			.finally(() => {
 				scroll.inFlight = false;
 			});
@@ -1031,7 +1038,6 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	// a fractional rest where scrollPosF stays non-integer — we never snap to a line).
 	// We only ever hand off to normal rendering at the bottom (offset 0). Until the
 	// backend frame reaches `settlePending` we keep cache-rendering it (no jump).
-	let settleTimer = 0;
 
 	// Full-frame reconciliation: partial frames (only the rows alacritty marked
 	// dirty) merge into rowMap by index, so if the grid shifts content the canvas
@@ -1077,20 +1083,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		);
 	}
 
-	function finishSettle() {
-		settleTimer = 0;
-		// A settle timer can fire after unmount; the row cache is released by then,
-		// so endSmoothScroll must not run.
-		if (!alive || scroll.settleTarget == null) return;
-		scroll.settleTarget = null;
-		scroll.position = null;
-		endSmoothScroll();
-	}
 	function clearSettlePending() {
-		if (settleTimer) {
-			clearTimeout(settleTimer);
-			settleTimer = 0;
-		}
 		scroll.settleTarget = null;
 	}
 
@@ -1367,8 +1360,6 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		// once the backend frame arrives at offset 0. No motion: 0 has no fractional part.
 		if (position === 0) {
 			scroll.settleTarget = 0;
-			if (settleTimer) clearTimeout(settleTimer);
-			settleTimer = window.setTimeout(finishSettle, 400);
 		}
 		scheduleSmoothRender();
 	}
@@ -1393,10 +1384,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			return;
 		}
 		// Otherwise keep cache-rendering the snapped line until the backend frame
-		// reaches `target` (onFrame settle handler), with a timer as the safety net.
+		// reaches `target` (onFrame settle handler).
 		scroll.settleTarget = target;
-		if (settleTimer) clearTimeout(settleTimer);
-		settleTimer = window.setTimeout(finishSettle, 400);
 		scheduleSmoothRender();
 	}
 
@@ -1543,6 +1532,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			return;
 		}
 		awaitingFullFrame = false;
+		// Purged history cannot acknowledge a gesture that still targets a removed row.
+		if (scroll.position != null && scroll.position > frame.historySize) resetSmoothScroll(false);
 
 		if (scrollChanged || geomChanged || screenChanged) {
 			if (hoveredLink) {
@@ -3461,8 +3452,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			cancelAnimationFrame(rafId);
 			rafId = undefined;
 		}
-		// Smooth-scroll RAF + settle timer also outlive unmount and run against the
-		// released row cache — cancel both.
+		// The smooth-scroll RAF can outlive unmount and use the released row cache.
 		if (smoothRafId) {
 			cancelAnimationFrame(smoothRafId);
 			smoothRafId = 0;
@@ -3673,6 +3663,33 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 							if (t) copyLink(t);
 						},
 					},
+					...(/^https?:\/\//i.test(linkMenuTarget()?.path ?? "") && terminalsStore.get(props.terminalId)?.agentType
+						? [
+								{
+									label: "Start in Design Mode",
+									action: () => {},
+									children: designModeBrowsers.map((browser) => ({
+										label: browser.label,
+										action: () => {
+											const target = linkMenuTarget();
+											if (!target || !invokeRef) return;
+											void invokeRef("start_design_mode", {
+												sessionId: props.sessionId,
+												browser: browser.id,
+												url: target.path,
+											}).catch((error) => {
+												appLogger.error("terminal", "Failed to start Design Mode", error);
+												toastsStore.add(
+													"Design Mode failed",
+													error instanceof Error ? error.message : String(error),
+													"error",
+												);
+											});
+										},
+									})),
+								},
+							]
+						: []),
 				]}
 				x={linkMenu.position().x}
 				y={linkMenu.position().y}
