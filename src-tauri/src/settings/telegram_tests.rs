@@ -225,3 +225,27 @@ async fn unchanged_value_does_not_write() {
         .unwrap();
     assert_eq!(before, after);
 }
+
+#[test]
+fn read_succeeds_while_a_token_setup_holds_the_setup_lock() {
+    // catches: a read taking the exclusive setup.lock, so a get fails with store_failed whenever
+    // a token save or another get is in flight (the lock is held across the getMe round trip).
+    use super::service::Store;
+    let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let paths = crate::telegram::Paths::new(dir.path().to_path_buf());
+    let held = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(paths.file("setup.lock"))
+        .unwrap();
+    held.lock().unwrap();
+    let store = super::telegram::TelegramSettingsStore::at_paths(paths);
+    let value = store.read().expect("a read must not wait on the setup lock");
+    assert_eq!(value["enabled"], false);
+}
