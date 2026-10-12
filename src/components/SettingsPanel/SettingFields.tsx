@@ -1,4 +1,6 @@
 import { type Component, For, type JSX, Show } from "solid-js";
+import { Input } from "../ui/Input";
+import { Select } from "../ui/Select";
 import s from "./Settings.module.css";
 
 export { SettingAccount, type SettingAccountOption, type SettingAccountProps } from "./fields/SettingAccount";
@@ -37,9 +39,9 @@ export const SettingSelect: Component<{
 }> = (props) => (
 	<div class={s.group}>
 		<label>{props.label}</label>
-		<select value={props.value} onChange={(e) => props.onChange(e.currentTarget.value)}>
+		<Select value={props.value} onChange={(e) => props.onChange(e.currentTarget.value)}>
 			<For each={props.options}>{(opt) => <option value={opt.value}>{opt.label}</option>}</For>
-		</select>
+		</Select>
 		<Show when={props.hint}>
 			<p class={s.hint} style={props.hintStyle}>
 				{props.hint}
@@ -93,7 +95,7 @@ export const SettingInput: Component<{
 }> = (props) => (
 	<div class={s.group}>
 		<label>{props.label}</label>
-		<input
+		<Input
 			type={props.type ?? "text"}
 			value={props.value}
 			onInput={(e) => {

@@ -11,6 +11,7 @@ import {
 	planSuggestOverlay,
 	type RowSnapshot,
 } from "../suggestOverlay";
+import recordedCodex from "./fixtures/codex-answer-marker-1720.json";
 
 /** Build a `getRow` lookup from a compact string/bool list, with null past end. */
 function rows(snapshots: Array<[string, boolean]>): (i: number) => RowSnapshot | null {
@@ -366,5 +367,41 @@ describe("answerBlockRanges", () => {
 	// Catches: a literal 💬 line inside a code block ending the answer, as the grid never does.
 	it("keeps a code block that shows a marker inside the answer", () => {
 		expect(answerBlockRanges([p("A", true), code("💬 example"), p("after")])).toEqual([[0, 2]]);
+	});
+});
+
+describe("planSuggestOverlay — Codex bullet-prefixed answer marker (#1720-668c)", () => {
+	const codexRows = recordedCodex.answerRows;
+	const lookup = (snapshots: RowSnapshot[]) => (i: number) => snapshots[i] ?? null;
+
+	it("tints the whole recorded Codex answer, marker row and indented continuations", () => {
+		// catches: ANSWER_MARKER_RE accepting only the Claude bullets, so a `• 💬` row gets no highlight at all
+		const plan = planSuggestOverlay(codexRows.length, lookup(codexRows));
+		expect(plan.blocks).toEqual(codexRows.map((_, row) => ({ row, kind: "answer" })));
+	});
+
+	it("ends a Codex answer at the next column-0 bullet row", () => {
+		// catches: widening the marker to `•` while the answer walk keeps running into the next Codex tool row
+		const get = lookup([
+			{ text: "• 💬 Done.", isWrapped: false },
+			{ text: "  more", isWrapped: false },
+			{ text: "• Ran make test", isWrapped: false },
+			{ text: "  └ ok", isWrapped: false },
+		]);
+		expect(planSuggestOverlay(4, get).blocks.map((b) => b.row)).toEqual([0, 1]);
+	});
+
+	it("starts a new answer at a second Codex marker", () => {
+		// catches: the second `• 💬` row swallowed as a continuation of the first
+		const get = lookup([
+			{ text: "• 💬 First.", isWrapped: false },
+			{ text: "• 💬 Second.", isWrapped: false },
+		]);
+		expect(planSuggestOverlay(2, get).blocks.map((b) => b.row)).toEqual([0, 1]);
+	});
+
+	it("does not tint a Codex bullet row without the marker", () => {
+		// catches: matching any `•` row as an answer instead of only `• 💬`
+		expect(planSuggestOverlay(1, lookup([{ text: "• Ran make test", isWrapped: false }])).blocks).toEqual([]);
 	});
 });

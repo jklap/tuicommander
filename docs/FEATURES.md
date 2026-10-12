@@ -1,5 +1,7 @@
 # TUICommander — Complete Feature Reference
 
+Mobile terminal Send supports long-press Queue for the next agent ready window.
+
 Published story workflows can start in Plans and Stories through the owning daemon. Run history renders graph positions, decisions, evidence and paged event payloads, with explicit graph recovery and cancellation. IPC/HTTP and the generated `workflow_run` MCP schema share the native run service. Plan start remains visibly unavailable pending plan dispatch.
 
 > Canonical capability inventory. Update this file when adding, changing, or removing user-visible features.
@@ -11,9 +13,17 @@ Published story workflows can start in Plans and Stories through the owning daem
 **Last verified:** 2026-09-16  
 **Recent feature delta:** See the [Unreleased](https://github.com/sstraus/tuicommander/blob/main/CHANGELOG.md#unreleased) and [1.7.7](https://github.com/sstraus/tuicommander/blob/main/CHANGELOG.md#177---2026-09-16) changelog sections for what changed recently. Keep this page focused on the current state; do not duplicate the full changelog here.
 
-Desktop AI Chat uses the terminal composer’s pin and blue play buttons. The pin highlights a parked draft; tooltips identify Park, Restore, Swap, Send and Queue.
+Desktop AI Chat uses the terminal composer’s pin and blue play buttons. The pin highlights a parked draft; tooltips identify Park, Restore, Swap, Send and Queue. Mobile Park and Stop share the input row with Attach and Send.
 
 AI Chat image paste discovers capabilities on first use and shares clipboard precedence with Ideas, terminal Compose, and terminal input: Finder image filenames allow attachments, while substantive text takes priority.
+
+## Shared form controls
+
+Desktop and mobile select fields use a shared native Select, with consistent theme
+colours, visible focus, disabled states and touch sizing. Tasks, Settings, Automations,
+Git and chat forms also share Input and Textarea controls. Desktop fields are 36px;
+mobile fields retain 44px touch targets. The Tasks List, Board and Roadmap switch
+supports arrow keys, Home and End.
 
 ## Tasks roadmap component
 
@@ -87,6 +97,10 @@ per cell and the configured history limit still apply.
 
 ### 1.0 Design Mode for agent terminals
 
+The extension sends a heartbeat every five seconds. A stale mode stops after 60 seconds without a heartbeat, or ten minutes after Start if the extension has not connected. Agents can request a page reload with `design_mode action=reload repo_path=<repoPath>`; the worker reloads the reviewed tab once per new sequence.
+
+Right-click an HTTP(S) terminal link (including localhost) and choose **Start in Design Mode**, then **Edge** or **Chrome**, to open that exact page with the terminal agent connected. Agent coordinators use `design_mode action=start session_id=<terminal> url=<page>` for layout work; stop uses the returned `repoPath`.
+
 - Start from an agent terminal’s context menu or the Command Palette. Choose Edge or Chrome; TUIC uses a dedicated profile per repository and browser. The launching terminal remains the default recipient and carries the armed D badge.
 - During the pilot, load the materialised extension folder once using **Load unpacked**. The first-run page explains setup; a missing URL opens these instructions instead of a blank page. The sidebar lists configured URLs and live servers attributed to this repository and its linked worktrees, with fresh PTY advertisements validated against listeners.
 - **Pick element** selects once, then browsing resumes. **Multi-pick**, Escape and Stop control longer collection. Cards keep extraction evidence, optional screenshots and independent comments; delete removes a card. The sidebar offers live local agents from the same repository and reports an exited recipient without switching silently.
@@ -107,6 +121,9 @@ per cell and the configured history limit still apply.
 - **Remote replay health** — Stream failure, unreadable frames and initial replay stalls show a persistent error toast. Reconnect success requires a delivered frame; healthy idle terminals have no output-silence deadline.
 
 - **CLI / Chat view** — Claude terminals switch between the grid and a conversation view with docked Compose input, built from the agent's session file (including older prompts, human text/image follow-ups queued while Claude is busy, replies, folded tool cards, image/PDF markers and model-change cards). The grid is hidden, never unmounted.
+- **Deferred update restart** — After an in-app update installs, TUICommander restarts only when no session is busy or awaiting input; the APP UPDATE notification shows how many are busy and offers **Restart now** (with confirmation). Turn off in **Settings → General → Updates → Wait for agents before restarting** (`defer_update_relaunch`, default on).
+- **Eager resume after an update** — When the app restarts to apply an update, every agent tab with a confirmed session id resumes by itself on every branch, without selecting the branch first. Tabs without a confirmed id keep the click-to-resume banner. Turn off in **Settings → General → Updates → Resume all agents after an update** (`eager_resume_after_update`, default on).
+- **Intermediate Chat text** — Assistant text that a tool call follows in the same turn renders smaller and dimmer in the terminal Chat view, AI Chat and the mobile chat; the last text of a turn keeps the normal style. Switch it off in **Settings → Appearance → Chat → Mute Intermediate Text** (`chat_mute_intermediate_text`, default on).
 - **Chat transcript presentation** — Harness notices use compact system notes, image placeholders use attachment chips, adjacent thinking blocks share a disclosure, and TUIC answers retain the CLI highlight. Historical tool cards show status without fabricated execution timing.
 
 ### 1.2 Tab Bar
@@ -375,7 +392,7 @@ Right-click the main worktree row → **Switch Branch** submenu to checkout a di
 
 ### 2.6 Quick Branch Switcher
 - Hold `Cmd+Ctrl` (macOS) or `Ctrl+Alt` (Win/Linux): show numbered overlay
-- `Cmd+Ctrl+1-9`: switch to branch by index
+- `Cmd+Ctrl+1-9`: switch to branch by index (in the Global Workspace: switch to tab N)
 
 ### 2.7 Park Repos
 - Right-click any repo in the sidebar to park or unpark it
@@ -686,6 +703,7 @@ Tabbed side panel with four tabs: Changes, Log, Stashes, Branches. Replaces the 
 - **Git section** — background git operation results (push, pull, fetch) with success/failure status
 - **Worktrees section** — worktree creation events (from MCP/agent)
 - **Messages section** — agent/MCP notices and agent spawns go directly to the bell, with repository scope and an explicit **Open terminal** action when a session is known. Consecutive identical notices from the same origin within five seconds produce one item and one requested sound. User-action toasts are also retained when **Keep toasts in the bell** is enabled. Overflow from the two-card limit is retained even with that setting off; dedicated-domain toasts that explicitly opt out of Messages stay visible or queued.
+- **Automatic agent toast cards** — MCP toast notices show a transient card only while their origin terminal tab is active. Settings → Notifications → **Show cards from the active terminal** defaults on and is saved per client; turning it off restores urgent-only cards. Urgent notices always show a card, and notices without an origin session remain bell-only unless urgent.
 - **Transient toast placement** — top-right of the terminal area, offset left of a docked panel, with at most two visible cards. Same-kind notices in the same repository/session within five seconds show a ×N summary; every new member restarts its dismissal timer. Errors take a visible slot ahead of informational cards. Tall cards scroll within the upper region so their action buttons remain reachable without covering the bottom input. Clicking a card dismisses it; navigation uses its explicit action.
 - **Plugin activity sections** — registered by plugins via activityStore
 - Click PR notification: opens full PR detail popover for that branch
@@ -924,6 +942,10 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 - **Durable task handles**: `agent action=spawn` returns `task_id` and `poll_interval_ms` alongside `session_id`. The `task` MCP tool polls that handle without blocking — `task action=get` returns `{task_id, status, status_message?, result?, error_detail?, poll_interval_ms}` where status is `working|input_required|completed|failed|cancelled` (the last three final), and `task action=cancel` marks the task cancelled **without** killing the agent (`session action=kill` does that). Use this instead of `agent action=wait` / `session action=wait` when work runs past their 300 s cap or when the client may reconnect: the outcome is recorded by the session exit path whether or not anyone was listening. Tasks live for the TUICommander process only — they are deliberately not persisted, because a restart tears down every PTY
 
 ### 6.14 AI Chat Panel (`Cmd+Alt+A`) — ego over ACP
+
+When new content arrives while you read earlier messages, **New text below** appears above the composer. Select it to return to the bottom and resume following. Scrolling to the bottom also clears it; a search jump alone does not show it. Terminal Chat shares this behavior. Disable **New text indicator** in Settings → Appearance → Chat, or mobile Settings. The preference stays on the current client.
+
+Start conversations with **New chat tab** in the tab bar. The session control bar contains no duplicate + action.
 **The conversation lives in ego, not in TUICommander.** There is no LLM client
 here: no provider, no API key, no tool loop, no sandbox. TUICommander launches
 one configured ego binary and speaks ACP to it, per
@@ -1066,6 +1088,7 @@ re-derived later.
   - Desktop IPC, HTTP, and MCP creation payloads report `warm_artifacts.status` (`pending` until the background copy finishes) and state the linked-worktree isolation semantics; workspace path listing reports the current status. A cancelled create marks warming failed; removal and archive cancel queued copies
   - Removal without force keeps dirty worktrees and submodules, refuses an in-progress Git operation, and keeps a branch that changed after the removal check. Submodule commits, stash history, and reflog-only commits receive durable refs in the initialized main-checkout module repository. An uninitialized, misdirected, or deinitialized module with retained Git history stops removal, including nested modules with names different from their paths. A registered checkout whose directory is missing has an explicit lifecycle verdict and needs confirmed force to prune its registration; cleanup skips its inaccessible archive script. Dirty-file force still proves branch safety and never overrides a lock by itself
   - Branch deletion accepts default-branch ancestry, ancestry in the checked-out integration branch, patch equivalence, or a merged GitHub PR whose fetched head contains the local tip
+  - Merged-PR proof uses paginated HTTP GraphQL with the repository-bound account and host; incomplete reads remain unknown and retryable
   - MCP `repo action=branch_delete` removes an integrated local branch without a worktree after the same safety proof; it preserves remote refs and refuses checked-out, current, default, or changed local refs
   - **Worktree Manager panel** (`Cmd+Shift+W` or Command Palette → "Worktree manager"):
   - Dedicated overlay listing all worktrees across all repos with metadata: branch name, repo badge, PR state (open/merged/closed), dirty stats, last commit timestamp
@@ -1147,6 +1170,7 @@ re-derived later.
 - TriStateToggle component: 3-position pill switch (left=hide, center=default, right=show) matching existing toggle style
 
 ### 8.5 Auto-Heal
+- Auto-heal resolves failing checks from the exact commit over account-bound GraphQL, including external CI; check pagination and newest-rerun deduplication do not depend on the open PR count.
 - When a PR on a branch with an active agent terminal becomes blocked, auto-heal hands the problem to the agent:
   - **CI failure** — fetches failure logs and injects them with a fix prompt
   - **Merge conflict** (`mergeable === "CONFLICTING"`) — injects a resolve-conflicts prompt
@@ -1219,9 +1243,9 @@ re-derived later.
 - API budget: ~2 calls/min/repo
 
 ### 8.12 Token Resolution
-- Priority: `GH_TOKEN` env → `GITHUB_TOKEN` env → OAuth keyring token → `gh_token` crate → `gh auth token` CLI
-- `gh_token` crate with empty-string bug workaround
-- Fallback to `gh auth token` CLI
+- Priority: `GH_TOKEN` env → `GITHUB_TOKEN` env → OAuth keyring token
+- Empty environment variables are ignored
+- The `gh` CLI login is not a token source
 
 ### 8.13 OAuth Device Flow Login
 - One-click GitHub authentication from the Settings > Git & GitHub page
@@ -1229,14 +1253,16 @@ re-derived later.
 - Token stored in OS keyring (macOS Keychain, Windows Credential Manager, Linux Secret Service)
 - Requested scope: `repo`
 - Shows user avatar, login name, and token source after authentication
-- Logout removes OAuth token, falls back to env/gh CLI
+- Logout removes OAuth token, falls back to the env tokens
 - On 401: auto-clears invalid OAuth token and prompts re-auth
+
+PR creation, issue creation, and review submission use account-aware REST requests for the bound repository, including GitHub Enterprise, without spawning `gh`.
 
 ### 8.14 Multiple Accounts (github.com + GitHub Enterprise)
 GitHub integration is **account-centric**: TUICommander can manage N accounts and each workspace repo is explicitly bound to the account that monitors it (a persisted binding, not derived live from `origin`).
 
 **Account kinds**
-- **Ambient github.com default** — the account you authenticate with via the OAuth device flow above (or `GH_TOKEN`/`gh` CLI). Behaves exactly as before; a github.com-only user sees zero change.
+- **Ambient github.com default** — the account you authenticate with via the OAuth device flow above (or `GH_TOKEN`/`GITHUB_TOKEN`). Behaves exactly as before; a github.com-only user sees zero change.
 - **Additional github.com accounts** — extra named github.com logins added via the device flow (Settings → Git & GitHub → *Additional GitHub Accounts* → "Add another github.com account").
 - **GitHub Enterprise Server (GHE)** — added by host + a pasted **Personal Access Token** (no per-host OAuth App). Validated against `https://{host}/api/v3/user`; PAT stored in the OS keyring under `github/account/{id}/token`.
 
@@ -1250,9 +1276,9 @@ GitHub integration is **account-centric**: TUICommander can manage N accounts an
 - Cooldown keys are account-scoped (`{account_id}:owner/repo` for GHE; `owner/repo` unchanged for cloud); github.com logout clears only cloud cooldowns; removing an account drops only its token, record, bindings, and caches.
 
 **Limitations**
-- REST + GraphQL (PRs, CI, issues, merge, approve, issue comments) work against bound GHE repos. `gh`-CLI-assisted CI-failure-log fetching (CI Auto-Heal) is disabled with a clear message for non-github.com accounts.
+- REST + GraphQL (PRs, CI, issues, merge, approve, issue comments) work against bound GHE repos. CI Auto-Heal fetches Actions logs over REST using the bound GHE account; downloads keep bounded failure tails and share one 60-second sweep deadline.
 
-Backend: `github_account.rs` (`GitHubHost`, account model, binding store, `resolve_repo_account`), commands `github_list_accounts` / `github_add_account` / `github_remove_account` / `github_bind_repo` / `github_unbind_repo` / `github_list_bindings` / `github_resolve_repo`.
+Backend: `github_account.rs` (`GitHubHost`, account model, binding store, `resolve_repo_account`), commands `github_list_accounts` / `github_remove_account` / `github_bind_repo` / `github_unbind_repo` / `github_list_bindings` / `github_resolve_repo`.
 
 ---
 
@@ -1275,10 +1301,13 @@ The `tuic-dictation` Rust crate implements audio, transcription and speech; the 
 | large-v3-turbo | ~1.6 GB | Best (recommended, default) |
 
 ### 9.3 Push-to-Talk
+- **Native macOS Fn** stays recording across window focus changes while held.
+  Physical release stops capture even when another app has focus.
 - Default hotkey: `F5` (configurable, registered globally)
 - Mic button in status bar: hold to record, release to transcribe
-- On macOS, releasing Fn stops microphone capture in Rust before the WebView handles the event. Losing window focus releases a held hotkey; a late Fn start is refused. The file log records release-to-stop latency without storing spoken text.
-- Transcribed text inserts into the focused input element (textarea, input, contenteditable); falls back to active terminal PTY when no text input has focus. Focus target captured at key-press time.
+- On macOS, releasing Fn stops microphone capture in Rust before the WebView handles the event. A late Fn start is refused. DOM hotkeys release on blur if key-up was lost; native Fn follows physical key state. The file log records release-to-stop latency without storing spoken text.
+- The destination and selection are captured at key-press time, before asynchronous work. Explicit editors take priority. In terminal Chat, transcript or BODY focus delivers to Compose through a CodeMirror transaction; CLI uses the captured PTY session with existing auto-send behavior. Focus and tab changes do not redirect the text.
+- If the target disappears or the draft changes before delivery, the transcript stays in a sticky error message and the Messages bell for recovery. Delivery logs contain metadata without spoken text.
 
 ### 9.4 Streaming Transcription
 - Real-time partial results during push-to-talk via adaptive sliding windows
@@ -1320,6 +1349,7 @@ The `tuic-dictation` Rust crate implements audio, transcription and speech; the 
 - Sources and licensing: the graphs come from a public Hugging Face export of Kyutai's Pocket TTS weights; the voices come from Kyutai's ungated repository without the voice-cloning weights. Both are CC-BY-4.0, attributed in `THIRD_PARTY_NOTICES.md`.
 
 ### 9.8 Spoken Replies
+- **Hands-free listening and spoken replies are independent.** Settings → Voice has a toggle for each (mobile Settings too): listening only, replies only (push-to-talk dictation, answers spoken), both, or none. Existing users keep listening on. The dictation toast carries a speaker button that turns spoken replies on and off for the next reply and stops one that is playing.
 - **Spoken replies** defaults on and can be disabled from Voice Settings or mobile Settings. Off keeps dictation armed, cancels the speech queue, and enforces text replies server-side. Edge 401/403 rejections start a five-minute cool-down across conversations.
 - Arming hands-free also opens a **reply queue** for that conversation, so the model can answer out loud. Arming without a working voice still works — that is ordinary dictation — and the reason is reported rather than discovered on the first reply.
 - **The user can talk over a reply.** Speaking stops the moment the capture loop hears them, and their words land in the new turn rather than behind the sentence they interrupted. Echo cancellation runs first, so a reply never interrupts itself on its own voice coming back through the microphone.
@@ -1642,6 +1672,7 @@ All data persisted to platform config directory via Rust:
 
 ### 14.1 Auto-Update
 - Check for updates on startup via `tauri-plugin-updater`
+- Stable, Beta and Nightly channels. Beta automatically checks the next beta and final stable; beta downloads open the versioned release page, and stable updates install in-app. Fresh beta installations default to Beta; saved channel choices stay unchanged
 - Status bar badge with version
 - Download progress percentage
 - One-click install and relaunch
@@ -1844,7 +1875,7 @@ Buffer eviction is reported; it does not create another output store.
 | Shortcut | Action |
 |----------|--------|
 | Hold `Cmd+Ctrl` | Show quick switcher overlay |
-| `Cmd+Ctrl+1-9` | Switch to branch by index |
+| `Cmd+Ctrl+1-9` | Switch to branch by index (in the Global Workspace: switch to tab N; only the tab hints show) |
 
 ### Voice Dictation
 | Shortcut | Action |
@@ -2015,6 +2046,8 @@ Agent-scoped plugin (`agentTypes: ["claude"]`) that wakes Claude Code when it st
 
 ## 18. Mobile Companion UI
 
+Waiting terminal ego questions show **Input**. Tap the question icon in the session header to open or close the full question and its wrapping options. The card overlays the terminal without reserving rows. Prior suggested actions are hidden while a human answer is pending.
+
 Phone-optimized progressive web app for monitoring AI agents remotely. Separate SolidJS entry point (`src/mobile/`) served by the existing HTTP server at `/mobile`.
 
 ### 18.1 Architecture
@@ -2060,7 +2093,7 @@ Phone-optimized progressive web app for monitoring AI agents remotely. Separate 
 
 ### 18.3 Session Detail Screen
 - Mirrored sessions stream through the connected desktop server to their owning daemon, so the phone stays on its HTTPS origin; the session kill action reaches that owner too
-- Live output via WebSocket with `format=log` (VT100-extracted clean lines, auto-scrolling, 500-line buffer)
+- Live output via WebSocket with `format=log` (VT100-extracted clean lines, auto-scrolling, 500-line live tail). Scrolling up or touching retains the reading window and fetched history; the next log update after returning to the bottom restores the live tail.
 - HTTP and HTTPS links in output open in the phone's external browser; Markdown path controls open the Files editor.
 - Source-width prose rows are rejoined before the phone wraps them; short lines, lists, and box-drawing blocks retain their layout
 - When a mobile output line wraps, its continuation keeps the line's leading spaces or tabs; unindented prose and horizontally scrolling box-drawing blocks retain their layout
@@ -2107,6 +2140,8 @@ Phone-optimized progressive web app for monitoring AI agents remotely. Separate 
 - Open Desktop UI link
 
 ### 18.8 PWA Support
+- Mobile session attachments use a bare icon on the left. Smaller mic and
+  Send controls sit inside the input border on the right; compact gaps preserve draft width.
 - Mobile session and AI Chat composers accept camera photos and files from one
   picker. Binary files stream to `.tuic/attachments/` in the session working
   directory and are excluded from Git locally; older files are cleaned at close.
@@ -2148,7 +2183,7 @@ Phone-optimized progressive web app for monitoring AI agents remotely. Separate 
 - In the desktop app, an unfocused agent question also sends a native OS notification naming its terminal. The Tauri notification plugin handles desktop delivery; macOS retains the native response handle through a desktop command so a click returns to the terminal. Permission is checked once, and focused windows and repeated notices within five seconds are suppressed
 - **Sounds:** `question` (C5→E5 chime), `completion` (C5→E5→G5 arpeggio), `error` (E4→C4), `warning` (A4 double-tap), `info` (single G5 pluck), and `attention` — a triangular G4→G4→E5 callback with two short knocks and a longer rise. Native and browser/PWA playback share the motif and 0.8 gain; each engine applies its own envelope. The repeated opening is immediately recognizable while the softer timbre avoids the old square buzzer's harshness. Meant for an agent that is working unattended and is blocked on the user
 - Each sound has its own on/off toggle and Test button in Settings > Notifications, and all of them honour the global volume and chosen output device
-- **Agents can raise them over MCP**: `ui action=toast sound="attention"` (see 19.x `ui` tool). `sound: true` still means "the tone matching `level`"; a name overrides it. These agent notices appear in the bell rather than as transient toasts; consecutive identical notices within five seconds play once. The sound plays through this scheme, so a muted sound stays muted no matter who asked for it
+- **Agents can raise them over MCP**: `ui action=toast sound="attention"` (see 19.x `ui` tool). `sound: true` still means "the tone matching `level`"; a name overrides it. These agent notices appear in the bell and also show a card only while their origin terminal tab is active (configurable); `urgency="urgent"` always shows a transient card; consecutive identical notices within five seconds play once. The sound plays through this scheme, so a muted sound stays muted no matter who asked for it
 
 ### 18.10 Visual Polish
 - Frosted glass bottom tabs: `backdrop-filter: blur(20px) saturate(1.8)` with semi-transparent background
@@ -2157,7 +2192,8 @@ Phone-optimized progressive web app for monitoring AI agents remotely. Separate 
 - `font-variant-emoji: text` on output view — forces Unicode symbols (●, ○, ◉) to render as monochrome text glyphs instead of colorful emoji
 
 ### 18.11 Standalone CSS
-- The mobile composer offers browser dictation directly next to Send (44 px touch targets) when `SpeechRecognition` or `webkitSpeechRecognition` is available. Interim and final speech append to the draft without focusing the textarea or sending; tap again to stop. Editing the draft cancels recognition and keeps the edit exactly; tap the mic to start again. Late results from the cancelled recording are ignored. Errors keep the draft and show a toast. It uses the configured dictation language, falling back to the browser language for automatic detection. Browser dictation and server hands-free conversation cannot record together.
+- The mobile composer offers browser dictation directly next to Send (44 px touch targets) when `SpeechRecognition` or `webkitSpeechRecognition` is available. Interim and final speech append to the draft without focusing the textarea or sending; tap again to stop. Editing the draft cancels recognition and keeps the edit exactly; the mic becomes available again when the browser confirms the previous session has ended. Errors also retain the microphone claim until that confirmation, so repeated taps cannot overlap recognition sessions. Late results from the cancelled recording are ignored. Errors keep the draft and show a toast. It uses the configured dictation language, falling back to the browser language for automatic detection. Browser dictation and server hands-free conversation cannot record together.
+- Dictated mobile drafts survive reload without automatic terminal input. Send or the first edit reconciles the restored draft with the current terminal line, preserving cleared text without duplicating text still present.
 - iPhone Home Screen availability remains device-dependent: [WebKit bug 225298](https://bugs.webkit.org/show_bug.cgi?id=225298#c3) documents the historical standalone restriction; Safari's [14.1 release notes](https://webkit.org/blog/11648/new-webkit-features-in-safari-14-1/) require Siri enabled. Feature detection and error handling apply; Safari tab support does not prove PWA support.
 - Mobile PWA uses its own standalone stylesheet (`src/mobile/mobile.css`), independent from the desktop `global.css`
 - Shares core color palette and border radius tokens; differs in font stacks, layout approach, and iOS-specific rules
@@ -2768,13 +2804,15 @@ prechecks, workspace and duration controls, pause/resume, Run now, confirmed
 delete and recent status history. Open **Automations** from the command palette.
 Step 8 API integration is required before use; see [Automations](user-guide/automations.md).
 
+The Automations palette action also matches **scheduler** and **schedule**. Automations cards show the repository name (full path on hover), common schedules in plain language, secondary cron and the backend next run in its named timezone. Definitions and Runs use keyboard tabs (Left/Right, Home/End). The single toolbar includes **Select first automation on open**, enabled by default and saved for this browser/WebView. Turning it off restores manual selection. Refresh keeps unsaved edits.
+
 ### Automation transport availability
 
 Automations definition management, pause/resume, schedule previews/presets,
 retained run history and UTC aggregates are available through matching Tauri IPC
 and HTTP on desktop/headless hosts. Browser/PWA uses the same command mapping.
-Run Now uses the addressed machine's runtime owner and supports paused Once
-schedules; recurring execution remains outside phase 1. Full run replies retain
+Run Now uses the addressed machine's runtime owner and supports paused Once and
+cron schedules; a due cron occurrence dispatches once. Full run replies retain
 output, workspace and task/session evidence.
 
 Automation execution now reconciles task, PTY and progress completion evidence,
@@ -2830,7 +2868,7 @@ Automation agent surface (#1630-cbfa, #1621-5dce): MCP `automations` and
 previews, run history, summaries and Run Now runtime. Enabled-only updates and
 Once definitions work identically; MCP creation retains host-bound provenance.
 
-GitHub backend: paginated line review threads and replies, resolve/unresolve, and draft review submission pinned to the reviewed head are available through IPC and HTTP.
+GitHub backend: paginated line review threads and replies, resolve/unresolve, and draft review submission pinned to the reviewed head are available through IPC and HTTP. The PR Files tab draws them on the diff lines: outdated threads are listed above their file, pending comments are added from the line gutter, and Submit review is refused once the PR head moves.
 
 GitHub backend: failed-job reruns, auto-merge enable/disable, merge queue state/entry/removal and queue-aware merge are available over IPC and HTTP. Request changes requires review text.
 
@@ -2841,3 +2879,29 @@ lanes. Cards support drag and drop and a keyboard-accessible move menu. Pending
 moves cannot be repeated; rejected actions restore the card and show the error.
 This component is available to the Tasks host; provider registration and the
 Tasks navigation surface determine where it is shown.
+
+## Tasks create component
+
+Core provides a generic work-item create form. The provider declares the item
+types and the fields of each type; the form uses the shared setting controls,
+blocks Create until the required fields of the current type are set, and opens
+the created item. The Tasks shell integrates this component separately.
+
+
+Automation worktree cleanup (#1623-8b2a): Automation runs retain automation/run IDs and the exact created workspace path and ID in their saved snapshot, including after definition deletion. Worktree cleanup is explicit and limited to final runs. The backend resolves the saved identity and rechecks shared Git integration/archive proof, dirt, submodule commits and live sessions; it never forces removal or closes sessions. Shared `automation_action` actions `worktree_preview` and `cleanup_worktree` accept a saved run `id` on IPC, HTTP, MCP and CLI.
+### Built-in automation templates
+
+New automation drafts offer weekday repository audit, release readiness, daily
+change review and hourly maintenance review templates. Enter the repository and
+run config, then select **Apply template**. Rust supplies the literal prompt,
+cadence, limits and zone (the backend host's local IANA zone unless selected).
+Review and edit the draft, then select **Save**. Templates start paused; applying
+one never persists a definition or starts a run. **Resume** is a separate action.
+Templates use the existing checkout with no precheck and do not change agent
+permissions. Recurring cadence previews retain the existing runtime limitations.
+
+- Finished worktree recycling: explicit completion permits safe reuse with a new branch and path while ignored build artifacts remain intact. Fresh allocations stay reserved.
+
+### History-anchored viewport scrolling
+
+Terminal gestures hold the requested history row even when output arrives before the backend applies the scroll. If capped scrollback evicts that row, the viewport clamps to the oldest retained row.

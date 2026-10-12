@@ -72,8 +72,8 @@ If desktop and mobile open the chat together, they attach to the same running eg
 
 ego starts when you send the first message, click **+**, or select a saved tab; opening the panel
 starts nothing. There is one ego for the app: a reloaded window or the phone
-gets the one already running, and quitting TUICommander ends it. **New** in the
-control bar starts another conversation; the picker beside it lists previous
+gets the one already running, and quitting TUICommander ends it. **New chat tab** in the
+tab bar starts another conversation; the conversation picker lists previous
 conversations by title, newest first. Selecting one loads its history. The open
 tabs and the selected tab are restored after restarting TUICommander, and their
 history is replayed when ego starts. Selecting a saved tab connects and loads it
@@ -135,8 +135,8 @@ current text and image previews. The **Parked draft** control on desktop, or the
 **Restore parked draft** icon on mobile, shows that a
 draft is waiting. Press `Ctrl+S` or tap it again while the composer is empty to
 restore the draft; when the composer contains another draft, the two swap.
-On mobile, Park and Stop use labelled icons above the input row to preserve
-the input, attachment and Send positions.
+On mobile, Park and Stop use labelled icons in the input row beside Attach and
+Send. They do not reserve a separate row above the composer.
 Sending the intervening prompt also restores the parked draft automatically.
 Parking survives closing and reopening the panel or reloading its window, and
 stays with its chat tab. If browser storage is unavailable, the composer warns
@@ -192,7 +192,7 @@ read its full command and output.
   conversation when it reaches ego; steering appears when ego echoes it.
 - **Session settings** are published by the current conversation. The control bar
   shows the model's short name and the current mode. Its summary shortens before
-  the icon controls, so Pause, Resume, Compact and New stay on one row. Each
+  the icon controls, so Pause, Resume and Compact stay on one row. Each
   control has a tooltip and a name for assistive technology. The settings button opens a dialog with
   labeled choices and descriptions for every select option ego offers, including
   reasoning effort and sandbox when available. Changes apply to this conversation
@@ -276,3 +276,5 @@ Closed refusal turns show one plain-text card with the agent’s existing ACP re
 Use **New conversation with options** beside the `+` button to override the ego profile, workspace or executable for one conversation. Empty fields use Settings defaults. The header shows the resolved values. The conversation keeps these values and its peer identity after a restart; other chats keep their existing launch configuration. The plain `+` action creates a chat with the global defaults.
 
 A custom conversation runs its own ego ACP process. Its mail identity is separate from daily chats, even when both use the same workspace.
+
+When you scroll up and more conversation content arrives, **New text below** appears above the composer. Select it to return to the bottom and resume following. Reaching the bottom by hand clears it too. Search jumps do not show the pill until later content arrives. Disable **New text indicator** in **Settings → Appearance → Chat**, or mobile Settings. This preference is saved on the current client and applies to terminal Chat too.

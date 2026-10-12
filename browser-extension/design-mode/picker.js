@@ -30,7 +30,12 @@
     document.documentElement.append(overlay);
     timer = setTimeout(stop, 120000);
   }
-  const elementAt = (event) => event.composedPath().find((node) => node instanceof Element && node !== overlay);
+  // A press on the icon inside a disabled control targets the icon; the control is what is picked.
+  const DISABLED = 'button:disabled, input:disabled, select:disabled, textarea:disabled, [aria-disabled="true"]';
+  const elementAt = (event) => {
+    const target = event.composedPath().find((node) => node instanceof Element && node !== overlay);
+    return target?.closest(DISABLED) ?? target;
+  };
   window.addEventListener('pointermove', (event) => {
     if (!armed) return;
     const target = elementAt(event);
@@ -43,11 +48,22 @@
       event.preventDefault(); event.stopImmediatePropagation(); stop(); send({kind: 'cancel'});
     }
   }, true);
-  window.addEventListener('click', (event) => {
+  // Pick on the press: Chromium sends a disabled control pointerdown/pointerup but never
+  // mousedown, mouseup or click. The picking press is consumed whole so the page never reacts.
+  let consuming = false;
+  const consume = (event) => {
+    if (!event.isTrusted || !(armed || consuming)) return;
+    event.preventDefault(); event.stopImmediatePropagation();
+    // mouseup and click follow pointerup in the same task.
+    if (event.type === 'pointerup') setTimeout(() => { consuming = false; });
+  };
+  for (const type of ['mousedown', 'pointerup', 'mouseup', 'click']) window.addEventListener(type, consume, true);
+  window.addEventListener('pointerdown', (event) => {
     if (!armed || !event.isTrusted) return;
     const target = elementAt(event);
     if (!target) return;
     event.preventDefault(); event.stopImmediatePropagation();
+    consuming = true;
     const raw = tuicExtract.call(target);
     nonce = crypto.randomUUID(); selected = {raw, nonce};
     window.postMessage({tuicDesignHint: nonce, selector: raw.selector}, location.origin);

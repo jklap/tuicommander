@@ -415,7 +415,11 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		map: (args) => ({
 			method: "POST",
 			path: `/sessions/${args.sessionId}/queue`,
-			body: { text: args.text, ...(args.idempotencyKey != null ? { idempotencyKey: args.idempotencyKey } : {}) },
+			body: {
+				text: args.text,
+				...(args.expectedDraft != null ? { expectedDraft: args.expectedDraft } : {}),
+				...(args.idempotencyKey != null ? { idempotencyKey: args.idempotencyKey } : {}),
+			},
 		}),
 	},
 	clear_queued_agent_commands: {
@@ -566,6 +570,13 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			method: "POST",
 			path: `/sessions/${args.sessionId}/terminal/scroll-to-offset`,
 			body: { offset: args.offset },
+		}),
+	},
+	terminal_scroll_to_anchor: {
+		map: (args) => ({
+			method: "POST",
+			path: `/sessions/${args.sessionId}/terminal/scroll-to-anchor`,
+			body: { anchor: args.anchor },
 		}),
 	},
 	terminal_scroll_info: {
@@ -1239,9 +1250,6 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	// Multi-account: accounts + repo bindings
 	github_list_accounts: {
 		map: () => ({ method: "GET", path: "/github/accounts" }),
-	},
-	github_add_account: {
-		map: (args) => ({ method: "POST", path: "/github/accounts", body: { host: args.host, pat: args.pat } }),
 	},
 	github_remove_account: {
 		map: (args) => ({ method: "POST", path: "/github/accounts/remove", body: { id: args.id } }),
@@ -2125,11 +2133,25 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		map: (args) => ({
 			method: "POST",
 			path: "/design-mode/start",
-			body: { sessionId: args.sessionId, ...(args.browser ? { browser: args.browser } : {}) },
+			body: {
+				sessionId: args.sessionId,
+				...(args.browser ? { browser: args.browser } : {}),
+				...(args.url !== undefined ? { url: args.url } : {}),
+			},
 		}),
 	},
 	stop_design_mode: {
 		map: (args) => ({ method: "POST", path: "/design-mode/stop", body: { repoPath: args.repoPath } }),
+	},
+	reload_design_mode: {
+		map: (args) => ({ method: "POST", path: "/design-mode/reload", body: { repoPath: args.repoPath } }),
+	},
+	navigate_design_mode: {
+		map: (args) => ({
+			method: "POST",
+			path: "/design-mode/navigate",
+			body: { repoPath: args.repoPath, url: args.url },
+		}),
 	},
 	get_design_mode_status: { map: () => ({ method: "GET", path: "/design-mode" }) },
 	list_tunnel_profiles: { map: () => ({ method: "GET", path: "/tunnels/profiles" }) },
@@ -2272,6 +2294,7 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 				method: args.method,
 				headers: args.headers,
 				body: args.body,
+				account: args.account,
 			},
 		}),
 	},
@@ -2337,6 +2360,8 @@ export const INTENTIONALLY_UNMAPPED: ReadonlySet<string> = new Set<string>([
 	"upload_attachment",
 	// Multi-window management — secondary/panel windows are a desktop-only concept.
 	"open_secondary_window",
+	// Open on the client machine; remote HTTP must not launch host applications.
+	"open_default_app",
 	"open_panel_window",
 	"close_panel_window",
 	"focus_panel_window",

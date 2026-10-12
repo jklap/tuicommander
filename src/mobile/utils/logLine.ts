@@ -276,6 +276,16 @@ function joinedLineFor(rows: LogLine[]): LogLine {
 
 const codePoints = (text: string): number => [...text].length;
 
+/** Claude paints its tool bullet as one blank cell while it pulses, so the dot
+ * counts as indentation: both frames of the blink must measure the same. */
+const bulletIndent = (text: string): number => {
+	const normalized = text.replace(/^⏺\uFE0E?(?=[ \t])/, " ");
+	return normalized.length - normalized.trimStart().length;
+};
+
+/** A tool result row (`⎿ …`) starts its own item and is never a wrapped continuation. */
+const TOOL_RESULT_RE = /^\s*⎿/;
+
 export function reflowDisplayLines(lines: LogLine[]): LogLine[] {
 	const result: LogLine[] = [];
 	const listMarker = /^(?:[-*+•·] |\d+[.)] )/;
@@ -304,6 +314,7 @@ export function reflowDisplayLines(lines: LogLine[]): LogLine[] {
 				!text.trim() ||
 				hasBoxDrawing(next) ||
 				listMarker.test(text.trimStart()) ||
+				TOOL_RESULT_RE.test(text) ||
 				/^\s{4}/.test(text)
 			)
 				break;
@@ -323,8 +334,8 @@ export function reflowDisplayLines(lines: LogLine[]): LogLine[] {
 			const next = run[j];
 			const prevText = lineText(previous);
 			const nextText = lineText(next);
-			const prevIndent = prevText.length - prevText.trimStart().length;
-			const nextIndent = nextText.length - nextText.trimStart().length;
+			const prevIndent = bulletIndent(prevText);
+			const nextIndent = bulletIndent(nextText);
 			const nextWord = nextText.trimStart().split(/\s/, 1)[0];
 			const prevLength = codePoints(prevText);
 			const joins =

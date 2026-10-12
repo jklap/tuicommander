@@ -1090,6 +1090,10 @@ fn shared_routes() -> Router<Arc<AppState>> {
             post(session::terminal_scroll_to_offset),
         )
         .route(
+            "/sessions/{id}/terminal/scroll-to-anchor",
+            post(session::terminal_scroll_to_anchor),
+        )
+        .route(
             "/sessions/{id}/terminal/scroll-info",
             get(session::terminal_scroll_info),
         )
@@ -2111,6 +2115,14 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
                 "/design-mode/stop",
                 post(crate::design_mode::commands::stop),
             )
+            .route(
+                "/design-mode/reload",
+                post(crate::design_mode::commands::reload),
+            )
+            .route(
+                "/design-mode/navigate",
+                post(crate::design_mode::commands::navigate),
+            )
             .route("/design-mode", get(crate::design_mode::commands::statuses));
     }
 
@@ -2131,10 +2143,7 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
     // tuic-remote (#094-ec55 remote-target fix).
     #[cfg(feature = "desktop")]
     let routes = routes
-        .route(
-            "/github/accounts",
-            get(github_routes::github_list_accounts).post(github_routes::github_add_account),
-        )
+        .route("/github/accounts", get(github_routes::github_list_accounts))
         .route(
             "/github/accounts/remove",
             post(github_routes::github_remove_account),

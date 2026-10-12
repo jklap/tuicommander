@@ -56,6 +56,7 @@ fn story_reservation_blocks_second_root() {
         store
             .start_graph_run(&other)
             .unwrap_err()
+            .to_string()
             .contains("manual claim")
     );
 }
@@ -199,4 +200,133 @@ async fn unsupported_graph_start_and_non_owner_mutations_are_refused() {
         state.workflow_runtime.start_graph(&state, &start).is_err(),
         "an unpublished revision cannot start"
     );
+}
+
+fn executable_plan(project: &str, template: &str) {
+    let story = definition(project, false, true);
+    let published = super::semantics::plan_dispatch::plan_definition(project, template, &story);
+    assert_eq!(published.revision, 2);
+}
+
+fn plan_request(project: &str, plan: &str, template: &str, key: &str) -> GraphStartRequest {
+    GraphStartRequest {
+        project: project.into(),
+        target: RunTarget::Plan(plan.into()),
+        expected_revision: None,
+        definition_id: template.into(),
+        definition_revision: 2,
+        request_id: key.into(),
+        limits: RunLimits::default(),
+    }
+}
+
+/// Catches: the SQLite UNIQUE message leaking instead of the active run identity,
+/// either start path ignoring paused runs, or refusal modifying the existing ledger.
+#[test]
+fn duplicate_plan_start_reports_active_run_without_mutating_it() {
+    let (config, project, plan, _story, template, _guard) = fixture();
+    let store = RunStore::open_at(&config.path().join("runs.sqlite3")).unwrap();
+    let project = project.path().to_str().unwrap();
+    executable_plan(project, &template);
+    for graph_first in [false, true] {
+        let start = plan_request(
+            project,
+            &plan,
+            &template,
+            if graph_first { "graph" } else { "plan" },
+        );
+        let mut first = if graph_first {
+            store.start_graph_run(&start).unwrap()
+        } else {
+            store
+                .start_plan(project, &plan, &template, 2, RunLimits::default())
+                .unwrap()
+        };
+        for paused in [false, true] {
+            if paused {
+                first = store
+                    .command(&first.id, "pause", RunCommand::Pause)
+                    .unwrap()
+                    .snapshot;
+            }
+            let events = store.events_after(&first.id, 0, 100).unwrap();
+            let expected = RunStartError::AlreadyActive {
+                plan_id: plan.clone(),
+                active_run_id: first.id.clone(),
+            };
+            assert_eq!(
+                store
+                    .start_plan(project, &plan, &template, 2, RunLimits::default())
+                    .unwrap_err(),
+                expected,
+            );
+            assert_eq!(
+                store
+                    .start_graph_run(&plan_request(project, &plan, &template, "duplicate"))
+                    .unwrap_err(),
+                expected,
+            );
+            assert_eq!(
+                expected.to_string(),
+                format!("workflow run already active for plan {plan}: {}", first.id)
+            );
+            if graph_first {
+                assert_eq!(
+                    store.start_graph_run(&start).unwrap(),
+                    first,
+                    "a same-request retry is not a second start"
+                );
+            }
+            assert_eq!(store.snapshot(&first.id).unwrap(), first);
+            assert_eq!(store.replay(&first.id).unwrap(), first);
+            assert_eq!(store.events_after(&first.id, 0, 100).unwrap(), events);
+            assert_eq!(
+                store.list_plan_runs(&first.project, &plan, 100).unwrap()[0],
+                first
+            );
+        }
+        store
+            .command(&first.id, "release", RunCommand::Cancel)
+            .unwrap();
+    }
+    assert_eq!(
+        store
+            .list_plan_runs(&canonical_owner(project), &plan, 100)
+            .unwrap()
+            .len(),
+        2
+    );
+}
+
+/// Catches: distinct concurrent start requests bypassing atomic admission or
+/// reporting a candidate id instead of the winning persisted run id.
+#[test]
+fn duplicate_plan_start_concurrent_requests_name_the_winner() {
+    let (config, project, plan, _story, template, _guard) = fixture();
+    let store = RunStore::open_at(&config.path().join("runs.sqlite3")).unwrap();
+    let project = project.path().to_str().unwrap();
+    executable_plan(project, &template);
+    let a = plan_request(project, &plan, &template, "a");
+    let b = plan_request(project, &plan, &template, "b");
+    let (a, b) = std::thread::scope(|scope| {
+        let a = scope.spawn(|| store.start_graph_run(&a));
+        let b = scope.spawn(|| store.start_graph_run(&b));
+        (a.join().unwrap(), b.join().unwrap())
+    });
+    let (winner, refusal) = match (a, b) {
+        (Ok(run), Err(error)) | (Err(error), Ok(run)) => (run, error),
+        other => panic!("expected one winner and one refusal: {other:?}"),
+    };
+    assert_eq!(
+        refusal,
+        RunStartError::AlreadyActive {
+            plan_id: plan.clone(),
+            active_run_id: winner.id.clone()
+        }
+    );
+    assert_eq!(
+        store.list_plan_runs(&winner.project, &plan, 100).unwrap(),
+        vec![winner.clone()]
+    );
+    assert_eq!(store.replay(&winner.id).unwrap(), winner);
 }

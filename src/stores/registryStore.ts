@@ -1,6 +1,6 @@
 import { createStore } from "solid-js/store";
 import { invoke } from "../invoke";
-import { compareSemver } from "../plugins/pluginLoader";
+import { compareSemver } from "../utils/semver";
 
 /** A plugin entry from the remote registry */
 export interface RegistryEntry {

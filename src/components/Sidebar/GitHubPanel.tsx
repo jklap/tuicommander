@@ -28,6 +28,7 @@ import {
 } from "../PostMergeCleanupDialog/PostMergeCleanupDialog";
 import { SmartButtonStrip } from "../SmartButtonStrip/SmartButtonStrip";
 import { ChevronIcon } from "../ui/ChevronIcon";
+import { Select } from "../ui/Select";
 import { PrSection } from "./PrSection";
 import s from "./Sidebar.module.css";
 
@@ -673,13 +674,13 @@ export const GitHubPanel: Component<{
 
 							{/* Filter bar — always visible so user can re-enable issues */}
 							<div class={s.ghFilterBar}>
-								<select
+								<Select
 									class={s.ghFilterSelect}
 									value={settingsStore.state.issueFilter}
 									onChange={(e) => githubStore.setIssueFilter(e.currentTarget.value as IssueFilterMode)}
 								>
 									<For each={FILTER_OPTIONS}>{(opt) => <option value={opt.value}>{opt.label}</option>}</For>
-								</select>
+								</Select>
 							</div>
 						</div>
 					</div>

@@ -46,6 +46,15 @@ describe("settingsStore", () => {
 		return mockInvoke.mock.calls.filter((c: unknown[]) => c[0] === "save_config");
 	}
 
+	// Catches: hydration silently turns a persisted beta channel back into stable.
+	it.each(["beta", "stable", "nightly"])("keeps the saved %s update channel", async (channel) => {
+		mockInvoke.mockResolvedValueOnce({ update_channel: channel });
+		await testInScopeAsync(async () => {
+			await store.hydrate();
+			expect(store.state.updateChannel).toBe(channel);
+		});
+	});
+
 	describe("ego ACP profile", () => {
 		it("persists a selected profile and allows clearing it", async () => {
 			await testInScopeAsync(async () => {

@@ -314,3 +314,9 @@ None. All tracked gaps have been resolved or marked wontfix.
 Stored command blocks and user prompt markers use all-time rows. Answers history consumes them directly. Gutter, scrollbar, search scope, navigation and buffer reads subtract the current frame history base at grid-relative boundaries. Evicted markers are omitted.
 
 Terminal stream reconnect notices use the current terminal name when available and show the transport’s current attempt (up to 10). A received grid frame or confirmed empty replay removes only that stream notice; socket opening alone does not. Exhausted retries leave a persistent failure notice. Closing the terminal removes its notice, and late subscription failures cannot publish a notice after closure.
+
+HTTP(S) link context menus include **Start in Design Mode**, passing the resolved URL and owning terminal session to the shared start command. File and other schemes retain Open and Copy link only.
+
+### History-anchored viewport scrolling
+
+Wheel, touch and scrollbar gestures send `terminal_scroll_to_anchor` with `historyBase + historySize - offset`. Null resumes following output. The cache keeps rendering until the backend frame reaches the target; there is no timed settle handoff that can skip rows during sustained output.

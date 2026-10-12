@@ -26,6 +26,20 @@ describe("mdTabsStore", () => {
 		repositoriesStore._testCancelPendingSave();
 	});
 
+	describe("addTasks()", () => {
+		// Catches: a second Tasks tab per action call.
+		it("reuses the one Tasks tab and activates it", () => {
+			testInScope(() => {
+				const first = store.addTasks();
+				const other = store.add("/repo", "docs/README.md");
+				expect(store.state.activeId).toBe(other);
+				expect(store.addTasks()).toBe(first);
+				expect(store.state.activeId).toBe(first);
+				expect(Object.values(store.state.tabs).filter((tab) => tab.type === "tasks")).toHaveLength(1);
+			});
+		});
+	});
+
 	describe("add()", () => {
 		it("adds a markdown tab and sets it active", () => {
 			testInScope(() => {

@@ -421,6 +421,51 @@ describe("Toolbar", () => {
 			expect(container.querySelector(".notifCount")?.textContent).toBe("2");
 			expect(container.querySelector(".activityItemSubtitle")?.textContent).toBe("2 new updates");
 		});
+		// Catches: static plugin launchers contribute an impossible-to-dismiss badge.
+		it("keeps a status-only bell unbadged while its plugin row remains visible", () => {
+			activityStore.registerSection({ id: "status", label: "STATUS", priority: 10, canDismissAll: false });
+			activityStore.addItem({
+				id: "status",
+				pluginId: "test",
+				sectionId: "status",
+				title: "Plugin status",
+				icon: "<svg/>",
+				dismissible: false,
+			});
+			const { container } = render(() => <Toolbar />);
+			expect(container.querySelector(".notifCount")).toBeNull();
+			fireEvent.click(container.querySelector(".bell")!);
+			expect(container.textContent).toContain("Plugin status");
+			expect(container.textContent).toContain("Open project journal");
+			addTestNotif();
+			expect(container.querySelector(".notifCount")?.textContent).toBe("1");
+			prNotificationsStore.dismissAll();
+			expect(container.querySelector(".notifCount")).toBeNull();
+		});
+
+		// Catches: Progress unread counts have no explicit acknowledgement without opening the journal.
+		it("marks Progress read explicitly without clearing other notifications or opening the journal", () => {
+			progressStore.presentLive({
+				repo_path: "/repo",
+				payload: { entry: { id: 1, project: "/repo", createdAtMs: 1, type: "done", text: "Finished" } },
+			});
+			addTestNotif();
+			const { container, getByRole, queryByRole } = render(() => <Toolbar />);
+			expect(container.querySelector(".notifCount")?.textContent).toBe("2");
+			fireEvent.click(container.querySelector(".bell")!);
+			fireEvent.click(getByRole("button", { name: "Mark as read" }));
+			expect(progressStore.unreadCount).toBe(0);
+			expect(progressStore.dialogVisible()).toBe(false);
+			expect(container.querySelector(".notifCount")?.textContent).toBe("1");
+			expect(container.textContent).toContain("Open project journal");
+			expect(queryByRole("button", { name: "Mark as read" })).toBeNull();
+			progressStore.presentLive({
+				repo_path: "/repo",
+				payload: { entry: { id: 2, project: "/repo", createdAtMs: 2, type: "done", text: "Next" } },
+			});
+			expect(container.querySelector(".notifCount")?.textContent).toBe("2");
+		});
+
 		it("bell is always visible even with no notifications", () => {
 			const { container } = render(() => <Toolbar />);
 			expect(container.querySelector(".bell")).not.toBeNull();
@@ -733,25 +778,6 @@ describe("Toolbar", () => {
 			const name = left?.querySelector(".appName");
 			expect(name).not.toBeNull();
 			expect(name?.previousElementSibling?.classList.contains("leftSpacer")).toBe(true);
-		});
-
-		it("switches to the short wordmark only below the width where the full one fits", () => {
-			// 254 = 78 traffic-light inset + 110 wordmark + ~56 toggles + 10 padding.
-			uiStore.setSidebarWidth(254);
-			const wide = render(() => <Toolbar />);
-			expect(wide.container.querySelector(".left")?.classList.contains("narrowSidebar")).toBe(false);
-			wide.unmount();
-
-			uiStore.setSidebarWidth(253);
-			const narrow = render(() => <Toolbar />);
-			expect(narrow.container.querySelector(".left")?.classList.contains("narrowSidebar")).toBe(true);
-			narrow.unmount();
-		});
-
-		it("still marks narrow at the minimum sidebar width", () => {
-			uiStore.setSidebarWidth(200);
-			const { container } = render(() => <Toolbar />);
-			expect(container.querySelector(".left")?.classList.contains("narrowSidebar")).toBe(true);
 		});
 	});
 	describe("ahead/behind count", () => {

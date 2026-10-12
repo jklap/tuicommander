@@ -55,7 +55,7 @@ grid-cell coordinates. Both match the stored sequence without normalization.
 | `create_pty_with_worktree` | `pty_config, worktree_config` | `WorktreeResult` | Create worktree + PTY |
 | `write_pty` | `session_id, data` | `()` | Write to PTY |
 | `write_pty_parts` | `session_id, parts: Vec<String>` | `()` | Write several inputs under one writer lock. The parts stay separate on purpose: post-write bookkeeping runs once per part, and it is not a function of the joined bytes (a lone `/` opens slash mode, an exact option key answers a choice prompt) |
-| `enqueue_agent_command` | `session_id, text, idempotency_key?` | `{ accepted, typed, queued }` | Queue for the next idle window; optional key (1–128 UTF-8 bytes, wire name `idempotencyKey`) recognizes the last 128 accepted keys per live PTY without resubmitting; acceptance is not a model-turn receipt |
+| `enqueue_agent_command` | `session_id, text, idempotency_key?, expected_draft?` | `{ accepted, typed, queued }` | Queue for the next idle window; optional `expectedDraft` validates and clears the live composer first (errors after clearing are uncertain; do not retry automatically); optional key (1–128 UTF-8 bytes, wire name `idempotencyKey`) recognizes the last 128 accepted keys per live PTY without resubmitting; acceptance is not a model-turn receipt |
 | `clear_queued_agent_commands` | `session_id` | `usize` | Drop every queued command; returns how many |
 | `list_queued_agent_commands` | `session_id` | `[{ id, text }]` | The queued user commands in delivery order; peer messages excluded |
 | `remove_queued_agent_command` | `session_id, command_id` | `bool` | Drop one queued command by id; false when it already drained |
@@ -112,7 +112,7 @@ that session's input draft without submitting it.
 
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
-| `start_design_mode` | `sessionId: String` | `DesignModeStatus` | Start or rebind inspection for an agent terminal; opens the repository's configured URL or `about:blank` |
+| `start_design_mode` | `sessionId: String, browser?: String, url?: String` | `DesignModeStatus` | Start or rebind an agent terminal; optional HTTP(S) `url` opens directly, otherwise uses discovery/onboarding |
 | `stop_design_mode` | `repoPath: String` | `DesignModeStatus` | Stop inspection for a repository |
 | `get_design_mode_status` | -- | `Vec<DesignModeStatus>` | Read the active per-repository modes |
 
@@ -202,10 +202,10 @@ receive it on `/events`.
 | `close_pr` | `repo_path, pr_number` | `()` | Close a PR without merging |
 | `merge_pr_via_github` | `repo_path, pr_number, merge_method, expected_head_sha` | `String` | Merge PR via GitHub API, pinned to the reviewed head |
 | `get_all_pr_statuses` | `path` | `Vec<BranchPrStatus>` | Batch PR status for all branches (includes merged) |
-| `get_pr_diff` | `repo_path, pr_number` | `String` | Get PR diff content |
+| `get_pr_diff` | `repo_path, pr_number` | `{diff, headSha}` | Get PR diff content and the head it was read at |
 | `get_merged_prs` | `repo_path, since_tag?` | `Vec<MergedPr>` | Merged PRs via GraphQL, optionally since a tag's date |
 | `start_conflict_assist` | `repo_path, pr_number` | `ConflictAssistResult` | Worktree on PR head + rebase onto base; reports verified/unverified clean or conflicts, base provenance/warning, and agent prompt (push gated, never auto-merge) |
-| `fetch_ci_failure_logs` | `repo_path, branch, check_url?, head_sha?` | `String` | Fetch failed-job logs for the local branch head, or select a check at the supplied PR head SHA |
+| `fetch_ci_failure_logs` | `repo_path, branch, check_url?, head_sha?` | `String` | Fetch failed-job logs for the local branch head, or select a check at the supplied PR head SHA; failing checks come from the paginated commit rollup and Actions logs from REST using the repository account on github.com or GHE; one 60-second sweep deadline |
 | `circleci_token_status` | — | `CircleCiTokenStatus` | Report token presence and source without returning the token |
 | `circleci_set_token` | `token` | `()` | Store a read-only CircleCI token |
 | `circleci_delete_token` | — | `()` | Remove the stored CircleCI token |
@@ -224,14 +224,14 @@ reached is an error carrying ego's own sentence, never an empty result.
 | `run_pr_review` | `repo_path, pr_number` | `PrReviewResult` | Review a PR's diff. Findings under the confidence threshold (default `0.7`, `TUIC_REVIEW_CONFIDENCE_THRESHOLD` overrides) are dropped before the result is built. Emits `review-progress` |
 | `generate_changelog` | `repo_path, since_tag?` | `ChangelogResult` | Changelog over the merged PRs since a tag. `{ markdown, json }`; `json` is `null` when ego answered in prose only |
 | `run_improvement_scan` | `repo_path, focus` | `ImprovementScanResult` | Up to five proposals for `refactor`, `testing` or `perf`. Emits `proposals-ready` |
-| `create_issue_from_proposal` | `repo_path, proposal` | `CreatedIssue` | File one proposal as a GitHub issue through `gh`. No model call |
+| `create_issue_from_proposal` | `repo_path, proposal` | `CreatedIssue` | File one proposal as a GitHub issue through account-aware REST. No model call |
 
 ## Worktree Management (`worktree.rs`)
 
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
 | `create_worktree` | `base_repo, branch_name, create_branch?, base_ref?` | `{ status: "ok", name, path, workspace_id, branch, base_repo, instructions }` | Create a linked worktree and start warming in the background. `instructions.warm_artifacts.status` is `pending`, matching HTTP/MCP. Parent tracked changes are not carried over. |
-| `remove_worktree` | `repo_path, workspace_id, delete_branch?, force?, override_lock?, expected_fingerprint?, confirm_missing_checkout?` | `{ branch_delete_warning?: string, branch: string, removal_rule: string }` | Remove a linked worktree by `workspace_id`. Branch deletion defaults to true, or false when force is true. Without force, a clean checkout and submodules with no Git operation in progress are required even when the branch is kept. `force` permits discarding dirty files but does not skip branch proof or override a lock; `override_lock` is separate. A live checkout requires `expected_fingerprint` for force removal. A missing registered checkout instead requires `force` and explicit `confirm_missing_checkout`; its absence is rechecked before cleanup and module refs are preserved before pruning. Branch deletion uses the same integration proof as MCP, including no-op merges, corroborated squash messages and archived content heuristics, alongside ancestry, patch equivalence and verified merged GitHub PRs; it uses the captured OID and warns if the proof fails or the ref moves. Keeping the branch skips only branch proof. Before Git removes a live checkout, owner write permission is restored inside it so read-only ignored artifacts cannot block deletion. A leftover unregistered directory is reported with its path. `removal_rule` names the matching rule. |
+| `remove_worktree` | `repo_path, workspace_id, delete_branch?, force?, override_lock?, expected_fingerprint?, confirm_missing_checkout?` | `{ branch_delete_warning?: string, branch: string, removal_rule: string }` | Remove a linked worktree by `workspace_id`. Branch deletion defaults to true, or false when force is true. Without force, a clean checkout and submodules with no Git operation in progress are required even when the branch is kept. `force` permits discarding dirty files but does not skip branch proof or override a lock; `override_lock` is separate. A live checkout requires `expected_fingerprint` for force removal. A missing registered checkout instead requires `force` and explicit `confirm_missing_checkout`; its absence is rechecked before cleanup and module refs are preserved before pruning. Branch deletion uses the same integration proof as MCP, including no-op merges, corroborated squash messages and archived content heuristics, alongside ancestry, patch equivalence and verified merged GitHub PRs fetched over account-aware, fully paginated HTTP GraphQL; it uses the captured OID and warns if the proof fails or the ref moves. Keeping the branch skips only branch proof. Before Git removes a live checkout, owner write permission is restored inside it so read-only ignored artifacts cannot block deletion. A leftover unregistered directory is reported with its path. `removal_rule` names the matching rule. |
 | `delete_local_branch` | `repo_path, branch_name, workspace_id, keep_worktree?` | `()` | Delete a local branch and dispose of the workspace `workspace_id` names. Two identifiers because there are two objects: `branch_name` is the ref to delete, `workspace_id` the checkout holding it. Refuses to delete the default branch, and refuses when the resolved workspace is on a different branch than the one asked for. Uses safe `git branch -d` |
 | `check_worktree_dirty` | `repo_path, workspace_id` | `bool` | Check if the workspace `workspace_id` names has uncommitted changes. Addressed by id because the answer gates an irreversible cleanup — a sibling on the same branch being clean must never authorise destroying this one. Returns false if the id resolves to no checkout. When git cannot answer (the `worktree list` or `status` call fails) it returns an **error**, never `false` — callers that gate a destructive action must see the failure |
 | `get_worktree_paths` | `repo_path` | `HashMap<String, { branch, path, kind: "worktree", warm_artifacts }>` | Every linked worktree of a repo, keyed by workspace id. `warm_artifacts.status` is `pending`, `done`, or `failed`. |
@@ -347,6 +347,7 @@ remote daemon.
 | `detect_all_agent_binaries` | `binaries` | `HashMap<String, AgentBinaryDetection>` | Detect the named binaries in parallel, path only (no version or screen-capability lookup) |
 | `detect_claude_binary` | -- | `String` | Detect Claude binary |
 | `detect_installed_ides` | -- | `Vec<String>` | Detect installed IDEs |
+| `open_default_app` | `target: String, kind: "url" \| "path"` | `()` | Host-only default application open; allows http/https/mailto/tel URLs, checks path metadata, returns after spawn and reaps the launcher through `tuic_core::child_reaping` |
 | `open_in_app` | `path, app, line?, col?` | `()` | Open path in application; `line`/`col` are used only by editors that support them |
 | `spawn_agent` | `pty_config, agent_config` | `String` (session ID) | Spawn agent in PTY |
 
@@ -354,7 +355,7 @@ remote daemon.
 
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
-| `discover_agent_session` | `agent_type, cwd, claimed_ids, agent_pid, env_overrides` | `Option<{ sessionId, launchCommand }>` | Discover the agent's session UUID for session-aware resume. Claude and grok resolve it exactly from their pid→session registry when `agent_pid` is known; every other agent (and any Claude/grok too old to publish one) falls back to the newest unclaimed session file, which cannot tell two tabs in one folder apart. `launchCommand` is the command the live process really runs, rebuilt from its argv and env (`CLAUDE_CONFIG_DIR=… claude --dangerously-skip-permissions`) — a shell alias is expanded before `exec`, so it is the only record of which config dir holds the session. `null` for agents with no verified session-flag list, and on Windows, where argv is unreadable |
+| `discover_agent_session` | `agent_type, cwd, claimed_ids, agent_pid, env_overrides` | `Option<{ sessionId, launchCommand, provider }>` | Discover the agent's session UUID for session-aware resume. Claude and grok resolve it exactly from their pid→session registry when `agent_pid` is known; every other agent (and any Claude/grok too old to publish one) falls back to the newest unclaimed session file, which cannot tell two tabs in one folder apart. `launchCommand` is the command the live process really runs, rebuilt from its argv and env (`CLAUDE_CONFIG_DIR=… claude --dangerously-skip-permissions`) — a shell alias is expanded before `exec`, so it is the only record of which config dir holds the session. `null` for agents with no verified session-flag list, and on Windows, where argv is unreadable. `provider` is the model provider the session runs on, for ego only: the first segment of `model` in the pid-leased `<EGO_HOME>/sessions/<id>/manifest.json`; the sidebar picks the ego icon from it (`null` when unreadable, which shows the generic ego icon) |
 | `verify_agent_session` | `agent_type, session_id, cwd, agent_pid, env_overrides` | `bool` | Verify that the session file exists in the agent's selected profile. A live PID can supply process environment; saved launch environment selects the profile after restart. HTTP parity: `POST /agents/verify-session` |
 
 ## Panel Windows (`panel_window.rs`)
@@ -523,7 +524,7 @@ These commands stay in the root `dictation/commands.rs` adapter; their audio and
 | `list_audio_devices` | -- | `Vec<AudioDevice>` | List input devices |
 | `get_dictation_config` | -- | `DictationConfig` | Load saved config. With an activation phrase, the hands-free runtime applies at least 5000 ms of hold-back even when the saved `hands_free_hold_back_ms` is shorter; hands-free status reports the effective value |
 | `get_hands_free_default_notice` | -- | `string` | The built-in hands-free start notice, sent while `hands_free_start_notice` is empty |
-| `set_dictation_config` | `base, config` | `()` | Save only the changes between the loaded base and edited config. A changed `language`, `speechCommand` or `speech_voice` also drops the voice built for the previous one, cancelling what it was speaking; hands_free_spoken_replies=false also cancels it and refuses new speech while dictation stays armed. Edge 401/403 rejection makes speech unavailable for five minutes. Other fields leave the voice alone. `hands_free_earcons` (default true) turns the hands-free earcons off; only the frontend reads it. `hands_free_notify_model` (default true) is read at arm time only — turning it off mid-conversation does not cancel the end notice the model is already owed. `hands_free_start_notice` (default empty = built-in text) replaces the start notice, also at arm time only, folded to one line |
+| `set_dictation_config` | `base, config` | `()` | Save only the changes between the loaded base and edited config. A changed `language`, `speechCommand` or `speech_voice` also drops the voice built for the previous one, cancelling what it was speaking; hands_free_spoken_replies=false also cancels it and refuses new speech while dictation stays armed. Edge 401/403 rejection makes speech unavailable for five minutes. Other fields leave the voice alone. `hands_free_listening` (default true, read at arm time only; false arms a replies-only conversation with no microphone, and arming with it and `hands_free_spoken_replies` both false is refused). `hands_free_earcons` (default true) turns the hands-free earcons off; only the frontend reads it. `hands_free_notify_model` (default true) is read at arm time only — turning it off mid-conversation does not cancel the end notice the model is already owed. `hands_free_start_notice` (default empty = built-in text) replaces the start notice, also at arm time only, folded to one line |
 | `check_microphone_permission` | -- | `String` | Check macOS microphone TCC permission status |
 | `open_microphone_settings` | -- | `()` | Open macOS System Settings > Privacy > Microphone |
 
@@ -622,7 +623,7 @@ JavaScript `String.slice` semantics for ASCII, accented text, and non-BMP emoji.
 
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
-| `plugin_http_fetch` | `url, method?, headers?, body?, allowed_urls, plugin_id` | `HttpResponse` | Make HTTP request (validated against allowed_urls) |
+| `plugin_http_fetch` | `url, method?, headers?, body?, account?, plugin_id` | `HttpResponse` | Make HTTP request (validated against the on-disk manifest `allowedUrls`; with `account`, Rust injects that account's credential under the account host rule) |
 
 ## Code Intelligence / MDKB (`mdkb_commands.rs`)
 
@@ -895,10 +896,10 @@ previews/presets, UTC run summaries and owner-guarded Run Now with
 `POST /automations/action`. Invoke with `{input:{action:"list"}}`; response values
 and application error messages match HTTP. See the HTTP Automations action table
 for every field and reply. Blocking storage/schedule work runs off the main
-thread. Run Now executes only on the addressed backend; phase 1 is Once-only.
+thread. Run Now executes only on the addressed backend; Once and cron definitions both run.
 
 `automation_action` also accepts `{input:{action:"run",id:"<run id>"}}` to fetch a canonical saved run for notification navigation. Native automation click targets are `{kind:"automation",id:"<run id>"}` on macOS.
-Design Mode v2: `start_design_mode(sessionId, browser?: "edge" | "chrome")` opens the dedicated browser profile and installs its native host. HTTP `POST /design-mode/start` accepts the identical camelCase body. Stop/status and the terminal badge retain their existing shapes. The browser opens on the backend host.
+Design Mode v2: `start_design_mode(sessionId, browser?: "edge" | "chrome", url?: string)` opens the dedicated browser profile and installs its native host. HTTP `POST /design-mode/start` accepts the identical camelCase body. Stop/status and the terminal badge retain their existing shapes. The browser opens on the backend host.
 
 Automation precheck context (#1631-45bf): definitions can opt in with
 `precheck.inject_output: true` (default false). Proceeding checks prefix the
@@ -941,3 +942,15 @@ The request is `{action:"add",account:{provider,host,kind,label,username?}}` or
 `{names:[],status:"stored"|"declined"|"failed"}`. `secret_form_bootstrap` and
 `secret_form_submit` require the active native window identity. Account forms
 do not expose a mobile capability or accept HTTP bootstrap/submission.
+
+
+Automation worktree cleanup (#1623-8b2a): Automation runs retain automation/run IDs and the exact created workspace path and ID in their saved snapshot, including after definition deletion. Worktree cleanup is explicit and limited to final runs. The backend resolves the saved identity and rechecks shared Git integration/archive proof, dirt, submodule commits and live sessions; it never forces removal or closes sessions. Shared `automation_action` actions `worktree_preview` and `cleanup_worktree` accept a saved run `id` on IPC, HTTP, MCP and CLI.
+Automation templates (#1622-be11): the shared automation action accepts
+**templates** (catalogue) and **template** (draft). Draft inputs are template_id,
+repository, run_config and optional timezone (host local by default).
+Drafts have fresh ids and start disabled; no definition or run is created until
+an explicit create action. These actions match across HTTP, IPC, MCP and CLI.
+
+### History-anchored viewport scrolling
+
+`terminal_scroll_to_anchor` accepts `{ sessionId: string, anchor: number | null }` and returns `()`. The all-time row includes evicted rows, matching `historyBase + historySize - displayOffset`. Null follows output; a trimmed anchor clamps to the oldest retained row. HTTP uses `POST /sessions/:id/terminal/scroll-to-anchor` with the same anchor value.

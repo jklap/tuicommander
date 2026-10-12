@@ -13,6 +13,7 @@ import {
 import type { DecodedRow, StyledRange } from "../canvasTerminalUtils";
 import type { RowSnapshot } from "../suggestOverlay";
 import recordedClaude from "./fixtures/claude-answers-before-first-prompt.json";
+import recordedCodex from "./fixtures/codex-answer-marker-1720.json";
 
 const row = (text: string, isWrapped = false): RowSnapshot => ({ text, isWrapped });
 
@@ -347,5 +348,21 @@ describe("sameAnswersHistory", () => {
 		expect(sameAnswersHistory(a, [])).toBe(false);
 		expect(sameAnswersHistory(null, null)).toBe(true);
 		expect(sameAnswersHistory(null, a)).toBe(false);
+	});
+});
+
+describe("buildAnswersTurn — Codex bullet-prefixed answer (#1720-668c)", () => {
+	it("keeps the recorded Codex answer, marker row and continuations", () => {
+		// catches: the answers-only view dropping a `• 💬` answer because its marker regex only knows Claude bullets
+		const turn = buildAnswersTurn(recordedCodex.answerRows, false);
+		expect(turn.answers).toHaveLength(1);
+		expect(turn.answers[0].startsWith("💬 This is a real Codex terminal capture")).toBe(true);
+		expect(turn.answers[0].endsWith("highlighting and wrapping together.")).toBe(true);
+	});
+
+	it("stops a Codex answer before the next tool row", () => {
+		// catches: the answer running past its end into the following Codex tool output
+		const turn = buildAnswersTurn([row("• 💬 Done."), row("  more"), row("• Ran make test"), row("  └ ok")], false);
+		expect(turn.answers).toEqual(["💬 Done.\nmore"]);
 	});
 });

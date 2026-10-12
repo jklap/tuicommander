@@ -6,10 +6,12 @@ import { repoSettingsStore } from "../../stores/repoSettings";
 import { repositoriesStore } from "../../stores/repositories";
 import { paneLayoutKey, savedPaneLayouts } from "../../stores/savedPaneLayouts";
 import { terminalsStore } from "../../stores/terminals";
-import { verifyAndBuildResumeCommand } from "../../utils/agentSession";
+import type { SavedTerminal } from "../../types";
+import { resolveAgentResume, verifyAndBuildResumeCommand } from "../../utils/agentSession";
 import { assignTabToActiveGroup } from "../../utils/paneTabAssign";
 import { markPerf } from "../../utils/perfTrace";
 import { filterValidTerminals } from "../../utils/terminalFilter";
+import { disarmEagerResume, isEagerResumeArmed } from "../../utils/updateRestart";
 
 interface BranchSelectionCoordinatorDeps {
 	repo: {
@@ -94,6 +96,110 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 		requestAnimationFrame(() => terminalsStore.get(id)?.ref?.focus());
 		return id;
 	};
+
+	interface RestoredTab {
+		id: string;
+		terminal: SavedTerminal;
+		/** Set only when the command was resolved up front (post-update restart). */
+		resolution: ResumeResolution | null;
+	}
+	type ResumeResolution = Awaited<ReturnType<typeof resolveAgentResume>>;
+
+	/** Create terminals (no PTY yet) for the saved tabs of one workspace.
+	 *  `autoResume` is the post-update restart: resume commands are resolved BEFORE the
+	 *  terminals exist, so a tab whose session the agent confirmed gets its command as
+	 *  `pendingInitCommand` before its PTY is created and types it at first idle. */
+	const restoreSavedTabs = async (
+		repoPath: string,
+		workspaceId: string,
+		tabs: SavedTerminal[],
+		autoResume: boolean,
+	): Promise<RestoredTab[]> => {
+		const resolutions = autoResume
+			? await Promise.all(
+					tabs.map((terminal) =>
+						terminal.suspended
+							? null
+							: resolveAgentResume(
+									terminal.agentType!,
+									terminal.cwd,
+									terminal.tuicSession,
+									terminal.agentSessionId,
+									terminal.agentLaunchCommand,
+								),
+					),
+				)
+			: null;
+		// First pass: create all terminals synchronously (instant UI)
+		const restoredIds: RestoredTab[] = [];
+		for (const [index, terminal] of tabs.entries()) {
+			const id = terminalsStore.add({
+				sessionId: null,
+				fontSize: terminal.fontSize,
+				name: terminal.name,
+				cwd: terminal.cwd,
+				placementPath: terminal.tuicSession
+					? repositoriesStore.get(repoPath)?.declaredWorktrees?.[terminal.tuicSession]?.worktreePath
+					: undefined,
+				awaitingInput: null,
+				tuicSession: terminal.tuicSession ?? crypto.randomUUID(),
+				agentType: terminal.agentType ?? null,
+				agentSessionId: terminal.agentSessionId ?? null,
+				agentLaunchCommand: terminal.agentLaunchCommand ?? null,
+				// The address other agents already hold. Rust reserves it on
+				// PTY create and moves the repo counter past it, so the next
+				// fresh tab cannot be handed the same name.
+				alias: terminal.alias ?? null,
+			});
+			// Restored without a PTY; the user resumes it.
+			if (terminal.suspended) terminalsStore.update(id, { suspended: true });
+			// What the tab was doing before the restart. Carried purely so the
+			// resume banner and the Context bar can say it — the next `intent:`
+			// or user prompt overwrites both.
+			if (terminal.agentIntent || terminal.lastPrompt) {
+				terminalsStore.update(id, {
+					agentIntent: terminal.agentIntent ?? null,
+					lastPrompt: terminal.lastPrompt ?? null,
+				});
+			}
+			const resolution = resolutions?.[index] ?? null;
+			if (resolution?.verified && resolution.cmd) terminalsStore.update(id, { pendingInitCommand: resolution.cmd });
+			// Same reason as handleAddTerminalToWorkspace: a restore knows its repo.
+			terminalsStore.setRepoPath(id, repoPath);
+			repositoriesStore.addTerminalToWorkspace(repoPath, workspaceId, id);
+			restoredIds.push({ id, terminal, resolution });
+		}
+		return restoredIds;
+	};
+
+	/** Second pass: verify resume commands in parallel (non-blocking) and offer the
+	 *  click-to-resume banner. A suspended tab stays suspended; resuming it builds the
+	 *  command then. A tab already given its init command has nothing left to offer. */
+	const applyResumeBanners = (restored: RestoredTab[]): Promise<void> =>
+		Promise.all(
+			restored
+				.filter(({ terminal }) => !terminal.suspended)
+				.map(async ({ id, terminal, resolution }) => {
+					if (resolution?.verified && resolution.cmd) return;
+					const resumeCmd = resolution
+						? resolution.cmd
+						: await verifyAndBuildResumeCommand(
+								terminal.agentType!,
+								terminal.cwd,
+								terminal.tuicSession,
+								terminal.agentSessionId,
+								terminal.agentLaunchCommand,
+							);
+					if (resumeCmd) {
+						terminalsStore.update(id, {
+							pendingResumeCommand: resumeCmd,
+							agentSessionId: terminal.agentSessionId ?? null,
+						});
+					}
+				}),
+		)
+			.then(() => {})
+			.catch((e) => appLogger.warn("terminal", "Resume command verification failed", { error: String(e) }));
 
 	const handleBranchSelect = (repoPath: string, workspaceId: string): Promise<void> => {
 		// Append to the FIFO queue: this select runs only after every previously
@@ -263,43 +369,7 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 					// Capture old terminal IDs from the pane layout (branch.terminals is cleared on hydration)
 					const oldTerminalIds = paneLayoutStore.getTerminalTabIds();
 					// Lazy restore: create terminals from persisted session state
-					// First pass: create all terminals synchronously (instant UI)
-					const restoredIds: { id: string; terminal: (typeof restorableTerminals)[number] }[] = [];
-					for (const terminal of restorableTerminals) {
-						const id = terminalsStore.add({
-							sessionId: null,
-							fontSize: terminal.fontSize,
-							name: terminal.name,
-							cwd: terminal.cwd,
-							placementPath: terminal.tuicSession
-								? repositoriesStore.get(repoPath)?.declaredWorktrees?.[terminal.tuicSession]?.worktreePath
-								: undefined,
-							awaitingInput: null,
-							tuicSession: terminal.tuicSession ?? crypto.randomUUID(),
-							agentType: terminal.agentType ?? null,
-							agentSessionId: terminal.agentSessionId ?? null,
-							agentLaunchCommand: terminal.agentLaunchCommand ?? null,
-							// The address other agents already hold. Rust reserves it on
-							// PTY create and moves the repo counter past it, so the next
-							// fresh tab cannot be handed the same name.
-							alias: terminal.alias ?? null,
-						});
-						// Restored without a PTY; the user resumes it.
-						if (terminal.suspended) terminalsStore.update(id, { suspended: true });
-						// What the tab was doing before the restart. Carried purely so the
-						// resume banner and the Context bar can say it — the next `intent:`
-						// or user prompt overwrites both.
-						if (terminal.agentIntent || terminal.lastPrompt) {
-							terminalsStore.update(id, {
-								agentIntent: terminal.agentIntent ?? null,
-								lastPrompt: terminal.lastPrompt ?? null,
-							});
-						}
-						// Same reason as handleAddTerminalToWorkspace: a restore knows its repo.
-						terminalsStore.setRepoPath(id, repoPath);
-						repositoriesStore.addTerminalToWorkspace(repoPath, workspaceId, id);
-						restoredIds.push({ id, terminal });
-					}
+					const restoredIds = await restoreSavedTabs(repoPath, workspaceId, restorableTerminals, isEagerResumeArmed());
 					if (restoredIds.length > 0) terminalsStore.setActive(restoredIds[0].id);
 
 					// Remap disk-restored layout terminal IDs to newly created IDs
@@ -319,25 +389,7 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 
 					// Second pass: verify resume commands in parallel (non-blocking).
 					// A suspended tab stays suspended; resuming it builds the command then.
-					Promise.all(
-						restoredIds
-							.filter(({ terminal }) => !terminal.suspended)
-							.map(async ({ id, terminal }) => {
-								const resumeCmd = await verifyAndBuildResumeCommand(
-									terminal.agentType!,
-									terminal.cwd,
-									terminal.tuicSession,
-									terminal.agentSessionId,
-									terminal.agentLaunchCommand,
-								);
-								if (resumeCmd) {
-									terminalsStore.update(id, {
-										pendingResumeCommand: resumeCmd,
-										agentSessionId: terminal.agentSessionId ?? null,
-									});
-								}
-							}),
-					).catch((e) => appLogger.warn("terminal", "Resume command verification failed", { error: String(e) }));
+					void applyResumeBanners(restoredIds);
 				} else {
 					// All saved tabs were plain shells — spawn a fresh terminal
 					paneLayoutStore.reset();
@@ -375,5 +427,39 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 		}
 	};
 
-	return { handleAddTerminalToWorkspace, handleBranchSelect, handleBranchSelectInner };
+	/** After an update restart, bring back every branch's agent tabs that have a session
+	 *  the agent confirmed — not only the branch the user selects. A branch with no such
+	 *  tab keeps its saved tabs for the lazy path. Runs behind pending selects. */
+	const resumeAgentTabsAfterUpdate = (): Promise<void> => {
+		const run = branchSelectQueue.then(async () => {
+			try {
+				if (!isEagerResumeArmed()) return;
+				for (const repoPath of repositoriesStore.getPaths()) {
+					for (const [workspaceId, workspace] of Object.entries(repositoriesStore.get(repoPath)?.workspaces ?? {})) {
+						const saved = workspace.savedTerminals ?? [];
+						if (workspace.terminals.length > 0) continue;
+						if (!saved.some((tab) => tab.agentType != null && !tab.suspended && tab.agentSessionId)) continue;
+						// Consume-once, as in a branch select.
+						repositoriesStore.setWorkspace(repoPath, workspaceId, { savedTerminals: [] });
+						const restored = await restoreSavedTabs(
+							repoPath,
+							workspaceId,
+							saved.filter((tab) => tab.agentType != null || tab.suspended),
+							true,
+						);
+						await applyResumeBanners(restored);
+					}
+				}
+			} finally {
+				disarmEagerResume();
+			}
+		});
+		branchSelectQueue = run.then(
+			() => {},
+			() => {},
+		);
+		return run;
+	};
+
+	return { handleAddTerminalToWorkspace, handleBranchSelect, handleBranchSelectInner, resumeAgentTabsAfterUpdate };
 }

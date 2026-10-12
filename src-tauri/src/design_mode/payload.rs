@@ -33,14 +33,14 @@ pub(crate) struct GrabPayload {
     rect: Vec<(String, String)>,
 }
 
-fn strip_controls(value: &str) -> String {
+pub(super) fn strip_controls(value: &str) -> String {
     value
         .chars()
         .filter(|c| !c.is_control() || matches!(c, '\n' | '\t'))
         .collect()
 }
 
-fn clamp(value: &str, max: usize) -> String {
+pub(super) fn clamp(value: &str, max: usize) -> String {
     let clean = strip_controls(value);
     let end = clean.floor_char_boundary(max.min(clean.len()));
     clean[..end].to_owned()
@@ -48,7 +48,7 @@ fn clamp(value: &str, max: usize) -> String {
 
 /// Page text for a field printed on one line. A newline would let the page
 /// start a line of its own that reads like a trusted `source:` or `[image:]`.
-fn one_line(value: &str, max: usize) -> String {
+pub(super) fn one_line(value: &str, max: usize) -> String {
     clamp(value, max).replace(['\n', '\t'], " ")
 }
 
@@ -80,11 +80,11 @@ fn field_text(value: &str, max: usize) -> String {
 
 /// Multi-line page text: every continuation line is indented, so none can
 /// start at column 0 and pass for a header line of the grab block.
-fn indent_continuation(value: &str) -> String {
+pub(super) fn indent_continuation(value: &str) -> String {
     value.replace('\n', "\n  ")
 }
 
-fn safe_url(value: &str) -> Option<String> {
+pub(super) fn safe_url(value: &str) -> Option<String> {
     if value == "about:blank" {
         return Some(value.to_owned());
     }

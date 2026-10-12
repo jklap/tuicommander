@@ -142,6 +142,7 @@ File: `~/.config/com.tuic.commander/plugins/{id}/manifest.json`
 | `allowedUrls` | string[] | for `net:http` | Non-empty URL patterns required for HTTP access (e.g. `["https://api.example.com/*"]`) |
 | `agentTypes` | string[] | no | Agent types this plugin targets (e.g. `["claude"]`). Omit or `[]` for universal plugins. |
 | `binaries` | string[] | no | CLI binaries this plugin may execute via `exec:cli` (e.g. `["rtk", "mdkb"]`) |
+| `providers` | (string \| object)[] | no | Account providers for `httpFetch({account})`; requires `net:http`. A core id (`"github"`) or a token-only descriptor registered on load (see [Core account registry integration](#core-account-registry-integration)) |
 
 ### Validation Rules
 
@@ -1170,6 +1171,12 @@ interface HttpResponse {
 }
 ```
 
+**Account requests:** `httpFetch(url, { account: "<account id>" })` makes Rust inject that account's credential (`Authorization: Bearer <token>`, or `Basic` for Basic accounts). The plugin never sees the token. Rules: the manifest `providers` list must contain the account's provider; the URL must be under the account host (same scheme, host and port, path prefix of the site URL; GitHub accounts use their API base, `https://api.github.com/` or `https://<ghe>/api/`); the account host rule replaces the `allowedUrls` check for the first URL; you must not set `Authorization` yourself. Each redirect hop must be under the account host or match `allowedUrls`, and a hop to another scheme, host or port loses the `Authorization` header. The token is read again for each request, so a re-entered credential applies at once; a 401 comes back to you as a normal response. Token values in the response body and headers are replaced with `[redacted]`.
+
+```typescript
+const me = await host.httpFetch(`${site}/rest/api/3/myself`, { account: accountId });
+```
+
 **Security and limits:**
 - `file://`, `data://`, `ftp://` schemes are blocked
 - 30-second timeout, 10 MB response limit, max 5 redirects
@@ -1412,10 +1419,10 @@ Never use emoji — they render inconsistently across platforms.
 When any file in a plugin directory changes, the app:
 1. Emits a `plugin-changed` event with the plugin ID
 2. Calls `pluginRegistry.unregister(id)` (runs `onunload`, disposes all registrations)
-3. Re-imports the module with a cache-busting query (`?t=timestamp`)
+3. Re-imports the module under a fresh path version (`plugin://<id>/~v<timestamp>/main.js`). Relative imports inherit the version, so every file the entry imports is re-read too
 4. Validates and re-registers the plugin
 
-This means you can edit `main.js` and see changes without restarting the app.
+This means you can edit `main.js` or any file it imports and see changes without restarting the app. The `~v<digits>` segment exists only in the URL; do not name a plugin directory that way.
 
 ## Build & Install
 
@@ -1443,14 +1450,14 @@ my-plugin/
 Core renders the following Solid components. Plugins supply manifest metadata and host registrations; they do not import or mount these components.
 
 ### Manifest UX field inventory
-`agentTypes`, `allowedUrls`, `author`, `binaries`, `capabilities`, `description`, `id`, `main`, `minAppVersion`, `name`, `version`.
+`agentTypes`, `allowedUrls`, `author`, `binaries`, `capabilities`, `description`, `id`, `main`, `minAppVersion`, `name`, `providers`, `version`.
 
 ### Core UX component inventory
 `BrowseRow`, `PluginLogViewer`, `PluginRow`, `PluginsTab`.
 
 #### PluginsTab
 
-Settings > Plugins has Installed and Browse views. Installed lists loaded/discovered plugin state. Browse reads community registry entries and offers install, update and refresh actions. Installation accepts ZIP archives. The manifest `id` identifies the package, `main` selects its module, and `minAppVersion` controls compatibility. `author` is optional metadata. `allowedUrls`, `agentTypes` and `binaries` drive host access/event routing, not editable settings controls.
+Settings > Plugins has Installed and Browse views. Installed lists loaded/discovered plugin state. Browse reads community registry entries and offers install, update and refresh actions. Installation accepts ZIP archives. The manifest `id` identifies the package, `main` selects its module, and `minAppVersion` controls compatibility. `author` is optional metadata. `allowedUrls`, `agentTypes`, `binaries` and `providers` drive host access/event routing, not editable settings controls.
 
 #### PluginRow
 
@@ -1789,7 +1796,11 @@ Available from the [plugin registry](https://github.com/sstraus/tuicommander-plu
 
 ## Core account registry integration
 
-Provider accounts and sites are core-owned. Metadata reads expose credential presence only. A trusted manifest adapter registers `ProviderDescriptor {id,label,kinds,verify:{path,login_pointer}}` with `accounts::register_provider(owner, descriptor)`; non-core providers use bearer/basic tokens only. Unload unregisters descriptors but keeps accounts and credentials. Account actions are not currently a grant in `host.invoke`; the scoped plugin host adapter and authenticated HTTP injection are separate host-API work. Secret entry belongs in the core private native sink, which calls the write-only account service; plugins must never receive token values. See [Shared account registry](backend/github.md#shared-account-registry).
+Provider accounts and sites are core-owned. Metadata reads expose credential presence only. Manifest `providers` descriptors (`{id,label,kinds,verify:{path,loginPointer}}`) register with `accounts::register_provider(<plugin id>, descriptor)` when the plugin loads; non-core providers use bearer/basic tokens only. Unload unregisters descriptors but keeps accounts and credentials.
+
+`providers`: optional account providers this plugin may use with `httpFetch({account})`; requires `net:http`. An entry is either a core provider id (only `"github"`) or a token-only descriptor that core registers when the plugin loads and removes when it unloads (accounts and credentials stay): `{ "id": "jira", "label": "Jira", "kinds": ["basic", "bearer"], "verify": { "path": "/rest/api/3/myself", "loginPointer": "/displayName" } }`. `kinds` accepts `bearer` and `basic`; `verify.path` is a path under the site URL that the account Test calls, and `loginPointer` is the JSON Pointer of the viewer name in its response. An id may appear once; a declared descriptor must not use a core id.
+
+Authenticated HTTP goes through `host.httpFetch(url, { account })` (see Tier 3h). Account actions are not currently a grant in `host.invoke`. Secret entry belongs in the core private native sink, which calls the write-only account service; plugins must never receive token values. See [Shared account registry](backend/github.md#shared-account-registry).
 
 ## Core setting controls
 
@@ -1930,3 +1941,20 @@ Resolvers run in registration order; the first non-null result wins and a resolv
 that throws is skipped. When a worktree is already linked to `link.reference`, the
 palette offers **Open worktree**; otherwise it offers **Start work** with your
 request (`repoPath` defaults to the active repository).
+
+## Tasks create
+
+Core's `TasksCreate` consumes `createFields` and `act` of the `WorkItemProvider` port.
+The host supplies `provider`, `onCreated(detail)` to open the created item, and
+optional `onCancel`. Providers supply types and schemas; they do not render the form.
+
+`createFields()` without a type must return an enum field with id `itemType` that
+lists the creatable types; a single type is preselected. `createFields(type)`
+returns the fields of that type (an unknown type is an error, and `create`
+rejects an undeclared `itemType`). Title and Description are fixed inputs, so a
+schema does not repeat them. Only editable fields render.
+
+A type change reloads the schema; values survive only for the same field id and
+kind, and a late schema of an earlier type is dropped. Create stays disabled until
+Title, Type and every required field of the current type are set. Submit sends one
+`create` action with every current field (unset is null). A rejection keeps the draft.

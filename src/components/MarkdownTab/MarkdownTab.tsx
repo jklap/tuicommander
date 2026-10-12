@@ -34,6 +34,7 @@ import { DomSearchOverview } from "../shared/DomSearchOverview";
 import e from "../shared/editor-header.module.css";
 import { createSearchVisibility, SearchBar } from "../shared/SearchBar";
 import { ContentRenderer } from "../ui/ContentRenderer";
+import { Select } from "../ui/Select";
 import { CommentOverlay } from "./CommentOverlay";
 import { LiveMarkdownEditor } from "./LiveMarkdownEditor";
 import { liveModeSupported } from "./liveMarkdown";
@@ -570,6 +571,26 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 		}
 	};
 
+	// The focused element is the non-scrolling wrapper, so the browser never pages
+	// the .content child on its own. Handle the bare paging keys here; leave
+	// modified keys (Shift+PageUp = terminal scroll) and form controls alone.
+	const handlePagingKey = (ev: KeyboardEvent) => {
+		const el = scrollEl();
+		if (!el || liveMode() || ev.defaultPrevented || ev.shiftKey || ev.ctrlKey || ev.altKey || ev.metaKey) return;
+		const target = ev.target as HTMLElement;
+		if (target.closest("input, textarea, select, [contenteditable]")) return;
+		const page = Math.max(el.clientHeight - 40, 1);
+		const top = {
+			PageDown: el.scrollTop + page,
+			PageUp: el.scrollTop - page,
+			Home: 0,
+			End: el.scrollHeight - el.clientHeight,
+		}[ev.key];
+		if (top === undefined) return;
+		ev.preventDefault();
+		el.scrollTop = top;
+	};
+
 	const handleCopyPath = () => {
 		const path = fullPath();
 		if (!path) return;
@@ -583,7 +604,14 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 	};
 
 	return (
-		<div ref={wrapperRef} class={s.wrapper} tabIndex={-1} data-focus-target="md-tab" data-tab-id={props.tab.id}>
+		<div
+			ref={wrapperRef}
+			class={s.wrapper}
+			tabIndex={-1}
+			data-focus-target="md-tab"
+			data-tab-id={props.tab.id}
+			onKeyDown={handlePagingKey}
+		>
 			<div class={e.header} onContextMenu={handleHeaderContextMenu}>
 				<span class={e.filename} title={displayPath()}>
 					{displayPath()}
@@ -640,7 +668,7 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 							<label class={s.agentLabel} for={`review-agent-${props.tab.id}`}>
 								{t("markdownTab.agentLabel", "Agent")}
 							</label>
-							<select
+							<Select
 								id={`review-agent-${props.tab.id}`}
 								class={s.agentSelect}
 								aria-label={t("markdownTab.reviewAgent", "Review agent")}
@@ -652,7 +680,7 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 									<option value="">{t("markdownTab.noAgents", "No agents")}</option>
 								</Show>
 								<For each={reviewAgents()}>{(agent) => <option value={agent.sessionId}>{agent.label}</option>}</For>
-							</select>
+							</Select>
 							<button
 								class={e.btn}
 								disabled={!selectedAgentSession() || sendingChanges()}

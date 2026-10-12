@@ -90,6 +90,8 @@ export function useMobileVoice(sessionId: Accessor<string>, enabled: Accessor<bo
 		phase,
 		recording: () => arming() || !!store()?.state.handsFree?.armed,
 		toggle,
+		listening: () => store()?.state.handsFreeListening ?? true,
+		setListening: (value: boolean) => store()?.setHandsFreeListening(value),
 		spokenReplies: () => store()?.state.spokenReplies ?? true,
 		setSpokenReplies: (value: boolean) => store()?.setSpokenReplies(value),
 	};

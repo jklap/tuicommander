@@ -66,6 +66,109 @@ describe("DictationToast", () => {
 		});
 	});
 
+	describe("spoken replies toggle", () => {
+		const SAVED_CONFIG = { hands_free_spoken_replies: true, hands_free_listening: true };
+
+		const armedStatus = {
+			armed: true,
+			listening: true,
+			phase: "waiting",
+			sessionId: "s1",
+			owner: "desktop",
+			generation: 1,
+			pendingText: null,
+			holdBackMs: 1500,
+			error: null,
+		};
+
+		/** Bug caught: the toggle is shown in push-to-talk, where no reply is ever spoken and it has no effect. */
+		it("is not offered during push-to-talk dictation", async () => {
+			mockInvoke.mockImplementation((cmd: string) => {
+				if (cmd === "get_dictation_config") return Promise.resolve({ ...SAVED_CONFIG });
+				return Promise.resolve(undefined);
+			});
+
+			await testInScopeAsync(async () => {
+				const { container } = render(() => <DictationToast />);
+				await dictationStore.startRecording();
+
+				expect(dictationStore.state.recording).toBe(true);
+				expect(dictationStore.state.handsFree?.armed).not.toBe(true);
+				expect(container.querySelector(".toast")).not.toBeNull();
+				expect(container.querySelector('button[aria-label="Spoken replies"]')).toBeNull();
+			});
+		});
+
+		/** Bug caught: the toast flips a local flag, so Settings and the backend never see the change. */
+		it("flips the persisted setting from the toast while a hands-free conversation is armed", async () => {
+			let stored = { ...SAVED_CONFIG };
+			mockInvoke.mockImplementation((cmd: string, args?: { config?: typeof stored }) => {
+				if (cmd === "arm_hands_free_dictation" || cmd === "get_hands_free_status") return Promise.resolve(armedStatus);
+				if (cmd === "get_dictation_config") return Promise.resolve({ ...stored });
+				if (cmd === "set_dictation_config" && args?.config) {
+					stored = { ...args.config };
+				}
+				return Promise.resolve(undefined);
+			});
+
+			await testInScopeAsync(async () => {
+				const { container } = render(() => <DictationToast />);
+				expect(await dictationStore.armHandsFree("s1")).toBe(true);
+
+				const toggle = container.querySelector<HTMLButtonElement>('button[aria-label="Spoken replies"]');
+				expect(toggle).not.toBeNull();
+				expect(toggle?.getAttribute("aria-pressed")).toBe("true");
+
+				toggle?.click();
+				await vi.waitFor(() => expect(toggle?.getAttribute("aria-pressed")).toBe("false"));
+				expect(stored.hands_free_spoken_replies).toBe(false);
+				expect(dictationStore.state.spokenReplies).toBe(false);
+
+				toggle?.click();
+				await vi.waitFor(() => expect(toggle?.getAttribute("aria-pressed")).toBe("true"));
+				expect(stored.hands_free_spoken_replies).toBe(true);
+
+				await dictationStore.disarmHandsFree();
+			});
+		});
+
+		/** Bug caught: a replies-only conversation keeps a permanent toast with a flat microphone meter. */
+		it("stays hidden for an idle replies-only conversation and appears while recording", async () => {
+			vi.useFakeTimers();
+			mockInvoke.mockImplementation((cmd: string) => {
+				if (cmd === "arm_hands_free_dictation" || cmd === "get_hands_free_status")
+					return Promise.resolve({
+						armed: true,
+						listening: false,
+						phase: "waiting",
+						sessionId: "s1",
+						owner: "desktop",
+						generation: 1,
+						pendingText: null,
+						holdBackMs: 1500,
+						error: null,
+					});
+				if (cmd === "get_dictation_status") return Promise.resolve({ audio_level: 0 });
+				if (cmd === "get_speech_status") return Promise.resolve({ speaking: false, paused: false });
+				return Promise.resolve(undefined);
+			});
+
+			await testInScopeAsync(async () => {
+				const { container } = render(() => <DictationToast />);
+				expect(await dictationStore.armHandsFree("s1")).toBe(true);
+				await vi.advanceTimersByTimeAsync(300);
+				expect(container.querySelector(".toast")).toBeNull();
+
+				await dictationStore.startRecording();
+				await vi.advanceTimersByTimeAsync(100);
+				expect(container.querySelector(".toast")).not.toBeNull();
+				expect(container.querySelector('button[aria-label="Spoken replies"]')).not.toBeNull();
+				expect(container.textContent).toContain("Listening");
+			});
+			vi.useRealTimers();
+		});
+	});
+
 	describe("while a hands-free conversation is armed", () => {
 		const status = (armed: boolean, phase: string) => ({
 			armed,
@@ -144,8 +247,11 @@ describe("DictationToast", () => {
 			});
 		});
 
+		/** The playback controls; the always-present spoken-replies toggle has its own tests. */
 		const labels = (container: HTMLElement) =>
-			Array.from(container.querySelectorAll("button")).map((b) => b.getAttribute("aria-label"));
+			Array.from(container.querySelectorAll("button"))
+				.map((b) => b.getAttribute("aria-label"))
+				.filter((label) => label !== "Spoken replies");
 
 		/** Bug caught: controls shown for the wrong state (Pause while paused), or while nothing speaks. */
 		it("offers pause and stop while speaking, play and stop while paused, nothing otherwise", async () => {

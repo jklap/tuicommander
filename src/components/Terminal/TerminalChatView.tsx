@@ -2,6 +2,7 @@ import { type Component, createEffect, onCleanup, onMount, Show } from "solid-js
 import { acpTranscript } from "../../stores/acpTranscript";
 import { appLogger } from "../../stores/appLogger";
 import { chatViewAvailability, chatViewKey, chatViewStore } from "../../stores/chatView";
+import { settingsStore } from "../../stores/settings";
 import { terminalsStore } from "../../stores/terminals";
 import { Transcript, type TranscriptSearchRef } from "../AIChatPanel/Transcript";
 import s from "./TerminalChatView.module.css";
@@ -61,6 +62,7 @@ export const TerminalChatView: Component<{
 				entries={() => acpTranscript.entries(chatViewKey(props.sessionId))}
 				busy={() => false}
 				observeToolDuration={false}
+				muteIntermediate={settingsStore.state.chatMuteIntermediateText}
 				emptyMessage="No messages in this conversation yet."
 			/>
 			<div class={s.hint}>Reply below with Compose. Switch to CLI to answer permission prompts.</div>

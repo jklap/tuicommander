@@ -40,7 +40,6 @@ authors and communities behind each project.
 | drag | 2.1.1 | Apache-2.0 OR MIT |
 | flate2 | 1.1.10 | MIT OR Apache-2.0 |
 | futures-util | 0.3.33 | MIT OR Apache-2.0 |
-| gh-token | 0.1.8 | MIT OR Apache-2.0 |
 | gix | 0.85.0 | MIT OR Apache-2.0 |
 | glob | 0.3.4 | MIT OR Apache-2.0 |
 | grep-matcher | 0.1.9 | Unlicense OR MIT |
@@ -61,6 +60,7 @@ authors and communities behind each project.
 | mime_guess | 2.0.5 | MIT |
 | moka | 0.12.15 | MIT OR Apache-2.0 AND Apache-2.0 |
 | notify | 8.2.0 | CC0-1.0 |
+| open | 5.4.0 | MIT |
 | ort | 2.0.0-rc.13 | MIT OR Apache-2.0 |
 | p256 | 0.13.2 | Apache-2.0 OR MIT |
 | parking_lot | 0.12.5 | MIT OR Apache-2.0 |
@@ -230,8 +230,8 @@ Counts below collapse equivalent SPDX expressions (`MIT OR Apache-2.0` ≡ `Apac
 <!-- BEGIN GENERATED:summary -->
 | License | Count |
 |---------|-------|
-| MIT OR Apache-2.0 | 80 |
-| MIT | 66 |
+| MIT OR Apache-2.0 | 79 |
+| MIT | 67 |
 | Apache-2.0 | 8 |
 | Unlicense OR MIT | 7 |
 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | 4 |

@@ -10,6 +10,24 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "Agent toast cards",
+		description:
+			"Normal agent notices show a card only on their active origin terminal tab; other tabs receive bell entries only. Turn off Show cards from the active terminal in Settings > Notifications to keep only urgent cards.",
+		shortcut: null,
+	},
+	{
+		feature: "New chat text",
+		description:
+			"While reading earlier chat messages, select New text below to return to the latest reply. Toggle the indicator in Settings > Appearance > Chat.",
+		shortcut: null,
+	},
+	{
+		feature: "Mobile prompt queue",
+		description:
+			"Hold Send and select Queue to submit your current agent draft at its next ready window. Tap Send to submit now.",
+		shortcut: null,
+	},
+	{
 		feature: "Tasks roadmap",
 		description:
 			"Switch Month or Quarter in the Tasks roadmap to change the timeline scale. Tasks without usable dates stay in the side list.",
@@ -18,7 +36,7 @@ export const TIPS: Tip[] = [
 	{
 		feature: "Design Mode",
 		description:
-			"Start Design Mode from an agent tab, open its browser sidebar, pick elements and comment before sending. Busy agents receive feedback at their next idle window.",
+			"Right-click a terminal web link and choose Start in Design Mode to connect that agent and open the page directly. Pick elements and comment in the browser sidebar before sending.",
 		shortcut: null,
 	},
 	{
@@ -232,6 +250,12 @@ export const TIPS: Tip[] = [
 	{
 		feature: "Pin Tab",
 		description: "Right-click any tab and select Pin — pinned tabs stay visible when you switch branches.",
+		shortcut: null,
+	},
+	{
+		feature: "Automation worktree cleanup",
+		description:
+			"Open Automations → Runs to inspect a completed run’s worktree and remove it when the backend confirms it is safe.",
 		shortcut: null,
 	},
 	{
@@ -614,6 +638,12 @@ export const TIPS: Tip[] = [
 		feature: "Native Agent Hooks",
 		description:
 			"Let Claude or Gemini report status through their own hooks for precise busy/idle/waiting state — enable per agent in Settings → Agents. TUIC installs and removes the hooks cleanly and never touches your own.",
+		shortcut: null,
+	},
+	{
+		feature: "Automation Templates",
+		description:
+			"Choose a built-in template in a new automation draft after entering its repository and run config. Review it and save it paused before enabling runs.",
 		shortcut: null,
 	},
 ];

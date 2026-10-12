@@ -85,21 +85,102 @@ pub fn install(app_handle: tauri::AppHandle) {
 
 #[cfg(target_os = "macos")]
 pub fn release_on_focus_loss(app_handle: &tauri::AppHandle) {
+    use objc2_app_kit::{NSEvent, NSEventModifierFlags};
+    use objc2_foundation::{NSRunLoop, NSRunLoopCommonModes};
     use std::sync::atomic::Ordering;
     use tauri::{Emitter, Manager};
 
     let dictation = app_handle.state::<super::DictationState>();
+    if !dictation.fn_down.load(Ordering::Acquire) {
+        return;
+    }
+    let physically_down = NSEvent::modifierFlags_class().contains(NSEventModifierFlags::Function);
+    tracing::info!(
+        source = "dictation",
+        physically_down,
+        recording = dictation.recording.load(Ordering::Acquire),
+        unix_ms = unix_ms(),
+        "Fn focus loss observed"
+    );
+    release_fn_capture(&dictation, physically_down, "focus-loss", || {
+        let _ = app_handle.emit_to(tauri::EventTarget::labeled("main"), "fn-key-up", ());
+    });
+    if !dictation.fn_down.load(Ordering::Acquire)
+        || dictation
+            .fn_release_watch_active
+            .swap(true, Ordering::AcqRel)
+    {
+        return;
+    }
+
+    // The local monitor cannot see key-up in another app. Read physical state
+    // on the AppKit thread until release, without global-monitor permissions.
+    let app = app_handle.clone();
+    let timer = release_watch_timer(move || {
+        let dictation = app.state::<super::DictationState>();
+        if dictation.fn_down.load(Ordering::Acquire) {
+            let physically_down =
+                NSEvent::modifierFlags_class().contains(NSEventModifierFlags::Function);
+            release_fn_capture(&dictation, physically_down, "fn-state-poll", || {
+                let _ = app.emit_to(tauri::EventTarget::labeled("main"), "fn-key-up", ());
+            });
+        }
+        let held = dictation.fn_down.load(Ordering::Acquire);
+        if !held {
+            dictation
+                .fn_release_watch_active
+                .store(false, Ordering::Release);
+        }
+        held
+    });
+    // SAFETY: Tauri window events run on the AppKit thread. The run loop retains
+    // the timer, including during menus/tracking, until it invalidates itself.
+    unsafe { NSRunLoop::mainRunLoop().addTimer_forMode(&timer, NSRunLoopCommonModes) };
+}
+
+/// A temporary watch: no wakeups remain once the held key has been released.
+#[cfg(target_os = "macos")]
+fn release_watch_timer(
+    observe_held: impl Fn() -> bool + Send + 'static,
+) -> objc2::rc::Retained<objc2_foundation::NSTimer> {
+    use block2::RcBlock;
+    use objc2_foundation::NSTimer;
+    use std::ptr::NonNull;
+
+    let block = RcBlock::new(move |timer: NonNull<NSTimer>| {
+        if !observe_held() {
+            // SAFETY: Foundation supplies the live timer for this invocation.
+            unsafe { timer.as_ref().invalidate() };
+        }
+    });
+    // SAFETY: the block captures a Send closure and retains no borrowed state.
+    unsafe { NSTimer::timerWithTimeInterval_repeats_block(0.05, true, &block) }
+}
+
+/// Reconcile the held Fn key with a native release observation.
+#[cfg(target_os = "macos")]
+pub(super) fn release_fn_capture(
+    dictation: &super::DictationState,
+    physically_down: bool,
+    origin: &'static str,
+    emit_release: impl FnOnce(),
+) {
+    use std::sync::atomic::Ordering;
+
+    if physically_down {
+        return;
+    }
     if dictation.fn_down.swap(false, Ordering::AcqRel) {
         tracing::info!(
             source = "dictation",
             key = "Fn",
             edge = "up",
-            origin = "focus-loss",
+            origin,
             unix_ms = unix_ms(),
             "Push-to-talk key edge"
         );
-        dictation.request_native_stop("focus-loss");
-        let _ = app_handle.emit_to(tauri::EventTarget::labeled("main"), "fn-key-up", ());
+        dictation.request_native_stop(origin);
+        emit_release();
     }
 }
 
@@ -114,3 +195,7 @@ fn unix_ms() -> u128 {
 /// No-op on non-macOS platforms.
 #[cfg(not(target_os = "macos"))]
 pub fn install(_app_handle: tauri::AppHandle) {}
+
+#[cfg(all(test, target_os = "macos"))]
+#[path = "fn_key_monitor_tests.rs"]
+mod tests;

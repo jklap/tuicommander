@@ -61,24 +61,7 @@
   font-weight: 600;
 }
 
-.agentSelect {
-  min-width: 100px;
-  max-width: 160px;
-  color: var(--fg-primary);
-  background: var(--bg-secondary);
-  border: 0;
-  border-right: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
-  border-left: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
-  border-radius: 0;
-  padding: 2px 6px;
-  font: inherit;
-  font-size: var(--font-xs);
-}
-
-.agentSelect:focus-visible {
-  outline: 1px solid var(--accent);
-  outline-offset: -1px;
-}
+.agentSelect { min-width: 100px; max-width: 160px; }
 
 .agentActions button {
   border: 0;

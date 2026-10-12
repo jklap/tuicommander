@@ -8,6 +8,14 @@ Published story workflows can start in Plans and Stories through the owning daem
 **Version:** 1.8.0
 **Last Updated:** 2026-09-16
 
+## Shared form controls — Implemented (#1815-01c9)
+
+Native Select, Input and Textarea wrappers and a keyboard-accessible segmented
+view switch share theme-based form styling. All desktop and mobile native select fields
+use the shared Select. Tasks, Settings, Automations, Git review and chat forms also
+share their text controls. The JSX source guard rejects native selects outside ui
+without migration exceptions. Desktop fields are 36px and mobile touch fields are 44px.
+
 ## ego Perimeter Settings — Implemented (#1401-ab1c)
 
 Settings > AI Chat edits user/profile `roots` and `network` through ego CLI,
@@ -629,6 +637,8 @@ Some frontend-only stores persist to localStorage:
 - [x] SolidJS migration
 
 ### Completed (P2)
+- [x] Terminal HTTP(S) link menu starts Design Mode with the owning agent and exact URL; HTTP/IPC optional `url` and MCP `design_mode` start/stop/status share the lifecycle. Agents use URL-aware start as the default path for layout work.
+- [x] Design Mode extension heartbeat: every 5 seconds, expiry after 60 seconds without a beat (600 seconds before the first beat), and MCP `design_mode action=reload` delivered on the next heartbeat.
 - [x] Design Mode v2 pilot: dedicated Chrome/Edge profile, unpacked extension sidebar, explicit picking, per-pick comments, launching-agent default, same-repository recipient selection, native messaging, idle-gated Send and live dev-server discovery; native Edge validation remains tracked in to-test.md
 - [x] Split pane layout
 - [x] Touch branch action trays: left swipe reveals existing actions; vertical scrolling and desktop hover controls remain unchanged
@@ -689,7 +699,9 @@ Some frontend-only stores persist to localStorage:
 - [x] Remote access / HTTP server
 - [x] SSH-managed remote daemon deployment, idle lifetime, pairing-token vaulting, and systemd/launchd installation
 - [x] Mobile terminal Ctrl menu (Ctrl+C, Ctrl+B, Ctrl+D, agent-aware Ctrl+Enter)
+- [x] Mobile Send long-press Queue transfers the live draft to the shared server ready-window queue; taps still submit immediately.
 - [x] Mobile Companion PWA (searchable sessions, live output, question reply including Codex interactive choices, activity feed)
+  - [x] Compact bare attachment icon left of the session composer; smaller mic and Send sit inside its right border (#1719-ff5d)
   - [x] Files tree search, hidden-folder ordering, long-path preview, and full-height wrapped editing
   - [x] Repository-relative Markdown images through an authenticated, repository-confined image route
   - [x] Expandable Progress messages, local Activity time and minute durations, version display, and a server-persisted mobile light theme separate from the desktop theme
@@ -712,6 +724,8 @@ Some frontend-only stores persist to localStorage:
 - [x] AI Chat image paste — supported images stage removable previews and become ACP image content blocks when the agent advertises image prompts
 - [x] AI Chat session details — ACP title updates rename the header and picker; context-window use and reported cost appear in the footer; a session settings dialog labels every select option and the one-row control bar summarizes the model's short name and mode beside named icon actions
 - [x] AI Chat transcript and tabs — selectable messages, with message Copy on hover or keyboard focus; sent prompts reconciled with ego's chunked echo; copyable code and tool output; trailing `suggest:` tokens rendered as reply buttons; terminal-shared web and file link handlers; parallel ACP sessions with independent drafts and transcripts; only running tool calls pulse
+- [x] AI Chat control bar has no duplicate + action; New chat tab creates conversations (#1755-7709).
+- [x] Shared terminal Chat and AI Chat new-text pill — detached content arrivals offer a return to the bottom; search alone does not trigger it; desktop/mobile provide a per-client opt-out (#1757-c6a9).
 - [x] AI Chat transcript polish — collapsed tool rows show short names, message Copy keeps its own space, and streaming follows the bottom until the reader scrolls up
 - [x] Desktop AI Chat composer actions reuse the terminal composer pin/play icons and button sizes; tooltips and accessible names distinguish Send, Queue and parked drafts.
 
@@ -932,6 +946,44 @@ Once previews, run history, summaries and Run Now on the addressed backend.
 MCP create requires host-bound creator provenance. CLI exposes these actions as
 `tuic automations '<JSON>'` or stdin via `-`; results and validation text match.
 
-GitHub line review backend supports paginated thread/comment reads, reply, resolve/unresolve and head-pinned draft submission on both transports. UI integration is tracked separately.
+GitHub line review backend supports paginated thread/comment reads, reply, resolve/unresolve and head-pinned draft submission on both transports. The PR Files tab (`PrDiffTab`) shows the threads on the existing diff, with replies, resolution and a head-pinned draft review.
 
 GitHub PR action backend supports failed-job reruns, head-pinned auto-merge and queue entry, queue removal/state and active-rule-aware merge. Legacy review submission validates REQUEST_CHANGES bodies. Frontend action integration remains separate.
+
+## Tasks create — Component implemented (#1688-518d)
+
+The generic Tasks create form reads item types from the `itemType` enum field of
+an untyped `createFields()`, then loads the schema of the chosen type. A type
+change keeps only same-id, same-kind values and drops late schemas of an earlier
+type. Create stays disabled until Title, Type and every required field hold a
+valid value; it dispatches one `create` action and hands the returned item to the
+host to open. A rejection keeps the draft. Tasks shell mounting is separate.
+
+
+Automation worktree cleanup (#1623-8b2a): Automation runs retain automation/run IDs and the exact created workspace path and ID in their saved snapshot, including after definition deletion. Worktree cleanup is explicit and limited to final runs. The backend resolves the saved identity and rechecks shared Git integration/archive proof, dirt, submodule commits and live sessions; it never forces removal or closes sessions. Shared `automation_action` actions `worktree_preview` and `cleanup_worktree` accept a saved run `id` on IPC, HTTP, MCP and CLI.
+### Built-in automation templates
+
+New automation drafts offer weekday repository audit, release readiness, daily
+change review and hourly maintenance review templates. Enter the repository and
+run config, then select **Apply template**. Rust supplies the literal prompt,
+cadence, limits and zone (the backend host's local IANA zone unless selected).
+Review and edit the draft, then select **Save**. Templates start paused; applying
+one never persists a definition or starts a run. **Resume** is a separate action.
+Templates use the existing checkout with no precheck and do not change agent
+permissions. Recurring cadence previews retain the existing runtime limitations.
+
+
+### Automatic agent toast cards (#1760-bab7)
+
+MCP toast notices show a transient card only while their origin terminal tab is active. Settings → Notifications → **Show cards from the active terminal** defaults on and is saved per client; turning it off restores urgent-only cards. Urgent notices always show a card, and notices without an origin session remain bell-only unless urgent. The listener reads `terminalsStore.state.activeId` at arrival; `notificationsStore.state.autoToastCards` is stored under `tui-commander-auto-toast-cards` in localStorage. Bell deduplication, sound and terminal navigation are preserved.
+
+## Finished worktree recycling
+
+Use a durable per-checkout allocation marker. Creation reserves the checkout before
+returning it. Explicit archive or safe removal marks it finished. Reuse requires fresh
+clean and integration evidence and no live session. Rename the registered checkout and
+repair Git and submodule paths; preserve ignored artifacts and publish lifecycle events.
+
+## Beta update channel (#1813-4bdf)
+
+The Beta channel checks a rolling signed manifest published only after the versioned beta release finishes. It also checks stable and selects the newer version, so beta users receive the final release. Stable users retain the stable endpoint. New beta installs default to Beta; explicit saved settings are preserved. Beta installers stay on the immutable versioned release and open in the browser; stable installs use the existing in-app updater.

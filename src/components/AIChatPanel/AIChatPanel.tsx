@@ -3,6 +3,7 @@ import { type Component, createEffect, createMemo, createSignal, For, onCleanup,
 import { invoke } from "../../invoke";
 import { acpTranscript } from "../../stores/acpTranscript";
 import { appLogger } from "../../stores/appLogger";
+import { settingsStore } from "../../stores/settings";
 import { uiStore } from "../../stores/ui";
 import { isTauri } from "../../transport";
 import { cx } from "../../utils";
@@ -291,6 +292,7 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 				entries={chat.entries}
 				busy={chat.busy}
 				retry={chat.retry}
+				muteIntermediate={settingsStore.state.chatMuteIntermediateText}
 				emptyMessage={emptyMessage()}
 				onSuggestion={(text) => void chat.send(text)}
 				onOpenFile={(href) => void openFile(href)}

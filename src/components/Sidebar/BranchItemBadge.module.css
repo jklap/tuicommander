@@ -8,7 +8,7 @@
   font-size: var(--font-2xs);
   font-weight: 600;
   font-family: var(--font-ui);
-  line-height: 16px;
+  line-height: calc(16px + var(--text-step, 0px));
   border: 1px solid currentColor;
   border-radius: var(--radius-pill);
   background: transparent;

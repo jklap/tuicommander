@@ -2899,18 +2899,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "gh-token"
-version = "0.1.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f6b05178455aca6d0624534729a2f8d2b94c93b02c0fcdf1736453912b9a9b4f"
-dependencies = [
- "home",
- "serde",
- "serde_derive",
- "serde_yaml",
-]
-
-[[package]]
 name = "gio"
 version = "0.18.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9373,7 +9361,6 @@ dependencies = [
  "drag",
  "flate2",
  "futures-util",
- "gh-token",
  "glob",
  "grep-matcher",
  "grep-regex",
@@ -9393,6 +9380,7 @@ dependencies = [
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
+ "open",
  "p256",
  "parking_lot",
  "portable-pty",

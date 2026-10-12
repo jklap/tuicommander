@@ -12,6 +12,7 @@ import { appLogger } from "../stores/appLogger";
 import { pluginStore } from "../stores/pluginStore";
 import { terminalsStore } from "../stores/terminals";
 import { isTauri } from "../transport";
+import { compareAppVersion } from "../utils/semver";
 import { updateAppConfig } from "../utils/updateAppConfig";
 import { pluginRegistry } from "./pluginRegistry";
 import type { TuiPlugin } from "./types";
@@ -58,19 +59,6 @@ export interface PluginManifest {
 // Validation
 // ---------------------------------------------------------------------------
 
-/** Simple semver comparison: returns -1, 0, or 1 */
-export function compareSemver(a: string, b: string): number {
-	const pa = a.split(".").map(Number);
-	const pb = b.split(".").map(Number);
-	for (let i = 0; i < 3; i++) {
-		const va = pa[i] ?? 0;
-		const vb = pb[i] ?? 0;
-		if (va < vb) return -1;
-		if (va > vb) return 1;
-	}
-	return 0;
-}
-
 /**
  * Validate a plugin manifest. Returns null if valid, error string if invalid.
  */
@@ -81,7 +69,7 @@ export function validateManifest(manifest: PluginManifest): string | null {
 	if (!manifest.main) return "manifest: main is required";
 
 	if (!manifest.minAppVersion) return "manifest: minAppVersion is required";
-	if (compareSemver(manifest.minAppVersion, APP_VERSION) > 0) {
+	if (compareAppVersion(manifest.minAppVersion, APP_VERSION) > 0) {
 		return `plugin "${manifest.id}" requires app version ${manifest.minAppVersion}, current is ${APP_VERSION}`;
 	}
 
@@ -206,6 +194,17 @@ export function pluginModuleBaseUrl(id: string, main: string, windows: boolean):
 	return windows ? `http://plugin.localhost/${relPath}` : `plugin://${relPath}`;
 }
 
+/**
+ * Entry URL of one load of a plugin. The version is a path segment (`~v<n>`) right
+ * after the id, not a query: the WebView resolves a relative `import "./x.js"`
+ * against the importing module's URL, drops the query, and keys its module map on
+ * the result. A query would bust `main.js` only and leave every sub-module on the
+ * copy from the first load. `register_plugin_protocol()` strips the segment.
+ */
+export function pluginModuleUrl(id: string, main: string, windows: boolean, version: number): string {
+	return pluginModuleBaseUrl(id, `~v${version}/${main}`, windows);
+}
+
 async function loadPlugin(manifest: PluginManifest): Promise<void> {
 	const logger = pluginStore.getLogger(manifest.id);
 
@@ -233,8 +232,8 @@ async function loadPlugin(manifest: PluginManifest): Promise<void> {
 	// supplies. A per-plugin token was considered and rejected: same-realm JS can
 	// read, proxy or monkey-patch it, so it would be a boundary in name only.
 	//
-	// `?t=` cache-busts for hot reload.
-	const url = `${pluginModuleBaseUrl(manifest.id, manifest.main, isWindows())}?t=${Date.now()}`;
+	// A fresh `~v<n>` path version per load cache-busts the whole module graph for hot reload.
+	const url = pluginModuleUrl(manifest.id, manifest.main, isWindows(), Date.now());
 	let mod: unknown;
 	try {
 		mod = await import(/* @vite-ignore */ url);

@@ -99,6 +99,8 @@ export interface PrDiffTab extends BaseTab {
 	prTitle: string;
 	/** Raw unified diff content */
 	diff: string;
+	/** PR head the diff was fetched at; replaced whenever the diff is reopened */
+	headSha?: string;
 }
 
 /** HTML preview tab (renders HTML in a sandboxed iframe) */
@@ -119,6 +121,12 @@ export interface CommandOverviewTab extends BaseTab {
 	title: string;
 }
 
+/** Native Tasks tab (work-item providers' list, board, roadmap, detail and create views) */
+export interface TasksTab extends BaseTab {
+	type: "tasks";
+	title: string;
+}
+
 /** Discriminated union of all markdown tab types */
 export type MdTabData =
 	| FileTab
@@ -130,7 +138,8 @@ export type MdTabData =
 	| GithubOpsTab
 	| PrDiffTab
 	| HtmlPreviewTab
-	| CommandOverviewTab;
+	| CommandOverviewTab
+	| TasksTab;
 
 /**
  * Resolve a caller-supplied path (repo root or PTY cwd) to a registered repo path.
@@ -526,9 +535,7 @@ function createMdTabsStore() {
 						branchKeyFor(repoPath) as MdTabData[keyof MdTabData],
 					);
 				}
-				if (focus && repoPath && repoPath !== repositoriesStore.state.activeRepoPath)
-					repositoriesStore.setActive(repoPath);
-				if (focus) base.setActive(existing.id);
+				// An update never navigates: only the open that creates the tab may.
 				return existing.id;
 			}
 
@@ -672,8 +679,20 @@ function createMdTabsStore() {
 			return base._addTab({ type: "command-overview", id, title: "Commands", pinned: true } as CommandOverviewTab);
 		},
 
+		/** Add the Tasks tab (singleton — reuses existing if open) */
+		addTasks(): string {
+			const existing = Object.values(base.state.tabs).find((tab) => tab.type === "tasks") as TasksTab | undefined;
+			if (existing) {
+				base.setActive(existing.id);
+				return existing.id;
+			}
+
+			const id = base._nextId("md");
+			return base._addTab({ type: "tasks", id, title: "Tasks", pinned: true } as TasksTab);
+		},
+
 		/** Add a PR diff tab (or reuse existing for same repo+prNumber, updating diff content) */
-		addPrDiff(repoPath: string, prNumber: number, prTitle: string, diff: string): string {
+		addPrDiff(repoPath: string, prNumber: number, prTitle: string, diff: string, headSha?: string): string {
 			const existing = Object.values(base.state.tabs).find(
 				(tab) =>
 					tab.type === "pr-diff" &&
@@ -683,6 +702,7 @@ function createMdTabsStore() {
 			if (existing) {
 				// Update diff content in case it changed
 				base._setState("tabs", existing.id, "diff" as keyof MdTabData, diff as MdTabData[keyof MdTabData]);
+				base._setState("tabs", existing.id, "headSha" as keyof MdTabData, headSha as MdTabData[keyof MdTabData]);
 				base.setActive(existing.id);
 				return existing.id;
 			}
@@ -697,9 +717,15 @@ function createMdTabsStore() {
 				prNumber,
 				prTitle,
 				diff,
+				headSha,
 				pinned: false,
 			} as PrDiffTab);
 			return tabId;
+		},
+
+		/** Record the head a PR diff tab was first reviewed at, when its fetch did not supply one */
+		pinPrDiffHead(id: string, headSha: string): void {
+			base._setState("tabs", id, "headSha" as keyof MdTabData, headSha as MdTabData[keyof MdTabData]);
 		},
 
 		/** Add an HTML preview tab (or return existing if same file already open) */

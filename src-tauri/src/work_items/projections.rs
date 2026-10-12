@@ -6,8 +6,40 @@ use super::{
 use std::collections::BTreeMap;
 
 impl InMemoryWorkItemProvider {
-    pub fn create_fields(&self, _item_type: Option<&str>) -> Vec<WorkItemFieldSchema> {
-        self.fields.clone()
+    /// Contract: an untyped call lists the creatable types as the `itemType` enum field.
+    pub fn create_fields(
+        &self,
+        item_type: Option<&str>,
+    ) -> Result<Vec<WorkItemFieldSchema>, WorkItemError> {
+        let types = self.item_types();
+        match item_type {
+            None => Ok(vec![WorkItemFieldSchema {
+                id: "itemType".into(),
+                name: "Type".into(),
+                kind: WorkItemFieldKind::Enum,
+                required: true,
+                editable: true,
+                options: types
+                    .into_iter()
+                    .map(|id| WorkItemOption {
+                        name: id.clone(),
+                        id,
+                    })
+                    .collect(),
+            }]),
+            Some(id) if types.iter().any(|t| t == id) => Ok(self.fields.clone()),
+            Some(_) => Err(WorkItemError::Query("unknown item type".into())),
+        }
+    }
+
+    /// The fake has one schema; its creatable types are the types of its items.
+    pub(super) fn item_types(&self) -> Vec<String> {
+        self.items
+            .values()
+            .map(|detail| detail.item.item_type.clone())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect()
     }
 
     pub fn grouped(&self, query: &WorkItemQuery) -> Result<WorkItemGroupedPage, WorkItemError> {

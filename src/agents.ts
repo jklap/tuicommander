@@ -427,6 +427,8 @@ export interface AgentSettingsConfig {
 	skip_trust_dialog?: boolean;
 	ego_mode?: EgoPermissionMode;
 	ego_sandbox?: EgoSandbox;
+	/** Launch instructions for this agent; overrides the global text. Empty turns them off. */
+	launch_instructions?: string;
 }
 
 /** Install state of an agent's TUIC hooks (mirrors Rust `InstallState::as_str`). */
@@ -437,6 +439,8 @@ export interface AgentsConfig {
 	agents: Record<string, AgentSettingsConfig>;
 	/** Which agent CLI to use for headless prompt execution when no agent is in the active terminal */
 	headless_agent?: HeadlessAgentChoice;
+	/** Launch instructions for every agent; undefined = the shipped default. */
+	launch_instructions?: string;
 }
 
 /** A headless agent: a plain agent type, or `<agent>:<run config name>`

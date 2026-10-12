@@ -28,7 +28,7 @@ impl PrApi for Stub {
         vars: Value,
     ) -> impl std::future::Future<Output = Result<Value, String>> + Send {
         if !query.contains("mutation") {
-            return std::future::ready(Ok(json!({"repository":{"pullRequest":self.pr}})));
+            return std::future::ready(Ok(json!({"data":{"repository":{"pullRequest":self.pr}}})));
         }
         self.writes
             .lock()
@@ -38,10 +38,14 @@ impl PrApi for Stub {
         // local effects, not claims that a write was made to the recorded PR.
         let entry = json!({"id":"local-queue-entry","position":1,"state":"QUEUED"});
         if query.contains("enqueuePullRequest(") {
-            return std::future::ready(Ok(json!({"enqueuePullRequest":{"mergeQueueEntry":entry}})));
+            return std::future::ready(Ok(
+                json!({"data":{"enqueuePullRequest":{"mergeQueueEntry":entry}}}),
+            ));
         }
         if query.contains("dequeuePullRequest(") {
-            return std::future::ready(Ok(json!({"dequeuePullRequest":{"mergeQueueEntry":entry}})));
+            return std::future::ready(Ok(
+                json!({"data":{"dequeuePullRequest":{"mergeQueueEntry":entry}}}),
+            ));
         }
         let enabled = query.contains("enablePullRequestAutoMerge(");
         let operation = if enabled {
@@ -50,7 +54,7 @@ impl PrApi for Stub {
             "disablePullRequestAutoMerge"
         };
         std::future::ready(Ok(
-            json!({operation:{"pullRequest":{"id":self.pr["id"],"autoMergeRequest":if enabled {json!({"enabledAt":"2026-10-11T00:00:00Z","mergeMethod":"SQUASH"})} else {Value::Null}}}}),
+            json!({"data":{operation:{"pullRequest":{"id":self.pr["id"],"autoMergeRequest":if enabled {json!({"enabledAt":"2026-10-11T00:00:00Z","mergeMethod":"SQUASH"})} else {Value::Null}}}}}),
         ))
     }
     fn rest(
@@ -268,7 +272,7 @@ mod critic {
             if query.contains("enqueuePullRequest") {
                 self.writes.lock().unwrap().push("enqueue".into());
                 return std::future::ready(Ok(
-                    json!({"enqueuePullRequest":{"mergeQueueEntry":{"id":"MQE_1","position":1,"state":"QUEUED"}}}),
+                    json!({"data":{"enqueuePullRequest":{"mergeQueueEntry":{"id":"MQE_1","position":1,"state":"QUEUED"}}}}),
                 ));
             }
             let recorded: Value = serde_json::from_str(include_str!(
@@ -276,7 +280,7 @@ mod critic {
             ))
             .unwrap();
             let pr = recorded["data"]["repository"]["pullRequests"]["nodes"][0].clone();
-            std::future::ready(Ok(json!({"repository":{"pullRequest":pr}})))
+            std::future::ready(Ok(json!({"data":{"repository":{"pullRequest":pr}}})))
         }
 
         fn rest(
@@ -316,4 +320,20 @@ mod critic {
         assert_eq!(*api.writes.lock().unwrap(), vec!["enqueue".to_string()]);
         assert_eq!(response.unwrap()["action"], "enqueued");
     }
+}
+
+// Catches: reading repository at the root of RepoApi's full GraphQL envelope.
+#[tokio::test]
+async fn action_state_reads_recorded_pr_from_full_graphql_envelope() {
+    let api = Stub::recorded();
+    let state = action_state(&api, json!({})).await.unwrap();
+    assert_eq!(state.id, "PR_kwDOC01lZ88AAAABHsM3_A");
+    assert_eq!(state.head_sha, "a2b8613ecf3dda46cc0b608efd69b8f309e8fbc0");
+    assert_eq!(state.base_ref_name, "main");
+    assert_eq!(state.state, "OPEN");
+    assert!(!state.is_draft);
+    assert!(state.queue_required);
+    assert!(state.auto_merge_request.is_none());
+    assert!(state.merge_queue_entry.is_none());
+    assert!(api.writes.lock().unwrap().is_empty());
 }

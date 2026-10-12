@@ -699,6 +699,8 @@ that acknowledgement. Movement proves the child terminal reacted, not that the
 application understood the command. A complete or uncertain write is never
 automatically retryable; only rejection/no-byte failure is.
 
+Mobile Queue supplies `expectedDraft` to validate the live InputLineBuffer before a server-side Ctrl-U and enqueue on this same FIFO. Preflight rejections leave the draft untouched. A write failure may have cleared it already; the caller reports uncertainty and does not retry automatically. Concurrent producers are not transactionally isolated.
+
 **User-composed commands share that gate:** the Compose panel's enqueue action
 (`enqueue_agent_command` / `POST /sessions/:id/queue`) appends to the same
 typed `pending_injections` FIFO as peer delivery rather than writing to the PTY,
@@ -827,3 +829,7 @@ A reset carries an empty string. Titles do not change semantic session activity
 and bypass the lossless state queue. Authoritative lifecycle snapshots and pushes
 apply `agent_type` immediately, including removal when the shell returns; the
 30-second foreground probe remains a recovery/discovery path.
+
+### History-anchored viewport scrolling
+
+Coalesced scrolling uses one atomic latest-wins slot for both transports. `terminal_scroll_to_anchor` encodes an all-time row anchor in that slot; the ticker resolves it under the VT lock after pending output. Null follows output. Evicted anchors clamp to the oldest retained row. Offset commands share the slot, so mixed clients retain request order.

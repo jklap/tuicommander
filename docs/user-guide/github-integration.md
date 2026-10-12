@@ -2,6 +2,8 @@
 
 TUICommander monitors your GitHub PRs and CI status automatically.
 
+PR creation, issue creation, and review submission use the repository's selected account over HTTP, including GitHub Enterprise. These writes do not require an installed `gh` executable.
+
 ## Authentication
 
 TUICommander needs a GitHub token to access PRs and CI status. You have two options:
@@ -17,9 +19,11 @@ TUICommander needs a GitHub token to access PRs and CI status. You have two opti
 
 This method automatically requests the correct scope (`repo`) and works with private repositories and organization repos.
 
-### Option 2: gh CLI
+### Option 2: Environment variable
 
-If you prefer, install the `gh` CLI and run `gh auth login`. TUICommander will use the `gh` token automatically.
+Set `GH_TOKEN` or `GITHUB_TOKEN` before you start TUICommander. A macOS app started from the Dock or Finder does not see variables from your shell profile, so OAuth login is the practical choice there.
+
+TUICommander does not read the `gh` CLI login. If you only signed in with `gh auth login`, the GitHub tab shows "Not connected" until you use OAuth login or set a token variable.
 
 ### Token Priority
 
@@ -28,7 +32,6 @@ When multiple sources are available, TUICommander uses this priority:
 1. `GH_TOKEN` environment variable
 2. `GITHUB_TOKEN` environment variable
 3. OAuth token (from Settings login)
-4. `gh` CLI token
 
 ## Multiple Accounts (github.com + GitHub Enterprise)
 
@@ -171,7 +174,11 @@ The PR panel also shows the number of unresolved review threads, split into huma
 
 ## CI Auto-Heal
 
+Actions log fetching uses the repository account on github.com or GitHub Enterprise and does not require the GitHub CLI. It keeps failure tails and stops the log sweep after 60 seconds.
+
 Enable **Auto-heal** in a blocked PR's detail popover to send failed GitHub Actions or configured CircleCI job logs to the agent terminal assigned to that branch. A completed failed job can trigger healing while other jobs in the same workflow are still running. The displayed three-attempt budget counts only prompts successfully delivered to the agent; log-fetch and terminal-delivery errors do not consume it.
+
+Auto-heal reads failing checks directly from the selected or local head commit, including external CI links. It uses the repository's GitHub account and reads every check page before discarding older reruns; the number of open PRs does not limit this lookup.
 
 Set a read-only CircleCI token in **Settings > Git & GitHub > CircleCI**. The token is never shown again. The Log button on a failed CircleCI check also works for remote-only PRs.
 
@@ -297,10 +304,15 @@ own default: PR sections start collapsed when empty, Issues starts open.
 ## Troubleshooting
 
 **No PR data showing:**
-1. Check `gh auth status` — must be authenticated
+1. Check Settings > Git & GitHub — the account must show as signed in
 2. Check repository has a GitHub remote (`git remote -v`)
-3. Check that `gh pr list` works in the repo directory
+3. Check that the repository is bound to the intended account
 
 **Stale data:**
 - Click the refresh button or switch away and back to the branch
 - Polling updates every 60 seconds automatically
+
+Merged-PR evidence for worktree and local-branch cleanup uses the GitHub account
+and host selected for that repository. It no longer depends on the GitHub CLI
+login. If the complete PR history cannot be read, cleanup does not treat that
+lookup as proof that a branch was merged.

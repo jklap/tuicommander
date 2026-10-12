@@ -151,6 +151,7 @@ pub(super) async fn create_worktree_http(
         // model reading it over MCP and the client reading it over HTTP need
         // the same isolation semantics (#734-ca73).
         "instructions": &created.instructions,
+        "worktree_rename": &created.instructions["worktree_rename"],
         // How the caller addresses this workspace from here on. `branch` remains
         // explicit display data even though linked worktree ids currently match it.
         "workspace_id": &created.workspace_id,
@@ -195,8 +196,10 @@ pub(super) async fn create_worktree_shared(
     // because a clone or a `git worktree add` can take seconds.
     let config_bg = config.clone();
     let worktrees_dir_bg = worktrees_dir.clone();
+    let allocation_state = Arc::clone(state);
     let result = match tokio::task::spawn_blocking(move || {
-        crate::worktree::create_workspace_unwarmed(
+        crate::worktree::allocate_workspace(
+            &allocation_state,
             &worktrees_dir_bg,
             &config_bg,
             base_ref.as_deref(),
@@ -213,7 +216,7 @@ pub(super) async fn create_worktree_shared(
         }
     };
     match result {
-        Ok(workspace) => {
+        Ok((workspace, recycled)) => {
             let wt_path = workspace.path.to_string_lossy().to_string();
             let branch_name = workspace.branch.clone();
             let workspace_id = workspace.workspace_id.clone();
@@ -226,7 +229,9 @@ pub(super) async fn create_worktree_shared(
             // Built before the setup script runs: the payload describes what the
             // workspace ARRIVED with, and a script that installs something does
             // not change what was already warm.
-            let instructions = workspace.instruction_payload_pending();
+            let mut instructions = workspace.instruction_payload_pending();
+            instructions["worktree_rename"] = serde_json::json!(recycled);
+            let reused = recycled.is_some();
             state.notify_worktree_created(crate::state::WorktreeCreatedPayload {
                 creator_session,
                 spawn_session,
@@ -251,7 +256,13 @@ pub(super) async fn create_worktree_shared(
                 warm_source,
                 warm_destination,
                 warm_token,
-                crate::cow::warm_worktree,
+                move |source, destination| {
+                    if reused {
+                        crate::cow::WarmingReport::default()
+                    } else {
+                        crate::cow::warm_worktree(source, destination)
+                    }
+                },
             )
             .await;
             Ok(CreatedWorktree {
@@ -312,6 +323,7 @@ pub(super) async fn remove_worktree_http(
         .warnings;
         let archive = crate::worktree::resolve_archive_script(&repo_path);
         let outcome = crate::worktree::remove_worktree_with_presence_confirmation(
+            &preview_state,
             &repo_path,
             &workspace_id,
             delete_branch,
@@ -747,6 +759,68 @@ pub(super) async fn run_setup_script_http(
 #[cfg(test)]
 mod warm_tests {
     use super::*;
+
+    // Catches: safe removal destroys reusable artifacts or allocation leaves stale lifecycle paths.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn recycling_removal_and_creation_return_rename_and_retract_old_workspace() {
+        let temp = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let repo = setup_repo(temp.path());
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let directory = temp.path().join("worktrees");
+        let first_config = crate::worktree::WorktreeConfig {
+            task_name: "first".into(),
+            base_repo: repo.to_string_lossy().into_owned(),
+            branch: Some("first".into()),
+            create_branch: true,
+        };
+        let (first, _) =
+            crate::worktree::allocate_workspace(&state, &directory, &first_config, None).unwrap();
+        let outcome = crate::worktree::remove_worktree_by_workspace_id_with_confirmation(
+            &state,
+            &first_config.base_repo,
+            "first",
+            true,
+            None,
+            false,
+            false,
+            None,
+        )
+        .unwrap();
+        assert_eq!(outcome.removal_rule, "recyclable");
+        assert!(!first.path.exists());
+        let mut events = state.event_bus.subscribe();
+        let second_config = crate::worktree::WorktreeConfig {
+            task_name: "second".into(),
+            branch: Some("second".into()),
+            ..first_config
+        };
+        let (second, rename) =
+            crate::worktree::allocate_workspace(&state, &directory, &second_config, None).unwrap();
+        assert_eq!(
+            rename.as_ref().unwrap()["new_path"],
+            second.path.to_string_lossy().as_ref()
+        );
+        assert!(
+            rename.as_ref().unwrap()["old_path"]
+                .as_str()
+                .unwrap()
+                .contains("__archived")
+        );
+        assert!(
+            !std::path::Path::new(rename.as_ref().unwrap()["old_path"].as_str().unwrap()).exists()
+        );
+        let event = events.try_recv().unwrap();
+        assert!(
+            matches!(event, crate::state::AppEvent::WorktreeRemoved(ref payload) if payload.workspace_id == "first")
+        );
+        assert_eq!(
+            crate::worktree::get_worktree_paths(second_config.base_repo).unwrap()["second"].path,
+            second.path.to_string_lossy()
+        );
+    }
 
     #[cfg(unix)]
     pub(super) fn setup_repo(root: &std::path::Path) -> std::path::PathBuf {

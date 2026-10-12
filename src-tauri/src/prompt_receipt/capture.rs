@@ -117,7 +117,8 @@ impl PromptReceipt {
     }
 
     pub(super) fn push(&mut self, mut section: PromptSection) {
-        if section.status == "served" && self.sections.iter().any(|s| s.source == section.source) {
+        if section.status == "served" {
+            self.merge_served(section);
             return;
         }
         if self.sections.len() >= SECTION_COUNT_CAP {
@@ -131,6 +132,30 @@ impl PromptReceipt {
             truncate_utf8(&mut section.text, remaining);
         }
         self.sections.push(section);
+    }
+
+    /// Every bridge reconnect serves a fresh response whose text embeds live
+    /// state (peer count, repos). Keying on the text made each change a new
+    /// row, so a served row is keyed by its label: the newest body replaces
+    /// the older one and the row counts the observations. It bypasses the
+    /// section and byte caps because at most one row exists per label and
+    /// the section cap already bounds its size; launch rows are never evicted.
+    fn merge_served(&mut self, mut section: PromptSection) {
+        let Some(row) = self
+            .sections
+            .iter_mut()
+            .find(|s| s.status == "served" && s.label == section.label)
+        else {
+            self.sections.push(section);
+            return;
+        };
+        row.count += section.count;
+        row.first_seen_ms = row.first_seen_ms.min(section.first_seen_ms);
+        if section.last_seen_ms >= row.last_seen_ms {
+            section.count = row.count;
+            section.first_seen_ms = row.first_seen_ms;
+            *row = section;
+        }
     }
 
     pub fn mark_brief_sent(&mut self) {

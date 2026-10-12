@@ -187,8 +187,7 @@ serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 schemars = { version = "1", features = ["derive"] }
 unicode-width = "0.2"
-# Goose stores its MCP extensions in YAML. Deprecated upstream, but already in
-# the tree via gh-token, so the direct dependency adds nothing to the build.
+# Goose stores its MCP extensions in YAML. Deprecated upstream.
 serde_yaml = "0.9"
 toml_edit = "0.25"
 portable-pty = "0.9"
@@ -247,7 +246,6 @@ libc = "0.2"
 notify = "8"
 # Stable identity for a transcript replaced at the same path, on all platforms.
 same-file = "1.0.6"
-gh-token = "0.1"
 keepawake = "0.6"
 # Keep the Rust/npm updater pair on the tested 2.11 line.
 tauri-plugin-updater = { version = "~2.11.0", optional = true }
@@ -271,6 +269,7 @@ grep-searcher = "0.1"
 grep-regex = "0.1"
 grep-matcher = "0.1"
 url = "2"
+open = "5"
 chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = "=0.10.4"
 croner = { version = "=4.0.1", default-features = false, features = ["chrono"] }

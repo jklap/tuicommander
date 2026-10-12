@@ -224,6 +224,37 @@ pub struct PluginManifest {
     /// Each entry is a plain binary name (e.g. "rtk", "mdkb").
     #[serde(default)]
     pub binaries: Vec<String>,
+    /// Account providers whose accounts `httpFetch({account})` may use: a core
+    /// provider id (`"github"`) or a token-only descriptor registered on load.
+    #[serde(default)]
+    pub providers: Vec<ManifestProvider>,
+}
+
+/// One manifest `providers` entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub(crate) enum ManifestProvider {
+    Core(String),
+    Declared(crate::accounts::ProviderDescriptor),
+}
+
+/// Account providers that core registers itself; a manifest may only reference them.
+const CORE_ACCOUNT_PROVIDERS: &[&str] = &["github"];
+
+impl ManifestProvider {
+    fn id(&self) -> &str {
+        match self {
+            Self::Core(id) => id,
+            Self::Declared(descriptor) => &descriptor.id,
+        }
+    }
+}
+
+impl PluginManifest {
+    /// Manifest consent: may this plugin authenticate with accounts of `provider`?
+    pub(crate) fn declares_provider(&self, provider: &str) -> bool {
+        self.providers.iter().any(|entry| entry.id() == provider)
+    }
 }
 
 /// Binary name prefixes that are never permitted in plugin manifests.
@@ -332,6 +363,44 @@ fn validate_manifest(manifest: &PluginManifest, dir_name: &str) -> Result<(), St
     if !manifest.binaries.is_empty() && !manifest.capabilities.contains(&"exec:cli".to_string()) {
         return Err("manifest declares binaries but lacks exec:cli capability".into());
     }
+    validate_providers(manifest)
+}
+
+/// Accounts are used only through `httpFetch`, so `providers` requires `net:http`.
+fn validate_providers(manifest: &PluginManifest) -> Result<(), String> {
+    if !manifest.providers.is_empty() && !manifest.capabilities.iter().any(|c| c == "net:http") {
+        return Err("manifest declares providers but lacks net:http capability".into());
+    }
+    let mut seen = std::collections::HashSet::new();
+    for entry in &manifest.providers {
+        let id = entry.id();
+        let core = CORE_ACCOUNT_PROVIDERS.contains(&id);
+        if matches!(entry, ManifestProvider::Core(_)) != core {
+            return Err(format!(
+                "provider \"{id}\" must be a core id or a new declared descriptor"
+            ));
+        }
+        if !seen.insert(id) {
+            return Err(format!("provider \"{id}\" is declared twice"));
+        }
+    }
+    Ok(())
+}
+
+/// Register the manifest's declared descriptors, owned by the plugin id. All or
+/// nothing: a rejected descriptor removes the ones registered before it.
+fn register_manifest_providers(manifest: &PluginManifest) -> Result<(), String> {
+    for entry in &manifest.providers {
+        if let ManifestProvider::Declared(descriptor) = entry
+            && let Err(e) = crate::accounts::register_provider(&manifest.id, descriptor.clone())
+        {
+            crate::accounts::unregister_providers(&manifest.id);
+            return Err(format!(
+                "Plugin \"{}\" provider \"{}\": {e}",
+                manifest.id, descriptor.id
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -360,6 +429,23 @@ fn is_path_escape(relative: &str) -> bool {
     false
 }
 
+/// Drops a leading `~v<digits>/` load-version segment from a plugin file path.
+/// Any other leading segment, including `~v` alone or `~vx`, is a real directory.
+fn strip_load_version(file: &str) -> &str {
+    let Some(rest) = file.strip_prefix("~v") else {
+        return file;
+    };
+    match rest.split_once('/') {
+        Some((digits, tail))
+            if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) =>
+        {
+            tail
+        }
+        None if !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()) => "",
+        _ => file,
+    }
+}
+
 /// Resolve a `plugin://{id}/{file}` URI to a filesystem path within the
 /// plugins directory. Returns `None` if the path is invalid or escapes.
 fn resolve_plugin_path(uri_path: &str) -> Option<PathBuf> {
@@ -374,6 +460,13 @@ fn resolve_plugin_path(uri_path: &str) -> Option<PathBuf> {
     let (plugin_id, file) = trimmed.split_once('/')?;
 
     if plugin_id.is_empty() || file.is_empty() {
+        return None;
+    }
+
+    // The frontend loads a plugin under `/{id}/~v{n}/` so that every relative import
+    // of one load shares a URL the WebView has not cached. The segment is not on disk.
+    let file = strip_load_version(file);
+    if file.is_empty() {
         return None;
     }
 
@@ -401,8 +494,8 @@ fn resolve_plugin_path(uri_path: &str) -> Option<PathBuf> {
 /// Serves JS files from `{config_dir}/plugins/{id}/{file}` with the
 /// `application/javascript` MIME type. Rejects path traversal attempts.
 ///
-/// The `?t=<timestamp>` query parameter is accepted (and ignored) to allow
-/// cache-busting for hot-reload.
+/// A leading `~v<digits>/` path segment (the frontend's per-load cache-busting
+/// version for hot reload, see `strip_load_version`) is accepted and ignored.
 pub fn register_plugin_protocol(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> {
     builder.register_uri_scheme_protocol("plugin", |_ctx, request| {
         let uri = request.uri();
@@ -575,6 +668,7 @@ pub(crate) fn register_loaded_plugin_impl(
     // each reload leaks a watcher set and MAX_WATCHERS_PER_PLUGIN caps out
     // after a handful of reloads (#649-56fb). Idempotent: a no-op on first load.
     dispose_plugin_runtime_state(state, &plugin_id);
+    register_manifest_providers(&manifest)?;
 
     state.loaded_plugins.insert(plugin_id, capabilities);
     Ok(())
@@ -606,6 +700,7 @@ pub fn unregister_loaded_plugin(
 
 pub(crate) fn unregister_loaded_plugin_impl(state: &crate::AppState, plugin_id: &str) {
     state.loaded_plugins.remove(plugin_id);
+    crate::accounts::unregister_providers(plugin_id);
 }
 
 // ---------------------------------------------------------------------------
@@ -1077,6 +1172,8 @@ pub(crate) fn dispose_plugin_runtime_state(state: &crate::AppState, id: &str) {
     state.loaded_plugins.remove(id);
     // Clear the exec:cli sliding-window rate-limiter entry for this id.
     crate::plugin_exec::clear_rate_limit(id);
+    // Descriptors leave with the plugin; accounts and their credentials stay.
+    crate::accounts::unregister_providers(id);
 }
 
 /// Remove a plugin and all its files (including data/).
@@ -1535,6 +1632,41 @@ mod tests {
     }
 
     #[test]
+    fn resolve_strips_the_load_version_segment() {
+        // The frontend loads a whole plugin under `/{id}/~v{n}/`, so relative imports
+        // inherit the version. The file on disk has no such directory.
+        let versioned = resolve_plugin_path("/my-plugin/~v1791828000000/provider.js").unwrap();
+        assert_eq!(
+            versioned,
+            resolve_plugin_path("/my-plugin/provider.js").unwrap()
+        );
+        let nested = resolve_plugin_path("/my-plugin/~v7/lib/model.js").unwrap();
+        assert!(nested.ends_with("my-plugin/lib/model.js"));
+    }
+
+    #[test]
+    fn resolve_versioned_path_still_rejects_traversal_and_empty_files() {
+        assert!(resolve_plugin_path("/my-plugin/~v1/../../secret").is_none());
+        assert!(resolve_plugin_path("/my-plugin/~v1/").is_none());
+        assert!(resolve_plugin_path("/my-plugin/~v1").is_none());
+    }
+
+    #[test]
+    fn resolve_keeps_a_directory_that_only_looks_like_a_version() {
+        // Only `~v<digits>` is a load version; any other name is a real directory.
+        assert!(
+            resolve_plugin_path("/my-plugin/~vx/a.js")
+                .unwrap()
+                .ends_with("my-plugin/~vx/a.js")
+        );
+        assert!(
+            resolve_plugin_path("/my-plugin/~v/a.js")
+                .unwrap()
+                .ends_with("my-plugin/~v/a.js")
+        );
+    }
+
+    #[test]
     fn plugin_protocol_serves_webassembly_with_its_standard_mime_type() {
         assert_eq!(
             plugin_asset_mime(Path::new("sqlite-viewer/vendor/sql-wasm.wasm")),
@@ -1561,6 +1693,7 @@ mod tests {
             allowed_urls: vec![],
             agent_types: vec![],
             binaries: vec![],
+            providers: vec![],
         }
     }
 

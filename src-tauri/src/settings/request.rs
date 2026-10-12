@@ -77,6 +77,17 @@ pub enum Request {
     },
 }
 
+impl Request {
+    pub fn store(&self) -> &str {
+        match self {
+            Self::Get { store, .. }
+            | Self::Set { store, .. }
+            | Self::Reset { store, .. }
+            | Self::Patch { store, .. } => store,
+        }
+    }
+}
+
 /// Values, provider errors and caller-supplied dynamic keys never enter errors.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]

@@ -203,6 +203,9 @@ pub(super) async fn enqueue_command(
     Json(body): Json<EnqueueCommandRequest>,
 ) -> impl IntoResponse {
     let outcome = tokio::task::spawn_blocking(move || {
+        if let Some(draft) = body.expected_draft.as_deref() {
+            return crate::pty::enqueue_owned_draft(&state, &session_id, &body.text, draft);
+        }
         crate::pty::enqueue_user_command(
             &state,
             &session_id,
@@ -2112,6 +2115,16 @@ pub(super) async fn terminal_scroll_to_offset(
     (StatusCode::OK, Json(serde_json::json!({"ok": true})))
 }
 
+// Same coalesced history coordinate and tail sentinel as desktop IPC.
+pub(super) async fn terminal_scroll_to_anchor(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+    Json(body): Json<super::types::TerminalScrollToAnchorRequest>,
+) -> impl IntoResponse {
+    crate::pty::queue_scroll_anchor(&state, &session_id, body.anchor);
+    (StatusCode::OK, Json(serde_json::json!({"ok": true})))
+}
+
 pub(super) async fn terminal_scroll_info(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,
@@ -2530,6 +2543,100 @@ mod tests {
         }
     }
 
+    /// Catches: mobile queue retaining its own draft or sending Enter mid-turn.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn mobile_owned_draft_queues_without_mid_turn_enter() {
+        let state = super::super::tests::test_state();
+        let sid = "mobile-owned-draft";
+        crate::test_support::agent_session(&state, sid, crate::pty::SHELL_BUSY);
+        let bytes = crate::test_support::insert_recording_session(&state, sid);
+        write_pty_input(&state, sid, "next task").unwrap();
+        let request = serde_json::from_value(serde_json::json!({
+            "text": "next task", "expectedDraft": "next task"
+        }))
+        .unwrap();
+        let response = enqueue_command(State(state.clone()), Path(sid.into()), Json(request))
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(*bytes.lock().unwrap(), b"next task\x15");
+        assert!(
+            state
+                .session_maps
+                .input_buffers
+                .get(sid)
+                .unwrap()
+                .lock()
+                .content()
+                .is_empty()
+        );
+        assert_eq!(
+            crate::pty::list_queued_commands(&state, sid)[0].text,
+            "next task"
+        );
+        state
+            .session_maps
+            .session_states
+            .get_mut(sid)
+            .unwrap()
+            .agent_type = Some("amp".into());
+        state
+            .session_maps
+            .silence_states
+            .get(sid)
+            .unwrap()
+            .lock()
+            .confirm_idle();
+        state
+            .session_maps
+            .shell_states
+            .get(sid)
+            .unwrap()
+            .store(crate::pty::SHELL_IDLE, Ordering::Release);
+        crate::pty::flush_pending_injections_blocking(&state, sid);
+        crate::pty::flush_pending_injections_blocking(&state, sid);
+        assert_eq!(*bytes.lock().unwrap(), b"next task\x15\x15next task\r");
+        assert!(crate::pty::list_queued_commands(&state, sid).is_empty());
+    }
+
+    /// Catches: clearing somebody else's changed composer or a non-agent shell.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn mobile_owned_draft_rejection_preserves_input() {
+        for (sid, expected, agent) in [
+            ("changed-draft", "old task", true),
+            ("shell-draft", "new task", false),
+        ] {
+            let state = super::super::tests::test_state();
+            if agent {
+                crate::test_support::agent_session(&state, sid, crate::pty::SHELL_BUSY);
+            }
+            let bytes = crate::test_support::insert_recording_session(&state, sid);
+            write_pty_input(&state, sid, "new task").unwrap();
+            let request = serde_json::from_value(
+                serde_json::json!({ "text": expected, "expectedDraft": expected }),
+            )
+            .unwrap();
+            let response = enqueue_command(State(state.clone()), Path(sid.into()), Json(request))
+                .await
+                .into_response();
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+            assert_eq!(*bytes.lock().unwrap(), b"new task");
+            assert_eq!(
+                state
+                    .session_maps
+                    .input_buffers
+                    .get(sid)
+                    .unwrap()
+                    .lock()
+                    .content(),
+                "new task"
+            );
+            assert!(crate::pty::list_queued_commands(&state, sid).is_empty());
+        }
+    }
+
     /// Catches: retrying an earlier job after a later acceptance duplicates the
     /// first job, or text-based deduplication silently drops the second job.
     #[cfg(unix)]
@@ -2628,6 +2735,7 @@ mod tests {
             Path(sid.into()),
             Json(EnqueueCommandRequest {
                 text: "wake".into(),
+                expected_draft: None,
                 idempotency_key: None,
             }),
         )
@@ -3854,6 +3962,38 @@ mod tests {
         .await;
 
         await_display_offset(&state, &sid, 25).await;
+        stop.store(true, Ordering::Relaxed);
+    }
+
+    /// Catches: the HTTP anchor route enqueues a tail offset instead of a history row.
+    #[tokio::test]
+    async fn http_scroll_anchor_moves_to_the_same_history_row_without_desktop() {
+        let state = super::super::tests::test_state();
+        let sid = "http-anchor-scroll".to_string();
+        let stop = browser_session(&state, &sid, 200);
+        let history = state
+            .grid
+            .vt_log_buffers
+            .get(&sid)
+            .unwrap()
+            .lock()
+            .grid_history_size();
+        terminal_scroll_to_anchor(
+            State(state.clone()),
+            Path(sid.clone()),
+            Json(super::super::types::TerminalScrollToAnchorRequest {
+                anchor: Some(history - 25),
+            }),
+        )
+        .await;
+        await_display_offset(&state, &sid, 25).await;
+        terminal_scroll_to_anchor(
+            State(state.clone()),
+            Path(sid.clone()),
+            Json(super::super::types::TerminalScrollToAnchorRequest { anchor: None }),
+        )
+        .await;
+        await_display_offset(&state, &sid, 0).await;
         stop.store(true, Ordering::Relaxed);
     }
 
