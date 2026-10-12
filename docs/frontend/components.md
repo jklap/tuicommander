@@ -187,6 +187,8 @@ events, so another window or a phone sees the same order and cancellations.
 
 ## Mobile Screens (`src/mobile/`)
 
+Terminal ego single-choice questions use the header question action to toggle the existing `ChoicePromptOverlay`. Full titles and option labels wrap within its scrollable overlay. Opening is explicit; the terminal keeps its full height. The composer uses the backend navigation selection mode and its existing in-flight guard to submit only once.
+
 The session composer has a 44 px paperclip in its existing row. It uploads a
 selected file and stages `@path` without Enter; the upload chip floats above
 the row. Mobile AI Chat uses the shared composer to stage images as ACP image

@@ -5149,3 +5149,7 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 ## Compact mobile attachment (1719-ff5d)
 
 - [ ] On iPhone, tap the attachment icon left of the session composer, choose a photo/file, confirm upload status then its path in the draft, and confirm Queue stays disabled during upload. Smaller mic and Send controls remain inside the right input border.
+
+## Mobile ego questions (1759-6047) — Rust restart required
+
+- [ ] After rebuilding/restarting TUIC and updating ego, ask ego a real single-choice question from a terminal. On iPhone confirm **Input**, tap the header question icon, read the full question and both long options, and tap one option. Confirm one answer, continued output and no terminal-height loss. Browser rendering uses the recorded real ego question; real phone touch remains to check.
