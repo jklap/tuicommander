@@ -187,6 +187,11 @@ events, so another window or a phone sees the same order and cancellations.
 
 ## Mobile Screens (`src/mobile/`)
 
+`OutputView` keeps a 500-line live tail while following. While the reader is
+scrolled up or touching the output, it retains the loaded rows instead of
+evicting the content being read. Older-history pages extend that reading window.
+The next log update after following resumes restores the 500-line tail.
+
 Terminal ego single-choice questions use the header question action to toggle the existing `ChoicePromptOverlay`. Full titles and option labels wrap within its scrollable overlay. Opening is explicit; the terminal keeps its full height. The composer uses the backend navigation selection mode and its existing in-flight guard to submit only once.
 
 The session composer has a 44 px paperclip in its existing row. It uploads a

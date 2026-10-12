@@ -45,6 +45,8 @@ export function OutputView(props: OutputViewProps) {
 	// return to the bottom.
 	let userScrolledUp = false;
 	// Tracks the oldest log offset we've loaded — 0 means full history is loaded.
+	// DEFERRED (2026-10-12) — live-tail eviction needs source cursor metadata to
+	// advance this boundary correctly; chrome filtering makes row counts unsafe.
 	let oldestLoadedOffset = 0;
 
 	/** Fetch initial log lines + screen rows via HTTP; returns the total_lines offset for WS catch-up. */
@@ -107,13 +109,19 @@ export function OutputView(props: OutputViewProps) {
 				return;
 			}
 			const older = json.lines.map(normalizeLogLine);
-			// Anchor viewport: save height before prepend, offset scrollTop by delta after
+			// Exclude the transient loading row from the prepend height delta.
+			setLoadingOlder(false);
 			const prevHeight = containerEl?.scrollHeight ?? 0;
-			setLogLines((prev) => [...older, ...prev].slice(-MAX_LINES));
+			const prevTop = containerEl?.scrollTop ?? 0;
+			// History is explicitly requested by a detached reader. Applying the live
+			// tail cap here discards that page immediately once the tail is full.
+			setLogLines((prev) => [...older, ...prev]);
+			const addedHeight = (containerEl?.scrollHeight ?? 0) - prevHeight;
 			oldestLoadedOffset = fetchOffset;
 			requestAnimationFrame(() => {
 				if (containerEl) {
-					containerEl.scrollTop += containerEl.scrollHeight - prevHeight;
+					// A later live append must not count as prepended history.
+					containerEl.scrollTop = prevTop + addedHeight;
 				}
 			});
 		} catch (err) {
@@ -206,7 +214,10 @@ export function OutputView(props: OutputViewProps) {
 						onLogLines(rawLines) {
 							setLogLines((prev) => {
 								const incoming = rawLines.map(normalizeLogLine);
-								return [...prev, ...incoming].slice(-MAX_LINES);
+								const next = [...prev, ...incoming];
+								// Keep the reader's rows mounted while detached (or touching).
+								// Resume the bounded tail when following resumes.
+								return userScrolledUp || touchActive ? next : next.slice(-MAX_LINES);
 							});
 							scrollToBottom();
 						},
