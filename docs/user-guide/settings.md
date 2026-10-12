@@ -107,6 +107,7 @@ never all expert: in basic mode it would show an empty page.
 | **Cycle All Tab Types** | Off | When on, next/prev-tab shortcuts also cycle file/diff/markdown/editor tabs (ordered like the tab bar). Off cycles terminals only. |
 | **Nested Terminal Tabs** | Off | Opt in to collapsible branch activity cards. When off, the sidebar shows no activity caret or nested agent/session rows. When on, branches with open sessions show agent status, current activity, and last-update age. Applies immediately. |
 | **Max Tab Name Length** | — | 10–60 slider |
+| **New text indicator** | On | Show **New text below** when terminal Chat or AI Chat receives content while you read earlier messages. Saved on this client; mobile Settings offers the same toggle. |
 | **Repository Groups** | — | Create, rename, delete, and color-code groups |
 | **Reset Panel Sizes** | — | Restore sidebar and panel widths to defaults (**Layout** section) |
 | **Mute Intermediate Text** | On | **Chat** section. In the terminal Chat view, AI Chat and the mobile chat, assistant text that is followed by a tool call in the same turn is drawn smaller and dimmer, so status lines such as "Pump restart." are not mistaken for the answer. The last text of a turn keeps the normal style. Copy and Find work on muted text. Applies immediately. |

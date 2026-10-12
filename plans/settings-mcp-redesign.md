@@ -79,16 +79,18 @@ Tauri `settings_action` and `POST /settings/action` share service/schema/guards;
 
 ## Open Boss choices
 
-Select one in each pair before security implementation. Neither recommendation is assumed approved.
+Boss decided both pairs on 2026-10-12. The ticked option is binding for security implementation.
+
+Boss clarification (2026-10-12): the model sees only set/unset for a secret. Only the settings that open TUIC to the outside or change who runs code need confirmation (remote listener, auth user/password, TLS paths, relay, trusted ego executable). It uses the existing confirm dialog on desktop and phone. Every other setting changes without asking.
 
 **Secrets**
 
-- [ ] **Write-only (recommended):** presence on all reads, owner-service set/clear; no reveal action. Redact replies/errors/logs/events/audits/confirmation previews/artifacts.
+- [x] **Write-only (recommended) — chosen:** presence on all reads, owner-service set/clear; no reveal action. Redact replies/errors/logs/events/audits/confirmation previews/artifacts.
 - [ ] **Readable:** ordinary get remains redacted; explicit `get` with `revealSecrets:true` retrieves requested recoverable secrets through the same origin gate. No broadcast/log/preview or frontend persistence. Derived hashes are marked nonrecoverable/read-only; password replacement hashes through its service. External/ego retrieval needs an owner-supported API before claiming full readable coverage, never credential-file scraping.
 
 **Settings exposing TUIC or changing execution authority**
 
-- [ ] **Boss confirmation (recommended):** remote listener/bind/enable, auth/password/session credentials/bypass, TLS/certificates/keys, relay URL/token and trusted ego executable, including weakened protection. Validate a pending patch. `ui action=confirm` takes its opaque proposal ID and displays a backend-built redacted diff via the existing all-client mechanism. Approval consumes exactly that connection/target/revision/content-bound proposal once. Refusal, 300s expiry or disconnect writes nothing; changed revision requires a new proposal. Never trust model-supplied `confirmed:true`; never hold locks while waiting. Confirmation policy is host-issued, not writable by the model.
+- [x] **Boss confirmation (recommended) — chosen:** remote listener/bind/enable, auth/password/session credentials/bypass, TLS/certificates/keys, relay URL/token and trusted ego executable, including weakened protection. Validate a pending patch. `ui action=confirm` takes its opaque proposal ID and displays a backend-built redacted diff via the existing all-client mechanism. Approval consumes exactly that connection/target/revision/content-bound proposal once. Refusal, 300s expiry or disconnect writes nothing; changed revision requires a new proposal. Never trust model-supplied `confirmed:true`; never hold locks while waiting. Confirmation policy is host-issued, not writable by the model.
 - [ ] **No confirmation:** identical validation/revision/commit pipeline commits immediately, including exposure/executable changes. Document the resulting local-caller authority; keep origin checks and redaction.
 
 ## Security Considerations

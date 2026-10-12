@@ -75,7 +75,7 @@ The toolbar bell icon is the Activity Center. Plugins contribute sections and it
 - **Items** — Individual notifications with icon, title, subtitle
 - **Actions** — Click an item to open its detail (usually a markdown panel), or dismiss it
 
-The bell shows a count badge when there are active items.
+The bell counts active, dismissible notifications. Static plugin status rows and dashboard launchers stay visible without adding to the badge.
 
 ## Hot Reload
 

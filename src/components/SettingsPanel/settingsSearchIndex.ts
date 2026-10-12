@@ -268,6 +268,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		label: "Max Tab Name Length",
 		labelKey: "appearance.label.maxTabNameLength",
 	},
+	{ tab: "appearance", section: "Chat", label: "New text indicator", labelKey: "appearance.label.newTextIndicator" },
 	{
 		tab: "appearance",
 		section: "Chat",

@@ -23,6 +23,8 @@ export interface ActionEntry {
 	id: string; // ActionName for static entries, or dynamic IDs like "switch-repo:/path"
 	label: string;
 	category: string;
+	/** Extra search terms; never displayed as the action label. */
+	keywords?: string;
 	keybinding: string;
 	execute: () => void;
 }
@@ -122,7 +124,14 @@ const ACTION_META: Partial<Record<ActionName, ActionMeta>> = {
  */
 export function getActionEntries(handlers: ShortcutHandlers): ActionEntry[] {
 	const entries: ActionEntry[] = [
-		{ id: "automations", label: "Automations", category: "Navigation", keybinding: "", execute: automationsUi.open },
+		{
+			id: "automations",
+			label: "Automations",
+			category: "Navigation",
+			keywords: "scheduler schedule",
+			keybinding: "",
+			execute: automationsUi.open,
+		},
 	];
 
 	const handlerMap: Partial<Record<ActionName, () => void>> = {

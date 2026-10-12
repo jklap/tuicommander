@@ -10,9 +10,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Chat mutes intermediate assistant text (text followed by a tool call in the same turn) in the terminal Chat view, AI Chat and mobile; **Settings → Appearance → Chat → Mute Intermediate Text** turns it off (#1769-89dc).
 
 ### Removed
+- Remove the duplicate AI Chat control-bar + button; New chat tab still starts a conversation (#1755-7709).
 - GitHub token chain no longer reads the `gh` CLI login (`gh auth token`, `gh-token` crate); use OAuth login or `GH_TOKEN`/`GITHUB_TOKEN`. TUIC spawns no `gh` process (#1714-1c1d).
 
 ### Fixed
+- Native macOS Fn dictation keeps recording through window focus changes while the key is held and detects its release outside TUIC (#1763-3361).
+- Automations uses readable schedule cards, short repository names, keyboard tabs and a compact toolbar. The first definition opens automatically unless disabled in the dialog; the palette entry also matches scheduler and schedule (#1762-c772).
+- The bell no longer counts static plugin status rows; unread Progress outcomes have an explicit Mark as read action (#1764-862a).
 - Mobile AI Chat keeps Park and Stop in the composer input row, removing the archive-only row above it (#1746-aa9e).
 - Default-app URL and file opens reap their launcher child instead of leaving a zombie process (#1749-f9a0).
 - Design Mode retains a wait owner for Chrome/Edge launches, including short-lived handoff processes, independently of the launch runtime (#1707-bd40).
@@ -22,6 +26,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Design Mode lists only the dev servers of the session being edited (HTML-serving listeners of its worktree, URLs it printed, the configured URL) and excludes TUIC itself (#1723-4a21).
 
 ### Added
+- Chat transcripts show New text below when content arrives while you read earlier messages. Select it to resume following; a per-client setting is available on desktop and mobile (#1757-c6a9).
 
 - Design Mode extension heartbeats expire stale sessions and deliver agent-requested page reloads once per sequence (#1735-080b).
 

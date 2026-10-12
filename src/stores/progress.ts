@@ -404,6 +404,8 @@ export function createProgressStore() {
 		refreshProject,
 		deleteEntries,
 		presentLive,
+		/** Acknowledge the bell count without changing journal entries or view dividers. */
+		markRead: () => setArrivedSinceOpen(0),
 		get unreadCount() {
 			return arrivedSinceOpen();
 		},
