@@ -8,40 +8,75 @@ const rule = (name: string) =>
 	[...css.matchAll(new RegExp(`\\.${name}\\s*\\{([^}]*)\\}`, "g"))].map((m) => m[1]).join(";\n");
 // Last declaration wins, as in the cascade.
 const px = (block: string, prop: string) =>
-	Number(
-		[...block.matchAll(new RegExp(`(?:^|[;\\s])${prop}:\\s*(-?\\d+)px`, "g"))].at(-1)?.[1] ?? Number.NaN,
-	);
+	Number([...block.matchAll(new RegExp(`(?:^|[;\\s])${prop}:\\s*(-?\\d+)px`, "g"))].at(-1)?.[1] ?? Number.NaN);
 // `inset: top right bottom left` as plain px numbers
 const inset = (block: string) => {
-	const v = (block.match(/inset:\s*([^;]+);/)?.[1] ?? "").trim().split(/\s+/).map((n) => Number.parseInt(n, 10));
+	const v = (block.match(/inset:\s*([^;]+);/)?.[1] ?? "")
+		.trim()
+		.split(/\s+/)
+		.map((n) => Number.parseInt(n, 10));
 	const [top, right = top, bottom = top, left = right] = v;
 	return { top, right, bottom, left };
 };
-const lastPaddingRight = (block: string) => {
-	const m = block.match(/(?:^|[;\s])padding:\s*([^;]+);/)?.[1].trim().split(/\s+/).map((n) => Number.parseInt(n, 10));
-	if (!m) return px(block, "padding-right");
-	return m.length === 1 ? m[0] : m[1];
+// `padding: top right bottom left` -> [left, right]; falls back to padding-left/right.
+const sides = (block: string) => {
+	const v = (block.match(/(?:^|[;\s])padding:\s*([^;]+);/)?.[1] ?? "")
+		.trim()
+		.split(/\s+/)
+		.map((n) => Number.parseInt(n, 10));
+	if (v.length === 4) return { left: v[3], right: v[1] };
+	return { left: px(block, "padding-left"), right: px(block, "padding-right") };
+};
+// `margin: top right bottom left` -> left
+const marginLeft = (block: string) => {
+	const v = (block.match(/(?:^|[;\s])margin:\s*([^;]+);/)?.[1] ?? "0")
+		.trim()
+		.split(/\s+/)
+		.map((n) => Number.parseInt(n, 10));
+	const [top, right = top, , left = right] = v;
+	return left;
 };
 
 const send = rule("send");
 const sendHit = css.match(/\.send::before\s*\{([^}]*)\}/)?.[1] ?? "";
 const dictate = rule("dictate");
+const form = rule("form");
 
-describe("mobile command input right-side layout", () => {
-	// Catches: shrinking the send touch target below 44px tall, or letting it grow left over the mic.
-	it("keeps a send hit area of at least 44px tall that never reaches over the mic", () => {
+describe("mobile command input layout (send outside the box)", () => {
+	// Catches: shrinking the send touch target below 44px tall.
+	it("keeps a send hit area of at least 44px tall", () => {
 		const i = inset(sendHit);
 		expect(px(send, "height") - i.top - i.bottom).toBeGreaterThanOrEqual(44);
-		expect(i.left).toBeGreaterThanOrEqual(0);
 	});
 
-	// Catches: growing paddings, mic or send so the textarea wrap width drops under 286px at 390px.
-	it("keeps paddings + mic + send within the 62px right-side budget", () => {
+	// Catches: the send hit area growing left over the mic inside the box.
+	it("does not let the send hit area reach left past the gap to the box", () => {
+		const gap = px(form, "gap") + marginLeft(send);
+		expect(-inset(sendHit).left).toBeLessThanOrEqual(gap);
+	});
+
+	// Catches: growing paddings, mic, gap or send so the textarea wrap width drops under 286px at 390px.
+	it("keeps the horizontal space around the text within the 70px budget", () => {
 		const budget =
+			sides(rule("input")).left +
+			sides(rule("input")).right +
 			px(rule("composer"), "padding-right") +
-			lastPaddingRight(rule("input")) +
 			px(dictate, "width") +
+			px(form, "gap") +
+			marginLeft(send) +
 			px(send, "width");
-		expect(budget).toBeLessThanOrEqual(62);
+		expect(budget).toBeLessThanOrEqual(70);
+	});
+
+	// Catches: a fixed px width/max-width on the textarea or its box, which would stop it filling
+	// the row on wide viewports (iPad 820/1024px) - the 286px figure is an iPhone result, not a value.
+	it("keeps the textarea and its box fluid in the row", () => {
+		for (const name of ["input", "composer"]) {
+			const block = rule(name);
+			expect(block, name).not.toMatch(/(?:^|[;\s])(?:max-)?width:/);
+			expect(block, name).toMatch(/flex:\s*1\b/);
+			expect(block, name).toMatch(/min-width:\s*0\b/);
+		}
+		expect(form).not.toMatch(/(?:^|[;\s])(?:max-)?width:/);
 	});
 });

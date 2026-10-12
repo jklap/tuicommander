@@ -14,7 +14,7 @@
   align-items: flex-end;
   flex: 1;
   min-width: 0;
-  padding-right: 6px;
+  padding-right: 2px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--bg-tertiary);
@@ -69,7 +69,7 @@
   min-width: 0;
   min-height: 38px;
   max-height: 120px;
-  padding: 8px 2px 8px 8px;
+  padding: 8px 2px 8px 4px;
   border: none;
   background: transparent;
   color: var(--fg-primary);
@@ -110,16 +110,16 @@
 }
 
 .send {
-  width: 32px;
-  height: 32px;
-  margin-bottom: 3px;
+  width: 36px;
+  height: 36px;
+  margin: 0 0 2px 2px;
 }
 
-/* Hit area 38x44: extends up, down and right, never left over the mic. */
+/* Hit area 42x44: reaches left only across the 4px gap to the box, never over the mic. */
 .send::before {
   content: "";
   position: absolute;
-  inset: -6px -6px -6px 0;
+  inset: -4px -2px -4px -4px;
 }
 
 .send:active {
