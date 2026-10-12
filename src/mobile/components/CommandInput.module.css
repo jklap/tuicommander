@@ -14,7 +14,7 @@
   align-items: flex-end;
   flex: 1;
   min-width: 0;
-  padding-right: 2px;
+  padding-right: 6px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--bg-tertiary);
@@ -69,7 +69,7 @@
   min-width: 0;
   min-height: 38px;
   max-height: 120px;
-  padding: 8px;
+  padding: 8px 2px 8px 8px;
   border: none;
   background: transparent;
   color: var(--fg-primary);
@@ -106,12 +106,20 @@
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
   flex-shrink: 0;
+  position: relative;
 }
 
 .send {
-  width: 24px;
-  height: 24px;
-  margin-bottom: 6px;
+  width: 32px;
+  height: 32px;
+  margin-bottom: 3px;
+}
+
+/* Hit area 38x44: extends up, down and right, never left over the mic. */
+.send::before {
+  content: "";
+  position: absolute;
+  inset: -6px -6px -6px 0;
 }
 
 .send:active {
@@ -119,8 +127,19 @@
 }
 
 .dictate {
-  background: var(--bg-tertiary);
+  width: 22px;
+  height: 38px;
+  margin-bottom: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
   color: var(--fg-muted);
+}
+
+/* Hit area 22x44. */
+.dictate::before {
+  content: "";
+  position: absolute;
+  inset: -3px 0;
 }
 
 .dictate[aria-pressed="true"] {
