@@ -143,6 +143,12 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{
 		tab: "general",
 		section: "Updates",
+		label: "Wait for agents before restarting",
+		labelKey: "general.toggle.deferUpdateRelaunch",
+	},
+	{
+		tab: "general",
+		section: "Updates",
 		label: "Update Channel",
 		labelKey: "general.label.updateChannel",
 		expert: true,

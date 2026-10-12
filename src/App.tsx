@@ -72,6 +72,7 @@ import { useTerminalReattachBridge } from "./hooks/useTerminalReattachBridge";
 import { useTerminalShellExit } from "./hooks/useTerminalShellExit";
 import { useWorktreeConsolidation } from "./hooks/useWorktreeConsolidation";
 import { useWorktreeSwitchPrompt } from "./hooks/useWorktreeSwitchPrompt";
+import { t } from "./i18n";
 import { invoke, listen } from "./invoke";
 import { activityPanelAdapter } from "./panelAdapters/activity";
 import { aiChatPanelAdapter } from "./panelAdapters/aiChat";
@@ -903,6 +904,19 @@ const App: Component = () => {
 				// "Manage Smart Prompts..." link.
 				onOpenSettings={() => openSettings("smart-prompts")}
 				onShowWhatsNew={(v) => setWhatsNewVersion(v)}
+				onRestartNow={async () => {
+					const count = updaterStore.busyCount();
+					const ok =
+						count === 0 ||
+						(await dialogs.confirm({
+							title: t("updater.restartNow.title", "Restart to finish the update?"),
+							message: t("updater.restartNow.message", "{count} busy or waiting session(s) will be interrupted by the restart.", {
+								count,
+							}),
+							okLabel: t("updater.restartNow.confirm", "Restart now"),
+						}));
+					if (ok) await updaterStore.restartNow();
+				}}
 			/>
 
 			{/* Body: sidebar + main content side by side */}

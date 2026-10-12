@@ -161,6 +161,8 @@ export function lastItemKey(src: LastItemSource): string {
 }
 
 export interface ToolbarProps {
+	/** Confirms and restarts into an installed update while sessions are still busy. */
+	onRestartNow?: () => void;
 	repoPath?: string;
 	runCommand?: string;
 	onBranchClick?: () => void;
@@ -612,7 +614,8 @@ export const Toolbar: Component<ToolbarProps> = (props) => {
 									onClick={(e) => {
 										e.stopPropagation();
 										setShowNotifPopover(false);
-										updaterStore.downloadAndInstall();
+										if (updaterStore.state.restartPending) props.onRestartNow?.();
+										else updaterStore.downloadAndInstall();
 									}}
 								>
 									<span class={s.notifIcon}>
@@ -625,9 +628,13 @@ export const Toolbar: Component<ToolbarProps> = (props) => {
 											{`v${updaterStore.state.version} ${t("toolbar.available", "available")}`}
 										</span>
 										<span class={s.notifBranch}>
-											{updaterStore.state.downloading
-												? `${t("statusBar.updating", "Updating")} ${updaterStore.state.progress}%`
-												: t("toolbar.clickToUpdate", "Click to update")}
+											{updaterStore.state.restartPending
+												? t("toolbar.restartPending", "Restarts when agents are idle ({count} busy) — click to restart now", {
+														count: updaterStore.busyCount(),
+													})
+												: updaterStore.state.downloading
+													? `${t("statusBar.updating", "Updating")} ${updaterStore.state.progress}%`
+													: t("toolbar.clickToUpdate", "Click to update")}
 										</span>
 										<Show
 											when={

@@ -6,6 +6,17 @@ import { isTauri, rpc } from "../transport";
 import { compareAppVersion } from "../utils/semver";
 import { appLogger } from "./appLogger";
 import { settingsStore } from "./settings";
+import { terminalsStore } from "./terminals";
+
+/** How often a deferred relaunch re-checks whether every agent is idle. */
+const IDLE_POLL_MS = 2_000;
+
+/** Sessions an immediate relaunch would interrupt: busy, or waiting on the user. */
+function countBusySessions(): number {
+	return terminalsStore
+		.getIds()
+		.filter((id) => terminalsStore.isBusy(id) || !!terminalsStore.get(id)?.awaitingInput).length;
+}
 
 /** True if remote > current by app-version precedence: 2.0.0 is newer than
  *  2.0.0-beta.1, and a nightly is newer than the release it was built after. */
@@ -36,6 +47,8 @@ interface UpdaterState {
 	unsupported: string | null;
 	/** For non-stable channels, a URL to the release page for manual download */
 	downloadUrl: string | null;
+	/** Update installed; the relaunch waits for busy sessions to finish */
+	restartPending: boolean;
 }
 
 /** Sentinel to distinguish "check() timed out" from "no update available". */
@@ -82,9 +95,27 @@ function createUpdaterStore() {
 		noRelease: false,
 		unsupported: null,
 		downloadUrl: null,
+		restartPending: false,
 	});
 
 	let pendingUpdate: Update | null = null;
+	let idleTimer: ReturnType<typeof setInterval> | null = null;
+
+	function stopIdleWatch(): void {
+		if (idleTimer !== null) clearInterval(idleTimer);
+		idleTimer = null;
+	}
+
+	async function relaunchNow(): Promise<void> {
+		stopIdleWatch();
+		try {
+			await relaunch();
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			appLogger.error("app", "Update relaunch failed", message);
+			setState({ error: message, downloading: false, restartPending: false });
+		}
+	}
 
 	const actions = {
 		async checkForUpdate(): Promise<void> {
@@ -229,12 +260,31 @@ function createUpdaterStore() {
 						setState({ progress: pct });
 					}
 				});
-				await relaunch();
 			} catch (err) {
 				const message = err instanceof Error ? err.message : String(err);
 				appLogger.error("app", "Update install failed", message);
 				setState({ error: message, downloading: false });
+				return;
 			}
+			if (settingsStore.state.deferUpdateRelaunch && countBusySessions() > 0) {
+				appLogger.info("app", "Update installed; restart deferred until agents are idle");
+				setState({ downloading: false, restartPending: true });
+				idleTimer = setInterval(() => {
+					if (countBusySessions() === 0) void relaunchNow();
+				}, IDLE_POLL_MS);
+				return;
+			}
+			await relaunchNow();
+		},
+
+		/** Number of sessions a restart right now would interrupt. */
+		busyCount(): number {
+			return countBusySessions();
+		},
+
+		/** Restart immediately, even with busy sessions (the user confirmed). */
+		restartNow(): Promise<void> {
+			return relaunchNow();
 		},
 
 		dismiss(): void {
