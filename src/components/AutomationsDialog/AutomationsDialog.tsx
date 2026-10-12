@@ -3,6 +3,7 @@ import { t } from "../../i18n";
 import { appLogger } from "../../stores/appLogger";
 import { automationsUi, createAutomationsStore } from "../../stores/automations";
 import { registerModal } from "../../stores/modalStack";
+import { Input } from "../ui/Input";
 import { AutomationCard } from "./AutomationCard";
 import s from "./AutomationsDialog.module.css";
 import type { AutomationAdapter } from "./contract";
@@ -130,7 +131,7 @@ export function AutomationsDialog(props: { onClose: () => void; adapter?: Automa
 						<button type="button" disabled={store.busy() || store.loading()} onClick={() => void store.refresh()}>
 							{t("automations.refresh", "Refresh")}
 						</button>
-						<input
+						<Input
 							ref={searchInput}
 							aria-label={t("automations.search", "Search automations")}
 							placeholder={t("automations.search", "Search automations")}

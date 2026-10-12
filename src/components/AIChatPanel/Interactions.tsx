@@ -1,3 +1,5 @@
+import { Input } from "../ui/Input";
+import { Select } from "../ui/Select";
 /**
  * The two questions an agent can block on, and the only answers it will take.
  *
@@ -150,14 +152,14 @@ const ElicitationCard: Component<{
 						</span>
 						<Switch>
 							<Match when={field.type === "enum"}>
-								<select
+								<Select
 									class={s.formInput}
 									onChange={(event) => set(field.name, event.currentTarget.value)}
 									value={String(values()[field.name] ?? "")}
 								>
 									<option value="" />
 									<For each={field.choices}>{(choice) => <option value={choice}>{choice}</option>}</For>
-								</select>
+								</Select>
 							</Match>
 							<Match when={field.type === "boolean"}>
 								<input
@@ -167,14 +169,14 @@ const ElicitationCard: Component<{
 								/>
 							</Match>
 							<Match when={field.type === "number"}>
-								<input
+								<Input
 									class={s.formInput}
 									type="number"
 									onInput={(event) => set(field.name, event.currentTarget.valueAsNumber)}
 								/>
 							</Match>
 							<Match when={field.type === "string"}>
-								<input
+								<Input
 									class={s.formInput}
 									type="text"
 									onInput={(event) => set(field.name, event.currentTarget.value)}

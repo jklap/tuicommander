@@ -1,5 +1,11 @@
 # Components
 
+`ui/Select`, `ui/Input` and `ui/Textarea` forward native form attributes and events.
+`ui/SegmentedControl` provides a keyboard-accessible single-choice view switch.
+All four share `ui/FormControls.module.css`; screen CSS owns layout only.
+The native-select guard in `src/__tests__/nativeSelect.test.ts` rejects new raw
+selects outside `ui/` and requires the explicit pending-migration list to shrink.
+
 `Tasks/detail/TasksDetail` is the core work-item detail surface. Its props are
 `provider`, `reference`, optional `visible`, `onClose` and `onItemChange`.
 It renders schema-driven fields, sanitized Markdown, all declared comment

@@ -5,6 +5,7 @@ import { registerModal } from "../../stores/modalStack";
 import { rpc } from "../../transport";
 import { writeClipboard } from "../../utils/clipboard";
 import d from "../shared/dialog.module.css";
+import { Select } from "../ui/Select";
 import s from "./RemoteQrDialog.module.css";
 
 interface LocalIpEntry {
@@ -113,7 +114,7 @@ export const RemoteQrDialog: Component<{ onClose: () => void }> = (props) => {
 					<Show when={(localIps()?.length ?? 0) > 1}>
 						<label class={s.ipRow}>
 							<span>Network</span>
-							<select value={activeIp() ?? ""} onChange={(e) => setSelectedIp(e.currentTarget.value)}>
+							<Select value={activeIp() ?? ""} onChange={(e) => setSelectedIp(e.currentTarget.value)}>
 								<For each={localIps()}>
 									{(entry) => (
 										<option value={entry.ip}>
@@ -121,7 +122,7 @@ export const RemoteQrDialog: Component<{ onClose: () => void }> = (props) => {
 										</option>
 									)}
 								</For>
-							</select>
+							</Select>
 						</label>
 					</Show>
 
