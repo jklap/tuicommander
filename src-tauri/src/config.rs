@@ -1022,10 +1022,10 @@ pub(crate) struct AppConfig {
     #[serde(default)]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates disabled plugin ids for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) disabled_plugin_ids: Vec<String>,
-    /// Update channel: "stable" or "nightly"
+    /// Update channel: "stable", "beta" or "nightly"
     #[serde(default = "default_update_channel")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates update channel for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
-    #[schemars(extend("enum" = ["stable","nightly"]))]
+    #[schemars(extend("enum" = ["stable","beta","nightly"]))]
     pub(crate) update_channel: String,
     /// Agent types disabled by the user (won't appear in sidebar "Add Agent" menu)
     #[serde(default)]
@@ -1201,7 +1201,15 @@ fn default_disabled_native_tools() -> Vec<String> {
 }
 
 fn default_update_channel() -> String {
-    "stable".to_string()
+    default_update_channel_for_version(env!("CARGO_PKG_VERSION")).to_string()
+}
+
+fn default_update_channel_for_version(version: &str) -> &'static str {
+    if version.contains("-beta.") && !version.contains("-nightly.") {
+        "beta"
+    } else {
+        "stable"
+    }
 }
 
 /// 30 days. The cookie slides on every authenticated request, so this is the
@@ -5342,6 +5350,31 @@ mod tests {
         );
     }
 
+    // Catches: a fresh beta install silently defaults to stable and misses beta.2.
+    #[test]
+    fn beta_build_defaults_to_beta_without_enrolling_stable_or_nightly() {
+        assert_eq!(default_update_channel_for_version("2.0.0-beta.1"), "beta");
+        assert_eq!(default_update_channel_for_version("2.0.0"), "stable");
+        assert_eq!(
+            default_update_channel_for_version("2.0.0-beta.1-nightly.20261012.t1000"),
+            "stable"
+        );
+    }
+
+    // Catches: loading settings loses a saved beta choice or overwrites stable opt-out.
+    #[test]
+    fn saved_update_channel_survives_config_roundtrip() {
+        for channel in ["stable", "beta", "nightly"] {
+            let config = AppConfig {
+                update_channel: channel.to_string(),
+                ..Default::default()
+            };
+            let loaded: AppConfig =
+                serde_json::from_str(&serde_json::to_string(&config).unwrap()).unwrap();
+            assert_eq!(loaded.update_channel, channel);
+        }
+    }
+
     #[test]
     fn app_config_serde_default_for_new_fields() {
         // Simulate a config.json from before ide/default_font_size existed
@@ -5365,7 +5398,7 @@ mod tests {
         assert!(!loaded.prevent_sleep_when_busy);
         assert!(loaded.auto_update_enabled);
         assert_eq!(loaded.language, "en");
-        assert_eq!(loaded.update_channel, "stable");
+        assert_eq!(loaded.update_channel, AppConfig::default().update_channel);
         assert!(!loaded.services.server.ipv6_enabled);
         assert!(!loaded.services.auth.lan_auth_bypass);
         assert!(loaded.intent_tab_title); // defaults to true

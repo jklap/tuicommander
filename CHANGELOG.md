@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+- Preserve beta installs in the macOS terminal installer and normalize release tag prefixes for default and pinned downloads.
+
+### Added
+- Beta update channel: automatically check for the next beta and final stable release. Completed beta releases publish a rolling feed without changing stable updates.
+
 ### Added
 - After an update restart, every agent tab with a session the agent confirmed resumes on its own, on every branch, not only the selected one; **Settings → General → Updates → Resume all agents after an update** (`eager_resume_after_update`, default on) turns it off. Tabs without a confirmed session keep the click-to-resume banner (#1772-25c5).
 - After an update installs, the app restart waits until no session is busy or awaiting input; **Settings → General → Updates → Wait for agents before restarting** (`defer_update_relaunch`, default on) turns it off, and the APP UPDATE notification offers Restart now with the busy-session count (#1771-c6fb).

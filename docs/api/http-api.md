@@ -2280,7 +2280,7 @@ GET /system/check-update?channel=nightly
 ```
 
 Returns `{ "available": bool, "version": string|null, "notes": string|null, "release_page": string|null, "not_found": bool }`.
-Channel URLs are hardcoded — no user-supplied URL is accepted. An unpublished
+Channels are `beta` and `nightly`. Beta returns the immutable versioned release page for downloads. Channel URLs are hardcoded — no user-supplied URL is accepted. An unpublished
 channel is `not_found: true`, not an error; an unknown channel name is a 500.
 
 ## Prompt Endpoints

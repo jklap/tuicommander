@@ -983,3 +983,7 @@ Use a durable per-checkout allocation marker. Creation reserves the checkout bef
 returning it. Explicit archive or safe removal marks it finished. Reuse requires fresh
 clean and integration evidence and no live session. Rename the registered checkout and
 repair Git and submodule paths; preserve ignored artifacts and publish lifecycle events.
+
+## Beta update channel (#1813-4bdf)
+
+The Beta channel checks a rolling signed manifest published only after the versioned beta release finishes. It also checks stable and selects the newer version, so beta users receive the final release. Stable users retain the stable endpoint. New beta installs default to Beta; explicit saved settings are preserved. Beta installers stay on the immutable versioned release and open in the browser; stable installs use the existing in-app updater.
