@@ -160,7 +160,7 @@ export const CommandPalette: Component<CommandPaletteProps> = (props) => {
 	 * allocation-free per keystroke.
 	 */
 	const bm25Index = createMemo(() =>
-		buildIndex(availableActions().map((a) => ({ item: a, text: `${a.label} ${a.category}` }))),
+		buildIndex(availableActions().map((a) => ({ item: a, text: `${a.label} ${a.category} ${a.keywords ?? ""}` }))),
 	);
 
 	// A pasted URL is offered to plugin resolvers; their entries lead the list.
