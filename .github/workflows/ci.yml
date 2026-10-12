@@ -145,6 +145,9 @@ jobs:
       - name: No hard-coded temp-dir writes in code and tooling
         run: bash scripts/with-test-tmp.sh pnpm check:no-hardcoded-tmp && bash scripts/with-test-tmp.sh pnpm check:no-hardcoded-tmp:test
 
+      - name: No ps/pgrep/pkill exec outside the allow-list
+        run: bash scripts/with-test-tmp.sh pnpm check:no-process-exec && bash scripts/with-test-tmp.sh pnpm check:no-process-exec:test
+
   # The isolated suite took 1134-1141s on hosted Linux, versus 327s locally,
   # and later exceeded 20 minutes while still progressing. Partition the full
   # suite across runners, not extra workers competing on the same four vCPUs.
