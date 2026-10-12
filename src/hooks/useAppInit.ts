@@ -581,8 +581,8 @@ export async function initApp(deps: AppInitDeps) {
 			return;
 		}
 		const safeLevel = level === "warn" || level === "error" ? level : "info";
-		// Backend notifications go to the bell. Only urgency=urgent adds a transient
-		// card; its container sits in the upper half and never covers the active input.
+		// Backend notifications stay in the bell. Urgent notices always add a card;
+		// automatic cards also surface notices from terminals the user is not viewing.
 		// Only a registered repo may scope a bell item.
 		const terminalId = origin_session_id ? terminalsStore.findBySessionId(origin_session_id) : undefined;
 		const repoPath = origin
@@ -611,7 +611,13 @@ export async function initApp(deps: AppInitDeps) {
 			origin_session_id,
 			origin?.connection,
 		);
-		if (noticeId !== -1 && urgency === "urgent")
+		const viewingOrigin =
+			terminalId !== undefined &&
+			terminalId === terminalsStore.state.activeId &&
+			(!origin || getSessionConnection(origin_session_id) === origin.connection) &&
+			document.hasFocus();
+		const automaticCard = notificationsStore.state.autoToastCards && !!origin_session_id && !viewingOrigin;
+		if (noticeId !== -1 && (urgency === "urgent" || automaticCard))
 			toastsStore.add(
 				visibleTitle,
 				visibleMessage,

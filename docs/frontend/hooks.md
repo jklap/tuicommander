@@ -423,3 +423,8 @@ Handles worktree lifecycle events. A newly created worktree can be opened or dec
 **File:** `src/hooks/useFileBrowser.ts`
 
 File browser panel logic: directory listing, file operations (create, delete, rename, copy), content search, and gitignore management.
+
+
+### Automatic agent toast cards (#1760-bab7)
+
+MCP toast notices show a transient card when their origin terminal is not active or the window is unfocused. Settings → Notifications → **Show cards from other terminals** defaults on and is saved per client; turning it off restores urgent-only cards. Urgent notices always show a card, and notices without an origin session remain bell-only unless urgent. The listener reads `terminalsStore.state.activeId` and `document.hasFocus()` at arrival; `notificationsStore.state.autoToastCards` is stored under `tui-commander-auto-toast-cards` in localStorage. Bell deduplication, sound and terminal navigation are preserved.

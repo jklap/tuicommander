@@ -291,6 +291,16 @@ export const NotificationsTab: Component = () => {
 				</p>
 			</div>
 
+			<SettingToggle
+				checked={notificationsStore.state.autoToastCards}
+				onChange={(enabled) => notificationsStore.setAutoToastCards(enabled)}
+				label={t("notifications.toggle.autoToastCards", "Show cards from other terminals")}
+				hint={t(
+					"notifications.hint.autoToastCards",
+					"Show agent toast cards when their terminal is not active or this window is unfocused. Urgent notices always show a card. Saved for this client.",
+				)}
+			/>
+
 			<div class={s.group}>
 				<label>{t("notifications.label.prNotifications", "Pull Requests")}</label>
 				<div class={s.toggle}>

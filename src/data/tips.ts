@@ -10,6 +10,12 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "Agent toast cards",
+		description:
+			"Agent notices show a card when you are looking elsewhere. Turn off Show cards from other terminals in Settings > Notifications to keep only urgent cards.",
+		shortcut: null,
+	},
+	{
 		feature: "Mobile prompt queue",
 		description:
 			"Hold Send and select Queue to submit your current agent draft at its next ready window. Tap Send to submit now.",

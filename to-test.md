@@ -5149,3 +5149,11 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 ## Compact mobile attachment (1719-ff5d)
 
 - [ ] On iPhone, tap the attachment icon left of the session composer, choose a photo/file, confirm upload status then its path in the draft, and confirm Queue stays disabled during upload. Smaller mic and Send controls remain inside the right input border.
+
+
+## Automatic agent toast cards (#1760-bab7)
+
+- [ ] After landing, raise a normal MCP toast from another terminal, then the active terminal: only the other terminal shows a card. With TUIC unfocused, the active terminal also shows a card.
+- [ ] Disable Settings → Notifications → Show cards from other terminals and reload: normal notices remain bell-only; urgent notices still show a card. The preference is per client.
+
+Visual evidence: worktree Vite fixture mounted the real NotificationsTab and ToastContainer; agent-browser snapshot showed the new default-checked toggle, hint and card. Screenshot and subsequent toggle probes timed out (exit 142); bundled Chrome headless also produced no image within 40 seconds. Actual desktop window-focus behavior and screenshot remain unverified. Targeted tests prove routing and stored opt-out/reset.

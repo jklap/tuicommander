@@ -750,3 +750,8 @@ run snapshots are never saved as replacement definitions. Deleted definitions
 leave saved run details visible without an editable draft.
 
 Automation all-run history uses 20-row pages plus one backend lookahead row. `loadRuns` reads both backend summaries with the page and rejects stale replies. Definition deletion does not remove the all-history view. The transport adapter accepts an explicit remote connection so global history and summaries do not fall back to the local ledger.
+
+
+### Automatic agent toast cards (#1760-bab7)
+
+MCP toast notices show a transient card when their origin terminal is not active or the window is unfocused. Settings → Notifications → **Show cards from other terminals** defaults on and is saved per client; turning it off restores urgent-only cards. Urgent notices always show a card, and notices without an origin session remain bell-only unless urgent. The listener reads `terminalsStore.state.activeId` and `document.hasFocus()` at arrival; `notificationsStore.state.autoToastCards` is stored under `tui-commander-auto-toast-cards` in localStorage. Bell deduplication, sound and terminal navigation are preserved.
