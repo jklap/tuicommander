@@ -4120,6 +4120,113 @@ mod tests {
     use tempfile::TempDir;
     use tuic_test_support::{fail_with_stderr_script, print_file_script, touch_script};
 
+    // Catches: a failed rename journal strands a recycled checkout at an unpublished path.
+    #[test]
+    fn recycling_journal_failure_restores_the_original_checkout() {
+        let repo = setup_test_repo();
+        let directory = tempfile::tempdir().unwrap();
+        let first = create_workspace_unwarmed(
+            directory.path(),
+            &recycle_config(repo.path(), "first"),
+            None,
+        )
+        .unwrap();
+        finish_worktree(repo.path(), &first.path).unwrap();
+        // An unopenable journal deterministically models an append I/O failure.
+        std::fs::create_dir(repo.path().join(".git/tuic-worktree-renames.jsonl")).unwrap();
+        let result = create_workspace_recycling(
+            directory.path(),
+            &recycle_config(repo.path(), "second"),
+            None,
+            |_| true,
+        );
+        assert!(result.is_err(), "journal failure must be reported");
+        assert!(
+            first.path.exists(),
+            "failed recycle left the original checkout path missing"
+        );
+        assert_eq!(
+            get_worktree_paths_raw(&repo.path().to_string_lossy()).unwrap()["first"].path,
+            first.path.to_string_lossy()
+        );
+        assert!(!directory.path().join("second").exists());
+    }
+
+    // Catches: archive errors leave the sidebar and registry pointing at a moved checkout.
+    #[test]
+    fn archive_journal_failure_restores_the_original_checkout() {
+        let repo = setup_test_repo();
+        let directory = tempfile::tempdir().unwrap();
+        let first = create_workspace_unwarmed(
+            directory.path(),
+            &recycle_config(repo.path(), "first"),
+            None,
+        )
+        .unwrap();
+        std::fs::create_dir(repo.path().join(".git/tuic-worktree-renames.jsonl")).unwrap();
+        let result = archive_worktree(repo.path(), "first", None);
+        assert!(result.is_err(), "journal failure must be reported");
+        assert!(
+            first.path.exists(),
+            "failed archive left the original checkout path missing"
+        );
+        assert_eq!(
+            get_worktree_paths_raw(&repo.path().to_string_lossy()).unwrap()["first"].path,
+            first.path.to_string_lossy()
+        );
+    }
+
+    // Catches: overlapping agent spawns fail merely because another allocation is running.
+    #[test]
+    fn overlapping_workspace_creates_both_return_distinct_checkouts() {
+        let repo = setup_test_repo();
+        let directory = tempfile::tempdir().unwrap();
+        let first = create_workspace_unwarmed(
+            directory.path(),
+            &recycle_config(repo.path(), "first"),
+            None,
+        )
+        .unwrap();
+        finish_worktree(repo.path(), &first.path).unwrap();
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let (result_tx, result_rx) = std::sync::mpsc::channel();
+        let second_config = recycle_config(repo.path(), "second");
+        let third_config = recycle_config(repo.path(), "third");
+        let directory_path = directory.path();
+        std::thread::scope(|scope| {
+            let second = scope.spawn(move || {
+                create_workspace_recycling(directory_path, &second_config, None, |_| {
+                    entered_tx.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                    true
+                })
+            });
+            entered_rx.recv().unwrap();
+            scope.spawn(move || {
+                result_tx
+                    .send(create_workspace_recycling(
+                        directory_path,
+                        &third_config,
+                        None,
+                        |_| true,
+                    ))
+                    .unwrap();
+            });
+            // This budget only releases our coordination gate; expiry never fails the test.
+            let early = result_rx.recv_timeout(Duration::from_millis(100));
+            release_tx.send(()).unwrap();
+            let third = early.unwrap_or_else(|_| result_rx.recv().unwrap());
+            let second = second.join().unwrap().unwrap().0;
+            let third = third
+                .expect("overlapping creation must not fail on the allocation lock")
+                .0;
+            assert_ne!(second.path, third.path);
+            assert!(second.path.exists());
+            assert!(third.path.exists());
+        });
+    }
+
     fn recycle_config(repo: &Path, branch: &str) -> WorktreeConfig {
         WorktreeConfig {
             task_name: branch.into(),
