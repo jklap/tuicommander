@@ -17,7 +17,7 @@ import time
 import urllib.error
 import urllib.request
 
-from scenario import AGENTS, exit_session, expand, run_steps, validate
+from scenario import AGENTS, exit_session, expand, passthrough_env, run_steps, validate
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -207,6 +207,8 @@ def capture_run(args):
                             "TUIC_SOCKET": report["daemon_health"]["socket_path"],
                             # Login-keychain lookups are keyed by account name.
                             **{key: os.environ[key] for key in ("USER", "LOGNAME") if key in os.environ},
+                            # API keys a scenario names; the VM matrix has no logged-in HOME.
+                            **passthrough_env(scenario, os.environ),
                             **expand(scenario.get("env", {}) if env is None else env, placeholders)},
                 })["session_id"]
                 sessions.append(new_id)

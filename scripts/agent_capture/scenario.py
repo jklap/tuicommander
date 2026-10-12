@@ -7,6 +7,7 @@ AGENTS = {
     "claude": "claude", "codex": "codex", "grok": "grok", "opencode": "opencode",
     "ego": "ego", "gemini": "gemini", "aider": "aider", "pi": "pi", "goose": "goose",
     "amp": "amp", "cursor": "cursor-agent", "droid": "droid",
+    "qwen": "qwen", "crush": "crush", "copilot": "copilot", "kiro": "kiro-cli",
 }
 KEYS = {"enter": "\r", "escape": "\x1b", "up": "\x1b[A", "down": "\x1b[B",
         "right": "\x1b[C", "left": "\x1b[D"}
@@ -26,6 +27,11 @@ def expand(value, values):
     if isinstance(value, dict):
         return {key: one(text) for key, text in value.items()}
     return [one(text) for text in value]
+
+
+def passthrough_env(scenario, environ):
+    """Credentials the scenario names (env_passthrough) taken from the driver's own environment."""
+    return {name: environ[name] for name in scenario.get("env_passthrough", []) if name in environ}
 
 
 def judge_reply(lines, prompt, answer, canary, ignore_prefixes=()):
@@ -139,6 +145,10 @@ def validate(scenario):
             raise ValueError(f"unknown scenario action: {action}")
     if not isinstance(scenario.get("idle_gate", False), bool):
         raise ValueError("idle_gate must be boolean")
+    passthrough = scenario.get("env_passthrough", [])
+    if not isinstance(passthrough, list) or not all(
+            isinstance(n, str) and re.fullmatch(r"[A-Z_][A-Z0-9_]*", n) for n in passthrough):
+        raise ValueError("env_passthrough must list environment variable names")
     ignore = scenario.get("ignore_prefixes", [])
     if not isinstance(ignore, list) or not all(isinstance(p, str) and p.strip() for p in ignore):
         raise ValueError("ignore_prefixes must list nonempty strings")

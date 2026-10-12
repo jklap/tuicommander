@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import patch
 
 import run
-from scenario import expand, judge_reply, run_steps, validate
+from scenario import expand, judge_reply, passthrough_env, run_steps, validate
 
 CANARY = {"canary": "ZEBRA-7:", "canary_rule": "Start every reply with ZEBRA-7:"}
 
@@ -131,6 +131,20 @@ class InjectionMatrixTests(unittest.TestCase):
                      {"action": "slash", "text": "/clear", "quiet_secs": 0}]:
             with self.subTest(step=step), self.assertRaises(ValueError):
                 validate({**self.base, "steps": [step]})
+
+    # Catches: a typo in env_passthrough silently launches the agent without its key, so the
+    # run fails as "login required" with no hint; and the driver must hand over only the named
+    # variables, never its whole environment.
+    def test_env_passthrough_names_only_the_listed_variables(self):
+        steps = [{"action": "check", "label": "A1", "text": "What is 123+456?", "answer": "579"}]
+        self.assertEqual(validate({**self.base, "env_passthrough": ["GEMINI_API_KEY"], "steps": steps}), [])
+        for bad in ["GEMINI_API_KEY", ["gemini key"], [1]]:
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                validate({**self.base, "env_passthrough": bad, "steps": steps})
+        environ = {"GEMINI_API_KEY": "k", "OTHER_SECRET": "s"}
+        self.assertEqual(passthrough_env({"env_passthrough": ["GEMINI_API_KEY", "MISSING_KEY"]}, environ),
+                         {"GEMINI_API_KEY": "k"})
+        self.assertEqual(passthrough_env({}, environ), {})
 
     # Catches: a check whose answer occurs in its own prompt passes on the
     # echoed prompt; a check without a canary has nothing to judge.
