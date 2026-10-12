@@ -1,3 +1,7 @@
+## Design Mode child reaping (1707-bd40) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, use Design Mode normally, including repeated starts for the same browser profile. Sample direct children after a day and confirm no zombie is older than one minute. Automated Linux tests verify real shell children through the full launcher, including exit after the launch runtime ends; no browser or desktop instance was started by this peer.
+
 ## Duplicate workflow starts (1748-47b0) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, start a workflow on a throwaway plan and submit a distinct second start. Confirm the error names the existing run ID and its history does not change. Automated store tests cover both start paths, running and paused states, retries, cancellation and concurrent requests; no desktop instance was started.
