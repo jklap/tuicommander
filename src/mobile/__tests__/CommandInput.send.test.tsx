@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CommandInput } from "../components/CommandInput";
+import { clearDictationPartial, saveDictationPartial } from "../utils/dictationPartial";
 
 const writes: { data: string; at: number }[] = [];
 vi.mock("../../transport", () => ({
@@ -16,8 +17,21 @@ import { rpc } from "../../transport";
 
 afterEach(() => {
 	cleanup();
+	clearDictationPartial("restored-dictation");
 	writes.length = 0;
 	vi.unstubAllGlobals();
+});
+
+// Catches: a restored dictated draft submits only Enter after the desktop clears the PTY line.
+it("sends the restored dictated text when the desktop cleared the terminal before reload", async () => {
+	// CommandInput's dictation callback persists this text before streaming it to the PTY.
+	// The desktop can then clear the line while the PWA is suspended.
+	saveDictationPartial("restored-dictation", "review the latest changes");
+	const { container, getByRole } = render(() => <CommandInput sessionId="restored-dictation" ptyInputLine="" />);
+	expect(container.querySelector("textarea")?.value).toBe("review the latest changes");
+	fireEvent.click(getByRole("button", { name: "Send" }));
+	await waitFor(() => expect(writes.some((write) => write.data === "\r")).toBe(true));
+	expect(writes.map((write) => write.data).join("")).toBe("review the latest changes\r");
 });
 
 it("stages an uploaded file path in the PTY draft without pressing Enter", async () => {
