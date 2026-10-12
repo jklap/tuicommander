@@ -31,8 +31,11 @@ def expand(value, values):
 
 
 def passthrough_env(scenario, environ):
-    """Credentials the scenario names (env_passthrough) taken from the driver's own environment."""
-    return {name: environ[name] for name in scenario.get("env_passthrough", []) if name in environ}
+    """Credentials the scenario names (env_passthrough) taken from the driver's own environment.
+
+    An entry is NAME or TARGET=SOURCE (the agent sees TARGET with the value of SOURCE)."""
+    pairs = (entry.partition("=")[::2] for entry in scenario.get("env_passthrough", []))
+    return {target: environ[source or target] for target, source in pairs if (source or target) in environ}
 
 
 def _cwd_files(files, allow_delete):
@@ -172,7 +175,7 @@ def validate(scenario):
         _cwd_files(scenario["cwd_files"], False)
     passthrough = scenario.get("env_passthrough", [])
     if not isinstance(passthrough, list) or not all(
-            isinstance(n, str) and re.fullmatch(r"[A-Z_][A-Z0-9_]*", n) for n in passthrough):
+            isinstance(n, str) and re.fullmatch(r"[A-Z_][A-Z0-9_]*(=[A-Z_][A-Z0-9_]*)?", n) for n in passthrough):
         raise ValueError("env_passthrough must list environment variable names")
     ignore = scenario.get("ignore_prefixes", [])
     if not isinstance(ignore, list) or not all(isinstance(p, str) and p.strip() for p in ignore):

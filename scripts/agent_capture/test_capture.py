@@ -145,6 +145,9 @@ class InjectionMatrixTests(unittest.TestCase):
         self.assertEqual(passthrough_env({"env_passthrough": ["GEMINI_API_KEY", "MISSING_KEY"]}, environ),
                          {"GEMINI_API_KEY": "k"})
         self.assertEqual(passthrough_env({}, environ), {})
+        # Catches: renaming (qwen reads OPENAI_API_KEY, the key is OpenRouter's) copying the wrong source.
+        self.assertEqual(passthrough_env({"env_passthrough": ["OPENAI_API_KEY=OTHER_SECRET"]}, environ),
+                         {"OPENAI_API_KEY": "s"})
 
     # Catches: a file-based rule (AGENTS.md) that survives the "resume without injection" restart,
     # so the E moment would measure the file instead of the history; and a path that escapes cwd.
