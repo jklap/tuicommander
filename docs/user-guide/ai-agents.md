@@ -242,6 +242,8 @@ claude --session-id $TUIC_SESSION   # explicit, wrapper bypassed
 
 Claude Code stores the session locally. When you restart TUICommander and switch to this branch, the session resumes automatically via `claude --resume <uuid>`.
 
+Goose returns to idle after a reply when its ready composer appears, so you can send the next prompt without waiting for stale-state recovery.
+
 **Automatic session binding (Goose):**
 
 Shell integration injects `--name $TUIC_SESSION` into `goose session` and `goose run` subcommands. The wrapper is bypassed when you explicitly pass `--name`, `-n`, `--resume`, or `-r`.
