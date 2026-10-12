@@ -2105,21 +2105,8 @@
   border-top: 1px solid var(--border);
 }
 
-.ghFilterSelect {
-  width: 100%;
-  padding: 4px 8px;
-  font-size: var(--font-xs);
-  background: var(--bg-tertiary);
-  color: var(--fg-secondary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-}
+.ghFilterSelect { width: 100%; }
 
-.ghFilterSelect:focus {
-  outline: none;
-  border-color: var(--accent);
-}
 
 /* ── GitHub badge button (replaces remoteOnlyBadgeBtn) ── */
 .ghBadgeBtn {

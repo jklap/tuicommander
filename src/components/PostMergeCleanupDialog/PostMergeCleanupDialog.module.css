@@ -64,15 +64,7 @@
   margin-top: -2px;
 }
 
-.worktreeSelect {
-  background: var(--bg-secondary);
-  color: var(--fg-primary);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 2px 6px;
-  font-size: var(--font-md);
-  cursor: pointer;
-}
+.worktreeSelect { min-width: 0; max-width: 100%; }
 
 .subtitle {
   margin: 0 0 8px;

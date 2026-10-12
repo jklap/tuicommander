@@ -1,3 +1,4 @@
+import { Input } from "../ui/Input";
 import { type Component, createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import type { BaseRefOption } from "../../hooks/useRepository";
 import { t } from "../../i18n";
@@ -35,7 +36,7 @@ function sanitizeForPath(name: string): string {
 	return name.replaceAll("/", "-");
 }
 
-/** Custom styled dropdown replacing native <select>, with local/remote grouping */
+/** Custom styled dropdown replacing native select, with local/remote grouping */
 const BaseRefDropdown: Component<{
 	value: string;
 	options: BaseRefOption[];
@@ -231,7 +232,7 @@ export const CreateWorktreeDialog: Component<CreateWorktreeDialogProps> = (props
 					</div>
 					<div class={d.body}>
 						<div class={s.inputRow}>
-							<input
+							<Input
 								ref={inputRef}
 								type="text"
 								value={branchName()}

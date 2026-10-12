@@ -1,3 +1,5 @@
+import { Select } from "../ui/Select";
+import { Input } from "../ui/Input";
 import { type Component, createEffect, createMemo, createSignal, For, on, onCleanup, Show } from "solid-js";
 import type { BaseRefOption } from "../../hooks/useRepository";
 import { invoke } from "../../invoke";
@@ -926,7 +928,7 @@ export const BranchesTab: Component<BranchesTabProps> = (props) => {
 		const isRenaming = renamingBranch() === branch.name;
 		if (isRenaming) {
 			return (
-				<input
+				<Input
 					ref={renameInputRef}
 					class={s.inlineInput}
 					value={renameValue()}
@@ -1049,7 +1051,7 @@ export const BranchesTab: Component<BranchesTabProps> = (props) => {
 	return (
 		<div ref={containerRef} class={s.container} tabIndex={-1} onKeyDown={handleKeyDown}>
 			<div class={s.searchBar}>
-				<input
+				<Input
 					ref={searchInputRef}
 					data-focus-target="git-branches-search"
 					data-repo-path={props.repoPath ?? ""}
@@ -1104,7 +1106,7 @@ export const BranchesTab: Component<BranchesTabProps> = (props) => {
 			{/* Create branch inline form */}
 			<Show when={creating()}>
 				<div class={s.createForm}>
-					<input
+					<Input
 						ref={createInputRef}
 						class={s.inlineInput}
 						placeholder="New branch name..."
@@ -1112,7 +1114,7 @@ export const BranchesTab: Component<BranchesTabProps> = (props) => {
 						onInput={(e) => setCreateState((p) => ({ ...p, name: e.currentTarget.value }))}
 					/>
 					<Show when={createBaseRefs().length > 0}>
-						<select
+						<Select
 							class={s.fromSelect}
 							value={createState().startPoint ?? ""}
 							onChange={(e) => setCreateState((p) => ({ ...p, startPoint: e.currentTarget.value || null }))}
@@ -1135,7 +1137,7 @@ export const BranchesTab: Component<BranchesTabProps> = (props) => {
 									</For>
 								</optgroup>
 							</Show>
-						</select>
+						</Select>
 					</Show>
 					<label class={s.createCheckboxLabel}>
 						<input

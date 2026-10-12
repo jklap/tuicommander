@@ -1,3 +1,4 @@
+import { Select } from "../ui/Select";
 import { type Component, createEffect, createMemo, createSignal, For, onMount, Show } from "solid-js";
 import { Portal } from "solid-js/web";
 import { useOutsideDismiss } from "../../hooks/useOutsideDismiss";
@@ -673,13 +674,13 @@ export const GitHubPanel: Component<{
 
 							{/* Filter bar — always visible so user can re-enable issues */}
 							<div class={s.ghFilterBar}>
-								<select
+								<Select
 									class={s.ghFilterSelect}
 									value={settingsStore.state.issueFilter}
 									onChange={(e) => githubStore.setIssueFilter(e.currentTarget.value as IssueFilterMode)}
 								>
 									<For each={FILTER_OPTIONS}>{(opt) => <option value={opt.value}>{opt.label}</option>}</For>
-								</select>
+								</Select>
 							</div>
 						</div>
 					</div>
