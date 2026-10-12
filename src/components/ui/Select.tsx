@@ -6,9 +6,9 @@ export type SelectProps = JSX.SelectHTMLAttributes<HTMLSelectElement>;
 
 /** Keep native keyboard, option, form and mobile picker behavior. */
 export function Select(props: SelectProps) {
-	const [local, rest] = splitProps(props, ["class", "children", "value"]);
+	const [local, rest] = splitProps(props, ["class", "classList", "children", "value"]);
 	const element = (
-		<select {...rest} data-form-control class={cx(s.control, s.select, local.class)}>
+		<select {...rest} data-form-control class={cx(s.control, s.select, local.class)} classList={local.classList}>
 			{local.children}
 		</select>
 	) as HTMLSelectElement;

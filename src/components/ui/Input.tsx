@@ -6,6 +6,6 @@ export type InputProps = JSX.InputHTMLAttributes<HTMLInputElement>;
 
 /** Text, numeric and date fields; checkboxes and sliders retain their own controls. */
 export function Input(props: InputProps) {
-	const [local, rest] = splitProps(props, ["class"]);
-	return <input {...rest} data-form-control class={cx(s.control, local.class)} />;
+	const [local, rest] = splitProps(props, ["class", "classList"]);
+	return <input {...rest} data-form-control class={cx(s.control, local.class)} classList={local.classList} />;
 }

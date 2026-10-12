@@ -1,3 +1,4 @@
+import { Input } from "../ui/Input";
 import { createEffect, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { t } from "../../i18n";
 import { appLogger } from "../../stores/appLogger";
@@ -130,7 +131,7 @@ export function AutomationsDialog(props: { onClose: () => void; adapter?: Automa
 						<button type="button" disabled={store.busy() || store.loading()} onClick={() => void store.refresh()}>
 							{t("automations.refresh", "Refresh")}
 						</button>
-						<input
+						<Input
 							ref={searchInput}
 							aria-label={t("automations.search", "Search automations")}
 							placeholder={t("automations.search", "Search automations")}

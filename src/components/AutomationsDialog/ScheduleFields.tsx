@@ -1,3 +1,5 @@
+import { Select } from "../ui/Select";
+import { Input } from "../ui/Input";
 import { createSignal, For, Show } from "solid-js";
 import { t } from "../../i18n";
 import type { AutomationsStore } from "../../stores/automations";
@@ -40,7 +42,7 @@ export function ScheduleFields(props: { store: AutomationsStore }) {
 			<div class={s.row}>
 				<label>
 					{t("automations.cadence", "Cadence")}
-					<select
+					<Select
 						value={cadence()}
 						onChange={(event) => {
 							const value = event.currentTarget.value;
@@ -55,13 +57,13 @@ export function ScheduleFields(props: { store: AutomationsStore }) {
 						<option value="daily">{t("automations.daily", "Daily")}</option>
 						<option value="weekdays">{t("automations.weekdays", "Weekdays")}</option>
 						<option value="weekly">{t("automations.weekly", "Weekly")}</option>
-					</select>
+					</Select>
 				</label>
 				<Show when={cadence() !== "custom" && cadence() !== "once"}>
 					<Show when={cadence() !== "hourly"}>
 						<label>
 							{t("automations.hour", "Hour")}
-							<input
+							<Input
 								type="number"
 								min="0"
 								max="23"
@@ -72,7 +74,7 @@ export function ScheduleFields(props: { store: AutomationsStore }) {
 					</Show>
 					<label>
 						{t("automations.minute", "Minute")}
-						<input
+						<Input
 							type="number"
 							min="0"
 							max="59"
@@ -83,7 +85,7 @@ export function ScheduleFields(props: { store: AutomationsStore }) {
 					<Show when={cadence() === "weekly"}>
 						<label>
 							{t("automations.weekday", "Weekday (Sunday = 0)")}
-							<input
+							<Input
 								type="number"
 								min="0"
 								max="6"
@@ -103,7 +105,7 @@ export function ScheduleFields(props: { store: AutomationsStore }) {
 					fallback={
 						<label>
 							{t("automations.cron", "Cron")}
-							<input
+							<Input
 								value={props.store.draft()?.cron ?? ""}
 								onInput={(event) => props.store.edit({ cron: event.currentTarget.value })}
 							/>
@@ -112,7 +114,7 @@ export function ScheduleFields(props: { store: AutomationsStore }) {
 				>
 					<label>
 						{t("automations.onceTime", "Once local time")}
-						<input
+						<Input
 							type="datetime-local"
 							step="1"
 							value={props.store.draft()?.once_local ?? ""}
@@ -127,7 +129,7 @@ export function ScheduleFields(props: { store: AutomationsStore }) {
 
 				<label>
 					{t("automations.timezone", "Timezone")}
-					<input
+					<Input
 						placeholder={t("automations.localZone", "Local zone from backend")}
 						value={props.store.draft()?.timezone ?? ""}
 						onInput={(event) => props.store.edit({ timezone: event.currentTarget.value })}

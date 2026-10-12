@@ -1,11 +1,7 @@
 [
   "components/AIChatPanel/Interactions.tsx",
   "components/AIChatPanel/SessionControls.tsx",
-  "components/AutomationsDialog/DefinitionEditor.tsx",
-  "components/AutomationsDialog/ScheduleFields.tsx",
-  "components/AutomationsDialog/TemplatePicker.tsx",
   "components/ClaudeUsageDashboard/ClaudeUsageDashboard.tsx",
-  "components/CreateWorktreeDialog/CreateWorktreeDialog.tsx",
   "components/ErrorLogPanel/ErrorLogPanel.tsx",
   "components/GitPanel/BranchesTab.tsx",
   "components/IdeasPanel/IdeasPanel.tsx",
