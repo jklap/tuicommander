@@ -239,9 +239,9 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	},
 	// tabs/AppearanceTab.tsx
 	{ tab: "appearance", section: "Tabs", sectionKey: "appearance.heading.tabs" },
+	{ tab: "appearance", section: "Chat", sectionKey: "appearance.heading.chat" },
 	{ tab: "appearance", section: "Repository Groups", sectionKey: "appearance.heading.groups" },
 	{ tab: "appearance", section: "Layout", sectionKey: "appearance.heading.layout" },
-	{ tab: "appearance", section: "Chat", sectionKey: "appearance.heading.chat" },
 	{ tab: "appearance", section: "UI Legend", sectionKey: "appearance.heading.uiLegend" },
 	{
 		tab: "appearance",
