@@ -1628,24 +1628,24 @@ pub fn finish_worktree(base_repo: &Path, checkout: &Path) -> Result<(), String> 
     write_allocation(base_repo, checkout, "finished")
 }
 
-/// Serialize create/recycle within a repository. The directory is a cross-process
-/// reservation: a crashed allocator fails closed until its owner repairs it.
-struct AllocationGuard(PathBuf);
-impl Drop for AllocationGuard {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir(&self.0);
-    }
-}
-fn allocation_guard(base_repo: &Path) -> Result<AllocationGuard, String> {
+/// Serialize create/recycle across processes; dropping the file releases the lock.
+fn allocation_guard(base_repo: &Path) -> Result<std::fs::File, String> {
     let common = rev_at(base_repo, "--git-common-dir")?;
     let lock = base_repo.join(common).join("tuic-allocation-lock");
-    std::fs::create_dir(&lock).map_err(|error| {
-        format!(
-            "Cannot acquire worktree allocation lock {}: {error}",
-            lock.display()
-        )
-    })?;
-    Ok(AllocationGuard(lock))
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(&lock)
+        .map_err(|error| {
+            format!(
+                "Cannot open worktree allocation lock {}: {error}",
+                lock.display()
+            )
+        })?;
+    file.lock()
+        .map_err(|error| format!("Cannot acquire worktree allocation lock: {error}"))?;
+    Ok(file)
 }
 
 /// At the domain boundary the app supplies authoritative live-session exclusion.
@@ -1705,23 +1705,49 @@ pub fn create_workspace_recycling(
             let start = base_ref.unwrap_or("HEAD");
             fetch_if_remote(&config.base_repo, start)?;
             // Reserve before touching Git or paths; failures cannot expose it to another caller.
-            reserve_worktree(repo, &old_path)?;
             std::fs::create_dir_all(worktrees_dir)
                 .map_err(|error| format!("Cannot create checkout parent: {error}"))?;
-            move_registered_checkout(repo, &old_path, &destination)?;
-            if let Err(error) = git_cmd(&destination)
-                .args(["switch", "-c", &branch, start])
-                .run()
-            {
-                let rollback = move_registered_checkout(repo, &destination, &old_path);
+            reserve_worktree(repo, &old_path)?;
+            let mut switched = false;
+            let previous_base = get_branch_base(&config.base_repo, &branch);
+            let recycled = (|| -> Result<(), String> {
+                move_registered_checkout(repo, &old_path, &destination)?;
+                git_cmd(&destination)
+                    .args(["switch", "-c", &branch, start])
+                    .run()
+                    .map_err(|error| format!("Cannot switch recycled checkout: {error}"))?;
+                switched = true;
+                git_cmd(&destination)
+                    .args(["clean", "-fd"])
+                    .run()
+                    .map_err(|error| format!("Cannot clean recycled source: {error}"))?;
+                set_branch_base(&config.base_repo, &branch, start)?;
+                record_worktree_rename(repo, &entry.path, &destination.to_string_lossy())
+            })();
+            if let Err(error) = recycled {
+                let rollback = (|| -> Result<(), String> {
+                    if destination.exists() {
+                        move_registered_checkout(repo, &destination, &old_path)?;
+                    }
+                    if switched {
+                        git_cmd(&old_path)
+                            .args(["switch", &old_branch])
+                            .run()
+                            .map_err(|error| format!("Cannot restore recycled branch: {error}"))?;
+                        git_cmd(repo)
+                            .args(["branch", "-D", &branch])
+                            .run()
+                            .map_err(|error| format!("Cannot remove recycled branch: {error}"))?;
+                        if let Some(base) = previous_base {
+                            set_branch_base(&config.base_repo, &branch, &base)?;
+                        }
+                    }
+                    finish_worktree(repo, &old_path)
+                })();
                 return Err(format!(
-                    "Cannot switch recycled checkout: {error}; rollback: {rollback:?}"
+                    "Cannot recycle checkout: {error}; rollback: {rollback:?}"
                 ));
             }
-            git_cmd(&destination)
-                .args(["clean", "-fd"])
-                .run()
-                .map_err(|error| format!("Cannot clean recycled source: {error}"))?;
             let old = WorkspaceWorktree {
                 branch: old_branch,
                 path: entry.path,
@@ -1729,9 +1755,7 @@ pub fn create_workspace_recycling(
                 warm_artifacts: None,
                 lifecycle_status: None,
             };
-            record_worktree_rename(repo, &old.path, &destination.to_string_lossy())?;
             clear_warm(&old_path);
-            set_branch_base(&config.base_repo, &branch, start)?;
             let warnings = initialize_submodules(repo, &destination);
             return Ok((
                 CreatedWorkspace {
@@ -3985,9 +4009,33 @@ pub fn archive_worktree(
     std::fs::create_dir_all(&archive_dir)
         .map_err(|error| format!("Cannot create archive directory: {error}"))?;
     let archive_dest = free_archive_dest(&archive_dir, &sanitize_name(&workspace.branch));
+    let marker = admin.join("tuic-allocation");
+    let previous_allocation = match std::fs::read(&marker) {
+        Ok(state) => Some(state),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(format!("Cannot read allocation marker: {error}")),
+    };
     move_registered_checkout(base_repo, &wt_path, &archive_dest)?;
-    finish_worktree(base_repo, &archive_dest)?;
-    record_worktree_rename(base_repo, &workspace.path, &archive_dest.to_string_lossy())?;
+    let archived = (|| -> Result<(), String> {
+        finish_worktree(base_repo, &archive_dest)?;
+        record_worktree_rename(base_repo, &workspace.path, &archive_dest.to_string_lossy())
+    })();
+    if let Err(error) = archived {
+        let rollback = (|| -> Result<(), String> {
+            move_registered_checkout(base_repo, &archive_dest, &wt_path)?;
+            match previous_allocation {
+                Some(state) => std::fs::write(&marker, state),
+                None => match std::fs::remove_file(&marker) {
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                    result => result,
+                },
+            }
+            .map_err(|error| format!("Cannot restore allocation marker: {error}"))
+        })();
+        return Err(format!(
+            "Cannot archive checkout: {error}; rollback: {rollback:?}"
+        ));
+    }
     clear_warm(&wt_path);
 
     Ok(archive_dest.to_string_lossy().to_string())
@@ -4150,6 +4198,24 @@ mod tests {
             first.path.to_string_lossy()
         );
         assert!(!directory.path().join("second").exists());
+        assert_eq!(
+            git_cmd(&first.path)
+                .args(["branch", "--show-current"])
+                .run()
+                .unwrap()
+                .stdout
+                .trim(),
+            "first"
+        );
+        assert!(rev_at(repo.path(), "refs/heads/second").is_err());
+        assert_eq!(
+            get_branch_base(&repo.path().to_string_lossy(), "second"),
+            None
+        );
+        assert_eq!(
+            std::fs::read_to_string(allocation_marker(repo.path(), &first.path).unwrap()).unwrap(),
+            "finished"
+        );
     }
 
     // Catches: archive errors leave the sidebar and registry pointing at a moved checkout.
@@ -4173,6 +4239,10 @@ mod tests {
         assert_eq!(
             get_worktree_paths_raw(&repo.path().to_string_lossy()).unwrap()["first"].path,
             first.path.to_string_lossy()
+        );
+        assert_eq!(
+            std::fs::read_to_string(allocation_marker(repo.path(), &first.path).unwrap()).unwrap(),
+            "reserved"
         );
     }
 

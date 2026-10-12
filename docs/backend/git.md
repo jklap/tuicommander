@@ -204,7 +204,8 @@ checkout into `__archived`, runs `git worktree repair`, and repairs initialized
 submodule gitfiles and `core.worktree` paths. The Git administration directory,
 HEAD, and reflogs remain registered; the workspace mapper hides archived paths
 from active UI listings. A repair failure rolls the checkout back to its old
-path. The archive path is never unlocked and never pruned.
+path. Allocation or rename-journal failures also restore the original path and
+allocation state. The archive path is never unlocked and never pruned.
 
 Orphan pruning accepts only a registered detached linked checkout with no Git
 operation in progress. Immediately before removal it checks detached HEAD
@@ -465,5 +466,8 @@ proves it clean and integrated, with no unpushed submodule commits, lock, operat
 pending warm, or live session. Ignored artifacts stay in place. Git registration and
 submodule paths are repaired. The old workspace removal event precedes the new creation
 event. A durable `tuic-worktree-renames.jsonl` journal lets external registry consumers
-reconcile paths. Allocation is serialized with a Git-common-dir reservation directory;
-a stale directory after a process crash refuses allocation until repaired.
+reconcile paths. Allocation uses a blocking OS file lock in the Git common directory;
+concurrent creates wait, and a process exit releases the lock. A failed recycle restores
+the old checkout path, registration, branch and finished allocation state before returning
+the error. Live sessions prevent recycling; fingerprint-confirmed forced deletion keeps
+the existing deletion contract.

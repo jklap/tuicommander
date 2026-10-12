@@ -299,11 +299,6 @@ pub(crate) fn remove_worktree_by_workspace_id_with_confirmation(
     override_lock: bool,
     expected_fingerprint: Option<&str>,
 ) -> Result<RemoveWorktreeOutcome, String> {
-    if let Ok(workspace) = resolve_any_workspace(Path::new(repo_path), workspace_id)
-        && !live_sessions_in(state, Path::new(&workspace.path)).is_empty()
-    {
-        return Err("Cannot remove a checkout with a live session".into());
-    }
     if expected_fingerprint.is_none()
         && let Some(outcome) = retain_finished_checkout(
             state,
@@ -344,11 +339,6 @@ pub(crate) fn remove_worktree_with_presence_confirmation(
     expected_fingerprint: Option<&str>,
     confirm_missing_checkout: bool,
 ) -> Result<RemoveWorktreeOutcome, String> {
-    if let Ok(workspace) = resolve_any_workspace(Path::new(repo_path), workspace_id)
-        && !live_sessions_in(state, Path::new(&workspace.path)).is_empty()
-    {
-        return Err("Cannot remove a checkout with a live session".into());
-    }
     if expected_fingerprint.is_none()
         && !confirm_missing_checkout
         && let Some(outcome) = retain_finished_checkout(
