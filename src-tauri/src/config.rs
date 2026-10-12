@@ -1010,6 +1010,10 @@ pub(crate) struct AppConfig {
     #[serde(default = "default_true")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates defer update relaunch for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) defer_update_relaunch: bool,
+    /// After an update restart, resume every agent tab whose session the agent confirmed, not only the selected branch
+    #[serde(default = "default_true")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates eager resume after update for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    pub(crate) eager_resume_after_update: bool,
     /// UI language code (e.g. "en", "it", "de")
     #[serde(default = "default_language")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates language for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
@@ -1307,6 +1311,7 @@ impl Default for AppConfig {
             auto_update_enabled: true,
             auto_update_plugins_enabled: true,
             defer_update_relaunch: true,
+            eager_resume_after_update: true,
             language: default_language(),
             disabled_plugin_ids: Vec::new(),
             update_channel: default_update_channel(),
@@ -5261,6 +5266,7 @@ mod tests {
             block_folding_enabled: false,
             auto_update_plugins_enabled: false,
             defer_update_relaunch: false,
+            eager_resume_after_update: false,
             standby_timeout_minutes: 5,
             custom_launchers: Vec::new(),
             inline_blame_enabled: true,
@@ -5297,6 +5303,7 @@ mod tests {
         assert!(!loaded.auto_update_enabled);
         // The default is true, so false is the only value that proves a real round trip.
         assert!(!loaded.defer_update_relaunch);
+        assert!(!loaded.eager_resume_after_update);
         assert_eq!(loaded.language, "it");
         assert_eq!(
             loaded.disabled_plugin_ids,

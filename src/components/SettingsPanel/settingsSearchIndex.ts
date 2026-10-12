@@ -149,6 +149,12 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{
 		tab: "general",
 		section: "Updates",
+		label: "Resume all agents after an update",
+		labelKey: "general.toggle.eagerResumeAfterUpdate",
+	},
+	{
+		tab: "general",
+		section: "Updates",
 		label: "Update Channel",
 		labelKey: "general.label.updateChannel",
 		expert: true,

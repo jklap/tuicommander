@@ -244,7 +244,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 		setStatusInfo: deps.setStatusInfo,
 	});
 
-	const { handleAddTerminalToWorkspace, handleBranchSelect, handleBranchSelectInner } =
+	const { handleAddTerminalToWorkspace, handleBranchSelect, handleBranchSelectInner, resumeAgentTabsAfterUpdate } =
 		createBranchSelectionCoordinator({
 			repo: deps.repo,
 			pty: deps.pty,
@@ -801,6 +801,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 		setBranchToRename,
 		refreshAllBranchStats: refreshAllBranchStatsAndLists,
 		handleBranchSelect,
+		resumeAgentTabsAfterUpdate,
 		handleAddTerminalToWorkspace,
 		handleRemoveRepo,
 		handleRemoveWorkspace,

@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- After an update restart, every agent tab with a session the agent confirmed resumes on its own, on every branch, not only the selected one; **Settings → General → Updates → Resume all agents after an update** (`eager_resume_after_update`, default on) turns it off. Tabs without a confirmed session keep the click-to-resume banner (#1772-25c5).
 - After an update installs, the app restart waits until no session is busy or awaiting input; **Settings → General → Updates → Wait for agents before restarting** (`defer_update_relaunch`, default on) turns it off, and the APP UPDATE notification offers Restart now with the busy-session count (#1771-c6fb).
 - Chat mutes intermediate assistant text (text followed by a tool call in the same turn) in the terminal Chat view, AI Chat and mobile; **Settings → Appearance → Chat → Mute Intermediate Text** turns it off (#1769-89dc).
 

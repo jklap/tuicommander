@@ -64,6 +64,7 @@ describe("updaterStore", () => {
 		mockSettingsState.updateChannel = "stable";
 		mockSettingsState.deferUpdateRelaunch = true;
 		mockTerminals.clear();
+		localStorage.clear();
 		mockAppVersion = "0.0.1";
 		pendingPromises.length = 0;
 
@@ -673,6 +674,28 @@ describe("updaterStore", () => {
 				mockTerminals.get("a")!.busy = false;
 				await vi.advanceTimersByTimeAsync(10_000);
 				expect(mockRelaunch).toHaveBeenCalledTimes(1);
+			});
+		});
+
+		// Catches: no marker at relaunch, so the next boot cannot tell an update restart
+		// from an ordinary one and eager resume never fires.
+		it("marks the restart as caused by an update before relaunching", async () => {
+			let markerAtRelaunch: string | null = null;
+			mockRelaunch.mockImplementation(async () => {
+				markerAtRelaunch = localStorage.getItem("tuic.updateRestartAt");
+			});
+			await testInScopeAsync(async () => {
+				await install();
+				expect(markerAtRelaunch).not.toBeNull();
+			});
+		});
+
+		// Catches: a stale marker after a failed relaunch arming a later manual restart.
+		it("clears the update marker when the relaunch fails", async () => {
+			mockRelaunch.mockRejectedValue(new Error("relaunch denied"));
+			await testInScopeAsync(async () => {
+				await install();
+				expect(localStorage.getItem("tuic.updateRestartAt")).toBeNull();
 			});
 		});
 

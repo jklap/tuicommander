@@ -473,6 +473,7 @@ const App: Component = () => {
 		getDefaultFontSize,
 		detectAgents: agentDetection.detectAll,
 		restoreDetachedPanels: detachedPanelBridge.restoreDetachedPanels,
+		resumeAgentTabsAfterUpdate: gitOps.resumeAgentTabsAfterUpdate,
 		setWhatsNewVersion,
 		openSettings,
 		openRepoPath: gitOps.addRepoByPath,

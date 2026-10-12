@@ -4,6 +4,7 @@ import { check, type Update } from "@tauri-apps/plugin-updater";
 import { createStore } from "solid-js/store";
 import { isTauri, rpc } from "../transport";
 import { compareAppVersion } from "../utils/semver";
+import { clearUpdateRestartMark, markUpdateRestart } from "../utils/updateRestart";
 import { appLogger } from "./appLogger";
 import { settingsStore } from "./settings";
 import { terminalsStore } from "./terminals";
@@ -107,9 +108,11 @@ function createUpdaterStore() {
 
 	async function relaunchNow(): Promise<void> {
 		stopIdleWatch();
+		markUpdateRestart();
 		try {
 			await relaunch();
 		} catch (err) {
+			clearUpdateRestartMark();
 			const message = err instanceof Error ? err.message : String(err);
 			appLogger.error("app", "Update relaunch failed", message);
 			setState({ error: message, downloading: false, restartPending: false });

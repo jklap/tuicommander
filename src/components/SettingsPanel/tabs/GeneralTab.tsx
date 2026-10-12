@@ -244,6 +244,16 @@ export const GeneralTab: Component = () => {
 				)}
 			/>
 
+			<SettingToggle
+				checked={settingsStore.state.eagerResumeAfterUpdate}
+				onChange={(v) => settingsStore.setEagerResumeAfterUpdate(v)}
+				label={t("general.toggle.eagerResumeAfterUpdate", "Resume all agents after an update")}
+				hint={t(
+					"general.hint.eagerResumeAfterUpdate",
+					"After the app restarts for an update, resume every agent tab with a confirmed session on every branch, without visiting each one",
+				)}
+			/>
+
 			<ExpertSetting configKey="app.update_channel" value={settingsStore.state.updateChannel}>
 				<SettingSelect
 					label={t("general.label.updateChannel", "Update Channel")}
