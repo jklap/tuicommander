@@ -73,6 +73,16 @@ bundle. A desktop rebuild does not replace JavaScript already loaded on a phone.
 
 All unqualified files in this table are in `tuic-dictation/src/`. The domain crate has no Tauri or Tokio dependency. `DictationConfig` is defined in the root `config.rs` and re-exported at its previous command path. The root keeps the desktop feature gate, commands, downloads, PTY ports and event emission.
 
+## Screen wake lock while capturing
+
+`holdScreenAwake()` (`src/utils/screenWakeLock.ts`) owns the one Screen Wake Lock of a browser client.
+Browser hands-free (`connectBrowserVoice`, only when the microphone opens) and mobile push-to-talk
+(`useBrowserDictation`) take it at capture start and release it at stop, failure or cancel. The page
+releases it when hidden and requests it again on return while capture runs. The per-device setting
+`tuic-mobile-keep-awake` (mobile Settings, default on) turns it off. A missing API or a refused request
+is logged once and never blocks capture. Safari supports the API from 16.4, but home-screen web apps
+only from iOS 18.4 ([WebKit bug 254545](https://bugs.webkit.org/show_bug.cgi?id=254545)).
+
 ## Whisper build cache
 
 `src-tauri/.cargo/config.toml` sets `GGML_CCACHE=OFF` for Cargo builds. The

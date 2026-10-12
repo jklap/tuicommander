@@ -2,6 +2,7 @@ import { createSignal, onMount, Show } from "solid-js";
 import { TelegramTab } from "../../components/SettingsPanel/tabs/TelegramTab";
 import { appLogger } from "../../stores/appLogger";
 import { transcriptPreferences } from "../../stores/transcriptPreferences";
+import { KEEP_AWAKE_KEY } from "../../utils/screenWakeLock";
 import { setDesktopUI } from "../../utils/tabletRouting";
 import { loadMobileTheme, mobileTheme, setMobileTheme } from "../mobileTheme";
 import { useMobileVoice } from "../useMobileVoice";
@@ -30,6 +31,7 @@ export function SettingsScreen(props: SettingsScreenProps) {
 	);
 	const [telegramOpen, setTelegramOpen] = createSignal(false);
 	const [soundEnabled, setSoundEnabled] = createSignal(localStorage.getItem(SOUND_KEY) !== "false");
+	const [keepAwake, setKeepAwake] = createSignal(localStorage.getItem(KEEP_AWAKE_KEY) !== "false");
 	const [serverUrl, setServerUrl] = createSignal("");
 	const [serverVersion, setServerVersion] = createSignal<string | null>(null);
 	const [theme, setTheme] = createSignal(mobileTheme());
@@ -181,6 +183,12 @@ export function SettingsScreen(props: SettingsScreenProps) {
 		localStorage.setItem(SOUND_KEY, String(next));
 	}
 
+	function toggleKeepAwake() {
+		const next = !keepAwake();
+		setKeepAwake(next);
+		localStorage.setItem(KEEP_AWAKE_KEY, String(next));
+	}
+
 	const pushStatusText = () => {
 		switch (pushState()) {
 			case "unsupported":
@@ -330,6 +338,17 @@ export function SettingsScreen(props: SettingsScreenProps) {
 						classList={{ [styles.toggleOn]: soundEnabled() }}
 						onClick={toggleSound}
 						aria-pressed={soundEnabled()}
+					>
+						<span class={styles.toggleThumb} />
+					</button>
+				</div>
+				<div class={styles.row}>
+					<span class={styles.label}>Keep screen awake while dictating</span>
+					<button
+						class={styles.toggle}
+						classList={{ [styles.toggleOn]: keepAwake() }}
+						onClick={toggleKeepAwake}
+						aria-pressed={keepAwake()}
 					>
 						<span class={styles.toggleThumb} />
 					</button>
