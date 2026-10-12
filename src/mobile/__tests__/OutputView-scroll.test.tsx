@@ -78,6 +78,58 @@ function dragUp(viewport: HTMLDivElement, pixels: number) {
 }
 
 describe("mobile output follow", () => {
+	it("keeps the line being read when streaming crosses the tail cap instead of evicting detached content", async () => {
+		const { viewport, append, visibleLine } = await mountCappedOutput();
+		dragUp(viewport, 240);
+		const reading = visibleLine();
+		append(600, 650);
+		paint();
+		expect(visibleLine()).toBe(reading);
+	});
+
+	it("reveals older history at the cap instead of discarding the fetched page and resetting scroll", async () => {
+		const { viewport, visibleLine, append } = await mountCappedOutput();
+		viewport.scrollTop = 100;
+		const reading = visibleLine();
+		fireEvent.scroll(viewport);
+		await waitFor(() => expect(viewport.textContent).toContain("history 0"));
+		append(600, 610); // live output between prepend and paint must not shift the anchor
+		paint();
+		expect(visibleLine()).toBe(reading);
+		expect(viewport.scrollTop).toBe(2100);
+		viewport.scrollTop += 200;
+		fireEvent.scroll(viewport);
+		paint();
+		expect(viewport.scrollTop).toBe(2300);
+	});
+
+	it("restores the bounded live tail after a detached reader returns to bottom", async () => {
+		const { viewport, append, rows } = await mountCappedOutput();
+		dragUp(viewport, 240);
+		append(600, 650);
+		paint();
+		viewport.scrollTop = viewport.scrollHeight;
+		fireEvent.scroll(viewport);
+		append(650, 651);
+		paint();
+		expect(rows()).toHaveLength(500);
+		expect(rows()[0].textContent).toBe("history 151");
+		expect(viewport.scrollTop).toBe(viewport.scrollHeight - viewport.clientHeight);
+	});
+
+	it("does not evict the reading window while a stationary touch guards output at the cap", async () => {
+		const { viewport, append, visibleLine } = await mountCappedOutput();
+		fireEvent.touchStart(viewport);
+		const reading = visibleLine();
+		append(600, 650);
+		paint();
+		expect(visibleLine()).toBe(reading);
+		fireEvent.touchCancel(viewport);
+		append(650, 651);
+		paint();
+		expect(viewport.scrollTop).toBe(viewport.scrollHeight - viewport.clientHeight);
+	});
+
 	it("keeps a small upward touch drag detached across output chunks instead of treating it as bottom", async () => {
 		const { viewport, chunk } = await mountOutput();
 		dragUp(viewport, 40);
@@ -131,3 +183,35 @@ describe("mobile output follow", () => {
 		expect(viewport.scrollTop).toBe(viewport.scrollHeight - viewport.clientHeight);
 	});
 });
+
+/** Fixed-height DOM rows model layout; assertions read the actual rendered content. */
+async function mountCappedOutput() {
+	vi.mocked(fetch).mockImplementation(async (input) => {
+		const url = new URL(String(input), "http://localhost");
+		const start = Number(url.searchParams.get("offset") ?? 100);
+		const lines = Array.from({ length: 100 }, (_, i) => `history ${start + i}`);
+		return { ok: true, json: async () => ({ lines, total_lines: 200, offset: start }) } as Response;
+	});
+	const view = render(() => <OutputView sessionId="scroll-session" />);
+	const viewport = view.container.firstElementChild as HTMLDivElement;
+	const rows = () => Array.from(viewport.querySelectorAll<HTMLDivElement>("pre > div"));
+	let top = 0;
+	Object.defineProperties(viewport, {
+		clientHeight: { get: () => 400 },
+		scrollHeight: { get: () => rows().length * 20 },
+		scrollTop: {
+			get: () => top,
+			set: (value: number) => {
+				top = Math.max(0, Math.min(value, viewport.scrollHeight - 400));
+			},
+		},
+	});
+	await waitFor(() => expect(subscribePty).toHaveBeenCalled());
+	const append = (start: number, end: number) => {
+		stream.onLogLines?.(Array.from({ length: end - start }, (_, i) => ({ spans: [{ text: `history ${start + i}` }] })));
+	};
+	append(200, 600);
+	paint();
+	fireEvent.scroll(viewport);
+	return { viewport, rows, append, visibleLine: () => rows()[Math.floor(viewport.scrollTop / 20)]?.textContent };
+}

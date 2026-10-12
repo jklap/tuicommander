@@ -67,6 +67,17 @@ describe("COMMAND_TABLE source scan", () => {
 	});
 });
 
+// Catches: HTTP maps history anchors to tail offsets or drops the null tail sentinel.
+it("maps anchored scrolling with the same row coordinate and tail sentinel as IPC", () => {
+	for (const anchor of [0, 123, null]) {
+		expect(mapCommandToHttp("terminal_scroll_to_anchor", { sessionId: "anchor", anchor })).toEqual({
+			method: "POST",
+			path: "/sessions/anchor/terminal/scroll-to-anchor",
+			body: { anchor },
+		});
+	}
+});
+
 describe("orphan cleanup transport", () => {
 	it("maps the assessment and pending answer to the same repo path", () => {
 		const repoPath = "/repo with space";

@@ -1419,10 +1419,10 @@ Never use emoji — they render inconsistently across platforms.
 When any file in a plugin directory changes, the app:
 1. Emits a `plugin-changed` event with the plugin ID
 2. Calls `pluginRegistry.unregister(id)` (runs `onunload`, disposes all registrations)
-3. Re-imports the module with a cache-busting query (`?t=timestamp`)
+3. Re-imports the module under a fresh path version (`plugin://<id>/~v<timestamp>/main.js`). Relative imports inherit the version, so every file the entry imports is re-read too
 4. Validates and re-registers the plugin
 
-This means you can edit `main.js` and see changes without restarting the app.
+This means you can edit `main.js` or any file it imports and see changes without restarting the app. The `~v<digits>` segment exists only in the URL; do not name a plugin directory that way.
 
 ## Build & Install
 

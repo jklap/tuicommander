@@ -117,3 +117,41 @@ fn receipt_labels_missing_and_oversized_instruction_files_unobservable() {
             .all(|s| s.status == "not_observable" && s.bytes.is_none())
     );
 }
+
+// Catches: served bodies filling the section cap so launch brief and
+// system-argument rows are starved (or the served row itself is dropped).
+#[test]
+fn served_rows_never_evict_launch_sections_when_cap_is_full() {
+    let served = |i: usize| {
+        PromptSection::captured(
+            "MCP initialize instructions",
+            "bridge",
+            &format!("body {i}"),
+            "served",
+        )
+    };
+    // Launch brief + 15 system arguments fill the cap exactly.
+    let mut args = vec!["task".to_string()];
+    for i in 0..15 {
+        args.extend(["--append-system-prompt".into(), format!("arg {i}")]);
+    }
+    let mut full = PromptReceipt::capture("task", "generator", &args, None, false);
+    assert_eq!(full.sections.len(), SECTION_COUNT_CAP);
+    let mut sparse = PromptReceipt::capture("task", "generator", &["task".into()], None, false);
+    for receipt in [&mut full, &mut sparse] {
+        let launch = receipt.sections.len();
+        for i in 0..20 {
+            receipt.push(served(i));
+        }
+        let rows: Vec<_> = receipt
+            .sections
+            .iter()
+            .filter(|s| s.status == "served")
+            .collect();
+        assert_eq!(rows.len(), 1, "one served row per label");
+        assert_eq!((rows[0].count, rows[0].text.as_str()), (20, "body 19"));
+        assert_eq!(receipt.sections.len(), launch + 1);
+        assert_eq!(receipt.sections[0].label, "Launch brief");
+        assert!(!receipt.capture_limited);
+    }
+}

@@ -7,6 +7,8 @@ import { tunnelsStore } from "../../stores/tunnels";
 import { openDialog as openFileDialog } from "../../utils/nativeDialog";
 import s from "../SettingsPanel/Settings.module.css";
 import d from "../shared/dialog.module.css";
+import { Input } from "../ui/Input";
+import { Select } from "../ui/Select";
 
 interface AgentKey {
 	fingerprint: string;
@@ -192,32 +194,32 @@ export const TunnelEditorModal: Component<TunnelEditorModalProps> = (props) => {
 				>
 					<div class={s.group}>
 						<label class={s.label}>Name</label>
-						<input value={name()} onInput={(e) => setName(e.currentTarget.value)} />
+						<Input value={name()} onInput={(e) => setName(e.currentTarget.value)} />
 					</div>
 
 					<div style={{ display: "flex", gap: "8px" }}>
 						<div class={s.group} style={{ flex: "1" }}>
 							<label class={s.label}>Host</label>
-							<input value={host()} onInput={(e) => setHost(e.currentTarget.value)} list="ssh-hosts-list" />
+							<Input value={host()} onInput={(e) => setHost(e.currentTarget.value)} list="ssh-hosts-list" />
 							<datalist id="ssh-hosts-list">
 								<For each={sshHosts()}>{(h) => <option value={h} />}</For>
 							</datalist>
 						</div>
 						<div class={s.group} style={{ width: "80px" }}>
 							<label class={s.label}>Port</label>
-							<input type="number" value={port()} onInput={(e) => setPort(parsePort(e.currentTarget.value, 22))} />
+							<Input type="number" value={port()} onInput={(e) => setPort(parsePort(e.currentTarget.value, 22))} />
 						</div>
 					</div>
 
 					<div class={s.group}>
 						<label class={s.label}>User</label>
-						<input value={user()} onInput={(e) => setUser(e.currentTarget.value)} />
+						<Input value={user()} onInput={(e) => setUser(e.currentTarget.value)} />
 					</div>
 
 					<div class={s.group}>
 						<label class={s.label}>Identity / Authentication</label>
 						<div style={{ display: "flex", gap: "6px" }}>
-							<input
+							<Input
 								style={{ flex: "1" }}
 								value={identityFile()}
 								onInput={(e) => setIdentityFile(e.currentTarget.value)}
@@ -277,7 +279,7 @@ export const TunnelEditorModal: Component<TunnelEditorModalProps> = (props) => {
 						<For each={forwards()}>
 							{(fw, idx) => (
 								<div class={s.group} style={{ display: "flex", gap: "6px", "align-items": "center" }}>
-									<select
+									<Select
 										style={{ width: "80px" }}
 										value={fw.type}
 										onChange={(e) =>
@@ -289,8 +291,8 @@ export const TunnelEditorModal: Component<TunnelEditorModalProps> = (props) => {
 									>
 										<option value="Local">Local</option>
 										<option value="Remote">Remote</option>
-									</select>
-									<input
+									</Select>
+									<Input
 										inputMode="numeric"
 										pattern="[0-9]*"
 										placeholder="bind"
@@ -303,7 +305,7 @@ export const TunnelEditorModal: Component<TunnelEditorModalProps> = (props) => {
 										}
 									/>
 									<span style={{ color: "var(--fg-muted)" }}>:</span>
-									<input
+									<Input
 										placeholder={fw.type === "Remote" ? "local host" : "remote host"}
 										style={{ flex: "1" }}
 										value={fw.type === "Remote" ? (fw.local_host ?? fw.remote_host ?? "") : (fw.remote_host ?? "")}
@@ -317,7 +319,7 @@ export const TunnelEditorModal: Component<TunnelEditorModalProps> = (props) => {
 										}
 									/>
 									<span style={{ color: "var(--fg-muted)" }}>:</span>
-									<input
+									<Input
 										inputMode="numeric"
 										pattern="[0-9]*"
 										placeholder="port"
@@ -356,7 +358,7 @@ export const TunnelEditorModal: Component<TunnelEditorModalProps> = (props) => {
 					<div style={{ display: "flex", gap: "8px" }}>
 						<div class={s.group} style={{ flex: "1" }}>
 							<label class={s.label}>ServerAliveInterval</label>
-							<input
+							<Input
 								type="number"
 								value={options().server_alive_interval}
 								onInput={(e) =>
@@ -369,7 +371,7 @@ export const TunnelEditorModal: Component<TunnelEditorModalProps> = (props) => {
 						</div>
 						<div class={s.group} style={{ width: "160px" }}>
 							<label class={s.label}>StrictHostKeyChecking</label>
-							<select
+							<Select
 								value={options().strict_host_key_checking}
 								onChange={(e) =>
 									setOptions((o) => ({
@@ -380,7 +382,7 @@ export const TunnelEditorModal: Component<TunnelEditorModalProps> = (props) => {
 							>
 								<option value="AcceptNew">AcceptNew</option>
 								<option value="Yes">Yes</option>
-							</select>
+							</Select>
 						</div>
 					</div>
 

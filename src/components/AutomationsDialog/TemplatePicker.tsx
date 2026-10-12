@@ -1,6 +1,7 @@
 import { createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { t } from "../../i18n";
 import type { AutomationsStore } from "../../stores/automations";
+import { Select } from "../ui/Select";
 import s from "./AutomationsDialog.module.css";
 import type { AutomationTemplate } from "./contract";
 
@@ -45,12 +46,12 @@ export function TemplatePicker(props: { store: AutomationsStore }) {
 			</Show>
 			<label>
 				{t("automations.template", "Template")}
-				<select value={selected()} onChange={(event) => setSelected(event.currentTarget.value)}>
+				<Select value={selected()} onChange={(event) => setSelected(event.currentTarget.value)}>
 					<option value="">{t("automations.chooseTemplate", "Choose a template")}</option>
 					<For each={templates()}>
 						{(item) => <option value={item.id}>{t("automations.templateNames." + item.id, item.name)}</option>}
 					</For>
-				</select>
+				</Select>
 			</label>
 			<p class={s.hint}>
 				{t(

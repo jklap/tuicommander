@@ -1,6 +1,7 @@
 import { type Component, createSignal, For, Show } from "solid-js";
 import { registerModal } from "../../stores/modalStack";
 import d from "../shared/dialog.module.css";
+import { Select } from "../ui/Select";
 import s from "./PostMergeCleanupDialog.module.css";
 
 export type StepId = "worktree" | "switch" | "pull" | "delete-local" | "delete-remote";
@@ -146,7 +147,7 @@ export const PostMergeCleanupDialog: Component<PostMergeCleanupDialogProps> = (p
 													when={step.id === "worktree" && props.onWorktreeActionChange}
 													fallback={<span data-testid={`step-label-${step.id}`}>{step.label}</span>}
 												>
-													<select
+													<Select
 														data-testid={`step-label-${step.id}`}
 														class={s.worktreeSelect}
 														value={props.worktreeAction}
@@ -166,7 +167,7 @@ export const PostMergeCleanupDialog: Component<PostMergeCleanupDialogProps> = (p
 													>
 														<option value="archive">Archive worktree</option>
 														<option value="delete">Delete worktree</option>
-													</select>
+													</Select>
 												</Show>
 											</label>
 											<Show when={status() !== "pending"}>

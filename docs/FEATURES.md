@@ -17,6 +17,14 @@ Desktop AI Chat uses the terminal composer’s pin and blue play buttons. The pi
 
 AI Chat image paste discovers capabilities on first use and shares clipboard precedence with Ideas, terminal Compose, and terminal input: Finder image filenames allow attachments, while substantive text takes priority.
 
+## Shared form controls
+
+Desktop and mobile select fields use a shared native Select, with consistent theme
+colours, visible focus, disabled states and touch sizing. Tasks, Settings, Automations,
+Git and chat forms also share Input and Textarea controls. Desktop fields are 36px;
+mobile fields retain 44px touch targets. The Tasks List, Board and Roadmap switch
+supports arrow keys, Home and End.
+
 ## Tasks roadmap component
 
 The host-rendered roadmap shows provider date fields on a month or quarter timeline.
@@ -2084,7 +2092,7 @@ Phone-optimized progressive web app for monitoring AI agents remotely. Separate 
 
 ### 18.3 Session Detail Screen
 - Mirrored sessions stream through the connected desktop server to their owning daemon, so the phone stays on its HTTPS origin; the session kill action reaches that owner too
-- Live output via WebSocket with `format=log` (VT100-extracted clean lines, auto-scrolling, 500-line buffer)
+- Live output via WebSocket with `format=log` (VT100-extracted clean lines, auto-scrolling, 500-line live tail). Scrolling up or touching retains the reading window and fetched history; the next log update after returning to the bottom restores the live tail.
 - HTTP and HTTPS links in output open in the phone's external browser; Markdown path controls open the Files editor.
 - Source-width prose rows are rejoined before the phone wraps them; short lines, lists, and box-drawing blocks retain their layout
 - When a mobile output line wraps, its continuation keeps the line's leading spaces or tabs; unindented prose and horizontally scrolling box-drawing blocks retain their layout
@@ -2892,3 +2900,7 @@ Templates use the existing checkout with no precheck and do not change agent
 permissions. Recurring cadence previews retain the existing runtime limitations.
 
 - Finished worktree recycling: explicit completion permits safe reuse with a new branch and path while ignored build artifacts remain intact. Fresh allocations stay reserved.
+
+### History-anchored viewport scrolling
+
+Terminal gestures hold the requested history row even when output arrives before the backend applies the scroll. If capped scrollback evicts that row, the viewport clamps to the oldest retained row.
