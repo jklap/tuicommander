@@ -269,6 +269,12 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		labelKey: "appearance.label.maxTabNameLength",
 	},
 	{ tab: "appearance", section: "Chat", label: "New text indicator", labelKey: "appearance.label.newTextIndicator" },
+	{
+		tab: "appearance",
+		section: "Chat",
+		label: "Mute Intermediate Text",
+		labelKey: "appearance.label.chatMuteIntermediateText",
+	},
 	// tabs/NotificationsTab.tsx
 	{ tab: "notifications", section: "Notification Settings", sectionKey: "notifications.heading.notificationSettings" },
 	{
@@ -311,6 +317,12 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		section: "Notification Settings",
 		label: "Toolbar Bell",
 		labelKey: "notifications.label.toolbarBell",
+	},
+	{
+		tab: "notifications",
+		section: "Notification Settings",
+		label: "Show cards from the active terminal",
+		labelKey: "notifications.toggle.autoToastCards",
 	},
 	{
 		tab: "notifications",

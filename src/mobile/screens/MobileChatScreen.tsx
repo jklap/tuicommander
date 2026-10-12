@@ -157,6 +157,7 @@ export function MobileChatScreen(props: { onOpenFile?: (candidate: string, cwd: 
 			<Transcript
 				mobile
 				entries={chat.entries}
+				muteIntermediate={settingsStore.state.chatMuteIntermediateText}
 				busy={chat.busy}
 				onOpenFile={openFile}
 				onSuggestion={(text) => void chat.send(text)}

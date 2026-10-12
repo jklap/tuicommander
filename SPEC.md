@@ -963,3 +963,15 @@ Review and edit the draft, then select **Save**. Templates start paused; applyin
 one never persists a definition or starts a run. **Resume** is a separate action.
 Templates use the existing checkout with no precheck and do not change agent
 permissions. Recurring cadence previews retain the existing runtime limitations.
+
+
+### Automatic agent toast cards (#1760-bab7)
+
+MCP toast notices show a transient card only while their origin terminal tab is active. Settings → Notifications → **Show cards from the active terminal** defaults on and is saved per client; turning it off restores urgent-only cards. Urgent notices always show a card, and notices without an origin session remain bell-only unless urgent. The listener reads `terminalsStore.state.activeId` at arrival; `notificationsStore.state.autoToastCards` is stored under `tui-commander-auto-toast-cards` in localStorage. Bell deduplication, sound and terminal navigation are preserved.
+
+## Finished worktree recycling
+
+Use a durable per-checkout allocation marker. Creation reserves the checkout before
+returning it. Explicit archive or safe removal marks it finished. Reuse requires fresh
+clean and integration evidence and no live session. Rename the registered checkout and
+repair Git and submodule paths; preserve ignored artifacts and publish lifecycle events.

@@ -166,6 +166,16 @@ export const AppearanceTab: Component = () => {
 				)}
 			/>
 
+			<SettingToggle
+				checked={settingsStore.state.chatMuteIntermediateText}
+				onChange={(v) => settingsStore.setChatMuteIntermediateText(v)}
+				label={t("appearance.label.chatMuteIntermediateText", "Mute Intermediate Text")}
+				hint={t(
+					"appearance.hint.chatMuteIntermediateText",
+					"Show assistant text that is followed by a tool call in the same turn smaller and dimmer, so the final answer stands out",
+				)}
+			/>
+
 			<h3>{t("appearance.heading.groups", "Repository Groups")}</h3>
 			<p class={s.hint}>
 				{t("appearance.hint.groups", "Organize repositories into color-coded groups in the sidebar")}

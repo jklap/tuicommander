@@ -986,6 +986,10 @@ pub(crate) struct AppConfig {
     #[serde(default)]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates tab tree enabled for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) tab_tree_enabled: bool,
+    /// Draw Chat assistant text that a tool call follows in the same turn smaller and dimmer
+    #[serde(default = "default_true")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates chat mute intermediate text for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    pub(crate) chat_mute_intermediate_text: bool,
     /// Auto-show PR detail popover when a branch has PR data
     #[serde(default = "default_true")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates auto show pr popover for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
@@ -1293,6 +1297,7 @@ impl Default for AppConfig {
             tab_ordering_mode: TabOrderingMode::default(),
             tab_cycling_all_types: false,
             tab_tree_enabled: false,
+            chat_mute_intermediate_text: true,
             auto_show_pr_popover: true,
             prevent_sleep_when_busy: false,
             auto_update_enabled: true,
@@ -5219,6 +5224,7 @@ mod tests {
             tab_ordering_mode: TabOrderingMode::TerminalsFirst,
             tab_cycling_all_types: true,
             tab_tree_enabled: true,
+            chat_mute_intermediate_text: false,
             auto_show_pr_popover: true,
             prevent_sleep_when_busy: true,
             auto_update_enabled: false,
