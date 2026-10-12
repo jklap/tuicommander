@@ -2115,6 +2115,16 @@ pub(super) async fn terminal_scroll_to_offset(
     (StatusCode::OK, Json(serde_json::json!({"ok": true})))
 }
 
+// Same coalesced history coordinate and tail sentinel as desktop IPC.
+pub(super) async fn terminal_scroll_to_anchor(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+    Json(body): Json<super::types::TerminalScrollToAnchorRequest>,
+) -> impl IntoResponse {
+    crate::pty::queue_scroll_anchor(&state, &session_id, body.anchor);
+    (StatusCode::OK, Json(serde_json::json!({"ok": true})))
+}
+
 pub(super) async fn terminal_scroll_info(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,
@@ -3952,6 +3962,38 @@ mod tests {
         .await;
 
         await_display_offset(&state, &sid, 25).await;
+        stop.store(true, Ordering::Relaxed);
+    }
+
+    /// Catches: the HTTP anchor route enqueues a tail offset instead of a history row.
+    #[tokio::test]
+    async fn http_scroll_anchor_moves_to_the_same_history_row_without_desktop() {
+        let state = super::super::tests::test_state();
+        let sid = "http-anchor-scroll".to_string();
+        let stop = browser_session(&state, &sid, 200);
+        let history = state
+            .grid
+            .vt_log_buffers
+            .get(&sid)
+            .unwrap()
+            .lock()
+            .grid_history_size();
+        terminal_scroll_to_anchor(
+            State(state.clone()),
+            Path(sid.clone()),
+            Json(super::super::types::TerminalScrollToAnchorRequest {
+                anchor: Some(history - 25),
+            }),
+        )
+        .await;
+        await_display_offset(&state, &sid, 25).await;
+        terminal_scroll_to_anchor(
+            State(state.clone()),
+            Path(sid.clone()),
+            Json(super::super::types::TerminalScrollToAnchorRequest { anchor: None }),
+        )
+        .await;
+        await_display_offset(&state, &sid, 0).await;
         stop.store(true, Ordering::Relaxed);
     }
 

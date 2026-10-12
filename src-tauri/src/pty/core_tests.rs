@@ -14559,3 +14559,31 @@ mod root_identity {
         );
     }
 }
+
+/// Catches: the coalesced slot loses row zero, uses stale offsets, or reorders tail requests.
+#[test]
+fn coalesced_scroll_anchor_applies_after_output_and_latest_request_wins() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let sid = "anchor-1264";
+    state
+        .grid
+        .pending_scroll
+        .insert(sid.into(), Arc::new(AtomicI64::new(-1)));
+    let mut vt = VtLogBuffer::new(3, 20, 100);
+    vt.process(b"l0\r\nl1\r\nl2\r\nl3\r\nl4\r\nl5\r\nl6");
+    queue_scroll_anchor(&state, sid, Some(2));
+    vt.process(b"\r\nl7\r\nl8\r\nl9\r\nl10\r\nl11");
+    apply_scroll_target(&mut vt, take_pending_scroll(&state, sid).unwrap());
+    assert_eq!(vt.grid_get_row_text(0), "l2");
+    assert!(take_pending_scroll(&state, sid).is_none());
+    queue_scroll_anchor(&state, sid, Some(0));
+    apply_scroll_target(&mut vt, take_pending_scroll(&state, sid).unwrap());
+    assert_eq!(vt.grid_get_row_text(0), "l0");
+    queue_scroll_anchor(&state, sid, Some(2));
+    queue_scroll_anchor(&state, sid, None);
+    apply_scroll_target(&mut vt, take_pending_scroll(&state, sid).unwrap());
+    assert_eq!(vt.grid_display_offset(), 0);
+    queue_scroll_anchor(&state, sid, Some(usize::MAX));
+    apply_scroll_target(&mut vt, take_pending_scroll(&state, sid).unwrap());
+    assert_eq!(vt.grid_display_offset(), 0);
+}
