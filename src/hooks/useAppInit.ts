@@ -582,7 +582,7 @@ export async function initApp(deps: AppInitDeps) {
 		}
 		const safeLevel = level === "warn" || level === "error" ? level : "info";
 		// Backend notifications stay in the bell. Urgent notices always add a card;
-		// automatic cards also surface notices from terminals the user is not viewing.
+		// automatic cards surface normal notices only on their active origin terminal.
 		// Only a registered repo may scope a bell item.
 		const terminalId = origin_session_id ? terminalsStore.findBySessionId(origin_session_id) : undefined;
 		const repoPath = origin
@@ -614,9 +614,8 @@ export async function initApp(deps: AppInitDeps) {
 		const viewingOrigin =
 			terminalId !== undefined &&
 			terminalId === terminalsStore.state.activeId &&
-			(!origin || getSessionConnection(origin_session_id) === origin.connection) &&
-			document.hasFocus();
-		const automaticCard = notificationsStore.state.autoToastCards && !!origin_session_id && !viewingOrigin;
+			(!origin || getSessionConnection(origin_session_id) === origin.connection);
+		const automaticCard = notificationsStore.state.autoToastCards && viewingOrigin;
 		if (noticeId !== -1 && (urgency === "urgent" || automaticCard))
 			toastsStore.add(
 				visibleTitle,

@@ -5161,8 +5161,8 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 
 ## Automatic agent toast cards (#1760-bab7)
 
-- [ ] After landing, raise a normal MCP toast from another terminal, then the active terminal: only the other terminal shows a card. With TUIC unfocused, the active terminal also shows a card.
-- [ ] Disable Settings → Notifications → Show cards from other terminals and reload: normal notices remain bell-only; urgent notices still show a card. The preference is per client.
+- [ ] After landing, raise a normal MCP toast from another terminal, then the active terminal: only the active origin terminal shows a card, regardless of window focus. Urgent notices show a card on every tab, including non-terminal tabs.
+- [ ] Disable Settings → Notifications → Show cards from the active terminal and reload: normal notices remain bell-only; urgent notices still show a card. The preference is per client.
 
 Visual evidence: worktree Vite fixture mounted the real NotificationsTab and ToastContainer; agent-browser snapshot showed the new default-checked toggle, hint and card. Screenshot and subsequent toggle probes timed out (exit 142); bundled Chrome headless also produced no image within 40 seconds. Actual desktop window-focus behavior and screenshot remain unverified. Targeted tests prove routing and stored opt-out/reset.
 - [ ] Chat new-text indicator (#1757-c6a9): after restart, scroll up in terminal Chat and AI Chat while output streams; confirm the pill appears above the composer, returns to the bottom on click, clears on manual bottom, and respects the per-client Appearance > Chat toggle. On mobile/PWA, check the same behavior and the mobile Settings toggle.

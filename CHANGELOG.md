@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- Show agent toast cards when their origin terminal is not active or the window is unfocused, with a default-on per-client Notifications toggle. Urgent notices always show a card (#1760-bab7).
+- Show agent toast cards only while their origin terminal tab is active, with a default-on per-client Notifications toggle. Urgent notices always show a card (#1760-bab7).
 
 ### Removed
 - Remove the duplicate AI Chat control-bar + button; New chat tab still starts a conversation (#1755-7709).

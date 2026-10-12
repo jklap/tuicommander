@@ -294,10 +294,10 @@ export const NotificationsTab: Component = () => {
 			<SettingToggle
 				checked={notificationsStore.state.autoToastCards}
 				onChange={(enabled) => notificationsStore.setAutoToastCards(enabled)}
-				label={t("notifications.toggle.autoToastCards", "Show cards from other terminals")}
+				label={t("notifications.toggle.autoToastCards", "Show cards from the active terminal")}
 				hint={t(
 					"notifications.hint.autoToastCards",
-					"Show agent toast cards when their terminal is not active or this window is unfocused. Urgent notices always show a card. Saved for this client.",
+					"Show normal agent toast cards only on their active origin terminal tab. Other tabs receive bell entries only. Urgent notices always show a card. Saved for this client.",
 				)}
 			/>
 

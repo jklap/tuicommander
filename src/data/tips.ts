@@ -12,7 +12,7 @@ export const TIPS: Tip[] = [
 	{
 		feature: "Agent toast cards",
 		description:
-			"Agent notices show a card when you are looking elsewhere. Turn off Show cards from other terminals in Settings > Notifications to keep only urgent cards.",
+			"Normal agent notices show a card only on their active origin terminal tab; other tabs receive bell entries only. Turn off Show cards from the active terminal in Settings > Notifications to keep only urgent cards.",
 		shortcut: null,
 	},
 	{

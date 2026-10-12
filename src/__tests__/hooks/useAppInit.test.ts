@@ -2599,14 +2599,17 @@ describe("initApp", () => {
 			return { getCallback: () => callback };
 		}
 
-		// Catches: normal toasts from a terminal the user is not viewing stay invisible in the bell.
-		it.each(["inactive terminal", "unfocused window"])("1760 shows a card for an %s", async (condition) => {
+		// Catches: inverted origin routing shows normal cards on unrelated tabs and hides them on the active origin.
+		it.each([
+			{ condition: "inactive origin", activeOrigin: false, cards: 0 },
+			{ condition: "active origin", activeOrigin: true, cards: 1 },
+		])("1760 regression normal toast from $condition yields $cards cards", async ({ activeOrigin, cards }) => {
 			const { getCallback } = captureMcpToast();
 			await initApp(createMockDeps());
 			const origin = terminalsStore.add(makeTerminal({ sessionId: "auto-card-origin" }));
 			const other = terminalsStore.add(makeTerminal({ sessionId: "auto-card-other" }));
-			terminalsStore.setActive(condition === "unfocused window" ? origin : other);
-			const focus = vi.spyOn(document, "hasFocus").mockReturnValue(condition !== "unfocused window");
+			terminalsStore.setActive(activeOrigin ? origin : other);
+			const focus = vi.spyOn(document, "hasFocus").mockReturnValue(true);
 			getCallback()!({
 				payload: {
 					title: "Background notice",
@@ -2616,27 +2619,50 @@ describe("initApp", () => {
 					origin_session_id: "auto-card-origin",
 				},
 			});
-			expect(toastsStore.toasts).toHaveLength(1);
+			expect(toastsStore.toasts).toHaveLength(cards);
 			expect(activityStore.getForSection("messages")).toHaveLength(1);
 			focus.mockRestore();
 		});
 
-		// Catches: automatic routing ignores the opt-out, active focus, unknown origins, or urgent bypass.
+		// Catches: automatic routing ignores the opt-out, non-terminal tabs, unknown origins, or urgent bypass.
 		it.each([
-			{ name: "active focused origin", enabled: true, origin: "active", focused: true, urgent: false, cards: 0 },
+			{ name: "active unfocused origin", enabled: true, origin: "active", focused: false, urgent: false, cards: 1 },
+			{ name: "disabled active origin", enabled: false, origin: "active", focused: true, urgent: false, cards: 0 },
+			{ name: "inactive unfocused origin", enabled: true, origin: "other", focused: false, urgent: false, cards: 0 },
+			{ name: "urgent inactive origin", enabled: false, origin: "other", focused: true, urgent: true, cards: 1 },
 			{ name: "disabled automatic cards", enabled: false, origin: "other", focused: false, urgent: false, cards: 0 },
 			{ name: "urgent with toggle off", enabled: false, origin: "active", focused: true, urgent: true, cards: 1 },
 			{ name: "urgent without origin", enabled: false, origin: undefined, focused: true, urgent: true, cards: 1 },
 			{ name: "no origin in background", enabled: true, origin: undefined, focused: false, urgent: false, cards: 0 },
-			{ name: "unknown origin", enabled: true, origin: "unknown", focused: true, urgent: false, cards: 1 },
+			{ name: "unknown origin", enabled: true, origin: "unknown", focused: true, urgent: false, cards: 0 },
+			{
+				name: "normal on non-terminal tab",
+				enabled: true,
+				origin: "active",
+				focused: true,
+				urgent: false,
+				cards: 0,
+				nonTerminal: true,
+			},
+			{
+				name: "urgent on non-terminal tab",
+				enabled: false,
+				origin: "active",
+				focused: true,
+				urgent: true,
+				cards: 1,
+				nonTerminal: true,
+			},
 		])(
 			"1760 routes $name without duplicating the bell or stealing focus",
-			async ({ enabled, origin, focused, urgent, cards }) => {
+			async ({ enabled, origin, focused, urgent, cards, nonTerminal }) => {
 				const { getCallback } = captureMcpToast();
 				await initApp(createMockDeps());
 				const active = terminalsStore.add(makeTerminal({ sessionId: "active" }));
 				terminalsStore.add(makeTerminal({ sessionId: "other" }));
 				terminalsStore.setActive(active);
+				if (nonTerminal) mdTabsStore.openUiTab("toast-other-tab", "Other", "<p>Other</p>", false);
+				const activeBefore = terminalsStore.state.activeId;
 				notificationsStore.setAutoToastCards(enabled);
 				const focus = vi.spyOn(document, "hasFocus").mockReturnValue(focused);
 				const event = {
@@ -2653,7 +2679,7 @@ describe("initApp", () => {
 				getCallback()!(event);
 				expect(toastsStore.toasts).toHaveLength(cards);
 				expect(activityStore.getForSection("messages")).toHaveLength(1);
-				expect(terminalsStore.state.activeId).toBe(active);
+				expect(terminalsStore.state.activeId).toBe(activeBefore);
 				focus.mockRestore();
 			},
 		);
@@ -2884,7 +2910,7 @@ describe("initApp", () => {
 				},
 			});
 
-			expect(toastsStore.toasts).toHaveLength(1);
+			expect(toastsStore.toasts).toHaveLength(0);
 			expect(activityStore.getForSection("messages")[0]).toMatchObject({
 				title: "Release published",
 				subtitle: "v1.7.4",

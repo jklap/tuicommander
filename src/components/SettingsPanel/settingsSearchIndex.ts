@@ -315,7 +315,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{
 		tab: "notifications",
 		section: "Notification Settings",
-		label: "Show cards from other terminals",
+		label: "Show cards from the active terminal",
 		labelKey: "notifications.toggle.autoToastCards",
 	},
 	{
