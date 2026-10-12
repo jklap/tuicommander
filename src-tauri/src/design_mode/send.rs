@@ -142,7 +142,7 @@ pub(crate) async fn send(state: Arc<AppState>, body: Value) -> Result<Value, Str
     .map_err(|e| e.to_string())?
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     #[cfg(unix)]
