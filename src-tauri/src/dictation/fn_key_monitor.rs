@@ -85,21 +85,37 @@ pub fn install(app_handle: tauri::AppHandle) {
 
 #[cfg(target_os = "macos")]
 pub fn release_on_focus_loss(app_handle: &tauri::AppHandle) {
-    use std::sync::atomic::Ordering;
+    use objc2_app_kit::{NSEvent, NSEventModifierFlags};
     use tauri::{Emitter, Manager};
 
     let dictation = app_handle.state::<super::DictationState>();
+    let physically_down = NSEvent::modifierFlags_class().contains(NSEventModifierFlags::Function);
+    release_fn_capture(&dictation, physically_down, "focus-loss", || {
+        let _ = app_handle.emit_to(tauri::EventTarget::labeled("main"), "fn-key-up", ());
+    });
+}
+
+/// Reconcile the held Fn key with a native release observation.
+#[cfg(target_os = "macos")]
+pub(super) fn release_fn_capture(
+    dictation: &super::DictationState,
+    _physically_down: bool,
+    origin: &'static str,
+    emit_release: impl FnOnce(),
+) {
+    use std::sync::atomic::Ordering;
+
     if dictation.fn_down.swap(false, Ordering::AcqRel) {
         tracing::info!(
             source = "dictation",
             key = "Fn",
             edge = "up",
-            origin = "focus-loss",
+            origin,
             unix_ms = unix_ms(),
             "Push-to-talk key edge"
         );
-        dictation.request_native_stop("focus-loss");
-        let _ = app_handle.emit_to(tauri::EventTarget::labeled("main"), "fn-key-up", ());
+        dictation.request_native_stop(origin);
+        emit_release();
     }
 }
 
