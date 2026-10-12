@@ -1,15 +1,19 @@
 //! Live listener discovery. Ownership uses path components, never string prefixes.
 use futures_util::StreamExt;
 use serde_json::{Value, json};
-use std::collections::{HashMap, HashSet};
+#[cfg(unix)]
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+#[cfg(unix)]
 #[derive(Debug)]
 struct Listener {
     pid: u32,
     name: String,
     port: u16,
 }
+#[cfg(unix)]
 fn listeners(output: &str) -> Vec<Listener> {
     let mut pid = 0;
     let mut name = String::new();
@@ -41,6 +45,7 @@ fn listeners(output: &str) -> Vec<Listener> {
     }
     found
 }
+#[cfg(unix)]
 fn cwd_map(output: &str) -> HashMap<u32, PathBuf> {
     let mut pid = 0;
     let mut paths = HashMap::new();
@@ -59,6 +64,7 @@ fn owner<'a>(cwd: &Path, roots: &'a [PathBuf]) -> Option<&'a PathBuf> {
         .filter(|root| cwd.starts_with(root))
         .max_by_key(|root| root.components().count())
 }
+#[cfg(unix)]
 fn candidates(listing: &str, cwds: &str, roots: &[PathBuf]) -> Vec<Value> {
     let paths = cwd_map(cwds);
     listeners(listing).into_iter().filter_map(|listener| {
@@ -105,6 +111,7 @@ async fn html_servers(candidates: Vec<Value>) -> Vec<Value> {
     }
     found
 }
+#[cfg(unix)]
 fn command_owners(output: &str, roots: &[PathBuf]) -> HashMap<u32, PathBuf> {
     let mut owners = HashMap::new();
     for line in output.lines() {
@@ -149,6 +156,7 @@ fn settings(repo: &Path) -> Option<crate::config::RepoSettingsEntry> {
             .then_some(value)
         })
 }
+#[cfg(unix)]
 fn attributed_candidates(
     listing: &str,
     cwds: &mut String,

@@ -149,6 +149,7 @@ async fn cleanup_rechecks_dirty_unmerged_and_locked_worktrees_without_discarding
 }
 
 // Catches: an idle live session, open run, existing repository or changed checkout being deleted.
+#[cfg(unix)]
 #[tokio::test]
 async fn cleanup_preserves_live_sessions_and_rejects_unowned_or_changed_workspaces() {
     let (_guard, f) = Fixture::new().await;
