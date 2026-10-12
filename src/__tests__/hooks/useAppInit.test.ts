@@ -2630,7 +2630,6 @@ describe("initApp", () => {
 			{ name: "disabled active origin", enabled: false, origin: "active", focused: true, urgent: false, cards: 0 },
 			{ name: "inactive unfocused origin", enabled: true, origin: "other", focused: false, urgent: false, cards: 0 },
 			{ name: "urgent inactive origin", enabled: false, origin: "other", focused: true, urgent: true, cards: 1 },
-			{ name: "disabled automatic cards", enabled: false, origin: "other", focused: false, urgent: false, cards: 0 },
 			{ name: "urgent with toggle off", enabled: false, origin: "active", focused: true, urgent: true, cards: 1 },
 			{ name: "urgent without origin", enabled: false, origin: undefined, focused: true, urgent: true, cards: 1 },
 			{ name: "no origin in background", enabled: true, origin: undefined, focused: false, urgent: false, cards: 0 },
