@@ -276,3 +276,5 @@ Closed refusal turns show one plain-text card with the agent’s existing ACP re
 Use **New conversation with options** beside the `+` button to override the ego profile, workspace or executable for one conversation. Empty fields use Settings defaults. The header shows the resolved values. The conversation keeps these values and its peer identity after a restart; other chats keep their existing launch configuration. The plain `+` action creates a chat with the global defaults.
 
 A custom conversation runs its own ego ACP process. Its mail identity is separate from daily chats, even when both use the same workspace.
+
+When you scroll up and more conversation content arrives, **New text below** appears above the composer. Select it to return to the bottom and resume following. Reaching the bottom by hand clears it too. Search jumps do not show the pill until later content arrives. Disable **New text indicator** in **Settings → Appearance → Chat**, or mobile Settings. This preference is saved on the current client and applies to terminal Chat too.

@@ -3,6 +3,7 @@ import { t } from "../../../i18n";
 import type { RepoGroup } from "../../../stores/repositories";
 import { repositoriesStore } from "../../../stores/repositories";
 import { settingsStore } from "../../../stores/settings";
+import { transcriptPreferences } from "../../../stores/transcriptPreferences";
 import { uiStore } from "../../../stores/ui";
 import { UiLegend } from "../../HelpPanel/UiLegend";
 import { ColorSwatchPicker } from "../../shared/ColorSwatchPicker";
@@ -152,6 +153,17 @@ export const AppearanceTab: Component = () => {
 				min={10}
 				max={60}
 				hint={t("appearance.hint.maxTabNameLength", "Maximum characters shown in tab names before truncating")}
+			/>
+
+			<h3>{t("appearance.heading.chat", "Chat")}</h3>
+			<SettingToggle
+				checked={transcriptPreferences.enabled()}
+				onChange={(value) => transcriptPreferences.setEnabled(value)}
+				label={t("appearance.label.newTextIndicator", "New text indicator")}
+				hint={t(
+					"appearance.hint.newTextIndicator",
+					"Show New text below when a chat receives content while you read earlier messages. Saved on this client.",
+				)}
 			/>
 
 			<h3>{t("appearance.heading.groups", "Repository Groups")}</h3>

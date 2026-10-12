@@ -750,3 +750,7 @@ run snapshots are never saved as replacement definitions. Deleted definitions
 leave saved run details visible without an editable draft.
 
 Automation all-run history uses 20-row pages plus one backend lookahead row. `loadRuns` reads both backend summaries with the page and rejects stale replies. Definition deletion does not remove the all-history view. The transport adapter accepts an explicit remote connection so global history and summaries do not fall back to the local ledger.
+
+### Transcript view preference
+
+`transcriptPreferences` stores the shared terminal Chat and AI Chat new-text indicator toggle in client localStorage (`tui-commander-new-text-indicator`, default on). Desktop Appearance → Chat and mobile Settings edit the same client preference. It does not write backend configuration. The Transcript compares entry identities and text lengths to detect arrivals while detached, clears unread state when content is replaced, and follows in-place streamed text while attached.

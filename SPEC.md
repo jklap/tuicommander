@@ -717,6 +717,7 @@ Some frontend-only stores persist to localStorage:
 - [x] AI Chat session details — ACP title updates rename the header and picker; context-window use and reported cost appear in the footer; a session settings dialog labels every select option and the one-row control bar summarizes the model's short name and mode beside named icon actions
 - [x] AI Chat transcript and tabs — selectable messages, with message Copy on hover or keyboard focus; sent prompts reconciled with ego's chunked echo; copyable code and tool output; trailing `suggest:` tokens rendered as reply buttons; terminal-shared web and file link handlers; parallel ACP sessions with independent drafts and transcripts; only running tool calls pulse
 - [x] AI Chat control bar has no duplicate + action; New chat tab creates conversations (#1755-7709).
+- [x] Shared terminal Chat and AI Chat new-text pill — detached content arrivals offer a return to the bottom; search alone does not trigger it; desktop/mobile provide a per-client opt-out (#1757-c6a9).
 - [x] AI Chat transcript polish — collapsed tool rows show short names, message Copy keeps its own space, and streaming follows the bottom until the reader scrolls up
 - [x] Desktop AI Chat composer actions reuse the terminal composer pin/play icons and button sizes; tooltips and accessible names distinguish Send, Queue and parked drafts.
 
