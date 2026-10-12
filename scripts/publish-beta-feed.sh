@@ -14,29 +14,7 @@ trap 'rm -rf "$work"' EXIT
 gh release download "v$version" --repo "$repo" --pattern latest.json --dir "$work"
 jq -e --arg version "$version" '.version == $version and (.platforms | type == "object" and length > 0) and all(.platforms[]; (.signature | type == "string" and length > 0) and (.url | startswith("https://github.com/")))' "$work/latest.json" >/dev/null
 notes="Beta downloads: https://github.com/$repo/releases/tag/v$version. This rolling release contains only the updater manifest."
-if gh release view beta --repo "$repo" --json assets --jq '.assets[].name' > "$work/assets" 2>/dev/null; then
-  if grep -qx latest.json "$work/assets"; then
-    mkdir "$work/current"
-    gh release download beta --repo "$repo" --pattern latest.json --dir "$work/current"
-    # Serialized by the workflow job; a late older build must not roll back the feed.
-    decision=$(python3 - "$work/current/latest.json" "$version" <<'PYVER'
-import json, re, sys
-
-def beta_key(version):
-    match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)-beta\.(\d+)(?:\+[^ ]+)?", version)
-    if not match:
-        raise ValueError("Invalid beta version: " + version)
-    return tuple(map(int, match.groups()))
-
-current = json.load(open(sys.argv[1]))["version"]
-print("keep" if beta_key(current) >= beta_key(sys.argv[2]) else "publish")
-PYVER
-    )
-    if [[ "$decision" == keep ]]; then
-      echo "Beta feed is already at this version or newer; unchanged"
-      exit 0
-    fi
-  fi
+if gh release view beta --repo "$repo" --json tagName >/dev/null 2>&1; then
   gh release edit beta --repo "$repo" --title "TUICommander beta" --notes "$notes" --prerelease=true --latest=false
 else
   gh release create beta --repo "$repo" --target "${GITHUB_SHA:-HEAD}" --title "TUICommander beta" --notes "$notes" --prerelease --latest=false

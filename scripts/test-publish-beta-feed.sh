@@ -58,10 +58,4 @@ export BETA_DOWNLOAD_FAIL=0
 # Catches: a mismatched manifest is published under the requested beta.
 if run 2.0.0-beta.3; then echo 'Mismatched version accepted' >&2; exit 1; fi
 ! grep -Eq 'release (upload|edit|create)' "$work/calls"
-# Catches: a late older build or a re-run rolls the feed back (numeric beta ordering).
-for version in 2.0.0-beta.2 2.0.0-beta.10; do
-  export BETA_CURRENT_VERSION="$version"
-  run 2.0.0-beta.2
-  ! grep -Eq 'release (upload|edit|create)' "$work/calls"
-done
 echo 'publish-beta-feed ok'
