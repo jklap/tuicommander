@@ -19,15 +19,11 @@ mkdir -p "$git_template"
 # Fail closed: git in a test process must never discover a repository above
 # the root (a fixture whose `git init` failed once fell through to the real
 # checkout and renamed its branches). GIT_CEILING_DIRECTORIES = the root's
-# parent, lexical and physical spelling (macOS /var vs /private/var), each
-# appended once to any value an outer wrapper already set.
-git_ceiling=${GIT_CEILING_DIRECTORIES:-}
-for dir in "$(dirname "$root")" "$(cd "$(dirname "$root")" && pwd -P)"; do
-    case ":$git_ceiling:" in
-        *":$dir:"*) ;;
-        *) git_ceiling=${git_ceiling:+$git_ceiling:}$dir ;;
-    esac
-done
+# parent plus the host temp dir (home of the t.XXXXXX socket roots), lexical
+# and physical spelling (macOS /var vs /private/var), each appended once to any
+# value an outer wrapper already set.
+# The physical root's parent too, for a root that is itself a symlink.
+git_ceiling=$(tuic_git_ceiling_with "$(dirname "$root")" "$(dirname "$(cd "$root" && pwd -P)")" "$host")
 {
     printf 'TUIC_TEST_HOST_TMPDIR=%s\n' "$host"
     printf 'TUIC_TEST_TMP_ROOT=%s\n' "$root"
