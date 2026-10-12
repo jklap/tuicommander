@@ -315,6 +315,12 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{
 		tab: "notifications",
 		section: "Notification Settings",
+		label: "Show cards from the active terminal",
+		labelKey: "notifications.toggle.autoToastCards",
+	},
+	{
+		tab: "notifications",
+		section: "Notification Settings",
 		label: "Pull Requests",
 		labelKey: "notifications.label.prNotifications",
 	},
