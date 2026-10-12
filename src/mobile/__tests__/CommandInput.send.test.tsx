@@ -1,6 +1,8 @@
 import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
+import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CommandInput } from "../components/CommandInput";
+import { clearDictationPartial, saveDictationPartial } from "../utils/dictationPartial";
 
 const writes: { data: string; at: number }[] = [];
 vi.mock("../../transport", () => ({
@@ -16,8 +18,55 @@ import { rpc } from "../../transport";
 
 afterEach(() => {
 	cleanup();
+	clearDictationPartial("restored-dictation");
 	writes.length = 0;
 	vi.unstubAllGlobals();
+});
+
+// Catches: a restored dictated draft submits only Enter after the desktop clears the PTY line.
+it("sends the restored dictated text when the desktop cleared the terminal before reload", async () => {
+	// CommandInput's dictation callback persists this text before streaming it to the PTY.
+	// The desktop can then clear the line while the PWA is suspended.
+	saveDictationPartial("restored-dictation", "review the latest changes");
+	const { container, getByRole } = render(() => <CommandInput sessionId="restored-dictation" ptyInputLine="" />);
+	expect(container.querySelector("textarea")?.value).toBe("review the latest changes");
+	expect(writes).toEqual([]);
+	fireEvent.click(getByRole("button", { name: "Send" }));
+	await waitFor(() => expect(writes.some((write) => write.data === "\r")).toBe(true));
+	expect(writes.map((write) => write.data).join("")).toBe("review the latest changes\r");
+});
+
+// Catches: first edit sends only the appended suffix, and later edits replay a stale PTY snapshot.
+it("keeps the restored prefix on first edit after the PTY clears and tracks subsequent local edits", () => {
+	saveDictationPartial("restored-dictation", "review the latest changes");
+	const [ptyLine, setPtyLine] = createSignal<string | null>(null);
+	const { container } = render(() => <CommandInput sessionId="restored-dictation" ptyInputLine={ptyLine()} />);
+	setPtyLine("");
+	expect(writes).toEqual([]);
+	const input = container.querySelector("textarea")!;
+	fireEvent.input(input, { target: { value: "review the latest changes now" } });
+	fireEvent.input(input, { target: { value: "review the latest changes now please" } });
+	expect(writes.map((write) => write.data)).toEqual(["review the latest changes now", " please"]);
+});
+
+// Catches: blindly replaying the saved draft duplicates words still present in the PTY.
+it("sends only Enter when the restored dictated text is still in the PTY", async () => {
+	saveDictationPartial("restored-dictation", "review the latest changes");
+	const { getByRole } = render(() => (
+		<CommandInput sessionId="restored-dictation" ptyInputLine="review the latest changes" />
+	));
+	expect(writes).toEqual([]);
+	fireEvent.click(getByRole("button", { name: "Send" }));
+	await waitFor(() => expect(writes.map((write) => write.data)).toEqual(["\r"]));
+});
+
+// Catches: a restored edit appends to a different desktop draft instead of replacing its divergent tail.
+it("reconciles the restored first edit with the changed PTY draft", () => {
+	saveDictationPartial("restored-dictation", "review the latest changes");
+	const { container } = render(() => <CommandInput sessionId="restored-dictation" ptyInputLine="review old" />);
+	expect(writes).toEqual([]);
+	fireEvent.input(container.querySelector("textarea")!, { target: { value: "review the latest changes now" } });
+	expect(writes.map((write) => write.data)).toEqual(["\x7f\x7f\x7fthe latest changes now"]);
 });
 
 it("stages an uploaded file path in the PTY draft without pressing Enter", async () => {

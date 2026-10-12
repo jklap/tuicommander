@@ -21,6 +21,7 @@ import {
 } from "solid-js";
 import type { AcpNoticeAction, AcpTranscriptEntry } from "../../stores/acpTranscript";
 import { appLogger } from "../../stores/appLogger";
+import { transcriptPreferences } from "../../stores/transcriptPreferences";
 import type { AcpToolCall, AcpToolCallContent } from "../../types/acp";
 import { cx } from "../../utils";
 import { writeClipboard } from "../../utils/clipboard";
@@ -391,22 +392,44 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 	let searchInput: HTMLInputElement | undefined;
 	let matchIndex = -1;
 	let stickToBottom = true;
-	const onScroll = () => {
-		if (!container) return;
-		stickToBottom = container.scrollHeight - container.clientHeight - container.scrollTop <= 24;
-	};
+	const [newTextBelow, setNewTextBelow] = createSignal(false);
+	let previousContent = new Map<string, number>();
 	createEffect(() => {
-		props.entries();
 		props.busy();
 		props.retry?.();
+		const content = new Map(
+			props
+				.entries()
+				.map((entry): [string, number] => [
+					entry.id,
+					"text" in entry ? entry.text.length : entry.kind === "tool" ? toolCallDetail(entry.call).length : 0,
+				]),
+		);
+		const sameConversation = [...previousContent.keys()].some((id) => content.has(id));
+		const grew = [...content].some(
+			([id, length]) => !previousContent.has(id) || length > (previousContent.get(id) ?? 0),
+		);
+		if (!sameConversation || !transcriptPreferences.enabled()) setNewTextBelow(false);
+		else if (grew && !stickToBottom) setNewTextBelow(true);
+		previousContent = content;
 		queueMicrotask(() => {
 			if (container && stickToBottom) container.scrollTop = container.scrollHeight;
 		});
 	});
+	const scrollToBottom = () => {
+		stickToBottom = true;
+		setNewTextBelow(false);
+		if (container) container.scrollTop = container.scrollHeight;
+	};
+	const onScroll = () => {
+		if (!container) return;
+		stickToBottom = container.scrollHeight - container.clientHeight - container.scrollTop <= 24;
+		if (stickToBottom) setNewTextBelow(false);
+	};
+
 	const runNoticeAction = (action: AcpNoticeAction) => {
 		if (action.kind !== "open_result" && container) {
-			stickToBottom = true;
-			container.scrollTop = container.scrollHeight;
+			scrollToBottom();
 		}
 		props.onNoticeAction?.(action);
 	};
@@ -507,6 +530,7 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 					: 0
 				: (matchIndex + direction + matches.length) % matches.length;
 		stickToBottom = false;
+		setNewTextBelow(false);
 		const selection = window.getSelection();
 		selection?.removeAllRanges();
 		selection?.addRange(matches[matchIndex]);
@@ -548,248 +572,260 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 		}
 	};
 	return (
-		<div
-			class={cx(s.messageList, props.mobile && s.mobileTranscript)}
-			ref={container}
-			aria-label="Chat transcript"
-			tabIndex={0}
-			onKeyDown={onKeyDown}
-			onScroll={onScroll}
-		>
-			<Show when={finding()}>
-				<div class={s.findBar}>
-					<input
-						ref={searchInput}
-						aria-label="Find in chat"
-						value={query()}
-						onInput={(event) => {
-							clearSearchSelection();
-							setQuery(event.currentTarget.value);
-							matchIndex = -1;
-						}}
-						onKeyDown={(event) => {
-							if (event.key === "Enter") {
-								event.preventDefault();
-								event.stopPropagation();
-								findNext(event.shiftKey ? -1 : 1);
-							}
-							if (event.key === "Escape") {
-								event.preventDefault();
-								event.stopPropagation();
-								closeSearch();
-							}
-						}}
-					/>
-					<button type="button" onClick={() => findNext(-1)}>
-						Previous
-					</button>
-					<button type="button" onClick={() => findNext()}>
-						Next
-					</button>
-					<button type="button" aria-label="Close chat search" onClick={closeSearch}>
-						<svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
-							<path d="M2.8 2l3.2 3.2L9.2 2l.8.8L6.8 6l3.2 3.2-.8.8L6 6.8 2.8 10l-.8-.8L5.2 6 2 2.8z" />
+		<>
+			<div
+				class={cx(s.messageList, props.mobile && s.mobileTranscript)}
+				ref={container}
+				aria-label="Chat transcript"
+				tabIndex={0}
+				onKeyDown={onKeyDown}
+				onScroll={onScroll}
+			>
+				<Show when={finding()}>
+					<div class={s.findBar}>
+						<input
+							ref={searchInput}
+							aria-label="Find in chat"
+							value={query()}
+							onInput={(event) => {
+								clearSearchSelection();
+								setQuery(event.currentTarget.value);
+								matchIndex = -1;
+							}}
+							onKeyDown={(event) => {
+								if (event.key === "Enter") {
+									event.preventDefault();
+									event.stopPropagation();
+									findNext(event.shiftKey ? -1 : 1);
+								}
+								if (event.key === "Escape") {
+									event.preventDefault();
+									event.stopPropagation();
+									closeSearch();
+								}
+							}}
+						/>
+						<button type="button" onClick={() => findNext(-1)}>
+							Previous
+						</button>
+						<button type="button" onClick={() => findNext()}>
+							Next
+						</button>
+						<button type="button" aria-label="Close chat search" onClick={closeSearch}>
+							<svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
+								<path d="M2.8 2l3.2 3.2L9.2 2l.8.8L6.8 6l3.2 3.2-.8.8L6 6.8 2.8 10l-.8-.8L5.2 6 2 2.8z" />
+							</svg>
+						</button>
+					</div>
+				</Show>
+				<Show when={props.entries().length > 0} fallback={<div class={s.emptyState}>{props.emptyMessage}</div>}>
+					<Show when={props.entries()[0]?.inherited}>
+						<div class={s.historyBoundary}>Inherited history</div>
+					</Show>
+					<For each={activity().visible}>
+						{(entry) => (
+							<>
+								<Show when={entry.id === firstLocalId()}>
+									<div class={s.historyBoundary} role="separator" aria-label="Inherited history ends">
+										This conversation
+									</div>
+								</Show>
+								<Switch>
+									<Match when={entry.kind === "user" && entry}>
+										{(user) => (
+											<Show
+												when={!isHarnessNotice(user().text)}
+												fallback={
+													<div class={s.systemNotice} role="note">
+														{user().text}
+													</div>
+												}
+											>
+												<div class={s.userMsg}>
+													<UserText text={user().text} onOpenFile={props.onOpenFile} />
+													<CopyButton label="Copy user message" text={user().text} />
+												</div>
+											</Show>
+										)}
+									</Match>
+									<Match when={entry.kind === "agent" && entry}>
+										{(agent) => {
+											const projected = createMemo(() => projectChatProtocolText(agent().text));
+											let content: HTMLDivElement | undefined;
+											createEffect(() => {
+												projected().body;
+												queueMicrotask(() => highlightAnswers(content));
+											});
+											return (
+												<Show
+													when={
+														projected().body.trim() ||
+														projected().intent ||
+														(props.onSuggestion && projected().suggestions.length > 0)
+													}
+												>
+													<div class={s.assistantMsg}>
+														<Show when={projected().intent}>
+															{(intent) => (
+																<div class={s.agentIntent} aria-label="Agent intent">
+																	<span>{intent().title ?? "Status"}</span>
+																	{intent().text}
+																</div>
+															)}
+														</Show>
+														<Show when={projected().body}>
+															<ContentRenderer
+																contentRef={(element) => {
+																	content = element;
+																}}
+																content={projected().body}
+																incremental={true}
+																onLinkClick={props.onOpenFile}
+																autoLinkFiles={true}
+																onCodeCopy={(text) =>
+																	void writeClipboard(text).catch((error) =>
+																		appLogger.error("ai-chat", "Copy failed", error),
+																	)
+																}
+															/>
+														</Show>
+														<div class={s.replyActions}>
+															<CopyButton label="Copy assistant message" text={agent().text} />
+															<Show when={props.canForkAtMessage?.() && agent().messageId}>
+																<button
+																	type="button"
+																	class={s.copyAction}
+																	aria-label="Fork from here"
+																	disabled={props.busy()}
+																	onClick={() => {
+																		const id = agent().messageId;
+																		if (id) props.onFork?.(id);
+																	}}
+																>
+																	Fork from here
+																</button>
+															</Show>
+														</div>
+														<Show when={props.onSuggestion && projected().suggestions.length > 0}>
+															<div class={s.suggestedReplies} aria-label="Suggested replies">
+																<For each={projected().suggestions}>
+																	{(item) => (
+																		<button type="button" onClick={() => props.onSuggestion?.(item)}>
+																			{item}
+																		</button>
+																	)}
+																</For>
+															</div>
+														</Show>
+													</div>
+												</Show>
+											);
+										}}
+									</Match>
+									<Match when={entry.kind === "notice" && entry}>
+										{(notice) => (
+											<div class={s.noticeCard} role="group" aria-label="Notice">
+												<div class={s.noticeTitle}>
+													{(notice().action && NOTICE_LABELS[notice().action!.kind].title) || "Notice"}
+												</div>
+												<div>{notice().text}</div>
+												<Show when={notice().action}>
+													{(action) => (
+														<button type="button" class={s.noticeAction} onClick={() => runNoticeAction(action())}>
+															{NOTICE_LABELS[action().kind].button}
+														</button>
+													)}
+												</Show>
+											</div>
+										)}
+									</Match>
+									<Match when={entry.kind === "thought" && entry}>
+										{(thought) => (
+											<details class={s.reasoningDisclosure}>
+												<summary class={s.reasoningSummary}>Thinking</summary>
+												<div class={s.reasoningBody}>{activity().thoughts.get(thought().id)}</div>
+											</details>
+										)}
+									</Match>
+									<Match when={entry.kind === "tool" && entry}>
+										{(tool) => (
+											<ToolActivity
+												calls={() => activity().calls.get(tool().id) ?? []}
+												observeDuration={props.observeToolDuration}
+											/>
+										)}
+									</Match>
+									<Match when={entry.kind === "plan" && entry}>
+										{(plan) => (
+											<div class={s.toolCallCard}>
+												<div class={s.toolCallHeader}>
+													<span class={s.toolCallName}>Plan</span>
+												</div>
+												<ul class={s.planList}>
+													<For each={plan().entries}>
+														{(step) => (
+															<li
+																class={cx(
+																	s.planItem,
+																	step.status === "completed" && s.planItemDone,
+																	step.status === "in_progress" && s.planItemActive,
+																)}
+															>
+																<span>{step.status === "completed" ? "✓" : "•"}</span>
+																<span>{step.content}</span>
+															</li>
+														)}
+													</For>
+												</ul>
+											</div>
+										)}
+									</Match>
+									<Match when={entry.kind === "settled" && entry}>
+										{(ended) => (
+											<Show
+												when={ended().stopReason === "refusal"}
+												fallback={<div class={s.settledNote}>{settlement(ended().stopReason)}</div>}
+											>
+												<div class={s.noticeCard} role="group" aria-label="Agent refusal">
+													{activity().refusals.get(ended().id) || settlement("refusal")}
+												</div>
+											</Show>
+										)}
+									</Match>
+									<Match when={entry.kind === "failed" && entry}>
+										{(failed) => <div class={s.settledNote}>{failed().message}</div>}
+									</Match>
+								</Switch>
+							</>
+						)}
+					</For>
+				</Show>
+				<Show
+					when={props.retry?.()}
+					fallback={
+						<Show when={props.busy()}>
+							<div class={cx(s.assistantMsg, s.thinkingPulse)}>…</div>
+						</Show>
+					}
+				>
+					{(retry) => (
+						<div class={s.providerRetry} role="status">
+							{retry()}
+						</div>
+					)}
+				</Show>
+				{props.children}
+			</div>
+			<Show when={newTextBelow() && transcriptPreferences.enabled()}>
+				<div class={s.newTextBar}>
+					<button type="button" class={s.newTextPill} onClick={scrollToBottom}>
+						<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+							<path d="M7 2h2v8.2l3.6-3.6L14 8l-6 6-6-6 1.4-1.4L7 10.2z" />
 						</svg>
+						New text below
 					</button>
 				</div>
 			</Show>
-			<Show when={props.entries().length > 0} fallback={<div class={s.emptyState}>{props.emptyMessage}</div>}>
-				<Show when={props.entries()[0]?.inherited}>
-					<div class={s.historyBoundary}>Inherited history</div>
-				</Show>
-				<For each={activity().visible}>
-					{(entry) => (
-						<>
-							<Show when={entry.id === firstLocalId()}>
-								<div class={s.historyBoundary} role="separator" aria-label="Inherited history ends">
-									This conversation
-								</div>
-							</Show>
-							<Switch>
-								<Match when={entry.kind === "user" && entry}>
-									{(user) => (
-										<Show
-											when={!isHarnessNotice(user().text)}
-											fallback={
-												<div class={s.systemNotice} role="note">
-													{user().text}
-												</div>
-											}
-										>
-											<div class={s.userMsg}>
-												<UserText text={user().text} onOpenFile={props.onOpenFile} />
-												<CopyButton label="Copy user message" text={user().text} />
-											</div>
-										</Show>
-									)}
-								</Match>
-								<Match when={entry.kind === "agent" && entry}>
-									{(agent) => {
-										const projected = createMemo(() => projectChatProtocolText(agent().text));
-										let content: HTMLDivElement | undefined;
-										createEffect(() => {
-											projected().body;
-											queueMicrotask(() => highlightAnswers(content));
-										});
-										return (
-											<Show
-												when={
-													projected().body.trim() ||
-													projected().intent ||
-													(props.onSuggestion && projected().suggestions.length > 0)
-												}
-											>
-												<div class={s.assistantMsg}>
-													<Show when={projected().intent}>
-														{(intent) => (
-															<div class={s.agentIntent} aria-label="Agent intent">
-																<span>{intent().title ?? "Status"}</span>
-																{intent().text}
-															</div>
-														)}
-													</Show>
-													<Show when={projected().body}>
-														<ContentRenderer
-															contentRef={(element) => {
-																content = element;
-															}}
-															content={projected().body}
-															incremental={true}
-															onLinkClick={props.onOpenFile}
-															autoLinkFiles={true}
-															onCodeCopy={(text) =>
-																void writeClipboard(text).catch((error) =>
-																	appLogger.error("ai-chat", "Copy failed", error),
-																)
-															}
-														/>
-													</Show>
-													<div class={s.replyActions}>
-														<CopyButton label="Copy assistant message" text={agent().text} />
-														<Show when={props.canForkAtMessage?.() && agent().messageId}>
-															<button
-																type="button"
-																class={s.copyAction}
-																aria-label="Fork from here"
-																disabled={props.busy()}
-																onClick={() => {
-																	const id = agent().messageId;
-																	if (id) props.onFork?.(id);
-																}}
-															>
-																Fork from here
-															</button>
-														</Show>
-													</div>
-													<Show when={props.onSuggestion && projected().suggestions.length > 0}>
-														<div class={s.suggestedReplies} aria-label="Suggested replies">
-															<For each={projected().suggestions}>
-																{(item) => (
-																	<button type="button" onClick={() => props.onSuggestion?.(item)}>
-																		{item}
-																	</button>
-																)}
-															</For>
-														</div>
-													</Show>
-												</div>
-											</Show>
-										);
-									}}
-								</Match>
-								<Match when={entry.kind === "notice" && entry}>
-									{(notice) => (
-										<div class={s.noticeCard} role="group" aria-label="Notice">
-											<div class={s.noticeTitle}>
-												{(notice().action && NOTICE_LABELS[notice().action!.kind].title) || "Notice"}
-											</div>
-											<div>{notice().text}</div>
-											<Show when={notice().action}>
-												{(action) => (
-													<button type="button" class={s.noticeAction} onClick={() => runNoticeAction(action())}>
-														{NOTICE_LABELS[action().kind].button}
-													</button>
-												)}
-											</Show>
-										</div>
-									)}
-								</Match>
-								<Match when={entry.kind === "thought" && entry}>
-									{(thought) => (
-										<details class={s.reasoningDisclosure}>
-											<summary class={s.reasoningSummary}>Thinking</summary>
-											<div class={s.reasoningBody}>{activity().thoughts.get(thought().id)}</div>
-										</details>
-									)}
-								</Match>
-								<Match when={entry.kind === "tool" && entry}>
-									{(tool) => (
-										<ToolActivity
-											calls={() => activity().calls.get(tool().id) ?? []}
-											observeDuration={props.observeToolDuration}
-										/>
-									)}
-								</Match>
-								<Match when={entry.kind === "plan" && entry}>
-									{(plan) => (
-										<div class={s.toolCallCard}>
-											<div class={s.toolCallHeader}>
-												<span class={s.toolCallName}>Plan</span>
-											</div>
-											<ul class={s.planList}>
-												<For each={plan().entries}>
-													{(step) => (
-														<li
-															class={cx(
-																s.planItem,
-																step.status === "completed" && s.planItemDone,
-																step.status === "in_progress" && s.planItemActive,
-															)}
-														>
-															<span>{step.status === "completed" ? "✓" : "•"}</span>
-															<span>{step.content}</span>
-														</li>
-													)}
-												</For>
-											</ul>
-										</div>
-									)}
-								</Match>
-								<Match when={entry.kind === "settled" && entry}>
-									{(ended) => (
-										<Show
-											when={ended().stopReason === "refusal"}
-											fallback={<div class={s.settledNote}>{settlement(ended().stopReason)}</div>}
-										>
-											<div class={s.noticeCard} role="group" aria-label="Agent refusal">
-												{activity().refusals.get(ended().id) || settlement("refusal")}
-											</div>
-										</Show>
-									)}
-								</Match>
-								<Match when={entry.kind === "failed" && entry}>
-									{(failed) => <div class={s.settledNote}>{failed().message}</div>}
-								</Match>
-							</Switch>
-						</>
-					)}
-				</For>
-			</Show>
-			<Show
-				when={props.retry?.()}
-				fallback={
-					<Show when={props.busy()}>
-						<div class={cx(s.assistantMsg, s.thinkingPulse)}>…</div>
-					</Show>
-				}
-			>
-				{(retry) => (
-					<div class={s.providerRetry} role="status">
-						{retry()}
-					</div>
-				)}
-			</Show>
-			{props.children}
-		</div>
+		</>
 	);
 };

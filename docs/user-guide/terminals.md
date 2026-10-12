@@ -15,6 +15,8 @@ when you scroll, select, copy or search. Search matches the exact characters
 printed by the program: precomposed and decomposed spellings are not automatically
 normalized into each other.
 
+In the mobile session output, a small upward drag stops auto-follow. New output does not scroll the view until you return to the bottom.
+
 In the mobile session output, completed lines continue into history even after the terminal history fills, while the live region redraws below. Long text wraps to the phone width. A continuation
 keeps the original line's leading spaces or tabs, so indented lists and code
 remain readable. Claude tool-call status dots keep the same space while pulsing
@@ -61,7 +63,7 @@ In Chat, Compose stays docked and open after sending or queueing, clears the sub
 
 **Chat** is disabled, with the reason as its tooltip, when the terminal has no agent, the agent is not Claude, or TUICommander has not bound the agent to a session file yet. If the agent exits or the binding is lost while Chat is open, the terminal returns to CLI with a one-line notice.
 
-Chat follows new transcript entries while the agent writes. A replaced transcript resets the displayed conversation, including when the replacement keeps the same file name and size.
+Chat follows new transcript entries while the agent writes. When you scroll up and more content arrives, **New text below** appears above Compose. Select it to return to the bottom and resume following. Reaching the bottom by hand also clears it. Search jumps show no indicator until later content arrives. Turn the indicator off in **Settings → Appearance → Chat**; this preference is saved on the current client. A replaced transcript resets the displayed conversation, including when the replacement keeps the same file name and size.
 
 Older recorded prompts with a prompt ID also appear when Claude did not record a human-origin field. Command echoes, tool results and sidechain conversations stay out of user bubbles. Image and PDF tool outputs show `[image]` and `[document]` markers; a model fallback shows a **Model changed** card.
 
