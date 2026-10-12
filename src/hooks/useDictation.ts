@@ -108,9 +108,10 @@ export function useDictation(deps: DictationDeps) {
 	const handleDictationStop = async () => {
 		// Wait for any in-flight start to finish before checking state
 		if (startPromise) {
-			const started = await startPromise;
+			// A refused overlapping start resolves false while the first recording is
+			// still active, so the recording flag below decides, not the start result.
+			await startPromise;
 			startPromise = null;
-			if (!started) return;
 		}
 
 		if (!deps.dictation.state.recording) return;
