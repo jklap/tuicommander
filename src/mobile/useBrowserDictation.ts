@@ -3,6 +3,7 @@ import { t } from "../i18n";
 import { appLogger } from "../stores/appLogger";
 import { toastsStore } from "../stores/toasts";
 import { rpc } from "../transport";
+import { holdScreenAwake } from "../utils/screenWakeLock";
 
 interface RecognitionResult {
 	isFinal: boolean;
@@ -49,7 +50,15 @@ export function useBrowserDictation(options: {
 			.catch((error) => appLogger.info("dictation", "Browser dictation uses browser language", error));
 	}
 
+	let releaseScreen: (() => void) | null = null;
+
 	function markRecording(active: boolean) {
+		// Every start, end, error and cancel passes here, so the lock cannot outlive the recording.
+		if (active) releaseScreen ??= holdScreenAwake();
+		else {
+			releaseScreen?.();
+			releaseScreen = null;
+		}
 		setRecording(active);
 		options.onRecording?.(active);
 	}

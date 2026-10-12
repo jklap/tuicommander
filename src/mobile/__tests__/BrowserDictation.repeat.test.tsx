@@ -1,5 +1,5 @@
 import { cleanup, fireEvent, render, screen } from "@solidjs/testing-library";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CommandInput } from "../components/CommandInput";
 
 vi.mock("../../stores/appLogger", async (importOriginal) => {
@@ -98,4 +98,49 @@ it("dictates again after a synchronous start failure without waiting for end", (
 	Recognition.failStart = false;
 	start().result("retry succeeded");
 	expect(draft.value).toBe("retry succeeded");
+});
+
+// Catches: push-to-talk dictation on a phone lets the screen auto-lock mid-recording,
+// and a lock that outlives every way a recording ends (stop, error, abort).
+describe("screen wake lock while dictating", () => {
+	const lock = { release: vi.fn(async () => {}) };
+	const request = vi.fn(async () => lock);
+	const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+	beforeEach(() => {
+		localStorage.clear();
+		Object.defineProperty(navigator, "wakeLock", { configurable: true, value: { request } });
+	});
+	afterEach(() => {
+		Reflect.deleteProperty(navigator, "wakeLock");
+		vi.clearAllMocks();
+	});
+
+	it("holds the lock from start to end", async () => {
+		mount();
+		const current = start();
+		await flush();
+		expect(request).toHaveBeenCalledOnce();
+		expect(lock.release).not.toHaveBeenCalled();
+		current.onend?.();
+		expect(lock.release).toHaveBeenCalledOnce();
+	});
+
+	it("releases the lock when recognition fails to start", async () => {
+		mount();
+		Recognition.failStart = true;
+		start();
+		await flush();
+		expect(lock.release).toHaveBeenCalledTimes(request.mock.calls.length);
+	});
+
+	it("holds one lock across a repeat dictation, not a leaked one per take", async () => {
+		mount();
+		for (let take = 0; take < 3; take++) {
+			start().onend?.();
+			await flush();
+		}
+		expect(request).toHaveBeenCalledTimes(3);
+		expect(lock.release).toHaveBeenCalledTimes(3);
+	});
 });
