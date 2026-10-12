@@ -12,8 +12,11 @@ unset GIT_TEMPLATE_DIR
 "$root/scripts/with-test-tmp.sh" bash -c '
   set -euo pipefail
   [ -n "${GIT_TEMPLATE_DIR:-}" ] || { echo "with-test-tmp.sh did not export GIT_TEMPLATE_DIR" >&2; exit 1; }
-  git init -q "$TMPDIR/repo"
-  if [ -n "$(ls -A "$TMPDIR/repo/.git/hooks" 2>/dev/null)" ]; then
+  # A private dir: an inherited TUIC_TEST_TMP_ROOT is the caller'"'"'s and is kept.
+  repo="$(mktemp -d "${TMPDIR%/}/git-template-wrap.XXXXXX")"
+  trap '"'"'rm -rf "$repo"'"'"' EXIT
+  git init -q "$repo"
+  if [ -n "$(ls -A "$repo/.git/hooks" 2>/dev/null)" ]; then
     echo "with-test-tmp.sh: git init still copied template hooks" >&2
     exit 1
   fi
