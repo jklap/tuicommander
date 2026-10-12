@@ -9,7 +9,7 @@ import { settingsStore } from "../../stores/settings";
 import { sidebarPluginStore } from "../../stores/sidebarPluginStore";
 import { tunnelPanelStore } from "../../stores/tunnelPanel";
 import { tunnelsStore } from "../../stores/tunnels";
-import { uiStore } from "../../stores/ui";
+import { SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, uiStore } from "../../stores/ui";
 import { getRepoTextColor } from "../../utils/repoColor";
 import {
 	countSidebarRows,
@@ -246,7 +246,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
 
 		const onMove = (ev: MouseEvent) => {
 			const raw = startWidth + (ev.clientX - startX);
-			const clamped = Math.min(500, Math.max(200, raw));
+			const clamped = Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, raw));
 			lastWidth = clamped;
 			// Update CSS immediately for smooth visual feedback (no IPC)
 			document.documentElement.style.setProperty("--sidebar-width", `${clamped}px`);

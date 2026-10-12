@@ -25,9 +25,10 @@ function loadEditorWrapPrefs(): { text: boolean; code: boolean } {
 	return { text: true, code: false };
 }
 
-const SIDEBAR_MIN_WIDTH = 200;
-const SIDEBAR_MAX_WIDTH = 500;
-const SIDEBAR_DEFAULT_WIDTH = 300;
+export const SIDEBAR_MAX_WIDTH = 500;
+export const SIDEBAR_DEFAULT_WIDTH = 300;
+/** The default is also the floor: the sidebar never gets narrower than it opens. */
+export const SIDEBAR_MIN_WIDTH = SIDEBAR_DEFAULT_WIDTH;
 
 const SETTINGS_NAV_DEFAULT_WIDTH = 180;
 

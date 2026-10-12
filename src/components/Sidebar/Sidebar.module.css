@@ -12,7 +12,7 @@
   --row-h: 22px;
   --tree-indent: 10px;
   width: var(--sidebar-width);
-  min-width: 200px;
+  min-width: 300px;
   max-width: 500px;
   flex-shrink: 0;
   background: var(--bg-secondary);

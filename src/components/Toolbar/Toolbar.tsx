@@ -38,17 +38,6 @@ function relativeAge(timestamp: number): string {
 	return `${Math.floor(hours / 24)}d ago`;
 }
 
-/** Narrowest sidebar that still fits the full "TUICommander" wordmark.
- *
- * Worst case is macOS: 78px of `padding-left` reserved for the traffic lights,
- * 10px `padding-right`, two 26px toggles plus gaps (~56px) and the 110px svg —
- * 254px total. The old threshold was 240, so between 240 and 254 the full name
- * did not fit; because it was absolutely positioned it overlapped the toggles
- * instead of pushing them. Below this the short "TUIC" mark (38px) is used, which
- * fits comfortably at the 200px minimum sidebar width.
- */
-const FULL_APP_NAME_MIN_SIDEBAR_PX = 254;
-
 const DENSITY_TITLES: Record<SidebarDensityMode, () => string> = {
 	auto: () => t("toolbar.densityAuto", "Sidebar layout: auto (rich for a short list or a finger) — click for compact"),
 	compact: () => t("toolbar.densityCompact", "Sidebar layout: compact — click for rich"),
@@ -300,12 +289,9 @@ export const Toolbar: Component<ToolbarProps> = (props) => {
 
 	return (
 		<div id="toolbar" class={s.toolbar} data-tauri-drag-region>
-			<div
-				class={cx(s.left, uiStore.state.sidebarWidth < FULL_APP_NAME_MIN_SIDEBAR_PX && s.narrowSidebar)}
-				data-tauri-drag-region
-			>
+			<div class={s.left} data-tauri-drag-region>
 				<span class={s.leftSpacer} data-tauri-drag-region />
-				{/* Embossed app name — full version for wide sidebar, short for narrow */}
+				{/* Embossed app name —  */}
 				<svg
 					class={`${s.appName} ${s.appNameFull}`}
 					data-tauri-drag-region
@@ -357,59 +343,6 @@ export const Toolbar: Component<ToolbarProps> = (props) => {
 						font-family="system-ui,-apple-system,sans-serif"
 					>
 						TUICommander
-					</text>
-				</svg>
-				<svg
-					class={`${s.appName} ${s.appNameShort}`}
-					data-tauri-drag-region
-					viewBox="0 0 38 16"
-					width="38"
-					height="16"
-					aria-label="TUIC"
-				>
-					<defs>
-						<linearGradient id="toolbar-name-grad-short" x1="0" y1="0" x2="38" y2="0" gradientUnits="userSpaceOnUse">
-							<stop offset="0%" class={s.nameGradStart} />
-							<stop offset="50%" class={s.nameGradMid} />
-							<stop offset="100%" class={s.nameGradEnd} />
-						</linearGradient>
-					</defs>
-					<text
-						x="0"
-						y="12"
-						class={s.nameShadow}
-						font-size="11"
-						font-weight="700"
-						letter-spacing="0.09em"
-						font-family="system-ui,-apple-system,sans-serif"
-						dx="1"
-						dy="1"
-					>
-						TUIC
-					</text>
-					<text
-						x="0"
-						y="12"
-						class={s.nameHighlight}
-						font-size="11"
-						font-weight="700"
-						letter-spacing="0.09em"
-						font-family="system-ui,-apple-system,sans-serif"
-						dx="-0.5"
-						dy="-0.5"
-					>
-						TUIC
-					</text>
-					<text
-						x="0"
-						y="12"
-						fill="url(#toolbar-name-grad-short)"
-						font-size="11"
-						font-weight="700"
-						letter-spacing="0.09em"
-						font-family="system-ui,-apple-system,sans-serif"
-					>
-						TUIC
 					</text>
 				</svg>
 				<span class={s.leftSpacer} data-tauri-drag-region />

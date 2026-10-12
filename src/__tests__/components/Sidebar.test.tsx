@@ -3873,7 +3873,7 @@ describe("Sidebar", () => {
 		it("clamps width to min/max via ui store", () => {
 			uiStore.setSidebarWidth(100);
 			render(() => <Sidebar {...defaultProps()} />);
-			expect(document.documentElement.style.getPropertyValue("--sidebar-width")).toBe("200px");
+			expect(document.documentElement.style.getPropertyValue("--sidebar-width")).toBe("300px");
 		});
 	});
 
@@ -3888,7 +3888,6 @@ describe("Sidebar", () => {
 
 		// Catches: thresholds read from window width instead of sidebar width (jsdom window is 1024 wide, so every case would step), off-by-one at the boundary.
 		it.each([
-			[200, "0"],
 			[300, "0"],
 			[349, "0"],
 			[350, "1"],
