@@ -5906,13 +5906,10 @@ fn close_pty_core_actually_kills_a_process_that_ignores_everything_but_sigkill()
 
     close_pty_core(&state, sid, false);
 
-    // `kill -0` reports whether the process exists at all, without sending a
-    // real signal — the standard "is this pid still alive" check.
-    let still_alive = std::process::Command::new("kill")
-        .args(["-0", &pid.to_string()])
-        .status()
-        .expect("kill -0 runs")
-        .success();
+    // `kill(pid, 0)` reports whether the process exists at all, without
+    // sending a real signal — the standard "is this pid still alive" check
+    // (same semantics as `/bin/kill -0`, an unreaped zombie included).
+    let still_alive = tuic_core::process_info::is_alive(pid);
     assert!(
         !still_alive,
         "close_pty_core must actually terminate the child process (pid {pid}), \

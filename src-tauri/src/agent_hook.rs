@@ -233,10 +233,13 @@ fn hook_binary_command(codex_session: bool, args: &[&str]) -> String {
 }
 
 /// Resolve the controlling tty into `$__t`, even when the caller's stdout is
-/// captured (hooks have no controlling tty of their own — read the parent's).
+/// captured (hooks have no controlling tty of their own). `$TUIC_PTY_TTY` — the
+/// device TUIC stamps on every PTY child, which `tuic-hook` also reads first —
+/// wins; the parent's tty via `ps -o tty=` is only the fallback for an agent
+/// TUIC did not spawn (a sandboxed agent cannot exec the setuid `ps`).
 #[cfg(any(test, not(feature = "desktop")))]
 fn tty_resolve() -> &'static str {
-    r#"__t=$(ps -o tty= -p "$PPID" 2>/dev/null|tr -d '[:space:]');case "$__t" in *[0-9]*)__t="/dev/${__t#/dev/}";;*)__t="/dev/tty";;esac"#
+    r#"__t=${TUIC_PTY_TTY:-};[ -n "$__t" ]||{ __t=$(ps -o tty= -p "$PPID" 2>/dev/null|tr -d '[:space:]');case "$__t" in *[0-9]*)__t="/dev/${__t#/dev/}";;*)__t="/dev/tty";;esac;}"#
 }
 
 /// The self-contained shell flavour of a spec (builds without the sidecar):
@@ -618,6 +621,9 @@ mod tests {
                 let cmd = shell_hook_command(s.wire);
                 assert!(cmd.starts_with(r#"[ -n "${TUIC_SESSION"#), "{cmd}");
                 assert!(cmd.contains(r#"ps -o tty= -p "$PPID""#), "{cmd}");
+                let pty_tty = cmd.find("TUIC_PTY_TTY").expect("reads TUIC_PTY_TTY");
+                let ps = cmd.find("ps -o tty=").expect("keeps the ps fallback");
+                assert!(pty_tty < ps, "TUIC_PTY_TTY is tried before ps: {cmd}");
                 assert!(cmd.contains("|| true"), "{cmd}");
                 assert!(cmd.trim_end().ends_with(SENTINEL), "{cmd}");
                 for (verb, payload) in s.wire {
