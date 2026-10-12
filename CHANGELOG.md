@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Fixed
+- Align community plugin permissions, CLI binaries and minimum app versions with shipped manifests.
 - Keep document preview panels separate for files with the same name in different repositories.
 - Cancel pending retry and wakeup decisions when session state changes during composer inspection.
 - Discard obsolete plan, story and dashboard results after repository switches or plugin unloads; refresh the MDKB ticker on repository switches.

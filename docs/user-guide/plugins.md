@@ -116,3 +116,8 @@ while the composer is being inspected.
 
 CSV, DOCX and XLSX previews keep files from different repositories in separate
 panels, even when their file names match. Reopening the same file reuses its panel.
+
+The community catalogue declares each shipped plugin’s permissions, agent targets,
+CLI binaries and minimum app version. Dashboard plugins need at least v1.0.3;
+MDKB and RTK dashboard lifetime handling needs v1.7.6. SQLite’s panel bundle keeps
+its ES2022 JavaScript target.
