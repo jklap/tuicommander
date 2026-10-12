@@ -1,3 +1,7 @@
+## Duplicate workflow starts (1748-47b0) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, start a workflow on a throwaway plan and submit a distinct second start. Confirm the error names the existing run ID and its history does not change. Automated store tests cover both start paths, running and paused states, retries, cancellation and concurrent requests; no desktop instance was started.
+
 ## Design Mode navigation restart (1724-fe7e) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, reload the Design Mode extension and request navigation to a local page. Confirm the first navigation reaches the reviewed tab, with and without an idle heartbeat before the request. Automated heartbeat boundary tests cover delivery and failed-update retry; no desktop instance was started by this peer.
