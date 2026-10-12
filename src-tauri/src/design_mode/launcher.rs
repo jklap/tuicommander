@@ -113,12 +113,12 @@ pub(crate) async fn launch(
     } else {
         setup
     };
-    tokio::process::Command::new(executable)
+    let mut command = std::process::Command::new(executable);
+    command
         .arg(format!("--user-data-dir={}", profile.display()))
         .args(["--no-first-run", "--no-default-browser-check"])
-        .arg(&target)
-        .spawn()
-        .map_err(|e| e.to_string())?;
+        .arg(&target);
+    tuic_core::child_reaping::spawn_reaped(command).map_err(|e| e.to_string())?;
     let status = super::legacy::manager(state)
         .await
         .arm_extension(repo.to_string_lossy().into_owned(), session.to_owned())
@@ -252,3 +252,7 @@ mod url_tests {
         assert!(validate_url(None).is_ok());
     }
 }
+
+#[cfg(all(test, unix))]
+#[path = "launcher_reaping_tests.rs"]
+mod reaping_tests;
