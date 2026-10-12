@@ -30,6 +30,7 @@ import { ParkedReposPopover } from "./ParkedReposPopover";
 import { RepoSection } from "./RepoSection";
 import s from "./Sidebar.module.css";
 import { StaleTempRepairPopover } from "./StaleTempRepairPopover";
+import { sidebarTextStep } from "./sidebarTextStep";
 import { useSidebarDragDrop } from "./useSidebarDragDrop";
 
 export interface SidebarProps {
@@ -249,6 +250,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
 			lastWidth = clamped;
 			// Update CSS immediately for smooth visual feedback (no IPC)
 			document.documentElement.style.setProperty("--sidebar-width", `${clamped}px`);
+			if (sidebar) sidebar.dataset.textStep = String(sidebarTextStep(clamped));
 		};
 
 		const cleanup = () => {
@@ -391,7 +393,13 @@ export const Sidebar: Component<SidebarProps> = (props) => {
 
 	return (
 		<SidebarDensityContext.Provider value={density}>
-			<aside id="sidebar" class={s.sidebar} data-testid="sidebar" data-density={density()}>
+			<aside
+				id="sidebar"
+				class={s.sidebar}
+				data-testid="sidebar"
+				data-density={density()}
+				data-text-step={sidebarTextStep(uiStore.state.sidebarWidth)}
+			>
 				{/* Content */}
 				<div class={s.content}>
 					{/* Repo filter status — only rendered while the "active only" filter is

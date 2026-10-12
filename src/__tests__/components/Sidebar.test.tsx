@@ -3877,6 +3877,58 @@ describe("Sidebar", () => {
 		});
 	});
 
+	describe("text step (#1751-6a7b)", () => {
+		const stepAt = (width: number) => {
+			uiStore.setSidebarWidth(width);
+			const { container, unmount } = render(() => <Sidebar {...defaultProps()} />);
+			const step = container.querySelector<HTMLElement>(`[data-testid="sidebar"]`)?.dataset.textStep;
+			unmount();
+			return step;
+		};
+
+		// Catches: thresholds read from window width instead of sidebar width (jsdom window is 1024 wide, so every case would step), off-by-one at the boundary.
+		it.each([
+			[200, "0"],
+			[300, "0"],
+			[349, "0"],
+			[350, "1"],
+			[399, "1"],
+			[400, "2"],
+			[449, "2"],
+			[450, "3"],
+			[500, "3"],
+		])("sidebar width %ipx gives text step %s", (width, step) => {
+			expect(stepAt(width)).toBe(step);
+		});
+
+		// Catches: step only recomputed from the store, so it lags the live width while the handle is dragged.
+		it("follows the width while the resize handle is dragged", () => {
+			uiStore.setSidebarWidth(300);
+			const { container } = render(() => <Sidebar {...defaultProps()} />);
+			const sidebar = container.querySelector<HTMLElement>(`[data-testid="sidebar"]`) as HTMLElement;
+			const handle = container.querySelector(".resizeHandle") as HTMLElement;
+			fireEvent.mouseDown(handle, { clientX: 300 });
+			fireEvent.mouseMove(document, { clientX: 400 });
+			expect(sidebar.dataset.textStep).toBe("2");
+			fireEvent.mouseMove(document, { clientX: 320 });
+			expect(sidebar.dataset.textStep).toBe("0");
+			fireEvent.mouseUp(document);
+		});
+
+		// Catches: font tokens overridden globally (:root) instead of on the sidebar root, which would resize the whole app.
+		it("redefines the font tokens only on the sidebar root", () => {
+			const css = readFileSync("src/components/Sidebar/Sidebar.module.css", "utf8");
+			expect(css).toMatch(/\.sidebar\[data-text-step\] \{[^}]*--font-sm: calc\(12px \+ var\(--text-step\)\)/);
+			expect(readFileSync("src/global.css", "utf8")).not.toContain("--text-step");
+		});
+
+		// Catches: the two token-bypassing rules keep literal px sizes and never scale.
+		it("has no literal font-size px left in the sidebar rules", () => {
+			const css = readFileSync("src/components/Sidebar/Sidebar.module.css", "utf8");
+			expect(css).not.toMatch(/font-size:\s*\d+px/);
+		});
+	});
+
 	describe("PrDetailPopover auto-show vs manual click", () => {
 		it("PR badge click on non-active repo opens PrDetailPopover without auto-show closing it", async () => {
 			// Two repos: /repo1 is active (no PR), /repo2 has a branch with a conflicting PR

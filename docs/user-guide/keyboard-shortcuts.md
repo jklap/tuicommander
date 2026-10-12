@@ -229,7 +229,7 @@ While a context menu is open, pressing a menu item's shortcut chord (modifier + 
 | Right-click | Sidebar branch | Branch context menu |
 | Middle-click | Tab | Close tab |
 | Drag | Tab | Reorder tabs |
-| Drag | Sidebar right edge | Resize sidebar (200-500px) |
+| Drag | Sidebar right edge | Resize sidebar (200-500px); sidebar text grows 1px at 350, 400 and 450px |
 | Click | PR badge / CI ring | Open PR detail popover |
 | Click | Status bar CWD path | Copy path to clipboard |
 | Click | Status bar panel buttons | Toggle Git/MD/FB/Ideas panels |
