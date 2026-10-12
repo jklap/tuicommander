@@ -1,3 +1,6 @@
+## Plugin hot reload re-reads sub-modules (1809-010d) — Rust restart required
+
+- [ ] After the restart, edit an export in `github-work/provider.js` (or any file a plugin's `main.js` imports) and save: the plugin reloads and the new export is live without a WebView reload. In Tasks > New task for GitHub, the type picker shows and Create enables (stale-realm symptom of 1743-4776).
 ## Mute intermediate Chat text (1769-89dc)
 
 - [ ] [VISUAL] Terminal Chat view, AI Chat and mobile chat: text followed by a tool call in the same turn is smaller and dimmer; the last text of the turn keeps normal weight. Needs a `make dev` restart (Rust config field `chat_mute_intermediate_text`).
