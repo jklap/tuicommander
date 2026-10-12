@@ -20,6 +20,51 @@ pub struct RunStore {
     db_path: PathBuf,
 }
 
+/// Domain refusal at the atomic run-start boundary. Transports render Display.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RunStartError {
+    AlreadyActive {
+        plan_id: String,
+        active_run_id: String,
+    },
+    Other(String),
+}
+
+impl std::fmt::Display for RunStartError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::AlreadyActive {
+                plan_id,
+                active_run_id,
+            } => write!(
+                f,
+                "workflow run already active for plan {plan_id}: {active_run_id}"
+            ),
+            Self::Other(message) => f.write_str(message),
+        }
+    }
+}
+
+impl std::error::Error for RunStartError {}
+
+impl From<String> for RunStartError {
+    fn from(message: String) -> Self {
+        Self::Other(message)
+    }
+}
+
+impl From<&str> for RunStartError {
+    fn from(message: &str) -> Self {
+        Self::Other(message.into())
+    }
+}
+
+impl From<RunStartError> for String {
+    fn from(error: RunStartError) -> Self {
+        error.to_string()
+    }
+}
+
 /// Layout version recorded in `PRAGMA user_version`. Stores created before the
 /// version was recorded report 0 and already have the version 1 layout.
 /// Version 2 adds graph events and additive JSON snapshot fields. Legacy JSON
@@ -133,7 +178,7 @@ impl RunStore {
         definition_id: &str,
         definition_revision: i64,
         limits: RunLimits,
-    ) -> Result<RunSnapshot, String> {
+    ) -> Result<RunSnapshot, RunStartError> {
         self.start_plan_with(
             project,
             plan_id,
@@ -154,7 +199,7 @@ impl RunStore {
         definition_id: &str,
         definition_revision: i64,
         limits: RunLimits,
-    ) -> Result<RunSnapshot, String> {
+    ) -> Result<RunSnapshot, RunStartError> {
         self.start_plan_with(
             project,
             plan_id,
@@ -173,7 +218,7 @@ impl RunStore {
         definition_revision: i64,
         limits: RunLimits,
         enforce_check_policy: bool,
-    ) -> Result<RunSnapshot, String> {
+    ) -> Result<RunSnapshot, RunStartError> {
         limits.validate()?;
         let owner = crate::progress::resolve_owning_project(Some(project))?
             .to_string_lossy()
@@ -261,9 +306,7 @@ impl RunStore {
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|e| format!("begin run start: {e}"))?;
-        tx.execute("INSERT INTO workflow_runs(id,project,plan_id,status,snapshot_json) VALUES (?1,?2,?3,?4,?5)",
-            params![snapshot.id, snapshot.project, snapshot.plan_id, snapshot.status.as_str(), encode(&snapshot)?])
-            .map_err(|e| format!("start plan run: {e}"))?;
+        insert_started_run(&tx, &snapshot, "start plan run")?;
         insert_event(&tx, &snapshot.id, &receipt)?;
         tx.commit()
             .map_err(|e| format!("commit plan run start: {e}"))?;
@@ -1491,6 +1534,37 @@ fn read_command_receipt(
         .optional()
         .map_err(|e| format!("read workflow command receipt: {e}"))?;
     raw.map(|raw| decode(&raw)).transpose()
+}
+
+/// The unique index admits the run; translate only its refusal, while the
+/// immediate transaction still holds the writer lock and the active id is stable.
+fn insert_started_run(
+    conn: &Connection,
+    snapshot: &RunSnapshot,
+    context: &str,
+) -> Result<(), RunStartError> {
+    let result = conn.execute(
+        "INSERT INTO workflow_runs(id,project,plan_id,status,snapshot_json) VALUES (?1,?2,?3,?4,?5)",
+        params![snapshot.id, snapshot.project, snapshot.plan_id, snapshot.status.as_str(), encode(snapshot)?],
+    );
+    if let Err(error) = result {
+        if matches!(&error, rusqlite::Error::SqliteFailure(code, _)
+            if code.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE)
+        {
+            let active_run_id: Option<String> = conn.query_row(
+                "SELECT id FROM workflow_runs WHERE project=?1 AND plan_id=?2 AND status IN ('running','paused')",
+                params![snapshot.project, snapshot.plan_id], |row| row.get(0),
+            ).optional().map_err(|e| format!("read active workflow run: {e}"))?;
+            if let Some(active_run_id) = active_run_id {
+                return Err(RunStartError::AlreadyActive {
+                    plan_id: snapshot.plan_id.clone(),
+                    active_run_id,
+                });
+            }
+        }
+        return Err(RunStartError::Other(format!("{context}: {error}")));
+    }
+    Ok(())
 }
 
 fn insert_event(conn: &Connection, run_id: &str, receipt: &RunReceipt) -> Result<(), String> {

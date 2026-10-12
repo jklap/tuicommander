@@ -18,6 +18,8 @@ Slice F exposes `start_graph {target:{type:story|plan,id},expected_revision?,def
 
 The `command` action also accepts `answer_input {attempt_id,answer}` for a paused run. The answer is an idempotent durable event; graph runs resume separately with an explicit activation and resolution. An unanswered input request prevents resume.
 
+A distinct second start on a plan with a running or paused run is refused with `workflow run already active for plan <plan-id>: <active-run-id>`. The store returns the typed `RunStartError::AlreadyActive`; IPC, HTTP and MCP keep their existing string error envelope. The unique index remains the atomic admission boundary. Refusal does not change the active run or its events; a matching graph request ID still returns its existing run.
+
 `start_plan.limits` accepts `maxParallelStories` (default 2 when omitted, range 1–8). `start_attempt` conservatively serializes unknown or overlapping file scopes and refuses dependent stories lacking a current integration receipt at the accepted revision. `execute_check` runs only a check from the pinned story definition in its assigned worktree; `record_integration` verifies a completed non-fast-forward merge and runs the pinned checks again on the canonical result. `recertify_canonical` validates a later clean canonical tip and reruns those checks without claiming a new merge. `assign_worktree`, `record_check`, `record_integration`, and `record_recertification` as nested commands are internal and rejected on this operator API.
 
 ## Workflow definitions
