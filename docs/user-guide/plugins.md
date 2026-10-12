@@ -109,3 +109,7 @@ See the [Plugin Authoring Guide](../plugins.md) for the full API reference, mani
 
 Repository-aware plugins discard scans started before a repository switch or unload.
 The MDKB status ticker refreshes when you select another repository.
+
+Automatic retry and wakeup decisions are cancelled when the agent resumes work,
+user input or a dialog changes its state, the session closes, or the plugin unloads
+while the composer is being inspected.
