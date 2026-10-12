@@ -1172,6 +1172,7 @@
 	"toolbar.densityRich": "Sidebar layout: rich (details on every row) — click for auto",
 	"toolbar.dismiss": "Dismiss",
 	"toolbar.dismissAll": "Dismiss All",
+	"toolbar.markAsRead": "Mark as read",
 	"toolbar.filterActiveOff": "Show only repos with open terminals",
 	"toolbar.filterActiveOn": "Showing active repos only — click to show all",
 	"toolbar.hideSidebar": "Hide Sidebar",
