@@ -328,6 +328,11 @@ pub(crate) fn notify_changed() {
     CHANGED.notify_one();
 }
 
+/// Read `config.json` without locks or side effects: writes replace the file atomically.
+pub(crate) fn read_config(paths: &Paths) -> Result<Config, Error> {
+    config(paths)
+}
+
 /// Read-modify-write `config.json` under the same locks as `change_at`, so a settings-service
 /// edit cannot race the desktop save or daemon pairing. `edit` returns the value to hand back and
 /// the config to persist (`None` = unchanged, nothing is written). A token or chat allowlist

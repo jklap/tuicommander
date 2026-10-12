@@ -51,10 +51,7 @@ impl Store for TelegramSettingsStore {
     }
 
     fn read(&self) -> Result<Value, Failure> {
-        setup::update_config(&self.paths()?, |config, _| {
-            Ok::<_, Failure>((to_value(config)?, None))
-        })
-        .map_err(|_| Error::new(ID, "store_failed"))?
+        to_value(&setup::read_config(&self.paths()?).map_err(|_| Error::new(ID, "store_failed"))?)
     }
 
     fn commit(
@@ -75,11 +72,6 @@ impl Store for TelegramSettingsStore {
                 return Err(Error::new(ID, "out_of_range"));
             }
             reply.revision = transaction::revision(&canonical)?;
-            if canonical == latest {
-                reply.changed_ids.clear();
-                reply.effects.clear();
-                reply.restart.clear();
-            }
             let changed = !reply.changed_ids.is_empty();
             reply.persisted = changed;
             Ok((reply, changed.then_some(next)))
