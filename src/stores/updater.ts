@@ -13,9 +13,8 @@ const IDLE_POLL_MS = 2_000;
 
 /** Sessions an immediate relaunch would interrupt: busy, or waiting on the user. */
 function countBusySessions(): number {
-	return terminalsStore
-		.getIds()
-		.filter((id) => terminalsStore.isBusy(id) || !!terminalsStore.get(id)?.awaitingInput).length;
+	return terminalsStore.getIds().filter((id) => terminalsStore.isBusy(id) || !!terminalsStore.get(id)?.awaitingInput)
+		.length;
 }
 
 /** True if remote > current by app-version precedence: 2.0.0 is newer than

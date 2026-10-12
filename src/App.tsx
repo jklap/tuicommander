@@ -910,9 +910,13 @@ const App: Component = () => {
 						count === 0 ||
 						(await dialogs.confirm({
 							title: t("updater.restartNow.title", "Restart to finish the update?"),
-							message: t("updater.restartNow.message", "{count} busy or waiting session(s) will be interrupted by the restart.", {
-								count: String(count),
-							}),
+							message: t(
+								"updater.restartNow.message",
+								"{count} busy or waiting session(s) will be interrupted by the restart.",
+								{
+									count: String(count),
+								},
+							),
 							okLabel: t("updater.restartNow.confirm", "Restart now"),
 						}));
 					if (ok) await updaterStore.restartNow();

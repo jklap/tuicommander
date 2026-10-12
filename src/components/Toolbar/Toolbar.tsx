@@ -629,9 +629,13 @@ export const Toolbar: Component<ToolbarProps> = (props) => {
 										</span>
 										<span class={s.notifBranch}>
 											{updaterStore.state.restartPending
-												? t("toolbar.restartPending", "Restarts when agents are idle ({count} busy) — click to restart now", {
-														count: String(updaterStore.busyCount()),
-													})
+												? t(
+														"toolbar.restartPending",
+														"Restarts when agents are idle ({count} busy) — click to restart now",
+														{
+															count: String(updaterStore.busyCount()),
+														},
+													)
 												: updaterStore.state.downloading
 													? `${t("statusBar.updating", "Updating")} ${updaterStore.state.progress}%`
 													: t("toolbar.clickToUpdate", "Click to update")}
