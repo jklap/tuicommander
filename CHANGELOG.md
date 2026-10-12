@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - GitHub token chain no longer reads the `gh` CLI login (`gh auth token`, `gh-token` crate); use OAuth login or `GH_TOKEN`/`GITHUB_TOKEN`. TUIC spawns no `gh` process (#1714-1c1d).
 
 ### Fixed
+- Restored mobile dictation drafts reconcile with the current terminal line on Send or first edit, preserving words if the desktop cleared the line and avoiding duplicate replay (#1768-a83f).
 - Mobile AI Chat keeps Park and Stop in the composer input row, removing the archive-only row above it (#1746-aa9e).
 - Default-app URL and file opens reap their launcher child instead of leaving a zombie process (#1749-f9a0).
 - Design Mode retains a wait owner for Chrome/Edge launches, including short-lived handoff processes, independently of the launch runtime (#1707-bd40).

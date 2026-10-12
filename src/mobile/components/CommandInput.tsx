@@ -41,9 +41,8 @@ interface CommandInputProps {
 }
 
 export function CommandInput(props: CommandInputProps) {
-	// A dictated draft that survived a reload is offered back in the composer: never sent, never typed
-	// into the session. The terminal already holds it (the draft is streamed as it is dictated), so
-	// the sync baseline starts at the restored text.
+	// Offer a restored dictated draft without writing on mount. The PTY may have
+	// changed while this client was away; reconcile it on the first explicit edit/send.
 	const restoredPartial = loadDictationPartial(props.sessionId);
 	let savedPartial = restoredPartial;
 	const [value, setValue] = createSignal(restoredPartial);
@@ -117,7 +116,7 @@ export function CommandInput(props: CommandInputProps) {
 	let fileInput: HTMLInputElement | undefined;
 	// The local draft baseline, including explicitly requested PTY completions
 	// and history replacements. Every edit computes its delta from this text.
-	let syncedText = restoredPartial;
+	let syncedText: string | null = restoredPartial ? null : "";
 	let inputRequest: { kind: "completion" | "history"; armed: boolean } | null = null;
 	// Timestamp of the last Enter (send()). Within POST_SEND_GUARD_MS, all
 	// incoming ptyInputLine updates are ignored to prevent a lagging echo of
@@ -154,7 +153,7 @@ export function CommandInput(props: CommandInputProps) {
 		if (!inputRequest?.armed || props.ptyInputLine == null) return;
 		if (inputRequest.kind === "completion") {
 			if (isPostSendGuardActive(Date.now(), lastSendAt)) return;
-			if (!isSupersetEcho(text, syncedText)) return;
+			if (!isSupersetEcho(text, syncedText ?? restoredPartial)) return;
 		}
 		inputRequest = null;
 		syncedText = text;
@@ -196,7 +195,7 @@ export function CommandInput(props: CommandInputProps) {
 	function syncDelta(newText: string) {
 		inputRequest = null;
 		if (atomicReply() || props.sessionExists === false) return;
-		const delta = computeInputDelta(syncedText, newText);
+		const delta = computeInputDelta(syncedText ?? props.ptyInputLine ?? restoredPartial, newText);
 		if (delta) writePty(delta);
 		syncedText = newText;
 	}
@@ -286,7 +285,7 @@ export function CommandInput(props: CommandInputProps) {
 		if (atomicReply() || props.sessionExists === false) return;
 		const request =
 			key === "Tab"
-				? syncedText.length > 0
+				? (syncedText ?? restoredPartial).length > 0
 					? { kind: "completion" as const, armed: true }
 					: null
 				: { kind: "history" as const, armed: false };
@@ -358,6 +357,7 @@ export function CommandInput(props: CommandInputProps) {
 			return;
 		}
 
+		if (syncedText === null) syncDelta(textareaEl?.value ?? value());
 		lastSendAt = Date.now();
 		inputRequest = null;
 		syncedText = "";
