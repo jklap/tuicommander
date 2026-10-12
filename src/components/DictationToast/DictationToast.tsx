@@ -159,7 +159,7 @@ export function DictationToast() {
 						</button>
 					</span>
 				</Show>
-					<Show when={handsFreeArmed()}>
+				<Show when={handsFreeArmed()}>
 					<button
 						type="button"
 						class={styles.control}
@@ -177,14 +177,16 @@ export function DictationToast() {
 							<path d="M2 6h2.5L8 3v10L4.5 10H2z" />
 							<Show
 								when={spokenReplies()}
-								fallback={<path d="M10.5 6.2l3 3.6m0-3.6l-3 3.6" stroke="currentColor" stroke-width="1.4" fill="none" />}
+								fallback={
+									<path d="M10.5 6.2l3 3.6m0-3.6l-3 3.6" stroke="currentColor" stroke-width="1.4" fill="none" />
+								}
 							>
 								<path d="M10.2 5.8a3.2 3.2 0 0 1 0 4.4" stroke="currentColor" stroke-width="1.4" fill="none" />
 								<path d="M11.9 4.2a5.5 5.5 0 0 1 0 7.6" stroke="currentColor" stroke-width="1.4" fill="none" />
 							</Show>
 						</svg>
 					</button>
-					</Show>
+				</Show>
 			</div>
 		</Show>
 	);
