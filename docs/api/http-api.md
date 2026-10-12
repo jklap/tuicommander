@@ -3008,8 +3008,8 @@ for weekly (Sunday 0 or 7). Blank create/definition-preview zones and omitted
 cron-preview zones resolve to the backend's local IANA zone.
 
 Paused or consumed Once definitions have a null `next_run_ms`. List computes
-future cron occurrences but phase 1 execution remains Once-only. Run Now requires
-the runtime owner, allows paused Once definitions, bypasses prechecks and records
+future cron occurrences and the scheduler dispatches each due one. Run Now requires
+the runtime owner, allows paused Once and cron definitions, bypasses prechecks and records
 overlap/capacity refusals without queueing. No execution retry is introduced.
 
 Automation runtime transitions are streamed on `/events` as

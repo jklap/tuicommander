@@ -2796,8 +2796,8 @@ The Automations palette action also matches **scheduler** and **schedule**. Auto
 Automations definition management, pause/resume, schedule previews/presets,
 retained run history and UTC aggregates are available through matching Tauri IPC
 and HTTP on desktop/headless hosts. Browser/PWA uses the same command mapping.
-Run Now uses the addressed machine's runtime owner and supports paused Once
-schedules; recurring execution remains outside phase 1. Full run replies retain
+Run Now uses the addressed machine's runtime owner and supports paused Once and
+cron schedules; a due cron occurrence dispatches once. Full run replies retain
 output, workspace and task/session evidence.
 
 Automation execution now reconciles task, PTY and progress completion evidence,
