@@ -963,3 +963,10 @@ Review and edit the draft, then select **Save**. Templates start paused; applyin
 one never persists a definition or starts a run. **Resume** is a separate action.
 Templates use the existing checkout with no precheck and do not change agent
 permissions. Recurring cadence previews retain the existing runtime limitations.
+
+## Finished worktree recycling
+
+Use a durable per-checkout allocation marker. Creation reserves the checkout before
+returning it. Explicit archive or safe removal marks it finished. Reuse requires fresh
+clean and integration evidence and no live session. Rename the registered checkout and
+repair Git and submodule paths; preserve ignored artifacts and publish lifecycle events.
