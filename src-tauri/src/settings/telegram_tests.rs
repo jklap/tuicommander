@@ -246,6 +246,8 @@ fn read_succeeds_while_a_token_setup_holds_the_setup_lock() {
         .unwrap();
     held.lock().unwrap();
     let store = super::telegram::TelegramSettingsStore::at_paths(paths);
-    let value = store.read().expect("a read must not wait on the setup lock");
+    let value = store
+        .read()
+        .expect("a read must not wait on the setup lock");
     assert_eq!(value["enabled"], false);
 }
