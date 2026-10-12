@@ -66,7 +66,8 @@ itself from the agent's `intent:` marker, and `/progress/report` refuses one.
 `ptyId` selects one PTY; omitting it returns the repository aggregate. Each
 entry includes `ptyId` when TUIC knows its source. Older entries and direct
 IPC/HTTP reports have no PTY ID and remain visible in the aggregate. `ptyIds`
-lists the PTYs with stored history, including closed PTYs. The list is
+lists the 32 most recently active PTYs with stored history, including closed PTYs;
+older PTYs' entries stay in the aggregate. The list is
 newest-first in pages of 8 entries by default. `limit` is clamped to 1–100;
 `total` counts entries matching the filters before the cursor, and `nextCursor`
 is `null` after the last page. Pass it back as `cursor` to read older entries.
