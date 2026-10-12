@@ -380,6 +380,10 @@ Terminal stream reconnect notices use the current terminal name when available a
 
 Right-click an HTTP or HTTPS link, including a localhost dev server, then select **Start in Design Mode** and choose **Edge** or **Chrome**. The dedicated browser opens that URL and connects the agent in that terminal, not the focused tab. File and other non-web links retain Open and Copy link only. Browser extension setup is required once per repository profile.
 
+### History-anchored viewport scrolling
+
+Scrolling into history keeps the requested lines in view while an agent writes more output. If the scrollback limit removes those lines, the view stops at the oldest retained line. Scroll to the bottom to follow output again.
+
 ### Desktop dictation in Chat
 
 Dictation inserts into Compose when focus is on the Chat transcript or page background. It replaces the selection that existed when you pressed the hotkey and keeps the rest of the draft. A focused search or form editor still receives dictation. In CLI, dictation keeps the usual terminal and auto-send behavior.

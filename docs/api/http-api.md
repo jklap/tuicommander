@@ -3091,3 +3091,7 @@ no-store`. It never returns a nonce or credential. Account forms cannot be read
 through `GET /secrets/forms/{nonce}` or submitted through
 `POST /secrets/forms/submit`, even with the correct nonce. Ordinary secret forms
 retain their existing mobile capability support.
+
+### History-anchored viewport scrolling
+
+`POST /sessions/:id/terminal/scroll-to-anchor` accepts `{ "anchor": number | null }` and returns `{ "ok": true }`. The anchor is an all-time row index including evicted rows, matching grid-frame `historyBase + historySize - displayOffset`. Null follows the tail; a trimmed anchor clamps to the oldest retained row. The request is coalesced with offset requests and applied under the ticker VT lock, so intervening output cannot move the target.
