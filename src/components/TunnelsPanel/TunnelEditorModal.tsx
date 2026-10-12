@@ -1,5 +1,3 @@
-import { Select } from "../ui/Select";
-import { Input } from "../ui/Input";
 import { type Component, createSignal, For, onMount, Show } from "solid-js";
 import { invoke } from "../../invoke";
 import { appLogger } from "../../stores/appLogger";
@@ -9,6 +7,8 @@ import { tunnelsStore } from "../../stores/tunnels";
 import { openDialog as openFileDialog } from "../../utils/nativeDialog";
 import s from "../SettingsPanel/Settings.module.css";
 import d from "../shared/dialog.module.css";
+import { Input } from "../ui/Input";
+import { Select } from "../ui/Select";
 
 interface AgentKey {
 	fingerprint: string;

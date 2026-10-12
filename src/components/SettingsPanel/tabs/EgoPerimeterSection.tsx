@@ -1,11 +1,11 @@
-import { Select } from "../../ui/Select";
-import { Textarea } from "../../ui/Textarea";
-import { Input } from "../../ui/Input";
 import { type Component, createSignal, onMount, Show } from "solid-js";
 import { t } from "../../../i18n";
 import { type EgoPerimeterClient, egoPerimeterCli } from "../../../services/egoCli";
 import { appLogger } from "../../../stores/appLogger";
 import { asEgoCliError, type EgoPerimeterView, type EgoRootAccess, type EgoRootsEdit } from "../../../types/ego";
+import { Input } from "../../ui/Input";
+import { Select } from "../../ui/Select";
+import { Textarea } from "../../ui/Textarea";
 import s from "../Settings.module.css";
 
 export const EgoPerimeterSection: Component<{ client?: EgoPerimeterClient }> = (props) => {

@@ -1,5 +1,3 @@
-import { Textarea } from "../../ui/Textarea";
-import { Input } from "../../ui/Input";
 import { type Component, createEffect, createSignal, For, onMount, Show } from "solid-js";
 import { AVAILABLE_LOCALES, localeName, t } from "../../../i18n";
 import { invoke } from "../../../invoke";
@@ -9,6 +7,8 @@ import { IDE_NAMES, settingsStore } from "../../../stores/settings";
 import { updaterStore } from "../../../stores/updater";
 import { isTauri } from "../../../transport";
 import { openDialog } from "../../../utils/nativeDialog";
+import { Input } from "../../ui/Input";
+import { Textarea } from "../../ui/Textarea";
 import { ExpertSetting } from "../ExpertSetting";
 import { InfoBadge } from "../InfoBadge";
 import { SettingInput, SettingSelect, SettingSlider, SettingToggle } from "../SettingFields";

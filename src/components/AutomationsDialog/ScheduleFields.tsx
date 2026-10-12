@@ -1,8 +1,8 @@
-import { Select } from "../ui/Select";
-import { Input } from "../ui/Input";
 import { createSignal, For, Show } from "solid-js";
 import { t } from "../../i18n";
 import type { AutomationsStore } from "../../stores/automations";
+import { Input } from "../ui/Input";
+import { Select } from "../ui/Select";
 import s from "./AutomationsDialog.module.css";
 import type { SchedulePreset } from "./contract";
 

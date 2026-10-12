@@ -11,14 +11,13 @@ export type { DiffViewerProps } from "./DiffViewer";
 export { DiffViewer } from "./DiffViewer";
 export type { DropdownItem, DropdownProps } from "./Dropdown";
 export { Dropdown } from "./Dropdown";
+export { Input, type InputProps } from "./Input";
 export type { PromptOptionProps } from "./PromptOption";
 export { PromptOption } from "./PromptOption";
+export { SegmentedControl, type SegmentedControlProps, type SegmentOption } from "./SegmentedControl";
+export { Select, type SelectProps } from "./Select";
 export type { BadgeVariant, BranchBadgeProps, CiBadgeProps, PrBadgeProps, StatusBadgeProps } from "./StatusBadge";
 export { BranchBadge, CiBadge, PrBadge, StatusBadge } from "./StatusBadge";
+export { Textarea, type TextareaProps } from "./Textarea";
 export type { ZoomIndicatorProps } from "./ZoomIndicator";
 export { ZoomIndicator } from "./ZoomIndicator";
-
-export { Select, type SelectProps } from "./Select";
-export { Input, type InputProps } from "./Input";
-export { Textarea, type TextareaProps } from "./Textarea";
-export { SegmentedControl, type SegmentedControlProps, type SegmentOption } from "./SegmentedControl";

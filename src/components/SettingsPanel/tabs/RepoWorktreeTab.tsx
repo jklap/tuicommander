@@ -1,5 +1,3 @@
-import { Select } from "../../ui/Select";
-import { Input } from "../../ui/Input";
 import { type Component, For, Show } from "solid-js";
 import { t } from "../../../i18n";
 import { isMacOS } from "../../../platform";
@@ -16,6 +14,8 @@ import { settingsStore } from "../../../stores/settings";
 import { ColorSwatchPicker } from "../../shared/ColorSwatchPicker";
 import { DEFAULT_COLOR_PRESETS } from "../../shared/colorPresets";
 import { type TriState, TriStateToggle } from "../../shared/TriStateToggle";
+import { Input } from "../../ui/Input";
+import { Select } from "../../ui/Select";
 import s from "../Settings.module.css";
 
 export interface RepoTabProps {

@@ -1,7 +1,7 @@
-import { Select } from "../ui/Select";
 import { createEffect, createSignal, For, onCleanup, Show } from "solid-js";
 import type { WorkItemProvider } from "../../plugins/workItemProvider";
 import type { WorkItemBoardPage, WorkItemQuery, WorkItemRef } from "../../types/work-items.gen";
+import { Select } from "../ui/Select";
 import { TasksBoard } from "./board/TasksBoard";
 import s from "./TasksShell.module.css";
 

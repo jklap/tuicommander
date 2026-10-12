@@ -1,4 +1,3 @@
-import { Input } from "../../ui/Input";
 import { type Component, createMemo, createSignal, For, Show } from "solid-js";
 import { useNativeKeyCombo } from "../../../hooks/useNativeKeyCombo";
 import { t } from "../../../i18n";
@@ -11,6 +10,7 @@ import { isTauri } from "../../../transport";
 import { comboToDisplay, keyFor } from "../../../utils/hotkey";
 import { keyEventToCombo, validateGlobalHotkeyCombo } from "../../../utils/keyRecorder";
 import { KeyComboCapture } from "../../shared/KeyComboCapture";
+import { Input } from "../../ui/Input";
 import s from "../Settings.module.css";
 
 /**

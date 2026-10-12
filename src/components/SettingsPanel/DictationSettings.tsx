@@ -1,6 +1,3 @@
-import { Select } from "../ui/Select";
-import { Textarea } from "../ui/Textarea";
-import { Input } from "../ui/Input";
 import { type Component, createEffect, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { t } from "../../i18n";
 import { invoke } from "../../invoke";
@@ -13,6 +10,9 @@ import { isTauri } from "../../transport";
 import { cx } from "../../utils";
 import { handsFreePhaseLabel } from "../DictationToast/handsFreePhaseLabel";
 import { KeyComboCapture } from "../shared/KeyComboCapture";
+import { Input } from "../ui/Input";
+import { Select } from "../ui/Select";
+import { Textarea } from "../ui/Textarea";
 import d from "./DictationSettings.module.css";
 import { ExpertSetting } from "./ExpertSetting";
 import { SettingSlider } from "./SettingFields";

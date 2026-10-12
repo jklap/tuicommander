@@ -1,6 +1,3 @@
-import { Select } from "../ui/Select";
-import { Textarea } from "../ui/Textarea";
-import { Input } from "../ui/Input";
 import { type Component, createEffect, createSignal, For, on, onMount, Show, untrack } from "solid-js";
 import { t } from "../../i18n";
 import { invoke } from "../../invoke";
@@ -9,6 +6,9 @@ import { registerModal } from "../../stores/modalStack";
 import { workflowRunSignals } from "../../stores/workflowRunSignals";
 import { HttpRpcError, isTauri } from "../../transport";
 import d from "../shared/dialog.module.css";
+import { Input } from "../ui/Input";
+import { Select } from "../ui/Select";
+import { Textarea } from "../ui/Textarea";
 import { WorkflowDesigner } from "../WorkflowDesigner/WorkflowDesigner";
 import { RunIncidents } from "./RunIncidents";
 import s from "./StoriesDialog.module.css";

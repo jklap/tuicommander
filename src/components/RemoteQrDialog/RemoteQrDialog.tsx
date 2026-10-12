@@ -1,4 +1,3 @@
-import { Select } from "../ui/Select";
 import QRCode from "qrcode";
 import { type Component, createEffect, createResource, createSignal, For, onCleanup, Show } from "solid-js";
 import { appLogger } from "../../stores/appLogger";
@@ -6,6 +5,7 @@ import { registerModal } from "../../stores/modalStack";
 import { rpc } from "../../transport";
 import { writeClipboard } from "../../utils/clipboard";
 import d from "../shared/dialog.module.css";
+import { Select } from "../ui/Select";
 import s from "./RemoteQrDialog.module.css";
 
 interface LocalIpEntry {

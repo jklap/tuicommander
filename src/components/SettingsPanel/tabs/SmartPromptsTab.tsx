@@ -1,6 +1,3 @@
-import { Select } from "../../ui/Select";
-import { Textarea } from "../../ui/Textarea";
-import { Input } from "../../ui/Input";
 import { type Component, createMemo, createSignal, For, onMount, Show } from "solid-js";
 import { AGENT_TYPES, AGENTS, type AgentType, toHeadlessAgentChoice } from "../../../agents";
 import { SMART_PROMPTS_BUILTIN } from "../../../data/smartPromptsBuiltIn";
@@ -11,6 +8,9 @@ import { promptLibraryStore, type SavedPrompt, type SmartPlacement } from "../..
 import { onClickKeyDown } from "../../../utils/a11y";
 import { ConfirmDialog } from "../../ConfirmDialog";
 import { KeyComboCapture } from "../../shared/KeyComboCapture";
+import { Input } from "../../ui/Input";
+import { Select } from "../../ui/Select";
+import { Textarea } from "../../ui/Textarea";
 import s from "../Settings.module.css";
 import sp from "./SmartPromptsTab.module.css";
 

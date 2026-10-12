@@ -1,4 +1,3 @@
-import { Select } from "../ui/Select";
 import { type Component, createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { reviewAgents as repositoryReviewAgents } from "../../../browser-extension/design-mode/reviewAgents.js";
 import { usePty } from "../../hooks/usePty";
@@ -35,6 +34,7 @@ import { DomSearchOverview } from "../shared/DomSearchOverview";
 import e from "../shared/editor-header.module.css";
 import { createSearchVisibility, SearchBar } from "../shared/SearchBar";
 import { ContentRenderer } from "../ui/ContentRenderer";
+import { Select } from "../ui/Select";
 import { CommentOverlay } from "./CommentOverlay";
 import { LiveMarkdownEditor } from "./LiveMarkdownEditor";
 import { liveModeSupported } from "./liveMarkdown";

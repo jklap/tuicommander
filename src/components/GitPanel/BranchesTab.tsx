@@ -1,5 +1,3 @@
-import { Select } from "../ui/Select";
-import { Input } from "../ui/Input";
 import { type Component, createEffect, createMemo, createSignal, For, on, onCleanup, Show } from "solid-js";
 import type { BaseRefOption } from "../../hooks/useRepository";
 import { invoke } from "../../invoke";
@@ -14,6 +12,8 @@ import { handleOpenUrl } from "../../utils/openUrl";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { ContextMenu, type ContextMenuItem, createContextMenu } from "../ContextMenu/ContextMenu";
 import { SmartButtonStrip } from "../SmartButtonStrip/SmartButtonStrip";
+import { Input } from "../ui/Input";
+import { Select } from "../ui/Select";
 import s from "./BranchesTab.module.css";
 import type { BranchDetail } from "./types";
 

@@ -1,4 +1,3 @@
-import { Input } from "../../ui/Input";
 import { type Component, createSignal, For, Show } from "solid-js";
 import { t } from "../../../i18n";
 import type { RepoGroup } from "../../../stores/repositories";
@@ -9,6 +8,7 @@ import { uiStore } from "../../../stores/ui";
 import { UiLegend } from "../../HelpPanel/UiLegend";
 import { ColorSwatchPicker } from "../../shared/ColorSwatchPicker";
 import { DEFAULT_COLOR_PRESETS } from "../../shared/colorPresets";
+import { Input } from "../../ui/Input";
 import { SettingSelect, SettingSlider, SettingToggle } from "../SettingFields";
 import s from "../Settings.module.css";
 

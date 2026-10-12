@@ -1,7 +1,7 @@
-import { Select } from "../ui/Select";
 import { createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { t } from "../../i18n";
 import type { AutomationsStore } from "../../stores/automations";
+import { Select } from "../ui/Select";
 import s from "./AutomationsDialog.module.css";
 import type { AutomationTemplate } from "./contract";
 

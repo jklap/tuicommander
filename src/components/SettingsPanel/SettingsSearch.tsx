@@ -1,6 +1,6 @@
-import { Input } from "../ui/Input";
 import { type Component, For, Show } from "solid-js";
 import { t } from "../../i18n";
+import { Input } from "../ui/Input";
 import s from "./Settings.module.css";
 import type { SettingsShellTab } from "./SettingsShell";
 import { entryLabel, entrySection, type SettingsSearchEntry } from "./settingsSearchIndex";

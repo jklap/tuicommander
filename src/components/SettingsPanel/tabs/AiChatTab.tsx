@@ -1,4 +1,3 @@
-import { Select } from "../../ui/Select";
 import { type Component, createSignal, For, Match, onMount, Show, Switch } from "solid-js";
 import { t } from "../../../i18n";
 import { type EgoCliClient, egoCli } from "../../../services/egoCli";
@@ -7,6 +6,7 @@ import { appLogger } from "../../../stores/appLogger";
 import { toastsStore } from "../../../stores/toasts";
 import type { EgoCliError, EgoCredential, EgoProviders } from "../../../types/ego";
 import { asEgoCliError } from "../../../types/ego";
+import { Select } from "../../ui/Select";
 import s from "../Settings.module.css";
 import { EgoPerimeterSection } from "./EgoPerimeterSection";
 

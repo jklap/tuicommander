@@ -11,7 +11,7 @@ describe("shared form controls", () => {
 	it("preserves reactive selection, native refs, names and change targets", () => {
 		const [value, setValue] = createSignal("board");
 		const [disabled, setDisabled] = createSignal(false);
-        const [invalid, setInvalid] = createSignal(true);
+		const [invalid, setInvalid] = createSignal(true);
 		const changed = vi.fn();
 		let element: HTMLSelectElement | undefined;
 		render(() => (
@@ -25,7 +25,7 @@ describe("shared form controls", () => {
 					value={value()}
 					disabled={disabled()}
 					class="caller-layout"
-                    classList={{ invalid: invalid() }}
+					classList={{ invalid: invalid() }}
 					onChange={(event) => changed(event.currentTarget.value)}
 				>
 					<option value="list">List</option>
@@ -42,8 +42,8 @@ describe("shared form controls", () => {
 		expect(changed).toHaveBeenCalledWith("board");
 		expect(new FormData(screen.getByRole("form", { name: "Views" }) as HTMLFormElement).get("view")).toBe("board");
 		expect(select).toHaveClass("caller-layout", "invalid");
-        setInvalid(false);
-        expect(select).not.toHaveClass("invalid");
+		setInvalid(false);
+		expect(select).not.toHaveClass("invalid");
 		setDisabled(true);
 		expect(select).toBeDisabled();
 	});

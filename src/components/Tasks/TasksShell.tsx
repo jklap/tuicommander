@@ -1,8 +1,8 @@
-import { SegmentedControl } from "../ui/SegmentedControl";
-import { Select } from "../ui/Select";
 import { createMemo, createSignal, For, Match, Show, Switch } from "solid-js";
 import { workItemProviderRegistry } from "../../plugins/workItemProviderRegistry";
 import type { WorkItemRef } from "../../types/work-items.gen";
+import { SegmentedControl } from "../ui/SegmentedControl";
+import { Select } from "../ui/Select";
 import { TasksCreate } from "./create/TasksCreate";
 import { TasksDetail } from "./detail/TasksDetail";
 import { TasksList } from "./list/TasksList";

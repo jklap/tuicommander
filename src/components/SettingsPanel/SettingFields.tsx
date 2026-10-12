@@ -1,6 +1,6 @@
-import { Select } from "../ui/Select";
-import { Input } from "../ui/Input";
 import { type Component, For, type JSX, Show } from "solid-js";
+import { Input } from "../ui/Input";
+import { Select } from "../ui/Select";
 import s from "./Settings.module.css";
 
 export { SettingAccount, type SettingAccountOption, type SettingAccountProps } from "./fields/SettingAccount";

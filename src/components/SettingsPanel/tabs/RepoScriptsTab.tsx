@@ -1,7 +1,7 @@
-import { Textarea } from "../../ui/Textarea";
-import { Input } from "../../ui/Input";
 import type { Component } from "solid-js";
 import { t } from "../../../i18n";
+import { Input } from "../../ui/Input";
+import { Textarea } from "../../ui/Textarea";
 import s from "../Settings.module.css";
 import type { RepoTabProps } from "./RepoWorktreeTab";
 

@@ -1,8 +1,8 @@
-import { Select } from "../../ui/Select";
-import { Input } from "../../ui/Input";
-import { Textarea } from "../../ui/Textarea";
 import { createEffect, createMemo, createSignal, For, Match, on, Show, Switch } from "solid-js";
 import type { WorkItemFieldSchema, WorkItemFieldValue } from "../../../types/work-items.gen";
+import { Input } from "../../ui/Input";
+import { Select } from "../../ui/Select";
+import { Textarea } from "../../ui/Textarea";
 import { TaskMarkdown } from "./TaskMarkdown";
 import styles from "./TasksDetail.module.css";
 

@@ -1,6 +1,6 @@
-import { Select } from "../ui/Select";
 import { type Component, For, Show } from "solid-js";
 import { remoteConnectionsStore } from "../../stores/remoteConnections";
+import { Select } from "../ui/Select";
 import s from "./Settings.module.css";
 
 interface MachineSelectorProps {

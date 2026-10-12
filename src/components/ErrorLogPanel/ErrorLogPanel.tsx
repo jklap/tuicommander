@@ -1,5 +1,3 @@
-import { Select } from "../ui/Select";
-import { Input } from "../ui/Input";
 import { type Component, createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import {
 	type AppLogAudience,
@@ -10,6 +8,8 @@ import {
 } from "../../stores/appLogger";
 import { errorLogStore } from "../../stores/errorLog";
 import { writeClipboard } from "../../utils/clipboard";
+import { Input } from "../ui/Input";
+import { Select } from "../ui/Select";
 import s from "./ErrorLogPanel.module.css";
 
 /** Audience tabs. "User" (default) hides app-internal telemetry so it can't bury

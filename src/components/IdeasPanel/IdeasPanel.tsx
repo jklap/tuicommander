@@ -1,5 +1,3 @@
-import { Select } from "../ui/Select";
-import { Textarea } from "../ui/Textarea";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { type Component, createSignal, For, Show } from "solid-js";
 import { t } from "../../i18n";
@@ -11,6 +9,8 @@ import { formatRelativeTime } from "../../utils/time";
 import p from "../shared/panel.module.css";
 import { PanelResizeHandle } from "../ui/PanelResizeHandle";
 import { PanelWindowControls } from "../ui/PanelWindowControls";
+import { Select } from "../ui/Select";
+import { Textarea } from "../ui/Textarea";
 import s from "./IdeasPanel.module.css";
 
 export interface IdeasPanelProps {

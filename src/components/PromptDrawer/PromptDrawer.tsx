@@ -1,6 +1,3 @@
-import { Select } from "../ui/Select";
-import { Textarea } from "../ui/Textarea";
-import { Input } from "../ui/Input";
 import { type Component, createEffect, createSignal, For, onCleanup, Show } from "solid-js";
 import { SMART_PROMPTS_BUILTIN, VARIABLE_DESCRIPTIONS } from "../../data/smartPromptsBuiltIn";
 import { useConfirmDialog } from "../../hooks/useConfirmDialog";
@@ -18,6 +15,9 @@ import { terminalsStore } from "../../stores/terminals";
 import { cx } from "../../utils";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { KeyComboCapture } from "../shared/KeyComboCapture";
+import { Input } from "../ui/Input";
+import { Select } from "../ui/Select";
+import { Textarea } from "../ui/Textarea";
 import s from "./PromptDrawer.module.css";
 
 export interface PromptDrawerProps {

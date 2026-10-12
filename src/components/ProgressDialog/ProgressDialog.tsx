@@ -1,4 +1,3 @@
-import { Select } from "../ui/Select";
 import { type Component, createEffect, createMemo, createSignal, For, Show } from "solid-js";
 import { registerModal } from "../../stores/modalStack";
 import {
@@ -11,6 +10,7 @@ import { repositoriesStore } from "../../stores/repositories";
 import { terminalsStore } from "../../stores/terminals";
 import { formatRelativeTime } from "../../utils/time";
 import d from "../shared/dialog.module.css";
+import { Select } from "../ui/Select";
 import s from "./ProgressDialog.module.css";
 import { ProgressFlow } from "./ProgressFlow";
 

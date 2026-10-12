@@ -1,10 +1,10 @@
-import { Select } from "../../ui/Select";
-import { Input } from "../../ui/Input";
-import { Textarea } from "../../ui/Textarea";
 import { For, Match, Switch } from "solid-js";
 import type { WorkItemFieldSchema } from "../../../types/work-items.gen";
 import { SettingField } from "../../SettingsPanel/fields/SettingField";
 import { SettingMultiSelect } from "../../SettingsPanel/SettingFields";
+import { Input } from "../../ui/Input";
+import { Select } from "../../ui/Select";
+import { Textarea } from "../../ui/Textarea";
 import type { DraftValue } from "./createDraft";
 
 const inputType = (kind: WorkItemFieldSchema["kind"]) =>

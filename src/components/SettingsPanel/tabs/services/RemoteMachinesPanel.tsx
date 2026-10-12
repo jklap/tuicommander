@@ -1,5 +1,3 @@
-import { Select } from "../../../ui/Select";
-import { Input } from "../../../ui/Input";
 import { type Component, createSignal, For, onMount, Show } from "solid-js";
 import { appLogger } from "../../../../stores/appLogger";
 import {
@@ -13,6 +11,8 @@ import {
 	type SshAgentInfo,
 	type SshHostStatus,
 } from "../../../../stores/remoteConnections";
+import { Input } from "../../../ui/Input";
+import { Select } from "../../../ui/Select";
 import s from "../../Settings.module.css";
 
 // ---------------------------------------------------------------------------

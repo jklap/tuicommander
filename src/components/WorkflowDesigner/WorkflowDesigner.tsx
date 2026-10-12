@@ -1,8 +1,8 @@
-import { Select } from "../ui/Select";
-import { Textarea } from "../ui/Textarea";
-import { Input } from "../ui/Input";
 import { type Component, createSignal, For, onMount, Show } from "solid-js";
 import { invoke } from "../../invoke";
+import { Input } from "../ui/Input";
+import { Select } from "../ui/Select";
+import { Textarea } from "../ui/Textarea";
 import s from "./WorkflowDesigner.module.css";
 
 type Role = "coordinator" | "planner" | "implementer" | "reviewer" | "validator";

@@ -1,10 +1,10 @@
-import { Input } from "../ui/Input";
 import { type Component, createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import type { BaseRefOption } from "../../hooks/useRepository";
 import { t } from "../../i18n";
 import { registerModal } from "../../stores/modalStack";
 import { validateBranchName } from "../RenameBranchDialog/RenameBranchDialog";
 import d from "../shared/dialog.module.css";
+import { Input } from "../ui/Input";
 import s from "./CreateWorktreeDialog.module.css";
 
 /** Options returned when the user confirms worktree creation */

@@ -1,6 +1,6 @@
-import { Select } from "../../ui/Select";
 import { type Component, createResource, createSignal, For, Show } from "solid-js";
 import { invoke } from "../../../invoke";
+import { Select } from "../../ui/Select";
 import s from "./fields.module.css";
 import { SettingField, type SettingFieldProps } from "./SettingField";
 

@@ -1,8 +1,8 @@
-import { Input } from "../../ui/Input";
 import { type Component, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { t } from "../../../i18n";
 import { invoke } from "../../../invoke";
 import { HttpRpcError } from "../../../transport";
+import { Input } from "../../ui/Input";
 import { SettingToggle } from "../SettingFields";
 import s from "../Settings.module.css";
 import telegram from "./TelegramTab.module.css";

@@ -1,8 +1,8 @@
-import { Select } from "../../ui/Select";
 import { createEffect, createMemo, createSignal, onCleanup, Show, untrack } from "solid-js";
 import type { WorkItemProvider } from "../../../plugins/workItemProvider";
 import { createTasksQuery } from "../../../stores/tasksQuery";
 import type { WorkItemQuery, WorkItemRef } from "../../../types/work-items.gen";
+import { Select } from "../../ui/Select";
 import { TaskRows } from "../list/TaskRows";
 import listStyles from "../list/tasksList.module.css";
 import { projectRoadmap, type RoadmapDateFields, type RoadmapZoom, roadmapWindow } from "./calendar";

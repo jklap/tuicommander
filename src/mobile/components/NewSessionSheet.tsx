@@ -1,6 +1,6 @@
-import { Select } from "../../components/ui/Select";
-import { Input } from "../../components/ui/Input";
 import { createSignal, For, Show } from "solid-js";
+import { Input } from "../../components/ui/Input";
+import { Select } from "../../components/ui/Select";
 import { appLogger } from "../../stores/appLogger";
 import { toastsStore } from "../../stores/toasts";
 import { rpc } from "../../transport";

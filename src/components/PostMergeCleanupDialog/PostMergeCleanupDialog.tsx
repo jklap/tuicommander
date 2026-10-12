@@ -1,7 +1,7 @@
-import { Select } from "../ui/Select";
 import { type Component, createSignal, For, Show } from "solid-js";
 import { registerModal } from "../../stores/modalStack";
 import d from "../shared/dialog.module.css";
+import { Select } from "../ui/Select";
 import s from "./PostMergeCleanupDialog.module.css";
 
 export type StepId = "worktree" | "switch" | "pull" | "delete-local" | "delete-remote";

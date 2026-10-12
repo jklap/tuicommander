@@ -1,8 +1,8 @@
-import { Select } from "../../ui/Select";
-import { Input } from "../../ui/Input";
-import { Textarea } from "../../ui/Textarea";
 import { For, Show } from "solid-js";
 import { SettingField } from "../../SettingsPanel/fields/SettingField";
+import { Input } from "../../ui/Input";
+import { Select } from "../../ui/Select";
+import { Textarea } from "../../ui/Textarea";
 import { TaskCreateField } from "./TaskCreateField";
 import styles from "./TasksCreate.module.css";
 import { type TasksCreateOptions, useTasksCreate } from "./useTasksCreate";

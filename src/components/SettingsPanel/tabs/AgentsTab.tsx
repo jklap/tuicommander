@@ -1,5 +1,3 @@
-import { Select } from "../../ui/Select";
-import { Input } from "../../ui/Input";
 import { type Component, createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show } from "solid-js";
 import {
 	AGENT_DISPLAY,
@@ -40,6 +38,8 @@ import {
 	splitRawArgs,
 } from "../../../utils/runConfigArgs";
 import { AgentIcon } from "../../ui/AgentIcon";
+import { Input } from "../../ui/Input";
+import { Select } from "../../ui/Select";
 import { ExpertSetting } from "../ExpertSetting";
 import { MachineSelector } from "../MachineSelector";
 import { SettingToggle } from "../SettingFields";

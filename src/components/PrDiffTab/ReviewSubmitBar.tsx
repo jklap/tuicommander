@@ -1,7 +1,7 @@
-import { Select } from "../ui/Select";
-import { Input } from "../ui/Input";
 import { type Component, createSignal, Show } from "solid-js";
 import { t } from "../../i18n";
+import { Input } from "../ui/Input";
+import { Select } from "../ui/Select";
 import s from "./ReviewThreads.module.css";
 import type { ReviewEvent, ReviewSession } from "./useReviewSession";
 

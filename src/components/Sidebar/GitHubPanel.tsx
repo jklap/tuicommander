@@ -1,4 +1,3 @@
-import { Select } from "../ui/Select";
 import { type Component, createEffect, createMemo, createSignal, For, onMount, Show } from "solid-js";
 import { Portal } from "solid-js/web";
 import { useOutsideDismiss } from "../../hooks/useOutsideDismiss";
@@ -29,6 +28,7 @@ import {
 } from "../PostMergeCleanupDialog/PostMergeCleanupDialog";
 import { SmartButtonStrip } from "../SmartButtonStrip/SmartButtonStrip";
 import { ChevronIcon } from "../ui/ChevronIcon";
+import { Select } from "../ui/Select";
 import { PrSection } from "./PrSection";
 import s from "./Sidebar.module.css";
 

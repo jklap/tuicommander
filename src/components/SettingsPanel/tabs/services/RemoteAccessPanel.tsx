@@ -1,5 +1,3 @@
-import { Select } from "../../../ui/Select";
-import { Input } from "../../../ui/Input";
 import QRCode from "qrcode";
 import { type Component, createEffect, createResource, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { t } from "../../../../i18n";
@@ -7,6 +5,8 @@ import { appLogger } from "../../../../stores/appLogger";
 import { rpc } from "../../../../transport";
 import { cx } from "../../../../utils";
 import { writeClipboard } from "../../../../utils/clipboard";
+import { Input } from "../../../ui/Input";
+import { Select } from "../../../ui/Select";
 import { ExpertSetting } from "../../ExpertSetting";
 import { SettingInput, SettingSelect, SettingToggle } from "../../SettingFields";
 import s from "../../Settings.module.css";

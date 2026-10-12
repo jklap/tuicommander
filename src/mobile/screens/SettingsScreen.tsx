@@ -1,6 +1,6 @@
-import { Select } from "../../components/ui/Select";
 import { createSignal, onMount, Show } from "solid-js";
 import { TelegramTab } from "../../components/SettingsPanel/tabs/TelegramTab";
+import { Select } from "../../components/ui/Select";
 import { appLogger } from "../../stores/appLogger";
 import { transcriptPreferences } from "../../stores/transcriptPreferences";
 import { KEEP_AWAKE_KEY } from "../../utils/screenWakeLock";

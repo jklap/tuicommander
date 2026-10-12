@@ -1,8 +1,8 @@
-import { Textarea } from "../../ui/Textarea";
 import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
 import type { WorkItemProvider } from "../../../plugins/workItemProvider";
 import type { WorkItemDetail, WorkItemRef } from "../../../types/work-items.gen";
 import { handleOpenUrl } from "../../../utils/openUrl";
+import { Textarea } from "../../ui/Textarea";
 import { TaskComment } from "./TaskComment";
 import { TaskField } from "./TaskField";
 import { TaskMarkdown } from "./TaskMarkdown";

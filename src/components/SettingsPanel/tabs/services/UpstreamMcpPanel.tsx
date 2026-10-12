@@ -1,5 +1,3 @@
-import { Select } from "../../../ui/Select";
-import { Input } from "../../../ui/Input";
 import { type Component, createEffect, createSignal, For, Index, on, onCleanup, Show } from "solid-js";
 import { useConfirmDialog } from "../../../../hooks/useConfirmDialog";
 import { appLogger } from "../../../../stores/appLogger";
@@ -12,6 +10,8 @@ import {
 } from "../../../../transport";
 import { handleOpenUrl } from "../../../../utils/openUrl";
 import { ConfirmDialog } from "../../../ConfirmDialog";
+import { Input } from "../../../ui/Input";
+import { Select } from "../../../ui/Select";
 import { MachineSelector } from "../../MachineSelector";
 import s from "../../Settings.module.css";
 import { SETTINGS_SECTION_UPSTREAM_MCP } from "../../sections";

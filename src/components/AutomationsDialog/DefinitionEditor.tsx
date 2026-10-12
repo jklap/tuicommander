@@ -1,10 +1,10 @@
-import { Select } from "../ui/Select";
-import { Textarea } from "../ui/Textarea";
-import { Input } from "../ui/Input";
 import { For, Show } from "solid-js";
 import { t } from "../../i18n";
 import type { AutomationsStore } from "../../stores/automations";
 import { repositoriesStore } from "../../stores/repositories";
+import { Input } from "../ui/Input";
+import { Select } from "../ui/Select";
+import { Textarea } from "../ui/Textarea";
 import s from "./AutomationsDialog.module.css";
 import { ScheduleFields } from "./ScheduleFields";
 import { TemplatePicker } from "./TemplatePicker";

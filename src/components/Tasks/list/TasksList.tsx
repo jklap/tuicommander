@@ -1,5 +1,3 @@
-import { Select } from "../../ui/Select";
-import { Input } from "../../ui/Input";
 import { createEffect, createMemo, createSignal, For, onCleanup, Show, untrack } from "solid-js";
 import type { WorkItemProvider } from "../../../plugins/workItemProvider";
 import { createTasksQuery } from "../../../stores/tasksQuery";
@@ -9,6 +7,8 @@ import type {
 	WorkItemQuery,
 	WorkItemRef,
 } from "../../../types/work-items.gen";
+import { Input } from "../../ui/Input";
+import { Select } from "../../ui/Select";
 import { TaskRows } from "./TaskRows";
 import s from "./tasksList.module.css";
 
