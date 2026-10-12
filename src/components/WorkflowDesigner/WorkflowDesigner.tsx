@@ -1,5 +1,8 @@
 import { type Component, createSignal, For, onMount, Show } from "solid-js";
 import { invoke } from "../../invoke";
+import { Input } from "../ui/Input";
+import { Select } from "../ui/Select";
+import { Textarea } from "../ui/Textarea";
 import s from "./WorkflowDesigner.module.css";
 
 type Role = "coordinator" | "planner" | "implementer" | "reviewer" | "validator";
@@ -346,7 +349,7 @@ export const WorkflowDesigner: Component<WorkflowDesignerProps> = (props) => {
 								<Show when={node().kind.type === "agent"}>
 									<label>
 										Prompt template
-										<textarea
+										<Textarea
 											value={(node().kind as Extract<Kind, { type: "agent" }>).prompt_template}
 											onInput={(event) =>
 												updateKind({
@@ -360,7 +363,7 @@ export const WorkflowDesigner: Component<WorkflowDesignerProps> = (props) => {
 								<Show when={node().kind.type === "loop"}>
 									<label>
 										Maximum iterations
-										<input
+										<Input
 											type="number"
 											min="1"
 											max="100"
@@ -373,7 +376,7 @@ export const WorkflowDesigner: Component<WorkflowDesignerProps> = (props) => {
 								</Show>
 								<label>
 									Connect to
-									<select
+									<Select
 										aria-label="Connect to"
 										value={targetId()}
 										onChange={(event) => setTargetId(event.currentTarget.value)}
@@ -382,19 +385,19 @@ export const WorkflowDesigner: Component<WorkflowDesignerProps> = (props) => {
 										<For each={graph().nodes.filter((target) => target.id !== node().id)}>
 											{(target) => <option value={target.id}>{target.id}</option>}
 										</For>
-									</select>
+									</Select>
 								</label>
 								<Show when={outcomes(node().kind).length}>
 									<label>
 										Outcome
-										<select
+										<Select
 											aria-label="Outcome"
 											value={outcome()}
 											onChange={(event) => setOutcome(event.currentTarget.value)}
 										>
 											<option value="">Choose outcome</option>
 											<For each={outcomes(node().kind)}>{(choice) => <option value={choice}>{choice}</option>}</For>
-										</select>
+										</Select>
 									</label>
 								</Show>
 								<button type="button" onClick={connect} disabled={!targetId()}>

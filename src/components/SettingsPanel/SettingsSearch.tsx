@@ -1,5 +1,6 @@
 import { type Component, For, Show } from "solid-js";
 import { t } from "../../i18n";
+import { Input } from "../ui/Input";
 import s from "./Settings.module.css";
 import type { SettingsShellTab } from "./SettingsShell";
 import { entryLabel, entrySection, type SettingsSearchEntry } from "./settingsSearchIndex";
@@ -10,7 +11,7 @@ export const SettingsSearchBox: Component<{ value: string; onInput: (value: stri
 		<svg class={s.searchIcon} viewBox="0 0 16 16" width="12" height="12" fill="currentColor" aria-hidden="true">
 			<path d="M6.5 1a5.5 5.5 0 0 1 4.38 8.83l4.15 4.14-1.06 1.06-4.14-4.15A5.5 5.5 0 1 1 6.5 1Zm0 1.5a4 4 0 1 0 0 8 4 4 0 0 0 0-8Z" />
 		</svg>
-		<input
+		<Input
 			type="text"
 			value={props.value}
 			placeholder={t("settings.search.placeholder", "Search settings")}

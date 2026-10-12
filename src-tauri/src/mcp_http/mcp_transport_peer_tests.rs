@@ -146,6 +146,16 @@ fn served_texts(state: &Arc<AppState>) -> Vec<String> {
         .collect()
 }
 
+#[cfg(unix)]
+fn served_rows(state: &Arc<AppState>) -> Vec<crate::prompt_receipt::PromptSection> {
+    crate::prompt_receipt::read_receipt(state, TEST_UUID_A)
+        .unwrap()
+        .sections
+        .into_iter()
+        .filter(|s| s.status == "served")
+        .collect()
+}
+
 // Catches: one inspector row per bridge reconnect, the 16-section cap then
 // hiding later rows; and a receipt that grows on every read.
 #[cfg(unix)]
@@ -172,7 +182,10 @@ async fn initialize_omits_suggest_for_a_spawned_child_and_keeps_it_for_a_root() 
     insert_managed_test_session(&root_state, TEST_UUID_A, root.path().to_str().unwrap());
     post_fresh_initialize(&root_state).await;
     let root_text = served_texts(&root_state).join("\n");
-    assert!(root_text.contains("`suggest:`"), "root lost suggest: {root_text}");
+    assert!(
+        root_text.contains("`suggest:`"),
+        "root lost suggest: {root_text}"
+    );
 
     let child_state = test_state();
     insert_managed_test_session(&child_state, TEST_UUID_A, root.path().to_str().unwrap());
@@ -186,25 +199,99 @@ async fn initialize_omits_suggest_for_a_spawned_child_and_keeps_it_for_a_root() 
         !child_text.contains("`suggest:`"),
         "child kept suggest: {child_text}"
     );
-    assert!(child_text.contains("`ack`"), "child lost the ack rule: {child_text}");
+    assert!(
+        child_text.contains("`ack`"),
+        "child lost the ack rule: {child_text}"
+    );
 }
 
-// Catches: collapsing by session instead of by text, hiding a prompt that changed.
+// Catches: dedup keyed on the full text, so a peer joining between reconnects
+// (the text embeds the live peer count) adds an inspector row per reconnect.
 #[cfg(unix)]
 #[tokio::test]
-async fn changed_instructions_keep_one_row_per_distinct_text() {
+async fn reconnect_with_changed_peer_count_keeps_one_served_row() {
     let state = test_state();
     let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
     insert_managed_test_session(&state, TEST_UUID_A, root.path().to_str().unwrap());
     post_fresh_initialize(&state).await;
+    let before = served_texts(&state);
+    register_peer(&state, TEST_UUID_B, "joiner", "mcp-joiner");
     post_fresh_initialize(&state).await;
+    let rows = served_rows(&state);
+    assert_ne!(
+        before[0], rows[0].text,
+        "the peer count must change the text"
+    );
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0].count, 2);
+    assert!(rows[0].last_seen_ms >= rows[0].first_seen_ms);
+}
+
+// Catches: a changed body (settings toggled between reconnects) keeping the
+// stale text, or a read appending to the count.
+#[cfg(unix)]
+#[tokio::test]
+async fn changed_instructions_replace_the_served_row_with_the_newest_body() {
+    let state = test_state();
+    let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    insert_managed_test_session(&state, TEST_UUID_A, root.path().to_str().unwrap());
+    post_fresh_initialize(&state).await;
+    let first = served_texts(&state);
     let collapsed = state.config.read().collapse_tools;
     state.config.write().collapse_tools = !collapsed;
     post_fresh_initialize(&state).await;
     post_fresh_initialize(&state).await;
-    let texts = served_texts(&state);
-    assert_eq!(texts.len(), 2, "{texts:?}");
-    assert_ne!(texts[0], texts[1]);
+    let rows = served_rows(&state);
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_ne!(rows[0].text, first[0], "the newest body must win");
+    assert_eq!(rows[0].count, 3);
+    assert_eq!(served_rows(&state)[0].count, 3, "reads must not add counts");
+}
+
+// Catches: sorting adopted rows by a source string carrying a random uuid, so
+// row order changes between reads or between runs.
+#[cfg(unix)]
+#[tokio::test]
+async fn adopted_sections_keep_capture_order_across_reads() {
+    let state = test_state();
+    let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    insert_managed_test_session(&state, TEST_UUID_A, root.path().to_str().unwrap());
+    post_fresh_initialize(&state).await;
+    let row =
+        |label: &str, source: &str, first_seen_ms: u64| crate::prompt_receipt::PromptSection {
+            label: label.into(),
+            source: source.into(),
+            bytes: Some(1),
+            text: "x".into(),
+            status: "served".into(),
+            truncated: false,
+            count: 1,
+            first_seen_ms,
+            last_seen_ms: first_seen_ms,
+        };
+    // Captured order is Late-by-source first; source order is the reverse.
+    let seeded = crate::prompt_receipt::PromptReceipt {
+        sections: vec![
+            row("third", "a-source", 30),
+            row("first", "z-source", 10),
+            row("second", "m-source", 20),
+        ],
+        ..Default::default()
+    };
+    for mut meta in state.mcp.sessions.iter_mut() {
+        meta.prompt_instructions = Some(seeded.clone());
+    }
+    let labels = || -> Vec<String> {
+        crate::prompt_receipt::read_receipt(&state, TEST_UUID_A)
+            .unwrap()
+            .sections
+            .into_iter()
+            .filter(|s| s.status == "served" && s.text == "x")
+            .map(|s| s.label)
+            .collect()
+    };
+    assert_eq!(labels(), ["first", "second", "third"]);
+    assert_eq!(labels(), ["first", "second", "third"], "second read");
 }
 
 // Catches: claiming no MCP initialize was captured for an existing PTY
@@ -257,9 +344,14 @@ async fn prompt_receipt_keeps_the_served_initialize_payload_after_settings_chang
         let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
         let attach = || {
             insert_managed_test_session(&state, TEST_UUID_A, root.path().to_str().unwrap());
-            let historical = crate::prompt_receipt::read_receipt(&state, TEST_UUID_A).unwrap();
-            assert_eq!(historical.sections[0].status, "not_observable");
-            assert_eq!(historical.sections[0].text, "Not observable by TUIC");
+            // A read adopts (moves) the served rows into the PTY receipt, which the
+            // assignment below replaces wholesale; production sets the receipt at
+            // insertion, so only the pre-initialize order can observe the placeholder.
+            if !late_registration {
+                let historical = crate::prompt_receipt::read_receipt(&state, TEST_UUID_A).unwrap();
+                assert_eq!(historical.sections[0].status, "not_observable");
+                assert_eq!(historical.sections[0].text, "Not observable by TUIC");
+            }
             state
                 .session_maps
                 .sessions

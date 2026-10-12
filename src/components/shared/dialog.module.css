@@ -80,7 +80,7 @@
   overflow-y: auto;
 }
 
-.body input:not([type="checkbox"]):not([type="radio"]) {
+.body input:not([type="checkbox"]):not([type="radio"]):not([data-form-control]) {
   width: 100%;
   padding: 8px 12px;
   background: var(--bg-tertiary);
@@ -91,12 +91,12 @@
   font-family: var(--font-mono);
 }
 
-.body input:not([type="checkbox"]):not([type="radio"]):focus {
+.body input:not([type="checkbox"]):not([type="radio"]):not([data-form-control]):focus {
   outline: none;
   border-color: var(--accent);
 }
 
-.body input:not([type="checkbox"]):not([type="radio"]):disabled {
+.body input:not([type="checkbox"]):not([type="radio"]):not([data-form-control]):disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
@@ -149,3 +149,5 @@
 .primaryBtn:hover:not(:disabled) {
   background: var(--accent-hover);
 }
+
+.body input[data-form-control] { width: 100%; }

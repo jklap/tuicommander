@@ -1,3 +1,6 @@
+## Plugin hot reload re-reads sub-modules (1809-010d) — Rust restart required
+
+- [ ] After the restart, edit an export in `github-work/provider.js` (or any file a plugin's `main.js` imports) and save: the plugin reloads and the new export is live without a WebView reload. In Tasks > New task for GitHub, the type picker shows and Create enables (stale-realm symptom of 1743-4776).
 ## Mute intermediate Chat text (1769-89dc)
 
 - [ ] [VISUAL] Terminal Chat view, AI Chat and mobile chat: text followed by a tool call in the same turn is smaller and dimmer; the last text of the turn keeps normal weight. Needs a `make dev` restart (Rust config field `chat_mute_intermediate_text`).
@@ -5171,6 +5174,7 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 
 - [ ] On iPhone, tap the attachment icon left of the session composer, choose a photo/file, confirm upload status then its path in the draft, and confirm Queue stays disabled during upload. Smaller mic and Send controls remain inside the right input border.
 
+- [ ] [VISUAL] #1264-89c8: after a manual Rust restart, scroll up gently during sustained agent output, stop the gesture, then use scrollbar drag and return to the bottom. Verify no forward jump or gap, including capped history. Rust does not hot-reload; restart only when ready to lose the current session.
 - [ ] Mobile: Claude multi-question AskUserQuestion (two questions + Submit) — answer each tab and the Submit review from the phone overlay; needs the TUIC restart for the Rust parser change (#1766-9311)
 
 ## Automatic agent toast cards (#1760-bab7)
@@ -5191,3 +5195,11 @@ Visual evidence: worktree Vite fixture mounted the real NotificationsTab and Toa
 
 - [ ] Desktop dictation in terminal Chat: select transcript text, hold Fn and dictate, then confirm Compose receives the text with its draft preserved. Move focus or switch tabs during the final pass; confirm delivery stays with the original target. Close the original tab; confirm the transcript stays in the error message and Messages bell (#1773-5b69). Automated target/Compose tests cover routing; native Fn and microphone observation remain for Boss's normal app session.
 - [ ] #1754-071d (Rust restart required): after restarting TUIC, start a fresh Claude Code agent and read its initialize text (Inspect Launch Instructions): one repo count line with group/remote counts and no paths, a "What TUIC gives you" section naming ui/session/agent/repo and each connected upstream server, `suggest:` present. Spawn a child agent: its text has no `suggest:` line. `repo action=list` for a repo on a remote connection shows `connection_id`.
+
+- [x] Shared form controls: Tasks create fields align at 36px; the type picker remains native. _(verified: worktree Vite fixture, agent-browser before/after screenshots under ~/Gits/.tmp/results/form-controls/)_
+
+## Shared form controls (1815-01c9)
+
+- [x] Tasks create, Settings account/list fields, Automations, Git review, worktree creation, AI Chat elicitation, desktop filters and mobile New Session render with shared themed controls. _(verified: worktree Vite screenshots in `~/Gits/.tmp/results/form-controls/`, before/after per migration group; mobile 390×844 retains 44px fields.)_
+- [x] Native select keyboard/form behavior, reactive values, refs, change targets, multi-selection, disabled state and semantic classes remain intact; the Tasks view switch supports arrows/Home/End. _(verified: `src/__tests__/components/FormControls.test.tsx` and existing migrated-module suites.)_
+- [ ] #1753-f6b8 (Rust restart required): after restarting TUIC, open Inspect Launch Instructions on a session with 10+ MCP reconnects. Confirm one **MCP initialize instructions** row with a count and last-seen time, plus the Launch brief row; close the session and reopen: the error shows the backend reason.

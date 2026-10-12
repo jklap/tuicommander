@@ -16,6 +16,10 @@ pub struct PromptSection {
     pub text: String,
     pub status: String,
     pub truncated: bool,
+    /// Observations folded into this row; a served row absorbs every reconnect.
+    pub count: u32,
+    pub first_seen_ms: u64,
+    pub last_seen_ms: u64,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -32,6 +36,7 @@ impl PromptSection {
         truncate_utf8(&mut redacted, SECTION_BYTE_CAP);
         let mut source = crate::redaction::redact_secrets(source);
         truncate_utf8(&mut source, 1024);
+        let now_ms = now_ms();
         Self {
             label: label.into(),
             source,
@@ -39,6 +44,9 @@ impl PromptSection {
             text: redacted,
             status: status.into(),
             truncated,
+            count: 1,
+            first_seen_ms: now_ms,
+            last_seen_ms: now_ms,
         }
     }
 
@@ -47,6 +55,12 @@ impl PromptSection {
         section.bytes = None;
         section
     }
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64)
 }
 
 fn truncate_utf8(text: &mut String, cap: usize) {
@@ -67,10 +81,7 @@ pub fn record_mcp_instructions(state: &AppState, mcp_id: &str, text: &str) {
         let receipt = meta
             .prompt_instructions
             .get_or_insert_with(PromptReceipt::default);
-        let source = format!(
-            "TUIC MCP initialize ({mcp_id}, response {})",
-            uuid::Uuid::new_v4()
-        );
+        let source = format!("TUIC MCP initialize ({mcp_id})");
         receipt.push(PromptSection::captured(
             "MCP initialize instructions",
             &source,
@@ -87,7 +98,13 @@ pub fn record_mcp_instructions(state: &AppState, mcp_id: &str, text: &str) {
     adopt_mcp_instructions(state, &pty_id);
 }
 
+/// Move the protocol-side observations into the owning PTY. Draining keeps
+/// every observation counted once however often the receipt is read; a peer
+/// that has no live PTY yet keeps its rows until it has one.
 pub fn adopt_mcp_instructions(state: &AppState, session_id: &str) {
+    let Some(session) = state.session_maps.sessions.get(session_id) else {
+        return;
+    };
     let mut sections = Vec::new();
     let mut limited = false;
     for entry in &state.mcp.to_session {
@@ -98,31 +115,34 @@ pub fn adopt_mcp_instructions(state: &AppState, session_id: &str) {
             .get(peer)
             .map(|p| p.value().clone());
         if (peer == session_id || owner.as_deref() == Some(session_id))
-            && let Some(meta) = state.mcp.sessions.get(entry.key())
-            && let Some(receipt) = &meta.prompt_instructions
+            && let Some(mut meta) = state.mcp.sessions.get_mut(entry.key())
+            && let Some(receipt) = meta.prompt_instructions.take()
         {
-            sections.extend(receipt.sections.iter().cloned());
+            sections.extend(receipt.sections);
             limited |= receipt.capture_limited;
         }
     }
-    sections.sort_by(|a, b| a.source.cmp(&b.source));
-    if let Some(session) = state.session_maps.sessions.get(session_id)
-        && !sections.is_empty()
-    {
-        let mut session = session.lock();
-        let receipt = session.launch_receipt.get_or_insert_with(|| {
-            let mut receipt = PromptReceipt::default();
-            receipt.push(PromptSection::unavailable(
-                "Launch receipt unavailable",
-                "Session predates capture or was launched outside the managed spawn path",
-            ));
-            receipt
-        });
-        for section in sections {
-            receipt.push(section);
-        }
-        receipt.capture_limited |= limited;
+    if sections.is_empty() {
+        return;
     }
+    // Capture order, not source text: ties fall back to label and source so
+    // two reads of the same data always list rows alike.
+    sections.sort_by(|a, b| {
+        (a.first_seen_ms, &a.label, &a.source).cmp(&(b.first_seen_ms, &b.label, &b.source))
+    });
+    let mut session = session.lock();
+    let receipt = session.launch_receipt.get_or_insert_with(|| {
+        let mut receipt = PromptReceipt::default();
+        receipt.push(PromptSection::unavailable(
+            "Launch receipt unavailable",
+            "Session predates capture or was launched outside the managed spawn path",
+        ));
+        receipt
+    });
+    for section in sections {
+        receipt.push(section);
+    }
+    receipt.capture_limited |= limited;
 }
 
 pub fn read_receipt(state: &AppState, session_id: &str) -> Result<PromptReceipt, String> {
