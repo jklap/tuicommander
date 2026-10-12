@@ -93,13 +93,13 @@ mkdir -p "$test_tmp/git-template-empty"
 export GIT_TEMPLATE_DIR="$test_tmp/git-template-empty"
 # Fail closed: git under the test root never discovers a repository above it
 # (a fixture whose `git init` failed once fell through to this checkout and
-# renamed its branches). Ceiling = the root's parent, lexical and physical
-# spelling, appended once each so an outer wrapper's stricter value survives.
-for git_ceiling_dir in "$(cd "$test_tmp_base" && pwd)" "$(cd "$test_tmp_base" && pwd -P)"; do
-  case ":${GIT_CEILING_DIRECTORIES:-}:" in
-    *":$git_ceiling_dir:"*) ;;
-    *) GIT_CEILING_DIRECTORIES="${GIT_CEILING_DIRECTORIES:+$GIT_CEILING_DIRECTORIES:}$git_ceiling_dir" ;;
-  esac
-done
+# renamed its branches). Ceiling = the parent of the root actually in use (an
+# inherited TUIC_TEST_TMP_ROOT's own parent, not the base) plus the host temp
+# dir, which holds the t.XXXXXX socket roots; appended once each, so an outer
+# wrapper's stricter value survives.
+# The physical root's parent is listed too: when the root itself is a symlink,
+# git compares against where it really lives.
+GIT_CEILING_DIRECTORIES="$(tuic_git_ceiling_with "$(dirname "$(cd "$test_tmp" && pwd)")" \
+  "$(dirname "$(cd "$test_tmp" && pwd -P)")" "$host")"
 export GIT_CEILING_DIRECTORIES
 "$@"

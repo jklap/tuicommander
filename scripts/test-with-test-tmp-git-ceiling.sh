@@ -6,42 +6,66 @@
 set -euo pipefail
 
 root="$(git rev-parse --show-toplevel)"
-test_tmp="${TUIC_TEST_TMP_ROOT:-$root/.tmp/tuic-tests}"
-mkdir -p "$test_tmp"
+# shellcheck source=test-tmp-lib.sh
+. "$root/scripts/test-tmp-lib.sh"
+test_tmp="$(tuic_test_tmp_root "$root")"
 scratch="$(mktemp -d "$test_tmp/git-ceiling.XXXXXX")"
 trap 'rm -rf "$scratch"' EXIT
 # This test's own fixtures must not escape either.
-export GIT_CEILING_DIRECTORIES="${GIT_CEILING_DIRECTORIES:+$GIT_CEILING_DIRECTORIES:}$(cd "$test_tmp" && pwd):$(cd "$test_tmp" && pwd -P)"
+GIT_CEILING_DIRECTORIES="$(tuic_git_ceiling_with "$test_tmp")"
+export GIT_CEILING_DIRECTORIES
 
 fail() { echo "$*" >&2; exit 1; }
+has_entry() { case ":$1:" in *":$2:"*) return 0 ;; esac; return 1; }
+no_dups() { [ "$(printf %s "$1" | tr ':' '\n' | sort | uniq -d)" = "" ]; }
 
 # An outer repository standing in for the real checkout.
 outer="$scratch/outer"
 git init -q --template= "$outer"
 [ "$(cd "$outer" && pwd -P)" = "$(git -C "$outer" rev-parse --show-toplevel)" ] || fail "fixture init failed: $outer"
+outer="$(cd "$outer" && pwd)"
 
-# 1. with-test-tmp.sh, run from a checkout copy inside the outer repo: its
-#    default root is <checkout>/.tmp/tuic-tests, i.e. inside a repository.
+# A checkout copy inside the outer repo, so its default resolution happens there.
 mkdir -p "$outer/scripts"
-cp "$root/scripts/with-test-tmp.sh" "$outer/scripts/with-test-tmp.sh"
+cp "$root/scripts/with-test-tmp.sh" "$root/scripts/test-tmp-lib.sh" "$outer/scripts/"
 probe='mkdir -p "$TMPDIR/x"; git -C "$TMPDIR/x" rev-parse --show-toplevel'
-if found="$(env -u TMPDIR -u GIT_CEILING_DIRECTORIES "$outer/scripts/with-test-tmp.sh" sh -c "$probe" 2>&1)"; then
+
+# 1. with-test-tmp.sh with its per-run root below a base inside the outer repo
+#    (the opt-in in-checkout layout): the run dir's parent is fenced.
+base="$outer/.tmp/tuic-tests"
+if found="$(env -u TUIC_TEST_TMP_ROOT -u GIT_CEILING_DIRECTORIES TUIC_TEST_TMP_BASE="$base" \
+  "$outer/scripts/with-test-tmp.sh" sh -c "$probe" 2>&1)"; then
   fail "with-test-tmp.sh: git under the test root found $found"
 fi
 # A stricter value set by an outer wrapper survives, and nothing is listed twice.
-value="$(env -u TMPDIR GIT_CEILING_DIRECTORIES=/pre/set "$outer/scripts/with-test-tmp.sh" sh -c 'printf %s "$GIT_CEILING_DIRECTORIES"')"
+value="$(env -u TUIC_TEST_TMP_ROOT GIT_CEILING_DIRECTORIES=/pre/set TUIC_TEST_TMP_BASE="$base" \
+  "$outer/scripts/with-test-tmp.sh" sh -c 'printf %s "$GIT_CEILING_DIRECTORIES"')"
 case "$value" in /pre/set:*) ;; *) fail "with-test-tmp.sh dropped the inherited ceiling: $value" ;; esac
-case ":$value:" in *":$outer/.tmp/tuic-tests:"*) ;; *) fail "with-test-tmp.sh: ceiling lacks the root's parent: $value" ;; esac
-[ "$(printf %s "$value" | tr ':' '\n' | sort | uniq -d)" = "" ] || fail "with-test-tmp.sh: duplicate ceiling entries: $value"
+has_entry "$value" "$base" || fail "with-test-tmp.sh: ceiling lacks the run root's parent: $value"
+no_dups "$value" || fail "with-test-tmp.sh: duplicate ceiling entries: $value"
 
-# 2. nextest's setup script, with its root inside the outer repo.
+# 2. with-test-tmp.sh with an inherited root: fenced at THAT root's parent, not
+#    at the base the wrapper would otherwise have used.
+inherited="$outer/inherited/root"
+if found="$(env -u GIT_CEILING_DIRECTORIES TUIC_TEST_TMP_ROOT="$inherited" \
+  "$outer/scripts/with-test-tmp.sh" sh -c "$probe" 2>&1)"; then
+  fail "with-test-tmp.sh (inherited root): git under the test root found $found"
+fi
+value="$(env -u GIT_CEILING_DIRECTORIES TUIC_TEST_TMP_ROOT="$inherited" \
+  "$outer/scripts/with-test-tmp.sh" sh -c 'printf %s "$GIT_CEILING_DIRECTORIES"')"
+has_entry "$value" "$outer/inherited" || fail "with-test-tmp.sh: ceiling lacks the inherited root's parent: $value"
+no_dups "$value" || fail "with-test-tmp.sh: duplicate ceiling entries: $value"
+
+# 3. nextest's setup script, with its root inside the outer repo.
 ntroot="$outer/sub/root"
 mkdir -p "$ntroot/x"
 git -C "$ntroot/x" rev-parse --show-toplevel >/dev/null 2>&1 || fail "control: the outer repo is not discoverable"
 (cd "$root/src-tauri" && GIT_CEILING_DIRECTORIES=/pre/set TUIC_TEST_TMP_ROOT="$ntroot" NEXTEST_ENV="$scratch/env" sh scripts/nextest-test-tmp.sh)
 ceiling="$(sed -n 's/^GIT_CEILING_DIRECTORIES=//p' "$scratch/env")"
 case "$ceiling" in /pre/set:*) ;; *) fail "nextest-test-tmp.sh dropped the inherited ceiling: $ceiling" ;; esac
-case ":$ceiling:" in *":$outer/sub:"*) ;; *) fail "nextest-test-tmp.sh: ceiling lacks the root's parent: $ceiling" ;; esac
+has_entry "$ceiling" "$outer/sub" || fail "nextest-test-tmp.sh: ceiling lacks the root's parent: $ceiling"
+no_dups "$ceiling" || fail "nextest-test-tmp.sh: duplicate ceiling entries: $ceiling"
 if found="$(GIT_CEILING_DIRECTORIES="$ceiling" git -C "$ntroot/x" rev-parse --show-toplevel 2>&1)"; then
   fail "nextest-test-tmp.sh: git under the test root found $found"
 fi
+

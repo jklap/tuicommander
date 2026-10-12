@@ -5,7 +5,7 @@ project_root="$(git rev-parse --show-toplevel)"
 test_tmp="$(. "$project_root/scripts/test-tmp-lib.sh" && tuic_test_tmp_root "$project_root")"
 mkdir -p "$test_tmp"
 # Fail closed: no git here may find a repository above the test root.
-export GIT_CEILING_DIRECTORIES="${GIT_CEILING_DIRECTORIES:+$GIT_CEILING_DIRECTORIES:}$(cd "$test_tmp" && pwd):$(cd "$test_tmp" && pwd -P)"
+export GIT_CEILING_DIRECTORIES="$(. "$project_root/scripts/test-tmp-lib.sh" && tuic_git_ceiling_with "$test_tmp")"
 scratch="$(mktemp -d "$test_tmp/install-hooks.XXXXXX")"
 trap 'rm -rf "$scratch"' EXIT
 
