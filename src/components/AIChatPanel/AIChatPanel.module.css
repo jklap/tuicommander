@@ -1467,13 +1467,8 @@
 .inputArea:not(.mobileComposer) > .composerActions > button {
   margin-bottom: 8px;
 }
-.mobileComposerActions {
-  display: flex;
-  flex-basis: 100%;
-  order: -1;
-  justify-content: flex-end;
-  gap: 8px;
-}
+/* Keep Park and Stop beside the input instead of reserving another row. */
+.mobileComposerActions { display: contents; }
 .mobileComposerActions button { width: 32px; min-width: 32px; padding: 0; }
 .mobileComposer .filePreview { max-width: 100%; overflow-wrap: anywhere; }
 

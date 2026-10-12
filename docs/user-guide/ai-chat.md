@@ -135,8 +135,8 @@ current text and image previews. The **Parked draft** control on desktop, or the
 **Restore parked draft** icon on mobile, shows that a
 draft is waiting. Press `Ctrl+S` or tap it again while the composer is empty to
 restore the draft; when the composer contains another draft, the two swap.
-On mobile, Park and Stop use labelled icons above the input row to preserve
-the input, attachment and Send positions.
+On mobile, Park and Stop use labelled icons in the input row beside Attach and
+Send. They do not reserve a separate row above the composer.
 Sending the intervening prompt also restores the parked draft automatically.
 Parking survives closing and reopening the panel or reloading its window, and
 stays with its chat tab. If browser storage is unavailable, the composer warns
