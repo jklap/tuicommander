@@ -547,53 +547,53 @@ export function CommandInput(props: CommandInputProps) {
 						</svg>
 					</button>
 				</Show>
-				<Show when={queueMenu()}>
-					<div
-						class={styles.queueMenu}
-						role="menu"
-						onKeyDown={(event) => {
-							if (event.key === "Escape") setQueueMenu(false);
-						}}
-					>
-						<button
-							type="button"
-							role="menuitem"
-							disabled={submitting() || !!uploading() || !value().trim()}
-							onClick={queueDraft}
-						>
-							Queue
-						</button>
-					</div>
-				</Show>
-				<button
-					class={styles.send}
-					type="button"
-					aria-label="Send"
-					disabled={props.sessionExists === false || submitting()}
-					aria-haspopup="menu"
-					aria-expanded={queueMenu()}
-					onPointerDown={startPress}
-					onPointerUp={cancelPress}
-					onPointerLeave={cancelPress}
-					onPointerCancel={() => {
-						cancelPress();
-						held = true;
-					}}
-					onContextMenu={(event) => event.preventDefault()}
-					onClick={() => {
-						if (held) {
-							held = false;
-							return;
-						}
-						setQueueMenu(false);
-						void send();
+			</div>
+			<Show when={queueMenu()}>
+				<div
+					class={styles.queueMenu}
+					role="menu"
+					onKeyDown={(event) => {
+						if (event.key === "Escape") setQueueMenu(false);
 					}}
 				>
-					<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-						<path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
-					</svg>
-				</button>
-			</div>
+					<button
+						type="button"
+						role="menuitem"
+						disabled={submitting() || !!uploading() || !value().trim()}
+						onClick={queueDraft}
+					>
+						Queue
+					</button>
+				</div>
+			</Show>
+			<button
+				class={styles.send}
+				type="button"
+				aria-label="Send"
+				disabled={props.sessionExists === false || submitting()}
+				aria-haspopup="menu"
+				aria-expanded={queueMenu()}
+				onPointerDown={startPress}
+				onPointerUp={cancelPress}
+				onPointerLeave={cancelPress}
+				onPointerCancel={() => {
+					cancelPress();
+					held = true;
+				}}
+				onContextMenu={(event) => event.preventDefault()}
+				onClick={() => {
+					if (held) {
+						held = false;
+						return;
+					}
+					setQueueMenu(false);
+					void send();
+				}}
+			>
+				<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+					<path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
+				</svg>
+			</button>
 		</div>
 	);
 }
