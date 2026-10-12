@@ -1,6 +1,7 @@
 import { type Component, createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { invoke } from "../../invoke";
 import { appLogger } from "../../stores/appLogger";
+import { Select } from "../ui/Select";
 import s from "./ClaudeUsageDashboard.module.css";
 
 // ---------------------------------------------------------------------------
@@ -657,7 +658,7 @@ export const ClaudeUsageDashboard: Component<{ sessionId?: string | (() => strin
 			{/* Header with scope selector */}
 			<div class={s.header}>
 				<span class={s.title}>Claude Usage Dashboard</span>
-				<select class={s.scopeSelect} value={scope()} onChange={(e) => setScope(e.currentTarget.value)}>
+				<Select class={s.scopeSelect} value={scope()} onChange={(e) => setScope(e.currentTarget.value)}>
 					<option value="all">All Projects</option>
 					<For each={projects()}>
 						{(p) => (
@@ -666,7 +667,7 @@ export const ClaudeUsageDashboard: Component<{ sessionId?: string | (() => strin
 							</option>
 						)}
 					</For>
-				</select>
+				</Select>
 			</div>
 
 			{/* Loading state */}

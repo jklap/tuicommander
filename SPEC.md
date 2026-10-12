@@ -8,6 +8,14 @@ Published story workflows can start in Plans and Stories through the owning daem
 **Version:** 1.8.0
 **Last Updated:** 2026-09-16
 
+## Shared form controls — Implemented (#1815-01c9)
+
+Native Select, Input and Textarea wrappers and a keyboard-accessible segmented
+view switch share theme-based form styling. All desktop and mobile native select fields
+use the shared Select. Tasks, Settings, Automations, Git review and chat forms also
+share their text controls. The JSX source guard rejects native selects outside ui
+without migration exceptions. Desktop fields are 36px and mobile touch fields are 44px.
+
 ## ego Perimeter Settings — Implemented (#1401-ab1c)
 
 Settings > AI Chat edits user/profile `roots` and `network` through ego CLI,

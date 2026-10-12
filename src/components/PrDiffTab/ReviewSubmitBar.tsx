@@ -1,5 +1,7 @@
 import { type Component, createSignal, Show } from "solid-js";
 import { t } from "../../i18n";
+import { Input } from "../ui/Input";
+import { Select } from "../ui/Select";
 import s from "./ReviewThreads.module.css";
 import type { ReviewEvent, ReviewSession } from "./useReviewSession";
 
@@ -30,7 +32,7 @@ export const ReviewSubmitBar: Component<{ session: ReviewSession }> = (props) =>
 				<span class={s.pendingCount}>
 					{count()} {t("prDiff.pendingComments", "pending comments")}
 				</span>
-				<select
+				<Select
 					aria-label={t("prDiff.reviewEvent", "Review type")}
 					value={event()}
 					onChange={(e) => setEvent(e.currentTarget.value as ReviewEvent)}
@@ -38,8 +40,8 @@ export const ReviewSubmitBar: Component<{ session: ReviewSession }> = (props) =>
 					<option value="COMMENT">{t("prDiff.eventComment", "Comment")}</option>
 					<option value="APPROVE">{t("prDiff.eventApprove", "Approve")}</option>
 					<option value="REQUEST_CHANGES">{t("prDiff.eventRequest", "Request changes")}</option>
-				</select>
-				<input
+				</Select>
+				<Input
 					type="text"
 					aria-label={t("prDiff.reviewBody", "Review summary")}
 					placeholder={t("prDiff.reviewBody", "Review summary")}
