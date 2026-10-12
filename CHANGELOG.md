@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Show agent toast cards only while their origin terminal tab is active, with a default-on per-client Notifications toggle. Urgent notices always show a card (#1760-bab7).
 ### Fixed
 - Desktop dictation in terminal Chat inserts into Compose instead of the hidden CLI. The destination and selection are captured before recording yields; undelivered transcripts stay in Messages for recovery (#1773-5b69).
 
