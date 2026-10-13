@@ -13,6 +13,7 @@ pub mod request;
 pub mod service;
 pub mod telegram;
 pub mod transaction;
+pub mod upstreams;
 #[cfg(feature = "dictation")]
 pub mod voice;
 
@@ -47,6 +48,9 @@ mod repositories_tests;
 
 #[cfg(test)]
 mod remote_tests;
+
+#[cfg(test)]
+mod upstreams_tests;
 
 #[cfg(all(test, feature = "dictation"))]
 mod voice_tests;
