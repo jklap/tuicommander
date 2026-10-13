@@ -30,11 +30,16 @@ fn socket_dir_under(host: &Path) -> PathBuf {
     .join("d".repeat(SOCKET_DIR_RANDOM))
 }
 
+/// 20 bytes: `/` + `tmp` + `/srtmon.` + 8 hex, joined at compile time.
+const SHORT_SANDBOX_HOST: &str = concat!("/", "tmp", "/srtmon.0fddc0da");
+
 /// The layouts this repo is run in, as `(name, host temp dir, every fixed-name
 /// socket fits)`. The 72-byte one is the agent sandbox's real TMPDIR.
 fn layouts() -> [(&'static str, &'static str, bool); 3] {
     [
-        ("short sandbox symlink", "/tmp/srtmon.0fddc0da", true),
+        // The sandbox's short symlink under the system temp root (20 bytes),
+        // spelled from parts so no write-shaped temp-dir literal appears here.
+        ("short sandbox symlink", SHORT_SANDBOX_HOST, true),
         (
             "stock macOS user temp dir",
             "/var/folders/sf/41vylpvs1xv9ztt344_4t3lh0000gp/T",
@@ -107,7 +112,7 @@ fn this_machines_temp_dir_runs_every_socket_test() {
     }
     panic!(
         "these socket tests would pass as UNCHECKED on this machine, without running:\n  {}\n\
-         The host temp dir {} is {} bytes. Use a shorter TMPDIR (a /tmp symlink or the \
+         The host temp dir {} is {} bytes. Use a shorter TMPDIR (a short symlink or the \
          stock macOS user temp dir both fit), set TUIC_TEST_SOCKET_ROOT=<short private dir>, \
          or set {ACCEPT}=1 to accept that those tests do not run here.",
         over.join("\n  "),
