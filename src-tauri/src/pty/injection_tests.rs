@@ -2181,72 +2181,71 @@ fn queued_prompt_disappearing_after_enter_confirms_gemini() {
         }
     }
 
-    for agent_type in ["gemini"] {
-        let state = crate::state::tests_support::make_test_app_state();
-        let sid = format!("prompt-gone-{agent_type}");
-        agent_session(&state, &sid, SHELL_IDLE);
-        state
-            .session_maps
-            .session_states
-            .get_mut(&sid)
-            .unwrap()
-            .agent_type = Some(agent_type.into());
-        let mut vt = VtLogBuffer::new(24, 80, 1000);
-        vt.process(b"\x1b[24;1H> ");
+    let agent_type = "gemini";
+    let state = crate::state::tests_support::make_test_app_state();
+    let sid = format!("prompt-gone-{agent_type}");
+    agent_session(&state, &sid, SHELL_IDLE);
+    state
+        .session_maps
+        .session_states
+        .get_mut(&sid)
+        .unwrap()
+        .agent_type = Some(agent_type.into());
+    let mut vt = VtLogBuffer::new(24, 80, 1000);
+    vt.process(b"\x1b[24;1H> ");
+    state
+        .grid
+        .vt_log_buffers
+        .insert(sid.clone(), Mutex::new(vt));
+    state
+        .session_maps
+        .output_buffers
+        .insert(sid.clone(), Mutex::new(OutputRingBuffer::new(1024)));
+    let (writes, received) = std::sync::mpsc::channel();
+    insert_session_with_writer(
+        &state,
+        &sid,
+        Box::new(RecordingChannel(writes)),
+        TtyMode::Raw,
+    );
+
+    std::thread::scope(|scope| {
+        scope.spawn(|| enqueue_user_command(&state, &sid, "check status", None).unwrap());
+        for expected in [b"\x15".as_slice(), b"check status", b"\r"] {
+            assert_eq!(
+                received
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .unwrap(),
+                expected
+            );
+        }
+        let repaint = b"\x1b[2J\x1b[HProcessing request";
         state
             .grid
             .vt_log_buffers
-            .insert(sid.clone(), Mutex::new(vt));
+            .get(&sid)
+            .unwrap()
+            .lock()
+            .process(repaint);
         state
             .session_maps
             .output_buffers
-            .insert(sid.clone(), Mutex::new(OutputRingBuffer::new(1024)));
-        let (writes, received) = std::sync::mpsc::channel();
-        insert_session_with_writer(
-            &state,
-            &sid,
-            Box::new(RecordingChannel(writes)),
-            TtyMode::Raw,
-        );
+            .get(&sid)
+            .unwrap()
+            .lock()
+            .write(repaint);
+    });
 
-        std::thread::scope(|scope| {
-            scope.spawn(|| enqueue_user_command(&state, &sid, "check status", None).unwrap());
-            for expected in [b"\x15".as_slice(), b"check status", b"\r"] {
-                assert_eq!(
-                    received
-                        .recv_timeout(std::time::Duration::from_secs(5))
-                        .unwrap(),
-                    expected
-                );
-            }
-            let repaint = b"\x1b[2J\x1b[HProcessing request";
-            state
-                .grid
-                .vt_log_buffers
-                .get(&sid)
-                .unwrap()
-                .lock()
-                .process(repaint);
-            state
-                .session_maps
-                .output_buffers
-                .get(&sid)
-                .unwrap()
-                .lock()
-                .write(repaint);
-        });
-
-        assert!(
-            !state
-                .session_maps
-                .silence_states
-                .get(&sid)
-                .unwrap()
-                .lock()
-                .injection_delivery_uncertain,
-            "{agent_type} accepted the queued command after its prompt disappeared"
-        );
-    }
+    assert!(
+        !state
+            .session_maps
+            .silence_states
+            .get(&sid)
+            .unwrap()
+            .lock()
+            .injection_delivery_uncertain,
+        "{agent_type} accepted the queued command after its prompt disappeared"
+    );
 }
 
 /// Boss's rule: a hands-free turn goes straight to the agent, even while it

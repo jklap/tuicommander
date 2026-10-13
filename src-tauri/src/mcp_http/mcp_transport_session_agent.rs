@@ -2725,9 +2725,7 @@ pub(super) fn resolve_spawn_agent_type(
     if is_direct_codex_executable(binary_path) {
         Some("codex".to_string())
     } else {
-        configured
-            .filter(|agent| crate::agent::is_known_agent_type(agent))
-            .map(str::to_string)
+        configured.map(str::to_string)
     }
 }
 

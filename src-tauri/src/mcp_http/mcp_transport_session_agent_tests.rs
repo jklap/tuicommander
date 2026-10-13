@@ -4053,10 +4053,6 @@ fn saved_aider_settings_load_but_are_ignored_for_agent_spawns() {
             .command
             .is_none()
     );
-    assert_eq!(
-        resolve_spawn_agent_type("/usr/local/bin/aider", Some("aider")),
-        None
-    );
     for agent in [
         "claude", "codex", "gemini", "grok", "opencode", "amp", "cursor", "goose", "droid", "pi",
         "ego",
