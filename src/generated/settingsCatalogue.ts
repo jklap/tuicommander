@@ -4017,6 +4017,163 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "execution_authority"
     },
+    "ego.credentials.{key}": {
+      "id": "ego.credentials.{key}",
+      "store": "ego",
+      "owner": "profile",
+      "area": "ego",
+      "group": "managed",
+      "order": 0,
+      "path": "/credentials/{key}",
+      "labelKey": "settings.catalogue.ego.credentials.{key}.label",
+      "helpKey": "settings.catalogue.ego.credentials.{key}.help",
+      "label": "credentials/{key}",
+      "schema": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "nullable": true,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "secret",
+      "apply": "next_session",
+      "effect": "Used by the next Ego session; existing ACP and PTY sessions keep their configuration.",
+      "operations": [
+        "get"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "ego.model": {
+      "id": "ego.model",
+      "store": "ego",
+      "owner": "profile",
+      "area": "ego",
+      "group": "managed",
+      "order": 0,
+      "path": "/model",
+      "labelKey": "settings.catalogue.ego.model.label",
+      "helpKey": "settings.catalogue.ego.model.help",
+      "label": "model",
+      "schema": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null
+      },
+      "nullable": true,
+      "default": null,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "private",
+      "apply": "next_session",
+      "effect": "Used by the next Ego session; existing ACP and PTY sessions keep their configuration.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "ego.network": {
+      "id": "ego.network",
+      "store": "ego",
+      "owner": "profile",
+      "area": "ego",
+      "group": "managed",
+      "order": 0,
+      "path": "/network",
+      "labelKey": "settings.catalogue.ego.network.label",
+      "helpKey": "settings.catalogue.ego.network.help",
+      "label": "network",
+      "schema": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "enum": [
+          "on",
+          "off",
+          null
+        ],
+        "default": null
+      },
+      "nullable": true,
+      "default": null,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "private",
+      "apply": "next_session",
+      "effect": "Used by the next Ego session; existing ACP and PTY sessions keep their configuration.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "ego.roots": {
+      "id": "ego.roots",
+      "store": "ego",
+      "owner": "profile",
+      "area": "ego",
+      "group": "managed",
+      "order": 0,
+      "path": "/roots",
+      "labelKey": "settings.catalogue.ego.roots.label",
+      "helpKey": "settings.catalogue.ego.roots.help",
+      "label": "roots",
+      "schema": {
+        "type": [
+          "array",
+          "null"
+        ],
+        "items": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "access": {
+              "type": "string",
+              "enum": [
+                "read",
+                "read-write"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "path",
+            "access"
+          ]
+        },
+        "default": null
+      },
+      "nullable": true,
+      "default": null,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "private",
+      "apply": "next_session",
+      "effect": "Used by the next Ego session; existing ACP and PTY sessions keep their configuration.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
     "github_accounts.accounts.{id}.host.host": {
       "id": "github_accounts.accounts.{id}.host.host",
       "store": "github_accounts",
@@ -9252,18 +9409,6 @@ export const settingsCatalogue = {
       "reason": "Recoverable credential presence and typed login/rotation actions need the account owner schema; registry metadata alone is not coverage."
     },
     {
-      "store": "ego",
-      "path": "/providers/{id}",
-      "ownerStep": "Step 3b",
-      "reason": "Discover installed ego provider/model/auth capabilities through the configured binary; never infer an external schema or read its credential files."
-    },
-    {
-      "store": "ego",
-      "path": "/profiles/{id}/perimeter",
-      "ownerStep": "Step 3b",
-      "reason": "Installed-owner perimeter and stored/effective/source schema must be recorded from ego with the trusted workspace/profile."
-    },
-    {
       "store": "repositories_registration",
       "path": "/repos/{path}",
       "ownerStep": "Step 4d",
@@ -9400,6 +9545,36 @@ export const settingsCatalogue = {
       "path": "/agents/{key}/run_configs/{name}/model",
       "ownerStep": "Step 4c",
       "reason": "Agent model availability requires the owning CLI capability resolver, without launching on save."
+    },
+    {
+      "store": "ego",
+      "path": "/exec_paths",
+      "ownerStep": "Step 3b",
+      "reason": "DEFERRED (2026-10-13): parent scopes this adapter to managed keys. Installed ego config set exec_paths=[] exits 2: unknown config key; an Ego owner extension must precede support."
+    },
+    {
+      "store": "ego",
+      "path": "/auth/{provider}/headers",
+      "ownerStep": "Step 3b",
+      "reason": "DEFERRED (2026-10-13): auth is base-only and outside ManagedConfigKey. Installed ego config set auth.openrouter.headers={} exits 2: unknown config key. No config-edit or raw-file bypass."
+    },
+    {
+      "store": "ego",
+      "path": "/auth/{provider}/credential_command",
+      "ownerStep": "Step 3b",
+      "reason": "DEFERRED (2026-10-13): installed ego config set auth.openrouter.credential_command exits 2: unknown config key. The program path is non-secret, its stdout secret; an owner extension is required."
+    },
+    {
+      "store": "ego",
+      "path": "/atomic_batch",
+      "ownerStep": "Step 3b",
+      "reason": "DEFERRED (2026-10-13): Ego managed CLI publishes one key per call. The adapter refuses patches changing multiple keys before any write; complete atomic batches require an owner API."
+    },
+    {
+      "store": "ego",
+      "path": "/compare_and_swap",
+      "ownerStep": "Step 3b",
+      "reason": "DEFERRED (2026-10-13): Ego CLI has no conditional revision write. The adapter serializes its own commits and checks latest state; external CLI writers can race between read and mutation. Full cross-process CAS requires an owner API."
     }
   ],
   "collections": [

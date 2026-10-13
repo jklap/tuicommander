@@ -307,3 +307,10 @@ warning notice path. With no repo selection, requests and snapshots retain their
 previous shape. Unattended sessions retain their existing launch behavior.
 Load, resume, fork and compact rely on ego's durable ceiling, rather than sending
 a replacement authority from the current repository file.
+
+
+Ego settings (#1775-330c): model/provider defaults and perimeter reads/writes now
+share one captured trusted executable, configured profile and AI Chat workspace
+per operation. These owner CLI calls do not change any live ACP session. The
+internal settings adapter preserves this distinction; launch defaults stay in the
+`app` store and apply to later launches.

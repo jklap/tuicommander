@@ -2789,7 +2789,7 @@ that decides which model a later run uses. Neither is a read of state TUIC
 already holds.
 
 The executable is never in the request. It comes from the `ego_executable`
-setting, read per call. Only `model`, `roots` and `network` are writable keys, each through its own
+setting, captured with the configured `ego_profile` and `ai_chat_workspace` per operation. Model and perimeter config commands select that profile explicitly, run in that workspace, and clear ambient `EGO_PROFILE`. The profile flag is omitted for user-base edits. Existing ACP sessions are not modified. Only `model`, `roots` and `network` are writable keys, each through its own
 route rather than a `key`/`value` pair, so no body can reach `sandbox` or
 `permissions.judge`.
 
