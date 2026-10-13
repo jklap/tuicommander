@@ -639,7 +639,7 @@ Some frontend-only stores persist to localStorage:
 ### Completed (P2)
 - [x] Terminal HTTP(S) link menu starts Design Mode with the owning agent and exact URL; HTTP/IPC optional `url` and MCP `design_mode` start/stop/status share the lifecycle. Agents use URL-aware start as the default path for layout work.
 - [x] Design Mode extension heartbeat: every 5 seconds, expiry after 60 seconds without a beat (600 seconds before the first beat), and MCP `design_mode action=reload` delivered on the next heartbeat.
-- [x] Design Mode v2 pilot: dedicated Chrome/Edge profile, unpacked extension sidebar, explicit picking, per-pick comments, launching-agent default, same-repository recipient selection, native messaging, idle-gated Send and live dev-server discovery; native Edge validation remains tracked in to-test.md
+- [x] Design Mode v2 pilot: dedicated browser profile with automatic extension loading on cold Edge starts (running profiles must close first; branded Chrome reports an unsupported-autoload error), extension sidebar, explicit picking, per-pick comments, launching-agent default, same-repository recipient selection, native messaging, idle-gated Send and live dev-server discovery; native Edge validation remains tracked in to-test.md
 - [x] Split pane layout
 - [x] Touch branch action trays: left swipe reveals existing actions; vertical scrolling and desktop hover controls remain unchanged
 - [x] Multi-repository sidebar
