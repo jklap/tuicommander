@@ -715,7 +715,7 @@
 	"prDetail.pending": "pending",
 	"prDetail.postReview": "Post review",
 	"prDetail.unresolved": "{count} unresolved threads",
-	"prDetail.unresolvedSplit": "{human} human, {bot} bot unresolved threads",
+	"prDetail.unresolvedSplit": "{human} human, {bot} bot, {ego} ego unresolved threads",
 	"prDetail.postReviewConfirm": "Post selected AI review findings to GitHub?",
 	"prDetail.posting": "Posting",
 	"prDetail.push": "Push",

@@ -1253,7 +1253,7 @@ Returns detailed CI check list.
 GET /repo/pr-review-threads?path=/path/to/repo&pr_number=42
 ```
 
-Returns `{"bot": N, "human": M}`: unresolved review threads of one PR (first 50), split by the author of the first comment. One GraphQL point per call.
+Returns `{"bot": N, "human": M, "ego": E}`: unresolved review threads of one PR, split by the first comment. A first comment that holds `<!-- tuic:ego-review -->` (appended to every finding posted from the PR review) counts as ego, not human. One GraphQL point per page of 100 threads.
 
 ### PR Diff
 
@@ -3059,6 +3059,7 @@ Desktop command arguments and HTTP bodies use the same camelCase fields.
 | Method | Route | Arguments |
 |---|---|---|
 | GET | `/repo/pr-line-threads` | `repoPath`, `prNumber`, optional `after` |
+| GET | `/repo/pr-open-threads` | `repoPath`, `prNumber` — returns the `get_pr_open_threads` string |
 | GET | `/repo/pr-thread-comments` | `repoPath`, `threadId`, optional `after` |
 | POST | `/repo/pr-thread-resolved` | `{repoPath, threadId, resolved}` |
 | POST | `/repo/pr-thread-reply` | `{repoPath, threadId, body}` |

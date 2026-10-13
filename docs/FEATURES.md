@@ -1481,6 +1481,7 @@ Variables are resolved from the Rust backend (`resolve_context_variables`) and f
 | `{pr_additions}` | GitHub store | Lines added in PR |
 | `{pr_deletions}` | GitHub store | Lines deleted in PR |
 | `{pr_checks}` | GitHub store | CI check summary (passed/failed/pending) |
+| `{pr_open_threads}` | `get_pr_open_threads` | Open, current review threads as a fenced untrusted list (max 30, most severe first) |
 | `{merge_status}` | GitHub store | PR mergeable status |
 | `{review_decision}` | GitHub store | PR review decision |
 | `{agent_type}` | terminal store | Active agent type (claude, gemini, etc.) |

@@ -14,12 +14,15 @@ mod gemini;
 mod generic;
 mod graphite;
 mod greptile;
+mod open_threads;
 mod qodo;
 mod sourcery;
 mod text;
 
 use serde::Serialize;
 use serde_json::Value;
+
+pub use open_threads::{MAX_LISTED_THREADS, render_open_threads};
 
 /// Bodies above this size skip the vendor parsers (largest recorded: ~10.5 KB).
 const MAX_PARSED_BODY: usize = 64 * 1024;
@@ -82,6 +85,18 @@ pub fn is_bot(author: &Value) -> bool {
         || author["login"]
             .as_str()
             .is_some_and(|login| login.ends_with("[bot]"))
+}
+
+/// Appended to every review comment TUIC posts for ego, so the thread split can
+/// tell ego's findings from a human's. Invisible in rendered Markdown.
+pub const EGO_MARKER: &str = "<!-- tuic:ego-review -->";
+
+/// A comment TUIC posted for ego. The marker is plain text that anyone can
+/// paste, so it only moves a thread between counts and grants nothing.
+pub fn is_ego(comment: &Value) -> bool {
+    comment["body"]
+        .as_str()
+        .is_some_and(|body| body.contains(EGO_MARKER))
 }
 
 /// The review tool behind a bot account. Keyed on the login only: anyone can

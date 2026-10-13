@@ -242,6 +242,14 @@ pub fn review_threads_selection() -> String {
 pub struct ReviewThreadCounts {
     pub bot: u32,
     pub human: u32,
+    /// Threads opened by a finding TUIC posted for ego ([`crate::review_bots::EGO_MARKER`]).
+    pub ego: u32,
+}
+
+impl ReviewThreadCounts {
+    pub fn total(&self) -> u32 {
+        self.bot + self.human + self.ego
+    }
 }
 
 /// Count unresolved threads from `reviewThreads.nodes`, attributing each to the
@@ -253,7 +261,10 @@ pub fn count_review_threads(nodes: &serde_json::Value) -> ReviewThreadCounts {
         if node["isResolved"].as_bool().unwrap_or(true) {
             continue;
         }
-        if crate::review_bots::is_bot(&node["comments"]["nodes"][0]["author"]) {
+        let first = &node["comments"]["nodes"][0];
+        if crate::review_bots::is_ego(first) {
+            counts.ego += 1;
+        } else if crate::review_bots::is_bot(&first["author"]) {
             counts.bot += 1;
         } else {
             counts.human += 1;
@@ -953,11 +964,34 @@ mod tests {
         ]);
         assert_eq!(
             count_review_threads(&nodes),
-            ReviewThreadCounts { bot: 2, human: 2 }
+            ReviewThreadCounts {
+                bot: 2,
+                human: 2,
+                ego: 0
+            }
         );
         assert_eq!(
             count_review_threads(&serde_json::Value::Null),
             ReviewThreadCounts::default()
+        );
+    }
+
+    /// Catches: ego's own posted findings counted as human review threads.
+    #[test]
+    fn ego_marked_threads_count_as_ego_not_human() {
+        let first = |body: &str| serde_json::json!({"author": {"__typename": "User", "login": "boss"}, "body": body});
+        let nodes = serde_json::json!([
+            {"isResolved": false, "comments": {"nodes": [first("Null check\n\n<!-- tuic:ego-review -->")]}},
+            {"isResolved": false, "comments": {"nodes": [first("Null check")]}},
+            {"isResolved": true, "comments": {"nodes": [first("<!-- tuic:ego-review -->")]}},
+        ]);
+        assert_eq!(
+            count_review_threads(&nodes),
+            ReviewThreadCounts {
+                bot: 0,
+                human: 1,
+                ego: 1
+            }
         );
     }
 
@@ -1142,7 +1176,11 @@ mod critic2_tests {
         ]);
         assert_eq!(
             count_review_threads(&nodes),
-            ReviewThreadCounts { bot: 1, human: 4 }
+            ReviewThreadCounts {
+                bot: 1,
+                human: 4,
+                ego: 0
+            }
         );
     }
 
@@ -1160,7 +1198,7 @@ mod critic2_tests {
             "reviewThreads": {"nodes": nodes}
         }))
         .unwrap();
-        assert_eq!(pr.unresolved_threads, counts.bot + counts.human);
+        assert_eq!(pr.unresolved_threads, counts.total());
     }
 
     /// Catches: `reviewThreads: null` / `nodes: null` (permission-limited or partial
