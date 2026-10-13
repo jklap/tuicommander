@@ -2209,3 +2209,32 @@ The GitHub settings owner adapter supplies typed device-login, Enterprise accoun
 credential, label and binding actions for the later settings transport cutover.
 It is an internal service boundary; this adapter step registers no new MCP tool,
 HTTP route or IPC command. Its reads and results contain credential presence only.
+
+### Internal Ego settings adapters (#1775-330c)
+
+`settings::ego::EgoSettingsStore` targets `profile` with the configured profile ID,
+or `machine` for the user base. It captures trusted executable, workspace and
+profile together per operation, clears ambient `EGO_PROFILE`, and invokes only
+`config ls/set/unset`, `models --json` without refresh, and `auth status`.
+The model slug selects the provider. Managed DTOs discard unknown owner fields;
+credential type/expiry and process diagnostics never enter settings replies,
+effects or audit data. Credentials are read-only set/unset markers.
+
+Each managed key is one atomic leaf. Null/reset invokes owner `unset`; explicit
+`roots: []` invokes `set roots=[]`. The managed keys are `model`, `roots` and
+`network`; Ego itself enforces its scope rules. A patch changing multiple keys is rejected before any write because
+Ego's CLI has no atomic batch operation. The adapter checks latest revisions and
+serializes its own mutations, but an external CLI writer can race the read/write
+boundary; the owner-gap ledger records the missing conditional-write API. Failed
+readback after a successful write reports `persisted: true` and `nextAction: get`.
+
+Launch defaults (`ego_executable`, `ego_profile`, `ai_chat_workspace`) stay in the
+`app` store and its `AppSettingsStore` owner. The adapter is internal; settings
+transport registration and executable confirmation belong to later plan steps.
+The Providers tab shows the base model when the configured profile has none, as
+Ego resolves it, and creates a missing AI Chat workspace like ACP does. Existing Ego IPC/HTTP commands retain
+identical shapes; model reads/writes now honor configured profile/workspace.
+
+`exec_paths`, `auth.PROVIDER.headers` and `credential_command` remain owner gaps:
+isolated installed-Ego probes returned exit 2 (`unknown config key`). No editor or
+raw-file fallback is used. Credentials are never read from `auth.json`.

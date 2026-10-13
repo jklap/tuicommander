@@ -2911,3 +2911,13 @@ Terminal gestures hold the requested history row even when output arrives before
 GitHub settings backend: an internal typed owner adapter supports device login,
 verified Enterprise PAT accounts, labels, write-only credentials and revision-checked
 repository bindings. Shared settings transport publication is a separate step.
+
+### Ego settings owner service (#1775-330c)
+
+The internal settings catalogue includes Ego managed model/provider selection,
+roots and network. Configurations remain profile/workspace scoped; absent
+values and explicit empty roots stay distinct. Stored credentials are presence-only.
+Launch profile/workspace stay in the `app` store; trusted executable writes await
+the confirmation step. No new public settings transport is registered
+by this adapter. Model changes from the existing Providers UI now use the same
+configured profile and workspace as perimeter changes.

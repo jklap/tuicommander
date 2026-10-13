@@ -7,9 +7,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Fixed
+- Ego model settings now honor the configured profile and AI Chat workspace. The internal settings service adds managed Ego configuration, readback and presence-only credentials through owner services (#1775-330c).
 - Goose returns to idle after a reply and accepts the next submission without waiting for the five-minute stale recovery (#1812-022d).
 - Aider returns to idle after a reply and accepts the next submission (#1823-8150).
 - Keep child agent MCP bridges on the spawning instance, including isolated `tuic-remote` instances and fallback sockets (#1811-a0fe).
+- Align community plugin permissions, CLI binaries and minimum app versions with shipped manifests.
+- Keep document preview panels separate for files with the same name in different repositories.
+- Cancel pending retry and wakeup decisions when session state changes during composer inspection.
+- Discard obsolete plan, story and dashboard results after repository switches or plugin unloads; refresh the MDKB ticker on repository switches.
 - Preserve beta installs in the macOS terminal installer and normalize release tag prefixes for default and pinned downloads.
 
 ### Added
