@@ -75,7 +75,7 @@ export function TaskField(props: {
 			<label class={styles.fieldLabel}>
 				<span>
 					{props.schema.name}
-					{props.schema.required ? " *" : ""}
+					{props.schema.required && editable() ? " *" : ""}
 				</span>
 				<Show
 					when={editable()}
