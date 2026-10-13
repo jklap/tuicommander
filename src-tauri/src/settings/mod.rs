@@ -12,6 +12,8 @@ pub mod request;
 pub mod service;
 pub mod telegram;
 pub mod transaction;
+#[cfg(feature = "dictation")]
+pub mod voice;
 
 mod pointer;
 mod validation;
@@ -41,3 +43,6 @@ mod agents_tests;
 
 #[cfg(test)]
 mod repositories_tests;
+
+#[cfg(all(test, feature = "dictation"))]
+mod voice_tests;
