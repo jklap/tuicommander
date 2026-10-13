@@ -516,11 +516,8 @@ pub(crate) async fn github_auth_status_impl(state: &Arc<AppState>) -> Result<Aut
                             tracing::warn!(source = "github", error = %e, "Token resolution panicked during 401 recovery");
                             (None, TokenSource::None)
                         });
-                let mut slot = state.github.token.write();
-                if !state.github.disconnected.load(Ordering::Relaxed) {
-                    *slot = fallback_token;
-                    *state.github.token_source.write() = fallback_source;
-                }
+                *state.github.token.write() = fallback_token;
+                *state.github.token_source.write() = fallback_source;
             }
             Ok(AuthStatus {
                 authenticated: false,

@@ -714,15 +714,7 @@ pub(crate) async fn graphql_with_retry(
                 {
                     Ok(response) => {
                         tracing::info!(source = "github", "Token fallback succeeded");
-                        let mut slot = state.github.token.write();
-                        if state
-                            .github
-                            .disconnected
-                            .load(std::sync::atomic::Ordering::Relaxed)
-                        {
-                            return Err("GitHub is disconnected".to_string());
-                        }
-                        *slot = Some(candidate.clone());
+                        *state.github.token.write() = Some(candidate.clone());
                         *state.github.token_source.write() = *candidate_source;
                         with_account_breaker(state, account, |b| b.record_success());
                         return Ok(response);
