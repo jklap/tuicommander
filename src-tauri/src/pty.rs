@@ -1884,10 +1884,11 @@ impl ChunkProcessor {
             //
             // `retain` in place: the filter used to rebuild the whole Vec even
             // when the cutoff dropped nothing.
-            // Goose appends the reply BELOW its submitted `> prompt`; it has
-            // no fixed input-area border. Trimming there erases the reply's
-            // activity evidence and strands user-submit BUSY (#1812-022d).
-            let chrome_cutoff = if agent_type.as_deref() != Some("goose")
+            // Goose and Aider append the reply BELOW their submitted `> prompt`;
+            // they have no fixed input-area border. Trimming there erases the
+            // reply's activity evidence and strands user-submit BUSY
+            // (#1812-022d, #1823-8150).
+            let chrome_cutoff = if !matches!(agent_type.as_deref(), Some("goose" | "aider"))
                 && let Some(screen) = screen_ref
                 && !changed.is_empty()
             {

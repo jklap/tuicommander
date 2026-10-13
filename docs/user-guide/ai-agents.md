@@ -244,6 +244,8 @@ Claude Code stores the session locally. When you restart TUICommander and switch
 
 Goose returns to idle after a reply when its ready composer appears, so you can send the next prompt without waiting for stale-state recovery.
 
+Aider returns to idle after a reply when its prompt reappears, so you can send the next prompt right away.
+
 **Automatic session binding (Goose):**
 
 Shell integration injects `--name $TUIC_SESSION` into `goose session` and `goose run` subcommands. The wrapper is bypassed when you explicitly pass `--name`, `-n`, `--resume`, or `-r`.

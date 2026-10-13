@@ -2135,14 +2135,14 @@ pub(crate) mod settings_app;
 
 const NOTIFICATION_CONFIG_FILE: &str = "notifications.json";
 const UI_PREFS_FILE: &str = "ui-prefs.json";
-const REPO_SETTINGS_FILE: &str = "repo-settings.json";
+pub(crate) const REPO_SETTINGS_FILE: &str = "repo-settings.json";
 const REPO_DEFAULTS_FILE: &str = "repo-defaults.json";
 const PROMPT_LIBRARY_FILE: &str = "prompt-library.json";
 const REPOSITORIES_FILE: &str = "repositories.json";
 const NOTES_FILE: &str = "notes.json";
 const KEYBINDINGS_FILE: &str = "keybindings.json";
 const PANE_LAYOUT_FILE: &str = "pane-layout.json";
-const AGENTS_CONFIG_FILE: &str = "agents.json";
+pub(crate) const AGENTS_CONFIG_FILE: &str = "agents.json";
 const ACTIVITY_FILE: &str = "activity.json";
 
 // App config
@@ -4447,15 +4447,19 @@ fn migrate_codex_bypass(config: &mut AgentsConfig) -> bool {
 pub(crate) fn save_agents_config(base: AgentsConfig, config: AgentsConfig) -> Result<(), String> {
     let file: ConfigFile<AgentsConfig> = ConfigFile::new(AGENTS_CONFIG_FILE);
     file.save_delta(&base, &config)?;
-    // The instruction files are what launches read; refresh them with the edit.
-    // The save itself succeeded, and every launch rewrites them again.
+    refresh_launch_instructions();
+    Ok(())
+}
+
+/// The instruction files are what launches read; refresh them with the edit.
+/// The save itself succeeded, and every launch rewrites them again.
+pub(crate) fn refresh_launch_instructions() {
     if let Err(error) = crate::launch_instructions::write_files(&config_dir()) {
         tracing::error!(
             source = "agent_hooks",
             "Failed to write launch instructions: {error}"
         );
     }
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------

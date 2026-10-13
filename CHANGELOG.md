@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 - Goose returns to idle after a reply and accepts the next submission without waiting for the five-minute stale recovery (#1812-022d).
+- Aider returns to idle after a reply and accepts the next submission (#1823-8150).
 - Keep child agent MCP bridges on the spawning instance, including isolated `tuic-remote` instances and fallback sockets (#1811-a0fe).
 - Preserve beta installs in the macOS terminal installer and normalize release tag prefixes for default and pinned downloads.
 

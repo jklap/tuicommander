@@ -9703,6 +9703,66 @@ async fn queued_command_drains_after_a_captured_opencode_mini_turn() {
     );
 }
 
+// Catches: a submitted Aider turn whose reply rows are trimmed as chrome below the
+// echoed `> prompt` line, so no activity is ever seen and the user-submit BUSY
+// outlives the repainted Ready prompt (story 1823-8150).
+#[test]
+fn captured_aider_submitted_turn_returns_idle_after_the_reply() {
+    let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(
+        "aider-0.86.2-submitted-turn-20261013.tcap",
+    ))
+    .expect("valid recorded Aider turn");
+    let (rows, cols) = capture.geometry.expect("recorded geometry");
+    let sid = "aider-submitted-turn";
+    let (state, silence) = chunk_trace_state(sid);
+    {
+        let mut session = state.session_maps.session_states.get_mut(sid).unwrap();
+        session.agent_type = Some("aider".into());
+        session.agent_type_from_run_config = true;
+    }
+    state
+        .grid
+        .vt_log_buffers
+        .insert(sid.into(), Mutex::new(VtLogBuffer::new(rows, cols, 2000)));
+    let mut processor = ChunkProcessor::new(None, None);
+    let mut utf8 = Utf8ReadBuffer::new();
+    let mut escapes = EscapeAwareBuffer::new();
+    let mut input = String::new();
+    for record in capture.records {
+        match record.direction {
+            crate::pty_capture::CaptureDirection::Input => {
+                if record.data == b"\r" {
+                    record_submitted_line(&state, sid, std::mem::take(&mut input), 0);
+                } else {
+                    input.push_str(std::str::from_utf8(&record.data).unwrap());
+                }
+            }
+            crate::pty_capture::CaptureDirection::Output => {
+                let text = utf8.push(&record.data);
+                let text = escapes.push(&text);
+                let (text, _) = crate::state::strip_kitty_sequences(&text);
+                processor.process_chunk(&text, &silence, sid, &state);
+            }
+        }
+    }
+    let activity = silence.lock().cached_screen_activity;
+    assert_eq!(activity, AgentScreenActivity::Ready);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .background_probe_satisfied_turn_epoch = Some(1);
+    silence.lock().screen_ready_pending_since =
+        Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
+    assert!(
+        try_timer_idle_transition(&state, &silence, sid, activity, Some("aider"), Some(1))
+            .transitioned,
+        "the recorded Ready prompt must release the submitted turn: {:?}",
+        silence.lock().evidence
+    );
+}
+
 // Catches: a submitted Goose turn retaining Protocol busy after its real reply
 // and ready composer, blocking the next submission until protocol-stale.
 #[test]
