@@ -14,11 +14,16 @@ fixture_root="${TUIC_FIXTURE_ROOT:-${TMPDIR:-/tmp}}"
 fixture_root="${fixture_root%/}"
 # A named instance binds <TMPDIR>/tuic-mcp-<16 hex>.sock (30 bytes after the
 # '/'), and a separately launched `tuic` client must export the same TMPDIR to
-# find it. Rust binds at most 103 bytes (104-byte sun_path minus NUL), so the
-# fixture TMPDIR may be at most 72 bytes. First of: TUIC_FIXTURE_TMPDIR; a
-# private per-instance <root>/tuic-rf-<hash>; the caller's temp dir itself.
+# find it. The longest socket path is tuic-ipc's UNIX_SOCKET_PATH_MAX (read from
+# its source: one definition), so the fixture TMPDIR may be at most that minus
+# '/' minus the socket name. First of: TUIC_FIXTURE_TMPDIR; a private
+# per-instance <root>/tuic-rf-<hash>; the caller's temp dir itself.
 # Nothing falls back to /tmp: over budget, this fails naming every candidate.
-socket_budget=72
+# shellcheck source=test-tmp-lib.sh
+. "$(dirname "$0")/test-tmp-lib.sh"
+socket_max="$(tuic_unix_socket_path_max "$(cd "$(dirname "$0")/.." && pwd)")"
+socket_name="tuic-mcp-0000000000000000.sock" # tuic_ipc::named_socket_path's shape
+socket_budget=$((socket_max - 1 - ${#socket_name}))
 instance_hash="$(printf '%s' "$fixture_instance" | cksum | cut -d ' ' -f 1)"
 if [[ -n "${TUIC_FIXTURE_TMPDIR:-}" ]]; then
   candidates=("${TUIC_FIXTURE_TMPDIR%/}")
@@ -31,7 +36,7 @@ for candidate in "${candidates[@]}"; do
 done
 if [[ -z "$fixture_tmpdir" ]]; then
   {
-    echo "No fixture TMPDIR fits the named socket: it needs at most $socket_budget bytes (103-byte socket path minus /tuic-mcp-<16 hex>.sock)."
+    echo "No fixture TMPDIR fits the named socket: it needs at most $socket_budget bytes (${socket_max}-byte socket path minus /tuic-mcp-<16 hex>.sock)."
     for candidate in "${candidates[@]}"; do echo "  $candidate: ${#candidate} bytes"; done
     echo "Set TUIC_FIXTURE_TMPDIR to a private dir of at most $socket_budget bytes (or use a shorter TMPDIR)."
   } >&2

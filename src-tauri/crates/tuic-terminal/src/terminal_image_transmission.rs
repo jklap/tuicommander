@@ -135,6 +135,12 @@ fn temp_roots() -> Vec<PathBuf> {
 ///
 /// Returns whether the file was removed (for tests; the caller ignores it).
 fn delete_kitty_temp_file(path: &Path) -> bool {
+    delete_kitty_temp_file_within(path, &temp_roots())
+}
+
+/// `delete_kitty_temp_file` with the allowed directories passed in, so a test
+/// can name a root that excludes its own scratch space.
+fn delete_kitty_temp_file_within(path: &Path, roots: &[PathBuf]) -> bool {
     let Some(name) = path.file_name() else {
         return false;
     };
@@ -156,10 +162,7 @@ fn delete_kitty_temp_file(path: &Path) -> bool {
     let Ok(canonical_parent) = std::fs::canonicalize(parent) else {
         return false;
     };
-    if !temp_roots()
-        .iter()
-        .any(|root| canonical_parent.starts_with(root))
-    {
+    if !roots.iter().any(|root| canonical_parent.starts_with(root)) {
         return false;
     }
     let target = canonical_parent.join(name);
@@ -604,31 +607,32 @@ mod tests {
 
     #[test]
     fn t_equals_t_refuses_to_delete_a_file_outside_the_temp_dir() {
-        // Anything genuinely outside the OS temp dir — home directory is a
-        // safe stand-in that this test suite can always write to.
-        let dir = std::env::var("HOME")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|_| std::path::PathBuf::from("."))
-            .join(format!(".tuic-test-outside-temp-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        // Two sibling dirs in this test's scratch space: only `allowed` is a
+        // temp root, so `outside` is genuinely outside it. Nothing here touches
+        // $HOME.
+        let base = std::env::temp_dir().join(format!("tuic-test-tt-out-{}", std::process::id()));
+        let allowed = base.join("allowed");
+        let outside = base.join("outside");
+        std::fs::create_dir_all(&allowed).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
         // Carries the marker, so only the temp-dir containment check can
         // be what refuses the delete.
-        let path = dir.join("tty-graphics-protocol-must-survive.bin");
+        let path = outside.join("tty-graphics-protocol-must-survive.bin");
         std::fs::write(&path, b"keep me").unwrap();
+        let roots = [std::fs::canonicalize(&allowed).unwrap()];
 
-        let bytes = read_file_medium(path.to_str().unwrap().as_bytes(), true);
-        assert_eq!(
-            bytes.as_deref(),
-            Some(&b"keep me"[..]),
-            "still reads/displays even when the delete is refused"
-        );
         assert!(
-            path.exists(),
+            !delete_kitty_temp_file_within(&path, &roots),
             "t=t must NOT delete a file outside the temp dir"
         );
+        assert!(path.exists());
+        assert_eq!(
+            read_file_medium(path.to_str().unwrap().as_bytes(), false).as_deref(),
+            Some(&b"keep me"[..]),
+            "still reads/displays when the delete is refused"
+        );
 
-        std::fs::remove_file(&path).ok();
-        std::fs::remove_dir(&dir).ok();
+        std::fs::remove_dir_all(&base).ok();
     }
 
     /// Kitty spec: the terminal may only delete a `t=t` file whose name
@@ -687,27 +691,25 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn t_equals_t_refuses_a_symlinked_parent_that_escapes_the_temp_dir() {
-        let outside = std::env::var("HOME")
-            .map(std::path::PathBuf::from)
-            .unwrap()
-            .join(format!(".tuic-test-tt-escape-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("tuic-test-tt-esc-{}", std::process::id()));
+        let allowed = base.join("allowed");
+        let outside = base.join("outside");
+        std::fs::create_dir_all(&allowed).unwrap();
         std::fs::create_dir_all(&outside).unwrap();
         let target = outside.join("tty-graphics-protocol-x.bin");
         std::fs::write(&target, b"outside").unwrap();
-        let link_dir =
-            std::env::temp_dir().join(format!("tuic-test-tt-pdir-{}", std::process::id()));
+        let link_dir = allowed.join("pdir");
         std::os::unix::fs::symlink(&outside, &link_dir).unwrap();
+        let roots = [std::fs::canonicalize(&allowed).unwrap()];
 
         let via_link = link_dir.join("tty-graphics-protocol-x.bin");
-        assert!(read_file_medium(via_link.to_str().unwrap().as_bytes(), true).is_some());
+        assert!(!delete_kitty_temp_file_within(&via_link, &roots));
         assert!(
             target.exists(),
             "must not delete outside the temp dir via a parent link"
         );
 
-        std::fs::remove_file(&link_dir).ok();
-        std::fs::remove_file(&target).ok();
-        std::fs::remove_dir(&outside).ok();
+        std::fs::remove_dir_all(&base).ok();
     }
 
     #[test]
