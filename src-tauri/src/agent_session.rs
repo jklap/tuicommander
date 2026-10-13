@@ -3309,7 +3309,9 @@ mod attachment_resume_tests {
     fn attachment_resume_drops_only_generated_directory_grants() {
         let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
         let _guard = crate::config::set_config_dir_override(root.path().into());
-        let old = root.path().join("attachments/pty-old");
+        // Generated grants name the resolved data dir (`is_tuic_attachment_grant`
+        // canonicalizes it); test scratch may sit under a symlinked $TMPDIR.
+        let old = crate::fs::long_form(root.path()).join("attachments/pty-old");
         let argv = vec![
             "claude".into(),
             format!("--add-dir={}", old.display()),

@@ -11239,7 +11239,16 @@ mod tests {
             .unwrap();
         let reply: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         let path = std::path::Path::new(reply["path"].as_str().unwrap());
-        assert!(path.starts_with(state.data_dir.join("attachments/pty-upload-session")));
+        // The upload resolves its target directory before writing, so the
+        // reply names the canonical directory even when the data dir was
+        // reached through a symlinked `$TMPDIR`.
+        assert!(
+            path.starts_with(
+                crate::fs::long_form(&state.data_dir).join("attachments/pty-upload-session")
+            ),
+            "{}",
+            path.display()
+        );
         assert_eq!(std::fs::read(path).unwrap(), b"attachment bytes");
     }
 
