@@ -85,6 +85,14 @@ export function TasksList(props: TasksListProps) {
 					.filter((group) => group.items.length)
 			: model.state().groups,
 	);
+	// The provider total counts every match; the linked filter narrows only the loaded rows, so it no longer applies.
+	const itemsLabel = () => {
+		const total = model.state().total;
+		const shown = shownItems().length;
+		return !linkedOnly() && total !== null && total > shown
+			? `${shown} of ${total.toLocaleString()} items`
+			: `${shown} items`;
+	};
 	let debounce: ReturnType<typeof setTimeout> | undefined;
 	let previousSource: WorkItemProvider | undefined;
 	createEffect(() => {
@@ -279,12 +287,15 @@ export function TasksList(props: TasksListProps) {
 				)}
 			</Show>
 			<div class={s.status} role="status" aria-live="polite">
-				{model.state().loading ? "Loading tasks…" : `${shownItems().length} items`}
+				{model.state().loading ? "Loading tasks…" : itemsLabel()}
 				<Show when={model.state().stale}>
 					<span class={s.stale}>Stale results</span>
 				</Show>
 				<Show when={model.state().error}>
 					<span class={s.error}>{model.state().error}</span>
+					<button type="button" onClick={() => void model.refresh()}>
+						Retry
+					</button>
 				</Show>
 			</div>
 			<Show when={!provider()}>

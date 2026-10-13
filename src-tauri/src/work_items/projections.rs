@@ -103,6 +103,7 @@ impl InMemoryWorkItemProvider {
         Ok(WorkItemGroupedPage {
             groups: groups.into_values().collect(),
             next_cursor: page.next_cursor,
+            total: page.total,
         })
     }
 

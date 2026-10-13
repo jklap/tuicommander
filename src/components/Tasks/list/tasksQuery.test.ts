@@ -131,6 +131,27 @@ describe("Tasks query consumer", () => {
 		expect(model.state().error).toBe("offline");
 	});
 
+	// Catches: the total of a previous source or page survives into a page that reports none.
+	it("total_follows_the_latest_page_and_resets_when_unreported", async () => {
+		const model = createTasksQuery();
+		await model.select(
+			source("a", async (q) =>
+				q.cursor === null
+					? { items: [item("one")], nextCursor: "page2", total: 2 }
+					: { items: [item("two")], nextCursor: null, total: 2 },
+			),
+			query,
+		);
+		expect(model.state().total).toBe(2);
+		await model.loadMore();
+		expect(model.state().total).toBe(2);
+		await model.select(
+			source("b", async () => ({ items: [item("B", "b")], nextCursor: null })),
+			query,
+		);
+		expect(model.state().total).toBeNull();
+	});
+
 	// Catches: the page cache grows without evicting the least recently used query.
 	it("least_recent_query_is_evicted_at_capacity", async () => {
 		const model = createTasksQuery({ maxCachedPages: 2 });

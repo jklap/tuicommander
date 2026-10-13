@@ -66,11 +66,18 @@ def generate():
             if kind == "struct":
                 assert attrs == 'rename_all = "camelCase", deny_unknown_fields', attrs
                 fields = []
+                optional = False
                 for line in filter(str.strip, body.strip().splitlines()):
+                    # `#[serde(default)]` marks a field a producer may omit; TS makes the key optional.
+                    if line.strip() == "#[serde(default)]":
+                        optional = True
+                        continue
                     field = re.fullmatch(r"\s*pub (\w+): (.+),\s*", line)
                     assert field, f"Unsupported field: {line}"
                     key, value = field.groups()
-                    fields.append(f"\t{camel(key)}: {ts_type(value)};")
+                    assert not optional or value.startswith("Option<"), f"Defaulted field must be an Option: {line}"
+                    fields.append(f"\t{camel(key)}{'?' if optional else ''}: {ts_type(value)};")
+                    optional = False
                 declarations.append(f"export interface {name} {{\n" + "\n".join(fields) + "\n}")
             else:
                 tagged = 'tag = "kind", content = "value", ' in attrs

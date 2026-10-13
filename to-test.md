@@ -1,3 +1,7 @@
+## Work-item page total (1845-66f6) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, `WorkItemPage.total` / `WorkItemGroupedPage.total` are accepted by the Rust DTOs (optional, defaulted). Targeted `plugin_docs` and `work_items` tests pass; the Tasks list shows "N of total" once a loaded GitLab plugin build that sends `x-total` is installed (plugin branch parked, see story worklog).
+
 ## GitHub settings owner adapter (1774-ce8f) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, the GitHub owner adapter is loaded. Shared settings transport wiring is a separate step; this change adds no callable endpoint by itself.

@@ -92,6 +92,68 @@ describe("Tasks list", () => {
 		expect(screen.getByRole("button", { name: "Filters (2)" })).toBeInTheDocument();
 	});
 
+	describe("status line and error actions", () => {
+		const withPages = (total: number | null | undefined, count = 4) => {
+			const base = listDemo(count);
+			return {
+				...base,
+				list: async (query: Parameters<typeof base.list>[0], signal?: AbortSignal) => {
+					const page = await base.list(query, signal);
+					return total === undefined ? page : { ...page, total };
+				},
+			};
+		};
+
+		// Catches: the status prints the loaded count as if it were the whole result.
+		it("reads N of total when the provider knows the total", async () => {
+			render(() => <TasksList providers={[withPages(120)]} onOpen={() => {}} />);
+			await screen.findByRole("button", { name: /Task 00004/ });
+			expect(screen.getByRole("status")).toHaveTextContent("4 of 120 items");
+		});
+
+		// Catches: "N of total" invented when the provider reports no total, or a total below the loaded rows.
+		it("shows the loaded count alone when the total is unknown or inconsistent", async () => {
+			const unknown = render(() => <TasksList providers={[withPages(undefined)]} onOpen={() => {}} />);
+			await screen.findByRole("button", { name: /Task 00004/ });
+			expect(screen.getByRole("status")).toHaveTextContent(/^4 items/);
+			unknown.unmount();
+			render(() => <TasksList providers={[withPages(2)]} onOpen={() => {}} />);
+			await screen.findByRole("button", { name: /Task 00004/ });
+			expect(screen.getByRole("status")).toHaveTextContent(/^4 items/);
+		});
+
+		// Catches: the "Linked to a worktree" filter keeps the provider total, so the status claims 1 of 120 matches.
+		it("drops the total while a client-side filter narrows the loaded rows", async () => {
+			render(() => <TasksList providers={[withPages(120)]} onOpen={() => {}} />);
+			await screen.findByRole("button", { name: /Task 00004/ });
+			fireEvent.click(screen.getByRole("button", { name: "Filters" }));
+			fireEvent.click(screen.getByLabelText("Linked to a worktree"));
+			await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent(/^0 items/));
+			expect(screen.getByRole("status")).not.toHaveTextContent("of 120");
+		});
+
+		// Catches: a failed list leaves the error as a dead end with no way to retry from the list.
+		it("offers Retry on a list error and reloads the rows", async () => {
+			const base = listDemo(3);
+			let fail = true;
+			const flaky = {
+				...base,
+				list: async (query: Parameters<typeof base.list>[0], signal?: AbortSignal) => {
+					if (fail) throw new Error("GitHub request failed");
+					return base.list(query, signal);
+				},
+			};
+			render(() => <TasksList providers={[flaky]} onOpen={() => {}} />);
+			const retry = await screen.findByRole("button", { name: "Retry" });
+			expect(screen.getByRole("status")).toHaveTextContent("GitHub request failed");
+			fail = false;
+			fireEvent.click(retry);
+			await screen.findByRole("button", { name: /Task 00003/ });
+			expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+			expect(screen.getByRole("status")).not.toHaveTextContent("GitHub request failed");
+		});
+	});
+
 	describe("row metadata and selection", () => {
 		const row = (id: string, state: WorkItem["state"], assignees: string[], updatedAt: string): WorkItem => ({
 			reference: { providerId: "demo", accountId: "local", id },

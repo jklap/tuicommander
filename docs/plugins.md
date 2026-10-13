@@ -1875,7 +1875,7 @@ Generate their TypeScript declarations with
 `WorkItemQuery` carries ANDed filters (values are ORed), saved filter ID, native
 search, sort, bounded page size and opaque cursor. Providers must bind cursors to
 the account/query; selecting a preset starts with no cursor. `WorkItemPage`
-contains items and `nextCursor`. Details load body, field schemas, allowed action
+contains items, `nextCursor` and an optional `total` (all matches, when the provider knows it). Details load body, field schemas, allowed action
 descriptors and a separately paginated comment page on open. Comment entries are
 `normal`, `review_thread` (resolved, path, line and reviewed commitId), or
 `review_summary` (state and reviewed commitId). Bodies are markdown, not trusted HTML.
