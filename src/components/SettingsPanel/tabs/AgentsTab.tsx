@@ -7,6 +7,8 @@ import {
 	type AgentRunConfig,
 	type AgentType,
 	HOOK_SUPPORT,
+	LIMITED_SUPPORT_AGENTS,
+	LIMITED_SUPPORT_LABEL,
 	MCP_SUPPORT,
 } from "../../../agents";
 import {
@@ -879,6 +881,11 @@ const AgentRow: Component<{
 						<span class={a.agentName} style={{ opacity: isEnabled() ? 1 : 0.5 }}>
 							{agent().name}
 						</span>
+						<Show when={LIMITED_SUPPORT_AGENTS.includes(props.agentType)}>
+							<span class={a.badge} data-type="limited">
+								{LIMITED_SUPPORT_LABEL}
+							</span>
+						</Show>
 						<Show when={props.detection?.version}>
 							<span class={a.agentVersion}>{props.detection!.version}</span>
 						</Show>
