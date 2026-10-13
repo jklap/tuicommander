@@ -90,6 +90,11 @@
   color: var(--fg-muted);
 }
 
+.badge[data-type="limited"] {
+  background: rgba(210, 153, 34, 0.15);
+  color: var(--warning);
+}
+
 .badge[data-type="mcp"] {
   background: rgba(88, 166, 255, 0.15);
   color: var(--accent);
