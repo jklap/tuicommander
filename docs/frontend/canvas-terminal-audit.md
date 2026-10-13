@@ -11,6 +11,8 @@ Answers-only history includes a retained prompt-less prefix before the first tra
 
 Submitted prompts are not tinted in the terminal grid. Recorded `userPromptLines` still drive scrollbar ticks and answers-only turn grouping; Chat user messages retain the theme prompt tint and gutter.
 
+Adjacent `💬` answer paragraphs share one continuous tint and left bar, including blank rows between them. A non-answer output row or prompt ends the region. The CLI blanks only the marker glyph cells; copy, selection and search keep the original text. Chat uses the same answer extent and strips every paragraph marker.
+
 ## Architecture
 
 ```

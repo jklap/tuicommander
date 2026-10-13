@@ -214,6 +214,7 @@ describe("planSuggestOverlay", () => {
 		).toEqual({
 			key: "",
 			blocks: [],
+			answerMarkers: new Set(),
 		});
 	});
 });
@@ -268,14 +269,14 @@ describe("planSuggestOverlay — 💬 answer marker", () => {
 		expect(planSuggestOverlay(5, get).blocks.map((b) => b.row)).toEqual([0, 1]);
 	});
 
-	it("starts a new answer at a second marker instead of extending the first", () => {
-		// catches: the marker break deleted from answerExtent, so the first answer swallows the second
+	it("extends the answer through a second adjacent marker", () => {
+		// Catches: adjacent marked paragraphs being split into separate answer regions.
 		const get = rows([
 			["⏺ 💬 First.", false],
 			["  more first", false],
 			["⏺ 💬 Second.", false],
 		]);
-		expect(answerExtent(0, 3, get)).toBe(1);
+		expect(answerExtent(0, 3, get)).toBe(2);
 		expect(answerExtent(2, 3, get)).toBe(2);
 	});
 
@@ -355,13 +356,10 @@ describe("answerBlockRanges", () => {
 	const code = (text: string): ChatBlock => ({ kind: "code", text, marker: false });
 	const other = (text: string): ChatBlock => ({ kind: "other", text, marker: false });
 
-	// Catches: the tint stopping at the marker paragraph, or a second answer swallowed into the first.
-	it("spans each answer from its marker to the next marker or the end", () => {
+	// Catches: each adjacent marker starting another tinted region.
+	it("spans adjacent answer paragraphs to the end", () => {
 		const blocks = [p("intro"), p("A", true), other("- x"), p("B", true), other("- y"), p("tail")];
-		expect(answerBlockRanges(blocks)).toEqual([
-			[1, 2],
-			[3, 5],
-		]);
+		expect(answerBlockRanges(blocks)).toEqual([[1, 5]]);
 	});
 
 	// Catches: a literal 💬 line inside a code block ending the answer, as the grid never does.

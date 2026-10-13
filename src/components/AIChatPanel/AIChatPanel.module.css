@@ -381,15 +381,15 @@
   background: rgba(94,190,140,0.9);
 }
 
-.assistantMsg :global(#markdown-content [data-tuic-answer]:not([data-tuic-answer-start])) {
+.assistantMsg :global(#markdown-content [data-tuic-answer]:not([data-tuic-answer-region-start])) {
   margin-top: 8px;
 }
 
-.assistantMsg :global(#markdown-content [data-tuic-answer]:not([data-tuic-answer-start])::before) {
+.assistantMsg :global(#markdown-content [data-tuic-answer]:not([data-tuic-answer-region-start])::before) {
   top: -8px;
 }
 
-.assistantMsg :global(#markdown-content [data-tuic-answer]:not([data-tuic-answer-start])::after) {
+.assistantMsg :global(#markdown-content [data-tuic-answer]:not([data-tuic-answer-region-start])::after) {
   top: -8px;
 }
 

@@ -578,10 +578,18 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		const markers = planViewportMarkers(frame, dirtyIndices);
 		gridRenderer.paintGrid(rowMap, m, {
 			fullRepaint: fullRepaintNeeded,
-			dirtyIndices: dirtyIndices && withToggledRows(dirtyIndices, paintedHiddenRows, markers.hidden),
+			dirtyIndices:
+				dirtyIndices &&
+				withToggledRows(
+					withToggledRows(dirtyIndices, paintedHiddenRows, markers.hidden),
+					paintedAnswerMarkers,
+					markers.answerMarkers,
+				),
 			hiddenRows: markers.hidden,
+			hiddenAnswerMarkers: markers.answerMarkers,
 		});
 		paintedHiddenRows = markers.hidden;
+		paintedAnswerMarkers = markers.answerMarkers;
 		fullRepaintNeeded = false;
 
 		// Overlay (cursor/selection/search/links/scrollbar/suggest) always stays on main.
@@ -912,14 +920,16 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	interface MarkerPlan {
 		/** Rows not to paint: agent `suggest:`/`intent:` rows, overscan rows included. */
 		hidden: ReadonlySet<number>;
+		answerMarkers: ReadonlySet<number>;
 		/** Plan key plus the answer strips, viewport rows only. */
 		key: string;
 		blocks: OverlayBlock[];
 	}
-	const NO_MARKERS: MarkerPlan = { hidden: new Set(), key: "", blocks: [] };
+	const NO_MARKERS: MarkerPlan = { hidden: new Set(), answerMarkers: new Set(), key: "", blocks: [] };
 	let lastMarkerPlan: MarkerPlan = NO_MARKERS;
 	/** The hidden set the main canvas was last painted with. */
 	let paintedHiddenRows: ReadonlySet<number> = NO_MARKERS.hidden;
+	let paintedAnswerMarkers: ReadonlySet<number> = NO_MARKERS.answerMarkers;
 
 	/** `dirty` plus every viewport row whose hidden state differs between `before` and `after`. */
 	function withToggledRows(dirty: Set<number>, before: ReadonlySet<number>, after: ReadonlySet<number>): Set<number> {
@@ -937,7 +947,12 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	 */
 	function planMarkers(rows: number, getRow: (i: number) => { text: string; isWrapped: boolean } | null): MarkerPlan {
 		const plan = planSuggestOverlay(rows + 1, getRow, -MARKER_LOOKBACK_ROWS);
-		return { hidden: hiddenMarkerRows(plan.blocks), key: plan.key, blocks: plan.blocks.filter((b) => b.row < rows) };
+		return {
+			hidden: hiddenMarkerRows(plan.blocks),
+			answerMarkers: plan.answerMarkers,
+			key: plan.key,
+			blocks: plan.blocks.filter((b) => b.row < rows),
+		};
 	}
 
 	/** Marker plan of the live frame; a dirty-row prefilter skips the scan on screens that never had a marker. */
@@ -1142,8 +1157,13 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			if (!cached) return null;
 			return { text: rowToText(cached), isWrapped: cacheRow(hist - intOffset + i - 1)?.wrapped ?? false };
 		});
-		gridRenderer.paintGrid(tempMap, m, { fullRepaint: true, hiddenRows: markers.hidden });
+		gridRenderer.paintGrid(tempMap, m, {
+			fullRepaint: true,
+			hiddenRows: markers.hidden,
+			hiddenAnswerMarkers: markers.answerMarkers,
+		});
 		paintedHiddenRows = markers.hidden;
+		paintedAnswerMarkers = markers.answerMarkers;
 		lastMarkerPlan = markers;
 		if (octxOverscan && overscanRenderer) {
 			const ch = m.cellHeight;
@@ -1154,13 +1174,14 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			if (above) {
 				octxOverscan.fillStyle = cachedBgDefault;
 				octxOverscan.fillRect(-GUTTER_PX, 0, w, ch);
-				if (!markers.hidden.has(-1)) overscanRenderer.paintRow(above, 0, m);
+				if (!markers.hidden.has(-1)) overscanRenderer.paintRow(above, 0, m, undefined, markers.answerMarkers.has(-1));
 			}
 			if (below) {
 				const y = (rows + 1) * ch;
 				octxOverscan.fillStyle = cachedBgDefault;
 				octxOverscan.fillRect(-GUTTER_PX, y, w, ch);
-				if (!markers.hidden.has(rows)) overscanRenderer.paintRow(below, y, m);
+				if (!markers.hidden.has(rows))
+					overscanRenderer.paintRow(below, y, m, undefined, markers.answerMarkers.has(rows));
 			}
 		}
 		ensureCacheBand(intOffset, rows, hist);
