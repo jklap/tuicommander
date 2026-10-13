@@ -1505,7 +1505,8 @@
   margin-bottom: 8px;
 }
 
-.messageList[data-terminal-chat] .assistantMsg :global(#markdown-content [data-tuic-answer]:last-child) {
+/* Only the last block of the last segment ends the card; every earlier segment's last block keeps its gap. */
+.messageList[data-terminal-chat] .assistantMsg :global(#markdown-content > div:last-child > [data-tuic-answer]:last-child) {
   margin-bottom: 0;
 }
 
