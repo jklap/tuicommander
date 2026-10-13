@@ -92,6 +92,33 @@ describe("repoDefaultsStore", () => {
 		});
 	});
 
+	describe("config-file-only fields", () => {
+		// Dropped-items-review #4: the expert script timeouts have no UI; the
+		// delta writer's base is the whole loaded document, so dropping them
+		// from `desired` would save them as deletions on the next Settings edit.
+		it("carries keys it does not own through a save unchanged", async () => {
+			mockInvoke.mockResolvedValueOnce({
+				base_branch: "main",
+				setup_script_timeout_secs: 1200,
+				archive_script_timeout_secs: 60,
+			});
+			await store.hydrate();
+			mockInvoke.mockClear();
+
+			testInScope(() => store.setBaseBranch("develop"));
+			await Promise.resolve();
+
+			const call = mockInvoke.mock.calls.find(([cmd]) => cmd === "save_repo_defaults");
+			const args = call?.[1] as { base: Record<string, unknown>; config: Record<string, unknown> };
+			expect(args.config).toMatchObject({
+				base_branch: "develop",
+				setup_script_timeout_secs: 1200,
+				archive_script_timeout_secs: 60,
+			});
+			expect(args.base.setup_script_timeout_secs).toBe(1200);
+		});
+	});
+
 	describe("setters", () => {
 		it("setBaseBranch updates state and persists", () => {
 			testInScope(() => {

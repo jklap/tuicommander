@@ -4093,7 +4093,11 @@ mod tests {
         let victim = outside.path().join("victim.txt");
         std::fs::write(&victim, "important\n").unwrap();
         let mut abs = repo.clone();
-        for _ in repo.components().skip(1) {
+        // The kernel resolves each `..` against the physical directory, so the
+        // climb to `/` takes as many steps as the *canonical* repo path has
+        // components; a `$TMPDIR` reached through a symlink is shorter
+        // lexically than it is on disk.
+        for _ in repo.canonicalize().unwrap().components().skip(1) {
             abs.push("..");
         }
         let abs = abs

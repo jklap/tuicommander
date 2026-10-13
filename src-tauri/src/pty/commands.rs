@@ -635,11 +635,7 @@ pub(crate) async fn close_pty(
 ) -> Result<(), String> {
     let state = state.inner().clone();
     tokio::task::spawn_blocking(move || {
-        if let Some(worktree) = close_pty_core(&state, &session_id, cleanup_worktree)
-            && let Err(e) = remove_worktree_internal(&worktree, false)
-        {
-            tracing::warn!("Failed to cleanup worktree: {e}");
-        }
+        crate::worktree::close_pty_with_worktree_cleanup(&state, &session_id, cleanup_worktree);
     })
     .await
     .map_err(|e| format!("Task panic: {e}"))
