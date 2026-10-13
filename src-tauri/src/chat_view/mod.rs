@@ -11,7 +11,9 @@
 //! clients with `chat-view-changed`; when nobody has read for `VIEWER_IDLE` the
 //! ticker stops and the log is dropped.
 
+mod adapter;
 pub(crate) mod claude;
+pub(crate) mod codex;
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -25,7 +27,7 @@ use serde_json::Value;
 
 use crate::state::AppState;
 use crate::transcript_tail::{read_appended, read_last_window};
-use claude::ClaudeAdapter;
+use adapter::TranscriptAdapter;
 
 /// How much of the end of a transcript is read on first attach. The opt-in
 /// `measurement` test measures this and a full parse against a real disk file.
@@ -119,7 +121,7 @@ struct View {
     attached: bool,
     /// Keep the old file open so its identity cannot be reused after replacement.
     file_identity: Option<same_file::Handle>,
-    adapter: ClaudeAdapter,
+    adapter: TranscriptAdapter,
     log: ViewLog,
     last_read: Instant,
     bound_at: Instant,
@@ -133,7 +135,7 @@ impl View {
             offset: 0,
             attached: false,
             file_identity: None,
-            adapter: ClaudeAdapter::default(),
+            adapter: TranscriptAdapter::default(),
             log: ViewLog::new(max_entries, max_bytes),
             last_read: Instant::now(),
             bound_at: Instant::now(),
@@ -155,7 +157,7 @@ impl View {
         self.offset = 0;
         self.attached = false;
         self.file_identity = None;
-        self.adapter = ClaudeAdapter::default();
+        self.adapter.reset();
         self.log.reset();
     }
 
@@ -251,7 +253,15 @@ pub(crate) fn chat_view_snapshot(
             views
                 .entry(session_id.to_owned())
                 .or_insert_with(|| {
-                    Arc::new(Mutex::new(View::new(path, MAX_LOG_ENTRIES, MAX_LOG_BYTES)))
+                    let agent = state
+                        .session_maps
+                        .session_states
+                        .get(session_id)
+                        .and_then(|session| session.agent_type.clone())
+                        .unwrap_or_default();
+                    let mut view = View::new(path, MAX_LOG_ENTRIES, MAX_LOG_BYTES);
+                    view.adapter = TranscriptAdapter::for_agent(&agent);
+                    Arc::new(Mutex::new(view))
                 })
                 .clone()
         }
@@ -268,8 +278,8 @@ pub(crate) fn chat_view_snapshot(
             next_seq: view.log.next_seq,
             reset,
             updates,
-            unknown_rows: view.adapter.stats.unknown_rows,
-            malformed_rows: view.adapter.stats.malformed_rows,
+            unknown_rows: view.adapter.stats().unknown_rows,
+            malformed_rows: view.adapter.stats().malformed_rows,
         };
         let start = !view.ticking;
         view.ticking = true;

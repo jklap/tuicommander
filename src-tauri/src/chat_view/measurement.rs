@@ -66,7 +66,7 @@ fn view_real_transcript_throughput() {
         full.log.next_seq,
         full.log.entries.len(),
         full.log.bytes,
-        full.adapter.stats.unknown_rows,
-        full.adapter.stats.malformed_rows
+        full.adapter.stats().unknown_rows,
+        full.adapter.stats().malformed_rows
     );
 }

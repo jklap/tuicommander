@@ -341,7 +341,7 @@ fn notice(text: &str) -> Value {
 
 /// Redacted first, then cut: a secret split by the cut would no longer match
 /// its pattern.
-fn clean(text: &str, max: usize) -> String {
+pub(super) fn clean(text: &str, max: usize) -> String {
     let redacted = redact_secrets(text);
     if redacted.chars().count() <= max {
         return redacted;
@@ -392,7 +392,7 @@ fn tool_title(name: &str, input: &Value) -> String {
 
 /// A tool input with every string redacted and cut, so one `Write` of a whole
 /// file does not ride the log.
-fn cap_strings(value: &Value) -> Value {
+pub(super) fn cap_strings(value: &Value) -> Value {
     match value {
         Value::String(s) => Value::String(clean(s, MAX_INPUT_STRING_CHARS)),
         Value::Array(items) => Value::Array(items.iter().map(cap_strings).collect()),

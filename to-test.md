@@ -5238,3 +5238,5 @@ Visual evidence: worktree Vite fixture mounted the real NotificationsTab and Toa
 ## Goose reply completion (1812-022d) — Rust restart required
 
 - [ ] After Boss restarts `make dev` or installs `make build`, send two prompts to Goose 1.49.0 with ollama. Each reply must return the tab to idle shortly after the ready composer appears; the second submit must be accepted without a five-minute wait or 409. The recorded first-turn replay covers the backend transition; this live check remains open until restart.
+
+- [ ] #1792-7450: After Boss manually restarts `make dev` (or rebuilds release), confirm Claude Chat still loads and follows its transcript. Codex rollout projection is implemented internally; Codex Chat must remain unavailable until exact native session binding is implemented and verified. No desktop instance was launched for this change.

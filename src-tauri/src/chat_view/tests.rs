@@ -136,7 +136,7 @@ fn view_first_attach_reads_only_the_last_window() {
     assert!(texts.len() < 200, "the head of the file was not read");
     assert_eq!(texts.last().map(String::as_str), Some("row 199"));
     // Every kept row is whole: a cut line would have failed to parse.
-    assert_eq!(view.adapter.stats.malformed_rows, 0);
+    assert_eq!(view.adapter.stats().malformed_rows, 0);
 }
 
 /// A truncated transcript must not leave the old conversation on screen.
@@ -204,5 +204,28 @@ fn queued_human_prompts_survive_full_load_and_incremental_tail() {
         !tail.advance(TAIL_WINDOW_BYTES).unwrap(),
         "unchanged file replays no prompts"
     );
-    assert_eq!(tail.adapter.stats.unknown_rows, 0);
+    assert_eq!(tail.adapter.stats().unknown_rows, 0);
+}
+
+// Catches: restarting a Codex transcript silently switching back to Claude parsing.
+#[test]
+fn codex_view_file_reset_preserves_rollout_projection() {
+    let tmp = tempfile::tempdir_in(crate::test_support::test_temp_root()).expect("tempdir");
+    let path = tmp.path().join("rollout.jsonl");
+    let recorded = include_str!("../fixtures/chat_view/codex/completed.jsonl");
+    std::fs::write(&path, recorded).expect("write recording");
+    let mut view = View::new(path, 100, usize::MAX);
+    view.adapter = TranscriptAdapter::for_agent("codex");
+    view.advance(1 << 20).expect("read rollout");
+    let before = view.log.epoch;
+    view.restart();
+    view.advance(1 << 20).expect("read reset rollout");
+    assert_ne!(view.log.epoch, before);
+    let (_, updates) = view.log.since(None, 0);
+    let replies: Vec<_> = updates
+        .iter()
+        .filter(|update| update["sessionUpdate"] == "agent_message_chunk")
+        .map(|update| update["content"]["text"].as_str().unwrap())
+        .collect();
+    assert_eq!(replies, ["Recorded reply"]);
 }

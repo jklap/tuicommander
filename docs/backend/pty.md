@@ -844,3 +844,19 @@ apply `agent_type` immediately, including removal when the shell returns; the
 ### History-anchored viewport scrolling
 
 Coalesced scrolling uses one atomic latest-wins slot for both transports. `terminal_scroll_to_anchor` encodes an all-time row anchor in that slot; the ticker resolves it under the VT lock after pending output. Null follows output. Evicted anchors clamp to the oldest retained row. Offset commands share the slot, so mixed clients retain request order.
+
+### Codex rollout projection (binding pending)
+
+The Rust `chat_view::codex::CodexAdapter` maps Codex 0.162.1
+`event_msg.item_completed` records to the same ACP updates as the Claude adapter.
+It retains completed user/assistant text, reasoning summaries, command executions
+and MCP tool calls. Tool cards include a main-argument title, bounded `rawInput`,
+final status and bounded output. Shared Claude redaction and truncation rules apply.
+`response_item` duplicates, unfinished tools and hook instructions are ignored.
+Unknown row/item kinds and malformed JSON are counted without stopping later rows.
+
+The shared tail/log has an adapter dispatch seam and preserves its parser on reset.
+This does **not** enable Codex Chat: transcript resolution and the frontend still
+accept Claude only. Codex's newest-unclaimed rollout discovery cannot prove which
+terminal owns a conversation. Exact native session binding is still required;
+the failed isolated hook probes did not capture that evidence.
