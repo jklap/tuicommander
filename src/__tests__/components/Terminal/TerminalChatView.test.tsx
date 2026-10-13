@@ -84,6 +84,17 @@ describe("TerminalChatView file links", () => {
 		await settle();
 		expect(mockOpenFile).not.toHaveBeenCalled();
 	});
+
+	// Catches: a nonexistent target remaining a clickable dead link after resolution fails.
+	it("removes the dead link when a clicked file no longer exists", async () => {
+		const { container } = await renderAnswer("Gone: `reports/missing.md`.");
+		const link = container.querySelector<HTMLAnchorElement>("a[data-tuic-href]");
+		expect(link).not.toBeNull();
+		link?.click();
+		await settle();
+		expect(container.textContent).toContain("reports/missing.md");
+		expect(container.querySelector("a[data-tuic-href='reports/missing.md']")).toBeNull();
+	});
 });
 
 describe("ViewModeToggle", () => {
