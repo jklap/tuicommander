@@ -4410,6 +4410,20 @@ pub fn validate_branch_worktree_path(repo_path: &str, worktree_path: &str) -> Re
     Ok(())
 }
 
+/// A symlinked folder above a checkout is fine (that is what `same_path`
+/// resolves), but the checkout itself must be named directly: removal keys its
+/// warm state and its directory by the leaf name (`warm_key` resolves the
+/// parent only), so a link standing in for the checkout would validate one
+/// directory and then act on the link instead. A dangling link is refused too.
+pub fn refuse_symlinked_checkout(worktree_path: &str) -> Result<(), String> {
+    if std::fs::symlink_metadata(worktree_path).is_ok_and(|meta| meta.file_type().is_symlink()) {
+        return Err(format!(
+            "Refused: '{worktree_path}' is a symlink; name the worktree directory itself"
+        ));
+    }
+    Ok(())
+}
+
 /// Validate that `worktree_path` is a detached orphan of the given repo, not a
 /// main or branch checkout or one with a Git operation in progress.
 pub fn validate_worktree_path(repo_path: &str, worktree_path: &str) -> Result<(), String> {
@@ -4417,6 +4431,7 @@ pub fn validate_worktree_path(repo_path: &str, worktree_path: &str) -> Result<()
     if !path.is_absolute() {
         return Err("worktree_path must be an absolute path".to_string());
     }
+    refuse_symlinked_checkout(worktree_path)?;
 
     let out = git_cmd(Path::new(repo_path))
         .args(["worktree", "list", "--porcelain"])
@@ -4425,10 +4440,7 @@ pub fn validate_worktree_path(repo_path: &str, worktree_path: &str) -> Result<()
 
     let entry = parse_worktree_entries(&out.stdout)
         .into_iter()
-        .find(|entry| {
-            tuic_core::path_spelling::portable_spelling(&entry.path)
-                == tuic_core::path_spelling::portable_spelling(worktree_path)
-        })
+        .find(|entry| tuic_core::path_spelling::same_path(&entry.path, worktree_path))
         .ok_or_else(|| {
             format!(
                 "Refused: '{}' is not a known worktree of '{}'",
@@ -5294,7 +5306,12 @@ pub fn sweep_archived_worktrees(
 /// issue #7 reported), or waiting on a lock nobody will release. Fifteen minutes
 /// sits above any plausible cold-cache install-and-build, so no real setup dies
 /// on it.
-const SCRIPT_TIMEOUT: Duration = Duration::from_secs(900);
+///
+/// This is the default only: a host can pass its own deadline per script
+/// ([`UserScript::timeout`], [`run_setup_script_with_env`]'s `timeout`), which
+/// TUICommander does from the config-file-only `setup_script_timeout_secs` /
+/// `archive_script_timeout_secs` expert settings.
+pub const SCRIPT_TIMEOUT: Duration = Duration::from_secs(900);
 
 /// A user-authored Setup/Archive Script plus the extra environment the host
 /// application wants it to see.
@@ -5304,19 +5321,23 @@ const SCRIPT_TIMEOUT: Duration = Duration::from_secs(900);
 /// supplies `env`: given the directory the script is about to run in, it
 /// returns the `(name, value)` pairs to set on top of the fully inherited
 /// parent environment. `PATH` is always set by the runner afterwards, so a
-/// pair naming it has no effect.
+/// pair naming it has no effect. `timeout` is the deadline after which the
+/// script's whole process tree is killed; `None` means [`SCRIPT_TIMEOUT`].
 #[derive(Clone, Copy)]
 pub struct UserScript<'a> {
     pub script: &'a str,
     pub env: &'a dyn Fn(&Path) -> Vec<(String, String)>,
+    pub timeout: Option<Duration>,
 }
 
 impl<'a> UserScript<'a> {
-    /// A script with no extra environment beyond the inherited one.
+    /// A script with no extra environment beyond the inherited one and the
+    /// default deadline.
     pub fn bare(script: &'a str) -> Self {
         Self {
             script,
             env: &no_extra_env,
+            timeout: None,
         }
     }
 }
@@ -5442,8 +5463,9 @@ fn windows_git_launcher(git: String) -> String {
 
 /// Run `script` through the platform shell in `cwd`, killing it at `timeout`.
 ///
-/// Both callers pass [`SCRIPT_TIMEOUT`]; the parameter is what lets a test drive
-/// the kill path without waiting a quarter of an hour for it.
+/// Callers pass the host's configured deadline or [`SCRIPT_TIMEOUT`]; the
+/// parameter is also what lets a test drive the kill path without waiting a
+/// quarter of an hour for it.
 ///
 /// **Accepted, not a gap**: the captured `stdout`/`stderr` are unbounded — a
 /// script that writes gigabytes grows this process's memory by that much
@@ -5543,7 +5565,12 @@ fn run_shell_script(
 ///
 /// Used by archive/delete operations to run cleanup scripts before the operation.
 fn run_script_in_dir(script: UserScript<'_>, cwd: &Path) -> Result<(), String> {
-    let output = run_shell_script(script.script, cwd, SCRIPT_TIMEOUT, &(script.env)(cwd))?;
+    let output = run_shell_script(
+        script.script,
+        cwd,
+        script.timeout.unwrap_or(SCRIPT_TIMEOUT),
+        &(script.env)(cwd),
+    )?;
 
     let exit_code = output.status.code().unwrap_or(-1);
     if exit_code != 0 {
@@ -5560,16 +5587,18 @@ fn run_script_in_dir(script: UserScript<'_>, cwd: &Path) -> Result<(), String> {
 /// Used to execute setup/run scripts after worktree creation.
 /// The script is passed to `sh -c` (Unix) or `cmd /C` (Windows).
 pub fn run_setup_script(script: String, cwd: String) -> Result<serde_json::Value, String> {
-    run_setup_script_with_env(script, cwd, &no_extra_env)
+    run_setup_script_with_env(script, cwd, &no_extra_env, None)
 }
 
 /// [`run_setup_script`] with host-supplied extra environment: `env` receives
 /// the resolved (tilde-expanded, existing) working directory and returns the
 /// pairs to set on top of the inherited environment — see [`UserScript`].
+/// `timeout` is the kill deadline (`None` = [`SCRIPT_TIMEOUT`]).
 pub fn run_setup_script_with_env(
     script: String,
     cwd: String,
     env: &dyn Fn(&Path) -> Vec<(String, String)>,
+    timeout: Option<Duration>,
 ) -> Result<serde_json::Value, String> {
     let cwd = tuic_core::cli::expand_tilde(&cwd);
     let cwd_path = Path::new(&cwd);
@@ -5577,7 +5606,12 @@ pub fn run_setup_script_with_env(
         return Err(format!("Working directory does not exist: {cwd}"));
     }
 
-    let output = run_shell_script(&script, cwd_path, SCRIPT_TIMEOUT, &env(cwd_path))?;
+    let output = run_shell_script(
+        &script,
+        cwd_path,
+        timeout.unwrap_or(SCRIPT_TIMEOUT),
+        &env(cwd_path),
+    )?;
 
     Ok(serde_json::json!({
         "exit_code": output.status.code().unwrap_or(-1),
@@ -9629,6 +9663,43 @@ branch refs/heads/feat
         assert_eq!(result["stderr"].as_str().unwrap(), "");
     }
 
+    /// Catches: a host-supplied deadline (TUICommander's
+    /// `setup_script_timeout_secs` / `archive_script_timeout_secs`) being
+    /// ignored in favour of the fixed default, for either script kind — and
+    /// the default itself drifting.
+    #[cfg(unix)]
+    #[test]
+    fn a_host_supplied_script_timeout_is_honoured_and_the_default_is_unchanged() {
+        assert_eq!(SCRIPT_TIMEOUT, Duration::from_secs(900));
+        assert!(UserScript::bare("true").timeout.is_none());
+        let dir = TempDir::new().expect("temp dir");
+        let short = Some(Duration::from_millis(300));
+
+        let started = std::time::Instant::now();
+        let archive = run_script_in_dir(
+            UserScript {
+                timeout: short,
+                ..UserScript::bare("sleep 30")
+            },
+            dir.path(),
+        )
+        .expect_err("an archive script past its deadline must fail");
+        assert!(archive.contains("timed out"), "{archive}");
+
+        let setup = run_setup_script_with_env(
+            "sleep 30".to_string(),
+            dir.path().to_string_lossy().into_owned(),
+            &no_extra_env,
+            short,
+        )
+        .expect_err("a setup script past its deadline must fail");
+        assert!(setup.contains("timed out"), "{setup}");
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "both must give up at the configured deadline, not the default"
+        );
+    }
+
     /// A setup script that never finishes must be killed at its deadline, and
     /// the caller must be told so rather than getting a plausible-looking
     /// exit code. `sleep` stands in for the real cases: a script blocked on a
@@ -9782,12 +9853,16 @@ branch refs/heads/feat
         let dir = TempDir::new().expect("temp dir");
         let cwd = dir.path().to_string_lossy().to_string();
         let seen = std::sync::Mutex::new(None);
-        let result =
-            run_setup_script_with_env("echo \"$TUIC_TEST_HOST_PAIR\"".to_string(), cwd, &|p| {
+        let result = run_setup_script_with_env(
+            "echo \"$TUIC_TEST_HOST_PAIR\"".to_string(),
+            cwd,
+            &|p| {
                 *seen.lock().unwrap() = Some(p.to_path_buf());
                 vec![("TUIC_TEST_HOST_PAIR".to_string(), "from-host".to_string())]
-            })
-            .expect("should succeed");
+            },
+            None,
+        )
+        .expect("should succeed");
         assert_eq!(result["stdout"].as_str().unwrap().trim(), "from-host");
         assert_eq!(seen.lock().unwrap().as_deref(), Some(dir.path()));
     }
@@ -9797,9 +9872,12 @@ branch refs/heads/feat
     fn host_pairs_cannot_replace_the_enriched_path() {
         let dir = TempDir::new().expect("temp dir");
         let cwd = dir.path().to_string_lossy().to_string();
-        let result = run_setup_script_with_env("echo \"$PATH\"".to_string(), cwd, &|_| {
-            vec![("PATH".to_string(), "/host/supplied".to_string())]
-        })
+        let result = run_setup_script_with_env(
+            "echo \"$PATH\"".to_string(),
+            cwd,
+            &|_| vec![("PATH".to_string(), "/host/supplied".to_string())],
+            None,
+        )
         .expect("should succeed");
         assert_eq!(
             result["stdout"].as_str().unwrap().trim(),
@@ -9823,6 +9901,7 @@ branch refs/heads/feat
             UserScript {
                 script: &script,
                 env: &env,
+                timeout: None,
             },
             dir.path(),
         );
@@ -14683,6 +14762,100 @@ branch refs/heads/feat
             fs::read_to_string(different.join("keep.txt")).unwrap(),
             "unregistered user work\n"
         );
+    }
+
+    /// `git worktree list` prints resolved paths; a repo opened through a
+    /// symlinked folder (macOS `/tmp` or `/var`, or any user symlink) spells the
+    /// same checkout differently. Validation must match the checkout itself, and
+    /// still refuse a different directory reached through the same symlink.
+    #[cfg(unix)]
+    #[test]
+    fn orphan_validation_matches_a_worktree_spelled_through_a_symlink() {
+        let (temp, repo, _workspaces) = orphan_workspace_fixture();
+        let path = add_worktree(&repo, "orphan-via-symlink");
+        git_cmd(&path).args(["checkout", "--detach"]).run().unwrap();
+        let alias = temp.path().join("alias");
+        std::os::unix::fs::symlink(temp.path().canonicalize().unwrap(), &alias).unwrap();
+        let aliased_repo = alias.join("repo");
+        let aliased_path = alias.join("orphan-via-symlink");
+        assert_ne!(aliased_path, path.canonicalize().unwrap());
+
+        validate_worktree_path(
+            &aliased_repo.to_string_lossy(),
+            &aliased_path.to_string_lossy(),
+        )
+        .unwrap();
+        validate_worktree_path(&repo.to_string_lossy(), &aliased_path.to_string_lossy()).unwrap();
+
+        let stranger = alias.join("not-registered");
+        fs::create_dir_all(&stranger).unwrap();
+        let error = validate_worktree_path(&repo.to_string_lossy(), &stranger.to_string_lossy())
+            .unwrap_err();
+        assert!(error.contains("not a known worktree"), "{error}");
+    }
+
+    /// A symlink standing in for the checkout itself is refused, even though it
+    /// resolves to a registered orphan: removal keys the checkout by its leaf
+    /// name (`warm_key` resolves only the parent), so it would validate one
+    /// directory and act on the link. The checkout named directly, and through
+    /// a symlinked parent, still validates.
+    #[cfg(unix)]
+    #[test]
+    fn orphan_validation_refuses_a_symlink_that_names_the_checkout_itself() {
+        let (temp, repo, _workspaces) = orphan_workspace_fixture();
+        let path = add_worktree(&repo, "orphan-leaf-link");
+        git_cmd(&path).args(["checkout", "--detach"]).run().unwrap();
+        let leaf_link = temp.path().join("leaf-link");
+        std::os::unix::fs::symlink(&path, &leaf_link).unwrap();
+        assert_ne!(warm_key(&leaf_link), warm_key(&path));
+
+        let error = validate_worktree_path(&repo.to_string_lossy(), &leaf_link.to_string_lossy())
+            .unwrap_err();
+        assert!(error.contains("is a symlink"), "{error}");
+        let error = orphan_cleanup_safety(&repo.to_string_lossy(), &leaf_link.to_string_lossy())
+            .unwrap_err();
+        assert!(error.contains("is a symlink"), "{error}");
+        // A dangling link is refused the same way (it cannot be the checkout).
+        let dangling = temp.path().join("dangling-link");
+        std::os::unix::fs::symlink(temp.path().join("nowhere"), &dangling).unwrap();
+        let error = validate_worktree_path(&repo.to_string_lossy(), &dangling.to_string_lossy())
+            .unwrap_err();
+        assert!(error.contains("is a symlink"), "{error}");
+
+        validate_worktree_path(&repo.to_string_lossy(), &path.to_string_lossy()).unwrap();
+        let parent_alias = temp.path().join("parent-alias");
+        std::os::unix::fs::symlink(temp.path().canonicalize().unwrap(), &parent_alias).unwrap();
+        validate_worktree_path(
+            &repo.to_string_lossy(),
+            &parent_alias.join("orphan-leaf-link").to_string_lossy(),
+        )
+        .unwrap();
+    }
+
+    /// Catches `same_path` matching on any shared prefix, losing the missing
+    /// tail of a vanished checkout, or rejoining `..` lexically.
+    #[cfg(unix)]
+    #[test]
+    fn same_path_resolves_symlinks_and_vanished_tails_without_aliasing() {
+        use tuic_core::path_spelling::{resolved_spelling, same_path};
+        let temp = TempDir::new().unwrap();
+        let real = temp.path().canonicalize().unwrap().join("real");
+        fs::create_dir_all(real.join("child")).unwrap();
+        let alias = temp.path().join("alias");
+        std::os::unix::fs::symlink(&real, &alias).unwrap();
+        let s = |p: &Path| p.to_string_lossy().into_owned();
+
+        assert!(same_path(&s(&alias.join("child")), &s(&real.join("child"))));
+        // A checkout whose directory is gone resolves through its parent.
+        assert!(same_path(&s(&alias.join("gone")), &s(&real.join("gone"))));
+        assert_eq!(
+            resolved_spelling(&s(&alias.join("gone/deeper"))).unwrap(),
+            s(&real.join("gone/deeper"))
+        );
+        assert!(!same_path(&s(&alias.join("gone")), &s(&real.join("child"))));
+        assert!(!same_path(&s(&alias), &s(&real.join("child"))));
+        assert_eq!(resolved_spelling(&s(&alias.join("gone/../child"))), None);
+        assert_eq!(resolved_spelling("relative/path"), None);
     }
 
     #[test]

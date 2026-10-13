@@ -699,27 +699,72 @@ pub(super) async fn get_output(
     )
 }
 
+/// `DELETE /sessions/{id}` query: `cleanup_worktree=true` is the HTTP twin of
+/// IPC `close_pty(cleanup_worktree=true)`.
+#[derive(serde::Deserialize, Default)]
+pub(super) struct CloseSessionQuery {
+    #[serde(default)]
+    cleanup_worktree: bool,
+}
+
+/// `DELETE /sessions/{id}` route handler.
+pub(super) async fn close_session_route(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+    Query(query): Query<CloseSessionQuery>,
+) -> impl IntoResponse {
+    close_session_with(state, session_id, query.cleanup_worktree).await
+}
+
+/// Close without worktree cleanup; the plain form tests and sibling routes use.
 pub(super) async fn close_session(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,
 ) -> impl IntoResponse {
+    close_session_with(state, session_id, false).await
+}
+
+async fn close_session_with(
+    state: Arc<AppState>,
+    session_id: String,
+    cleanup_worktree: bool,
+) -> (StatusCode, Json<serde_json::Value>) {
     if state.session_maps.sessions.contains_key(&session_id)
         || state.grid.vt_log_buffers.contains_key(&session_id)
     {
         let cleanup_state = Arc::clone(&state);
-        if let Err(error) = tokio::task::spawn_blocking(move || {
-            super::mcp_transport_session_agent::handle_session(
-                &cleanup_state,
-                &serde_json::json!({"action":"close", "session_id":session_id}),
-                None,
-            )
+        let removed = tokio::task::spawn_blocking(move || {
+            if cleanup_worktree {
+                // The same guarded close the IPC command runs: a worktree another
+                // live session still uses is kept.
+                let removed = crate::worktree::close_pty_with_worktree_cleanup(
+                    &cleanup_state,
+                    &session_id,
+                    true,
+                );
+                super::mcp_transport::emit_close_html_tabs(&cleanup_state, &session_id);
+                removed
+            } else {
+                super::mcp_transport_session_agent::handle_session(
+                    &cleanup_state,
+                    &serde_json::json!({"action":"close", "session_id":session_id}),
+                    None,
+                );
+                false
+            }
         })
         .await
-        {
+        .unwrap_or_else(|error| {
             tracing::warn!(%error, "session cleanup task failed");
-        }
+            false
+        });
 
-        (StatusCode::OK, Json(serde_json::json!({"ok": true})))
+        let body = if cleanup_worktree {
+            serde_json::json!({"ok": true, "worktree_removed": removed})
+        } else {
+            serde_json::json!({"ok": true})
+        };
+        (StatusCode::OK, Json(body))
     } else {
         session_not_found()
     }
@@ -7090,6 +7135,91 @@ mod tests {
             "a no-integration shell waited out the whole readiness bound ({elapsed:?})"
         );
         close_session(State(state), axum::extract::Path(session_id)).await;
+    }
+
+    // Catches (G2): HTTP `DELETE /sessions/{id}` ignoring `cleanup_worktree`, so a
+    // browser/PWA close leaves behind the worktree a desktop close removes.
+    #[cfg(unix)]
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn http_close_with_cleanup_worktree_matches_ipc_close_pty() {
+        let repo = crate::state::tests_support::create_temp_git_repo();
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let create = |branch: &str| {
+            let state = state.clone();
+            let base_repo = repo.path().to_string_lossy().to_string();
+            let branch_name = branch.to_string();
+            async move {
+                let response = create_session_with_worktree(
+                    State(state),
+                    Json(CreateSessionWithWorktreeRequest {
+                        config: plain_create_request(None),
+                        base_repo,
+                        branch_name,
+                    }),
+                )
+                .await
+                .into_response();
+                let status = response.status();
+                let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                    .await
+                    .unwrap();
+                let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                (status == StatusCode::CREATED).then(|| {
+                    (
+                        body["session_id"].as_str().unwrap().to_string(),
+                        std::path::PathBuf::from(body["worktree_path"].as_str().unwrap()),
+                    )
+                })
+            }
+        };
+        let close_http = |session_id: String, cleanup_worktree: bool| {
+            let state = state.clone();
+            async move {
+                let response = close_session_route(
+                    State(state),
+                    Path(session_id),
+                    Query(CloseSessionQuery { cleanup_worktree }),
+                )
+                .await
+                .into_response();
+                assert_eq!(response.status(), StatusCode::OK);
+                let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                    .await
+                    .unwrap();
+                serde_json::from_slice::<serde_json::Value>(&bytes).unwrap()
+            }
+        };
+
+        let Some((kept_id, kept_path)) = create("close-keeps-worktree").await else {
+            eprintln!("Skipping: PTY/worktree not available in this environment");
+            return;
+        };
+        let body = close_http(kept_id, false).await;
+        assert_eq!(body, serde_json::json!({"ok": true}));
+        assert!(
+            kept_path.exists(),
+            "a close without the flag must keep the worktree"
+        );
+
+        let (http_id, http_path) = create("close-http-cleanup").await.expect("second worktree");
+        let body = close_http(http_id.clone(), true).await;
+        assert_eq!(body["worktree_removed"], true, "{body}");
+        assert!(
+            !http_path.exists(),
+            "HTTP close with cleanup_worktree must remove it"
+        );
+        assert!(
+            !state.session_maps.sessions.contains_key(&http_id),
+            "the session itself must be closed too"
+        );
+
+        // The IPC command's own path, for the same scenario.
+        let (ipc_id, ipc_path) = create("close-ipc-cleanup").await.expect("third worktree");
+        assert!(crate::worktree::close_pty_with_worktree_cleanup(
+            &state, &ipc_id, true
+        ));
+        assert!(!ipc_path.exists());
     }
 
     /// The worktree-creating twin route types into a shell the same way, so it
