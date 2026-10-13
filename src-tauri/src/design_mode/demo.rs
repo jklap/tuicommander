@@ -16,7 +16,7 @@ async fn two_commented_picks_reach_a_test_agent_pty() {
         .unwrap();
     let scratch = tempfile::Builder::new()
         .prefix("dm2-")
-        .tempdir_in(crate::test_support::short_socket_test_temp_root())
+        .tempdir_in(tuic_test_support::short_socket_test_temp_root())
         .unwrap();
     let socket = scratch.path().join("s");
     let state = Arc::new(crate::state::tests_support::make_test_app_state());

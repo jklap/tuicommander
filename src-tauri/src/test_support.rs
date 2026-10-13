@@ -10,8 +10,6 @@ fn install_test_tls_provider() {
 }
 
 pub(crate) use crate::fs::system32_exe;
-#[cfg(unix)]
-pub(crate) use tuic_test_support::short_socket_test_temp_root;
 pub(crate) use tuic_test_support::{
     fail_with_stderr_script, fake_ssh_script, host_absolute, host_shell, normalize_newlines,
     print_var_script, replay_file_command, slashed, sleep_script, test_temp_root,
@@ -82,13 +80,11 @@ async fn resetting_tcp_peer_reserves_its_port_and_resets_connections() {
     }
 }
 
-/// Scratch dir short enough to bind a Unix socket whatever the checkout path.
+/// A private per-test socket dir (`<socket root>/xxxx`): any socket name of up
+/// to `tuic_test_support::MAX_TEST_SOCKET_NAME` bytes inside it fits SUN_LEN.
 #[cfg(unix)]
-pub(crate) fn short_socket_tempdir() -> tempfile::TempDir {
-    tempfile::Builder::new()
-        .prefix("s")
-        .tempdir_in(short_socket_test_temp_root())
-        .expect("short socket test dir")
+pub(crate) fn short_socket_tempdir() -> tuic_test_support::SocketDir {
+    tuic_test_support::socket_dir()
 }
 
 /// Snapshot the fake SSH PID and any direct children before tunnel teardown.

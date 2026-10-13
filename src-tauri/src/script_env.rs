@@ -508,18 +508,36 @@ mod tests {
     /// environment (e.g. a nested-TUIC scenario) survives into the child.
     #[test]
     fn apply_pty_clears_a_stale_tuic_var_the_context_does_not_set() {
-        let dir = TempDir::new().expect("temp dir"); // non-repo cwd: pairs() omits TUIC_BRANCH
-        let ctx = ScriptContext::derive(ScriptKind::Run, dir.path());
+        // A non-repo cwd, so pairs() omits TUIC_BRANCH. Not a TempDir: the test
+        // temp root lives inside this checkout, `derive` walks up into it and
+        // then legitimately sets TUIC_BRANCH to the checkout's own branch (see
+        // `non_git_cwd_emits_only_universal_vars`).
+        let dir = std::path::Path::new("/tuic-script-env-no-repo/run");
+        let ctx = ScriptContext::derive(ScriptKind::Run, dir);
+        assert!(
+            !ctx.as_map().contains_key("TUIC_BRANCH"),
+            "fixture must be outside any repo, or this test proves nothing"
+        );
 
+        // `CommandBuilder::new` starts from this process's own environment, so
+        // a TUIC_* var inherited from the shell running the tests (a TUIC
+        // terminal exports a dozen) is exactly the stale value at stake. Set
+        // two explicitly so the test does not depend on that ambient state.
         let mut cmd = portable_pty::CommandBuilder::new("/bin/sh");
         cmd.env("TUIC_BRANCH", "stale-outer-session-value");
+        cmd.env("TUIC_MAIN_REPO_PATH", "/stale/outer/repo");
         ctx.apply_pty(&mut cmd);
 
-        assert!(
-            cmd.get_env("TUIC_BRANCH").is_none(),
-            "apply_pty must clear a TUIC_* var this context doesn't itself set, \
-             not just skip writing it"
-        );
+        for key in ScriptContext::ALL_KEYS {
+            if ctx.as_map().contains_key(*key) {
+                continue;
+            }
+            assert!(
+                cmd.get_env(key).is_none(),
+                "apply_pty must clear {key}, a TUIC_* var this context doesn't \
+                 itself set, not just skip writing it"
+            );
+        }
         assert_eq!(
             cmd.get_env("TUIC_SCRIPT_KIND")
                 .map(|v| v.to_string_lossy().to_string()),

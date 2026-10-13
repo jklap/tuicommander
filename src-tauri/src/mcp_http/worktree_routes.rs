@@ -893,10 +893,16 @@ mod warm_tests {
         assert!(
             matches!(event, crate::state::AppEvent::WorktreeRemoved(ref payload) if payload.workspace_id == "first")
         );
+        // Git reports the resolved path; the test temp root may sit under a
+        // symlinked directory (macOS `/var` -> `/private/var`).
         assert_eq!(
-            crate::worktree::get_worktree_paths(second_config.base_repo.clone()).unwrap()["second"]
-                .path,
-            second.path.to_string_lossy()
+            std::path::Path::new(
+                &crate::worktree::get_worktree_paths(second_config.base_repo.clone()).unwrap()["second"]
+                    .path
+            )
+            .canonicalize()
+            .unwrap(),
+            second.path.canonicalize().unwrap()
         );
         // Catches: restoring an archived branch skips the new creator write.
         crate::worktree::remove_worktree_by_workspace_id_with_confirmation(

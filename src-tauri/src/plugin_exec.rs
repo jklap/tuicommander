@@ -1278,12 +1278,14 @@ mod tests {
             let pid = pid.trim();
             let deadline = Instant::now() + Duration::from_secs(10);
             loop {
-                let stat = std::process::Command::new("ps")
-                    .args(["-o", "stat=", "-p", pid])
-                    .output()
-                    .expect("ps");
-                let stat = String::from_utf8_lossy(&stat.stdout);
-                if stat.trim().is_empty() || stat.trim_start().starts_with('Z') {
+                // Native process inspection (no `ps` exec): gone, or an unreaped zombie of its parent.
+                let pid_number: u32 = pid.parse().expect("numeric pid");
+                let gone = !tuic_core::process_info::is_alive(pid_number)
+                    || tuic_core::process_info::info(pid_number).is_none_or(|info| {
+                        tuic_core::process_info::zombie_children(info.ppid)
+                            .is_some_and(|zombies| zombies.contains(&pid_number))
+                    });
+                if gone {
                     break;
                 }
                 assert!(

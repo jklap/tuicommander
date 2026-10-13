@@ -15,6 +15,15 @@ mod ipc;
 mod mcp;
 mod tmux;
 
+/// Scratch dir short enough to bind a Unix socket in: `tempfile::tempdir()`
+/// lands under the deep per-run test root, where `<dir>/mcp.sock` can pass the
+/// 104-byte `sun_path` limit ("path must be shorter than SUN_LEN"). A private
+/// per-test dir under the socket root; removed when the guard drops.
+#[cfg(all(test, unix))]
+fn short_socket_tempdir() -> tuic_test_support::SocketDir {
+    tuic_test_support::socket_dir()
+}
+
 use clap::{Args, Parser, Subcommand};
 use std::io::Read;
 use std::path::{Path, PathBuf};
