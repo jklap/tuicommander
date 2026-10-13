@@ -11173,6 +11173,38 @@ branch refs/heads/feat
         origin
     }
 
+    // Catches: cleanup fetch prunes the sole remote proof, but deletion still drops local work.
+    #[test]
+    fn removal_keeps_local_branch_when_cleanup_prunes_its_remote_proof() {
+        let (_temp, repo, _) = workspace_fixture();
+        let origin = add_origin(&repo);
+        let worktree = add_worktree(&repo, "pruned-proof");
+        commit_file(&worktree, "unique.txt", "preserve this commit\n");
+        git_cmd(&worktree)
+            .args(["push", "origin", "HEAD:integration"])
+            .run()
+            .unwrap();
+        let tip = rev_at(&repo, "refs/heads/pruned-proof").unwrap();
+        // Another checkout deleted the remote branch; the local tracking ref is still stale.
+        git_cmd(&origin)
+            .args(["update-ref", "-d", "refs/heads/integration"])
+            .run()
+            .unwrap();
+        let outcome = remove_worktree_by_workspace_id(
+            &repo.to_string_lossy(),
+            "pruned-proof",
+            true,
+            Some("git fetch --prune origin"),
+            false,
+        );
+        assert!(rev_at(&repo, "refs/remotes/origin/integration").is_err());
+        assert_eq!(
+            rev_at(&repo, "refs/heads/pruned-proof").ok(),
+            Some(tip),
+            "cleanup removed the remote proof: local work must survive; outcome={outcome:?}"
+        );
+    }
+
     fn remote_contained_fixture() -> (TempDir, PathBuf, PathBuf) {
         let (temp, repo, _workspaces) = workspace_fixture();
         add_origin(&repo);
