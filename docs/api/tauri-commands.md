@@ -804,8 +804,8 @@ Four rules hold this surface down:
 
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
-| `ego_providers` | `refresh?` | `EgoProviders` | `config ls --json` + `models --json` + `doctor --json`, joined. `refresh: true` adds `--refresh`, the only call that reaches a provider |
-| `ego_set_default_model` | `model` | `EgoProviders` | `config set model="<slug>"`, then a fresh read — the answer is what ego persisted, not what was sent |
+| `ego_providers` | `refresh?` | `EgoProviders` | `config ls --profile=<configured> --json` + `models --json` + `doctor --json`, joined in the configured AI Chat workspace. The profile flag is omitted for the base. `refresh: true` adds `--refresh`, the only call that reaches a provider |
+| `ego_set_default_model` | `model` | `EgoProviders` | `config set --profile=<configured> -- model="<slug>"` in the configured AI Chat workspace (profile omitted for the base), then a fresh read — the answer is what ego persisted, not what was sent |
 | `ego_perimeter` | -- | `PerimeterView` | Stored `config ls --json` plus `config ls --effective --json` in the AI Chat workspace/profile |
 | `ego_set_perimeter_roots` | `roots: {rootDir, rootAccess, readAllowlist, writableDirs}` | `PerimeterView` | Encode a typed `roots=[...]` assignment, run `config set --`, then read back |
 | `ego_set_perimeter_network` | `enabled: bool` | `PerimeterView` | `config set -- network="on"` or `network="off"`, then read back |

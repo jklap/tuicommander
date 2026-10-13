@@ -929,6 +929,7 @@ export const BranchesTab: Component<BranchesTabProps> = (props) => {
 		if (isRenaming) {
 			return (
 				<Input
+					compact
 					ref={renameInputRef}
 					class={s.inlineInput}
 					value={renameValue()}
@@ -1107,6 +1108,7 @@ export const BranchesTab: Component<BranchesTabProps> = (props) => {
 			<Show when={creating()}>
 				<div class={s.createForm}>
 					<Input
+						compact
 						ref={createInputRef}
 						class={s.inlineInput}
 						placeholder="New branch name..."
@@ -1115,6 +1117,7 @@ export const BranchesTab: Component<BranchesTabProps> = (props) => {
 					/>
 					<Show when={createBaseRefs().length > 0}>
 						<Select
+							compact
 							class={s.fromSelect}
 							value={createState().startPoint ?? ""}
 							onChange={(e) => setCreateState((p) => ({ ...p, startPoint: e.currentTarget.value || null }))}

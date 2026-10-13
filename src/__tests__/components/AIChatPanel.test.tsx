@@ -2278,6 +2278,25 @@ describe("AIChatPanel: a turn", () => {
 });
 
 describe("AIChatPanel: durable conversations", () => {
+	// Catches: the conversation picker left at the 36px default beside the 19px settings button in the control bar.
+	it("sizes the conversation picker compact like its control bar neighbours", async () => {
+		client.listSessions.mockResolvedValue({
+			sessions: [
+				{ sessionId: SESSION, cwd: CHAT_ROOT, title: null, updatedAt: "2026-09-27T09:00:00Z" },
+				{
+					sessionId: "01932d5e-0000-7000-8000-0000000000bb",
+					cwd: CHAT_ROOT,
+					title: null,
+					updatedAt: "2026-09-26T09:00:00Z",
+				},
+			],
+			nextCursor: null,
+		});
+		const { container } = await renderPanel();
+		await settle();
+		expect(container.querySelector('select[title="Conversation"]')?.className).toMatch(/compact/);
+	});
+
 	it("labels untitled conversations without exposing an id as the option text", async () => {
 		client.listSessions.mockResolvedValue({
 			sessions: [

@@ -9,6 +9,10 @@ use serde::{Deserialize, Serialize};
 
 pub(crate) use tuic_git::github_account::*;
 
+#[path = "github_account_settings.rs"]
+mod settings;
+pub(crate) use settings::update_settings_binding;
+
 // ---------------------------------------------------------------------------
 // Account registry (persisted)
 // ---------------------------------------------------------------------------
@@ -309,8 +313,9 @@ pub(crate) fn add_account_record(account: GitHubAccount, pat: Option<&str>) -> R
 /// in Step 9, once those caches become account-scoped.)
 pub(crate) fn remove_account_everywhere(account_id: &str) -> Result<(), String> {
     let _guard = store_guard();
+    // Refuse corrupt/unreadable bindings before deleting the account or its credential.
+    let mut bindings = RepoBindingStore::read_strict()?;
     crate::accounts::remove(account_id)?;
-    let mut bindings = RepoBindingStore::load();
     let bindings_base = bindings.clone();
     bindings.remove_account_bindings(account_id);
     bindings.save(&bindings_base)

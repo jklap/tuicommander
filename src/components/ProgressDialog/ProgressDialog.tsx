@@ -138,6 +138,7 @@ export const ProgressDialog: Component<ProgressDialogProps> = (props) => {
 				</div>
 				<Show when={props.embedded && (props.projects?.length ?? 0) > 0}>
 					<Select
+						compact
 						class={s.terminalSelect}
 						aria-label="Progress project"
 						value={project() ?? ""}
@@ -149,6 +150,7 @@ export const ProgressDialog: Component<ProgressDialogProps> = (props) => {
 					</Select>
 				</Show>
 				<Select
+					compact
 					class={s.terminalSelect}
 					aria-label="Progress terminal"
 					onChange={(event) => progressStore.selectPty(event.currentTarget.value || null)}

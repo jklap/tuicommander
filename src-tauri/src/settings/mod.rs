@@ -1,6 +1,9 @@
 //! Rust-owned settings schemas and descriptors.
+pub mod accounts;
 pub mod agents;
 pub mod catalogue;
+pub mod ego;
+mod ego_schema;
 pub mod model;
 
 pub mod native;
@@ -58,3 +61,14 @@ mod voice_tests;
 
 #[cfg(test)]
 mod config_file_tests;
+
+#[cfg(test)]
+mod accounts_tests;
+
+#[cfg(test)]
+mod accounts_safety_tests;
+
+#[cfg(all(test, unix))]
+mod ego_fixture;
+#[cfg(all(test, unix))]
+mod ego_tests;
