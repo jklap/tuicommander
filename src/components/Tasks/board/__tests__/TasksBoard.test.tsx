@@ -234,3 +234,13 @@ it("move_menu_escape_restores_trigger_focus", async () => {
 	expect(screen.queryByRole("menu")).toBeNull();
 	expect(trigger).toHaveFocus();
 });
+
+// Catches: scrolling the menu itself (wheel, or focus moving to a clipped item on a board with 7+ columns) dismisses it, so later destinations are unreachable.
+it("move_menu_stays_open_when_the_menu_itself_scrolls", () => {
+	mount(async () => {
+		throw new Error("Must not dispatch");
+	});
+	fireEvent.click(screen.getByRole("button", { name: "Move TASK-1" }));
+	fireEvent.scroll(screen.getByRole("menu"));
+	expect(screen.getByRole("menu")).toBeInTheDocument();
+});
