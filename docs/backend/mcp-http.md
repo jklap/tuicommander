@@ -2205,6 +2205,10 @@ an explicit create action. These actions match across HTTP, IPC, MCP and CLI.
 
 The native `design_mode` tool exposes `start`, `stop`, `status`, `reload` and `navigate` through normal discovery and dispatch. Start accepts `session_id`, optional `browser` (`chrome` or `edge`) and optional absolute HTTP(S) `url`. Session references resolve like the session tool. Stop accepts `repo_path` from start/status. Reload takes the same `repo_path` and bumps a per-repository reload sequence; the extension reloads the reviewed tab once on its next heartbeat. Navigate takes `repo_path` and `url` (HTTP(S) on `localhost`, `127.0.0.1` or `[::1]`, no credentials); the heartbeat reply then carries `navigate: {seq, url}` and the extension opens the URL in the reviewed tab once per sequence. The sequence survives a re-arm but the URL does not, so a new Start never replays an old navigation. Reload and navigate answer "Design Mode is not running for this repository" when nothing is armed. The extension posts `heartbeat` to `/design-mode/extension` every 5 s (reply `{armed, reloadSeq, navigate?}`); an armed mode is stopped 60 s after the last heartbeat, or 10 min after Start when none arrived. The adapter uses the same lifecycle core as HTTP and IPC; headless builds return an explicit desktop-host-required error. URL-aware start is the default coordinator path for layout work.
 
+The GitHub settings owner adapter supplies typed device-login, Enterprise account,
+credential, label and binding actions for the later settings transport cutover.
+It is an internal service boundary; this adapter step registers no new MCP tool,
+HTTP route or IPC command. Its reads and results contain credential presence only.
 
 ### Internal Ego settings adapters (#1775-330c)
 

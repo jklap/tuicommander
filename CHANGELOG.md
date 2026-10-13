@@ -18,6 +18,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Preserve beta installs in the macOS terminal installer and normalize release tag prefixes for default and pinned downloads.
 
 ### Added
+- Add the internal GitHub settings owner adapter for device login, verified Enterprise accounts, credential presence and revision-checked repository bindings (#1774-ce8f); shared settings transport wiring follows separately.
 - Beta update channel: automatically check for the next beta and final stable release. Completed beta releases publish a rolling feed without changing stable updates.
 
 ### Added

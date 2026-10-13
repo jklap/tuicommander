@@ -2908,6 +2908,9 @@ permissions. Recurring cadence previews retain the existing runtime limitations.
 
 Terminal gestures hold the requested history row even when output arrives before the backend applies the scroll. If capped scrollback evicts that row, the viewport clamps to the oldest retained row.
 
+GitHub settings backend: an internal typed owner adapter supports device login,
+verified Enterprise PAT accounts, labels, write-only credentials and revision-checked
+repository bindings. Shared settings transport publication is a separate step.
 
 ### Ego settings owner service (#1775-330c)
 
