@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Terminal Chat view for Grok terminals, read from the session's `chat_history.jsonl` and offered only when `~/.grok/active_sessions.json` names the exact session of that terminal's process; the newest-session fallback never feeds Chat (#1791-b8be).
 
 ### Fixed
+- Design Mode automatically loads its own extension on cold Edge launches and opens the discovered dev server. Running profiles and unsupported branded Chrome return clear errors (#1834-f6c4).
 - Make Terminal Chat easier to read with one lightly tinted answer card per turn, whole-answer Copy, reading-width limits, collapsible terminal pastes and compact inbox notices. Keep the collapsed tool row and show Claude Bash descriptions when available (#1832-b19a).
 - GitHub Settings hides bindings for a unique account/remote, restores Logout for OAuth credentials, and keeps an environment-token disconnect effective until login or restart (#1829-54c2).
 - Ego model settings now honor the configured profile and AI Chat workspace. The internal settings service adds managed Ego configuration, readback and presence-only credentials through owner services (#1775-330c).
