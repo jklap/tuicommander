@@ -1540,6 +1540,11 @@ pub(crate) struct UIPrefsConfig {
     #[serde(default)]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates github section collapsed for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) github_section_collapsed: std::collections::HashMap<String, bool>,
+    /// JSON-encoded Tasks view intent keyed by repository/provider/account; no result pages.
+    /// String leaves keep provider-specific query values compatible with the settings catalogue.
+    #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Remembers Tasks source, view and query per repository and account.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    pub(crate) tasks_view_preferences: std::collections::HashMap<String, String>,
 }
 
 fn default_diff_view_mode() -> String {
@@ -1585,6 +1590,7 @@ impl Default for UIPrefsConfig {
             diff_view_mode: default_diff_view_mode(),
             detached_panels: std::collections::HashMap::new(),
             github_section_collapsed: std::collections::HashMap::new(),
+            tasks_view_preferences: std::collections::HashMap::new(),
         }
     }
 }
@@ -5853,6 +5859,26 @@ mod tests {
         assert!(!opted_out.silence_remote_completions);
     }
 
+    /// Catches: serde silently drops Tasks preferences, so a restart loses view intent.
+    #[test]
+    fn ui_prefs_keep_tasks_preferences_and_default_empty() {
+        let saved = serde_json::json!({
+            "tasks_view_preferences": {
+                "[\"/repo-a\",\"demo\",\"work\"]": serde_json::json!({"view": "board", "query": {"sort": {"fieldId": "updatedAt", "descending": true}, "savedFilterId": null, "groupBy": null}}).to_string(),
+                "[\"/repo-b\",\"demo\",\"work\"]": serde_json::json!({"view": "list"}).to_string()
+            }
+        });
+        let prefs: UIPrefsConfig = serde_json::from_value(saved.clone()).unwrap();
+        let dir = TempDir::new().unwrap();
+        let loaded: UIPrefsConfig = round_trip_in_dir(dir.path(), "ui-prefs.json", &prefs);
+        assert_eq!(
+            serde_json::to_value(loaded).unwrap()["tasks_view_preferences"],
+            saved["tasks_view_preferences"]
+        );
+        let old: UIPrefsConfig = serde_json::from_str("{}").unwrap();
+        assert!(old.tasks_view_preferences.is_empty());
+    }
+
     #[test]
     fn ui_prefs_round_trip() {
         let dir = TempDir::new().unwrap();
@@ -5887,6 +5913,7 @@ mod tests {
                 ("issues".to_string(), true),
                 ("prs".to_string(), false),
             ]),
+            tasks_view_preferences: std::collections::HashMap::new(),
         };
         let loaded: UIPrefsConfig = round_trip_in_dir(dir.path(), "ui-prefs.json", &cfg);
         assert!(!loaded.sidebar_visible);
@@ -9155,13 +9182,26 @@ mod tests {
         let base = load_ui_prefs();
         let mut first = base.clone();
         first.sidebar_visible = false;
+        first.tasks_view_preferences.insert(
+            "repo-a".into(),
+            serde_json::json!({"view": "board"}).to_string(),
+        );
         let mut second = base.clone();
         second.settings_expert_mode = true;
+        second.tasks_view_preferences.insert(
+            "repo-b".into(),
+            serde_json::json!({"view": "list"}).to_string(),
+        );
         save_ui_prefs(base.clone(), first).unwrap();
         save_ui_prefs(base, second).unwrap();
         let saved = load_ui_prefs();
         assert!(!saved.sidebar_visible);
         assert!(saved.settings_expert_mode);
+        assert_eq!(
+            saved.tasks_view_preferences["repo-a"],
+            r#"{"view":"board"}"#
+        );
+        assert_eq!(saved.tasks_view_preferences["repo-b"], r#"{"view":"list"}"#);
     }
 
     #[test]

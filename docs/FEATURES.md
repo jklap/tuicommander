@@ -2936,3 +2936,7 @@ by this adapter. Model changes from the existing Providers UI now use the same
 configured profile and workspace as perimeter changes.
 
 Tasks setup preserves saved account keys outside the form, including Enterprise hosts and login. Label choices use matching provider field IDs; assignee username filters stay text when create-form IDs differ. Display-only roadmap dates do not appear in list filters or grouping.
+
+## Tasks view memory
+
+Tasks remembers the selected source per repository and List, Board or Roadmap plus list grouping, sort, preset, search and filters per repository/provider/account. The existing `uiStore` saves these preferences through `load_ui_prefs` and `save_ui_prefs` in `ui-prefs.json`. Results and page cursors remain transient. A rejected saved sort retries the last accepted order, then the provider default. Other query failures keep their error and Retry control. An unsaved scope keeps the normal defaults.
