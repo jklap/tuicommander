@@ -6535,8 +6535,10 @@ mod tests {
     fn merge_partial_clears_additional_readable_dirs() {
         // The non-empty serde default must not resurrect an explicit clear: a
         // caller sending `[]` means "no additional dirs," not "use the default."
-        let mut current = AppConfig::default();
-        current.additional_readable_dirs = vec!["/tmp/plans".to_string()];
+        let current = AppConfig {
+            additional_readable_dirs: vec!["/tmp/plans".to_string()],
+            ..AppConfig::default()
+        };
 
         let merged = merge_partial_app_config(
             &current,
@@ -7922,8 +7924,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let _guard = set_config_dir_override(dir.path().to_path_buf());
 
-        let mut first = AgentsConfig::default();
-        first.headless_agent = Some("claude".to_string());
+        let first = AgentsConfig {
+            headless_agent: Some("claude".to_string()),
+            ..AgentsConfig::default()
+        };
         save_agents_config(AgentsConfig::default(), first.clone())
             .expect("save first agents config");
         assert_eq!(
@@ -7933,8 +7937,10 @@ mod tests {
 
         // A second write must be observed on the very next read — the cache
         // must not serve the first write's now-stale value.
-        let mut second = AgentsConfig::default();
-        second.headless_agent = Some("codex".to_string());
+        let second = AgentsConfig {
+            headless_agent: Some("codex".to_string()),
+            ..AgentsConfig::default()
+        };
         save_agents_config(first, second).expect("save second agents config");
         assert_eq!(
             load_agents_config().headless_agent,
@@ -7965,8 +7971,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let _guard = set_config_dir_override(dir.path().to_path_buf());
 
-        let mut first = AgentsConfig::default();
-        first.headless_agent = Some("claude".to_string());
+        let first = AgentsConfig {
+            headless_agent: Some("claude".to_string()),
+            ..AgentsConfig::default()
+        };
         save_agents_config(AgentsConfig::default(), first.clone())
             .expect("save first agents config");
         assert_eq!(
@@ -7974,8 +7982,10 @@ mod tests {
             Some("claude".to_string())
         );
 
-        let mut second = AgentsConfig::default();
-        second.headless_agent = Some("gemini".to_string()); // same length as "claude"
+        let second = AgentsConfig {
+            headless_agent: Some("gemini".to_string()),
+            ..AgentsConfig::default()
+        }; // same length as "claude"
         save_agents_config(first, second).expect("save second agents config");
         assert_eq!(
             load_agents_config().headless_agent,

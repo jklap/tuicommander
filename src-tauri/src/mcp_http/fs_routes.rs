@@ -704,7 +704,7 @@ mod tests {
     fn empty_root_would_allow_everything_hence_the_filter() {
         assert!(is_within_repo_roots(
             Path::new("/etc/passwd"),
-            &["".to_string()]
+            &[String::new()]
         ));
         assert_eq!(expand_readable_root(""), None);
         assert_eq!(expand_readable_root("   "), None);
