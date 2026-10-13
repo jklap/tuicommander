@@ -29,8 +29,7 @@
 .links { display: flex; flex-direction: column; gap: 4px; padding: 9px 2px; color: var(--fg-secondary); font: var(--font-xs) var(--font-mono); overflow-wrap: anywhere; }
 .nodeName { margin: 0; font: 600 var(--font-sm) var(--font-mono); }
 .inspector label { display: flex; flex-direction: column; gap: 5px; margin: 14px 0; color: var(--fg-secondary); font-size: var(--font-xs); }
-.inspector select, .inspector textarea, .inspector input { box-sizing: border-box; width: 100%; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-tertiary); color: var(--fg-primary); padding: 6px; font: var(--font-sm) var(--font-ui); }
-.inspector textarea { min-height: 80px; resize: vertical; }
+.inspector select, .inspector textarea, .inspector input { width: 100%; }
 .inspector button { display: block; margin-top: 9px; width: 100%; }
 .inspector .remove { color: var(--error); }
 .error, .notice { margin: 0; padding: 8px 18px; border-bottom: 1px solid var(--border); font-size: var(--font-sm); }

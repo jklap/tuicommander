@@ -23,6 +23,7 @@ pub(crate) mod ai_agent;
 pub(crate) mod attachments;
 #[cfg(feature = "desktop")]
 pub(crate) mod audio_enumeration;
+pub(crate) mod launch_instructions;
 pub(crate) mod prompt_receipt;
 pub mod work_items;
 pub use tuic_core::app_instance;
@@ -2114,6 +2115,7 @@ pub fn run() {
             pty::terminal_exit_alt_screen,
             pty::terminal_scroll,
             pty::terminal_scroll_to_offset,
+            pty::terminal_scroll_to_anchor,
             pty::terminal_styled_rows,
             pty::terminal_scroll_to,
             pty::terminal_get_block_rows,

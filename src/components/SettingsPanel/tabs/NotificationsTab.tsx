@@ -5,6 +5,7 @@ import type { NotificationSound } from "../../../notifications";
 import { appLogger } from "../../../stores/appLogger";
 import { notificationsStore } from "../../../stores/notifications";
 import { isTauri } from "../../../transport";
+import { Select } from "../../ui/Select";
 import { ExpertSetting } from "../ExpertSetting";
 import { SettingSlider, SettingToggle } from "../SettingFields";
 import s from "../Settings.module.css";
@@ -191,7 +192,7 @@ export const NotificationsTab: Component = () => {
 									</>
 								}
 							>
-								<select
+								<Select
 									value={notificationsStore.state.config.audio_device ?? ""}
 									onChange={(e) => {
 										const val = e.currentTarget.value;
@@ -207,7 +208,7 @@ export const NotificationsTab: Component = () => {
 											</option>
 										)}
 									</For>
-								</select>
+								</Select>
 								<button
 									class={s.testBtn}
 									style={{ "margin-top": "6px" }}

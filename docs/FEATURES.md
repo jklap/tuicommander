@@ -17,6 +17,14 @@ Desktop AI Chat uses the terminal composer’s pin and blue play buttons. The pi
 
 AI Chat image paste discovers capabilities on first use and shares clipboard precedence with Ideas, terminal Compose, and terminal input: Finder image filenames allow attachments, while substantive text takes priority.
 
+## Shared form controls
+
+Desktop and mobile select fields use a shared native Select, with consistent theme
+colours, visible focus, disabled states and touch sizing. Tasks, Settings, Automations,
+Git and chat forms also share Input and Textarea controls. Desktop fields are 36px;
+mobile fields retain 44px touch targets. The Tasks List, Board and Roadmap switch
+supports arrow keys, Home and End.
+
 ## Tasks roadmap component
 
 The host-rendered roadmap shows provider date fields on a month or quarter timeline.
@@ -113,6 +121,8 @@ Right-click an HTTP(S) terminal link (including localhost) and choose **Start in
 - **Remote replay health** — Stream failure, unreadable frames and initial replay stalls show a persistent error toast. Reconnect success requires a delivered frame; healthy idle terminals have no output-silence deadline.
 
 - **CLI / Chat view** — Claude terminals switch between the grid and a conversation view with docked Compose input, built from the agent's session file (including older prompts, human text/image follow-ups queued while Claude is busy, replies, folded tool cards, image/PDF markers and model-change cards). The grid is hidden, never unmounted.
+- **Deferred update restart** — After an in-app update installs, TUICommander restarts only when no session is busy or awaiting input; the APP UPDATE notification shows how many are busy and offers **Restart now** (with confirmation). Turn off in **Settings → General → Updates → Wait for agents before restarting** (`defer_update_relaunch`, default on).
+- **Eager resume after an update** — When the app restarts to apply an update, every agent tab with a confirmed session id resumes by itself on every branch, without selecting the branch first. Tabs without a confirmed id keep the click-to-resume banner. Turn off in **Settings → General → Updates → Resume all agents after an update** (`eager_resume_after_update`, default on).
 - **Intermediate Chat text** — Assistant text that a tool call follows in the same turn renders smaller and dimmer in the terminal Chat view, AI Chat and the mobile chat; the last text of a turn keeps the normal style. Switch it off in **Settings → Appearance → Chat → Mute Intermediate Text** (`chat_mute_intermediate_text`, default on).
 - **Chat transcript presentation** — Harness notices use compact system notes, image placeholders use attachment chips, adjacent thinking blocks share a disclosure, and TUIC answers retain the CLI highlight. Historical tool cards show status without fabricated execution timing.
 
@@ -773,6 +783,7 @@ When an agent is detected running in a terminal, TUICommander automatically disc
 - **Claude Code** — Sessions stored as `~/.claude/projects/<slug>/<uuid>.jsonl`; UUID from filename. Windows drive colons become dashes in the project slug (`C:\Users\foo\bar` → `C--Users-foo-bar`).
 - **Gemini CLI** — Sessions stored in `~/.gemini/tmp/<hash>/chats/session-*.json`; `sessionId` field from JSON
 - **Codex CLI** — Sessions stored in `~/.codex/sessions/YYYY/MM/DD/rollout-*-<UUID>.jsonl`; UUID from filename. Codex does *not* partition by project, so candidates are filtered on the working directory recorded in the rollout's first `session_meta` record — otherwise a terminal in one project would bind to another project's session. A rollout whose `cwd` can't be read is rejected rather than accepted
+- **Goose turn completion** — A reply followed by the ready composer returns the tab to idle and allows the next submission, without the five-minute stale recovery (#1812-022d).
 - **Goose** — Sessions stored in SQLite (`~/Library/Application Support/Block/goose/sessions/sessions.db`); shell wrapper injects `--name $TUIC_SESSION` for deterministic binding, resume by name
 
 Discovery runs once per terminal on `null→agent` transition. Multiple concurrent agents are handled via a `claimed_ids` deduplication list. On agent exit, the stored session ID is cleared to allow re-discovery on next launch.
@@ -1662,6 +1673,7 @@ All data persisted to platform config directory via Rust:
 
 ### 14.1 Auto-Update
 - Check for updates on startup via `tauri-plugin-updater`
+- Stable, Beta and Nightly channels. Beta automatically checks the next beta and final stable; beta downloads open the versioned release page, and stable updates install in-app. Fresh beta installations default to Beta; saved channel choices stay unchanged
 - Status bar badge with version
 - Download progress percentage
 - One-click install and relaunch
@@ -2082,7 +2094,7 @@ Phone-optimized progressive web app for monitoring AI agents remotely. Separate 
 
 ### 18.3 Session Detail Screen
 - Mirrored sessions stream through the connected desktop server to their owning daemon, so the phone stays on its HTTPS origin; the session kill action reaches that owner too
-- Live output via WebSocket with `format=log` (VT100-extracted clean lines, auto-scrolling, 500-line buffer)
+- Live output via WebSocket with `format=log` (VT100-extracted clean lines, auto-scrolling, 500-line live tail). Scrolling up or touching retains the reading window and fetched history; the next log update after returning to the bottom restores the live tail.
 - HTTP and HTTPS links in output open in the phone's external browser; Markdown path controls open the Files editor.
 - Source-width prose rows are rejoined before the phone wraps them; short lines, lists, and box-drawing blocks retain their layout
 - When a mobile output line wraps, its continuation keeps the line's leading spaces or tabs; unindented prose and horizontally scrolling box-drawing blocks retain their layout
@@ -2890,3 +2902,7 @@ Templates use the existing checkout with no precheck and do not change agent
 permissions. Recurring cadence previews retain the existing runtime limitations.
 
 - Finished worktree recycling: explicit completion permits safe reuse with a new branch and path while ignored build artifacts remain intact. Fresh allocations stay reserved.
+
+### History-anchored viewport scrolling
+
+Terminal gestures hold the requested history row even when output arrives before the backend applies the scroll. If capped scrollback evicts that row, the viewport clamps to the oldest retained row.

@@ -1,4 +1,6 @@
 import { createSignal, For, Show } from "solid-js";
+import { Input } from "../../components/ui/Input";
+import { Select } from "../../components/ui/Select";
 import { appLogger } from "../../stores/appLogger";
 import { toastsStore } from "../../stores/toasts";
 import { rpc } from "../../transport";
@@ -72,18 +74,18 @@ export function NewSessionSheet(props: NewSessionSheetProps) {
 				<label class={styles.fieldLabel} for="new-session-agent">
 					Agent
 				</label>
-				<select
+				<Select
 					id="new-session-agent"
 					class={styles.field}
 					value={agent()}
 					onChange={(event) => setAgent(event.currentTarget.value as (typeof AGENTS)[number]["id"])}
 				>
 					<For each={AGENTS}>{(choice) => <option value={choice.id}>{choice.label}</option>}</For>
-				</select>
+				</Select>
 				<label class={styles.fieldLabel} for="new-session-repo">
 					Repository
 				</label>
-				<input
+				<Input
 					id="new-session-repo"
 					class={styles.field}
 					type="search"

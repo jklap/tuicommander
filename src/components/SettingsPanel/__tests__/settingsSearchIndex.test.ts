@@ -66,7 +66,9 @@ const UNINDEXABLE: Record<string, { dynamic: number; orphans: number }> = {
 	// idle-close control sits inside a collapsed, per-agent card: search cannot
 	// identify which card to expand or scroll to its hidden control. Neither has
 	// a stable search target.
-	agents: { dynamic: 0, orphans: 12 },
+	// The per-agent "Launch instructions for <agent>" editor names its agent at
+	// runtime, inside a collapsed card; the global editor is indexed.
+	agents: { dynamic: 1, orphans: 12 },
 	// The `<optgroup label={provider.name}>` inside the default-model picker. It
 	// groups the options by provider and is not a setting anybody can scroll to.
 	"ai-chat": { dynamic: 1, orphans: 0 },

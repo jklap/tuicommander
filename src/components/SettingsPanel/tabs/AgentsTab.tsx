@@ -26,6 +26,7 @@ import { editorTabsStore } from "../../../stores/editorTabs";
 import { remoteConnectionsStore } from "../../../stores/remoteConnections";
 import { repositoriesStore } from "../../../stores/repositories";
 import { settingsStore } from "../../../stores/settings";
+import { settingsExpertStore } from "../../../stores/settingsExpert";
 import { isTauri, rpc } from "../../../transport";
 import { onClickKeyDown } from "../../../utils/a11y";
 import { buildEnvFromEntries, findDuplicateEnvKeys } from "../../../utils/envVars";
@@ -38,6 +39,8 @@ import {
 	splitRawArgs,
 } from "../../../utils/runConfigArgs";
 import { AgentIcon } from "../../ui/AgentIcon";
+import { Input } from "../../ui/Input";
+import { Select } from "../../ui/Select";
 import { ExpertSetting } from "../ExpertSetting";
 import { MachineSelector } from "../MachineSelector";
 import { SettingToggle } from "../SettingFields";
@@ -50,8 +53,12 @@ import {
 	useAgentConfig,
 	useMachine,
 } from "./agentConfigContext";
+import { LaunchInstructionsEditor } from "./LaunchInstructionsEditor";
 
 const ALL_AGENT_TYPES = AGENT_TYPES.filter((t): t is AgentType => t !== "git" && t !== "api");
+
+/** Agents with a launch-time instruction channel (Rust `launch_instructions::AGENTS`). */
+const LAUNCH_INSTRUCTION_AGENTS: readonly AgentType[] = ["claude", "codex", "grok", "opencode", "goose", "pi", "ego"];
 
 /**
  * Build the set of lowercased run-config names across all agent groups,
@@ -101,7 +108,7 @@ const EnvVarRow: Component<{
 	onRemove: () => void;
 }> = (props) => (
 	<div class={a.envVarRow}>
-		<input
+		<Input
 			class={`${a.formInput} ${a.mono} ${a.envVarKey}`}
 			classList={{ [a.inputError]: !!props.duplicate }}
 			placeholder="KEY"
@@ -109,7 +116,7 @@ const EnvVarRow: Component<{
 			onInput={(e) => props.onChange(e.currentTarget.value, props.value)}
 		/>
 		<span class={a.envVarEquals}>=</span>
-		<input
+		<Input
 			class={`${a.formInput} ${a.mono} ${a.envVarValue}`}
 			placeholder="value"
 			value={props.value}
@@ -143,7 +150,7 @@ const RunArgsFields: Component<{
 			</div>
 		</Show>
 		<div class={a.formRow}>
-			<input
+			<Input
 				class={`${a.formInput} ${a.mono}`}
 				classList={{ [a.inputError]: hasBlockingConflict(props.conflicts) }}
 				aria-label="Raw arguments (advanced)"
@@ -218,7 +225,7 @@ const AddConfigForm: Component<{
 	return (
 		<div class={a.addConfigForm}>
 			<div class={a.formRow}>
-				<input
+				<Input
 					class={a.formInput}
 					classList={{ [a.inputError]: isDuplicate() }}
 					placeholder="Configuration name"
@@ -234,7 +241,7 @@ const AddConfigForm: Component<{
 				<div class={a.validationError}>Name "{name().trim()}" already exists</div>
 			</Show>
 			<div class={a.formRow}>
-				<input
+				<Input
 					class={`${a.formInput} ${a.mono}`}
 					placeholder="Command (binary)"
 					value={command()}
@@ -252,7 +259,7 @@ const AddConfigForm: Component<{
 				}}
 			/>
 			<div class={a.formRow}>
-				<input
+				<Input
 					class={`${a.formInput} ${a.mono}`}
 					aria-label="Model"
 					placeholder="Model (optional)"
@@ -474,7 +481,7 @@ const RunConfigRow: Component<{
 						<span class={a.envVarsLabel}>Edit Configuration</span>
 					</div>
 					<div class={a.formRow}>
-						<input
+						<Input
 							class={a.formInput}
 							classList={{ [a.inputError]: isDuplicateName() }}
 							placeholder="Configuration name"
@@ -490,7 +497,7 @@ const RunConfigRow: Component<{
 						<div class={a.validationError}>Name "{editName().trim()}" already exists</div>
 					</Show>
 					<div class={a.formRow}>
-						<input
+						<Input
 							class={`${a.formInput} ${a.mono}`}
 							placeholder="Command (binary)"
 							value={editCommand()}
@@ -508,7 +515,7 @@ const RunConfigRow: Component<{
 						}}
 					/>
 					<div class={a.formRow}>
-						<input
+						<Input
 							class={`${a.formInput} ${a.mono}`}
 							aria-label="Model"
 							placeholder="Model (optional)"
@@ -645,17 +652,17 @@ const EnvFlagsSection: Component<{ agentType: AgentType }> = (props) => {
 														/>
 													</Show>
 													<Show when={flag.type === "enum"}>
-														<select
+														<Select
 															class={a.envFlagSelect}
 															value={getFlagValue(flag.key)}
 															onChange={(e) => handleValueChange(flag.key, e.currentTarget.value)}
 														>
 															<option value="">off</option>
 															<For each={flag.options ?? []}>{(opt) => <option value={opt}>{opt}</option>}</For>
-														</select>
+														</Select>
 													</Show>
 													<Show when={flag.type === "number"}>
-														<input
+														<Input
 															type="number"
 															class={a.envFlagInput}
 															value={getFlagValue(flag.key)}
@@ -664,7 +671,7 @@ const EnvFlagsSection: Component<{ agentType: AgentType }> = (props) => {
 														/>
 													</Show>
 													<Show when={flag.type === "string"}>
-														<input
+														<Input
 															type="text"
 															class={a.envFlagInput}
 															value={getFlagValue(flag.key)}
@@ -913,7 +920,7 @@ const AgentRow: Component<{
 					>
 						<div class={a.expandedSection}>
 							<label for={`idle-close-${props.agentType}`}>Close idle managed child after</label>
-							<input
+							<Input
 								id={`idle-close-${props.agentType}`}
 								class={a.formInput}
 								type="number"
@@ -1127,6 +1134,19 @@ const AgentRow: Component<{
 						</ExpertSetting>
 					</Show>
 
+					<Show when={LAUNCH_INSTRUCTION_AGENTS.includes(props.agentType) && settingsExpertStore.launchInstructions()}>
+						{(defaults) => (
+							<LaunchInstructionsEditor
+								id={`launch-instructions-${props.agentType}`}
+								label={`Launch instructions for ${agent().name}`}
+								value={configStore.getAgentLaunchInstructions(props.agentType)}
+								fallback={configStore.getLaunchInstructions() ?? defaults().default_text}
+								requiredMarkers={defaults().required_markers}
+								onSave={(text) => void configStore.setAgentLaunchInstructions(props.agentType, text)}
+							/>
+						)}
+					</Show>
+
 					{/* Headless Command Template — compared by the stored override, not
 					    the built-in template the input falls back to. */}
 					<ExpertSetting
@@ -1135,7 +1155,7 @@ const AgentRow: Component<{
 					>
 						<div class={a.expandedSection}>
 							<div class={a.expandedLabel}>Headless Command Template</div>
-							<input
+							<Input
 								class={`${a.formInput} ${a.mono}`}
 								placeholder={`${AGENTS[props.agentType].binary} -p "{prompt}" --no-input`}
 								value={configStore.getHeadlessTemplate(props.agentType) ?? ""}
@@ -1397,6 +1417,19 @@ export const AgentsTab: Component<AgentsTabProps> = (props) => {
 						/>
 					</ExpertSetting>
 
+					<Show when={settingsExpertStore.launchInstructions()}>
+						{(defaults) => (
+							<LaunchInstructionsEditor
+								id="launch-instructions-global"
+								label="Launch instructions"
+								value={activeStore().getLaunchInstructions()}
+								fallback={defaults().default_text}
+								requiredMarkers={defaults().required_markers}
+								onSave={(text) => void activeStore().setLaunchInstructions(text)}
+							/>
+						)}
+					</Show>
+
 					<div class={a.agentList}>
 						<For each={sortedAgents()}>
 							{(type) => (
@@ -1425,7 +1458,7 @@ const EgoPermissionsSection: Component = () => {
 			<h3>ego permissions</h3>
 			<div class={a.expandedSection}>
 				<label for="ego-permission-mode">Permissions</label>
-				<select
+				<Select
 					id="ego-permission-mode"
 					class={a.formInput}
 					value={configStore.state.agents.ego?.ego_mode ?? ""}
@@ -1441,9 +1474,9 @@ const EgoPermissionsSection: Component = () => {
 					<option value="edits">Auto-edit (edits)</option>
 					<option value="auto">Auto (reviewed)</option>
 					<option value="yolo">Full access (yolo)</option>
-				</select>
+				</Select>
 				<label for="ego-permission-sandbox">Filesystem sandbox</label>
-				<select
+				<Select
 					id="ego-permission-sandbox"
 					class={a.formInput}
 					value={configStore.state.agents.ego?.ego_sandbox ?? ""}
@@ -1456,7 +1489,7 @@ const EgoPermissionsSection: Component = () => {
 					<option value="">Use ego configuration</option>
 					<option value="ro">Read-only (ro)</option>
 					<option value="workspace">Workspace writes (workspace)</option>
-				</select>
+				</Select>
 				<p class={s.hint}>
 					Applies to new terminal launches and managed spawns, including resumes. Overrides matching raw flags. AI Chat
 					uses its own ACP settings.

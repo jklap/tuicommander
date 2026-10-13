@@ -666,6 +666,7 @@ the very next `tools/list` deliver the full one, for the identical request.
 The BM25 index lives in `AppState::tool_search_index` (`parking_lot::RwLock<ToolSearchIndex>`, backed by `src-tauri/src/tool_search.rs`). A background task subscribes to the `mcp_tools_changed` broadcast and rebuilds the index whenever the tool set changes (upstream connect/disconnect, `disabled_native_tools` edit, `collapse_tools` toggle).
 
 The MCP instructions string returned by `initialize` (`build_mcp_instructions`) swaps to a "lazy discovery" guide when `collapse_tools: true` or the connecting Grok session requires compatibility mode, so agents know to call `search_tools` first rather than looking for a flat tool table.
+The initialize instructions carry no repository paths. The `## Repos` section is one line: the repository count, the count per group and per remote connection, and the `repo action=list` call (the `call_tool` form when tools are collapsed). `repo action=list` returns each repository with its `group` and, for a repository on a remote connection, `connection_id`; local rows have no `connection_id`. The `## What TUIC gives you` section names the native tools registered on that install by purpose (reach the user, drive the platform, other) and the connected upstream servers with their tool counts and how to discover those tools (ToolSearch for Claude Code, `search_tools` when collapsed). It names only tools that `tools/list` serves and is omitted when there are none. The `suggest:` marker is omitted for a spawned child (an MCP session bound to a peer with a parent session); root sessions keep it. Upstream servers have no description field in their configuration, so only names are listed.
 The TUIC connection acknowledgment in those instructions is emitted exactly once per MCP connection or reconnect, never once per conversational turn. TUIC protocol context remains in initialize instructions and native core-tool descriptions only; upstream tool descriptions are preserved instead of receiving a repeated TUIC preamble.
 When intent markers are enabled for the connecting agent, initialize instructions require `intent:` on its own line, at the start of every user task and on material phase changes. "On its own line" is in the instruction because the ack sentence is required to open that same first message: an agent that runs the two together leaves the token mid-row, where the parser has to reach for it (see `docs/backend/output-parser.md` → Intent). The backend stores that dynamic intent independently from the spawn-time PTY description and the last submitted prompt.
 
@@ -681,7 +682,7 @@ on its first turn. Deferred tool discovery can expose them later.
 
 | Surface | Transport receipt | Model visibility | Owns |
 |---|---|---|---|
-| `initialize.instructions` (`render_mcp_instructions`) | Returned in the initialize response | Harness-dependent: Claude exposes a bounded system block; Codex exposes namespace metadata after discovery in the measured mode | Wire protocol markers, cross-tool rules, live state |
+| `initialize.instructions` (`render_mcp_instructions`) | Returned in the initialize response | Harness-dependent: Claude exposes a bounded system block; Codex exposes namespace metadata after discovery in the measured mode | Wire protocol markers, a capability map, cross-tool rules, live state |
 | tool `description` (`native_tool_definitions`) | Returned for advertised tools on `tools/list` | May be deferred by the harness; in Speakeasy mode native descriptions arrive through discovery | That tool's actions, arguments and semantics |
 
 **Pinned canary evidence (2026-10-04).** Claude Code **2.1.286**, with
@@ -1436,6 +1437,11 @@ The desktop boot thread owns the always-on Unix-socket/named-pipe listener and
 its one-time background tasks for the lifetime of the process. A configuration
 save may stop and replace the TCP listener, but the boot runtime remains parked
 after that shutdown so dropping it cannot silently kill local bridge IPC.
+
+PTY children receive `TUIC_SOCKET` from the server's actual bound Unix socket
+path. This includes named `tuic-remote --instance` sockets and collision
+fallbacks. `tuic-bridge` honors this environment override before instance-based
+socket discovery, keeping child MCP calls on the spawning server.
 
 ### Stdio transport
 

@@ -66,7 +66,8 @@ itself from the agent's `intent:` marker, and `/progress/report` refuses one.
 `ptyId` selects one PTY; omitting it returns the repository aggregate. Each
 entry includes `ptyId` when TUIC knows its source. Older entries and direct
 IPC/HTTP reports have no PTY ID and remain visible in the aggregate. `ptyIds`
-lists the PTYs with stored history, including closed PTYs. The list is
+lists the 32 most recently active PTYs with stored history, including closed PTYs;
+older PTYs' entries stay in the aggregate. The list is
 newest-first in pages of 8 entries by default. `limit` is clamped to 1–100;
 `total` counts entries matching the filters before the cursor, and `nextCursor`
 is `null` after the last page. Pass it back as `cursor` to read older entries.
@@ -2280,7 +2281,7 @@ GET /system/check-update?channel=nightly
 ```
 
 Returns `{ "available": bool, "version": string|null, "notes": string|null, "release_page": string|null, "not_found": bool }`.
-Channel URLs are hardcoded — no user-supplied URL is accepted. An unpublished
+Channels are `beta` and `nightly`. Beta returns the immutable versioned release page for downloads. Channel URLs are hardcoded — no user-supplied URL is accepted. An unpublished
 channel is `not_found: true`, not an error; an unknown channel name is a 500.
 
 ## Prompt Endpoints
@@ -2905,7 +2906,7 @@ The host ACP session list gathers all ego pages before ordering ancestry. Each r
 
 ## Launch instruction receipts
 
-`GET /sessions/{id}/prompt-receipt` mirrors `get_prompt_receipt`. Missing sessions return 404. The response is `{sections, captureLimited}`. Each section has `label`, `source`, `bytes` (original UTF-8 payload size, or null when unknown), `text` (redacted bounded preview), `status` (`sent`, `queued`, `served`, `file_snapshot`, or `not_observable`) and `truncated`. The endpoint reads live PTY/MCP metadata and never rebuilds text from settings. Capture/retention limits and unobservable cases are documented in [AI Agents](../user-guide/ai-agents.md#inspect-launch-instructions).
+`GET /sessions/{id}/prompt-receipt` mirrors `get_prompt_receipt`. Missing sessions return 404. The response is `{sections, captureLimited}`. Each section has `label`, `source`, `bytes` (original UTF-8 payload size, or null when unknown), `text` (redacted bounded preview), `status` (`sent`, `queued`, `served`, `file_snapshot`, or `not_observable`), `truncated`, `count` (observations folded into the row; one `served` row per label keeps the newest body), `firstSeenMs` and `lastSeenMs` (unix milliseconds). The endpoint reads live PTY/MCP metadata and never rebuilds text from settings. Capture/retention limits and unobservable cases are documented in [AI Agents](../user-guide/ai-agents.md#inspect-launch-instructions).
 
 ### Run incident projection
 
@@ -3091,3 +3092,7 @@ no-store`. It never returns a nonce or credential. Account forms cannot be read
 through `GET /secrets/forms/{nonce}` or submitted through
 `POST /secrets/forms/submit`, even with the correct nonce. Ordinary secret forms
 retain their existing mobile capability support.
+
+### History-anchored viewport scrolling
+
+`POST /sessions/:id/terminal/scroll-to-anchor` accepts `{ "anchor": number | null }` and returns `{ "ok": true }`. The anchor is an all-time row index including evicted rows, matching grid-frame `historyBase + historySize - displayOffset`. Null follows the tail; a trimmed anchor clamps to the oldest retained row. The request is coalesced with offset requests and applied under the ticker VT lock, so intervening output cannot move the target.

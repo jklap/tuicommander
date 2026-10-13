@@ -6,7 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+- Goose returns to idle after a reply and accepts the next submission without waiting for the five-minute stale recovery (#1812-022d).
+- Keep child agent MCP bridges on the spawning instance, including isolated `tuic-remote` instances and fallback sockets (#1811-a0fe).
+- Preserve beta installs in the macOS terminal installer and normalize release tag prefixes for default and pinned downloads.
+
 ### Added
+- Beta update channel: automatically check for the next beta and final stable release. Completed beta releases publish a rolling feed without changing stable updates.
+
+### Added
+- After an update restart, every agent tab with a session the agent confirmed resumes on its own, on every branch, not only the selected one; **Settings → General → Updates → Resume all agents after an update** (`eager_resume_after_update`, default on) turns it off. Tabs without a confirmed session keep the click-to-resume banner (#1772-25c5).
+- After an update installs, the app restart waits until no session is busy or awaiting input; **Settings → General → Updates → Wait for agents before restarting** (`defer_update_relaunch`, default on) turns it off, and the APP UPDATE notification offers Restart now with the busy-session count (#1771-c6fb).
+- Shared themed form controls unify desktop and mobile select fields and the Tasks, Settings, Automations, Git and chat forms; List, Board and Roadmap use a keyboard-accessible segmented switch (#1815-01c9).
 - Chat mutes intermediate assistant text (text followed by a tool call in the same turn) in the terminal Chat view, AI Chat and mobile; **Settings → Appearance → Chat → Mute Intermediate Text** turns it off (#1769-89dc).
 
 - Show agent toast cards only while their origin terminal tab is active, with a default-on per-client Notifications toggle. Urgent notices always show a card (#1760-bab7).

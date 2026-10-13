@@ -31,7 +31,7 @@ absolute bridge path that is missing or not executable.
 
 ### Native scrollback on launch
 
-**Prevent alternate screen** in Settings → AI → Agents is enabled by default for every agent. TUIC applies Claude Code's `CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1` and `CLAUDE_CODE_DISABLE_AGENT_VIEW=1` environment controls when enabled. A terminal that enters the alternate screen within its first seconds raises a warning toast naming the session and the fix. Codex and Grok receive `--no-alt-screen` when their installed CLI advertises it in `--help`; OpenCode receives `--mini` when available. On Windows, the probe selects an executable `.exe` or `.cmd` launcher ahead of an extensionless npm shell shim. TUICommander checks the executable with a two-second deadline and shares concurrent checks. A timed-out check is not retried until that binary changes; a quick inconclusive exit is retried after a short cooldown. Older versions still start without an unsupported option. Existing flags are not duplicated. Rust applies the same policy to structured IPC, HTTP and MCP launches and exports it to new TUIC shells, where zsh, bash and fish wrappers apply it to commands typed manually. `command <agent>` bypasses those wrappers. Reopen an existing shell after changing the setting.
+**Prevent alternate screen** in Settings → AI → Agents is enabled by default for every agent. TUIC applies Claude Code's `CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1` and `CLAUDE_CODE_DISABLE_AGENT_VIEW=1` environment controls when enabled. A terminal that enters the alternate screen within its first seconds raises a warning toast naming the session and the fix. Codex and Grok receive `--no-alt-screen` when their installed CLI advertises it in `--help`; OpenCode receives `--mini` when available. On Windows, the probe selects an executable `.exe` or `.cmd` launcher ahead of an extensionless npm shell shim. TUICommander checks the executable with a two-second deadline and shares concurrent checks. A timed-out check is not retried until that binary changes; a quick inconclusive exit is retried after a short cooldown. Older versions still start without an unsupported option. Existing flags are not duplicated. Rust applies the same policy to structured IPC, HTTP and MCP launches and exports it to new TUIC shells, where zsh, bash and fish wrappers apply it to commands typed manually. `command <agent>` bypasses those wrappers, but not the launch-instructions shim. Reopen an existing shell after changing the setting.
 
 Gemini currently defaults to the primary screen (`ui.useAlternateBuffer: false`), Cursor enables fullscreen only when requested, and pi defaults to regular TUI mode. Other agents without a documented alternate-screen control keep their own defaults. If an agent enters the alternate screen despite these defaults, TUICommander records one warning for that session with the agent name and detected version.
 
@@ -88,6 +88,28 @@ When an agent asks an interactive question (Y/N, multiple choice, numbered optio
 3. Plays a **notification sound** (if enabled in Settings → Notifications)
 
 For unrecognized agents, silence-based detection kicks in — if the terminal stops producing output for 10 seconds after a line ending with `?`, it's treated as a potential prompt. User-typed lines ending with `?` are suppressed from question detection for 500ms (echo window) to avoid false positives from PTY echo.
+
+## Launch Instructions (TUIC Output Markers)
+
+TUICommander passes its output-marker rules (`intent:`, `suggest:`, `💬 `) to an agent at launch, through the agent's own instruction channel. The MCP `instructions` field still carries the same rules as a fallback, but Claude reads it only once per session and Codex never shows it.
+
+| Agent | Channel |
+|---|---|
+| Claude Code | `--append-system-prompt-file <config-dir>/agent-hooks/instructions-claude.md` |
+| Codex | `-c developer_instructions="<text>"` (a TOML string) |
+| Grok | `--rules=<text>` |
+| OpenCode | environment variable `OPENCODE_CONFIG_CONTENT={"instructions":["<file>"]}` |
+| Goose | `goose session --system=<text>` |
+| pi | `--append-system-prompt <file>` |
+| ego | `--append-system @<file>` |
+
+Resume launches get the flag too. Headless one-shot forms (`claude -p`, `codex exec`, `grok -p`, `goose run`, `opencode run`, `pi -p`, `ego run`) and non-session subcommands do not. When you pass the same flag yourself, TUIC does not add a second one.
+
+Edit the text in **Settings → Agents → Launch instructions**. Each supported agent also has its own override in its row. **Reset to default** removes an override. An empty text turns the instructions off. `{VER}` becomes the TUIC version. The editor warns when a marker that TUIC parses is missing from the text, because the tab title, the suggest buttons and the answers view depend on it. The default text leaves out a marker when you turn that marker off for the agent.
+
+TUIC writes the effective text to `<config-dir>/agent-hooks/instructions-<agent>.md` (`.toml` for Codex) at startup, on every agent launch and when you save the agent settings.
+
+**Scope:** agents that TUIC starts (Run, MCP/HTTP spawns, worktree launches) get the flag. In a TUIC shell on macOS and Linux, TUIC puts a shim directory first on `PATH` (`shell-integration/bin`). The shim adds the same flag and runs the next real binary on `PATH`, so a typed agent, an alias, and a wrapper script that runs the agent by name all get the instructions. The prompt hook of zsh, bash and fish moves the shim directory back to the front of `PATH` if your shell startup files prepend another directory. OpenCode gets `OPENCODE_CONFIG_CONTENT` instead, which also reaches an absolute-path launch. These agents have no env var or config file that appends instructions without side effects, so they use the shim: claude, codex, grok, goose, pi and ego. A shim-served agent launched by absolute path, and every typed launch on Windows or WSL, gets only the MCP fallback. The shim never adds a flag that you already pass.
 
 ## Native Hook Instrumentation
 
@@ -220,6 +242,8 @@ claude --session-id $TUIC_SESSION   # explicit, wrapper bypassed
 
 Claude Code stores the session locally. When you restart TUICommander and switch to this branch, the session resumes automatically via `claude --resume <uuid>`.
 
+Goose returns to idle after a reply when its ready composer appears, so you can send the next prompt without waiting for stale-state recovery.
+
 **Automatic session binding (Goose):**
 
 Shell integration injects `--name $TUIC_SESSION` into `goose session` and `goose run` subcommands. The wrapper is bypassed when you explicitly pass `--name`, `-n`, `--resume`, or `-r`.
@@ -302,7 +326,7 @@ Right-click a terminal and select **Inspect Launch Instructions…**. Expand a s
 
 Capture starts with new managed launches after the backend update. It includes the final brief with TUIC peer context, `--system-prompt`/`--append-system-prompt` values, snapshots of explicitly supplied `--system-prompt-file`/`--append-system-prompt-file` files, and TUIC MCP initialize responses. File snapshots show the bytes available to TUIC before spawn, not confirmation of what the agent read. Shell-launched agents, older sessions and independently loaded files such as AGENTS.md are **Not observable by TUIC**. TUIC does not reconstruct them from current settings.
 
-Redacted text is limited to 32 KiB per section and 64 KiB across 16 captured sections. Larger text is labeled truncated; missing, non-regular, non-UTF-8 or over-1-MiB instruction files are labeled unavailable. Byte counts describe the original payload, not the shorter redacted preview. Receipts survive a frontend reload, but not session closure or a backend restart.
+Redacted text is limited to 32 KiB per section and 64 KiB across 16 captured sections. Larger text is labeled truncated; missing, non-regular, non-UTF-8 or over-1-MiB instruction files are labeled unavailable. Byte counts describe the original payload, not the shorter redacted preview. A reconnecting MCP bridge does not add rows: the row **MCP initialize instructions** holds the newest response and shows how many times it was served and when it was last seen. Served rows never use the 16-section limit, so launch sections stay visible. If the receipt cannot be read, the dialog shows the reason from the backend. Receipts survive a frontend reload, but not session closure or a backend restart.
 
 ### Answer terminal ego questions on mobile
 

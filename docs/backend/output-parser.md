@@ -397,6 +397,8 @@ Emitted by the reader thread on real-output→busy and idle transitions. The fro
 
 The backend foreground probe enables agent parsing for hand-launched agents in both desktop and headless sessions. HTTP foreground queries update the same stored identity. Screen activity cached before identity discovery is reclassified when that identity changes.
 
+Goose replies are append-only below the submitted prompt. The PTY reader preserves those changed rows instead of trimming them as fixed composer chrome. This lets the reply prove consumption before a stable Ready screen closes the submitted turn; no protocol-stale timeout is needed (#1812-022d).
+
 Ordinary output and spinner repaints cannot override a protocol idle marker.
 The reader preserves that evidence until the ranked busy decision, and the
 ready-screen timer preserves its rank. A new submission or accepted semantic
@@ -601,6 +603,10 @@ OSC 0/2 title notifications use the terminal event path (`PtyTitle`), separately
 from parsed lifecycle events. Desktop remote tabs consume parsed events on the
 owning daemon's WebSocket instead of subscribing to local IPC. Identity comes
 from the authoritative backend `agent_type`, not from a title heuristic.
+
+### History-anchored viewport scrolling
+
+Viewport scroll requests do not alter parsed output. History-anchored scrolling resolves the requested all-time row after output processing, under the same VT lock; capped history clamps an evicted anchor to the oldest retained row.
 
 ### ego terminal questions
 

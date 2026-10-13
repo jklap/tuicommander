@@ -34,6 +34,8 @@ type InitOptions = Omit<AppInitDeps, "stores" | "applyPlatformClass" | "onCloseR
 export type AppBootstrapOptions = InitOptions & {
 	detectAgents: () => Promise<unknown>;
 	restoreDetachedPanels: () => void;
+	/** After an update restart, resume the agent tabs of every branch. */
+	resumeAgentTabsAfterUpdate: () => Promise<void>;
 	setWhatsNewVersion: (version: string) => void;
 	openSettings: (tab?: string) => void;
 	/** Add a repo by path — wired to the deep link `tuic://open-repo` (`tuic <dir>`). */
@@ -122,6 +124,7 @@ export async function runAppBootstrap(options: AppBootstrapOptions): Promise<voi
 	const {
 		detectAgents,
 		restoreDetachedPanels,
+		resumeAgentTabsAfterUpdate,
 		setWhatsNewVersion,
 		openSettings,
 		openRepoPath,
@@ -161,6 +164,7 @@ export async function runAppBootstrap(options: AppBootstrapOptions): Promise<voi
 		document.getElementById("splash")?.remove();
 	});
 
+	resumeAgentTabsAfterUpdate().catch((error) => appLogger.warn("app", "Resuming agents after update failed", error));
 	detectAgents().catch((error) => appLogger.debug("app", "Agent detection failed", error));
 
 	restoreDetachedPanels();

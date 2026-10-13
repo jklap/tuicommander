@@ -153,6 +153,15 @@ pub(crate) fn bind_pty_identity(
         "TUIC_CONFIG_DIR",
         crate::config::config_dir().to_string_lossy().as_ref(),
     );
+    // Use the socket the server actually bound, including collision fallbacks.
+    // Recomputing from config would let isolated child bridges reach another instance.
+    #[cfg(unix)]
+    {
+        let socket = state.bound_socket_path.read();
+        if !socket.as_os_str().is_empty() {
+            cmd.env("TUIC_SOCKET", socket.as_os_str());
+        }
+    }
     state.bind_live_pty(identity, session_id);
 }
 

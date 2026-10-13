@@ -1006,6 +1006,14 @@ pub(crate) struct AppConfig {
     #[serde(default = "default_true")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates auto update plugins enabled for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) auto_update_plugins_enabled: bool,
+    /// Hold the app restart after an update install until no session is busy or awaiting input
+    #[serde(default = "default_true")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates defer update relaunch for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    pub(crate) defer_update_relaunch: bool,
+    /// After an update restart, resume every agent tab whose session the agent confirmed, not only the selected branch
+    #[serde(default = "default_true")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates eager resume after update for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    pub(crate) eager_resume_after_update: bool,
     /// UI language code (e.g. "en", "it", "de")
     #[serde(default = "default_language")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates language for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
@@ -1014,10 +1022,10 @@ pub(crate) struct AppConfig {
     #[serde(default)]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates disabled plugin ids for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) disabled_plugin_ids: Vec<String>,
-    /// Update channel: "stable" or "nightly"
+    /// Update channel: "stable", "beta" or "nightly"
     #[serde(default = "default_update_channel")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates update channel for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
-    #[schemars(extend("enum" = ["stable","nightly"]))]
+    #[schemars(extend("enum" = ["stable","beta","nightly"]))]
     pub(crate) update_channel: String,
     /// Agent types disabled by the user (won't appear in sidebar "Add Agent" menu)
     #[serde(default)]
@@ -1193,7 +1201,15 @@ fn default_disabled_native_tools() -> Vec<String> {
 }
 
 fn default_update_channel() -> String {
-    "stable".to_string()
+    default_update_channel_for_version(env!("CARGO_PKG_VERSION")).to_string()
+}
+
+fn default_update_channel_for_version(version: &str) -> &'static str {
+    if version.contains("-beta.") && !version.contains("-nightly.") {
+        "beta"
+    } else {
+        "stable"
+    }
 }
 
 /// 30 days. The cookie slides on every authenticated request, so this is the
@@ -1302,6 +1318,8 @@ impl Default for AppConfig {
             prevent_sleep_when_busy: false,
             auto_update_enabled: true,
             auto_update_plugins_enabled: true,
+            defer_update_relaunch: true,
+            eager_resume_after_update: true,
             language: default_language(),
             disabled_plugin_ids: Vec::new(),
             update_channel: default_update_channel(),
@@ -2049,6 +2067,10 @@ pub(crate) struct AgentSettings {
     )]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"next_session","effect":"Used when the next session or process starts; existing sessions retain their launch configuration.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) ego_sandbox: Option<EgoSandbox>,
+    /// Per-agent launch instructions. Overrides the global text; empty turns injection off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"next_session","effect":"Used when the next session or process starts; existing sessions retain their launch configuration.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    pub(crate) launch_instructions: Option<String>,
 }
 
 impl Default for AgentSettings {
@@ -2069,6 +2091,7 @@ impl Default for AgentSettings {
             skip_trust_dialog: None,
             ego_mode: None,
             ego_sandbox: None,
+            launch_instructions: None,
         }
     }
 }
@@ -2083,6 +2106,11 @@ pub(crate) struct AgentsConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates headless agent for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) headless_agent: Option<String>,
+    /// Launch instructions for every agent TUIC starts. None = the shipped default
+    /// (`launch_instructions::default_text`); empty turns injection off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"next_session","effect":"Used when the next session or process starts; existing sessions retain their launch configuration.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    pub(crate) launch_instructions: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -4418,7 +4446,16 @@ fn migrate_codex_bypass(config: &mut AgentsConfig) -> bool {
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn save_agents_config(base: AgentsConfig, config: AgentsConfig) -> Result<(), String> {
     let file: ConfigFile<AgentsConfig> = ConfigFile::new(AGENTS_CONFIG_FILE);
-    file.save_delta(&base, &config)
+    file.save_delta(&base, &config)?;
+    // The instruction files are what launches read; refresh them with the edit.
+    // The save itself succeeded, and every launch rewrites them again.
+    if let Err(error) = crate::launch_instructions::write_files(&config_dir()) {
+        tracing::error!(
+            source = "agent_hooks",
+            "Failed to write launch instructions: {error}"
+        );
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -4451,6 +4488,15 @@ pub(crate) struct ConfigDefaults {
     /// route is never registered there either (see `build_remote_router`).
     #[cfg(feature = "dictation")]
     pub(crate) dictation: DictationConfig,
+    /// The shipped launch-instruction text (`{VER}` unexpanded) and the marker
+    /// tokens the Settings editor warns about when an edit drops one.
+    pub(crate) launch_instructions: LaunchInstructionsDefaults,
+}
+
+#[derive(Serialize)]
+pub(crate) struct LaunchInstructionsDefaults {
+    pub(crate) default_text: String,
+    pub(crate) required_markers: Vec<&'static str>,
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
@@ -4471,6 +4517,10 @@ pub(crate) fn get_config_defaults() -> ConfigDefaults {
         dictation: DictationConfig {
             speech_engine: "edge".to_string(),
             ..DictationConfig::default()
+        },
+        launch_instructions: LaunchInstructionsDefaults {
+            default_text: crate::launch_instructions::default_text(true, true),
+            required_markers: crate::launch_instructions::REQUIRED_MARKERS.to_vec(),
         },
     }
 }
@@ -5255,6 +5305,8 @@ mod tests {
             show_scrollbar_marks: false,
             block_folding_enabled: false,
             auto_update_plugins_enabled: false,
+            defer_update_relaunch: false,
+            eager_resume_after_update: false,
             standby_timeout_minutes: 5,
             custom_launchers: Vec::new(),
             inline_blame_enabled: true,
@@ -5289,6 +5341,9 @@ mod tests {
         assert_eq!(loaded.split_tab_mode, SplitTabMode::Unified);
         assert!(loaded.prevent_sleep_when_busy);
         assert!(!loaded.auto_update_enabled);
+        // The default is true, so false is the only value that proves a real round trip.
+        assert!(!loaded.defer_update_relaunch);
+        assert!(!loaded.eager_resume_after_update);
         assert_eq!(loaded.language, "it");
         assert_eq!(
             loaded.disabled_plugin_ids,
@@ -5327,6 +5382,31 @@ mod tests {
         );
     }
 
+    // Catches: a fresh beta install silently defaults to stable and misses beta.2.
+    #[test]
+    fn beta_build_defaults_to_beta_without_enrolling_stable_or_nightly() {
+        assert_eq!(default_update_channel_for_version("2.0.0-beta.1"), "beta");
+        assert_eq!(default_update_channel_for_version("2.0.0"), "stable");
+        assert_eq!(
+            default_update_channel_for_version("2.0.0-beta.1-nightly.20261012.t1000"),
+            "stable"
+        );
+    }
+
+    // Catches: loading settings loses a saved beta choice or overwrites stable opt-out.
+    #[test]
+    fn saved_update_channel_survives_config_roundtrip() {
+        for channel in ["stable", "beta", "nightly"] {
+            let config = AppConfig {
+                update_channel: channel.to_string(),
+                ..Default::default()
+            };
+            let loaded: AppConfig =
+                serde_json::from_str(&serde_json::to_string(&config).unwrap()).unwrap();
+            assert_eq!(loaded.update_channel, channel);
+        }
+    }
+
     #[test]
     fn app_config_serde_default_for_new_fields() {
         // Simulate a config.json from before ide/default_font_size existed
@@ -5350,7 +5430,7 @@ mod tests {
         assert!(!loaded.prevent_sleep_when_busy);
         assert!(loaded.auto_update_enabled);
         assert_eq!(loaded.language, "en");
-        assert_eq!(loaded.update_channel, "stable");
+        assert_eq!(loaded.update_channel, AppConfig::default().update_channel);
         assert!(!loaded.services.server.ipv6_enabled);
         assert!(!loaded.services.auth.lan_auth_bypass);
         assert!(loaded.intent_tab_title); // defaults to true
@@ -6306,6 +6386,7 @@ mod tests {
         agents.agents.insert(
             "claude".to_string(),
             AgentSettings {
+                launch_instructions: None,
                 run_configs: vec![
                     AgentRunConfig {
                         name: "Default".to_string(),

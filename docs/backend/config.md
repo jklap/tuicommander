@@ -314,12 +314,14 @@ cleartext copy does not survive on disk.
 | `tab_cycling_all_types` | `bool` | `false` | When true, next/prev-tab shortcuts cycle file/diff/markdown/editor tabs too (default cycles terminals only) |
 | `chat_mute_intermediate_text` | `bool` | `true` | Chat (terminal Chat view, AI Chat, mobile) draws assistant text that a tool call follows in the same turn smaller and dimmer. The final text of a turn keeps the normal style. Applies immediately. |
 | `tab_tree_enabled` | `bool` | `false` | Opt-in sidebar activity cards. `false` renders no activity caret, card, or nested agent/session rows. `true` lets every branch with an open terminal session expand its assigned sessions. Applies immediately; no restart is required. |
+| `defer_update_relaunch` | `bool` | `true` | After an update installs, hold the app restart until no session is busy or awaiting input. The APP UPDATE notification shows the busy count and offers Restart now. `false` restarts as soon as the install ends. Applies immediately. |
+| `eager_resume_after_update` | `bool` | `true` | After the app restarts for an update, resume every agent tab whose session id the agent confirmed on disk, on every branch (the resume command is typed at first shell idle). A branch with no such tab, and any unconfirmed tab, keep the lazy click-to-resume banner. Applies at the next update restart. |
 | `prevent_sleep_when_busy` | `bool` | `false` | Prevent macOS sleep when terminal is busy |
 | `suggest_followups` | `bool` | `true` | Show `suggest:` follow-up actions |
 | `issue_filter` | `Option<String>` | `"assigned"` | GitHub Issues filter: "assigned", "created", "mentioned", "all", "disabled" |
 | `experimental_features_enabled` | `bool` | `false` | Opts in to the AI Chat panel shell and SSH Tunnels. It has no sub-flags: `ai_chat_enabled`, `ai_triage_enabled` and `ai_watchers_enabled` went with the embedded AI engine (#784-0aec). A `config.json` written before that upgrade still carries them and still loads — `AppConfig` has no `deny_unknown_fields`, and `a_config_written_before_the_ai_engine_was_deleted_still_loads` holds that open |
 | `auto_show_pr_popover` | `bool` | `false` | Auto-show PR popover when switching to a branch with a PR |
-| `update_channel` | `String` | `"stable"` | Update channel: "stable" or "nightly" |
+| `update_channel` | `String` | `"stable"` (`"beta"` in beta builds) | Update channel: "stable", "beta" or "nightly"; saved choices are preserved |
 | `inline_blame_enabled` | `bool` | `true` | Show GitLens-style inline git blame on the code editor's active line |
 | `show_block_timestamps` | `bool` | `true` | Label each command block with its elapsed time while Ctrl+Cmd is held. Frontend-gated (painted by the renderer); stored here for persistence |
 | `show_scrollbar_marks` | `bool` | `true` | Draw command-block marks on the terminal scrollbar. Frontend-gated, toggled from Settings > Terminal |
@@ -848,6 +850,8 @@ Custom keyboard shortcut overrides.
 
 The `ego` entry supports optional `ego_mode` (`plan|default|edits|auto|yolo`) and `ego_sandbox` (`ro|workspace`). Missing values add no flags. The shared Rust launch translator injects `--mode` and `--sandbox` for terminal and MCP launches (including `run` and `resume`), replacing corresponding raw overrides before `--`. Administrative subcommands (including `mcp-server`) and ACP are excluded. The prompt separator `--` and its full suffix stay unchanged, even after a raw option without a value. An invalid saved ego choice is ignored for that field only; the valid sibling choice and other agents' settings remain intact. These choices apply only to new launches and do not rewrite ego configuration.
 
+`agents.json` may contain `launch_instructions: string` at the top level (the text for every agent) and in each agent entry (an override for that agent). Absent means the shipped default; an empty string turns the launch instructions off. See the user guide, "Launch Instructions".
+
 Each agent entry may contain `native_status_signals: boolean`. For Claude and Codex, an absent value means `true`; `false` disables launch argument injection. `hook_instrumentation` controls only explicit global installation and remains off when absent.
 
 Each agent entry may also contain `prevent_alt_screen: boolean`. An absent value means `true`. When true, TUIC uses a verified control where one exists: Claude's environment variable, Codex and Grok's `--no-alt-screen`, or OpenCode's `--mini`. A false value suppresses TUIC's screen control for that agent on new structured and shell launches. An agent without a verified control remains unaffected.
@@ -974,6 +978,7 @@ config.json written before the field existed — see
 | `repo_defaults` | `RepoDefaultsConfig` | `RepoDefaultsConfig::default()` — what a `repo-defaults.json`-less install loads |
 | `agents` | `AgentsConfig` | `AgentsConfig::default()` — `AgentsConfig`-level fields such as `headless_agent` |
 | `github_accounts` | `GitHubAccountRegistry` | `GitHubAccountRegistry::default()` — `{ "accounts": [] }`, the same shape as `github_accounts.json`; Settings shows the "Add another GitHub account" entry point in basic mode only when accounts exist |
+| `launch_instructions` | `LaunchInstructionsDefaults` | `{ default_text, required_markers }`: the shipped launch-instruction text (`{VER}` unexpanded) and the marker tokens the Settings editor warns about |
 | `dictation` | `DictationConfig` | Desktop builds only — absent under `--no-default-features` (`tuic-remote`), where `mod dictation` does not compile and the route is not registered |
 
 Fields marked `skip_serializing_if = "Option::is_none"` are omitted when

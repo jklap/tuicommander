@@ -9703,6 +9703,118 @@ async fn queued_command_drains_after_a_captured_opencode_mini_turn() {
     );
 }
 
+// Catches: a submitted Goose turn retaining Protocol busy after its real reply
+// and ready composer, blocking the next submission until protocol-stale.
+#[test]
+fn captured_goose_submitted_turn_returns_idle_without_protocol_stale() {
+    let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(
+        "goose-1.49.0-submitted-turn-20261012.tcap",
+    ))
+    .expect("valid recorded Goose turn");
+    let (rows, cols) = capture.geometry.expect("recorded geometry");
+    let sid = "goose-submitted-turn";
+    let (state, silence) = chunk_trace_state(sid);
+    {
+        let mut session = state.session_maps.session_states.get_mut(sid).unwrap();
+        session.agent_type = Some("goose".into());
+        session.agent_type_from_run_config = true;
+    }
+    state
+        .grid
+        .vt_log_buffers
+        .insert(sid.into(), Mutex::new(VtLogBuffer::new(rows, cols, 2000)));
+    let mut processor = ChunkProcessor::new(None, None);
+    let mut utf8 = Utf8ReadBuffer::new();
+    let mut escapes = EscapeAwareBuffer::new();
+    let mut input = String::new();
+    for record in capture.records {
+        match record.direction {
+            crate::pty_capture::CaptureDirection::Input => {
+                if record.data == b"\r" {
+                    record_submitted_line(&state, sid, std::mem::take(&mut input), 0);
+                    assert_eq!(
+                        state
+                            .session_maps
+                            .session_states
+                            .get(sid)
+                            .unwrap()
+                            .turn_epoch,
+                        1
+                    );
+                    assert_eq!(
+                        state
+                            .session_maps
+                            .shell_states
+                            .get(sid)
+                            .unwrap()
+                            .load(Ordering::Acquire),
+                        SHELL_BUSY
+                    );
+                } else {
+                    input.push_str(std::str::from_utf8(&record.data).unwrap());
+                }
+            }
+            crate::pty_capture::CaptureDirection::Output => {
+                let text = utf8.push(&record.data);
+                let text = escapes.push(&text);
+                let (text, _) = crate::state::strip_kitty_sequences(&text);
+                processor.process_chunk(&text, &silence, sid, &state);
+            }
+        }
+    }
+    let activity = silence.lock().cached_screen_activity;
+    assert_eq!(activity, AgentScreenActivity::Ready);
+    // A byte replay has no agent process tree. Supply only the independent
+    // foreground probe's quiet result; busy/idle evidence comes from replay.
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .background_probe_satisfied_turn_epoch = Some(1);
+    assert!(
+        !try_timer_idle_transition(&state, &silence, sid, activity, Some("goose"), Some(1))
+            .transitioned
+    );
+    // Advance the Ready debounce, never the five-minute stale deadline.
+    silence.lock().screen_ready_pending_since =
+        Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
+    assert!(
+        try_timer_idle_transition(&state, &silence, sid, activity, Some("goose"), Some(1))
+            .transitioned,
+        "the recorded Ready composer must release the submitted turn: {:?}",
+        silence.lock().evidence
+    );
+    assert_eq!(
+        state
+            .session_maps
+            .shell_states
+            .get(sid)
+            .unwrap()
+            .load(Ordering::Acquire),
+        SHELL_IDLE
+    );
+    record_submitted_line(&state, sid, "What is 30+12?".into(), 0);
+    assert_eq!(
+        state
+            .session_maps
+            .session_states
+            .get(sid)
+            .unwrap()
+            .turn_epoch,
+        2
+    );
+    assert_eq!(
+        state
+            .session_maps
+            .shell_states
+            .get(sid)
+            .unwrap()
+            .load(Ordering::Acquire),
+        SHELL_BUSY
+    );
+}
+
 /// goose 1.49.0, captured live (#699-c6e0): the composer footer is on screen and
 /// nothing is running, so the session must read Ready. Without this the OSC 133
 /// busy bit set once by the long-lived `goose session` command survives for the
@@ -14558,4 +14670,32 @@ mod root_identity {
             "a Shell-role root running claude was treated as a returned shell"
         );
     }
+}
+
+/// Catches: the coalesced slot loses row zero, uses stale offsets, or reorders tail requests.
+#[test]
+fn coalesced_scroll_anchor_applies_after_output_and_latest_request_wins() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let sid = "anchor-1264";
+    state
+        .grid
+        .pending_scroll
+        .insert(sid.into(), Arc::new(AtomicI64::new(-1)));
+    let mut vt = VtLogBuffer::new(3, 20, 100);
+    vt.process(b"l0\r\nl1\r\nl2\r\nl3\r\nl4\r\nl5\r\nl6");
+    queue_scroll_anchor(&state, sid, Some(2));
+    vt.process(b"\r\nl7\r\nl8\r\nl9\r\nl10\r\nl11");
+    apply_scroll_target(&mut vt, take_pending_scroll(&state, sid).unwrap());
+    assert_eq!(vt.grid_get_row_text(0), "l2");
+    assert!(take_pending_scroll(&state, sid).is_none());
+    queue_scroll_anchor(&state, sid, Some(0));
+    apply_scroll_target(&mut vt, take_pending_scroll(&state, sid).unwrap());
+    assert_eq!(vt.grid_get_row_text(0), "l0");
+    queue_scroll_anchor(&state, sid, Some(2));
+    queue_scroll_anchor(&state, sid, None);
+    apply_scroll_target(&mut vt, take_pending_scroll(&state, sid).unwrap());
+    assert_eq!(vt.grid_display_offset(), 0);
+    queue_scroll_anchor(&state, sid, Some(usize::MAX));
+    apply_scroll_target(&mut vt, take_pending_scroll(&state, sid).unwrap());
+    assert_eq!(vt.grid_display_offset(), 0);
 }

@@ -143,6 +143,18 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{
 		tab: "general",
 		section: "Updates",
+		label: "Wait for agents before restarting",
+		labelKey: "general.toggle.deferUpdateRelaunch",
+	},
+	{
+		tab: "general",
+		section: "Updates",
+		label: "Resume all agents after an update",
+		labelKey: "general.toggle.eagerResumeAfterUpdate",
+	},
+	{
+		tab: "general",
+		section: "Updates",
 		label: "Update Channel",
 		labelKey: "general.label.updateChannel",
 		expert: true,
@@ -672,6 +684,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		expert: true,
 		configKey: "app.progress_tracking",
 	},
+	{ tab: "agents", section: "Agents", label: "Launch instructions" },
 	{ tab: "agents", section: "ego permissions", label: "Permissions" },
 	{ tab: "agents", section: "ego permissions", label: "Filesystem sandbox" },
 	// tabs/AiChatTab.tsx — the inlined former ProvidersTab content, in file order.

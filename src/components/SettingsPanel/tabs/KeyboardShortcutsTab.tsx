@@ -10,6 +10,7 @@ import { isTauri } from "../../../transport";
 import { comboToDisplay, keyFor } from "../../../utils/hotkey";
 import { keyEventToCombo, validateGlobalHotkeyCombo } from "../../../utils/keyRecorder";
 import { KeyComboCapture } from "../../shared/KeyComboCapture";
+import { Input } from "../../ui/Input";
 import s from "../Settings.module.css";
 
 /**
@@ -603,7 +604,7 @@ export const KeyboardShortcutsTab: Component = () => {
 			</Show>
 
 			<div class={s.group}>
-				<input
+				<Input
 					ref={inputRef}
 					type="text"
 					placeholder={t("helpPanel.searchPlaceholder", "Search shortcuts...")}

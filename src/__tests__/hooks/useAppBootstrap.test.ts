@@ -64,6 +64,7 @@ function makeOptions(overrides: Partial<AppBootstrapOptions> = {}): AppBootstrap
 		getDefaultFontSize: () => 14,
 		detectAgents: vi.fn().mockResolvedValue(undefined),
 		restoreDetachedPanels: vi.fn(),
+		resumeAgentTabsAfterUpdate: vi.fn().mockResolvedValue(undefined),
 		setWhatsNewVersion: vi.fn(),
 		openSettings: vi.fn(),
 		openRepoPath: vi.fn().mockResolvedValue(undefined),
@@ -109,6 +110,24 @@ describe("runAppBootstrap", () => {
 		expect(mockRegistryFetch).toHaveBeenCalledOnce();
 		expect(options.setWhatsNewVersion).toHaveBeenCalledWith("2.0.0");
 		expect(mockDeepLink).toHaveBeenCalledWith(expect.objectContaining({ openSettings: options.openSettings }));
+	});
+
+	// Catches: the post-update sweep never starting, or starting before the initial
+	// branch select, so the selected branch's tabs are restored twice.
+	it("resumes the other branches' agent tabs only after application initialization", async () => {
+		const order: string[] = [];
+		mockInitApp.mockImplementationOnce(async () => {
+			await Promise.resolve();
+			order.push("init");
+		});
+		const resumeAgentTabsAfterUpdate = vi.fn(async () => {
+			order.push("resume");
+		});
+
+		await runAppBootstrap(makeOptions({ resumeAgentTabsAfterUpdate }));
+		await flushPromises();
+
+		expect(order).toEqual(["init", "resume"]);
 	});
 
 	it("finds a hands-free conversation still armed across a reload, only when dictation is on", async () => {

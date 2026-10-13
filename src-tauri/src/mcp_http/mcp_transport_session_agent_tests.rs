@@ -73,12 +73,14 @@ async fn critic_named_wrappers_deliver_positional_task_for_every_agent() {
         std::fs::write(&binary, "#!/bin/sh\nif [ \"${1-}\" = --version ]; then exit 0; fi\nprintf '%s\\n' \"$@\" > \"$ARGV_OUTPUT\"\n").unwrap();
         std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
         let _config = crate::config::set_config_dir_override(root.path().join("config"));
-        let cfg = serde_json::from_value(serde_json::json!({"agents": {(agent): {
-            "codex_bypass_migrated": true, "prevent_alt_screen": false,
-            "skip_trust_dialog": false, "native_status_signals": false,
-            "run_configs": [{"name": "My wrapper", "command": binary,
-                "args": ["run"], "is_default": true, "env": {"ARGV_OUTPUT": output}}]
-        }}}))
+        let cfg = serde_json::from_value(
+            serde_json::json!({"launch_instructions": "", "agents": {(agent): {
+                "codex_bypass_migrated": true, "prevent_alt_screen": false,
+                "skip_trust_dialog": false, "native_status_signals": false,
+                "run_configs": [{"name": "My wrapper", "command": binary,
+                    "args": ["run"], "is_default": true, "env": {"ARGV_OUTPUT": output}}]
+            }}}),
+        )
         .unwrap();
         crate::config::save_agents_config(crate::config::AgentsConfig::default(), cfg).unwrap();
         let state = test_state();
@@ -4088,6 +4090,7 @@ async fn literal_codex_default_does_not_ignore_settings_or_restore_removed_bypas
         std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
         let _config = crate::config::set_config_dir_override(root.path().join("config"));
         let cfg: crate::config::AgentsConfig = serde_json::from_value(serde_json::json!({
+            "launch_instructions": "",
             "agents": {"codex": {
                 "codex_bypass_migrated": true,
                 "prevent_alt_screen": false, "skip_trust_dialog": false,

@@ -1729,6 +1729,25 @@ pub(crate) const AGENT_INBOX_CAPACITY: usize = 100;
 /// Message-id prefix marking auto-generated lifecycle/system notifications.
 pub(crate) const LIFECYCLE_MSG_ID_PREFIX: &str = "tuic-auto-";
 
+/// Move one retained message to the end of the logical stream, stamped after
+/// both the newest entry and `floor` (a read position it must land beyond).
+/// False when the inbox no longer holds it.
+fn requeue_beyond(inbox: &mut VecDeque<AgentMessage>, message_id: &str, floor: u64) -> bool {
+    let Some(index) = inbox.iter().position(|message| message.id == message_id) else {
+        return false;
+    };
+    let Some(mut message) = inbox.remove(index) else {
+        return false;
+    };
+    let after_newest = inbox.back().map_or(0, |m| m.timestamp.saturating_add(1));
+    message.timestamp = message
+        .timestamp
+        .max(after_newest)
+        .max(floor.saturating_add(1));
+    inbox.push_back(message);
+    true
+}
+
 fn lifecycle_notice_kind(message: &AgentMessage) -> Option<String> {
     if !message.id.starts_with(LIFECYCLE_MSG_ID_PREFIX) || message.from_name != "tuic" {
         return None;
@@ -1882,7 +1901,7 @@ pub(crate) struct GridState {
     /// so an idle tick only takes the vt lock for sessions that can actually have
     /// a stalled update to flush.
     pub(crate) sync_update_active: DashMap<String, Arc<AtomicBool>>,
-    /// Pending coalesced scroll target (absolute display offset, -1 = none).
+    /// Pending coalesced scroll: >=0 offset, -1 none, <=-2 all-time anchor (-2 - row).
     /// Set by `terminal_scroll_to_offset` without taking the vt lock; applied by the
     /// frame ticker under the lock it already holds, so scroll never blocks on the
     /// PTY output processor.
@@ -2701,6 +2720,7 @@ impl AppState {
                 .map(|message| message.timestamp)
                 .max()
                 .unwrap_or(since);
+            self.requeue_unread_terminal_mail(&mut gate, tuic_session, since, read_through);
             gate.urgent_notices
                 .retain(|_, notice| notice.through > read_through);
             gate.orchestrator_observed_through =
@@ -2722,6 +2742,42 @@ impl AppState {
             gate.reset_orchestrator_wake_budget_if_observed();
         }
         finish
+    }
+
+    /// A wait that returns mail up to `read_through` moves the implicit cursor
+    /// there. Mail the terminal owns (a payload-free wake the agent has not acted
+    /// on) sits in `(since, read_through)` unreturned, and the cursor would skip it
+    /// for good. Put it behind the new cursor and drop the terminal ownership, so
+    /// the next wait returns it once; its id stays stable (#1818-3fe7).
+    fn requeue_unread_terminal_mail(
+        &self,
+        gate: &mut AgentDeliveryGate,
+        tuic_session: &str,
+        since: u64,
+        read_through: u64,
+    ) {
+        let Some(mut inbox) = self.agent_inbox.get_mut(tuic_session) else {
+            return;
+        };
+        let skipped: Vec<String> = inbox
+            .iter()
+            .filter(|message| message.timestamp > since && message.timestamp < read_through)
+            .filter(|message| {
+                matches!(
+                    gate.owners.get(&message.id),
+                    Some(
+                        AgentDeliveryOwner::TerminalPending
+                            | AgentDeliveryOwner::TerminalDispatched
+                    )
+                )
+            })
+            .map(|message| message.id.clone())
+            .collect();
+        for id in skipped {
+            if requeue_beyond(&mut inbox, &id, read_through) {
+                gate.owners.remove(&id);
+            }
+        }
     }
 
     /// Reserve one unread urgent notice per sender and recipient. This shares
@@ -3385,20 +3441,9 @@ impl AppState {
                 let requeued = self
                     .agent_inbox
                     .get_mut(tuic_session)
-                    .and_then(|mut inbox| {
-                        let index = inbox.iter().position(|message| message.id == message_id)?;
-                        let mut message = inbox.remove(index)?;
-                        let after_newest = inbox.back().map(|m| m.timestamp.saturating_add(1));
-                        let after_cursor = cursor.map(|c| c.saturating_add(1));
-                        message.timestamp = [Some(message.timestamp), after_newest, after_cursor]
-                            .into_iter()
-                            .flatten()
-                            .max()
-                            .unwrap_or(message.timestamp);
-                        inbox.push_back(message);
-                        Some(())
-                    })
-                    .is_some();
+                    .is_some_and(|mut inbox| {
+                        requeue_beyond(&mut inbox, message_id, cursor.unwrap_or(0))
+                    });
                 gate.owners.remove(message_id);
                 if requeued {
                     gate.inbox_revision = gate.inbox_revision.wrapping_add(1);
@@ -5819,9 +5864,11 @@ mod tests {
         );
         state.push_agent_inbox(recipient, make_msg("waiter-observed"));
         let lease = state.begin_agent_wait(recipient);
-        assert_eq!(state.waiter_fresh_message_count(recipient, 0), 1);
+        assert_eq!(state.waiter_fresh_message_count(recipient, 1), 1);
+        // The read position is already past the terminal mail (timestamp 1): a wait
+        // that would skip it unread requeues it instead (#1818-3fe7).
         assert_eq!(
-            state.finish_agent_wait(recipient, lease, 0, true).messages[0].id,
+            state.finish_agent_wait(recipient, lease, 1, true).messages[0].id,
             "waiter-observed"
         );
         for index in 0..(AGENT_INBOX_CAPACITY - 2) {
