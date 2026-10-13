@@ -986,8 +986,10 @@ pub(super) fn detect_gemini_screen_activity(rows: &[String]) -> AgentScreenActiv
 /// Prompt-based only — see `detect_claude_screen_activity` for the rationale.
 /// During generation Aider has no bottom input box (prompt_toolkit returned),
 /// so the screen reads Unknown and BUSY is held by spinner movement + silence.
+/// prompt_toolkit pads ~32 blank rows below the prompt, so trailing blanks are
+/// trimmed before the window (`find_live_prompt_row`), as for Gemini.
 pub(super) fn detect_aider_screen_activity(rows: &[String]) -> AgentScreenActivity {
-    if rows.iter().rev().take(3).any(|row| row.trim() == ">") {
+    if find_live_prompt_row(rows, 3, |row| row.trim() == ">").is_some() {
         AgentScreenActivity::Ready
     } else {
         AgentScreenActivity::Unknown
