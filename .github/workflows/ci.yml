@@ -269,6 +269,8 @@ jobs:
           CMAKE_C_FLAGS: '-fPIC'
           CMAKE_CXX_FLAGS: '-fPIC'
           RUSTFLAGS: '-C link-arg=-fuse-ld=mold'
+          # Throwaway $HOME for the test run (scripts/with-test-tmp.sh).
+          TUIC_TEST_FAKE_HOME: "1"
         run: bash ../scripts/with-test-tmp.sh cargo nextest run --workspace --features dictation --profile ci
 
 
@@ -290,6 +292,8 @@ jobs:
           CMAKE_C_FLAGS: '-fPIC'
           CMAKE_CXX_FLAGS: '-fPIC'
           RUSTFLAGS: '-C link-arg=-fuse-ld=mold'
+          # Throwaway $HOME for the test run (scripts/with-test-tmp.sh).
+          TUIC_TEST_FAKE_HOME: "1"
         run: bash ../scripts/with-test-tmp.sh cargo test --doc --workspace --features dictation
 
   # Verify tuic-remote compiles without the desktop feature (catches missing cfg
@@ -361,6 +365,8 @@ jobs:
           CMAKE_C_FLAGS: '-fPIC'
           CMAKE_CXX_FLAGS: '-fPIC'
           RUSTFLAGS: '-C link-arg=-fuse-ld=mold'
+          # Throwaway $HOME for the test run (scripts/with-test-tmp.sh).
+          TUIC_TEST_FAKE_HOME: "1"
         run: bash ../scripts/with-test-tmp.sh cargo nextest run --no-default-features --workspace --exclude tuic-dictation --profile ci
 
   # Push to main only: verify build on macOS and Windows.
@@ -543,4 +549,7 @@ jobs:
           # Use -Z7: Git Bash converts /Z7 into a Windows path before native Cargo.
           CMAKE_C_FLAGS: ${{ matrix.label == 'macOS-ARM' && '-march=armv8.4-a' || matrix.label == 'Windows-x64' && '-Z7' || '' }}
           CMAKE_CXX_FLAGS: ${{ matrix.label == 'macOS-ARM' && '-march=armv8.4-a' || matrix.label == 'Windows-x64' && '-Z7' || '' }}
+          # Throwaway $HOME for the test run (scripts/with-test-tmp.sh); not on
+          # Windows, where Git Bash would hand cargo a POSIX CARGO_HOME.
+          TUIC_TEST_FAKE_HOME: ${{ matrix.label != 'Windows-x64' && '1' || '' }}
         run: bash ../scripts/with-test-tmp.sh cargo nextest run --workspace --features dictation --profile ci
