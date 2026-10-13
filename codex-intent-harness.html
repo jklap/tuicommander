@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Codex recorded intent — CanvasTerminal</title>
+  <script>
+    // Fixture-only IPC. This page never connects to a running TUIC instance.
+    window.__TAURI_INTERNALS__ = {
+      transformCallback: () => 1,
+      unregisterCallback: () => {},
+      invoke: (cmd, args) => window.__CODEX_HARNESS_INVOKE__?.(cmd, args) ?? Promise.resolve(null),
+      convertFileSrc: (path) => path,
+      metadata: { currentWindow: { label: "harness" }, currentWebview: { label: "harness" } },
+    };
+    window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
+  </script>
+  <script type="module" src="/src/dev/codexIntentHarness.tsx"></script>
+</head>
+<body><div id="codex-intent-harness"></div></body>
+</html>
