@@ -6010,9 +6010,13 @@ mod tests {
             first.path.exists(),
             "failed recycle left the original checkout path missing"
         );
+        // Git reports the resolved path; the test temp root may sit under a
+        // symlinked directory (macOS `/var` -> `/private/var`).
         assert_eq!(
             get_worktree_paths_raw(&repo.path().to_string_lossy()).unwrap()["first"].path,
-            tuic_core::path_spelling::portable_spelling(&first.path.to_string_lossy())
+            tuic_core::path_spelling::portable_spelling(
+                &first.path.canonicalize().unwrap().to_string_lossy()
+            )
         );
         assert!(!directory.path().join("second").exists());
         assert_eq!(
@@ -6079,9 +6083,13 @@ mod tests {
         let error = archive_worktree(&repo, "marker-directory", None).unwrap_err();
         assert!(error.contains("Cannot read allocation marker"), "{error}");
         assert!(path.join(".git").exists());
+        // Git reports the resolved path; the test temp root may sit under a
+        // symlinked directory (macOS `/var` -> `/private/var`).
         assert_eq!(
             get_worktree_paths_raw(&repo.to_string_lossy()).unwrap()["marker-directory"].path,
-            tuic_core::path_spelling::portable_spelling(&path.to_string_lossy())
+            tuic_core::path_spelling::portable_spelling(
+                &path.canonicalize().unwrap().to_string_lossy()
+            )
         );
     }
 
@@ -6247,9 +6255,13 @@ mod tests {
             first.path.exists(),
             "failed archive left the original checkout path missing"
         );
+        // Git reports the resolved path; the test temp root may sit under a
+        // symlinked directory (macOS `/var` -> `/private/var`).
         assert_eq!(
             get_worktree_paths_raw(&repo.path().to_string_lossy()).unwrap()["first"].path,
-            tuic_core::path_spelling::portable_spelling(&first.path.to_string_lossy())
+            tuic_core::path_spelling::portable_spelling(
+                &first.path.canonicalize().unwrap().to_string_lossy()
+            )
         );
         assert_eq!(
             std::fs::read_to_string(allocation_marker(repo.path(), &first.path).unwrap()).unwrap(),
@@ -6433,9 +6445,11 @@ mod tests {
         );
         let paths = get_worktree_paths_raw(&repo.path().to_string_lossy()).unwrap();
         assert!(!paths.contains_key("first"));
+        // git lists the checkout resolved; a symlinked $TMPDIR (macOS /var)
+        // spells the fixture differently, so compare locations.
         assert_eq!(
-            paths["second"].path,
-            tuic_core::path_spelling::portable_spelling(&second.path.to_string_lossy())
+            Path::new(&paths["second"].path).canonicalize().unwrap(),
+            second.path.canonicalize().unwrap()
         );
         assert_eq!(
             rev_at(&second.path, "HEAD").unwrap(),
@@ -14801,7 +14815,9 @@ branch refs/heads/feat
             .prefix("orphan-scratch-")
             .tempdir_in(tuic_test_support::test_temp_root())
             .unwrap();
-        let path = scratch.path().join("review");
+        // Spelled as git reports it, so the lookup reaches the temporary-root
+        // refusal (the test temp root may sit under macOS `/var` -> `/private/var`).
+        let path = scratch.path().canonicalize().unwrap().join("review");
         git_cmd(&repo)
             .args([
                 "worktree",
@@ -15512,6 +15528,8 @@ branch refs/heads/feat
         // Git invokes this after locking the deletion ref, before committing it.
         // Run a real fetch here to deterministically order the concurrent writer.
         let hook = repo.join(".git/hooks/reference-transaction");
+        // Fixture repos use an empty git template: no `.git/hooks/` yet.
+        fs::create_dir_all(hook.parent().unwrap()).unwrap();
         fs::write(
             &hook,
             "#!/bin/sh\n[ \"$1\" = prepared ] || exit 0\nwhile read -r old new ref; do\n  if [ \"$ref\" = refs/heads/remote-contained ]; then\n    git fetch --force origin >/dev/null 2>&1 || exit 1\n  fi\ndone\n",

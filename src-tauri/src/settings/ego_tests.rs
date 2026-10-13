@@ -14,11 +14,7 @@ async fn ego_profile_edit_cannot_target_other_profile() {
     assert_eq!(reply.default_model, Some("ollama/changed".into()));
     assert_eq!(disk(&f, "base"), base);
     assert_eq!(disk(&f, "beta"), beta);
-    assert!(
-        calls(&f)
-            .iter()
-            .all(|call| call["cwd"] == f.dir.path().to_string_lossy().as_ref())
-    );
+    assert!(calls(&f).iter().all(|call| call["cwd"] == cwd(&f).as_str()));
 }
 
 // Catches: an adapter edit clobbers sibling fields, another profile, or another store.

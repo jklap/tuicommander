@@ -19,6 +19,9 @@ General testing policy (the required `check-gate.sh` gate, CI-never-executed, th
 - Function-filtered mutation runs through make can use `make mutants RANGE=<base> -- --re <function>`; use `MUTANTS_ARGS='--re <function>'` for filters containing spaces or other complex arguments.
 - **When touching `src-tauri/patches/{alacritty_terminal,vte}/`, verification MUST include `cargo nextest run --workspace` (or `make check`), not a package-scoped `cargo test --lib`/`cargo test -p tuicommander`.** The vendored crates are separate workspace members with their own regression suite (`patches/alacritty_terminal/tests/ref.rs`, ~44 fixture-replay tests) that a package-scoped run silently skips. `cargo nextest run`/`list` without `--workspace` also silently scopes to zero tests for a vendored crate instead of erroring — this exact mistake produced a false "these tests were never wired in" diagnosis in commit `47217d2c`'s own message. A background-color-erase fix landed in `6dd165f5` without running the workspace suite and shipped two regressions caught only later.
 - **A second, independent trap in `vte` specifically: its `ansi` Cargo feature is not in `default = ["std"]`.** `cargo test -p vte` (or `cargo nextest run -p vte`) alone silently compiles ZERO of `src/ansi.rs`'s `mod tests` — the module itself, `mod ansi;`, is declared `pub mod ansi;` unconditionally in `lib.rs`, but everything inside it (including the `Handler`/`Processor` types most OSC-parsing tests actually exercise) is behind `#[cfg(feature = "ansi")]` at the crate level. `cargo test -p vte --features ansi` runs them; so does `cargo nextest run --workspace`, since `alacritty_terminal`'s own `[dependencies.vte]` unconditionally requests `features = ["std", "ansi"]`, which Cargo's feature unification applies workspace-wide. Confirmed 2026-09-15 while adding OSC 133 parse tests to `ansi.rs`: a bare `cargo test -p vte` reported "32 passed, 0 failed" and looked completely healthy while running only `lib.rs`'s generic OSC/CSI tests, not a single one of `ansi.rs`'s OSC-1337/OSC-133-specific tests. Same failure shape as the `--workspace` gotcha above — a scoped run that reports a clean pass while silently excluding the tests you actually meant to run — just triggered by a feature flag instead of a workspace boundary.
+- **Test scratch lives under the caller's `$TMPDIR`, which on macOS is `/var/folders/…/T` — the directory with the exec-scan penalty.** `tuic-git/src/worktree.rs:7155-7178` (`shared_post_checkout_hook`) has paired measurements: a fresh executable inode cost 0.36-0.69 s there against ~0.24 s in `/tmp`, and 191-393 s against 1.9-4.5 s during an XProtect backlog. Many tests write and exec scripts (fake ssh, hooks, shims), so a `make check` that suddenly gets slow, or a timing test that flakes on a first exec, may be this rather than a regression. Mitigate by moving the base, not the code: `TUIC_TEST_TMP_BASE=<a private dir you own> make check` (`<checkout>/.tmp/tuic-tests`, the pre-2026-10 layout, is opt-in only: it is unsafe wherever writes to the checkout's `.git/hooks`/`.git/config` are denied, as in the agent sandbox, and it brings back the `find_repo_root` trap below). Never point it at a literal `/tmp`, `/var/tmp` or `/private/tmp`: scratch must derive from `$TMPDIR` or an explicit override, and `scripts/check-no-hardcoded-tmp.mjs` fails `make check` on a write-shaped hard-coded temp path in code or tooling. Unix socket roots live under the host `$TMPDIR` too (`<host>/t.XXXXXX`, at most 72 bytes of host path; else `TUIC_TEST_SOCKET_ROOT`, never `/tmp` — budget table in `docs/guides/development-setup.md` → Testing). Never point any of these at `$HOME`; `scripts/check-no-home-gits.mjs` fails `make check` on a `$HOME/Gits` path in code or tooling.
+- **Test fixture repos are created with an empty git template.** The nextest setup script (`scripts/nextest-test-tmp.sh`/`.ps1`) and `scripts/with-test-tmp.sh` export `GIT_TEMPLATE_DIR=<test tmp root>/git-template-empty`, and the shared helpers (`tuic_git::test_fixtures::setup_test_repo*`, `state::tests_support::create_temp_git_repo`) also pass `git init --template=` so a bare `cargo test` gets the same. Why: the default template copies ~14 `hooks/*.sample` files into every scratch repo — slower, dependent on whichever git the machine ships, and `fatal: cannot copy ... .sample: Operation not permitted` where writes under `.git/hooks` are forbidden. Consequence: a fixture repo has no `.git/hooks/` and no `.git/info/` until something creates them, so a test that installs a hook or writes `info/exclude` must `create_dir_all` the directory first (and production code that writes there must too — real repos made with an empty template look the same). Production `git` calls never see the override; it lives only in test-process env. Guarded by `test_fixtures::tests` and `scripts/test-with-test-tmp-git-template.sh`.
+- **Test git fails closed: it never discovers a repository above the test temp root.** The same three places (the nextest setup scripts, `scripts/with-test-tmp.sh`, and `tuic-test-support`'s constructor via `git_ceiling_directories`) append the parent of the root actually in use (an inherited `TUIC_TEST_TMP_ROOT`'s own parent; `<host>/tuic-tests` for the default `tuic-co-<hash>` root or a wrapper's `tuic-run.XXXXXX`) and the host temp dir itself (home of the `t.XXXXXX` socket roots) to `GIT_CEILING_DIRECTORIES` (shell: `tuic_git_ceiling_with` in `scripts/test-tmp-lib.sh`). Why: when a fixture's `git init` failed (e.g. a sandbox denying `.git/hooks`/`.git/config` writes), the fixture's next `git branch`/`checkout`/`commit` ran in the nearest *enclosing* repository, which under the pre-2026-10 default root (`<checkout>/.tmp/tuic-tests`, still opt-in via `TUIC_TEST_TMP_BASE`) is the real checkout. It created and renamed real branches, once onto `main`. Now git in a repo-less scratch dir fails with `not a git repository`, and the shared helpers (`tuic_git::test_fixtures::init_fixture_repo`, used by `setup_test_repo*` and `state::tests_support::create_temp_git_repo`) panic, naming the dir, unless `git rev-parse --show-toplevel` is the fixture dir itself. Gotchas, measured with git 2.56: the ceiling is the *parent* (git still ascends from a cwd that equals an entry); relative entries are ignored; after an empty entry git stops resolving symlinks in later entries, so both the lexical and canonical spelling are listed (macOS `/var` vs `/private/var`); wrappers append and de-duplicate, never overwrite. Tests that deliberately run git in the real checkout are unaffected: the checkout is above the ceiling, not below it. Guarded by `tuic-test-support`'s `ceiling_*`/`git_in_a_test_process_cannot_leave_the_test_root` tests, `test_fixtures::tests`, and `scripts/test-with-test-tmp-git-ceiling.sh`.
 - When resolving a rebase/merge conflict in a Rust function by taking one side's body wholesale, diff the full field set of any struct it returns — a dropped field can compile cleanly (mocked in the caller's own tests) while silently regressing a feature only an end-to-end test would catch. Prefer merging the logic, not picking a side outright, when the two versions diverge structurally.
 
 ## The suite skips every test it cannot run on purpose — classify them, never pin the count
@@ -243,6 +246,39 @@ run `pnpm exec vitest run` directly and check whether the `Tests` line shows 0 r
 so, this is that known flake, not your change. Use `./scripts/check-gate.sh` (or `make
 check-gate`), which detects and calls this out automatically.
 
+**Audio-device-enumeration tests can stall behind an un-granted macOS permission prompt — not
+a code bug.** Found 2026-09-30 (pre-rebase `wip` branch) running the full gate after an unrelated
+`to-test.md`-only change: `cargo nextest run --workspace` hit its 120 s hard kill (`slow-timeout`
+in `.config/nextest.toml`) on five tests that enumerate real CoreAudio devices through cpal. The
+first cpal query waits on a system permission dialog (main's `audio_enumeration::ENUMERATION_TIMEOUT`
+comment names the microphone prompt) when it was never granted for the process running the tests,
+and in a headless run nothing is there to answer it. On this tree the five behave differently:
+
+- `notification_sound::tests::list_output_devices_has_at_most_one_default_and_no_duplicate_names`,
+  `::resolve_output_stream_falls_back_to_default_for_an_unknown_device_name` and
+  `::resolve_output_stream_opens_a_named_device_when_one_is_available` call
+  `notification_sound::list_output_devices`/`resolve_output_stream` directly
+  (`rodio::cpal::default_host().output_devices()`/`default_output_device()`, unbounded), so they
+  can still block until nextest kills them at 120 s.
+- The device ROUTES are bounded: `GET /audio/output-devices` (`list_audio_output_devices_http` →
+  `notification_sound::list_audio_output_devices`) and `GET /dictation/devices`
+  (`dictation::commands::list_audio_devices` → `tuic_dictation::audio::list_input_devices`,
+  microphone enumeration, `dictation` feature only) both run through
+  `audio_enumeration::run_bounded` with `ENUMERATION_TIMEOUT` (30 s). So
+  `mcp_http::config_routes::tests::list_audio_output_devices_http_returns_a_device_array` FAILS
+  after ~30 s (a 500 instead of a 200) rather than hanging, and
+  `mcp_http::tests::every_dictation_and_os_integration_path_has_a_route` — whose route sweep probes
+  `GET /dictation/devices` and only asserts "not 404/405" — just takes ~30 s and passes.
+
+This is the same *shape* as the "interactive Keychain" precondition in the ignored-tests table
+above, but these are ordinary `#[test]`s, so they stall or fail the gate instead of being skipped.
+If `check-gate`/`cargo nextest` stalls or fails on exactly these names and your diff doesn't touch
+`notification_sound.rs`, `audio_enumeration.rs`, `tuic-dictation`'s `audio.rs` or the device
+routes, grant/confirm the prompt for the terminal/process running the tests (System Settings →
+Privacy & Security, or let it appear once and click through it interactively) and re-run — do not
+treat it as a regression from whatever you just changed.
+
+
 ## Building
 
 **NEVER use `cargo build --release` directly.** It produces a binary that points to the Vite dev server (`localhost:1420`) instead of embedding frontend assets — result: white screen. Always use `make build` or `pnpm tauri build`, which runs `beforeBuildCommand` (frontend build + sidecar) and embeds the dist/ into the binary.
@@ -271,7 +307,7 @@ Targets macOS, Windows, Linux. Use Cmd/Ctrl abstractions, Tauri cross-platform p
 
 **A Windows checkout needs `git config core.autocrlf false`** (CI sets it globally before checkout). Git for Windows otherwise rewrites every file to CRLF, and the suite compares bytes it wrote itself against bytes git handed back, and reads its own source to check route and boot invariants — both assert on different content under the default.
 
-**Write a test's shell script once, through `test_support`.** `cmd` has no `printf`, `seq`, `cat`, `touch` or `sleep`, and `/tmp` and `/bin/*` do not exist there, so a POSIX one-liner in a test fails on the shell rather than on the behaviour it exists to check. `host_shell`, `print_file_script`, `replay_file_command`, `dir_outside_home` and friends hold the one spelling per step.
+**Write a test's shell script once, through `test_support`.** `cmd` has no `printf`, `seq`, `cat`, `touch` or `sleep`, and `/tmp` and `/bin/*` do not exist there, so a POSIX one-liner in a test fails on the shell rather than on the behaviour it exists to check. `host_shell`, `print_file_script`, `replay_file_command` and friends hold the one spelling per step. A rejection probe needs an existing directory outside HOME: override HOME to one temp dir and target a sibling (`plugin_fs.rs`'s `home_and_outside`), never a system directory.
 
 **`Path::is_absolute` answers for the host only.** `C:\…` and `\\…` are not absolute on unix, and a leading `/` is merely *rooted* on Windows — while `Path::join` there **replaces** the root, so an unrejected `/etc/passwd` lands at the root of the repo's drive. Any validator deciding whether a path may escape a boundary uses `fs::is_absolute_on_any_platform`.
 
@@ -1460,7 +1496,9 @@ global `url.https://github.com/.insteadOf git@github.com:`):
 `monitoring_gitpoll_merge_refreshes_on_ref_move_and_keeps_dirty_badge`. A test temp
 dir created *inside* the checkout is the other trap: `find_repo_root` walks up from it
 into the real repo, so the test sees this checkout's own branch/`TUIC_MAIN_REPO_PATH`
-— create fixtures under the test temp root, not under the repo.
+— create fixtures under the test temp root, not under the repo. The default test temp
+root is outside the checkout since 2026-10 (`$TMPDIR/tuic-tests/...`); the trap returns
+only if you set `TUIC_TEST_TMP_BASE` to a directory inside it.
 
 ## Killing a Child Process: Signal the Group, Confirm the Reap, Bound Every Wait
 

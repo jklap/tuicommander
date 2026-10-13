@@ -5437,7 +5437,12 @@ pub(crate) fn mobile_push_away(window_focused: bool, hid_idle_secs: Option<f64>)
         || hid_idle_secs.is_some_and(|secs| secs.is_finite() && secs >= MOBILE_PUSH_HID_IDLE_SECS)
 }
 
-#[cfg(target_os = "macos")]
+// Not in unit tests: with no WindowServer connection (a sandbox, a headless
+// session) this CoreGraphics call never returns (it blocks in SkyLight's
+// CGSEventSourceShutdown mutex), and a test state has a focused window, so every
+// test that raises a question or choice prompt hung until its timeout. The pure
+// `mobile_push_away` takes the idle time as a parameter, so tests pass their own.
+#[cfg(all(target_os = "macos", not(test)))]
 pub(crate) fn hid_idle_seconds() -> Option<f64> {
     #[link(name = "CoreGraphics", kind = "framework")]
     unsafe extern "C" {
@@ -5449,7 +5454,7 @@ pub(crate) fn hid_idle_seconds() -> Option<f64> {
     (seconds.is_finite() && seconds >= 0.0).then_some(seconds)
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(any(not(target_os = "macos"), test))]
 pub(crate) fn hid_idle_seconds() -> Option<f64> {
     None
 }
@@ -6911,8 +6916,10 @@ pub(crate) mod tests_support {
     pub fn create_temp_git_repo() -> tempfile::TempDir {
         let dir = tempfile::tempdir().expect("create temp dir");
         let path = dir.path();
+        // Panics unless `path` became its own repository: a failed init must
+        // not leave the commands below to run in an enclosing one.
+        tuic_git::test_fixtures::init_fixture_repo(path);
         for args in [
-            vec!["init"],
             vec!["config", "user.email", "test@test.com"],
             vec!["config", "user.name", "Test"],
         ] {

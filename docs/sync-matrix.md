@@ -818,18 +818,37 @@ When changing how `make mutants` selects, builds or runs mutants:
 | File | What to update |
 |------|----------------|
 | `src-tauri/.cargo/mutants.toml` | Test tool, cargo test args, excluded globs |
-| `scripts/mutants.sh` | `git archive` export + `--in-place` + `--in-diff` mechanics, the `dist` copy `generate_context!` needs |
+| `scripts/mutants.sh` | local `git clone --local` copy + `--in-place` + `--in-diff` mechanics, the `dist` copy `generate_context!` needs |
 | `Makefile` | The `mutants` target and its `RANGE` default |
 | `src-tauri/AGENTS.md` | "Tests" section bullet (per-change rule, who runs it, surviving-mutant policy) |
 | `CONTRIBUTING.md` | The install line and the one-paragraph mention |
+
+### Test scratch roots
+When changing where tests, the wrapper, fixtures, scripts or agent skills put scratch files or Unix sockets (a hard-coded temp dir, `TUIC_TEST_HOST_TMPDIR`, `TUIC_TEST_TMP_BASE`, `TUIC_TEST_TMP_ROOT`, `TUIC_TEST_SOCKET_ROOT`, prune rules, the socket budget):
+
+| File | What to update |
+|------|----------------|
+| `scripts/with-test-tmp.sh` | Resolution order and prune rules; keep `scripts/test-with-test-tmp-prune.sh` / `-readonly-home.sh` in step |
+| `src-tauri/crates/tuic-test-support/src/lib.rs` | `host_temp_dir`/`test_base`/`test_temp_root`, the socket root (`t.XXXXXX`, marker, exit cleanup), the budget constants (`SUN_PATH_USABLE`, `MAX_TEST_SOCKET_NAME`, `MAX_SOCKET_ROOT_LEN`, `MAX_SOCKET_HOST_LEN`), `SocketSpelling`/`in_dir`, `socket_test_can_run`; `tests/socket_root.rs`, `tests/temp_roots.rs`, the budget table in `docs/guides/development-setup.md` |
+| `scripts/test-tmp-lib.sh` | Shared shell resolver (wrapper, nextest setup, `mutants.sh`, shell tests) and its FNV-1a checkout hash; `scripts/test-with-test-tmp-roots.sh` |
+| `src-tauri/scripts/nextest-test-tmp.{sh,ps1}` | Same default as the wrapper when no root was chosen (the `.ps1` reimplements the hash) |
+| `scripts/test-tmp-root.mjs` | Node-side resolver for `vitest.config.ts` and `scripts/check-frontend-cycles.mjs` |
+| `scripts/check-no-home-gits.mjs` | Scan roots, patterns and the allow-list |
+| `scripts/check-no-hardcoded-tmp.mjs`, `scripts/hardcoded-tmp-baseline.json` | Scan roots, write patterns, the `file::fn` allow-list (each entry with its reason) and the shrink-only baseline (`--write-baseline` after removing literals) |
+| `.claude/skills/*/SKILL.md`, `tests/terminal-stress/SKILL.md` | Scratch paths in their commands use `"${TMPDIR:-/tmp}"`, never a literal `/tmp` |
+| `scripts/run-remote-fixture.sh`, `scripts/test-run-remote-fixture.sh`, `scripts/test-remote-mcp.py`, `tools/ipad-repro/run.sh` | Fixture scratch, the 72-byte fixture `TMPDIR` budget and the printed fixture `TMPDIR` (`docs/user-guide/remote-access.md`) |
+| `docs/guides/development-setup.md` | "Testing" table and prune description |
+| `AGENTS.md`, `CONTRIBUTING.md` | The one-line test temp root descriptions |
+| `src-tauri/AGENTS.md` | "Tests (Rust)" exec-scan bullet and the in-checkout `find_repo_root` trap |
 
 ### Config-instance scoping (`TUIC_APP_INSTANCE`)
 When changing which make target launches against which configuration directory:
 
 | File | What to update |
 |------|----------------|
-| `Makefile` | The `dev` and `test` recipes. A `TUIC_APP_INSTANCE` default MUST be target-specific (`test: TUIC_APP_INSTANCE?=…`) — a line-start assignment is global whatever target follows it, and sends `make dev` to an empty instance |
-| `scripts/check-make-instance-scope.sh` | The expected value per target, and the structural check. It asks `make -n` what it expands rather than reading the line |
+| `Makefile` | The `dev` and `test` recipes and the ONE global per-checkout `TUIC_APP_INSTANCE` default (`tuic-<checkout dir>`). Every `tauri dev` recipe passes `TUIC_APP_INSTANCE=$(TUIC_APP_INSTANCE)` and `$(WARN_SHARED_INSTANCE)`; no target-specific `target: TUIC_APP_INSTANCE?=…` split |
+| `scripts/check-make-instance-scope.sh` | The expected value per target (per-checkout id, overrides, the warning only for an empty value), and the structural checks. It asks `make -n` what it expands rather than reading the line |
+| `scripts/test-check-make-instance-scope.sh` | Fixture checkouts for the id derivation and one mutated Makefile per shape the guard must reject |
 | `scripts/hooks/pre-commit` | Gate 1 runs that script when `Makefile` is staged. Gate 2 is the agent-state fixture gate; `TUIC_SKIP_FIXTURE_GATE=1` deliberately skips only gate 2 |
 | `docs/backend/config.md` | The override forms and what each target defaults to |
 | `CHANGELOG.md` | Only when the behaviour a user sees changes |
