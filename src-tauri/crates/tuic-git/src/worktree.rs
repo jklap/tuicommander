@@ -4085,6 +4085,20 @@ pub fn validate_branch_worktree_path(repo_path: &str, worktree_path: &str) -> Re
     Ok(())
 }
 
+/// A symlinked folder above a checkout is fine (that is what `same_path`
+/// resolves), but the checkout itself must be named directly: removal keys its
+/// warm state and its directory by the leaf name (`warm_key` resolves the
+/// parent only), so a link standing in for the checkout would validate one
+/// directory and then act on the link instead. A dangling link is refused too.
+pub fn refuse_symlinked_checkout(worktree_path: &str) -> Result<(), String> {
+    if std::fs::symlink_metadata(worktree_path).is_ok_and(|meta| meta.file_type().is_symlink()) {
+        return Err(format!(
+            "Refused: '{worktree_path}' is a symlink; name the worktree directory itself"
+        ));
+    }
+    Ok(())
+}
+
 /// Validate that `worktree_path` is a detached orphan of the given repo, not a
 /// main or branch checkout or one with a Git operation in progress.
 pub fn validate_worktree_path(repo_path: &str, worktree_path: &str) -> Result<(), String> {
@@ -4092,6 +4106,7 @@ pub fn validate_worktree_path(repo_path: &str, worktree_path: &str) -> Result<()
     if !path.is_absolute() {
         return Err("worktree_path must be an absolute path".to_string());
     }
+    refuse_symlinked_checkout(worktree_path)?;
 
     let out = git_cmd(Path::new(repo_path))
         .args(["worktree", "list", "--porcelain"])
@@ -12782,6 +12797,44 @@ branch refs/heads/feat
         let error = validate_worktree_path(&repo.to_string_lossy(), &stranger.to_string_lossy())
             .unwrap_err();
         assert!(error.contains("not a known worktree"), "{error}");
+    }
+
+    /// A symlink standing in for the checkout itself is refused, even though it
+    /// resolves to a registered orphan: removal keys the checkout by its leaf
+    /// name (`warm_key` resolves only the parent), so it would validate one
+    /// directory and act on the link. The checkout named directly, and through
+    /// a symlinked parent, still validates.
+    #[cfg(unix)]
+    #[test]
+    fn orphan_validation_refuses_a_symlink_that_names_the_checkout_itself() {
+        let (temp, repo, _workspaces) = workspace_fixture();
+        let path = add_worktree(&repo, "orphan-leaf-link");
+        git_cmd(&path).args(["checkout", "--detach"]).run().unwrap();
+        let leaf_link = temp.path().join("leaf-link");
+        std::os::unix::fs::symlink(&path, &leaf_link).unwrap();
+        assert_ne!(warm_key(&leaf_link), warm_key(&path));
+
+        let error = validate_worktree_path(&repo.to_string_lossy(), &leaf_link.to_string_lossy())
+            .unwrap_err();
+        assert!(error.contains("is a symlink"), "{error}");
+        let error = orphan_cleanup_safety(&repo.to_string_lossy(), &leaf_link.to_string_lossy())
+            .unwrap_err();
+        assert!(error.contains("is a symlink"), "{error}");
+        // A dangling link is refused the same way (it cannot be the checkout).
+        let dangling = temp.path().join("dangling-link");
+        std::os::unix::fs::symlink(temp.path().join("nowhere"), &dangling).unwrap();
+        let error = validate_worktree_path(&repo.to_string_lossy(), &dangling.to_string_lossy())
+            .unwrap_err();
+        assert!(error.contains("is a symlink"), "{error}");
+
+        validate_worktree_path(&repo.to_string_lossy(), &path.to_string_lossy()).unwrap();
+        let parent_alias = temp.path().join("parent-alias");
+        std::os::unix::fs::symlink(temp.path().canonicalize().unwrap(), &parent_alias).unwrap();
+        validate_worktree_path(
+            &repo.to_string_lossy(),
+            &parent_alias.join("orphan-leaf-link").to_string_lossy(),
+        )
+        .unwrap();
     }
 
     /// Catches `same_path` matching on any shared prefix, losing the missing

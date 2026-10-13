@@ -418,12 +418,25 @@ fn workspace_snapshot(state: &AppState, data: &Value) -> Value {
                 .as_str()
                 .unwrap_or_default();
             let worktrees = crate::worktree::get_worktree_paths_cached(state, path);
+            // By location, not spelling: a shell reports its cwd as spelled (a
+            // symlinked folder, macOS `/var`), git lists worktrees resolved, and
+            // the registered repo path is whatever the user added.
+            let resolve =
+                |p: &std::path::Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+            let roots: Vec<std::path::PathBuf> = std::iter::once(std::path::Path::new(path))
+                .chain(
+                    worktrees
+                        .values()
+                        .map(|worktree| std::path::Path::new(&worktree.path)),
+                )
+                .flat_map(|root| [root.to_path_buf(), resolve(root)])
+                .collect();
             let inside = |cwd: &str| {
                 let cwd = std::path::Path::new(cwd);
-                cwd.starts_with(path)
-                    || worktrees
-                        .values()
-                        .any(|worktree| cwd.starts_with(&worktree.path))
+                let resolved_cwd = resolve(cwd);
+                roots
+                    .iter()
+                    .any(|root| cwd.starts_with(root) || resolved_cwd.starts_with(root))
             };
             let mut live: Vec<Value> = agents
                 .iter()
@@ -954,6 +967,52 @@ mod tests {
         assert!(workspace["repos"][0].get("branch").is_some(), "{workspace}");
         assert_eq!(workspace["repos"][0]["liveAgents"], json!([]));
         assert_eq!(workspace["viewedRepo"], "/nowhere/beta");
+    }
+
+    /// Catches a lexical `starts_with`: a shell reports its cwd as spelled while
+    /// the repo was registered through a symlinked folder (or the other way
+    /// round), so an agent working in its own repo was listed under none.
+    #[cfg(unix)]
+    #[test]
+    fn a_live_agent_is_listed_under_its_repo_whichever_side_is_spelled_through_a_symlink() {
+        let state = test_state();
+        let temp = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let real = temp.path().canonicalize().unwrap().join("repo");
+        std::fs::create_dir_all(real.join("src")).unwrap();
+        let alias = temp.path().join("alias");
+        std::os::unix::fs::symlink(&real, &alias).unwrap();
+        let s = |p: &std::path::Path| p.to_string_lossy().into_owned();
+        let sid = "acp-aliased-agent";
+        crate::test_support::insert_recording_session(&state, sid);
+        crate::test_support::agent_session(&state, sid, crate::pty::SHELL_BUSY);
+
+        for (registered, cwd) in [
+            (s(&alias), s(&real.join("src"))),
+            (s(&real), s(&alias.join("src"))),
+        ] {
+            state.session_maps.sessions.get(sid).unwrap().lock().cwd = Some(cwd.clone());
+            let repos = json!({ "repos": { registered.clone(): {} }, "repoOrder": [registered] });
+            let workspace = workspace_snapshot(&state, &repos);
+            assert_eq!(
+                workspace["repos"][0]["liveAgents"][0]["sessionId"], sid,
+                "registered {registered}, cwd {cwd}: {workspace}"
+            );
+        }
+        // A sibling directory is still not inside the repo.
+        let sibling = temp.path().canonicalize().unwrap().join("repo-other");
+        std::fs::create_dir_all(&sibling).unwrap();
+        state.session_maps.sessions.get(sid).unwrap().lock().cwd = Some(s(&sibling));
+        let repos = json!({ "repos": { s(&alias): {} }, "repoOrder": [s(&alias)] });
+        assert_eq!(
+            workspace_snapshot(&state, &repos)["repos"][0]["liveAgents"],
+            json!([])
+        );
+
+        if let Some((_, session)) = state.session_maps.sessions.remove(sid) {
+            let mut session = session.into_inner();
+            let _ = session._child.kill();
+            let _ = session._child.wait();
+        }
     }
 
     /// Reading the inbox shows unread mail and leaves the cursor alone: the
