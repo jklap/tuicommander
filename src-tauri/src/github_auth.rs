@@ -4,7 +4,7 @@
 //! API authentication. The OAuth token is stored in the unified credential
 //! vault (`credentials.rs`).
 
-use std::sync::Arc;
+use std::sync::{Arc, atomic::Ordering};
 
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "desktop")]
@@ -184,8 +184,12 @@ pub(crate) async fn github_poll_login_impl(
                 e
             })?;
         // Activate immediately in runtime state
-        *state.github.token.write() = Some(access_token.clone());
-        *state.github.token_source.write() = TokenSource::OAuth;
+        {
+            let mut slot = state.github.token.write();
+            state.github.disconnected.store(false, Ordering::Relaxed);
+            *slot = Some(access_token.clone());
+            *state.github.token_source.write() = TokenSource::OAuth;
+        }
         // The token may belong to a different user than the one we cached, and the
         // cached login drives `author:@me` and the issue filters.
         crate::github::invalidate_viewer_login(state);
@@ -273,8 +277,13 @@ pub(crate) async fn github_logout_impl(state: &Arc<AppState>) -> Result<(), Stri
     let (token, source) = tokio::task::spawn_blocking(resolve_token_with_source)
         .await
         .map_err(|e| format!("token resolve task panicked: {e}"))?;
-    *state.github.token.write() = token;
-    *state.github.token_source.write() = source;
+    {
+        let mut slot = state.github.token.write();
+        if !state.github.disconnected.load(Ordering::Relaxed) {
+            *slot = token;
+            *state.github.token_source.write() = source;
+        }
+    }
     // The fallback token (env) is very likely a different user.
     crate::github::invalidate_viewer_login(state);
 
@@ -305,8 +314,12 @@ pub(crate) async fn github_disconnect_impl(state: &Arc<AppState>) -> Result<(), 
         tracing::warn!(source = "github", error = %e, "Failed to delete OAuth token during disconnect");
     }
     // Clear runtime state entirely
-    *state.github.token.write() = None;
-    *state.github.token_source.write() = TokenSource::None;
+    {
+        let mut slot = state.github.token.write();
+        state.github.disconnected.store(true, Ordering::Relaxed);
+        *slot = None;
+        *state.github.token_source.write() = TokenSource::None;
+    }
     crate::github::invalidate_viewer_login(state);
     tracing::info!(
         source = "github",
@@ -387,6 +400,34 @@ pub(crate) async fn github_diagnostics_impl(
     Ok(compute_diagnostics(state))
 }
 
+/// Resolve the ambient runtime credentials without undoing an explicit disconnect.
+pub(crate) async fn resolve_runtime_token(
+    state: &AppState,
+) -> Result<(Option<String>, TokenSource), String> {
+    {
+        let token = state.github.token.read();
+        if state.github.disconnected.load(Ordering::Relaxed) {
+            return Ok((None, TokenSource::None));
+        }
+        if token.is_some() {
+            return Ok((token.clone(), *state.github.token_source.read()));
+        }
+    }
+    let (token, source) = tokio::task::spawn_blocking(resolve_token_with_source)
+        .await
+        .map_err(|e| format!("token resolve task panicked: {e}"))?;
+    let mut slot = state.github.token.write();
+    if state.github.disconnected.load(Ordering::Relaxed) {
+        return Ok((None, TokenSource::None));
+    }
+    // A device-flow login that completed during resolution has priority.
+    if slot.is_none() {
+        *slot = token;
+        *state.github.token_source.write() = source;
+    }
+    Ok((slot.clone(), *state.github.token_source.read()))
+}
+
 /// Get the current GitHub authentication status, including the user's
 /// login name if authenticated.
 #[cfg(feature = "desktop")]
@@ -398,21 +439,7 @@ pub(crate) async fn github_auth_status(
 }
 
 pub(crate) async fn github_auth_status_impl(state: &Arc<AppState>) -> Result<AuthStatus, String> {
-    let mut token = state.github.token.read().clone();
-    let mut source = *state.github.token_source.read();
-
-    // Lazy resolution: if boot skipped the keychain, try full resolution now.
-    if token.is_none() {
-        let (t, s) = tokio::task::spawn_blocking(resolve_token_with_source)
-            .await
-            .map_err(|e| format!("token resolve task panicked: {e}"))?;
-        if t.is_some() {
-            *state.github.token.write() = t.clone();
-            *state.github.token_source.write() = s;
-        }
-        token = t;
-        source = s;
-    }
+    let (token, source) = resolve_runtime_token(state).await?;
 
     let Some(token) = token else {
         return Ok(AuthStatus {
@@ -676,7 +703,7 @@ pub(crate) fn spawn_deferred_token_resolution(state: Arc<AppState>) {
         {
             // A login may have landed while the probe ran; an explicit one wins.
             let mut slot = state.github.token.write();
-            if slot.is_some() {
+            if slot.is_some() || state.github.disconnected.load(Ordering::Relaxed) {
                 return;
             }
             *slot = Some(token);
@@ -1094,6 +1121,39 @@ mod tests {
             state.github.token.read().as_deref(),
             Some("gho_explicit_login")
         );
+    }
+
+    // Catches: status lazy resolution silently reconnects an environment token.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn disconnect_survives_status_refresh_with_an_environment_token() {
+        let _gh = EnvVar::set("GH_TOKEN", "fake-disconnect-token");
+        let _github = EnvVar::unset("GITHUB_TOKEN");
+        let mut state = crate::state::tests_support::make_test_app_state();
+        // A refused local proxy prevents accidental calls to the real GitHub API.
+        state.http_client = reqwest::Client::builder()
+            .proxy(reqwest::Proxy::all("http://127.0.0.1:1").unwrap())
+            .build()
+            .unwrap();
+        let state = Arc::new(state);
+        *state.github.token.write() = Some("fake-disconnect-token".into());
+        *state.github.token_source.write() = TokenSource::Env;
+        github_disconnect_impl(&state).await.unwrap();
+        let status = github_auth_status_impl(&state).await.unwrap();
+        assert!(!status.authenticated);
+        assert_eq!(*state.github.token.read(), None);
+        assert_eq!(*state.github.token_source.read(), TokenSource::None);
+        let account = crate::github::github_com_account(&state);
+        let result = crate::github::graphql_with_retry(
+            &state,
+            &account,
+            "query { viewer { login } }",
+            serde_json::json!({}),
+            None,
+        )
+        .await;
+        assert_eq!(result.unwrap_err(), "No GitHub token available");
+        assert_eq!(*state.github.token.read(), None);
     }
 
     // --- resolve_token_for_account (Step 4) ---

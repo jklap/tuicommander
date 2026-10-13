@@ -25,6 +25,8 @@ Set `GH_TOKEN` or `GITHUB_TOKEN` before you start TUICommander. A macOS app star
 
 TUICommander does not read the `gh` CLI login. If you only signed in with `gh auth login`, the GitHub tab shows "Not connected" until you use OAuth login or set a token variable.
 
+OAuth credentials show **Logout**. It removes the stored OAuth token and falls back to an environment token, if present. Environment credentials show **Switch to OAuth** and **Disconnect**. Disconnect stops using the default account until you log in again or restart the app; it does not remove your environment variables.
+
 ### Token Priority
 
 When multiple sources are available, TUICommander uses this priority:
@@ -54,7 +56,7 @@ Open **Settings > Git & GitHub > Repository Bindings**. Each workspace repo show
 - **Needs binding** — the repo matches more than one account or GitHub remote. TUICommander does **not** guess `origin`; pick the right account/remote from the chooser to bind it.
 - **Needs account** — a github.com repo with no account configured yet; add one first.
 
-A repo with exactly one matching account is bound automatically. Worktrees share their main checkout's binding.
+A repo with exactly one matching account/remote resolves automatically without a saved binding. Repository Bindings stays hidden in this single-account setup. A fork and an upstream repository on the same account still require a remote choice because they have different PRs and issues. Worktrees share their main checkout's binding.
 
 ### How multiple accounts behave
 
