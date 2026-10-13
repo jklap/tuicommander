@@ -581,6 +581,9 @@ fn is_zero(v: &u32) -> bool {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct SessionState {
+    /// Validated native hook identity; never a discovery heuristic.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub codex_binding: Option<crate::codex_binding::CodexBinding>,
     /// True when a Question parsed event is pending (no subsequent user-input or pty-exit)
     pub awaiting_input: bool,
     /// The question text, if awaiting input
@@ -842,6 +845,7 @@ impl SessionState {
     pub(crate) fn seed_configured_agent(&mut self, agent_type: Option<String>) {
         self.agent_type_from_run_config = agent_type.is_some();
         self.agent_foreground_observed = false;
+        self.codex_binding = None;
         self.agent_type = agent_type;
     }
 }
@@ -859,6 +863,7 @@ impl PartialEq for SessionState {
             && self.agent_state == other.agent_state
             && self.background_work == other.background_work
             && self.agent_type == other.agent_type
+            && self.codex_binding == other.codex_binding
             && self.last_error == other.last_error
             && self.agent_intent == other.agent_intent
             && self.current_task == other.current_task
@@ -4395,6 +4400,7 @@ impl AppState {
             .session_states
             .get(session_id)
             .map(|s| s.clone())?;
+        crate::codex_binding::validate_snapshot(self, session_id, &mut state);
         state.queued_commands = crate::pty::queued_command_count(self, session_id) as u32;
         state.shell_state = self
             .session_maps
@@ -5174,6 +5180,7 @@ impl AppState {
                 }
             }
             AppEvent::PtyExit { session_id } => {
+                crate::codex_binding::revoke(state, session_id);
                 let push_ready = {
                     let config = state.config.read();
                     config.services.push.enabled

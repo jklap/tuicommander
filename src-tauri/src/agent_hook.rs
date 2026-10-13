@@ -99,15 +99,20 @@ pub(crate) fn grok_hook_map() -> Vec<HookEntry> {
     ]
 }
 
-/// Codex hooks (Claude-compatible JSON schema, merged into `~/.codex/hooks.json`,
-/// gated by a `[features] hooks = true` flag in `config.toml`). Turn-level only:
-/// Codex doesn't expose PreToolUse/PostToolUse usefully (Bash-only) and has no
-/// SessionEnd — the badge clears via the idle/Stop event. SessionStart fires on
-/// the first turn (not session open), so busy appears once the user submits.
+/// Codex native SessionStart/UserPromptSubmit stdin carries the exact thread id,
+/// rollout path and cwd (recorded with 0.162.1). Reuse the guarded OSC channel;
+/// older/untrusted hooks simply leave Chat unavailable.
+fn codex_identity_command(state: &str) -> String {
+    format!(
+        r#"[ -n "${{TUIC_SESSION:-}}" ] && {{ {tty}; __p=$(base64 | tr -d '\r\n'); printf '\033]7770;codex-session=%s:%s\033\\\033]7770;state={state}\033\\' "$TUIC_SESSION" "$__p" > "$__t"; }} >/dev/null 2>&1 || true {SENTINEL}"#,
+        tty = tty_resolve(),
+    )
+}
+
 pub(crate) fn codex_hook_map() -> Vec<HookEntry> {
     vec![
-        ("SessionStart", "", hook_command("busy")),
-        ("UserPromptSubmit", "", hook_command("prompt")),
+        ("SessionStart", "", codex_identity_command("busy")),
+        ("UserPromptSubmit", "", codex_identity_command("prompt")),
         ("Stop", "", hook_command("idle")),
     ]
 }
@@ -227,3 +232,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "agent_hook_codex_tests.rs"]
+mod codex_tests;

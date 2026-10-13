@@ -11,6 +11,7 @@ const POLL_INTERVAL_MS = 30_000;
 const NATIVE_LIFECYCLE_TIMEOUT_MS = 5_000;
 
 type BackendSessionState = {
+	codex_binding?: { session_id: string } | null;
 	agent_type?: string | null;
 	shell_state?: string;
 	agent_state?: string;
@@ -92,6 +93,11 @@ function applySessionState(termId: string, sessionId: string, state: BackendSess
 		...(shellState !== undefined ? { shellState } : {}),
 	});
 	applyAgentIdentity(termId, toAgentType(state?.agent_type ?? null));
+	const exactId = state?.agent_type === "codex" ? (state.codex_binding?.session_id ?? null) : null;
+	terminalsStore.update(termId, {
+		exactAgentSessionId: exactId,
+		...(exactId ? { agentSessionId: exactId } : {}),
+	});
 	if (wasAwaiting !== isAwaiting) {
 		pluginRegistry.dispatchStructuredEvent(
 			"awaiting",
@@ -237,7 +243,7 @@ function applyAgentIdentity(termId: string, agentType: AgentType | null): void {
 			pluginRegistry.notifyStateChange({ type: "agent-stopped", sessionId: sessId, terminalId: termId });
 		}
 
-		terminalsStore.update(termId, { agentType });
+		terminalsStore.update(termId, { agentType, exactAgentSessionId: null });
 
 		// Reset agent-specific state carried over from the previous agent.
 		if (prevAgentType !== null) {
@@ -338,12 +344,14 @@ export async function detectAgentForTerminal(termId: string, source: DetectionSo
 						envOverrides: {},
 					},
 				);
-				if (found && found.sessionId !== current.agentSessionId) {
+				const exactId = agentType === "codex" ? terminalsStore.get(termId)?.exactAgentSessionId : null;
+				const sessionId = exactId ?? found?.sessionId;
+				if (sessionId && sessionId !== terminalsStore.get(termId)?.agentSessionId) {
 					appLogger.debug(
 						"app",
-						`[AgentDetect] ${termId} discovered agentSessionId "${found.sessionId}" (was "${current.agentSessionId}")`,
+						`[AgentDetect] ${termId} discovered agentSessionId "${sessionId}" (was "${current.agentSessionId}")`,
 					);
-					terminalsStore.update(termId, { agentSessionId: found.sessionId });
+					terminalsStore.update(termId, { agentSessionId: sessionId });
 				}
 				// The rebuilt command is ground truth read from the live process: it names
 				// the real binary and the env (CLAUDE_CONFIG_DIR) that decides which store

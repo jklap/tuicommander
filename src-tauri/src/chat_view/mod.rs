@@ -1,4 +1,4 @@
-//! The chat view of a Claude or Grok terminal: its transcript, tailed and projected.
+//! The chat view of a Claude, Grok or Codex terminal: its transcript, tailed and projected.
 //!
 //! The grid is never read. The bound transcript file is tailed by byte offset
 //! (`transcript_tail`), each row goes through the agent's adapter, and the
@@ -11,7 +11,9 @@
 //! clients with `chat-view-changed`; when nobody has read for `VIEWER_IDLE` the
 //! ticker stops and the log is dropped.
 
+mod adapter;
 pub(crate) mod claude;
+pub(crate) mod codex;
 pub(crate) mod grok;
 
 use std::collections::{HashMap, VecDeque};
@@ -26,8 +28,7 @@ use serde_json::Value;
 
 use crate::state::AppState;
 use crate::transcript_tail::{read_appended, read_last_window};
-use claude::{AdapterStats, ClaudeAdapter};
-use grok::GrokAdapter;
+use adapter::TranscriptAdapter;
 
 /// How much of the end of a transcript is read on first attach. The opt-in
 /// `measurement` test measures this and a full parse against a real disk file.
@@ -118,34 +119,7 @@ impl ViewLog {
 enum Agent {
     Claude,
     Grok,
-}
-
-enum Adapter {
-    Claude(ClaudeAdapter),
-    Grok(GrokAdapter),
-}
-
-impl Adapter {
-    fn new(agent: Agent) -> Self {
-        match agent {
-            Agent::Claude => Self::Claude(ClaudeAdapter::default()),
-            Agent::Grok => Self::Grok(GrokAdapter::default()),
-        }
-    }
-
-    fn absorb(&mut self, line: &str) -> Vec<Value> {
-        match self {
-            Self::Claude(adapter) => adapter.absorb(line),
-            Self::Grok(adapter) => adapter.absorb(line),
-        }
-    }
-
-    fn stats(&self) -> AdapterStats {
-        match self {
-            Self::Claude(adapter) => adapter.stats,
-            Self::Grok(adapter) => adapter.stats,
-        }
-    }
+    Codex,
 }
 
 /// The transcript a terminal's agent is bound to.
@@ -163,7 +137,7 @@ struct View {
     attached: bool,
     /// Keep the old file open so its identity cannot be reused after replacement.
     file_identity: Option<same_file::Handle>,
-    adapter: Adapter,
+    adapter: TranscriptAdapter,
     log: ViewLog,
     last_read: Instant,
     bound_at: Instant,
@@ -178,7 +152,7 @@ impl View {
             offset: 0,
             attached: false,
             file_identity: None,
-            adapter: Adapter::new(agent),
+            adapter: TranscriptAdapter::for_agent(agent),
             log: ViewLog::new(max_entries, max_bytes),
             last_read: Instant::now(),
             bound_at: Instant::now(),
@@ -212,7 +186,7 @@ impl View {
         self.offset = 0;
         self.attached = false;
         self.file_identity = None;
-        self.adapter = Adapter::new(self.agent);
+        self.adapter = TranscriptAdapter::for_agent(self.agent);
         self.log.reset();
     }
 
@@ -271,6 +245,12 @@ pub(crate) struct ChatViews {
     views: Mutex<HashMap<String, Arc<Mutex<View>>>>,
 }
 
+impl ChatViews {
+    pub(crate) fn invalidate(&self, session_id: &str) {
+        self.views.lock().remove(session_id);
+    }
+}
+
 fn not_bound(why: &str) -> String {
     format!("not_bound: {why}")
 }
@@ -284,7 +264,11 @@ fn bound_transcript(state: &AppState, session_id: &str) -> Result<Bound, String>
         .session_states
         .get(session_id)
         .and_then(|s| s.agent_type.clone());
-    let (agent, path) = if agent_type.as_deref() == Some("grok") {
+    let (agent, path) = if agent_type.as_deref() == Some("codex") {
+        let path = crate::codex_binding::transcript(state, session_id)
+            .ok_or_else(|| not_bound("no exact Codex hook binding for this terminal"))?;
+        (Agent::Codex, path)
+    } else if agent_type.as_deref() == Some("grok") {
         let path = grok_transcript(state, session_id)
             .ok_or_else(|| not_bound("no Grok session is registered for this terminal"))?;
         (Agent::Grok, path)
@@ -321,8 +305,17 @@ pub(crate) fn chat_view_snapshot(
     let existing = state.chat_views.views.lock().get(session_id).cloned();
     let view = match existing {
         Some(view) => {
-            let bound_for = view.lock().bound_at.elapsed();
-            if bound_for >= REBIND_EVERY {
+            let must_rebind = {
+                let guard = view.lock();
+                guard.agent == Agent::Codex
+                    || state
+                        .session_maps
+                        .session_states
+                        .get(session_id)
+                        .is_some_and(|s| s.agent_type.as_deref() == Some("codex"))
+                    || guard.bound_at.elapsed() >= REBIND_EVERY
+            };
+            if must_rebind {
                 rebind(state, session_id, &view)?;
             }
             view
@@ -376,7 +369,10 @@ fn rebind(state: &AppState, session_id: &str, view: &Arc<Mutex<View>>) -> Result
             Ok(())
         }
         Err(e) => {
-            state.chat_views.views.lock().remove(session_id);
+            let mut views = state.chat_views.views.lock();
+            if views.get(session_id).is_some_and(|v| Arc::ptr_eq(v, view)) {
+                views.remove(session_id);
+            }
             Err(e)
         }
     }
@@ -441,16 +437,26 @@ fn tick(state: &AppState, session_id: &str, view: &Arc<Mutex<View>>) -> Tick {
         view.lock().ticking = false;
         Tick::Stop(reason)
     };
-    let (unread_for, bound_for) = {
+    let registered = state
+        .chat_views
+        .views
+        .lock()
+        .get(session_id)
+        .is_some_and(|v| Arc::ptr_eq(v, view));
+    if !registered {
+        return stop(view, "binding replaced".into());
+    }
+    let (unread_for, must_rebind) = {
         let v = view.lock();
-        (v.last_read.elapsed(), v.bound_at.elapsed())
+        (
+            v.last_read.elapsed(),
+            v.agent == Agent::Codex || v.bound_at.elapsed() >= REBIND_EVERY,
+        )
     };
     if unread_for > VIEWER_IDLE {
         return stop(view, "viewer idle".into());
     }
-    if bound_for >= REBIND_EVERY
-        && let Err(error) = rebind(state, session_id, view)
-    {
+    if must_rebind && let Err(error) = rebind(state, session_id, view) {
         return stop(view, error);
     }
     let mut guard = view.lock();

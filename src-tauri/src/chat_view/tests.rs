@@ -208,6 +208,28 @@ fn queued_human_prompts_survive_full_load_and_incremental_tail() {
     assert_eq!(tail.adapter.stats().unknown_rows, 0);
 }
 
+// Catches: restarting a Codex transcript silently switching back to Claude parsing.
+#[test]
+fn codex_view_file_reset_preserves_rollout_projection() {
+    let tmp = tempfile::tempdir_in(crate::test_support::test_temp_root()).expect("tempdir");
+    let path = tmp.path().join("rollout.jsonl");
+    let recorded = include_str!("../fixtures/chat_view/codex/completed.jsonl");
+    std::fs::write(&path, recorded).expect("write recording");
+    let mut view = View::for_agent(Agent::Codex, path, 100, usize::MAX);
+    view.advance(1 << 20).expect("read rollout");
+    let before = view.log.epoch;
+    view.restart();
+    view.advance(1 << 20).expect("read reset rollout");
+    assert_ne!(view.log.epoch, before);
+    let (_, updates) = view.log.since(None, 0);
+    let replies: Vec<_> = updates
+        .iter()
+        .filter(|update| update["sessionUpdate"] == "agent_message_chunk")
+        .map(|update| update["content"]["text"].as_str().unwrap())
+        .collect();
+    assert_eq!(replies, ["Recorded reply"]);
+}
+
 // Catches: a Grok terminal tailed with the Claude adapter (every row unknown, empty
 // chat), or the old agent's conversation kept when the tab's agent changes.
 #[test]
@@ -247,4 +269,32 @@ fn view_reads_a_grok_transcript_and_resets_when_the_agent_changes() {
         ["from claude"],
         "nothing of the Grok tab remains"
     );
+}
+
+// Catches: an invalidated Codex ticker removing or advancing the replacement tab view.
+#[test]
+fn replaced_binding_stops_detached_ticker_and_preserves_current_view() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let old = Arc::new(Mutex::new(View::for_agent(
+        Agent::Codex,
+        PathBuf::from("old.jsonl"),
+        10,
+        1024,
+    )));
+    let current = Arc::new(Mutex::new(View::for_agent(
+        Agent::Codex,
+        PathBuf::from("new.jsonl"),
+        10,
+        1024,
+    )));
+    state
+        .chat_views
+        .views
+        .lock()
+        .insert("tab".into(), current.clone());
+    assert!(matches!(tick(&state, "tab", &old), Tick::Stop(_)));
+    assert!(Arc::ptr_eq(
+        state.chat_views.views.lock().get("tab").unwrap(),
+        &current
+    ));
 }

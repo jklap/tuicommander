@@ -861,3 +861,38 @@ apply `agent_type` immediately, including removal when the shell returns; the
 ### History-anchored viewport scrolling
 
 Coalesced scrolling uses one atomic latest-wins slot for both transports. `terminal_scroll_to_anchor` encodes an all-time row anchor in that slot; the ticker resolves it under the VT lock after pending output. Null follows output. Evicted anchors clamp to the oldest retained row. Offset commands share the slot, so mixed clients retain request order.
+
+### Codex Chat: exact native hook binding
+
+The Rust `chat_view::codex::CodexAdapter` maps Codex 0.162.1
+`event_msg.item_completed` records to the same ACP updates as the Claude adapter.
+It retains completed user/assistant text, reasoning summaries, command executions
+and MCP tool calls. Tool cards include a main-argument title, bounded `rawInput`,
+final status and bounded output. Shared Claude redaction and truncation rules apply.
+`response_item` duplicates, unfinished tools and hook instructions are ignored.
+Unknown row/item kinds and malformed JSON are counted without stopping later rows.
+
+The shared tail/log has an adapter dispatch seam and preserves its parser on reset.
+Codex Chat accepts only native `SessionStart`/`UserPromptSubmit` evidence. The
+existing managed Codex hook base64-encodes its JSON stdin on OSC 7770 as
+`codex-session=<TUIC_SESSION>:<payload>`. The terminal reader checks its own
+inherited TUIC UUID and stores the thread id, rollout path, cwd and foreground
+PID in live session state. Every Chat read validates that PID is still live,
+the hook/terminal/rollout cwd agree, and the first `session_meta.payload.id`
+exactly matches the native thread id. Header reads are bounded to 64 KiB.
+No directory scan or newest-file fallback participates in this binding.
+
+Thread replacement discards the cached conversation. Shell return, foreground
+agent change and PTY exit revoke identity; a changed/dead PID also fails each
+read and lifecycle snapshot immediately. IPC and HTTP/SSE publish only validated
+`codex_binding: { session_id }`; absence retracts frontend exactness. Native
+evidence is live state, not a persisted proof that can survive process exit.
+The normal persisted `agentSessionId` remains available for resume.
+
+Codex 0.162.1 was verified with an isolated CODEX_HOME, inherited TUIC_SESSION
+and a native SessionStart hook that cancelled before inference: no model request
+was made. Native hooks must be installed/updated through the existing global
+hook installer, enabled and trusted by Codex. Launch-scoped turn-complete notify
+alone does not establish identity. Unsupported versions, missing/untrusted hooks,
+Windows (the existing tty hook transport is Unix-only), and remote terminals
+keep Codex Chat unavailable. TUIC never bypasses native hook trust.

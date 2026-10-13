@@ -1639,6 +1639,9 @@ pub(super) fn apply_foreground_agent_observation(
         let changed = entry.agent_type != next;
         if changed {
             entry.telegram_registration_lifetime = None;
+            if next.as_deref() != Some("codex") || entry.agent_type.is_some() {
+                entry.codex_binding = None;
+            }
             entry.agent_type = next;
             entry.hook_instrumented = hook_instrumented_for(
                 &crate::config::load_agents_config(),
