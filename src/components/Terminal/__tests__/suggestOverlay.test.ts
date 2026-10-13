@@ -508,6 +508,24 @@ describe("hiddenMarkerRows — wrapped markers leave no visible fragment (#1761-
 		expect(hidden.has(3)).toBe(false);
 	});
 
+	// catches: the hard-wrap walk swallows a new answer, tool output or prompt
+	// (and its following indented content) as part of the preceding intent.
+	it.each(["  ● tool output", "  ⏺ tool output", "• tool output", "  💬 answer", "  ❯ prompt"])(
+		"ends a hard-wrapped intent before %s",
+		(boundary) => {
+			const hidden = screen(
+				[
+					["intent: Investigating marker rows", false],
+					["  continued (Marker rows)", false],
+					[boundary, false],
+					["  independent content", false],
+				],
+				0,
+			);
+			expect([...hidden]).toEqual([0, 1]);
+		},
+	);
+
 	// catches: the answer tint is hidden like a marker, removing the 💬 text
 	it("never hides an answer row", () => {
 		expect([...screen([["💬 yes", false]], 0)]).toEqual([]);

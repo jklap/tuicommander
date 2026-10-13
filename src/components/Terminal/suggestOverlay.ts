@@ -231,11 +231,17 @@ export function planSuggestOverlay(
 			}
 			row = last;
 		} else if (INTENT_HIGHLIGHT_RE.test(text)) {
-			// An intent that wraps owns every row it wraps onto.
+			// Ink also hard-wraps with cursor moves and indentation, without isWrapped.
 			for (; ; row++) {
 				blocks.push({ row, kind: "intent" });
 				parts.push(`i${row}`);
-				if (row + 1 >= totalRows || !getRow(row + 1)?.isWrapped) break;
+				if (row + 1 >= totalRows) break;
+				const next = getRow(row + 1);
+				if (!next || next.text.trim() === "") break;
+				if (next.isWrapped) continue;
+				if (!ANSWER_CONTINUATION_RE.test(next.text)) break;
+				if (OUTPUT_ROW_RE.test(next.text) || ANSWER_MARKER_RE.test(next.text) || PROMPT_ROW_RE.test(next.text)) break;
+				if (SUGGEST_ANCHOR_RE.test(next.text) || INTENT_HIGHLIGHT_RE.test(next.text)) break;
 			}
 		}
 	}
