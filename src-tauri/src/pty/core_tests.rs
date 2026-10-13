@@ -1471,7 +1471,10 @@ fn claude_submitted_prompt_row_is_not_a_ready_composer() {
 /// quote may be missing; the tab must still read Ready, not Busy forever.
 #[test]
 fn claude_truncated_placeholder_hint_is_a_ready_composer() {
-    for row in ["❯\u{a0}Try \"fix typec", "❯\u{a0}Try \"fix typecheck errors\""] {
+    for row in [
+        "❯\u{a0}Try \"fix typec",
+        "❯\u{a0}Try \"fix typecheck errors\"",
+    ] {
         let screen = vec![row.to_string()];
         assert_eq!(
             detect_claude_screen_activity(&screen),
