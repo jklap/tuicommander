@@ -2159,6 +2159,26 @@ mod tests {
         let unrelated = config.path().join("unrelated");
         std::fs::create_dir(&unrelated).unwrap();
         assert!(assign("assign-unregistered", second.id.clone(), &unrelated).is_err());
+        // The registered checkout spelled through a symlinked folder is refused
+        // (a story records one canonical path), and the refusal leaves the
+        // story assignable by its canonical spelling just below.
+        #[cfg(unix)]
+        {
+            let links = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+            let alias = links.path().join("alias");
+            std::os::unix::fs::symlink(config.path().canonicalize().unwrap(), &alias).unwrap();
+            let error = store
+                .command(
+                    &run.id,
+                    "assign-aliased",
+                    RunCommand::AssignWorktree {
+                        story_id: second.id.clone(),
+                        path: alias.join("worktree-b").to_string_lossy().to_string(),
+                    },
+                )
+                .unwrap_err();
+            assert!(error.contains("canonical"), "{error}");
+        }
         let result = assign("assign-second", second.id.clone(), &path_b).unwrap();
         assert_eq!(
             result
