@@ -81,7 +81,7 @@ interface WorktreeWorkflowCoordinatorDeps {
 		result: PendingCreation["result"],
 		displayName: string,
 		agentSeed?: AgentSeed,
-	) => Promise<void>;
+	) => Promise<string | undefined>;
 	refreshAllBranchStats: (repoPath: string) => Promise<void>;
 }
 
