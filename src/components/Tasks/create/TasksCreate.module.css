@@ -18,3 +18,7 @@
 }
 
 .create [data-form-control] { width: 100%; }
+
+.optional { margin-top: 8px; }
+.optional > summary { cursor: pointer; margin-bottom: 8px; color: var(--fg-secondary); }
+.optional > .fields { margin-top: 8px; }

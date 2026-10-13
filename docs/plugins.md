@@ -1902,7 +1902,10 @@ Providers supply data and declared actions; they do not render this view.
 The header shows key, title, type, state and updated time. Detail field schemas
 select text, Markdown, enum, user, labels, date, number and link controls. Saving
 requires an editable field and an enabled `edit_field` action. Required fields
-cannot be cleared. Values retain their tagged field-value shape.
+cannot be cleared. Values retain their tagged field-value shape. The detail shows
+Description first, then the fields, then Comments. A schema of more than eight
+fields folds behind a "Fields (N)" summary so a wide Jira project does not push
+Description and Comments out of view; no field is dropped.
 
 Descriptions and normal comments, review threads and review summaries render
 through `ContentRenderer` with `untrustedContent`. Markdown, tables, images and
@@ -1957,6 +1960,10 @@ lists the creatable types; a single type is preselected. `createFields(type)`
 returns the fields of that type (an unknown type is an error, and `create`
 rejects an undeclared `itemType`). Title and Description are fixed inputs, so a
 schema does not repeat them. Only editable fields render.
+
+Create lists Type, Title, Description and the required fields first. Optional
+fields sit in a folded "Optional fields (N)" group with a name filter; the filter
+only hides a field and never hides one that blocks Create.
 
 A type change reloads the schema; values survive only for the same field id and
 kind, and a late schema of an earlier type is dropped. Create stays disabled until
