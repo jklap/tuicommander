@@ -161,7 +161,10 @@ impl Store for ConnectionsSettingsStore {
         result.map_err(|_| failure.unwrap_or_else(|| Error::new(CONNECTIONS_ID, "store_failed")))
     }
 
-    async fn apply(&self, reply: &CommitReply) -> Result<bool, Failure> {
+    fn apply(
+        &self,
+        reply: &CommitReply,
+    ) -> impl std::future::Future<Output = Result<bool, Failure>> + Send {
         let removed = self.pending.lock().remove(&reply.revision);
         let mut complete = true;
         for id in removed.into_iter().flatten() {
@@ -169,7 +172,7 @@ impl Store for ConnectionsSettingsStore {
             // The vault key is the connection id: a secret left behind names nothing reachable.
             complete &= delete_connection_credentials(&id).is_ok();
         }
-        Ok(complete)
+        std::future::ready(Ok(complete))
     }
 }
 
@@ -246,7 +249,10 @@ impl Store for TunnelsSettingsStore {
         Ok(reply)
     }
 
-    async fn apply(&self, reply: &CommitReply) -> Result<bool, Failure> {
+    fn apply(
+        &self,
+        reply: &CommitReply,
+    ) -> impl std::future::Future<Output = Result<bool, Failure>> + Send {
         for id in self
             .pending
             .lock()
@@ -256,6 +262,6 @@ impl Store for TunnelsSettingsStore {
         {
             (self.on_removed)(&id);
         }
-        Ok(true)
+        std::future::ready(Ok(true))
     }
 }

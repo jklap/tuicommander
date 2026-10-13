@@ -238,7 +238,7 @@ async fn remote_write_cannot_touch_local() {
     let f = fixture();
     let conn = ssh("work");
     let profile = TunnelProfile::new("tun", "t.example", "bob");
-    seed_connections(&f, &[conn.clone()]);
+    seed_connections(&f, std::slice::from_ref(&conn));
     ProfileStore::save(f.dir.path(), &profile).unwrap();
     let connections_before =
         std::fs::read_to_string(f.dir.path().join("connections.json")).unwrap();
@@ -319,7 +319,7 @@ async fn adapter_secret_fields_presence_only() {
 async fn patch_persists_and_reads_back() {
     let f = fixture();
     let conn = ssh("work");
-    seed_connections(&f, &[conn.clone()]);
+    seed_connections(&f, std::slice::from_ref(&conn));
     let probe = format!("/connections/{}/enabled", conn.id);
     let before = get(&f, "connections", &[&probe]).await.unwrap();
     let reply = set(&f, "connections", before.revision.clone(), &probe, json!(false))
@@ -356,7 +356,7 @@ async fn invalid_records_are_rejected_before_any_write() {
     let f = fixture();
     let conn = ssh("work");
     let profile = TunnelProfile::new("tun", "t.example", "bob");
-    seed_connections(&f, &[conn.clone()]);
+    seed_connections(&f, std::slice::from_ref(&conn));
     ProfileStore::save(f.dir.path(), &profile).unwrap();
     let before_connections =
         std::fs::read_to_string(f.dir.path().join("connections.json")).unwrap();
