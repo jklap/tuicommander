@@ -25,12 +25,9 @@ export function loadFilterChoices(provider: WorkItemProvider): Promise<readonly 
 	return request;
 }
 
-// "assignee" (list filter) and "assignees" (create form) name the same provider values.
-const singular = (id: string) => id.replace(/s$/, "");
-
 /** Options for a filter field: its own, else the provider's create-form values for the same field and kind. */
 export function filterOptions(field: WorkItemFieldSchema, choices: readonly WorkItemFieldSchema[]): WorkItemOption[] {
 	if (field.options.length) return field.options;
-	const match = choices.find((choice) => choice.kind === field.kind && singular(choice.id) === singular(field.id));
+	const match = choices.find((choice) => choice.kind === field.kind && choice.id === field.id);
 	return match?.options ?? [];
 }

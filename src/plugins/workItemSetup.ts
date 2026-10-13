@@ -132,12 +132,23 @@ function parseConfig(raw: string | null): { accounts?: Account[] } & Record<stri
 	throw new Error(`${CONFIG} is not valid JSON; fix or delete it before using the form`);
 }
 
-/** Replaces the account with the same id and keeps every other account and key. */
-export function upsertAccount(raw: string | null, account: Account): string {
+/** Updates form-owned keys on the matching account, preserving the rest of the config. */
+export function upsertAccount(raw: string | null, account: Account, editedKeys = Object.keys(account)): string {
 	const config = parseConfig(raw);
 	const accounts = Array.isArray(config.accounts) ? config.accounts : [];
 	const index = accounts.findIndex((existing) => existing.id === account.id);
-	const next = index < 0 ? [...accounts, account] : accounts.map((existing, i) => (i === index ? account : existing));
+	const next =
+		index < 0
+			? [...accounts, account]
+			: accounts.map((existing, i) => {
+					if (i !== index) return existing;
+					const merged = { ...account, ...existing };
+					for (const key of editedKeys) {
+						if (key in account) merged[key] = account[key];
+						else delete merged[key];
+					}
+					return merged;
+				});
 	return JSON.stringify({ ...config, accounts: next }, null, 2);
 }
 
@@ -150,7 +161,11 @@ export async function loadWorkItemSetup(setup: WorkItemPluginSetup): Promise<Val
 }
 
 export async function saveWorkItemSetup(setup: WorkItemPluginSetup, values: Values): Promise<void> {
-	const content = upsertAccount(await readRaw(setup.pluginId), accountFromValues(setup, values));
+	const content = upsertAccount(
+		await readRaw(setup.pluginId),
+		accountFromValues(setup, values),
+		setup.fields.map((field) => field.key),
+	);
 	await invoke("write_plugin_data", { pluginId: setup.pluginId, path: CONFIG, content });
 	// Writes under data/ are not watched, so the plugin only sees them after an explicit reload.
 	await reloadPlugin(setup.pluginId);

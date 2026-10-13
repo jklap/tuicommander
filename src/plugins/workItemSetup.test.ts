@@ -144,4 +144,27 @@ describe("work-item plugin setup", () => {
 			{ id: "gitlab.com", host: "https://gitlab.com", project: "g/new", login: "sstraus", label: "Work" },
 		]);
 	});
+	// Catches: merging the account restoring cleared optional fields or resetting an existing auth kind.
+	it("clears optional form keys while preserving the saved authentication kind", async () => {
+		const setup = setupFor("jira");
+		if (!setup) throw new Error("jira setup missing");
+		invoke.mockResolvedValue(
+			JSON.stringify({
+				accounts: [
+					{
+						id: "work",
+						host: "https://jira.example",
+						kind: "bearer",
+						projectId: "7",
+						boards: [{ id: "1", name: "Sprint" }],
+					},
+				],
+			}),
+		);
+		await saveWorkItemSetup(setup, { id: "work", host: "https://jira.example", projectId: "", boards: "" });
+		const write = invoke.mock.calls.find(([command]) => command === "write_plugin_data");
+		expect(JSON.parse(write?.[1].content).accounts).toEqual([
+			{ id: "work", host: "https://jira.example", kind: "bearer" },
+		]);
+	});
 });

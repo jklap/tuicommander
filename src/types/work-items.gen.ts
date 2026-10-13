@@ -43,6 +43,7 @@ export interface WorkItemFieldSchema {
 	kind: WorkItemFieldKind;
 	required: boolean;
 	editable: boolean;
+	queryable?: boolean | null;
 	options: Array<WorkItemOption>;
 }
 

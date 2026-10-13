@@ -212,7 +212,7 @@ export function TasksList(props: TasksListProps) {
 			<Show when={filtersOpen() ? provider() : undefined}>
 				{(current) => (
 					<div class={s.filters}>
-						<For each={current().fields}>
+						<For each={current().fields.filter((field) => field.queryable !== false)}>
 							{(field) => (
 								<label>
 									{field.name}
@@ -286,7 +286,9 @@ export function TasksList(props: TasksListProps) {
 								}}
 							>
 								<option value="">No grouping</option>
-								<For each={current().fields}>{(field) => <option value={field.id}>{field.name}</option>}</For>
+								<For each={current().fields.filter((field) => field.queryable !== false)}>
+									{(field) => <option value={field.id}>{field.name}</option>}
+								</For>
 							</Select>
 						</label>
 						<label class={s.check}>

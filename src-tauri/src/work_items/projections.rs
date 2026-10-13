@@ -19,6 +19,7 @@ impl InMemoryWorkItemProvider {
                 kind: WorkItemFieldKind::Enum,
                 required: true,
                 editable: true,
+                queryable: None,
                 options: types
                     .into_iter()
                     .map(|id| WorkItemOption {

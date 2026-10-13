@@ -136,8 +136,8 @@ describe("Tasks list", () => {
 			return { provider, queries };
 		}
 
-		// Catches: a label or assignee filter stays a free-text box although the provider already lists its values.
-		it("offers the provider's labels and assignees as pickers and filters by the chosen value", async () => {
+		// Catches: labels stay free text, or numeric create-form assignee IDs replace the username filter.
+		it("offers label choices and keeps the assignee username filter as text", async () => {
 			const { provider, queries } = withChoices(async () => [
 				schema("labels", "Labels", "labels", [bugs]),
 				schema("assignees", "Assignees", "user", [ada]),
@@ -147,17 +147,17 @@ describe("Tasks list", () => {
 			fireEvent.click(screen.getByRole("button", { name: "Filters" }));
 			const label = await screen.findByRole("combobox", { name: "Filter Labels" });
 			expect(within(label).getByRole("option", { name: "bug" })).toBeInTheDocument();
-			// "assignee" (filter) and "assignees" (create form) name the same provider values.
-			const assignee = screen.getByRole("combobox", { name: "Filter Assignee" });
-			expect(within(assignee).getByRole("option", { name: "Ada Lovelace" })).toBeInTheDocument();
-			fireEvent.change(assignee, { target: { value: "7" } });
+			fireEvent.change(label, { target: { value: "bug" } });
 			await waitFor(() =>
-				expect(queries.at(-1)?.filters).toEqual([
-					{
-						fieldId: "assignee",
-						values: [{ kind: "user", value: [{ id: "7", name: "Ada Lovelace", avatarUrl: null }] }],
-					},
-				]),
+				expect(queries.at(-1)?.filters).toEqual([{ fieldId: "labels", values: [{ kind: "labels", value: [bugs] }] }]),
+			);
+			const assignee = screen.getByRole("textbox", { name: "Filter Assignee" });
+			fireEvent.change(assignee, { target: { value: "ada" } });
+			await waitFor(() =>
+				expect(queries.at(-1)?.filters.at(-1)).toEqual({
+					fieldId: "assignee",
+					values: [{ kind: "user", value: [{ id: "ada", name: "ada", avatarUrl: null }] }],
+				}),
 			);
 		});
 
@@ -186,6 +186,37 @@ describe("Tasks list", () => {
 			await screen.findByRole("combobox", { name: "Filter Labels" });
 			expect(createFields).toHaveBeenCalledTimes(1);
 		});
+	});
+
+	// Catches: roadmap-only dates becoming unsupported filter or group controls.
+	it("hides display-only dates from list controls while keeping ordinary filters", async () => {
+		const base = listDemo(2);
+		const provider = {
+			...base,
+			fields: [
+				...base.fields,
+				{
+					id: "start",
+					name: "Milestone start",
+					kind: "date" as const,
+					required: false,
+					editable: false,
+					options: [],
+					queryable: false,
+				},
+			],
+		};
+		render(() => <TasksList providers={[provider]} onOpen={() => {}} />);
+		await screen.findByRole("button", { name: /Task 00002/ });
+		fireEvent.click(screen.getByRole("button", { name: "Filters" }));
+		expect(screen.queryByLabelText("Filter Milestone start")).not.toBeInTheDocument();
+		expect(
+			within(screen.getByLabelText("Group tasks")).queryByRole("option", { name: "Milestone start" }),
+		).not.toBeInTheDocument();
+		expect(
+			within(screen.getByLabelText("Sort tasks")).queryByRole("option", { name: "Milestone start" }),
+		).not.toBeInTheDocument();
+		expect(screen.getByLabelText("Filter Priority")).toBeInTheDocument();
 	});
 
 	describe("status line and error actions", () => {

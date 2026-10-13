@@ -1868,6 +1868,8 @@ worktree. `repoPath` is the main repository path, `branch` the worktree branch n
 - `labels`: multiple labels with stable IDs; `date`: ISO-8601 date input.
 - `number`: finite numeric input; `link`: URL/link control.
 
+A field schema can set `queryable: false` to hide a display-only field from list filters and grouping. The roadmap still reads date fields. Omitted or null means queryable.
+
 The canonical DTOs are `work_items::model` and `work_items::protocol` in Rust.
 Generate their TypeScript declarations with
 `python3 scripts/generate-work-item-types.py`; import from
