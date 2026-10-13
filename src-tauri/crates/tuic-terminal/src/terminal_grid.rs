@@ -7568,7 +7568,7 @@ mod tests {
         use base64::Engine;
         let name = format!("/tuic-grid-test-shm-{}", std::process::id());
         let cname = std::ffi::CString::new(name.clone()).unwrap();
-        let raw_rgb = vec![3u8; 3 * 2 * 2];
+        let raw_rgb = [3u8; 3 * 2 * 2];
         unsafe {
             let fd = libc::shm_open(cname.as_ptr(), libc::O_CREAT | libc::O_RDWR, 0o600);
             assert!(fd >= 0);
@@ -7582,7 +7582,7 @@ mod tests {
                 0,
             );
             assert_ne!(ptr, libc::MAP_FAILED);
-            std::ptr::copy_nonoverlapping(raw_rgb.as_ptr(), ptr as *mut u8, raw_rgb.len());
+            std::ptr::copy_nonoverlapping(raw_rgb.as_ptr(), ptr.cast::<u8>(), raw_rgb.len());
             libc::munmap(ptr, raw_rgb.len());
             libc::close(fd);
         }
