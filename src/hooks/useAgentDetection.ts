@@ -22,7 +22,6 @@ const AGENT_BINARIES: Record<AgentType, string> = {
 	claude: "claude",
 	gemini: "gemini",
 	opencode: "opencode",
-	aider: "aider",
 	codex: "codex",
 	amp: "amp",
 	cursor: "cursor-agent",

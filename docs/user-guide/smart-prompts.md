@@ -97,7 +97,7 @@ Prompts use `{variable_name}` syntax. Most variables are auto-resolved at execut
 
 | Variable | Description |
 |----------|-------------|
-| `{agent_type}` | Active agent type (claude, aider, codex, etc.) |
+| `{agent_type}` | Active agent type (claude, gemini, codex, etc.) |
 | `{cwd}` | Active terminal working directory |
 
 ### Manual Input Variables

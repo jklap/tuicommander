@@ -2539,6 +2539,10 @@ pub(super) fn resolve_run_config(
 
     // Pass 1: try to match as a run config name across all agents
     for (agent_key, settings) in &agents_cfg.agents {
+        // Retired or unknown harness settings remain readable but cannot launch a peer.
+        if !crate::agent::is_known_agent_type(agent_key) {
+            continue;
+        }
         for cfg in &settings.run_configs {
             if cfg.name.to_ascii_lowercase() == needle {
                 return ResolvedRunConfig {

@@ -242,7 +242,7 @@ fn resolve_env_overrides(
 ///
 /// Agents without entries here have no known env var that changes their
 /// session storage path (amp, cursor, droid use cloud or hardcoded paths;
-/// aider writes to CWD; goose has no override).
+/// goose has no override).
 const AGENT_ENV_VARS: &[(&str, &[&str])] = &[
     ("claude", &["CLAUDE_CONFIG_DIR"]),
     ("gemini", &["GEMINI_CLI_HOME"]),

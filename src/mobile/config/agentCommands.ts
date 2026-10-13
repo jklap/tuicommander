@@ -37,14 +37,6 @@ const GEMINI: AgentCommandSet = {
 	commands: [{ label: "/help", command: "/help", category: "info" }],
 };
 
-const AIDER: AgentCommandSet = {
-	commands: [
-		{ label: "/clear", command: "/clear", category: "control" },
-		{ label: "/help", command: "/help", category: "info" },
-		{ label: "/tokens", command: "/tokens", category: "info" },
-	],
-};
-
 const FALLBACK: AgentCommandSet = {
 	commands: [],
 };
@@ -53,7 +45,6 @@ const AGENT_COMMANDS: Record<string, AgentCommandSet> = {
 	claude: CLAUDE_CODE,
 	codex: CODEX,
 	gemini: GEMINI,
-	aider: AIDER,
 };
 
 export function getAgentCommands(agentType?: string | null): AgentCommandSet {

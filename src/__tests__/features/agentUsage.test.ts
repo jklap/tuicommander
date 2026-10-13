@@ -81,7 +81,7 @@ describe("agent usage ticker — no vendor default", () => {
 	});
 
 	it("polls nothing when the active tab is an agent with no usage API", async () => {
-		setTerminals({ activeId: "t1", terminals: { t1: { agentType: "aider" } } });
+		setTerminals({ activeId: "t1", terminals: { t1: { agentType: "opencode" } } });
 
 		initAgentUsage();
 		await settle();

@@ -49,7 +49,7 @@ The query controller keeps at most 32 cached pages, ignores obsolete requests,
 and labels retained rows stale after an error. Mounting the Tasks shell is a
 separate integration step.
 
-TUICommander is a multi-agent terminal orchestrator designed to manage supported AI coding agents, including Claude Code, Gemini CLI, OpenCode, Aider, and Codex, in parallel. It provides per-pane zoom, git worktree isolation, and GitHub integration.
+TUICommander is a multi-agent terminal orchestrator designed to manage supported AI coding agents, including Claude Code, Gemini CLI, OpenCode, and Codex, in parallel. It provides per-pane zoom, git worktree isolation, and GitHub integration.
 
 ## Goals
 
@@ -260,7 +260,7 @@ See `src/hooks/` for full signatures — the above is a representative summary.
 ## Agent Types
 
 ```typescript
-type AgentType = "claude" | "gemini" | "opencode" | "aider" | "codex" | "amp" | "cursor" | "goose" | "grok" | "droid" | "pi" | "git" | "api";
+type AgentType = "claude" | "gemini" | "opencode" | "codex" | "amp" | "cursor" | "goose" | "grok" | "droid" | "pi" | "git" | "api";
 ```
 
 Full agent configuration (binary, resume command, session discovery, detection patterns) lives in `src/agents.ts`.
