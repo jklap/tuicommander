@@ -11,9 +11,9 @@ TUICommander detects, monitors, and manages AI coding agents running in your ter
 | Aider | `aider` | `aider --restore-chat-history` | — |
 | Gemini CLI | `gemini` | `gemini --resume` | `gemini --resume $TUIC_SESSION` |
 | OpenCode | `opencode` | `opencode -c` | — |
-| Amp | `amp` | `amp threads continue` | — |
-| Cursor Agent | `cursor-agent` | `cursor-agent resume` | — |
-| Droid (Factory) | `droid` | — | — |
+| Amp *(limited support, need more tests)* | `amp` | `amp threads continue` | — |
+| Cursor Agent *(limited support, need more tests)* | `cursor-agent` | `cursor-agent resume` | — |
+| Droid (Factory) *(limited support, need more tests)* | `droid` | — | — |
 | Goose | `goose` | `goose session --resume` | `goose session --resume --name $TUIC_SESSION` |
 | Grok | `grok` | `grok --continue` | `grok --resume <discovered id>` |
 | pi | `pi` | `pi --continue` | — |
