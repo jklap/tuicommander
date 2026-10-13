@@ -154,6 +154,7 @@ export const TasksBoard: Component<TasksBoardProps> = (props) => {
 								if (!pending(cardKey(card.item.reference))) drag.start(event, card, column.id);
 							}}
 							onOpen={props.onOpen ? (card) => props.onOpen?.(card.item.reference) : undefined}
+							cardActions={props.cardActions}
 						/>
 					)}
 				</For>

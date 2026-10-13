@@ -56,4 +56,47 @@ describe("TaskField", () => {
 		expect(readonly.container.textContent).toContain("Read only");
 		expect(readonly.container.querySelector("button, input")).toBeNull();
 	});
+
+	// Catches: required marker drawn from schema.required while editable is false
+	it("read_only_field_renders_without_a_required_star", () => {
+		const locked = render(() => (
+			<TaskField
+				schema={{ id: "title", name: "Title", kind: "text", required: true, editable: false, options: [] }}
+				value={{ kind: "text", value: "Fixed" }}
+				disabled={false}
+				canEdit
+				onSave={async () => true}
+			/>
+		));
+		expect(locked.container.textContent).toContain("Title");
+		expect(locked.container.textContent).not.toContain("*");
+	});
+
+	// Catches: a read-only field because the detail has no edit_field action still draws the star
+	it("field_without_an_edit_action_renders_without_a_required_star", () => {
+		const { container } = render(() => (
+			<TaskField
+				schema={{ id: "title", name: "Title", kind: "text", required: true, editable: true, options: [] }}
+				value={{ kind: "text", value: "Fixed" }}
+				disabled={false}
+				canEdit={false}
+				onSave={async () => true}
+			/>
+		));
+		expect(container.textContent).not.toContain("*");
+	});
+
+	// Catches: the star dropped from a field the user can edit and must not clear
+	it("editable_required_field_keeps_its_required_star", () => {
+		const { container } = render(() => (
+			<TaskField
+				schema={{ id: "title", name: "Title", kind: "text", required: true, editable: true, options: [] }}
+				value={{ kind: "text", value: "Editable" }}
+				disabled={false}
+				canEdit
+				onSave={async () => true}
+			/>
+		));
+		expect(container.textContent).toContain("Title *");
+	});
 });

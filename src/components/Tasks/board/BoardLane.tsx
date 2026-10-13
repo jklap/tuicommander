@@ -1,5 +1,5 @@
 import { createVirtualizer } from "@tanstack/solid-virtual";
-import { type Component, For, Show } from "solid-js";
+import { type Component, For, type JSX, Show } from "solid-js";
 import type { WorkItemBoardColumn } from "../../../types/work-items.gen";
 import { Select } from "../../ui/Select";
 import s from "./board.module.css";
@@ -15,6 +15,7 @@ interface BoardLaneProps {
 	onMove(card: BoardCard, column: string): void;
 	onPointerDown(event: PointerEvent, card: BoardCard): void;
 	onOpen?(card: BoardCard): void;
+	cardActions?(card: BoardCard): JSX.Element;
 }
 export const BoardLane: Component<BoardLaneProps> = (props) => {
 	let scroll: HTMLDivElement | undefined;
@@ -62,9 +63,12 @@ export const BoardLane: Component<BoardLaneProps> = (props) => {
 											style={{ position: "absolute", top: `${row.start}px`, height: `${row.size}px`, width: "100%" }}
 											onPointerDown={(event) => props.onPointerDown(event, entry())}
 										>
-											<button type="button" class={s.key} onClick={() => props.onOpen?.(entry())}>
-												{entry().item.key}
-											</button>
+											<div class={s.cardHead}>
+												<button type="button" class={s.key} onClick={() => props.onOpen?.(entry())}>
+													{entry().item.key}
+												</button>
+												{props.cardActions?.(entry())}
+											</div>
 											<span class={s.title}>{entry().item.title}</span>
 											<Show
 												when={props.pending(cardKey(entry().item.reference))}
