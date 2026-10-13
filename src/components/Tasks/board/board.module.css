@@ -10,6 +10,7 @@
 .laneScroll { flex: 1; overflow-y: auto; min-height: 0; padding: 8px; }
 .card { box-sizing: border-box; display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1px solid var(--border); border-bottom-width: 8px; border-radius: var(--radius-sm); background: var(--bg-tertiary); touch-action: pan-y; user-select: none; cursor: grab; }
 .card[aria-busy="true"] { opacity: 0.5; cursor: progress; }
+.cardHead { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .key { padding: 0; border: 0; background: transparent; color: var(--fg-primary); text-align: left; cursor: pointer; }
 .title { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; text-align: left; padding: 0; border: 0; background: transparent; color: var(--fg-primary); font: inherit; font-size: var(--font-sm); cursor: pointer; }
 .card select { width: 100%; margin-top: auto; touch-action: auto; }

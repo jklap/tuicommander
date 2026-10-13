@@ -1,5 +1,6 @@
 import { createMemo, createSignal, For, Match, Show, Switch } from "solid-js";
 import { workItemProviderRegistry } from "../../plugins/workItemProviderRegistry";
+import { repositoriesStore } from "../../stores/repositories";
 import type { WorkItemRef } from "../../types/work-items.gen";
 import { SegmentedControl } from "../ui/SegmentedControl";
 import { Select } from "../ui/Select";
@@ -24,6 +25,7 @@ export function TasksShell(props: { visible?: () => boolean }) {
 	const [view, setView] = createSignal<View>("list");
 	const [creating, setCreating] = createSignal(false);
 	const [reference, setReference] = createSignal<WorkItemRef | null>(null);
+	const repoPath = () => repositoriesStore.state.activeRepoPath ?? undefined;
 	const providers = () => workItemProviderRegistry.list();
 	const provider = createMemo(
 		() => providers().find((entry) => sourceKey(entry.providerId, entry.accountId) === source()) ?? providers()[0],
@@ -84,7 +86,12 @@ export function TasksShell(props: { visible?: () => boolean }) {
 										<TasksList providers={[current()]} onOpen={open} visible={props.visible?.()} />
 									</Match>
 									<Match when={view() === "board"}>
-										<TasksBoardView provider={current()} onOpen={open} visible={props.visible?.()} />
+										<TasksBoardView
+											provider={current()}
+											onOpen={open}
+											visible={props.visible?.()}
+											repoPath={repoPath()}
+										/>
 									</Match>
 									<Match when={view() === "roadmap"}>
 										<TasksRoadmap provider={current()} onOpen={open} visible={props.visible?.()} />
@@ -97,6 +104,7 @@ export function TasksShell(props: { visible?: () => boolean }) {
 										provider={current()}
 										reference={reference()}
 										visible={props.visible?.()}
+										repoPath={repoPath()}
 										onClose={() => setReference(null)}
 									/>
 								</aside>

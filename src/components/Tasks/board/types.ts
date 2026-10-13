@@ -1,3 +1,4 @@
+import type { JSX } from "solid-js";
 import type {
 	WorkItemAction,
 	WorkItemActionResult,
@@ -17,6 +18,8 @@ export interface TasksBoardProps {
 	onMove(reference: WorkItemRef, action: WorkItemAction): Promise<WorkItemActionResult>;
 	onUpdated?(result: WorkItemActionResult): void;
 	onOpen?(reference: WorkItemRef): void;
+	/** Extra per-card controls supplied by the host; the board does not know what they do. */
+	cardActions?(card: BoardCard): JSX.Element;
 }
 export const cardKey = (reference: WorkItemRef): string =>
 	JSON.stringify([reference.providerId, reference.accountId, reference.id]);
