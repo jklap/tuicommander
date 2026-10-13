@@ -25,6 +25,13 @@ Git and chat forms also share Input and Textarea controls. Desktop fields are 36
 mobile fields retain 44px touch targets. The Tasks List, Board and Roadmap switch
 supports arrow keys, Home and End.
 
+## Tasks create
+
+Tasks forms show provider-required fields with inline errors that preserve typing
+focus. User fields can search provider accounts; labels without static choices
+accept comma-separated text. Jira supplies configured Project and selected Type,
+and encodes sub-task Parent keys for creation.
+
 ## Tasks roadmap component
 
 The host-rendered roadmap shows provider date fields on a month or quarter timeline.

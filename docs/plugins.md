@@ -1981,6 +1981,15 @@ kind, and a late schema of an earlier type is dropped. Create stays disabled unt
 Title, Type and every required field of the current type are set. Submit sends one
 `create` action with every current field (unset is null). A rejection keeps the draft.
 
+Create user controls use optional `lookupUsers(fieldId, query, signal?)`, which
+returns `{id, name}` choices for that provider/account. Search text is never a
+selected user; rejected searches stay visible and late responses are discarded.
+Static user options remain selectable. Labels without static options accept
+comma-separated free text. Required-field errors are linked to their controls.
+The Jira provider omits configured Project and selected Issue Type from its
+create schema, searches project-assignable users for Assignee, and searches users
+for Reporter. Cloud choices use account IDs; Data Center choices use usernames.
+
 ## Tasks setup
 
 With no work-item provider registered, the Tasks tab shows install prompts for
