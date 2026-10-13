@@ -3,6 +3,13 @@ import type { AcpTranscriptEntry } from "../../stores/acpTranscript";
 import type { AcpToolCall } from "../../types/acp";
 import s from "./ChatPresentation.module.css";
 
+/**
+ * The joined row last handed out for an answer entry. A row is rebuilt only when its joined text
+ * changes: <For> keys by reference, so a fresh object per call would rebuild every earlier answer
+ * (and drop its renderer state) each time the transcript grows.
+ */
+const joinedRows = new WeakMap<object, AcpTranscriptEntry>();
+
 /** Presentation only: keep status rows in place and join the answer at its last row. */
 export function terminalAnswerRows(entries: AcpTranscriptEntry[], intermediate: Set<string>): AcpTranscriptEntry[] {
 	const rows: AcpTranscriptEntry[] = [];
@@ -13,11 +20,15 @@ export function terminalAnswerRows(entries: AcpTranscriptEntry[], intermediate: 
 		const last = answers.at(-1);
 		for (const entry of turn) {
 			if (!ids.has(entry.id)) rows.push(entry);
-			else if (entry === last && entry.kind === "agent")
-				rows.push({
-					...entry,
-					text: answers.map((answer) => (answer.kind === "agent" ? answer.text : "")).join("\n\n"),
-				});
+			else if (entry === last && entry.kind === "agent") {
+				const text = answers.map((answer) => (answer.kind === "agent" ? answer.text : "")).join("\n\n");
+				let row = joinedRows.get(entry);
+				if (row?.kind !== "agent" || row.text !== text) {
+					row = { ...entry, text };
+					joinedRows.set(entry, row);
+				}
+				rows.push(row);
+			}
 		}
 		turn = [];
 	};
