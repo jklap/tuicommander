@@ -1,4 +1,5 @@
 //! Rust-owned settings schemas and descriptors.
+pub mod agents;
 pub mod catalogue;
 pub mod model;
 
@@ -34,6 +35,9 @@ mod preferences_tests;
 
 #[cfg(test)]
 mod telegram_tests;
+
+#[cfg(test)]
+mod agents_tests;
 
 #[cfg(test)]
 mod repositories_tests;
