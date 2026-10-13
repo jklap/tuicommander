@@ -433,9 +433,11 @@ async fn native_repo_identity_uses_path_and_branch_without_old_parameter_aliases
         &serde_json::json!({"action": "register", "project": "/repo/b"}),
         Some("mcp-path"),
     );
-    assert!(old_project["error"]
-        .as_str()
-        .is_some_and(|error| error.contains("path")));
+    assert!(
+        old_project["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("path"))
+    );
     let old_workspace = handle_mcp_tool_call(
         &state,
         loopback_addr(),
@@ -444,9 +446,11 @@ async fn native_repo_identity_uses_path_and_branch_without_old_parameter_aliases
         None,
     )
     .await;
-    assert!(old_workspace["error"]
-        .as_str()
-        .is_some_and(|error| error.contains("branch")));
+    assert!(
+        old_workspace["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("branch"))
+    );
 
     let definitions = native_tool_definitions();
     let agent = definitions
@@ -464,9 +468,11 @@ async fn native_repo_identity_uses_path_and_branch_without_old_parameter_aliases
     assert!(agent["inputSchema"]["properties"]["path"].is_object());
     assert!(agent["inputSchema"]["properties"].get("project").is_none());
     assert!(repo["inputSchema"]["properties"]["branch"].is_object());
-    assert!(repo["inputSchema"]["properties"]
-        .get("workspace_id")
-        .is_none());
+    assert!(
+        repo["inputSchema"]["properties"]
+            .get("workspace_id")
+            .is_none()
+    );
 }
 
 #[test]
@@ -4047,10 +4053,12 @@ fn mcp_delivery_regression_working_claude_queues_wake_without_steering_turn() {
         receiver.try_recv(),
         Err(tokio::sync::broadcast::error::TryRecvError::Empty)
     ));
-    assert!(state
-        .pending_injections
-        .get(TEST_UUID_B)
-        .is_some_and(|pending| !pending.is_empty()));
+    assert!(
+        state
+            .pending_injections
+            .get(TEST_UUID_B)
+            .is_some_and(|pending| !pending.is_empty())
+    );
     let snapshot = state.session_state_with_shell(TEST_UUID_B).unwrap();
     assert_eq!(snapshot.agent_state.as_deref(), Some("working"));
     assert_eq!(snapshot.turn_epoch, 0);
@@ -4277,18 +4285,24 @@ fn external_sse_mail_uses_inline_only_through_the_200_byte_boundary() {
     );
     let second: serde_json::Value = serde_json::from_str(&receiver.try_recv().unwrap()).unwrap();
 
-    assert!(first["params"]["content"]
-        .as_str()
-        .unwrap()
-        .contains(&inline));
-    assert!(!second["params"]["content"]
-        .as_str()
-        .unwrap()
-        .contains(&larger));
-    assert!(second["params"]["content"]
-        .as_str()
-        .unwrap()
-        .contains("201 bytes"));
+    assert!(
+        first["params"]["content"]
+            .as_str()
+            .unwrap()
+            .contains(&inline)
+    );
+    assert!(
+        !second["params"]["content"]
+            .as_str()
+            .unwrap()
+            .contains(&larger)
+    );
+    assert!(
+        second["params"]["content"]
+            .as_str()
+            .unwrap()
+            .contains("201 bytes")
+    );
 }
 
 #[test]
@@ -5874,12 +5888,14 @@ async fn ego_child_without_session_header_binds_through_process_ancestry() {
     std::fs::copy(shell, &holder).expect("copy shell");
     // A copied Apple binary loses its platform signature and is killed at exec.
     #[cfg(target_os = "macos")]
-    assert!(std::process::Command::new("codesign")
-        .args(["-s", "-", "-f"])
-        .arg(&holder)
-        .status()
-        .expect("codesign")
-        .success());
+    assert!(
+        std::process::Command::new("codesign")
+            .args(["-s", "-", "-f"])
+            .arg(&holder)
+            .status()
+            .expect("codesign")
+            .success()
+    );
     let mut parent = std::process::Command::new(&holder)
         .args(["-c", "env -u TUIC_SESSION sleep 60 & echo $! $$; wait"])
         .env("TUIC_SESSION", TEST_UUID_A)
