@@ -121,7 +121,10 @@
       "args": [
         "--continue"
       ],
-      "env": {},
+      "env": {
+        "COPILOT_PROVIDER_BASE_URL": "https://openrouter.ai/api/v1",
+        "COPILOT_MODEL": "google/gemini-2.5-flash"
+      },
       "cwd_files": {
         "AGENTS.md": null
       }

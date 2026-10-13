@@ -4,7 +4,7 @@
   "canary_rule": "Every reply you write must start with the line `ZEBRA-7:` followed by one space.",
   "args": [
     "--model",
-    "gemini/gemini-2.5-flash",
+    "gemini/gemini-3.5-flash-lite",
     "--no-git",
     "--no-auto-commits",
     "--no-show-model-warnings",
@@ -75,7 +75,7 @@
       "action": "restart",
       "args": [
         "--model",
-        "gemini/gemini-2.5-flash",
+        "gemini/gemini-3.5-flash-lite",
         "--no-git",
         "--no-auto-commits",
         "--no-show-model-warnings",
@@ -111,7 +111,7 @@
       "action": "restart",
       "args": [
         "--model",
-        "gemini/gemini-2.5-flash",
+        "gemini/gemini-3.5-flash-lite",
         "--no-git",
         "--no-auto-commits",
         "--no-show-model-warnings",

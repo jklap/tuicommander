@@ -5,10 +5,11 @@
   "args": [
     "--skip-trust",
     "-m",
-    "gemini-2.5-flash"
+    "gemini-3.5-flash-lite"
   ],
   "env": {
-    "GEMINI_SYSTEM_MD": "{canary_file}"
+    "GEMINI_SYSTEM_MD": "{canary_file}",
+    "GEMINI_DEFAULT_AUTH_TYPE": "gemini-api-key"
   },
   "env_passthrough": [
     "GEMINI_API_KEY"
@@ -92,12 +93,13 @@
       "args": [
         "--skip-trust",
         "-m",
-        "gemini-2.5-flash",
+        "gemini-3.5-flash-lite",
         "--resume",
         "latest"
       ],
       "env": {
-        "GEMINI_SYSTEM_MD": "{canary_file}"
+        "GEMINI_SYSTEM_MD": "{canary_file}",
+        "GEMINI_DEFAULT_AUTH_TYPE": "gemini-api-key"
       }
     },
     {
@@ -124,11 +126,13 @@
       "args": [
         "--skip-trust",
         "-m",
-        "gemini-2.5-flash",
+        "gemini-3.5-flash-lite",
         "--resume",
         "latest"
       ],
-      "env": {}
+      "env": {
+        "GEMINI_DEFAULT_AUTH_TYPE": "gemini-api-key"
+      }
     },
     {
       "action": "settle",

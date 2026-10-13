@@ -133,7 +133,9 @@
         "google/gemini-2.5-flash",
         "--continue"
       ],
-      "env": {}
+      "env": {
+        "OPENAI_BASE_URL": "https://openrouter.ai/api/v1"
+      }
     },
     {
       "action": "settle",
