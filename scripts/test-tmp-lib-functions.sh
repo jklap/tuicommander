@@ -2,7 +2,8 @@
 # scripts/test-tmp-lib.sh helpers that scripts/with-test-tmp.sh and the fixture
 # runners rely on: tuic_unix_socket_path_max fails loudly (never a default)
 # when it cannot read the one budget definition, and
-# tuic_pin_compilers_for_sccache names CC/CXX on macOS with sccache only.
+# tuic_pin_compilers_for_sccache names CC/CXX on macOS with sccache only, and
+# tuic_pin_archiver_for_xcrun_shim names the real `ar` on macOS.
 set -euo pipefail
 
 root="$(git rev-parse --show-toplevel)"
@@ -76,3 +77,58 @@ test "$(pinned Darwin sccache clang-17)" = "clang-17|c++" \
 expected="$(env -u CC -u CXX /bin/sh -c '. "$1" && tuic_pin_compilers_for_sccache && printf "%s|%s" "${CC-<unset>}" "${CXX-<unset>}"' sh "$lib")"
 seen="$(env -u CC -u CXX "$root/scripts/with-test-tmp.sh" sh -c 'printf "%s|%s" "${CC-<unset>}" "${CXX-<unset>}"')"
 test "$seen" = "$expected" || { echo "with-test-tmp.sh CC/CXX '$seen' != helper's '$expected'" >&2; exit 1; }
+
+# --- tuic_pin_archiver_for_xcrun_shim -------------------------------------
+# PATH holds only stubs: `uname` and `xcrun` are exactly what each case says.
+ar_stub_dir() { # <uname> <xcrun mode: real|missing-file|fails|absent> <name>
+  local dir="$fixture/arpath-$3"
+  mkdir -p "$dir"
+  printf '#!/bin/sh\necho %s\n' "$1" >"$dir/uname"
+  chmod +x "$dir/uname"
+  printf '#!/bin/sh\nexit 0\n' >"$dir/real-ar"
+  chmod +x "$dir/real-ar"
+  case "$2" in
+    real) printf '#!/bin/sh\necho %s\n' "$dir/real-ar" >"$dir/xcrun" ;;
+    missing-file) printf '#!/bin/sh\necho %s\n' "$dir/no-such-ar" >"$dir/xcrun" ;;
+    fails) printf '#!/bin/sh\necho "xcrun: error" >&2\nexit 1\n' >"$dir/xcrun" ;;
+    absent) ;;
+  esac
+  [[ "$2" == absent ]] || chmod +x "$dir/xcrun"
+  printf '%s\n' "$dir"
+}
+archiver() { # <uname> <mode> <name> [AR value]
+  local dir
+  dir="$(ar_stub_dir "$1" "$2" "$3")"
+  env -u AR ${4:+AR="$4"} PATH="$dir" /bin/sh -c \
+    '. "$1" && tuic_pin_archiver_for_xcrun_shim && printf "%s" "${AR-<unset>}"' sh "$lib"
+}
+dir_real="$fixture/arpath-darwin-real"
+# Catches: the real ar not being named on macOS, so meson runs the shim.
+test "$(archiver Darwin real darwin-real)" = "$dir_real/real-ar" \
+  || { echo "macOS: AR '$(archiver Darwin real darwin-real)', expected $dir_real/real-ar" >&2; exit 1; }
+# Catches: AR forced elsewhere (CI's own archiver replaced), or on a failed lookup.
+test "$(archiver Linux real linux)" = "<unset>" || { echo "Linux: AR pinned" >&2; exit 1; }
+test "$(archiver Darwin fails fails)" = "<unset>" || { echo "failed xcrun lookup still pinned an AR" >&2; exit 1; }
+test "$(archiver Darwin missing-file missing)" = "<unset>" || { echo "a path that is not an executable was pinned" >&2; exit 1; }
+test "$(archiver Darwin absent absent)" = "<unset>" || { echo "no xcrun on PATH still pinned an AR" >&2; exit 1; }
+# Catches: a caller's own AR being replaced.
+test "$(archiver Darwin real keep llvm-ar-17)" = "llvm-ar-17" \
+  || { echo "explicit AR replaced: $(archiver Darwin real keep llvm-ar-17)" >&2; exit 1; }
+
+# End to end: the wrapper agrees with the helper on this machine.
+expected="$(env -u AR /bin/sh -c '. "$1" && tuic_pin_archiver_for_xcrun_shim && printf "%s" "${AR-<unset>}"' sh "$lib")"
+seen="$(env -u AR "$root/scripts/with-test-tmp.sh" sh -c 'printf "%s" "${AR-<unset>}"')"
+test "$seen" = "$expected" || { echo "with-test-tmp.sh AR '$seen' != helper's '$expected'" >&2; exit 1; }
+
+# The failure this pin exists for: on macOS with meson, a configure under an
+# environment xcrun has no cached entry for (TOOLCHAINS set) must succeed
+# through the wrapper. Skipped where there is no macOS or no meson.
+if [[ "$(uname -s)" == Darwin ]] && command -v meson >/dev/null 2>&1; then
+  proj="$fixture/meson-proj"
+  mkdir -p "$proj"
+  printf "project('t', 'c')\nexecutable('x', 'x.c')\n" >"$proj/meson.build"
+  printf 'int main(void) { return 0; }\n' >"$proj/x.c"
+  env -u AR TOOLCHAINS=com.apple.dt.toolchain.XcodeDefault \
+    "$root/scripts/with-test-tmp.sh" meson setup "$proj/build" "$proj" >"$fixture/meson.log" 2>&1 \
+    || { echo "meson setup failed through the wrapper:" >&2; cat "$fixture/meson.log" >&2; exit 1; }
+fi
