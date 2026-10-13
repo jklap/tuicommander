@@ -12995,6 +12995,30 @@ branch refs/heads/feat
         );
     }
 
+    // Catches: launch validation comparing spellings instead of locations, so a
+    // branch checkout named through a symlinked folder is refused, or the main
+    // checkout reached through that folder passes as a linked one. (Replay port
+    // of wip b9e06dbb0's location test onto main's launch validator.)
+    #[cfg(unix)]
+    #[test]
+    fn branch_worktree_validation_matches_by_location_through_a_symlinked_folder() {
+        let (temp, repo, _workspaces) = workspace_fixture();
+        add_worktree(&repo, "launch-via-alias");
+        let alias = temp.path().join("alias");
+        std::os::unix::fs::symlink(temp.path().canonicalize().unwrap(), &alias).unwrap();
+        validate_branch_worktree_path(
+            &repo.to_string_lossy(),
+            &alias.join("launch-via-alias").to_string_lossy(),
+        )
+        .unwrap();
+        let error = validate_branch_worktree_path(
+            &repo.to_string_lossy(),
+            &alias.join("repo").to_string_lossy(),
+        )
+        .unwrap_err();
+        assert!(error.contains("isolated"), "{error}");
+    }
+
     #[test]
     fn list_in_progress_worktrees_finds_only_the_busy_one() {
         let (_temp, repo, _workspaces) = workspace_fixture();
