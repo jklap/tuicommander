@@ -230,6 +230,14 @@ operation in progress. Immediately before removal it checks detached HEAD
 reachability against all durable refs with `git for-each-ref --contains`; a
 commit reachable only from the worktree HEAD/reflog is kept for recovery.
 
+Two validators, two jobs. `validate_worktree_path` (removal) demands a detached
+orphan. `validate_registered_worktree` (using a checkout, e.g. MCP `workflow_launch`)
+accepts any registered *linked* checkout — branch or detached — and refuses the
+main checkout, an unregistered directory and a symlinked leaf. Both match paths by
+resolved location, so a spelling through a symlinked folder is the same checkout.
+Workflow worktrees are `worktree add -b` branch checkouts, so the launch path must
+not use the removal validator.
+
 The Ask-mode cleanup dialog uses a separate automatic-removal assessment:
 tracked and untracked changes, and commits reachable only from tags, make the
 checkout unsafe for the countdown. Ignored files are allowed. The same check

@@ -1348,7 +1348,7 @@ pub(super) fn queue_workflow_coordinator_wake(
 
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct WorkflowLaunchInput {
+pub(super) struct WorkflowLaunchInput {
     pub(super) run_id: String,
     attempt_id: String,
     pub(super) worktree_path: String,
@@ -1425,7 +1425,24 @@ fn launch_workflow_agent(
     launch_workflow_effect(state, addr, mcp_session_id, input, &owner, false)
 }
 
-fn launch_workflow_effect(
+/// Resolve the worktree a workflow worker will run in: a registered *linked*
+/// checkout of the owning project, spelled canonically. Any checkout qualifies,
+/// branch or detached — workflow worktrees are created with `worktree add -b`.
+/// (The orphan-removal validator, `validate_worktree_path`, is deliberately NOT
+/// used here: it demands a detached HEAD, which refused every branch worktree.)
+pub(super) fn resolve_workflow_worktree(owner: &str, requested: &str) -> Result<String, String> {
+    let worktree = std::path::Path::new(requested)
+        .canonicalize()
+        .map_err(|error| format!("resolve workflow worktree: {error}"))?;
+    let worktree = worktree.to_string_lossy().to_string();
+    if worktree == owner {
+        return Err("workflow agents require an isolated worktree".into());
+    }
+    crate::worktree::validate_registered_worktree(owner, &worktree)?;
+    Ok(worktree)
+}
+
+pub(super) fn launch_workflow_effect(
     state: &Arc<AppState>,
     addr: SocketAddr,
     mcp_session_id: Option<&str>,
@@ -1436,14 +1453,7 @@ fn launch_workflow_effect(
     if input.agent_type.trim().is_empty() || input.agent_type.len() > 128 {
         return Err("invalid workflow agent type".into());
     }
-    let worktree = std::path::Path::new(&input.worktree_path)
-        .canonicalize()
-        .map_err(|error| format!("resolve workflow worktree: {error}"))?;
-    let worktree = worktree.to_string_lossy().to_string();
-    if worktree == owner {
-        return Err("workflow agents require an isolated worktree".into());
-    }
-    crate::worktree::validate_worktree_path(owner, &worktree)?;
+    let worktree = resolve_workflow_worktree(owner, &input.worktree_path)?;
     let store = crate::workflows::RunStore::open()?;
     let run = store.snapshot(&input.run_id)?;
     if run.project != owner {

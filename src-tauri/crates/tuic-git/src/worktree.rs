@@ -3394,9 +3394,14 @@ pub fn refuse_symlinked_checkout(worktree_path: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Validate that `worktree_path` is a detached orphan of the given repo, not a
-/// main or branch checkout or one with a Git operation in progress.
-pub fn validate_worktree_path(repo_path: &str, worktree_path: &str) -> Result<(), String> {
+/// Look up `worktree_path` among the repo's registered checkouts. Returns the
+/// matching entry and whether it is the repo's main checkout (git lists that
+/// one first). Shared by the orphan-removal and workflow-launch validators so
+/// both match paths by location and refuse a symlinked leaf the same way.
+fn registered_worktree_entry(
+    repo_path: &str,
+    worktree_path: &str,
+) -> Result<(WorktreeEntry, bool), String> {
     let path = PathBuf::from(worktree_path);
     if !path.is_absolute() {
         return Err("worktree_path must be an absolute path".to_string());
@@ -3408,15 +3413,23 @@ pub fn validate_worktree_path(repo_path: &str, worktree_path: &str) -> Result<()
         .run()
         .map_err(|e| format!("git worktree list failed: {e}"))?;
 
-    let entry = parse_worktree_entries(&out.stdout)
+    parse_worktree_entries(&out.stdout)
         .into_iter()
-        .find(|entry| tuic_core::path_spelling::same_path(&entry.path, worktree_path))
+        .enumerate()
+        .find(|(_, entry)| tuic_core::path_spelling::same_path(&entry.path, worktree_path))
+        .map(|(index, entry)| (entry, index == 0))
         .ok_or_else(|| {
             format!(
                 "Refused: '{}' is not a known worktree of '{}'",
                 worktree_path, repo_path
             )
-        })?;
+        })
+}
+
+/// Validate that `worktree_path` is a detached orphan of the given repo, not a
+/// main or branch checkout or one with a Git operation in progress.
+pub fn validate_worktree_path(repo_path: &str, worktree_path: &str) -> Result<(), String> {
+    let (entry, _) = registered_worktree_entry(repo_path, worktree_path)?;
     if has_operation_in_progress(worktree_path) {
         return Err("Cannot remove orphan worktree: a Git operation is in progress".into());
     }
@@ -3424,6 +3437,21 @@ pub fn validate_worktree_path(repo_path: &str, worktree_path: &str) -> Result<()
         return Err("Cannot remove orphan worktree: checkout is not detached".into());
     }
 
+    Ok(())
+}
+
+/// Validate that `worktree_path` is a linked (non-main) checkout registered with
+/// the repo, whatever it has checked out. This is the check for *using* a
+/// worktree (workflow agent launch); unlike [`validate_worktree_path`] it does
+/// not require a detached HEAD, since a branch worktree is the normal shape of
+/// one.
+pub fn validate_registered_worktree(repo_path: &str, worktree_path: &str) -> Result<(), String> {
+    let (_, is_main) = registered_worktree_entry(repo_path, worktree_path)?;
+    if is_main {
+        return Err(format!(
+            "Refused: '{worktree_path}' is the main checkout of '{repo_path}', not a linked worktree"
+        ));
+    }
     Ok(())
 }
 
@@ -10654,6 +10682,75 @@ branch refs/heads/feat
         let error = validate_worktree_path(&repo.to_string_lossy(), &stranger.to_string_lossy())
             .unwrap_err();
         assert!(error.contains("not a known worktree"), "{error}");
+    }
+
+    /// `validate_registered_worktree` is the check for *using* a worktree
+    /// (workflow launch): a branch checkout, which orphan validation refuses as
+    /// "not detached", is exactly what it must accept.
+    #[test]
+    fn registered_worktree_validation_accepts_a_branch_checkout_orphan_validation_refuses() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let path = add_worktree(&repo, "branch-checkout");
+        let repo_s = repo.to_string_lossy();
+        let path_s = path.to_string_lossy();
+
+        validate_registered_worktree(&repo_s, &path_s).unwrap();
+        let error = validate_worktree_path(&repo_s, &path_s).unwrap_err();
+        assert!(error.contains("not detached"), "{error}");
+
+        // A detached checkout passes both.
+        git_cmd(&path).args(["checkout", "--detach"]).run().unwrap();
+        validate_registered_worktree(&repo_s, &path_s).unwrap();
+        validate_worktree_path(&repo_s, &path_s).unwrap();
+    }
+
+    #[test]
+    fn registered_worktree_validation_refuses_main_unknown_and_relative_paths() {
+        let (temp, repo, _workspaces) = workspace_fixture();
+        let repo_s = repo.to_string_lossy();
+        let linked = add_worktree(&repo, "linked-checkout");
+
+        let error = validate_registered_worktree(&repo_s, &repo_s).unwrap_err();
+        assert!(error.contains("main checkout"), "{error}");
+        // Naming the main checkout from inside a linked one is still the main checkout.
+        let error = validate_registered_worktree(&linked.to_string_lossy(), &repo_s).unwrap_err();
+        assert!(error.contains("main checkout"), "{error}");
+
+        let stranger = temp.path().join("stranger");
+        fs::create_dir_all(&stranger).unwrap();
+        let error = validate_registered_worktree(&repo_s, &stranger.to_string_lossy()).unwrap_err();
+        assert!(error.contains("not a known worktree"), "{error}");
+
+        let error = validate_registered_worktree(&repo_s, "relative/checkout").unwrap_err();
+        assert!(error.contains("absolute"), "{error}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn registered_worktree_validation_matches_by_location_and_refuses_a_symlinked_leaf() {
+        let (temp, repo, _workspaces) = workspace_fixture();
+        let path = add_worktree(&repo, "branch-via-alias");
+        let alias = temp.path().join("alias");
+        std::os::unix::fs::symlink(temp.path().canonicalize().unwrap(), &alias).unwrap();
+        validate_registered_worktree(
+            &repo.to_string_lossy(),
+            &alias.join("branch-via-alias").to_string_lossy(),
+        )
+        .unwrap();
+        // The main checkout through the alias is still main.
+        let error = validate_registered_worktree(
+            &repo.to_string_lossy(),
+            &alias.join("repo").to_string_lossy(),
+        )
+        .unwrap_err();
+        assert!(error.contains("main checkout"), "{error}");
+
+        let leaf_link = temp.path().join("leaf-link");
+        std::os::unix::fs::symlink(&path, &leaf_link).unwrap();
+        let error =
+            validate_registered_worktree(&repo.to_string_lossy(), &leaf_link.to_string_lossy())
+                .unwrap_err();
+        assert!(error.contains("is a symlink"), "{error}");
     }
 
     /// A symlink standing in for the checkout itself is refused, even though it
