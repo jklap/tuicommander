@@ -32,6 +32,7 @@ describe("Tasks list", () => {
 	it("provider_filter_group_and_sort_change_rendered_results", async () => {
 		render(() => <TasksList providers={[listDemo(4)]} onOpen={() => {}} />);
 		await screen.findByRole("button", { name: /Task 00004/ });
+		fireEvent.click(screen.getByRole("button", { name: "Filters" }));
 		fireEvent.change(screen.getByLabelText("Filter Priority"), { target: { value: "high" } });
 		await waitFor(() => expect(screen.queryByRole("button", { name: /Task 00002/ })).not.toBeInTheDocument());
 		expect(screen.getByRole("button", { name: /Task 00003/ })).toBeInTheDocument();
@@ -71,5 +72,22 @@ describe("Tasks list", () => {
 		expect(screen.getByLabelText("Search tasks")).toHaveValue("");
 		fireEvent.click(screen.getByRole("button", { name: /Task 00002/ }));
 		expect(open).toHaveBeenCalledWith({ providerId: "demo", accountId: "b", id: "2" });
+	});
+
+	// Catches: filter inputs always open (they push every row off a narrow screen) or a count that ignores applied filters.
+	it("filters_collapse_behind_a_button_that_counts_active_filters", async () => {
+		render(() => <TasksList providers={[listDemo(4)]} onOpen={() => {}} />);
+		await screen.findByRole("button", { name: /Task 00004/ });
+		const toggle = screen.getByRole("button", { name: "Filters" });
+		expect(toggle).toHaveAttribute("aria-expanded", "false");
+		expect(screen.queryByLabelText("Filter Priority")).not.toBeInTheDocument();
+		fireEvent.click(toggle);
+		expect(toggle).toHaveAttribute("aria-expanded", "true");
+		fireEvent.change(screen.getByLabelText("Filter Priority"), { target: { value: "high" } });
+		fireEvent.change(screen.getByLabelText("Group tasks"), { target: { value: "priority" } });
+		const counted = await screen.findByRole("button", { name: "Filters (2)" });
+		fireEvent.click(counted);
+		expect(screen.queryByLabelText("Filter Priority")).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Filters (2)" })).toBeInTheDocument();
 	});
 });

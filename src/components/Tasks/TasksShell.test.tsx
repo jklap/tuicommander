@@ -61,4 +61,24 @@ describe("Tasks shell", () => {
 			registration.dispose();
 		}
 	});
+
+	// Catches: below 700 px the detail has no way back to the list (the list is hidden by CSS).
+	it("back_control_returns_from_the_detail_to_the_list", async () => {
+		const registration = workItemProviderRegistry.register(listDemo(3));
+		try {
+			render(() => <TasksShell />);
+			const body = await screen.findByLabelText("Tasks shell").then((shell) => shell.querySelector("[data-detail]"));
+			expect(body).toHaveAttribute("data-detail", "closed");
+			fireEvent.click(await screen.findByRole("button", { name: /Task 00002/ }));
+			await screen.findByRole("region", { name: "Task detail" });
+			expect(body).toHaveAttribute("data-detail", "open");
+			// Hidden above 700 px by a container query, which happy-dom evaluates as plain display:none.
+			fireEvent.click(screen.getByRole("button", { name: "Back to list", hidden: true }));
+			expect(screen.queryByRole("region", { name: "Task detail" })).not.toBeInTheDocument();
+			expect(body).toHaveAttribute("data-detail", "closed");
+			expect(screen.getByRole("button", { name: /Task 00002/ })).toBeInTheDocument();
+		} finally {
+			registration.dispose();
+		}
+	});
 });

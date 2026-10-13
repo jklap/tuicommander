@@ -11,7 +11,7 @@
 .muted { color: var(--fg-secondary); font-size: var(--font-sm, 12px); margin: 0; }
 .error { color: var(--error); margin: 8px 0 0; overflow-wrap: anywhere; }
 .error button { margin-left: 8px; }
-@media (max-width: 600px) {
+@container (max-width: 600px) {
 	.create { padding: 12px; }
 
 	.create button { min-height: 44px; }

@@ -66,6 +66,8 @@ export function TasksList(props: TasksListProps) {
 	};
 	const [query, setQuery] = createSignal(initialQuery());
 	const [search, setSearch] = createSignal("");
+	const [filtersOpen, setFiltersOpen] = createSignal(false);
+	const activeFilters = () => query().filters.length + (query().sort ? 1 : 0) + (query().groupBy ? 1 : 0);
 	let debounce: ReturnType<typeof setTimeout> | undefined;
 	let previousSource: WorkItemProvider | undefined;
 	createEffect(() => {
@@ -159,6 +161,9 @@ export function TasksList(props: TasksListProps) {
 						onInput={(event) => updateSearch(event.currentTarget.value)}
 					/>
 				</label>
+				<button type="button" aria-expanded={filtersOpen()} onClick={() => setFiltersOpen((open) => !open)}>
+					{activeFilters() ? `Filters (${activeFilters()})` : "Filters"}
+				</button>
 				<button
 					type="button"
 					disabled={!provider() || model.state().loading || props.visible === false}
@@ -167,7 +172,7 @@ export function TasksList(props: TasksListProps) {
 					Refresh
 				</button>
 			</div>
-			<Show when={provider()}>
+			<Show when={filtersOpen() ? provider() : undefined}>
 				{(current) => (
 					<div class={s.filters}>
 						<For each={current().fields}>

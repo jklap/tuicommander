@@ -70,7 +70,7 @@ export function TasksShell(props: { visible?: () => boolean }) {
 								New task
 							</button>
 						</header>
-						<div class={s.body}>
+						<div class={s.body} data-detail={reference() ? "open" : "closed"}>
 							<div class={s.main}>
 								<Switch>
 									<Match when={creating()}>
@@ -93,6 +93,9 @@ export function TasksShell(props: { visible?: () => boolean }) {
 							</div>
 							<Show when={reference()}>
 								<aside class={s.side}>
+									<button type="button" class={s.back} onClick={() => setReference(null)}>
+										Back to list
+									</button>
 									<TasksDetail
 										provider={current()}
 										reference={reference()}
