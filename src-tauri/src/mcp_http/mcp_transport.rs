@@ -125,7 +125,6 @@ use super::mcp_transport_peer::TAKEOVER_REJECT_SUMMARY_INTERVAL;
 #[cfg(test)]
 use super::mcp_transport_peer::TASK_POLL_INTERVAL_MS;
 pub(super) use super::mcp_transport_peer::TUIC_SESSION_HEADER;
-use super::mcp_transport_peer::apply_initialize_identity;
 pub(super) use super::mcp_transport_peer::client_pid_header;
 use super::mcp_transport_peer::drop_identity_buffers;
 use super::mcp_transport_peer::handle_agent_wait;
@@ -147,6 +146,7 @@ use super::mcp_transport_peer::retire_repaired_phantom_identity;
 use super::mcp_transport_peer::takeover_rejection_report;
 #[cfg(test)]
 use super::mcp_transport_peer::task_owner_identity;
+use super::mcp_transport_peer::{apply_initialize_identity, identity_from_client_ancestry};
 #[cfg(test)]
 use super::mcp_transport_session_agent::INFERRED_PTY_DESCRIPTION_MAX_CHARS;
 #[cfg(test)]
@@ -924,7 +924,24 @@ pub(super) async fn mcp_post(
             let tuic_session_header = headers
                 .get(TUIC_SESSION_HEADER)
                 .and_then(|v| v.to_str().ok());
-            apply_initialize_identity(&state, &session_id, tuic_session_header);
+            let ancestry_identity = match tuic_session_header.filter(|s| !s.is_empty()) {
+                Some(_) => None,
+                // Forks `ps` and reads process environments: off the async workers.
+                None => {
+                    let client_pid = client_pid_header(&headers).to_owned();
+                    tokio::task::spawn_blocking(move || identity_from_client_ancestry(&client_pid))
+                        .await
+                        .ok()
+                        .flatten()
+                }
+            };
+            apply_initialize_identity(
+                &state,
+                &session_id,
+                tuic_session_header
+                    .filter(|s| !s.is_empty())
+                    .or(ancestry_identity.as_deref()),
+            );
 
             // One record per handshake. `initialize` happens once per client
             // connection, so this is not a hot path, and it is the only evidence

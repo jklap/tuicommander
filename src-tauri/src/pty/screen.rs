@@ -1892,7 +1892,7 @@ pub(crate) fn collect_process_stats(state: &AppState) -> Vec<ProcessStats> {
 /// table inside that loop forked `ps` once per session — N+1 forks per refresh,
 /// each one taken while the session lock was held. One shared map serves every
 /// root, so the cost no longer scales with the number of sessions.
-pub(super) fn process_parent_map() -> Option<std::collections::HashMap<u32, Vec<u32>>> {
+pub(crate) fn process_parent_map() -> Option<std::collections::HashMap<u32, Vec<u32>>> {
     #[cfg(not(windows))]
     {
         let output = std::process::Command::new("ps")
