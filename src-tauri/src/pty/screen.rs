@@ -932,6 +932,19 @@ where
         .find(|&index| is_prompt(&rows[index]))
 }
 
+/// Claude's composer row: the bare `❯`, or `❯` over the dim placeholder hint a
+/// fresh session shows (`❯ Try "fix typecheck errors"`, the gap is a no-break
+/// space). Missing the hint row left a freshly launched Claude BUSY for as long
+/// as it sat unused (#1864-23d0).
+fn is_claude_composer_row(row: &str) -> bool {
+    let row = row.trim();
+    row == "\u{276F}"
+        || row
+            .strip_prefix('\u{276F}')
+            .map(str::trim_start)
+            .is_some_and(|hint| hint.starts_with("Try \""))
+}
+
 /// Claude's active status is presence-based because current Claude versions can
 /// keep the empty composer visible while a long tool call is still running.
 /// The live marker is deliberately semantic rather than glyph-only: an animated
@@ -947,7 +960,7 @@ pub(super) fn detect_claude_screen_activity(rows: &[String]) -> AgentScreenActiv
     let chrome_start = content_end.saturating_sub(crate::chrome::CHROME_SCAN_ROWS);
     let prompt_idx = rows[chrome_start..content_end]
         .iter()
-        .rposition(|row| row.trim() == "\u{276F}")
+        .rposition(|row| is_claude_composer_row(row))
         .map(|idx| chrome_start + idx);
     let activity_end = prompt_idx.unwrap_or(content_end);
     let activity_start = activity_end.saturating_sub(crate::chrome::CHROME_SCAN_ROWS);
