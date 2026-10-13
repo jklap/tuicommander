@@ -12789,17 +12789,18 @@ mod tests {
         // (agent_type, foreground_input_blocked, awaiting_input,
         //  has_choice_prompt, background_work, completion_declared,
         //  shell_state) -> (agent_state, rung)
-        let cases: &[(
-            Option<&str>,
+        type LadderCase<'a> = (
+            Option<&'a str>,
             bool,
             bool,
             bool,
             bool,
             bool,
-            Option<&str>,
-            Option<&str>,
-            &str,
-        )] = &[
+            Option<&'a str>,
+            Option<&'a str>,
+            &'a str,
+        );
+        let cases: &[LadderCase] = &[
             (
                 None,
                 false,

@@ -7691,14 +7691,17 @@ fn dsr_cursor_position_query_is_flushed_by_process_chunk() {
 /// Shared setup for the DSR/CPR edge-case tests below: a real PTY session
 /// backed by a `RecordingWriter`, plus the per-session state `process_chunk`
 /// requires.
+/// What [`setup_dsr_test_session`] hands back: the app state, the bytes the
+/// session's `RecordingWriter` captured, and the session's silence state.
 #[cfg(unix)]
-fn setup_dsr_test_session(
-    sid: &str,
-) -> (
+type DsrTestSession = (
     crate::state::AppState,
     Arc<std::sync::Mutex<Vec<u8>>>,
     Arc<Mutex<SilenceState>>,
-) {
+);
+
+#[cfg(unix)]
+fn setup_dsr_test_session(sid: &str) -> DsrTestSession {
     let state = crate::state::tests_support::make_test_app_state();
     let bytes = Arc::new(std::sync::Mutex::new(Vec::new()));
     insert_session_with_writer(
