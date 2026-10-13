@@ -260,3 +260,27 @@ async fn corrupt_file_is_an_error_not_defaults() {
     let error = get(&f, &["/headless_agent"]).await.unwrap_err();
     assert_eq!(error.code, "store_failed");
 }
+
+/// Catches: promoting a second run config to default while the first keeps its flag. Launches
+/// resolve `find(is_default)`, so the first wins and the user's change silently does nothing.
+#[tokio::test]
+async fn setting_a_run_config_default_leaves_exactly_one_default() {
+    let f = fixture(Some(initial()));
+    set(
+        &f,
+        revision(&f).await,
+        &format!("{RUN}/Beta/is_default"),
+        json!(true),
+    )
+    .await
+    .unwrap();
+    let runs = on_disk(&f)["agents"]["codex"]["run_configs"].clone();
+    let defaults: Vec<_> = runs
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| r["is_default"] == json!(true))
+        .map(|r| r["name"].clone())
+        .collect();
+    assert_eq!(defaults, vec![json!("Beta")]);
+}
