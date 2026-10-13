@@ -5251,3 +5251,7 @@ Visual evidence: worktree Vite fixture mounted the real NotificationsTab and Toa
 - [ ] GitHub Settings (#1829-54c2): after Boss restarts `make dev` or rebuilds release, verify one-account/one-remote repositories hide Repository Bindings, OAuth shows Logout, and environment Disconnect stays disconnected across reopening Settings. Then complete device-flow login; fork/upstream remotes must still offer a remote choice. Rust changes require restart; unit regressions use fake credentials.
 
 - [ ] Design Mode autoload (#1834-f6c4): after restarting `make dev` or rebuilding release, close the old Design Mode window, start from an agent terminal in each repository, verify the dev-server page, Pick element, and feedback delivery. Chrome is not installed locally; branded Chrome must report its unsupported-autoload error.
+
+## Idle Claude placeholder composer clears the activity dot (1864-23d0) — Rust restart required
+
+- [ ] After Boss restarts `make dev` / installs `make build` and the tuic-remote daemon, launch Claude Code from a shell tab and leave it at the `❯ Try "..."` placeholder: the blue activity dot clears in tuic-remote and in the desktop app, and returns while a turn runs. The replay test `captured_claude_launch_from_shell_returns_idle_at_its_ready_composer` covers the detector; the live dot is unverified.
