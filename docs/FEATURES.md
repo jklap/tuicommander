@@ -36,6 +36,10 @@ The component is ready for Tasks shell integration and does not add a tab by its
 
 ## Tasks list component
 
+Jira searches accept `jql:` and `text:` prefixes. Intended JQL failures keep the
+server parse message and typed query in Lists and Boards; plain text and issue-key
+lookups retain their fallback behavior.
+
 The generic Tasks list renders data-only work-item providers with account-scoped
 sources, saved presets, field filters, debounced search, sorting, virtual rows,
 and provider cursor pagination. Failed refreshes retain rows with a stale label.

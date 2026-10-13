@@ -121,3 +121,10 @@ The community catalogue declares each shipped plugin’s permissions, agent targ
 CLI binaries and minimum app version. Dashboard plugins need at least v1.0.3;
 MDKB and RTK dashboard lifetime handling needs v1.7.6. SQLite’s panel bundle keeps
 its ES2022 JavaScript target.
+
+### Jira query errors
+
+In Tasks search, prefix a query with `jql:` to require JQL, or `text:` for
+literal text. Jira parse errors stay visible with the input unchanged. A previous
+result page remains marked as stale until a corrected query succeeds. Issue keys
+and saved-filter predicates such as `filter = 28712` keep their usual meaning.

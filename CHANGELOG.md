@@ -10,6 +10,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Terminal Chat view for Grok terminals, read from the session's `chat_history.jsonl` and offered only when `~/.grok/active_sessions.json` names the exact session of that terminal's process; the newest-session fallback never feeds Chat (#1791-b8be).
 
 ### Fixed
+
+- Keep Jira JQL parse errors visible in Tasks lists and boards, with explicit `jql:` and `text:` search prefixes (#1861-8a4c).
 - Trackpad and wheel scrolling no longer stalls while the pointer is over the CLI/Chat switch, in either view (#1847-feb9).
 - Design Mode automatically loads its own extension on cold Edge launches and opens the discovered dev server. Running profiles and unsupported branded Chrome return clear errors (#1834-f6c4).
 - Make Terminal Chat easier to read with one lightly tinted answer card per turn, whole-answer Copy, reading-width limits, collapsible terminal pastes and compact inbox notices. Keep the collapsed tool row and show Claude Bash descriptions when available (#1832-b19a).
