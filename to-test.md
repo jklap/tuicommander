@@ -5299,3 +5299,5 @@ Visual evidence: worktree Vite fixture mounted the real NotificationsTab and Toa
 
 - [x] `jql: project =` shows the recorded Jira parse failure and a correction hint; the typed query remains intact and previous rows are marked stale. _(verified: real TasksShell and Jira provider in the read-only Vite harness, screenshot and UI request trace in `~/Gits/.tmp/fix-1861/`; no text fallback request.)_
 - [x] Explicit text, key lookup, valid JQL, saved-filter predicates and board query scoping retain their meanings. _(verified: `plugins/jira/jql-errors.test.js`, 31 Jira tests pass; 11 Tasks consumer tests pass.)_
+
+- [ ] Tasks/plugins batch 1013: after Boss restarts `make dev` (or rebuilds release), verify review-bot findings in Tasks and PR review threads. The merged Rust changes require a backend restart to load.

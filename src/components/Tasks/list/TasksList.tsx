@@ -54,7 +54,14 @@ function filterValue(
 		case "user":
 			return {
 				kind: "user",
-				value: [{ id: value, name: options.find((option) => option.id === value)?.name ?? value, avatarUrl: null, bot: false }],
+				value: [
+					{
+						id: value,
+						name: options.find((option) => option.id === value)?.name ?? value,
+						avatarUrl: null,
+						bot: false,
+					},
+				],
 			};
 	}
 }
