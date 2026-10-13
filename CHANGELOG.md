@@ -17,6 +17,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Remove the Aider agent harness, including launch profiles, detection, screen adapters and mobile commands. Existing settings remain readable (#1849-0c19).
 
 ### Fixed
+- Stop answer tint before blank-separated unmarked prose, while retaining wrapped continuations and structured answer content (#1872-1870).
 - Merge adjacent marked answer paragraphs into one continuous CLI and Chat tint, including blank paragraph gaps and excluding Codex duration footers. Hide answer glyphs in the CLI grid while keeping raw copy and search text (#1872-1870).
 - Tasks board lanes show loaded counts and More controls; cards show assignees and labels with a compact keyboard-accessible Move menu (#1844-858d).
 - Preserve account metadata when saving Tasks setup, keep assignee username filters as text, and hide unsupported GitLab roadmap date filters and grouping (#1841-bbac, #1843-9b0f, #1845-66f6).
