@@ -1431,7 +1431,7 @@ Content-Type: application/json
 { "repoPath": "/path/to/repo", "worktreePath": "/path/to/worktree", "safeOnly": true }
 ```
 
-Removes an orphan worktree by filesystem path. The worktree path is validated against the repo's actual worktree list. `safeOnly` is optional; when true, the server rechecks clean status, branch reachability and live sessions immediately before removal and refuses a checkout a session still works in. With `safeOnly` false the caller has confirmed the removal from the assessment: `confirmedSessions` (default `[]`) lists the `live_sessions` ids it showed, and the server refuses when a live session outside that list works in the checkout.
+Removes an orphan worktree by filesystem path. The worktree path is validated against the repo's actual worktree list by location, not spelling: a path (or `repoPath`) reached through a symlinked folder, such as macOS `/var` for `/private/var`, names the same checkout git lists. The checkout itself must be named directly, though — a symlink standing in for the worktree directory is refused with 400 (`... is a symlink; name the worktree directory itself`), on this route, `orphan-cleanup/begin`/`answer` and MCP `repo action=worktree_remove worktree_path=...` alike. `safeOnly` is optional; when true, the server rechecks clean status, branch reachability and live sessions immediately before removal and refuses a checkout a session still works in. With `safeOnly` false the caller has confirmed the removal from the assessment: `confirmedSessions` (default `[]`) lists the `live_sessions` ids it showed, and the server refuses when a live session outside that list works in the checkout.
 
 ### Merge PR via GitHub
 

@@ -7285,6 +7285,122 @@ mod tests {
         assert!(dirty.join("untracked.txt").exists());
     }
 
+    /// A repo with two detached checkouts, all spelled through a symlinked
+    /// folder: (repo guard, link guard, aliased repo, aliased checkouts).
+    #[cfg(unix)]
+    fn aliased_detached_checkouts(
+        names: &[&str],
+    ) -> (tempfile::TempDir, tempfile::TempDir, String, Vec<String>) {
+        let repo = create_temp_git_repo();
+        for name in names {
+            crate::git_cli::git_cmd(repo.path())
+                .args([
+                    "worktree",
+                    "add",
+                    "--detach",
+                    repo.path().join(name).to_str().unwrap(),
+                    "HEAD",
+                ])
+                .run()
+                .unwrap();
+        }
+        // Keep the main checkout clean for any status the guards run there.
+        std::fs::create_dir_all(repo.path().join(".git/info")).unwrap();
+        std::fs::write(
+            repo.path().join(".git/info/exclude"),
+            names.join("/\n") + "/\n",
+        )
+        .unwrap();
+        let links = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let alias = links.path().join("alias");
+        std::os::unix::fs::symlink(repo.path().canonicalize().unwrap(), &alias).unwrap();
+        let aliased = names
+            .iter()
+            .map(|name| alias.join(name).to_string_lossy().into_owned())
+            .collect();
+        (repo, links, alias.to_string_lossy().into_owned(), aliased)
+    }
+
+    // Catches a lexical path comparison on the transports: git lists resolved
+    // paths, so an orphan named through a symlinked folder (macOS `/var`, a
+    // linked project dir) was "not a known worktree" over HTTP and MCP. Also
+    // pins A1 on both: a symlink standing in for the checkout is refused.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn orphan_routes_accept_a_checkout_spelled_through_a_symlinked_folder() {
+        let (repo, links, aliased_repo, aliased) =
+            aliased_detached_checkouts(&["via-http", "via-mcp", "via-dialog"]);
+        let state = test_state();
+
+        let begun = build_router(state.clone(), false, true)
+            .oneshot(mcp_post(
+                "/repo/orphan-cleanup/begin",
+                &serde_json::json!({ "repoPath": aliased_repo, "paths": [aliased[2]] }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(begun.status(), StatusCode::OK);
+
+        let removed = build_router(state.clone(), false, true)
+            .oneshot(mcp_post(
+                "/repo/remove-orphan",
+                &serde_json::json!({
+                    "repoPath": aliased_repo,
+                    "worktreePath": aliased[0],
+                    "safeOnly": true
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(removed.status(), StatusCode::OK);
+        assert!(!repo.path().join("via-http").exists());
+
+        let removed = call_mcp_tool(
+            &state,
+            "repo",
+            serde_json::json!({
+                "action": "worktree_remove",
+                "path": aliased_repo,
+                "worktree_path": aliased[1]
+            }),
+        )
+        .await;
+        assert_eq!(removed["ok"], true, "{removed}");
+        assert!(!repo.path().join("via-mcp").exists());
+
+        let leaf = links.path().join("leaf");
+        std::os::unix::fs::symlink(repo.path().join("via-dialog"), &leaf).unwrap();
+        let refused = build_router(state.clone(), false, true)
+            .oneshot(mcp_post(
+                "/repo/remove-orphan",
+                &serde_json::json!({
+                    "repoPath": aliased_repo,
+                    "worktreePath": leaf.to_string_lossy(),
+                    "safeOnly": true
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+        let refused = call_mcp_tool(
+            &state,
+            "repo",
+            serde_json::json!({
+                "action": "worktree_remove",
+                "path": aliased_repo,
+                "worktree_path": leaf.to_string_lossy()
+            }),
+        )
+        .await;
+        assert!(
+            refused["error"]
+                .as_str()
+                .is_some_and(|error| error.contains("is a symlink")),
+            "{refused}"
+        );
+        assert!(repo.path().join("via-dialog").exists());
+    }
+
     // Catches: worktree_remove defaulting `force` to true (or ignoring its absence), which
     // would discard the uncommitted work of a branch worktree without confirmation.
     #[tokio::test]

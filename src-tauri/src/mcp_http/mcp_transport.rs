@@ -937,12 +937,30 @@ fn resolve_repo_for_path(path: &str, known: &[String]) -> String {
 /// [`resolve_repo_for_path`] falls back to the path itself, which is right for
 /// scoping tool access and wrong for ownership: a journal entry filed under an
 /// unregistered directory belongs to no project anybody can open.
+///
+/// A path and a registration are compared by location as well as by spelling:
+/// a shell reports its cwd as spelled (`/var/…`, a symlinked project folder)
+/// while git and a canonicalizing caller report the resolved path
+/// (`/private/var/…`), and either side may be the registered one. The deepest
+/// containing registration wins; the registered spelling is what comes back.
 pub(crate) fn registered_repo_for_path(path: &str, known: &[String]) -> Option<String> {
+    let contains = |path: &str, repo: &str| path == repo || path.starts_with(&format!("{repo}/"));
+    let resolved = tuic_core::path_spelling::resolved_spelling(path);
     known
         .iter()
-        .filter(|repo| path == repo.as_str() || path.starts_with(&format!("{repo}/")))
-        .max_by_key(|repo| repo.len())
-        .cloned()
+        .filter_map(|repo| {
+            let resolved_repo = tuic_core::path_spelling::resolved_spelling(repo);
+            let matched = contains(path, repo)
+                || resolved
+                    .as_deref()
+                    .zip(resolved_repo.as_deref())
+                    .is_some_and(|(path, repo)| contains(path, repo));
+            // Depth in one spelling for every candidate, so a lexical match is
+            // never ranked against a resolved one by spelling length.
+            matched.then(|| (repo, resolved_repo.map_or(repo.len(), |r| r.len())))
+        })
+        .max_by_key(|(_, depth)| *depth)
+        .map(|(repo, _)| repo.clone())
 }
 
 /// POST /mcp — Handle all MCP JSON-RPC requests via Streamable HTTP
