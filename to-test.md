@@ -5,17 +5,12 @@
 - [ ] After Boss manually restarts `make dev` or installs `make build`, `WorkItemPage.total` / `WorkItemGroupedPage.total` are accepted by the Rust DTOs (optional, defaulted). Targeted `plugin_docs` and `work_items` tests pass; the Tasks list shows "N of total" once a loaded GitLab plugin build that sends `x-total` is installed (plugin branch parked, see story worklog). _(triage 2026-10-14: WAITS — Needs the named integration/plugin release to land and load before the consumer check.)_
 ## GitHub settings owner adapter (1774-ce8f) — Rust restart required
 
-- [ ] After Boss manually restarts `make dev` or installs `make build`, the GitHub owner adapter is loaded. Shared settings transport wiring is a separate step; this change adds no callable endpoint by itself. _(triage 2026-10-14: DO — Adapter has no new transport; inspect registered owner and existing contract evidence.)_
 - [ ] After transport wiring, use a throwaway instance to complete default/additional cloud device login and add an Enterprise PAT. Confirm immediate presence-only readback, real identity, bindings and account-removal cleanup. Boss performs provider authentication; do not use production credentials for automated checks. _(triage 2026-10-14: WAITS — Needs Boss’s provider authentication, external service fixture or authorized live account operation.)_
 ## Ego settings adapter (1775-330c) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, model reads/writes in Settings > Providers use the configured Ego profile and AI Chat workspace. Existing ACP and PTY sessions keep their launch configuration. Internal settings adapters await the later transport-registration step; targeted fixture tests cover owner commands and readback without touching production credentials. _(triage 2026-10-14: WAITS — Needs the named integration/plugin release to land and load before the consumer check.)_
-## Shared settings file store (1824-9c1e) — Rust restart required
 
-- [ ] After Boss manually restarts `make dev` or installs `make build`, the shared strict file-store refactor is loaded. Notifications, preferences, repositories, agents and voice keep their existing behavior; targeted settings tests cover persistence, normalization, corrupt input and apply hooks. No new settings transport is registered by this refactor. _(triage 2026-10-14: DO — Runnable through scoped source/tests, isolated browser or throwaway API fixtures.)_
-## Child bridge instance binding (1811-a0fe) — Rust restart required
 
-- [ ] After Boss restarts `make dev` or installs `make build`, newly opened agent terminals must send MCP calls to their spawning TUIC instance. Existing terminals keep their previous environment. Native PTY regression covers named, default and fallback socket paths; bridge integration covers socket override routing. Do not test isolated agents against Boss's live sessions. _(triage 2026-10-14: DO — Runnable through scoped source/tests, isolated browser or throwaway API fixtures.)_
 ## Mute intermediate Chat text (1769-89dc)
 
 - [ ] [VISUAL] Terminal Chat view, AI Chat and mobile chat: text followed by a tool call in the same turn is smaller and dimmer; the last text of the turn keeps normal weight. Needs a `make dev` restart (Rust config field `chat_mute_intermediate_text`). _(audit 2026-10-13: HUMAN — VISUAL. Live settings store has chatMuteIntermediateText (restart took effect); rendering/toggle unverified.)_ _(triage 2026-10-14: DO — Runnable through scoped source/tests, isolated browser or throwaway API fixtures.)_
