@@ -1,8 +1,21 @@
 import { describe, expect, it, vi } from "vitest";
 import { buildAnswersTurn, rowCopyText } from "../answersTurn";
-import { ATTR_DEFAULT_BG, ATTR_DEFAULT_FG, type CellMetrics, type DecodedRow, rowText } from "../canvasTerminalUtils";
+import {
+	ATTR_DEFAULT_BG,
+	ATTR_DEFAULT_FG,
+	type CellMetrics,
+	type DecodedRow,
+	decodeBinaryFrame,
+	rowText,
+} from "../canvasTerminalUtils";
 import { createGridRenderer } from "../gridRenderer";
-import { answerExtent, hiddenMarkerRows, planSuggestOverlay, type RowSnapshot } from "../suggestOverlay";
+import {
+	answerBlockRanges,
+	answerExtent,
+	hiddenMarkerRows,
+	planSuggestOverlay,
+	type RowSnapshot,
+} from "../suggestOverlay";
 import recordedCodex from "./fixtures/codex-answer-paragraphs-1872.json";
 
 const snapshots = (texts: string[]): RowSnapshot[] => texts.map((text) => ({ text, isWrapped: false }));
@@ -29,6 +42,42 @@ function decoded(text: string, index: number): DecodedRow {
 }
 
 describe("continuous answer regions (#1872-1870)", () => {
+	// Catches: Codex's indented duration footer being tinted and included in answers-only text.
+	it("ends the recorded answer before the Codex Worked for footer", () => {
+		const frame = decodeBinaryFrame(Uint8Array.from(atob(recordedCodex.frameBase64), (c) => c.charCodeAt(0)).buffer)!;
+		const rows = frame.rows.map((row, index) => ({
+			text: rowText(row),
+			isWrapped: frame.rows[index - 1]?.wrapped ?? false,
+		}));
+		const first = rows.findIndex((row) => row.text.includes("💬"));
+		const last = rows.findLastIndex((row) => row.text.includes("💬"));
+		const footer = rows.findIndex((row) => row.text.includes("Worked for"));
+		expect(footer).toBeGreaterThan(last);
+		expect(answerExtent(first, rows.length, (i) => rows[i] ?? null)).toBe(last);
+		expect(planSuggestOverlay(rows.length, (i) => rows[i] ?? null).blocks.some((block) => block.row === footer)).toBe(
+			false,
+		);
+		expect(buildAnswersTurn(rows, false).answers.join("\n")).not.toContain("Worked for");
+		expect(
+			answerBlockRanges([
+				{ kind: "paragraph", text: "Answer.", marker: true },
+				{ kind: "paragraph", text: rows[footer].text.trim(), marker: false },
+			]),
+		).toEqual([[0, 0]]);
+	});
+
+	// Catches: treating quoted footer examples or ordinary Worked for prose as terminal status.
+	it("preserves footer examples in code and ordinary Worked for prose", () => {
+		const rows = snapshots([
+			"💬 Answer.",
+			"  ```text",
+			"  Worked for 7s • 18:58",
+			"  ```",
+			"  Worked for several years.",
+		]);
+		expect(answerExtent(0, rows.length, (i) => rows[i] ?? null)).toBe(4);
+	});
+
 	// Catches: each marked paragraph ends the answer extent, leaving blank gaps untinted.
 	it("merges three marked paragraphs across blank rows without trailing blank tint", () => {
 		const rows = [...recordedCodex.answerRows, { text: "", isWrapped: false }];

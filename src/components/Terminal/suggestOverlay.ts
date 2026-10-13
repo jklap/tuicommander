@@ -35,6 +35,9 @@ const ANSWER_CONTINUATION_RE = /^ {2,}\S/;
 const PROMPT_ROW_RE = /^\s*❯/;
 /** A fenced code block delimiter. Inside a fence a bullet, marker or prompt glyph is content. */
 const FENCE_RE = /^\s*```/;
+/** Codex's indented turn-duration footer is terminal status, not answer prose. */
+const CODEX_FOOTER_RE =
+	/^\s*Worked for \d+(?:\.\d+)?(?:ms|[smh])(?:\s+\d+(?:\.\d+)?(?:ms|[smh]))*(?:\s*•\s*\d{1,2}:\d{2})?\s*$/;
 
 /**
  * Last row of the answer that starts at `start` (a row matching
@@ -71,7 +74,7 @@ export function answerExtent(
 		if (inFence) {
 			inFence = !FENCE_RE.test(row.text);
 		} else {
-			if (OUTPUT_ROW_RE.test(row.text) || PROMPT_ROW_RE.test(row.text)) break;
+			if (OUTPUT_ROW_RE.test(row.text) || PROMPT_ROW_RE.test(row.text) || CODEX_FOOTER_RE.test(row.text)) break;
 			if (SUGGEST_ANCHOR_RE.test(row.text) || INTENT_HIGHLIGHT_RE.test(row.text)) break;
 			inFence = FENCE_RE.test(row.text);
 		}
