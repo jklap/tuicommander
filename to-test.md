@@ -5299,3 +5299,4 @@ Visual evidence: worktree Vite fixture mounted the real NotificationsTab and Toa
 - [ ] Tasks board (#1844-858d): on a configured provider with multiple pages, More retains prior cards and updates loaded lane counts; cards show assignees/labels and Move… offers legal destinations.
 
 - [ ] #1874-1758: After restarting `make dev`, remove a scratch worktree whose tip is contained only in another remote branch with Delete branch on remove enabled; verify it succeeds. For unique local commits, verify the refusal offers “Remove worktree, keep branch” and preserves the branch.
+- [ ] #1874-1758: After the Rust restart, remove a scratch worktree whose cleanup runs `git fetch --prune` after its sole containing remote branch was deleted. Verify the checkout is removed, the local branch remains, and the branch-deletion warning is shown. Automated backend regression: `removal_keeps_local_branch_when_cleanup_prunes_its_remote_proof`.

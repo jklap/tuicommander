@@ -2823,6 +2823,13 @@ pub fn remove_worktree_by_workspace_id_with_missing_confirmation_and_pr(
             &removal_rule,
         )
         .and_then(|()| {
+            // Cleanup may fetch --prune and remove the ref that proved safety.
+            if lifecycle.commit_status == WorkspaceCommitStatus::PushedUnmerged {
+                removal_rule = containing_remote_ref(&worktree.base_repo, &expected_branch_oid)?
+                    .ok_or_else(|| {
+                        "remote refs no longer contain the captured branch tip".to_string()
+                    })?;
+            }
             git_cmd(&worktree.base_repo)
                 .args([
                     "update-ref",
@@ -9867,11 +9874,16 @@ branch refs/heads/feat
 
         let status = inspect_workspace_lifecycle_with_pr_fixture(&repo, "pr-fetch", &api(&head));
         assert_eq!(status.commit_status, WorkspaceCommitStatus::Merged);
+        assert_eq!(status.merge_proof.as_deref(), Some("github_pr"));
         commit_file(&upstream, "not-in-pr.txt", "newer\n");
         let stale_api_head = rev_at(&upstream, "HEAD").unwrap();
         let status =
             inspect_workspace_lifecycle_with_pr_fixture(&repo, "pr-fetch", &api(&stale_api_head));
-        assert_eq!(status.commit_status, WorkspaceCommitStatus::Unmerged);
+        assert_eq!(status.commit_status, WorkspaceCommitStatus::PushedUnmerged);
+        assert_eq!(
+            status.merge_proof.as_deref(),
+            Some("refs/remotes/origin/pr-source")
+        );
     }
 
     // Audit cases: wiz POC-00168/170 landed together in squash 4a190ec8;
@@ -11203,6 +11215,9 @@ branch refs/heads/feat
             Some(tip),
             "cleanup removed the remote proof: local work must survive; outcome={outcome:?}"
         );
+        let outcome = outcome.unwrap();
+        assert!(outcome.branch_delete_warning.is_some());
+        assert!(!worktree.exists());
     }
 
     fn remote_contained_fixture() -> (TempDir, PathBuf, PathBuf) {
@@ -11281,18 +11296,21 @@ branch refs/heads/feat
     // Catches: a fetch leaving the sidebar's cached unmerged verdict stale.
     #[test]
     fn remote_contained_fetch_invalidates_monitoring_key() {
-        let (_temp, repo, worktree) = remote_contained_fixture();
+        let (_temp, repo, _) = remote_contained_fixture();
         git_cmd(&repo)
             .args(["update-ref", "-d", "refs/remotes/origin/integration"])
             .run()
             .unwrap();
-        let before = monitoring_ref_key(&repo, "remote-contained").unwrap();
+        let workspace = resolve_removable_workspace(&repo, "remote-contained").unwrap();
+        let before = inspect_workspace_monitoring_with_pr(&repo, &workspace, |_, _, _| false);
+        assert_eq!(before.commit_status, WorkspaceCommitStatus::Unmerged);
         git_cmd(&repo).args(["fetch", "origin"]).run().unwrap();
-        assert_ne!(
-            before,
-            monitoring_ref_key(&repo, "remote-contained").unwrap()
+        let after = inspect_workspace_monitoring_with_pr(&repo, &workspace, |_, _, _| false);
+        assert_eq!(after.commit_status, WorkspaceCommitStatus::PushedUnmerged);
+        assert_eq!(
+            after.merge_proof.as_deref(),
+            Some("refs/remotes/origin/integration")
         );
-        assert!(worktree.exists());
     }
 
     /// Local main is stale (10 behind origin/main in the field); the branch
