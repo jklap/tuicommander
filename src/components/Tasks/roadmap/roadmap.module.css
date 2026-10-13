@@ -32,7 +32,7 @@
 .bar[data-tone="success"] { border-color: var(--success); background: color-mix(in srgb, var(--success) 25%, var(--bg-tertiary)); }
 .bar[data-tone="warning"] { border-color: var(--warning); }
 .bar[data-tone="danger"] { border-color: var(--error); }
-.outside { display: block; padding: 20px 12px; color: var(--fg-muted); font-size: var(--font-xs); }
+.outside { display: block; padding: 20px 12px; color: var(--fg-secondary); font-size: var(--font-xs); }
 .roadmap .undated { height: auto; display: flex; flex-direction: column; flex: 0 0 300px; min-height: 0; min-width: 0; border-left: 1px solid var(--border); background: var(--bg-secondary); }
 .undated h3 { margin: 0; padding: 12px; font-size: var(--font-md); }
 .help { margin: 0; padding: 0 12px 12px; color: var(--fg-secondary); font-size: var(--font-sm); }

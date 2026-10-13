@@ -19,10 +19,11 @@
 .row > [role="listitem"] { height: 100%; }
 .group { display: flex; align-items: center; height: 100%; margin: 0; font-size: var(--font-md); color: var(--fg-secondary); }
 .list .item { display: flex; align-items: center; gap: 12px; width: 100%; height: 100%; text-align: left; border: none; border-bottom: 1px solid var(--border); border-radius: 0; background: transparent; }
+.list .item:hover { background: var(--bg-secondary); }
 .key { font-family: var(--font-mono); color: var(--fg-secondary); flex-shrink: 0; }
 .title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .state { font-size: var(--font-sm); flex-shrink: 0; }
-.state[data-tone="info"] { color: var(--accent); }
+.state[data-tone="info"] { color: var(--accent-hover); }
 .state[data-tone="success"] { color: var(--success); }
 .state[data-tone="warning"] { color: var(--warning); }
 .state[data-tone="danger"] { color: var(--error); }
