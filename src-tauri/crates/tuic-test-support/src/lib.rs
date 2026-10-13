@@ -255,11 +255,14 @@ pub fn test_temp_root() -> std::path::PathBuf {
     root
 }
 
-/// macOS `sun_path` size, NUL included (Linux allows 108; the smaller wins).
-pub const SUN_PATH_MAX: usize = 104;
 /// The longest socket path Rust's std binds or connects: one byte for the NUL
-/// (a 104-byte path fails with "path must be shorter than SUN_LEN").
-pub const SUN_PATH_USABLE: usize = SUN_PATH_MAX - 1;
+/// (a 104-byte path fails with "path must be shorter than SUN_LEN"). The one
+/// definition is `tuic_ipc::UNIX_SOCKET_PATH_MAX`, which production code checks
+/// named-instance sockets against; `scripts/test-tmp-lib.sh` reads the same
+/// constant out of its source (`tuic_unix_socket_path_max`). Never restate it.
+pub const SUN_PATH_USABLE: usize = tuic_ipc::UNIX_SOCKET_PATH_MAX;
+/// macOS `sun_path` size, NUL included (Linux allows 108; the smaller wins).
+pub const SUN_PATH_MAX: usize = SUN_PATH_USABLE + 1;
 /// Socket roots are `<host temp>/t.XXXXXX`: this prefix plus
 /// [`SOCKET_ROOT_RANDOM`] random characters.
 pub const SOCKET_ROOT_PREFIX: &str = "t.";
@@ -281,6 +284,32 @@ pub const MAX_SOCKET_HOST_LEN: usize =
 /// Marks a socket root this crate created; `scripts/with-test-tmp.sh` prunes
 /// only stale `t.??????` directories that carry it.
 pub const SOCKET_ROOT_MARKER: &str = ".tuic-socket-root";
+
+/// mdkb's own staging socket, relative to the HOME a test gives it, with the
+/// longest pid it budgets for (7 digits: Linux `pid_max`; macOS pids have 5).
+pub const MDKB_STAGING_SOCKET: &str = ".mdkb/daemon-hook.sock.4194304.tmp";
+
+/// Sockets whose NAME is fixed by something the tests cannot shorten (an
+/// external tool's own scheme), as `(what, path relative to the per-test
+/// socket dir)`. Unlike every socket this crate names itself, these can
+/// overflow `sun_path` for a long host temp dir, so their tests go `UNCHECKED`
+/// instead of running. `tests/socket_environment.rs` fails the run when that
+/// would happen; add every new fixed-name socket test's name here.
+pub const FIXED_NAME_SOCKETS: &[(&str, &str)] = &[("mdkb staging socket", MDKB_STAGING_SOCKET)];
+
+/// The [`FIXED_NAME_SOCKETS`] that do not fit `sun_path` below `home` (the
+/// per-test socket dir a test runs them in), each as a message naming its
+/// length and the budget. Empty when every one fits.
+pub fn fixed_name_sockets_over_budget(home: &std::path::Path) -> Vec<String> {
+    FIXED_NAME_SOCKETS
+        .iter()
+        .filter_map(|(what, relative)| {
+            unix_socket_path_fits(&home.join(relative))
+                .err()
+                .map(|reason| format!("{what}: {reason}"))
+        })
+        .collect()
+}
 
 /// Whether `root` leaves room for every socket the tests bind below it.
 pub fn socket_root_fits(root: &std::path::Path) -> bool {
@@ -809,6 +838,66 @@ pub fn replay_file_command(path: &std::path::Path) -> portable_pty::CommandBuild
 /// Return a path using forward slashes on every platform.
 pub fn slashed(path: &str) -> String {
     path.replace('\\', "/")
+}
+
+/// The identity probe `build.rs` compiled from `src/identity_probe_main.rs`.
+/// Install a copy with [`install_identity_probe`] rather than exec'ing this
+/// path, so the process carries the name the test needs.
+pub fn identity_probe_bin() -> &'static std::path::Path {
+    std::path::Path::new(env!("TUIC_IDENTITY_PROBE_BIN"))
+}
+
+/// Install the identity probe as `dir/name` (mode 0755 on Unix) and return
+/// that path. The started process then reports `dir/name` as its executable
+/// (macOS `proc_pidpath`, Linux `/proc/<pid>/exe`), so it stands in for any
+/// program a test needs to see in the foreground: `claude`, `bash`,
+/// `tuic-remote`, a `claude/versions/2.1.5` layout, or `ps` itself.
+///
+/// Personalities (see `src/identity_probe_main.rs`): no arguments copies stdin
+/// to stdout until EOF, staying alive like `cat` while its stdin is open;
+/// `--print <words…>` prints the words and exits 0; installed as `ps` (or run
+/// with `--ps`) it answers `-p <pid> -o comm=` natively.
+///
+/// Why not copy `/bin/cat` or `/bin/sleep`: a relocated Apple platform binary
+/// is SIGKILLed on exec in the agent sandbox ("Killed: 9"), and symlinks,
+/// scripts and `exec -a` report the wrong identity. No `codesign` step is
+/// needed either: the probe is this checkout's own build output, and the
+/// linker's ad-hoc signature (Apple Silicon) is part of the file's bytes, so
+/// it survives the copy.
+///
+/// The copy is staged and renamed into place, so re-installing over a probe
+/// that is still running never rewrites an executing file's pages in place
+/// (macOS kills a process whose signed pages change under it).
+pub fn install_identity_probe(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
+    static INSTALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+    let destination = dir.join(name);
+    let parent = destination
+        .parent()
+        .expect("an install path below dir has a parent");
+    std::fs::create_dir_all(parent)
+        .unwrap_or_else(|error| panic!("create {}: {error}", parent.display()));
+    let staging = parent.join(format!(
+        ".tuic-identity-probe.{}.{}",
+        std::process::id(),
+        INSTALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    std::fs::copy(identity_probe_bin(), &staging).unwrap_or_else(|error| {
+        panic!(
+            "copy the identity probe {} to {}: {error}",
+            identity_probe_bin().display(),
+            staging.display()
+        )
+    });
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o755))
+            .unwrap_or_else(|error| panic!("chmod {}: {error}", staging.display()));
+    }
+    std::fs::rename(&staging, &destination)
+        .unwrap_or_else(|error| panic!("install {}: {error}", destination.display()));
+    destination
 }
 
 /// HTTP request bytes captured by an IPC test server.

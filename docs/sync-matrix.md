@@ -868,6 +868,7 @@ When adding or removing a process-inspection call site, or the logged `ps` fallb
 |------|----------------|
 | `scripts/check-no-process-exec.mjs` | The `file::fn` allow-list (a stale entry fails `--self-test`); wired into `make check` and `.github/workflows/ci.yml` |
 | `docs/backend/pty.md` | Native process snapshot, the `ps` fallback and its removal plan |
+| `src-tauri/crates/tuic-test-support/{build.rs,src/identity_probe_main.rs}` | The identity probe tests install as a named foreground process (and as a local `ps` stand-in); its personalities, `tests/identity_probe.rs`, and the paragraph in `docs/guides/development-setup.md` → Testing |
 
 ### Config-instance scoping (`TUIC_APP_INSTANCE`)
 When changing which make target launches against which configuration directory:

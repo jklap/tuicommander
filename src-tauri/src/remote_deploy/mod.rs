@@ -535,6 +535,18 @@ mod tests {
         assert!(digits < kill && comm < kill && name < kill, "{stop}");
     }
 
+    /// Whether this host can run `ps` and get a process's command back, the
+    /// way the remote host runs it inside `verified_kill`. False in a sandbox
+    /// that refuses to exec the setuid `/bin/ps`.
+    #[cfg(unix)]
+    fn host_ps_reports_comm() -> bool {
+        std::process::Command::new("sh")
+            .args(["-c", "ps -p $$ -o comm="])
+            .stderr(std::process::Stdio::null())
+            .output()
+            .is_ok_and(|out| out.status.success() && !out.stdout.trim_ascii().is_empty())
+    }
+
     /// Runs the real stop command in a throwaway `$HOME`: a PID file pointing at
     /// a live process that is NOT `tuic-remote` (a stale PID reused by
     /// something else) is never signalled; one pointing at a real
@@ -545,13 +557,30 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let dir = home.path().join(".cache/tuic");
         std::fs::create_dir_all(&dir).unwrap();
+        // `verified_kill`'s `ps` runs on the REMOTE host in production. Here it
+        // runs locally, where a sandbox may refuse to exec the setuid `/bin/ps`;
+        // then a native `ps` stand-in answers the same `-p <pid> -o comm=`.
+        let shim = tempfile::tempdir().unwrap();
+        let path = if host_ps_reports_comm() {
+            None
+        } else {
+            tuic_test_support::install_identity_probe(shim.path(), "ps");
+            let mut dirs = vec![shim.path().to_path_buf()];
+            dirs.extend(std::env::split_paths(
+                &std::env::var_os("PATH").unwrap_or_default(),
+            ));
+            Some(std::env::join_paths(dirs).unwrap())
+        };
         let run_stop = || {
-            std::process::Command::new("sh")
+            let mut command = std::process::Command::new("sh");
+            command
                 .arg("-c")
                 .arg(stop_command(None).unwrap())
-                .env("HOME", home.path())
-                .output()
-                .unwrap()
+                .env("HOME", home.path());
+            if let Some(path) = &path {
+                command.env("PATH", path);
+            }
+            command.output().unwrap()
         };
         let alive = |child: &mut std::process::Child| child.try_wait().unwrap().is_none();
 
@@ -571,14 +600,12 @@ mod tests {
         let _ = stranger.kill();
         let _ = stranger.wait();
 
-        let sleep = ["/bin/sleep", "/usr/bin/sleep"]
-            .into_iter()
-            .find(|p| Path::new(p).exists())
-            .expect("a sleep binary");
-        let fake_daemon = home.path().join("tuic-remote");
-        std::fs::copy(sleep, &fake_daemon).unwrap();
+        // A compiled stand-in, not a copy of /bin/sleep (the sandbox SIGKILLs a
+        // relocated platform binary): it stays alive blocked on its open stdin.
+        let fake_daemon = tuic_test_support::install_identity_probe(home.path(), "tuic-remote");
         let mut daemon = std::process::Command::new(&fake_daemon)
-            .arg("30")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
             .spawn()
             .unwrap();
         std::fs::write(dir.join("tuic-remote.pid"), daemon.id().to_string()).unwrap();

@@ -287,6 +287,20 @@ bytes and the host temp dir at most 72:
 | macOS default (`/var/folders/xx/…/T`) | 49 | 80 | fits, 23 bytes spare |
 | agent sandbox | 72 | 103 | fits, 0 bytes spare |
 | long CI-like | 90 | 121 | fails with the budget message |
+| agent sandbox, short symlink (`/tmp/srtmon.XXXXXXXX`) | 20 | 51 | fits, 52 bytes spare |
+
+The host temp dir can be spelled two ways for the same directory: the sandbox's
+real path (72 bytes) and a short symlink to it (20 bytes). Both hold every socket
+this repo names itself, but only the short one holds mdkb's own staging socket
+(`HOME/.mdkb/daemon-hook.sock.<pid>.tmp`, a name the tests cannot shorten; it needs
+a host temp dir of at most 54 bytes). In the long spelling that test (and any other
+entry in `tuic_test_support::FIXED_NAME_SOCKETS`) would print `UNCHECKED` and pass
+without running. `tuic-test-support`'s `socket_environment` test is the runtime
+blocker for that: it fails, naming the sockets, the host temp dir and its length,
+unless the run uses a shorter `TMPDIR`, sets `TUIC_TEST_SOCKET_ROOT`, or accepts
+the gap with `TUIC_ALLOW_UNCHECKED_SOCKET_TESTS=1`. It also pins the outcome for
+both layouts, so a change to the budget constants cannot move the line silently.
+Add every new fixed-name socket test's path to `FIXED_NAME_SOCKETS`.
 
 Over budget, the panic names the host temp dir and its length, the would-be root
 length, the 81/72-byte budgets and `TUIC_TEST_SOCKET_ROOT=<short private dir>`;
@@ -327,6 +341,20 @@ with a reason) or the shrink-only per-file counts in
 the same change, `node scripts/check-no-hardcoded-tmp.mjs --write-baseline`) but
 never up. New tests use a fake root that never exists rather than a `/tmp/...`
 string.
+
+A test that needs a process with a particular name in the foreground (`claude`,
+`bash`, `tuic-remote`, a `claude/versions/2.1.5` layout) installs
+`tuic_test_support::install_identity_probe(dir, name)`: a small std-only program
+(`src-tauri/crates/tuic-test-support/src/identity_probe_main.rs`) that the
+crate's `build.rs` compiles with the build's own `rustc`. Never copy `/bin/cat`,
+`/bin/sh` or `/bin/sleep` instead: the agent sandbox SIGKILLs a relocated Apple
+platform binary ("Killed: 9"), and a symlink, a script or `exec -a` reports the
+wrong executable to `proc_pidpath`/`/proc/<pid>/exe`. The probe needs no
+`codesign`. With no arguments it echoes stdin until EOF (alive while its stdin is
+open, like `cat`); `--print <words…>` prints them; installed as `ps` (or run with
+`--ps`) it answers `-p <pid> -o comm=` natively, for a test that runs
+remote-side shell text such as `verified_kill` locally where `/bin/ps` cannot run.
+Covered by `crates/tuic-test-support/tests/identity_probe.rs`.
 
 ### Live peer-mail wake canary
 

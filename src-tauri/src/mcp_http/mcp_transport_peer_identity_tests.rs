@@ -8,18 +8,12 @@ struct IdentityTerminal {
 impl IdentityTerminal {
     fn new(state: &Arc<AppState>, id: &str, identity: &str) -> Self {
         let scratch = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
-        let executable = scratch.path().join("identity-cat");
-        std::fs::copy("/bin/cat", &executable).unwrap();
-        // Protected Apple executables do not expose their environment to sysctl.
-        #[cfg(target_os = "macos")]
-        assert!(
-            std::process::Command::new("/usr/bin/codesign")
-                .args(["--force", "--sign", "-"])
-                .arg(&executable)
-                .status()
-                .unwrap()
-                .success()
-        );
+        // A compiled probe, not a copy of /bin/cat: the sandbox SIGKILLs a
+        // relocated Apple platform binary, and a protected Apple executable
+        // does not expose its environment to sysctl. It blocks on its PTY
+        // stdin like cat.
+        let executable =
+            tuic_test_support::install_identity_probe(scratch.path(), "identity-cat");
         let pair = portable_pty::native_pty_system()
             .openpty(PtySize::default())
             .unwrap();
