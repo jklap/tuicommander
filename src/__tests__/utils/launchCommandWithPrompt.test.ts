@@ -39,3 +39,10 @@ describe("launchCommandWithPrompt", () => {
 		expect(launchCommandWithPrompt("claude", "claude", "a\nb", "windows-native")).toBeNull();
 	});
 });
+
+// Catches: a trailing Claude --add-dir consumes the task brief as another directory instead of a prompt.
+it("separates_the_initial_prompt_from_a_trailing_variadic_add_dir", () => {
+	expect(launchCommandWithPrompt("claude", "claude --add-dir /repo/shared", "Fix issue 125", "posix")).toBe(
+		"claude --add-dir /repo/shared -- 'Fix issue 125'",
+	);
+});
