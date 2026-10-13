@@ -96,4 +96,18 @@ describe("Tasks shell", () => {
 			registration.dispose();
 		}
 	});
+	// Catches: below 700 px an open detail keeps `.main` hidden, so "New task" opens a form the user cannot see.
+	it("closes the open detail when New task is chosen, so the narrow layout shows the form", async () => {
+		const registration = workItemProviderRegistry.register(listDemo(3));
+		try {
+			render(() => <TasksShell />);
+			fireEvent.click(await screen.findByRole("button", { name: /Task 00002/ }));
+			await screen.findByRole("region", { name: "Task detail" });
+			fireEvent.click(screen.getByRole("button", { name: "New task" }));
+			expect(await screen.findByRole("form", { name: "Create task" })).toBeInTheDocument();
+			expect(screen.queryByRole("region", { name: "Task detail" })).not.toBeInTheDocument();
+		} finally {
+			registration.dispose();
+		}
+	});
 });
