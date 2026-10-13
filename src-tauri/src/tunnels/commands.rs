@@ -295,10 +295,16 @@ fn ssh_config_path() -> Option<PathBuf> {
 }
 
 pub(crate) fn load_ssh_config_hosts() -> Result<Vec<String>, String> {
-    let Some(path) = ssh_config_path() else {
-        return Ok(Vec::new());
-    };
-    parse_ssh_config_hosts(&path)
+    load_ssh_config_hosts_from(ssh_config_path().as_deref())
+}
+
+/// The aliases of the SSH config at `path`; no path (no home directory) is
+/// an empty list, like a missing file.
+fn load_ssh_config_hosts_from(path: Option<&FsPath>) -> Result<Vec<String>, String> {
+    match path {
+        Some(path) => parse_ssh_config_hosts(path),
+        None => Ok(Vec::new()),
+    }
 }
 
 fn parse_ssh_config_hosts(path: &FsPath) -> Result<Vec<String>, String> {
@@ -392,7 +398,14 @@ pub(crate) async fn list_discovered_ssh_hosts_http() -> Response {
 
 /// GET /tunnels/ssh-hosts — parse ~/.ssh/config and return host aliases.
 pub(crate) async fn list_ssh_config_hosts() -> Response {
-    match load_ssh_config_hosts() {
+    list_ssh_config_hosts_from(ssh_config_path().as_deref())
+}
+
+/// The body of [`list_ssh_config_hosts`] for an explicit config path, so
+/// tests can serve a fixture instead of the real `~/.ssh/config`. A missing
+/// file is `200 []`; a file that cannot be read or parsed is a 500.
+fn list_ssh_config_hosts_from(path: Option<&FsPath>) -> Response {
+    match load_ssh_config_hosts_from(path) {
         Ok(hosts) => (StatusCode::OK, Json(serde_json::json!(hosts))).into_response(),
         Err(error) => err_json(StatusCode::INTERNAL_SERVER_ERROR, &error),
     }
@@ -584,15 +597,13 @@ async fn run_probe(
         return HostAuth::Unreachable;
     };
     let mut command = tokio::process::Command::new(binary);
-    command
-        .args(probe_args(&host.host, host.probe_port(), policy))
-        .kill_on_drop(true)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-    let output = match tokio::time::timeout(timeout, command.output()).await {
-        Ok(Ok(output)) => output,
-        Ok(Err(_)) | Err(_) => return HostAuth::Unreachable,
+    command.args(probe_args(&host.host, host.probe_port(), policy));
+    // The shared one-shot runner, not `kill_on_drop`: that ends only the
+    // direct ssh, orphaning a `ProxyCommand` child on a timeout or a dropped
+    // request. This one spawns a process group, kills the group on timeout
+    // (bounded grace, then SIGKILL, then a bounded reap) and on drop.
+    let Ok(output) = super::exec::run_bounded_command(command, timeout).await else {
+        return HostAuth::Unreachable;
     };
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1237,29 +1248,86 @@ exit /b %record_status%"#,
     /// taken by hung hosts no other host is ever probed again.
     #[tokio::test]
     async fn a_timed_out_probe_releases_its_permit_to_the_next_host() {
+        // `exec sleep`, so the slow fixture is one process with no grandchild
+        // to outlive the kill. It never finishes inside the harness bound, so
+        // only its timeout can hand the permit on.
         let script = crate::test_support::fake_ssh_script(
             "ssh-r6-timeout-permit",
-            "case \"$*\" in *slow*) sleep 15;; esac; exit 0",
+            "case \"$*\" in *slow*) exec sleep 60;; esac; exit 0",
             &format!(
-                "echo %* | {} slow >nul\r\nif not errorlevel 1 {} -n 16 127.0.0.1 >nul\r\nexit /b 0",
+                "echo %* | {} slow >nul\r\nif not errorlevel 1 {} -n 61 127.0.0.1 >nul\r\nexit /b 0",
                 crate::test_support::system32_exe("findstr.exe"),
                 crate::test_support::system32_exe("ping.exe"),
             ),
         );
         let gate = ProbeGate::new(1);
-        let listed = vec![config_host("slow"), config_host("fast")];
-        // The slow fixture exceeds this deadline; the fast one has time to
-        // start even when process creation is delayed on a loaded runner.
-        let timeout = Duration::from_secs(5);
-        let statuses = tokio::time::timeout(
-            Duration::from_secs(15),
-            probe_hosts_with_gate(&gate, listed, &script, timeout),
-        )
+        // Two budgets, never one: the slow host's timeout is the behaviour
+        // under test; the fast host's only has to let a process start on a
+        // loaded machine, so it is generous. The fast clock starts once it
+        // holds the permit, not while it waits for one.
+        let slow_timeout = Duration::from_secs(1);
+        let fast_timeout = Duration::from_secs(30);
+        // Strictly larger than the slow timeout plus exec.rs's kill grace and
+        // reap bound (1s + 2s) plus the whole fast budget.
+        let harness = Duration::from_secs(50);
+        let (slow, fast) = (config_host("slow"), config_host("fast"));
+        // `join!` polls in order, so the slow probe takes the only permit
+        // before the fast one queues on it.
+        let (slow_auth, fast_auth) = tokio::time::timeout(harness, async {
+            tokio::join!(
+                probe_host_gated(&gate, &slow, &script, slow_timeout),
+                probe_host_gated(&gate, &fast, &script, fast_timeout),
+            )
+        })
         .await
         .expect("the permit of a timed-out probe was never released");
-        let auth = |name: &str| statuses.iter().find(|s| s.host == name).unwrap().auth;
-        assert_eq!(auth("slow"), HostAuth::Unreachable);
-        assert_eq!(auth("fast"), HostAuth::Shell);
+        assert_eq!(slow_auth, HostAuth::Unreachable);
+        assert_eq!(fast_auth, HostAuth::Shell);
+    }
+
+    /// Catches: a timed-out probe relying on `kill_on_drop`, which ends only
+    /// the direct ssh, so a `ProxyCommand`-shaped child keeps running.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_timed_out_probe_kills_the_grandchild_it_forked() {
+        use crate::tunnels::exec::grandchild_fixture::{
+            assert_process_gone, forking_ssh, grandchild_pid,
+        };
+        let (ssh, marker) = forking_ssh("ssh-r6-probe-timeout-forks");
+        let auth = probe_host_gated(
+            &ProbeGate::new(1),
+            &config_host("forks"),
+            &ssh,
+            Duration::from_secs(2),
+        )
+        .await;
+        assert_eq!(auth, HostAuth::Unreachable);
+        let pid = grandchild_pid(&marker).await;
+        assert_process_gone(pid).await;
+    }
+
+    /// Catches: a cancelled probe (the HTTP request torn down mid-probe)
+    /// leaving the child the ssh forked running.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_cancelled_probe_kills_the_grandchild_it_forked() {
+        use crate::tunnels::exec::grandchild_fixture::{
+            assert_process_gone, forking_ssh, grandchild_pid,
+        };
+        let (ssh, marker) = forking_ssh("ssh-r6-probe-cancel-forks");
+        let task = tokio::spawn(async move {
+            probe_host_gated(
+                &ProbeGate::new(1),
+                &config_host("forks"),
+                &ssh,
+                Duration::from_secs(120),
+            )
+            .await
+        });
+        let pid = grandchild_pid(&marker).await;
+        task.abort();
+        let _ = task.await;
+        assert_process_gone(pid).await;
     }
 
     /// Catches: single-flight applying only between a bulk and a single probe,
@@ -1625,17 +1693,96 @@ mod http_route_tests {
 
     // ── SSH config hosts / agent keys ───────────────────────
 
+    /// Only that the route is registered and runs this handler. What it
+    /// returns depends on the real `~/.ssh/config` (absent, present, or
+    /// sandbox-denied), so the body is pinned through
+    /// `list_ssh_config_hosts_from` below instead.
     #[tokio::test]
-    async fn list_ssh_config_hosts_returns_a_json_array() {
-        // Environment-dependent (reads the real `~/.ssh/config`, if any), so
-        // this only pins the contract: always 200, always a JSON array.
+    async fn list_ssh_config_hosts_route_runs_its_handler() {
         let resp = app(test_state())
             .oneshot(get("/tunnels/ssh-hosts"))
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
+        let status = resp.status();
         let json = body_json(resp).await;
-        assert!(json.is_array(), "expected a JSON array, got: {json}");
+        match status {
+            StatusCode::OK => assert!(json.is_array(), "expected a JSON array, got: {json}"),
+            StatusCode::INTERNAL_SERVER_ERROR => assert!(
+                json["error"]
+                    .as_str()
+                    .is_some_and(|error| error.contains("SSH config")),
+                "expected an SSH config error, got: {json}"
+            ),
+            other => panic!("GET /tunnels/ssh-hosts answered {other}: {json}"),
+        }
+    }
+
+    fn ssh_config_fixture(contents: &[u8]) -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config");
+        std::fs::write(&path, contents).unwrap();
+        (dir, path)
+    }
+
+    #[tokio::test]
+    async fn list_ssh_config_hosts_lists_only_concrete_aliases() {
+        let (_dir, path) = ssh_config_fixture(
+            b"Host zeta alpha\n  HostName example.test\nHost alpha\n  User boss\n\
+              Host * !internal\n  ServerAliveInterval 10\nHost web-? db*\n  Port 2222\n\
+              Host gamma !beta\n  User ops\n",
+        );
+        let resp = list_ssh_config_hosts_from(Some(&path));
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            body_json(resp).await,
+            serde_json::json!(["alpha", "gamma", "zeta"])
+        );
+    }
+
+    #[tokio::test]
+    async fn list_ssh_config_hosts_answers_an_empty_list_for_a_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let resp = list_ssh_config_hosts_from(Some(&dir.path().join("absent")));
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(body_json(resp).await, serde_json::json!([]));
+        let resp = list_ssh_config_hosts_from(None);
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(body_json(resp).await, serde_json::json!([]));
+    }
+
+    #[tokio::test]
+    async fn list_ssh_config_hosts_answers_500_for_an_unparseable_file() {
+        let (_dir, path) = ssh_config_fixture(b"Host alpha\n  Port notaport\n");
+        let resp = list_ssh_config_hosts_from(Some(&path));
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let json = body_json(resp).await;
+        assert!(
+            json["error"]
+                .as_str()
+                .is_some_and(|error| error.starts_with("failed to parse SSH config")),
+            "{json}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn list_ssh_config_hosts_answers_500_for_an_unreadable_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_dir, path) = ssh_config_fixture(b"Host alpha\n");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+        if std::fs::File::open(&path).is_ok() {
+            // Root ignores the mode bits; there is no unreadable file to test.
+            return;
+        }
+        let resp = list_ssh_config_hosts_from(Some(&path));
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let json = body_json(resp).await;
+        assert!(
+            json["error"]
+                .as_str()
+                .is_some_and(|error| error.starts_with("failed to read SSH config")),
+            "{json}"
+        );
     }
 
     #[tokio::test]
