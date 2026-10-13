@@ -1015,3 +1015,7 @@ owner API. These are explicit limits rather than raw-file fallback paths.
 Tasks field schemas accept optional `queryable`; false excludes display-only fields from list filters and grouping while roadmap dates remain available. Setup edits preserve account keys outside the form and clear blank optional form fields. Create-form filter choices require exact field IDs.
 
 Tasks board paging (#1844-858d): lane headers show loaded counts, with More controls for the provider’s shared board cursor. Appended pages deduplicate cards by provider/account/item identity. Cards show assignees and labels; a Move button opens legal destination actions with keyboard navigation and rollback on failure. Refresh after a move merges page one into loaded cards; later pages remain cached until reload. Scrolling inside the move menu keeps it open.
+
+## Tasks view memory
+
+Tasks remembers the selected source per repository and List, Board or Roadmap plus list grouping, sort, preset, search and filters per repository/provider/account. The existing `uiStore` saves these preferences through `load_ui_prefs` and `save_ui_prefs` in `ui-prefs.json`. Results and page cursors remain transient. A rejected saved sort retries the last accepted order, then the provider default. Other query failures keep their error and Retry control. An unsaved scope keeps the normal defaults.

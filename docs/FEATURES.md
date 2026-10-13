@@ -90,7 +90,7 @@ Durable workflow run storage records event history, pinned graph revisions, node
 
 ## 1. Terminal Management
 
-Adjacent `💬` answer paragraphs share one continuous tint and left bar, including blank rows between them. A non-answer output row or prompt ends the region. The CLI blanks only the marker glyph cells; copy, selection and search keep the original text. Chat uses the same answer extent and strips every paragraph marker.
+Adjacent `💬` answer paragraphs share one continuous tint and left bar, including blank rows between them. An unmarked prose paragraph after a blank row ends the answer; an uninterrupted indented continuation stays inside. Lists, tables, quotations and fenced code remain attached to the answer. A non-answer output row or prompt ends the region. The CLI blanks only the marker glyph cells; copy, selection and search keep the original text. Chat uses the same answer extent and strips every paragraph marker.
 
 Terminal prompt colours apply to Chat user messages only. The CLI grid retains prompt scrollbar ticks and answers-only prompt grouping without tinting prompt rows.
 
@@ -2937,3 +2937,7 @@ by this adapter. Model changes from the existing Providers UI now use the same
 configured profile and workspace as perimeter changes.
 
 Tasks setup preserves saved account keys outside the form, including Enterprise hosts and login. Label choices use matching provider field IDs; assignee username filters stay text when create-form IDs differ. Display-only roadmap dates do not appear in list filters or grouping.
+
+## Tasks view memory
+
+Tasks remembers the selected source per repository and List, Board or Roadmap plus list grouping, sort, preset, search and filters per repository/provider/account. The existing `uiStore` saves these preferences through `load_ui_prefs` and `save_ui_prefs` in `ui-prefs.json`. Results and page cursors remain transient. A rejected saved sort retries the last accepted order, then the provider default. Other query failures keep their error and Retry control. An unsaved scope keeps the normal defaults.

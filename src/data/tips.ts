@@ -10,6 +10,12 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "Tasks view memory",
+		description:
+			"Tasks remembers your source, view, grouping, sort and filters separately for each repository and provider account.",
+		shortcut: null,
+	},
+	{
 		feature: "Tasks board",
 		description:
 			"Use More in any lane to load the next board page. Select Move… on a card to change its lane without dragging.",

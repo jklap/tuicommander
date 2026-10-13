@@ -5559,6 +5559,34 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
+    "preferences.tasks_view_preferences.{key}": {
+      "id": "preferences.tasks_view_preferences.{key}",
+      "store": "preferences",
+      "owner": "instance",
+      "area": "preferences",
+      "group": "tasks_view_preferences",
+      "order": 24,
+      "path": "/tasks_view_preferences/{key}",
+      "labelKey": "settings.catalogue.preferences.tasks_view_preferences.{key}.label",
+      "helpKey": "settings.catalogue.preferences.tasks_view_preferences.{key}.help",
+      "label": "{key}",
+      "schema": {
+        "type": "string"
+      },
+      "nullable": false,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Remembers Tasks source, view and query per repository and account.",
+      "operations": [
+        "get",
+        "set"
+      ],
+      "confirmationClass": "ordinary"
+    },
     "prompts.prompts.{id}.id": {
       "id": "prompts.prompts.{id}.id",
       "store": "prompts",

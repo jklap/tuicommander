@@ -5296,6 +5296,7 @@ Visual evidence: worktree Vite fixture mounted the real NotificationsTab and Toa
 
 - [ ] After a manual `make dev` restart or release rebuild, verify GitLab planning dates still render in Roadmap and have no list filter/group control (`queryable` schema support requires the rebuilt Rust backend).
 
+- [ ] After restarting `make dev` or installing a rebuilt app, confirm Tasks restores the source, view and list query for each repository/account. Confirm the settings catalogue also remains available. Rust `UIPrefsConfig` stores JSON-encoded `tasks_view_preferences`; the running desktop backend needs a restart to load this field (#1852-35a8).
 - [ ] Tasks board (#1844-858d): on a configured provider with multiple pages, More retains prior cards and updates loaded lane counts; cards show assignees/labels and Move… offers legal destinations.
 
 - [ ] #1874-1758: After restarting `make dev`, remove a scratch worktree whose tip is contained only in another remote branch with Delete branch on remove enabled; verify it succeeds. For unique local commits, verify the refusal offers “Remove worktree, keep branch” and preserves the branch.
