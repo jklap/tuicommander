@@ -27,6 +27,21 @@ describe("shared form controls", () => {
 		expect(screen.getByRole("textbox", { name: "Dense input" })).not.toHaveAttribute("compact");
 	});
 
+	// Catches: Input stripping `compact` from the DOM props but never adding the size class, so Error Log search,
+	// Branches create/rename and Agents env-flag fields stay 36px beside 22px neighbours.
+	it("adds the compact size class to Input and keeps a caller class", () => {
+		render(() => (
+			<>
+				<Input aria-label="Plain" class="mine" />
+				<Input compact aria-label="Dense" class="mine" />
+			</>
+		));
+		const plain = screen.getByRole("textbox", { name: "Plain" });
+		const dense = screen.getByRole("textbox", { name: "Dense" });
+		expect(dense.classList.length).toBe(plain.classList.length + 1);
+		expect(dense).toHaveClass("mine");
+	});
+
 	// Catches: a wrapper freezing reactive props or losing native ref/event targets and form values.
 	it("preserves reactive selection, native refs, names and change targets", () => {
 		const [value, setValue] = createSignal("board");
