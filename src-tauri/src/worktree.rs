@@ -336,6 +336,43 @@ pub(crate) fn workspace_removal_guard(
     }
 }
 
+/// Close a session and, with `cleanup_worktree`, remove the worktree it was
+/// spawned into — IPC `close_pty` and its HTTP twin
+/// `DELETE /sessions/{id}?cleanup_worktree=true` both close through here, so
+/// this is the only close that removes a worktree.
+///
+/// Skipped with a warning while another live session still works in that
+/// checkout ([`live_sessions_in`], the same source as every removal guard):
+/// closing one tab must not delete the directory a sibling tab or agent is in.
+/// The closing session is already out of the registry by then, so it never
+/// counts against itself. Returns whether the worktree was removed.
+pub(crate) fn close_pty_with_worktree_cleanup(
+    state: &AppState,
+    session_id: &str,
+    cleanup_worktree: bool,
+) -> bool {
+    let Some(worktree) = crate::pty::close_pty_core(state, session_id, cleanup_worktree) else {
+        return false;
+    };
+    let live_sessions = live_sessions_in(state, &worktree.path);
+    if !live_sessions.is_empty() {
+        tracing::warn!(
+            session_id,
+            worktree = %worktree.path.display(),
+            live_sessions = live_sessions.len(),
+            "Skipping worktree cleanup on close: other live sessions still use it"
+        );
+        return false;
+    }
+    match tuic_git::worktree::remove_worktree_internal(&worktree, false) {
+        Ok(()) => true,
+        Err(e) => {
+            tracing::warn!("Failed to cleanup worktree: {e}");
+            false
+        }
+    }
+}
+
 pub(crate) fn inspect_worktree_removal(
     state: &Arc<AppState>,
     repo_path: &Path,
@@ -485,6 +522,7 @@ pub(crate) fn remove_worktree_by_workspace_id_with_confirmation(
         archive_script.map(|script| UserScript {
             script,
             env: &archive_script_env,
+            timeout: crate::config::archive_script_timeout(),
         }),
         force,
         override_lock,
@@ -532,6 +570,7 @@ pub(crate) fn remove_worktree_with_presence_confirmation(
         archive_script.map(|script| UserScript {
             script,
             env: &archive_script_env,
+            timeout: crate::config::archive_script_timeout(),
         }),
         force,
         override_lock,
@@ -2004,18 +2043,25 @@ fn cleanup_needs_lifecycle_confirmation(
 }
 
 /// Merge/finalize cleanup removes or moves the checkout, so it takes the same
-/// live-session refusal as a plain removal. `force` lifts only the dirty-file
-/// confirmation (see [`cleanup_needs_lifecycle_confirmation`]), never this.
+/// live-session refusal as a plain removal. A bare `force` lifts only the
+/// dirty-file confirmation (see [`cleanup_needs_lifecycle_confirmation`]), never
+/// this. The one consent that does count is the confirmation round-trip itself:
+/// `needs_confirmation` was returned BECAUSE of the live sessions (the dialog
+/// lists them), and the confirmed retry carries `force` plus the fingerprint the
+/// dialog was shown (`confirmed`). Without that fingerprint a caller cannot have
+/// seen the sessions, so it is refused.
 fn refuse_cleanup_with_live_sessions(
     state: &AppState,
     repo_path: &str,
     workspace_id: &str,
     action: &str,
+    confirmed: bool,
 ) -> Result<(), String> {
     if action != "archive" && action != "delete" {
         return Ok(());
     }
-    workspace_removal_guard(state, repo_path, workspace_id, false).map_err(|busy| busy.message())
+    workspace_removal_guard(state, repo_path, workspace_id, confirmed)
+        .map_err(|busy| busy.message())
 }
 
 pub(crate) fn finalize_merged_worktree_impl_with_confirmation(
@@ -2058,7 +2104,13 @@ pub(crate) fn finalize_merged_worktree_impl_with_confirmation(
             branch_delete_warning: None,
         });
     }
-    refuse_cleanup_with_live_sessions(state, &repo_path, &workspace_id, &action)?;
+    refuse_cleanup_with_live_sessions(
+        state,
+        &repo_path,
+        &workspace_id,
+        &action,
+        force && expected_fingerprint.is_some(),
+    )?;
 
     match action.as_str() {
         "archive" => {
@@ -2241,7 +2293,13 @@ pub(crate) fn merge_and_archive_worktree_impl_with_confirmation(
     }
 
     // Before the merge: refusing afterwards would leave it merged but uncleaned.
-    refuse_cleanup_with_live_sessions(state, &repo_path, &workspace_id, &after_merge)?;
+    refuse_cleanup_with_live_sessions(
+        state,
+        &repo_path,
+        &workspace_id,
+        &after_merge,
+        force && expected_fingerprint.is_some(),
+    )?;
 
     // 1. Ensure we're on the target branch in the base repo
     git_cmd(&base_repo)
@@ -2559,13 +2617,15 @@ pub(crate) fn begin_orphan_cleanup_internal(
     repo_path: &str,
     paths: Vec<String>,
 ) -> Result<(), String> {
+    for path in &paths {
+        tuic_git::worktree::refuse_symlinked_checkout(path)?;
+    }
     let current = tuic_git::worktree::assess_orphan_worktrees(repo_path)?;
     if paths.is_empty()
         || paths.iter().any(|path| {
-            !current.iter().any(|entry| {
-                tuic_core::path_spelling::portable_spelling(&entry.path)
-                    == tuic_core::path_spelling::portable_spelling(path)
-            })
+            !current
+                .iter()
+                .any(|entry| tuic_core::path_spelling::same_path(&entry.path, path))
         })
     {
         return Err("Pending cleanup must list current orphan worktrees".into());
@@ -2699,6 +2759,7 @@ pub(crate) fn archive_worktree(
         archive_script.map(|script| UserScript {
             script,
             env: &archive_script_env,
+            timeout: crate::config::archive_script_timeout(),
         }),
     )
 }
@@ -2709,10 +2770,15 @@ pub(crate) fn archive_worktree(
 /// the same variables.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn run_setup_script(script: String, cwd: String) -> Result<serde_json::Value, String> {
-    tuic_git::worktree::run_setup_script_with_env(script, cwd, &|cwd| {
-        crate::script_env::ScriptContext::derive(crate::script_env::ScriptKind::Setup, cwd)
-            .std_pairs()
-    })
+    tuic_git::worktree::run_setup_script_with_env(
+        script,
+        cwd,
+        &|cwd| {
+            crate::script_env::ScriptContext::derive(crate::script_env::ScriptKind::Setup, cwd)
+                .std_pairs()
+        },
+        crate::config::setup_script_timeout(),
+    )
 }
 
 #[cfg(test)]
@@ -4049,6 +4115,56 @@ mod tests {
             assert!(guard(&state, repo.path(), "spawned", false).is_err());
         }
 
+        fn spawned_into(state: &AppState, session_id: &str, repo: &Path, worktree: &Path) {
+            insert_dummy_session(state, session_id);
+            state
+                .session_maps
+                .sessions
+                .get(session_id)
+                .unwrap()
+                .lock()
+                .worktree = Some(WorktreeInfo {
+                name: "closing".into(),
+                path: worktree.to_path_buf(),
+                branch: Some("closing".into()),
+                base_repo: repo.to_path_buf(),
+            });
+        }
+
+        // Catches (audit C3): `close_pty(cleanup_worktree=true)` deleting the
+        // checkout a sibling session still works in.
+        #[test]
+        fn close_with_cleanup_keeps_a_worktree_another_live_session_uses() {
+            let repo = setup_test_repo();
+            let worktree = worktree_with(repo.path(), "closing", false);
+            let state = make_test_app_state();
+            spawned_into(&state, "pty-closing", repo.path(), &worktree);
+            insert_dummy_session(&state, "pty-sibling");
+            set_session_cwd(&state, "pty-sibling", &worktree.to_string_lossy());
+
+            assert!(!close_pty_with_worktree_cleanup(
+                &state,
+                "pty-closing",
+                true
+            ));
+            assert!(!state.session_maps.sessions.contains_key("pty-closing"));
+            assert!(worktree.exists(), "a live sibling's worktree must survive");
+            crate::pty::close_pty_core(&state, "pty-sibling", false);
+        }
+
+        // Catches: the guard counting the closing session itself, so cleanup
+        // never removes anything.
+        #[test]
+        fn close_with_cleanup_removes_a_worktree_nobody_else_uses() {
+            let repo = setup_test_repo();
+            let worktree = worktree_with(repo.path(), "closing", false);
+            let state = make_test_app_state();
+            spawned_into(&state, "pty-closing", repo.path(), &worktree);
+
+            assert!(close_pty_with_worktree_cleanup(&state, "pty-closing", true));
+            assert!(!worktree.exists(), "an unused worktree is removed");
+        }
+
         // Catches: the override not lifting the refusal (the user's explicit
         // "Delete anyway" must still work).
         #[test]
@@ -4707,6 +4823,170 @@ mod tests {
             assert_eq!(pending_answer(&state, &repo_path), Some(false));
         }
 
+        // Catches a lexical path comparison: git lists the resolved checkout path, so a
+        // repo opened through a symlinked folder (macOS `/tmp`, `/var`, or a user's own
+        // symlink) could never begin a cleanup of its own orphans.
+        #[cfg(unix)]
+        #[test]
+        fn a_dialog_accepts_orphans_spelled_through_a_symlinked_folder() {
+            let repo = setup_test_repo();
+            let linked = detached(repo.path(), "linked");
+            // Outside the temp roots: an orphan spelled through a temp-dir alias is
+            // refused as temporary (`refuse_temporary_orphan`) before the symlink matters.
+            let links =
+                tempfile::tempdir_in(tuic_test_support::non_temporary_fixture_root()).unwrap();
+            let alias = links.path().join("alias");
+            std::os::unix::fs::symlink(repo.path().canonicalize().unwrap(), &alias).unwrap();
+            let aliased_linked = alias.join(linked.file_name().unwrap());
+            let state = crate::state::tests_support::make_test_app_state();
+
+            for repo_path in [alias.clone(), repo.path().to_path_buf()] {
+                let repo_path = repo_path.to_string_lossy().to_string();
+                begin_orphan_cleanup_internal(
+                    &state,
+                    &repo_path,
+                    vec![aliased_linked.to_string_lossy().to_string()],
+                )
+                .expect("the symlink spelling names the registered orphan");
+                assert_eq!(pending_answer(&state, &repo_path), None);
+            }
+
+            let stranger = alias.join("not-a-worktree");
+            std::fs::create_dir_all(&stranger).unwrap();
+            let error = begin_orphan_cleanup_internal(
+                &state,
+                &repo.path().to_string_lossy(),
+                vec![stranger.to_string_lossy().to_string()],
+            )
+            .unwrap_err();
+            assert_eq!(error, "Pending cleanup must list current orphan worktrees");
+        }
+
+        /// A repo and its orphan both spelled through a symlinked folder: the
+        /// repo path and the checkout path the caller has, never git's.
+        #[cfg(unix)]
+        fn aliased_orphan(
+            name: &str,
+        ) -> (
+            tempfile::TempDir,
+            tempfile::TempDir,
+            PathBuf,
+            String,
+            String,
+        ) {
+            let repo = setup_test_repo();
+            let linked = detached(repo.path(), name);
+            // Outside the temp roots: an orphan spelled through a temp-dir alias is
+            // refused as temporary (`refuse_temporary_orphan`) before the symlink matters.
+            let links =
+                tempfile::tempdir_in(tuic_test_support::non_temporary_fixture_root()).unwrap();
+            let alias = links.path().join("alias");
+            std::os::unix::fs::symlink(repo.path().canonicalize().unwrap(), &alias).unwrap();
+            let aliased_repo = alias.to_string_lossy().to_string();
+            let aliased_linked = alias.join(name).to_string_lossy().to_string();
+            (repo, links, linked, aliased_repo, aliased_linked)
+        }
+
+        // Catches the removal half of a lexical comparison: an orphan named through
+        // a symlinked folder validated, but the removal itself (git, the admin dir
+        // lookup, the warm-state key) could still miss it.
+        #[cfg(unix)]
+        #[test]
+        fn an_orphan_named_through_a_symlinked_folder_is_removed() {
+            let (_repo, _links, linked, aliased_repo, aliased_linked) =
+                aliased_orphan("alias-remove");
+            let state = crate::state::tests_support::make_test_app_state();
+
+            remove_orphan_checkout(&state, &aliased_repo, &aliased_linked, true, &[])
+                .expect("the aliased spelling names the registered orphan");
+
+            assert!(!linked.exists(), "the checkout must be gone");
+            let listed = tuic_git::worktree::assess_orphan_worktrees(&aliased_repo).unwrap();
+            assert!(listed.is_empty(), "registration must be gone: {listed:?}");
+        }
+
+        // Catches a vanished checkout reached through a symlinked folder: its
+        // directory is gone, so only the deepest existing ancestor can resolve
+        // it. Main's model keeps an unavailable registration out of the
+        // automatic assessment (repair diagnostics, not the sweep); the explicit
+        // removal by its aliased spelling must still drop the tracking entry.
+        #[cfg(unix)]
+        #[test]
+        fn a_vanished_orphan_named_through_a_symlinked_folder_drops_its_entry() {
+            let (_repo, _links, linked, aliased_repo, aliased_linked) =
+                aliased_orphan("alias-vanished");
+            std::fs::remove_dir_all(&linked).unwrap();
+            let state = crate::state::tests_support::make_test_app_state();
+            let registered = || {
+                tuic_git::worktree::detect_orphan_worktrees_blocking(aliased_repo.clone())
+                    .unwrap()
+                    .into_iter()
+                    .any(|path| tuic_core::path_spelling::same_path(&path, &aliased_linked))
+            };
+
+            assert!(registered(), "git still lists the vanished checkout");
+            assert!(
+                tuic_git::worktree::assess_orphan_worktrees(&aliased_repo)
+                    .unwrap()
+                    .is_empty(),
+                "an unavailable registration is not offered to the automatic sweep"
+            );
+
+            // Explicit (not safe-only) removal: the only path main lets discard an
+            // unavailable registration.
+            remove_orphan_checkout(&state, &aliased_repo, &aliased_linked, false, &[])
+                .expect("a vanished orphan is removable by its aliased spelling");
+            assert!(!registered(), "the registration must be gone");
+        }
+
+        // Catches the dialog's remove answer re-checking safety with the
+        // spelling it was begun with and refusing an orphan it accepted.
+        #[cfg(unix)]
+        #[test]
+        fn a_remove_answer_accepts_orphans_spelled_through_a_symlinked_folder() {
+            let (_repo, _links, linked, aliased_repo, aliased_linked) =
+                aliased_orphan("alias-answer");
+            let state = crate::state::tests_support::make_test_app_state();
+            begin_orphan_cleanup_internal(&state, &aliased_repo, vec![aliased_linked]).unwrap();
+
+            answer_orphan_cleanup_internal(&state, &aliased_repo, true)
+                .expect("a clean aliased orphan is safe to remove");
+
+            assert_eq!(pending_answer(&state, &aliased_repo), Some(true));
+            assert!(
+                linked.exists(),
+                "answering records intent; it removes nothing"
+            );
+        }
+
+        // A1: the checkout must be named directly. A symlink standing in for it
+        // resolves to the same orphan but is refused by every entry point.
+        #[cfg(unix)]
+        #[test]
+        fn a_symlink_standing_in_for_the_orphan_is_refused_everywhere() {
+            let repo = setup_test_repo();
+            let linked = detached(repo.path(), "leaf-target");
+            // Outside the temp roots: an orphan spelled through a temp-dir alias is
+            // refused as temporary (`refuse_temporary_orphan`) before the symlink matters.
+            let links =
+                tempfile::tempdir_in(tuic_test_support::non_temporary_fixture_root()).unwrap();
+            let leaf = links.path().join("leaf");
+            std::os::unix::fs::symlink(&linked, &leaf).unwrap();
+            let repo_path = repo.path().to_string_lossy().to_string();
+            let leaf = leaf.to_string_lossy().to_string();
+            let state = crate::state::tests_support::make_test_app_state();
+
+            let error = remove_orphan_checkout(&state, &repo_path, &leaf, true, &[]).unwrap_err();
+            assert!(error.contains("is a symlink"), "{error}");
+            let error = check_orphan_removal(&state, &repo_path, &leaf, false, &[]).unwrap_err();
+            assert!(error.contains("is a symlink"), "{error}");
+            let error =
+                begin_orphan_cleanup_internal(&state, &repo_path, vec![leaf.clone()]).unwrap_err();
+            assert!(error.contains("is a symlink"), "{error}");
+            assert_eq!(pending_answer(&state, &repo_path), None);
+            assert!(linked.exists(), "the real checkout must survive");
+        }
+
         // Catches (critic-1367): a confirmed removal that settles the entry like a Keep, or
         // a Keep on a repo with no dialog creating a phantom entry that a later "remove"
         // answer would then trip over.
@@ -4829,6 +5109,48 @@ mod tests {
         )
         .expect("should succeed");
         assert_eq!(result["stdout"].as_str().unwrap().trim(), "UNSET");
+    }
+
+    /// Catches: the config-file-only `setup_script_timeout_secs` /
+    /// `archive_script_timeout_secs` (dropped-items-review #4) being ignored —
+    /// a hung script would then run for tuic-git's full 900 s default.
+    #[cfg(unix)]
+    #[test]
+    fn configured_script_timeouts_are_honoured_for_setup_and_archive() {
+        let config_dir = TempDir::new().expect("temp dir");
+        let _guard = crate::config::set_config_dir_override(config_dir.path().to_path_buf());
+        crate::config::save_repo_defaults(
+            crate::config::RepoDefaultsConfig::default(),
+            crate::config::RepoDefaultsConfig {
+                setup_script_timeout_secs: Some(1),
+                archive_script_timeout_secs: Some(1),
+                ..crate::config::RepoDefaultsConfig::default()
+            },
+        )
+        .expect("save repo defaults");
+
+        let started = std::time::Instant::now();
+        let dir = TempDir::new().expect("temp dir");
+        let setup = run_setup_script("sleep 30".to_string(), dir.path().to_string_lossy().into())
+            .expect_err("a setup script past its configured deadline must fail");
+        assert!(setup.contains("timed out after 1s"), "{setup}");
+
+        let repo = setup_test_repo();
+        let config = WorktreeConfig {
+            task_name: "archive-timeout".to_string(),
+            base_repo: repo.path().to_string_lossy().to_string(),
+            branch: Some("archive-timeout".to_string()),
+            create_branch: true,
+        };
+        create_worktree_internal(&repo.path().join("worktrees"), &config, None)
+            .expect("create worktree");
+        let archive = archive_worktree(repo.path(), "archive-timeout", Some("sleep 30"))
+            .expect_err("an archive script past its configured deadline must fail");
+        assert!(archive.contains("timed out after 1s"), "{archive}");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(20),
+            "both must give up at the configured 1 s, not the 900 s default"
+        );
     }
 
     #[cfg(unix)]

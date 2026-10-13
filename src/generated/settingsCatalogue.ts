@@ -1641,7 +1641,7 @@ export const settingsCatalogue = {
       "helpKey": "settings.catalogue.app.block_timestamp_mode.help",
       "label": "block timestamp mode",
       "schema": {
-        "description": "Command-block timestamp overlay display mode: \"off\", \"always\", or \"modifier\"\n(hold Ctrl+Cmd to reveal — the only behavior before this field existed, hence\nthe default). The frontend owns migrating a pre-existing `show_block_timestamps`\nbool into this field; Rust just persists whatever it's given.",
+        "description": "Command-block timestamp overlay display mode: \"off\", \"always\", or \"modifier\"\n(hold Ctrl+Cmd to reveal — the only behavior before this field existed, hence\nthe default). A config predating this field gets it from the legacy\n`show_block_timestamps` bool at load (`migrate_legacy_block_timestamps`) —\nthe serde default alone would turn a user's \"off\" into \"modifier\".",
         "type": "string",
         "default": "modifier",
         "enum": [
@@ -4473,7 +4473,7 @@ export const settingsCatalogue = {
       "helpKey": "settings.catalogue.app.show_block_timestamps.help",
       "label": "show block timestamps",
       "schema": {
-        "description": "Deprecated (issue #5): superseded by `block_timestamp_mode` below. Kept only\nso a config saved by an older build still deserializes; the frontend migrates\nit once at load time (`true` -> \"modifier\", `false` -> \"off\") and no longer\nwrites this field on save.\nevery `save_config`, which is exactly what happened to these three\nbefore they had a Settings toggle.",
+        "description": "Deprecated (issue #5): superseded by `block_timestamp_mode` below. Kept only\nso a config saved by an older build still deserializes; a `false` here with\nno `block_timestamp_mode` beside it is migrated to `\"off\"` at load\n(`migrate_legacy_block_timestamps`). Nothing reads it any more.",
         "type": "boolean",
         "default": true
       },
@@ -6053,6 +6053,7 @@ export const settingsCatalogue = {
       "helpKey": "settings.catalogue.connections.connections.{id}.transport.ssh.strict_host_key_checking.help",
       "label": "strict host key checking",
       "schema": {
+        "description": "ssh's `StrictHostKeyChecking`, honoured as stored by every tunnel and\nremote-server SSH command. Stored as `\"Yes\"` / `\"AcceptNew\"`; any other\nvalue (a hand-edited `connections.json` or `tunnels/*.toml`, a future\nvariant read by an older build) loads as the strictest policy, `Yes`,\ninstead of failing the whole file or silently trusting a new host key.",
         "type": "string",
         "enum": [
           "Yes",
@@ -8913,7 +8914,7 @@ export const settingsCatalogue = {
       "owner": "instance",
       "area": "repo_defaults",
       "group": "after_merge",
-      "order": 14,
+      "order": 16,
       "path": "/after_merge",
       "labelKey": "settings.catalogue.repo_defaults.after_merge.label",
       "helpKey": "settings.catalogue.repo_defaults.after_merge.help",
@@ -8980,13 +8981,49 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
+    "repo_defaults.archive_script_timeout_secs": {
+      "id": "repo_defaults.archive_script_timeout_secs",
+      "store": "repo_defaults",
+      "owner": "instance",
+      "area": "repo_defaults",
+      "group": "archive_script_timeout_secs",
+      "order": 8,
+      "path": "/archive_script_timeout_secs",
+      "labelKey": "settings.catalogue.repo_defaults.archive_script_timeout_secs.label",
+      "helpKey": "settings.catalogue.repo_defaults.archive_script_timeout_secs.help",
+      "label": "archive script timeout secs",
+      "schema": {
+        "description": "Expert, config-file-only: the same for an Archive Script, which blocks\nthe archive/remove it runs before. Absent (or 0) keeps 900 s; see\n[`archive_script_timeout`].",
+        "type": [
+          "integer",
+          "null"
+        ],
+        "format": "uint64",
+        "minimum": 0
+      },
+      "nullable": true,
+      "default": null,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Updates archive script timeout secs for the current owner.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
     "repo_defaults.auto_archive_merged": {
       "id": "repo_defaults.auto_archive_merged",
       "store": "repo_defaults",
       "owner": "instance",
       "area": "repo_defaults",
       "group": "auto_archive_merged",
-      "order": 10,
+      "order": 12,
       "path": "/auto_archive_merged",
       "labelKey": "settings.catalogue.repo_defaults.auto_archive_merged.label",
       "helpKey": "settings.catalogue.repo_defaults.auto_archive_merged.help",
@@ -9017,7 +9054,7 @@ export const settingsCatalogue = {
       "owner": "instance",
       "area": "repo_defaults",
       "group": "auto_delete_on_pr_close",
-      "order": 16,
+      "order": 18,
       "path": "/auto_delete_on_pr_close",
       "labelKey": "settings.catalogue.repo_defaults.auto_delete_on_pr_close.label",
       "helpKey": "settings.catalogue.repo_defaults.auto_delete_on_pr_close.help",
@@ -9061,7 +9098,7 @@ export const settingsCatalogue = {
       "owner": "instance",
       "area": "repo_defaults",
       "group": "auto_fetch_interval_minutes",
-      "order": 15,
+      "order": 17,
       "path": "/auto_fetch_interval_minutes",
       "labelKey": "settings.catalogue.repo_defaults.auto_fetch_interval_minutes.label",
       "helpKey": "settings.catalogue.repo_defaults.auto_fetch_interval_minutes.help",
@@ -9188,7 +9225,7 @@ export const settingsCatalogue = {
       "owner": "instance",
       "area": "repo_defaults",
       "group": "delete_branch_on_remove",
-      "order": 9,
+      "order": 11,
       "path": "/delete_branch_on_remove",
       "labelKey": "settings.catalogue.repo_defaults.delete_branch_on_remove.label",
       "helpKey": "settings.catalogue.repo_defaults.delete_branch_on_remove.help",
@@ -9219,7 +9256,7 @@ export const settingsCatalogue = {
       "owner": "instance",
       "area": "repo_defaults",
       "group": "orphan_cleanup",
-      "order": 11,
+      "order": 13,
       "path": "/orphan_cleanup",
       "labelKey": "settings.catalogue.repo_defaults.orphan_cleanup.label",
       "helpKey": "settings.catalogue.repo_defaults.orphan_cleanup.help",
@@ -9261,7 +9298,7 @@ export const settingsCatalogue = {
       "owner": "instance",
       "area": "repo_defaults",
       "group": "orphan_cleanup_countdown_seconds",
-      "order": 12,
+      "order": 14,
       "path": "/orphan_cleanup_countdown_seconds",
       "labelKey": "settings.catalogue.repo_defaults.orphan_cleanup_countdown_seconds.label",
       "helpKey": "settings.catalogue.repo_defaults.orphan_cleanup_countdown_seconds.help",
@@ -9294,7 +9331,7 @@ export const settingsCatalogue = {
       "owner": "instance",
       "area": "repo_defaults",
       "group": "pr_merge_strategy",
-      "order": 13,
+      "order": 15,
       "path": "/pr_merge_strategy",
       "labelKey": "settings.catalogue.repo_defaults.pr_merge_strategy.label",
       "helpKey": "settings.catalogue.repo_defaults.pr_merge_strategy.help",
@@ -9338,7 +9375,7 @@ export const settingsCatalogue = {
       "owner": "instance",
       "area": "repo_defaults",
       "group": "prompt_on_create",
-      "order": 8,
+      "order": 10,
       "path": "/prompt_on_create",
       "labelKey": "settings.catalogue.repo_defaults.prompt_on_create.label",
       "helpKey": "settings.catalogue.repo_defaults.prompt_on_create.help",
@@ -9425,6 +9462,42 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
+    "repo_defaults.setup_script_timeout_secs": {
+      "id": "repo_defaults.setup_script_timeout_secs",
+      "store": "repo_defaults",
+      "owner": "instance",
+      "area": "repo_defaults",
+      "group": "setup_script_timeout_secs",
+      "order": 7,
+      "path": "/setup_script_timeout_secs",
+      "labelKey": "settings.catalogue.repo_defaults.setup_script_timeout_secs.label",
+      "helpKey": "settings.catalogue.repo_defaults.setup_script_timeout_secs.help",
+      "label": "setup script timeout secs",
+      "schema": {
+        "description": "Expert, config-file-only (no Settings UI): seconds after which a Setup\nScript's whole process tree is killed. Absent (or 0) keeps tuic-git's\nbuilt-in 900 s; see [`setup_script_timeout`].",
+        "type": [
+          "integer",
+          "null"
+        ],
+        "format": "uint64",
+        "minimum": 0
+      },
+      "nullable": true,
+      "default": null,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Updates setup script timeout secs for the current owner.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
     "repo_defaults.warm_ignored_directories": {
       "id": "repo_defaults.warm_ignored_directories",
       "store": "repo_defaults",
@@ -9463,7 +9536,7 @@ export const settingsCatalogue = {
       "owner": "instance",
       "area": "repo_defaults",
       "group": "worktree_storage",
-      "order": 7,
+      "order": 9,
       "path": "/worktree_storage",
       "labelKey": "settings.catalogue.repo_defaults.worktree_storage.label",
       "helpKey": "settings.catalogue.repo_defaults.worktree_storage.help",
@@ -11922,6 +11995,7 @@ export const settingsCatalogue = {
       "helpKey": "settings.catalogue.tunnels.profiles.{id}.ssh.strict_host_key_checking.help",
       "label": "strict host key checking",
       "schema": {
+        "description": "ssh's `StrictHostKeyChecking`, honoured as stored by every tunnel and\nremote-server SSH command. Stored as `\"Yes\"` / `\"AcceptNew\"`; any other\nvalue (a hand-edited `connections.json` or `tunnels/*.toml`, a future\nvariant read by an older build) loads as the strictest policy, `Yes`,\ninstead of failing the whole file or silently trusting a new host key.",
         "type": "string",
         "enum": [
           "Yes",
@@ -14295,7 +14369,7 @@ export const settingsCatalogue = {
                 "type": "object",
                 "properties": {
                   "ssh": {
-                    "description": "Host/port/user/identity/keepalive config — shared with\n`tunnels::profile::TunnelProfile` via `SshConnectionParams`.\n`strict_host_key_checking` is stored but the runtime always uses\n`AcceptNew` for the tunnel it opens on the user's behalf\n(`remote_runtime::ssh_profile`).",
+                    "description": "Host/port/user/identity/keepalive config — shared with\n`tunnels::profile::TunnelProfile` via `SshConnectionParams`.\n`strict_host_key_checking` is honoured as stored by every SSH\ncommand run for this connection (`remote_runtime::ssh_profile`);\na new connection defaults to `AcceptNew` (`new_ssh`).",
                     "type": "object",
                     "properties": {
                       "host": {
@@ -14329,6 +14403,7 @@ export const settingsCatalogue = {
                         "maximum": 65535
                       },
                       "strict_host_key_checking": {
+                        "description": "ssh's `StrictHostKeyChecking`, honoured as stored by every tunnel and\nremote-server SSH command. Stored as `\"Yes\"` / `\"AcceptNew\"`; any other\nvalue (a hand-edited `connections.json` or `tunnels/*.toml`, a future\nvariant read by an older build) loads as the strictest policy, `Yes`,\ninstead of failing the whole file or silently trusting a new host key.",
                         "type": "string",
                         "enum": [
                           "Yes",
@@ -14537,6 +14612,7 @@ export const settingsCatalogue = {
                 "maximum": 65535
               },
               "strict_host_key_checking": {
+                "description": "ssh's `StrictHostKeyChecking`, honoured as stored by every tunnel and\nremote-server SSH command. Stored as `\"Yes\"` / `\"AcceptNew\"`; any other\nvalue (a hand-edited `connections.json` or `tunnels/*.toml`, a future\nvariant read by an older build) loads as the strictest policy, `Yes`,\ninstead of failing the whole file or silently trusting a new host key.",
                 "type": "string",
                 "enum": [
                   "Yes",

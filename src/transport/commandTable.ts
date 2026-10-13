@@ -496,7 +496,10 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		map: (args) => ({ method: "GET", path: `/sessions/${args.sessionId}/kitty-flags` }),
 	},
 	close_pty: {
-		map: (args) => ({ method: "DELETE", path: `/sessions/${args.sessionId}` }),
+		map: (args) => ({
+			method: "DELETE",
+			path: `/sessions/${args.sessionId}${args.cleanupWorktree ? "?cleanup_worktree=true" : ""}`,
+		}),
 	},
 	// Answering a blocked agent has to work from a browser or phone — that is the
 	// whole reason the confirmation stopped being a native desktop dialog.

@@ -763,6 +763,14 @@ describe("transport", () => {
 			expect(result.path).toBe("/sessions/abc");
 		});
 
+		// Catches (G2): the HTTP close dropping cleanupWorktree, so a browser close
+		// left behind the worktree a desktop close removes.
+		it("forwards close_pty cleanupWorktree as a query flag", () => {
+			const result = mapCommandToHttp("close_pty", { sessionId: "abc", cleanupWorktree: true });
+			expect(result.method).toBe("DELETE");
+			expect(result.path).toBe("/sessions/abc?cleanup_worktree=true");
+		});
+
 		it("maps get_session_foreground_process to GET /sessions/{id}/foreground", () => {
 			const result = mapCommandToHttp("get_session_foreground_process", { sessionId: "abc" });
 			expect(result.method).toBe("GET");

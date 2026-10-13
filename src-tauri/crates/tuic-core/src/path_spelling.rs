@@ -45,6 +45,70 @@ pub fn portable_spelling(path: &str) -> String {
     }
 }
 
+/// Do two host path strings name the same filesystem location?
+///
+/// The strings `git` prints are resolved: `git worktree list` reports
+/// `/private/var/…` on macOS where the user (or `$TMPDIR`) spells the same
+/// directory `/var/…` or through any other symlinked folder. A comparison of
+/// spellings alone then refuses a path that is exactly the registered one. So
+/// equal [`portable_spelling`]s match outright, and otherwise both sides are
+/// resolved with [`resolved_spelling`] and compared again.
+///
+/// Resolution never aliases two distinct locations: two paths that resolve to
+/// the same canonical string are the same directory entry. A literal `\` in a
+/// unix file name stays a file-name character, exactly as in
+/// [`portable_spelling`].
+pub fn same_path(a: &str, b: &str) -> bool {
+    if portable_spelling(a) == portable_spelling(b) {
+        return true;
+    }
+    match (resolved_spelling(a), resolved_spelling(b)) {
+        (Some(a), Some(b)) => a == b,
+        _ => false,
+    }
+}
+
+/// The canonical, [`portable_spelling`] form of `path`, resolving symlinks.
+///
+/// A path that does not exist (a checkout whose directory was deleted while
+/// git still lists it) is resolved through its deepest existing ancestor, and
+/// the missing components are rejoined verbatim. `None` when the path is
+/// relative, when no ancestor resolves, or when a missing component is `.` or
+/// `..` — rejoining those lexically could name a different place than the
+/// filesystem would. Only a component that is really missing (`NotFound`) is
+/// rejoined: any other failure (permission denied, not a directory, a loop)
+/// means the component may exist as something this process cannot see — a
+/// symlink behind an unreadable directory, say — so the answer is `None`
+/// rather than a guess.
+pub fn resolved_spelling(path: &str) -> Option<String> {
+    use std::path::{Component, Path, PathBuf};
+
+    let path = Path::new(path);
+    if !path.is_absolute() {
+        return None;
+    }
+    let mut missing: Vec<&std::ffi::OsStr> = Vec::new();
+    let mut ancestor = path;
+    let canonical = loop {
+        match std::fs::canonicalize(ancestor) {
+            Ok(canonical) => break canonical,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return None,
+        }
+        let name = match ancestor.components().next_back()? {
+            Component::Normal(name) => name,
+            _ => return None,
+        };
+        missing.push(name);
+        ancestor = ancestor.parent()?;
+    };
+    let full: PathBuf = missing
+        .iter()
+        .rev()
+        .fold(canonical, |acc, name| acc.join(name));
+    Some(portable_spelling(&full.to_string_lossy()))
+}
+
 pub fn windows_portable_spelling(path: &str) -> String {
     // `\\?\UNC\host\share` is `\\host\share` written verbatim, so the prefix
     // cannot simply be cut off that one.
@@ -105,6 +169,81 @@ mod tests {
         assert!(is_absolute_on_any_platform("/etc/passwd"));
         assert!(!is_absolute_on_any_platform("repo/sub"));
         assert!(!is_absolute_on_any_platform(r"repo\sub"));
+    }
+
+    /// A drive root is the one Windows path `fs::canonicalize` answers with a
+    /// trailing separator (`\\?\C:\`). Its portable spelling must be the one
+    /// `git` prints for it, from either input form, and a child under it must
+    /// not gain a doubled separator.
+    #[test]
+    fn a_windows_drive_root_round_trips_through_the_portable_spelling() {
+        assert_eq!(windows_portable_spelling(r"\\?\C:\"), "C:/");
+        assert_eq!(windows_portable_spelling(r"C:\"), "C:/");
+        assert_eq!(windows_portable_spelling("C:/"), "C:/");
+        assert_eq!(
+            windows_portable_spelling(r"\\?\C:\tuic\repo"),
+            "C:/tuic/repo"
+        );
+    }
+
+    /// The same round trip through the filesystem: the drive the system root
+    /// lives on resolves to its portable root, and a missing path under it is
+    /// rejoined once, verbatim.
+    #[cfg(windows)]
+    #[test]
+    fn resolved_spelling_of_a_drive_root_is_its_portable_root() {
+        let drive = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".into());
+        let root = format!(r"{drive}\");
+        let portable_root = format!("{drive}/");
+        assert_eq!(
+            resolved_spelling(&root).as_deref(),
+            Some(portable_root.as_str())
+        );
+        assert!(same_path(&root, &portable_root));
+        let missing = format!(r"{drive}\tuic-no-such-dir-{}\x", std::process::id());
+        assert_eq!(
+            resolved_spelling(&missing),
+            Some(format!("{drive}/tuic-no-such-dir-{}/x", std::process::id()))
+        );
+    }
+
+    /// Catches the walk treating every `canonicalize` failure as "missing": a
+    /// component behind an unreadable directory may be a symlink to anywhere,
+    /// so rejoining it verbatim could alias two different places.
+    #[cfg(unix)]
+    #[test]
+    fn resolved_spelling_refuses_a_component_it_cannot_inspect() {
+        use std::os::unix::fs::PermissionsExt;
+        let base =
+            std::env::temp_dir().join(format!("tuic-spelling-eacces-{}", std::process::id()));
+        let locked = base.join("locked");
+        std::fs::create_dir_all(locked.join("inner")).unwrap();
+        let s = |p: &std::path::Path| p.to_string_lossy().into_owned();
+        // Restores the mode even when an assertion fails, so the scratch dir
+        // can always be removed.
+        struct Restore(std::path::PathBuf);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o755));
+                let _ = std::fs::remove_dir_all(self.0.parent().unwrap());
+            }
+        }
+        let _restore = Restore(locked.clone());
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        if std::fs::canonicalize(locked.join("inner")).is_ok() {
+            eprintln!("UNCHECKED: mode 000 does not stop this process (root?)");
+            return;
+        }
+
+        assert_eq!(resolved_spelling(&s(&locked.join("inner"))), None);
+        assert_eq!(resolved_spelling(&s(&locked.join("inner/gone"))), None);
+        // The locked directory itself is still readable as an entry.
+        assert!(resolved_spelling(&s(&locked)).is_some());
+        // Two spellings that could only be matched by guessing are not "same".
+        assert!(!same_path(
+            &s(&locked.join("inner")),
+            &s(&base.join("./locked/inner"))
+        ));
     }
 
     /// Catches `portable_spelling` replaced by `String::new()` or `"xyzzy"`.

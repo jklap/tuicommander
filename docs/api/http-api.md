@@ -768,6 +768,22 @@ the desktop Tauri event.
 DELETE /sessions/:id?cleanup_worktree=false
 ```
 
+Closes the session and returns `{"ok": true}`; an unknown id returns 404.
+
+`cleanup_worktree=true` is the HTTP twin of IPC `close_pty(cleanupWorktree: true)`
+(`COMMAND_TABLE` appends the query only when the flag is true). The close runs
+through the same guarded `close_pty_with_worktree_cleanup` as the desktop: the
+session's worktree is removed unless another live session still uses it. The
+response then carries `worktree_removed`:
+
+```json
+{ "ok": true, "worktree_removed": true }
+```
+
+`worktree_removed` is `false` when the worktree was kept (still in use, not a
+worktree session, or removal failed). Without the flag the response has no
+`worktree_removed` field.
+
 ## Design Mode Endpoints
 
 The inspector opens a dedicated Chrome window on the machine running
@@ -1562,7 +1578,7 @@ Content-Type: application/json
 { "repoPath": "/path/to/repo", "worktreePath": "/path/to/worktree", "safeOnly": true }
 ```
 
-Removes an orphan worktree by filesystem path. The worktree path is validated against the repo's actual worktree list. `safeOnly` is optional; when true, the server rechecks clean status, branch reachability and live sessions immediately before removal and refuses a checkout a session still works in. With `safeOnly` false the caller has confirmed the removal from the assessment: `confirmedSessions` (default `[]`) lists the `live_sessions` ids it showed, and the server refuses when a live session outside that list works in the checkout.
+Removes an orphan worktree by filesystem path. The worktree path is validated against the repo's actual worktree list by location, not spelling: a path (or `repoPath`) reached through a symlinked folder, such as macOS `/var` for `/private/var`, names the same checkout git lists. The checkout itself must be named directly, though — a symlink standing in for the worktree directory is refused with 400 (`... is a symlink; name the worktree directory itself`), on this route, `orphan-cleanup/begin`/`answer` and MCP `repo action=worktree_remove worktree_path=...` alike. `safeOnly` is optional; when true, the server rechecks clean status, branch reachability and live sessions immediately before removal and refuses a checkout a session still works in. With `safeOnly` false the caller has confirmed the removal from the assessment: `confirmedSessions` (default `[]`) lists the `live_sessions` ids it showed, and the server refuses when a live session outside that list works in the checkout.
 
 ### Merge PR via GitHub
 
@@ -3199,7 +3215,7 @@ Runs the script through `sh -c` (Unix) or `cmd /C` (Windows) in `cwd` and return
 `{ "exit_code": number, "stdout": string, "stderr": string }` — the same function
 and shape as the `run_setup_script` command, with the `TUIC_*` environment
 injected (`script_env::ScriptContext`: main checkout path, branch, base ref,
-worktree name, …) and the fixed 900 s script deadline. This is arbitrary shell
+worktree name, …) and the Setup Script deadline (900 s, or `repo-defaults.json` `setup_script_timeout_secs`). This is arbitrary shell
 execution, so the handler itself requires a loopback or authenticated request
 (`require_local_or_auth`; 403 otherwise). `cwd` accepts `~`; after expansion it
 must be absolute with no `..` (400 otherwise). A `cwd` that does not exist, or a
