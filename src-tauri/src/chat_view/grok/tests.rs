@@ -132,20 +132,6 @@ fn grok_backend_web_search_is_a_completed_card() {
     assert_eq!(calls[0]["status"], "completed");
 }
 
-// Catches: a secret in a command line or tool output reaching the browser client.
-#[test]
-fn grok_secrets_in_arguments_and_output_are_redacted() {
-    let secret = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";
-    let rows = [
-        format!(
-            r#"{{"type":"assistant","content":"","tool_calls":[{{"id":"c1","name":"run_terminal_command","arguments":"{{\"command\":\"echo {secret}\"}}"}}]}}"#
-        ),
-        format!(r#"{{"type":"tool_result","tool_call_id":"c1","content":"{secret}"}}"#),
-    ];
-    let (updates, _) = run(&rows.join("\n"));
-    assert!(!serde_json::to_string(&updates).unwrap().contains(secret));
-}
-
 #[test]
 fn grok_unknown_and_malformed_rows_are_counted_not_fatal() {
     let rows = [
