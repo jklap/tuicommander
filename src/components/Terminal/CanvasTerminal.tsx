@@ -114,6 +114,8 @@ export interface CanvasTerminalRef {
 	searchClear: () => void;
 	/** Paste text with correct bracketed paste wrapping based on current terminal state */
 	paste: (text: string) => void;
+	/** Run a wheel event that landed outside the canvas (the CLI | Chat switch) through the canvas's own wheel path. */
+	wheel: (e: WheelEvent) => void;
 }
 
 export interface CanvasTerminalProps {
@@ -3269,6 +3271,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		}
 
 		props.onRef?.({
+			wheel: handleWheel,
 			focus: () => keyInputRef.focus({ preventScroll: true }),
 			getSelectionText: () => selection.cachedText,
 			refresh: () => {

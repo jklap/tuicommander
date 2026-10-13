@@ -1267,6 +1267,20 @@ export const Terminal: Component<TerminalProps> = (props) => {
 		canvasTerminalRef()?.focus();
 	};
 
+	// The switch floats over the top-right corner of both views and is a sibling of each, so a wheel
+	// landing on it reaches neither scroller: the scroll stalls while the pointer crosses it.
+	const handleToggleWheel = (e: WheelEvent) => {
+		e.preventDefault();
+		if (!chatActive()) {
+			canvasTerminalRef()?.wheel(e);
+			return;
+		}
+		const transcript = (e.currentTarget as HTMLElement)
+			.closest("[data-terminal-id]")
+			?.querySelector("[data-terminal-chat]");
+		transcript?.scrollBy({ top: e.deltaY, left: e.deltaX });
+	};
+
 	return (
 		<div
 			class={s.wrapper}
@@ -1284,7 +1298,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					canvasTerminalRef()?.focus();
 				}}
 			/>
-			<ViewModeToggle terminalId={props.id} />
+			<ViewModeToggle terminalId={props.id} onWheel={handleToggleWheel} />
 			<ChatViewFallbackBanner terminalId={props.id} />
 			<Show
 				when={
