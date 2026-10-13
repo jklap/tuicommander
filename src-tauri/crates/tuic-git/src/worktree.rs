@@ -11220,6 +11220,49 @@ branch refs/heads/feat
         assert!(!worktree.exists());
     }
 
+    // Catches: fetch replaces the sole proof after recheck but before local ref deletion commits.
+    #[test]
+    #[cfg(unix)]
+    fn removal_keeps_local_branch_when_fetch_replaces_proof_during_ref_deletion() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (_temp, repo, worktree) = remote_contained_fixture();
+        let tip = rev_at(&repo, "refs/heads/remote-contained").unwrap();
+        let base = rev_at(&repo, &base_branch_of(&repo)).unwrap();
+        let origin = git_cmd(&repo)
+            .args(["remote", "get-url", "origin"])
+            .run()
+            .unwrap();
+        git_cmd(Path::new(origin.stdout.trim()))
+            .args(["update-ref", "refs/heads/integration", &base])
+            .run()
+            .unwrap();
+        // Git invokes this after locking the deletion ref, before committing it.
+        // Run a real fetch here to deterministically order the concurrent writer.
+        let hook = repo.join(".git/hooks/reference-transaction");
+        fs::write(
+            &hook,
+            "#!/bin/sh\n[ \"$1\" = prepared ] || exit 0\nwhile read -r old new ref; do\n  if [ \"$ref\" = refs/heads/remote-contained ]; then\n    git fetch --force origin >/dev/null 2>&1 || exit 1\n  fi\ndone\n",
+        )
+        .unwrap();
+        fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let outcome = remove_worktree_by_workspace_id(
+            &repo.to_string_lossy(),
+            "remote-contained",
+            true,
+            None,
+            false,
+        );
+        assert_eq!(
+            rev_at(&repo, "refs/heads/remote-contained").ok(),
+            Some(tip),
+            "fetch attempted to replace the sole proof: local work must survive; outcome={outcome:?}"
+        );
+        assert!(outcome.unwrap().branch_delete_warning.is_some());
+        assert!(!worktree.exists());
+    }
+
     fn remote_contained_fixture() -> (TempDir, PathBuf, PathBuf) {
         let (temp, repo, _workspaces) = workspace_fixture();
         add_origin(&repo);
