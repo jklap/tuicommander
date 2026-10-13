@@ -1,3 +1,7 @@
+## Shared settings file store (1824-9c1e) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, the shared strict file-store refactor is loaded. Notifications, preferences, repositories, agents and voice keep their existing behavior; targeted settings tests cover persistence, normalization, corrupt input and apply hooks. No new settings transport is registered by this refactor.
+
 ## Child bridge instance binding (1811-a0fe) — Rust restart required
 
 - [ ] After Boss restarts `make dev` or installs `make build`, newly opened agent terminals must send MCP calls to their spawning TUIC instance. Existing terminals keep their previous environment. Native PTY regression covers named, default and fallback socket paths; bridge integration covers socket override routing. Do not test isolated agents against Boss's live sessions.
