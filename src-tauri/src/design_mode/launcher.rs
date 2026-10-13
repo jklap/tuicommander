@@ -30,35 +30,103 @@ fn browser(choice: Option<&str>) -> Result<(String, PathBuf), String> {
     };
     Ok((kind.into(), executable))
 }
-fn escape(value: &str) -> String {
-    value
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-}
-fn onboarding(profile: &Path, folder: &Path) -> Result<String, String> {
+fn onboarding(profile: &Path) -> Result<String, String> {
     let path = profile.join("design-mode.html");
-    let html = format!(
-        "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><title>Set up Design Mode</title><style>body{{font:16px system-ui;max-width:780px;margin:8vh auto;background:#1e1e1e;color:#ccc;line-height:1.6}}code{{overflow-wrap:anywhere;color:#59a8dd}}h1{{font-size:28px}}li{{margin:16px 0}}</style><h1>Design Mode</h1><p>Set up this repository’s dedicated browser profile once.</p><ol><li>Open <code>chrome://extensions</code> (Edge: <code>edge://extensions</code>).</li><li>Enable Developer mode, choose <b>Load unpacked</b>, and select:<br><code>{}</code></li><li>Open the Extensions (puzzle) menu and pin <b>TUICommander Design Mode</b>. Click its icon to open the sidebar, or press <b>Option+Shift+D</b> (Windows/Linux: <b>Alt+Shift+D</b>). Choose a running dev server there, or enter your page URL in the address bar.</li></ol><p>The sidebar collects your picks and comments before you send them to an agent. Ordinary browsing works until you click Pick element.</p></html>",
-        escape(&folder.to_string_lossy())
-    );
+    let html = "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><title>Design Mode</title><style>body{font:16px system-ui;max-width:780px;margin:8vh auto;background:#1e1e1e;color:#ccc;line-height:1.6}h1{font-size:28px}</style><h1>Design Mode</h1><p>No single dev server was found. Open the TUICommander Design Mode extension icon to choose a server or start your configured dev server, or enter your page URL in the address bar.</p><p>The sidebar collects your picks and comments before you send them to an agent. Ordinary browsing works until you click Pick element.</p></html>";
     std::fs::write(&path, html).map_err(|e| e.to_string())?;
     url::Url::from_file_path(path)
         .map(|url| url.to_string())
         .map_err(|_| "Cannot open Design Mode setup page".into())
 }
 fn installed(profile: &Path) -> bool {
-    std::fs::read(profile.join("Default/Preferences"))
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
-        .and_then(|prefs| {
-            prefs
-                .pointer(&format!("/extensions/settings/{EXTENSION_ID}"))
-                .cloned()
+    ["Default/Secure Preferences", "Default/Preferences"]
+        .iter()
+        .any(|file| {
+            std::fs::read(profile.join(file))
+                .ok()
+                .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+                .is_some_and(|prefs| {
+                    prefs
+                        .pointer(&format!("/extensions/settings/{EXTENSION_ID}"))
+                        .is_some()
+                })
         })
-        .is_some()
 }
+
+/// Never forward a load flag to a running browser: Chromium ignores it there.
+fn ensure_profile_closed(profile: &Path) -> Result<(), String> {
+    if profile_running(profile)? {
+        let previous = if installed(profile) {
+            " The installed extension may still use an older repository binding."
+        } else {
+            " The extension cannot be loaded into an already running profile."
+        };
+        return Err(format!(
+            "Close the Design Mode browser window for {} and start Design Mode again.{previous}",
+            profile.display()
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn profile_running(profile: &Path) -> Result<bool, String> {
+    let lock = match std::fs::read_link(profile.join("SingletonLock")) {
+        Ok(lock) => lock,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(format!("Cannot inspect Design Mode profile lock: {error}")),
+    };
+    let pid = lock
+        .to_string_lossy()
+        .rsplit('-')
+        .next()
+        .and_then(|pid| pid.parse::<i32>().ok())
+        .filter(|pid| *pid > 0)
+        .ok_or(
+            "Cannot identify the Design Mode profile owner; close its browser window and try again",
+        )?;
+    // SAFETY: signal zero only observes the lock owner; it never sends a signal.
+    Ok(unsafe { libc::kill(pid, 0) } == 0
+        || std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH))
+}
+
+#[cfg(windows)]
+fn profile_running(profile: &Path) -> Result<bool, String> {
+    use std::os::windows::fs::OpenOptionsExt;
+    // Chromium owns lockfile with GENERIC_WRITE, FILE_SHARE_READ, DELETE_ON_CLOSE.
+    match std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0)
+        .open(profile.join("lockfile"))
+    {
+        Ok(_) => Ok(false),
+        Err(error) if error.raw_os_error() == Some(32) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(format!("Cannot inspect Design Mode profile lock: {error}")),
+    }
+}
+
+fn ensure_autoload_supported(executable: &Path) -> Result<(), String> {
+    let name = executable
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_lowercase();
+    let path = executable
+        .to_string_lossy()
+        .replace('\\', "/")
+        .to_lowercase();
+    if path.contains("/google/chrome/")
+        || name == "google chrome"
+        || name == "google chrome canary"
+        || name.starts_with("google-chrome")
+        || name == "chrome.exe"
+    {
+        return Err("Google Chrome branded builds (137+) do not support automatic Design Mode extension loading. Choose Microsoft Edge or Chromium instead.".into());
+    }
+    Ok(())
+}
+
 pub(crate) async fn launch(
     state: &Arc<AppState>,
     repo: &Path,
@@ -69,6 +137,8 @@ pub(crate) async fn launch(
     validate_url(url)?;
     let (kind, executable) = browser(choice)?;
     let profile = super::browser::profile_dir(repo).join(&kind);
+    ensure_autoload_supported(&executable)?;
+    ensure_profile_closed(&profile)?;
     let bridge = crate::agent_mcp::locate_bridge_binary()
         .ok_or("Design Mode native host is missing; rebuild the bundled tuic-bridge sidecar")?;
     #[cfg(unix)]
@@ -105,17 +175,18 @@ pub(crate) async fn launch(
         .filter(|servers| servers.len() == 1)
         .and_then(|servers| servers[0]["url"].as_str())
         .map(str::to_owned);
-    let setup = onboarding(&profile, &profile.join("tuic-design-extension"))?;
-    let target = if let Some(url) = url {
-        url.to_owned()
-    } else if installed(&profile) {
-        selected.unwrap_or(setup)
-    } else {
-        setup
+    let target = match url.map(str::to_owned).or(selected) {
+        Some(target) => target,
+        None => onboarding(&profile)?,
     };
+    ensure_profile_closed(&profile)?;
     let mut command = std::process::Command::new(executable);
     command
         .arg(format!("--user-data-dir={}", profile.display()))
+        .arg(format!(
+            "--load-extension={}",
+            profile.join("tuic-design-extension").display()
+        ))
         .args(["--no-first-run", "--no-default-browser-check"])
         .arg(&target);
     tuic_core::child_reaping::spawn_reaped(command).map_err(|e| e.to_string())?;
@@ -129,89 +200,8 @@ pub(crate) async fn launch(
 }
 
 #[cfg(all(test, unix))]
-mod tests {
-    use super::*;
-    use std::os::unix::fs::PermissionsExt;
-
-    // Catches: launch choosing about:blank/no setup page, or writing an unescaped profile path.
-    #[tokio::test]
-    async fn first_run_page_is_useful_without_a_server_and_escapes_paths() {
-        const ROLE: &str = "TUIC_DESIGN_LAUNCH_TEST";
-        if let Some(root) = std::env::var_os(ROLE) {
-            let root = PathBuf::from(root);
-            let _config = crate::config::set_config_dir_override(root.join("<script>\"&"));
-            let state = Arc::new(crate::state::tests_support::make_test_app_state());
-            *state.bound_socket_path.write() = root.join("socket");
-            let bridge = root.join(".cargo/bin/tuic-bridge");
-            assert_eq!(crate::agent_mcp::locate_bridge_binary(), Some(bridge));
-            let response = launch(
-                &state,
-                &root.join("repo"),
-                "launching-agent",
-                Some("chrome"),
-                std::env::var("TUIC_DESIGN_LAUNCH_URL").ok().as_deref(),
-            )
-            .await
-            .unwrap();
-            let target = response["url"].as_str().unwrap();
-            if let Ok(requested) = std::env::var("TUIC_DESIGN_LAUNCH_URL") {
-                // Catches: onboarding/discovery replacing an explicit URL on first start.
-                assert_eq!(target, requested);
-                assert_eq!(response["sessionId"], "launching-agent");
-                assert_eq!(response["status"], "armed");
-            } else {
-                let path = url::Url::parse(target).unwrap().to_file_path().unwrap();
-                let html = std::fs::read_to_string(path).unwrap();
-                assert!(target.starts_with("file:"));
-                assert!(html.contains("Load unpacked"));
-                assert!(html.contains("&lt;script&gt;&quot;&amp;"));
-                assert!(!html.contains("about:blank"));
-            }
-            let captured = root.join("browser-args");
-            while !captured.exists() {
-                tokio::task::yield_now().await;
-            }
-            let args = std::fs::read_to_string(captured).unwrap();
-            assert_eq!(args.lines().last(), Some(target));
-            assert!(args.contains("--user-data-dir="));
-            return;
-        }
-        // Environment-based browser/sidecar discovery is isolated from other libtest threads.
-        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
-        let root = dir.path();
-        std::fs::create_dir_all(root.join(".cargo/bin")).unwrap();
-        std::fs::create_dir(root.join("repo")).unwrap();
-        super::super::discovery::tests::git(&root.join("repo"), &["init"]);
-        let bridge = root.join(".cargo/bin/tuic-bridge");
-        std::fs::write(
-            &bridge,
-            "#!/bin/sh\nmkdir -p \"$2/tuic-design-extension\"\n",
-        )
-        .unwrap();
-        let browser = root.join("chrome-test");
-        std::fs::write(&browser, "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$TUIC_DESIGN_LAUNCH_TEST/browser-args.pending\"\nmv \"$TUIC_DESIGN_LAUNCH_TEST/browser-args.pending\" \"$TUIC_DESIGN_LAUNCH_TEST/browser-args\"\n").unwrap();
-        for path in [&bridge, &browser] {
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
-        for requested in [None, Some("http://localhost:5173/page?x=1#element")] {
-            let _ = std::fs::remove_file(root.join("browser-args"));
-            let mut command = tokio::process::Command::new(std::env::current_exe().unwrap());
-            if let Some(requested) = requested {
-                command.env("TUIC_DESIGN_LAUNCH_URL", requested);
-            }
-            let output = command
-            .args(["--exact", "design_mode::launcher::tests::first_run_page_is_useful_without_a_server_and_escapes_paths", "--nocapture"])
-            .env(ROLE, root).env("HOME", root).env("TUIC_DESIGN_CHROME", &browser)
-            .output().await.unwrap();
-            assert!(
-                output.status.success(),
-                "{}\n{}",
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
-            );
-        }
-    }
-}
+#[path = "launcher_tests.rs"]
+mod tests;
 
 /// Check the navigation contract before any native host or browser side effects.
 pub(crate) fn validate_url(url: Option<&str>) -> Result<(), String> {
@@ -229,6 +219,30 @@ pub(crate) fn validate_url(url: Option<&str>) -> Result<(), String> {
 #[cfg(test)]
 mod url_tests {
     use super::*;
+
+    // Catches: Edge stores extensions.settings in Secure Preferences, not Preferences.
+    #[test]
+    fn installed_finds_edge_extension_in_secure_preferences() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        std::fs::create_dir(dir.path().join("Default")).unwrap();
+        std::fs::write(dir.path().join("Default/Preferences"), "{}").unwrap();
+        std::fs::write(
+            dir.path().join("Default/Secure Preferences"),
+            include_str!("fixtures/edge-extension-settings.json"),
+        )
+        .unwrap();
+        assert!(installed(dir.path()));
+        // Catches: malformed Secure Preferences hiding a valid legacy Preferences entry.
+        std::fs::rename(
+            dir.path().join("Default/Secure Preferences"),
+            dir.path().join("Default/Preferences"),
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("Default/Secure Preferences"), "invalid").unwrap();
+        assert!(installed(dir.path()));
+        std::fs::write(dir.path().join("Default/Preferences"), "{}").unwrap();
+        assert!(!installed(dir.path()));
+    }
 
     #[test]
     fn url_contract_rejects_non_web_navigation_before_launch() {
