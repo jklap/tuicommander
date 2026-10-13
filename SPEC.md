@@ -1013,3 +1013,5 @@ changes are refused before writing; cross-process conditional writes await an Eg
 owner API. These are explicit limits rather than raw-file fallback paths.
 
 Tasks field schemas accept optional `queryable`; false excludes display-only fields from list filters and grouping while roadmap dates remain available. Setup edits preserve account keys outside the form and clear blank optional form fields. Create-form filter choices require exact field IDs.
+
+Tasks board paging (#1844-858d): lane headers show loaded counts, with More controls for the provider’s shared board cursor. Appended pages deduplicate cards by provider/account/item identity. Cards show assignees and labels; a Move button opens legal destination actions with keyboard navigation and rollback on failure. Refresh after a move retains the loaded page depth.

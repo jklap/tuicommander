@@ -5291,3 +5291,5 @@ Visual evidence: worktree Vite fixture mounted the real NotificationsTab and Toa
 - [ ] Tasks setup (1841-bbac) — desktop only: with no work-item plugin installed, open Tasks (Open Tasks is offered) and install GitHub Work from the prompt; save a repository in the form and confirm the plugin registers its provider without a restart (`reloadPlugin` after writing `data/config.json`). Then open **Provider settings**, change the repository, save, and confirm the list reloads. _(The browser harness stubs `invoke` and the plugin loader; the real reload is not verified.)_
 
 - [ ] After a manual `make dev` restart or release rebuild, verify GitLab planning dates still render in Roadmap and have no list filter/group control (`queryable` schema support requires the rebuilt Rust backend).
+
+- [ ] Tasks board (#1844-858d): on a configured provider with multiple pages, More retains prior cards and updates loaded lane counts; cards show assignees/labels and Move… offers legal destinations.

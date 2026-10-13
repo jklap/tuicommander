@@ -142,6 +142,9 @@ export const TasksBoard: Component<TasksBoardProps> = (props) => {
 					{(column) => (
 						<BoardLane
 							column={column}
+							hasMore={props.hasMore}
+							loadingMore={props.loadingMore}
+							onMore={props.onMore}
 							columns={props.board.columns}
 							cards={lanes().get(column.id) ?? []}
 							target={drag.drag()?.target === column.id}

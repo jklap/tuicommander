@@ -63,7 +63,8 @@ describe("TasksBoard", () => {
 					reject = fail;
 				}),
 		);
-		fireEvent.change(screen.getByRole("combobox", { name: "Move TASK-1" }), { target: { value: "doing" } });
+		fireEvent.click(screen.getByRole("button", { name: "Move TASK-1" }));
+		fireEvent.click(screen.getByRole("menuitem", { name: "In progress" }));
 		expect(within(lane("In progress")).getByText("Ship the board")).toBeInTheDocument();
 		expect(screen.getByText("Moving TASK-1…")).toBeInTheDocument();
 		reject?.(new Error("Workflow rejected"));
@@ -76,9 +77,9 @@ describe("TasksBoard", () => {
 		mount(async () => {
 			throw new Error("Must not dispatch");
 		});
-		const select = screen.getByRole("combobox", { name: "Move TASK-1" });
-		expect(within(select).getByRole("option", { name: "Done" })).toBeDisabled();
-		fireEvent.change(select, { target: { value: "done" } });
+		fireEvent.click(screen.getByRole("button", { name: "Move TASK-1" }));
+		expect(screen.getByRole("menuitem", { name: "Done" })).toBeDisabled();
+		fireEvent.click(screen.getByRole("menuitem", { name: "Done" }));
 		expect(within(lane("To do")).getByText("Ship the board")).toBeInTheDocument();
 		expect(screen.queryByRole("alert")).toBeNull();
 	});
@@ -99,7 +100,8 @@ describe("TasksBoard", () => {
 				},
 			};
 		});
-		fireEvent.change(screen.getByRole("combobox", { name: "Move TASK-1" }), { target: { value: "doing" } });
+		fireEvent.click(screen.getByRole("button", { name: "Move TASK-1" }));
+		fireEvent.click(screen.getByRole("menuitem", { name: "In progress" }));
 		await waitFor(() => expect(screen.queryByText("Moving TASK-1…")).toBeNull());
 		expect(action).toEqual({ kind: "transition", value: "start-work-for-one" });
 		expect(within(lane("In progress")).getByText("Ship the board")).toBeInTheDocument();
@@ -177,7 +179,8 @@ it("late_move_does_not_change_new_scope", async () => {
 			}
 		/>
 	));
-	fireEvent.change(screen.getByRole("combobox", { name: "Move TASK-1" }), { target: { value: "doing" } });
+	fireEvent.click(screen.getByRole("button", { name: "Move TASK-1" }));
+	fireEvent.click(screen.getByRole("menuitem", { name: "In progress" }));
 	setScope("second");
 	accept?.({
 		kind: "item",
@@ -210,10 +213,24 @@ it("same_board_refresh_preserves_pending_move", async () => {
 			}
 		/>
 	));
-	fireEvent.change(screen.getByRole("combobox", { name: "Move TASK-1" }), { target: { value: "doing" } });
+	fireEvent.click(screen.getByRole("button", { name: "Move TASK-1" }));
+	fireEvent.click(screen.getByRole("menuitem", { name: "In progress" }));
 	setSnapshot({ ...board });
 	expect(screen.getByText("Moving TASK-1…")).toBeInTheDocument();
 	reject?.(new Error("Still tracked"));
 	await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Still tracked"));
 	expect(within(lane("To do")).getByText("Ship the board")).toBeInTheDocument();
+});
+
+// Catches: a menu cannot be dismissed from the keyboard and takes focus away from the card.
+it("move_menu_escape_restores_trigger_focus", async () => {
+	mount(async () => {
+		throw new Error("Must not dispatch");
+	});
+	const trigger = screen.getByRole("button", { name: "Move TASK-1" });
+	fireEvent.click(trigger);
+	await waitFor(() => expect(screen.getByRole("menuitem", { name: "In progress" })).toHaveFocus());
+	fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+	expect(screen.queryByRole("menu")).toBeNull();
+	expect(trigger).toHaveFocus();
 });
