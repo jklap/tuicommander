@@ -4506,6 +4506,56 @@ mod tests {
         assert_eq!(recorded.as_deref(), Some("HEAD~1"));
     }
 
+    // Catches: recycling a checkout onto a remote-tracking base_ref resolves it to a bare commit id and
+    // drops the upstream tracking that the non-recycled create path sets for the same base_ref.
+    #[test]
+    fn recycling_remote_base_ref_tracks_it_like_a_fresh_create() {
+        let repo = setup_test_repo();
+        let directory = tempfile::tempdir().unwrap();
+        let remote = directory.path().join("remote.git");
+        git_cmd(directory.path())
+            .args(["init", "--bare", remote.to_str().unwrap()])
+            .run()
+            .unwrap();
+        git_cmd(repo.path())
+            .args(["remote", "add", "origin", remote.to_str().unwrap()])
+            .run()
+            .unwrap();
+        git_cmd(repo.path())
+            .args(["push", "origin", "HEAD:refs/heads/trunk"])
+            .run()
+            .unwrap();
+        git_cmd(repo.path())
+            .args(["fetch", "origin", "trunk"])
+            .run()
+            .unwrap();
+        let workspaces = directory.path().join("workspaces");
+        let (first, _) = create_workspace_recycling(
+            &workspaces,
+            &recycle_config(repo.path(), "first"),
+            Some("origin/trunk"),
+            |_| true,
+        )
+        .unwrap();
+        let tracked = |branch: &str| {
+            git_cmd(repo.path())
+                .args(["config", "--get", &format!("branch.{branch}.remote")])
+                .run_silent()
+                .map(|out| out.stdout.trim().to_string())
+        };
+        let fresh = tracked("first");
+        finish_worktree(repo.path(), &first.path).unwrap();
+        let (_, reused) = create_workspace_recycling(
+            &workspaces,
+            &recycle_config(repo.path(), "second"),
+            Some("origin/trunk"),
+            |_| true,
+        )
+        .unwrap();
+        assert!(reused.is_some(), "the finished checkout must be recycled");
+        assert_eq!(tracked("second"), fresh);
+    }
+
     // Catches: cmd dropping an oversized duplicated PATH and losing Git lookup.
     #[test]
     fn windows_hook_path_keeps_git_first_and_bounds_long_duplicate_paths() {
