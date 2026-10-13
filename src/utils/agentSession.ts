@@ -87,8 +87,12 @@ function tokenize(command: string): string[] {
 	let current = "";
 	let quoted = false;
 	let started = false;
-	for (const ch of command) {
-		if (ch === "'") {
+	for (let i = 0; i < command.length; i++) {
+		const ch = command[i];
+		if (ch === "\\" && !quoted && i + 1 < command.length) {
+			current += ch + command[++i];
+			started = true;
+		} else if (ch === "'") {
 			quoted = !quoted;
 			current += ch;
 			started = true;
