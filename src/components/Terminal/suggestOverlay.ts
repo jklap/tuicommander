@@ -26,8 +26,9 @@ export const INTENT_HIGHLIGHT_RE = new RegExp(`^[\\s${AGENT_BULLETS}]*intent:\\s
  * Like `intent:`, it may sit behind the agent's own bullet: an agent bullet (see [`AGENT_BULLETS`]).
  */
 export const ANSWER_MARKER_RE = new RegExp(`^[\\s${AGENT_BULLETS}]*💬`);
-/** An agent output row: a bullet glyph at the start of the line. */
-export const OUTPUT_ROW_RE = new RegExp(`^\\s*[${AGENT_BULLETS}]`);
+/** An agent output row: a bullet glyph at the start of the line. Codex's `•` also
+ *  marks ordinary list items, so it counts only at column 0; an indented one is content. */
+export const OUTPUT_ROW_RE = /^(?:\s*[●⏺]|•)/;
 /** A continuation row of an answer: indented under the agent's bullet. */
 const ANSWER_CONTINUATION_RE = /^ {2,}\S/;
 /** A user prompt row; an indented one still ends the answer. */
