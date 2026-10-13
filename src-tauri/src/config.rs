@@ -2135,7 +2135,7 @@ pub(crate) mod settings_app;
 
 const NOTIFICATION_CONFIG_FILE: &str = "notifications.json";
 const UI_PREFS_FILE: &str = "ui-prefs.json";
-const REPO_SETTINGS_FILE: &str = "repo-settings.json";
+pub(crate) const REPO_SETTINGS_FILE: &str = "repo-settings.json";
 const REPO_DEFAULTS_FILE: &str = "repo-defaults.json";
 const PROMPT_LIBRARY_FILE: &str = "prompt-library.json";
 const REPOSITORIES_FILE: &str = "repositories.json";

@@ -6,6 +6,7 @@ pub mod native;
 pub mod notifications;
 pub mod preferences;
 pub mod registry;
+pub mod repositories;
 pub mod request;
 pub mod service;
 pub mod telegram;
@@ -33,3 +34,6 @@ mod preferences_tests;
 
 #[cfg(test)]
 mod telegram_tests;
+
+#[cfg(test)]
+mod repositories_tests;
