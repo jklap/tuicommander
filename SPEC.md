@@ -995,8 +995,8 @@ The internal `ego` settings store is bound to one configured profile (or the use
 base). Managed keys use the trusted Ego CLI with the AI Chat workspace as cwd,
 then read back stored values. Provider selection is the model slug prefix.
 Credential reads expose stored presence only through `ego auth status`.
-`ego_launch` delegates profile/workspace edits to the AppConfig owner; executable
-writes remain unavailable pending Step 6 confirmation. Existing ACP/PTY sessions
+Managed keys are `model`, `roots` and `network`. Launch defaults stay in the
+`app` store; executable writes await Step 6 confirmation. Existing ACP/PTY sessions
 keep their launch state. Transport publication remains a later integration step.
 Unsupported auth overrides and exec_paths stay in the owner-gap ledger. Multi-key
 changes are refused before writing; cross-process conditional writes await an Ego

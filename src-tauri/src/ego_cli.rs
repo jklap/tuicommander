@@ -543,8 +543,18 @@ pub(crate) async fn providers(
 
 async fn providers_in(context: &ConfigContext, refresh: bool) -> Result<EgoProviders, EgoCliError> {
     let raw = context.command("ls", &["--json"]).await?;
-    let listing: ConfigListing = serde_json::from_str(&raw)
+    let mut listing: ConfigListing = serde_json::from_str(&raw)
         .map_err(|error| unreadable("ego config ls --json", raw, error))?;
+    // A profile without its own model inherits the base model of the same layer.
+    if context.profile.is_some() && !listing.values.contains_key("model") {
+        let args = ["config".into(), "ls".into(), "--json".into()];
+        let raw = context.run(&args).await?;
+        let base: ConfigListing = serde_json::from_str(&raw)
+            .map_err(|error| unreadable("ego config ls --json", raw, error))?;
+        if let Some(model) = base.values.get("model") {
+            listing.values.insert("model".into(), model.clone());
+        }
+    }
     let mut models_args = vec!["models".into(), "--json".into()];
     if refresh {
         models_args.push("--refresh".into());

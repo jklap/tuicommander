@@ -8,54 +8,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
-macro_rules! vocabulary {
-    ($name:ident { $($variant:ident),+ }) => {
-        #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
-        #[serde(rename_all = "lowercase")]
-        pub(super) enum $name { $($variant),+ }
-    };
-}
-vocabulary!(Thinking {
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub(super) enum Network {
+    On,
     Off,
-    Minimal,
-    Low,
-    Medium,
-    High,
-    Xhigh,
-    Max
-});
-vocabulary!(Mode {
-    Plan,
-    Default,
-    Auto,
-    Edits,
-    Yolo
-});
-vocabulary!(Sandbox {
-    Ro,
-    Workspace,
-    Adaptive,
-    Off
-});
-vocabulary!(Network { On, Off });
-vocabulary!(ExecEnv {
-    Inherit,
-    Core,
-    Allowlist
-});
-vocabulary!(Segment {
-    Model,
-    Effort,
-    Mode,
-    Context,
-    Cost,
-    Queue,
-    Drafts,
-    Interrupt,
-    Cwd,
-    Git,
-    Trust
-});
+}
 
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
@@ -75,23 +33,8 @@ pub(super) struct Root {
 #[serde(default)]
 pub(super) struct Managed {
     pub model: Option<String>,
-    pub thinking: Option<Thinking>,
-    pub mode: Option<Mode>,
-    pub sandbox: Option<Sandbox>,
     pub roots: Option<Vec<Root>>,
     pub network: Option<Network>,
-    pub budget: Option<String>,
-    pub bare: Option<bool>,
-    #[serde(rename = "permissions.judge")]
-    pub judge: Option<String>,
-    #[serde(rename = "exec.env")]
-    pub exec_env: Option<ExecEnv>,
-    #[serde(rename = "exec.env_allowlist")]
-    pub exec_env_allowlist: Option<Vec<String>>,
-    #[serde(rename = "ui.statusline.segments")]
-    pub statusline: Option<Vec<Segment>>,
-    pub session_dir: Option<String>,
-    pub artifact_dir: Option<String>,
 }
 
 /// Whole managed keys are atomic leaves, including `roots`. The owner accepts one typed
@@ -127,24 +70,6 @@ pub(super) fn register(catalogue: &mut Catalogue) -> Result<(), CatalogueError> 
     );
     credential.annotation.operations = vec![Operation::Get];
     catalogue.fields.insert(credential.id.clone(), credential);
-    for name in ["ego_executable", "ego_profile", "ai_chat_workspace"] {
-        let mut field = catalogue
-            .fields
-            .get(&format!("app.{name}"))
-            .cloned()
-            .ok_or_else(|| CatalogueError {
-                store: "ego_launch".into(),
-                path: format!("/{name}"),
-                reason: "missing launch owner field".into(),
-            })?;
-        field.id = format!("ego_launch.{name}");
-        field.store = "ego_launch".into();
-        if name == "ego_executable" {
-            // DEFERRED (2026-10-13) — executable writes need the Step 6 authority proposal.
-            field.annotation.operations = vec![Operation::Get];
-        }
-        catalogue.fields.insert(field.id.clone(), field);
-    }
     Ok(())
 }
 

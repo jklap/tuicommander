@@ -1431,9 +1431,7 @@ committed revision: reread the affected paths rather than replaying the mutation
 
 ### Ego launch defaults through settings (#1775-330c)
 
-The internal `ego_launch` adapter delegates `ego_profile` and `ai_chat_workspace`
-to `AppSettingsStore`; it does not use a plain JSON writer because AppConfig also
-owns vault snapshots, migrations and runtime state. The executable is readable
-but unavailable for mutation until the settings confirmation step. Changes apply
-to subsequent ACP or PTY launches. Ego-owned defaults use the separate `ego`
-profile store and the configured CLI; no Ego configuration files are edited.
+`ego_executable`, `ego_profile` and `ai_chat_workspace` are `app` store fields owned
+by `AppSettingsStore`; no separate launch adapter exists. Changes apply to later
+ACP or PTY launches. Ego-owned defaults use the separate `ego` profile store and
+the configured CLI; no Ego configuration files are edited.

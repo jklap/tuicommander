@@ -2,7 +2,6 @@
 pub mod agents;
 pub mod catalogue;
 pub mod ego;
-pub mod ego_launch;
 mod ego_schema;
 pub mod model;
 

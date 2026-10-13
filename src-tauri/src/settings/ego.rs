@@ -140,12 +140,6 @@ impl Store for EgoSettingsStore {
             reply.restart.clear();
             return Ok(reply);
         };
-        if context.profile.is_some() && matches!(key.as_str(), "bare" | "ui.statusline.segments")
-            || context.profile.as_deref() != Some("ci")
-                && matches!(key.as_str(), "session_dir" | "artifact_dir")
-        {
-            return Err(Error::new(ID, "unavailable"));
-        }
         if key == "model"
             && let Some(model) = new_value.as_str()
         {

@@ -2217,18 +2217,18 @@ credential type/expiry and process diagnostics never enter settings replies,
 effects or audit data. Credentials are read-only set/unset markers.
 
 Each managed key is one atomic leaf. Null/reset invokes owner `unset`; explicit
-`roots: []` invokes `set roots=[]`. Base-only and CI-only keys are rejected in the
-wrong scope. A patch changing multiple keys is rejected before any write because
+`roots: []` invokes `set roots=[]`. The managed keys are `model`, `roots` and
+`network`; Ego itself enforces its scope rules. A patch changing multiple keys is rejected before any write because
 Ego's CLI has no atomic batch operation. The adapter checks latest revisions and
 serializes its own mutations, but an external CLI writer can race the read/write
 boundary; the owner-gap ledger records the missing conditional-write API. Failed
 readback after a successful write reports `persisted: true` and `nextAction: get`.
 
-`ego_launch` exposes only executable (read-only), profile and workspace and delegates
-to `config::settings_app::AppSettingsStore`, preserving its migrations, vault
-snapshot/rollback, locks, persistence and runtime effects. It does not launch a
-process. Both adapters are internal; settings transport registration and executable
-confirmation belong to later plan steps. Existing Ego IPC/HTTP commands retain
+Launch defaults (`ego_executable`, `ego_profile`, `ai_chat_workspace`) stay in the
+`app` store and its `AppSettingsStore` owner. The adapter is internal; settings
+transport registration and executable confirmation belong to later plan steps.
+The Providers tab shows the base model when the configured profile has none, as
+Ego resolves it, and creates a missing AI Chat workspace like ACP does. Existing Ego IPC/HTTP commands retain
 identical shapes; model reads/writes now honor configured profile/workspace.
 
 `exec_paths`, `auth.PROVIDER.headers` and `credential_command` remain owner gaps:

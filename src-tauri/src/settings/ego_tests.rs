@@ -210,7 +210,7 @@ async fn reset_unsets_while_empty_roots_remain_explicit() {
     );
 }
 
-// Catches: malformed model/enum values or base-only keys reach an owner write.
+// Catches: malformed model/enum values reach an owner write.
 #[tokio::test]
 async fn invalid_values_and_wrong_scope_are_rejected_before_write() {
     let f = fixture();
@@ -219,8 +219,6 @@ async fn invalid_values_and_wrong_scope_are_rejected_before_write() {
         ("/model", json!("-flag")),
         ("/model", json!("missing-provider")),
         ("/network", json!("offline")),
-        ("/bare", json!(true)),
-        ("/session_dir", json!("/tmp/caller")),
     ] {
         assert!(
             set(&f, snapshot.revision.clone(), path, value)
@@ -259,14 +257,7 @@ async fn authority_change_invalidates_revision_and_missing_binary_does_not_probe
 async fn managed_keys_roundtrip_as_closed_assignments() {
     let f = fixture();
     for (path, value) in [
-        ("/thinking", json!("high")),
-        ("/mode", json!("edits")),
-        ("/sandbox", json!("adaptive")),
         ("/network", json!("on")),
-        ("/budget", json!("400k")),
-        ("/permissions.judge", json!("ollama/judge")),
-        ("/exec.env", json!("allowlist")),
-        ("/exec.env_allowlist", json!(["PATH", "HOME"])),
         (
             "/roots",
             json!([{"path":"/data/a\"},network=\"on", "access":"read"}]),
@@ -305,76 +296,29 @@ async fn readback_failure_reports_durable_write() {
     );
 }
 
-// Catches: TUIC launch edits replace unrelated AppConfig fields or execute a supplied binary.
+// Catches: the Providers tab shows no default model under a profile that inherits the
+// base model (Ego resolves a missing profile model from the same layer's base value).
 #[tokio::test]
-async fn launch_defaults_preserve_owner_and_wait_for_next_session() {
-    use super::{ego_launch::EgoLaunchSettingsStore, native::native_catalogue, service::Service};
-    use std::sync::Arc;
+async fn providers_default_model_falls_back_to_base_under_a_profile() {
     let f = fixture();
-    let _guard = crate::config::set_config_dir_override(f.dir.path().to_path_buf());
-    crate::credentials::reset_test_faults();
-    let path = f.dir.path().join("config.json");
-    let mut config = crate::config::AppConfig::default();
-    config.ego_executable = f.state.config.read().ego_executable.clone();
-    config.ego_profile = "alpha".into();
-    config.font_size = 19;
-    std::fs::write(&path, serde_json::to_vec(&config).unwrap()).unwrap();
-    let service = Service::new(
-        Arc::new(native_catalogue().unwrap()),
-        Arc::new(EgoLaunchSettingsStore::new(f.state.clone())),
-    );
-    let snapshot = service
-        .get(
-            Target::Machine,
-            "ego_launch".into(),
-            vec!["/ego_profile".into()],
-        )
-        .await
-        .unwrap();
-    let reply = service
-        .patch(
-            Target::Machine,
-            "ego_launch".into(),
-            snapshot.revision,
-            vec![Edit::Set {
-                path: "/ego_profile".into(),
-                value: json!("beta"),
-            }],
-        )
-        .await
-        .unwrap();
-    assert!(reply.persisted && reply.applied);
-    assert_eq!(reply.restart, vec!["next_session"]);
-    let config: crate::config::AppConfig =
-        serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
-    assert_eq!(config.font_size, 19);
-    assert_eq!(config.ego_profile, "beta");
-    assert_eq!(f.state.config.read().ego_profile, "beta");
-    let after = service
-        .get(
-            Target::Machine,
-            "ego_launch".into(),
-            vec!["/ego_profile".into()],
-        )
-        .await
-        .unwrap();
-    assert_eq!(after.values["/ego_profile"].stored, json!("beta"));
-    assert_eq!(after.revision, reply.revision);
-    let error = service
-        .patch(
-            Target::Machine,
-            "ego_launch".into(),
-            after.revision,
-            vec![Edit::Set {
-                path: "/ego_executable".into(),
-                value: json!("/untrusted/program"),
-            }],
-        )
-        .await
-        .unwrap_err();
-    assert_eq!(error.code, "unavailable");
-    assert!(
-        calls(&f).is_empty(),
-        "launch settings never probe or restart Ego"
-    );
+    let mut alpha = disk(&f, "alpha");
+    alpha["values"].as_object_mut().unwrap().remove("model");
+    std::fs::write(f.dir.path().join("alpha.json"), alpha.to_string()).unwrap();
+    let mut base = disk(&f, "base");
+    base["values"]["model"] = json!("ollama/base");
+    std::fs::write(f.dir.path().join("base.json"), base.to_string()).unwrap();
+    let providers = crate::ego_cli::providers(&f.state, false).await.unwrap();
+    assert_eq!(providers.default_model, Some("ollama/base".into()));
+}
+
+// Catches: the Providers tab refuses a configured AI Chat workspace that ACP has not yet
+// created, although ACP creates it on first connect.
+#[tokio::test]
+async fn providers_accept_a_workspace_not_yet_created() {
+    let f = fixture();
+    let workspace = f.dir.path().join("not-yet-created");
+    f.state.config.write().ai_chat_workspace = workspace.to_string_lossy().into_owned();
+    let providers = crate::ego_cli::providers(&f.state, false).await.unwrap();
+    assert_eq!(providers.default_model, Some("ollama/qwen3".into()));
+    assert!(workspace.is_dir());
 }

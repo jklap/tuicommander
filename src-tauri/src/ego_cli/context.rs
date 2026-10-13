@@ -26,9 +26,10 @@ impl ConfigContext {
         } else {
             PathBuf::from(settings.ai_chat_workspace.trim())
         };
-        if !workspace.is_absolute() || !workspace.is_dir() {
+        // Created like `acp_commands::workspace_root` does, so the tab works before the first chat.
+        if !workspace.is_absolute() || std::fs::create_dir_all(&workspace).is_err() {
             return Err(EgoCliError::invalid_input(
-                "AI Chat workspace must be an existing absolute directory",
+                "AI Chat workspace must be a usable absolute directory (Settings > General)",
             ));
         }
         let profile = settings.ego_profile.trim();
