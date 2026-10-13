@@ -1824,6 +1824,9 @@ and clip to the visible period. A single endpoint gives a one-day milestone.
 Missing, invalid or reversed dates stay clickable in the **Without usable dates**
 side list; out-of-period tasks stay listed in the timeline.
 
+The shell hides the Roadmap view while the selected provider declares no
+`kind: "date"` field.
+
 Both lists use virtual rows. **Load more** follows provider cursors. Failed
 refreshes retain stale results; obsolete provider responses cannot replace the
 active view. This component adds no manifest, IPC or HTTP API. Tasks shell mounting
@@ -1970,3 +1973,13 @@ A type change reloads the schema; values survive only for the same field id and
 kind, and a late schema of an earlier type is dropped. Create stays disabled until
 Title, Type and every required field of the current type are set. Submit sends one
 `create` action with every current field (unset is null). A rejection keeps the draft.
+
+## Tasks setup
+
+With no work-item provider registered, the Tasks tab shows install prompts for
+`github-work`, `gitlab` and `jira`. Once a plugin is installed, a form edits its
+account (`id`, `repository`, `host`, `project`/`projectId`, `boards`) and merges it
+into the plugin's `data/config.json`, then reloads the plugin. Other accounts and keys
+stay; a file that is not valid JSON is never overwritten. **Provider settings** in the
+Tasks header opens the same form. The Plugins settings tab lists install hints for
+the work-item plugins that are missing. Open Tasks is always offered.

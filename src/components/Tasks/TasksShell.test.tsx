@@ -2,8 +2,14 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { workItemProviderRegistry } from "../../plugins/workItemProviderRegistry";
+import { pluginStore } from "../../stores/pluginStore";
 import { listDemo } from "./list/demo";
+import { roadmapDemo } from "./roadmap/demo";
 import { TasksShell } from "./TasksShell";
+
+vi.mock("../../invoke", () => ({
+	invoke: vi.fn(async (command: string) => (command === "fetch_plugin_registry" ? [] : null)),
+}));
 
 // happy-dom has no layout. Supply viewport geometry, keeping the real virtualizer.
 beforeEach(() => {
@@ -12,6 +18,7 @@ beforeEach(() => {
 });
 afterEach(() => {
 	cleanup();
+	pluginStore.clear();
 	vi.restoreAllMocks();
 });
 
@@ -19,7 +26,64 @@ describe("Tasks shell", () => {
 	// Catches: the shell mounting views without any provider and showing a broken list.
 	it("explains that a provider plugin is needed when none is registered", () => {
 		render(() => <TasksShell />);
-		expect(screen.getByText(/Install a work-item provider plugin/)).toBeInTheDocument();
+		expect(screen.getByText(/No work-item provider is set up/)).toBeInTheDocument();
+	});
+
+	// Catches: an empty Tasks tab that cannot start the setup, so the user must edit data/config.json by hand.
+	it("shows the setup form of an installed plugin instead of an empty tab", async () => {
+		pluginStore.registerPlugin("github-work", { loaded: true });
+		render(() => <TasksShell />);
+		expect(await screen.findByText(/GitHub Work needs a repository/)).toBeInTheDocument();
+		expect(screen.getByLabelText("Repository")).toBeInTheDocument();
+	});
+
+	// Catches: the Roadmap tab opening onto an empty timeline for a provider with no date field.
+	it("hides the Roadmap view when the provider has no date field", async () => {
+		const registration = workItemProviderRegistry.register(listDemo(3));
+		try {
+			render(() => <TasksShell />);
+			await screen.findByRole("button", { name: /Task 00001/ });
+			expect(screen.getByRole("tab", { name: "Board" })).toBeInTheDocument();
+			expect(screen.queryByRole("tab", { name: "Roadmap" })).not.toBeInTheDocument();
+		} finally {
+			registration.dispose();
+		}
+	});
+
+	// Catches: switching to a source without dates leaving the shell on the Roadmap view it just hid.
+	it("falls back to the list when the selected source has no date field", async () => {
+		const dated = workItemProviderRegistry.register(roadmapDemo(2));
+		const plain = workItemProviderRegistry.register(listDemo(2, "plain"));
+		try {
+			render(() => <TasksShell />);
+			fireEvent.click(await screen.findByRole("tab", { name: "Roadmap" }));
+			await screen.findByRole("region", { name: "Tasks roadmap" });
+			fireEvent.change(screen.getByLabelText("Tasks source"), { target: { value: JSON.stringify(["demo", "plain"]) } });
+			expect(await screen.findByRole("button", { name: /Task 00001/ })).toBeInTheDocument();
+			expect(screen.queryByRole("region", { name: "Tasks roadmap" })).not.toBeInTheDocument();
+		} finally {
+			plain.dispose();
+			dated.dispose();
+		}
+	});
+
+	// Catches: a configured provider with no way to change its repository, project or boards from the UI.
+	it("opens the setup form of the selected provider from the header", async () => {
+		pluginStore.registerPlugin("gitlab", { loaded: true });
+		const base = listDemo(2);
+		const registration = workItemProviderRegistry.register({
+			...base,
+			providerId: "gitlab",
+			list: base.list,
+		} as typeof base);
+		try {
+			render(() => <TasksShell />);
+			fireEvent.click(await screen.findByRole("button", { name: "Provider settings" }));
+			expect(await screen.findByLabelText("Project")).toBeInTheDocument();
+			expect(screen.getByLabelText("Boards")).toBeInTheDocument();
+		} finally {
+			registration.dispose();
+		}
 	});
 
 	// Catches: a list row click that never reaches the detail view.
@@ -37,10 +101,10 @@ describe("Tasks shell", () => {
 
 	// Catches: the board and roadmap views not being reachable from the shell.
 	it("switches to the board and the roadmap views", async () => {
-		const registration = workItemProviderRegistry.register(listDemo(3));
+		const registration = workItemProviderRegistry.register(roadmapDemo(3));
 		try {
 			render(() => <TasksShell />);
-			await screen.findByRole("button", { name: /Task 00001/ });
+			await screen.findByRole("tab", { name: "Roadmap" });
 			fireEvent.click(screen.getByRole("tab", { name: "Board" }));
 			expect(await screen.findByRole("region", { name: "Tasks board" })).toBeInTheDocument();
 			fireEvent.click(screen.getByRole("tab", { name: "Roadmap" }));

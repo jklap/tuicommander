@@ -768,7 +768,7 @@ literal text; sort supports key/title/updatedAt. Its cursor expires on mutation.
 ## Tasks core UX contracts
 
 ### Tasks component inventory
-`BoardLane`, `RoadmapTimeline`, `StartWorkMenu`, `TaskComment`, `TaskCreateField`, `TaskField`, `TaskMarkdown`, `TaskRows`, `TasksBoard`, `TasksBoardView`, `TasksCreate`, `TasksDetail`, `TasksList`, `TasksRoadmap`, `TasksShell`.
+`BoardLane`, `InstallWorkItemPlugin`, `RoadmapTimeline`, `StartWorkMenu`, `TaskComment`, `TaskCreateField`, `TaskField`, `TaskMarkdown`, `TaskRows`, `TasksBoard`, `TasksBoardView`, `TasksCreate`, `TasksDetail`, `TasksList`, `TasksRoadmap`, `TasksSetup`, `TasksShell`.
 
 ### Tasks DTO field inventory
 `WorkItem.assignees`, `WorkItem.fields`, `WorkItem.itemType`, `WorkItem.key`, `WorkItem.labels`, `WorkItem.reference`, `WorkItem.state`, `WorkItem.title`, `WorkItem.updatedAt`, `WorkItem.url`, `WorkItemActionDescriptor.disabledReason`, `WorkItemActionDescriptor.enabled`, `WorkItemActionDescriptor.id`, `WorkItemActionDescriptor.kind`, `WorkItemActionDescriptor.name`, `WorkItemBoard.columns`, `WorkItemBoard.fieldId`, `WorkItemBoard.id`, `WorkItemBoard.name`, `WorkItemBoardCard.item`, `WorkItemBoardCard.moves`, `WorkItemBoardColumn.action`, `WorkItemBoardColumn.id`, `WorkItemBoardColumn.name`, `WorkItemBoardLane.cards`, `WorkItemBoardLane.columnId`, `WorkItemBoardMove.action`, `WorkItemBoardMove.columnId`, `WorkItemBoardPage.board`, `WorkItemBoardPage.lanes`, `WorkItemBoardPage.nextCursor`, `WorkItemComment.author`, `WorkItemComment.body`, `WorkItemComment.createdAt`, `WorkItemComment.id`, `WorkItemComment.url`, `WorkItemCommentPage.entries`, `WorkItemCommentPage.nextCursor`, `WorkItemCreate.body`, `WorkItemCreate.fields`, `WorkItemCreate.itemType`, `WorkItemCreate.title`, `WorkItemDetail.actions`, `WorkItemDetail.body`, `WorkItemDetail.comments`, `WorkItemDetail.fields`, `WorkItemDetail.item`, `WorkItemEdit.fieldId`, `WorkItemEdit.value`, `WorkItemFieldSchema.editable`, `WorkItemFieldSchema.id`, `WorkItemFieldSchema.kind`, `WorkItemFieldSchema.name`, `WorkItemFieldSchema.options`, `WorkItemFieldSchema.required`, `WorkItemFilter.fieldId`, `WorkItemFilter.values`, `WorkItemGroup.id`, `WorkItemGroup.items`, `WorkItemGroup.name`, `WorkItemGroupedPage.groups`, `WorkItemGroupedPage.nextCursor`, `WorkItemGroupedPage.total`, `WorkItemOption.id`, `WorkItemOption.name`, `WorkItemPage.items`, `WorkItemPage.nextCursor`, `WorkItemPage.total`, `WorkItemProviderSnapshot.accountId`, `WorkItemProviderSnapshot.boards`, `WorkItemProviderSnapshot.fields`, `WorkItemProviderSnapshot.items`, `WorkItemProviderSnapshot.name`, `WorkItemProviderSnapshot.providerId`, `WorkItemProviderSnapshot.savedFilters`, `WorkItemQuery.cursor`, `WorkItemQuery.filters`, `WorkItemQuery.groupBy`, `WorkItemQuery.limit`, `WorkItemQuery.savedFilterId`, `WorkItemQuery.search`, `WorkItemQuery.sort`, `WorkItemRef.accountId`, `WorkItemRef.id`, `WorkItemRef.providerId`, `WorkItemReviewSummary.comment`, `WorkItemReviewSummary.commitId`, `WorkItemReviewSummary.state`, `WorkItemReviewThread.comments`, `WorkItemReviewThread.commitId`, `WorkItemReviewThread.id`, `WorkItemReviewThread.line`, `WorkItemReviewThread.path`, `WorkItemReviewThread.resolved`, `WorkItemSavedFilter.id`, `WorkItemSavedFilter.name`, `WorkItemSavedFilter.query`, `WorkItemSort.descending`, `WorkItemSort.fieldId`, `WorkItemStartWork.agentType`, `WorkItemStartWork.baseRef`, `WorkItemStartWork.branch`, `WorkItemStartWork.delivery`, `WorkItemStartWork.prompt`, `WorkItemStartWork.repoPath`, `WorkItemState.id`, `WorkItemState.name`, `WorkItemState.tone`, `WorkItemUser.avatarUrl`, `WorkItemUser.id`, `WorkItemUser.name`.
@@ -812,9 +812,28 @@ supplies `id`, `name`, nullable default `action`. `WorkItemBoardPage` supplies `
 #### TasksShell
 
 The core Tasks tab selects a registered provider by `providerId` and `accountId`,
-displays its `name`, and offers List, Board, Roadmap and New task. Changing the source
+displays its `name`, and offers List, Board, Roadmap and New task. Roadmap is hidden
+while the selected provider declares no `kind: "date"` field. Changing the source
 clears the create/detail selection. New task mounts TasksCreate; opening a reference
 mounts TasksDetail alongside the current view. `visible` gates hidden-view work.
+With no provider registered the shell mounts TasksSetup. Provider settings opens the
+same form for the plugin behind the selected provider.
+
+#### TasksSetup
+
+Core renders install prompts and setup forms for the work-item plugins `github-work`,
+`gitlab` and `jira` from a core-owned descriptor list. A plugin that is not installed
+gets an install button fed by the plugin registry; the GitHub Work prompt notes when
+GitHub is connected. An installed plugin gets a form for its account `id`, `repository`
+(GitHub), `host`, `project` or `projectId`, and `boards` (one `id name` per line). Save
+merges the account into the plugin's `data/config.json`, keeps other accounts and keys,
+refuses to overwrite a file that is not valid JSON, then reloads the plugin. The
+Settings Plugins tab shows the same install prompts for plugins that are missing.
+
+#### InstallWorkItemPlugin
+
+Install button for one work-item plugin. It reads the plugin registry and calls the
+install command for the matching entry; a missing entry disables the button.
 
 #### TasksBoardView
 
