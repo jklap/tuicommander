@@ -2647,6 +2647,8 @@ fn test_load_app_config_delay() {
 /// for explicit whole-document writes that already hold `CONFIG_WRITE_LOCK`.
 pub(crate) struct ConfigFile<T> {
     path: PathBuf,
+    /// Defaults to `<path>.lock`; set when the file lives in a directory the app must not litter.
+    lock: Option<PathBuf>,
     _marker: std::marker::PhantomData<T>,
 }
 
@@ -2662,11 +2664,23 @@ where
     pub(crate) fn at_path(path: PathBuf) -> Self {
         Self {
             path,
+            lock: None,
             _marker: std::marker::PhantomData,
         }
     }
 
+    /// Like `at_path`, with the advisory lock kept at `lock` instead of beside the file.
+    pub(crate) fn at_path_locked_at(path: PathBuf, lock: PathBuf) -> Self {
+        Self {
+            lock: Some(lock),
+            ..Self::at_path(path)
+        }
+    }
+
     fn lock_path(&self) -> PathBuf {
+        if let Some(lock) = &self.lock {
+            return lock.clone();
+        }
         let mut name = self.path.clone().into_os_string();
         name.push(".lock");
         PathBuf::from(name)
@@ -2676,6 +2690,9 @@ where
     /// lock. The returned handle releases the lock on drop.
     fn acquire_file_lock(&self) -> Result<std::fs::File, String> {
         if let Some(dir) = self.path.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| format!("Failed to create directory: {e}"))?;
+        }
+        if let Some(dir) = self.lock.as_deref().and_then(std::path::Path::parent) {
             std::fs::create_dir_all(dir).map_err(|e| format!("Failed to create directory: {e}"))?;
         }
         let file = std::fs::OpenOptions::new()
@@ -3420,6 +3437,26 @@ fn overlay_repo_local_config(
     base
 }
 
+/// The `.tuic.json` of a repository, locked from the app config dir so no lock file appears in the
+/// user's repository. Export and the settings adapter share this lock through the same key.
+pub(crate) fn repo_local_file<T>(
+    config_dir: &std::path::Path,
+    root: &std::path::Path,
+) -> ConfigFile<T>
+where
+    T: Serialize + DeserializeOwned + Default,
+{
+    use sha2::{Digest, Sha256};
+    let canonical = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    let key = hex::encode(Sha256::digest(canonical.to_string_lossy().as_bytes()));
+    ConfigFile::at_path_locked_at(
+        root.join(REPO_LOCAL_CONFIG_FILE),
+        config_dir
+            .join("repo-local-locks")
+            .join(format!("{key}.lock")),
+    )
+}
+
 /// Write the repo's per-repo UI settings into `.tuic.json` at its root so they
 /// can be committed and shared with the team. Preserves any existing `.tuic.json`
 /// values for fields left as inherit-from-global.
@@ -3427,21 +3464,17 @@ fn overlay_repo_local_config(
 pub(crate) fn save_repo_local_config(repo_path: String) -> Result<(), String> {
     let dir = std::path::Path::new(&repo_path);
     let entry = load_repo_settings().repos.remove(&repo_path);
-    // Start from the existing .tuic.json so manually-set fields (e.g. mcp_upstreams) survive.
-    let base = load_repo_local_config_from_path(dir).unwrap_or_default();
-    // Fill worktree/branch fields with global defaults so the export captures the
-    // user's effective settings, not just the (usually empty) per-repo overrides —
-    // otherwise a user who relies on global defaults exports an empty {} file.
-    let base = fill_repo_local_defaults(base, &load_repo_defaults());
-    // Per-repo overrides win over both .tuic.json and global defaults.
-    let merged = match entry.as_ref() {
-        Some(e) => overlay_repo_local_config(base, e),
-        None => base,
-    };
-    let json = serde_json::to_string_pretty(&merged).map_err(|e| e.to_string())?;
-    let file = dir.join(REPO_LOCAL_CONFIG_FILE);
-    persist_atomic(&file, json.as_bytes())
-        .map_err(|e| format!("Failed to write {}: {e}", file.display()))?;
+    let defaults = load_repo_defaults();
+    // Share the local settings adapter's lock so export cannot overwrite a concurrent patch.
+    let file = repo_local_file::<RepoLocalConfig>(&config_dir(), dir);
+    file.update_with_strict(|config| {
+        let base = fill_repo_local_defaults(config.clone(), &defaults);
+        *config = match entry.as_ref() {
+            Some(entry) => overlay_repo_local_config(base, entry),
+            None => base,
+        };
+        Ok(((), true))
+    })?;
     Ok(())
 }
 

@@ -108,7 +108,7 @@ export function createWorktreeCreationCoordinator(deps: WorktreeCreationCoordina
 		result: PendingCreation["result"],
 		displayName: string,
 		agentSeed?: AgentSeed,
-	) => {
+	): Promise<string | undefined> => {
 		// Keyed by the id the backend reported; `branch` is display data.
 		markRecentlyCreated(repoPath, result.workspace_id);
 		repositoriesStore.setWorkspace(repoPath, result.workspace_id, {
@@ -161,6 +161,7 @@ export function createWorktreeCreationCoordinator(deps: WorktreeCreationCoordina
 		}
 
 		deps.setStatusInfo(`Created worktree ${displayName}`);
+		return termId;
 	};
 
 	const confirmCreateWorktree = async (options: WorktreeCreateOptions) => {

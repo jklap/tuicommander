@@ -38,6 +38,10 @@ export const EgoPerimeterSection: Component<{ client?: EgoPerimeterClient }> = (
 		}
 	};
 	onMount(() => void attempt(() => client().perimeter(), true));
+	const rootsDirty = () => {
+		const saved = view()?.roots;
+		return !!saved && JSON.stringify(saved) !== JSON.stringify(draft());
+	};
 	const edit = <K extends keyof EgoRootsEdit>(key: K, value: EgoRootsEdit[K]) =>
 		setDraft((current) => ({ ...current, [key]: value }));
 
@@ -129,7 +133,11 @@ export const EgoPerimeterSection: Component<{ client?: EgoPerimeterClient }> = (
 							</p>
 						</div>
 						<div class={s.actions}>
-							<button disabled={busy()} onClick={() => void attempt(() => client().setRoots(draft()), true)}>
+							<button
+								disabled={busy()}
+								data-ready={rootsDirty() ? "true" : undefined}
+								onClick={() => void attempt(() => client().setRoots(draft()), true)}
+							>
 								{t("perimeter.saveRoots", "Save roots in ego")}
 							</button>
 						</div>

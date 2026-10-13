@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::state::AppEvent;
+use std::path::Path;
 
 const ROW: &str = include_str!("../fixtures/chat_view/recorded/shape-012.jsonl");
 
@@ -184,7 +185,8 @@ async fn ticker_follows_appends_and_equal_size_transcript_replacement() {
     let sid = "follow-test";
     state.chat_views.views.lock().insert(
         sid.into(),
-        Arc::new(Mutex::new(View::new(
+        Arc::new(Mutex::new(View::for_agent(
+            Agent::Claude,
             path.clone(),
             MAX_LOG_ENTRIES,
             MAX_LOG_BYTES,

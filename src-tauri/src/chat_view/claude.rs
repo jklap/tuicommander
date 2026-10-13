@@ -19,13 +19,13 @@ use serde_json::{Value, json};
 use crate::redaction::redact_secrets;
 
 /// Characters kept of one prompt or reply.
-const MAX_TEXT_CHARS: usize = 20_000;
+pub(super) const MAX_TEXT_CHARS: usize = 20_000;
 /// Characters kept of one tool output.
-const MAX_TOOL_OUTPUT_CHARS: usize = 4_000;
+pub(super) const MAX_TOOL_OUTPUT_CHARS: usize = 4_000;
 /// Characters kept of one string inside a tool input.
 const MAX_INPUT_STRING_CHARS: usize = 1_000;
 /// Characters of a tool's argument shown in its title.
-const MAX_TITLE_ARG_CHARS: usize = 120;
+pub(super) const MAX_TITLE_ARG_CHARS: usize = 120;
 
 /// Row types that carry no conversation. Skipped without decoding the body.
 const PLUMBING_ROWS: &[&str] = &[
@@ -331,7 +331,7 @@ fn is_agent_text(update: &Value) -> bool {
 }
 
 /// A card the transcript projection draws apart from the agent's prose.
-fn notice(text: &str) -> Value {
+pub(super) fn notice(text: &str) -> Value {
     json!({
         "sessionUpdate": "agent_message_chunk",
         "content": { "type": "text", "text": text },
@@ -341,7 +341,7 @@ fn notice(text: &str) -> Value {
 
 /// Redacted first, then cut: a secret split by the cut would no longer match
 /// its pattern.
-fn clean(text: &str, max: usize) -> String {
+pub(super) fn clean(text: &str, max: usize) -> String {
     let redacted = redact_secrets(text);
     if redacted.chars().count() <= max {
         return redacted;
@@ -392,7 +392,7 @@ fn tool_title(name: &str, input: &Value) -> String {
 
 /// A tool input with every string redacted and cut, so one `Write` of a whole
 /// file does not ride the log.
-fn cap_strings(value: &Value) -> Value {
+pub(super) fn cap_strings(value: &Value) -> Value {
     match value {
         Value::String(s) => Value::String(clean(s, MAX_INPUT_STRING_CHARS)),
         Value::Array(items) => Value::Array(items.iter().map(cap_strings).collect()),
