@@ -7,6 +7,7 @@ pub mod native;
 pub mod notifications;
 pub mod preferences;
 pub mod registry;
+pub mod remote;
 pub mod repositories;
 pub mod request;
 pub mod service;
@@ -43,6 +44,9 @@ mod agents_tests;
 
 #[cfg(test)]
 mod repositories_tests;
+
+#[cfg(test)]
+mod remote_tests;
 
 #[cfg(all(test, feature = "dictation"))]
 mod voice_tests;

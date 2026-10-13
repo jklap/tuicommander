@@ -3582,16 +3582,16 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
-    "connections.auth_username": {
-      "id": "connections.auth_username",
+    "connections.connections.{id}.auth_username": {
+      "id": "connections.connections.{id}.auth_username",
       "store": "connections",
       "owner": "machine",
       "area": "connections",
-      "group": "auth_username",
+      "group": "connections",
       "order": 9,
-      "path": "/auth_username",
-      "labelKey": "settings.catalogue.connections.auth_username.label",
-      "helpKey": "settings.catalogue.connections.auth_username.help",
+      "path": "/connections/{id}/auth_username",
+      "labelKey": "settings.catalogue.connections.connections.{id}.auth_username.label",
+      "helpKey": "settings.catalogue.connections.connections.{id}.auth_username.help",
       "label": "auth username",
       "schema": {
         "type": "string"
@@ -3610,16 +3610,16 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
-    "connections.auto_update": {
-      "id": "connections.auto_update",
+    "connections.connections.{id}.auto_update": {
+      "id": "connections.connections.{id}.auto_update",
       "store": "connections",
       "owner": "machine",
       "area": "connections",
-      "group": "auto_update",
+      "group": "connections",
       "order": 11,
-      "path": "/auto_update",
-      "labelKey": "settings.catalogue.connections.auto_update.label",
-      "helpKey": "settings.catalogue.connections.auto_update.help",
+      "path": "/connections/{id}/auto_update",
+      "labelKey": "settings.catalogue.connections.connections.{id}.auto_update.label",
+      "helpKey": "settings.catalogue.connections.connections.{id}.auto_update.help",
       "label": "auto update",
       "schema": {
         "type": "boolean",
@@ -3641,16 +3641,16 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
-    "connections.deploy": {
-      "id": "connections.deploy",
+    "connections.connections.{id}.deploy": {
+      "id": "connections.connections.{id}.deploy",
       "store": "connections",
       "owner": "machine",
       "area": "connections",
-      "group": "deploy",
+      "group": "connections",
       "order": 12,
-      "path": "/deploy",
-      "labelKey": "settings.catalogue.connections.deploy.label",
-      "helpKey": "settings.catalogue.connections.deploy.help",
+      "path": "/connections/{id}/deploy",
+      "labelKey": "settings.catalogue.connections.connections.{id}.deploy.label",
+      "helpKey": "settings.catalogue.connections.connections.{id}.deploy.help",
       "label": "deploy",
       "schema": {
         "type": "string",
@@ -3684,16 +3684,16 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
-    "connections.enabled": {
-      "id": "connections.enabled",
+    "connections.connections.{id}.enabled": {
+      "id": "connections.connections.{id}.enabled",
       "store": "connections",
       "owner": "machine",
       "area": "connections",
-      "group": "enabled",
+      "group": "connections",
       "order": 10,
-      "path": "/enabled",
-      "labelKey": "settings.catalogue.connections.enabled.label",
-      "helpKey": "settings.catalogue.connections.enabled.help",
+      "path": "/connections/{id}/enabled",
+      "labelKey": "settings.catalogue.connections.connections.{id}.enabled.label",
+      "helpKey": "settings.catalogue.connections.connections.{id}.enabled.help",
       "label": "enabled",
       "schema": {
         "type": "boolean"
@@ -3712,16 +3712,16 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
-    "connections.id": {
-      "id": "connections.id",
+    "connections.connections.{id}.id": {
+      "id": "connections.connections.{id}.id",
       "store": "connections",
       "owner": "machine",
       "area": "connections",
-      "group": "id",
+      "group": "connections",
       "order": 0,
-      "path": "/id",
-      "labelKey": "settings.catalogue.connections.id.label",
-      "helpKey": "settings.catalogue.connections.id.help",
+      "path": "/connections/{id}/id",
+      "labelKey": "settings.catalogue.connections.connections.{id}.id.label",
+      "helpKey": "settings.catalogue.connections.connections.{id}.id.help",
       "label": "id",
       "schema": {
         "type": "string"
@@ -3739,16 +3739,16 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
-    "connections.name": {
-      "id": "connections.name",
+    "connections.connections.{id}.name": {
+      "id": "connections.connections.{id}.name",
       "store": "connections",
       "owner": "machine",
       "area": "connections",
-      "group": "name",
+      "group": "connections",
       "order": 1,
-      "path": "/name",
-      "labelKey": "settings.catalogue.connections.name.label",
-      "helpKey": "settings.catalogue.connections.name.help",
+      "path": "/connections/{id}/name",
+      "labelKey": "settings.catalogue.connections.connections.{id}.name.label",
+      "helpKey": "settings.catalogue.connections.connections.{id}.name.help",
       "label": "name",
       "schema": {
         "type": "string"
@@ -3767,16 +3767,16 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
-    "connections.survive_secs": {
-      "id": "connections.survive_secs",
+    "connections.connections.{id}.survive_secs": {
+      "id": "connections.connections.{id}.survive_secs",
       "store": "connections",
       "owner": "machine",
       "area": "connections",
-      "group": "survive_secs",
+      "group": "connections",
       "order": 13,
-      "path": "/survive_secs",
-      "labelKey": "settings.catalogue.connections.survive_secs.label",
-      "helpKey": "settings.catalogue.connections.survive_secs.help",
+      "path": "/connections/{id}/survive_secs",
+      "labelKey": "settings.catalogue.connections.connections.{id}.survive_secs.label",
+      "helpKey": "settings.catalogue.connections.connections.{id}.survive_secs.help",
       "label": "survive secs",
       "schema": {
         "type": "integer",
@@ -3800,16 +3800,16 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
-    "connections.transport.identity_file": {
-      "id": "connections.transport.identity_file",
+    "connections.connections.{id}.transport.identity_file": {
+      "id": "connections.connections.{id}.transport.identity_file",
       "store": "connections",
       "owner": "machine",
       "area": "connections",
-      "group": "transport",
+      "group": "connections",
       "order": 5,
-      "path": "/transport/identity_file",
-      "labelKey": "settings.catalogue.connections.transport.identity_file.label",
-      "helpKey": "settings.catalogue.connections.transport.identity_file.help",
+      "path": "/connections/{id}/transport/identity_file",
+      "labelKey": "settings.catalogue.connections.connections.{id}.transport.identity_file.label",
+      "helpKey": "settings.catalogue.connections.connections.{id}.transport.identity_file.help",
       "label": "identity file",
       "schema": {
         "type": [
@@ -3833,16 +3833,16 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
-    "connections.transport.remote_daemon_port": {
-      "id": "connections.transport.remote_daemon_port",
+    "connections.connections.{id}.transport.remote_daemon_port": {
+      "id": "connections.connections.{id}.transport.remote_daemon_port",
       "store": "connections",
       "owner": "machine",
       "area": "connections",
-      "group": "transport",
+      "group": "connections",
       "order": 6,
-      "path": "/transport/remote_daemon_port",
-      "labelKey": "settings.catalogue.connections.transport.remote_daemon_port.label",
-      "helpKey": "settings.catalogue.connections.transport.remote_daemon_port.help",
+      "path": "/connections/{id}/transport/remote_daemon_port",
+      "labelKey": "settings.catalogue.connections.connections.{id}.transport.remote_daemon_port.label",
+      "helpKey": "settings.catalogue.connections.connections.{id}.transport.remote_daemon_port.help",
       "label": "remote daemon port",
       "schema": {
         "type": "integer",
@@ -3864,16 +3864,16 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
-    "connections.transport.ssh_host": {
-      "id": "connections.transport.ssh_host",
+    "connections.connections.{id}.transport.ssh_host": {
+      "id": "connections.connections.{id}.transport.ssh_host",
       "store": "connections",
       "owner": "machine",
       "area": "connections",
-      "group": "transport",
+      "group": "connections",
       "order": 2,
-      "path": "/transport/ssh_host",
-      "labelKey": "settings.catalogue.connections.transport.ssh_host.label",
-      "helpKey": "settings.catalogue.connections.transport.ssh_host.help",
+      "path": "/connections/{id}/transport/ssh_host",
+      "labelKey": "settings.catalogue.connections.connections.{id}.transport.ssh_host.label",
+      "helpKey": "settings.catalogue.connections.connections.{id}.transport.ssh_host.help",
       "label": "ssh host",
       "schema": {
         "type": "string"
@@ -3892,16 +3892,16 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
-    "connections.transport.ssh_port": {
-      "id": "connections.transport.ssh_port",
+    "connections.connections.{id}.transport.ssh_port": {
+      "id": "connections.connections.{id}.transport.ssh_port",
       "store": "connections",
       "owner": "machine",
       "area": "connections",
-      "group": "transport",
+      "group": "connections",
       "order": 3,
-      "path": "/transport/ssh_port",
-      "labelKey": "settings.catalogue.connections.transport.ssh_port.label",
-      "helpKey": "settings.catalogue.connections.transport.ssh_port.help",
+      "path": "/connections/{id}/transport/ssh_port",
+      "labelKey": "settings.catalogue.connections.connections.{id}.transport.ssh_port.label",
+      "helpKey": "settings.catalogue.connections.connections.{id}.transport.ssh_port.help",
       "label": "ssh port",
       "schema": {
         "type": "integer",
@@ -3923,16 +3923,16 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
-    "connections.transport.ssh_user": {
-      "id": "connections.transport.ssh_user",
+    "connections.connections.{id}.transport.ssh_user": {
+      "id": "connections.connections.{id}.transport.ssh_user",
       "store": "connections",
       "owner": "machine",
       "area": "connections",
-      "group": "transport",
+      "group": "connections",
       "order": 4,
-      "path": "/transport/ssh_user",
-      "labelKey": "settings.catalogue.connections.transport.ssh_user.label",
-      "helpKey": "settings.catalogue.connections.transport.ssh_user.help",
+      "path": "/connections/{id}/transport/ssh_user",
+      "labelKey": "settings.catalogue.connections.connections.{id}.transport.ssh_user.label",
+      "helpKey": "settings.catalogue.connections.connections.{id}.transport.ssh_user.help",
       "label": "ssh user",
       "schema": {
         "type": "string"
@@ -3951,16 +3951,16 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
-    "connections.transport.type": {
-      "id": "connections.transport.type",
+    "connections.connections.{id}.transport.type": {
+      "id": "connections.connections.{id}.transport.type",
       "store": "connections",
       "owner": "machine",
       "area": "connections",
-      "group": "transport",
+      "group": "connections",
       "order": 7,
-      "path": "/transport/type",
-      "labelKey": "settings.catalogue.connections.transport.type.label",
-      "helpKey": "settings.catalogue.connections.transport.type.help",
+      "path": "/connections/{id}/transport/type",
+      "labelKey": "settings.catalogue.connections.connections.{id}.transport.type.label",
+      "helpKey": "settings.catalogue.connections.connections.{id}.transport.type.help",
       "label": "type",
       "schema": {
         "type": "string",
@@ -3989,16 +3989,16 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
-    "connections.transport.url": {
-      "id": "connections.transport.url",
+    "connections.connections.{id}.transport.url": {
+      "id": "connections.connections.{id}.transport.url",
       "store": "connections",
       "owner": "machine",
       "area": "connections",
-      "group": "transport",
+      "group": "connections",
       "order": 8,
-      "path": "/transport/url",
-      "labelKey": "settings.catalogue.connections.transport.url.label",
-      "helpKey": "settings.catalogue.connections.transport.url.help",
+      "path": "/connections/{id}/transport/url",
+      "labelKey": "settings.catalogue.connections.connections.{id}.transport.url.label",
+      "helpKey": "settings.catalogue.connections.connections.{id}.transport.url.help",
       "label": "url",
       "schema": {
         "type": "string"
@@ -7387,16 +7387,16 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
-    "tunnels.auto_connect": {
-      "id": "tunnels.auto_connect",
+    "tunnels.profiles.{id}.auto_connect": {
+      "id": "tunnels.profiles.{id}.auto_connect",
       "store": "tunnels",
       "owner": "machine",
       "area": "tunnels",
-      "group": "auto_connect",
+      "group": "profiles",
       "order": 10,
-      "path": "/auto_connect",
-      "labelKey": "settings.catalogue.tunnels.auto_connect.label",
-      "helpKey": "settings.catalogue.tunnels.auto_connect.help",
+      "path": "/profiles/{id}/auto_connect",
+      "labelKey": "settings.catalogue.tunnels.profiles.{id}.auto_connect.label",
+      "helpKey": "settings.catalogue.tunnels.profiles.{id}.auto_connect.help",
       "label": "auto connect",
       "schema": {
         "type": "boolean",
@@ -7418,16 +7418,16 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
-    "tunnels.host": {
-      "id": "tunnels.host",
+    "tunnels.profiles.{id}.host": {
+      "id": "tunnels.profiles.{id}.host",
       "store": "tunnels",
       "owner": "machine",
       "area": "tunnels",
-      "group": "host",
+      "group": "profiles",
       "order": 2,
-      "path": "/host",
-      "labelKey": "settings.catalogue.tunnels.host.label",
-      "helpKey": "settings.catalogue.tunnels.host.help",
+      "path": "/profiles/{id}/host",
+      "labelKey": "settings.catalogue.tunnels.profiles.{id}.host.label",
+      "helpKey": "settings.catalogue.tunnels.profiles.{id}.host.help",
       "label": "host",
       "schema": {
         "type": "string"
@@ -7446,16 +7446,16 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
-    "tunnels.id": {
-      "id": "tunnels.id",
+    "tunnels.profiles.{id}.id": {
+      "id": "tunnels.profiles.{id}.id",
       "store": "tunnels",
       "owner": "machine",
       "area": "tunnels",
-      "group": "id",
+      "group": "profiles",
       "order": 0,
-      "path": "/id",
-      "labelKey": "settings.catalogue.tunnels.id.label",
-      "helpKey": "settings.catalogue.tunnels.id.help",
+      "path": "/profiles/{id}/id",
+      "labelKey": "settings.catalogue.tunnels.profiles.{id}.id.label",
+      "helpKey": "settings.catalogue.tunnels.profiles.{id}.id.help",
       "label": "id",
       "schema": {
         "type": "string"
@@ -7473,16 +7473,16 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
-    "tunnels.identity_file": {
-      "id": "tunnels.identity_file",
+    "tunnels.profiles.{id}.identity_file": {
+      "id": "tunnels.profiles.{id}.identity_file",
       "store": "tunnels",
       "owner": "machine",
       "area": "tunnels",
-      "group": "identity_file",
+      "group": "profiles",
       "order": 5,
-      "path": "/identity_file",
-      "labelKey": "settings.catalogue.tunnels.identity_file.label",
-      "helpKey": "settings.catalogue.tunnels.identity_file.help",
+      "path": "/profiles/{id}/identity_file",
+      "labelKey": "settings.catalogue.tunnels.profiles.{id}.identity_file.label",
+      "helpKey": "settings.catalogue.tunnels.profiles.{id}.identity_file.help",
       "label": "identity file",
       "schema": {
         "type": [
@@ -7506,16 +7506,16 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
-    "tunnels.name": {
-      "id": "tunnels.name",
+    "tunnels.profiles.{id}.name": {
+      "id": "tunnels.profiles.{id}.name",
       "store": "tunnels",
       "owner": "machine",
       "area": "tunnels",
-      "group": "name",
+      "group": "profiles",
       "order": 1,
-      "path": "/name",
-      "labelKey": "settings.catalogue.tunnels.name.label",
-      "helpKey": "settings.catalogue.tunnels.name.help",
+      "path": "/profiles/{id}/name",
+      "labelKey": "settings.catalogue.tunnels.profiles.{id}.name.label",
+      "helpKey": "settings.catalogue.tunnels.profiles.{id}.name.help",
       "label": "name",
       "schema": {
         "type": "string"
@@ -7534,16 +7534,16 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
-    "tunnels.options.compression": {
-      "id": "tunnels.options.compression",
+    "tunnels.profiles.{id}.options.compression": {
+      "id": "tunnels.profiles.{id}.options.compression",
       "store": "tunnels",
       "owner": "machine",
       "area": "tunnels",
-      "group": "options",
+      "group": "profiles",
       "order": 9,
-      "path": "/options/compression",
-      "labelKey": "settings.catalogue.tunnels.options.compression.label",
-      "helpKey": "settings.catalogue.tunnels.options.compression.help",
+      "path": "/profiles/{id}/options/compression",
+      "labelKey": "settings.catalogue.tunnels.profiles.{id}.options.compression.label",
+      "helpKey": "settings.catalogue.tunnels.profiles.{id}.options.compression.help",
       "label": "compression",
       "schema": {
         "description": "`ssh -C`. On by default, and the reason the WebSocket layer refuses to\ndeflate a loopback peer: a tunnelled client reaches this machine through\nthe local ssh process, so its address is loopback and its link is\nalready compressed here. Turn it off for a link that is fast and a CPU\nthat is not — a tunnel to another machine on the same LAN.",
@@ -7566,16 +7566,16 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
-    "tunnels.options.server_alive_count_max": {
-      "id": "tunnels.options.server_alive_count_max",
+    "tunnels.profiles.{id}.options.server_alive_count_max": {
+      "id": "tunnels.profiles.{id}.options.server_alive_count_max",
       "store": "tunnels",
       "owner": "machine",
       "area": "tunnels",
-      "group": "options",
+      "group": "profiles",
       "order": 7,
-      "path": "/options/server_alive_count_max",
-      "labelKey": "settings.catalogue.tunnels.options.server_alive_count_max.label",
-      "helpKey": "settings.catalogue.tunnels.options.server_alive_count_max.help",
+      "path": "/profiles/{id}/options/server_alive_count_max",
+      "labelKey": "settings.catalogue.tunnels.profiles.{id}.options.server_alive_count_max.label",
+      "helpKey": "settings.catalogue.tunnels.profiles.{id}.options.server_alive_count_max.help",
       "label": "server alive count max",
       "schema": {
         "type": "integer",
@@ -7597,16 +7597,16 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
-    "tunnels.options.server_alive_interval": {
-      "id": "tunnels.options.server_alive_interval",
+    "tunnels.profiles.{id}.options.server_alive_interval": {
+      "id": "tunnels.profiles.{id}.options.server_alive_interval",
       "store": "tunnels",
       "owner": "machine",
       "area": "tunnels",
-      "group": "options",
+      "group": "profiles",
       "order": 6,
-      "path": "/options/server_alive_interval",
-      "labelKey": "settings.catalogue.tunnels.options.server_alive_interval.label",
-      "helpKey": "settings.catalogue.tunnels.options.server_alive_interval.help",
+      "path": "/profiles/{id}/options/server_alive_interval",
+      "labelKey": "settings.catalogue.tunnels.profiles.{id}.options.server_alive_interval.label",
+      "helpKey": "settings.catalogue.tunnels.profiles.{id}.options.server_alive_interval.help",
       "label": "server alive interval",
       "schema": {
         "type": "integer",
@@ -7628,16 +7628,16 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
-    "tunnels.options.strict_host_key_checking": {
-      "id": "tunnels.options.strict_host_key_checking",
+    "tunnels.profiles.{id}.options.strict_host_key_checking": {
+      "id": "tunnels.profiles.{id}.options.strict_host_key_checking",
       "store": "tunnels",
       "owner": "machine",
       "area": "tunnels",
-      "group": "options",
+      "group": "profiles",
       "order": 8,
-      "path": "/options/strict_host_key_checking",
-      "labelKey": "settings.catalogue.tunnels.options.strict_host_key_checking.label",
-      "helpKey": "settings.catalogue.tunnels.options.strict_host_key_checking.help",
+      "path": "/profiles/{id}/options/strict_host_key_checking",
+      "labelKey": "settings.catalogue.tunnels.profiles.{id}.options.strict_host_key_checking.label",
+      "helpKey": "settings.catalogue.tunnels.profiles.{id}.options.strict_host_key_checking.help",
       "label": "strict host key checking",
       "schema": {
         "type": "string",
@@ -7666,16 +7666,16 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
-    "tunnels.port": {
-      "id": "tunnels.port",
+    "tunnels.profiles.{id}.port": {
+      "id": "tunnels.profiles.{id}.port",
       "store": "tunnels",
       "owner": "machine",
       "area": "tunnels",
-      "group": "port",
+      "group": "profiles",
       "order": 3,
-      "path": "/port",
-      "labelKey": "settings.catalogue.tunnels.port.label",
-      "helpKey": "settings.catalogue.tunnels.port.help",
+      "path": "/profiles/{id}/port",
+      "labelKey": "settings.catalogue.tunnels.profiles.{id}.port.label",
+      "helpKey": "settings.catalogue.tunnels.profiles.{id}.port.help",
       "label": "port",
       "schema": {
         "type": "integer",
@@ -7697,16 +7697,16 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "execution_authority"
     },
-    "tunnels.user": {
-      "id": "tunnels.user",
+    "tunnels.profiles.{id}.user": {
+      "id": "tunnels.profiles.{id}.user",
       "store": "tunnels",
       "owner": "machine",
       "area": "tunnels",
-      "group": "user",
+      "group": "profiles",
       "order": 4,
-      "path": "/user",
-      "labelKey": "settings.catalogue.tunnels.user.label",
-      "helpKey": "settings.catalogue.tunnels.user.help",
+      "path": "/profiles/{id}/user",
+      "labelKey": "settings.catalogue.tunnels.profiles.{id}.user.label",
+      "helpKey": "settings.catalogue.tunnels.profiles.{id}.user.help",
       "label": "user",
       "schema": {
         "type": "string"
@@ -9264,7 +9264,7 @@ export const settingsCatalogue = {
   "gaps": [
     {
       "store": "tunnels",
-      "path": "/forwards",
+      "path": "/profiles/{id}/forwards",
       "ownerStep": "Step 4f",
       "reason": "ForwardSpec records have no stable IDs; owner must define stable record edits."
     },
@@ -9852,6 +9852,273 @@ export const settingsCatalogue = {
           "id",
           "host",
           "kind"
+        ]
+      },
+      "operations": [
+        "get",
+        "create",
+        "remove"
+      ]
+    },
+    {
+      "store": "connections",
+      "path": "/connections",
+      "key": "id",
+      "schema": {
+        "description": "A saved remote connection.",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "transport": {
+            "description": "Transport layer for a remote connection.",
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "ssh_host": {
+                    "type": "string"
+                  },
+                  "ssh_port": {
+                    "type": "integer",
+                    "format": "uint16",
+                    "minimum": 0,
+                    "maximum": 65535
+                  },
+                  "ssh_user": {
+                    "type": "string"
+                  },
+                  "identity_file": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "remote_daemon_port": {
+                    "type": "integer",
+                    "format": "uint16",
+                    "minimum": 0,
+                    "maximum": 65535
+                  },
+                  "type": {
+                    "type": "string",
+                    "const": "Ssh"
+                  }
+                },
+                "required": [
+                  "type",
+                  "ssh_host",
+                  "ssh_port",
+                  "ssh_user",
+                  "remote_daemon_port"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "url": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "type": "string",
+                    "const": "Direct"
+                  }
+                },
+                "required": [
+                  "type",
+                  "url"
+                ]
+              }
+            ]
+          },
+          "auth_username": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "auto_update": {
+            "type": "boolean"
+          },
+          "deploy": {
+            "type": "string",
+            "enum": [
+              "never",
+              "on_connect",
+              "installed"
+            ]
+          },
+          "survive_secs": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "transport",
+          "auth_username",
+          "enabled"
+        ]
+      },
+      "operations": [
+        "get",
+        "create",
+        "remove"
+      ]
+    },
+    {
+      "store": "tunnels",
+      "path": "/profiles",
+      "key": "id",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "host": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer",
+            "format": "uint16",
+            "minimum": 0,
+            "maximum": 65535
+          },
+          "user": {
+            "type": "string"
+          },
+          "identity_file": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "forwards": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "bind_port": {
+                      "type": "integer",
+                      "format": "uint16",
+                      "minimum": 0,
+                      "maximum": 65535
+                    },
+                    "remote_host": {
+                      "type": "string"
+                    },
+                    "remote_port": {
+                      "type": "integer",
+                      "format": "uint16",
+                      "minimum": 0,
+                      "maximum": 65535
+                    },
+                    "type": {
+                      "type": "string",
+                      "const": "Local"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "bind_port",
+                    "remote_host",
+                    "remote_port"
+                  ]
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "bind_port": {
+                      "type": "integer",
+                      "format": "uint16",
+                      "minimum": 0,
+                      "maximum": 65535
+                    },
+                    "local_host": {
+                      "type": "string"
+                    },
+                    "local_port": {
+                      "type": "integer",
+                      "format": "uint16",
+                      "minimum": 0,
+                      "maximum": 65535
+                    },
+                    "type": {
+                      "type": "string",
+                      "const": "Remote"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "bind_port",
+                    "local_host",
+                    "local_port"
+                  ]
+                }
+              ]
+            },
+            "x-inventory-gap": {
+              "ownerStep": "Step 4f",
+              "reason": "ForwardSpec records have no stable IDs; owner must define stable record edits."
+            }
+          },
+          "options": {
+            "type": "object",
+            "properties": {
+              "server_alive_interval": {
+                "type": "integer",
+                "format": "uint16",
+                "minimum": 0,
+                "maximum": 65535
+              },
+              "server_alive_count_max": {
+                "type": "integer",
+                "format": "uint16",
+                "minimum": 0,
+                "maximum": 65535
+              },
+              "strict_host_key_checking": {
+                "type": "string",
+                "enum": [
+                  "Yes",
+                  "AcceptNew"
+                ]
+              },
+              "compression": {
+                "description": "`ssh -C`. On by default, and the reason the WebSocket layer refuses to\ndeflate a loopback peer: a tunnelled client reaches this machine through\nthe local ssh process, so its address is loopback and its link is\nalready compressed here. Turn it off for a link that is fast and a CPU\nthat is not — a tunnel to another machine on the same LAN.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "server_alive_interval",
+              "server_alive_count_max",
+              "strict_host_key_checking"
+            ]
+          },
+          "auto_connect": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "host",
+          "port",
+          "user",
+          "forwards",
+          "options"
         ]
       },
       "operations": [
