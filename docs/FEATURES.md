@@ -2884,7 +2884,7 @@ GitHub backend: failed-job reruns, auto-merge enable/disable, merge queue state/
 ## Tasks board component
 
 The core Tasks board component renders provider-declared columns and virtualized
-lanes. Cards support drag and drop and a keyboard-accessible move menu. Pending
+lanes. Each lane shows its loaded count and a More control while the provider has another board page. More loads the next page across all lanes, retaining earlier cards. Cards show assignee names and label chips, and support drag and drop and a keyboard-accessible Move button menu. Pending
 moves cannot be repeated; rejected actions restore the card and show the error.
 This component is available to the Tasks host; provider registration and the
 Tasks navigation surface determine where it is shown.

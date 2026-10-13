@@ -762,4 +762,6 @@ has a virtualized card list. Pointer capture supports drag and drop; the native
 move menu provides keyboard and touch access. Moves dispatch the provider's per-card
 action, show pending feedback, and restore the origin on rejection. Cancellation
 and scope changes clean up drag state. Consumers refresh the projection after a
-successful move; the view does not infer workflow transitions.
+successful move by merging page one into the loaded cards. Other loaded pages are
+retained until reload. The move menu stays open when its own list scrolls; scrolling
+outside it dismisses it. The view does not infer workflow transitions.

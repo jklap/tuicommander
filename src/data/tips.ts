@@ -10,6 +10,12 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "Tasks board",
+		description:
+			"Use More in any lane to load the next board page. Select Move… on a card to change its lane without dragging.",
+		shortcut: null,
+	},
+	{
 		feature: "Terminal Chat answers",
 		description:
 			"Hover or focus an answer card to copy the whole reply. Pasted terminal output shows two lines; select + N lines to expand it.",
