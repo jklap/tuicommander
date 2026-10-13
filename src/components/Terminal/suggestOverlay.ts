@@ -179,15 +179,20 @@ export function isSuggestBlock(
 	return false;
 }
 
-/** One row the overlay masks, and why. */
+/** One row the plan classifies, and why. */
 export interface OverlayBlock {
 	row: number;
 	kind: "suggest" | "continuation" | "intent" | "answer";
 }
 
 /**
- * Which rows the suggest/intent overlay must mask on this screen, plus a key
- * that changes exactly when that set does.
+ * Which rows hold a `suggest:`/`intent:` marker or an answer on this screen, plus
+ * a key that changes exactly when that set does. The marker rows are not painted
+ * at all (see [`hiddenMarkerRows`]); only answer rows get an overlay strip.
+ *
+ * `firstRow` lets the caller start the scan above the viewport (negative row
+ * indexes). A marker whose first row has scrolled off the top still has its
+ * continuation rows on screen, and they are only recognisable from the anchor.
  *
  * The key is the point: the overlay rebuilds its DOM only when the plan differs
  * from the last one, and most repaints do not move a suggest block. Deciding
@@ -198,10 +203,11 @@ export interface OverlayBlock {
 export function planSuggestOverlay(
 	totalRows: number,
 	getRow: (i: number) => RowSnapshot | null,
+	firstRow = 0,
 ): { key: string; blocks: OverlayBlock[] } {
 	const blocks: OverlayBlock[] = [];
 	const parts: string[] = [];
-	for (let row = 0; row < totalRows; row++) {
+	for (let row = firstRow; row < totalRows; row++) {
 		const snapshot = getRow(row);
 		if (!snapshot) continue;
 		const text = snapshot.text;
@@ -225,11 +231,33 @@ export function planSuggestOverlay(
 			}
 			row = last;
 		} else if (INTENT_HIGHLIGHT_RE.test(text)) {
-			blocks.push({ row, kind: "intent" });
-			parts.push(`i${row}`);
+			// Ink also hard-wraps with cursor moves and indentation, without isWrapped.
+			for (; ; row++) {
+				blocks.push({ row, kind: "intent" });
+				parts.push(`i${row}`);
+				if (row + 1 >= totalRows) break;
+				const next = getRow(row + 1);
+				if (!next || next.text.trim() === "") break;
+				if (next.isWrapped) continue;
+				if (!ANSWER_CONTINUATION_RE.test(next.text)) break;
+				if (OUTPUT_ROW_RE.test(next.text) || ANSWER_MARKER_RE.test(next.text) || PROMPT_ROW_RE.test(next.text)) break;
+				if (SUGGEST_ANCHOR_RE.test(next.text) || INTENT_HIGHLIGHT_RE.test(next.text)) break;
+			}
 		}
 	}
 	return { key: parts.join(","), blocks };
+}
+
+/**
+ * Rows the terminal must not paint: every `suggest:`/`intent:` marker row in the
+ * plan, wrapped continuations included. Row indexes stay where they are, so
+ * selection, search and scrollback keep their coordinates. Rows outside the
+ * viewport (the overscan rows, the lookback) may be in the set; they are inert.
+ */
+export function hiddenMarkerRows(blocks: readonly OverlayBlock[]): Set<number> {
+	const hidden = new Set<number>();
+	for (const block of blocks) if (block.kind !== "answer") hidden.add(block.row);
+	return hidden;
 }
 
 function overlayDiv(top: number, height: number, background: string): HTMLDivElement {
@@ -240,25 +268,15 @@ function overlayDiv(top: number, height: number, background: string): HTMLDivEle
 
 /**
  * Replace the contents of `container` with one absolutely positioned strip per
- * planned block. Masks (`suggest`, `continuation`) paint the terminal
- * background over the row; `intent` and `answer` are translucent tints, so the
- * row's text stays readable underneath. An answer also gets a solid gutter bar.
+ * answer row: a translucent tint, so the row's text stays readable underneath,
+ * plus a solid gutter bar. Marker rows get no strip — they are not painted.
  */
-export function paintOverlayBlocks(
-	container: HTMLElement,
-	blocks: readonly OverlayBlock[],
-	cellHeight: number,
-	bg: string,
-): void {
+export function paintOverlayBlocks(container: HTMLElement, blocks: readonly OverlayBlock[], cellHeight: number): void {
 	container.textContent = "";
 	for (const block of blocks) {
-		const top = block.row * cellHeight;
-		if (block.kind === "answer") {
-			const div = overlayDiv(top, cellHeight, "rgba(94,190,140,0.14)");
-			div.style.boxShadow = "inset 3px 0 0 rgba(94,190,140,0.9)";
-			container.appendChild(div);
-		} else {
-			container.appendChild(overlayDiv(top, cellHeight, block.kind === "intent" ? "rgba(181,147,90,0.12)" : bg));
-		}
+		if (block.kind !== "answer" || block.row < 0) continue;
+		const div = overlayDiv(block.row * cellHeight, cellHeight, "rgba(94,190,140,0.14)");
+		div.style.boxShadow = "inset 3px 0 0 rgba(94,190,140,0.9)";
+		container.appendChild(div);
 	}
 }

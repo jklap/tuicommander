@@ -137,3 +137,52 @@ describe("gridRenderer multi-codepoint cells", () => {
 		expect(paint(0x25cf, "\uFE0F")).toHaveBeenCalledWith("●\uFE0F", 0, 12);
 	});
 });
+
+describe("gridRenderer hiddenRows (#1761-7249)", () => {
+	const metrics: CellMetrics = {
+		cellWidth: 8,
+		cellHeight: 16,
+		baseline: 12,
+		fontSize: 14,
+		dpr: 1,
+		scaledCellWidth: 8,
+		scaledCellHeight: 16,
+	};
+
+	function textRow(index: number, ch: string): DecodedRow {
+		return {
+			index,
+			count: 1,
+			wrapped: false,
+			codepoints: Uint32Array.of(ch.codePointAt(0) ?? 0),
+			fg: new Uint32Array(1),
+			bg: new Uint32Array(1),
+			attrs: Uint8Array.of(ATTR_DEFAULT_BG | ATTR_DEFAULT_FG),
+		};
+	}
+
+	function paintedChars(opts: { fullRepaint: boolean; dirtyIndices?: Set<number> }) {
+		const fillText = vi.fn();
+		const ctx = {
+			fillText,
+			fillRect: vi.fn(),
+			globalAlpha: 1,
+			canvas: { width: 100, height: 100 },
+		} as unknown as CanvasRenderingContext2D;
+		const renderer = createGridRenderer(ctx, { fontWeight: () => 400, getFontFamily: () => "monospace" });
+		renderer.setTheme(DEF_BG, DEF_FG);
+		const rowMap = new Map([0, 1, 2].map((i) => [i, textRow(i, "ABC"[i])]));
+		renderer.paintGrid(rowMap, metrics, { ...opts, hiddenRows: new Set([1]) });
+		return fillText.mock.calls.map((c) => c[0]);
+	}
+
+	// catches: a hidden marker row is still painted, so its text shows on the canvas
+	it("paints no glyph for a hidden row on a full repaint", () => {
+		expect(paintedChars({ fullRepaint: true })).toEqual(["A", "C"]);
+	});
+
+	// catches: the incremental path repaints a hidden dirty row from its text
+	it("paints no glyph for a hidden row on an incremental repaint", () => {
+		expect(paintedChars({ fullRepaint: false, dirtyIndices: new Set([0, 1, 2]) })).toEqual(["A", "C"]);
+	});
+});

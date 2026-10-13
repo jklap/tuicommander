@@ -320,3 +320,7 @@ HTTP(S) link context menus include **Start in Design Mode**, passing the resolve
 ### History-anchored viewport scrolling
 
 Wheel, touch and scrollbar gestures send `terminal_scroll_to_anchor` with `historyBase + historySize - offset`. Null resumes following output. The cache keeps rendering until the backend frame reaches the target; there is no timed settle handoff that can skip rows during sustained output.
+
+### Hidden agent marker rows
+
+The marker plan blanks intent and suggest rows without changing grid coordinates. Intent continuation includes soft wraps and adjacent rows with at least two leading spaces (Codex/Ink cursor-move hard wraps). A blank row ends the walk. Unwrapped output, answer, prompt, suggest and intent rows start separate blocks.

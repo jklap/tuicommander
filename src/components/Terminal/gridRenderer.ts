@@ -56,6 +56,8 @@ export interface PaintGridOptions {
 	fullRepaint: boolean;
 	/** When set (and not fullRepaint), only these row indices are repainted. */
 	dirtyIndices?: Set<number>;
+	/** Row indices that are cleared but never drawn (agent marker rows). */
+	hiddenRows?: ReadonlySet<number>;
 }
 
 export interface GridRenderer {
@@ -1340,7 +1342,7 @@ export function createGridRenderer(ctx: GridContext2D, deps: GridRendererDeps): 
 			ctx.fillStyle = cachedBgDefault;
 			ctx.fillRect(-GUTTER_PX, 0, w, h);
 			for (const [, row] of rowMap) {
-				paintRow(row, row.index * m.cellHeight, m, fontFamily);
+				if (!opts.hiddenRows?.has(row.index)) paintRow(row, row.index * m.cellHeight, m, fontFamily);
 			}
 		} else {
 			// Incremental: repaint only dirty text rows (overlay handles cursor/selection/search)
@@ -1349,7 +1351,7 @@ export function createGridRenderer(ctx: GridContext2D, deps: GridRendererDeps): 
 				ctx.fillStyle = cachedBgDefault;
 				ctx.fillRect(-GUTTER_PX, y, w, m.cellHeight);
 				const row = rowMap.get(idx);
-				if (row) paintRow(row, y, m, fontFamily);
+				if (row && !opts.hiddenRows?.has(idx)) paintRow(row, y, m, fontFamily);
 			}
 		}
 	}
