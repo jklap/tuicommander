@@ -3,6 +3,7 @@ import { cleanup, render } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it } from "vitest";
 import { Transcript } from "../../components/AIChatPanel/Transcript";
+import recordedCodex from "../../components/Terminal/__tests__/fixtures/codex-answer-paragraphs-1872.json";
 import type { AcpTranscriptEntry } from "../../stores/acpTranscript";
 
 afterEach(cleanup);
@@ -47,7 +48,7 @@ describe("chat answer shapes follow the CLI grid extent", () => {
 	});
 
 	// Catches: streaming a second answer onto a finished one leaving a raw 💬 or a stale "end" mark.
-	it("re-marks each answer when a second one streams in", async () => {
+	it("extends the region when a second marked paragraph streams in", async () => {
 		const [entries, setEntries] = createSignal<AcpTranscriptEntry[]>([
 			{ id: "a", kind: "agent", text: "💬 One.\n\nMore." },
 		]);
@@ -57,8 +58,21 @@ describe("chat answer shapes follow the CLI grid extent", () => {
 		await Promise.resolve();
 		await Promise.resolve();
 		const blocks = Array.from(container.querySelectorAll<HTMLElement>("#markdown-content > div > *"));
-		expect(blocks.map((b) => b.getAttribute("data-tuic-answer"))).toEqual(["", "end", "", "end"]);
+		expect(blocks.map((b) => b.getAttribute("data-tuic-answer"))).toEqual(["", "", "", "end"]);
 		expect(container.textContent).not.toContain("💬");
+	});
+
+	// Catches: the shared range merging while the chat still draws gaps or leaves later glyphs raw.
+	it("merges the recorded Codex paragraphs into one region and strips each marker", async () => {
+		const text = recordedCodex.answerRows.map((row) => row.text.replace(/^[• ]+/, "")).join("\n");
+		const { container, blocks, marks } = await show(text);
+		expect(marks).toEqual(["", "", "end"]);
+		expect(container.querySelectorAll("[data-tuic-answer-region-start]")).toHaveLength(1);
+		expect(blocks.map((block) => block.textContent)).toEqual([
+			"The answer highlight runs continuously across the full response.",
+			"Blank paragraph spacing stays preserved.",
+			"Raw copy text remains untouched.",
+		]);
 	});
 
 	// Catches: a 💬 on its own line inside one paragraph (soft break) staying raw, though the grid row starts an answer.

@@ -2,6 +2,8 @@
 
 Remote terminals replay their current viewport when attached or reconnected. A stream failure or stalled initial replay shows a persistent error toast; the client retries without requiring new terminal output. See [Remote Access](remote-access.md).
 
+Adjacent `💬` answer paragraphs share one continuous tint and left bar, including blank rows between them. A non-answer output row or prompt ends the region. The CLI blanks only the marker glyph cells; copy, selection and search keep the original text. Chat uses the same answer extent and strips every paragraph marker.
+
 ## Tablet Keyboard
 
 Tap the terminal to focus its keyboard input. Touch and mouse input use the same field, including soft-keyboard text entry and repeated deletion. Primary mouse presses keep focus on that input without a temporary canvas focus change.

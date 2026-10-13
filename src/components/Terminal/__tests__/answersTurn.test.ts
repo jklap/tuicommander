@@ -315,8 +315,10 @@ describe("readAnswersHistory", () => {
 			newTurnCache(),
 		);
 		expect(turns?.[0].prompt).toBeNull();
-		// catches: the answers-only view keeping only the 💬 row, or running an answer past its end into the next one
-		const answers = turns?.[0].answers ?? [];
+		// Catches: retained adjacent marked paragraphs being split or losing continuation content.
+		const merged = turns?.[0].answers ?? [];
+		expect(merged).toHaveLength(1);
+		const answers = merged[0].split(/\n\n(?=💬)/);
 		expect(answers.map((a) => a.split("\n")[0])).toEqual([
 			"💬 Green bar in the terminal scrollbar: green is the colour TUIC uses to mark the",
 			'💬 Project by project: the full status is in the tab "Stato progetti 03/10"',
