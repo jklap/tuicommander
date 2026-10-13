@@ -9857,6 +9857,152 @@ fn goose_interrupted_capture_reads_ready() {
     );
 }
 
+/// Aider 0.86.2 in the agent-vm marker matrix (#1822-5e0f): prompt_toolkit paints
+/// the `>` prompt, then about 32 blank rows below it, and parks the cursor back
+/// on the prompt. The live prompt is therefore never among the last rows of the
+/// 41-row viewport. Catches: an Aider detector that reads only the viewport tail
+/// and so never sees Ready on a real screen.
+#[test]
+fn aider_padded_prompt_capture_reads_ready() {
+    let screen = replay_final_screen(&agent_prompt_fixture(
+        "aider-0.86.2-padded-prompt-20261012.tcap",
+    ));
+    assert_eq!(
+        detect_agent_screen_activity(Some("aider"), &screen),
+        AgentScreenActivity::Ready,
+        "screen: {screen:#?}"
+    );
+}
+
+/// Same capture, derived screens. A generation has no bottom prompt, and a stale
+/// echoed `> text` line in history is not a composer. Catches: a fix that
+/// accepts any `>` row anywhere on the viewport.
+#[test]
+fn aider_padded_prompt_variants_stay_unknown() {
+    let screen = replay_final_screen(&agent_prompt_fixture(
+        "aider-0.86.2-padded-prompt-20261012.tcap",
+    ));
+    let prompt = screen
+        .iter()
+        .rposition(|row| row.trim() == ">")
+        .unwrap_or_else(|| panic!("fixture has no prompt row: {screen:#?}"));
+    let mut generating = screen.clone();
+    generating[prompt].clear();
+    assert_eq!(
+        detect_agent_screen_activity(Some("aider"), &generating),
+        AgentScreenActivity::Unknown,
+        "generating screen: {generating:#?}"
+    );
+    // Aider echoes a submitted line as `> text`; that history row is not a
+    // composer even when it sits inside the final window. (A bare `>` anywhere is
+    // an empty input box by the shared `find_input_box_prompt_row` contract.)
+    let mut stale = vec![String::new(); screen.len()];
+    for (row, text) in [
+        "Earlier reply from the model.",
+        "> What is 10+7?",
+        "Tokens: 1.2k sent, 12 received.",
+        "Applied edit to canary-rule.md",
+        "Tokens: 2k",
+        "Cost: $0.00",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        stale[row] = text.into();
+    }
+    assert_eq!(
+        detect_agent_screen_activity(Some("aider"), &stale),
+        AgentScreenActivity::Unknown,
+        "stale prompt screen: {stale:#?}"
+    );
+}
+
+/// The user-visible failure: the first submission to a freshly started Aider
+/// answered 409 agent_not_ready. Replays the real startup through the reader,
+/// lets the silence timer run, and asks the same gate the submit route asks.
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn aider_padded_prompt_capture_accepts_the_first_submission() {
+    tokio::time::pause();
+    let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(
+        "aider-0.86.2-padded-prompt-20261012.tcap",
+    ))
+    .expect("valid live capture");
+    let (rows, cols) = capture.geometry.expect("recorded terminal geometry");
+    let sid = "aider-padded-prompt";
+    let (state, silence) = chunk_trace_state(sid);
+    {
+        let mut session = state.session_maps.session_states.get_mut(sid).unwrap();
+        session.agent_type = Some("aider".into());
+        session.agent_type_from_run_config = true;
+        session.spawn_root_role = crate::state::SpawnRootRole::DirectProgram;
+    }
+    state
+        .grid
+        .vt_log_buffers
+        .insert(sid.into(), Mutex::new(VtLogBuffer::new(rows, cols, 2000)));
+    insert_recording_session(&state, sid);
+    // The launch command's own Enter left the shell busy, as for any agent
+    // started through the agent route.
+    state
+        .session_maps
+        .shell_states
+        .get(sid)
+        .unwrap()
+        .store(SHELL_BUSY, std::sync::atomic::Ordering::Release);
+    let mut processor = ChunkProcessor::new(None, None);
+    for record in capture.records {
+        if record.direction == crate::pty_capture::CaptureDirection::Output {
+            processor.process_chunk(
+                std::str::from_utf8(&record.data).expect("UTF-8 terminal output"),
+                &silence,
+                sid,
+                &state,
+            );
+        }
+    }
+    {
+        let mut session = state.session_maps.session_states.get_mut(sid).unwrap();
+        session.background_probe_satisfied_turn_epoch = Some(session.turn_epoch);
+    }
+    {
+        let mut silence = silence.lock();
+        let settled = std::time::Instant::now() - std::time::Duration::from_secs(60);
+        silence.last_output_at = settled;
+        silence.last_chunk_at = settled;
+        silence.screen_ready_pending_since = Some(settled);
+    }
+    let running = Arc::new(AtomicBool::new(true));
+    spawn_silence_timer(silence.clone(), running.clone(), sid.into(), state.clone());
+    tokio::task::yield_now().await;
+    tokio::time::advance(SILENCE_CHECK_INTERVAL + std::time::Duration::from_millis(1)).await;
+    tokio::task::yield_now().await;
+    running.store(false, Ordering::Release);
+    let idle_confirmed = silence.lock().idle_confirmed();
+    let shell_idle = state
+        .session_maps
+        .shell_states
+        .get(sid)
+        .unwrap()
+        .load(Ordering::Acquire)
+        == SHELL_IDLE;
+    let question = state
+        .session_maps
+        .session_states
+        .get(sid)
+        .unwrap()
+        .question_confident;
+    let injection_uncertain = silence.lock().injection_delivery_uncertain;
+    let partial = super::injection::has_partial_user_input(&state, sid);
+    assert!(
+        should_inject_now(&state, sid),
+        "submission gate closed: shell_idle={shell_idle} idle_confirmed={idle_confirmed} \
+         question_confident={question} injection_delivery_uncertain={injection_uncertain} \
+         partial_input={partial} cached_screen={:?}",
+        silence.lock().cached_screen_activity
+    );
+}
+
 /// What a replay saw on the way through, beyond the events it produced.
 ///
 /// The counter that matters is `ticks_without_cutoff`: `find_chrome_cutoff`
