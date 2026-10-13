@@ -250,7 +250,7 @@ export interface TranscriptProps {
 	/** ego's provider-retry line ("… retrying in 2s (attempt 2/6)"), shown instead of the pulse. */
 	retry?: () => string | null;
 	emptyMessage: string;
-	onOpenFile?: (href: string) => void;
+	onOpenFile?: (href: string) => void | Promise<boolean | void>;
 	onClear?: () => void;
 	canForkAtMessage?: () => boolean;
 	onFork?: (messageId: string) => void;

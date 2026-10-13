@@ -39,12 +39,14 @@ export const TerminalChatView: Component<{
 			.refresh(props.sessionId)
 			.catch((error) => appLogger.error("terminal", "Chat view refresh failed", { sessionId: props.sessionId, error }));
 
+	/** False when the path resolves to nothing, so the caller can drop the dead link. */
 	const openFile = async (href: string) => {
 		const cwd = terminalsStore.get(props.terminalId)?.cwd;
 		if (!cwd) return;
 		try {
 			const target = await resolveFileLink(cwd, href);
-			if (target) openFileLinkHere(target);
+			if (!target) return false;
+			openFileLinkHere(target);
 		} catch (error) {
 			appLogger.error("terminal", "Failed to resolve file link", error);
 		}
@@ -72,7 +74,7 @@ export const TerminalChatView: Component<{
 			<Transcript
 				terminalAgent={terminalsStore.get(props.terminalId)?.agentType ?? undefined}
 				onSearchRef={props.onSearchRef}
-				onOpenFile={(href) => void openFile(href)}
+				onOpenFile={openFile}
 				entries={() => acpTranscript.entries(chatViewKey(props.sessionId))}
 				busy={() => false}
 				observeToolDuration={false}
