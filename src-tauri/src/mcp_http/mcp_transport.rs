@@ -926,7 +926,14 @@ pub(super) async fn mcp_post(
                 .and_then(|v| v.to_str().ok());
             let ancestry_identity = match tuic_session_header.filter(|s| !s.is_empty()) {
                 Some(_) => None,
-                None => identity_from_client_ancestry(client_pid_header(&headers)),
+                // Forks `ps` and reads process environments: off the async workers.
+                None => {
+                    let client_pid = client_pid_header(&headers).to_owned();
+                    tokio::task::spawn_blocking(move || identity_from_client_ancestry(&client_pid))
+                        .await
+                        .ok()
+                        .flatten()
+                }
             };
             apply_initialize_identity(
                 &state,

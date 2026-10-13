@@ -579,6 +579,11 @@ pub(super) fn identity_from_client_ancestry(client_pid: &str) -> Option<String> 
     /// Bridge -> agent is one or two hops; the bound only stops a corrupt table.
     const MAX_HOPS: usize = 16;
     let mut pid: u32 = client_pid.parse().ok()?;
+    // One process-table query serves every hop; the table maps parent -> children.
+    let parents: std::collections::HashMap<u32, u32> = crate::pty::process_parent_map()?
+        .into_iter()
+        .flat_map(|(parent, children)| children.into_iter().map(move |child| (child, parent)))
+        .collect();
     for _ in 0..MAX_HOPS {
         if pid <= 1 {
             return None;
@@ -588,24 +593,8 @@ pub(super) fn identity_from_client_ancestry(client_pid: &str) -> Option<String> 
         {
             return Some(identity);
         }
-        pid = parent_pid_of(pid)?;
+        pid = *parents.get(&pid)?;
     }
-    None
-}
-
-#[cfg(unix)]
-fn parent_pid_of(pid: u32) -> Option<u32> {
-    let output = std::process::Command::new("ps")
-        .args(["-o", "ppid=", "-p", &pid.to_string()])
-        .output()
-        .ok()?;
-    String::from_utf8_lossy(&output.stdout).trim().parse().ok()
-}
-
-// DEFERRED (2026-10-13) — Windows ancestry walk; the Toolhelp snapshot in
-// `pty::screen::process_parent_map` could serve it. ego on Windows is unverified.
-#[cfg(not(unix))]
-fn parent_pid_of(_pid: u32) -> Option<u32> {
     None
 }
 
