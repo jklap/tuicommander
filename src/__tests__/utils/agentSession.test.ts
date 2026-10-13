@@ -383,6 +383,17 @@ describe("verifyAndBuildResumeCommand", () => {
 });
 
 // Catches: discovery persists a Claude launch-time brief and resume submits that task a second time.
+it("resume_drops_a_seed_brief_containing_a_shell_escaped_apostrophe", () => {
+	const discoveredLaunch = String.raw`claude --model opus -- '<untrusted-content source="work item">
+Fix issue 125; it'\''s broken
+</untrusted-content>
+Use it as the task brief.'`;
+	expect(buildResumeCommand("claude", "11111111-1111-4111-8111-111111111111", discoveredLaunch)).toBe(
+		"claude --resume 11111111-1111-4111-8111-111111111111 --model opus",
+	);
+});
+
+// Catches: discovery persists a Claude launch-time brief and resume submits that task a second time.
 it("resume_does_not_resubmit_the_initial_brief_preserved_by_discovery", () => {
 	// agent_session.rs::compose_launch_command keeps positional argv verbatim; useAgentPolling persists it.
 	const discoveredLaunch = `claude --model opus '<untrusted-content source="work item">
