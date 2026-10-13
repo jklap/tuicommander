@@ -46,6 +46,7 @@ beforeEach(async () => {
 });
 afterEach(() => {
 	cleanup();
+	uiStore._testCancelPendingSave();
 	for (const entry of registrations) entry.dispose();
 	registrations = [];
 	vi.restoreAllMocks();
@@ -70,10 +71,10 @@ it("restored_rejected_sort_falls_back_to_last_valid_sort", async () => {
 	};
 	disk.prefs = {
 		tasks_view_preferences: {
-			'["/repo-a","demo","a"]': {
+			'["/repo-a","demo","a"]': JSON.stringify({
 				query: { ...query, sort: { fieldId: "title", descending: false } },
 				lastValidSort: { fieldId: "updatedAt", descending: true },
-			},
+			}),
 		},
 	};
 	await uiStore.hydrate();
@@ -100,7 +101,9 @@ it("restores_source_view_and_query_after_remount_and_partitions_repositories_and
 	await screen.findByRole("heading", { name: "High" });
 	fireEvent.click(screen.getByRole("tab", { name: "Board" }));
 	expect(await screen.findByRole("region", { name: "Tasks board" })).toBeInTheDocument();
-	await waitFor(() => expect(JSON.stringify(disk.prefs)).toContain('"board"'));
+	await waitFor(() =>
+		expect(Object.values(disk.prefs.tasks_view_preferences as Record<string, string>).join()).toContain('"board"'),
+	);
 	mounted.unmount();
 	await uiStore.hydrate();
 	mounted = render(() => <TasksShell />);
@@ -149,14 +152,14 @@ it("rejected_last_valid_sort_uses_provider_default_and_retains_filters", async (
 	};
 	disk.prefs = {
 		tasks_view_preferences: {
-			'["/repo-a","demo","a"]': {
+			'["/repo-a","demo","a"]': JSON.stringify({
 				query: {
 					...query,
 					filters: [{ fieldId: "priority", values: [{ kind: "enum", value: "high" }] }],
 					sort: { fieldId: "title", descending: false },
 				},
 				lastValidSort: { fieldId: "updatedAt", descending: true },
-			},
+			}),
 		},
 	};
 	await uiStore.hydrate();
@@ -176,10 +179,10 @@ it("network_failure_keeps_saved_sort_and_error_visible", async () => {
 	};
 	disk.prefs = {
 		tasks_view_preferences: {
-			'["/repo-a","demo","a"]': {
+			'["/repo-a","demo","a"]': JSON.stringify({
 				query: { ...query, sort: { fieldId: "title", descending: false } },
 				lastValidSort: { fieldId: "updatedAt", descending: true },
-			},
+			}),
 		},
 	};
 	await uiStore.hydrate();
@@ -204,7 +207,7 @@ it("restored_query_keeps_null_contract_when_disk_dropped_null_leaves", async () 
 	};
 	disk.prefs = {
 		tasks_view_preferences: {
-			'["/repo-a","demo","a"]': { query: { filters: [], search: "", limit: 100 } },
+			'["/repo-a","demo","a"]': JSON.stringify({ query: { filters: [], search: "", limit: 100 } }),
 		},
 	};
 	await uiStore.hydrate();

@@ -211,7 +211,9 @@ function createUIStore() {
 				file_browser_view_mode: state.fileBrowserViewMode,
 				detached_panels: state.detachedPanels,
 				github_section_collapsed: state.githubSectionCollapsed,
-				tasks_view_preferences: state.tasksViewPreferences,
+				tasks_view_preferences: Object.fromEntries(
+					Object.entries(state.tasksViewPreferences).map(([key, value]) => [key, JSON.stringify(value)]),
+				),
 			})
 			.catch((err) => appLogger.debug("store", "Failed to save UI prefs", err));
 	}
@@ -262,11 +264,22 @@ function createUIStore() {
 						file_browser_view_mode?: string;
 						detached_panels?: Record<string, string>;
 						github_section_collapsed?: Record<string, boolean>;
-						tasks_view_preferences?: Record<string, TaskViewPreference>;
+						tasks_view_preferences?: Record<string, string>;
 					} & Partial<Record<(typeof exclusivePanelPrefs)[number]["backendKey"], boolean>>
 				>("load_ui_prefs");
 				uiPrefsWriter.loaded(loaded ?? {});
-				setState("tasksViewPreferences", reconcile(loaded?.tasks_view_preferences ?? {}));
+				const taskPreferences: Record<string, TaskViewPreference> = {};
+				for (const [key, value] of Object.entries(loaded?.tasks_view_preferences ?? {})) {
+					try {
+						const parsed: unknown = JSON.parse(value);
+						if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+							taskPreferences[key] = parsed as TaskViewPreference;
+						}
+					} catch (err) {
+						appLogger.debug("store", "Failed to decode Tasks view preference", err);
+					}
+				}
+				setState("tasksViewPreferences", reconcile(taskPreferences));
 				setState("tasksPreferencesRevision", (revision) => revision + 1);
 				if (loaded) {
 					if (loaded.sidebar_visible !== undefined) {

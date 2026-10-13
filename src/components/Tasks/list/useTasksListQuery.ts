@@ -35,7 +35,7 @@ export function useTasksListQuery(
 			clearTimeout(debounce);
 			const saved = props.repoPath ? uiStore.state.tasksViewPreferences[scope()] : undefined;
 			const next = saved?.query
-				? (JSON.parse(JSON.stringify({ ...saved.query, cursor: null })) as WorkItemQuery)
+				? (JSON.parse(JSON.stringify({ ...initialTaskQuery(), ...saved.query, cursor: null })) as WorkItemQuery)
 				: initialTaskQuery();
 			lastValidSort = saved?.lastValidSort ? { ...saved.lastValidSort } : null;
 			setSearch(next.search);

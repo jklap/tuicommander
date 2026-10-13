@@ -565,7 +565,7 @@ neither of which involves a model. Nothing reads them back yet.
 | `settings_expert_mode` | `bool` | `false` | Settings "expert mode": off hides an expert control that is still at its default; on shows every control |
 | `diff_view_mode` | `String` | `"split"` | Diff viewer: `split` or `unified` |
 | `detached_panels` | `HashMap<String, String>` | `{}` | Panel id to detached window label |
-| `tasks_view_preferences` | `HashMap<String, Value>` | `{}` | Tasks source per repository and view/query intent per repository/provider/account; saved sort fallback, no result pages |
+| `tasks_view_preferences` | `HashMap<String, String>` | `{}` | JSON-encoded Tasks source per repository and view/query intent per repository/provider/account; saved sort fallback, no result pages |
 | `github_section_collapsed` | `HashMap<String, bool>` | `{}` | Collapsed GitHub sections (`my-prs`, `prs`, `issues`); absent key means the section's own default |
 
 The eight `*_panel_visible` flags for markdown, file browser, git, outline,

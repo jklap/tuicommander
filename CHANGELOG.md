@@ -17,6 +17,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Remove the Aider agent harness, including launch profiles, detection, screen adapters and mobile commands. Existing settings remain readable (#1849-0c19).
 
 ### Fixed
+
+- Tasks view preferences keep the settings catalogue available and restore nullable query defaults correctly (#1852-35a8).
 - Preserve account metadata when saving Tasks setup, keep assignee username filters as text, and hide unsupported GitLab roadmap date filters and grouping (#1841-bbac, #1843-9b0f, #1845-66f6).
 - Hide Codex/Ink hard-wrapped intent tails with their marker rows, stopping at blank rows and new output (#1761-7249).
 - Trackpad and wheel scrolling no longer stalls while the pointer is over the CLI/Chat switch, in either view (#1847-feb9).
