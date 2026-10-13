@@ -476,8 +476,8 @@ describe("hiddenMarkerRows — wrapped markers leave no visible fragment (#1761-
 		expect([...hidden]).toEqual([-1, 0]);
 	});
 
-	// catches: a wrapped intent hides only its first row, so the tail of the line shows
-	it("hides every row an intent line wraps onto", () => {
+	// catches: intent rows hidden again, so the user cannot read what the agent is doing (D3, 2026-10-13)
+	it("never hides an intent row, wrapped or not", () => {
 		const hidden = screen(
 			[
 				["intent: Investigating why the terminal keeps repainting marker", false],
@@ -486,13 +486,13 @@ describe("hiddenMarkerRows — wrapped markers leave no visible fragment (#1761-
 			],
 			0,
 		);
-		expect([...hidden]).toEqual([0, 1]);
+		expect([...hidden]).toEqual([]);
 	});
 
 	// catches: only soft-wrapped (isWrapped) intent tails are hidden; Codex/Ink hard-wrap with
 	// cursor moves and a two-space indent, so the tail row keeps painting (recorded in
 	// codex-narrow-progress-intent-20260925.tcap: `intent: ...con` then `  righe di continuazione ...`)
-	it("hides the indented tail of a hard-wrapped intent line", () => {
+	it("keeps the indented tail of a hard-wrapped intent line painted", () => {
 		const hidden = screen(
 			[
 				["• intent: Controllo la cattura a 80 colonne e preparo la prova del journal con", false],
@@ -502,14 +502,14 @@ describe("hiddenMarkerRows — wrapped markers leave no visible fragment (#1761-
 			],
 			0,
 		);
-		expect(hidden.has(1)).toBe(true);
+		expect(hidden.has(1)).toBe(false);
 		expect(hidden.has(3)).toBe(false);
 	});
 
 	// catches: the hard-wrap walk swallows a new answer, tool output or prompt
 	// (and its following indented content) as part of the preceding intent.
 	it.each(["  ● tool output", "  ⏺ tool output", "• tool output", "  💬 answer", "  ❯ prompt"])(
-		"ends a hard-wrapped intent before %s",
+		"hides nothing of a hard-wrapped intent before %s",
 		(boundary) => {
 			const hidden = screen(
 				[
@@ -520,7 +520,7 @@ describe("hiddenMarkerRows — wrapped markers leave no visible fragment (#1761-
 				],
 				0,
 			);
-			expect([...hidden]).toEqual([0, 1]);
+			expect([...hidden]).toEqual([]);
 		},
 	);
 

@@ -265,14 +265,15 @@ export function planSuggestOverlay(
 }
 
 /**
- * Rows the terminal must not paint: every `suggest:`/`intent:` marker row in the
- * plan, wrapped continuations included. Row indexes stay where they are, so
+ * Rows the terminal must not paint: every `suggest:` row in the plan, wrapped
+ * continuations included. `intent:` rows stay painted: the user reads the agent's
+ * work there, not only in the tab header (Boss, 2026-10-13). Row indexes stay where they are, so
  * selection, search and scrollback keep their coordinates. Rows outside the
  * viewport (the overscan rows, the lookback) may be in the set; they are inert.
  */
 export function hiddenMarkerRows(blocks: readonly OverlayBlock[]): Set<number> {
 	const hidden = new Set<number>();
-	for (const block of blocks) if (block.kind !== "answer") hidden.add(block.row);
+	for (const block of blocks) if (block.kind === "suggest" || block.kind === "continuation") hidden.add(block.row);
 	return hidden;
 }
 
