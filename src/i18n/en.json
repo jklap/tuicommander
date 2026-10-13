@@ -557,6 +557,7 @@
 	"helpPanel.resetZoomAll": "Reset zoom all terminals",
 	"helpPanel.resources": "Resources",
 	"helpPanel.rightClickGroup": "Right-click group",
+	"helpPanel.runSavedCommandNoEdit": "Run saved command",
 	"helpPanel.saveFile": "Save file (when editor focused)",
 	"helpPanel.searchPlaceholder": "Search shortcuts...",
 	"helpPanel.showQuickSwitcher": "Show quick switcher",

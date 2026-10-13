@@ -661,7 +661,7 @@ Tabbed side panel with four tabs: Changes, Log, Stashes, Branches. Replaces the 
   - **Audio** — MP3, WAV, FLAC, AAC, M4A — rendered as `<audio>` with native controls
   - **Text / data** — TXT, JSON, CSV, LOG, XML, YAML, TOML, INI, CFG, CONF — raw text in a `<pre>` block
 - Header bar shows shortened file path with **Edit** button (pencil icon — opens file in code editor) and **Open externally** button
-- **Reload:** when a web or HTML-preview tab is active, `Cmd/Ctrl+R` reloads its content instead of opening the Run Command dialog
+- **Reload:** when a web or HTML-preview tab is active, `Cmd/Ctrl+R` (action `reload-tab`) reloads its content
 - File content auto-refreshes on repository revision bumps (git change detection)
 - Uses Tauri's `convertFileSrc()` asset protocol for binary files, `read_external_file` IPC for text content
 - The permissive `default-src` CSP allows `asset:` and `http://asset.localhost` for frames and media; no per-directive CSP overrides it
@@ -723,7 +723,7 @@ Tabbed side panel with four tabs: Changes, Log, Stashes, Branches. Replaces the 
 - JetBrains family: IntelliJ IDEA, PyCharm, WebStorm, GoLand, CLion, PhpStorm, RubyMine, Rider, DataGrip, RustRover, Android Studio, Fleet — launched via their CLI launcher (`idea`, `pycharm`, …) with `--line`/`--column` goto, falling back to `open -a` on macOS when the Toolbox shell scripts aren't on PATH
 - File-capable editors (including JetBrains IDEs) open the focused file (from editor or MD tab); others open the repo
 - Custom launchers (#71): user-defined entries configured at Settings → General → Custom Launchers (name, executable on `PATH` or absolute, args, per-OS platform, enable toggle), shown under a "Custom" section in the dropdown. Args support placeholder tokens resolved at launch: `{path}`/`{file}` (focused file, else repo), `{repo}`, `{fileDir}` (focused file's directory, else repo), `{cwd}` (focused terminal cwd, else repo), `{home}`, and `{line}`/`{column}` (editor cursor, default 1)
-- Run command button: `Cmd+R` (run), `Cmd+Shift+R` (edit & run)
+- Run command button: `Cmd+Shift+R` (run); edit & run has no default shortcut (action `edit-command`)
 
 ---
 
@@ -1423,8 +1423,9 @@ The `tuic-dictation` Rust crate implements audio, transcription and speech; the 
 - `↑/↓`: navigate, `Enter`: insert (restores terminal focus), `Ctrl+N`: new, `Ctrl+E`: edit, `Ctrl+F`: toggle favorite, `Esc`: close
 
 ### 10.4 Run Commands
-- `Cmd+R`: run saved command for active branch
-- `Cmd+Shift+R`: edit command before running
+- `Cmd+Shift+R`: run saved command for active branch
+- `edit-command`: edit command before running (no default shortcut; bind it in `keybindings.json`)
+- `Cmd+R`: reload the active web/preview tab
 - Configure per-repo in Settings → Repository → Scripts
 
 ### 10.5 Smart Prompts
@@ -1581,7 +1582,7 @@ Three pages under **Integrations**. They were one "Services & MCP" tab; each pag
 ### 11.4 Repository Settings (per-repo)
 - Display name
 - Worktree tab: storage strategy, prompt on create, delete branch on remove, auto-archive, orphan cleanup, PR merge strategy, after-merge action (each overridable from global defaults)
-- Scripts tab: setup script (post-worktree), run script (`Cmd+R`), archive script (pre-archive/delete hook), and optional local development-server URL for Design Mode
+- Scripts tab: setup script (post-worktree), run script (`Cmd+Shift+R`), archive script (pre-archive/delete hook), and optional local development-server URL for Design Mode
 - Repo-local config: `.tuic.json` in repo root provides team-shared settings. Three-tier precedence: `.tuic.json` > per-repo app settings > global defaults. **Scripts (setup, run, archive) are intentionally excluded from `.tuic.json` merging** — arbitrary script execution by a checked-in file poses a security risk; scripts are always sourced from the local per-repo app settings only
 
 ### 11.5 Notifications
@@ -1775,8 +1776,8 @@ Buffer eviction is reported; it does not create another output store.
 | `Cmd+End` | Scroll to bottom |
 | `Shift+PageUp` | Scroll one page up |
 | `Shift+PageDown` | Scroll one page down |
-| `Cmd+R` | Run saved command |
-| `Cmd+Shift+R` | Edit and run command |
+| `Cmd+Shift+R` | Run saved command |
+| `Cmd+R` | Reload active web/preview tab |
 | `Cmd+Shift+.` | Toggle block folding |
 | `Cmd+Shift+Up` | Jump to previous block |
 | `Cmd+Shift+Down` | Jump to next block |

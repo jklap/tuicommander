@@ -446,7 +446,7 @@ Settings navigation, or from the sidebar `⋯` → "Repo Settings".
 ### Scripts Tab
 
 - **Setup Script** — Runs once after worktree creation (e.g., `npm install`)
-- **Run Script** — On-demand script launchable from toolbar with `Cmd+R`
+- **Run Script** — On-demand script launchable from toolbar with `Cmd+Shift+R`
 - **Archive Script** — Runs before a worktree is archived or deleted; non-zero exit blocks the operation
 - **Dev Server URL** — Optional address of this repository's development server. Design Mode opens it in a dedicated Chrome window; with no URL, Chrome opens `about:blank` so you can navigate manually. See [Design Mode](design-mode.md).
 
