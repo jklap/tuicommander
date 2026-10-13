@@ -48,7 +48,7 @@
 	border: 0;
 	border-radius: var(--radius-md);
 	background: transparent;
-	color: var(--fg-secondary);
+	color: var(--fg-primary);
 	font: inherit;
 	cursor: pointer;
 }

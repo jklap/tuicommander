@@ -90,6 +90,8 @@ mod tests {
                 "url must be a string",
             ),
         ] {
+            #[cfg(not(feature = "desktop"))]
+            let expected = "Design Mode requires the desktop host";
             assert_eq!(handle(&state, &args).await["error"], expected, "{args}");
         }
     }
