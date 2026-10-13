@@ -10,7 +10,7 @@ const cases = (Object.keys(recordedProjects) as (keyof typeof recordedProjects)[
 });
 
 // Catches: a required field has no usable control, or form values serialize to invalid Jira shapes.
-it.each(cases)("recorded_$project_$id_collects_valid_create_payload_at_jira_boundary", async ({ project, id }) => {
+it.each(cases)("recorded $project $id collects valid create payload at jira boundary", async ({ project, id }) => {
 	const { provider, writes } = jiraFixtureProvider(project);
 	const view = render(() => <TasksCreate provider={provider} onCreated={() => {}} />);
 	const picker = await screen.findByLabelText("Type *");
