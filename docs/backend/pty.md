@@ -1129,9 +1129,11 @@ every PTY session lives) was listed but its argv or start time could not be
 read — in practice a root process under `sudo`, whose argv setuid `ps` can read
 and an unprivileged caller cannot. Unreadable processes outside that subtree
 (other users' daemons, present on every Mac) do not trigger it. The first
-fallback per reason logs one `process_snapshot` warning; if `ps` cannot even be
-spawned it is latched off for the process lifetime and the native entries are
-used with `argv_unknown` set. A shell whose argv is unknown never counts as
+fallback per reason logs one `process_snapshot` warning; if `ps` can never be
+spawned here — the exec is denied (a sandbox) or there is no `ps` — it is latched
+off for the process lifetime and the native entries are used with `argv_unknown`
+set. A transient spawn failure (EAGAIN under a process limit, EINTR) skips only
+that snapshot (`run_ps_fallback`, test `ps_fallback_latches_only_when_ps_can_never_run`). A shell whose argv is unknown never counts as
 "at a prompt" for the nested-prompt override, so `sudo bash -c 'job'` cannot
 clear BUSY; such a subtree simply keeps its OSC 133 BUSY latch.
 

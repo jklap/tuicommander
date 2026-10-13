@@ -1630,8 +1630,14 @@ fixture orphaned its child on a timeout or a cancelled request. It now spawns wi
 `process_group(0)`; a timeout SIGTERMs the group, waits a bounded grace, SIGKILLs the group and
 reaps the child within a bound; a dropped future signals the group through a drop guard. The pipes
 are drained on their own tasks under the same deadline, so a straggler holding stdout cannot hang
-the call either. Tests: `a_timed_out_one_shot_kills_the_grandchild_it_forked`,
-`a_cancelled_one_shot_kills_the_grandchild_it_forked` (`tunnels/exec.rs`).
+the call either — and since 2026-10-13 a straggler is not a timeout: once the leader has exited, its
+status is the outcome, the straggler's group is killed and the output read so far is returned. A stdin
+write that fails with EPIPE because the child exited without reading (an auth failure) no longer
+replaces the exit classification. Tests: `a_timed_out_one_shot_kills_the_grandchild_it_forked`,
+`a_cancelled_one_shot_kills_the_grandchild_it_forked`,
+`a_successful_one_shot_whose_grandchild_holds_the_pipes_returns_its_output`,
+`a_timed_out_one_shot_that_ignores_sigterm_is_killed`, `a_stdin_epipe_keeps_the_exit_classification`
+(`tunnels/exec.rs`).
 
 **Same shape, fixed 2026-10-12 for the SSH host probe** (`tunnels::commands::run_probe`, behind
 `GET /tunnels/ssh-hosts/status` and `POST /tunnels/ssh-hosts/probe`). It had its own
