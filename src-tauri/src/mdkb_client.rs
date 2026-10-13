@@ -783,7 +783,7 @@ pub(crate) mod tests {
     /// mdkb's staging socket for HOME `home`, with the longest pid this test
     /// budgets for (7 digits: Linux `pid_max`; macOS pids have 5).
     fn mdkb_staging_socket(home: &std::path::Path) -> PathBuf {
-        home.join(".mdkb/daemon-hook.sock.4194304.tmp")
+        home.join(tuic_test_support::MDKB_STAGING_SOCKET)
     }
 
     /// `false`, with a loud UNCHECKED line, when mdkb's own staging socket
@@ -805,10 +805,16 @@ pub(crate) mod tests {
             - 1;
         let home = |len: usize| PathBuf::from(format!("/{}", "h".repeat(len - 1)));
         let longest = home(tuic_test_support::SUN_PATH_USABLE - 1 - suffix);
-        assert_eq!(mdkb_staging_socket(&longest).as_os_str().len(), 103);
+        assert_eq!(
+            mdkb_staging_socket(&longest).as_os_str().len(),
+            tuic_test_support::SUN_PATH_USABLE
+        );
         assert!(mdkb_staging_socket_fits(&longest));
         let one_over = home(tuic_test_support::SUN_PATH_USABLE - suffix);
-        assert_eq!(mdkb_staging_socket(&one_over).as_os_str().len(), 104);
+        assert_eq!(
+            mdkb_staging_socket(&one_over).as_os_str().len(),
+            tuic_test_support::SUN_PATH_MAX
+        );
         assert!(!mdkb_staging_socket_fits(&one_over));
     }
 
