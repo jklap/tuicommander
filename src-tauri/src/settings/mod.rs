@@ -17,6 +17,7 @@ pub mod upstreams;
 #[cfg(feature = "dictation")]
 pub mod voice;
 
+mod config_file;
 mod pointer;
 mod validation;
 
@@ -54,3 +55,6 @@ mod upstreams_tests;
 
 #[cfg(all(test, feature = "dictation"))]
 mod voice_tests;
+
+#[cfg(test)]
+mod config_file_tests;

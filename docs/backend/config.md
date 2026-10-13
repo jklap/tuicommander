@@ -1397,6 +1397,13 @@ must compute the returned revision after typed defaults/normalization so immedia
 readback agrees. Unrelated fields survive, and malformed files are never replaced
 by defaults.
 
+The notifications, preferences, repositories, agents and voice adapters share
+`settings::config_file::ConfigFileStore` for strict reads and locked commits.
+Adapters supply normalization before canonical comparison and retain their own
+runtime apply hooks. Upstreams and remote connections retain commit-specific
+validation and pending effect records; app, Telegram and tunnels retain their
+different persistence owners.
+
 The AppConfig adapter retains vault rollback, cache updates, reflow, relay notices,
 tool-list notices and listener restart requests. Runtime effects run after file
 locks are released. Replies distinguish persisted data from applied effects;
