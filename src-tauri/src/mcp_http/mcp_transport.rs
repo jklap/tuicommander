@@ -7719,6 +7719,23 @@ fn handle_workflow_launch(
         .unwrap_or_else(|error| serde_json::json!({"error": error}))
 }
 
+/// Resolve the worktree a workflow worker will run in: a registered *linked*
+/// checkout of the owning project, spelled canonically. Any checkout qualifies,
+/// branch or detached — workflow worktrees are created with `worktree add -b`.
+/// (The orphan-removal validator, `validate_worktree_path`, is deliberately NOT
+/// used here: it demands a detached HEAD, which refused every branch worktree.)
+fn resolve_workflow_worktree(owner: &str, requested: &str) -> Result<String, String> {
+    let worktree = std::path::Path::new(requested)
+        .canonicalize()
+        .map_err(|error| format!("resolve workflow worktree: {error}"))?;
+    let worktree = worktree.to_string_lossy().to_string();
+    if worktree == owner {
+        return Err("workflow agents require an isolated worktree".into());
+    }
+    crate::worktree::validate_registered_worktree(owner, &worktree)?;
+    Ok(worktree)
+}
+
 fn launch_workflow_agent(
     state: &Arc<AppState>,
     addr: SocketAddr,
@@ -7738,14 +7755,7 @@ fn launch_workflow_agent(
     if input.agent_type.trim().is_empty() || input.agent_type.len() > 128 {
         return Err("invalid workflow agent type".into());
     }
-    let worktree = std::path::Path::new(&input.worktree_path)
-        .canonicalize()
-        .map_err(|error| format!("resolve workflow worktree: {error}"))?;
-    let worktree = worktree.to_string_lossy().to_string();
-    if worktree == owner {
-        return Err("workflow agents require an isolated worktree".into());
-    }
-    crate::worktree::validate_worktree_path(&owner, &worktree)?;
+    let worktree = resolve_workflow_worktree(&owner, &input.worktree_path)?;
     let caller_cwd = state
         .session_maps
         .sessions
@@ -20559,6 +20569,160 @@ mod tests {
             titles,
             ["Bound plan"],
             "the caller's tab project scopes the list"
+        );
+    }
+
+    /// Workflow worktrees are `git worktree add -b` checkouts. The launch path
+    /// once reused the orphan-removal validator, which demands a detached HEAD
+    /// and so refused every one of them.
+    #[cfg(unix)]
+    fn workflow_git_fixture() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
+        let temp = tempfile::tempdir().expect("fixture directory");
+        let root = temp.path().canonicalize().expect("canonical fixture root");
+        let repo = root.join("repo");
+        std::fs::create_dir(&repo).expect("repo dir");
+        for args in [
+            vec!["init", "-q"],
+            vec!["config", "user.name", "Workflow Test"],
+            vec!["config", "user.email", "workflow@example.invalid"],
+        ] {
+            crate::git_cli::git_cmd(&repo)
+                .args(args)
+                .run()
+                .expect("git setup");
+        }
+        std::fs::write(repo.join("README.md"), "initial\n").expect("tracked file");
+        for args in [vec!["add", "README.md"], vec!["commit", "-qm", "initial"]] {
+            crate::git_cli::git_cmd(&repo)
+                .args(args)
+                .run()
+                .expect("git commit");
+        }
+        let branch_worktree = root.join("story-branch");
+        crate::git_cli::git_cmd(&repo)
+            .args([
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "story-branch",
+                &branch_worktree.to_string_lossy(),
+            ])
+            .run()
+            .expect("branch worktree");
+        (temp, repo, branch_worktree)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_workflow_worktree_may_be_a_branch_checkout_however_it_is_spelled() {
+        let (temp, repo, branch_worktree) = workflow_git_fixture();
+        let owner = repo.to_string_lossy().to_string();
+        let resolved = resolve_workflow_worktree(&owner, &branch_worktree.to_string_lossy())
+            .expect("a branch worktree is a valid workflow worktree");
+        assert_eq!(resolved, branch_worktree.to_string_lossy());
+
+        // Spelled through a symlinked folder, it resolves to the same location.
+        let alias = temp.path().join("alias");
+        std::os::unix::fs::symlink(temp.path().canonicalize().unwrap(), &alias).unwrap();
+        let via_alias =
+            resolve_workflow_worktree(&owner, &alias.join("story-branch").to_string_lossy())
+                .expect("an aliased spelling is accepted");
+        assert_eq!(via_alias, resolved);
+
+        // A detached checkout stays acceptable.
+        let detached = temp.path().canonicalize().unwrap().join("story-detached");
+        crate::git_cli::git_cmd(&repo)
+            .args([
+                "worktree",
+                "add",
+                "-q",
+                "--detach",
+                &detached.to_string_lossy(),
+            ])
+            .run()
+            .expect("detached worktree");
+        resolve_workflow_worktree(&owner, &detached.to_string_lossy()).expect("detached is fine");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_workflow_worktree_must_be_a_registered_linked_checkout() {
+        let (temp, repo, _branch_worktree) = workflow_git_fixture();
+        let owner = repo.to_string_lossy().to_string();
+        let root = temp.path().canonicalize().unwrap();
+
+        let error = resolve_workflow_worktree(&owner, &owner).unwrap_err();
+        assert_eq!(error, "workflow agents require an isolated worktree");
+        // The main checkout reached through a symlink is the same checkout.
+        let alias = root.join("repo-alias");
+        std::os::unix::fs::symlink(&repo, &alias).unwrap();
+        let error = resolve_workflow_worktree(&owner, &alias.to_string_lossy()).unwrap_err();
+        assert_eq!(error, "workflow agents require an isolated worktree");
+
+        let stranger = root.join("not-registered");
+        std::fs::create_dir(&stranger).unwrap();
+        let error = resolve_workflow_worktree(&owner, &stranger.to_string_lossy()).unwrap_err();
+        assert!(error.contains("not a known worktree"), "{error}");
+
+        let error =
+            resolve_workflow_worktree(&owner, &root.join("missing").to_string_lossy()).unwrap_err();
+        assert!(error.starts_with("resolve workflow worktree"), "{error}");
+    }
+
+    /// The whole launch path, not just the helper: a bound coordinator naming a
+    /// branch worktree gets past worktree validation and fails later, at the
+    /// run lookup. Before the fix it stopped at "checkout is not detached".
+    #[cfg(unix)]
+    #[test]
+    fn workflow_launch_accepts_a_branch_worktree_and_refuses_the_main_checkout() {
+        #[cfg(not(feature = "desktop"))]
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test Tokio runtime");
+        #[cfg(not(feature = "desktop"))]
+        let _runtime_guard = runtime.enter();
+        let config = tempfile::tempdir().expect("config directory");
+        let _config_guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let (_temp, repo, branch_worktree) = workflow_git_fixture();
+        let state = test_state();
+        let mcp_sid = "workflow-launch-mcp";
+        state
+            .mcp
+            .to_session
+            .insert(mcp_sid.into(), TEST_UUID_A.into());
+        insert_managed_test_session(&state, "pty-workflow", &repo.to_string_lossy());
+        state.bind_live_pty(TEST_UUID_A, "pty-workflow");
+        crate::repo_watcher::start_watching(&repo.to_string_lossy(), &state).expect("watch repo");
+        let launch = |worktree: &std::path::Path| {
+            handle_workflow_launch(
+                &state,
+                "127.0.0.1:0".parse().unwrap(),
+                &serde_json::json!({"input": {
+                    "runId": "no-such-run",
+                    "attemptId": "attempt",
+                    "worktreePath": worktree.to_string_lossy(),
+                    "agentType": "claude"
+                }}),
+                Some(mcp_sid),
+            )
+        };
+
+        let branch = launch(&branch_worktree);
+        let error = branch["error"]
+            .as_str()
+            .expect("an error from the run lookup");
+        assert!(
+            !error.contains("not detached") && !error.contains("not a known worktree"),
+            "worktree validation must pass for a branch checkout: {error}"
+        );
+        assert!(!error.contains("isolated worktree"), "{error}");
+
+        let main = launch(&repo);
+        assert_eq!(
+            main["error"],
+            "workflow agents require an isolated worktree"
         );
     }
 
