@@ -117,6 +117,15 @@ pub(super) fn calls(f: &Fixture) -> Vec<Value> {
         .collect()
 }
 
+/// The cwd the fake CLI records: canonical, so a symlinked $TMPDIR (macOS
+/// /var) spelling of the fixture dir still matches.
+pub(super) fn cwd(f: &Fixture) -> String {
+    std::fs::canonicalize(f.dir.path())
+        .unwrap()
+        .to_string_lossy()
+        .into_owned()
+}
+
 pub(super) fn expected_model() -> Value {
     json!("ollama/changed")
 }

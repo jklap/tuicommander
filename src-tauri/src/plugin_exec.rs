@@ -766,7 +766,16 @@ mod tests {
     // Catches: the owner cannot run a declared plugin tool in an external checkout.
     #[tokio::test]
     async fn plugin_external_cwd_is_used() {
-        let outside = crate::test_support::dir_outside_home();
+        // An existing directory outside HOME: the system root on Windows
+        // (its temp dir is inside the profile), else a fresh test temp dir.
+        let scratch = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let outside = if cfg!(windows) {
+            std::path::PathBuf::from(
+                std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string()),
+            )
+        } else {
+            scratch.path().to_path_buf()
+        };
         let print_cwd = if cfg!(windows) { "cd" } else { "pwd -P" };
         let stdout = run_host_shell(print_cwd, &outside.to_string_lossy())
             .await
@@ -1269,12 +1278,14 @@ mod tests {
             let pid = pid.trim();
             let deadline = Instant::now() + Duration::from_secs(10);
             loop {
-                let stat = std::process::Command::new("ps")
-                    .args(["-o", "stat=", "-p", pid])
-                    .output()
-                    .expect("ps");
-                let stat = String::from_utf8_lossy(&stat.stdout);
-                if stat.trim().is_empty() || stat.trim_start().starts_with('Z') {
+                // Native process inspection (no `ps` exec): gone, or an unreaped zombie of its parent.
+                let pid_number: u32 = pid.parse().expect("numeric pid");
+                let gone = !tuic_core::process_info::is_alive(pid_number)
+                    || tuic_core::process_info::info(pid_number).is_none_or(|info| {
+                        tuic_core::process_info::zombie_children(info.ppid)
+                            .is_some_and(|zombies| zombies.contains(&pid_number))
+                    });
+                if gone {
                     break;
                 }
                 assert!(

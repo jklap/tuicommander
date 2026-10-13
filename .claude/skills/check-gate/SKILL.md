@@ -1,7 +1,7 @@
 ---
 name: check-gate
 description: >
-  Run TUICommander's full make-check gate (tsc, biome, architecture cycles,
+  Run TUICommander's full make-check gate (tsc, biome, architecture cycles, NUL bytes,
   a production frontend build + bundle-size budget check, rustfmt, clippy,
   the full Rust test suite, vitest, plugin tests, pnpm/cargo audit) reliably
   before declaring any code change complete. Use before

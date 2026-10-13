@@ -1,12 +1,35 @@
 #!/bin/sh
+# Nextest setup script: give every test process the same scratch roots
+# scripts/with-test-tmp.sh would. TUIC_TEST_TMP_ROOT when a wrapper already
+# chose one, else this checkout's default under the host temp dir (order in
+# scripts/test-tmp-lib.sh). Never derived from $HOME.
 set -eu
 
-root=${TUIC_TEST_TMP_ROOT:-"$(cd .. && pwd)/.tmp/tuic-tests"}
-mkdir -p "$root"
+# shellcheck source=../../scripts/test-tmp-lib.sh
+. ../scripts/test-tmp-lib.sh
+host=$(tuic_test_host_tmpdir)
+root=$(tuic_test_tmp_root ..)
 root=$(cd "$root" && pwd)
+# An empty template dir keeps `git init`/`git clone` in test fixtures from
+# copying git's own hooks/*.sample files into every scratch repo: slower,
+# machine-dependent, and EPERM where `.git/hooks` writes are forbidden. Test
+# processes only; production git calls never see this variable.
+git_template="$root/git-template-empty"
+mkdir -p "$git_template"
+# Fail closed: git in a test process must never discover a repository above
+# the root (a fixture whose `git init` failed once fell through to the real
+# checkout and renamed its branches). GIT_CEILING_DIRECTORIES = the root's
+# parent plus the host temp dir (home of the t.XXXXXX socket roots), lexical
+# and physical spelling (macOS /var vs /private/var), each appended once to any
+# value an outer wrapper already set.
+# The physical root's parent too, for a root that is itself a symlink.
+git_ceiling=$(tuic_git_ceiling_with "$(dirname "$root")" "$(dirname "$(cd "$root" && pwd -P)")" "$host")
 {
+    printf 'TUIC_TEST_HOST_TMPDIR=%s\n' "$host"
     printf 'TUIC_TEST_TMP_ROOT=%s\n' "$root"
     printf 'TMPDIR=%s/\n' "$root"
     printf 'TMP=%s/\n' "$root"
     printf 'TEMP=%s/\n' "$root"
+    printf 'GIT_TEMPLATE_DIR=%s\n' "$git_template"
+    printf 'GIT_CEILING_DIRECTORIES=%s\n' "$git_ceiling"
 } >> "$NEXTEST_ENV"
