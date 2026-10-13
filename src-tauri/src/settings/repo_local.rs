@@ -1,6 +1,6 @@
 //! One registry owner binds requests to registered repository roots, never caller filenames.
 use super::{config_file::ConfigFileStore, request::*, service::Store, transaction::Prepared};
-use crate::config::{ConfigFile, RepoLocalConfig};
+use crate::config::{ConfigFile, RepoLocalConfig, repo_local_file};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
@@ -59,18 +59,19 @@ impl RepoLocalSettingsStore {
         if !registered || !root.is_absolute() || !root.is_dir() {
             return Err(Error::new(ID, "not_found"));
         }
-        let path = root.join(".tuic.json");
-        for candidate in [&path, &root.join(".tuic.json.lock")] {
-            match std::fs::symlink_metadata(candidate) {
-                Ok(metadata) if metadata.file_type().is_symlink() => {
-                    return Err(Error::new(ID, "unavailable"));
-                }
-                Ok(_) => {}
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(_) => return Err(Error::new(ID, "store_failed")),
+        match std::fs::symlink_metadata(root.join(".tuic.json")) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(Error::new(ID, "unavailable"));
             }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return Err(Error::new(ID, "store_failed")),
         }
-        Ok(ConfigFileStore::new(ID, ConfigFile::at_path(path)))
+        let config_dir = self
+            .registrations
+            .parent()
+            .unwrap_or(std::path::Path::new("."));
+        Ok(ConfigFileStore::new(ID, repo_local_file(config_dir, root)))
     }
 }
 
@@ -87,12 +88,10 @@ impl Store for RepoLocalSettingsStore {
         let Target::Repository { id } = target else {
             return Err(Error::new(self.id(), "not_found"));
         };
-        let bound = Arc::new(Self {
+        Ok(Arc::new(Self {
             registrations: self.registrations.clone(),
             repository: Some(id.clone()),
-        });
-        bound.file()?;
-        Ok(bound)
+        }))
     }
     fn read(&self) -> Result<Value, Failure> {
         self.file()?.read()
