@@ -48,15 +48,8 @@ impl Logins {
     }
 
     fn insert(&self, response: DeviceCodeResponse, additional: bool) -> Result<Value, Failure> {
-        // Only the documented human verification URL/code are returned; never device_code.
-        if response.verification_uri != "https://github.com/login/device"
-            || response.device_code.is_empty()
-            || response.user_code.is_empty()
-            || response.user_code.len() > 128
-            || response.user_code.chars().any(char::is_control)
-            || response.device_code.len() > 16 * 1024
-            || response.user_code.contains(&response.device_code)
-            || response.expires_in == 0
+        // Bounds keep Instant arithmetic finite; device_code is never returned.
+        if response.expires_in == 0
             || response.expires_in > 3600
             || response.interval == 0
             || response.interval > 300

@@ -228,7 +228,7 @@ impl GithubSettings {
         );
         let result = crate::accounts::execute(&self.state, owner_action)
             .await
-            .map_err(|_| Error::new(ID, "store_failed"));
+            .map_err(|message| Error::new(ID, owner_code(&message)));
         let snapshot = self.read().await.map_err(|mut error| {
             // An owner action may already have committed a file/vault phase.
             error.persisted = true;
@@ -274,5 +274,26 @@ impl GithubSettings {
         json!({"persisted":persisted,"applied":true,"revision":snapshot["revision"],
             "changedIds": if persisted { vec!["github_accounts", "github_bindings"] } else { vec![] },
             "effects":[],"restart":[],"result":result,"snapshot":snapshot})
+    }
+}
+
+const INPUT_CAUSES: [&str; 4] = ["must contain", "require", "too long", "Invalid"];
+
+/// The owner reports refusals as text; only the cause class leaves, never the message.
+fn owner_code(message: &str) -> &'static str {
+    if message.contains("device-flow login") || message.contains("core GitHub login flow") {
+        "auth_required"
+    } else if message.contains("cannot be removed") {
+        "not_allowed"
+    } else if message.contains("already") || message.contains("changed during") {
+        "conflict"
+    } else if message.contains("not found") || message.contains("was removed during") {
+        "not_found"
+    } else if message.starts_with("Account verification") {
+        "verification_failed"
+    } else if INPUT_CAUSES.iter().any(|cause| message.contains(cause)) {
+        "out_of_range"
+    } else {
+        "store_failed"
     }
 }

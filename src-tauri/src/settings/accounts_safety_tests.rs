@@ -56,3 +56,55 @@ fn typed_action_schema_rejects_unknown_fields_and_marks_tokens_write_only() {
     }
     assert!(serde_json::from_value::<GithubAction>(serde_json::json!({"action":"remove_account","id":"github.com","token":"unrecognized-canary"})).is_err());
 }
+
+// Catches: owner refusals reported as store_failed, so the user retries a request that can never succeed.
+#[tokio::test]
+async fn owner_refusals_keep_their_cause() {
+    let (_dir, _guard, state) = isolated();
+    let account = GitHubAccount::ghe_pat(GitHubHost::new("refuse.example").unwrap(), None);
+    add_account_record(account.clone(), Some("refuse-token-canary")).unwrap();
+    let settings = GithubSettings::new(state);
+    let cases = [
+        (
+            GithubAction::RemoveAccount {
+                id: GitHubAccount::GITHUB_COM_ID.into(),
+            },
+            "not_allowed",
+        ),
+        (
+            GithubAction::SetLabel {
+                id: account.id.clone(),
+                label: " ".into(),
+            },
+            "out_of_range",
+        ),
+        (
+            GithubAction::AddEnterprise {
+                host: "github.com".into(),
+                label: "cloud".into(),
+                token: "bare-cloud-canary".into(),
+            },
+            "out_of_range",
+        ),
+        (
+            GithubAction::AddEnterprise {
+                host: "https://user@ghe.example".into(),
+                label: "userinfo".into(),
+                token: "userinfo-canary".into(),
+            },
+            "out_of_range",
+        ),
+        (
+            GithubAction::AddEnterprise {
+                host: "https://other.example".into(),
+                label: "split".into(),
+                token: "line\nbreak".into(),
+            },
+            "out_of_range",
+        ),
+    ];
+    for (action, code) in cases {
+        let error = settings.perform(action).await.unwrap_err();
+        assert_eq!((error.code.as_str(), error.persisted), (code, false));
+    }
+}
