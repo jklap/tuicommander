@@ -1467,6 +1467,23 @@ fn claude_submitted_prompt_row_is_not_a_ready_composer() {
     }
 }
 
+/// A narrow PTY (phone) wraps or truncates the placeholder, so the closing
+/// quote may be missing; the tab must still read Ready, not Busy forever.
+#[test]
+fn claude_truncated_placeholder_hint_is_a_ready_composer() {
+    for row in [
+        "❯\u{a0}Try \"fix typec",
+        "❯\u{a0}Try \"fix typecheck errors\"",
+    ] {
+        let screen = vec![row.to_string()];
+        assert_eq!(
+            detect_claude_screen_activity(&screen),
+            AgentScreenActivity::Ready,
+            "placeholder hint must read Ready: {row:?}"
+        );
+    }
+}
+
 /// THE core invariant of the movement design: a byte-identical repaint of a
 /// frozen "spinner" line produces NO ChangedRow (text-equality diff in
 /// `TerminalGrid::process`), so it can never pass the reader's busy gate —
@@ -9646,6 +9663,63 @@ async fn queued_command_drains_after_a_captured_opencode_mini_turn() {
         String::from_utf8(bytes.lock().unwrap()[replayed..].to_vec()).unwrap(),
         "\u{15}resume queued work\r",
         "the Ready screen must release the queue into the composer"
+    );
+}
+
+// Catches: a Claude launched from a shell that paints its Ready composer and
+// status-line HUD but never returns the tab to idle, so tuic-remote shows the
+// blue activity dot for hours on an agent nobody is driving (story 1864-23d0).
+// The capture is a reconstruction of session pe-1 on a remote daemon: bytes
+// are real, chunk boundaries and geometry are approximated.
+#[test]
+fn captured_claude_launch_from_shell_returns_idle_at_its_ready_composer() {
+    let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(
+        "claude-2.1.294-remote-startup-idle-20261013.tcap",
+    ))
+    .expect("valid recorded Claude launch");
+    let (rows, cols) = capture.geometry.expect("recorded geometry");
+    let sid = "claude-launch-idle";
+    let (state, silence) = chunk_trace_state(sid);
+    state
+        .grid
+        .vt_log_buffers
+        .insert(sid.into(), Mutex::new(VtLogBuffer::new(rows, cols, 2000)));
+    {
+        let mut session = state.session_maps.session_states.get_mut(sid).unwrap();
+        session.agent_type = Some("claude".into());
+        session.agent_type_from_run_config = true;
+    }
+    record_submitted_line(&state, sid, "claude".into(), 0);
+    let mut processor = ChunkProcessor::new(None, None);
+    let mut utf8 = Utf8ReadBuffer::new();
+    let mut escapes = EscapeAwareBuffer::new();
+    for record in capture.records {
+        let text = utf8.push(&record.data);
+        let text = escapes.push(&text);
+        let (text, _) = crate::state::strip_kitty_sequences(&text);
+        processor.process_chunk(&text, &silence, sid, &state);
+    }
+    let activity = silence.lock().cached_screen_activity;
+    assert_eq!(
+        activity,
+        AgentScreenActivity::Ready,
+        "{:?}",
+        silence.lock().evidence
+    );
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .background_probe_satisfied_turn_epoch = Some(1);
+    let _ = try_timer_idle_transition(&state, &silence, sid, activity, Some("claude"), Some(1));
+    silence.lock().screen_ready_pending_since =
+        Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
+    assert!(
+        try_timer_idle_transition(&state, &silence, sid, activity, Some("claude"), Some(1))
+            .transitioned,
+        "the recorded Ready composer must release the launch BUSY: {:?}",
+        silence.lock().evidence
     );
 }
 
