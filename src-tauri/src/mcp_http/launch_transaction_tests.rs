@@ -70,7 +70,12 @@ async fn launch_transaction_retries_after_worktree_checkpoint_without_fallback()
         .unwrap();
     let result = execute(&state, addr(), &request).await;
     assert!(result.get("error").is_none(), "{result}");
-    assert_eq!(result["workspace_path"], selected.path);
+    // git lists the checkout resolved; the launch keeps the repo's spelling (a
+    // symlinked $TMPDIR, macOS /var), so compare locations.
+    assert_eq!(
+        std::fs::canonicalize(result["workspace_path"].as_str().unwrap()).unwrap(),
+        std::fs::canonicalize(&selected.path).unwrap()
+    );
     assert_ne!(result["workspace_path"], repo.to_string_lossy().as_ref());
     assert!(result["warm_artifacts"]["status"].is_string());
     assert_eq!(state.session_maps.sessions.len(), 1);

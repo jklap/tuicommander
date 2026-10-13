@@ -75,8 +75,11 @@ To run a single gate, copy its command out of the `check` target in the
 [Makefile](Makefile) — that target is the source of truth for what CI enforces.
 Prefix standalone test commands with `scripts/with-test-tmp.sh` from the
 repository root (`../scripts/with-test-tmp.sh` from `src-tauri/`). It creates
-a per-run directory under `.tmp/tuic-tests/` and removes it when the command
-ends, including when a test fails. `make check`, `make test-shell`, `make cov`, and
+a per-run directory under `$TMPDIR/tuic-tests/` (or `TUIC_TEST_TMP_BASE`) and
+removes it when the command ends, including when a test fails; a
+`TUIC_TEST_TMP_ROOT` you set yourself is used as is and left in place. Nothing is
+written under `$HOME` or a hard-coded `/tmp` (`scripts/check-no-hardcoded-tmp.mjs`
+enforces the latter). `make check`, `make test-shell`, `make cov`, and
 `make mutants` do this automatically. `make dev` and `cargo run` retain their
 normal runtime temporary directory.
 

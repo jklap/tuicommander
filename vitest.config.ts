@@ -2,18 +2,13 @@ import { defineConfig } from "vitest/config";
 import solid from "vite-plugin-solid";
 import path from "node:path";
 import { mkdirSync } from "node:fs";
+import { testTmpRoot } from "./scripts/test-tmp-root.mjs";
 
 // Vitest workers and their dependencies inherit this path. Vite's dev/build
 // configuration is separate, so normal app processes retain the OS temp dir.
-const repoTmp = path.resolve(import.meta.dirname, ".tmp/tuic-tests");
-const requestedTmp = process.env.TMPDIR;
-const gitsRoot = process.env.HOME && path.join(process.env.HOME, "Gits");
-const testTmp = requestedTmp && (
-  requestedTmp.startsWith(`${import.meta.dirname}${path.sep}`)
-  || (gitsRoot && requestedTmp.startsWith(`${gitsRoot}${path.sep}`))
-)
-  ? requestedTmp
-  : repoTmp;
+// Under scripts/with-test-tmp.sh this is the wrapper's per-run dir; a bare
+// `vitest` run uses <TMPDIR>/tuic-tests (see scripts/test-tmp-root.mjs).
+const testTmp = testTmpRoot();
 mkdirSync(testTmp, { recursive: true });
 process.env.TMPDIR = testTmp;
 process.env.TMP = testTmp;
@@ -91,12 +86,16 @@ export default defineConfig({
       // SessionDiffTab tree's own tests, measured lines 65.97%, statements 63.08%, functions
       // 61.32%, branches 57.76%). Set just under that new floor so CI can keep enforcing "don't
       // regress" — ratchet up incrementally as coverage genuinely improves, rather than lowering
-      // them again if a change makes CI red.
+      // them again if a change makes CI red. Re-measured 2026-10-08 on the tree that replays
+      // wip onto main (main had kept the never-enforced 80s; wip's 65/61/57/63 were measured
+      // on wip alone): a clean-env `vitest run --coverage` over 766 files / 11,376 tests
+      // measured lines 79.99%, statements 77.57%, functions 76.95%, branches 71.21%. Floors
+      // below are each value minus one point, rounded down.
       thresholds: {
-        lines: 65,
-        functions: 61,
-        branches: 57,
-        statements: 63,
+        lines: 78,
+        functions: 75,
+        branches: 70,
+        statements: 76,
       },
     },
   },

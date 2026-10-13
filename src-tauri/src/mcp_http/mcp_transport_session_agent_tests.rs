@@ -3833,9 +3833,11 @@ async fn managed_codex_spawn_trusts_its_new_cwd_without_writing_user_config() {
         None,
     );
     assert!(!actual.is_empty(), "agent must record launch argv");
+    // Trust is written for the canonical cwd; a symlinked $TMPDIR (macOS /var)
+    // spells the fixture path differently.
     let expected = format!(
         "projects={{{}={{trust_level=\"trusted\"}}}}",
-        serde_json::to_string(&cwd.to_string_lossy()).unwrap()
+        serde_json::to_string(&std::fs::canonicalize(&cwd).unwrap().to_string_lossy()).unwrap()
     );
     assert!(
         actual
@@ -3982,9 +3984,11 @@ async fn managed_codex_wrapper_trusts_only_its_spawn_cwd_and_submits_prompt() {
         &serde_json::json!({"action":"kill", "session_id":sid}),
         None,
     );
+    // Trust is written for the canonical cwd; a symlinked $TMPDIR (macOS /var)
+    // spells the fixture path differently.
     let expected = format!(
         "projects={{{}={{trust_level=\"trusted\"}}}}",
-        serde_json::to_string(&cwd.to_string_lossy()).unwrap()
+        serde_json::to_string(&std::fs::canonicalize(&cwd).unwrap().to_string_lossy()).unwrap()
     );
     assert!(
         actual

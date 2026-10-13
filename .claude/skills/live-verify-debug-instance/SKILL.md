@@ -38,7 +38,8 @@ The orchestrator (your own embedded instance) holds port 9876. Never touch it. B
 lsof -iTCP:9876 -sTCP:LISTEN -Pn   # confirm the orchestrator holds 9876
 lsof -iTCP:9877 -sTCP:LISTEN -Pn   # confirm 9877 is free
 
-nohup make dev > /tmp/tuic-dev-verify.log 2>&1 &
+# Log under $TMPDIR (or your session scratchpad), never a literal /tmp.
+nohup make dev > "${TMPDIR:-/tmp}/tuic-dev-verify.log" 2>&1 &
 disown
 ```
 
@@ -150,7 +151,9 @@ AGENTS.md's Visual section.
 ## 4. Clean up before stopping
 
 - **Config**: if you changed any setting for testing, restore it via the HTTP API before
-  stopping — debug and release builds share the same `config.json`/`repositories.json`
+  stopping. `make dev` already runs on its own per-checkout `instances/tuic-<dir>/` config, but
+  that instance is reused by every later `make dev` from the same checkout, and a run with an
+  explicit empty `TUIC_APP_INSTANCE=` shares Boss's real `config.json`/`repositories.json`
   (AGENTS.md's isolation caveat). `PUT /config` with the original values, then `GET /config` to
   confirm.
 - **Repos**: don't leave a scratch repo registered in the app (`GET /config/repositories`);

@@ -7,9 +7,38 @@ BUNDLE_ID=com.tuic.commander
 VERSION=$(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 
 # Optional runtime override used by isolated verification sessions. An empty
-# value preserves the production default; TUIC_APP_INSTANCE is intentionally
-# left undefined here so the test target can keep its own default below.
+# value preserves the production default.
 TUIC_PORT?=
+
+# Per-checkout config instance (#763-d219). `make dev` and `make test` both run
+# on their OWN `instances/<id>/` config directory (repositories.json,
+# agents.json, disabled_mcp_agents, ...), never the shared default one that
+# Boss's real, separately-launched TUICommander.app uses — that release build is
+# never started through this Makefile (see "Test instance vs orchestrator
+# instance" in AGENTS.md).
+#
+# The id is derived from the checkout's own directory name rather than a shared
+# literal like "tuic-test", so two worktrees running `make dev`/`make test` at
+# the same time — the normal multi-agent shape in this repo — get separate
+# instances instead of colliding on one repositories.json. It is a valid
+# instance id by construction: lowercase, non-alphanumerics folded to single
+# hyphens, no leading/trailing hyphen, `tuic-` + at most 58 characters = at
+# most 63 (docs/backend/config.md). A directory name with no usable character
+# falls back to `tuic-checkout`.
+#
+# Deliberately ONE global default for both targets: they are the same kind of
+# launch now, so there is no target that must stay on the shared directory.
+# Overrides: `make dev TUIC_APP_INSTANCE=<id>` / `TUIC_APP_INSTANCE=<id> make
+# dev` pick another instance; an EMPTY value (`make dev TUIC_APP_INSTANCE=` or
+# `TUIC_APP_INSTANCE= make dev`) opts back into the shared default config for
+# one run and prints a loud warning. `scripts/check-make-instance-scope.sh`
+# asks `make -n` what each target really expands (pre-commit + `make check`).
+TUIC_CHECKOUT_INSTANCE:=$(shell basename "$(CURDIR)" | tr 'A-Z' 'a-z' | tr -c 'a-z0-9' '-' | sed -E 's/-+/-/g; s/^-//' | cut -c1-58 | sed -E 's/-$$//')
+TUIC_APP_INSTANCE?=tuic-$(or $(TUIC_CHECKOUT_INSTANCE),checkout)
+
+# Expands to a recipe line ONLY when this run is on the shared default config,
+# so `make -n` shows the warning exactly when it would fire.
+WARN_SHARED_INSTANCE=$(if $(TUIC_APP_INSTANCE),,@echo "WARNING: TUIC_APP_INSTANCE is empty for this run - using the SHARED default config directory, the same one Boss's real TUICommander.app uses (repositories.json, agents.json, ...). Only do this on purpose." >&2)
 
 # rtk (Rust Token Killer) is an optional output-compacting proxy: `rtk <cmd>`
 # runs <cmd> and trims its output. It is a personal tool, not a project
@@ -48,7 +77,7 @@ SHELL_TEST_DIR ?= scripts
 # Run every repository shell test. New scripts named test-*.sh below scripts/
 # join this target automatically; local scripts git ignores do not.
 test-shell:
-	@SHELL_TEST_DIR="$(SHELL_TEST_DIR)" scripts/with-test-tmp.sh bash -c 'set -euo pipefail; found=0; while IFS= read -r script; do git check-ignore -q "$$script" 2>/dev/null && continue; found=1; echo "shell test: $$script"; bash "$$script"; done < <(find "$$SHELL_TEST_DIR" -type f -name "test-*.sh" -print | LC_ALL=C sort); [ "$$found" -eq 1 ] || { echo "no shell tests found under $$SHELL_TEST_DIR" >&2; exit 1; }'
+	@SHELL_TEST_DIR="$(SHELL_TEST_DIR)" scripts/with-test-tmp.sh bash -c 'set -euo pipefail; found=0; list="$$(mktemp "$${TMPDIR:?}/shell-tests.XXXXXX")"; trap '"'"'rm -f "$$list"'"'"' EXIT; find "$$SHELL_TEST_DIR" -type f -name "test-*.sh" -print | LC_ALL=C sort > "$$list"; while IFS= read -r script; do git check-ignore -q "$$script" 2>/dev/null && continue; found=1; echo "shell test: $$script"; bash "$$script"; done < "$$list"; [ "$$found" -eq 1 ] || { echo "no shell tests found under $$SHELL_TEST_DIR" >&2; exit 1; }'
 
 # Install tracked git hooks. Idempotent.
 #   pre-commit — Makefile TUIC_APP_INSTANCE scope (bypass: --no-verify) +
@@ -63,9 +92,10 @@ hooks:
 # (or its `.rs.tmp.*` scratch files) will NOT rebuild/restart the Rust backend.
 # Vite HMR still reloads the UI (it runs as a separate `beforeDevCommand` process).
 # Rust changes require a manual `make dev` restart — see src-tauri/AGENTS.md "Dev Hot Reload".
-# An inherited `TUIC_APP_INSTANCE` (a dotfile, direnv, or one copy-pasted
-# `TUIC_APP_INSTANCE=<id> make dev` still exported in the shell) beats the
-# Makefile the same way the old global assignment did, and the guard in
+# Isolated per-checkout config instance by default — see the
+# `TUIC_APP_INSTANCE` comment at the top. An inherited `TUIC_APP_INSTANCE` (a
+# dotfile, direnv, or an exported `TUIC_APP_INSTANCE=` still in the shell)
+# beats the Makefile default, and the guard in
 # `scripts/check-make-instance-scope.sh` deliberately cannot see it. Say which
 # config directory this is starting on, so the wrong one is the first line of
 # output instead of something inferred from an empty repository list.
@@ -76,6 +106,7 @@ hooks:
 # 9s incremental.
 dev: export MBX_INCREMENTAL := 1
 dev: hooks
+	$(WARN_SHARED_INSTANCE)
 	@pnpm build:sidecar
 	@pnpm exec vite build
 	@cd src-tauri && cargo build --bin tuic-remote --no-default-features
@@ -83,33 +114,15 @@ dev: hooks
 	@echo "Starting Tauri dev on $(if $(TUIC_APP_INSTANCE),the ISOLATED config instance '$(TUIC_APP_INSTANCE)' (instances/$(TUIC_APP_INSTANCE)) — not the shared one,the shared default config directory)"
 	TUIC_APP_INSTANCE=$(TUIC_APP_INSTANCE) TUIC_PORT=$(TUIC_PORT) RUST_LOG=tuicommander_lib=debug,info pnpm tauri dev --no-watch -- --config 'target."cfg(target_os = \"macos\")".runner = ["python3", "$(CURDIR)/scripts/dev-exe-copy.py"]'
 
-# Build frontend + launch Tauri dev (for quick manual testing).
-#
-# Isolated by default (#763-d219): this target exists specifically for
-# throwaway manual verification, not as a daily-driver launch — unlike `make
-# dev`, which stays on the shared default config directory because it IS
-# Boss's actual long-running instance and switching it would look like every
-# repository had vanished. TUIC_APP_INSTANCE points this one at its own
-# `instances/tuic-test/` config namespace (see docs/backend/config.md), so a
-# verification session can add/remove repositories, worktrees, whatever it
-# needs, without ever touching production `repositories.json`. Override with
-# `make test TUIC_APP_INSTANCE=some-other-id`, or `TUIC_APP_INSTANCE= make
-# test` to opt back into the shared default instance for one run.
-#
-# Scoped to the `test` target on purpose (2026-09-17). Written as a bare
-# `TUIC_APP_INSTANCE?=tuic-test` this is a *global* make variable — position in
-# the file buys nothing — so `make dev` expanded it too and launched the daily
-# driver against an empty `instances/tuic-test/`, which is precisely the "every
-# repository had vanished" failure the paragraph above warns about. It cost no
-# data (production `repositories.json` was never opened) and a real scare.
-# Command-line and environment assignments still win over a target-specific
-# `?=`, so both overrides documented above keep working.
-test: TUIC_APP_INSTANCE?=tuic-test
+# Build frontend + launch Tauri dev (for quick manual, throwaway verification).
+# Same per-checkout config instance as `make dev` — see the `TUIC_APP_INSTANCE`
+# comment at the top.
 test:
+	$(WARN_SHARED_INSTANCE)
 	@echo "Building Vite frontend..."
 	@pnpm exec vite build
 	@cd src-tauri && cargo build -p tuic-bridge -p tuic-cli
-	@echo "Starting Tauri dev (isolated config instance: $(TUIC_APP_INSTANCE))..."
+	@echo "Starting Tauri dev on $(if $(TUIC_APP_INSTANCE),the ISOLATED config instance '$(TUIC_APP_INSTANCE)' (instances/$(TUIC_APP_INSTANCE)),the SHARED default config directory)..."
 	TAURI_CLI_WATCHER_IGNORE_FILENAME=.taurignore TUIC_APP_INSTANCE=$(TUIC_APP_INSTANCE) pnpm tauri dev
 
 # Agent desktop checks never use make dev/test or the daily executable.
@@ -160,7 +173,10 @@ check: test-shell check-desktop-embedding
 	@echo "Running checks..."
 	@scripts/with-test-tmp.sh $(RTK) pnpm exec tsc --noEmit && echo "  tsc ✓"
 	@scripts/with-test-tmp.sh $(RTK) pnpm exec biome check --max-diagnostics=100 src/ && echo "  biome ✓"
-	@scripts/with-test-tmp.sh $(RTK) pnpm architecture:cycles && scripts/with-test-tmp.sh $(RTK) pnpm architecture:cycles:test && echo "  architecture cycles ✓"
+	@scripts/with-test-tmp.sh $(RTK) pnpm architecture:cycles && scripts/with-test-tmp.sh $(RTK) pnpm architecture:cycles:test && scripts/with-test-tmp.sh $(RTK) pnpm test-tmp-root:test && echo "  architecture cycles ✓"
+	@scripts/with-test-tmp.sh $(RTK) pnpm check:no-nul-bytes && scripts/with-test-tmp.sh $(RTK) pnpm check:no-nul-bytes:test && echo "  no NUL bytes ✓"
+	@scripts/with-test-tmp.sh $(RTK) pnpm check:no-home-gits && scripts/with-test-tmp.sh $(RTK) pnpm check:no-home-gits:test && echo "  no HOME-relative Gits paths ✓"
+	@scripts/with-test-tmp.sh $(RTK) pnpm check:no-hardcoded-tmp && scripts/with-test-tmp.sh $(RTK) pnpm check:no-hardcoded-tmp:test && echo "  no hard-coded temp-dir writes ✓"
 	@scripts/with-test-tmp.sh bash -c 'caps=$$(sed -n "/const KNOWN_CAPABILITIES/,/];/p" src-tauri/src/plugins.rs | grep -oE "\"[a-z][a-z:_-]+\"" | tr -d "\""); miss=0; for c in $$caps; do for d in src-tauri/src/mcp_http/plugin_docs.rs docs/plugins.md; do grep -qF "$$c" "$$d" || { echo "  ✗ capability $$c missing from $$d"; miss=1; }; done; done; [ $$miss -eq 0 ]' && echo "  plugin-docs-sync ✓"
 	@scripts/with-test-tmp.sh bash scripts/check-make-instance-scope.sh && echo "  make-instance-scope ✓"
 	@scripts/with-test-tmp.sh bash scripts/check-make-dev-builds-sibling.sh && echo "  make-dev-builds-sibling ✓"
@@ -168,7 +184,7 @@ check: test-shell check-desktop-embedding
 	@cd src-tauri && ../scripts/with-test-tmp.sh $(RTK) cargo fmt --check && echo "  rustfmt ✓"
 # bm25 is a vendored third-party patch (patches/bm25): not ours to lint.
 	@cd src-tauri && ../scripts/with-test-tmp.sh $(RTK) cargo clippy --workspace --exclude bm25 --release -- -D warnings && echo "  clippy ✓"
-	@cd src-tauri && ulimit -n 10240 && ../scripts/with-test-tmp.sh $(RTK) cargo nextest run --workspace && ../scripts/with-test-tmp.sh $(RTK) cargo test --doc --workspace -q && echo "  rust tests ✓"
+	@cd src-tauri && ulimit -n 10240 && TUIC_TEST_FAKE_HOME=1 ../scripts/with-test-tmp.sh $(RTK) cargo nextest run --workspace && TUIC_TEST_FAKE_HOME=1 ../scripts/with-test-tmp.sh $(RTK) cargo test --doc --workspace -q && echo "  rust tests ✓"
 	@bash -o pipefail -c 'scripts/with-test-tmp.sh $(RTK) pnpm exec vitest run --reporter=dot 2>&1 | tail -3' && echo "  vitest ✓"
 	@bash -o pipefail -c 'scripts/with-test-tmp.sh $(RTK) pnpm test:plugins 2>&1 | tail -3' && echo "  plugin tests ✓"
 	@scripts/with-test-tmp.sh $(RTK) pnpm audit --audit-level=high && echo "  pnpm audit ✓"

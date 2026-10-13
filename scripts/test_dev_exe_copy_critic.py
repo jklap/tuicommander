@@ -17,12 +17,13 @@ class RunnerBoundaryTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.source = self.root / "build"
         self.source.mkdir()
+        # A script, not a copy of /bin/sh: macOS kills a relocated system
+        # binary (arm64e), so a copied /bin/sh cannot run here at all. The
+        # script execs the real shell, so signals and exit statuses are the
+        # shell's own, and the runner still copies and launches a real file.
         shell = self.root / "host-shell"
-        shutil.copy("/bin/sh", shell)
-        if sys.platform == "darwin":
-            subprocess.run(["/usr/bin/codesign", "--force", "--sign", "-",
-                            "--timestamp=none", str(shell)], check=True,
-                           capture_output=True)
+        shell.write_text('#!/bin/sh\nexec /bin/sh "$@"\n')
+        shell.chmod(0o755)
         for name in ("tuicommander", "tuic", "tuic-remote", "tuic-bridge"):
             shutil.copy(shell, self.source / name)
         self.destination = self.root / "stable"
