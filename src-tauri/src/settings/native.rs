@@ -77,13 +77,13 @@ pub(super) fn native_catalogue_for(dictation: bool) -> Result<Catalogue, Catalog
         Some(&crate::github_account::RepoBindingStore::default()),
         available.clone(),
     )?;
-    catalogue.register::<crate::remote_connection::RemoteConnection>(
+    catalogue.register::<super::remote::RemoteConnections>(
         "connections",
         "machine",
         None,
         available.clone(),
     )?;
-    catalogue.register::<crate::tunnels::profile::TunnelProfile>(
+    catalogue.register::<super::remote::TunnelProfiles>(
         "tunnels",
         "machine",
         None,

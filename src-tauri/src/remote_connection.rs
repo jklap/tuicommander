@@ -305,7 +305,7 @@ pub(crate) fn pairing_token(id: &str) -> Result<Option<String>, String> {
     crate::credentials::get(crate::credentials::Credential::RemotePairingToken(id))
 }
 
-fn delete_connection_credentials(id: &str) -> Result<(), String> {
+pub(crate) fn delete_connection_credentials(id: &str) -> Result<(), String> {
     let password = crate::credentials::delete(crate::credentials::Credential::RemoteConnection(id));
     let pairing =
         crate::credentials::delete(crate::credentials::Credential::RemotePairingToken(id));

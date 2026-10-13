@@ -7,11 +7,15 @@ pub mod native;
 pub mod notifications;
 pub mod preferences;
 pub mod registry;
+pub mod remote;
 pub mod repositories;
 pub mod request;
 pub mod service;
 pub mod telegram;
 pub mod transaction;
+pub mod upstreams;
+#[cfg(feature = "dictation")]
+pub mod voice;
 
 mod pointer;
 mod validation;
@@ -41,3 +45,12 @@ mod agents_tests;
 
 #[cfg(test)]
 mod repositories_tests;
+
+#[cfg(test)]
+mod remote_tests;
+
+#[cfg(test)]
+mod upstreams_tests;
+
+#[cfg(all(test, feature = "dictation"))]
+mod voice_tests;
