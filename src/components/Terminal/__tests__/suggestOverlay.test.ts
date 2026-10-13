@@ -6,6 +6,7 @@ import {
 	answerExtent,
 	type ChatBlock,
 	continuationRowsAfterSuggest,
+	hiddenMarkerRows,
 	isSuggestBlock,
 	paintOverlayBlocks,
 	planSuggestOverlay,
@@ -178,7 +179,7 @@ describe("planSuggestOverlay", () => {
 	// The highlight pattern is looser than the walk's stop pattern on purpose: an
 	// agent prints its intent line behind a bullet, and that row must still be
 	// tinted. Using the stop pattern here would silently leave it untinted.
-	it("tints an intent line that sits behind a bullet", () => {
+	it("classifies an intent line that sits behind a bullet", () => {
 		const plan = planSuggestOverlay(1, rows([["\u23fa intent: doing a thing (Thing)", false]]));
 		expect(plan.blocks).toEqual([{ row: 0, kind: "intent" }]);
 	});
@@ -322,21 +323,20 @@ describe("planSuggestOverlay — 💬 answer marker", () => {
 });
 
 describe("paintOverlayBlocks", () => {
-	it("masks suggest rows with the background and keeps answer rows translucent with a gutter", () => {
-		// catches: an answer row masked like a suggest row, hiding the answer text
+	it("tints answer rows with a gutter and paints nothing for marker rows", () => {
+		// catches: a suggest/intent row still gets a strip (or an answer row a solid mask hiding its text)
 		const container = document.createElement("div");
 		paintOverlayBlocks(
 			container,
 			[
 				{ row: 1, kind: "suggest" },
 				{ row: 2, kind: "answer" },
+				{ row: 3, kind: "intent" },
 			],
 			20,
-			"rgb(10, 10, 10)",
 		);
-		const [masked, answer] = Array.from(container.children) as HTMLElement[];
-		expect(masked.style.top).toBe("20px");
-		expect(masked.style.background).toBe("rgb(10, 10, 10)");
+		const [answer, ...rest] = Array.from(container.children) as HTMLElement[];
+		expect(rest).toEqual([]);
 		expect(answer.style.top).toBe("40px");
 		expect(answer.style.background).toContain("0.14");
 		expect(answer.style.boxShadow).toContain("inset 3px");
@@ -344,8 +344,8 @@ describe("paintOverlayBlocks", () => {
 
 	it("replaces the previous strips instead of stacking them", () => {
 		const container = document.createElement("div");
-		paintOverlayBlocks(container, [{ row: 0, kind: "answer" }], 20, "#000");
-		paintOverlayBlocks(container, [], 20, "#000");
+		paintOverlayBlocks(container, [{ row: 0, kind: "answer" }], 20);
+		paintOverlayBlocks(container, [], 20);
 		expect(container.children.length).toBe(0);
 	});
 });
@@ -448,5 +448,100 @@ describe("planSuggestOverlay — Codex bullet-prefixed intent and suggest (#1858
 				{ row: 1, kind: "suggest" },
 			]);
 		}
+	});
+});
+
+describe("hiddenMarkerRows — wrapped markers leave no visible fragment (#1761-7249)", () => {
+	/** Rows -above..n-1 of a screen whose first `above` rows are scrolled off the top. */
+	function screen(snapshots: Array<[string, boolean]>, above: number) {
+		const get = (i: number) => {
+			const k = i + above;
+			if (k < 0 || k >= snapshots.length) return null;
+			const [text, isWrapped] = snapshots[k];
+			return { text, isWrapped };
+		};
+		const viewportRows = snapshots.length - above;
+		return hiddenMarkerRows(planSuggestOverlay(viewportRows, get, -above).blocks);
+	}
+
+	// catches: the anchor row is above the viewport, so the plan never sees it and the
+	// continuation row at the top of the viewport is painted as a bare fragment
+	it("hides the continuation of a suggest whose anchor row is above the viewport (the anchor too)", () => {
+		const hidden = screen(
+			[
+				["suggest: [ Run the full test suite | Skip the", false],
+				["slow integration tests | Stop here ]", true],
+				["normal output", false],
+			],
+			1,
+		);
+		expect([...hidden]).toEqual([-1, 0]);
+	});
+
+	// catches: a wrapped intent hides only its first row, so the tail of the line shows
+	it("hides every row an intent line wraps onto", () => {
+		const hidden = screen(
+			[
+				["intent: Investigating why the terminal keeps repainting marker", false],
+				["rows after a resize (Marker rows)", true],
+				["normal output", false],
+			],
+			0,
+		);
+		expect([...hidden]).toEqual([0, 1]);
+	});
+
+	// catches: only soft-wrapped (isWrapped) intent tails are hidden; Codex/Ink hard-wrap with
+	// cursor moves and a two-space indent, so the tail row keeps painting (recorded in
+	// codex-narrow-progress-intent-20260925.tcap: `intent: ...con` then `  righe di continuazione ...`)
+	it("hides the indented tail of a hard-wrapped intent line", () => {
+		const hidden = screen(
+			[
+				["• intent: Controllo la cattura a 80 colonne e preparo la prova del journal con", false],
+				["  righe di continuazione e titolo finale (Verifica stretta)", false],
+				["", false],
+				["  La registrazione riguarda solo", false],
+			],
+			0,
+		);
+		expect(hidden.has(1)).toBe(true);
+		expect(hidden.has(3)).toBe(false);
+	});
+
+	// catches: the hard-wrap walk swallows a new answer, tool output or prompt
+	// (and its following indented content) as part of the preceding intent.
+	it.each(["  ● tool output", "  ⏺ tool output", "• tool output", "  💬 answer", "  ❯ prompt"])(
+		"ends a hard-wrapped intent before %s",
+		(boundary) => {
+			const hidden = screen(
+				[
+					["intent: Investigating marker rows", false],
+					["  continued (Marker rows)", false],
+					[boundary, false],
+					["  independent content", false],
+				],
+				0,
+			);
+			expect([...hidden]).toEqual([0, 1]);
+		},
+	);
+
+	// catches: the answer tint is hidden like a marker, removing the 💬 text
+	it("never hides an answer row", () => {
+		expect([...screen([["💬 yes", false]], 0)]).toEqual([]);
+	});
+
+	// catches: lookback rows leak into the painted overlay strips at negative offsets
+	it("keeps rows above the viewport out of the answer strips", () => {
+		const get = (i: number) =>
+			i === -1
+				? { text: "💬 an answer", isWrapped: false }
+				: i === 0
+					? { text: "  continued", isWrapped: false }
+					: null;
+		const plan = planSuggestOverlay(1, get, -1);
+		const container = document.createElement("div");
+		paintOverlayBlocks(container, plan.blocks, 20);
+		expect(Array.from(container.children).map((c) => (c as HTMLElement).style.top)).toEqual(["0px"]);
 	});
 });
