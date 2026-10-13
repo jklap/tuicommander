@@ -483,8 +483,10 @@ pub(super) fn native_process_tree_entry(
     }
 }
 
-/// Set once `ps` could not even be spawned (sandboxed: EPERM); every later
-/// fallback is then skipped instead of failing the same exec each second.
+/// Set once `ps` can never be spawned here — the exec is denied (a sandbox:
+/// EPERM/EACCES) or there is no `ps` (ENOENT) — so every later fallback is
+/// skipped instead of failing the same exec each second. A transient spawn
+/// failure (EAGAIN under a process limit, EINTR, ENOMEM) does not latch.
 #[cfg(not(windows))]
 static PS_FALLBACK_UNAVAILABLE: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
@@ -514,17 +516,41 @@ pub(super) fn ps_process_tree_snapshot(reason: PsFallbackReason) -> Option<Vec<P
             "native process snapshot insufficient; falling back to `ps` (logged once per reason)"
         );
     }
-    let output = match std::process::Command::new("ps")
-        .args(["-ww", "-axo", "pid=,ppid=,etime=,comm=,args="])
-        .output()
-    {
+    run_ps_fallback(&PS_FALLBACK_UNAVAILABLE, || {
+        std::process::Command::new("ps")
+            .args(["-ww", "-axo", "pid=,ppid=,etime=,comm=,args="])
+            .output()
+    })
+}
+
+/// [`ps_process_tree_snapshot`]'s spawn and latch, with both injected so the
+/// latch rule is testable without exec'ing anything.
+#[cfg(not(windows))]
+pub(super) fn run_ps_fallback(
+    unavailable: &std::sync::atomic::AtomicBool,
+    spawn: impl FnOnce() -> std::io::Result<std::process::Output>,
+) -> Option<Vec<ProcessTreeEntry>> {
+    use std::sync::atomic::Ordering;
+    let output = match spawn() {
         Ok(output) => output,
         Err(error) => {
-            if !PS_FALLBACK_UNAVAILABLE.swap(true, Ordering::Relaxed) {
-                tracing::warn!(
+            let permanent = matches!(
+                error.kind(),
+                std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::NotFound
+            );
+            if permanent {
+                if !unavailable.swap(true, Ordering::Relaxed) {
+                    tracing::warn!(
+                        source = "process_snapshot",
+                        %error,
+                        "`ps` fallback cannot run; using the native snapshot with unknown argv"
+                    );
+                }
+            } else {
+                tracing::debug!(
                     source = "process_snapshot",
                     %error,
-                    "`ps` fallback cannot run; using the native snapshot with unknown argv"
+                    "`ps` fallback failed to spawn this time; will retry"
                 );
             }
             return None;

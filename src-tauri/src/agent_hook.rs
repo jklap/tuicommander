@@ -225,13 +225,21 @@ fn hook_binary_command(args: &[&str]) -> String {
 }
 
 /// Resolve the controlling tty into `$__t`, even when the caller's stdout is
-/// captured (hooks have no controlling tty of their own). `$TUIC_PTY_TTY` — the
-/// device TUIC stamps on every PTY child, which `tuic-hook` also reads first —
-/// wins; the parent's tty via `ps -o tty=` is only the fallback for an agent
-/// TUIC did not spawn (a sandboxed agent cannot exec the setuid `ps`).
+/// captured (hooks have no controlling tty of their own).
+///
+/// The parent's LIVE tty (`ps -o tty= -p $PPID`) wins whenever it resolves:
+/// it is where the agent actually runs. `$TUIC_PTY_TTY` — the device TUIC
+/// stamps on every PTY child — is only the fallback, for when the live one
+/// cannot be read: a sandboxed agent that cannot exec the setuid `ps`, or a
+/// hook whose immediate parent is detached (Claude Code's hook shell). Trying
+/// the variable first would let any process that merely inherited it — a pane
+/// of a real tmux started inside a TUIC tab, a command that copies its
+/// parent's environment onto another pty — label that other tab's session.
+/// A TUIC tmux-shim pane is its own PTY and gets its own `$TUIC_PTY_TTY`, so
+/// either order resolves it; this one stays right for the inherited case too.
 #[cfg(any(test, not(feature = "desktop")))]
 fn tty_resolve() -> &'static str {
-    r#"__t=${TUIC_PTY_TTY:-};[ -n "$__t" ]||{ __t=$(ps -o tty= -p "$PPID" 2>/dev/null|tr -d '[:space:]');case "$__t" in *[0-9]*)__t="/dev/${__t#/dev/}";;*)__t="/dev/tty";;esac;}"#
+    r#"__t=$(ps -o tty= -p "$PPID" 2>/dev/null|tr -d '[:space:]');case "$__t" in *[0-9]*)__t="/dev/${__t#/dev/}";;*)__t=${TUIC_PTY_TTY:-/dev/tty};;esac"#
 }
 
 /// The self-contained shell flavour of a spec (builds without the sidecar):
@@ -612,8 +620,11 @@ mod tests {
                 assert!(cmd.starts_with(r#"[ -n "${TUIC_SESSION"#), "{cmd}");
                 assert!(cmd.contains(r#"ps -o tty= -p "$PPID""#), "{cmd}");
                 let pty_tty = cmd.find("TUIC_PTY_TTY").expect("reads TUIC_PTY_TTY");
-                let ps = cmd.find("ps -o tty=").expect("keeps the ps fallback");
-                assert!(pty_tty < ps, "TUIC_PTY_TTY is tried before ps: {cmd}");
+                let ps = cmd.find("ps -o tty=").expect("reads the live tty");
+                assert!(
+                    ps < pty_tty,
+                    "the live tty is tried before TUIC_PTY_TTY: {cmd}"
+                );
                 assert!(cmd.contains("|| true"), "{cmd}");
                 assert!(cmd.trim_end().ends_with(SENTINEL), "{cmd}");
                 for (verb, payload) in s.wire {
@@ -646,6 +657,57 @@ mod tests {
                 cmd.matches("ps -o tty=").count(),
                 1,
                 "tty resolved once: {cmd}"
+            );
+        }
+    }
+
+    /// M3: run a real shell-flavour hook. A stand-in `ps` reports the live tty
+    /// (spelled `/dev/..<path>` so it can be a scratch file); the hook must
+    /// write there, not to an inherited `$TUIC_PTY_TTY` naming another tab.
+    /// When the live lookup yields nothing (`ps` unrunnable, or a detached
+    /// parent's `??`), the variable is used.
+    #[test]
+    #[cfg(unix)]
+    fn shell_hook_writes_to_the_live_tty_before_an_inherited_tuic_pty_tty() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let live = dir.path().join("live-tty7");
+        let inherited = dir.path().join("inherited-tty");
+        let cmd = shell_hook_command(&[("state", "idle")]);
+        let run = |ps_body: &str| {
+            std::fs::write(&live, "").unwrap();
+            std::fs::write(&inherited, "").unwrap();
+            let bin = tempfile::TempDir::new().unwrap();
+            let ps = bin.path().join("ps");
+            std::fs::write(&ps, format!("#!/bin/sh\n{ps_body}\n")).unwrap();
+            std::fs::set_permissions(&ps, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+                .unwrap();
+            let status = std::process::Command::new("/bin/sh")
+                .arg("-c")
+                .arg(&cmd)
+                .env_clear()
+                .env("PATH", format!("{}:/usr/bin:/bin", bin.path().display()))
+                .env("TUIC_SESSION", "probe")
+                .env("TUIC_PTY_TTY", &inherited)
+                .status()
+                .unwrap();
+            assert!(status.success());
+            (
+                std::fs::read(&live).unwrap(),
+                std::fs::read(&inherited).unwrap(),
+            )
+        };
+        let idle = b"\x1b]7770;state=idle\x1b\\".to_vec();
+
+        let (to_live, to_inherited) = run(&format!("printf '%s\\n' '/dev/..{}'", live.display()));
+        assert_eq!(to_live, idle, "the live tty gets the OSC");
+        assert!(to_inherited.is_empty(), "the inherited tty is left alone");
+
+        for no_live_tty in ["exit 1", "printf '??\\n'"] {
+            let (to_live, to_inherited) = run(no_live_tty);
+            assert!(to_live.is_empty(), "{no_live_tty}");
+            assert_eq!(
+                to_inherited, idle,
+                "{no_live_tty}: falls back to TUIC_PTY_TTY"
             );
         }
     }

@@ -105,6 +105,8 @@ When a commit resolves a **GitHub issue**, use a closing keyword so GitHub auto-
 
 All business logic in Rust. Frontend only renders and handles interaction — no data reshaping, computation, or process orchestration.
 
+**Inspect processes with `tuic_core::process_info`, never by exec'ing `ps`, `pgrep` or `pkill`** (production code and tests alike). `/bin/ps` is setuid root on macOS and sandboxed hosts refuse to exec it; `pgrep`/`pkill` need a mach service sandboxes do not expose, so a caller that parses their output goes blind exactly where TUIC most needs to see its children. `process_info` reads libproc / `kern.proc` (macOS) and `/proc` (Linux) natively, with a `FakeProcessSource` seam for tests; signal through it (`terminate`/`kill`) or `tuic_core::process_tree` for groups. `scripts/check-no-process-exec.mjs` fails `make check` on a new exec or a shell string that runs one, keyed by `file::fn`; the few remaining sites (the logged `ps` fallback in `pty.rs`, text run by an agent or on a remote host, one macOS oracle test) are allow-listed with their reason.
+
 ## TUIC Protocol Markers (ack / intent: / suggest:)
 
 Top-level sessions only. Subagents (Task tool) and in-process teammates must NEVER emit `ack`, `intent:`, or `suggest:` — `suggest:` is the end-of-task signal, so a subagent emitting it flips the *parent* session to `completed` mid-work. See `docs/user-guide/ai-agents.md#tuic-protocol--output-markers` for the full protocol and `src-tauri/src/mcp_http/mcp_transport.rs`'s `build_mcp_instructions_for_mode` / `cc_agent_hint.suggested_prompt` for where this is enforced today.

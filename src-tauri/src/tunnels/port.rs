@@ -28,15 +28,19 @@ pub async fn kill_ssh_on_port(port: u16) {
         .await;
 
     let Ok(output) = output else { return };
-    let pids = String::from_utf8_lossy(&output.stdout);
-    for pid_str in pids.split_whitespace() {
-        let Ok(pid) = pid_str.parse::<u32>() else {
-            continue;
-        };
-        if is_ssh_process(pid) {
-            tuic_core::process_info::terminate(pid);
-        }
-    }
+    terminate_ssh_pids(&String::from_utf8_lossy(&output.stdout));
+}
+
+/// SIGTERM every pid in `lsof -t` output that is an `ssh` process; anything
+/// else holding the port is left alone. Returns the pids signalled.
+#[cfg(unix)]
+fn terminate_ssh_pids(lsof_pids: &str) -> Vec<u32> {
+    lsof_pids
+        .split_whitespace()
+        .filter_map(|pid| pid.parse::<u32>().ok())
+        .filter(|&pid| is_ssh_process(pid))
+        .filter(|&pid| tuic_core::process_info::terminate(pid))
+        .collect()
 }
 
 /// Whether `pid` runs an `ssh` binary, by executable path or kernel name.
@@ -80,6 +84,47 @@ mod tests {
         let _ = sleeper.kill();
         let _ = sleeper.wait();
         assert!(!is_ssh, "a sleep is not an ssh");
+    }
+
+    /// L6, the positive half: an `ssh` among the port's holders is
+    /// terminated, a non-ssh holder and junk lines are not. The `ssh` is the
+    /// identity probe installed under that name (a copied system binary would
+    /// be SIGKILLed by the sandbox), blocked reading a pipe nobody writes.
+    #[cfg(unix)]
+    #[test]
+    fn an_ssh_holding_the_port_is_terminated_and_nothing_else() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let spawn = |name: &str| {
+            let probe = tuic_test_support::install_identity_probe(dir.path(), name);
+            std::process::Command::new(probe)
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::null())
+                .spawn()
+                .expect("spawn the identity probe")
+        };
+        let mut ssh = spawn("ssh");
+        let mut other = spawn("not-an-ssh-daemon");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !is_ssh_process(ssh.id()) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the ssh probe never showed up"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+
+        let signalled = terminate_ssh_pids(&format!("{}\n{}\nnot-a-pid\n", ssh.id(), other.id()));
+
+        assert_eq!(signalled, vec![ssh.id()]);
+        let status = ssh.wait().expect("reap the ssh probe");
+        use std::os::unix::process::ExitStatusExt;
+        assert_eq!(status.signal(), Some(libc::SIGTERM), "{status:?}");
+        assert!(
+            matches!(other.try_wait(), Ok(None)),
+            "a non-ssh holder must survive"
+        );
+        let _ = other.kill();
+        let _ = other.wait();
     }
 
     #[tokio::test]
