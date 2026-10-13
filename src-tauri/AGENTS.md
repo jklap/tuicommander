@@ -1639,6 +1639,16 @@ are drained on their own tasks under the same deadline, so a straggler holding s
 the call either. Tests: `a_timed_out_one_shot_kills_the_grandchild_it_forked`,
 `a_cancelled_one_shot_kills_the_grandchild_it_forked` (`tunnels/exec.rs`).
 
+**Same shape, fixed 2026-10-12 for the SSH host probe** (`tunnels::commands::run_probe`, behind
+`GET /tunnels/ssh-hosts/status` and `POST /tunnels/ssh-hosts/probe`). It had its own
+`kill_on_drop` + `tokio::time::timeout(command.output())`, so a timed-out or dropped probe left a
+`ProxyCommand` child running. It now hands its `Command` to `tunnels::exec::run_bounded_command`,
+the same group-spawn/kill/reap/drop-guard core `run_process` uses, and classifies the raw exit
+itself. Do not give a new one-shot ssh caller its own spawn loop; build the `Command` and use that
+helper. Tests: `a_timed_out_probe_kills_the_grandchild_it_forked`,
+`a_cancelled_probe_kills_the_grandchild_it_forked` (`tunnels/commands.rs`, sharing
+`exec::grandchild_fixture`).
+
 ## Notification Sound Playback (`rodio` decoder features, custom-file fallback)
 
 `notification_sound.rs` generates its built-in tones procedurally (`EnvelopedTone`,

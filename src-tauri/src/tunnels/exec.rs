@@ -254,12 +254,55 @@ async fn run_process_with(
     let env = build_ssh_env(agent_socket.as_deref());
 
     let mut command = Command::new(binary);
+    command.args(args).envs(
+        env.iter()
+            .map(|(key, value)| (key.as_str(), value.as_str())),
+    );
+
+    let output = run_command_with(command, stdin, stdin_end, timeout).await?;
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    let code = output.status.code();
+    if !output.status.success() {
+        return Err(classify_exit(&stderr, code));
+    }
+
+    Ok(ExecOutput {
+        stdout,
+        stderr,
+        code,
+    })
+}
+
+/// A bounded one-shot's raw result, before any exit classification.
+pub(crate) struct RawOutput {
+    pub(crate) status: std::process::ExitStatus,
+    pub(crate) stdout: Vec<u8>,
+    pub(crate) stderr: Vec<u8>,
+}
+
+/// Run an already-built `command` (program, args, env) with no stdin, under
+/// the same process-group spawn, bounded group kill on timeout, bounded reap
+/// and drop guard as every one-shot ssh/scp here. The exit status is returned
+/// unclassified; only a timeout ([`ExitReason::Timeout`]) or a spawn/wait
+/// failure ([`ExitReason::Unknown`]) is an error. Used by the SSH host probe
+/// (`tunnels::commands::run_probe`), which classifies its own exits.
+pub(crate) async fn run_bounded_command(
+    command: Command,
+    timeout: Duration,
+) -> Result<RawOutput, ExitReason> {
+    run_command_with(command, None, StdinEnd::Close, timeout).await
+}
+
+async fn run_command_with(
+    mut command: Command,
+    stdin: Option<&[u8]>,
+    stdin_end: StdinEnd,
+    timeout: Duration,
+) -> Result<RawOutput, ExitReason> {
+    let binary = std::path::PathBuf::from(command.as_std().get_program());
+    let binary = binary.as_path();
     command
-        .args(args)
-        .envs(
-            env.iter()
-                .map(|(key, value)| (key.as_str(), value.as_str())),
-        )
         .stdin(if stdin.is_some() {
             Stdio::piped()
         } else {
@@ -354,17 +397,10 @@ async fn run_process_with(
         }
     }
 
-    let stdout = String::from_utf8_lossy(&stdout).into_owned();
-    let stderr = String::from_utf8_lossy(&stderr).into_owned();
-    let code = status.code();
-    if !status.success() {
-        return Err(classify_exit(&stderr, code));
-    }
-
-    Ok(ExecOutput {
+    Ok(RawOutput {
+        status,
         stdout,
         stderr,
-        code,
     })
 }
 
@@ -408,8 +444,63 @@ fn shell_path(value: &str) -> String {
     )
 }
 
+/// Fixtures for proving a one-shot's whole process group dies, shared by
+/// this module's tests and the SSH host probe's (`tunnels::commands`).
+#[cfg(all(test, unix))]
+pub(crate) mod grandchild_fixture {
+    use std::time::Duration;
+
+    use crate::test_support::fake_ssh_script;
+
+    /// A fake ssh that forks a grandchild (`sleep 60 &`), records its PID,
+    /// and waits on it — the shape of a real `ssh` with a `ProxyCommand`.
+    pub(crate) fn forking_ssh(name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        let marker = crate::test_support::test_temp_root().join(format!("{name}.grandchild.pid"));
+        let _ = std::fs::remove_file(&marker);
+        let posix = format!("sleep 60 & echo $! > '{}'; wait", marker.display());
+        (fake_ssh_script(name, &posix, "exit /b 0"), marker)
+    }
+
+    /// The grandchild's PID, once the fake ssh has written it. Setup, not the
+    /// behaviour under test, so the bound is generous.
+    pub(crate) async fn grandchild_pid(marker: &std::path::Path) -> i32 {
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        loop {
+            if let Ok(text) = std::fs::read_to_string(marker)
+                && let Ok(pid) = text.trim().parse()
+            {
+                return pid;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "fake ssh never recorded its grandchild PID at {}",
+                marker.display()
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
+    /// Assert `pid` is gone (it is reparented to init/launchd and reaped
+    /// there, so allow a moment), killing it if it survived.
+    pub(crate) async fn assert_process_gone(pid: i32) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while std::time::Instant::now() < deadline {
+            // SAFETY: signal 0 only probes for existence.
+            if unsafe { libc::kill(pid, 0) } != 0 {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        // SAFETY: a test-owned `sleep` we deliberately started.
+        unsafe { libc::kill(pid, libc::SIGKILL) };
+        panic!("the one-shot's grandchild {pid} survived the kill");
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use super::grandchild_fixture::{assert_process_gone, forking_ssh, grandchild_pid};
     use super::*;
     use crate::test_support::{fail_with_stderr_script, fake_ssh_script, sleep_script};
     use crate::tunnels::classifier::ExitReason;
@@ -539,53 +630,6 @@ mod tests {
         .expect_err("mute process times out");
 
         assert_eq!(error, ExitReason::Timeout);
-    }
-
-    /// A fake ssh that forks a grandchild (`sleep 60 &`), records its PID,
-    /// and waits on it — the shape of a real `ssh` with a `ProxyCommand`.
-    #[cfg(unix)]
-    fn forking_ssh(name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
-        let marker = crate::test_support::test_temp_root().join(format!("{name}.grandchild.pid"));
-        let _ = std::fs::remove_file(&marker);
-        let posix = format!("sleep 60 & echo $! > '{}'; wait", marker.display());
-        (fake_ssh_script(name, &posix, "exit /b 0"), marker)
-    }
-
-    /// The grandchild's PID, once the fake ssh has written it. Setup, not the
-    /// behaviour under test, so the bound is generous.
-    #[cfg(unix)]
-    async fn grandchild_pid(marker: &std::path::Path) -> i32 {
-        let deadline = std::time::Instant::now() + Duration::from_secs(30);
-        loop {
-            if let Ok(text) = std::fs::read_to_string(marker)
-                && let Ok(pid) = text.trim().parse()
-            {
-                return pid;
-            }
-            assert!(
-                std::time::Instant::now() < deadline,
-                "fake ssh never recorded its grandchild PID at {}",
-                marker.display()
-            );
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    }
-
-    /// Assert `pid` is gone (it is reparented to init/launchd and reaped
-    /// there, so allow a moment), killing it if it survived.
-    #[cfg(unix)]
-    async fn assert_process_gone(pid: i32) {
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        while std::time::Instant::now() < deadline {
-            // SAFETY: signal 0 only probes for existence.
-            if unsafe { libc::kill(pid, 0) } != 0 {
-                return;
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-        // SAFETY: a test-owned `sleep` we deliberately started.
-        unsafe { libc::kill(pid, libc::SIGKILL) };
-        panic!("the one-shot's grandchild {pid} survived the kill");
     }
 
     /// Catches: a timed-out one-shot killing only the direct child, so the
