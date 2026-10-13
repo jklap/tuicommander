@@ -1624,6 +1624,62 @@ mod tests {
         assert!(registry.upstream_names().contains(&"epsilon".to_string()));
     }
 
+    fn header(name: &str, credential_ref: &str) -> UpstreamHeader {
+        UpstreamHeader {
+            name: name.into(),
+            credential_ref: credential_ref.into(),
+        }
+    }
+
+    /// Connect a server with `before` headers, apply the diff to `after`, and
+    /// return the headers the registry's live entry holds afterwards.
+    async fn headers_after_diff(
+        name: &str,
+        before: Vec<UpstreamHeader>,
+        after: Vec<UpstreamHeader>,
+    ) -> Vec<UpstreamHeader> {
+        let registry = UpstreamRegistry::new();
+        let mut server = disabled_http_server(name, "http://127.0.0.1:1/mcp");
+        server.headers = before;
+        registry
+            .connect_upstream(server.clone(), None)
+            .await
+            .unwrap();
+        let old = UpstreamMcpConfig {
+            servers: vec![server.clone()],
+        };
+        server.headers = after;
+        let new = UpstreamMcpConfig {
+            servers: vec![server],
+        };
+
+        registry.apply_config_diff(&old, &new, 9999).await;
+
+        registry.entry(name).unwrap().config.headers.clone()
+    }
+
+    // RED: diff_reconnects_when_header_is_removed — catches: apply_config_diff ignores headers
+    #[tokio::test]
+    async fn diff_reconnects_when_header_is_removed() {
+        let live =
+            headers_after_diff("hdr-removed", vec![header("x-api-key", "ref-1")], vec![]).await;
+        assert!(
+            live.is_empty(),
+            "removed header still on the live entry: {live:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn diff_reconnects_when_header_credential_changes() {
+        let live = headers_after_diff(
+            "hdr-changed",
+            vec![header("x-api-key", "ref-1")],
+            vec![header("x-api-key", "ref-2")],
+        )
+        .await;
+        assert_eq!(live, vec![header("x-api-key", "ref-2")]);
+    }
+
     #[test]
     fn save_and_load_round_trip_via_file() {
         use tempfile::TempDir;
