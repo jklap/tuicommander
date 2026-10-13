@@ -7,7 +7,9 @@ export interface RowSnapshot {
 /** Re-declared here instead of imported: keeps the helper self-contained and
  *  avoids pulling the full Terminal module into unit tests. Must stay in
  *  sync with the patterns used in Terminal.tsx. */
-export const SUGGEST_ANCHOR_RE = /^[\s●⏺]*suggest:\s+\S/;
+/** Agent bullet glyphs: Claude's `●`/`⏺`, Codex's `•`. A new agent's bullet is added here, once. */
+export const AGENT_BULLETS = "●⏺•";
+export const SUGGEST_ANCHOR_RE = new RegExp(`^[\\s${AGENT_BULLETS}]*suggest:\\s+\\S`);
 /** Stop condition for the continuation walk: a new `intent:` token at column 0. */
 const INTENT_RE = /^intent:\s+\S/;
 /**
@@ -16,17 +18,17 @@ const INTENT_RE = /^intent:\s+\S/;
  * row must still be tinted. It is NOT a walk stop condition — ending a suggest
  * block on an indented mention would swallow the block's closing bracket.
  */
-export const INTENT_HIGHLIGHT_RE = /^[\s●⏺]*intent:\s+/;
+export const INTENT_HIGHLIGHT_RE = new RegExp(`^[\\s${AGENT_BULLETS}]*intent:\\s+`);
 /**
  * The answer marker an agent prefixes to every sentence that directly answers
  * the user (💬). Matched on row text, which carries no escape sequences — bold,
  * colour and the like live in cell attributes — so styling cannot hide it.
- * Like `intent:`, it may sit behind the agent's own bullet: Claude's `●`/`⏺`
- * or Codex's `•`.
+ * Like `intent:`, it may sit behind the agent's own bullet: an agent bullet (see [`AGENT_BULLETS`]).
  */
-export const ANSWER_MARKER_RE = /^[\s●⏺•]*💬/;
-/** An agent output row: a bullet glyph at the start of the line. */
-const OUTPUT_ROW_RE = /^\s*[●⏺]/;
+export const ANSWER_MARKER_RE = new RegExp(`^[\\s${AGENT_BULLETS}]*💬`);
+/** An agent output row: a bullet glyph at the start of the line. Codex's `•` also
+ *  marks ordinary list items, so it counts only at column 0; an indented one is content. */
+export const OUTPUT_ROW_RE = /^(?:\s*[●⏺]|•)/;
 /** A continuation row of an answer: indented under the agent's bullet. */
 const ANSWER_CONTINUATION_RE = /^ {2,}\S/;
 /** A user prompt row; an indented one still ends the answer. */
@@ -109,7 +111,7 @@ export function answerBlockRanges(blocks: readonly ChatBlock[]): [number, number
  *  first `|` to arrive on a wrapped continuation line, so a row like
  *  `suggest: long item that wraps...` (with the pipe on the next row) is
  *  still a new block boundary and the walk MUST stop here. (#1380-3b9c) */
-const SUGGEST_STOP_RE = /^[\t ]*(?:[●⏺][\t ]+)?suggest:\s+\S/;
+const SUGGEST_STOP_RE = new RegExp(`^[\\t ]*(?:[${AGENT_BULLETS}][\\t ]+)?suggest:\\s+\\S`);
 
 /**
  * Given a suggest anchor row at `anchorIndex`, return the 0-based indexes of

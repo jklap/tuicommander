@@ -1,6 +1,6 @@
 import type { DecodedRow, StyledRange } from "./canvasTerminalUtils";
 import { cellText } from "./canvasTerminalUtils";
-import { ANSWER_MARKER_RE, answerExtent, type RowSnapshot } from "./suggestOverlay";
+import { ANSWER_MARKER_RE, answerExtent, OUTPUT_ROW_RE, type RowSnapshot } from "./suggestOverlay";
 
 /** One turn of the answers-only view: what the user asked, then only the 💬 answers. */
 export interface AnswersTurn {
@@ -33,8 +33,6 @@ export function rowCopyText(row: DecodedRow): string {
 	return text;
 }
 
-/** An agent output row (bullet glyph) ends the prompt block, as does a 💬 row. */
-const OUTPUT_START_RE = /^\s*[●⏺]/;
 /** Rows a prompt may span, so a turn whose output never starts with a bullet is not swallowed whole. */
 export const PROMPT_MAX_ROWS = 50;
 
@@ -69,7 +67,7 @@ function readPrompt(rows: readonly RowSnapshot[]): { text: string; next: number 
 	let next = 1;
 	while (next < rows.length && next < PROMPT_MAX_ROWS) {
 		const row = rows[next];
-		if (!row.isWrapped && (OUTPUT_START_RE.test(row.text) || ANSWER_MARKER_RE.test(row.text))) break;
+		if (!row.isWrapped && (OUTPUT_ROW_RE.test(row.text) || ANSWER_MARKER_RE.test(row.text))) break;
 		text = row.isWrapped ? text + row.text : `${text.replace(/[ \t]+$/, "")}\n${row.text}`;
 		next++;
 	}

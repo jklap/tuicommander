@@ -31,6 +31,36 @@ function decoded(text: string, wrapped = false): DecodedRow {
 }
 
 describe("buildAnswersTurn", () => {
+	// Catches: a pasted bullet list being mistaken for Codex output and cut out of the prompt.
+	it("keeps bullet list items in a multiline user prompt", () => {
+		const turn = buildAnswersTurn(
+			[
+				row("❯ Compare these constraints:"),
+				row("  • keep local changes"),
+				row("  • preserve backups"),
+				row("⏺ 💬 Done."),
+			],
+			true,
+		);
+		expect(turn.prompt).toBe("❯ Compare these constraints:\n  • keep local changes\n  • preserve backups");
+	});
+
+	// Catches: an ordinary bullet in an answer hiding the list and all following caveats from answers-only mode.
+	it("keeps indented bullet list items and the following caveat in an answer", () => {
+		const turn = buildAnswersTurn(
+			[
+				row("• 💬 Before deleting the branch:"),
+				row("  • keep local changes"),
+				row("  • preserve backups"),
+				row("  Do not delete until both are done."),
+			],
+			false,
+		);
+		expect(turn.answers).toEqual([
+			"💬 Before deleting the branch:\n• keep local changes\n• preserve backups\nDo not delete until both are done.",
+		]);
+	});
+
 	it("keeps the prompt and only the answers, joining wrapped rows", () => {
 		const turn = buildAnswersTurn(
 			[

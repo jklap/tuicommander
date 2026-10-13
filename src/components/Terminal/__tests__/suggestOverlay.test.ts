@@ -405,3 +405,48 @@ describe("planSuggestOverlay — Codex bullet-prefixed answer marker (#1720-668c
 		expect(planSuggestOverlay(1, lookup([{ text: "• Ran make test", isWrapped: false }])).blocks).toEqual([]);
 	});
 });
+
+describe("planSuggestOverlay — Codex bullet-prefixed intent and suggest (#1858-8cf9)", () => {
+	const lookup = (snapshots: RowSnapshot[]) => (i: number) => snapshots[i] ?? null;
+
+	it("tints an intent line behind the Codex bullet", () => {
+		// catches: INTENT_HIGHLIGHT_RE accepting only the Claude bullets, so `• intent:` stays plain text
+		const plan = planSuggestOverlay(
+			1,
+			lookup([{ text: "• intent: Saving reports (Jira data review)", isWrapped: false }]),
+		);
+		expect(plan.blocks).toEqual([{ row: 0, kind: "intent" }]);
+	});
+
+	it("masks a suggest block behind the Codex bullet", () => {
+		// catches: SUGGEST_ANCHOR_RE accepting only the Claude bullets, so Codex suggest chips never appear
+		const plan = planSuggestOverlay(1, lookup([{ text: "• suggest: [ A | B | C ]", isWrapped: false }]));
+		expect(plan.blocks).toEqual([{ row: 0, kind: "suggest" }]);
+	});
+
+	it("stops a suggest walk at a second Codex-bulleted suggest anchor", () => {
+		// catches: SUGGEST_STOP_RE not seeing a bulleted anchor, so the first block runs into the second
+		const get = lookup([
+			{ text: "suggest: [ A |", isWrapped: false },
+			{ text: "• suggest: long item that wraps", isWrapped: false },
+		]);
+		expect(continuationRowsAfterSuggest(0, 2, get)).toEqual([]);
+	});
+
+	it("keeps the Claude bullets working", () => {
+		// catches: the shared bullet class dropping ● or ⏺
+		for (const b of ["●", "⏺"]) {
+			const plan = planSuggestOverlay(
+				2,
+				lookup([
+					{ text: `${b} intent: x (X)`, isWrapped: false },
+					{ text: `${b} suggest: [ A | B | C ]`, isWrapped: false },
+				]),
+			);
+			expect(plan.blocks).toEqual([
+				{ row: 0, kind: "intent" },
+				{ row: 1, kind: "suggest" },
+			]);
+		}
+	});
+});
