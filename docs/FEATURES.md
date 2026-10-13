@@ -1255,7 +1255,8 @@ re-derived later.
 - Token stored in OS keyring (macOS Keychain, Windows Credential Manager, Linux Secret Service)
 - Requested scope: `repo`
 - Shows user avatar, login name, and token source after authentication
-- Logout removes OAuth token, falls back to the env tokens
+- OAuth status exposes Logout; it removes the OAuth token and falls back to environment tokens
+- Environment status exposes Switch to OAuth and Disconnect; disconnect remains in effect across status refresh and lazy requests until login or restart
 - On 401: auto-clears invalid OAuth token and prompts re-auth
 
 PR creation, issue creation, and review submission use account-aware REST requests for the bound repository, including GitHub Enterprise, without spawning `gh`.
@@ -1270,7 +1271,7 @@ GitHub integration is **account-centric**: TUICommander can manage N accounts an
 
 **Repository bindings** (Settings → Git & GitHub → *Repository Bindings*)
 - Each workspace repo resolves to one of: **Bound** (shows the account + *Unbind*), **NeedsBind** (a candidate chooser — no silent `origin` pick when multiple GitHub remotes/accounts match), **NeedsAccount** (a github.com repo with no account yet → points to setup), or **Unmonitored**.
-- A single matching account auto-confirms; ambiguity always asks. Worktrees of a repo share the main checkout's binding.
+- A single account/remote candidate resolves automatically without persisting a binding; the default-only setup hides Repository Bindings. Multiple candidates always ask, including fork/upstream repositories on one account. Worktrees of a repo share the main checkout's binding.
 
 **Per-account isolation** (hybrid model)
 - github.com keeps the global breaker/viewer/rate/cooldown state byte-for-byte; each GHE account gets its own `ghe_state` (circuit breaker, viewer login, rate budget).
@@ -2907,6 +2908,10 @@ permissions. Recurring cadence previews retain the existing runtime limitations.
 ### History-anchored viewport scrolling
 
 Terminal gestures hold the requested history row even when output arrives before the backend applies the scroll. If capped scrollback evicts that row, the viewport clamps to the oldest retained row.
+
+### Internal repository settings owners
+
+The typed settings service supports repository defaults and per-repository `.tuic.json` targets. One registered owner resolves only existing repository registrations; patches preserve sibling fields and check revisions under the file lock. Transport publication remains pending. Registration/group configuration remains an accepted inventory gap until its owner has a typed schema (#1825-4566).
 
 GitHub settings backend: an internal typed owner adapter supports device login,
 verified Enterprise PAT accounts, labels, write-only credentials and revision-checked

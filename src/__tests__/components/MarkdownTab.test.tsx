@@ -197,6 +197,23 @@ describe("MarkdownTab agent review actions", () => {
 		expect(container.querySelector(".header")?.lastElementChild?.contains(send)).toBe(true);
 	});
 
+	it("marks Send ready only while it can send", async () => {
+		const tabId = mdTabsStore.add("/repo", "docs/review.md");
+		render(() => <MarkdownTab tab={mdTabsStore.get(tabId) as FileTab} />);
+		const send = await screen.findByRole("button", { name: "Send changes to agent" });
+		expect((send as HTMLButtonElement).disabled).toBe(true);
+		expect(send.hasAttribute("data-ready")).toBe(false);
+	});
+
+	it("marks Send ready when an agent is selected", async () => {
+		addAgent("Reviewer", "session-one", "/repo");
+		const tabId = mdTabsStore.add("/repo", "docs/review.md");
+		render(() => <MarkdownTab tab={mdTabsStore.get(tabId) as FileTab} />);
+		const send = await screen.findByRole("button", { name: "Send changes to agent" });
+		await waitFor(() => expect((send as HTMLButtonElement).disabled).toBe(false));
+		expect(send.getAttribute("data-ready")).toBe("true");
+	});
+
 	it("queues an absolute Markdown file without prefixing its repository path", async () => {
 		addAgent("Reviewer", "session-one", "/repo");
 		const path = "/Users/boss/Gits/.tmp/review.md";

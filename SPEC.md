@@ -988,6 +988,10 @@ repair Git and submodule paths; preserve ignored artifacts and publish lifecycle
 
 The Beta channel checks a rolling signed manifest published only after the versioned beta release finishes. It also checks stable and selects the newer version, so beta users receive the final release. Stable users retain the stable endpoint. New beta installs default to Beta; explicit saved settings are preserved. Beta installers stay on the immutable versioned release and open in the browser; stable installs use the existing in-app updater.
 
+### Repository settings owner coverage
+
+Implemented internal `repo_defaults` and `repo_local` adapters (#1825-4566). Repository targets resolve through one owner per store, with existing fixed-target adapters unchanged. `.tuic.json` writes use the shared locked file owner; arbitrary unregistered targets are rejected. Transport cutover remains pending. `repositories_registration` is an accepted inventory gap until registration/group runtime identities and delta-save contracts have a typed owner schema.
+
 GitHub settings owner adapter (1774-ce8f): internal typed read/perform actions use
 the existing GitHub/account owners for authentication, credential handling and
 removal effects. Bindings require a registered repository, matching remote host
