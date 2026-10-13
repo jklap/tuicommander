@@ -5297,3 +5297,5 @@ Visual evidence: worktree Vite fixture mounted the real NotificationsTab and Toa
 - [ ] After a manual `make dev` restart or release rebuild, verify GitLab planning dates still render in Roadmap and have no list filter/group control (`queryable` schema support requires the rebuilt Rust backend).
 
 - [ ] Tasks board (#1844-858d): on a configured provider with multiple pages, More retains prior cards and updates loaded lane counts; cards show assignees/labels and Move… offers legal destinations.
+
+- [ ] #1874-1758: After restarting `make dev`, remove a scratch worktree whose tip is contained only in another remote branch with Delete branch on remove enabled; verify it succeeds. For unique local commits, verify the refusal offers “Remove worktree, keep branch” and preserves the branch.
