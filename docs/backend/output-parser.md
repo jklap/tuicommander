@@ -613,3 +613,13 @@ Viewport scroll requests do not alter parsed output. History-anchored scrolling 
 ### ego terminal questions
 
 The terminal ego CLI reports human-question waits with OSC 7770 awaiting and resumes busy after settlement. TUIC also recognizes its single-choice selector only for ego sessions, anchored to `Up/Down or number selects; Enter answers; Esc cancels.` and a highlighted numbered option. Wrapped question and option rows are joined in Rust into `choice-prompt`, using `navigate-enter` selection. This creates authoritative awaiting state even for older ego builds without the native signal. Multiple-choice and free-text questions keep the native awaiting signal and terminal/composer controls; they are not misrepresented as single-choice dialogs.
+
+## Codex native session identity
+
+The existing OSC 7770 consumer accepts `codex-session=<TUIC_SESSION>:<base64>`
+from managed native SessionStart/UserPromptSubmit hooks. JSON carries
+`session_id`, `transcript_path`, `cwd` and `hook_event_name`; encoded payloads
+above 32 KiB and foreign TUIC UUIDs are rejected. `codex_binding.rs` validates
+live foreground ownership and the rollout header before Chat or lifecycle
+snapshots expose exactness. Ordinary text and heuristic discovery cannot bind
+Codex Chat. Shell OSC 133 A revokes the binding.

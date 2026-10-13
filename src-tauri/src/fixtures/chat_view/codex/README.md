@@ -10,3 +10,10 @@ directory, timestamps and identifiers. Reasoning summary text replaces an empty
 recorded array to cover the documented string-array field without personal text.
 The `response_item` row carries the same scrubbed reply to catch duplicate rendering.
 This fixture proves the rollout format; it does not prove native hook identity.
+
+`session-start.json` and `session-meta.json` were recorded from a live Codex
+0.162.1 native SessionStart hook on 2026-10-13. The hook inherited TUIC_SESSION,
+returned `continue: false`, and a local guard server recorded zero requests.
+Paths were normalized; session_meta retains only identity/version/source/time
+fields. Binding tests substitute IDs, cwd and paths to model independent tabs.
+Raw evidence: ~/Gits/.tmp/chat-codex4-native-start/{hook-capture,result}.json.

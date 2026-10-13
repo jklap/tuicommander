@@ -1496,6 +1496,7 @@ impl ChunkProcessor {
         // These bypass the silence timer entirely when OSC 133 is available.
         match command {
             'A' => {
+                crate::codex_binding::revoke(state, session_id);
                 transition_explicit_shell_state(state, session_id, SHELL_IDLE, "idle", false);
             }
             'C' => {
@@ -2289,6 +2290,12 @@ impl ChunkProcessor {
                         payload,
                         line,
                     } => match verb.as_str() {
+                        "codex-session" => crate::codex_binding::receive(
+                            state,
+                            session_id,
+                            self.tuic_session.as_deref(),
+                            &payload,
+                        ),
                         "state" => {
                             // idle/busy drive the shell-state machine; awaiting is
                             // ignored here (it's a separate field). The awaiting_input

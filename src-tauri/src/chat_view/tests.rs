@@ -270,3 +270,31 @@ fn view_reads_a_grok_transcript_and_resets_when_the_agent_changes() {
         "nothing of the Grok tab remains"
     );
 }
+
+// Catches: an invalidated Codex ticker removing or advancing the replacement tab view.
+#[test]
+fn replaced_binding_stops_detached_ticker_and_preserves_current_view() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let old = Arc::new(Mutex::new(View::for_agent(
+        Agent::Codex,
+        PathBuf::from("old.jsonl"),
+        10,
+        1024,
+    )));
+    let current = Arc::new(Mutex::new(View::for_agent(
+        Agent::Codex,
+        PathBuf::from("new.jsonl"),
+        10,
+        1024,
+    )));
+    state
+        .chat_views
+        .views
+        .lock()
+        .insert("tab".into(), current.clone());
+    assert!(matches!(tick(&state, "tab", &old), Tick::Stop(_)));
+    assert!(Arc::ptr_eq(
+        state.chat_views.views.lock().get("tab").unwrap(),
+        &current
+    ));
+}

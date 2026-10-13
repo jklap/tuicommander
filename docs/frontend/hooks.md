@@ -386,6 +386,12 @@ The three-attempt budget counts only prompts successfully delivered to the agent
 
 **File:** `src/hooks/useAgentPolling.ts`
 
+Backend lifecycle snapshots own `exactAgentSessionId`: only a validated
+`codex_binding.session_id` sets it, and omission clears it. The native ID also
+updates the normal persisted resume ID; asynchronous heuristic discovery cannot
+overwrite that ID while exact evidence is live. Codex Chat availability reads
+the live exact field rather than the resume/discovery field.
+
 Polls agent status (foreground process detection) for all active terminal sessions at regular intervals.
 
 Lifecycle state arrives through `session-state-changed`, with a session snapshot

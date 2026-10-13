@@ -847,7 +847,7 @@ the server is back to the filter the connection was opened with.
 |-------|---------|-------------|
 | `session-created` | `{session_id, cwd, agent_type, display_name, parent_session}` | New session started; `display_name` is the optional stable assigned name; `parent_session` is the `$TUIC_SESSION` of the agent that spawned it (null otherwise) |
 | `pty-description-changed` | `{session_id, description}` | Orchestrator updates the short task description shown above a PTY |
-| `chat-view-changed` | `{session_id, seq}` | The chat view of a Claude terminal has entries past `seq`; read them with `GET /sessions/:id/chat-view` |
+| `chat-view-changed` | `{session_id, seq}` | The chat view of a Claude, Grok or exactly bound Codex terminal has entries past `seq`; read them with `GET /sessions/:id/chat-view` |
 | `session-renamed` | `{session_id, name, is_custom}` | An MCP `session action=rename` changed a tab's display name |
 | `session-suspend-requested` | `{session_id, request_id}` | An MCP `session action=suspend` asked the UI to suspend that tab |
 | `term-alias-assigned` | `{session_id, alias}` | A session received its terminal alias (e.g. `tu-3`); published once, after `session-created` |
@@ -3096,3 +3096,11 @@ retain their existing mobile capability support.
 ### History-anchored viewport scrolling
 
 `POST /sessions/:id/terminal/scroll-to-anchor` accepts `{ "anchor": number | null }` and returns `{ "ok": true }`. The anchor is an all-time row index including evicted rows, matching grid-frame `historyBase + historySize - displayOffset`. Null follows the tail; a trimmed anchor clamps to the oldest retained row. The request is coalesced with offset requests and applied under the ticker VT lock, so intervening output cannot move the target.
+
+Codex session lifecycle snapshots (`GET /sessions`, `session-state-changed` SSE,
+and the equivalent desktop IPC) include optional
+`codex_binding: { "session_id": "<native thread UUID>" }` only while the native
+hook evidence passes live PID, rollout id and cwd validation. Omission retracts
+exactness; clients must not substitute a heuristic discovery ID. The existing
+`GET /sessions/:id/chat-view` route repeats validation on every Codex read and
+returns `not_bound` when evidence is missing or stale.

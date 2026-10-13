@@ -46,6 +46,7 @@ interface TerminalData {
   currentTask: string | null;       // Current agent task from status-line parsing
   activeSubTasks: number;           // Count of running sub-agents from ›› status line
   isRemote: boolean;                // Created via HTTP/MCP (not locally by the UI)
+  exactAgentSessionId?: string | null; // Live, validated Codex hook binding; never persisted
   agentSessionId: string | null;    // Agent session ID for session-specific resume
   tuicSession: string | null;       // Stable tab UUID — injected as TUIC_SESSION env var
   suggestedActions: string[] | null; // Follow-up suggestions from suggest: token

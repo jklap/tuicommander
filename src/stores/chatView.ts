@@ -47,21 +47,24 @@ export function chatViewKey(sessionId: string): string {
 /**
  * Whether a terminal can show a chat view, and if not, why.
  *
- * Only Claude and Grok have a transcript adapter, and only an agent TUIC has
+ * Claude, Grok and Codex have transcript adapters, and only an agent TUIC has
  * bound to a session file is read: a tab with no `agentSessionId` is one the
  * pid registry has not answered for, and showing it would risk another tab's
  * conversation (issue #119). The backend repeats that check for Grok on the
  * exact registry entry and answers `not_bound` for a heuristic binding.
  */
 export function chatViewAvailability(
-	term: Pick<TerminalData, "agentType" | "agentSessionId" | "sessionId" | "isRemote"> | undefined,
+	term:
+		| Pick<TerminalData, "agentType" | "agentSessionId" | "exactAgentSessionId" | "sessionId" | "isRemote">
+		| undefined,
 ): { available: true } | { available: false; reason: string } {
 	if (!term?.agentType) return { available: false, reason: "No agent is running in this terminal" };
-	if (term.agentType !== "claude" && term.agentType !== "grok")
-		return { available: false, reason: "The chat view supports Claude and Grok only" };
+	if (term.agentType !== "claude" && term.agentType !== "grok" && term.agentType !== "codex")
+		return { available: false, reason: "The chat view supports Claude, Grok and Codex only" };
 	if (term.isRemote) return { available: false, reason: "The chat view is not available for remote terminals" };
 	if (!term.sessionId) return { available: false, reason: "The terminal has no session yet" };
-	if (!term.agentSessionId) return { available: false, reason: "The agent session is not bound to a transcript yet" };
+	const boundId = term.agentType === "codex" ? term.exactAgentSessionId : term.agentSessionId;
+	if (!boundId) return { available: false, reason: "The agent session is not bound to a transcript yet" };
 	return { available: true };
 }
 

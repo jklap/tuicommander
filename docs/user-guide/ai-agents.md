@@ -142,6 +142,20 @@ For Claude, `awaiting` also covers **MCP elicitation** — the dialog an MCP ser
 
 > **Platform note:** Hook instrumentation is **macOS/Linux only** — it resolves the controlling tty via `ps`/`/dev/tty`, which has no Windows equivalent. On Windows the toggle is hidden and agents keep heuristic detection (no regression).
 
+### Codex terminal Chat
+
+Codex terminals offer **CLI | Chat** after trusted native hooks identify their
+own conversation. Install or update TUIC's Codex hooks through the existing
+hook-instrumentation setting/API, enable native hooks in Codex, and accept
+Codex's hook trust prompt before launching a new session. Codex 0.162.1 is
+verified. The launch-scoped status notification alone cannot enable Chat.
+
+Each tab reads only the rollout whose native session id and cwd match that tab.
+An ID inferred from the newest file, including a restored resume ID, never
+enables Chat. Missing/untrusted hooks, unsupported versions, Windows and remote
+terminals leave Chat unavailable. Session replacement resets the conversation;
+process exit or return to the shell retracts the binding.
+
 ## Usage Limit Tracking
 
 For Claude Code, TUICommander detects weekly and session usage limit messages from terminal output:
