@@ -1,8 +1,8 @@
 import { createVirtualizer } from "@tanstack/solid-virtual";
 import { type Component, For, type JSX, Show } from "solid-js";
 import type { WorkItemBoardColumn } from "../../../types/work-items.gen";
-import { Select } from "../../ui/Select";
 import s from "./board.module.css";
+import { CardMoveMenu } from "./CardMoveMenu";
 import { type BoardCard, cardKey } from "./types";
 
 interface BoardLaneProps {
@@ -10,6 +10,9 @@ interface BoardLaneProps {
 	columns: WorkItemBoardColumn[];
 	cards: readonly BoardCard[];
 	target: boolean;
+	hasMore?: boolean;
+	loadingMore?: boolean;
+	onMore?(): void;
 	pending(key: string): boolean;
 	canMove(card: BoardCard, column: string): boolean;
 	onMove(card: BoardCard, column: string): void;
@@ -24,7 +27,7 @@ export const BoardLane: Component<BoardLaneProps> = (props) => {
 			return props.cards.length;
 		},
 		getScrollElement: () => scroll ?? null,
-		estimateSize: () => 132,
+		estimateSize: () => 196,
 		overscan: 3,
 		getItemKey: (index) => {
 			const card = props.cards[index];
@@ -42,7 +45,7 @@ export const BoardLane: Component<BoardLaneProps> = (props) => {
 		>
 			<header class={s.laneHeader}>
 				<h3>{props.column.name}</h3>
-				<span>{props.cards.length}</span>
+				<span>{props.cards.length} loaded</span>
 			</header>
 			<div class={s.laneScroll} ref={scroll}>
 				<Show when={props.cards.length === 0}>
@@ -70,28 +73,32 @@ export const BoardLane: Component<BoardLaneProps> = (props) => {
 												{props.cardActions?.(entry())}
 											</div>
 											<span class={s.title}>{entry().item.title}</span>
+											<div class={s.metadata}>
+												<For each={entry().item.assignees}>
+													{(user) => (
+														<span class={s.assignee} title={user.name}>
+															{user.name}
+														</span>
+													)}
+												</For>
+												<For each={entry().item.labels}>
+													{(label) => (
+														<span class={s.label} title={label.name}>
+															{label.name}
+														</span>
+													)}
+												</For>
+											</div>
 											<Show
 												when={props.pending(cardKey(entry().item.reference))}
 												fallback={
-													<Select
-														aria-label={`Move ${entry().item.key}`}
-														value={props.column.id}
-														onChange={(event) => {
-															props.onMove(entry(), event.currentTarget.value);
-															event.currentTarget.value = props.column.id;
-														}}
-													>
-														<For each={props.columns}>
-															{(column) => (
-																<option
-																	value={column.id}
-																	disabled={column.id !== props.column.id && !props.canMove(entry(), column.id)}
-																>
-																	{column.name}
-																</option>
-															)}
-														</For>
-													</Select>
+													<CardMoveMenu
+														card={entry()}
+														columns={props.columns}
+														columnId={props.column.id}
+														canMove={props.canMove}
+														onMove={props.onMove}
+													/>
 												}
 											>
 												<span class={s.pending}>Moving {entry().item.key}…</span>
@@ -104,6 +111,18 @@ export const BoardLane: Component<BoardLaneProps> = (props) => {
 					</For>
 				</div>
 			</div>
+			<Show when={props.hasMore}>
+				<button
+					type="button"
+					class={s.more}
+					aria-label={`More in ${props.column.name}`}
+					title="Load the next page across all lanes"
+					disabled={props.loadingMore}
+					onClick={() => props.onMore?.()}
+				>
+					{props.loadingMore ? "Loading…" : "More"}
+				</button>
+			</Show>
 		</section>
 	);
 };

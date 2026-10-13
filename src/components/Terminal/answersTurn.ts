@@ -37,10 +37,13 @@ export function rowCopyText(row: DecodedRow): string {
 export const PROMPT_MAX_ROWS = 50;
 
 /** Text of rows `[from, to]`: soft-wrapped rows concatenated, hard lines joined with a newline, indent under the bullet removed. */
-function joinAnswerRows(rows: readonly RowSnapshot[], from: number, to: number): string {
+function joinAnswerRows(rows: readonly RowSnapshot[], from: number, to: number, markers: ReadonlySet<number>): string {
 	let text = rows[from].text.trimStart().replace(/^[●⏺•]\s*/, "");
 	for (let i = from + 1; i <= to; i++) {
-		text += rows[i].isWrapped ? rows[i].text : `\n${rows[i].text.replace(/^ {1,2}/, "").trimEnd()}`;
+		const line = rows[i].text;
+		text += rows[i].isWrapped
+			? line
+			: `\n${(markers.has(i) ? line.trimStart().replace(/^[●⏺•]\s*/, "") : line.replace(/^ {1,2}/, "")).trimEnd()}`;
 	}
 	return text.replace(/[ \t]+$/gm, "").trimEnd();
 }
@@ -77,7 +80,7 @@ function readPrompt(rows: readonly RowSnapshot[]): { text: string; next: number 
 /**
  * Build one turn of the answers-only view from its rows. With `hasPrompt` the
  * first row starts the user's prompt (see `readPrompt`); every logical line after
- * it that starts with the 💬 marker begins an answer, in order, spanning the same rows the
+ * it that starts with the 💬 marker begins an answer region, in order, merging adjacent marked paragraphs and spanning the same rows the
  * terminal highlights (`answerExtent`).
  */
 export function buildAnswersTurn(rows: readonly RowSnapshot[], hasPrompt: boolean): AnswersTurn {
@@ -91,8 +94,14 @@ export function buildAnswersTurn(rows: readonly RowSnapshot[], hasPrompt: boolea
 	const answers: string[] = [];
 	while (i < rows.length) {
 		if (!rows[i].isWrapped && ANSWER_MARKER_RE.test(rows[i].text)) {
-			const last = answerExtent(i, rows.length, (r) => rows[r] ?? null);
-			answers.push(joinAnswerRows(rows, i, last));
+			const markers = new Set<number>();
+			const last = answerExtent(
+				i,
+				rows.length,
+				(r) => rows[r] ?? null,
+				(marker) => markers.add(marker),
+			);
+			answers.push(joinAnswerRows(rows, i, last, markers));
 			i = last + 1;
 		} else {
 			i = joinLogicalLine(rows, i).next;

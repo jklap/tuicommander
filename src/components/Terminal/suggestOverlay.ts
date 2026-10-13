@@ -35,18 +35,32 @@ const ANSWER_CONTINUATION_RE = /^ {2,}\S/;
 const PROMPT_ROW_RE = /^\s*❯/;
 /** A fenced code block delimiter. Inside a fence a bullet, marker or prompt glyph is content. */
 const FENCE_RE = /^\s*```/;
+/** A list item, table row or quotation belongs to the answer above it. */
+const ANSWER_STRUCTURE_RE = /^ {2,}(?:[-*+•] |\d+[.)] |\||>)/;
+/** Codex's indented turn-duration footer is terminal status, not answer prose. */
+const CODEX_FOOTER_RE =
+	/^\s*Worked for \d+(?:\.\d+)?(?:ms|[smh])(?:\s+\d+(?:\.\d+)?(?:ms|[smh]))*(?:\s*•\s*\d{1,2}:\d{2})?\s*$/;
 
 /**
  * Last row of the answer that starts at `start` (a row matching
  * [`ANSWER_MARKER_RE`]). An answer is the marker row, every row it wraps onto and
- * the indented rows that follow, blank paragraph gaps included. It ends before the
- * next bullet (a tool call or another answer), before a `suggest:`/`intent:` row, before a row that starts at column
+ * the indented rows that follow. Blank gaps join marked paragraphs and structured
+ * content, but an unmarked prose paragraph after a blank row ends the region. It ends before the
+ * next non-answer bullet (a tool call), before a `suggest:`/`intent:` row, before a row that starts at column
  * 0 (user prompt, separator, status line) and before the trailing blank rows.
+ * Adjacent answer markers extend the same region, including blank rows between them.
  * Rows inside a fenced code block belong to the answer whatever glyph they start with.
  */
-export function answerExtent(start: number, totalRows: number, getRow: (i: number) => RowSnapshot | null): number {
+export function answerExtent(
+	start: number,
+	totalRows: number,
+	getRow: (i: number) => RowSnapshot | null,
+	onMarker?: (row: number) => void,
+): number {
+	onMarker?.(start);
 	let last = start;
 	let inFence = false;
+	let afterBlank = false;
 	for (let i = start + 1; i < totalRows; i++) {
 		const row = getRow(i);
 		if (!row) break;
@@ -54,12 +68,23 @@ export function answerExtent(start: number, totalRows: number, getRow: (i: numbe
 			last = i;
 			continue;
 		}
-		if (row.text.trim() === "") continue;
+		if (row.text.trim() === "") {
+			afterBlank = true;
+			continue;
+		}
+		if (!inFence && ANSWER_MARKER_RE.test(row.text)) {
+			onMarker?.(i);
+			last = i;
+			afterBlank = false;
+			continue;
+		}
 		if (!ANSWER_CONTINUATION_RE.test(row.text)) break;
+		if (afterBlank && !inFence && !ANSWER_STRUCTURE_RE.test(row.text) && !FENCE_RE.test(row.text)) break;
+		afterBlank = false;
 		if (inFence) {
 			inFence = !FENCE_RE.test(row.text);
 		} else {
-			if (OUTPUT_ROW_RE.test(row.text) || ANSWER_MARKER_RE.test(row.text) || PROMPT_ROW_RE.test(row.text)) break;
+			if (OUTPUT_ROW_RE.test(row.text) || PROMPT_ROW_RE.test(row.text) || CODEX_FOOTER_RE.test(row.text)) break;
 			if (SUGGEST_ANCHOR_RE.test(row.text) || INTENT_HIGHLIGHT_RE.test(row.text)) break;
 			inFence = FENCE_RE.test(row.text);
 		}
@@ -204,7 +229,8 @@ export function planSuggestOverlay(
 	totalRows: number,
 	getRow: (i: number) => RowSnapshot | null,
 	firstRow = 0,
-): { key: string; blocks: OverlayBlock[] } {
+): { key: string; blocks: OverlayBlock[]; answerMarkers: ReadonlySet<number> } {
+	const answerMarkers = new Set<number>();
 	const blocks: OverlayBlock[] = [];
 	const parts: string[] = [];
 	for (let row = firstRow; row < totalRows; row++) {
@@ -224,7 +250,7 @@ export function planSuggestOverlay(
 		} else if (!snapshot.isWrapped && ANSWER_MARKER_RE.test(text)) {
 			// The whole answer, not only its marker row. A wrapped row is never a
 			// line start, so an emoji the wrap happens to land on is not a marker.
-			const last = answerExtent(row, totalRows, getRow);
+			const last = answerExtent(row, totalRows, getRow, (marker) => answerMarkers.add(marker));
 			for (; row <= last; row++) {
 				blocks.push({ row, kind: "answer" });
 				parts.push(`a${row}`);
@@ -245,7 +271,7 @@ export function planSuggestOverlay(
 			}
 		}
 	}
-	return { key: parts.join(","), blocks };
+	return { key: parts.join(","), blocks, answerMarkers };
 }
 
 /**

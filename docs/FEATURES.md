@@ -90,6 +90,8 @@ Durable workflow run storage records event history, pinned graph revisions, node
 
 ## 1. Terminal Management
 
+Adjacent `💬` answer paragraphs share one continuous tint and left bar, including blank rows between them. An unmarked prose paragraph after a blank row ends the answer; an uninterrupted indented continuation stays inside. Lists, tables, quotations and fenced code remain attached to the answer. A non-answer output row or prompt ends the region. The CLI blanks only the marker glyph cells; copy, selection and search keep the original text. Chat uses the same answer extent and strips every paragraph marker.
+
 Terminal prompt colours apply to Chat user messages only. The CLI grid retains prompt scrollbar ticks and answers-only prompt grouping without tinting prompt rows.
 
 - **Tablet keyboard input** — Touch taps and mouse presses focus the same terminal input. Soft-keyboard text and deletion use the shared input handler. Primary presses suppress the browser default canvas focus change.
@@ -2884,7 +2886,7 @@ GitHub backend: failed-job reruns, auto-merge enable/disable, merge queue state/
 ## Tasks board component
 
 The core Tasks board component renders provider-declared columns and virtualized
-lanes. Cards support drag and drop and a keyboard-accessible move menu. Pending
+lanes. Each lane shows its loaded count and a More control while the provider has another board page. More loads the next page across all lanes, retaining earlier cards. Cards show assignee names and label chips, and support drag and drop and a keyboard-accessible Move button menu. Pending
 moves cannot be repeated; rejected actions restore the card and show the error.
 This component is available to the Tasks host; provider registration and the
 Tasks navigation surface determine where it is shown.

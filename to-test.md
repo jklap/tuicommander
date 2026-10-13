@@ -1,3 +1,7 @@
+## Continuous answer regions (1872-1870)
+
+- [x] Recorded Codex paragraphs form one CLI and Chat tint with no visible answer glyphs. _(verified: worktree CanvasTerminal and Transcript screenshots in ~/Gits/.tmp/results/1872/before-grid-chat.png and after-grid-chat.png; real Codex VT replayed with the Rust grid.)_
+
 ## Work-item page total (1845-66f6) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, `WorkItemPage.total` / `WorkItemGroupedPage.total` are accepted by the Rust DTOs (optional, defaulted). Targeted `plugin_docs` and `work_items` tests pass; the Tasks list shows "N of total" once a loaded GitLab plugin build that sends `x-total` is installed (plugin branch parked, see story worklog).
@@ -5293,3 +5297,4 @@ Visual evidence: worktree Vite fixture mounted the real NotificationsTab and Toa
 - [ ] After a manual `make dev` restart or release rebuild, verify GitLab planning dates still render in Roadmap and have no list filter/group control (`queryable` schema support requires the rebuilt Rust backend).
 
 - [ ] After restarting `make dev` or installing a rebuilt app, confirm Tasks restores the source, view and list query for each repository/account. Confirm the settings catalogue also remains available. Rust `UIPrefsConfig` stores JSON-encoded `tasks_view_preferences`; the running desktop backend needs a restart to load this field (#1852-35a8).
+- [ ] Tasks board (#1844-858d): on a configured provider with multiple pages, More retains prior cards and updates loaded lane counts; cards show assignees/labels and Move… offers legal destinations.

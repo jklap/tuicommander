@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 - Remember Tasks source, view, grouping, sort and filters per repository and provider account; recover rejected saved sorts with the last accepted order (#1852-35a8).
+- Keep the Tasks move menu open while scrolling its destinations; simplify board refresh to merge page one into loaded cards (#1844-858d).
 - Terminal Chat view for Grok terminals, read from the session's `chat_history.jsonl` and offered only when `~/.grok/active_sessions.json` names the exact session of that terminal's process; the newest-session fallback never feeds Chat (#1791-b8be).
 
 ### Changed
@@ -19,6 +20,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 - Tasks view preferences keep the settings catalogue available and restore nullable query defaults correctly (#1852-35a8).
+- Stop answer tint before blank-separated unmarked prose, while retaining wrapped continuations and structured answer content (#1872-1870).
+- Merge adjacent marked answer paragraphs into one continuous CLI and Chat tint, including blank paragraph gaps and excluding Codex duration footers. Hide answer glyphs in the CLI grid while keeping raw copy and search text (#1872-1870).
+- Tasks board lanes show loaded counts and More controls; cards show assignees and labels with a compact keyboard-accessible Move menu (#1844-858d).
 - Preserve account metadata when saving Tasks setup, keep assignee username filters as text, and hide unsupported GitLab roadmap date filters and grouping (#1841-bbac, #1843-9b0f, #1845-66f6).
 - Hide Codex/Ink hard-wrapped intent tails with their marker rows, stopping at blank rows and new output (#1761-7249).
 - Trackpad and wheel scrolling no longer stalls while the pointer is over the CLI/Chat switch, in either view (#1847-feb9).
