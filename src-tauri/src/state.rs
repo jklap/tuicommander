@@ -5207,6 +5207,14 @@ pub(crate) fn hid_idle_seconds() -> Option<f64> {
     // CoreGraphics defines HIDSystemState as 1 and AnyInputEventType as ~0.
     // SAFETY: this OS API reads global input idle time and retains no pointers.
     let seconds = unsafe { CGEventSourceSecondsSinceLastEventType(1, u32::MAX) };
+    sanitize_idle(seconds)
+}
+
+/// The HID idle time CoreGraphics reported, or `None` when it is not a real
+/// duration (NaN, infinite, negative). Separate from `hid_idle_seconds` so the
+/// check is unit-tested: tests never make the CoreGraphics call itself.
+#[cfg(any(target_os = "macos", test))]
+fn sanitize_idle(seconds: f64) -> Option<f64> {
     (seconds.is_finite() && seconds >= 0.0).then_some(seconds)
 }
 
@@ -11707,6 +11715,16 @@ mod tests {
         assert!(!super::mobile_push_away(true, Some(f64::NAN)));
         assert!(!super::mobile_push_away(true, None));
         assert!(super::mobile_push_away(false, None));
+    }
+
+    #[test]
+    fn sanitize_idle_keeps_real_durations_and_drops_the_rest() {
+        assert_eq!(super::sanitize_idle(0.0), Some(0.0));
+        assert_eq!(super::sanitize_idle(120.5), Some(120.5));
+        assert_eq!(super::sanitize_idle(-0.001), None);
+        assert_eq!(super::sanitize_idle(f64::NAN), None);
+        assert_eq!(super::sanitize_idle(f64::INFINITY), None);
+        assert_eq!(super::sanitize_idle(f64::NEG_INFINITY), None);
     }
 
     #[tokio::test]

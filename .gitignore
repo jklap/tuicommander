@@ -87,12 +87,16 @@ scripts/*
 !scripts/test-install-sh-tmpdir.sh
 !scripts/test-with-test-tmp-git-template.sh
 !scripts/test-with-test-tmp-git-ceiling.sh
+!scripts/test-with-test-tmp-git-config.sh
+!scripts/test-with-test-tmp-fake-home.sh
+!scripts/test-tmp-lib-functions.sh
 !scripts/check-no-nul-bytes.mjs
 !scripts/check-no-home-gits.mjs
 !scripts/check-no-hardcoded-tmp.mjs
 !scripts/hardcoded-tmp-baseline.json
 !scripts/run-plugin-tests.mjs
 !scripts/check-gate.sh
+!scripts/test-check-gate.sh
 !scripts/hooks/
 !scripts/speech-assets/
 !scripts/perf/

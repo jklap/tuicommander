@@ -24,7 +24,33 @@ mkdir -p "$git_template"
 # value an outer wrapper already set.
 # The physical root's parent too, for a root that is itself a symlink.
 git_ceiling=$(tuic_git_ceiling_with "$(dirname "$root")" "$(dirname "$(cd "$root" && pwd -P)")" "$host")
+# TUIC_TEST_FAKE_HOME=1: the same throwaway HOME scripts/with-test-tmp.sh gives
+# its command, for the test processes only (nextest itself, cargo and rustup
+# keep the real one), so a direct `cargo nextest run` honours the flag too.
+# CARGO_HOME/RUSTUP_HOME are pinned for tests that start cargo themselves.
+fake_home=
+if [ "${TUIC_TEST_FAKE_HOME:-}" = 1 ]; then
+    fake_home="$root/home"
+    mkdir -p "$fake_home"
+    real_home=${HOME:-}
+    if [ "$real_home" = "$fake_home" ]; then
+        real_home= # the wrapper moved HOME already and pinned both below
+    fi
+fi
 {
+    if [ -n "$fake_home" ]; then
+        printf 'HOME=%s\n' "$fake_home"
+        if [ -n "${CARGO_HOME:-}" ]; then
+            printf 'CARGO_HOME=%s\n' "$CARGO_HOME"
+        elif [ -n "$real_home" ]; then
+            printf 'CARGO_HOME=%s/.cargo\n' "$real_home"
+        fi
+        if [ -n "${RUSTUP_HOME:-}" ]; then
+            printf 'RUSTUP_HOME=%s\n' "$RUSTUP_HOME"
+        elif [ -n "$real_home" ]; then
+            printf 'RUSTUP_HOME=%s/.rustup\n' "$real_home"
+        fi
+    fi
     printf 'TUIC_TEST_HOST_TMPDIR=%s\n' "$host"
     printf 'TUIC_TEST_TMP_ROOT=%s\n' "$root"
     printf 'TMPDIR=%s/\n' "$root"
