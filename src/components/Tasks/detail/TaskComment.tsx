@@ -1,10 +1,10 @@
 import { For, Show } from "solid-js";
 import type { WorkItemComment, WorkItemCommentEntry } from "../../../types/work-items.gen";
-import { ReviewFindingView } from "../../shared/ReviewFindingView";
+import { hidesOriginal, OriginalComment, ReviewFindingView } from "../../shared/ReviewFindingView";
 import { TaskMarkdown } from "./TaskMarkdown";
 import styles from "./TasksDetail.module.css";
 
-function Comment(props: { comment: WorkItemComment }) {
+function Comment(props: { comment: WorkItemComment; collapsed?: boolean }) {
 	return (
 		<article class={styles.comment}>
 			<header class={styles.commentHeader}>
@@ -16,7 +16,9 @@ function Comment(props: { comment: WorkItemComment }) {
 				</strong>
 				<time dateTime={props.comment.createdAt}>{new Date(props.comment.createdAt).toLocaleString()}</time>
 			</header>
-			<TaskMarkdown content={props.comment.body} />
+			<OriginalComment collapsed={props.collapsed ?? false}>
+				<TaskMarkdown content={props.comment.body} />
+			</OriginalComment>
 		</article>
 	);
 }
@@ -42,9 +44,10 @@ export function TaskComment(props: { entry: WorkItemCommentEntry }) {
 						</header>
 						<Show when={value().finding}>{(finding) => <ReviewFindingView finding={finding()} />}</Show>
 						<For each={value().comments.map((comment) => comment.id)}>
-							{(id) => {
+							{(id, index) => {
 								const comment = () => value().comments.find((entry) => entry.id === id);
-								return <Show when={comment()}>{(entry) => <Comment comment={entry()} />}</Show>;
+								const collapsed = () => index() === 0 && hidesOriginal(value().finding);
+								return <Show when={comment()}>{(entry) => <Comment comment={entry()} collapsed={collapsed()} />}</Show>;
 							}}
 						</For>
 					</section>

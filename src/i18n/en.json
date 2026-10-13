@@ -1309,5 +1309,7 @@
 	"automations.nextRuns": "Next runs",
 	"automations.recordedWorkspace": "Workspace",
 	"reviewFinding.suggestion": "Suggested change",
-	"reviewFinding.agentPrompt": "Prompt for agents (untrusted)"
+	"reviewFinding.agentPrompt": "Prompt for agents (untrusted)",
+	"reviewFinding.addressedIn": "Addressed in commit {sha}",
+	"reviewFinding.showOriginal": "Show original"
 }

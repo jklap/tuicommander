@@ -1,7 +1,7 @@
 import { type Component, createSignal, For, Show } from "solid-js";
 import { t } from "../../i18n";
 import { cx } from "../../utils";
-import { ReviewFindingView } from "../shared/ReviewFindingView";
+import { hidesOriginal, OriginalComment, ReviewFindingView } from "../shared/ReviewFindingView";
 import { TaskMarkdown } from "../Tasks/detail/TaskMarkdown";
 import s from "./ReviewThreads.module.css";
 import type { ReviewThread } from "./reviewThreads";
@@ -45,7 +45,7 @@ export const ReviewThreadView: Component<{ thread: ReviewThread; session: Review
 			</header>
 			<Show when={props.thread.finding}>{(finding) => <ReviewFindingView finding={finding()} />}</Show>
 			<For each={props.thread.comments.nodes}>
-				{(comment) => (
+				{(comment, index) => (
 					<article class={s.comment}>
 						<header class={s.commentHeader}>
 							<strong>{comment.author?.login ?? t("prDiff.ghost", "ghost")}</strong>
@@ -54,7 +54,9 @@ export const ReviewThreadView: Component<{ thread: ReviewThread; session: Review
 							</Show>
 							<time dateTime={comment.createdAt}>{new Date(comment.createdAt).toLocaleString()}</time>
 						</header>
-						<TaskMarkdown content={comment.body} />
+						<OriginalComment collapsed={index() === 0 && hidesOriginal(props.thread.finding)}>
+							<TaskMarkdown content={comment.body} />
+						</OriginalComment>
 					</article>
 				)}
 			</For>
