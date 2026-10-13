@@ -1218,7 +1218,8 @@ re-derived later.
 - Triggered when GitHub polling detects PR merged or closed transition
 - If branch has a linked worktree, removes worktree first then deletes branch
 - Safety: never deletes default/main branch; dirty worktrees always escalate to ask mode
-- Uses safe `git branch -d` (refuses unmerged branches)
+- Removes the checkout and local branch when the shared backend verdict proves integration or finds its tip on any remote-tracking ref; the containing ref is named as proof.
+- When removal would delete an unmerged branch, the error card offers **Remove worktree, keep branch**. The action reruns lifecycle checks and confirmation with branch deletion disabled for that removal only; the repository setting stays unchanged.
 - Deduplication prevents double-firing on the same PR
 
 ### 8.9 GitHub Issues Panel
