@@ -544,7 +544,9 @@ export const ContentRenderer: Component<ContentRendererProps> = (props) => {
 			appLogger.debug("app", "Blocked Markdown link scheme", { href });
 		} else if (props.onLinkClick) {
 			void Promise.resolve(props.onLinkClick(href)).then((opened) => {
-				if (opened === false && anchor.isConnected) anchor.replaceWith(...anchor.childNodes);
+				if (opened !== false) return;
+				deadHrefs.add(href);
+				if (anchor.isConnected) anchor.replaceWith(...anchor.childNodes);
 			});
 		} else if (href.startsWith("#")) {
 			const heading = Array.from(containerRef?.querySelectorAll("h1,h2,h3,h4,h5,h6") ?? []).find(
@@ -563,6 +565,8 @@ export const ContentRenderer: Component<ContentRendererProps> = (props) => {
 	};
 
 	let containerRef: HTMLDivElement | undefined;
+	// Hrefs that resolved to nothing; the auto-link pass must not turn their text back into links.
+	const deadHrefs = new Set<string>();
 
 	// After render, set indeterminate property on [~] checkboxes (not settable via HTML attribute)
 	// and render Mermaid diagrams from ```mermaid code blocks.
@@ -597,6 +601,7 @@ export const ContentRenderer: Component<ContentRendererProps> = (props) => {
 					let end = 0;
 					for (const match of source.matchAll(regex)) {
 						const path = match[1];
+						if (deadHrefs.has(path)) continue;
 						const start = match.index + match[0].indexOf(path);
 						fragment.append(document.createTextNode(source.slice(end, start)));
 						const anchor = document.createElement("a");
