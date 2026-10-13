@@ -5298,3 +5298,5 @@ Visual evidence: worktree Vite fixture mounted the real NotificationsTab and Toa
 
 - [ ] After restarting `make dev` or installing a rebuilt app, confirm Tasks restores the source, view and list query for each repository/account. Confirm the settings catalogue also remains available. Rust `UIPrefsConfig` stores JSON-encoded `tasks_view_preferences`; the running desktop backend needs a restart to load this field (#1852-35a8).
 - [ ] Tasks board (#1844-858d): on a configured provider with multiple pages, More retains prior cards and updates loaded lane counts; cards show assignees/labels and Move… offers legal destinations.
+
+- [ ] After Boss rebuilds/restarts, verify Tasks Start work in a repository with `.tuic-start-work.md`: key/title/URL substitutions appear in the draft inside the untrusted wrapper; remove the file and confirm the original key/title/body brief. Rust does not hot-reload. (#1855-8ee0)

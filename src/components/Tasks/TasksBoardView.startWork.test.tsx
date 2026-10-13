@@ -6,6 +6,9 @@ import type { WorkItemAction, WorkItemBoard, WorkItemBoardPage } from "../../typ
 import { provider as baseProvider, detail, reference } from "./detail/__tests__/detailFixture";
 import { TasksBoardView } from "./TasksBoardView";
 
+vi.mock("../../transport", () => ({
+	rpc: vi.fn().mockResolvedValue("DEMO-1: Inspect the work item\n\nA **clear** description."),
+}));
 const hostStartWork = vi.hoisted(() => vi.fn());
 vi.mock("../../hooks/git/startWork", () => ({ startWork: hostStartWork }));
 

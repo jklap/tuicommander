@@ -765,3 +765,9 @@ and scope changes clean up drag state. Consumers refresh the projection after a
 successful move by merging page one into the loaded cards. Other loaded pages are
 retained until reload. The move menu stays open when its own list scrolls; scrolling
 outside it dismisses it. The view does not infer workflow transitions.
+
+Tasks `useStartWork` obtains the brief from `build_start_work_prompt` before the
+provider action, with a pending state covering that read. The Rust builder reads
+`.tuic-start-work.md` in the repository root; absent files use the legacy brief.
+Read failures use the existing error/Retry state. Host delivery retains the
+untrusted-content wrapper and 12,000-character cap.
