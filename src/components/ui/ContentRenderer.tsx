@@ -19,7 +19,7 @@ import {
 	parseTweakComments,
 } from "../../utils/tweakComments";
 import { applyTweakDomHighlights } from "../../utils/tweakDomHighlight";
-import { filePathRegex } from "../Terminal/linkProvider";
+import { filePathRegex, isWholeFilePath } from "../Terminal/linkProvider";
 
 /** DOMPurify's default allowed-URI schemes plus Tauri's local asset protocols
  *  (`asset:`, `tauri:`). Without these, DOMPurify strips the rewritten image
@@ -579,7 +579,11 @@ export const ContentRenderer: Component<ContentRendererProps> = (props) => {
 				const nodes: Text[] = [];
 				while (walker.nextNode()) {
 					const node = walker.currentNode as Text;
-					if (!node.parentElement?.closest("a, code, pre, button, textarea, input")) nodes.push(node);
+					const parent = node.parentElement;
+					if (!parent) continue;
+					// Inline code links only when the whole span is one path: `src/a.ts:12`, not `cat src/a.ts`.
+					const wholePath = parent.tagName === "CODE" && !parent.closest("a, pre") && isWholeFilePath(node.data);
+					if (wholePath || !parent.closest("a, code, pre, button, textarea, input")) nodes.push(node);
 				}
 				for (const node of nodes) {
 					const source = node.textContent ?? "";
