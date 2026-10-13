@@ -653,6 +653,7 @@ const EnvFlagsSection: Component<{ agentType: AgentType }> = (props) => {
 													</Show>
 													<Show when={flag.type === "enum"}>
 														<Select
+															compact
 															class={a.envFlagSelect}
 															value={getFlagValue(flag.key)}
 															onChange={(e) => handleValueChange(flag.key, e.currentTarget.value)}
@@ -663,6 +664,7 @@ const EnvFlagsSection: Component<{ agentType: AgentType }> = (props) => {
 													</Show>
 													<Show when={flag.type === "number"}>
 														<Input
+															compact
 															type="number"
 															class={a.envFlagInput}
 															value={getFlagValue(flag.key)}
@@ -672,6 +674,7 @@ const EnvFlagsSection: Component<{ agentType: AgentType }> = (props) => {
 													</Show>
 													<Show when={flag.type === "string"}>
 														<Input
+															compact
 															type="text"
 															class={a.envFlagInput}
 															value={getFlagValue(flag.key)}

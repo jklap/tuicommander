@@ -669,6 +669,7 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 								{t("markdownTab.agentLabel", "Agent")}
 							</label>
 							<Select
+								compact
 								id={`review-agent-${props.tab.id}`}
 								class={s.agentSelect}
 								aria-label={t("markdownTab.reviewAgent", "Review agent")}
