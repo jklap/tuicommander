@@ -491,6 +491,23 @@ describe("hiddenMarkerRows — wrapped markers leave no visible fragment (#1761-
 		expect([...hidden]).toEqual([0, 1]);
 	});
 
+	// catches: only soft-wrapped (isWrapped) intent tails are hidden; Codex/Ink hard-wrap with
+	// cursor moves and a two-space indent, so the tail row keeps painting (recorded in
+	// codex-narrow-progress-intent-20260925.tcap: `intent: ...con` then `  righe di continuazione ...`)
+	it("hides the indented tail of a hard-wrapped intent line", () => {
+		const hidden = screen(
+			[
+				["• intent: Controllo la cattura a 80 colonne e preparo la prova del journal con", false],
+				["  righe di continuazione e titolo finale (Verifica stretta)", false],
+				["", false],
+				["  La registrazione riguarda solo", false],
+			],
+			0,
+		);
+		expect(hidden.has(1)).toBe(true);
+		expect(hidden.has(3)).toBe(false);
+	});
+
 	// catches: the answer tint is hidden like a marker, removing the 💬 text
 	it("never hides an answer row", () => {
 		expect([...screen([["💬 yes", false]], 0)]).toEqual([]);
