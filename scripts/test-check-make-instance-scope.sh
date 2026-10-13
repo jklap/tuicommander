@@ -10,6 +10,9 @@ test_tmp="$(. "$project_root/scripts/test-tmp-lib.sh" && tuic_test_tmp_root "$pr
 mkdir -p "$test_tmp"
 # Fail closed: no git here may find a repository above the test root.
 export GIT_CEILING_DIRECTORIES="$(. "$project_root/scripts/test-tmp-lib.sh" && tuic_git_ceiling_with "$test_tmp")"
+# Explicit git config: never the developer's global/system files.
+. "$project_root/scripts/test-tmp-lib.sh"
+tuic_git_isolate_config "$test_tmp"
 fixture_root="$(mktemp -d "$test_tmp/make-instance-scope.XXXXXX")"
 trap 'rm -rf "$fixture_root"' EXIT
 

@@ -85,7 +85,7 @@ if git submodule status plugins 2>/dev/null | grep -q '^-'; then
 	echo "      reported below, the gate is effectively green."
 fi
 
-LOG="$(mktemp -t tuic-check-gate)"
+LOG="$(mktemp --tmpdir="${TMPDIR:-/tmp}" tuic-check-gate.XXXXXX)"
 
 echo
 echo "==> Running make check (several minutes: clippy --release + full nextest run)"
@@ -94,9 +94,20 @@ echo "==> Running make check (several minutes: clippy --release + full nextest r
 # pass through the tested command's real status. Capture `$?` directly
 # instead, with `set -e` off around just this one command since a nonzero
 # status here is expected and handled explicitly below, not a script bug.
+# No `> >(tee "$LOG")`: process substitution needs /dev/fd/*, which sandboxes
+# deny. make writes straight to the log; a background `tail -f` shows it live
+# and `wait` returns make's own exit status.
 set +e
-make check > >(tee "$LOG") 2>&1
+make check > "$LOG" 2>&1 &
+make_pid=$!
+tail -n +1 -f "$LOG" &
+tail_pid=$!
+trap 'kill "$tail_pid" 2>/dev/null || true' EXIT
+wait "$make_pid"
 status=$?
+sleep 1 # let tail print the last lines before it is stopped
+kill "$tail_pid" 2>/dev/null || true
+wait "$tail_pid" 2>/dev/null
 set -e
 
 if [ "$status" -eq 0 ]; then
