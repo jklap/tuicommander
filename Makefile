@@ -80,7 +80,7 @@ SHELL_TEST_DIR ?= scripts
 # Run every repository shell test. New scripts named test-*.sh below scripts/
 # join this target automatically; local scripts git ignores do not.
 test-shell:
-	@SHELL_TEST_DIR="$(SHELL_TEST_DIR)" scripts/with-test-tmp.sh bash -c 'set -euo pipefail; found=0; list="$$(mktemp "$${TMPDIR:?}/shell-tests.XXXXXX")"; trap '"'"'rm -f "$$list"'"'"' EXIT; find "$$SHELL_TEST_DIR" -type f -name "test-*.sh" -print | LC_ALL=C sort > "$$list"; while IFS= read -r script; do git check-ignore -q "$$script" 2>/dev/null && continue; found=1; echo "shell test: $$script"; bash "$$script"; done < "$$list"; [ "$$found" -eq 1 ] || { echo "no shell tests found under $$SHELL_TEST_DIR" >&2; exit 1; }'
+	@SHELL_TEST_DIR="$(SHELL_TEST_DIR)" TUIC_TEST_ISOLATE_GIT_CONFIG=1 scripts/with-test-tmp.sh bash -c 'set -euo pipefail; found=0; list="$$(mktemp "$${TMPDIR:?}/shell-tests.XXXXXX")"; trap '"'"'rm -f "$$list"'"'"' EXIT; find "$$SHELL_TEST_DIR" -type f -name "test-*.sh" -print | LC_ALL=C sort > "$$list"; while IFS= read -r script; do git check-ignore -q "$$script" 2>/dev/null && continue; found=1; echo "shell test: $$script"; bash "$$script"; done < "$$list"; [ "$$found" -eq 1 ] || { echo "no shell tests found under $$SHELL_TEST_DIR" >&2; exit 1; }'
 
 # Install tracked git hooks. Idempotent.
 #   pre-commit — Makefile TUIC_APP_INSTANCE scope (bypass: --no-verify) +
@@ -176,7 +176,7 @@ check-gate:
 # included), so expect several minutes. Doctests are not measured
 # (doctest coverage requires nightly).
 cov:
-	@cd src-tauri && ulimit -n 10240 && ../scripts/with-test-tmp.sh $(RTK) cargo llvm-cov nextest --workspace
+	@cd src-tauri && ulimit -n 10240 && TUIC_TEST_FAKE_HOME=1 ../scripts/with-test-tmp.sh $(RTK) cargo llvm-cov nextest --workspace
 	@cd src-tauri && ../scripts/with-test-tmp.sh $(RTK) cargo llvm-cov report --html
 	@cd src-tauri && ../scripts/with-test-tmp.sh $(RTK) cargo llvm-cov report --lcov --output-path lcov.info
 	@echo "HTML report: src-tauri/target/llvm-cov/html/index.html"

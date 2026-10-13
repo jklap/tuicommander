@@ -1528,14 +1528,22 @@ accumulator republishes the lead when a teammate's state moves. Read any *new* c
 *after* the parent's `Stop`, so `SubagentStop` is not a usable clear signal. Full write-up:
 `docs/backend/pty.md`'s "An idle Agent-Teams teammate does not count as work".
 
-**A handful of git-behavior-dependent unit tests can fail purely from the
-running machine's global git config** (e.g. `merge.ff = only` turns an
-expected merge conflict into a hard refusal; an `insteadOf` URL rewrite makes
-a raw-config read disagree with `git remote get-url`) or from ambient `TMPDIR`
-state, unrelated to any code change. If a regression shows up only in
-git-merge/remote-URL tests with no plausible connection to your diff, suspect
-the environment before the code. Seen on Boss's machine (`merge.ff = only` plus a
-global `url.https://github.com/.insteadOf git@github.com:`):
+**Git-behavior-dependent unit tests used to fail purely from the running
+machine's global git config** (e.g. `merge.ff = only` turns an expected merge
+conflict into a hard refusal; an `insteadOf` URL rewrite makes a raw-config read
+disagree with `git remote get-url`). Since 2026-10 a Rust test process never reads
+that config: `tuic-test-support`'s constructor points `GIT_CONFIG_GLOBAL` at
+`<test root>/gitconfig` (`TEST_GITCONFIG`) and sets `GIT_CONFIG_NOSYSTEM=1`, and
+`make test-shell` gives the shell tests the identical file through
+`TUIC_TEST_ISOLATE_GIT_CONFIG=1` (`scripts/test-with-test-tmp-git-config.sh` pins the
+two copies equal). Every other `scripts/with-test-tmp.sh` step keeps the developer's
+config on purpose — `pnpm audit`, `cargo audit` and the submodule/gitlink checks talk
+to real remotes and need the credential helper, `url.*.insteadOf` and proxy settings.
+A test that needs a specific global setting exports its own `GIT_CONFIG_GLOBAL`. If a
+git test still fails only on one machine, suspect a `-c`/`GIT_CONFIG_*` the test sets
+itself, or ambient `TMPDIR` state, before the code. The tests that used to fail on
+Boss's machine (`merge.ff = only` plus a global
+`url.https://github.com/.insteadOf git@github.com:`):
 `repo_watcher::tests::test_real_fingerprint_moves_across_stage_commit_conflict_and_clean`,
 `git::tests::repo_info_status_reports_unmerged_paths_as_conflict`,
 `git::tests::test_read_remote_url_matches_git_remote`, and in tuic-git

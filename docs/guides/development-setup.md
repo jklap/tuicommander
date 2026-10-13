@@ -115,6 +115,19 @@ Test scratch comes from your temp directory, never from `$HOME`:
 apply that order. The checkout hash is FNV-1a 64 of the checkout's physical path,
 the same in every one, so parallel worktrees never share a default root.
 
+Two opt-ins of `scripts/with-test-tmp.sh` change what a wrapped command sees
+beyond its temp dirs:
+
+| Variable | Effect | Set by |
+|---|---|---|
+| `TUIC_TEST_FAKE_HOME=1` | `HOME=<root>/home` for the command. `CARGO_HOME`/`RUSTUP_HOME` are pinned to the real home first (from the passwd entry when `HOME` is unset), so cargo keeps its registry and toolchains. The nextest setup script applies the same flag to the test processes only, so `TUIC_TEST_FAKE_HOME=1 cargo nextest run` works without the wrapper too. On Windows the setup script sets `HOME` alone (the `dirs` crate reads Known Folders there) | `make check`'s and `make cov`'s Rust test steps, `scripts/mutants.sh`, CI's Linux/macOS Rust test steps |
+| `TUIC_TEST_ISOLATE_GIT_CONFIG=1` | git reads `<root>/gitconfig` (the same content as `tuic-test-support`'s `TEST_GITCONFIG`) and no system config, instead of yours. Not the default: `pnpm audit`, `cargo audit` and the submodule checks need your credential helper, `url.*.insteadOf` and proxy settings | `make test-shell` |
+
+On macOS with `sccache` on `PATH` the wrapper also exports `CC=cc CXX=c++` (unless
+you set them), so meson does not wrap its compiler with sccache, whose socket
+would not fit `sun_path` under the long per-run `TMPDIR`. Nowhere else: `CC` is
+part of the native build fingerprint.
+
 `TUIC_TEST_TMP_BASE=<checkout>/.tmp/tuic-tests` still puts scratch in the
 checkout, but only as an explicit opt-in: it is unsafe wherever writes to the
 checkout's `.git/hooks` or `.git/config` are denied (observed in the agent
@@ -130,7 +143,7 @@ bytes and the host temp dir at most 72:
 | `$TMPDIR` | bytes | longest test socket | result |
 |---|---|---|---|
 | macOS default (`/var/folders/xx/…/T`) | 49 | 80 | fits, 23 bytes spare |
-| agent sandbox | 72 | 103 | fits, 0 bytes spare |
+| agent sandbox | 72 | 103 | fits, 0 bytes spare — for self-named sockets only (fixed-name ones go `UNCHECKED`, below) |
 | long CI-like | 90 | 121 | fails with the budget message |
 | agent sandbox, short symlink (`/tmp/srtmon.XXXXXXXX`) | 20 | 51 | fits, 52 bytes spare |
 

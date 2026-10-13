@@ -12,6 +12,11 @@
 #                          deleted (only its stale tuic-run.* children are
 #                          pruned); else a fresh <base>/tuic-run.XXXXXX,
 #                          removed on exit. TMPDIR/TMP/TEMP point at it too.
+#   TUIC_TEST_ISOLATE_GIT_CONFIG=1  git reads <root>/gitconfig, never the
+#                          developer's global/system config (`make test-shell`).
+#   TUIC_TEST_FAKE_HOME=1  HOME=<root>/home for the command; CARGO_HOME and
+#                          RUSTUP_HOME stay pinned to the real home (the Rust
+#                          test steps of `make check`/`make cov` and CI).
 set -euo pipefail
 
 root="$(git -C "$(dirname "$0")/.." rev-parse --show-toplevel)"
@@ -104,23 +109,41 @@ export GIT_TEMPLATE_DIR="$test_tmp/git-template-empty"
 GIT_CEILING_DIRECTORIES="$(tuic_git_ceiling_with "$(dirname "$(cd "$test_tmp" && pwd)")" \
   "$(dirname "$(cd "$test_tmp" && pwd -P)")" "$host")"
 export GIT_CEILING_DIRECTORIES
-# Explicit git config: never the developer's global/system files.
-tuic_git_isolate_config "$test_tmp"
-# meson auto-wraps its compiler with sccache when one is on PATH, and sccache
-# puts its server socket under $TMPDIR, which is now a long scratch path: every
-# compile then fails with "path must be shorter than SUN_LEN" (the bundled
-# WebRTC build under tuic-dictation). Name the compilers explicitly so no
-# launcher is auto-inserted; an explicit CC/CXX from the caller still wins.
-export CC="${CC:-cc}" CXX="${CXX:-c++}"
-# Opt-in (TUIC_TEST_FAKE_HOME=1): the Rust suite gets a throwaway $HOME under the
+# Opt-in (TUIC_TEST_ISOLATE_GIT_CONFIG=1, set by `make test-shell`): explicit git
+# config instead of the developer's global/system files. Opt-in, not default:
+# the other wrapped steps (pnpm/cargo audit, the gitlink and submodule checks)
+# talk to real remotes and need the user's credential helper, url.*.insteadOf
+# and proxy settings. The Rust suite isolates itself (tuic-test-support's
+# TEST_GITCONFIG, kept identical to the shell copy by
+# scripts/test-with-test-tmp-gitconfig-parity.sh).
+if [[ "${TUIC_TEST_ISOLATE_GIT_CONFIG:-}" == 1 ]]; then
+  tuic_git_isolate_config "$test_tmp"
+fi
+# macOS with sccache on PATH only: meson auto-wraps its compiler with sccache,
+# whose server socket lands under $TMPDIR, now a long scratch path, so every
+# compile fails with "path must be shorter than SUN_LEN" (the bundled WebRTC
+# build under tuic-dictation). Naming the compilers keeps any launcher out.
+# Nowhere else: an explicit CC/CXX is part of the cc crate's build fingerprint,
+# so forcing it everywhere would rebuild the native deps of every wrapped run
+# against an unwrapped one (and override CI's own compiler choice). A caller's
+# CC/CXX still wins.
+tuic_pin_compilers_for_sccache
+# Opt-in (TUIC_TEST_FAKE_HOME=1): the command gets a throwaway $HOME under the
 # test root. Tests that use the home directory as scratch space (plugin_fs,
 # terminal image transmission) or resolve the platform config dir (dirs::config_dir
 # reads $HOME on macOS) then never touch the developer's real files, and a sandbox
 # that denies writes there cannot fail them. Cargo and rustup keep their real
-# homes, pinned before $HOME moves. Not applied to pnpm/cargo audit, which need
-# the real caches.
+# homes, pinned before $HOME moves (from the passwd entry when HOME is unset).
+# Not applied to pnpm/cargo audit, which need the real caches. nextest's setup
+# script (src-tauri/scripts/nextest-test-tmp.sh) applies the same flag to the
+# test processes of a direct `cargo nextest run`.
 if [[ "${TUIC_TEST_FAKE_HOME:-}" == 1 ]]; then
-  export CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}" RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}"
+  real_home="${HOME:-}"
+  # Unset HOME: bash expands ~ from the passwd entry instead.
+  [[ -n "$real_home" ]] || real_home=~
+  if [[ -n "$real_home" && "$real_home" != "~" ]]; then
+    export CARGO_HOME="${CARGO_HOME:-$real_home/.cargo}" RUSTUP_HOME="${RUSTUP_HOME:-$real_home/.rustup}"
+  fi
   fake_home="$test_tmp/home"
   mkdir -p "$fake_home"
   export HOME="$fake_home"

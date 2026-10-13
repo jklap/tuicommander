@@ -635,6 +635,36 @@ mod tests {
         std::fs::remove_dir_all(&base).ok();
     }
 
+    /// The same refusal end to end: `read_file_medium(.., true)` with the real
+    /// `temp_roots()`, not an injected list, so a delete path that stopped
+    /// consulting them would be caught. The file lives next to this test
+    /// binary (`target/<profile>/deps`): writable, outside $HOME, and outside
+    /// every temp root unless the target dir itself sits in a temp dir.
+    #[test]
+    fn t_equals_t_end_to_end_keeps_a_marker_file_outside_every_temp_root() {
+        let exe = std::env::current_exe().unwrap();
+        let exe_dir = exe.parent().unwrap();
+        let canonical = std::fs::canonicalize(exe_dir).unwrap();
+        if temp_roots().iter().any(|root| canonical.starts_with(root)) {
+            eprintln!(
+                "UNCHECKED: the test binary's dir {} is inside a temp root",
+                canonical.display()
+            );
+            return;
+        }
+        let dir = exe_dir.join(format!("tuic-tt-e2e-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("tty-graphics-protocol-outside.bin");
+        std::fs::write(&path, b"outside").unwrap();
+
+        let bytes = read_file_medium(path.to_str().unwrap().as_bytes(), true);
+        let survived = path.exists();
+        std::fs::remove_dir_all(&dir).ok();
+
+        assert_eq!(bytes.as_deref(), Some(&b"outside"[..]), "still displays");
+        assert!(survived, "t=t deleted a file outside every temp root");
+    }
+
     /// Kitty spec: the terminal may only delete a `t=t` file whose name
     /// carries `tty-graphics-protocol`. Without that guard, `cat` of a
     /// hostile file (or SSH output) could delete any file in the temp dir.
