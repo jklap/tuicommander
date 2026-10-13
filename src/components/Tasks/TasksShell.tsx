@@ -65,14 +65,22 @@ export function TasksShell(props: { visible?: () => boolean }) {
 								aria-label="Tasks view"
 								onChange={(id) => {
 									setCreating(false);
+									setReference(null);
 									setView(id);
 								}}
 							/>
-							<button type="button" class={s.create} onClick={() => setCreating(true)}>
+							<button
+								type="button"
+								class={s.create}
+								onClick={() => {
+									setCreating(true);
+									setReference(null);
+								}}
+							>
 								New task
 							</button>
 						</header>
-						<div class={s.body}>
+						<div class={s.body} data-detail={reference() ? "open" : "closed"}>
 							<div class={s.main}>
 								<Switch>
 									<Match when={creating()}>
@@ -83,7 +91,12 @@ export function TasksShell(props: { visible?: () => boolean }) {
 										/>
 									</Match>
 									<Match when={view() === "list"}>
-										<TasksList providers={[current()]} onOpen={open} visible={props.visible?.()} />
+										<TasksList
+											providers={[current()]}
+											onOpen={open}
+											selected={reference()}
+											visible={props.visible?.()}
+										/>
 									</Match>
 									<Match when={view() === "board"}>
 										<TasksBoardView
@@ -100,6 +113,9 @@ export function TasksShell(props: { visible?: () => boolean }) {
 							</div>
 							<Show when={reference()}>
 								<aside class={s.side}>
+									<button type="button" class={s.back} onClick={() => setReference(null)}>
+										Back to list
+									</button>
 									<TasksDetail
 										provider={current()}
 										reference={reference()}

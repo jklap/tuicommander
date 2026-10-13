@@ -59,8 +59,8 @@ phone; it is not a configurable global shortcut.
 | `Cmd+T` | New terminal tab |
 | `Cmd+W` | Close tab (or close active pane in split mode) |
 | `Cmd+Shift+T` | Reopen last closed tab |
-| `Cmd+R` | Run saved command |
-| `Cmd+Shift+R` | Edit and run command |
+| `Cmd+Shift+R` | Run saved command |
+| `Cmd+R` | Reload active web/preview tab |
 | `Cmd+L` | Clear terminal |
 | `Cmd+Shift+L` | Refresh terminal (fix rendering glyphs) |
 | `Cmd+F` | Find in terminal / diff tab |
@@ -251,8 +251,9 @@ While a context menu is open, pressing a menu item's shortcut chord (modifier + 
 | `reopen-closed-tab` | `Cmd+Shift+T` | Reopen closed tab |
 | `clear-terminal` | `Cmd+L` | Clear terminal |
 | `refresh-terminal` | `Cmd+Shift+L` | Refresh terminal (fix glyphs) |
-| `run-command` | `Cmd+R` | Run saved command |
-| `edit-command` | `Cmd+Shift+R` | Edit and run command |
+| `run-command` | `Cmd+Shift+R` | Run saved command |
+| `edit-command` | _(unbound)_ | Edit and run command |
+| `reload-tab` | `Cmd+R` | Reload the active web/preview tab |
 | `split-vertical` | `Cmd+\` | Split vertically |
 | `split-horizontal` | `Cmd+Alt+\` | Split horizontally |
 | `prev-tab` | `Ctrl+Shift+Tab` | Previous tab |

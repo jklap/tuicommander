@@ -516,6 +516,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 		handleAutofixIssue,
 		handleConflictAssist,
 		handleMergeAndArchive,
+		handleMergeAndArchiveIntoMain,
 	} = createWorktreeWorkflowCoordinator({
 		repo: deps.repo,
 		closeTerminal: deps.closeTerminal,
@@ -826,6 +827,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 		handleAutofixIssue,
 		handleConflictAssist,
 		handleMergeAndArchive,
+		handleMergeAndArchiveIntoMain,
 		mergePendingCtx,
 		dismissMergePending,
 		closeTerminalsForBranch,

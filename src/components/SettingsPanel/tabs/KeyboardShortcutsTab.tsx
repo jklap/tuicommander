@@ -88,9 +88,12 @@ export function getShortcutSections(): ShortcutSection[] {
 				{
 					action: "run-command",
 					keys: keyFor("run-command"),
-					description: t("helpPanel.runSavedCommand", `Run saved command (${editKey} to edit)`),
+					description: editKey
+						? t("helpPanel.runSavedCommand", `Run saved command (${editKey} to edit)`)
+						: t("helpPanel.runSavedCommandNoEdit", "Run saved command"),
 				},
 				{ action: "edit-command", keys: keyFor("edit-command"), description: "Edit saved command" },
+				{ action: "reload-tab", keys: keyFor("reload-tab"), description: "Reload active tab" },
 				{
 					action: "reopen-closed-tab",
 					keys: keyFor("reopen-closed-tab"),

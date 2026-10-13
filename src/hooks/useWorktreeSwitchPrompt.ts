@@ -4,6 +4,7 @@ import { activityStore } from "../stores/activityStore";
 import { appLogger } from "../stores/appLogger";
 import { repositoriesStore } from "../stores/repositories";
 import { terminalsStore } from "../stores/terminals";
+import { workItemLinksStore } from "../stores/workItemLinks";
 import { pathBasename, pathDirname } from "../utils/pathUtils";
 
 interface WorktreeSwitchDeps {
@@ -207,7 +208,8 @@ export function useWorktreeSwitchPrompt(deps: WorktreeSwitchDeps): void {
 		.catch((err) => appLogger.error("app", "Failed to register session-worktree-declared listener", err));
 
 	listen<WorktreeRemovedPayload>("worktree-removed", (event) => {
-		const { repo_path, workspace_id } = event.payload;
+		const { repo_path, workspace_id, branch } = event.payload;
+		workItemLinksStore.forget(repo_path, branch);
 		pruneRemovedWorktree(repo_path, workspace_id, deps.closeTerminalsForBranch).catch((err) =>
 			appLogger.warn("git", `Failed to prune removed worktree "${workspace_id}"`, err),
 		);

@@ -179,12 +179,8 @@ pub fn build_menu(app: &App) -> Result<tauri::menu::Menu<Wry>, tauri::Error> {
             "Prompt Library",
             "CmdOrCtrl+Shift+K"
         ))
-        .item(&item!("run-command", "Run Command", "CmdOrCtrl+R"))
-        .item(&item!(
-            "edit-run-command",
-            "Edit && Run Command",
-            "CmdOrCtrl+Shift+R"
-        ))
+        .item(&item!("run-command", "Run Command", "CmdOrCtrl+Shift+R"))
+        .item(&item!("edit-run-command", "Edit && Run Command"))
         .item(&item!(
             "content-search",
             "Search File Contents",

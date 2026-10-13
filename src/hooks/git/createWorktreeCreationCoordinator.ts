@@ -127,11 +127,11 @@ export function createWorktreeCreationCoordinator(deps: WorktreeCreationCoordina
 				const scriptResult = await deps.repo.runSetupScript(effective.setupScript, result.path);
 				if (scriptResult.exit_code !== 0) {
 					appLogger.warn("git", `Setup script failed (exit ${scriptResult.exit_code})`, scriptResult.stderr);
-					deps.setStatusInfo(`Setup script failed (exit ${scriptResult.exit_code})`);
+					reportActionError(deps.setStatusInfo, `Setup script failed (exit ${scriptResult.exit_code})`);
 				}
 			} catch (err) {
 				appLogger.warn("git", "Setup script execution error", err);
-				deps.setStatusInfo(`Setup script failed: ${err}`);
+				reportActionError(deps.setStatusInfo, `Setup script failed: ${err}`);
 			}
 		}
 

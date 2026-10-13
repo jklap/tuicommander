@@ -40,6 +40,7 @@ function createMockHandlers(): ShortcutHandlers {
 		handleTerminalSelect: vi.fn(),
 		handleSplit: vi.fn(),
 		handleRunCommand: vi.fn(),
+		reloadActiveTab: vi.fn(),
 		switchToBranchByIndex: vi.fn(),
 		isQuickSwitcherOpen: vi.fn().mockReturnValue(false),
 		toggleMarkdownPanel: vi.fn(),
