@@ -1413,6 +1413,8 @@ fn toast_sound_resolves_to_a_notification_sound_or_silence() {
 /// was missing "attention" entirely until a 2026-09-10 fix). The `match` below
 /// is exhaustive, so adding a `NotificationSound` variant without updating
 /// `TOAST_SOUNDS` fails to *compile*, not just fails this test at runtime.
+// `notification_sound` is a desktop-only module (`lib.rs`).
+#[cfg(feature = "desktop")]
 #[test]
 fn toast_sounds_stay_in_sync_with_notification_sound_variants() {
     use crate::notification_sound::NotificationSound;
@@ -1576,7 +1578,8 @@ fn ui_tab_falls_back_to_pty_cwd_when_no_peer_agent() {
         })
         .expect("openpty");
     let mut cmd = portable_pty::CommandBuilder::new("true");
-    cmd.cwd("/tmp");
+    // Any existing directory: the recorded `cwd` below is what is read.
+    cmd.cwd(crate::test_support::test_temp_root());
     let child = pair.slave.spawn_command(cmd).expect("spawn");
     let writer = pair.master.take_writer().expect("writer");
     state.session_maps.sessions.insert(

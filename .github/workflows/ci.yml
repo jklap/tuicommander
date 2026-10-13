@@ -131,11 +131,19 @@ jobs:
         # `test:plugins` run over the plugins submodule's real tests.
         run: bash scripts/with-test-tmp.sh pnpm test:plugins:test && bash scripts/with-test-tmp.sh pnpm test:plugins
 
+      # Wrapped like the Makefile's `check` target (with-test-tmp.sh), which
+      # runs the same two steps.
       - name: Architecture cycles
-        run: pnpm architecture:cycles && pnpm architecture:cycles:test
+        run: bash scripts/with-test-tmp.sh pnpm architecture:cycles && bash scripts/with-test-tmp.sh pnpm architecture:cycles:test && bash scripts/with-test-tmp.sh pnpm test-tmp-root:test
 
       - name: No literal NUL bytes in source
-        run: pnpm check:no-nul-bytes && pnpm check:no-nul-bytes:test
+        run: bash scripts/with-test-tmp.sh pnpm check:no-nul-bytes && bash scripts/with-test-tmp.sh pnpm check:no-nul-bytes:test
+
+      - name: No HOME-relative Gits paths in code and tooling
+        run: bash scripts/with-test-tmp.sh pnpm check:no-home-gits && bash scripts/with-test-tmp.sh pnpm check:no-home-gits:test
+
+      - name: No hard-coded temp-dir writes in code and tooling
+        run: bash scripts/with-test-tmp.sh pnpm check:no-hardcoded-tmp && bash scripts/with-test-tmp.sh pnpm check:no-hardcoded-tmp:test
 
   # The isolated suite took 1134-1141s on hosted Linux, versus 327s locally,
   # and later exceeded 20 minutes while still progressing. Partition the full
@@ -215,8 +223,12 @@ jobs:
       # cancellation) with meson and ninja, which no runner image ships. pip
       # rather than apt so every leg gets the same version: Ubuntu 22.04
       # packages meson 0.61, which is older than the abseil wrap expects.
+      # Not pinned to an exact version: CI has never run on this repo, so no
+      # meson/ninja release has been verified against this build yet. The floor
+      # is the one webrtc-audio-processing's meson.build declares (>= 0.63).
+      # Pin exact versions once a real run proves a pair.
       - name: Install meson and ninja
-        run: python -m pip install --upgrade meson ninja
+        run: python -m pip install --upgrade 'meson>=0.63' ninja
 
       # shell_integration.rs launches the claude/codex wrappers in bash, zsh
       # AND fish. fish is on none of the runner images, and the tests used to
@@ -458,9 +470,13 @@ jobs:
       # cancellation) with meson and ninja, which no runner image ships. pip
       # rather than apt/brew/choco so every leg gets the same version: Ubuntu
       # 22.04 packages meson 0.61, which is older than the abseil wrap expects.
+      # Not pinned to an exact version: CI has never run on this repo, so no
+      # meson/ninja release has been verified against this build yet. The floor
+      # is the one webrtc-audio-processing's meson.build declares (>= 0.63).
+      # Pin exact versions once a real run proves a pair.
       - name: Install meson and ninja
         shell: bash
-        run: python -m pip install --upgrade meson ninja
+        run: python -m pip install --upgrade 'meson>=0.63' ninja
 
       # The launch matrix is #[cfg(unix)], so only the macOS leg needs it.
       - name: Install launch-matrix shells

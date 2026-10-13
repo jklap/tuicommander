@@ -165,7 +165,7 @@ async fn startup_ego_settings_use_configured_owner_and_readback() {
     assert!(
         super::ego_fixture::calls(&fixture)
             .iter()
-            .all(|call| call["cwd"] == fixture.dir.path().to_string_lossy().as_ref())
+            .all(|call| call["cwd"] == super::ego_fixture::cwd(&fixture).as_str())
     );
 }
 
@@ -343,7 +343,7 @@ async fn startup_ego_login_binds_authority_and_reads_credentials_after_exit() {
         .iter()
         .find(|call| call["args"] == json!(["auth", "login", "--", "openai"]))
         .unwrap();
-    assert_eq!(login["cwd"], fixture.dir.path().to_string_lossy().as_ref());
+    assert_eq!(login["cwd"], super::ego_fixture::cwd(&fixture).as_str());
     assert!(
         calls
             .iter()

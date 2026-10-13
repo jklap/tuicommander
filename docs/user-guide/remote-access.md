@@ -1039,6 +1039,18 @@ This launches three actual isolated daemons, exercises the hub MCP, remote-to-re
 mail and replies, semantic shell rejection, then verifies intrahost mail with the hub
 stopped. It does not claim to test a real agent composer; use `--exercise` for that.
 
+`scripts/run-remote-fixture.sh <binary> [port] [instance]` launches one such daemon on
+its own. Its scratch (logs, the test-support config fallback) goes under
+`TUIC_FIXTURE_ROOT`, else your `TMPDIR`, else `/tmp`; nothing is written under `$HOME`.
+A named instance binds `<TMPDIR>/tuic-mcp-<hash>.sock`, so the launcher prints the
+`Fixture TMPDIR:` it chose: export that `TMPDIR` before running a separate `tuic`
+client against the fixture. To choose it yourself, set `TUIC_FIXTURE_TMPDIR` (at most
+72 bytes, so the 103-byte socket path fits). The default is a private per-instance
+`<TMPDIR>/tuic-rf-<hash>`, else your `TMPDIR` itself when that would be too long;
+when neither fits, the launcher fails and lists each candidate's length. It never
+falls back to `/tmp`. Above 61 bytes it notes that a second fixture of the same
+instance could not bind its `-<pid>` alternate socket.
+
 Connected daemon notices carry their host identity. MCP confirmation responses and ACP permission/elicitation answers return to that daemon; disconnected questions disappear without changing local connections. MCP confirmation dialogs appear on the desktop and close when another client answers. AI Chat shows remote questions separately, with their ACP connection identity. Completing an earlier answer preserves questions announced by newer notices. Remote GitHub transitions fetch PR data from the repository owner, notify once, and do not run local repository automation. GitHub polling also works on the headless daemon. MCP upstream health refreshes use a separate host snapshot rather than this machine’s editable configuration.
 
 MCP terminal output can be read in retained pages without running a command again.

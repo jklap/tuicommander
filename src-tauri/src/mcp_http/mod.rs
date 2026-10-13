@@ -4562,8 +4562,11 @@ mod tests {
         use crate::workflows::{WorkflowAction, WorkflowKind, WorkflowStore};
         let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
         let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
-        let project = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
-        let project = project.path().to_str().unwrap();
+        let project_dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        // The route compares canonical project roots; a symlinked $TMPDIR (macOS
+        // /var) spells the fixture path differently.
+        let project = std::fs::canonicalize(project_dir.path()).unwrap();
+        let project = project.to_str().unwrap();
         let draft = WorkflowStore::open()
             .unwrap()
             .seed_templates(project)
@@ -8966,6 +8969,8 @@ mod tests {
             .unwrap();
         // The linked checkout lives inside the main one; hide it from `git status` so
         // the main checkout is clean and only the removal guard can stop the call.
+        // No git template in tests, so `.git/info/` may not exist yet.
+        std::fs::create_dir_all(repo.path().join(".git/info")).unwrap();
         std::fs::write(repo.path().join(".git/info/exclude"), "caller/\n").unwrap();
         let caller = critic_detached_checkout(repo.path(), "caller");
         let main = repo.path().to_str().unwrap();
@@ -10405,17 +10410,16 @@ mod tests {
         );
     }
 
+    /// A per-test socket dir; the longest name these tests bind there is
+    /// `mcp-<pid>.sock` (16 bytes with a 7-digit Linux pid).
     #[cfg(unix)]
-    fn short_socket_test_dir() -> tempfile::TempDir {
-        let dir = tempfile::Builder::new()
-            .prefix("s")
-            .tempdir_in(crate::test_support::short_socket_test_temp_root())
-            .expect("create repository-local socket test dir");
-        assert!(
-            dir.path().join("mcp-4294967295.sock").as_os_str().len() < 104,
-            "socket test path exceeds macOS SUN_LEN: {}",
-            dir.path().display()
-        );
+    fn short_socket_test_dir() -> tuic_test_support::SocketDir {
+        let dir = crate::test_support::short_socket_tempdir();
+        if let Err(reason) =
+            tuic_test_support::unix_socket_path_fits(&dir.path().join("mcp-4194304.sock"))
+        {
+            panic!("socket test path exceeds SUN_LEN: {reason}");
+        }
         dir
     }
 
@@ -11617,6 +11621,9 @@ mod tests {
     async fn attachment_upload_does_not_write_into_repository() {
         let repo = create_temp_git_repo();
         let exclude = repo.path().join(".git/info/exclude");
+        // No git template in tests, so seed the user's exclude file to watch.
+        std::fs::create_dir_all(exclude.parent().unwrap()).unwrap();
+        std::fs::write(&exclude, b"# user excludes\n").unwrap();
         let before = std::fs::read(&exclude).unwrap();
         let state = test_state();
         crate::state::tests_support::insert_dummy_session(&state, "upload-session");
@@ -11644,7 +11651,11 @@ mod tests {
             .unwrap();
         let reply: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         let path = std::path::Path::new(reply["path"].as_str().unwrap());
-        assert!(path.starts_with(state.data_dir.join("attachments/pty-upload-session")));
+        // The reply carries the canonical path; a symlinked $TMPDIR (macOS /var)
+        // spells data_dir differently.
+        let upload_dir =
+            std::fs::canonicalize(state.data_dir.join("attachments/pty-upload-session")).unwrap();
+        assert!(path.starts_with(upload_dir));
         assert_eq!(std::fs::read(path).unwrap(), b"attachment bytes");
     }
 
@@ -11817,6 +11828,9 @@ mod tests {
         std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
         std::fs::write(&legacy, b"user bytes").unwrap();
         let exclude = repo.path().join(".git/info/exclude");
+        // No git template in tests, so seed the user's exclude file to watch.
+        std::fs::create_dir_all(exclude.parent().unwrap()).unwrap();
+        std::fs::write(&exclude, b"# user excludes\n").unwrap();
         let before = std::fs::read(&exclude).unwrap();
         let state = test_state();
         crate::state::tests_support::insert_dummy_session(&state, "nested-upload");

@@ -1996,9 +1996,12 @@ mod session_placement_tests {
             .into_iter()
             .find(|r| r.session_id == "restored-pty")
             .unwrap();
+        // The row carries the canonical path; a symlinked $TMPDIR (macOS /var)
+        // spells the fixture path differently.
+        let canonical_worktree = std::fs::canonicalize(&worktree).unwrap();
         assert_eq!(
             row.worktree_path.as_deref().map(std::path::Path::new),
-            Some(worktree.as_path())
+            Some(canonical_worktree.as_path())
         );
         assert_eq!(row.worktree_branch.as_deref(), Some("feature"));
         assert_eq!(row.cwd.as_deref(), Some(root_path));

@@ -309,6 +309,9 @@ mod tests {
         assert_eq!(loaded.lines, sample_lines());
     }
 
+    // `clear_saved_scrollback` is the desktop `#[tauri::command]`; headless
+    // builds clear through `clear_saved_scrollback_http` instead.
+    #[cfg(feature = "desktop")]
     #[tokio::test]
     async fn clear_saved_scrollback_command_with_a_session_clears_only_that_one() {
         let dir = tempfile::tempdir().unwrap();
@@ -324,6 +327,9 @@ mod tests {
         assert!(load("tuic-b").is_some());
     }
 
+    // `clear_saved_scrollback` is the desktop `#[tauri::command]`; headless
+    // builds clear through `clear_saved_scrollback_http` instead.
+    #[cfg(feature = "desktop")]
     #[tokio::test]
     async fn clear_saved_scrollback_command_with_none_clears_every_tab() {
         let dir = tempfile::tempdir().unwrap();

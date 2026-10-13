@@ -1154,6 +1154,9 @@ mod tests {
         let repo = path.to_string_lossy().into_owned();
         let structure = get_repo_structure_impl(&state, repo.clone()).await.unwrap();
         assert_eq!(structure.worktree_diagnostics.len(), 2);
+        // Rows carry the canonical path; a symlinked $TMPDIR (macOS /var)
+        // spells the fixture path differently.
+        let missing = linked.path().canonicalize().unwrap().join("missing");
         assert!(structure.worktree_diagnostics.iter().any(|row| row.state
             == crate::worktree::WorktreeDiagnosticState::Missing
             && Path::new(&row.path) == missing));

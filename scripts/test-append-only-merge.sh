@@ -3,7 +3,11 @@ set -euo pipefail
 
 repo_root=$(git rev-parse --show-toplevel)
 fixture=$(mktemp -d "${TMPDIR:?}/tuic-union-merge.XXXXXX")
-trap 'rm -rf "$fixture"' EXIT
+gitcfg=$(mktemp -d "${TMPDIR:?}/tuic-union-merge-cfg.XXXXXX")
+trap 'rm -rf "$fixture" "$gitcfg"' EXIT
+# Explicit git config: a developer's global merge.ff=only must not change this.
+. "$repo_root/scripts/test-tmp-lib.sh"
+tuic_git_isolate_config "$gitcfg"
 
 git -C "$fixture" init -q -b main
 git -C "$fixture" config user.name "Union Merge Test"
