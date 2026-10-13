@@ -9150,6 +9150,36 @@ branch refs/heads/feat
         );
     }
 
+    // Catches: the sidebar reads workspaces through the routed (gix) adapter,
+    // which lists `__archived/` checkouts that the CLI parser skips, so a
+    // recycled branch stays a sidebar row (Phase 2 lifecycle marks it Merged).
+    #[test]
+    fn routed_workspace_listing_hides_checkouts_parked_in_archive() {
+        let (_temp, repo, archived) = archived_merged_branch("feat-pooled-row");
+        assert!(archived.exists());
+
+        let listed = crate::git_reads::git_reads().worktree_paths(&repo).unwrap();
+
+        assert!(!listed.contains_key("feat-pooled-row"), "{listed:#?}");
+    }
+
+    // Catches: hiding pooled branches from the merged list also makes the Git
+    // panel report a merged branch as unmerged.
+    #[test]
+    fn git_panel_still_reports_a_pooled_merged_branch_as_merged() {
+        let (_temp, repo, _) = archived_merged_branch("feat-pooled-panel");
+
+        let branches = crate::git_reads::git_reads()
+            .branches_detail(&repo)
+            .unwrap();
+
+        let pooled = branches
+            .iter()
+            .find(|b| b.name == "feat-pooled-panel" && !b.is_remote)
+            .expect("pooled branch listed");
+        assert!(pooled.is_merged, "{branches:#?}");
+    }
+
     fn commit_file(dir: &Path, name: &str, body: &str) {
         fs::write(dir.join(name), body).expect("write file");
         git_cmd(dir).args(["add", "."]).run().expect("git add");
