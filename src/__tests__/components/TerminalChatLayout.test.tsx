@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render } from "@solidjs/testing-library";
+import { createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { Transcript } from "../../components/AIChatPanel/Transcript";
 import type { AcpTranscriptEntry } from "../../stores/acpTranscript";
@@ -128,4 +129,30 @@ it("groups unmarked Codex replies while keeping tool-followed status outside the
 	expect(container.querySelectorAll('[role="separator"]')).toHaveLength(0);
 	await fireEvent.click(getAllByRole("button", { name: "Copy assistant message" }).at(-1)!);
 	expect(clipboard).toHaveBeenCalledWith("First result.\n\nSecond result.");
+});
+
+// Catches: terminalAnswerRows handing <For> a fresh row object per recompute, so every earlier answer is rebuilt on each append.
+it("keeps an earlier answer's DOM node when the transcript grows, while the last answer keeps streaming", async () => {
+	const first: AcpTranscriptEntry = { id: "a", kind: "agent", text: "💬 First answer." };
+	const second: AcpTranscriptEntry = { id: "b", kind: "agent", text: "💬 Second" };
+	const [entries, setEntries] = createSignal<AcpTranscriptEntry[]>([
+		first,
+		{ id: "u", kind: "user", text: "Next question" },
+		second,
+	]);
+	const { container } = render(() => (
+		<Transcript entries={entries} busy={() => false} emptyMessage="Empty" terminalAgent="claude" />
+	));
+	await Promise.resolve();
+	const before = container.querySelector("#markdown-content");
+	expect(before?.textContent).toContain("First answer.");
+	setEntries([
+		first,
+		{ id: "u", kind: "user", text: "Next question" },
+		{ ...second, text: "💬 Second answer, longer." },
+	]);
+	await Promise.resolve();
+	const roots = container.querySelectorAll("#markdown-content");
+	expect(roots[0]).toBe(before);
+	expect(roots[1].textContent).toContain("Second answer, longer.");
 });
