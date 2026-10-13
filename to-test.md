@@ -1,3 +1,7 @@
+## GitHub settings owner adapter (1774-ce8f) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, the GitHub owner adapter is loaded. Shared settings transport wiring is a separate step; this change adds no callable endpoint by itself.
+- [ ] After transport wiring, use a throwaway instance to complete default/additional cloud device login and add an Enterprise PAT. Confirm immediate presence-only readback, real identity, bindings and account-removal cleanup. Boss performs provider authentication; do not use production credentials for automated checks.
 ## Ego settings adapter (1775-330c) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, model reads/writes in Settings > Providers use the configured Ego profile and AI Chat workspace. Existing ACP and PTY sessions keep their launch configuration. Internal settings adapters await the later transport-registration step; targeted fixture tests cover owner commands and readback without touching production credentials.
@@ -5238,3 +5242,6 @@ Visual evidence: worktree Vite fixture mounted the real NotificationsTab and Toa
 ## Goose reply completion (1812-022d) — Rust restart required
 
 - [ ] After Boss restarts `make dev` or installs `make build`, send two prompts to Goose 1.49.0 with ollama. Each reply must return the tab to idle shortly after the ready composer appears; the second submit must be accepted without a five-minute wait or 409. The recorded first-turn replay covers the backend transition; this live check remains open until restart.
+
+- [ ] After Boss restarts `make dev` or installs `make build`, load the repository settings owners and verify defaults/local read, patch and readback when settings transport cutover is wired (#1825-4566). Current transports remain unchanged; Rust edits require restart.
+- [ ] GitHub Settings (#1829-54c2): after Boss restarts `make dev` or rebuilds release, verify one-account/one-remote repositories hide Repository Bindings, OAuth shows Logout, and environment Disconnect stays disconnected across reopening Settings. Then complete device-flow login; fork/upstream remotes must still offer a remote choice. Rust changes require restart; unit regressions use fake credentials.

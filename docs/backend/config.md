@@ -1397,12 +1397,22 @@ must compute the returned revision after typed defaults/normalization so immedia
 readback agrees. Unrelated fields survive, and malformed files are never replaced
 by defaults.
 
-The notifications, preferences, repositories, agents and voice adapters share
+The notifications, preferences, repositories, repository-defaults, repository-local, agents and voice adapters share
 `settings::config_file::ConfigFileStore` for strict reads and locked commits.
 Adapters supply normalization before canonical comparison and retain their own
 runtime apply hooks. Upstreams and remote connections retain commit-specific
 validation and pending effect records; app, Telegram and tunnels retain their
 different persistence owners.
+
+The repository-defaults adapter owns `repo-defaults.json`. One repository-local
+owner serves all `Target::Repository { id }` requests through `Store::resolve`.
+The id must be an existing `repositories.json` key naming a repository root;
+requests cannot choose a filename. Resolution, reads and commits run off the async
+executor, and apply uses the same request-scoped owner. Fixed-target adapters keep
+the default exact-target check. Local patches preserve unknown team-owned keys,
+reject symlinked data/lock files, and share the export writer's file lock. Corrupt
+local files block the operation and are preserved as recovery backups. `repositories_registration` remains an accepted inventory
+gap: runtime identities and owner delta-save rules need a typed schema before cutover.
 
 The AppConfig adapter retains vault rollback, cache updates, reflow, relay notices,
 tool-list notices and listener restart requests. Runtime effects run after file
@@ -1428,6 +1438,11 @@ committed revision: reread the affected paths rather than replaying the mutation
 
 `accounts.json` stores provider/site/account metadata only. The first read migrates `github_accounts.json` while preserving IDs; the old file is retained for recovery and a durable marker prevents re-import after removals. `github_bindings.json` remains the GitHub binding store. Tokens migrate atomically within the credential vault to `account/{id}`; env/CLI credentials remain ambient. Unknown registry, site and account fields are ignored so mixed-version builds can still load every account. Corrupt metadata is retained and blocks account writes. See [Shared account registry](github.md#shared-account-registry) for APIs, credential presence and partial cross-store recovery.
 
+The internal GitHub settings adapter delegates account and credential mutations
+to the shared account owner. It does not use `ConfigFileStore` to bypass account
+verification or vault rules. Binding revisions are checked inside the GitHub
+owner's strict file update; account reads expose presence and runtime provenance.
+See [GitHub settings owner adapter](github.md#github-settings-owner-adapter).
 
 ### Ego launch defaults through settings (#1775-330c)
 

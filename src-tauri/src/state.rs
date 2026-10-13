@@ -1780,6 +1780,9 @@ pub(crate) struct GitHubState {
     pub(crate) token: parking_lot::RwLock<Option<String>>,
     /// Where the current GitHub token came from (env, OAuth keyring, gh CLI)
     pub(crate) token_source: parking_lot::RwLock<crate::github_auth::TokenSource>,
+    /// Explicit runtime disconnect; read/write while holding the token lock.
+    /// Prevents lazy resolution from restoring credentials.
+    pub(crate) disconnected: std::sync::atomic::AtomicBool,
     /// Circuit breaker for GitHub API calls
     pub(crate) circuit_breaker: crate::github::GitHubCircuitBreaker,
     /// Background GitHub poller task handle
@@ -1801,6 +1804,7 @@ impl Default for GitHubState {
         Self {
             token: parking_lot::RwLock::new(None),
             token_source: parking_lot::RwLock::new(Default::default()),
+            disconnected: std::sync::atomic::AtomicBool::new(false),
             circuit_breaker: crate::github::GitHubCircuitBreaker::new(),
             poller: parking_lot::Mutex::new(None),
             viewer_login: parking_lot::RwLock::new(None),

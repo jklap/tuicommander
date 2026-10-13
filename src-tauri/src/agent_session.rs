@@ -150,11 +150,12 @@ const AGENT_SESSION_FLAGS: &[(&str, &[&str])] = &[(
 /// Returns `None` for agents with no entry in `AGENT_SESSION_FLAGS`, and when argv
 /// cannot be read (Windows, or the process already exited).
 ///
-/// DEFERRED (2026-09-08) — argv is kept whole apart from session flags, so an agent
-/// launched with an inline prompt (`claude 'fix this'` — TUIC's own worktree seed
-/// does this) rebuilds with that prompt attached and re-sends it on resume. Telling
-/// a prompt from a flag value needs the CLI's flag arity (`--model opus` takes one,
-/// `--add-dir a b c` takes many), which argv alone does not carry.
+/// DEFERRED (2026-09-08) — argv is kept whole apart from session flags and Start
+/// Work's own brief (`without_seed_brief`), so an agent launched with some other
+/// inline prompt (`claude 'fix this'`) rebuilds with that prompt attached and
+/// re-sends it on resume. Telling a prompt from a flag value needs the CLI's flag
+/// arity (`--model opus` takes one, `--add-dir a b c` takes many), which argv alone
+/// does not carry.
 fn rebuild_launch_command(agent_type: &str, pid: u32) -> Option<String> {
     let argv = crate::process_env::read_process_argv(pid)?;
     compose_launch_command(agent_type, &argv, read_agent_env_overrides(agent_type, pid))
@@ -178,7 +179,7 @@ fn compose_launch_command(
         .map(|(key, value)| format!("{key}={}", quote_if_needed(&value)))
         .collect();
 
-    let mut argv = argv.iter().peekable();
+    let mut argv = without_seed_brief(argv).iter().peekable();
     parts.push(quote_if_needed(argv.next()?));
     while let Some(token) = argv.next() {
         if session_flags.contains(&token.as_str()) {
@@ -191,6 +192,22 @@ fn compose_launch_command(
         parts.push(quote_if_needed(token));
     }
     Some(parts.join(" "))
+}
+
+/// First line of the brief Start Work passes as a launch argument (`SEED_BRIEF_OPEN`
+/// in `agentLaunchCommand.ts`). It is host-generated, so a restored session must not
+/// replay it: a resumed agent would take it as a second task submission.
+const SEED_BRIEF_OPEN: &str = "<untrusted-content source=\"work item\">";
+
+/// `argv` without a trailing Start Work brief and the `--` that precedes it.
+fn without_seed_brief(argv: &[String]) -> &[String] {
+    match argv {
+        [rest @ .., last] if last.starts_with(SEED_BRIEF_OPEN) => match rest {
+            [head @ .., sep] if sep == "--" => head,
+            _ => rest,
+        },
+        _ => argv,
+    }
 }
 
 /// Shell-quote a token only when it needs it, so a rebuilt command stays readable
@@ -2284,6 +2301,32 @@ mod tests {
             cmd.as_deref(),
             Some("claude --dangerously-skip-permissions")
         );
+    }
+
+    /// Start Work launches `<cmd> -- '<brief>'`; resume would submit that task again.
+    #[test]
+    fn compose_launch_command_drops_the_start_work_brief_and_its_separator() {
+        let brief = format!("{SEED_BRIEF_OPEN}\nFix issue 125\n</untrusted-content>\nuntrusted.");
+        let cmd = compose_launch_command(
+            "claude",
+            &argv(&["claude", "--add-dir", "/repo/shared", "--", &brief]),
+            env(&[("CLAUDE_CONFIG_DIR", "/Users/me/.claude-private")]),
+        );
+        assert_eq!(
+            cmd.as_deref(),
+            Some("CLAUDE_CONFIG_DIR=/Users/me/.claude-private claude --add-dir /repo/shared")
+        );
+    }
+
+    /// Only the host's own brief goes: a user's trailing prompt and `--` stay.
+    #[test]
+    fn compose_launch_command_keeps_a_prompt_that_is_not_the_start_work_brief() {
+        let cmd = compose_launch_command(
+            "claude",
+            &argv(&["claude", "--", "fix this"]),
+            HashMap::new(),
+        );
+        assert_eq!(cmd.as_deref(), Some("claude -- 'fix this'"));
     }
 
     #[test]

@@ -40,7 +40,7 @@ The integration is **account-centric**: the primary key is a stable `GitHubAccou
 - **`GitHubHost`** — canonical (lowercased, validated) host. `is_cloud()` → github.com; `graphql_url()` / `rest_base()` return `api.github.com` (+`/graphql`) for cloud and `https://{host}/api/graphql` / `https://{host}/api/v3` for GHE. `is_ambient_default()` routes the global-vs-per-account branch points.
 - **Account kinds** — `GithubComOAuth` / `GithubComEnv` / `GithubComGhCli` (the ambient default, existing auth chain), additional named github.com accounts, and `GhePat` (GitHub Enterprise Server via pasted PAT).
 - **Credential storage** — github.com keeps `Credential::GithubOauthToken` (`github/oauth-token`) unchanged; per-account PATs use `Credential::GithubToken(account_id)` → `github/account/{id}/token`.
-- **Repo bindings** — `{repo_path → account_id, owner, repo, remote_name}` persisted per canonical repo root (worktrees resolve to the main root). `resolve_repo_account(repo_path)` returns `RepoResolution::{Bound | NeedsBind(candidates) | NeedsAccount | Unmonitored}` — binding-first, single-candidate auto-confirm, ambiguity surfaces all candidates (never a silent `origin` pick).
+- **Repo bindings** — `{repo_path → account_id, owner, repo, remote_name}` persisted per canonical repo root (worktrees resolve to the main root). `resolve_repo_account(repo_path)` returns `RepoResolution::{Bound | NeedsBind(candidates) | NeedsAccount | Unmonitored}` — binding-first, a single candidate returns `Bound` without persisting a binding, and multiple candidates return `NeedsBind` for every consumer (never a silent `origin` pick). Fork and upstream remotes on the same account still identify different repositories and require a remote choice.
 - **Concurrent saves** — Binding maps use `ConfigFile::save_delta`, so changes to different repositories compose. Account additions and removals mutate the latest registry under `ConfigFile::update_with`; the on-disk array is never replaced from a stale account snapshot.
 - **Per-account isolation (hybrid)** — github.com keeps the global breaker/viewer/rate/cooldown fields byte-for-byte; GHE accounts get isolated `ghe_state: DashMap<AccountId, GheAccountState>`. The poller groups repos by resolved account and runs one batch per account, so a fault on one never opens another's breaker. Cooldown keys: `owner/repo` (cloud, unchanged) vs `{account_id}:owner/repo` (GHE).
 - **CI logs** — github.com and GitHub Enterprise use the repo-resolved account token and REST host. Actions runs, jobs and logs use the account circuit breaker. Log redirects remove bearer credentials when the storage host changes.
@@ -66,7 +66,9 @@ Priority order (first non-empty wins) for the ambient github.com account:
 2. `GITHUB_TOKEN` environment variable
 3. OAuth keyring token (`github_auth.rs` — stored in OS keyring via `keyring` crate)
 
-The active token source is tracked in `AppState.github_token_source` as a `TokenSource` enum (`Env`, `OAuth`, `Pat`, `None`). `resolve_token_for_account(&GitHubAccount)` runs this exact chain for github.com and returns the vault PAT (`TokenSource::Pat`) for GHE accounts.
+The active token source is tracked in `AppState.github.token_source` as a `TokenSource` enum (`Env`, `OAuth`, `Pat`, `None`), serialized as `env`, `oauth`, `pat`, `none` in both transports. `resolve_token_for_account(&GitHubAccount)` runs this exact chain for github.com and returns the vault PAT (`TokenSource::Pat`) for GHE accounts.
+
+An explicit disconnect is held in runtime state under the token lock. Status refresh, GraphQL lazy resolution, deferred probes and in-flight fallback writes cannot reconnect the ambient account. A successful primary device-flow login re-enables it; named accounts stay independent.
 
 ## Tauri Commands — Authentication (`github_auth.rs`)
 
@@ -76,7 +78,7 @@ The active token source is tracked in `AppState.github_token_source` as a `Token
 | `github_poll_login` | `(device_code: String) -> PollResult` | Poll for token, saves to keyring on success |
 | `github_logout` | `() -> ()` | Delete OAuth token from keyring, fall back to environment tokens |
 | `github_auth_status` | `() -> AuthStatus` | Current auth status with login, avatar, source |
-| `github_disconnect` | `() -> ()` | Disconnect GitHub — clear all tokens from keyring and env cache |
+| `github_disconnect` | `() -> ()` | Delete the ambient OAuth token and disable ambient runtime credential resolution until device-flow login or restart; environment variables remain unchanged |
 | `github_diagnostics` | `() -> Value` | Diagnostics: token sources, scopes, API connectivity |
 
 ## Tauri Commands — GitHub Data (`github.rs`)
@@ -460,3 +462,37 @@ writes no account or credential. After Submit is accepted, verification and stor
 finish even if the window closes; a consumed nonce cannot be replayed. Rotation
 invalidates the same GitHub Enterprise runtime cache as the account owner API.
 Native inspection remains blocked until the private window is destroyed.
+
+## GitHub settings owner adapter
+
+`settings/accounts.rs` provides an internal typed `GithubSettings` read/perform
+boundary. `action_schema()` derives its action DTO schema. Account creation,
+credential replacement/clearing, labels and removal use `accounts::execute`;
+Enterprise PAT creation keeps the owner's `/user` identity verification. Cloud
+PATs cannot replace default or named OAuth credentials. Removal also removes
+bindings, per-account caches and cooldowns; corrupt bindings stop removal before
+credentials or metadata are deleted.
+
+Snapshots return credential presence (`set`, `unset`, or `unavailable`) and the
+ambient runtime token source. Reads do not resolve ambient credentials or refresh
+GitHub over the network. They do not invent a stored account for an external
+credential source. GitHub display preferences remain in the existing preferences
+and repository settings adapters.
+
+Cloud login uses `begin_cloud_login`, `cloud_login_status` and
+`complete_cloud_login`. Begin returns an opaque `flowId`, human verification URI
+and user code. The backend retains the device credential, enforces expiry and
+poll intervals, increases intervals on slow-down, and prevents duplicate exchanges.
+Default and additional-account completion call their existing GitHub auth owners.
+Token/provider error bodies and token scopes never enter adapter replies.
+
+Binding actions require `expectedRevision` from the snapshot's `bindingsRevision`.
+The GitHub owner checks it under the cross-process binding file lock, accepts only
+registered repositories, derives owner/repo from the chosen remote, and rejects a
+remote whose host differs from the account. Successful mutations include immediate
+owner readback; binding no-ops report `persisted:false`.
+
+This step adds no MCP, HTTP or IPC endpoint. Transport publication and settings
+change events remain the shared cutover and refresh work. Real provider login and
+Enterprise identity checks need an authenticated manual verification after that
+wiring; the isolated adapter tests do not access production credentials.

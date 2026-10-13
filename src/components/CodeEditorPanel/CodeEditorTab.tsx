@@ -886,11 +886,15 @@ export const CodeEditorTab: Component<CodeEditorTabProps> = (props) => {
 					>
 						<path fill="none" d="M2 3h12M2 6h12M2 9h9a2 2 0 0 1 0 4H8m0 0 2-2m-2 2 2 2M2 13h3" />
 					</svg>
+					{t("codeEditor.wrapBtn", "Wrap")}
 				</button>
 				<button
 					class={e.btn}
 					onClick={() => setIsReadOnly((v) => !v)}
 					title={isReadOnly() ? t("codeEditor.unlock", "Unlock editing") : t("codeEditor.lock", "Lock (read-only)")}
+					aria-label={
+						isReadOnly() ? t("codeEditor.unlock", "Unlock editing") : t("codeEditor.lock", "Lock (read-only)")
+					}
 				>
 					{isReadOnly() ? (
 						<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
@@ -901,6 +905,7 @@ export const CodeEditorTab: Component<CodeEditorTabProps> = (props) => {
 							<path d="M8 1a3 3 0 0 1 3 3v1h.5a1.5 1.5 0 0 1 1.5 1.5V14a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6.5A1.5 1.5 0 0 1 4.5 5H5V4a3 3 0 0 1 3-3zm1.5 4V4a1.5 1.5 0 0 0-3 0v1h3z" />
 						</svg>
 					)}
+					{isReadOnly() ? t("codeEditor.unlockBtn", "Unlock") : t("codeEditor.lockBtn", "Lock")}
 				</button>
 				<Show when={!isExternal() && props.repoPath}>
 					<button
@@ -910,6 +915,7 @@ export const CodeEditorTab: Component<CodeEditorTabProps> = (props) => {
 						// would run in the wrong tree and report "No changes". (#67)
 						onClick={() => diffTabsStore.add(fsRoot(), props.filePath, "M")}
 						title={t("codeEditor.viewDiff", "View diff")}
+						aria-label={t("codeEditor.viewDiff", "View diff")}
 					>
 						<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
 							<path
@@ -922,13 +928,21 @@ export const CodeEditorTab: Component<CodeEditorTabProps> = (props) => {
 							<path d="M4 12l-2 2 2 2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
 							<path d="M12 12l2 2-2 2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
 						</svg>
+						{t("codeEditor.diffBtn", "Diff")}
 					</button>
 				</Show>
-				<Show when={dirty() && !isReadOnly()}>
-					<button class={e.btn} onClick={handleSave} title={`${t("codeEditor.save", "Save")} (${"\u2318"}S)`}>
+				<Show when={!isReadOnly()}>
+					<button
+						class={e.btn}
+						onClick={handleSave}
+						disabled={!dirty()}
+						data-ready={dirty() ? "true" : undefined}
+						title={`${t("codeEditor.save", "Save")} (${"\u2318"}S)`}
+					>
 						<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
 							<path d="M13.354 1.146a.5.5 0 0 1 .146.354v12a1.5 1.5 0 0 1-1.5 1.5h-8A1.5 1.5 0 0 1 2.5 13.5v-11A1.5 1.5 0 0 1 4 1h8.5a.5.5 0 0 1 .354.146L13.354 1.146zM4 2.5a.5.5 0 0 0-.5.5v10.5a.5.5 0 0 0 .5.5h1V10a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v4h1a.5.5 0 0 0 .5-.5V2.207L11.793 2H11v2.5A1.5 1.5 0 0 1 9.5 6h-3A1.5 1.5 0 0 1 5 4.5V2H4zm2 0v2.5a.5.5 0 0 0 .5.5h3a.5.5 0 0 0 .5-.5V2H6zm0 8v4h4v-4H6z" />
 						</svg>
+						{t("codeEditor.save", "Save")}
 					</button>
 				</Show>
 			</div>

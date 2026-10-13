@@ -9,13 +9,13 @@
     "store": "repositories_registration",
     "path": "/repos/{path}",
     "ownerStep": "Step 4d",
-    "reason": "repositories.json uses untyped JSON for registration/groups/branch display preferences; classify runtime fields individually and define the owner's stable identities."
+    "reason": "Accepted gap for story 1825-4566: repositories.json registration and group records remain untyped; converting the owner requires classification of runtime tab/worktree identities and delta-save contracts. A raw JSON settings adapter would bypass those owner invariants. Keep Step 4d ownership and block cutover until a typed owner schema is delivered."
   },
   {
     "store": "repositories_registration",
     "path": "/groups/{id}",
     "ownerStep": "Step 4d",
-    "reason": "Repository group settings are currently untyped JSON and must receive an owner schema."
+    "reason": "Accepted gap for story 1825-4566: repositories.json registration and group records remain untyped; converting the owner requires classification of runtime tab/worktree identities and delta-save contracts. A raw JSON settings adapter would bypass those owner invariants. Keep Step 4d ownership and block cutover until a typed owner schema is delivered."
   },
   {
     "store": "keybindings",

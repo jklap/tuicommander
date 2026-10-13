@@ -616,6 +616,21 @@ const PromptEditor: Component<PromptEditorProps> = (props) => {
 	const [systemPrompt, setSystemPrompt] = createSignal(props.prompt?.systemPrompt ?? "");
 	const [validationError, setValidationError] = createSignal<string | null>(null);
 
+	const formSnapshot = () =>
+		JSON.stringify([
+			name(),
+			description(),
+			content(),
+			shortcut(),
+			placement(),
+			autoExecute(),
+			executionMode(),
+			outputTarget(),
+			systemPrompt(),
+		]);
+	const initialSnapshot = formSnapshot();
+	const formDirty = () => formSnapshot() !== initialSnapshot;
+
 	const isOverridden = () => {
 		const def = builtInDefault();
 		return def ? content() !== def.content : false;
@@ -831,7 +846,9 @@ const PromptEditor: Component<PromptEditorProps> = (props) => {
 						</button>
 					</Show>
 					<div style={{ flex: "1" }} />
-					<button onClick={handleSave}>Save</button>
+					<button data-ready={formDirty() ? "true" : undefined} onClick={handleSave}>
+						Save
+					</button>
 					<button onClick={props.onCancel}>Cancel</button>
 				</div>
 			</div>
