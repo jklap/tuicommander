@@ -74,3 +74,45 @@ tuic_git_ceiling_with() {
   done
   printf '%s\n' "$_tuic_ceiling"
 }
+
+# Usage: tuic_git_isolate_config <dir>. Points every git started from this shell
+# at <dir>/gitconfig (the same content tuic-test-support writes) instead of the
+# developer's global/system config, so a test never depends on how a machine's
+# git is configured (merge.ff=only, url.*.insteadOf, hooksPath, signing, ...).
+# Exports GIT_CONFIG_GLOBAL, so call it in the current shell, not in $(...).
+# A test that needs a specific global setting exports GIT_CONFIG_GLOBAL after.
+tuic_git_isolate_config() {
+  mkdir -p "$1"
+  _tuic_gitconfig=$1/gitconfig
+  # Several runners may write this at once: install it by rename, never in place.
+  printf '%s\n' \
+    '# Written by scripts/test-tmp-lib.sh: tests never read the developer'\''s git config.' \
+    '[user]' '	name = TUIC Test' '	email = tests@tuic.invalid' \
+    '[init]' '	defaultBranch = main' \
+    '[commit]' '	gpgSign = false' \
+    '[tag]' '	gpgSign = false' \
+    '[core]' '	autocrlf = false' >"$_tuic_gitconfig.$$.tmp"
+  mv -f "$_tuic_gitconfig.$$.tmp" "$_tuic_gitconfig"
+  GIT_CONFIG_GLOBAL=$_tuic_gitconfig
+  GIT_CONFIG_NOSYSTEM=1
+  export GIT_CONFIG_GLOBAL GIT_CONFIG_NOSYSTEM
+  # Command-scope config an invoking `git -c ...` or shell may have exported.
+  unset GIT_CONFIG_SYSTEM GIT_CONFIG_PARAMETERS GIT_CONFIG_COUNT
+}
+
+# Usage: tuic_unix_socket_path_max <repo root>. Prints the longest Unix socket
+# path the platform binds, read out of its one definition,
+# `tuic_ipc::UNIX_SOCKET_PATH_MAX` (src-tauri/crates/tuic-ipc/src/lib.rs), so
+# no script restates the number. Fails loudly (never a default) when that line
+# cannot be read; scripts/test-run-remote-fixture.sh pins the value found.
+tuic_unix_socket_path_max() {
+  _tuic_ipc_src=$1/src-tauri/crates/tuic-ipc/src/lib.rs
+  _tuic_path_max=$(sed -n 's/^pub const UNIX_SOCKET_PATH_MAX: usize = \([0-9][0-9]*\);$/\1/p' "$_tuic_ipc_src" 2>/dev/null)
+  case $_tuic_path_max in
+    '' | *[!0-9]*)
+      echo "cannot read UNIX_SOCKET_PATH_MAX from $_tuic_ipc_src" >&2
+      return 1
+      ;;
+  esac
+  printf '%s\n' "$_tuic_path_max"
+}

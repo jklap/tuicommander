@@ -7,6 +7,13 @@ set -euo pipefail
 root="$(git rev-parse --show-toplevel)"
 base="$(. "$root/scripts/test-tmp-lib.sh" && tuic_test_tmp_root "$root")"
 host="$(. "$root/scripts/test-tmp-lib.sh" && tuic_test_host_tmpdir)"
+# The budget comes from the one definition (tuic-ipc), never restated here; the
+# pins below fail if that value or the name shape moves without this test knowing.
+socket_max="$(. "$root/scripts/test-tmp-lib.sh" && tuic_unix_socket_path_max "$root")"
+test "$socket_max" = 103 || { echo "UNIX_SOCKET_PATH_MAX is $socket_max, expected 103" >&2; exit 1; }
+socket_name="tuic-mcp-0000000000000000.sock" # tuic_ipc::named_socket_path's shape
+budget=$((socket_max - 1 - ${#socket_name}))
+test "$budget" = 72 || { echo "fixture budget is $budget, expected 72" >&2; exit 1; }
 fixture="$(mktemp -d "${base%/}/tuic-remote-fixture-test.XXXXXX")"
 instance="tuic-fixture-test-$$"
 made="$host/tuic-rf-$(printf '%s' "$instance" | cksum | cut -d ' ' -f 1)"
@@ -50,7 +57,7 @@ mkdir -p "$long_tmp"
 if out="$(launch TMPDIR="$long_tmp/" 2>&1)"; then
   echo "an over-budget caller TMPDIR was accepted: $out" >&2; exit 1
 fi
-for needle in "at most 72 bytes" "$long_tmp: ${#long_tmp} bytes" "$long_tmp/tuic-rf-" TUIC_FIXTURE_TMPDIR; do
+for needle in "at most $budget bytes" "$long_tmp: ${#long_tmp} bytes" "$long_tmp/tuic-rf-" TUIC_FIXTURE_TMPDIR; do
   printf '%s\n' "$out" | grep -Fq -- "$needle" \
     || { echo "budget failure does not name '$needle': $out" >&2; exit 1; }
 done
@@ -58,7 +65,7 @@ no_tmp_mention "${out//"$long_tmp"/}"
 
 # Catches: not printing the TMPDIR a separately launched client must export,
 # or choosing one past the budget, under the real caller temp dir.
-if (( ${#host} <= 72 )); then
+if (( ${#host} <= budget )); then
   out="$(launch TMPDIR="$host/")"
   chosen="$(field "$out" TMPDIR)"
   printf '%s\n' "$out" | grep -Fq "Fixture TMPDIR: $chosen" \
@@ -67,25 +74,25 @@ if (( ${#host} <= 72 )); then
     "$made/" | "$host/") ;;
     *) echo "fixture TMPDIR $chosen is neither $made/ nor $host/" >&2; exit 1 ;;
   esac
-  (( ${#chosen} - 1 <= 72 )) || { echo "fixture TMPDIR $chosen is over 72 bytes" >&2; exit 1; }
+  (( ${#chosen} - 1 <= budget )) || { echo "fixture TMPDIR $chosen is over $budget bytes" >&2; exit 1; }
   case "$(field "$out" ROOT)" in
     "$host/tuic-remote-fixture/$instance/") ;;
     *) echo "config fallback root left the caller's temp dir: $out" >&2; exit 1 ;;
   esac
 else
-  echo "SKIP: host temp dir $host is ${#host} bytes, over the 72-byte fixture budget"
+  echo "SKIP: host temp dir $host is ${#host} bytes, over the $budget-byte fixture budget"
 fi
 
 # Catches: clobbering a TMPDIR the caller chose for a separately launched client.
-if (( ${#host} + 11 <= 72 )); then
+if (( ${#host} + 11 <= budget )); then
   mine="$(mktemp -d "$host/rft.XXXXXX")"
   rmdir "$mine"
   out="$(launch TMPDIR="$long_tmp/" TUIC_FIXTURE_TMPDIR="$mine")"
   test "$(field "$out" TMPDIR)" = "$mine/" || { echo "TUIC_FIXTURE_TMPDIR ignored: $out" >&2; exit 1; }
   test "$(stat -f '%Lp' "$mine" 2>/dev/null || stat -c '%a' "$mine")" = 700 \
     || { echo "fixture TMPDIR is not private" >&2; exit 1; }
-elif (( ${#host} <= 72 )); then
-  # Nothing below a 72-byte host temp dir fits; the override is still used as is.
+elif (( ${#host} <= budget )); then
+  # Nothing below a budget-sized host temp dir fits; the override is still used as is.
   out="$(launch TMPDIR="$long_tmp/" TUIC_FIXTURE_TMPDIR="$host")"
   test "$(field "$out" TMPDIR)" = "$host/" || { echo "TUIC_FIXTURE_TMPDIR ignored: $out" >&2; exit 1; }
 fi

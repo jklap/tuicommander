@@ -47,7 +47,11 @@ prune_stale_runs() {
 prune_stale_socket_dirs() {
   [[ -d "$1" ]] || return 0
   local stale name
-  while IFS= read -r -d '' stale; do
+  # A pipe, not `< <(find ...)`: process substitution needs /dev/fd/*, which
+  # sandboxes deny. The loop keeps no state, so its subshell is harmless.
+  find "$1" -mindepth 1 -maxdepth 1 -type d \
+    \( -name 't.??????' -mtime +1 -o -name 'tuic-s????????????????' -mtime +6 \) \
+    -print0 2>/dev/null | while IFS= read -r -d '' stale; do
     name=${stale##*/}
     [[ -O "$stale" && ! -L "$stale" ]] || continue
     if [[ $name =~ ^t\.[a-z0-9]{6}$ ]]; then
@@ -56,9 +60,7 @@ prune_stale_socket_dirs() {
       continue
     fi
     rm -rf -- "$stale" 2>/dev/null || warn_prune "$stale"
-  done < <(find "$1" -mindepth 1 -maxdepth 1 -type d \
-    \( -name 't.??????' -mtime +1 -o -name 'tuic-s????????????????' -mtime +6 \) \
-    -print0 2>/dev/null || true)
+  done || true
 }
 prune_stale_runs "$test_tmp_base"
 prune_stale_runs "$root/.tmp/tuic-tests"
@@ -102,4 +104,25 @@ export GIT_TEMPLATE_DIR="$test_tmp/git-template-empty"
 GIT_CEILING_DIRECTORIES="$(tuic_git_ceiling_with "$(dirname "$(cd "$test_tmp" && pwd)")" \
   "$(dirname "$(cd "$test_tmp" && pwd -P)")" "$host")"
 export GIT_CEILING_DIRECTORIES
+# Explicit git config: never the developer's global/system files.
+tuic_git_isolate_config "$test_tmp"
+# meson auto-wraps its compiler with sccache when one is on PATH, and sccache
+# puts its server socket under $TMPDIR, which is now a long scratch path: every
+# compile then fails with "path must be shorter than SUN_LEN" (the bundled
+# WebRTC build under tuic-dictation). Name the compilers explicitly so no
+# launcher is auto-inserted; an explicit CC/CXX from the caller still wins.
+export CC="${CC:-cc}" CXX="${CXX:-c++}"
+# Opt-in (TUIC_TEST_FAKE_HOME=1): the Rust suite gets a throwaway $HOME under the
+# test root. Tests that use the home directory as scratch space (plugin_fs,
+# terminal image transmission) or resolve the platform config dir (dirs::config_dir
+# reads $HOME on macOS) then never touch the developer's real files, and a sandbox
+# that denies writes there cannot fail them. Cargo and rustup keep their real
+# homes, pinned before $HOME moves. Not applied to pnpm/cargo audit, which need
+# the real caches.
+if [[ "${TUIC_TEST_FAKE_HOME:-}" == 1 ]]; then
+  export CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}" RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}"
+  fake_home="$test_tmp/home"
+  mkdir -p "$fake_home"
+  export HOME="$fake_home"
+fi
 "$@"
