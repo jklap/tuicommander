@@ -463,6 +463,12 @@ export function toHeadlessAgentChoice(value: string): HeadlessAgentChoice | null
 	return value as HeadlessAgentChoice;
 }
 
+/** Agents kept at basic support: busy state is unreliable and no vendor account is available to test. */
+export const LIMITED_SUPPORT_AGENTS: readonly AgentType[] = ["amp", "cursor", "droid"];
+
+/** The label Settings shows for them; docs/user-guide/ai-agents.md quotes it (checked by a test). */
+export const LIMITED_SUPPORT_LABEL = "limited support, need more tests";
+
 /** Which agents support MCP configuration */
 export const MCP_SUPPORT: Record<AgentType, boolean> = {
 	claude: true,
