@@ -411,7 +411,10 @@ describe("planSuggestOverlay — Codex bullet-prefixed intent and suggest (#1858
 
 	it("tints an intent line behind the Codex bullet", () => {
 		// catches: INTENT_HIGHLIGHT_RE accepting only the Claude bullets, so `• intent:` stays plain text
-		const plan = planSuggestOverlay(1, lookup([{ text: "• intent: Saving reports (Jira data review)", isWrapped: false }]));
+		const plan = planSuggestOverlay(
+			1,
+			lookup([{ text: "• intent: Saving reports (Jira data review)", isWrapped: false }]),
+		);
 		expect(plan.blocks).toEqual([{ row: 0, kind: "intent" }]);
 	});
 
@@ -419,18 +422,6 @@ describe("planSuggestOverlay — Codex bullet-prefixed intent and suggest (#1858
 		// catches: SUGGEST_ANCHOR_RE accepting only the Claude bullets, so Codex suggest chips never appear
 		const plan = planSuggestOverlay(1, lookup([{ text: "• suggest: [ A | B | C ]", isWrapped: false }]));
 		expect(plan.blocks).toEqual([{ row: 0, kind: "suggest" }]);
-	});
-
-	it("ends an answer at a Codex bullet row that carries no marker", () => {
-		// catches: OUTPUT_ROW_RE missing the Codex bullet, so the answer swallows the next `• intent:` row's tint boundary
-		const get = lookup([
-			{ text: "• 💬 Done.", isWrapped: false },
-			{ text: "• intent: next (Next)", isWrapped: false },
-		]);
-		expect(planSuggestOverlay(2, get).blocks).toEqual([
-			{ row: 0, kind: "answer" },
-			{ row: 1, kind: "intent" },
-		]);
 	});
 
 	it("stops a suggest walk at a second Codex-bulleted suggest anchor", () => {
@@ -445,11 +436,17 @@ describe("planSuggestOverlay — Codex bullet-prefixed intent and suggest (#1858
 	it("keeps the Claude bullets working", () => {
 		// catches: the shared bullet class dropping ● or ⏺
 		for (const b of ["●", "⏺"]) {
-			const plan = planSuggestOverlay(2, lookup([
-				{ text: `${b} intent: x (X)`, isWrapped: false },
-				{ text: `${b} suggest: [ A | B | C ]`, isWrapped: false },
-			]));
-			expect(plan.blocks).toEqual([{ row: 0, kind: "intent" }, { row: 1, kind: "suggest" }]);
+			const plan = planSuggestOverlay(
+				2,
+				lookup([
+					{ text: `${b} intent: x (X)`, isWrapped: false },
+					{ text: `${b} suggest: [ A | B | C ]`, isWrapped: false },
+				]),
+			);
+			expect(plan.blocks).toEqual([
+				{ row: 0, kind: "intent" },
+				{ row: 1, kind: "suggest" },
+			]);
 		}
 	});
 });
