@@ -121,3 +121,7 @@ The community catalogue declares each shipped plugin’s permissions, agent targ
 CLI binaries and minimum app version. Dashboard plugins need at least v1.0.3;
 MDKB and RTK dashboard lifetime handling needs v1.7.6. SQLite’s panel bundle keeps
 its ES2022 JavaScript target.
+
+### Remembered Tasks views
+
+Tasks restores your selected source for each repository. Each provider account keeps its own List, Board or Roadmap choice and list group, sort, preset, search and filters. These choices survive closing Tasks and restarting the app. If a provider stops accepting a saved sort, Tasks retries the last accepted sort, then the provider default.

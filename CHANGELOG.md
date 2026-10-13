@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- Remember Tasks source, view, grouping, sort and filters per repository and provider account; recover rejected saved sorts with the last accepted order (#1852-35a8).
 - Terminal Chat view for Grok terminals, read from the session's `chat_history.jsonl` and offered only when `~/.grok/active_sessions.json` names the exact session of that terminal's process; the newest-session fallback never feeds Chat (#1791-b8be).
 
 ### Changed

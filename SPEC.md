@@ -1013,3 +1013,7 @@ changes are refused before writing; cross-process conditional writes await an Eg
 owner API. These are explicit limits rather than raw-file fallback paths.
 
 Tasks field schemas accept optional `queryable`; false excludes display-only fields from list filters and grouping while roadmap dates remain available. Setup edits preserve account keys outside the form and clear blank optional form fields. Create-form filter choices require exact field IDs.
+
+## Tasks view memory
+
+Tasks remembers the selected source per repository and List, Board or Roadmap plus list grouping, sort, preset, search and filters per repository/provider/account. The existing `uiStore` saves these preferences through `load_ui_prefs` and `save_ui_prefs` in `ui-prefs.json`. Results and page cursors remain transient. A rejected saved sort retries the last accepted order, then the provider default. Other query failures keep their error and Retry control. An unsaved scope keeps the normal defaults.

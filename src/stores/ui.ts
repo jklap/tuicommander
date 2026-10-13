@@ -1,6 +1,7 @@
 import { batch } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import { invoke } from "../invoke";
+import type { TaskViewPreference } from "../types/taskPreferences";
 import { createConfigDeltaWriter } from "../utils/configDeltaWriter";
 import { isSidebarDensityMode, nextSidebarDensityMode, type SidebarDensityMode } from "../utils/sidebarDensity";
 import { appLogger } from "./appLogger";
@@ -43,6 +44,8 @@ export type DiffViewMode = "split" | "unified" | "scroll";
 
 /** UI store state */
 interface UIStoreState {
+	tasksViewPreferences: Record<string, TaskViewPreference>;
+	tasksPreferencesRevision: number;
 	// Sidebar visibility
 	sidebarVisible: boolean;
 
@@ -126,6 +129,8 @@ function createUIStore() {
 	const uiPrefsWriter = createConfigDeltaWriter<Record<string, unknown>>("save_ui_prefs");
 	const editorWrapPrefs = loadEditorWrapPrefs();
 	const [state, setState] = createStore<UIStoreState>({
+		tasksViewPreferences: {},
+		tasksPreferencesRevision: 0,
 		sidebarVisible: true,
 		focusMode: false,
 		repoFilterActiveOnly: false,
@@ -206,6 +211,7 @@ function createUIStore() {
 				file_browser_view_mode: state.fileBrowserViewMode,
 				detached_panels: state.detachedPanels,
 				github_section_collapsed: state.githubSectionCollapsed,
+				tasks_view_preferences: state.tasksViewPreferences,
 			})
 			.catch((err) => appLogger.debug("store", "Failed to save UI prefs", err));
 	}
@@ -224,6 +230,10 @@ function createUIStore() {
 	}
 
 	const actions = {
+		setTaskViewPreference(key: string, patch: TaskViewPreference): void {
+			setState("tasksViewPreferences", key, (previous) => ({ ...previous, ...patch }));
+			saveUIPrefs();
+		},
 		/** Load UI prefs from Rust backend; migrate from localStorage on first run */
 		async hydrate(): Promise<void> {
 			try {
@@ -252,9 +262,12 @@ function createUIStore() {
 						file_browser_view_mode?: string;
 						detached_panels?: Record<string, string>;
 						github_section_collapsed?: Record<string, boolean>;
+						tasks_view_preferences?: Record<string, TaskViewPreference>;
 					} & Partial<Record<(typeof exclusivePanelPrefs)[number]["backendKey"], boolean>>
 				>("load_ui_prefs");
 				uiPrefsWriter.loaded(loaded ?? {});
+				setState("tasksViewPreferences", reconcile(loaded?.tasks_view_preferences ?? {}));
+				setState("tasksPreferencesRevision", (revision) => revision + 1);
 				if (loaded) {
 					if (loaded.sidebar_visible !== undefined) {
 						setState("sidebarVisible", loaded.sidebar_visible);
