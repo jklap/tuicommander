@@ -276,3 +276,18 @@ fn fence_terminators_in_bot_text_stay_inert() {
     );
     assert_eq!(f.suggestion, None);
 }
+
+/// Catches: `strip_inline` treating the generic argument of a code span as an HTML tag, so a
+/// title naming `Option<String>` reaches the list and the agent prompt as `Option`.
+#[test]
+fn title_keeps_generic_arguments_inside_code_spans() {
+    let finding = parse(
+        Some(ReviewTool::Copilot),
+        "`Option<String>` unwrap panics when the input is empty.",
+    )
+    .unwrap();
+    assert_eq!(
+        finding.title.as_deref(),
+        Some("`Option<String>` unwrap panics when the input is empty.")
+    );
+}
