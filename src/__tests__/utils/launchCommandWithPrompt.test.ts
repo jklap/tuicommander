@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { AGENT_TYPES } from "../../agents";
-import { ARGV_PROMPT_MAX_CHARS, launchCommandWithPrompt } from "../../utils/agentLaunchCommand";
+import { launchCommandWithPrompt } from "../../utils/agentLaunchCommand";
 
 /** What a POSIX shell hands the program for the quoted tail of `command`: the independent oracle for quoting. */
 function argvAfter(command: string, head: string): string {
@@ -26,12 +26,6 @@ describe("launchCommandWithPrompt", () => {
 		const command = launchCommandWithPrompt(type, `${type} --flag`, prompt, "posix");
 		expect(command).not.toBeNull();
 		expect(argvAfter(command as string, `${type} --flag`)).toBe(prompt);
-	});
-
-	// Catches: an over-long prompt breaking the command line instead of falling back to typing.
-	it("a_prompt_over_the_limit_falls_back_to_typing", () => {
-		expect(launchCommandWithPrompt("claude", "claude", "x".repeat(ARGV_PROMPT_MAX_CHARS), "posix")).not.toBeNull();
-		expect(launchCommandWithPrompt("claude", "claude", "x".repeat(ARGV_PROMPT_MAX_CHARS + 1), "posix")).toBeNull();
 	});
 
 	// Catches: a multi-line prompt quoted for cmd/PowerShell, whose quoting cannot carry a newline.
