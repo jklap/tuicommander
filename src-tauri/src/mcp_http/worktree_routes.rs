@@ -2089,13 +2089,15 @@ mod survivor_tests {
         let gate = temp.path().join("release");
         let started = temp.path().join("started");
         let finished = temp.path().join("finished");
-        let mut defaults = crate::config::RepoDefaultsConfig::default();
-        defaults.setup_script = format!(
-            "echo s > '{}'; while [ ! -f '{}' ]; do sleep 0.02; done; echo f > '{}'",
-            started.display(),
-            gate.display(),
-            finished.display()
-        );
+        let defaults = crate::config::RepoDefaultsConfig {
+            setup_script: format!(
+                "echo s > '{}'; while [ ! -f '{}' ]; do sleep 0.02; done; echo f > '{}'",
+                started.display(),
+                gate.display(),
+                finished.display()
+            ),
+            ..crate::config::RepoDefaultsConfig::default()
+        };
         crate::config::save_repo_defaults(crate::config::RepoDefaultsConfig::default(), defaults)
             .unwrap();
         let destination = temp.path().join("workspace");

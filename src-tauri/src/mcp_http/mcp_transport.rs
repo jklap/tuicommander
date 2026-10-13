@@ -11590,8 +11590,10 @@ mod tests {
         let repo = crate::state::tests_support::create_temp_git_repo();
         let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
         let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
-        let mut defaults = crate::config::RepoDefaultsConfig::default();
-        defaults.setup_script = "true".into();
+        let defaults = crate::config::RepoDefaultsConfig {
+            setup_script: "true".into(),
+            ..crate::config::RepoDefaultsConfig::default()
+        };
         crate::config::save_repo_defaults(crate::config::RepoDefaultsConfig::default(), defaults)
             .unwrap();
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
@@ -11747,8 +11749,10 @@ mod tests {
         let repo = crate::state::tests_support::create_temp_git_repo();
         let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
         let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
-        let mut defaults = crate::config::RepoDefaultsConfig::default();
-        defaults.setup_script = "exit 3".into();
+        let defaults = crate::config::RepoDefaultsConfig {
+            setup_script: "exit 3".into(),
+            ..crate::config::RepoDefaultsConfig::default()
+        };
         crate::config::save_repo_defaults(crate::config::RepoDefaultsConfig::default(), defaults)
             .unwrap();
         let state = Arc::new(crate::state::tests_support::make_test_app_state());

@@ -327,9 +327,14 @@ mod tests {
     /// against the receiving side in one place. Every entry that existed in
     /// the shell-hook era must emit exactly what its one-liner printed; the
     /// two Claude additions (`SessionStart`, `Notification`) are marked.
+    /// One `(agent, event, matcher, wire)` row of the expected event table.
+    type WireRowLiteral<'a> = (&'a str, &'a str, &'a str, &'a [(&'a str, &'a str)]);
+    /// The owned-wire form of [`WireRowLiteral`], comparable against `ALL_SPECS`.
+    type WireRow<'a> = (&'a str, &'a str, &'a str, Vec<(&'a str, &'a str)>);
+
     #[test]
     fn wire_contract_is_the_event_table() {
-        let expected: &[(&str, &str, &str, &[(&str, &str)])] = &[
+        let expected: &[WireRowLiteral] = &[
             ("claude", "SessionStart", "", &[("state", "busy")]), // added with tuic-hook
             ("claude", "UserPromptSubmit", "", &[("state", "prompt")]),
             ("claude", "PreToolUse", "", &[("state", "busy")]),
@@ -379,7 +384,7 @@ mod tests {
             ("codex", "UserPromptSubmit", "", &[("state", "prompt")]),
             ("codex", "Stop", "", &[("state", "idle")]),
         ];
-        let actual: Vec<(&str, &str, &str, Vec<(&str, &str)>)> = ALL_SPECS
+        let actual: Vec<WireRow> = ALL_SPECS
             .iter()
             .flat_map(|(agent, specs)| {
                 specs
@@ -387,7 +392,7 @@ mod tests {
                     .map(move |s| (*agent, s.event, s.matcher, s.wire.to_vec()))
             })
             .collect();
-        let expected: Vec<(&str, &str, &str, Vec<(&str, &str)>)> = expected
+        let expected: Vec<WireRow> = expected
             .iter()
             .map(|(a, e, m, w)| (*a, *e, *m, w.to_vec()))
             .collect();
