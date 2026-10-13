@@ -163,6 +163,14 @@ class InjectionMatrixTests(unittest.TestCase):
             write_cwd_files(directory, {".github/rules.md": None, "missing.md": None}, {})
             self.assertFalse((Path(directory) / ".github/rules.md").exists())
 
+    # Catches: an agent whose history echo drops the trailing "?" (Gemini: "> What is 10+7") never matches
+    # the prompt, so every check stays "not observed" although the reply carries the canary.
+    def test_judge_finds_an_echo_without_the_trailing_question_mark(self):
+        lines = ["> What is 10+7", "", "✦ ZEBRA-7: 17"]
+        self.assertEqual(judge_reply(lines, "What is 10+7?", "17", "ZEBRA-7:")["followed"], True)
+        self.assertEqual(judge_reply(["> What is 10+7", "✦ 17"], "What is 10+7?", "17", "ZEBRA-7:")["followed"], False)
+        self.assertIsNone(judge_reply(["> What is 10+7"], "What is 10+7?", "17", "ZEBRA-7:"))
+
     # Catches: a check whose answer occurs in its own prompt passes on the
     # echoed prompt; a check without a canary has nothing to judge.
     def test_check_step_rejects_unjudgeable_checks(self):

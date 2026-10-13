@@ -58,11 +58,16 @@ def write_cwd_files(directory, files, values):
             path.write_text(expand([text], values)[0] + "\n")
 
 
+def _echoed(prompt):
+    """Gemini's history echoes "What is 10+7?" as "What is 10+7": match without the trailing question mark."""
+    return prompt.rstrip("?")
+
+
 def judge_reply(lines, prompt, answer, canary, ignore_prefixes=()):
     """Judge the reply below the latest echo of prompt; None until it shows the answer.
 
     Lines starting with one of ignore_prefixes (an agent's reasoning panel) are not reply."""
-    echo = max((i for i, line in enumerate(lines) if prompt in line), default=None)
+    echo = max((i for i, line in enumerate(lines) if _echoed(prompt) in line), default=None)
     if echo is None:
         return None
     region = [line for line in lines[echo + 1:]
@@ -79,7 +84,7 @@ def judge_reply(lines, prompt, answer, canary, ignore_prefixes=()):
 
 
 def _turn(lines, prompt, limit=80):
-    echo = max((i for i, line in enumerate(lines) if prompt in line), default=max(0, len(lines) - 15))
+    echo = max((i for i, line in enumerate(lines) if _echoed(prompt) in line), default=max(0, len(lines) - 15))
     return [line for line in lines[echo:] if line.strip()][:limit]
 
 
