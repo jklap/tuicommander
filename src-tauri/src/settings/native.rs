@@ -4,6 +4,11 @@ use crate::config::*;
 
 /// Build descriptors even on hosts without the optional native audio backend.
 pub fn native_catalogue() -> Result<Catalogue, CatalogueError> {
+    native_catalogue_for(cfg!(feature = "dictation"))
+}
+
+/// The committed TypeScript is one file for every build, so it is generated with `dictation` on.
+pub(super) fn native_catalogue_for(dictation: bool) -> Result<Catalogue, CatalogueError> {
     let mut catalogue = Catalogue::default();
     let available = Availability::Available;
     catalogue.register(
@@ -85,7 +90,7 @@ pub fn native_catalogue() -> Result<Catalogue, CatalogueError> {
         available.clone(),
     )?;
     catalogue.register::<crate::telegram::Config>("telegram", "machine", None, available)?;
-    let voice = if cfg!(feature = "dictation") {
+    let voice = if dictation {
         Availability::Available
     } else {
         Availability::Unavailable {
