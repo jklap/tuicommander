@@ -82,6 +82,9 @@ pub struct WorkItemFieldSchema {
     pub kind: WorkItemFieldKind,
     pub required: bool,
     pub editable: bool,
+    /// False hides display-only fields from list filter, sort and group controls.
+    #[serde(default)]
+    pub queryable: Option<bool>,
     /// Enum options, user choices or labels; IDs are provider IDs, never display names.
     pub options: Vec<WorkItemOption>,
 }

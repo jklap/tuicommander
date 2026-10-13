@@ -13,6 +13,8 @@ interface QueryState {
 	items: WorkItem[];
 	groups: WorkItemGroup[];
 	nextCursor: string | null;
+	/** Count of every match across all pages, when the provider reports it. */
+	total: number | null;
 	loading: boolean;
 	stale: boolean;
 	error: string | null;
@@ -21,6 +23,7 @@ const empty = (): QueryState => ({
 	items: [],
 	groups: [],
 	nextCursor: null,
+	total: null,
 	loading: false,
 	stale: false,
 	error: null,
@@ -87,6 +90,7 @@ export function createTasksQuery(options: { maxCachedPages?: number } = {}) {
 				items: [...rows.values()],
 				groups: [...groups.values()],
 				nextCursor: page.nextCursor && !consumedCursors.has(page.nextCursor) ? page.nextCursor : null,
+				total: page.total ?? null,
 				loading: false,
 				stale: false,
 				error: null,

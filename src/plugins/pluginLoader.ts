@@ -327,6 +327,11 @@ async function handlePluginChanged(event: { payload: string[] }): Promise<void> 
 	}
 }
 
+/** Reload one plugin after a change the file watcher does not see (for example its data/config.json). */
+export function reloadPlugin(pluginId: string): Promise<void> {
+	return handlePluginChanged({ payload: [pluginId] });
+}
+
 /** Replay agent-started events for terminals that already have a running agent. */
 function replayActiveAgents(store: typeof terminalsStore): void {
 	for (const id of store.getIds()) {

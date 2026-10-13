@@ -19,6 +19,7 @@ impl InMemoryWorkItemProvider {
                 kind: WorkItemFieldKind::Enum,
                 required: true,
                 editable: true,
+                queryable: None,
                 options: types
                     .into_iter()
                     .map(|id| WorkItemOption {
@@ -103,6 +104,7 @@ impl InMemoryWorkItemProvider {
         Ok(WorkItemGroupedPage {
             groups: groups.into_values().collect(),
             next_cursor: page.next_cursor,
+            total: page.total,
         })
     }
 

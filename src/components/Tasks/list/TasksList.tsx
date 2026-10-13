@@ -5,11 +5,13 @@ import { workItemLinksStore } from "../../../stores/workItemLinks";
 import type {
 	WorkItemFieldSchema,
 	WorkItemFieldValue,
+	WorkItemOption,
 	WorkItemQuery,
 	WorkItemRef,
 } from "../../../types/work-items.gen";
 import { Input } from "../../ui/Input";
 import { Select } from "../../ui/Select";
+import { filterOptions, loadFilterChoices } from "./filterChoices";
 import { TaskRows } from "./TaskRows";
 import s from "./tasksList.module.css";
 
@@ -30,7 +32,11 @@ const initialQuery = (): WorkItemQuery => ({
 });
 const sourceKey = (provider: WorkItemProvider) => JSON.stringify([provider.providerId, provider.accountId]);
 
-function filterValue(field: WorkItemFieldSchema, value: string): WorkItemFieldValue | undefined {
+function filterValue(
+	field: WorkItemFieldSchema,
+	value: string,
+	options: readonly WorkItemOption[],
+): WorkItemFieldValue | undefined {
 	switch (field.kind) {
 		case "text":
 		case "markdown":
@@ -43,14 +49,12 @@ function filterValue(field: WorkItemFieldSchema, value: string): WorkItemFieldVa
 		case "labels":
 			return {
 				kind: "labels",
-				value: [{ id: value, name: field.options.find((option) => option.id === value)?.name ?? value }],
+				value: [{ id: value, name: options.find((option) => option.id === value)?.name ?? value }],
 			};
 		case "user":
 			return {
 				kind: "user",
-				value: [
-					{ id: value, name: field.options.find((option) => option.id === value)?.name ?? value, avatarUrl: null },
-				],
+				value: [{ id: value, name: options.find((option) => option.id === value)?.name ?? value, avatarUrl: null }],
 			};
 	}
 }
@@ -85,6 +89,22 @@ export function TasksList(props: TasksListProps) {
 					.filter((group) => group.items.length)
 			: model.state().groups,
 	);
+	// The provider total counts every match; the linked filter narrows only the loaded rows, so it no longer applies.
+	const itemsLabel = () => {
+		const total = model.state().total;
+		const shown = shownItems().length;
+		return !linkedOnly() && total !== null && total > shown
+			? `${shown} of ${total.toLocaleString()} items`
+			: `${shown} items`;
+	};
+	const [choices, setChoices] = createSignal<readonly WorkItemFieldSchema[]>([]);
+	createEffect(() => {
+		const current = provider();
+		if (!filtersOpen() || !current) return;
+		void loadFilterChoices(current).then((fields) => {
+			if (provider() === current) setChoices(fields);
+		});
+	});
 	let debounce: ReturnType<typeof setTimeout> | undefined;
 	let previousSource: WorkItemProvider | undefined;
 	createEffect(() => {
@@ -122,7 +142,7 @@ export function TasksList(props: TasksListProps) {
 		setQuery(next);
 	}
 	function applyFilter(field: WorkItemFieldSchema, raw: string) {
-		const value = raw ? filterValue(field, raw) : undefined;
+		const value = raw ? filterValue(field, raw, filterOptions(field, choices())) : undefined;
 		setQuery((previous) => ({
 			...previous,
 			savedFilterId: null,
@@ -192,12 +212,12 @@ export function TasksList(props: TasksListProps) {
 			<Show when={filtersOpen() ? provider() : undefined}>
 				{(current) => (
 					<div class={s.filters}>
-						<For each={current().fields}>
+						<For each={current().fields.filter((field) => field.queryable !== false)}>
 							{(field) => (
 								<label>
 									{field.name}
 									<Show
-										when={field.options.length > 0}
+										when={filterOptions(field, choices()).length > 0}
 										fallback={
 											<Input
 												aria-label={`Filter ${field.name}`}
@@ -213,7 +233,9 @@ export function TasksList(props: TasksListProps) {
 											onChange={(event) => applyFilter(field, event.currentTarget.value)}
 										>
 											<option value="">Any</option>
-											<For each={field.options}>{(option) => <option value={option.id}>{option.name}</option>}</For>
+											<For each={filterOptions(field, choices())}>
+												{(option) => <option value={option.id}>{option.name}</option>}
+											</For>
 										</Select>
 									</Show>
 								</label>
@@ -264,7 +286,9 @@ export function TasksList(props: TasksListProps) {
 								}}
 							>
 								<option value="">No grouping</option>
-								<For each={current().fields}>{(field) => <option value={field.id}>{field.name}</option>}</For>
+								<For each={current().fields.filter((field) => field.queryable !== false)}>
+									{(field) => <option value={field.id}>{field.name}</option>}
+								</For>
 							</Select>
 						</label>
 						<label class={s.check}>
@@ -279,12 +303,15 @@ export function TasksList(props: TasksListProps) {
 				)}
 			</Show>
 			<div class={s.status} role="status" aria-live="polite">
-				{model.state().loading ? "Loading tasks…" : `${shownItems().length} items`}
+				{model.state().loading ? "Loading tasks…" : itemsLabel()}
 				<Show when={model.state().stale}>
 					<span class={s.stale}>Stale results</span>
 				</Show>
 				<Show when={model.state().error}>
 					<span class={s.error}>{model.state().error}</span>
+					<button type="button" onClick={() => void model.refresh()}>
+						Retry
+					</button>
 				</Show>
 			</div>
 			<Show when={!provider()}>

@@ -1,7 +1,7 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { WorkItem } from "../../../types/work-items.gen";
+import type { WorkItem, WorkItemQuery } from "../../../types/work-items.gen";
 import { allDemoRows, listDemo } from "./demo";
 import { TaskRows } from "./TaskRows";
 import { TasksList } from "./TasksList";
@@ -90,6 +90,195 @@ describe("Tasks list", () => {
 		fireEvent.click(counted);
 		expect(screen.queryByLabelText("Filter Priority")).not.toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Filters (2)" })).toBeInTheDocument();
+	});
+
+	describe("filter pickers fed by provider values", () => {
+		const schema = (
+			id: string,
+			name: string,
+			kind: "labels" | "user",
+			options: { id: string; name: string }[] = [],
+		) => ({
+			id,
+			name,
+			kind,
+			required: false,
+			editable: false,
+			options,
+		});
+		const bugs = { id: "bug", name: "bug" };
+		const ada = { id: "7", name: "Ada Lovelace" };
+		function withChoices(createFields: () => Promise<ReturnType<typeof schema>[]>) {
+			const base = listDemo(2);
+			const queries: WorkItemQuery[] = [];
+			const provider = {
+				...base,
+				fields: [
+					...base.fields.filter((field) => !["labels", "assignees"].includes(field.id)),
+					schema("labels", "Labels", "labels"),
+					schema("assignee", "Assignee", "user"),
+				],
+				createFields: async (type?: string) =>
+					type === undefined
+						? [
+								{
+									...schema("itemType", "Type", "labels"),
+									kind: "enum" as const,
+									options: [{ id: "issue", name: "Issue" }],
+								},
+							]
+						: createFields(),
+				list: async (query: WorkItemQuery, signal?: AbortSignal) => {
+					queries.push(query);
+					return base.list({ ...query, filters: [] }, signal);
+				},
+			};
+			return { provider, queries };
+		}
+
+		// Catches: labels stay free text, or numeric create-form assignee IDs replace the username filter.
+		it("offers label choices and keeps the assignee username filter as text", async () => {
+			const { provider, queries } = withChoices(async () => [
+				schema("labels", "Labels", "labels", [bugs]),
+				schema("assignees", "Assignees", "user", [ada]),
+			]);
+			render(() => <TasksList providers={[provider]} onOpen={() => {}} />);
+			await screen.findByRole("button", { name: /Task 00002/ });
+			fireEvent.click(screen.getByRole("button", { name: "Filters" }));
+			const label = await screen.findByRole("combobox", { name: "Filter Labels" });
+			expect(within(label).getByRole("option", { name: "bug" })).toBeInTheDocument();
+			fireEvent.change(label, { target: { value: "bug" } });
+			await waitFor(() =>
+				expect(queries.at(-1)?.filters).toEqual([{ fieldId: "labels", values: [{ kind: "labels", value: [bugs] }] }]),
+			);
+			const assignee = screen.getByRole("textbox", { name: "Filter Assignee" });
+			fireEvent.change(assignee, { target: { value: "ada" } });
+			await waitFor(() =>
+				expect(queries.at(-1)?.filters.at(-1)).toEqual({
+					fieldId: "assignee",
+					values: [{ kind: "user", value: [{ id: "ada", name: "ada", avatarUrl: null }] }],
+				}),
+			);
+		});
+
+		// Catches: a failing value lookup removes the filter or leaves the panel without any control.
+		it("keeps a text box when the provider cannot list its values", async () => {
+			const { provider } = withChoices(async () => {
+				throw new Error("offline");
+			});
+			render(() => <TasksList providers={[provider]} onOpen={() => {}} />);
+			await screen.findByRole("button", { name: /Task 00002/ });
+			fireEvent.click(screen.getByRole("button", { name: "Filters" }));
+			expect(await screen.findByRole("textbox", { name: "Filter Labels" })).toBeInTheDocument();
+		});
+
+		// Catches: values re-fetched every time the panel opens, or fetched before it is ever opened.
+		it("loads the values once, only when the filters panel opens", async () => {
+			const createFields = vi.fn(async () => [schema("labels", "Labels", "labels", [bugs])]);
+			const { provider } = withChoices(createFields);
+			render(() => <TasksList providers={[provider]} onOpen={() => {}} />);
+			await screen.findByRole("button", { name: /Task 00002/ });
+			expect(createFields).not.toHaveBeenCalled();
+			fireEvent.click(screen.getByRole("button", { name: "Filters" }));
+			await screen.findByRole("combobox", { name: "Filter Labels" });
+			fireEvent.click(screen.getByRole("button", { name: "Filters" }));
+			fireEvent.click(screen.getByRole("button", { name: "Filters" }));
+			await screen.findByRole("combobox", { name: "Filter Labels" });
+			expect(createFields).toHaveBeenCalledTimes(1);
+		});
+	});
+
+	// Catches: roadmap-only dates becoming unsupported filter or group controls.
+	it("hides display-only dates from list controls while keeping ordinary filters", async () => {
+		const base = listDemo(2);
+		const provider = {
+			...base,
+			fields: [
+				...base.fields,
+				{
+					id: "start",
+					name: "Milestone start",
+					kind: "date" as const,
+					required: false,
+					editable: false,
+					options: [],
+					queryable: false,
+				},
+			],
+		};
+		render(() => <TasksList providers={[provider]} onOpen={() => {}} />);
+		await screen.findByRole("button", { name: /Task 00002/ });
+		fireEvent.click(screen.getByRole("button", { name: "Filters" }));
+		expect(screen.queryByLabelText("Filter Milestone start")).not.toBeInTheDocument();
+		expect(
+			within(screen.getByLabelText("Group tasks")).queryByRole("option", { name: "Milestone start" }),
+		).not.toBeInTheDocument();
+		expect(
+			within(screen.getByLabelText("Sort tasks")).queryByRole("option", { name: "Milestone start" }),
+		).not.toBeInTheDocument();
+		expect(screen.getByLabelText("Filter Priority")).toBeInTheDocument();
+	});
+
+	describe("status line and error actions", () => {
+		const withPages = (total: number | null | undefined, count = 4) => {
+			const base = listDemo(count);
+			return {
+				...base,
+				list: async (query: Parameters<typeof base.list>[0], signal?: AbortSignal) => {
+					const page = await base.list(query, signal);
+					return total === undefined ? page : { ...page, total };
+				},
+			};
+		};
+
+		// Catches: the status prints the loaded count as if it were the whole result.
+		it("reads N of total when the provider knows the total", async () => {
+			render(() => <TasksList providers={[withPages(120)]} onOpen={() => {}} />);
+			await screen.findByRole("button", { name: /Task 00004/ });
+			expect(screen.getByRole("status")).toHaveTextContent("4 of 120 items");
+		});
+
+		// Catches: "N of total" invented when the provider reports no total, or a total below the loaded rows.
+		it("shows the loaded count alone when the total is unknown or inconsistent", async () => {
+			const unknown = render(() => <TasksList providers={[withPages(undefined)]} onOpen={() => {}} />);
+			await screen.findByRole("button", { name: /Task 00004/ });
+			expect(screen.getByRole("status")).toHaveTextContent(/^4 items/);
+			unknown.unmount();
+			render(() => <TasksList providers={[withPages(2)]} onOpen={() => {}} />);
+			await screen.findByRole("button", { name: /Task 00004/ });
+			expect(screen.getByRole("status")).toHaveTextContent(/^4 items/);
+		});
+
+		// Catches: the "Linked to a worktree" filter keeps the provider total, so the status claims 1 of 120 matches.
+		it("drops the total while a client-side filter narrows the loaded rows", async () => {
+			render(() => <TasksList providers={[withPages(120)]} onOpen={() => {}} />);
+			await screen.findByRole("button", { name: /Task 00004/ });
+			fireEvent.click(screen.getByRole("button", { name: "Filters" }));
+			fireEvent.click(screen.getByLabelText("Linked to a worktree"));
+			await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent(/^0 items/));
+			expect(screen.getByRole("status")).not.toHaveTextContent("of 120");
+		});
+
+		// Catches: a failed list leaves the error as a dead end with no way to retry from the list.
+		it("offers Retry on a list error and reloads the rows", async () => {
+			const base = listDemo(3);
+			let fail = true;
+			const flaky = {
+				...base,
+				list: async (query: Parameters<typeof base.list>[0], signal?: AbortSignal) => {
+					if (fail) throw new Error("GitHub request failed");
+					return base.list(query, signal);
+				},
+			};
+			render(() => <TasksList providers={[flaky]} onOpen={() => {}} />);
+			const retry = await screen.findByRole("button", { name: "Retry" });
+			expect(screen.getByRole("status")).toHaveTextContent("GitHub request failed");
+			fail = false;
+			fireEvent.click(retry);
+			await screen.findByRole("button", { name: /Task 00003/ });
+			expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+			expect(screen.getByRole("status")).not.toHaveTextContent("GitHub request failed");
+		});
 	});
 
 	describe("row metadata and selection", () => {

@@ -1,3 +1,7 @@
+## Work-item page total (1845-66f6) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, `WorkItemPage.total` / `WorkItemGroupedPage.total` are accepted by the Rust DTOs (optional, defaulted). Targeted `plugin_docs` and `work_items` tests pass; the Tasks list shows "N of total" once a loaded GitLab plugin build that sends `x-total` is installed (plugin branch parked, see story worklog).
+
 ## GitHub settings owner adapter (1774-ce8f) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, the GitHub owner adapter is loaded. Shared settings transport wiring is a separate step; this change adds no callable endpoint by itself.
@@ -5284,3 +5288,6 @@ Visual evidence: worktree Vite fixture mounted the real NotificationsTab and Toa
 ## Recycled checkouts in `__archived` (1866-142a) — Rust restart required
 
 - [ ] After restart, the orchestrator sidebar no longer lists `feat/agent-vm` and `feat/multi-coordinator` (neither as worktree nor as Merged branch row). Then `repo action=worktree_remove path=<orchestrator> branch=feat/agent-vm` removes the archived checkout and the branch (check `git worktree list` and `git branch` before and after). Run on the real repo only after Boss ok. _(REALITY criterion of 1866-142a.)_
+- [ ] Tasks setup (1841-bbac) — desktop only: with no work-item plugin installed, open Tasks (Open Tasks is offered) and install GitHub Work from the prompt; save a repository in the form and confirm the plugin registers its provider without a restart (`reloadPlugin` after writing `data/config.json`). Then open **Provider settings**, change the repository, save, and confirm the list reloads. _(The browser harness stubs `invoke` and the plugin loader; the real reload is not verified.)_
+
+- [ ] After a manual `make dev` restart or release rebuild, verify GitLab planning dates still render in Roadmap and have no list filter/group control (`queryable` schema support requires the rebuilt Rust backend).

@@ -1011,3 +1011,5 @@ keep their launch state. Transport publication remains a later integration step.
 Unsupported auth overrides and exec_paths stay in the owner-gap ledger. Multi-key
 changes are refused before writing; cross-process conditional writes await an Ego
 owner API. These are explicit limits rather than raw-file fallback paths.
+
+Tasks field schemas accept optional `queryable`; false excludes display-only fields from list filters and grouping while roadmap dates remain available. Setup edits preserve account keys outside the form and clear blank optional form fields. Create-form filter choices require exact field IDs.

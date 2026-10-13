@@ -137,7 +137,7 @@ export function createInMemoryWorkItemProvider(seed: WorkItemProviderSnapshot = 
 					return (sort.descending ? -order : order) || a.reference.id.localeCompare(b.reference.id);
 				});
 			const result = page(values, query.cursor, query.limit, JSON.stringify({ ...query, cursor: null }));
-			return { items: result.values, nextCursor: result.nextCursor };
+			return { items: result.values, nextCursor: result.nextCursor, total: values.length };
 		},
 		async detail(reference, signal) {
 			guard(signal);
@@ -181,6 +181,7 @@ export function createInMemoryWorkItemProvider(seed: WorkItemProviderSnapshot = 
 			return {
 				groups: [...groups.values()].toSorted((a, b) => a.id.localeCompare(b.id)),
 				nextCursor: result.nextCursor,
+				total: result.total,
 			};
 		},
 		async board(id, query, signal): Promise<WorkItemBoardPage> {

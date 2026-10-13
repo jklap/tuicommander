@@ -43,6 +43,7 @@ export interface WorkItemFieldSchema {
 	kind: WorkItemFieldKind;
 	required: boolean;
 	editable: boolean;
+	queryable?: boolean | null;
 	options: Array<WorkItemOption>;
 }
 
@@ -116,6 +117,7 @@ export interface WorkItemSavedFilter {
 export interface WorkItemPage {
 	items: Array<WorkItem>;
 	nextCursor: string | null;
+	total?: number | null;
 }
 
 export interface WorkItemCommentPage {
@@ -223,6 +225,7 @@ export interface WorkItemGroup {
 export interface WorkItemGroupedPage {
 	groups: Array<WorkItemGroup>;
 	nextCursor: string | null;
+	total?: number | null;
 }
 
 export interface WorkItemBoardMove {

@@ -1824,6 +1824,9 @@ and clip to the visible period. A single endpoint gives a one-day milestone.
 Missing, invalid or reversed dates stay clickable in the **Without usable dates**
 side list; out-of-period tasks stay listed in the timeline.
 
+The shell hides the Roadmap view while the selected provider declares no
+`kind: "date"` field.
+
 Both lists use virtual rows. **Load more** follows provider cursors. Failed
 refreshes retain stale results; obsolete provider responses cannot replace the
 active view. This component adds no manifest, IPC or HTTP API. Tasks shell mounting
@@ -1865,6 +1868,8 @@ worktree. `repoPath` is the main repository path, `branch` the worktree branch n
 - `labels`: multiple labels with stable IDs; `date`: ISO-8601 date input.
 - `number`: finite numeric input; `link`: URL/link control.
 
+A field schema can set `queryable: false` to hide a display-only field from list filters and grouping. The roadmap still reads date fields. Omitted or null means queryable.
+
 The canonical DTOs are `work_items::model` and `work_items::protocol` in Rust.
 Generate their TypeScript declarations with
 `python3 scripts/generate-work-item-types.py`; import from
@@ -1875,7 +1880,7 @@ Generate their TypeScript declarations with
 `WorkItemQuery` carries ANDed filters (values are ORed), saved filter ID, native
 search, sort, bounded page size and opaque cursor. Providers must bind cursors to
 the account/query; selecting a preset starts with no cursor. `WorkItemPage`
-contains items and `nextCursor`. Details load body, field schemas, allowed action
+contains items, `nextCursor` and an optional `total` (all matches, when the provider knows it). Details load body, field schemas, allowed action
 descriptors and a separately paginated comment page on open. Comment entries are
 `normal`, `review_thread` (resolved, path, line and reviewed commitId), or
 `review_summary` (state and reviewed commitId). Bodies are markdown, not trusted HTML.
@@ -1970,3 +1975,13 @@ A type change reloads the schema; values survive only for the same field id and
 kind, and a late schema of an earlier type is dropped. Create stays disabled until
 Title, Type and every required field of the current type are set. Submit sends one
 `create` action with every current field (unset is null). A rejection keeps the draft.
+
+## Tasks setup
+
+With no work-item provider registered, the Tasks tab shows install prompts for
+`github-work`, `gitlab` and `jira`. Once a plugin is installed, a form edits its
+account (`id`, `repository`, `host`, `project`/`projectId`, `boards`) and merges it
+into the plugin's `data/config.json`, then reloads the plugin. Other accounts and keys
+stay; a file that is not valid JSON is never overwritten. **Provider settings** in the
+Tasks header opens the same form. The Plugins settings tab lists install hints for
+the work-item plugins that are missing. Open Tasks is always offered.
