@@ -1,6 +1,7 @@
 import { createEffect, createMemo, createSignal, For, onCleanup, Show, untrack } from "solid-js";
 import type { WorkItemProvider } from "../../../plugins/workItemProvider";
 import { createTasksQuery } from "../../../stores/tasksQuery";
+import { workItemLinksStore } from "../../../stores/workItemLinks";
 import type {
 	WorkItemFieldSchema,
 	WorkItemFieldValue,
@@ -15,6 +16,7 @@ import s from "./tasksList.module.css";
 export interface TasksListProps {
 	providers: readonly WorkItemProvider[];
 	onOpen: (reference: WorkItemRef) => void;
+	selected?: WorkItemRef | null;
 	visible?: boolean;
 }
 const initialQuery = (): WorkItemQuery => ({
@@ -66,6 +68,23 @@ export function TasksList(props: TasksListProps) {
 	};
 	const [query, setQuery] = createSignal(initialQuery());
 	const [search, setSearch] = createSignal("");
+	const [filtersOpen, setFiltersOpen] = createSignal(false);
+	const [linkedOnly, setLinkedOnly] = createSignal(false);
+	const activeFilters = () =>
+		query().filters.length + (query().sort ? 1 : 0) + (query().groupBy ? 1 : 0) + (linkedOnly() ? 1 : 0);
+	const linkedBranch = (reference: WorkItemRef) => workItemLinksStore.findByItem(reference)?.branch;
+	// Links live in the host, not in the provider, so this filter applies to the loaded rows.
+	const shownItems = createMemo(() =>
+		linkedOnly() ? model.state().items.filter((item) => linkedBranch(item.reference)) : model.state().items,
+	);
+	const shownGroups = createMemo(() =>
+		linkedOnly()
+			? model
+					.state()
+					.groups.map((group) => ({ ...group, items: group.items.filter((item) => linkedBranch(item.reference)) }))
+					.filter((group) => group.items.length)
+			: model.state().groups,
+	);
 	let debounce: ReturnType<typeof setTimeout> | undefined;
 	let previousSource: WorkItemProvider | undefined;
 	createEffect(() => {
@@ -159,6 +178,9 @@ export function TasksList(props: TasksListProps) {
 						onInput={(event) => updateSearch(event.currentTarget.value)}
 					/>
 				</label>
+				<button type="button" aria-expanded={filtersOpen()} onClick={() => setFiltersOpen((open) => !open)}>
+					{activeFilters() ? `Filters (${activeFilters()})` : "Filters"}
+				</button>
 				<button
 					type="button"
 					disabled={!provider() || model.state().loading || props.visible === false}
@@ -167,7 +189,7 @@ export function TasksList(props: TasksListProps) {
 					Refresh
 				</button>
 			</div>
-			<Show when={provider()}>
+			<Show when={filtersOpen() ? provider() : undefined}>
 				{(current) => (
 					<div class={s.filters}>
 						<For each={current().fields}>
@@ -245,11 +267,19 @@ export function TasksList(props: TasksListProps) {
 								<For each={current().fields}>{(field) => <option value={field.id}>{field.name}</option>}</For>
 							</Select>
 						</label>
+						<label class={s.check}>
+							<input
+								type="checkbox"
+								checked={linkedOnly()}
+								onChange={(event) => setLinkedOnly(event.currentTarget.checked)}
+							/>
+							Linked to a worktree
+						</label>
 					</div>
 				)}
 			</Show>
 			<div class={s.status} role="status" aria-live="polite">
-				{model.state().loading ? "Loading tasks…" : `${model.state().items.length} items`}
+				{model.state().loading ? "Loading tasks…" : `${shownItems().length} items`}
 				<Show when={model.state().stale}>
 					<span class={s.stale}>Stale results</span>
 				</Show>
@@ -260,14 +290,16 @@ export function TasksList(props: TasksListProps) {
 			<Show when={!provider()}>
 				<p class={s.empty}>Install a work-item provider to show tasks.</p>
 			</Show>
-			<Show when={provider() && !model.state().loading && !model.state().items.length && !model.state().error}>
+			<Show when={provider() && !model.state().loading && !shownItems().length && !model.state().error}>
 				<p class={s.empty}>No tasks match this query.</p>
 			</Show>
 			<TaskRows
-				items={model.state().items}
-				groups={model.state().groups}
+				items={shownItems()}
+				groups={shownGroups()}
 				loading={model.state().loading}
-				resetKey={query()}
+				resetKey={[query(), linkedOnly()]}
+				linkedBranch={linkedBranch}
+				selected={props.selected}
 				onOpen={props.onOpen}
 			/>
 			<Show when={model.state().nextCursor}>

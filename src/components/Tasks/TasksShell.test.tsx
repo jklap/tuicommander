@@ -61,4 +61,53 @@ describe("Tasks shell", () => {
 			registration.dispose();
 		}
 	});
+
+	// Catches: below 700 px the detail has no way back to the list (the list is hidden by CSS).
+	it("back_control_returns_from_the_detail_to_the_list", async () => {
+		const registration = workItemProviderRegistry.register(listDemo(3));
+		try {
+			render(() => <TasksShell />);
+			const body = await screen.findByLabelText("Tasks shell").then((shell) => shell.querySelector("[data-detail]"));
+			expect(body).toHaveAttribute("data-detail", "closed");
+			fireEvent.click(await screen.findByRole("button", { name: /Task 00002/ }));
+			await screen.findByRole("region", { name: "Task detail" });
+			expect(body).toHaveAttribute("data-detail", "open");
+			// Hidden above 700 px by a container query, which happy-dom evaluates as plain display:none.
+			fireEvent.click(screen.getByRole("button", { name: "Back to list", hidden: true }));
+			expect(screen.queryByRole("region", { name: "Task detail" })).not.toBeInTheDocument();
+			expect(body).toHaveAttribute("data-detail", "closed");
+			expect(screen.getByRole("button", { name: /Task 00002/ })).toBeInTheDocument();
+		} finally {
+			registration.dispose();
+		}
+	});
+
+	// Catches: the shell not telling the list which task is open, so no row is highlighted.
+	it("highlights the row of the open task", async () => {
+		const registration = workItemProviderRegistry.register(listDemo(3));
+		try {
+			render(() => <TasksShell />);
+			fireEvent.click(await screen.findByRole("button", { name: /Task 00002/ }));
+			await waitFor(() =>
+				expect(screen.getByRole("button", { name: /Task 00002/ })).toHaveAttribute("aria-current", "true"),
+			);
+			expect(screen.getByRole("button", { name: /Task 00001/ })).not.toHaveAttribute("aria-current");
+		} finally {
+			registration.dispose();
+		}
+	});
+	// Catches: below 700 px an open detail keeps `.main` hidden, so "New task" opens a form the user cannot see.
+	it("closes the open detail when New task is chosen, so the narrow layout shows the form", async () => {
+		const registration = workItemProviderRegistry.register(listDemo(3));
+		try {
+			render(() => <TasksShell />);
+			fireEvent.click(await screen.findByRole("button", { name: /Task 00002/ }));
+			await screen.findByRole("region", { name: "Task detail" });
+			fireEvent.click(screen.getByRole("button", { name: "New task" }));
+			expect(await screen.findByRole("form", { name: "Create task" })).toBeInTheDocument();
+			expect(screen.queryByRole("region", { name: "Task detail" })).not.toBeInTheDocument();
+		} finally {
+			registration.dispose();
+		}
+	});
 });

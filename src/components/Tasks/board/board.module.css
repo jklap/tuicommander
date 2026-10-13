@@ -22,4 +22,4 @@
 .empty { color: var(--fg-secondary); text-align: center; font-size: var(--font-sm); }
 .pending { color: var(--warning); font-size: var(--font-xs); }
 .announcement { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
-@media (max-width: 600px) { .lane { flex-basis: 85vw; min-width: 85vw; }  }
+@container (max-width: 600px) { .lane { flex-basis: 85cqw; min-width: 85cqw; }  }
