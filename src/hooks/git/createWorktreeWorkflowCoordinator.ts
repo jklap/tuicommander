@@ -277,6 +277,19 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 		}
 	};
 
+	/** Merge a workspace into the repo's main branch with the repo's after-merge setting.
+	 *  Shared by the sidebar and branch-menu Merge & Archive entries. */
+	const handleMergeAndArchiveIntoMain = async (repoPath: string, workspaceId: string) => {
+		const repoState = repositoriesStore.get(repoPath);
+		const mainBranch = repoState ? Object.values(repoState.workspaces).find((b) => b.isMain)?.branchName : undefined;
+		if (!mainBranch) {
+			reportActionError(deps.setStatusInfo, "Cannot merge: no main branch found");
+			return;
+		}
+		const afterMerge = repoSettingsStore.getEffective(repoPath)?.afterMerge ?? "archive";
+		await handleMergeAndArchive(repoPath, workspaceId, mainBranch, afterMerge);
+	};
+
 	/** Collect everything the post-merge cleanup dialog needs to warn honestly.
 	 *
 	 *  Two different directories, two different warnings:
@@ -424,6 +437,7 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 		handleAutofixIssue,
 		handleConflictAssist,
 		handleMergeAndArchive,
+		handleMergeAndArchiveIntoMain,
 		handleStartWork,
 	};
 }
