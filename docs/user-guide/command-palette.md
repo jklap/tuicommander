@@ -105,7 +105,7 @@ A compact list where each row shows:
 | Column | Description |
 |--------|-------------|
 | **Terminal name** | The tab name |
-| **Agent type** | Detected agent (Claude, Aider, etc.) with brand icon |
+| **Agent type** | Detected agent (Claude, Codex, etc.) with brand icon |
 | **Status** | Current state with color indicator |
 | **Last activity** | Relative timestamp ("2s ago", "1m ago") — auto-refreshes |
 

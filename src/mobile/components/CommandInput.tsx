@@ -22,7 +22,7 @@ interface CommandInputProps {
 	prefillValue?: { text: string; seq: number };
 	/** Current PTY input line text (synced from terminal prompt via WebSocket). */
 	ptyInputLine?: string | null;
-	/** Detected agent type (e.g. "claude-code", "aider"). */
+	/** Detected agent type (e.g. "claude", "codex"). */
 	agentType?: string | null;
 	/** Slash menu items from session state (populated by backend parser). */
 	slashItems?: SlashMenuItem[];

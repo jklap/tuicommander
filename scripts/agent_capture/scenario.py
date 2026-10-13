@@ -6,7 +6,7 @@ import time
 
 AGENTS = {
     "claude": "claude", "codex": "codex", "grok": "grok", "opencode": "opencode",
-    "ego": "ego", "gemini": "gemini", "aider": "aider", "pi": "pi", "goose": "goose",
+    "ego": "ego", "gemini": "gemini", "pi": "pi", "goose": "goose",
     "amp": "amp", "cursor": "cursor-agent", "droid": "droid",
     "qwen": "qwen", "crush": "crush", "copilot": "copilot", "kiro": "kiro-cli",
 }

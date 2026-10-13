@@ -7,6 +7,7 @@ import {
 	type EgoPermissionMode,
 	type EgoSandbox,
 	type HeadlessAgentChoice,
+	toHeadlessAgentChoice,
 } from "../agents";
 import { invoke } from "../invoke";
 import { rpc } from "../transport";
@@ -129,7 +130,7 @@ export function createAgentConfigsStore(io: AgentConfigIO = defaultIO) {
 				setState(
 					produce((s) => {
 						s.agents = config.agents ?? {};
-						s.headless_agent = config.headless_agent ?? null;
+						s.headless_agent = toHeadlessAgentChoice(config.headless_agent ?? "");
 						s.launch_instructions = config.launch_instructions ?? null;
 						s.loaded = true;
 						s.loadError = null;

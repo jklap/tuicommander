@@ -996,19 +996,6 @@ pub(super) fn detect_gemini_screen_activity(rows: &[String]) -> AgentScreenActiv
     }
 }
 
-/// Prompt-based only — see `detect_claude_screen_activity` for the rationale.
-/// During generation Aider has no bottom input box (prompt_toolkit returned),
-/// so the screen reads Unknown and BUSY is held by spinner movement + silence.
-/// prompt_toolkit pads ~32 blank rows below the prompt, so trailing blanks are
-/// trimmed before the window (`find_live_prompt_row`), as for Gemini.
-pub(super) fn detect_aider_screen_activity(rows: &[String]) -> AgentScreenActivity {
-    if find_live_prompt_row(rows, 3, |row| row.trim() == ">").is_some() {
-        AgentScreenActivity::Ready
-    } else {
-        AgentScreenActivity::Unknown
-    }
-}
-
 /// True for grok's composer row. Builds from 0.2.11x draw it inside a rounded box
 /// (`│ ❯                    │`); earlier builds emitted a bare `❯ Ask anything`. Missing the
 /// boxed form left the session stuck BUSY for the whole process, because Ready never fired.
@@ -1330,7 +1317,6 @@ pub(super) fn detect_agent_screen_activity_at(
         Some("claude") => detect_claude_screen_activity(rows),
         Some("codex") => detect_codex_screen_activity(rows),
         Some("gemini") => detect_gemini_screen_activity(rows),
-        Some("aider") => detect_aider_screen_activity(rows),
         Some("grok") => detect_grok_screen_activity(rows),
         Some("pi") => detect_pi_screen_activity(rows),
         Some("opencode") => detect_opencode_screen_activity_at(rows, columns),
@@ -1396,7 +1382,7 @@ pub(crate) fn agent_submission_ack_kind(state: &AppState, session_id: &str) -> &
 pub(crate) fn has_ready_screen_adapter(agent_type: Option<&str>) -> bool {
     matches!(
         agent_type,
-        Some("claude" | "codex" | "gemini" | "aider" | "grok" | "pi" | "opencode" | "goose")
+        Some("claude" | "codex" | "gemini" | "grok" | "pi" | "opencode" | "goose")
     )
 }
 
@@ -1816,7 +1802,6 @@ fn exact_agent_name(process_name: &str) -> Option<&'static str> {
         "claude" => Some("claude"),
         "gemini" => Some("gemini"),
         "opencode" => Some("opencode"),
-        "aider" => Some("aider"),
         "codex" => Some("codex"),
         "amp" => Some("amp"),
         "cursor-agent" => Some("cursor"),

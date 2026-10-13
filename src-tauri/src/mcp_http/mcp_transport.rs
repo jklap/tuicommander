@@ -345,8 +345,6 @@ pub(super) fn resolve_agent_type(client_name: Option<&str>) -> Option<&'static s
         Some("cursor")
     } else if name.contains("gemini") {
         Some("gemini")
-    } else if name.contains("aider") {
-        Some("aider")
     } else if name.contains("amp") {
         Some("amp")
     } else if name.contains("goose") {

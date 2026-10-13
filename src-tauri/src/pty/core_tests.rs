@@ -138,7 +138,7 @@ fn alt_screen_toast_text_names_the_fix_per_agent() {
     assert!(claude.contains("CLAUDE_CODE_DISABLE_AGENT_VIEW"));
     assert!(alt_screen_toast_message("s", Some("codex")).contains("--no-alt-screen"));
     assert!(alt_screen_toast_message("s", Some("opencode")).contains("--mini"));
-    for agent in [None, Some("aider")] {
+    for agent in [None, Some("opencode")] {
         let text = alt_screen_toast_message("s", agent);
         assert!(text.contains("scrollback"), "{agent:?}: {text}");
         assert!(text.contains("state detection"), "{agent:?}: {text}");
@@ -623,7 +623,7 @@ fn test_is_retry_line_matches_connection_retries() {
     assert!(is_retry_line(
         "Teammate @spinach-mail-validate failed: API Error: Unable to connect to API (ConnectionRefused)"
     ));
-    // Goose/Aider stream-error retry form.
+    // Goose stream-error retry form.
     assert!(is_retry_line(
         "⚠  stream error: exceeded retry limit, last status: 401; retrying 5/5 in 3s…"
     ));
@@ -1168,41 +1168,6 @@ fn test_content_zone_spinner_still_keeps_alive() {
     }
 }
 
-/// Aider during generation has NO bottom input box (prompt_toolkit has
-/// returned), so `find_chrome_cutoff` finds no separator/prompt and returns
-/// None → nothing is filtered → the Knight Rider spinner survives and keeps
-/// the agent alive. This is why the positional fix does not false-idle Aider
-/// even though its spinner is a bare block run.
-#[test]
-fn test_aider_generation_spinner_keeps_alive() {
-    let screen: Vec<&str> = vec![
-        "Applied edit to src/main.rs",
-        "█░  Waiting for openrouter/anthropic/claude-sonnet-4.5",
-    ];
-    assert_eq!(
-        crate::chrome::find_chrome_cutoff(&screen),
-        None,
-        "Aider generation view has no input box → no cutoff"
-    );
-    let changed = changed_at(&screen, &[1]);
-    let filtered = filter_below_cutoff(&screen, changed);
-    assert!(
-        filtered.iter().any(|r| r.row_index == 1),
-        "Knight Rider spinner must survive (no cutoff to drop it)"
-    );
-    let chrome_only = !filtered.is_empty() && filtered.iter().all(|r| is_chrome_row(&r.text));
-    // Aider's Knight Rider bar leads its row, so the structural is_spinner_row
-    // matches it (#446-596f).
-    let has_spinner = chrome_only
-        && filtered
-            .iter()
-            .any(|r| crate::chrome::is_spinner_row(&r.text));
-    assert!(
-        !chrome_only || has_spinner,
-        "Aider Knight Rider spinner must pass the busy transition gate"
-    );
-}
-
 // --- Presence-driven working-status keepalive (Codex frozen-TUI false-idle) ---
 
 /// Codex freezes its TUI during a child subprocess (long `cargo`/`git`): the
@@ -1405,7 +1370,7 @@ fn gemini_prompt_above_tall_hud_is_current_chrome() {
 // active — period." BUSY is latched/kept ONLY by movement (post-cutoff
 // `changed_rows` are text-equality diffed, so a frozen glyph produces no
 // ChangedRow and is inert by construction), by user submission, and by
-// hooks. The Claude/Gemini/Aider screen classifiers are PROMPT-based only
+// hooks. The Claude/Gemini screen classifiers are PROMPT-based only
 // (Ready/Unknown, never Working), so a static glyph can never mask the
 // ready prompt or hold the idle path hostage. Codex is the one deliberate
 // exception: its presence-based `• Working (… esc to interrupt)` line holds
@@ -1591,25 +1556,6 @@ fn wiz_hud_progress_bar_is_not_a_claude_spinner() {
     assert!(
         !crate::chrome::is_spinner_row(&hud),
         "a status-line progress bar is not an animated spinner"
-    );
-}
-
-/// Guardrail: the fix must NOT break Aider, whose real "Knight Rider" spinner
-/// IS a run of block glyphs that LEADS its row, so the structural
-/// `is_spinner_row` still matches it — its movement latches/keeps BUSY via
-/// the reader gate. Classification stays prompt-based: mid-generation Aider
-/// has no input box, so the screen is Unknown (never a false Ready).
-#[test]
-fn aider_knight_rider_block_spinner_still_movement_evidence() {
-    assert!(
-        crate::chrome::is_spinner_row("░░░█░░░░░░"),
-        "Aider's Knight Rider block spinner leads the row → still a spinner"
-    );
-    let generating: Vec<String> = vec!["Applied edit to src/main.rs".into(), "░░░█░░░░░░".into()];
-    assert_eq!(
-        detect_aider_screen_activity(&generating),
-        AgentScreenActivity::Unknown,
-        "no input box during generation → Unknown, BUSY held by movement"
     );
 }
 
@@ -6277,7 +6223,7 @@ fn enqueue_refuses_shells_and_dead_sessions() {
 #[test]
 fn queued_wake_without_agent_response_reports_uncertain_delivery() {
     for agent_type in [
-        "codex", "claude", "gemini", "opencode", "aider", "goose", "grok", "pi", "unknown",
+        "codex", "claude", "gemini", "opencode", "goose", "grok", "pi", "unknown",
     ] {
         let state = crate::state::tests_support::make_test_app_state();
         let sid = format!("silent-{agent_type}");
@@ -9717,66 +9663,6 @@ async fn queued_command_drains_after_a_captured_opencode_mini_turn() {
     );
 }
 
-// Catches: a submitted Aider turn whose reply rows are trimmed as chrome below the
-// echoed `> prompt` line, so no activity is ever seen and the user-submit BUSY
-// outlives the repainted Ready prompt (story 1823-8150).
-#[test]
-fn captured_aider_submitted_turn_returns_idle_after_the_reply() {
-    let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(
-        "aider-0.86.2-submitted-turn-20261013.tcap",
-    ))
-    .expect("valid recorded Aider turn");
-    let (rows, cols) = capture.geometry.expect("recorded geometry");
-    let sid = "aider-submitted-turn";
-    let (state, silence) = chunk_trace_state(sid);
-    {
-        let mut session = state.session_maps.session_states.get_mut(sid).unwrap();
-        session.agent_type = Some("aider".into());
-        session.agent_type_from_run_config = true;
-    }
-    state
-        .grid
-        .vt_log_buffers
-        .insert(sid.into(), Mutex::new(VtLogBuffer::new(rows, cols, 2000)));
-    let mut processor = ChunkProcessor::new(None, None);
-    let mut utf8 = Utf8ReadBuffer::new();
-    let mut escapes = EscapeAwareBuffer::new();
-    let mut input = String::new();
-    for record in capture.records {
-        match record.direction {
-            crate::pty_capture::CaptureDirection::Input => {
-                if record.data == b"\r" {
-                    record_submitted_line(&state, sid, std::mem::take(&mut input), 0);
-                } else {
-                    input.push_str(std::str::from_utf8(&record.data).unwrap());
-                }
-            }
-            crate::pty_capture::CaptureDirection::Output => {
-                let text = utf8.push(&record.data);
-                let text = escapes.push(&text);
-                let (text, _) = crate::state::strip_kitty_sequences(&text);
-                processor.process_chunk(&text, &silence, sid, &state);
-            }
-        }
-    }
-    let activity = silence.lock().cached_screen_activity;
-    assert_eq!(activity, AgentScreenActivity::Ready);
-    state
-        .session_maps
-        .session_states
-        .get_mut(sid)
-        .unwrap()
-        .background_probe_satisfied_turn_epoch = Some(1);
-    silence.lock().screen_ready_pending_since =
-        Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
-    assert!(
-        try_timer_idle_transition(&state, &silence, sid, activity, Some("aider"), Some(1))
-            .transitioned,
-        "the recorded Ready prompt must release the submitted turn: {:?}",
-        silence.lock().evidence
-    );
-}
-
 // Catches: a Claude launched from a shell that paints its Ready composer and
 // status-line HUD but never returns the tab to idle, so tuic-remote shows the
 // blue activity dot for hours on an agent nobody is driving (story 1864-23d0).
@@ -9985,139 +9871,6 @@ fn goose_interrupted_capture_reads_ready() {
         detect_agent_screen_activity(Some("goose"), &screen),
         AgentScreenActivity::Ready,
         "screen: {screen:#?}"
-    );
-}
-
-/// Aider 0.86.2 in the agent-vm marker matrix (#1822-5e0f): prompt_toolkit paints
-/// the `>` prompt, then about 32 blank rows below it, and parks the cursor back
-/// on the prompt. The live prompt is therefore never among the last rows of the
-/// 41-row viewport. Catches: an Aider detector that reads only the viewport tail
-/// and so never sees Ready on a real screen.
-#[test]
-fn aider_padded_prompt_capture_reads_ready() {
-    let screen = replay_final_screen(&agent_prompt_fixture(
-        "aider-0.86.2-padded-prompt-20261012.tcap",
-    ));
-    assert_eq!(
-        detect_agent_screen_activity(Some("aider"), &screen),
-        AgentScreenActivity::Ready,
-        "screen: {screen:#?}"
-    );
-}
-
-/// Same capture, derived screens. A generation has no bottom prompt, and a stale
-/// echoed `> text` line in history is not a composer. Catches: a fix that
-/// accepts any `>` row anywhere on the viewport.
-#[test]
-fn aider_padded_prompt_variants_stay_unknown() {
-    let screen = replay_final_screen(&agent_prompt_fixture(
-        "aider-0.86.2-padded-prompt-20261012.tcap",
-    ));
-    let prompt = screen
-        .iter()
-        .rposition(|row| row.trim() == ">")
-        .unwrap_or_else(|| panic!("fixture has no prompt row: {screen:#?}"));
-    let mut generating = screen.clone();
-    generating[prompt].clear();
-    assert_eq!(
-        detect_agent_screen_activity(Some("aider"), &generating),
-        AgentScreenActivity::Unknown,
-        "generating screen: {generating:#?}"
-    );
-    // Aider echoes a submitted line as `> text`; that history row is not a
-    // composer even when it sits inside the final window. (A bare `>` anywhere is
-    // an empty input box by the shared `find_input_box_prompt_row` contract.)
-    let mut stale = vec![String::new(); screen.len()];
-    for (row, text) in [
-        "Earlier reply from the model.",
-        "> What is 10+7?",
-        "Tokens: 1.2k sent, 12 received.",
-        "Applied edit to canary-rule.md",
-        "Tokens: 2k",
-        "Cost: $0.00",
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        stale[row] = text.into();
-    }
-    assert_eq!(
-        detect_agent_screen_activity(Some("aider"), &stale),
-        AgentScreenActivity::Unknown,
-        "stale prompt screen: {stale:#?}"
-    );
-}
-
-/// agent-vm rerun of the #1822-5e0f fix: a headless `POST /sessions/agent` spawns the
-/// binary directly, so no launch command ever leaves the shell atom BUSY, and Aider
-/// paints no working screen before its prompt. The live daemon read the screen Ready
-/// ("Ready confirmed after shell became idle") yet still answered 409 agent_not_ready
-/// for the whole session, until a Ctrl-L redraw made the first real output. Catches: a
-/// Ready screen that cannot release a session whose shell state never became BUSY.
-#[cfg(unix)]
-#[tokio::test(flavor = "current_thread")]
-async fn aider_padded_prompt_capture_accepts_the_first_submission_of_a_direct_spawn() {
-    tokio::time::pause();
-    let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(
-        "aider-0.86.2-padded-prompt-20261012.tcap",
-    ))
-    .expect("valid live capture");
-    let (rows, cols) = capture.geometry.expect("recorded terminal geometry");
-    let sid = "aider-direct-spawn";
-    let (state, silence) = chunk_trace_state(sid);
-    {
-        let mut session = state.session_maps.session_states.get_mut(sid).unwrap();
-        session.agent_type = Some("aider".into());
-        session.agent_type_from_run_config = true;
-        session.spawn_root_role = crate::state::SpawnRootRole::DirectProgram;
-    }
-    state
-        .grid
-        .vt_log_buffers
-        .insert(sid.into(), Mutex::new(VtLogBuffer::new(rows, cols, 2000)));
-    insert_recording_session(&state, sid);
-    let mut processor = ChunkProcessor::new(None, None);
-    for record in capture.records {
-        if record.direction == crate::pty_capture::CaptureDirection::Output {
-            processor.process_chunk(
-                std::str::from_utf8(&record.data).expect("UTF-8 terminal output"),
-                &silence,
-                sid,
-                &state,
-            );
-        }
-    }
-    {
-        let mut session = state.session_maps.session_states.get_mut(sid).unwrap();
-        session.background_probe_satisfied_turn_epoch = Some(session.turn_epoch);
-    }
-    {
-        let mut silence = silence.lock();
-        let settled = std::time::Instant::now() - std::time::Duration::from_secs(60);
-        silence.last_output_at = settled;
-        silence.last_chunk_at = settled;
-        silence.screen_ready_pending_since = Some(settled);
-    }
-    let running = Arc::new(AtomicBool::new(true));
-    spawn_silence_timer(silence.clone(), running.clone(), sid.into(), state.clone());
-    tokio::task::yield_now().await;
-    tokio::time::advance(SILENCE_CHECK_INTERVAL + std::time::Duration::from_millis(1)).await;
-    tokio::task::yield_now().await;
-    running.store(false, Ordering::Release);
-    let shell = state
-        .session_maps
-        .shell_states
-        .get(sid)
-        .unwrap()
-        .load(Ordering::Acquire);
-    let (idle_confirmed, cached_screen) = {
-        let silence = silence.lock();
-        (silence.idle_confirmed(), silence.cached_screen_activity)
-    };
-    assert!(
-        should_inject_now(&state, sid),
-        "submission gate closed: shell_state={shell} idle_confirmed={idle_confirmed} \
-         cached_screen={cached_screen:?}"
     );
 }
 
@@ -14282,8 +14035,8 @@ fn replay_oracle_all_committed_tcap_preserves_chunk_decisions() {
     let mut manifest = Vec::new();
     for fixture in fixtures {
         let agent = [
-            "claude", "codex", "grok", "goose", "opencode", "gemini", "aider", "pi", "amp",
-            "cursor", "droid", "ego",
+            "claude", "codex", "grok", "goose", "opencode", "gemini", "pi", "amp", "cursor",
+            "droid", "ego",
         ]
         .into_iter()
         .find(|agent| {

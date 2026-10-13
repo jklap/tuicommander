@@ -133,8 +133,8 @@ describe("buildResumeCommand", () => {
 		expect(buildResumeCommand("codex", null)).toBe("codex resume --last");
 	});
 
-	it("returns static resume for aider (no session discovery)", () => {
-		expect(buildResumeCommand("aider", null)).toBe("aider --restore-chat-history");
+	it("returns static resume for opencode (no session discovery)", () => {
+		expect(buildResumeCommand("opencode", null)).toBe("opencode -c");
 	});
 
 	it("returns static resume for amp", () => {
@@ -207,10 +207,6 @@ describe("sessionDiscovery in AgentConfig", () => {
 		expect(disc?.resumeWithId("test-uuid")).toBe("codex resume test-uuid");
 	});
 
-	it("aider has null sessionDiscovery (no session IDs)", () => {
-		expect(AGENTS.aider.sessionDiscovery).toBeNull();
-	});
-
 	it("amp has null sessionDiscovery (cloud-only)", () => {
 		expect(AGENTS.amp.sessionDiscovery).toBeNull();
 	});
@@ -277,9 +273,9 @@ describe("verifyAndBuildResumeCommand", () => {
 	});
 
 	it("skips verification for agents without sessionDiscovery", async () => {
-		const result = await verifyAndBuildResumeCommand("aider", "/tmp/repo", "tuic-uuid-1", null);
+		const result = await verifyAndBuildResumeCommand("opencode", "/tmp/repo", "tuic-uuid-1", null);
 		expect(mockRpc).not.toHaveBeenCalledWith("verify_agent_session", expect.anything());
-		expect(result).toBe("aider --restore-chat-history");
+		expect(result).toBe("opencode -c");
 	});
 
 	it("returns null for agents without resume support", async () => {

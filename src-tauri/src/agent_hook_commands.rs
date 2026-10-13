@@ -214,12 +214,12 @@ mod tests {
     fn config_agent_hook_unsupported_agent_writes_nothing() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("settings.json");
-        apply_at("aider", &path, true).unwrap();
+        apply_at("unknown-agent", &path, true).unwrap();
         assert!(
             !path.exists(),
             "unsupported agent must not write a settings file"
         );
-        assert_eq!(state_at("aider", &path), InstallState::NotInstalled);
+        assert_eq!(state_at("unknown-agent", &path), InstallState::NotInstalled);
     }
 
     #[test]

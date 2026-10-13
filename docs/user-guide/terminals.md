@@ -113,7 +113,7 @@ opened on that phone. Opening the session clears its purple status.
 
 Agent activity combines native lifecycle hooks, terminal movement (text
 changing above the input area means the agent is active), and the visible
-ready prompt. Claude, Codex, Gemini, Aider, Grok, pi, and OpenCode require a stable ready
+ready prompt. Claude, Codex, Gemini, Grok, pi, and OpenCode require a stable ready
 screen before safety-sensitive actions such as auto-standby or queued agent
 message delivery. Pressing Ctrl-C or Escape requests interruption but does not
 turn the dot green until the agent confirms the interruption, returns to its
@@ -305,7 +305,7 @@ whose type is still unknown uses the longer Codex-safe pause.
 
 TUICommander detects rate limits, prompts, and status messages from AI agents:
 
-- **Rate limit detection** — Recognizes rate limit messages from Claude, Aider, Gemini, OpenCode, Codex
+- **Rate limit detection** — Recognizes rate limit messages from Claude, Gemini, OpenCode, Codex
 - **Prompt interception** — Detects when agents ask yes/no questions or multiple choice
 - **Status tracking** — Parses token usage and timing from agent output
 - **Progress indicators** — Shows progress bars for long-running operations

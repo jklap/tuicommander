@@ -5255,3 +5255,28 @@ Visual evidence: worktree Vite fixture mounted the real NotificationsTab and Toa
 ## Idle Claude placeholder composer clears the activity dot (1864-23d0) — Rust restart required
 
 - [ ] After Boss restarts `make dev` / installs `make build` and the tuic-remote daemon, launch Claude Code from a shell tab and leave it at the `❯ Try "..."` placeholder: the blue activity dot clears in tuic-remote and in the desktop app, and returns while a turn runs. The replay test `captured_claude_launch_from_shell_returns_idle_at_its_ready_composer` covers the detector; the live dot is unverified.
+- [ ] After a manual backend restart, run an `aider`-named command: it must stay a plain terminal command, with no Aider badge or managed profile. Confirm remaining agent tabs still detect and submit normally (#1849-0c19). _(Automated verification: 545 targeted Rust tests passed on Linux, including plain-command classification, remaining-agent screen/injection tests, and the committed replay oracle. The real AgentsTab rendered 11 remaining agents without Aider in an isolated browser harness with retired saved settings; transport data was stubbed. Live PTY detection and visual screenshot remain unverified; both screenshot methods timed out.)_
+
+## Design Mode v2 S0 spike (1672-cd3d)
+
+- [ ] [HUMAN] Once MacControl Screen Recording works (`capture_screen` returns an image), run S0 spike items (a), (b), (e) and (f) and record the evidence in `docs/design/design-mode-v2-s0-results.md`. Needs the Screen Recording grant of Boss; no restart of TUIC. _(Moved from the story by Boss's rule 2026-10-13.)_
+
+## Mobile command input layout (1625-b873)
+
+- [ ] [VISUAL] On the iPhone PWA after a reload, open a session: Send is outside the input box (36 px visible, 44 px hit area), the mic sits inside the box, and the text wraps at the same width as before. Chromium measured 286 px wrap at 390 px; the iOS Safari layout is unverified. No Rust restart. _(Moved from the story by Boss's rule 2026-10-13.)_
+
+## Worktree recycling benchmark (1705-67b3) — Rust restart required
+
+- [ ] After Boss rebuilds/restarts the Rust backend, create 15 worktrees in a row with recycling and compare the time and the Defender/fseventsd CPU with the 2026-10-10 benchmark. Rust does not hot-reload. _(Moved from the story by Boss's rule 2026-10-13.)_
+
+## Launch marker instructions (1810-c28c) — Rust restart required
+
+- [ ] After Boss restarts `make dev`, start Claude, Codex, grok, goose, pi and ego from a TUIC shell (typed command, alias and resume) and one opencode tab; open **Inspect Launch Instructions** and confirm each agent got the marker text through its own flag (or `OPENCODE_CONFIG_CONTENT` for opencode), once, and that a launch by absolute path is the known miss. The flags were verified only against the installed `--help` of 2026-10-12. _(Moved from the story by Boss's rule 2026-10-13.)_
+
+## Terminal Chat file links (1835-a278)
+
+- [ ] In a running TUIC, open a Claude terminal Chat view whose answer holds a backticked relative path (for example `src/a.ts` and `src/a.ts:12`): the path is a link, a click opens the file, and a path of a deleted file gives no working link. No Rust restart. _(Moved from the story by Boss's rule 2026-10-13.)_
+
+## Truncated dictation incident (1763-3361) — Rust restart required
+
+- [ ] When Boss meets a truncated dictation again, correlate its time with the file log (`focus-loss` stop lines, `~/Gits/.tmp/results/ui-1763-dictation-evidence.log` shows the method) and note whether the cause was the Fn focus-loss stop. The 11:49/11:51 focus-loss stops and the RED prove the native defect only; the link to all three reported truncations is unproven. _(Moved from the story by Boss's rule 2026-10-13.)_
