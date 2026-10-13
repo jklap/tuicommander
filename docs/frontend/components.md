@@ -763,3 +763,6 @@ move menu provides keyboard and touch access. Moves dispatch the provider's per-
 action, show pending feedback, and restore the origin on rejection. Cancellation
 and scope changes clean up drag state. Consumers refresh the projection after a
 successful move; the view does not infer workflow transitions.
+
+Tasks list controls use provider-declared field sort, group and filter capabilities.
+A rejected selection restores the last successful query and shows the provider reason.

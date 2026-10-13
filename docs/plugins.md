@@ -1873,6 +1873,11 @@ Generate their TypeScript declarations with
 `{kind, value}` with snake_case kinds. `WorkItemRef` scopes opaque item IDs by
 `providerId` and `accountId`. Missing field keys mean not loaded; null means unset.
 
+Each field schema declares `sortable`, `groupable` and `filterable` booleans for
+the provider list endpoint. Tasks offers only those declared query controls.
+Create and detail schemas set these to false when they are not list fields.
+A rejected query restores the last successful controls and shows the reason.
+
 `WorkItemQuery` carries ANDed filters (values are ORed), saved filter ID, native
 search, sort, bounded page size and opaque cursor. Providers must bind cursors to
 the account/query; selecting a preset starts with no cursor. `WorkItemPage`

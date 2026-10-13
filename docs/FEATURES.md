@@ -2928,3 +2928,6 @@ Launch profile/workspace stay in the `app` store; trusted executable writes awai
 the confirmation step. No new public settings transport is registered
 by this adapter. Model changes from the existing Providers UI now use the same
 configured profile and workspace as perimeter changes.
+
+Tasks list controls use provider-declared field sort, group and filter capabilities.
+A rejected selection restores the last successful query and shows the provider reason.

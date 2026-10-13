@@ -16,7 +16,17 @@ describe("TaskField", () => {
 		let saved: WorkItemFieldValue | null = null;
 		render(() => (
 			<TaskField
-				schema={{ id: "field", name: "Field", kind, required: true, editable: true, options: [] }}
+				schema={{
+					id: "field",
+					name: "Field",
+					kind,
+					required: true,
+					editable: true,
+					sortable: false,
+					groupable: false,
+					filterable: false,
+					options: [],
+				}}
 				value={null}
 				disabled={false}
 				canEdit
@@ -35,7 +45,17 @@ describe("TaskField", () => {
 	it("required_empty_and_read_only_fields_cannot_be_saved", () => {
 		render(() => (
 			<TaskField
-				schema={{ id: "field", name: "Field", kind: "text", required: true, editable: true, options: [] }}
+				schema={{
+					id: "field",
+					name: "Field",
+					kind: "text",
+					required: true,
+					editable: true,
+					sortable: false,
+					groupable: false,
+					filterable: false,
+					options: [],
+				}}
 				value={{ kind: "text", value: "Original" }}
 				disabled={false}
 				canEdit
@@ -46,7 +66,17 @@ describe("TaskField", () => {
 		expect(screen.getByRole("button", { name: "Save Field" })).toBeDisabled();
 		const readonly = render(() => (
 			<TaskField
-				schema={{ id: "locked", name: "Locked", kind: "text", required: false, editable: false, options: [] }}
+				schema={{
+					id: "locked",
+					name: "Locked",
+					kind: "text",
+					required: false,
+					editable: false,
+					sortable: false,
+					groupable: false,
+					filterable: false,
+					options: [],
+				}}
 				value={{ kind: "text", value: "Read only" }}
 				disabled={false}
 				canEdit

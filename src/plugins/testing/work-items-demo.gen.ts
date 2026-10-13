@@ -21,7 +21,10 @@ export const workItemsDemo = {
 					"id": "low",
 					"name": "Low"
 				}
-			]
+			],
+			"sortable": false,
+			"groupable": true,
+			"filterable": true
 		},
 		{
 			"id": "state",
@@ -38,7 +41,10 @@ export const workItemsDemo = {
 					"id": "closed",
 					"name": "Closed"
 				}
-			]
+			],
+			"sortable": false,
+			"groupable": true,
+			"filterable": true
 		},
 		{
 			"id": "assignees",
@@ -46,7 +52,10 @@ export const workItemsDemo = {
 			"kind": "user",
 			"required": false,
 			"editable": true,
-			"options": []
+			"options": [],
+			"sortable": false,
+			"groupable": true,
+			"filterable": true
 		},
 		{
 			"id": "labels",
@@ -54,7 +63,32 @@ export const workItemsDemo = {
 			"kind": "labels",
 			"required": false,
 			"editable": true,
-			"options": []
+			"options": [],
+			"sortable": false,
+			"groupable": true,
+			"filterable": true
+		},
+		{
+			"id": "key",
+			"name": "Key",
+			"kind": "text",
+			"required": false,
+			"editable": false,
+			"options": [],
+			"sortable": true,
+			"groupable": false,
+			"filterable": false
+		},
+		{
+			"id": "title",
+			"name": "Title",
+			"kind": "text",
+			"required": false,
+			"editable": false,
+			"options": [],
+			"sortable": true,
+			"groupable": false,
+			"filterable": false
 		}
 	],
 	"savedFilters": [
@@ -167,7 +201,10 @@ export const workItemsDemo = {
 							"id": "low",
 							"name": "Low"
 						}
-					]
+					],
+					"sortable": false,
+					"groupable": true,
+					"filterable": true
 				},
 				{
 					"id": "state",
@@ -184,7 +221,10 @@ export const workItemsDemo = {
 							"id": "closed",
 							"name": "Closed"
 						}
-					]
+					],
+					"sortable": false,
+					"groupable": true,
+					"filterable": true
 				},
 				{
 					"id": "assignees",
@@ -192,7 +232,10 @@ export const workItemsDemo = {
 					"kind": "user",
 					"required": false,
 					"editable": true,
-					"options": []
+					"options": [],
+					"sortable": false,
+					"groupable": true,
+					"filterable": true
 				},
 				{
 					"id": "labels",
@@ -200,7 +243,10 @@ export const workItemsDemo = {
 					"kind": "labels",
 					"required": false,
 					"editable": true,
-					"options": []
+					"options": [],
+					"sortable": false,
+					"groupable": true,
+					"filterable": true
 				}
 			],
 			"actions": [
@@ -348,7 +394,10 @@ export const workItemsDemo = {
 							"id": "low",
 							"name": "Low"
 						}
-					]
+					],
+					"sortable": false,
+					"groupable": true,
+					"filterable": true
 				},
 				{
 					"id": "state",
@@ -365,7 +414,10 @@ export const workItemsDemo = {
 							"id": "closed",
 							"name": "Closed"
 						}
-					]
+					],
+					"sortable": false,
+					"groupable": true,
+					"filterable": true
 				},
 				{
 					"id": "assignees",
@@ -373,7 +425,10 @@ export const workItemsDemo = {
 					"kind": "user",
 					"required": false,
 					"editable": true,
-					"options": []
+					"options": [],
+					"sortable": false,
+					"groupable": true,
+					"filterable": true
 				},
 				{
 					"id": "labels",
@@ -381,7 +436,10 @@ export const workItemsDemo = {
 					"kind": "labels",
 					"required": false,
 					"editable": true,
-					"options": []
+					"options": [],
+					"sortable": false,
+					"groupable": true,
+					"filterable": true
 				}
 			],
 			"actions": [
@@ -473,7 +531,10 @@ export const workItemsDemo = {
 							"id": "low",
 							"name": "Low"
 						}
-					]
+					],
+					"sortable": false,
+					"groupable": true,
+					"filterable": true
 				},
 				{
 					"id": "state",
@@ -490,7 +551,10 @@ export const workItemsDemo = {
 							"id": "closed",
 							"name": "Closed"
 						}
-					]
+					],
+					"sortable": false,
+					"groupable": true,
+					"filterable": true
 				},
 				{
 					"id": "assignees",
@@ -498,7 +562,10 @@ export const workItemsDemo = {
 					"kind": "user",
 					"required": false,
 					"editable": true,
-					"options": []
+					"options": [],
+					"sortable": false,
+					"groupable": true,
+					"filterable": true
 				},
 				{
 					"id": "labels",
@@ -506,7 +573,10 @@ export const workItemsDemo = {
 					"kind": "labels",
 					"required": false,
 					"editable": true,
-					"options": []
+					"options": [],
+					"sortable": false,
+					"groupable": true,
+					"filterable": true
 				}
 			],
 			"actions": [

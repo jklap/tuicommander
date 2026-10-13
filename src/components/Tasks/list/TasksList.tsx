@@ -67,6 +67,7 @@ export function TasksList(props: TasksListProps) {
 	const [query, setQuery] = createSignal(initialQuery());
 	const [search, setSearch] = createSignal("");
 	let debounce: ReturnType<typeof setTimeout> | undefined;
+	let restoredQuery: WorkItemQuery | undefined;
 	let previousSource: WorkItemProvider | undefined;
 	createEffect(() => {
 		const current = provider();
@@ -82,7 +83,17 @@ export function TasksList(props: TasksListProps) {
 		const request = query();
 		if (props.visible === false) return;
 		untrack(() => {
-			if (current) void model.select(current, request);
+			if (request === restoredQuery) {
+				restoredQuery = undefined;
+				return;
+			}
+			if (current)
+				void model.select(current, request).then(() => {
+					if (current !== provider() || request !== query() || !model.state().error) return;
+					restoredQuery = structuredClone(model.acceptedQuery() ?? initialQuery());
+					setSearch(restoredQuery.search);
+					setQuery(restoredQuery);
+				});
 			else model.clear();
 		});
 	});
@@ -170,7 +181,7 @@ export function TasksList(props: TasksListProps) {
 			<Show when={provider()}>
 				{(current) => (
 					<div class={s.filters}>
-						<For each={current().fields}>
+						<For each={current().fields.filter((field) => field.filterable)}>
 							{(field) => (
 								<label>
 									{field.name}
@@ -212,9 +223,9 @@ export function TasksList(props: TasksListProps) {
 								}}
 							>
 								<option value="">Provider default</option>
-								<option value="key">Key</option>
-								<option value="title">Title</option>
-								<option value="updatedAt">Updated</option>
+								<For each={current().fields.filter((field) => field.sortable)}>
+									{(field) => <option value={field.id}>{field.name}</option>}
+								</For>
 							</Select>
 						</label>
 						<button
@@ -242,7 +253,9 @@ export function TasksList(props: TasksListProps) {
 								}}
 							>
 								<option value="">No grouping</option>
-								<For each={current().fields}>{(field) => <option value={field.id}>{field.name}</option>}</For>
+								<For each={current().fields.filter((field) => field.groupable)}>
+									{(field) => <option value={field.id}>{field.name}</option>}
+								</For>
 							</Select>
 						</label>
 					</div>

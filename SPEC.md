@@ -1011,3 +1011,6 @@ keep their launch state. Transport publication remains a later integration step.
 Unsupported auth overrides and exec_paths stay in the owner-gap ledger. Multi-key
 changes are refused before writing; cross-process conditional writes await an Ego
 owner API. These are explicit limits rather than raw-file fallback paths.
+
+Tasks list controls use provider-declared field sort, group and filter capabilities.
+A rejected selection restores the last successful query and shows the provider reason.

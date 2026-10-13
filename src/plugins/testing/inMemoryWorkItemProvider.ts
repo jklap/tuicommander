@@ -98,6 +98,9 @@ export function createInMemoryWorkItemProvider(seed: WorkItemProviderSnapshot = 
 						kind: "enum",
 						required: true,
 						editable: true,
+						sortable: false,
+						groupable: false,
+						filterable: false,
 						options: itemTypes().map((id) => ({ id, name: id.charAt(0).toUpperCase() + id.slice(1) })),
 					},
 				];
