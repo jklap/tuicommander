@@ -1,4 +1,5 @@
 //! Rust-owned settings schemas and descriptors.
+pub mod agents;
 pub mod catalogue;
 pub mod model;
 
@@ -12,6 +13,8 @@ pub mod request;
 pub mod service;
 pub mod telegram;
 pub mod transaction;
+#[cfg(feature = "dictation")]
+pub mod voice;
 
 mod pointer;
 mod validation;
@@ -37,7 +40,13 @@ mod preferences_tests;
 mod telegram_tests;
 
 #[cfg(test)]
+mod agents_tests;
+
+#[cfg(test)]
 mod repositories_tests;
 
 #[cfg(test)]
 mod remote_tests;
+
+#[cfg(all(test, feature = "dictation"))]
+mod voice_tests;
