@@ -5,11 +5,13 @@ import { workItemLinksStore } from "../../../stores/workItemLinks";
 import type {
 	WorkItemFieldSchema,
 	WorkItemFieldValue,
+	WorkItemOption,
 	WorkItemQuery,
 	WorkItemRef,
 } from "../../../types/work-items.gen";
 import { Input } from "../../ui/Input";
 import { Select } from "../../ui/Select";
+import { filterOptions, loadFilterChoices } from "./filterChoices";
 import { TaskRows } from "./TaskRows";
 import s from "./tasksList.module.css";
 
@@ -30,7 +32,11 @@ const initialQuery = (): WorkItemQuery => ({
 });
 const sourceKey = (provider: WorkItemProvider) => JSON.stringify([provider.providerId, provider.accountId]);
 
-function filterValue(field: WorkItemFieldSchema, value: string): WorkItemFieldValue | undefined {
+function filterValue(
+	field: WorkItemFieldSchema,
+	value: string,
+	options: readonly WorkItemOption[],
+): WorkItemFieldValue | undefined {
 	switch (field.kind) {
 		case "text":
 		case "markdown":
@@ -43,14 +49,12 @@ function filterValue(field: WorkItemFieldSchema, value: string): WorkItemFieldVa
 		case "labels":
 			return {
 				kind: "labels",
-				value: [{ id: value, name: field.options.find((option) => option.id === value)?.name ?? value }],
+				value: [{ id: value, name: options.find((option) => option.id === value)?.name ?? value }],
 			};
 		case "user":
 			return {
 				kind: "user",
-				value: [
-					{ id: value, name: field.options.find((option) => option.id === value)?.name ?? value, avatarUrl: null },
-				],
+				value: [{ id: value, name: options.find((option) => option.id === value)?.name ?? value, avatarUrl: null }],
 			};
 	}
 }
@@ -93,6 +97,14 @@ export function TasksList(props: TasksListProps) {
 			? `${shown} of ${total.toLocaleString()} items`
 			: `${shown} items`;
 	};
+	const [choices, setChoices] = createSignal<readonly WorkItemFieldSchema[]>([]);
+	createEffect(() => {
+		const current = provider();
+		if (!filtersOpen() || !current) return;
+		void loadFilterChoices(current).then((fields) => {
+			if (provider() === current) setChoices(fields);
+		});
+	});
 	let debounce: ReturnType<typeof setTimeout> | undefined;
 	let previousSource: WorkItemProvider | undefined;
 	createEffect(() => {
@@ -130,7 +142,7 @@ export function TasksList(props: TasksListProps) {
 		setQuery(next);
 	}
 	function applyFilter(field: WorkItemFieldSchema, raw: string) {
-		const value = raw ? filterValue(field, raw) : undefined;
+		const value = raw ? filterValue(field, raw, filterOptions(field, choices())) : undefined;
 		setQuery((previous) => ({
 			...previous,
 			savedFilterId: null,
@@ -205,7 +217,7 @@ export function TasksList(props: TasksListProps) {
 								<label>
 									{field.name}
 									<Show
-										when={field.options.length > 0}
+										when={filterOptions(field, choices()).length > 0}
 										fallback={
 											<Input
 												aria-label={`Filter ${field.name}`}
@@ -221,7 +233,9 @@ export function TasksList(props: TasksListProps) {
 											onChange={(event) => applyFilter(field, event.currentTarget.value)}
 										>
 											<option value="">Any</option>
-											<For each={field.options}>{(option) => <option value={option.id}>{option.name}</option>}</For>
+											<For each={filterOptions(field, choices())}>
+												{(option) => <option value={option.id}>{option.name}</option>}
+											</For>
 										</Select>
 									</Show>
 								</label>

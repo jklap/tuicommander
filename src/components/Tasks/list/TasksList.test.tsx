@@ -1,7 +1,7 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { WorkItem } from "../../../types/work-items.gen";
+import type { WorkItem, WorkItemQuery } from "../../../types/work-items.gen";
 import { allDemoRows, listDemo } from "./demo";
 import { TaskRows } from "./TaskRows";
 import { TasksList } from "./TasksList";
@@ -90,6 +90,102 @@ describe("Tasks list", () => {
 		fireEvent.click(counted);
 		expect(screen.queryByLabelText("Filter Priority")).not.toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Filters (2)" })).toBeInTheDocument();
+	});
+
+	describe("filter pickers fed by provider values", () => {
+		const schema = (
+			id: string,
+			name: string,
+			kind: "labels" | "user",
+			options: { id: string; name: string }[] = [],
+		) => ({
+			id,
+			name,
+			kind,
+			required: false,
+			editable: false,
+			options,
+		});
+		const bugs = { id: "bug", name: "bug" };
+		const ada = { id: "7", name: "Ada Lovelace" };
+		function withChoices(createFields: () => Promise<ReturnType<typeof schema>[]>) {
+			const base = listDemo(2);
+			const queries: WorkItemQuery[] = [];
+			const provider = {
+				...base,
+				fields: [
+					...base.fields.filter((field) => !["labels", "assignees"].includes(field.id)),
+					schema("labels", "Labels", "labels"),
+					schema("assignee", "Assignee", "user"),
+				],
+				createFields: async (type?: string) =>
+					type === undefined
+						? [
+								{
+									...schema("itemType", "Type", "labels"),
+									kind: "enum" as const,
+									options: [{ id: "issue", name: "Issue" }],
+								},
+							]
+						: createFields(),
+				list: async (query: WorkItemQuery, signal?: AbortSignal) => {
+					queries.push(query);
+					return base.list({ ...query, filters: [] }, signal);
+				},
+			};
+			return { provider, queries };
+		}
+
+		// Catches: a label or assignee filter stays a free-text box although the provider already lists its values.
+		it("offers the provider's labels and assignees as pickers and filters by the chosen value", async () => {
+			const { provider, queries } = withChoices(async () => [
+				schema("labels", "Labels", "labels", [bugs]),
+				schema("assignees", "Assignees", "user", [ada]),
+			]);
+			render(() => <TasksList providers={[provider]} onOpen={() => {}} />);
+			await screen.findByRole("button", { name: /Task 00002/ });
+			fireEvent.click(screen.getByRole("button", { name: "Filters" }));
+			const label = await screen.findByRole("combobox", { name: "Filter Labels" });
+			expect(within(label).getByRole("option", { name: "bug" })).toBeInTheDocument();
+			// "assignee" (filter) and "assignees" (create form) name the same provider values.
+			const assignee = screen.getByRole("combobox", { name: "Filter Assignee" });
+			expect(within(assignee).getByRole("option", { name: "Ada Lovelace" })).toBeInTheDocument();
+			fireEvent.change(assignee, { target: { value: "7" } });
+			await waitFor(() =>
+				expect(queries.at(-1)?.filters).toEqual([
+					{
+						fieldId: "assignee",
+						values: [{ kind: "user", value: [{ id: "7", name: "Ada Lovelace", avatarUrl: null }] }],
+					},
+				]),
+			);
+		});
+
+		// Catches: a failing value lookup removes the filter or leaves the panel without any control.
+		it("keeps a text box when the provider cannot list its values", async () => {
+			const { provider } = withChoices(async () => {
+				throw new Error("offline");
+			});
+			render(() => <TasksList providers={[provider]} onOpen={() => {}} />);
+			await screen.findByRole("button", { name: /Task 00002/ });
+			fireEvent.click(screen.getByRole("button", { name: "Filters" }));
+			expect(await screen.findByRole("textbox", { name: "Filter Labels" })).toBeInTheDocument();
+		});
+
+		// Catches: values re-fetched every time the panel opens, or fetched before it is ever opened.
+		it("loads the values once, only when the filters panel opens", async () => {
+			const createFields = vi.fn(async () => [schema("labels", "Labels", "labels", [bugs])]);
+			const { provider } = withChoices(createFields);
+			render(() => <TasksList providers={[provider]} onOpen={() => {}} />);
+			await screen.findByRole("button", { name: /Task 00002/ });
+			expect(createFields).not.toHaveBeenCalled();
+			fireEvent.click(screen.getByRole("button", { name: "Filters" }));
+			await screen.findByRole("combobox", { name: "Filter Labels" });
+			fireEvent.click(screen.getByRole("button", { name: "Filters" }));
+			fireEvent.click(screen.getByRole("button", { name: "Filters" }));
+			await screen.findByRole("combobox", { name: "Filter Labels" });
+			expect(createFields).toHaveBeenCalledTimes(1);
+		});
 	});
 
 	describe("status line and error actions", () => {
