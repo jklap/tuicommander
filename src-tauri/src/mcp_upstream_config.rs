@@ -17,7 +17,8 @@ pub(crate) const UPSTREAMS_FILE: &str = "mcp-upstreams.json";
 /// `persist_upstream_delta` and released before `apply_config_diff` awaits. This
 /// async mutex remains held across both stages so a later commit cannot apply its
 /// runtime diff before an earlier commit and then be overwritten by that stale diff.
-pub(crate) static UPSTREAM_SAVE_SEQUENCE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+pub(crate) static UPSTREAM_SAVE_SEQUENCE: tokio::sync::Mutex<()> =
+    tokio::sync::Mutex::const_new(());
 
 /// Top-level wrapper for the upstream config file.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]

@@ -101,10 +101,8 @@ async fn revision(f: &Fixture) -> String {
 }
 
 fn on_disk(f: &Fixture) -> Value {
-    serde_json::from_str(
-        &std::fs::read_to_string(f.dir.path().join("mcp-upstreams.json")).unwrap(),
-    )
-    .unwrap()
+    serde_json::from_str(&std::fs::read_to_string(f.dir.path().join("mcp-upstreams.json")).unwrap())
+        .unwrap()
 }
 
 /// Catches: a path edit to a server's URL dropping the sibling auth and header references, or
@@ -120,9 +118,8 @@ async fn upstream_path_edit_preserves_auth_cleanup() {
         "https://old.example/mcp",
     )
     .unwrap();
-    let vault = || {
-        crate::credentials::get(crate::credentials::Credential::McpUpstream(&key)).unwrap()
-    };
+    let vault =
+        || crate::credentials::get(crate::credentials::Credential::McpUpstream(&key)).unwrap();
     let before = vault();
     let reply = set(
         &f,
@@ -157,9 +154,14 @@ async fn adapter_preserves_other_fields() {
     let f = fixture(Some(initial()));
     let neighbour = f.dir.path().join("notifications.json");
     std::fs::write(&neighbour, "{\"sentinel\":true}").unwrap();
-    set(&f, revision(&f).await, "/servers/id-beta/timeout_secs", json!(99))
-        .await
-        .unwrap();
+    set(
+        &f,
+        revision(&f).await,
+        "/servers/id-beta/timeout_secs",
+        json!(99),
+    )
+    .await
+    .unwrap();
     let disk = on_disk(&f);
     assert_eq!(disk["servers"][1]["timeout_secs"], json!(99));
     assert_eq!(disk["servers"][1]["name"], json!("beta"));
@@ -224,7 +226,10 @@ async fn adapter_secret_fields_presence_only() {
     for text in texts {
         assert!(!text.contains("canary-upstream-secret"), "{text}");
     }
-    assert_eq!(on_disk(&f)["servers"][0]["headers"][0]["credential_ref"], json!(REF));
+    assert_eq!(
+        on_disk(&f)["servers"][0]["headers"][0]["credential_ref"],
+        json!(REF)
+    );
 }
 
 /// Reality: a patch persists via the owner file, the live registry sees it, and an immediate
@@ -247,7 +252,10 @@ async fn patch_persists_and_reads_back() {
     let after = get(&f, &["/servers/id-beta/name"]).await.unwrap();
     assert_eq!(after.values["/servers/id-beta/name"].stored, json!("gamma"));
     assert_eq!(after.revision, reply.revision);
-    assert!(f.live.entry("gamma").is_some(), "registry connected the rename");
+    assert!(
+        f.live.entry("gamma").is_some(),
+        "registry connected the rename"
+    );
     let stale = set(&f, before.revision, "/servers/id-beta/name", json!("x"))
         .await
         .unwrap_err();
