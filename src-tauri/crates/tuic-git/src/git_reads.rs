@@ -823,6 +823,10 @@ impl GitReads for GixGitReads {
             let Ok(wt_repo) = proxy.into_repo() else {
                 continue;
             };
+            // Recycled checkouts parked in `__archived/` are a pool, not workspaces.
+            if crate::worktree::is_archived_checkout(&base) {
+                continue;
+            }
             let path = real(&base);
             // A worktree mid-rebase is on a detached HEAD, so gix reports no branch. Recover the
             // pre-rebase branch from git's own state files, otherwise the row vanishes from the
