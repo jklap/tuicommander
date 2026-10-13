@@ -460,3 +460,37 @@ writes no account or credential. After Submit is accepted, verification and stor
 finish even if the window closes; a consumed nonce cannot be replayed. Rotation
 invalidates the same GitHub Enterprise runtime cache as the account owner API.
 Native inspection remains blocked until the private window is destroyed.
+
+## GitHub settings owner adapter
+
+`settings/accounts.rs` provides an internal typed `GithubSettings` read/perform
+boundary. `action_schema()` derives its action DTO schema. Account creation,
+credential replacement/clearing, labels and removal use `accounts::execute`;
+Enterprise PAT creation keeps the owner's `/user` identity verification. Cloud
+PATs cannot replace default or named OAuth credentials. Removal also removes
+bindings, per-account caches and cooldowns; corrupt bindings stop removal before
+credentials or metadata are deleted.
+
+Snapshots return credential presence (`set`, `unset`, or `unavailable`) and the
+ambient runtime token source. Reads do not resolve ambient credentials or refresh
+GitHub over the network. They do not invent a stored account for an external
+credential source. GitHub display preferences remain in the existing preferences
+and repository settings adapters.
+
+Cloud login uses `begin_cloud_login`, `cloud_login_status` and
+`complete_cloud_login`. Begin returns an opaque `flowId`, human verification URI
+and user code. The backend retains the device credential, enforces expiry and
+poll intervals, increases intervals on slow-down, and prevents duplicate exchanges.
+Default and additional-account completion call their existing GitHub auth owners.
+Token/provider error bodies and token scopes never enter adapter replies.
+
+Binding actions require `expectedRevision` from the snapshot's `bindingsRevision`.
+The GitHub owner checks it under the cross-process binding file lock, accepts only
+registered repositories, derives owner/repo from the chosen remote, and rejects a
+remote whose host differs from the account. Successful mutations include immediate
+owner readback; binding no-ops report `persisted:false`.
+
+This step adds no MCP, HTTP or IPC endpoint. Transport publication and settings
+change events remain the shared cutover and refresh work. Real provider login and
+Enterprise identity checks need an authenticated manual verification after that
+wiring; the isolated adapter tests do not access production credentials.

@@ -1,3 +1,7 @@
+## GitHub settings owner adapter (1774-ce8f) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, the GitHub owner adapter is loaded. Shared settings transport wiring is a separate step; this change adds no callable endpoint by itself.
+- [ ] After transport wiring, use a throwaway instance to complete default/additional cloud device login and add an Enterprise PAT. Confirm immediate presence-only readback, real identity, bindings and account-removal cleanup. Boss performs provider authentication; do not use production credentials for automated checks.
 ## Ego settings adapter (1775-330c) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, model reads/writes in Settings > Providers use the configured Ego profile and AI Chat workspace. Existing ACP and PTY sessions keep their launch configuration. Internal settings adapters await the later transport-registration step; targeted fixture tests cover owner commands and readback without touching production credentials.
