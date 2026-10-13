@@ -10,6 +10,7 @@ export interface WorkItemUser {
 	id: string;
 	name: string;
 	avatarUrl: string | null;
+	bot: boolean;
 }
 
 export interface WorkItemOption {
@@ -73,10 +74,41 @@ export interface WorkItemComment {
 export interface WorkItemReviewThread {
 	id: string;
 	resolved: boolean;
+	outdated: boolean;
 	path: string;
 	line: number | null;
+	originalLine: number | null;
 	commitId: string;
 	comments: Array<WorkItemComment>;
+	finding: WorkItemReviewFinding | null;
+}
+
+export type WorkItemReviewTool =
+	| "code_rabbit"
+	| "codex"
+	| "copilot"
+	| "gemini"
+	| "cursor"
+	| "sourcery"
+	| "greptile"
+	| "qodo"
+	| "code_ant"
+	| "graphite"
+	| "code_scanning"
+	| "generic";
+
+export type WorkItemReviewSeverity = "critical" | "high" | "medium" | "low" | "info";
+
+export interface WorkItemReviewFinding {
+	tool: WorkItemReviewTool | null;
+	title: string | null;
+	severity: WorkItemReviewSeverity | null;
+	severityLabel: string | null;
+	category: string | null;
+	suggestion: string | null;
+	agentPrompt: string | null;
+	addressedIn: string | null;
+	externalId: string | null;
 }
 
 export interface WorkItemReviewSummary {

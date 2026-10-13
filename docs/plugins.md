@@ -1887,8 +1887,10 @@ search, sort, bounded page size and opaque cursor. Providers must bind cursors t
 the account/query; selecting a preset starts with no cursor. `WorkItemPage`
 contains items, `nextCursor` and an optional `total` (all matches, when the provider knows it). Details load body, field schemas, allowed action
 descriptors and a separately paginated comment page on open. Comment entries are
-`normal`, `review_thread` (resolved, path, line and reviewed commitId), or
-`review_summary` (state and reviewed commitId). Bodies are markdown, not trusted HTML.
+`normal`, `review_thread` (resolved, outdated, path, line, originalLine, reviewed
+commitId and a nullable parsed `finding`), or `review_summary` (state and reviewed
+commitId). Comment authors carry `bot`. Bodies are markdown, not trusted HTML; finding
+text is untrusted bot data, shown as plain text and never applied or executed.
 
 Actions are `create`, `edit_field`, `transition`, `comment`, and `start_work`.
 Transitions use provider action IDs, not state display names. Board columns may carry a default edit/transition action or null; per-card moves

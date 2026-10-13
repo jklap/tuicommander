@@ -716,7 +716,7 @@
 	"prDetail.pending": "pending",
 	"prDetail.postReview": "Post review",
 	"prDetail.unresolved": "{count} unresolved threads",
-	"prDetail.unresolvedSplit": "{human} human, {bot} bot unresolved threads",
+	"prDetail.unresolvedSplit": "{human} human, {bot} bot, {ego} ego unresolved threads",
 	"prDetail.postReviewConfirm": "Post selected AI review findings to GitHub?",
 	"prDetail.posting": "Posting",
 	"prDetail.push": "Push",
@@ -745,6 +745,7 @@
 	"prDetail.requestChangesBody": "Review summary",
 	"prDetail.submitRequestChanges": "Submit",
 	"prDiff.addToReview": "Add to review",
+	"prDiff.bot": "bot",
 	"prDiff.cancel": "Cancel",
 	"prDiff.collapsed": "collapsed",
 	"prDiff.collapsedHint": "Lockfiles, generated and test files; click a file to expand",
@@ -1307,5 +1308,9 @@
 	"automations.viewRun": "View run",
 	"automations.previousRuns": "Previous runs",
 	"automations.nextRuns": "Next runs",
-	"automations.recordedWorkspace": "Workspace"
+	"automations.recordedWorkspace": "Workspace",
+	"reviewFinding.suggestion": "Suggested change",
+	"reviewFinding.agentPrompt": "Prompt for agents (untrusted)",
+	"reviewFinding.addressedIn": "Addressed in commit {sha}",
+	"reviewFinding.showOriginal": "Show original"
 }

@@ -6,7 +6,7 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-const THREAD_FIELDS: &str = "id path line originalLine diffSide isResolved isOutdated comments(first:100) { pageInfo { hasNextPage endCursor } nodes { id databaseId body url author { login } createdAt } }";
+const THREAD_FIELDS: &str = "id path line originalLine diffSide isResolved isOutdated comments(first:100) { pageInfo { hasNextPage endCursor } nodes { id databaseId body url author { __typename login } createdAt } }";
 const HEAD_QUERY: &str = "query ReviewedHead($owner:String!,$repo:String!,$number:Int!) { repository(owner:$owner,name:$repo) { pullRequest(number:$number) { headRefOid } } }";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -27,6 +27,28 @@ pub(crate) struct DraftReview {
     pub comments: Vec<crate::github::PrReviewInlineComment>,
 }
 
+/// Every comment author carries `bot`, so IPC and HTTP clients never re-derive it.
+fn mark_bot(comment: &mut Value) {
+    let bot = tuic_git::review_bots::is_bot(&comment["author"]);
+    if let Some(author) = comment["author"].as_object_mut() {
+        author.insert("bot".into(), json!(bot));
+    }
+}
+
+fn mark_bot_authors(comments: &mut Value) {
+    for comment in comments["nodes"].as_array_mut().into_iter().flatten() {
+        mark_bot(comment);
+    }
+}
+
+/// Marks the authors and attaches the finding parsed from the first comment:
+/// the comment that opened the thread states the issue; replies discuss it.
+fn enrich_thread(thread: &mut Value) {
+    mark_bot_authors(&mut thread["comments"]);
+    let finding = tuic_git::review_bots::finding_for(&thread["comments"]["nodes"][0]);
+    thread["finding"] = json!(finding);
+}
+
 pub(crate) async fn read_threads(
     api: &impl PrApi,
     mut variables: Value,
@@ -42,10 +64,11 @@ pub(crate) async fn read_threads(
         .as_str()
         .ok_or("GitHub response missing PR head")?;
     let connection = &pr["reviewThreads"];
-    let threads = connection["nodes"]
+    let mut threads = connection["nodes"]
         .as_array()
         .ok_or("GitHub response missing review threads")?
         .clone();
+    threads.iter_mut().for_each(enrich_thread);
     Ok(ReviewThreadsPage {
         head_sha: head.into(),
         threads,
@@ -64,12 +87,13 @@ pub(crate) async fn read_comments(
     thread_id: &str,
     after: Option<String>,
 ) -> Result<Value, String> {
-    let data = api.graphql("query ThreadComments($id:ID!,$after:String) { node(id:$id) { ... on PullRequestReviewThread { comments(first:100,after:$after) { pageInfo { hasNextPage endCursor } nodes { id databaseId body url author { login } createdAt } } } } }", json!({"id":thread_id,"after":after})).await?;
-    let comments = &data["data"]["node"]["comments"];
+    let data = api.graphql("query ThreadComments($id:ID!,$after:String) { node(id:$id) { ... on PullRequestReviewThread { comments(first:100,after:$after) { pageInfo { hasNextPage endCursor } nodes { id databaseId body url author { __typename login } createdAt } } } } }", json!({"id":thread_id,"after":after})).await?;
+    let mut comments = data["data"]["node"]["comments"].clone();
     if !comments["nodes"].is_array() {
         return Err("GitHub response missing thread comments".into());
     }
-    Ok(comments.clone())
+    mark_bot_authors(&mut comments);
+    Ok(comments)
 }
 
 pub(crate) async fn resolve_thread(
@@ -91,12 +115,13 @@ pub(crate) async fn resolve_thread(
     let data = api
         .graphql(&query, json!({"input":{"threadId":thread_id}}))
         .await?;
-    let thread = &data["data"][operation]["thread"];
+    let mut thread = data["data"][operation]["thread"].clone();
     if thread["isResolved"].as_bool() != Some(resolved) || thread["id"].as_str() != Some(thread_id)
     {
         return Err("GitHub did not confirm the requested thread resolution".into());
     }
-    Ok(thread.clone())
+    enrich_thread(&mut thread);
+    Ok(thread)
 }
 
 pub(crate) async fn reply_thread(
@@ -107,12 +132,13 @@ pub(crate) async fn reply_thread(
     if thread_id.trim().is_empty() || body.trim().is_empty() {
         return Err("Thread id and reply body are required".into());
     }
-    let data = api.graphql("mutation ReplyToThread($input:AddPullRequestReviewThreadReplyInput!) { addPullRequestReviewThreadReply(input:$input) { comment { id body url author { login } createdAt } } }", json!({"input":{"pullRequestReviewThreadId":thread_id,"body":body}})).await?;
-    let comment = &data["data"]["addPullRequestReviewThreadReply"]["comment"];
+    let data = api.graphql("mutation ReplyToThread($input:AddPullRequestReviewThreadReplyInput!) { addPullRequestReviewThreadReply(input:$input) { comment { id body url author { __typename login } createdAt } } }", json!({"input":{"pullRequestReviewThreadId":thread_id,"body":body}})).await?;
+    let mut comment = data["data"]["addPullRequestReviewThreadReply"]["comment"].clone();
     if !comment["id"].is_string() {
         return Err("GitHub response missing posted reply".into());
     }
-    Ok(comment.clone())
+    mark_bot(&mut comment);
+    Ok(comment)
 }
 
 pub(crate) fn validate_review(draft: &DraftReview) -> Result<(), String> {

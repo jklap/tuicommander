@@ -20,7 +20,7 @@ function comment(id: string): WorkItemCommentEntry {
 		kind: "normal",
 		value: {
 			id,
-			author: { id: "u", name: "User", avatarUrl: null },
+			author: { id: "u", name: "User", avatarUrl: null, bot: false },
 			body: `body ${id}`,
 			createdAt: "2026-10-10T10:00:00Z",
 			url: null,
@@ -115,7 +115,7 @@ describe("critic: Tasks detail", () => {
 		render(() => (
 			<TaskField
 				schema={schema}
-				value={{ kind: "user", value: [{ id: "alice", name: "Alice", avatarUrl: null }] }}
+				value={{ kind: "user", value: [{ id: "alice", name: "Alice", avatarUrl: null, bot: false }] }}
 				disabled={false}
 				canEdit
 				onSave={onSave}

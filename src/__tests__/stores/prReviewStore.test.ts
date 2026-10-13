@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock the transport boundary so we drive run/post state transitions with real
@@ -10,7 +12,7 @@ vi.mock("../../stores/appLogger", () => ({
 	appLogger: { warn: vi.fn(), info: vi.fn(), debug: vi.fn(), error: vi.fn() },
 }));
 
-import { prReviewStore } from "../../stores/prReview";
+import { EGO_MARKER, prReviewStore } from "../../stores/prReview";
 import type { PrReviewResult } from "../../types";
 
 const REPO = "/repo";
@@ -137,7 +139,14 @@ describe("prReviewStore", () => {
 			prNumber: 33,
 			body: "AI review findings",
 			event: "COMMENT",
-			comments: [{ path: "src/a.ts", line: 10, side: "RIGHT", body: "boom" }],
+			comments: [{ path: "src/a.ts", line: 10, side: "RIGHT", body: "boom\n\n<!-- tuic:ego-review -->" }],
 		});
+	});
+
+	// Catches: the frontend marker drifting from the one the backend counts, so ego
+	// threads fall back into the human count with nothing failing.
+	it("posts the same ego marker the backend thread split recognises", () => {
+		const rust = readFileSync(resolve(__dirname, "../../../src-tauri/crates/tuic-git/src/review_bots/mod.rs"), "utf8");
+		expect(rust).toContain(`pub const EGO_MARKER: &str = "${EGO_MARKER}";`);
 	});
 });

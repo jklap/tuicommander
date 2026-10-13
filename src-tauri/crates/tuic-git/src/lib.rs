@@ -16,6 +16,7 @@ pub mod github_auth;
 pub mod github_debug;
 pub mod github_poller;
 pub mod pr_review;
+pub mod review_bots;
 pub mod worktree;
 
 #[cfg(any(test, feature = "test-support"))]

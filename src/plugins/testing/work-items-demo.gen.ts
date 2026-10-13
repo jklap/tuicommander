@@ -295,7 +295,8 @@ export const workItemsDemo = {
 							"author": {
 								"id": "demo-user",
 								"name": "Demo User",
-								"avatarUrl": null
+								"avatarUrl": null,
+								"bot": false
 							},
 							"body": "**Synthetic** review comment",
 							"createdAt": "2026-10-10T00:00:00Z",
@@ -307,8 +308,10 @@ export const workItemsDemo = {
 						"value": {
 							"id": "demo-thread",
 							"resolved": true,
+							"outdated": false,
 							"path": "src/example.rs",
 							"line": 12,
+							"originalLine": 12,
 							"commitId": "demo-sha",
 							"comments": [
 								{
@@ -316,13 +319,15 @@ export const workItemsDemo = {
 									"author": {
 										"id": "demo-user",
 										"name": "Demo User",
-										"avatarUrl": null
+										"avatarUrl": null,
+										"bot": false
 									},
 									"body": "**Synthetic** review comment",
 									"createdAt": "2026-10-10T00:00:00Z",
 									"url": null
 								}
-							]
+							],
+							"finding": null
 						}
 					},
 					{
@@ -333,7 +338,8 @@ export const workItemsDemo = {
 								"author": {
 									"id": "demo-user",
 									"name": "Demo User",
-									"avatarUrl": null
+									"avatarUrl": null,
+									"bot": false
 								},
 								"body": "**Synthetic** review comment",
 								"createdAt": "2026-10-10T00:00:00Z",

@@ -59,6 +59,7 @@ export function TaskField(props: {
 							id,
 							name: options().find((option) => option.id === id)?.name ?? id,
 							avatarUrl: null,
+							bot: false,
 						},
 				),
 			};
