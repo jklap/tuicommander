@@ -1,9 +1,11 @@
 import { For, Show } from "solid-js";
+import type { WorkItemFieldSchema } from "../../../types/work-items.gen";
 import { Input } from "../../ui/Input";
 import { Select } from "../../ui/Select";
 import { Textarea } from "../../ui/Textarea";
 import { CreateField as SettingField } from "./CreateField";
 import { TaskCreateField } from "./TaskCreateField";
+import { TaskCreateOptional } from "./TaskCreateOptional";
 import styles from "./TasksCreate.module.css";
 import { type TasksCreateOptions, useTasksCreate } from "./useTasksCreate";
 
@@ -15,6 +17,18 @@ export interface TasksCreateProps extends TasksCreateOptions {
 export function TasksCreate(props: TasksCreateProps) {
 	const model = useTasksCreate(props);
 	const busy = () => model.loading() || model.submitting();
+	const required = () => model.schema().filter((entry) => entry.required);
+	const optional = () => model.schema().filter((entry) => !entry.required);
+	const field = (schema: WorkItemFieldSchema) => (
+		<TaskCreateField
+			schema={schema}
+			provider={props.provider}
+			error={model.fieldError(schema)}
+			value={model.draft()[schema.id]}
+			disabled={busy()}
+			onInput={(value) => model.setValue(schema.id, value)}
+		/>
+	);
 	return (
 		<form
 			class={styles.create}
@@ -73,19 +87,11 @@ export function TasksCreate(props: TasksCreateProps) {
 				)}
 			</SettingField>
 			<div class={styles.fields}>
-				<For each={model.schema()}>
-					{(field) => (
-						<TaskCreateField
-							schema={field}
-							provider={props.provider}
-							error={model.fieldError(field)}
-							value={model.draft()[field.id]}
-							disabled={busy()}
-							onInput={(value) => model.setValue(field.id, value)}
-						/>
-					)}
-				</For>
+				<For each={required()}>{field}</For>
 			</div>
+			<TaskCreateOptional fields={optional()} error={model.fieldError}>
+				{field}
+			</TaskCreateOptional>
 			<Show when={model.loading()}>
 				<p class={styles.muted} role="status">
 					Loading fields…

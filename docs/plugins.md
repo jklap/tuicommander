@@ -1911,7 +1911,10 @@ Providers supply data and declared actions; they do not render this view.
 The header shows key, title, type, state and updated time. Detail field schemas
 select text, Markdown, enum, user, labels, date, number and link controls. Saving
 requires an editable field and an enabled `edit_field` action. Required fields
-cannot be cleared. Values retain their tagged field-value shape.
+cannot be cleared. Values retain their tagged field-value shape. The detail shows
+Description first, then the fields, then Comments. A schema of more than eight
+fields folds behind a "Fields (N)" summary so a wide Jira project does not push
+Description and Comments out of view; no field is dropped.
 
 Descriptions and normal comments, review threads and review summaries render
 through `ContentRenderer` with `untrustedContent`. Markdown, tables, images and
@@ -1976,6 +1979,10 @@ returns the fields of that type (an unknown type is an error, and `create`
 rejects an undeclared `itemType`). Title and Description are fixed inputs, so a
 schema does not repeat them. Only editable fields render.
 
+Create lists Type, Title, Description and the required fields first. Optional
+fields sit in a folded "Optional fields (N)" group with a name filter; the filter
+only hides a field and never hides one that blocks Create.
+
 A type change reloads the schema; values survive only for the same field id and
 kind, and a late schema of an earlier type is dropped. Create stays disabled until
 Title, Type and every required field of the current type are set. Submit sends one
@@ -1989,6 +1996,11 @@ comma-separated free text. Required-field errors are linked to their controls.
 The Jira provider omits configured Project and selected Issue Type from its
 create schema, searches project-assignable users for Assignee, and searches users
 for Reporter. Cloud choices use account IDs; Data Center choices use usernames.
+A provider may declare optional `singleUser(fieldId)`; Jira does, so a second pick in
+a user field replaces the first. The control shows and announces the chosen user.
+Jira create metadata that carries `hasDefaultValue` (Reporter) is not required in
+the form, and empty optional fields are left out of the create payload so Jira
+applies its own defaults.
 
 ## Tasks setup
 

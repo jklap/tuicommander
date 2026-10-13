@@ -19,6 +19,7 @@ export function TaskCreateUser(props: {
 	const [names, setNames] = createSignal<Record<string, string>>({});
 	const [loading, setLoading] = createSignal(false);
 	const [error, setError] = createSignal<string>();
+	const single = () => props.provider.singleUser?.(props.schema.id) === true;
 	const selected = () => (Array.isArray(props.value) ? props.value : []);
 	createEffect(() => {
 		const text = query().trim();
@@ -52,6 +53,8 @@ export function TaskCreateUser(props: {
 			clearTimeout(timer);
 		});
 	});
+	const name = (userId: string) =>
+		names()[userId] ?? props.schema.options.find((option) => option.id === userId)?.name ?? userId;
 	const label = () => `${props.schema.name}${props.schema.required ? " *" : ""}`;
 	return (
 		<SettingField label={label()} error={props.error} hint="Search for a user, then select a result.">
@@ -59,13 +62,14 @@ export function TaskCreateUser(props: {
 				<>
 					<Input
 						id={id}
-						aria-describedby={hintId}
+						aria-describedby={[hintId, `${id}-selected`].join(" ")}
 						aria-required={props.schema.required}
 						aria-invalid={!!props.error}
 						value={query()}
 						disabled={props.disabled}
 						onInput={(event) => setQuery(event.currentTarget.value)}
 					/>
+					<span id={`${id}-selected`}>{selected().length ? `Selected: ${selected().map(name).join(", ")}` : ""}</span>
 					<For each={selected()}>
 						{(userId) => (
 							<button
@@ -73,7 +77,7 @@ export function TaskCreateUser(props: {
 								disabled={props.disabled}
 								onClick={() => props.onInput(selected().filter((value) => value !== userId))}
 							>
-								Remove {names()[userId] ?? props.schema.options.find((option) => option.id === userId)?.name ?? userId}
+								Remove {name(userId)}
 							</button>
 						)}
 					</For>
@@ -91,7 +95,7 @@ export function TaskCreateUser(props: {
 								disabled={props.disabled}
 								onClick={() => {
 									setNames((previous) => ({ ...previous, [option.id]: option.name }));
-									props.onInput([...selected(), option.id]);
+									props.onInput(single() ? [option.id] : [...selected(), option.id]);
 									setQuery("");
 								}}
 							>

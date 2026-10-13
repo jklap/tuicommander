@@ -1,15 +1,18 @@
 import aitr from "../../../../../plugins/jira/fixtures/create-aitr.json";
 import lan from "../../../../../plugins/jira/fixtures/create-lan.json";
+import lanWide from "../../../../../plugins/jira/fixtures/create-lan-wide.json";
 import users from "../../../../../plugins/jira/fixtures/create-users.json";
 // @ts-expect-error -- Built-in providers are distributed as plain JavaScript.
 import { createJiraProvider } from "../../../../../plugins/jira/provider.js";
 import type { WorkItemProvider } from "../../../../plugins/workItemProvider";
 
 export const recordedProjects = { LAN: lan, AITR: aitr };
+/** LAN Task (57 fields) with every field Jira offers, the schema that overwhelms the form. */
+export const WIDE_LAN_TYPE = "10002";
 
 /** Real provider + recorded REST replies; every write is captured and rejected before networking. */
-export function jiraFixtureProvider(project: keyof typeof recordedProjects) {
-	const fixture = recordedProjects[project];
+export function jiraFixtureProvider(project: keyof typeof recordedProjects | "LAN_WIDE") {
+	const fixture = project === "LAN_WIDE" ? lanWide : recordedProjects[project];
 	const writes: unknown[] = [];
 	const provider: WorkItemProvider = createJiraProvider({
 		account: { id: "review", kind: "basic", host: "https://jira.example.invalid" },
