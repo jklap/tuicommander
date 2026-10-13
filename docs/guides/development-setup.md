@@ -106,6 +106,16 @@ you set them), so meson does not wrap its compiler with sccache, whose socket
 would not fit `sun_path` under the long per-run `TMPDIR`. Nowhere else: `CC` is
 part of the native build fingerprint.
 
+On macOS the wrapper also exports `AR` as the real toolchain `ar` (what `xcrun --find ar`
+prints), unless you set it. `/usr/bin/ar` is a shim that runs `xcrun`; where `xcrun` cannot
+write its lookup cache (the agent sandbox) a cache miss prints `couldn't create cache file`
+*before* the usage text, and meson accepts Apple's `ar` only when stderr starts with
+`usage` — so the bundled WebRTC build (`tuic-dictation`) fails with `Unknown linker(s): ar`
+whenever the environment is one `xcrun` has not cached. Which environments are cached
+changes over time, so this does not depend on the cache. (A separate, intermittent sandbox
+failure: the proxy sometimes truncates meson's abseil download, which surfaces as
+`Incorrect hash for source`; re-running the build succeeds.)
+
 `TUIC_TEST_TMP_BASE=<checkout>/.tmp/tuic-tests` still puts scratch in the
 checkout, but only as an explicit opt-in: it is unsafe wherever writes to the
 checkout's `.git/hooks` or `.git/config` are denied (observed in the agent
