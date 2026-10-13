@@ -56,8 +56,8 @@
   font-size: var(--font-sm);
 }
 
-/* Same 20px as the Edit/Live/Diff buttons beside it. */
-.agentSelect { --control-height: 20px; min-width: 100px; max-width: 160px; }
+/* Same 20px as the Edit/Live/Diff buttons beside it. Two classes so it beats .compact whatever the bundle order. */
+.agentActions .agentSelect { --control-height: 20px; min-width: 100px; max-width: 160px; }
 
 .agentActions button:disabled { opacity: 0.5; cursor: not-allowed; }
 

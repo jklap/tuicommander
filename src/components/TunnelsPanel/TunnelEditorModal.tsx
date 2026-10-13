@@ -280,6 +280,7 @@ export const TunnelEditorModal: Component<TunnelEditorModalProps> = (props) => {
 							{(fw, idx) => (
 								<div class={s.group} style={{ display: "flex", gap: "6px", "align-items": "center" }}>
 									<Select
+										compact
 										style={{ width: "80px" }}
 										value={fw.type}
 										onChange={(e) =>
@@ -293,6 +294,7 @@ export const TunnelEditorModal: Component<TunnelEditorModalProps> = (props) => {
 										<option value="Remote">Remote</option>
 									</Select>
 									<Input
+										compact
 										inputMode="numeric"
 										pattern="[0-9]*"
 										placeholder="bind"
@@ -306,6 +308,7 @@ export const TunnelEditorModal: Component<TunnelEditorModalProps> = (props) => {
 									/>
 									<span style={{ color: "var(--fg-muted)" }}>:</span>
 									<Input
+										compact
 										placeholder={fw.type === "Remote" ? "local host" : "remote host"}
 										style={{ flex: "1" }}
 										value={fw.type === "Remote" ? (fw.local_host ?? fw.remote_host ?? "") : (fw.remote_host ?? "")}
@@ -320,6 +323,7 @@ export const TunnelEditorModal: Component<TunnelEditorModalProps> = (props) => {
 									/>
 									<span style={{ color: "var(--fg-muted)" }}>:</span>
 									<Input
+										compact
 										inputMode="numeric"
 										pattern="[0-9]*"
 										placeholder="port"
@@ -339,7 +343,8 @@ export const TunnelEditorModal: Component<TunnelEditorModalProps> = (props) => {
 										class={d.cancelBtn}
 										style={{
 											flex: "none",
-											padding: "2px 8px",
+											height: "22px",
+											padding: "0 8px",
 											"font-size": "var(--font-sm)",
 											border: "none",
 											"border-radius": "var(--radius-md)",
