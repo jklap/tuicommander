@@ -1785,6 +1785,59 @@ mod http_route_tests {
         );
     }
 
+    /// L1: the IPC command (`tauri_commands::list_ssh_config_hosts`, which
+    /// returns `load_ssh_config_hosts`) and the HTTP route agree on every
+    /// outcome: hosts, an empty list for a missing file, and an error — not
+    /// an IPC `[]` — for a file that cannot be read or parsed. The error never
+    /// names the config's path (it would leak the home directory to a remote
+    /// client).
+    #[tokio::test]
+    async fn ssh_config_hosts_ipc_and_http_agree_and_errors_name_no_path() {
+        let (_ok_dir, ok) = ssh_config_fixture(b"Host alpha\n  User boss\n");
+        let (bad_dir, bad) = ssh_config_fixture(b"Host alpha\n  Port notaport\n");
+        let missing = bad_dir.path().join("absent");
+        let mut cases = vec![(ok, true), (missing, true), (bad.clone(), false)];
+        #[cfg(unix)]
+        let (_unreadable_dir, unreadable) = ssh_config_fixture(b"Host alpha\n");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&unreadable, std::fs::Permissions::from_mode(0o000)).unwrap();
+            if std::fs::File::open(&unreadable).is_err() {
+                cases.push((unreadable.clone(), false));
+            }
+        }
+        for (path, succeeds) in cases {
+            let ipc = load_ssh_config_hosts_from(Some(&path));
+            let http = list_ssh_config_hosts_from(Some(&path));
+            let status = http.status();
+            let body = body_json(http).await;
+            match ipc {
+                Ok(hosts) => {
+                    assert!(succeeds, "{}: IPC answered {hosts:?}", path.display());
+                    assert_eq!(status, StatusCode::OK, "{}", path.display());
+                    assert_eq!(body, serde_json::json!(hosts));
+                }
+                Err(error) => {
+                    assert!(!succeeds, "{}: IPC failed: {error}", path.display());
+                    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+                    assert_eq!(body["error"], error, "both transports carry one message");
+                    let dir = path.parent().unwrap().to_string_lossy().into_owned();
+                    assert!(!error.contains(&dir), "error names the path: {error}");
+                    assert!(
+                        !error.contains("config\""),
+                        "error quotes a file name: {error}"
+                    );
+                }
+            }
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&unreadable, std::fs::Permissions::from_mode(0o644));
+        }
+    }
+
     #[tokio::test]
     async fn list_agent_keys_runs_its_handler_and_returns_json() {
         // Environment-dependent (shells out to the real `ssh-add -l`), so this

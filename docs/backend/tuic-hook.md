@@ -72,8 +72,9 @@ runs this binary against every spec of every agent and holds it to that table
 **Builds without this binary.** Only the desktop app bundles `tuic-hook`. The headless
 `tuic-remote` binary ships alone, yet still launches Claude with the launch-scoped
 `agent-hooks/claude.json`; a non-desktop build therefore generates each spec's `wire`
-as a self-contained shell one-liner (tty from `$TUIC_PTY_TTY`, falling back to `ps -o tty=` only
-for an agent TUIC did not spawn, + `printf`) instead — the same
+as a self-contained shell one-liner (tty: the parent's live one via `ps -o tty=` when that
+resolves, else `$TUIC_PTY_TTY` — a sandboxed agent cannot run `ps`, and Claude's hook parent is
+detached — else `/dev/tty`; + `printf`) instead — the same
 state/`toolfail` bytes, without the metadata scrapes or `is_interrupt` suppression.
 
 **One override survives in `agent_hook.rs`:** Claude's `PreToolUse` entry is scoped to
@@ -172,6 +173,14 @@ hook event, including ones that used to skip stdin entirely.
 Without `TUIC_PTY_TTY` (an agent TUICommander didn't spawn, or an old binary), `tuic-hook`
 falls back to walking process ancestors for the first one with a controlling tty
 (`src-tauri/crates/tuic-hook/src/tty.rs`), then to `/dev/tty`.
+
+The two **shell** paths — the headless hook one-liner and the Codex `notify` script — use
+the opposite order: the parent's live tty (`ps -o tty= -p $PPID`) first and `$TUIC_PTY_TTY`
+only when that yields nothing. A process that merely *inherited* the variable onto another
+terminal (a pane of a real `tmux` started inside a TUIC tab, a command that copies its
+parent's environment) then cannot label the wrong tab. A TUIC tmux-shim pane is its own PTY
+with its own `$TUIC_PTY_TTY` (`tmux_routes` test
+`each_tmux_shim_pane_shell_carries_its_own_pty_device`), so it resolves correctly either way.
 
 ## Wire format
 

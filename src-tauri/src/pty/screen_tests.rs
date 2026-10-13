@@ -610,6 +610,46 @@ fn native_snapshot_mapping_matches_the_macos_ps_fixture() {
     assert!(has_meaningful_descendant(701, &with_turn_work));
 }
 
+/// M5: the "ps can never run here" latch is set only by a permanent spawn
+/// failure (a denied exec, a missing `ps`). A transient one — EAGAIN under a
+/// process limit, EINTR — must leave the fallback available for the next
+/// snapshot, or one unlucky second would blind it for the process lifetime.
+#[cfg(not(windows))]
+#[test]
+fn ps_fallback_latches_only_when_ps_can_never_run() {
+    use std::io::{Error, ErrorKind};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    for transient in [
+        ErrorKind::WouldBlock,
+        ErrorKind::Interrupted,
+        ErrorKind::OutOfMemory,
+    ] {
+        let latch = AtomicBool::new(false);
+        assert!(run_ps_fallback(&latch, || Err(Error::from(transient))).is_none());
+        assert!(
+            !latch.load(Ordering::Relaxed),
+            "{transient:?} must not latch"
+        );
+    }
+    for permanent in [ErrorKind::PermissionDenied, ErrorKind::NotFound] {
+        let latch = AtomicBool::new(false);
+        assert!(run_ps_fallback(&latch, || Err(Error::from(permanent))).is_none());
+        assert!(latch.load(Ordering::Relaxed), "{permanent:?} must latch");
+    }
+    // A spawn that ran parses its rows and leaves the latch alone.
+    let latch = AtomicBool::new(false);
+    let rows = run_ps_fallback(&latch, || {
+        Ok(std::process::Output {
+            status: std::os::unix::process::ExitStatusExt::from_raw(0),
+            stdout: b"  1     0  01:00 launchd /sbin/launchd\n".to_vec(),
+            stderr: Vec::new(),
+        })
+    })
+    .expect("ps rows parse");
+    assert_eq!(rows[0].name, "launchd");
+    assert!(!latch.load(Ordering::Relaxed));
+}
+
 /// `ps` stays a fallback: never the primary path, taken only when the native
 /// enumeration fails or a process in TUIC's own subtree is unreadable.
 #[cfg(not(windows))]

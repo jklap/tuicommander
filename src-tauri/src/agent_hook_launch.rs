@@ -107,12 +107,14 @@ fn codex_user_notify() -> Vec<String> {
         .collect()
 }
 
-/// Codex's `notify` script. The tty comes from `$TUIC_PTY_TTY` — the device
-/// TUIC stamps on every PTY child (`spawn_pty_pair_with_retry`), inherited by
-/// the agent and by the notify it runs — exactly as `tuic-hook` resolves it.
-/// `ps -o tty=` is only the fallback for an agent TUIC did not spawn: inside a
-/// sandboxed agent the setuid `ps` cannot be exec'd, which used to drop the
-/// tty to `/dev/tty` (none for a detached notify) and lose `state=idle`.
+/// Codex's `notify` script. The tty is Codex's own LIVE one (`ps -o tty= -p
+/// $PPID`; Codex is the notify's parent) whenever that resolves, and
+/// `$TUIC_PTY_TTY` — the device TUIC stamps on every PTY child
+/// (`spawn_pty_pair_with_retry`) — only when it does not: inside a sandboxed
+/// agent the setuid `ps` cannot be exec'd, which used to drop the tty to
+/// `/dev/tty` (none for a detached notify) and lose `state=idle`. Same order
+/// as the shell hook flavour (`agent_hook::tty_resolve`): an inherited
+/// variable must never label another tab's session.
 fn codex_script(user_notify: &[String]) -> String {
     let chain = if user_notify.is_empty() {
         String::new()
@@ -130,11 +132,8 @@ fn codex_script(user_notify: &[String]) -> String {
 payload=${{1:-}}
 case "$payload" in
   *'"type":"agent-turn-complete"'*|*'"type": "agent-turn-complete"'*)
-    tty=${{TUIC_PTY_TTY:-}}
-    if [ -z "$tty" ]; then
-      tty=$(ps -o tty= -p "$PPID" 2>/dev/null | tr -d '[:space:]')
-      case "$tty" in *[0-9]*) tty="/dev/${{tty#/dev/}}";; *) tty=/dev/tty;; esac
-    fi
+    tty=$(ps -o tty= -p "$PPID" 2>/dev/null | tr -d '[:space:]')
+    case "$tty" in *[0-9]*) tty="/dev/${{tty#/dev/}}";; *) tty=${{TUIC_PTY_TTY:-/dev/tty}};; esac
     printf '\033]7770;state=idle\033\\' > "$tty" 2>/dev/null || true
     ;;
 esac
@@ -917,8 +916,11 @@ mod tests {
         assert!(codex.contains("agent-turn-complete"));
         assert!(codex.contains("7770;state=idle"));
         let pty_tty = codex.find("TUIC_PTY_TTY").expect("reads TUIC_PTY_TTY");
-        let ps = codex.find("ps -o tty=").expect("keeps the ps fallback");
-        assert!(pty_tty < ps, "TUIC_PTY_TTY is tried before ps: {codex}");
+        let ps = codex.find("ps -o tty=").expect("reads the live tty");
+        assert!(
+            ps < pty_tty,
+            "the live tty is tried before TUIC_PTY_TTY: {codex}"
+        );
     }
 
     /// The notify must reach the PTY TUIC stamped without exec'ing `ps`:
@@ -942,6 +944,58 @@ mod tests {
             .unwrap();
         assert!(status.success());
         assert_eq!(std::fs::read(&tty).unwrap(), b"\x1b]7770;state=idle\x1b\\");
+    }
+
+    /// M3: an inherited `$TUIC_PTY_TTY` must not beat the tty the agent is
+    /// really on. A stand-in `ps` reports a live tty (spelled `/dev/..<path>`
+    /// so it can be a scratch file); the notify must write there and leave the
+    /// inherited device alone. With the live lookup failing (a `ps` that prints
+    /// nothing, as a sandboxed exec does) the variable is used.
+    #[cfg(unix)]
+    #[test]
+    fn codex_notify_prefers_the_live_tty_over_an_inherited_tuic_pty_tty() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let script = dir.path().join("notify.sh");
+        std::fs::write(&script, codex_script(&[])).unwrap();
+        let live = dir.path().join("live-tty7");
+        let inherited = dir.path().join("inherited-tty");
+        std::fs::write(&live, "").unwrap();
+        std::fs::write(&inherited, "").unwrap();
+        let run = |ps_body: &str| {
+            let bin = tempfile::TempDir::new().unwrap();
+            let ps = bin.path().join("ps");
+            std::fs::write(&ps, format!("#!/bin/sh\n{ps_body}\n")).unwrap();
+            std::fs::set_permissions(&ps, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+                .unwrap();
+            let status = std::process::Command::new("/bin/sh")
+                .arg(&script)
+                .arg(r#"{"type":"agent-turn-complete"}"#)
+                .env_clear()
+                .env("PATH", format!("{}:/usr/bin:/bin", bin.path().display()))
+                .env("TUIC_PTY_TTY", &inherited)
+                .status()
+                .unwrap();
+            assert!(status.success());
+        };
+        let idle = b"\x1b]7770;state=idle\x1b\\";
+
+        run(&format!("printf '%s\\n' '/dev/..{}'", live.display()));
+        assert_eq!(
+            std::fs::read(&live).unwrap(),
+            idle,
+            "the live tty gets the notify"
+        );
+        assert!(
+            std::fs::read(&inherited).unwrap().is_empty(),
+            "the inherited tty is left alone"
+        );
+
+        run("exit 1");
+        assert_eq!(
+            std::fs::read(&inherited).unwrap(),
+            idle,
+            "no live tty: TUIC_PTY_TTY"
+        );
     }
 
     #[test]

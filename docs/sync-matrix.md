@@ -864,7 +864,9 @@ When adding or removing a process-inspection call site, or the logged `ps` fallb
 
 | File | What to update |
 |------|----------------|
-| `scripts/check-no-process-exec.mjs` | The `file::fn` allow-list (a stale entry fails `--self-test`); wired into `make check` and `.github/workflows/ci.yml` |
+| `scripts/check-no-process-exec.mjs` | The `file::fn` allow-list (a stale entry fails `--self-test`); the per-body scoping (rustfmt indentation ends a fn) and the dash / BSD-letter `ps` patterns, each pinned by a `--self-test` fixture; wired into `make check` and `.github/workflows/ci.yml` |
+| `src-tauri/crates/tuic-core/src/process_info.rs` | The `ProcessSource` trait (a new method needs a `FakeProcessSource` answer or a default), per-platform reads and their fail-soft rules (`Unreadable`, zombies, the pid-listing growth loop, `hidepid`), the module docs; its `tests::live` cases, including the macOS `ps` oracle that reports `UNCHECKED` in the sandbox; `AGENTS.md`'s process-inspection rule |
+| `src-tauri/src/tunnels/exec.rs` | The one-shot runner every ssh/scp/probe call shares (`run_command_with`): group spawn, bounded group kill on timeout, drop guard, a leader's exit winning over a straggler that holds the pipes, a stdin EPIPE never replacing the exit classification; `src-tauri/AGENTS.md`'s "Killing a Child Process" section |
 | `docs/backend/pty.md` | Native process snapshot, the `ps` fallback and its removal plan |
 | `src-tauri/crates/tuic-test-support/{build.rs,src/identity_probe_main.rs}` | The identity probe tests install as a named foreground process (and as a local `ps` stand-in); its personalities, `tests/identity_probe.rs`, and the paragraph in `docs/guides/development-setup.md` → Testing |
 
