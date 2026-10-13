@@ -1,20 +1,30 @@
 // @vitest-environment jsdom
 import { fireEvent, render, screen } from "@solidjs/testing-library";
 import { expect, it } from "vitest";
+import type { WorkItemProvider } from "../../../../plugins/workItemProvider";
 import type { WorkItemFieldSchema } from "../../../../types/work-items.gen";
 import { formFields } from "../createDraft";
 import { TaskCreateOptional } from "../TaskCreateOptional";
 import { TasksCreate } from "../TasksCreate";
 import { jiraFixtureProvider, WIDE_LAN_TYPE } from "./jiraFixtureProvider";
 
+// Recorded Task has no required field left once Jira defaults are honoured, so one is required here
+// the way a sub-task requires its Parent.
 async function openWideForm() {
-	const { provider } = jiraFixtureProvider("LAN_WIDE");
+	const recorded = jiraFixtureProvider("LAN_WIDE").provider;
+	const provider: WorkItemProvider = {
+		...recorded,
+		createFields: async (type, signal) =>
+			(await recorded.createFields(type, signal)).map((field) =>
+				field.id === "environment" ? { ...field, required: true } : field,
+			),
+	};
 	const schema = formFields(await provider.createFields(WIDE_LAN_TYPE));
 	render(() => <TasksCreate provider={provider} onCreated={() => {}} />);
 	const picker = await screen.findByLabelText("Type *");
 	await screen.findByRole("option", { name: "Task" });
 	fireEvent.change(picker, { target: { value: WIDE_LAN_TYPE } });
-	await screen.findByLabelText("Reporter *");
+	await screen.findByLabelText("Environment *");
 	const group = screen.getByText(/^Optional fields/).closest("details");
 	if (!group) throw new Error("The optional fields have no group");
 	return { schema, group };
@@ -23,10 +33,10 @@ async function openWideForm() {
 // Catches: 47-56 optional controls rendered inline, so the required fields drown in a long form.
 it("wide_lan_schema_lists_required_fields_first_and_folds_the_optional_ones", async () => {
 	const { schema, group } = await openWideForm();
-	const reporter = screen.getByLabelText("Reporter *");
+	const environment = screen.getByLabelText("Environment *");
 	expect(group.open).toBe(false);
-	expect(group.contains(reporter)).toBe(false);
-	expect(reporter.compareDocumentPosition(group) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+	expect(group.contains(environment)).toBe(false);
+	expect(environment.compareDocumentPosition(group) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 	for (const field of schema.filter((entry) => !entry.required))
 		expect(group.contains(screen.getAllByLabelText(field.name)[0]), field.name).toBe(true);
 	expect(group).toHaveTextContent(`Optional fields (${schema.filter((entry) => !entry.required).length})`);

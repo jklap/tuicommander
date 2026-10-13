@@ -1978,3 +1978,8 @@ comma-separated free text. Required-field errors are linked to their controls.
 The Jira provider omits configured Project and selected Issue Type from its
 create schema, searches project-assignable users for Assignee, and searches users
 for Reporter. Cloud choices use account IDs; Data Center choices use usernames.
+A provider may declare optional `singleUser(fieldId)`; Jira does, so a second pick in
+a user field replaces the first. The control shows and announces the chosen user.
+Jira create metadata that carries `hasDefaultValue` (Reporter) is not required in
+the form, and empty optional fields are left out of the create payload so Jira
+applies its own defaults.

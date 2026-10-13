@@ -21,14 +21,8 @@ it.each(cases)("recorded $project $id collects valid create payload at jira boun
 	expect(screen.queryByLabelText("Project *")).toBeNull();
 	expect(screen.queryByLabelText("Issue Type *")).toBeNull();
 	if (project === "LAN") {
-		const reporter = screen.getByLabelText("Reporter *");
-		const hintId = reporter.getAttribute("aria-describedby");
-		expect(
-			hintId
-				?.split(" ")
-				.map((id) => document.getElementById(id)?.textContent)
-				.join(" "),
-		).toContain("Required: Reporter");
+		// Jira fills Reporter itself (hasDefaultValue in every recorded LAN type), so the form does not require it.
+		const reporter = screen.getByLabelText("Reporter");
 		fireEvent.input(reporter, { target: { value: "Reviewer" } });
 		fireEvent.click(await screen.findByRole("button", { name: "Reviewer 2" }));
 		fireEvent.input(screen.getByLabelText("Labels"), { target: { value: "new-label," } });
