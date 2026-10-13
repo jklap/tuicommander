@@ -178,7 +178,10 @@ async fn remote_edit_preserves_credential_reference() {
         json!(uuid::Uuid::new_v4().to_string()),
     )
     .await;
-    assert!(id_edit.is_err(), "the id is the vault binding and is immutable");
+    assert!(
+        id_edit.is_err(),
+        "the id is the vault binding and is immutable"
+    );
     assert!(connection_password_exists(&id).unwrap());
 
     let reply = patch(
@@ -208,14 +211,20 @@ async fn adapter_preserves_other_fields() {
     seed_connections(&f, &[a, b]);
     let profile = TunnelProfile::new("tun", "t.example", "bob");
     ProfileStore::save(f.dir.path(), &profile).unwrap();
-    let tunnel_file = f.dir.path().join("tunnels").join(format!("{}.toml", profile.id));
+    let tunnel_file = f
+        .dir
+        .path()
+        .join("tunnels")
+        .join(format!("{}.toml", profile.id));
     let tunnel_before = std::fs::read_to_string(&tunnel_file).unwrap();
     let neighbour = f.dir.path().join("notifications.json");
     std::fs::write(&neighbour, "{\"sentinel\":true}").unwrap();
 
     let probe = format!("/connections/{b_id}/name");
     let rev = revision(&f, "connections", &probe).await;
-    set(&f, "connections", rev, &probe, json!("b2")).await.unwrap();
+    set(&f, "connections", rev, &probe, json!("b2"))
+        .await
+        .unwrap();
 
     let disk = connections_on_disk(&f);
     assert_eq!(disk[0]["id"], json!(a_id));
@@ -223,7 +232,10 @@ async fn adapter_preserves_other_fields() {
     assert_eq!(disk[0]["transport"]["ssh_host"], json!("host.example"));
     assert_eq!(disk[1]["name"], json!("b2"));
     assert_eq!(disk[1]["auth_username"], json!("alice"));
-    assert_eq!(std::fs::read_to_string(&tunnel_file).unwrap(), tunnel_before);
+    assert_eq!(
+        std::fs::read_to_string(&tunnel_file).unwrap(),
+        tunnel_before
+    );
     assert_eq!(
         std::fs::read_to_string(&neighbour).unwrap(),
         "{\"sentinel\":true}"
@@ -242,12 +254,18 @@ async fn remote_write_cannot_touch_local() {
     ProfileStore::save(f.dir.path(), &profile).unwrap();
     let connections_before =
         std::fs::read_to_string(f.dir.path().join("connections.json")).unwrap();
-    let tunnel_file = f.dir.path().join("tunnels").join(format!("{}.toml", profile.id));
+    let tunnel_file = f
+        .dir
+        .path()
+        .join("tunnels")
+        .join(format!("{}.toml", profile.id));
     let tunnel_before = std::fs::read_to_string(&tunnel_file).unwrap();
 
     let probe = format!("/profiles/{}/name", profile.id);
     let rev = revision(&f, "tunnels", &probe).await;
-    set(&f, "tunnels", rev, &probe, json!("tun2")).await.unwrap();
+    set(&f, "tunnels", rev, &probe, json!("tun2"))
+        .await
+        .unwrap();
     assert_eq!(
         std::fs::read_to_string(f.dir.path().join("connections.json")).unwrap(),
         connections_before
@@ -255,7 +273,9 @@ async fn remote_write_cannot_touch_local() {
 
     let probe = format!("/connections/{}/name", conn.id);
     let rev = revision(&f, "connections", &probe).await;
-    set(&f, "connections", rev, &probe, json!("work2")).await.unwrap();
+    set(&f, "connections", rev, &probe, json!("work2"))
+        .await
+        .unwrap();
     let tunnel_after = std::fs::read_to_string(&tunnel_file).unwrap();
     assert_ne!(tunnel_after, tunnel_before, "the tunnel edit itself landed");
     assert!(tunnel_after.contains("tun2"));
@@ -322,9 +342,15 @@ async fn patch_persists_and_reads_back() {
     seed_connections(&f, std::slice::from_ref(&conn));
     let probe = format!("/connections/{}/enabled", conn.id);
     let before = get(&f, "connections", &[&probe]).await.unwrap();
-    let reply = set(&f, "connections", before.revision.clone(), &probe, json!(false))
-        .await
-        .unwrap();
+    let reply = set(
+        &f,
+        "connections",
+        before.revision.clone(),
+        &probe,
+        json!(false),
+    )
+    .await
+    .unwrap();
     assert!(reply.persisted);
     assert_eq!(connections_on_disk(&f)[0]["enabled"], json!(false));
     let after = get(&f, "connections", &[&probe]).await.unwrap();
@@ -363,7 +389,9 @@ async fn invalid_records_are_rejected_before_any_write() {
 
     let name = format!("/connections/{}/name", conn.id);
     let rev = revision(&f, "connections", &name).await;
-    let error = set(&f, "connections", rev, &name, json!("  ")).await.unwrap_err();
+    let error = set(&f, "connections", rev, &name, json!("  "))
+        .await
+        .unwrap_err();
     assert_eq!(error.code, "out_of_range");
     let port = format!("/profiles/{}/port", profile.id);
     let rev = revision(&f, "tunnels", &port).await;
@@ -373,7 +401,10 @@ async fn invalid_records_are_rejected_before_any_write() {
         std::fs::read_to_string(f.dir.path().join("connections.json")).unwrap(),
         before_connections
     );
-    assert_eq!(ProfileStore::load_all(f.dir.path(), None).unwrap()[0].port, 22);
+    assert_eq!(
+        ProfileStore::load_all(f.dir.path(), None).unwrap()[0].port,
+        22
+    );
 }
 
 /// Catches: a tunnel profile edit dropping the forwards (an inventory gap the adapter cannot
@@ -390,7 +421,9 @@ async fn tunnel_edit_keeps_forwards_and_removal_stops_the_tunnel() {
     ProfileStore::save(f.dir.path(), &profile).unwrap();
     let probe = format!("/profiles/{}/name", profile.id);
     let rev = revision(&f, "tunnels", &probe).await;
-    let reply = set(&f, "tunnels", rev, &probe, json!("tun2")).await.unwrap();
+    let reply = set(&f, "tunnels", rev, &probe, json!("tun2"))
+        .await
+        .unwrap();
     let saved = ProfileStore::load_all(f.dir.path(), None).unwrap();
     assert_eq!(saved[0].name, "tun2");
     assert_eq!(saved[0].forwards.len(), 1);
@@ -408,7 +441,11 @@ async fn tunnel_edit_keeps_forwards_and_removal_stops_the_tunnel() {
     .await
     .unwrap();
     assert!(reply.persisted && reply.applied);
-    assert!(ProfileStore::load_all(f.dir.path(), None).unwrap().is_empty());
+    assert!(
+        ProfileStore::load_all(f.dir.path(), None)
+            .unwrap()
+            .is_empty()
+    );
     assert_eq!(*f.removed.lock(), vec![profile.id]);
 }
 
