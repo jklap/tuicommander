@@ -399,6 +399,8 @@ The backend foreground probe enables agent parsing for hand-launched agents in b
 
 Goose replies are append-only below the submitted prompt. The PTY reader preserves those changed rows instead of trimming them as fixed composer chrome. This lets the reply prove consumption before a stable Ready screen closes the submitted turn; no protocol-stale timeout is needed (#1812-022d).
 
+Aider does the same: its reply and `Waiting for` spinner are printed below the echoed `> prompt` line, so the PTY reader keeps those rows too (#1823-8150).
+
 Ordinary output and spinner repaints cannot override a protocol idle marker.
 The reader preserves that evidence until the ranked busy decision, and the
 ready-screen timer preserves its rank. A new submission or accepted semantic
