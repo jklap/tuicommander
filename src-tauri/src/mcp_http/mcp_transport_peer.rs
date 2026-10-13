@@ -567,6 +567,48 @@ fn pty_with_process_identity(state: &AppState, identity: &str) -> Option<String>
     matched
 }
 
+/// Identity of the PTY an MCP client runs inside, read off its process ancestry.
+///
+/// For clients that scrub the environment of the bridge they launch: ego starts
+/// stdio MCP servers with only the variables its config lists in `inherit_env`,
+/// so the bridge never sees `$TUIC_SESSION` and asserts no `x-tuic-session`
+/// header. The ego process itself still holds the variable from its PTY, so the
+/// nearest ancestor that carries a well-formed one names the terminal. Used only
+/// when no header was asserted; an asserted header always wins.
+pub(super) fn identity_from_client_ancestry(client_pid: &str) -> Option<String> {
+    /// Bridge -> agent is one or two hops; the bound only stops a corrupt table.
+    const MAX_HOPS: usize = 16;
+    let mut pid: u32 = client_pid.parse().ok()?;
+    for _ in 0..MAX_HOPS {
+        if pid <= 1 {
+            return None;
+        }
+        if let Some(identity) = crate::process_env::read_process_env_var(pid, "TUIC_SESSION")
+            && is_valid_uuid(&identity)
+        {
+            return Some(identity);
+        }
+        pid = parent_pid_of(pid)?;
+    }
+    None
+}
+
+#[cfg(unix)]
+fn parent_pid_of(pid: u32) -> Option<u32> {
+    let output = std::process::Command::new("ps")
+        .args(["-o", "ppid=", "-p", &pid.to_string()])
+        .output()
+        .ok()?;
+    String::from_utf8_lossy(&output.stdout).trim().parse().ok()
+}
+
+// DEFERRED (2026-10-13) — Windows ancestry walk; the Toolhelp snapshot in
+// `pty::screen::process_parent_map` could serve it. ego on Windows is unverified.
+#[cfg(not(unix))]
+fn parent_pid_of(_pid: u32) -> Option<u32> {
+    None
+}
+
 /// Auto-bind an MCP session to the `x-tuic-session` identity asserted by the
 /// bridge. PTY agents inherit it from the terminal; ACP ego receives it from
 /// the host's durable conversation binding.

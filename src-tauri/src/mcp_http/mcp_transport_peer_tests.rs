@@ -5865,3 +5865,85 @@ async fn an_auto_bound_peer_is_named_after_its_alias() {
     );
     kill_test_session(&state, &session_id);
 }
+
+/// ego launches its stdio MCP servers with a scrubbed environment, so the bridge
+/// asserts no `x-tuic-session`; only its parent (ego) still holds the PTY identity.
+///
+/// RED: ego_child_without_session_header_binds_through_process_ancestry —
+/// catches: identity read only from a header the ego-launched bridge cannot send.
+#[cfg(unix)]
+#[tokio::test]
+async fn ego_child_without_session_header_binds_through_process_ancestry() {
+    use std::io::{BufRead, BufReader};
+    // A platform binary's environment is unreadable on macOS, and ego is not one:
+    // run the identity holder from a copy (macOS /bin/sh stays unreadable even
+    // so, dash does not). Its `sleep` child (the stand-in bridge) has the variable
+    // removed.
+    let holder = crate::test_support::test_temp_root().join("ego-holder-sh");
+    let shell = if cfg!(target_os = "macos") { "/bin/dash" } else { "/bin/sh" };
+    std::fs::copy(shell, &holder).expect("copy shell");
+    // A copied Apple binary loses its platform signature and is killed at exec.
+    #[cfg(target_os = "macos")]
+    assert!(
+        std::process::Command::new("codesign")
+            .args(["-s", "-", "-f"])
+            .arg(&holder)
+            .status()
+            .expect("codesign")
+            .success()
+    );
+    let mut parent = std::process::Command::new(&holder)
+        .args(["-c", "env -u TUIC_SESSION sleep 60 & echo $! $$; wait"])
+        .env("TUIC_SESSION", TEST_UUID_A)
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn sh");
+    let mut line = String::new();
+    BufReader::new(parent.stdout.take().unwrap())
+        .read_line(&mut line)
+        .unwrap();
+    let (bridge_pid, holder_pid) = line.trim().split_once(' ').expect("two pids");
+    let bridge_pid = bridge_pid.to_string();
+    assert_eq!(
+        crate::process_env::read_process_env_var(holder_pid.parse().unwrap(), "TUIC_SESSION"),
+        Some(TEST_UUID_A.to_string()),
+        "fixture: the launching process must hold the identity and be readable"
+    );
+    // `env` still holds the variable until it has exec'd into `sleep`.
+    let bridge_n: u32 = bridge_pid.parse().unwrap();
+    while crate::process_env::read_process_env_var(bridge_n, "TUIC_SESSION").is_some() {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(
+        crate::process_env::read_process_env_var(bridge_n, "TUIC_SESSION"),
+        None,
+        "fixture: the stand-in bridge must not hold the identity itself"
+    );
+
+    let state = test_state();
+    let mut headers = HeaderMap::new();
+    headers.insert(CLIENT_PID_HEADER, bridge_pid.parse().unwrap());
+    mcp_post(
+        State(Arc::clone(&state)),
+        ConnectInfo("127.0.0.1:1".parse().unwrap()),
+        headers,
+        Json(serde_json::json!({
+            "jsonrpc":"2.0", "id":1, "method":"initialize", "params":{
+                "protocolVersion":"2025-06-18",
+                "clientInfo":{"name":"tuic-bridge","version":"test"}
+            }
+        })),
+    )
+    .await;
+
+    let bound: Vec<String> = state
+        .mcp
+        .to_session
+        .iter()
+        .map(|entry| entry.value().clone())
+        .collect();
+    let _ = std::process::Command::new("kill").arg(&bridge_pid).status();
+    let _ = parent.kill();
+    let _ = parent.wait();
+    assert_eq!(bound, vec![TEST_UUID_A.to_string()]);
+}

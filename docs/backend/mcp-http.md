@@ -1754,7 +1754,10 @@ bar also keeps repo-scoped tabs visible when a repository has no active workspac
    `tuic-bridge` sends the value as the `x-tuic-session` header on the initialize `POST /mcp`. The server
    validates the UUID and binds the MCP session to that tuic session (`apply_initialize_identity`
    → the shared locked live-owner policy), auto-registering the peer. `agent action=register`
-   becomes an optional rename. The same MCP session may refresh its binding, and a fresh session
+   becomes an optional rename. A client that scrubs the bridge's environment (ego launches stdio MCP
+   servers with only its config's `inherit_env`) sends no header; on initialize the server then walks the
+   `x-tuic-client-pid` ancestry for the nearest process holding a well-formed `TUIC_SESSION`
+   (`identity_from_client_ancestry`, unix only) and binds that. An asserted header always wins. The same MCP session may refresh its binding, and a fresh session
    may reclaim a stale owner; a subscribed or recently active owner is not replaced but is joined,
    so a second bridge in the same PTY becomes routable instead of being locked out. An existing
    peer's display name is preserved. The bridge's eager initialize and the downstream client's
