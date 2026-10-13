@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { fireEvent, render } from "@solidjs/testing-library";
+import { createSignal } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { ContentRenderer } from "../../components/ui/ContentRenderer";
 
@@ -40,5 +41,30 @@ describe("ContentRenderer file auto-link", () => {
 	it("does not nest an anchor inside an existing link", async () => {
 		const { container } = await renderLinked("[`src/a.ts`](src/a.ts)");
 		expect(container.querySelectorAll("a").length).toBe(1);
+	});
+
+	// Catches: the auto-link pass relinking a href that already failed to resolve.
+	it("keeps a dead link as text after the content grows", async () => {
+		const onLinkClick = vi.fn().mockResolvedValue(false);
+		const [content, setContent] = createSignal("Open src/gone.ts now.");
+		const { container } = render(() => <ContentRenderer content={content()} autoLinkFiles onLinkClick={onLinkClick} />);
+		await settle();
+		fireEvent.click(container.querySelector("a[data-tuic-href]") as HTMLAnchorElement);
+		await settle();
+		expect(container.querySelector("a")).toBeNull();
+		setContent("Open src/gone.ts now.\n\nAlso src/live.ts and src/gone.ts again.");
+		await settle();
+		expect([...container.querySelectorAll("a")].map((a) => a.dataset.tuicHref)).toEqual(["src/live.ts"]);
+	});
+
+	// Catches: the failed-href memory being module-global, so one renderer's dead link hides another's.
+	it("remembers a failed href per renderer only", async () => {
+		const dead = vi.fn().mockResolvedValue(false);
+		const first = render(() => <ContentRenderer content="Open src/gone.ts" autoLinkFiles onLinkClick={dead} />);
+		await settle();
+		fireEvent.click(first.container.querySelector("a[data-tuic-href]") as HTMLAnchorElement);
+		await settle();
+		const second = await renderLinked("Open src/gone.ts");
+		expect(second.container.querySelectorAll("a[data-tuic-href]").length).toBe(1);
 	});
 });
