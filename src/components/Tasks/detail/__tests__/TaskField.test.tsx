@@ -5,6 +5,74 @@ import type { WorkItemFieldKind, WorkItemFieldValue } from "../../../../types/wo
 import { TaskField } from "../TaskField";
 
 describe("TaskField", () => {
+	// Catches: read-only enum fields display an opaque request ID instead of the provider label.
+	it("read_only_enum_resolves_option_name", () => {
+		render(() => (
+			<TaskField
+				schema={{
+					id: "priority",
+					name: "Priority",
+					kind: "enum",
+					required: false,
+					editable: false,
+					options: [{ id: "10000", name: "Recorded priority" }],
+				}}
+				value={{ kind: "enum", value: "10000" }}
+				disabled={false}
+				canEdit={false}
+				onSave={async () => true}
+			/>
+		));
+		expect(screen.getByText("Recorded priority")).toBeInTheDocument();
+		expect(screen.queryByText("10000")).not.toBeInTheDocument();
+	});
+	// Catches: an unavailable option hides the stored value or an empty enum shows a blank field.
+	it.each([
+		["missing", "missing"],
+		["", "Not set"],
+	])("unknown enum %s remains visible", (value, expected) => {
+		render(() => (
+			<TaskField
+				schema={{ id: "priority", name: "Priority", kind: "enum", required: false, editable: false, options: [] }}
+				value={{ kind: "enum", value }}
+				disabled={false}
+				canEdit={false}
+				onSave={async () => true}
+			/>
+		));
+		expect(screen.getByText(expected)).toBeInTheDocument();
+	});
+
+	// Catches: resolving enum labels for display accidentally sends the label on save.
+	it("enum_edit_sends_option_id", async () => {
+		let saved: WorkItemFieldValue | null = null;
+		render(() => (
+			<TaskField
+				schema={{
+					id: "priority",
+					name: "Priority",
+					kind: "enum",
+					required: false,
+					editable: true,
+					options: [
+						{ id: "1", name: "High" },
+						{ id: "2", name: "Low" },
+					],
+				}}
+				value={{ kind: "enum", value: "1" }}
+				disabled={false}
+				canEdit
+				onSave={async (value) => {
+					saved = value;
+					return true;
+				}}
+			/>
+		));
+		fireEvent.change(screen.getByLabelText("Priority"), { target: { value: "2" } });
+		fireEvent.click(screen.getByRole("button", { name: "Save Priority" }));
+		await waitFor(() => expect(saved).toEqual({ kind: "enum", value: "2" }));
+	});
+
 	// Catches: coercing all scalar edits to text drops the field kind or corrupts numeric zero.
 	it.each<[WorkItemFieldKind, string, WorkItemFieldValue]>([
 		["text", "New title", { kind: "text", value: "New title" }],

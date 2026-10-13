@@ -11,6 +11,8 @@ selects outside `ui/` and requires the explicit pending-migration list to shrink
 It renders schema-driven fields, sanitized Markdown, all declared comment
 variants, cursor pagination, a comment composer and provider transition actions.
 The shell must pass visibility to pause the default 60-second refresh timer.
+Read-only enum fields resolve provider option IDs to their schema labels, falling back to the stored value when an option is unknown. Editing still sends the option ID.
+
 `useTasksDetail` fences responses by item generation and serializes mutations.
 Committed mutations remain accepted if reloading opened comment pages fails;
 the view reports the history error and Retry reloads those pages.
