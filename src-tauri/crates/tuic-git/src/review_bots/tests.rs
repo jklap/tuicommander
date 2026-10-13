@@ -276,3 +276,14 @@ fn fence_terminators_in_bot_text_stay_inert() {
     );
     assert_eq!(f.suggestion, None);
 }
+
+// Catches: `strip_inline` treating code-span text as markup, so `Option<String>` reaches the
+// list and the agent prompt as `Option`, and `**kwargs` or `\n` lose their marks.
+#[test]
+fn title_keeps_generic_arguments_inside_code_spans() {
+    let title = |body: &str| parse(Some(ReviewTool::Copilot), body).unwrap().title;
+    let generic = "`Option<String>` unwrap panics when the input is empty.";
+    assert_eq!(title(generic).as_deref(), Some(generic));
+    let marks = "`f(**kwargs)` drops the `\\n` separator.";
+    assert_eq!(title(marks).as_deref(), Some(marks));
+}

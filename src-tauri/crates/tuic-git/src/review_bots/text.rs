@@ -117,6 +117,13 @@ pub(super) fn strip_inline(line: &str) -> String {
     let mut out = String::with_capacity(line.len());
     let mut rest = line;
     while let Some(c) = rest.chars().next() {
+        if c == '`'
+            && let Some(end) = rest[1..].find('`')
+        {
+            out.push_str(&rest[..end + 2]);
+            rest = &rest[end + 2..];
+            continue;
+        }
         if c == '<'
             && let Some(end) = rest.find('>')
         {
