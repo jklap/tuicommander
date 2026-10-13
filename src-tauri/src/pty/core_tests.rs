@@ -9942,14 +9942,8 @@ async fn aider_padded_prompt_capture_accepts_the_first_submission() {
         .vt_log_buffers
         .insert(sid.into(), Mutex::new(VtLogBuffer::new(rows, cols, 2000)));
     insert_recording_session(&state, sid);
-    // The launch command's own Enter left the shell busy, as for any agent
-    // started through the agent route.
-    state
-        .session_maps
-        .shell_states
-        .get(sid)
-        .unwrap()
-        .store(SHELL_BUSY, std::sync::atomic::Ordering::Release);
+    // The shell atom keeps its spawn value (SHELL_NULL): the agent route starts
+    // the binary directly, so no launch line ever marks the shell busy.
     let mut processor = ChunkProcessor::new(None, None);
     for record in capture.records {
         if record.direction == crate::pty_capture::CaptureDirection::Output {

@@ -423,11 +423,22 @@ fn try_timer_idle_transition(
             }
             AgentScreenActivity::Working => false,
         };
-        let is_busy = state
+        let observed_shell = state
             .session_maps
             .shell_states
             .get(session_id)
-            .is_some_and(|atom| atom.load(std::sync::atomic::Ordering::Acquire) == SHELL_BUSY);
+            .map(|atom| atom.load(std::sync::atomic::Ordering::Acquire));
+        // A headless agent spawn never typed a launch line, so no shell edge
+        // ever marked it BUSY: the atom is still SHELL_NULL and a TUI that
+        // paints no working screen (Aider) would never reach IDLE. For an
+        // agent session a screen-confirmed Ready is the same evidence that
+        // releases BUSY, so it releases NULL too. A plain shell
+        // (`agent_type == None`) keeps NULL until its own OSC 133 edge.
+        let is_busy = observed_shell == Some(SHELL_BUSY)
+            || (observed_shell == Some(SHELL_NULL)
+                && agent_type.is_some()
+                && screen_confirms_idle);
+        let released_from = observed_shell.unwrap_or(SHELL_NULL);
         if !is_busy && screen_confirms_idle && !idle_was_confirmed {
             tracing::debug!(
                 session_id,
@@ -512,7 +523,7 @@ fn try_timer_idle_transition(
             ShellTransitionRequest {
                 state,
                 session_id,
-                expected: SHELL_BUSY,
+                expected: released_from,
                 new: SHELL_IDLE,
                 notify_parent: true,
                 observed_turn_epoch: decision.turn_epoch,
