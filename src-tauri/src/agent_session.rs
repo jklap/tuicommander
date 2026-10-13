@@ -882,6 +882,24 @@ fn grok_session_for_pid(pid: u32, cwd: &str) -> Option<String> {
     verify_grok_session(&session_id, cwd).then_some(session_id)
 }
 
+/// The `chat_history.jsonl` of the grok session `pid` registered for `cwd`, for
+/// the Chat view. Exact registry hits only: the newest-session fallback of
+/// `discover_grok_session` is a guess, and a Chat that guesses shows another
+/// tab's conversation.
+pub(crate) fn grok_chat_history_for_pid(home: &Path, pid: u32, cwd: &str) -> Option<PathBuf> {
+    let grok = home.join(".grok");
+    let contents = std::fs::read_to_string(grok.join("active_sessions.json")).ok()?;
+    let session_id = select_grok_session_for_pid(&contents, pid, cwd)?;
+    if !is_uuid(&session_id) {
+        return None;
+    }
+    let dir = grok
+        .join("sessions")
+        .join(grok_path_encode(cwd))
+        .join(session_id);
+    dir.is_dir().then(|| dir.join("chat_history.jsonl"))
+}
+
 /// grok stores sessions under `~/.grok/sessions/<percent-encoded-cwd>/<UUIDv7>/`.
 /// Each session is a *directory* named with its UUIDv7 id (usable with
 /// `grok --resume <id>`); the newest such directory is the active session.
@@ -1275,6 +1293,71 @@ mod tests {
             AGENT_ENV_VARS
                 .iter()
                 .any(|(t, vars)| *t == "ego" && vars.contains(&"EGO_HOME"))
+        );
+    }
+
+    /// A grok home with two sessions in one folder, registered by two pids.
+    fn grok_home_with_two_tabs(cwd: &str, mine: &str, other: &str) -> tempfile::TempDir {
+        let home = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let grok = home.path().join(".grok");
+        for id in [mine, other] {
+            let dir = grok.join("sessions").join(grok_path_encode(cwd)).join(id);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("chat_history.jsonl"), id).unwrap();
+        }
+        std::fs::write(
+            grok.join("active_sessions.json"),
+            grok_active_sessions(&[(other, 111, cwd), (mine, 222, cwd)]),
+        )
+        .unwrap();
+        home
+    }
+
+    // Catches: two grok tabs in one folder showing each other's conversation, or a
+    // tab the registry does not know being given the newest session in the folder.
+    #[test]
+    fn test_grok_chat_history_binds_each_tab_to_its_own_session_only() {
+        let (mine, other) = (
+            "01a0725d-38ec-73b1-9c79-fab368c84702",
+            "01a0725d-38ec-73b1-9c79-fab368c84703",
+        );
+        let home = grok_home_with_two_tabs("/fake/project", mine, other);
+        let read = |pid| {
+            grok_chat_history_for_pid(home.path(), pid, "/fake/project")
+                .map(|p| std::fs::read_to_string(p).unwrap())
+        };
+        assert_eq!(read(222).as_deref(), Some(mine));
+        assert_eq!(read(111).as_deref(), Some(other));
+        assert_eq!(
+            read(999),
+            None,
+            "an unregistered pid must not fall back to the newest"
+        );
+    }
+
+    // Catches: a recycled pid naming a session from another project, or a registry
+    // entry whose session directory is gone.
+    #[test]
+    fn test_grok_chat_history_rejects_other_cwd_and_missing_session() {
+        let (mine, other) = (
+            "01a0725d-38ec-73b1-9c79-fab368c84702",
+            "01a0725d-38ec-73b1-9c79-fab368c84703",
+        );
+        let home = grok_home_with_two_tabs("/fake/project", mine, other);
+        assert_eq!(
+            grok_chat_history_for_pid(home.path(), 222, "/fake/else"),
+            None
+        );
+        std::fs::remove_dir_all(
+            home.path()
+                .join(".grok/sessions")
+                .join(grok_path_encode("/fake/project"))
+                .join(mine),
+        )
+        .unwrap();
+        assert_eq!(
+            grok_chat_history_for_pid(home.path(), 222, "/fake/project"),
+            None
         );
     }
 

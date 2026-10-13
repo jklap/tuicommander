@@ -781,6 +781,23 @@ start/end positions, including omitted chrome slots. The end is a page boundary,
 not the total scrollback size. Logical wrap lines stay whole; raw pages use the
 existing output ring and original-byte cursors. See [MCP output paging](mcp-http.md#mcp-tool-session-output).
 
+### Grok transcript Chat view
+
+A Grok terminal is tailed through the same `chat_view::View`, with `GrokAdapter`
+(`chat_view/grok.rs`) reading `~/.grok/sessions/<cwd>/<id>/chat_history.jsonl`.
+`updates.jsonl` is not read: it carries no user turns. A human prompt is a
+`user` row with `prompt_index` and no `synthetic_reason`, unwrapped from
+`<user_query>`; context, reminders, hook feedback and task notices are dropped,
+`compaction_meta` becomes a notice card. Reasoning summaries become thoughts,
+tool calls and results become folded cards (orphan results dropped), and
+server-side `backend_tool_call` rows become finished cards. The binding is
+`agent_session::grok_chat_history_for_pid`: the pid must have an
+`active_sessions.json` entry for the terminal's cwd and its session directory
+must exist. The newest-session fallback of `discover_grok_session` never feeds
+Chat; without an exact entry the snapshot answers `not_bound`. A tab whose agent
+changes between Claude and Grok restarts the view. Fixture:
+`fixtures/chat_view/grok_chat_history.jsonl` (real rows, payloads replaced).
+
 ### Claude transcript Chat view
 
 `chat_view::View::advance` reads complete JSONL rows through `transcript_tail`,

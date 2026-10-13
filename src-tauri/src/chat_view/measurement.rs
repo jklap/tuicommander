@@ -28,7 +28,7 @@ fn view_real_transcript_throughput() {
     let path =
         PathBuf::from(std::env::var_os("TUIC_CHAT_TRANSCRIPT").expect("set TUIC_CHAT_TRANSCRIPT"));
     let bytes = std::fs::metadata(&path).expect("source metadata").len();
-    let mut attached = View::new(path.clone(), MAX_LOG_ENTRIES, MAX_LOG_BYTES);
+    let mut attached = View::for_agent(Agent::Claude, path.clone(), MAX_LOG_ENTRIES, MAX_LOG_BYTES);
     let start = Instant::now();
     attached
         .advance(TAIL_WINDOW_BYTES)
@@ -43,7 +43,7 @@ fn view_real_transcript_throughput() {
     drop(updates);
     // Hold the file's complete contents through the same path for the full
     // throughput measurement. Production attaches use only the 2 MiB window.
-    let mut full = View::new(path, MAX_LOG_ENTRIES, MAX_LOG_BYTES);
+    let mut full = View::for_agent(Agent::Claude, path, MAX_LOG_ENTRIES, MAX_LOG_BYTES);
     let start = Instant::now();
     full.advance(bytes).expect("read full real transcript");
     let (_, updates) = full.log.since(None, 0);
@@ -66,7 +66,7 @@ fn view_real_transcript_throughput() {
         full.log.next_seq,
         full.log.entries.len(),
         full.log.bytes,
-        full.adapter.stats.unknown_rows,
-        full.adapter.stats.malformed_rows
+        full.adapter.stats().unknown_rows,
+        full.adapter.stats().malformed_rows
     );
 }
