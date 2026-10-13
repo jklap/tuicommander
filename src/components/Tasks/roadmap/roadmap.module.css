@@ -38,7 +38,7 @@
 .help { margin: 0; padding: 0 12px 12px; color: var(--fg-secondary); font-size: var(--font-sm); }
 .empty { padding: 16px; color: var(--fg-secondary); }
 .more { align-self: center; margin: 8px; }
-@media (max-width: 700px) {
+@container (max-width: 700px) {
 	.toolbar { padding: 8px; }
 	.navigation { flex-basis: 100%; }
 	.navigation h2 { flex: 1; font-size: var(--font-md); }
