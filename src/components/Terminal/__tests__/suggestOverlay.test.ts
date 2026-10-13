@@ -249,7 +249,7 @@ describe("planSuggestOverlay — 💬 answer marker", () => {
 			["⏺ 💬 The build passes because the cache was warm and", false],
 			["  the lockfile did not change.", true],
 			["", false],
-			["  Second paragraph of the same answer.", false],
+			["  💬 Second paragraph of the same answer.", false],
 			["  - a bullet item inside the answer", false],
 			["⏺ Bash(make test)", false],
 			["  ⎿  ok", false],
@@ -356,15 +356,15 @@ describe("answerBlockRanges", () => {
 	const code = (text: string): ChatBlock => ({ kind: "code", text, marker: false });
 	const other = (text: string): ChatBlock => ({ kind: "other", text, marker: false });
 
-	// Catches: each adjacent marker starting another tinted region.
-	it("spans adjacent answer paragraphs to the end", () => {
+	// Catches: each adjacent marker starting another tinted region, or an unmarked closing paragraph tinted after a blank row.
+	it("spans adjacent answer paragraphs and their lists, not an unmarked prose tail", () => {
 		const blocks = [p("intro"), p("A", true), other("- x"), p("B", true), other("- y"), p("tail")];
-		expect(answerBlockRanges(blocks)).toEqual([[1, 5]]);
+		expect(answerBlockRanges(blocks)).toEqual([[1, 4]]);
 	});
 
 	// Catches: a literal 💬 line inside a code block ending the answer, as the grid never does.
 	it("keeps a code block that shows a marker inside the answer", () => {
-		expect(answerBlockRanges([p("A", true), code("💬 example"), p("after")])).toEqual([[0, 2]]);
+		expect(answerBlockRanges([p("A", true), code("💬 example"), p("after")])).toEqual([[0, 1]]);
 	});
 });
 
