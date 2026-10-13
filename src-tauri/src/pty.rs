@@ -435,9 +435,7 @@ fn try_timer_idle_transition(
         // releases BUSY, so it releases NULL too. A plain shell
         // (`agent_type == None`) keeps NULL until its own OSC 133 edge.
         let is_busy = observed_shell == Some(SHELL_BUSY)
-            || (observed_shell == Some(SHELL_NULL)
-                && agent_type.is_some()
-                && screen_confirms_idle);
+            || (observed_shell == Some(SHELL_NULL) && agent_type.is_some() && screen_confirms_idle);
         let released_from = observed_shell.unwrap_or(SHELL_NULL);
         if !is_busy && screen_confirms_idle && !idle_was_confirmed {
             tracing::debug!(
