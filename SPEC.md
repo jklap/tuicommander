@@ -987,3 +987,17 @@ repair Git and submodule paths; preserve ignored artifacts and publish lifecycle
 ## Beta update channel (#1813-4bdf)
 
 The Beta channel checks a rolling signed manifest published only after the versioned beta release finishes. It also checks stable and selects the newer version, so beta users receive the final release. Stable users retain the stable endpoint. New beta installs default to Beta; explicit saved settings are preserved. Beta installers stay on the immutable versioned release and open in the browser; stable installs use the existing in-app updater.
+
+
+## Ego settings owner adapters (#1775-330c)
+
+The internal `ego` settings store is bound to one configured profile (or the user
+base). Managed keys use the trusted Ego CLI with the AI Chat workspace as cwd,
+then read back stored values. Provider selection is the model slug prefix.
+Credential reads expose stored presence only through `ego auth status`.
+Managed keys are `model`, `roots` and `network`. Launch defaults stay in the
+`app` store; executable writes await Step 6 confirmation. Existing ACP/PTY sessions
+keep their launch state. Transport publication remains a later integration step.
+Unsupported auth overrides and exec_paths stay in the owner-gap ledger. Multi-key
+changes are refused before writing; cross-process conditional writes await an Ego
+owner API. These are explicit limits rather than raw-file fallback paths.

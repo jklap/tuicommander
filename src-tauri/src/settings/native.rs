@@ -98,6 +98,7 @@ pub(super) fn native_catalogue_for(dictation: bool) -> Result<Catalogue, Catalog
         }
     };
     catalogue.register("voice", "machine", Some(&DictationConfig::default()), voice)?;
+    super::ego_schema::register(&mut catalogue)?;
     catalogue.gaps.extend(
         serde_json::from_str::<Vec<InventoryGap>>(include_str!("inventory-gaps.json")).map_err(
             |_| CatalogueError {
