@@ -72,7 +72,7 @@ export const TerminalChatView: Component<{
 };
 
 /** The CLI | Chat switch of a terminal that runs an agent. */
-export const ViewModeToggle: Component<{ terminalId: string }> = (props) => {
+export const ViewModeToggle: Component<{ terminalId: string; onWheel?: (e: WheelEvent) => void }> = (props) => {
 	const term = () => terminalsStore.get(props.terminalId);
 	const availability = () => chatViewAvailability(term());
 	const mode = () => term()?.viewMode ?? "cli";
@@ -82,7 +82,7 @@ export const ViewModeToggle: Component<{ terminalId: string }> = (props) => {
 	};
 	return (
 		<Show when={term()?.agentType}>
-			<div class={s.toggle} role="group" aria-label="Terminal view">
+			<div class={s.toggle} role="group" aria-label="Terminal view" onWheel={props.onWheel}>
 				<button
 					type="button"
 					class={s.toggleButton}
