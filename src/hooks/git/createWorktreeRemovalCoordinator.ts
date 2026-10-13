@@ -3,6 +3,7 @@ import { appLogger } from "../../stores/appLogger";
 import { repoSettingsStore } from "../../stores/repoSettings";
 import { repositoriesStore } from "../../stores/repositories";
 import type { WorkspaceLifecycleStatus } from "../../stores/workspaceIdentity";
+import { reportActionError } from "../../utils/reportActionError";
 import type { RemoveWorktreeResult } from "../useRepository";
 
 interface WorktreeRemovalCoordinatorDeps {
@@ -64,7 +65,7 @@ export function createWorktreeRemovalCoordinator(deps: WorktreeRemovalCoordinato
 			const repoState = repositoriesStore.get(repoPath);
 			const branch = repoState?.workspaces[workspaceId];
 			if (!branch?.worktreePath) {
-				deps.setStatusInfo(`Cannot remove ${workspaceId}: not a worktree`);
+				reportActionError(deps.setStatusInfo, `Cannot remove ${workspaceId}: not a worktree`);
 				return;
 			}
 			const branchName = branch.branchName;
@@ -76,17 +77,19 @@ export function createWorktreeRemovalCoordinator(deps: WorktreeRemovalCoordinato
 				lifecycle = await deps.repo.getWorkspaceLifecycle(repoPath, workspaceId);
 			} catch (err) {
 				appLogger.warn("git", `workspace lifecycle preflight failed for ${workspaceId}`, err);
-				deps.setStatusInfo(`Cannot verify whether ${branchName} is safe to remove`);
+				reportActionError(deps.setStatusInfo, `Cannot verify whether ${branchName} is safe to remove`);
 				return;
 			}
 			if (lifecycle.removalSafety === "unknown") {
-				deps.setStatusInfo(
+				reportActionError(
+					deps.setStatusInfo,
 					`Cannot verify whether ${branchName} is safe to remove: ${lifecycle.error ?? "unknown state"}`,
 				);
 				return;
 			}
 			if (deleteBranch && lifecycle.commitStatus === "unmerged") {
-				deps.setStatusInfo(
+				reportActionError(
+					deps.setStatusInfo,
 					`Cannot remove ${branchName}: the branch has unmerged commits. Merge it first, or turn off Delete branch on remove.`,
 				);
 				return;
@@ -177,7 +180,7 @@ export function createWorktreeRemovalCoordinator(deps: WorktreeRemovalCoordinato
 							workspaceId,
 							error: dialogErr instanceof Error ? dialogErr.message : String(dialogErr),
 						});
-						deps.setStatusInfo(`Failed to confirm force-remove for ${branchName}`);
+						reportActionError(deps.setStatusInfo, `Failed to confirm force-remove for ${branchName}`);
 						return;
 					}
 					if (!forceConfirmed) {
@@ -199,7 +202,7 @@ export function createWorktreeRemovalCoordinator(deps: WorktreeRemovalCoordinato
 							workspaceId,
 							reason: forceReason,
 						});
-						deps.setStatusInfo(`Failed to remove ${branchName}: ${forceReason}`);
+						reportActionError(deps.setStatusInfo, `Failed to remove ${branchName}: ${forceReason}`);
 						repositoriesStore.setWorkspace(repoPath, workspaceId, { isRemoving: false });
 						return;
 					}
@@ -207,7 +210,10 @@ export function createWorktreeRemovalCoordinator(deps: WorktreeRemovalCoordinato
 					appLogger.warn("git", `handleRemoveWorkspace: branch is in main worktree — cannot remove as worktree`, {
 						workspaceId,
 					});
-					deps.setStatusInfo(`Cannot remove ${branchName}: branch is in the main worktree, not a linked worktree`);
+					reportActionError(
+						deps.setStatusInfo,
+						`Cannot remove ${branchName}: branch is in the main worktree, not a linked worktree`,
+					);
 					repositoriesStore.setWorkspace(repoPath, workspaceId, { isRemoving: false });
 					return;
 				} else {
@@ -215,7 +221,7 @@ export function createWorktreeRemovalCoordinator(deps: WorktreeRemovalCoordinato
 						workspaceId,
 						reason,
 					});
-					deps.setStatusInfo(`Failed to remove ${branchName}: ${reason}`);
+					reportActionError(deps.setStatusInfo, `Failed to remove ${branchName}: ${reason}`);
 					repositoriesStore.setWorkspace(repoPath, workspaceId, { isRemoving: false });
 					return;
 				}
