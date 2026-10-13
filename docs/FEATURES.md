@@ -2909,6 +2909,10 @@ permissions. Recurring cadence previews retain the existing runtime limitations.
 
 Terminal gestures hold the requested history row even when output arrives before the backend applies the scroll. If capped scrollback evicts that row, the viewport clamps to the oldest retained row.
 
+### Internal repository settings owners
+
+The typed settings service supports repository defaults and per-repository `.tuic.json` targets. One registered owner resolves only existing repository registrations; patches preserve sibling fields and check revisions under the file lock. Transport publication remains pending. Registration/group configuration remains an accepted inventory gap until its owner has a typed schema (#1825-4566).
+
 GitHub settings backend: an internal typed owner adapter supports device login,
 verified Enterprise PAT accounts, labels, write-only credentials and revision-checked
 repository bindings. Shared settings transport publication is a separate step.
