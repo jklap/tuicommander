@@ -84,7 +84,9 @@ import { filePathRegex, fileUrlRegex, matchWebUrls } from "./linkProvider";
 import { buildScrollbarMarksHtml } from "./scrollbarMarks";
 import {
 	ANSWER_MARKER_RE,
+	hiddenMarkerRows,
 	INTENT_HIGHLIGHT_RE,
+	type OverlayBlock,
 	paintOverlayBlocks,
 	planSuggestOverlay,
 	SUGGEST_ANCHOR_RE,
@@ -573,14 +575,20 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	}
 
 	function paintFrame(frame: DecodedFrame, m: CellMetrics, dirtyIndices?: Set<number>) {
-		gridRenderer.paintGrid(rowMap, m, { fullRepaint: fullRepaintNeeded, dirtyIndices });
+		const markers = planViewportMarkers(frame, dirtyIndices);
+		gridRenderer.paintGrid(rowMap, m, {
+			fullRepaint: fullRepaintNeeded,
+			dirtyIndices: dirtyIndices && withToggledRows(dirtyIndices, paintedHiddenRows, markers.hidden),
+			hiddenRows: markers.hidden,
+		});
+		paintedHiddenRows = markers.hidden;
 		fullRepaintNeeded = false;
 
 		// Overlay (cursor/selection/search/links/scrollbar/suggest) always stays on main.
 		repaintOverlay(frame, m);
 
 		updateScrollbar(frame);
-		updateSuggestOverlay(frame, m, dirtyIndices);
+		updateSuggestOverlay(m, markers);
 		if (answersView() !== null) scheduleAnswersRefresh();
 	}
 
@@ -895,59 +903,79 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
 	// --- Suggest / Intent overlay ---
 
-	const rowToText = rowText;
-
-	// Cached suggest/intent overlay state to avoid full DOM rebuild
+	// Cached answer overlay state to avoid full DOM rebuild
 	let lastSuggestOverlayKey = "";
 
-	function updateSuggestOverlay(
-		_frame: DecodedFrame,
-		m: CellMetrics,
-		dirtyIndices?: Set<number>,
-		snapshotOverride?: (i: number) => { text: string; isWrapped: boolean } | null,
-	) {
-		if (!overlayRef) return;
+	/** Rows of the cache above the viewport scanned for the anchor of a marker that scrolled off the top. */
+	const MARKER_LOOKBACK_ROWS = 32;
 
-		// Skip full rescan if no dirty rows touch suggest/intent/answer patterns
-		// (skipped entirely when rendering from the cache during a scroll gesture).
-		if (!snapshotOverride && dirtyIndices && !fullRepaintNeeded) {
-			let hasSuggestContent = false;
+	interface MarkerPlan {
+		/** Rows not to paint: agent `suggest:`/`intent:` rows, overscan rows included. */
+		hidden: ReadonlySet<number>;
+		/** Plan key plus the answer strips, viewport rows only. */
+		key: string;
+		blocks: OverlayBlock[];
+	}
+	const NO_MARKERS: MarkerPlan = { hidden: new Set(), key: "", blocks: [] };
+	let lastMarkerPlan: MarkerPlan = NO_MARKERS;
+	/** The hidden set the main canvas was last painted with. */
+	let paintedHiddenRows: ReadonlySet<number> = NO_MARKERS.hidden;
+
+	/** `dirty` plus every viewport row whose hidden state differs between `before` and `after`. */
+	function withToggledRows(dirty: Set<number>, before: ReadonlySet<number>, after: ReadonlySet<number>): Set<number> {
+		if (before === after) return dirty;
+		const out = new Set(dirty);
+		for (const idx of before) if (idx >= 0 && !after.has(idx)) out.add(idx);
+		for (const idx of after) if (idx >= 0 && !before.has(idx)) out.add(idx);
+		return out;
+	}
+
+	/**
+	 * Classify the screen rows (plus one overscan row below, and a lookback above
+	 * the viewport) by `getRow`. The plan covers `rows + 1` so the overscan row
+	 * below the viewport is classified too.
+	 */
+	function planMarkers(rows: number, getRow: (i: number) => { text: string; isWrapped: boolean } | null): MarkerPlan {
+		const plan = planSuggestOverlay(rows + 1, getRow, -MARKER_LOOKBACK_ROWS);
+		return { hidden: hiddenMarkerRows(plan.blocks), key: plan.key, blocks: plan.blocks.filter((b) => b.row < rows) };
+	}
+
+	/** Marker plan of the live frame; a dirty-row prefilter skips the scan on screens that never had a marker. */
+	function planViewportMarkers(frame: DecodedFrame, dirtyIndices?: Set<number>): MarkerPlan {
+		if (dirtyIndices && !fullRepaintNeeded && lastMarkerPlan.key === "") {
+			let touchesMarker = false;
 			for (const idx of dirtyIndices) {
 				const row = rowMap.get(idx);
 				if (!row) continue;
 				const text = rowToText(row);
-				if (SUGGEST_ANCHOR_RE.test(text) || INTENT_HIGHLIGHT_RE.test(text) || ANSWER_MARKER_RE.test(text)) {
-					hasSuggestContent = true;
+				// A wrapped row can complete a marker whose anchor row did not change.
+				if (
+					rowMap.get(idx - 1)?.wrapped ||
+					SUGGEST_ANCHOR_RE.test(text) ||
+					INTENT_HIGHLIGHT_RE.test(text) ||
+					ANSWER_MARKER_RE.test(text)
+				) {
+					touchesMarker = true;
 					break;
 				}
 			}
-			if (!hasSuggestContent) {
-				if (lastSuggestOverlayKey === "") return;
-				// Stale overlay — fall through to rebuild/clear it
-			}
+			if (!touchesMarker) return lastMarkerPlan;
 		}
+		const base = frame.historyBase + frame.historySize - frame.displayOffset;
+		const wrappedAbove = (i: number) => (i > 0 ? rowMap.get(i - 1) : rowCache.get(base + i - 1))?.wrapped ?? false;
+		lastMarkerPlan = planMarkers(lastResizeRows || 24, (i) => {
+			const row = i >= 0 ? rowMap.get(i) : rowCache.get(base + i);
+			return row ? { text: rowToText(row), isWrapped: wrappedAbove(i) } : null;
+		});
+		return lastMarkerPlan;
+	}
 
-		const bg = cachedBgDefault;
-		const numRows = lastResizeRows || 24;
+	const rowToText = rowText;
 
-		const getRowSnapshot =
-			snapshotOverride ??
-			((i: number) => {
-				const row = rowMap.get(i);
-				if (!row) return null;
-				// `row.wrapped` says the row continues onto the NEXT one; the overlay
-				// wants "this row continues the previous one".
-				return { text: rowToText(row), isWrapped: rowMap.get(i - 1)?.wrapped ?? false };
-			});
-
-		// Decide what to mask before building anything: most repaints leave the
-		// plan untouched, and the elements were being created and dropped just to
-		// discover that.
-		const { key, blocks } = planSuggestOverlay(numRows, getRowSnapshot);
-		if (key === lastSuggestOverlayKey) return;
-		lastSuggestOverlayKey = key;
-
-		paintOverlayBlocks(overlayRef, blocks, m.cellHeight, bg);
+	function updateSuggestOverlay(m: CellMetrics, plan: MarkerPlan) {
+		if (!overlayRef || plan.key === lastSuggestOverlayKey) return;
+		lastSuggestOverlayKey = plan.key;
+		paintOverlayBlocks(overlayRef, plan.blocks, m.cellHeight);
 	}
 
 	function startBlink() {
@@ -1107,7 +1135,16 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			const cached = cacheRow(hist - intOffset + r);
 			if (cached) tempMap.set(r, cached.index === r ? cached : { ...cached, index: r });
 		}
-		gridRenderer.paintGrid(tempMap, m, { fullRepaint: true });
+		// Classify from the cache at this offset so the marker rows track the scrolling
+		// content instead of the lagging backend frame (no flicker, no raw marker).
+		const markers = planMarkers(rows, (i) => {
+			const cached = cacheRow(hist - intOffset + i);
+			if (!cached) return null;
+			return { text: rowToText(cached), isWrapped: cacheRow(hist - intOffset + i - 1)?.wrapped ?? false };
+		});
+		gridRenderer.paintGrid(tempMap, m, { fullRepaint: true, hiddenRows: markers.hidden });
+		paintedHiddenRows = markers.hidden;
+		lastMarkerPlan = markers;
 		if (octxOverscan && overscanRenderer) {
 			const ch = m.cellHeight;
 			const w = overscanCanvasRef.width / m.dpr;
@@ -1117,26 +1154,17 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			if (above) {
 				octxOverscan.fillStyle = cachedBgDefault;
 				octxOverscan.fillRect(-GUTTER_PX, 0, w, ch);
-				overscanRenderer.paintRow(above, 0, m);
+				if (!markers.hidden.has(-1)) overscanRenderer.paintRow(above, 0, m);
 			}
 			if (below) {
 				const y = (rows + 1) * ch;
 				octxOverscan.fillStyle = cachedBgDefault;
 				octxOverscan.fillRect(-GUTTER_PX, y, w, ch);
-				overscanRenderer.paintRow(below, y, m);
+				if (!markers.hidden.has(rows)) overscanRenderer.paintRow(below, y, m);
 			}
 		}
 		ensureCacheBand(intOffset, rows, hist);
-		// Rebuild suggest/intent masks from the cache at this offset so they track the
-		// scrolling content instead of the lagging backend frame (no flicker, and the
-		// raw suggest line stays masked).
-		if (currentFrame) {
-			updateSuggestOverlay(currentFrame, m, undefined, (i) => {
-				const cached = cacheRow(hist - intOffset + i);
-				if (!cached) return null;
-				return { text: rowToText(cached), isWrapped: cacheRow(hist - intOffset + i - 1)?.wrapped ?? false };
-			});
-		}
+		if (currentFrame) updateSuggestOverlay(m, markers);
 	}
 
 	function renderSmooth() {
