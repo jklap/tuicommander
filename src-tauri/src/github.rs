@@ -569,23 +569,9 @@ pub(crate) async fn resolve_repo_for_rest(
                 owner,
                 repo,
             } => (account, owner, repo),
-            // Exactly one candidate is the obvious choice (e.g. a github.com repo
-            // with no explicit binding yet) — resolve it without prompting.
-            RepoResolution::NeedsBind(mut candidates) if candidates.len() == 1 => {
-                let c = candidates.remove(0);
-                let account = if c.account_id == default.id {
-                    default.clone()
-                } else {
-                    registry
-                        .get(&c.account_id)
-                        .cloned()
-                        .ok_or_else(|| format!("GitHub account '{}' not found", c.account_id))?
-                };
-                (account, c.owner, c.repo)
-            }
             RepoResolution::NeedsBind(_) => {
                 return Err(
-                    "Repository matches multiple GitHub accounts — bind it to one first"
+                    "Repository matches multiple GitHub accounts or remotes — choose a binding first"
                         .to_string(),
                 );
             }
@@ -692,19 +678,8 @@ pub(crate) async fn graphql_with_retry(
         };
     }
 
-    // github.com path — cached/rotated token + 401 candidate fallback. Unchanged.
-    let mut current_token = state.github.token.read().clone();
-    // Lazy resolution: boot skips keychain, resolve on first use.
-    if current_token.is_none() {
-        let (t, s) = tokio::task::spawn_blocking(crate::github_auth::resolve_token_with_source)
-            .await
-            .map_err(|e| format!("token resolve task panicked: {e}"))?;
-        if t.is_some() {
-            *state.github.token.write() = t.clone();
-            *state.github.token_source.write() = s;
-        }
-        current_token = t;
-    }
+    // The runtime resolver honors an explicit disconnect, including lazy loads.
+    let (current_token, _) = crate::github_auth::resolve_runtime_token(state).await?;
     let token = match current_token.as_deref() {
         Some(t) => t.to_string(),
         None => return Err("No GitHub token available".to_string()),
@@ -988,18 +963,6 @@ pub(crate) async fn get_all_batch_impl(
                     owner,
                     repo,
                 } => (account, owner, repo),
-                RepoResolution::NeedsBind(mut candidates) if candidates.len() == 1 => {
-                    let cand = candidates.remove(0);
-                    let account = if cand.account_id == default.id {
-                        default.clone()
-                    } else {
-                        match registry.get(&cand.account_id) {
-                            Some(a) => a.clone(),
-                            None => continue,
-                        }
-                    };
-                    (account, cand.owner, cand.repo)
-                }
                 // Ambiguous / no account / not a GitHub repo → not polled.
                 _ => continue,
             };

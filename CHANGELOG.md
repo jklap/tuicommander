@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Fixed
+- GitHub Settings hides bindings for a unique account/remote, restores Logout for OAuth credentials, and keeps an environment-token disconnect effective until login or restart (#1829-54c2).
 - Ego model settings now honor the configured profile and AI Chat workspace. The internal settings service adds managed Ego configuration, readback and presence-only credentials through owner services (#1775-330c).
 - Goose returns to idle after a reply and accepts the next submission without waiting for the five-minute stale recovery (#1812-022d).
 - Aider returns to idle after a reply and accepts the next submission (#1823-8150).
