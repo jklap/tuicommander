@@ -8,6 +8,7 @@ import type {
 	WorkItemDetail,
 	WorkItemFieldSchema,
 	WorkItemGroupedPage,
+	WorkItemOption,
 	WorkItemPage,
 	WorkItemQuery,
 	WorkItemRef,
@@ -21,6 +22,8 @@ export interface WorkItemProvider {
 	readonly fields: readonly WorkItemFieldSchema[];
 	readonly savedFilters: readonly WorkItemSavedFilter[];
 	readonly boards: readonly WorkItemBoard[];
+	/** Optional account-scoped user search for create fields; results contain provider user IDs. */
+	lookupUsers?(fieldId: string, query: string, signal?: AbortSignal): Promise<WorkItemOption[]>;
 	createFields(itemType?: string, signal?: AbortSignal): Promise<WorkItemFieldSchema[]>;
 	board(id: string, query: WorkItemQuery, signal?: AbortSignal): Promise<WorkItemBoardPage>;
 	grouped(query: WorkItemQuery, signal?: AbortSignal): Promise<WorkItemGroupedPage>;

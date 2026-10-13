@@ -1,8 +1,8 @@
 import { For, Show } from "solid-js";
-import { SettingField } from "../../SettingsPanel/fields/SettingField";
 import { Input } from "../../ui/Input";
 import { Select } from "../../ui/Select";
 import { Textarea } from "../../ui/Textarea";
+import { CreateField as SettingField } from "./CreateField";
 import { TaskCreateField } from "./TaskCreateField";
 import styles from "./TasksCreate.module.css";
 import { type TasksCreateOptions, useTasksCreate } from "./useTasksCreate";
@@ -25,11 +25,13 @@ export function TasksCreate(props: TasksCreateProps) {
 			}}
 		>
 			<h2>New task in {props.provider.name}</h2>
-			<SettingField label="Type *">
-				{(id) => (
+			<SettingField label="Type *" error={!model.itemType() ? "Required: Type" : undefined}>
+				{(id, hintId) => (
 					<Select
 						id={id}
+						aria-describedby={hintId}
 						aria-required="true"
+						aria-invalid={!model.itemType()}
 						disabled={model.submitting() || model.types().length < 2}
 						onChange={(event) => model.chooseType(event.currentTarget.value)}
 					>
@@ -46,12 +48,14 @@ export function TasksCreate(props: TasksCreateProps) {
 					</Select>
 				)}
 			</SettingField>
-			<SettingField label="Title *">
-				{(id) => (
+			<SettingField label="Title *" error={!model.title().trim() ? "Required: Title" : undefined}>
+				{(id, hintId) => (
 					<Input
 						id={id}
 						type="text"
+						aria-describedby={hintId}
 						aria-required="true"
+						aria-invalid={!model.title().trim()}
 						value={model.title()}
 						disabled={model.submitting()}
 						onInput={(event) => model.setTitle(event.currentTarget.value)}
@@ -73,6 +77,8 @@ export function TasksCreate(props: TasksCreateProps) {
 					{(field) => (
 						<TaskCreateField
 							schema={field}
+							provider={props.provider}
+							error={model.fieldError(field)}
 							value={model.draft()[field.id]}
 							disabled={busy()}
 							onInput={(value) => model.setValue(field.id, value)}
@@ -96,7 +102,6 @@ export function TasksCreate(props: TasksCreateProps) {
 				)}
 			</Show>
 			<div class={styles.actions}>
-				<Show when={!busy() && model.blocker()}>{(field) => <span class={styles.muted}>{field()}</span>}</Show>
 				<Show when={props.onCancel}>
 					<button type="button" onClick={props.onCancel} disabled={model.submitting()}>
 						Cancel
