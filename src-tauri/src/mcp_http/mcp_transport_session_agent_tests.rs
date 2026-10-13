@@ -3665,7 +3665,10 @@ async fn managed_codex_spawn_trusts_its_new_cwd_without_writing_user_config() {
     assert!(!actual.is_empty(), "agent must record launch argv");
     let expected = format!(
         "projects={{{}={{trust_level=\"trusted\"}}}}",
-        serde_json::to_string(&cwd.to_string_lossy()).unwrap()
+        // The launch trusts the resolved cwd (Codex matches its trust table
+        // against the real path), so a `$TMPDIR` reached through a symlink
+        // is expected back in its canonical spelling.
+        serde_json::to_string(&crate::fs::long_form(&cwd).to_string_lossy()).unwrap()
     );
     assert!(
         actual
@@ -3814,7 +3817,10 @@ async fn managed_codex_wrapper_trusts_only_its_spawn_cwd_and_submits_prompt() {
     );
     let expected = format!(
         "projects={{{}={{trust_level=\"trusted\"}}}}",
-        serde_json::to_string(&cwd.to_string_lossy()).unwrap()
+        // The launch trusts the resolved cwd (Codex matches its trust table
+        // against the real path), so a `$TMPDIR` reached through a symlink
+        // is expected back in its canonical spelling.
+        serde_json::to_string(&crate::fs::long_form(&cwd).to_string_lossy()).unwrap()
     );
     assert!(
         actual

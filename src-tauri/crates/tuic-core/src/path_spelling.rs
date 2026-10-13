@@ -45,6 +45,64 @@ pub fn portable_spelling(path: &str) -> String {
     }
 }
 
+/// Do two host path strings name the same filesystem location?
+///
+/// The strings `git` prints are resolved: `git worktree list` reports
+/// `/private/var/…` on macOS where the user (or `$TMPDIR`) spells the same
+/// directory `/var/…` or through any other symlinked folder. A comparison of
+/// spellings alone then refuses a path that is exactly the registered one. So
+/// equal [`portable_spelling`]s match outright, and otherwise both sides are
+/// resolved with [`resolved_spelling`] and compared again.
+///
+/// Resolution never aliases two distinct locations: two paths that resolve to
+/// the same canonical string are the same directory entry. A literal `\` in a
+/// unix file name stays a file-name character, exactly as in
+/// [`portable_spelling`].
+pub fn same_path(a: &str, b: &str) -> bool {
+    if portable_spelling(a) == portable_spelling(b) {
+        return true;
+    }
+    match (resolved_spelling(a), resolved_spelling(b)) {
+        (Some(a), Some(b)) => a == b,
+        _ => false,
+    }
+}
+
+/// The canonical, [`portable_spelling`] form of `path`, resolving symlinks.
+///
+/// A path that does not exist (a checkout whose directory was deleted while
+/// git still lists it) is resolved through its deepest existing ancestor, and
+/// the missing components are rejoined verbatim. `None` when the path is
+/// relative, when no ancestor resolves, or when a missing component is `.` or
+/// `..` — rejoining those lexically could name a different place than the
+/// filesystem would.
+pub fn resolved_spelling(path: &str) -> Option<String> {
+    use std::path::{Component, Path, PathBuf};
+
+    let path = Path::new(path);
+    if !path.is_absolute() {
+        return None;
+    }
+    let mut missing: Vec<&std::ffi::OsStr> = Vec::new();
+    let mut ancestor = path;
+    let canonical = loop {
+        if let Ok(canonical) = std::fs::canonicalize(ancestor) {
+            break canonical;
+        }
+        let name = match ancestor.components().next_back()? {
+            Component::Normal(name) => name,
+            _ => return None,
+        };
+        missing.push(name);
+        ancestor = ancestor.parent()?;
+    };
+    let full: PathBuf = missing
+        .iter()
+        .rev()
+        .fold(canonical, |acc, name| acc.join(name));
+    Some(portable_spelling(&full.to_string_lossy()))
+}
+
 pub fn windows_portable_spelling(path: &str) -> String {
     // `\\?\UNC\host\share` is `\\host\share` written verbatim, so the prefix
     // cannot simply be cut off that one.

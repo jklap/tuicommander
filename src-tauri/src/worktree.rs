@@ -2293,10 +2293,9 @@ pub(crate) fn begin_orphan_cleanup_internal(
     let current = tuic_git::worktree::assess_orphan_worktrees(repo_path)?;
     if paths.is_empty()
         || paths.iter().any(|path| {
-            !current.iter().any(|entry| {
-                tuic_core::path_spelling::portable_spelling(&entry.path)
-                    == tuic_core::path_spelling::portable_spelling(path)
-            })
+            !current
+                .iter()
+                .any(|entry| tuic_core::path_spelling::same_path(&entry.path, path))
         })
     {
         return Err("Pending cleanup must list current orphan worktrees".into());
@@ -3921,6 +3920,42 @@ mod tests {
             answer_orphan_cleanup_internal(&state, &repo_path, false)
                 .expect("a fresh dialog is answerable");
             assert_eq!(pending_answer(&state, &repo_path), Some(false));
+        }
+
+        // Catches a lexical path comparison: git lists the resolved checkout path, so a
+        // repo opened through a symlinked folder (macOS `/tmp`, `/var`, or a user's own
+        // symlink) could never begin a cleanup of its own orphans.
+        #[cfg(unix)]
+        #[test]
+        fn a_dialog_accepts_orphans_spelled_through_a_symlinked_folder() {
+            let repo = setup_test_repo();
+            let linked = detached(repo.path(), "linked");
+            let links = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+            let alias = links.path().join("alias");
+            std::os::unix::fs::symlink(repo.path().canonicalize().unwrap(), &alias).unwrap();
+            let aliased_linked = alias.join(linked.file_name().unwrap());
+            let state = crate::state::tests_support::make_test_app_state();
+
+            for repo_path in [alias.clone(), repo.path().to_path_buf()] {
+                let repo_path = repo_path.to_string_lossy().to_string();
+                begin_orphan_cleanup_internal(
+                    &state,
+                    &repo_path,
+                    vec![aliased_linked.to_string_lossy().to_string()],
+                )
+                .expect("the symlink spelling names the registered orphan");
+                assert_eq!(pending_answer(&state, &repo_path), None);
+            }
+
+            let stranger = alias.join("not-a-worktree");
+            std::fs::create_dir_all(&stranger).unwrap();
+            let error = begin_orphan_cleanup_internal(
+                &state,
+                &repo.path().to_string_lossy(),
+                vec![stranger.to_string_lossy().to_string()],
+            )
+            .unwrap_err();
+            assert_eq!(error, "Pending cleanup must list current orphan worktrees");
         }
 
         // Catches (critic-1367): a confirmed removal that settles the entry like a Keep, or

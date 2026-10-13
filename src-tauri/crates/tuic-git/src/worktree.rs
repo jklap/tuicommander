@@ -3395,10 +3395,7 @@ pub fn validate_worktree_path(repo_path: &str, worktree_path: &str) -> Result<()
 
     let entry = parse_worktree_entries(&out.stdout)
         .into_iter()
-        .find(|entry| {
-            tuic_core::path_spelling::portable_spelling(&entry.path)
-                == tuic_core::path_spelling::portable_spelling(worktree_path)
-        })
+        .find(|entry| tuic_core::path_spelling::same_path(&entry.path, worktree_path))
         .ok_or_else(|| {
             format!(
                 "Refused: '{}' is not a known worktree of '{}'",
@@ -10612,6 +10609,62 @@ branch refs/heads/feat
             fs::read_to_string(different.join("keep.txt")).unwrap(),
             "unregistered user work\n"
         );
+    }
+
+    /// `git worktree list` prints resolved paths; a repo opened through a
+    /// symlinked folder (macOS `/tmp` or `/var`, or any user symlink) spells the
+    /// same checkout differently. Validation must match the checkout itself, and
+    /// still refuse a different directory reached through the same symlink.
+    #[cfg(unix)]
+    #[test]
+    fn orphan_validation_matches_a_worktree_spelled_through_a_symlink() {
+        let (temp, repo, _workspaces) = workspace_fixture();
+        let path = add_worktree(&repo, "orphan-via-symlink");
+        git_cmd(&path).args(["checkout", "--detach"]).run().unwrap();
+        let alias = temp.path().join("alias");
+        std::os::unix::fs::symlink(temp.path().canonicalize().unwrap(), &alias).unwrap();
+        let aliased_repo = alias.join("repo");
+        let aliased_path = alias.join("orphan-via-symlink");
+        assert_ne!(aliased_path, path.canonicalize().unwrap());
+
+        validate_worktree_path(
+            &aliased_repo.to_string_lossy(),
+            &aliased_path.to_string_lossy(),
+        )
+        .unwrap();
+        validate_worktree_path(&repo.to_string_lossy(), &aliased_path.to_string_lossy()).unwrap();
+
+        let stranger = alias.join("not-registered");
+        fs::create_dir_all(&stranger).unwrap();
+        let error = validate_worktree_path(&repo.to_string_lossy(), &stranger.to_string_lossy())
+            .unwrap_err();
+        assert!(error.contains("not a known worktree"), "{error}");
+    }
+
+    /// Catches `same_path` matching on any shared prefix, losing the missing
+    /// tail of a vanished checkout, or rejoining `..` lexically.
+    #[cfg(unix)]
+    #[test]
+    fn same_path_resolves_symlinks_and_vanished_tails_without_aliasing() {
+        use tuic_core::path_spelling::{resolved_spelling, same_path};
+        let temp = TempDir::new().unwrap();
+        let real = temp.path().canonicalize().unwrap().join("real");
+        fs::create_dir_all(real.join("child")).unwrap();
+        let alias = temp.path().join("alias");
+        std::os::unix::fs::symlink(&real, &alias).unwrap();
+        let s = |p: &Path| p.to_string_lossy().into_owned();
+
+        assert!(same_path(&s(&alias.join("child")), &s(&real.join("child"))));
+        // A checkout whose directory is gone resolves through its parent.
+        assert!(same_path(&s(&alias.join("gone")), &s(&real.join("gone"))));
+        assert_eq!(
+            resolved_spelling(&s(&alias.join("gone/deeper"))).unwrap(),
+            s(&real.join("gone/deeper"))
+        );
+        assert!(!same_path(&s(&alias.join("gone")), &s(&real.join("child"))));
+        assert!(!same_path(&s(&alias), &s(&real.join("child"))));
+        assert_eq!(resolved_spelling(&s(&alias.join("gone/../child"))), None);
+        assert_eq!(resolved_spelling("relative/path"), None);
     }
 
     #[test]

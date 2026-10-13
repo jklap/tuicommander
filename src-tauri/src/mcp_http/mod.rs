@@ -10548,7 +10548,14 @@ mod tests {
             .unwrap();
         let reply: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         let path = std::path::Path::new(reply["path"].as_str().unwrap());
-        assert!(path.starts_with(repo.path().join(".tuic/attachments")));
+        // The upload resolves the session cwd before writing (its symlink
+        // guard), so the reply names the canonical directory even when the
+        // repo was reached through a symlinked `$TMPDIR`.
+        assert!(
+            path.starts_with(crate::fs::long_form(repo.path()).join(".tuic/attachments")),
+            "{}",
+            path.display()
+        );
         assert_eq!(std::fs::read(path).unwrap(), b"attachment bytes");
         let ignored = std::process::Command::new("git")
             .args(["check-ignore", "-q"])
