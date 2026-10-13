@@ -611,7 +611,9 @@ pub(super) fn set_background_work_for_epoch_with_hook<F: FnOnce()>(
         let completion = silence_state.drain_pending_suggest_with_epoch();
         match completion {
             Some((turn_epoch, items)) if turn_epoch == observed_turn_epoch => {
-                emit_suggest_event(state, session_id, turn_epoch, items);
+                if !silence_state.pending_suggest_emitted {
+                    emit_suggest_event(state, session_id, turn_epoch, items);
+                }
                 parent_dispatch = enqueue_state_change_to_parent(
                     state,
                     session_id,

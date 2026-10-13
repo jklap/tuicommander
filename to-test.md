@@ -5297,3 +5297,5 @@ Visual evidence: worktree Vite fixture mounted the real NotificationsTab and Toa
 - [ ] After a manual `make dev` restart or release rebuild, verify GitLab planning dates still render in Roadmap and have no list filter/group control (`queryable` schema support requires the rebuilt Rust backend).
 
 - [ ] Tasks board (#1844-858d): on a configured provider with multiple pages, More retains prior cards and updates loaded lane counts; cards show assignees/labels and Move… offers legal destinations.
+
+- [ ] #1873-bbc2: After a manual `make dev` restart, verify Claude/Codex suggest chips appear after the agent turn ends while a background child runs; completed remains gated and chips do not repeat when the child exits.

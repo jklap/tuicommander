@@ -1230,6 +1230,8 @@ pub(crate) struct SilenceState {
     pub(super) pending_suggest_items: Option<Vec<String>>,
     /// Input-turn epoch associated with `pending_suggest_items`.
     pub(super) pending_suggest_turn_epoch: u64,
+    /// Choices were published, while the completion payload remains parked.
+    pub(super) pending_suggest_emitted: bool,
     /// Timestamp when `pending_suggest_items` was parked. Currently for
     /// diagnostics only — the flush decision is driven by `last_output_at`,
     /// not the park time.
@@ -1370,6 +1372,7 @@ impl SilenceState {
             parser_dedup_reset_pending: false,
             pending_suggest_items: None,
             pending_suggest_turn_epoch: 0,
+            pending_suggest_emitted: false,
             pending_suggest_at: None,
             completion_declared: false,
             completion_turn_epoch: 0,
@@ -2069,6 +2072,7 @@ impl SilenceState {
         self.completion_declared = true;
         self.completion_turn_epoch = turn_epoch;
         self.pending_suggest_items = Some(items);
+        self.pending_suggest_emitted = false;
         self.pending_suggest_turn_epoch = turn_epoch;
         self.pending_suggest_at = Some(std::time::Instant::now());
     }
@@ -2096,6 +2100,7 @@ impl SilenceState {
     pub(crate) fn reset_suggest_memory(&mut self) {
         self.pending_suggest_items = None;
         self.pending_suggest_turn_epoch = 0;
+        self.pending_suggest_emitted = false;
         self.pending_suggest_at = None;
         self.completion_declared = false;
         self.completion_turn_epoch = 0;
@@ -3104,9 +3109,6 @@ pub(super) fn emit_pending_suggest_if_idle(
         .get(session_id)
         .map(|atom| atom.load(std::sync::atomic::Ordering::Acquire) == SHELL_IDLE)
         .unwrap_or(false);
-    if !shell_is_idle {
-        return false;
-    }
     // Serialize completion emission against note_submitted_input, which takes
     // this same lock before advancing SessionState.turn_epoch and clearing the
     // old turn. Whichever owns the lock first defines the lifecycle order.
@@ -3119,7 +3121,22 @@ pub(super) fn emit_pending_suggest_if_idle(
     else {
         return false;
     };
-    if background_work {
+    // A ready agent can finish its turn while descendants keep the shell busy.
+    // Publish choices independently; retain the payload for the existing
+    // completion gate and background-settlement path.
+    let agent_is_ready = silence_state.cached_screen_activity == AgentScreenActivity::Ready
+        && silence_state.last_output_at.elapsed() >= AGENT_READY_CONFIRM;
+    if !shell_is_idle && !agent_is_ready {
+        return false;
+    }
+    if silence_state.pending_suggest_turn_epoch == current_turn_epoch
+        && !silence_state.pending_suggest_emitted
+        && let Some(items) = silence_state.pending_suggest_items.clone()
+    {
+        emit_suggest_event(state, session_id, current_turn_epoch, items);
+        silence_state.pending_suggest_emitted = true;
+    }
+    if !shell_is_idle || background_work {
         return false;
     }
     let Some((turn_epoch, items)) = silence_state.drain_pending_suggest_with_epoch() else {
@@ -3132,7 +3149,9 @@ pub(super) fn emit_pending_suggest_if_idle(
         }
         return false;
     }
-    emit_suggest_event(state, session_id, turn_epoch, items);
+    if !silence_state.pending_suggest_emitted {
+        emit_suggest_event(state, session_id, turn_epoch, items);
+    }
     let parent_dispatch = enqueue_state_change_to_parent(
         state,
         session_id,

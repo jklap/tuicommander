@@ -895,3 +895,5 @@ hook installer, enabled and trusted by Codex. Launch-scoped turn-complete notify
 alone does not establish identity. Unsupported versions, missing/untrusted hooks,
 Windows (the existing tty hook transport is Unix-only), and remote terminals
 keep Codex Chat unavailable. TUIC never bypasses native hook trust.
+
+Suggest choices are published once when the agent is ready, including while background descendants keep the shell busy. The completion lifecycle event still waits for an idle shell and settled background work; publishing choices does not release that gate.
