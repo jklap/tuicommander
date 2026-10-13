@@ -128,4 +128,20 @@ describe("work-item plugin setup", () => {
 		invoke.mockResolvedValueOnce(null);
 		expect(await loadWorkItemSetup(github())).toEqual({ id: "github.com", repository: "" });
 	});
+
+	// Catches: saving the form replacing the whole account, dropping keys the form has no field for
+	// (GitLab login/label drive the "mine" presets, GitHub apiUrl points at an Enterprise host).
+	it("keeps the keys of the saved account that the form does not edit", async () => {
+		const existing = {
+			accounts: [{ id: "gitlab.com", host: "https://gitlab.com", project: "g/old", login: "sstraus", label: "Work" }],
+		};
+		invoke.mockImplementation(async (command: string) =>
+			command === "read_plugin_data" ? JSON.stringify(existing) : undefined,
+		);
+		await saveWorkItemSetup(gitlab(), { id: "gitlab.com", host: "https://gitlab.com", project: "g/new", boards: "" });
+		const write = invoke.mock.calls.find(([command]) => command === "write_plugin_data");
+		expect(JSON.parse(write?.[1].content).accounts).toEqual([
+			{ id: "gitlab.com", host: "https://gitlab.com", project: "g/new", login: "sstraus", label: "Work" },
+		]);
+	});
 });
