@@ -932,13 +932,6 @@ where
         .find(|&index| is_prompt(&rows[index]))
 }
 
-/// Claude's active status is presence-based because current Claude versions can
-/// keep the empty composer visible while a long tool call is still running.
-/// The live marker is deliberately semantic rather than glyph-only: an animated
-/// spinner prefix plus an ellipsis in the phase name (`✽ Nucleating… (3m 50s)`)
-/// means active, while completed summaries (`✻ Sautéed for 1m 25s`), HUD bars,
-/// hints, and banner art remain inert. This also holds BUSY when DEC 2026 frame
-/// coalescing makes consecutive spinner paints text-identical.
 /// Claude's composer row: the bare `❯`, or `❯` over the dim placeholder hint a
 /// fresh session shows (`❯ Try "fix typecheck errors"`, the gap is a no-break
 /// space). Missing the hint row left a freshly launched Claude BUSY for as long
@@ -949,10 +942,16 @@ fn is_claude_composer_row(row: &str) -> bool {
         || row
             .strip_prefix('\u{276F}')
             .map(str::trim_start)
-            .and_then(|hint| hint.strip_prefix("Try \""))
-            .is_some_and(|hint| hint.ends_with('"'))
+            .is_some_and(|hint| hint.starts_with("Try \""))
 }
 
+/// Claude's active status is presence-based because current Claude versions can
+/// keep the empty composer visible while a long tool call is still running.
+/// The live marker is deliberately semantic rather than glyph-only: an animated
+/// spinner prefix plus an ellipsis in the phase name (`✽ Nucleating… (3m 50s)`)
+/// means active, while completed summaries (`✻ Sautéed for 1m 25s`), HUD bars,
+/// hints, and banner art remain inert. This also holds BUSY when DEC 2026 frame
+/// coalescing makes consecutive spinner paints text-identical.
 pub(super) fn detect_claude_screen_activity(rows: &[String]) -> AgentScreenActivity {
     let content_end = rows
         .iter()

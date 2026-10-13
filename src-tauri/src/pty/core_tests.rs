@@ -1502,6 +1502,20 @@ fn claude_submitted_prompt_row_is_not_a_ready_composer() {
     }
 }
 
+/// A narrow PTY (phone) wraps or truncates the placeholder, so the closing
+/// quote may be missing; the tab must still read Ready, not Busy forever.
+#[test]
+fn claude_truncated_placeholder_hint_is_a_ready_composer() {
+    for row in ["❯\u{a0}Try \"fix typec", "❯\u{a0}Try \"fix typecheck errors\""] {
+        let screen = vec![row.to_string()];
+        assert_eq!(
+            detect_claude_screen_activity(&screen),
+            AgentScreenActivity::Ready,
+            "placeholder hint must read Ready: {row:?}"
+        );
+    }
+}
+
 /// THE core invariant of the movement design: a byte-identical repaint of a
 /// frozen "spinner" line produces NO ChangedRow (text-equality diff in
 /// `TerminalGrid::process`), so it can never pass the reader's busy gate —
@@ -9766,7 +9780,8 @@ fn captured_aider_submitted_turn_returns_idle_after_the_reply() {
 // Catches: a Claude launched from a shell that paints its Ready composer and
 // status-line HUD but never returns the tab to idle, so tuic-remote shows the
 // blue activity dot for hours on an agent nobody is driving (story 1864-23d0).
-// The capture is the real byte stream of session pe-1 on a remote daemon.
+// The capture is a reconstruction of session pe-1 on a remote daemon: bytes
+// are real, chunk boundaries and geometry are approximated.
 #[test]
 fn captured_claude_launch_from_shell_returns_idle_at_its_ready_composer() {
     let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(
