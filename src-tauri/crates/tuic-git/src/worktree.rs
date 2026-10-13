@@ -1704,6 +1704,11 @@ pub fn create_workspace_recycling(
             }
             let start = base_ref.unwrap_or("HEAD");
             fetch_if_remote(&config.base_repo, start)?;
+            // The switch runs inside the old checkout, where HEAD is its old commit.
+            let start_point = match base_ref {
+                Some(base) => base.to_string(),
+                None => rev_at(repo, "HEAD")?,
+            };
             // Reserve before touching Git or paths; failures cannot expose it to another caller.
             std::fs::create_dir_all(worktrees_dir)
                 .map_err(|error| format!("Cannot create checkout parent: {error}"))?;
@@ -1713,7 +1718,7 @@ pub fn create_workspace_recycling(
             let recycled = (|| -> Result<(), String> {
                 move_registered_checkout(repo, &old_path, &destination)?;
                 git_cmd(&destination)
-                    .args(["switch", "-c", &branch, start])
+                    .args(["switch", "-c", &branch, &start_point])
                     .run()
                     .map_err(|error| format!("Cannot switch recycled checkout: {error}"))?;
                 switched = true;
@@ -4432,6 +4437,54 @@ mod tests {
         )
         .unwrap();
         assert!(reused_again.is_none());
+    }
+
+    /// Recycle an integrated, finished checkout while the repository HEAD has moved on.
+    /// Returns (repo HEAD, old checkout HEAD, new branch tip).
+    fn recycle_after_repo_head_advances(base_ref: Option<&str>) -> (String, String, String) {
+        let repo = setup_test_repo();
+        let directory = tempfile::tempdir().unwrap();
+        let (first, _) = create_workspace_recycling(
+            directory.path(),
+            &recycle_config(repo.path(), "first"),
+            None,
+            |_| true,
+        )
+        .unwrap();
+        finish_worktree(repo.path(), &first.path).unwrap();
+        let old_head = rev_at(&first.path, "HEAD").unwrap();
+        std::fs::write(repo.path().join("advance"), "x").unwrap();
+        git_cmd(repo.path()).args(["add", "advance"]).run().unwrap();
+        git_cmd(repo.path())
+            .args(["commit", "-m", "advance"])
+            .run()
+            .unwrap();
+        let repo_head = rev_at(repo.path(), "HEAD").unwrap();
+        let (second, reused) = create_workspace_recycling(
+            directory.path(),
+            &recycle_config(repo.path(), "second"),
+            base_ref,
+            |_| true,
+        )
+        .unwrap();
+        assert!(reused.is_some(), "the finished checkout must be recycled");
+        (repo_head, old_head, rev_at(&second.path, "HEAD").unwrap())
+    }
+
+    // Catches: recycled create bases the new branch on the recycled checkout's HEAD instead of the repository HEAD.
+    #[test]
+    fn recycling_without_base_ref_branches_from_repository_head() {
+        let (repo_head, old_head, tip) = recycle_after_repo_head_advances(None);
+        assert_ne!(repo_head, old_head);
+        assert_eq!(tip, repo_head);
+    }
+
+    // Catches: the default-start fix overriding an explicit base_ref.
+    #[test]
+    fn recycling_with_base_ref_still_branches_from_it() {
+        let (repo_head, old_head, tip) = recycle_after_repo_head_advances(Some("first"));
+        assert_ne!(repo_head, old_head);
+        assert_eq!(tip, old_head);
     }
 
     // Catches: cmd dropping an oversized duplicated PATH and losing Git lookup.
