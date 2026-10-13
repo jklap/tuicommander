@@ -207,3 +207,26 @@ fn repo_local_export_rejects_corruption_and_preserves_existing_values() {
     assert_eq!(disk["mcp_upstreams"], json!(["docs"]));
     assert!(disk["copy_ignored_files"].is_boolean());
 }
+
+fn listing(root: &std::path::Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(root)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
+}
+
+// Catches: a settings read or patch leaves a `.tuic.json.lock` in the user's repository, which then shows
+// as an untracked file in git status and makes the worktree look dirty.
+#[tokio::test]
+async fn repo_local_read_and_patch_leave_no_lock_file_in_the_repository() {
+    let f = Fixture::new();
+    let root = f.dir.path().join("one");
+    let before = listing(&root);
+    let snapshot = f.get("one").await.unwrap();
+    f.set("one", snapshot.revision, json!("main"))
+        .await
+        .unwrap();
+    assert_eq!(listing(&root), before);
+}
