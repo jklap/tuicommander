@@ -1868,7 +1868,7 @@ worktree. `repoPath` is the main repository path, `branch` the worktree branch n
 - `labels`: multiple labels with stable IDs; `date`: ISO-8601 date input.
 - `number`: finite numeric input; `link`: URL/link control.
 
-A field schema can set `queryable: false` to hide a display-only field from list filters and grouping. The roadmap still reads date fields. Omitted or null means queryable.
+Display-only fields set `sortable`, `filterable` and `groupable` to false. The roadmap still reads date fields.
 
 The canonical DTOs are `work_items::model` and `work_items::protocol` in Rust.
 Generate their TypeScript declarations with
@@ -1876,6 +1876,11 @@ Generate their TypeScript declarations with
 `src/types/work-items.gen.ts`. Fields use camelCase; discriminated unions use
 `{kind, value}` with snake_case kinds. `WorkItemRef` scopes opaque item IDs by
 `providerId` and `accountId`. Missing field keys mean not loaded; null means unset.
+
+Each field schema declares `sortable`, `groupable` and `filterable` booleans for
+the provider list endpoint. Tasks offers only those declared query controls.
+Create and detail schemas set these to false when they are not list fields.
+A rejected query restores the last successful controls and shows the reason.
 
 `WorkItemQuery` carries ANDed filters (values are ORed), saved filter ID, native
 search, sort, bounded page size and opaque cursor. Providers must bind cursors to

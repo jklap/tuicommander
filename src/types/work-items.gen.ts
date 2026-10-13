@@ -43,7 +43,9 @@ export interface WorkItemFieldSchema {
 	kind: WorkItemFieldKind;
 	required: boolean;
 	editable: boolean;
-	queryable?: boolean | null;
+	sortable: boolean;
+	groupable: boolean;
+	filterable: boolean;
 	options: Array<WorkItemOption>;
 }
 

@@ -2934,3 +2934,6 @@ by this adapter. Model changes from the existing Providers UI now use the same
 configured profile and workspace as perimeter changes.
 
 Tasks setup preserves saved account keys outside the form, including Enterprise hosts and login. Label choices use matching provider field IDs; assignee username filters stay text when create-form IDs differ. Display-only roadmap dates do not appear in list filters or grouping.
+
+Tasks list controls use provider-declared field sort, group and filter capabilities.
+A rejected selection restores the last successful query and shows the provider reason.

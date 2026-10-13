@@ -765,3 +765,7 @@ and scope changes clean up drag state. Consumers refresh the projection after a
 successful move by merging page one into the loaded cards. Other loaded pages are
 retained until reload. The move menu stays open when its own list scrolls; scrolling
 outside it dismisses it. The view does not infer workflow transitions.
+
+
+Tasks list controls use provider-declared field sort, group and filter capabilities.
+A rejected selection restores the last successful query and shows the provider reason.

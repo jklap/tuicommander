@@ -27,6 +27,9 @@ export function detail(): WorkItemDetail {
 				kind: "enum",
 				required: true,
 				editable: true,
+				sortable: false,
+				groupable: false,
+				filterable: false,
 				options: [
 					{ id: "high", name: "High" },
 					{ id: "low", name: "Low" },

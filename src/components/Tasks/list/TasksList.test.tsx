@@ -202,7 +202,9 @@ describe("Tasks list", () => {
 					required: false,
 					editable: false,
 					options: [],
-					queryable: false,
+					sortable: false,
+					filterable: false,
+					groupable: false,
 				},
 			],
 		};
