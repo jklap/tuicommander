@@ -10,6 +10,8 @@ interface TaskRowsProps {
 	loading: boolean;
 	resetKey: unknown;
 	selected?: WorkItemRef | null;
+	/** Branch of the worktree linked to the task, when there is one. */
+	linkedBranch?: (reference: WorkItemRef) => string | undefined;
 	onOpen: (reference: WorkItemRef) => void;
 }
 // One shape per tone so state never relies on colour alone.
@@ -78,6 +80,21 @@ export function TaskRows(props: TaskRowsProps) {
 												>
 													<span class={s.key}>{current.item.key}</span>
 													<span class={s.title}>{current.item.title}</span>
+													<Show when={props.linkedBranch?.(current.item.reference)}>
+														{(branch) => (
+															<svg
+																class={s.linked}
+																role="img"
+																aria-label={`Linked to worktree ${branch()}`}
+																viewBox="0 0 12 12"
+																width="12"
+																height="12"
+																fill="currentColor"
+															>
+																<path d="M3.5 1a1.5 1.5 0 0 1 .5 2.915v.5c0 .3.2.585.5.585H7a2 2 0 0 1 1.5.7V5.9a1.5 1.5 0 1 1 1 0v.6A3 3 0 0 0 7.2 5.5H4.5c-.17 0-.34-.03-.5-.08v2.665a1.5 1.5 0 1 1-1 0V3.915A1.5 1.5 0 0 1 3.5 1z" />
+															</svg>
+														)}
+													</Show>
 													<span class={s.assignee}>{assigneeLabel(current.item)}</span>
 													<time class={s.age} datetime={current.item.updatedAt} title={current.item.updatedAt}>
 														{age(current.item.updatedAt)}

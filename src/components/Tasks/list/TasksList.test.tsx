@@ -157,5 +157,25 @@ describe("Tasks list", () => {
 			});
 			expect(new Set(shapes).size).toBe(tones.length);
 		});
+
+		// Catches: the linked-worktree mark on every row, on none, or on the wrong row.
+		it("marks only the rows whose task is linked to a worktree", async () => {
+			render(() => (
+				<TaskRows
+					items={items}
+					groups={[]}
+					loading={false}
+					resetKey="l"
+					linkedBranch={(reference) => (reference.id === "2" ? "feat/row-2" : undefined)}
+					onOpen={() => {}}
+				/>
+			));
+			await screen.findByRole("button", { name: /Row 2/ });
+			expect(screen.getByRole("img", { name: "Linked to worktree feat/row-2" })).toBeInTheDocument();
+			expect(screen.getAllByRole("img", { name: /Linked to worktree/ })).toHaveLength(1);
+			expect(screen.getByRole("button", { name: /Row 2/ })).toContainElement(
+				screen.getByRole("img", { name: "Linked to worktree feat/row-2" }),
+			);
+		});
 	});
 });

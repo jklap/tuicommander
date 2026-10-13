@@ -42,6 +42,8 @@ and provider cursor pagination. Failed refreshes retain rows with a stale label.
 Filters, sort and group sit behind a Filters button that shows the active count. The Tasks
 shell uses container queries: below 700 px the list and the detail take turns, with a Back to
 list control.
+Rows show the open task, assignee, age, a state shape and a mark for tasks linked to a worktree; a
+Filters checkbox lists only linked tasks among the loaded rows.
 The component is available for Tasks shell integration; it does not add a tab by itself.
 
 ## ego Perimeter Settings
