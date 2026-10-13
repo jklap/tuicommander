@@ -617,4 +617,69 @@ mod tests {
         // A sibling that merely shares a prefix is not inside anything.
         assert_eq!(registered_repo_for_path("/Users/dev/oneiric", &known), None);
     }
+
+    /// Catches a spelling-only match: a shell reports `$PWD` as spelled and git
+    /// reports the resolved path, so a session working in its own repository
+    /// through a symlinked folder (macOS `/var`, a linked project dir) used to
+    /// resolve to no project at all. The registered spelling comes back, and the
+    /// deepest registration still wins when only one of them is spelled through
+    /// the link.
+    #[cfg(unix)]
+    #[test]
+    fn a_working_directory_spelled_through_a_symlink_resolves_to_its_registered_repo() {
+        use crate::mcp_http::mcp_transport::registered_repo_for_path;
+        let temp = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let real = temp.path().canonicalize().unwrap().join("one");
+        std::fs::create_dir_all(real.join("two/src")).unwrap();
+        let alias = temp.path().join("alias");
+        std::os::unix::fs::symlink(temp.path().canonicalize().unwrap(), &alias).unwrap();
+        let s = |p: &std::path::Path| p.to_string_lossy().into_owned();
+        let aliased_one = s(&alias.join("one"));
+
+        let known = vec![aliased_one.clone()];
+        assert_eq!(
+            registered_repo_for_path(&s(&real.join("two/src")), &known).as_deref(),
+            Some(aliased_one.as_str())
+        );
+        let known = vec![s(&real)];
+        assert_eq!(
+            registered_repo_for_path(&s(&alias.join("one/two")), &known).as_deref(),
+            Some(s(&real).as_str())
+        );
+        // Outer registered as resolved, inner through the link: the inner wins.
+        let inner = s(&alias.join("one/two"));
+        let known = vec![s(&real), inner.clone()];
+        assert_eq!(
+            registered_repo_for_path(&s(&real.join("two/src")), &known).as_deref(),
+            Some(inner.as_str())
+        );
+        // Depth is compared in one spelling: a short link to a long directory
+        // must not let a shallow registration spelled long outrank a deeper one
+        // spelled short.
+        let long = temp
+            .path()
+            .canonicalize()
+            .unwrap()
+            .join("a-directory-name-long-enough-to-outweigh-the-nesting-below-it");
+        std::fs::create_dir_all(long.join("two/src")).unwrap();
+        let short = temp.path().join("s");
+        std::os::unix::fs::symlink(&long, &short).unwrap();
+        let deep = s(&short.join("two"));
+        let known = vec![s(&long), deep.clone()];
+        assert!(
+            s(&long).len() > deep.len(),
+            "fixture must spell the shallow repo longer"
+        );
+        assert_eq!(
+            registered_repo_for_path(&s(&short.join("two/src")), &known).as_deref(),
+            Some(deep.as_str())
+        );
+        // A sibling reached through the same link is still outside.
+        std::fs::create_dir_all(real.parent().unwrap().join("oneiric")).unwrap();
+        let known = vec![aliased_one];
+        assert_eq!(
+            registered_repo_for_path(&s(&real.parent().unwrap().join("oneiric")), &known),
+            None
+        );
+    }
 }

@@ -2208,6 +2208,9 @@ pub(crate) fn begin_orphan_cleanup_internal(
     repo_path: &str,
     paths: Vec<String>,
 ) -> Result<(), String> {
+    for path in &paths {
+        tuic_git::worktree::refuse_symlinked_checkout(path)?;
+    }
     let current = tuic_git::worktree::assess_orphan_worktrees(repo_path)?;
     if paths.is_empty()
         || paths.iter().any(|path| {
@@ -3848,6 +3851,126 @@ mod tests {
             )
             .unwrap_err();
             assert_eq!(error, "Pending cleanup must list current orphan worktrees");
+        }
+
+        /// A repo and its orphan both spelled through a symlinked folder: the
+        /// repo path and the checkout path the caller has, never git's.
+        #[cfg(unix)]
+        fn aliased_orphan(
+            name: &str,
+        ) -> (
+            tempfile::TempDir,
+            tempfile::TempDir,
+            PathBuf,
+            String,
+            String,
+        ) {
+            let repo = setup_test_repo();
+            let linked = detached(repo.path(), name);
+            let links = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+            let alias = links.path().join("alias");
+            std::os::unix::fs::symlink(repo.path().canonicalize().unwrap(), &alias).unwrap();
+            let aliased_repo = alias.to_string_lossy().to_string();
+            let aliased_linked = alias.join(name).to_string_lossy().to_string();
+            (repo, links, linked, aliased_repo, aliased_linked)
+        }
+
+        // Catches the removal half of a lexical comparison: an orphan named through
+        // a symlinked folder validated, but the removal itself (git, the admin dir
+        // lookup, the warm-state key) could still miss it.
+        #[cfg(unix)]
+        #[test]
+        fn an_orphan_named_through_a_symlinked_folder_is_removed() {
+            let (_repo, _links, linked, aliased_repo, aliased_linked) =
+                aliased_orphan("alias-remove");
+            let state = crate::state::tests_support::make_test_app_state();
+
+            remove_orphan_checkout(&state, &aliased_repo, &aliased_linked, true, &[])
+                .expect("the aliased spelling names the registered orphan");
+
+            assert!(!linked.exists(), "the checkout must be gone");
+            let listed = tuic_git::worktree::assess_orphan_worktrees(&aliased_repo).unwrap();
+            assert!(listed.is_empty(), "registration must be gone: {listed:?}");
+        }
+
+        // Catches a vanished checkout reached through a symlinked folder: its
+        // directory is gone, so only the deepest existing ancestor can resolve
+        // it; the assessment must say DIRECTORY_GONE and removal must drop the
+        // tracking entry.
+        #[cfg(unix)]
+        #[test]
+        fn a_vanished_orphan_named_through_a_symlinked_folder_drops_its_entry() {
+            let (_repo, _links, linked, aliased_repo, aliased_linked) =
+                aliased_orphan("alias-vanished");
+            std::fs::remove_dir_all(&linked).unwrap();
+            let state = crate::state::tests_support::make_test_app_state();
+
+            let assessed = tuic_git::worktree::assess_orphan_worktrees(&aliased_repo).unwrap();
+            let entry = assessed
+                .iter()
+                .find(|entry| tuic_core::path_spelling::same_path(&entry.path, &aliased_linked))
+                .expect("git still lists the vanished checkout");
+            assert!(entry.safe, "{entry:?}");
+            assert!(
+                entry
+                    .reason
+                    .as_deref()
+                    .is_some_and(|reason| reason.contains("already gone")),
+                "{entry:?}"
+            );
+
+            remove_orphan_checkout(&state, &aliased_repo, &aliased_linked, true, &[])
+                .expect("a vanished orphan is removable by its aliased spelling");
+            assert!(
+                tuic_git::worktree::assess_orphan_worktrees(&aliased_repo)
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+
+        // Catches the dialog's remove answer re-checking safety with the
+        // spelling it was begun with and refusing an orphan it accepted.
+        #[cfg(unix)]
+        #[test]
+        fn a_remove_answer_accepts_orphans_spelled_through_a_symlinked_folder() {
+            let (_repo, _links, linked, aliased_repo, aliased_linked) =
+                aliased_orphan("alias-answer");
+            let state = crate::state::tests_support::make_test_app_state();
+            begin_orphan_cleanup_internal(&state, &aliased_repo, vec![aliased_linked]).unwrap();
+
+            answer_orphan_cleanup_internal(&state, &aliased_repo, true)
+                .expect("a clean aliased orphan is safe to remove");
+
+            assert_eq!(pending_answer(&state, &aliased_repo), Some(true));
+            assert!(
+                linked.exists(),
+                "answering records intent; it removes nothing"
+            );
+        }
+
+        // A1: the checkout must be named directly. A symlink standing in for it
+        // resolves to the same orphan but is refused by every entry point.
+        #[cfg(unix)]
+        #[test]
+        fn a_symlink_standing_in_for_the_orphan_is_refused_everywhere() {
+            let repo = setup_test_repo();
+            let linked = detached(repo.path(), "leaf-target");
+            let links = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+            let leaf = links.path().join("leaf");
+            std::os::unix::fs::symlink(&linked, &leaf).unwrap();
+            let repo_path = repo.path().to_string_lossy().to_string();
+            let leaf = leaf.to_string_lossy().to_string();
+            let state = crate::state::tests_support::make_test_app_state();
+
+            let error = remove_orphan_checkout(&state, &repo_path, &leaf, true, &[]).unwrap_err();
+            assert!(error.contains("is a symlink"), "{error}");
+            let error = check_orphan_removal(&state, &repo_path, &leaf, false, &[]).unwrap_err();
+            assert!(error.contains("is a symlink"), "{error}");
+            let error =
+                begin_orphan_cleanup_internal(&state, &repo_path, vec![leaf.clone()]).unwrap_err();
+            assert!(error.contains("is a symlink"), "{error}");
+            assert_eq!(pending_answer(&state, &repo_path), None);
+            assert!(linked.exists(), "the real checkout must survive");
         }
 
         // Catches (critic-1367): a confirmed removal that settles the entry like a Keep, or
