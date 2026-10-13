@@ -148,8 +148,15 @@ fn socket_root_is_a_private_marked_dir_under_the_host_temp_dir_never_tmp() {
         name.len() == 8 && name.starts_with("t."),
         "socket root name {name}"
     );
+    // A shared temp dir is only a defect when the root fell back to it: a host
+    // temp dir that is itself a `/tmp/...` symlink (a sandbox's short TMPDIR)
+    // legitimately puts the root below one.
     for shared in ["/tmp", "/private/tmp", "/var/tmp"] {
-        assert!(!root.starts_with(shared), "{}", root.display());
+        assert!(
+            host.starts_with(shared) || !root.starts_with(shared),
+            "{}",
+            root.display()
+        );
     }
     let meta = std::fs::symlink_metadata(&root).unwrap();
     assert!(meta.is_dir() && !meta.file_type().is_symlink());
@@ -294,9 +301,12 @@ fn private_socket_root_checks_refuse_symlinks_tighten_modes_and_need_write() {
 // Catches: a name that does not fit reaching bind() as an opaque SUN_LEN error.
 #[test]
 fn short_socket_path_refuses_a_name_that_cannot_fit() {
-    let panic = std::panic::catch_unwind(|| tuic_test_support::short_socket_path(&"n".repeat(60)))
-        .expect_err("an over-long socket name must fail");
-    assert!(panic_message(panic).contains("103-byte"));
+    // Longer than the whole budget, so it overflows below any host temp dir.
+    let panic = std::panic::catch_unwind(|| {
+        tuic_test_support::short_socket_path(&"n".repeat(SUN_PATH_USABLE))
+    })
+    .expect_err("an over-long socket name must fail");
+    assert!(panic_message(panic).contains(&format!("{SUN_PATH_USABLE}-byte")));
     let path = tuic_test_support::short_socket_path("story.sock");
     assert_eq!(
         path.parent(),

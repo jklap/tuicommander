@@ -437,23 +437,9 @@ impl ForegroundIdentityProbe {
         use std::sync::{Arc, atomic::AtomicBool};
 
         let scratch = tempfile::tempdir_in(test_temp_root()).unwrap();
-        let executable = scratch.path().join(name);
-        std::fs::copy("/bin/cat", &executable).unwrap();
-        // macOS kills a relocated Apple platform binary (verified exit -9).
-        // Ad-hoc signing the scratch copy makes it a local identity probe.
-        #[cfg(target_os = "macos")]
-        {
-            let signed = std::process::Command::new("/usr/bin/codesign")
-                .args(["--force", "--sign", "-"])
-                .arg(&executable)
-                .output()
-                .expect("sign scratch identity probe");
-            assert!(
-                signed.status.success(),
-                "codesign: {}",
-                String::from_utf8_lossy(&signed.stderr)
-            );
-        }
+        // A compiled probe, not a copy of /bin/cat: the sandbox SIGKILLs a
+        // relocated Apple platform binary. It blocks on its PTY stdin like cat.
+        let executable = tuic_test_support::install_identity_probe(scratch.path(), name);
         let pair = native_pty_system()
             .openpty(PtySize {
                 rows: 24,

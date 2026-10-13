@@ -55,6 +55,10 @@ const ALLOWED = new Map([
 		"shell text executed on the REMOTE host over ssh, not under the local sandbox",
 	],
 	[
+		"src-tauri/src/remote_deploy/mod.rs::host_ps_reports_comm",
+		"test probe: decides whether verified_kill's remote-side `ps` can run locally; when it cannot (sandbox), the test puts tuic-test-support's native `ps` stand-in on PATH instead, so nothing depends on /bin/ps",
+	],
+	[
 		"src-tauri/src/agent_hook.rs::shell_command_resolves_the_tty_and_prints_every_wire_pair",
 		"test asserts on the generated fallback text; execs nothing",
 	],
