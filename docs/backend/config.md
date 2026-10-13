@@ -395,7 +395,6 @@ Each target uses the format its tool reads:
 | goose | `~/.config/goose/config.yaml` | YAML `extensions` (`ExtensionEntry`) |
 | pi | `~/.pi/agent/mcp.json` | JSON `mcpServers` (pi-mcp-adapter extension) |
 
-Aider is absent because it has no MCP client.
 
 **A target is written only when it is installed.** The writer creates every
 missing parent directory, so an unconditional pass used to create `~/.cursor/`,

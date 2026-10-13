@@ -1355,7 +1355,6 @@ TUICommander polls the foreground process of each terminal's PTY every 3 seconds
 | `claude` | `"claude"` |
 | `gemini` | `"gemini"` |
 | `opencode` | `"opencode"` |
-| `aider` | `"aider"` |
 | `codex` | `"codex"` |
 | `amp` | `"amp"` |
 | `cursor-agent` | `"cursor"` |

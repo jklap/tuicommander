@@ -231,7 +231,7 @@ ParsedEvent::ApiError {
 ```
 
 Detects errors from two tiers:
-- **Agent-specific**: Claude Code, Aider, Codex CLI, Gemini CLI, Copilot CLI (note: the generic "request failed unexpectedly" pattern was removed from Copilot detection due to false positives on Claude Code output)
+- **Agent-specific**: Claude Code, Codex CLI, Gemini CLI, Copilot CLI (note: the generic "request failed unexpectedly" pattern was removed from Copilot detection due to false positives on Claude Code output)
 - **Provider-level**: OpenAI, Anthropic, Google, OpenRouter, MiniMax JSON error structures
 
 Claude Code has two 5xx renderings and both are covered. `claude-api-error` matches
@@ -399,7 +399,6 @@ The backend foreground probe enables agent parsing for hand-launched agents in b
 
 Goose replies are append-only below the submitted prompt. The PTY reader preserves those changed rows instead of trimming them as fixed composer chrome. This lets the reply prove consumption before a stable Ready screen closes the submitted turn; no protocol-stale timeout is needed (#1812-022d).
 
-Aider does the same: its reply and `Waiting for` spinner are printed below the echoed `> prompt` line, so the PTY reader keeps those rows too (#1823-8150).
 
 Ordinary output and spinner repaints cannot override a protocol idle marker.
 The reader preserves that evidence until the ranked busy decision, and the
@@ -495,7 +494,7 @@ Scans screen bottom rows (from VtLogBuffer) for slash command menus. Only called
 ## Pattern Detection
 
 The parser uses regex patterns to detect:
-- Rate limit messages from Claude, Aider, OpenCode, Gemini, Codex
+- Rate limit messages from Claude, Codex, OpenCode, Gemini, Codex
 - Questions and interactive prompts (hardcoded, Y/N, inquirer, Ink menus, generic `?` lines)
 - API errors from agents and API providers (5xx, auth failures)
 - GitHub/GitLab PR URLs in `gh pr create` output
@@ -522,8 +521,6 @@ The `strip_ansi()` function pre-processes CUF (Cursor Forward, `\x1b[nC`) escape
 | Agent | Pattern | Example |
 |-------|---------|---------|
 | Claude Code | `·`/`✢`/`✳`/`✶`/`✻`/`✽`/`*` + ellipsis | `✢Reading files… (12s)` or `· Considering…` |
-| Aider | Knight Rider scanner `░█` / `█░` + task text | `░█        Waiting for claude-3-5-sonnet` |
-| Aider | Token report `Tokens:` prefix | `Tokens: 5.2k sent, 1.3k received.` |
 | Codex CLI | Bullet `•`/`◦` + task + parenthesized time | `• Working (4m 55s • esc to interrupt)` |
 | Copilot CLI | `∴`/`●`/`○` + task + dots/ellipsis | `∴ Thinking…` or `● Read file...` |
 | Gemini CLI | Braille spinner `⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏` + phrase | `⠋ Analyzing your codebase` |

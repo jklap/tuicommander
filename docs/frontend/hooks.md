@@ -14,7 +14,7 @@ export function initApp(deps: AppInitDeps): Promise<void>
 
 **What it does:**
 1. Hydrates all stores from Rust backend (settings, repos, UI, prompts, etc.)
-2. Detects installed binaries (Claude, Aider)
+2. Detects installed binaries (Claude, Codex)
 3. Applies platform CSS class (`platform-darwin`, `platform-win32`, `platform-linux`)
 4. Sets up close handler (quit confirmation dialog)
 5. Starts GitHub polling

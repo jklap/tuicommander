@@ -3,7 +3,6 @@ export type AgentType =
 	| "claude"
 	| "gemini"
 	| "opencode"
-	| "aider"
 	| "codex"
 	| "amp"
 	| "cursor"
@@ -20,7 +19,6 @@ export const AGENT_TYPES: readonly AgentType[] = [
 	"claude",
 	"gemini",
 	"opencode",
-	"aider",
 	"codex",
 	"amp",
 	"cursor",
@@ -150,29 +148,6 @@ export const AGENTS: Record<AgentType, AgentConfig> = {
 			completion: [/completed/i],
 			error: [/error:/i, /failed:/i],
 			prompt: [/^\s*\d+[.)]\s+.+$/gm],
-		},
-	},
-	aider: {
-		type: "aider",
-		name: "Aider",
-		binary: "aider",
-		description: "AI pair programming in terminal",
-		defaultHeadlessTemplate: 'aider --yes-always --message "{prompt}"',
-		resumeCommand: "aider --restore-chat-history",
-		ctrlEnterSequence: "\x1b[13;5u",
-		sessionDiscovery: null, // single .aider.chat.history.md per project, no session IDs
-		spawnArgs: (prompt, options = {}) => {
-			const args: string[] = ["--yes-always"];
-			if (options.model) args.push("--model", options.model);
-			args.push("--message", prompt);
-			return args;
-		},
-		outputFormat: "text",
-		detectPatterns: {
-			rateLimit: [/rate.?limit/i, /429/, /too many requests/i],
-			completion: [/Applied edit/i, /Committed/i],
-			error: [/error:/i, /failed:/i],
-			prompt: [/\[Y\/n\]/, /Enter.*:/i],
 		},
 	},
 	codex: {
@@ -468,7 +443,6 @@ export const MCP_SUPPORT: Record<AgentType, boolean> = {
 	claude: true,
 	gemini: true,
 	opencode: true,
-	aider: false,
 	codex: true,
 	amp: true,
 	cursor: true,
@@ -493,7 +467,6 @@ export const HOOK_SUPPORT: Record<AgentType, boolean> = {
 	claude: true,
 	gemini: true,
 	opencode: true,
-	aider: false,
 	codex: true,
 	amp: false,
 	cursor: false,
@@ -514,7 +487,6 @@ export const AGENT_DISPLAY: Record<AgentType, { icon: string; color: string }> =
 	claude: { icon: "C", color: "#d97706" },
 	gemini: { icon: "G", color: "#4285f4" },
 	opencode: { icon: "O", color: "#10a37f" },
-	aider: { icon: "A", color: "#9333ea" },
 	codex: { icon: "X", color: "#ffffff" },
 	amp: { icon: "A", color: "#ff5543" },
 	cursor: { icon: "C", color: "#000000" },

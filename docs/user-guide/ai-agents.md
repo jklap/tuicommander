@@ -2,13 +2,14 @@
 
 TUICommander detects, monitors, and manages AI coding agents running in your terminals.
 
+Aider is no longer an agent harness. An `aider` command runs as a plain terminal command. Old settings remain readable, but Aider profiles are excluded from agent pickers and managed peer launches.
+
 ## Supported Agents
 
 | Agent | Binary | Resume Command | Session Binding |
 |-------|--------|----------------|-----------------|
 | Claude Code | `claude` | `claude --continue` | `claude --resume $TUIC_SESSION` |
 | Codex CLI | `codex` | `codex resume --last` | `codex resume $TUIC_SESSION` |
-| Aider | `aider` | `aider --restore-chat-history` | — |
 | Gemini CLI | `gemini` | `gemini --resume` | `gemini --resume $TUIC_SESSION` |
 | OpenCode | `opencode` | `opencode -c` | — |
 | Amp | `amp` | `amp threads continue` | — |
@@ -17,6 +18,7 @@ TUICommander detects, monitors, and manages AI coding agents running in your ter
 | Goose | `goose` | `goose session --resume` | `goose session --resume --name $TUIC_SESSION` |
 | Grok | `grok` | `grok --continue` | `grok --resume <discovered id>` |
 | pi | `pi` | `pi --continue` | — |
+| ego (terminal CLI) | `ego` | `ego resume` | `ego resume <discovered id>` |
 
 ### Claude MCP profiles
 
@@ -55,7 +57,6 @@ TUICommander auto-detects which agent is running in each terminal by matching ou
 
 - **Claude Code**: Middle dot `·` (U+00B7), dingbat asterisks `✢` `✳` `✶` `✻` `✽` (U+2720–273F), or ASCII `*`
 - **Copilot CLI**: Therefore sign `∴` (U+2234), filled circle `●` (U+25CF), empty circle `○` (U+25CB)
-- **Aider**: Knight Rider scanner blocks `░█`
 - **Gemini CLI / Amazon Q / Cline**: Braille spinners `⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`
 - **Codex CLI**: Bullets `•` `◦`
 
@@ -138,7 +139,7 @@ For Claude, `awaiting` also covers **MCP elicitation** — the dialog an MCP ser
 | Codex | `~/.codex/hooks.json` + `~/.codex/config.toml` (`[features] hooks = true`) | Supported |
 | Grok | `~/.grok/hooks/tuic.json` (own file) | Supported |
 | OpenCode | `~/.config/opencode/plugin/tuic.ts` (Bun/TS plugin) | Supported |
-| Others (Aider, Amp, Cursor, Goose, Droid, pi) | — | No TUIC-managed hook system — stays heuristic |
+| Others (Amp, Cursor, Goose, Droid, pi) | — | No TUIC-managed hook system — stays heuristic |
 
 > **Platform note:** Hook instrumentation is **macOS/Linux only** — it resolves the controlling tty via `ps`/`/dev/tty`, which has no Windows equivalent. On Windows the toggle is hidden and agents keep heuristic detection (no regression).
 
@@ -258,7 +259,6 @@ Claude Code stores the session locally. When you restart TUICommander and switch
 
 Goose returns to idle after a reply when its ready composer appears, so you can send the next prompt without waiting for stale-state recovery.
 
-Aider returns to idle after a reply when its prompt reappears, so you can send the next prompt right away.
 
 **Automatic session binding (Goose):**
 
@@ -329,7 +329,7 @@ This is useful for enabling feature flags (e.g., `CLAUDE_CODE_EXPERIMENTAL_AGENT
 ## Tips
 
 - **Multiple agents on the same repo** — Use split panes (`Cmd+\`) to run two agents side by side on the same branch
-- **Different agents per branch** — Each worktree is independent, so you can run Claude on one branch and Aider on another
+- **Different agents per branch** — Each worktree is independent, so you can run Claude on one branch and Codex on another
 - **Monitor all at once** — Use the Activity Dashboard (`Cmd+Shift+A`) to see every terminal's agent status in one view
 
 ### ego launch permissions

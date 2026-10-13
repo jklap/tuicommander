@@ -776,21 +776,25 @@ fn build_api_error_patterns() -> Vec<ApiErrorPattern> {
             r"API Error: got status: (?:UNAVAILABLE|INTERNAL)",
             "server",
         ),
-        // Aider: litellm server/auth exceptions
+        // LiteLLM provider exceptions (shared by CLI clients)
         ae(
-            "aider-server-error",
+            "provider-server-error",
             r"litellm\.(?:InternalServerError|ServiceUnavailableError|APIError):",
             "server",
         ),
-        ae("aider-auth-error", r"litellm\.AuthenticationError:", "auth"),
-        // Aider: user-facing translated messages
         ae(
-            "aider-server-msg",
+            "provider-auth-error",
+            r"litellm\.AuthenticationError:",
+            "auth",
+        ),
+        // Provider-facing service and authentication messages
+        ae(
+            "provider-server-msg",
             r"The API provider's servers are down or overloaded",
             "server",
         ),
         ae(
-            "aider-auth-msg",
+            "provider-auth-msg",
             r"The API provider is not able to authenticate you",
             "auth",
         ),
@@ -968,23 +972,12 @@ fn strip_ansi_via_vt100(text: &str) -> String {
 /// Byte-level rejection for [`parse_status_line`]: can this blob contain ANY
 /// status-line marker at all?
 ///
-/// Checks for: '*' (Claude), "[Running]", "Tokens:" (Aider), or multi-byte UTF-8:
-/// 0xC2 leads U+00B7 (the Claude middle dot); 0xE2 leads braille U+2800, the
-/// dingbat asterisks U+2720-273F, the block elements, the bullets, U+2234,
-/// U+25CF and U+25CB.
-///
-/// It is NOT selective on agent output: 0xE2 also leads every box-drawing
-/// character an Ink TUI paints, so an agent screen admits on essentially every
-/// chunk -- proved by `status_line_byte_fast_path_barely_rejects_agent_output`.
-/// It is kept anyway because it is the only guard rejecting `## heading` and
-/// `== divider` lines from the Aider scanner pattern, which is anchored on
-/// `[#=]` and has nothing else to stop it; dropping the byte scan would ADD
-/// false positives rather than remove work. The work it fails to remove is
-/// removed per line by [`status_line_patterns_for`] instead.
+/// Checks for ASCII markers and the UTF-8 lead bytes of supported spinner glyphs.
+/// It is not selective on agent output: box drawing also uses 0xE2. Per-line
+/// dispatch in [`status_line_patterns_for`] rejects unrelated rows.
 fn status_line_fast_path_admits(clean: &str) -> bool {
     clean.contains('*')
         || clean.contains("[Running]")
-        || clean.contains("Tokens:")
         || clean.contains("Ctrl+C")
         || clean.as_bytes().contains(&0xe2)
         || clean.as_bytes().contains(&0xc2)
@@ -1005,13 +998,6 @@ lazy_static::lazy_static! {
     // Braille spinner: "⠋ Task name" (Gemini CLI dots, generic)
     static ref SPINNER_STATUS_RE: regex::Regex =
         regex::Regex::new(r"^\s*[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s+([^.…]+)").unwrap();
-    // Aider Knight Rider scanner: "░█" or "█░" prefix followed by spaces + task text
-    // The scanner chars (░ U+2591, █ U+2588) bounce back and forth across the line.
-    static ref AIDER_SPINNER_RE: regex::Regex =
-        regex::Regex::new(r"^\s*[\u{2588}\u{2591}#=]{1,2}\s{2,}(.+)").unwrap();
-    // Aider token report: "Tokens: 5.2k sent, 1.3k received."
-    static ref AIDER_TOKENS_RE: regex::Regex =
-        regex::Regex::new(r"^\s*Tokens:\s+(.+?)\.$").unwrap();
     // Codex CLI bullet spinner: "• Working (5s • esc to interrupt)" or "◦ Working (12s)"
     // • (U+2022) and ◦ (U+25E6) alternate as a blink spinner.
     // Requires parenthesized time suffix to avoid false positives from markdown bullets.
@@ -1037,19 +1023,16 @@ lazy_static::lazy_static! {
 ///
 /// Every pattern is anchored `^\s*` followed by a fixed character class, so
 /// the first non-whitespace character decides the candidates. The flat table
-/// ran all eight regexes per line; on an agent screen the byte fast path admits
-/// nearly every chunk, so that was eight matches per changed row, per chunk.
+/// ran all six regexes per line; on an agent screen the byte fast path admits
+/// nearly every chunk, so that was six matches per changed row, per chunk.
 ///
 /// Order inside a bucket is the order the flat table had — the first match
-/// wins, and `Tokens:` is reachable by two patterns. `trim_start` and the regex
+/// wins. `trim_start` and the regex
 /// `\s` agree on what whitespace is: both are Unicode `White_Space`.
 fn status_line_patterns_for(lead: char) -> &'static [&'static regex::Regex] {
     lazy_static::lazy_static! {
         static ref CLAUDE_ONLY: Vec<&'static regex::Regex> = vec![&CLAUDE_STATUS_RE];
         static ref RUNNING_ONLY: Vec<&'static regex::Regex> = vec![&RUNNING_STATUS_RE];
-        static ref TOKENS_THEN_GOOSE: Vec<&'static regex::Regex> =
-            vec![&AIDER_TOKENS_RE, &GOOSE_SPINNER_RE];
-        static ref AIDER_ONLY: Vec<&'static regex::Regex> = vec![&AIDER_SPINNER_RE];
         static ref GOOSE_ONLY: Vec<&'static regex::Regex> = vec![&GOOSE_SPINNER_RE];
         static ref COPILOT_ONLY: Vec<&'static regex::Regex> = vec![&COPILOT_STATUS_RE];
         static ref CODEX_ONLY: Vec<&'static regex::Regex> = vec![&CODEX_BULLET_RE];
@@ -1058,9 +1041,6 @@ fn status_line_patterns_for(lead: char) -> &'static [&'static regex::Regex] {
     match lead {
         '*' | '\u{00B7}' | '\u{2720}'..='\u{273F}' => &CLAUDE_ONLY,
         '[' => &RUNNING_ONLY,
-        // `Tokens:` is also `[A-Z]`, so it must offer the Goose pattern too.
-        'T' => &TOKENS_THEN_GOOSE,
-        '\u{2588}' | '\u{2591}' | '#' | '=' => &AIDER_ONLY,
         'A'..='Z' => &GOOSE_ONLY,
         '\u{2234}' | '\u{25CF}' | '\u{25CB}' => &COPILOT_ONLY,
         '\u{2022}' | '\u{25E6}' => &CODEX_ONLY,
@@ -1111,12 +1091,7 @@ fn parse_status_line(clean: &str) -> Option<ParsedEvent> {
                     continue;
                 }
                 let time_info = TIME_RE.captures(line).map(|c| c[1].to_string());
-                // For Aider token reports the whole line IS the token info
-                let token_info = if std::ptr::eq(*pattern, &*AIDER_TOKENS_RE) {
-                    Some(task_name.clone())
-                } else {
-                    TOKEN_RE.captures(line).map(|c| c[1].to_string())
-                };
+                let token_info = TOKEN_RE.captures(line).map(|c| c[1].to_string());
                 return Some(ParsedEvent::StatusLine {
                     task_name,
                     full_line: line.trim().to_string(),
@@ -2376,6 +2351,47 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_api_error_provider_translated_auth() {
+        let mut parser = OutputParser::new();
+        let input = "The API provider is not able to authenticate you. Check your API key.";
+        let events = parser.parse(input);
+        let (name, _, kind) = get_api_error(&events).expect("should detect provider auth msg");
+        assert_eq!(name, "provider-auth-msg");
+        assert_eq!(kind, "auth");
+    }
+
+    #[test]
+    fn test_api_error_provider_translated_server() {
+        let mut parser = OutputParser::new();
+        let input = "The API provider's servers are down or overloaded.";
+        let events = parser.parse(input);
+        let (name, _, kind) =
+            get_api_error(&events).expect("should detect provider translated msg");
+        assert_eq!(name, "provider-server-msg");
+        assert_eq!(kind, "server");
+    }
+
+    #[test]
+    fn test_api_error_provider_auth() {
+        let mut parser = OutputParser::new();
+        let input = "litellm.AuthenticationError: AnthropicException - invalid x-api-key";
+        let events = parser.parse(input);
+        let (name, _, kind) = get_api_error(&events).expect("should detect provider auth error");
+        assert_eq!(name, "provider-auth-error");
+        assert_eq!(kind, "auth");
+    }
+
+    #[test]
+    fn test_api_error_provider_server() {
+        let mut parser = OutputParser::new();
+        let input = r#"litellm.InternalServerError: AnthropicException - {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#;
+        let events = parser.parse(input);
+        let (name, _, kind) = get_api_error(&events).expect("should detect provider server error");
+        assert_eq!(name, "provider-server-error");
+        assert_eq!(kind, "server");
+    }
+
+    #[test]
     fn test_rate_limit_claude_429() {
         let mut parser = OutputParser::new();
         let events = parser.parse("Error: rate_limit_error - please try again");
@@ -2681,55 +2697,6 @@ mod tests {
                 assert_eq!(task_name, "npm test");
             }
             _ => panic!("Expected StatusLine event"),
-        }
-    }
-
-    #[test]
-    fn test_status_line_aider_spinner() {
-        // Aider uses a Knight Rider scanner: "░█        Waiting for claude-3-5-sonnet"
-        let mut parser = OutputParser::new();
-        let events = parser.parse("\u{2591}\u{2588}        Waiting for claude-3-5-sonnet");
-        assert_eq!(events.len(), 1);
-        match &events[0] {
-            ParsedEvent::StatusLine { task_name, .. } => {
-                assert_eq!(task_name, "Waiting for claude-3-5-sonnet");
-            }
-            _ => panic!("Expected StatusLine, got {:?}", events[0]),
-        }
-    }
-
-    #[test]
-    fn test_status_line_aider_token_report() {
-        // Aider token report: "Tokens: 5.2k sent, 1.3k received."
-        let mut parser = OutputParser::new();
-        let events = parser.parse("Tokens: 5.2k sent, 1.3k received.");
-        assert_eq!(events.len(), 1);
-        match &events[0] {
-            ParsedEvent::StatusLine {
-                task_name,
-                token_info,
-                ..
-            } => {
-                assert_eq!(task_name, "5.2k sent, 1.3k received");
-                assert!(token_info.is_some(), "Expected token_info");
-            }
-            _ => panic!("Expected StatusLine, got {:?}", events[0]),
-        }
-    }
-
-    #[test]
-    fn test_status_line_aider_token_report_with_cache() {
-        // Aider with cache: "Tokens: 2,345 sent, 123 cache write, 456 cache hit, 789 received."
-        let mut parser = OutputParser::new();
-        let events =
-            parser.parse("Tokens: 2,345 sent, 123 cache write, 456 cache hit, 789 received.");
-        assert_eq!(events.len(), 1);
-        match &events[0] {
-            ParsedEvent::StatusLine { task_name, .. } => {
-                assert!(task_name.contains("sent"));
-                assert!(task_name.contains("received"));
-            }
-            _ => panic!("Expected StatusLine, got {:?}", events[0]),
         }
     }
 
@@ -3977,46 +3944,6 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
         let (name, _, kind) = get_api_error(&events).expect("should detect Gemini INTERNAL");
         assert_eq!(name, "gemini-server-error");
         assert_eq!(kind, "server");
-    }
-
-    #[test]
-    fn test_api_error_aider_server() {
-        let mut parser = OutputParser::new();
-        let input = r#"litellm.InternalServerError: AnthropicException - {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#;
-        let events = parser.parse(input);
-        let (name, _, kind) = get_api_error(&events).expect("should detect Aider server error");
-        assert_eq!(name, "aider-server-error");
-        assert_eq!(kind, "server");
-    }
-
-    #[test]
-    fn test_api_error_aider_auth() {
-        let mut parser = OutputParser::new();
-        let input = "litellm.AuthenticationError: AnthropicException - invalid x-api-key";
-        let events = parser.parse(input);
-        let (name, _, kind) = get_api_error(&events).expect("should detect Aider auth error");
-        assert_eq!(name, "aider-auth-error");
-        assert_eq!(kind, "auth");
-    }
-
-    #[test]
-    fn test_api_error_aider_translated_server() {
-        let mut parser = OutputParser::new();
-        let input = "The API provider's servers are down or overloaded.";
-        let events = parser.parse(input);
-        let (name, _, kind) = get_api_error(&events).expect("should detect Aider translated msg");
-        assert_eq!(name, "aider-server-msg");
-        assert_eq!(kind, "server");
-    }
-
-    #[test]
-    fn test_api_error_aider_translated_auth() {
-        let mut parser = OutputParser::new();
-        let input = "The API provider is not able to authenticate you. Check your API key.";
-        let events = parser.parse(input);
-        let (name, _, kind) = get_api_error(&events).expect("should detect Aider auth msg");
-        assert_eq!(name, "aider-auth-msg");
-        assert_eq!(kind, "auth");
     }
 
     #[test]
@@ -6940,11 +6867,9 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
     /// over the whole BMP against the anchored classes.
     #[test]
     fn status_line_dispatch_offers_every_pattern_that_could_match() {
-        let all: [(&regex::Regex, &str); 8] = [
+        let all: [(&regex::Regex, &str); 6] = [
             (&CLAUDE_STATUS_RE, "claude"),
             (&RUNNING_STATUS_RE, "running"),
-            (&AIDER_TOKENS_RE, "aider-tokens"),
-            (&AIDER_SPINNER_RE, "aider-spinner"),
             (&GOOSE_SPINNER_RE, "goose"),
             (&COPILOT_STATUS_RE, "copilot"),
             (&CODEX_BULLET_RE, "codex"),

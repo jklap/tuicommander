@@ -9,8 +9,10 @@ fn test_classify_agent_gemini() {
 }
 
 #[test]
-fn test_classify_agent_aider() {
-    assert_eq!(classify_agent("aider"), Some("aider"));
+// Catches: an aider-named ordinary command retaining an agent badge.
+fn test_classify_removed_aider_as_plain_command() {
+    assert_eq!(classify_agent("aider"), None);
+    assert_eq!(classify_agent("aider-0.86.2"), None);
 }
 
 #[test]
@@ -234,8 +236,8 @@ fn test_opencode_requires_its_own_frame_and_status_bar() {
 #[test]
 fn test_agent_screen_adapter_baselines() {
     // Claude and Codex have presence-based active markers because both can
-    // freeze or leave a composer visible during long tools. Gemini/Aider
-    // remain prompt-based and use movement to hold BUSY.
+    // freeze or leave a composer visible during long tools. Gemini
+    // remains prompt-based and uses movement to hold BUSY.
     let claude_working = vec!["✻ Cogitating… (12s)".into()];
     let claude_ready = vec!["Answer complete".into(), "❯".into()];
     let gemini_working_prompt_visible = vec![
@@ -244,8 +246,6 @@ fn test_agent_screen_adapter_baselines() {
         "> Type your message".into(),
     ];
     let gemini_ready = vec!["> Type your message".into()];
-    let aider_working = vec!["█░  Waiting for model".into()];
-    let aider_ready = vec!["Tokens: 10k sent".into(), ">".into()];
     let grok_working = vec![
         "❯ Ask anything".into(),
         "⠹ Responding… 12s [stop]".into(),
@@ -266,8 +266,6 @@ fn test_agent_screen_adapter_baselines() {
             AgentScreenActivity::Ready,
         ),
         ("gemini", gemini_ready, AgentScreenActivity::Ready),
-        ("aider", aider_working, AgentScreenActivity::Unknown),
-        ("aider", aider_ready, AgentScreenActivity::Ready),
         ("grok", grok_working, AgentScreenActivity::Working),
         ("grok", grok_ready, AgentScreenActivity::Ready),
     ] {

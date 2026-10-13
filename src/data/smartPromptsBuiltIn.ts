@@ -24,7 +24,7 @@ export const VARIABLE_DESCRIPTIONS: Record<string, string> = {
 	merge_status: "Merge status: MERGEABLE, CONFLICTING, or BEHIND",
 	review_decision: "Review status: APPROVED, CHANGES_REQUESTED, or REVIEW_REQUIRED",
 	// Agent/terminal context
-	agent_type: "Active agent type (claude, aider, codex, etc.)",
+	agent_type: "Active agent type (claude, gemini, codex, etc.)",
 	cwd: "Active terminal working directory",
 	// Issue context (resolved from expanded issue in the sidebar)
 	issue_number: "GitHub issue number",

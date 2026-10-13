@@ -602,8 +602,8 @@ describe("useAgentPolling", () => {
 			});
 		});
 
-		it("skips discovery for agents without sessionDiscovery config (e.g. aider)", async () => {
-			mockInvoke.mockResolvedValue("aider");
+		it("skips discovery for agents without sessionDiscovery config (e.g. opencode)", async () => {
+			mockInvoke.mockResolvedValue("opencode");
 
 			await testInScopeAsync(async () => {
 				const id = store.add(makeTerminal({ name: "T1", sessionId: "sess-1" }));
@@ -612,7 +612,7 @@ describe("useAgentPolling", () => {
 				useAgentPolling();
 
 				await tick(30_000);
-				expect(store.get(id)?.agentType).toBe("aider");
+				expect(store.get(id)?.agentType).toBe("opencode");
 
 				const discoveryCalls = mockInvoke.mock.calls.filter(([cmd]) => cmd === "discover_agent_session");
 				expect(discoveryCalls).toHaveLength(0);

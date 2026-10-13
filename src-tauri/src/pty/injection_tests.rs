@@ -2163,11 +2163,11 @@ async fn queued_codex_command_submits_when_ready_confirms_after_shell_idle() {
     assert_eq!(queued_command_count(&state, sid), 0);
 }
 
-/// Gemini and Aider remove their bottom prompt while a turn runs. The child
+/// Gemini removes its bottom prompt while a turn runs. The child
 /// repaint after Enter, rather than the master's successful write, settles it.
 #[cfg(unix)]
 #[test]
-fn queued_prompt_disappearing_after_enter_confirms_gemini_and_aider() {
+fn queued_prompt_disappearing_after_enter_confirms_gemini() {
     struct RecordingChannel(std::sync::mpsc::Sender<Vec<u8>>);
 
     impl std::io::Write for RecordingChannel {
@@ -2181,7 +2181,7 @@ fn queued_prompt_disappearing_after_enter_confirms_gemini_and_aider() {
         }
     }
 
-    for agent_type in ["gemini", "aider"] {
+    for agent_type in ["gemini"] {
         let state = crate::state::tests_support::make_test_app_state();
         let sid = format!("prompt-gone-{agent_type}");
         agent_session(&state, &sid, SHELL_IDLE);
@@ -2936,7 +2936,6 @@ fn long_single_line_payload_is_framed_for_codex_only_and_every_known_gap_is_at_l
         "claude",
         "gemini",
         "opencode",
-        "aider",
         "goose",
         "grok",
         "pi",

@@ -430,7 +430,7 @@ fn try_timer_idle_transition(
             .map(|atom| atom.load(std::sync::atomic::Ordering::Acquire));
         // A headless agent spawn never typed a launch line, so no shell edge
         // ever marked it BUSY: the atom is still SHELL_NULL and a TUI that
-        // paints no working screen (Aider) would never reach IDLE. For an
+        // paints no working screen (Gemini) would never reach IDLE. For an
         // agent session a screen-confirmed Ready is the same evidence that
         // releases BUSY, so it releases NULL too. A plain shell
         // (`agent_type == None`) keeps NULL until its own OSC 133 edge.
@@ -660,7 +660,7 @@ fn spawn_silence_timer(
             // (the only screen classifier that returns Working, #446-596f); it
             // runs regardless of current state so it repairs an already-false-
             // idle session instead of merely keeping a pre-existing BUSY alive.
-            // Claude/Gemini/Aider BUSY is movement-driven in the reader.
+            // Claude/Gemini BUSY is movement-driven in the reader.
             let idle_evidence_turn_epoch = state
                 .session_maps
                 .session_states
@@ -1885,11 +1885,11 @@ impl ChunkProcessor {
             //
             // `retain` in place: the filter used to rebuild the whole Vec even
             // when the cutoff dropped nothing.
-            // Goose and Aider append the reply BELOW their submitted `> prompt`;
-            // they have no fixed input-area border. Trimming there erases the
+            // Goose appends the reply BELOW their submitted `> prompt`;
+            // it has no fixed input-area border. Trimming there erases the
             // reply's activity evidence and strands user-submit BUSY
-            // (#1812-022d, #1823-8150).
-            let chrome_cutoff = if !matches!(agent_type.as_deref(), Some("goose" | "aider"))
+            // (#1812-022d).
+            let chrome_cutoff = if !matches!(agent_type.as_deref(), Some("goose"))
                 && let Some(screen) = screen_ref
                 && !changed.is_empty()
             {
@@ -3047,7 +3047,7 @@ impl ChunkProcessor {
         //   state to busy forever during genuine idle.
         // Path 1: every row has a chrome marker (is_chrome_row).
         // Path 2: parse_status_line detected a spinner pattern (Gemini braille,
-        //   Aider Knight Rider) AND no row contains real agent output. A row is
+        //   Goose status text) AND no row contains real agent output. A row is
         //   "real output" if it is not chrome and not blank — this prevents
         //   has_status_line from suppressing chunks that mix spinner + output.
         let all_chrome_markers = changed_rows.iter().all(|r| is_chrome_row(&r.text));
@@ -3153,12 +3153,12 @@ impl ChunkProcessor {
         };
 
         // Stamp last_output_ms for real output and for active spinner repaints.
-        // Spinner rows (dingbats ✻, braille ⠋, Aider ░█) prove the agent is
+        // Spinner rows (dingbats ✻, braille ⠋) prove the agent is
         // alive even though they are chrome-only — keeping the timestamp fresh
         // prevents should_transition_idle from firing mid-think.
         //
         // Spinner detection runs on the SAME post-cutoff `changed_rows` as
-        // everything else. Real spinners (Gemini braille, Aider Knight Rider,
+        // everything else. Real spinners (Gemini braille,
         // Claude `✻ Thinking…`) all render ABOVE the input separator and LEAD
         // their row, so they survive the chrome cutoff and still keep the agent
         // alive here. A status-line HUD's `█░` progress bar or a `·`-bearing

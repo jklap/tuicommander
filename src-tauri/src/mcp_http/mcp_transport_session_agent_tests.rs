@@ -64,8 +64,8 @@ async fn critic_codex_profile_named_review_keeps_task_submission() {
 async fn critic_named_wrappers_deliver_positional_task_for_every_agent() {
     use std::os::unix::fs::PermissionsExt;
     for agent in [
-        "claude", "codex", "gemini", "grok", "opencode", "aider", "amp", "cursor", "goose",
-        "droid", "pi", "ego",
+        "claude", "codex", "gemini", "grok", "opencode", "amp", "cursor", "goose", "droid", "pi",
+        "ego",
     ] {
         let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
         let output = root.path().join("argv");
@@ -892,7 +892,7 @@ async fn agent_spawn_layers_caller_env_and_protects_peer_identity() {
     );
     let _config = crate::config::set_config_dir_override(root.path().join("tuic-config"));
     let config: crate::config::AgentsConfig = serde_json::from_value(serde_json::json!({
-            "agents": {"aider": {"run_configs": [{
+            "agents": {"opencode": {"run_configs": [{
                 "name": "Env Profile", "command": "/bin/sh", "args": ["-c", command],
                 "env": {"CLAUDE_CONFIG_DIR": "/run", "LAYER": "run", "ONLY_RUN": "present", "CARGO_INCREMENTAL": "1",
                         "TUIC_SESSION": "run-spoof", "TUIC_PARENT": "run-spoof"}
@@ -1081,7 +1081,7 @@ async fn agent_spawn_run_config_model_is_overridable_and_legacy_args_keep_confli
     let output = root.path().join("argv");
     let command = format!("printf '%s|%s' \"$0\" \"$1\" > '{}'", output.display());
     let config: crate::config::AgentsConfig = serde_json::from_value(serde_json::json!({
-            "agents": {"aider": {"run_configs": [
+            "agents": {"opencode": {"run_configs": [
                 {"name": "Structured", "command": "/bin/sh", "args": ["-c", command], "model": "sonnet"},
                 {"name": "Legacy", "command": "/bin/sh", "args": ["-c", "exit 0", "--model", "opus"]}
             ]}}
@@ -4040,6 +4040,32 @@ fn resolve_run_config_matches_by_name_case_insensitive() {
         resolved.env.get("OLLAMA_HOST").map(|s| s.as_str()),
         Some("localhost:11434")
     );
+}
+
+// Catches: persisted retired-harness profiles still launching managed peers.
+#[test]
+fn saved_aider_settings_load_but_are_ignored_for_agent_spawns() {
+    let cfg: crate::config::AgentsConfig = serde_json::from_value(serde_json::json!({
+        "agents": {"aider": {"run_configs": [{"name": "Retired profile", "command": "aider", "args": [], "env": {}}]}}
+    })).expect("old settings remain readable");
+    assert!(
+        resolve_run_config("Retired profile", &cfg)
+            .command
+            .is_none()
+    );
+    assert_eq!(
+        resolve_spawn_agent_type("/usr/local/bin/aider", Some("aider")),
+        None
+    );
+    for agent in [
+        "claude", "codex", "gemini", "grok", "opencode", "amp", "cursor", "goose", "droid", "pi",
+        "ego",
+    ] {
+        assert_eq!(
+            resolve_spawn_agent_type("/custom/wrapper", Some(agent)).as_deref(),
+            Some(agent)
+        );
+    }
 }
 
 // Catches: literal Codex rewrites a configured wrapper task into an undeliverable PTY injection.

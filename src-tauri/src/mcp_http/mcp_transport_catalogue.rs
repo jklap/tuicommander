@@ -563,7 +563,7 @@ pub(super) fn native_tool_definitions() -> serde_json::Value {
                 "env": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Child environment overrides. Applied after run-config env and before protected TUIC_SESSION/TUIC_PARENT (action=spawn)" },
                 "print_mode": { "type": "boolean", "description": "false (default): visible TUI tab, observable via agent(inbox). true: headless, no tab. (action=spawn)" },
                 "output_format": { "type": "string", "description": "Output format, e.g. 'json' (action=spawn)" },
-                "agent_type": { "type": "string", "description": "Agent type OR run config name. Resolved as: (1) run config name match across enabled agents, (2) agent binary name (claude, codex, aider, goose, gemini, ...). Case-insensitive. (action=spawn)" },
+                "agent_type": { "type": "string", "description": "Agent type OR run config name. Resolved as: (1) run config name match across enabled agents, (2) agent binary name (claude, codex, goose, gemini, ...). Case-insensitive. (action=spawn)" },
                 "binary_path": { "type": "string", "description": "Override agent binary path (action=spawn)" },
                 "args": { "type": "array", "items": { "type": "string" }, "description": "Additional CLI args; composed with structured flags and agent defaults. Native scrollback is controlled by the per-agent prevent_alt_screen setting (action=spawn)." },
                 "rows": { "type": "integer", "description": "Terminal rows (action=spawn)" },
