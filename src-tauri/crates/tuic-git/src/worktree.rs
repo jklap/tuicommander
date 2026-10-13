@@ -1704,6 +1704,8 @@ pub fn create_workspace_recycling(
             }
             let start = base_ref.unwrap_or("HEAD");
             fetch_if_remote(&config.base_repo, start)?;
+            // The switch runs inside the old checkout, so resolve the ref here in the base repo.
+            let start_point = rev_at(repo, start)?;
             // Reserve before touching Git or paths; failures cannot expose it to another caller.
             std::fs::create_dir_all(worktrees_dir)
                 .map_err(|error| format!("Cannot create checkout parent: {error}"))?;
@@ -1713,7 +1715,7 @@ pub fn create_workspace_recycling(
             let recycled = (|| -> Result<(), String> {
                 move_registered_checkout(repo, &old_path, &destination)?;
                 git_cmd(&destination)
-                    .args(["switch", "-c", &branch, start])
+                    .args(["switch", "-c", &branch, &start_point])
                     .run()
                     .map_err(|error| format!("Cannot switch recycled checkout: {error}"))?;
                 switched = true;
@@ -1721,7 +1723,9 @@ pub fn create_workspace_recycling(
                     .args(["clean", "-fd"])
                     .run()
                     .map_err(|error| format!("Cannot clean recycled source: {error}"))?;
-                set_branch_base(&config.base_repo, &branch, start)?;
+                if let Some(base) = base_ref {
+                    set_branch_base(&config.base_repo, &branch, base)?;
+                }
                 record_worktree_rename(repo, &entry.path, &destination.to_string_lossy())
             })();
             if let Err(error) = recycled {
@@ -4432,6 +4436,74 @@ mod tests {
         )
         .unwrap();
         assert!(reused_again.is_none());
+    }
+
+    /// Recycle an integrated, finished checkout while the repository HEAD has moved on.
+    /// Returns (repo HEAD, old checkout HEAD, new branch tip, recorded branch base).
+    fn recycle_after_repo_head_advances(
+        base_ref: Option<&str>,
+    ) -> (String, String, String, Option<String>) {
+        let repo = setup_test_repo();
+        let directory = tempfile::tempdir().unwrap();
+        let (first, _) = create_workspace_recycling(
+            directory.path(),
+            &recycle_config(repo.path(), "first"),
+            None,
+            |_| true,
+        )
+        .unwrap();
+        finish_worktree(repo.path(), &first.path).unwrap();
+        let old_head = rev_at(&first.path, "HEAD").unwrap();
+        std::fs::write(repo.path().join("advance"), "x").unwrap();
+        git_cmd(repo.path()).args(["add", "advance"]).run().unwrap();
+        git_cmd(repo.path())
+            .args(["commit", "-m", "advance"])
+            .run()
+            .unwrap();
+        let repo_head = rev_at(repo.path(), "HEAD").unwrap();
+        let (second, reused) = create_workspace_recycling(
+            directory.path(),
+            &recycle_config(repo.path(), "second"),
+            base_ref,
+            |_| true,
+        )
+        .unwrap();
+        assert!(reused.is_some(), "the finished checkout must be recycled");
+        let recorded = get_branch_base(&repo.path().to_string_lossy(), "second");
+        (
+            repo_head,
+            old_head,
+            rev_at(&second.path, "HEAD").unwrap(),
+            recorded,
+        )
+    }
+
+    // Catches: recycled create bases the new branch on the recycled checkout's HEAD instead of the repository HEAD.
+    #[test]
+    fn recycling_without_base_ref_branches_from_repository_head() {
+        let (repo_head, old_head, tip, recorded) = recycle_after_repo_head_advances(None);
+        assert_ne!(repo_head, old_head);
+        assert_eq!(tip, repo_head);
+        // The non-recycled path records no base when none was given.
+        assert_eq!(recorded, None);
+    }
+
+    // Catches: the default-start fix overriding an explicit base_ref.
+    #[test]
+    fn recycling_with_base_ref_still_branches_from_it() {
+        let (repo_head, old_head, tip, recorded) = recycle_after_repo_head_advances(Some("first"));
+        assert_ne!(repo_head, old_head);
+        assert_eq!(tip, old_head);
+        assert_eq!(recorded.as_deref(), Some("first"));
+    }
+
+    // Catches: a relative base_ref resolved inside the recycled checkout (invalid there) instead of the base repo.
+    #[test]
+    fn recycling_relative_base_ref_resolves_in_the_base_repository() {
+        let (repo_head, old_head, tip, recorded) = recycle_after_repo_head_advances(Some("HEAD~1"));
+        assert_ne!(repo_head, old_head);
+        assert_eq!(tip, old_head);
+        assert_eq!(recorded.as_deref(), Some("HEAD~1"));
     }
 
     // Catches: cmd dropping an oversized duplicated PATH and losing Git lookup.
