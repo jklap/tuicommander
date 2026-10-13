@@ -91,12 +91,6 @@ fn removed_ids<T>(latest: &[T], next: &[T], id_of: impl Fn(&T) -> &str) -> Vec<S
         .collect()
 }
 
-fn unique_ids<'a>(ids: impl Iterator<Item = &'a str>) -> Result<(), String> {
-    let mut seen = std::collections::HashSet::new();
-    ids.map(|id| seen.insert(id).then_some(()).ok_or("duplicate id".to_owned()))
-        .collect()
-}
-
 pub struct ConnectionsSettingsStore {
     path: PathBuf,
     on_removed: OnRemoved,
@@ -146,7 +140,6 @@ impl Store for ConnectionsSettingsStore {
         let mut failure = None;
         let result = self.file().update_with_strict(|records| {
             let settled = plan(CONNECTIONS_ID, "connections", records, prepare, |next| {
-                unique_ids(next.iter().map(|c| c.id.as_str()))?;
                 next.iter().try_for_each(RemoteConnection::validate)
             })
             .map_err(|e| {
@@ -229,7 +222,6 @@ impl Store for TunnelsSettingsStore {
             reply,
             changed,
         } = plan(TUNNELS_ID, "profiles", &latest, prepare, |next| {
-            unique_ids(next.iter().map(|p| p.id.as_str()))?;
             next.iter_mut().try_for_each(TunnelProfile::validate)
         })?;
         if changed {
