@@ -15,6 +15,7 @@ import s from "./tasksList.module.css";
 export interface TasksListProps {
 	providers: readonly WorkItemProvider[];
 	onOpen: (reference: WorkItemRef) => void;
+	selected?: WorkItemRef | null;
 	visible?: boolean;
 }
 const initialQuery = (): WorkItemQuery => ({
@@ -273,6 +274,7 @@ export function TasksList(props: TasksListProps) {
 				groups={model.state().groups}
 				loading={model.state().loading}
 				resetKey={query()}
+				selected={props.selected}
 				onOpen={props.onOpen}
 			/>
 			<Show when={model.state().nextCursor}>

@@ -1,6 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { WorkItem } from "../../../types/work-items.gen";
 import { allDemoRows, listDemo } from "./demo";
 import { TaskRows } from "./TaskRows";
 import { TasksList } from "./TasksList";
@@ -89,5 +90,72 @@ describe("Tasks list", () => {
 		fireEvent.click(counted);
 		expect(screen.queryByLabelText("Filter Priority")).not.toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Filters (2)" })).toBeInTheDocument();
+	});
+
+	describe("row metadata and selection", () => {
+		const row = (id: string, state: WorkItem["state"], assignees: string[], updatedAt: string): WorkItem => ({
+			reference: { providerId: "demo", accountId: "local", id },
+			key: `DEMO-${id}`,
+			title: `Row ${id}`,
+			itemType: "task",
+			state,
+			assignees: assignees.map((name) => ({ id: name, name, avatarUrl: null })),
+			labels: [],
+			updatedAt,
+			url: "",
+			fields: {},
+		});
+		const hoursAgo = (hours: number) => new Date(Date.now() - hours * 3_600_000).toISOString();
+		const items = [
+			row("1", { id: "open", name: "Open", tone: "info" }, ["Ada Lovelace"], hoursAgo(3)),
+			row("2", { id: "merged", name: "Merged", tone: "success" }, ["Grace", "Linus"], hoursAgo(50)),
+			row("3", { id: "closed", name: "Closed", tone: "danger" }, [], hoursAgo(0.5)),
+		];
+		const mount = (selected: WorkItem["reference"] | null) =>
+			render(() => (
+				<TaskRows items={items} groups={[]} loading={false} resetKey="r" selected={selected} onOpen={() => {}} />
+			));
+
+		// Catches: the open task is indistinguishable from its neighbours.
+		it("marks only the open task row as current", async () => {
+			mount(items[1].reference);
+			await screen.findByRole("button", { name: /Row 2/ });
+			expect(screen.getByRole("button", { name: /Row 2/ })).toHaveAttribute("aria-current", "true");
+			expect(screen.getByRole("button", { name: /Row 1/ })).not.toHaveAttribute("aria-current");
+			expect(screen.getByRole("button", { name: /Row 3/ })).not.toHaveAttribute("aria-current");
+		});
+
+		// Catches: assignee dropped, extra assignees hidden without a count, or an unassigned row showing a blank.
+		it("shows the first assignee with a count for the rest, and a label when unassigned", async () => {
+			mount(null);
+			const first = await screen.findByRole("button", { name: /Row 1/ });
+			expect(first).toHaveTextContent("Ada Lovelace");
+			expect(screen.getByRole("button", { name: /Row 2/ })).toHaveTextContent("Grace +1");
+			expect(screen.getByRole("button", { name: /Row 3/ })).toHaveTextContent("Unassigned");
+		});
+
+		// Catches: updated time shown as a raw ISO string or computed in the wrong unit.
+		it("shows the updated time as a relative age", async () => {
+			mount(null);
+			await screen.findByRole("button", { name: /Row 1/ });
+			expect(screen.getByRole("button", { name: /Row 1/ })).toHaveTextContent("3h");
+			expect(screen.getByRole("button", { name: /Row 2/ })).toHaveTextContent("2d");
+			expect(screen.getByRole("button", { name: /Row 3/ })).toHaveTextContent("30m");
+		});
+
+		// Catches: state conveyed by colour only; each tone must draw its own shape.
+		it("draws a distinct shape per state tone, not colour alone", async () => {
+			const tones: WorkItem["state"]["tone"][] = ["neutral", "info", "success", "warning", "danger"];
+			const many = tones.map((tone, index) => row(String(index), { id: tone, name: tone, tone }, [], hoursAgo(1)));
+			render(() => <TaskRows items={many} groups={[]} loading={false} resetKey="s" onOpen={() => {}} />);
+			await screen.findAllByRole("listitem");
+			const shapes = screen.getAllByRole("listitem").map((entry) => {
+				const icon = entry.querySelector("svg[data-state-icon]");
+				expect(icon).not.toBeNull();
+				expect(icon).toHaveAttribute("aria-hidden", "true");
+				return icon?.innerHTML;
+			});
+			expect(new Set(shapes).size).toBe(tones.length);
+		});
 	});
 });

@@ -81,4 +81,19 @@ describe("Tasks shell", () => {
 			registration.dispose();
 		}
 	});
+
+	// Catches: the shell not telling the list which task is open, so no row is highlighted.
+	it("highlights the row of the open task", async () => {
+		const registration = workItemProviderRegistry.register(listDemo(3));
+		try {
+			render(() => <TasksShell />);
+			fireEvent.click(await screen.findByRole("button", { name: /Task 00002/ }));
+			await waitFor(() =>
+				expect(screen.getByRole("button", { name: /Task 00002/ })).toHaveAttribute("aria-current", "true"),
+			);
+			expect(screen.getByRole("button", { name: /Task 00001/ })).not.toHaveAttribute("aria-current");
+		} finally {
+			registration.dispose();
+		}
+	});
 });

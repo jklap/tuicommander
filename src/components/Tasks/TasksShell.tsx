@@ -81,7 +81,12 @@ export function TasksShell(props: { visible?: () => boolean }) {
 										/>
 									</Match>
 									<Match when={view() === "list"}>
-										<TasksList providers={[current()]} onOpen={open} visible={props.visible?.()} />
+										<TasksList
+											providers={[current()]}
+											onOpen={open}
+											selected={reference()}
+											visible={props.visible?.()}
+										/>
 									</Match>
 									<Match when={view() === "board"}>
 										<TasksBoardView provider={current()} onOpen={open} visible={props.visible?.()} />
