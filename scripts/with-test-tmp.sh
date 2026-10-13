@@ -128,6 +128,9 @@ fi
 # against an unwrapped one (and override CI's own compiler choice). A caller's
 # CC/CXX still wins.
 tuic_pin_compilers_for_sccache
+# macOS only: name the real `ar` so meson never runs the xcrun shim, whose cache
+# write a sandbox denies (see tuic_pin_archiver_for_xcrun_shim). A caller's AR wins.
+tuic_pin_archiver_for_xcrun_shim
 # Opt-in (TUIC_TEST_FAKE_HOME=1): the command gets a throwaway $HOME under the
 # test root. Tests that use the home directory as scratch space (plugin_fs,
 # terminal image transmission) or resolve the platform config dir (dirs::config_dir
