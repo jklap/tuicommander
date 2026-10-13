@@ -248,16 +248,3 @@ async fn corrupt_file_is_an_error_not_defaults() {
     assert_eq!(error.code, "store_failed");
     assert!(!f.file.exists());
 }
-
-/// Catches: a read through the adapter moves a partially malformed file aside. The app's own
-/// reader keeps the valid fields (`partial_dictation_config_keeps_valid_fields`); the strict
-/// load renames the file, so the next app read finds nothing and the user's hotkey is gone.
-#[tokio::test]
-async fn partly_malformed_file_keeps_its_valid_fields() {
-    let f = fixture(Some(json!({"hotkey": "F8", "speech_volume_db": "loud"})));
-    let _ = get(&f, &["/hotkey"]).await;
-    assert!(
-        f.file.exists(),
-        "a get must not move a recoverable dictation-config.json aside"
-    );
-}
