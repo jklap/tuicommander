@@ -47,36 +47,19 @@
   margin-left: auto;
   display: inline-flex;
   align-items: center;
+  gap: 4px;
   flex-shrink: 0;
-  overflow: hidden;
-  background: color-mix(in srgb, var(--accent) 7%, var(--bg-secondary));
-  border: 1px solid color-mix(in srgb, var(--accent) 82%, var(--border));
-  border-radius: var(--radius-sm);
 }
 
 .agentLabel {
-  padding: 2px 7px;
-  color: var(--accent);
-  font-size: var(--font-xs);
-  font-weight: 600;
+  color: var(--fg-muted);
+  font-size: var(--font-sm);
 }
 
-.agentSelect { min-width: 100px; max-width: 160px; }
+/* Same 20px as the Edit/Live/Diff buttons beside it. Two classes so it beats .compact whatever the bundle order. */
+.agentActions .agentSelect { --control-height: 20px; min-width: 100px; max-width: 160px; }
 
-.agentActions button {
-  border: 0;
-  border-radius: 0;
-}
-
-.agentActions button:disabled {
-  opacity: 0.45;
-  cursor: default;
-}
-
-.agentActions button:disabled:hover {
-  background: none;
-  color: var(--fg-secondary);
-}
+.agentActions button:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* Hover tooltip for existing highlights */
 .tooltip {

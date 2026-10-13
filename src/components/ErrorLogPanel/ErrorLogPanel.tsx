@@ -237,6 +237,7 @@ export const ErrorLogPanel: Component = () => {
 						</div>
 
 						<Select
+							compact
 							class={s.sourceSelect}
 							value={sourceFilter()}
 							onChange={(e) => setSourceFilter(e.currentTarget.value as AppLogSource | "all")}
@@ -245,6 +246,7 @@ export const ErrorLogPanel: Component = () => {
 						</Select>
 
 						<Input
+							compact
 							ref={searchRef}
 							class={s.searchInput}
 							type="text"
