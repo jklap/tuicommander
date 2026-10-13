@@ -1956,6 +1956,20 @@ when `id` is empty or missing — as the desktop command always did — and answ
 and answers `{ "deleted": true }`, or 404 for a missing profile (the desktop
 command now errors for the same case).
 
+### SSH Config Hosts
+
+```
+GET /tunnels/ssh-hosts
+```
+
+Returns the concrete `Host` aliases of `~/.ssh/config` as a sorted JSON array of
+strings (`["alpha", "gamma"]`): wildcard (`*`, `?`) and negated (`!name`)
+patterns are dropped and duplicates collapse. A missing file (or no home
+directory) is `200 []`. A file that cannot be read or parsed is a `500` with
+`{ "error": "failed to read SSH config: …" }` or `"failed to parse SSH config: …"`;
+the message names no path. The desktop command `list_ssh_config_hosts` returns
+the same list or the same error. No host is contacted.
+
 ### SSH Discovered Hosts
 
 ```

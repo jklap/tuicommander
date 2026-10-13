@@ -3487,6 +3487,99 @@ mod tests {
         );
     }
 
+    /// M3: every tmux-shim pane is its own PTY, so its shell must carry ITS
+    /// device in `TUIC_PTY_TTY` — not the lead's, and not a sibling pane's. A
+    /// hook or Codex notify run in a teammate pane then reaches that pane's tab
+    /// even where `ps` cannot be exec'd. Proven on the live child environment.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn each_tmux_shim_pane_shell_carries_its_own_pty_device() {
+        let state = super::super::tests::test_state();
+        let label = "test-pane-own-tty";
+        let (window_id, initial_pane) = new_virtual_session(&state, label).await;
+        let lead = body_json(
+            create_tmux_pane(
+                State(state.clone()),
+                Json(CreateTmuxPaneRequest {
+                    label: Some(label.to_string()),
+                    window_id,
+                    cwd: None,
+                    cwd_session_id: None,
+                    fallback_cwd: None,
+                    origin_session_id: None,
+                }),
+            )
+            .await
+            .into_response(),
+        )
+        .await["tuic_session_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let teammate = body_json(
+            materialize_pane(
+                State(state.clone()),
+                Path(initial_pane),
+                label_query(label),
+                Json(MaterializePaneRequest {
+                    cwd: None,
+                    origin_session_id: Some(lead.clone()),
+                }),
+            )
+            .await
+            .into_response(),
+        )
+        .await["tuic_session_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_ne!(lead, teammate);
+
+        let mut seen = Vec::new();
+        for session in [&lead, &teammate] {
+            let device = {
+                let entry = state.session_maps.sessions.get(session).unwrap();
+                let pty = entry.lock();
+                let device = pty.master.tty_name().expect("a live pty names its device");
+                let writer = std::sync::Arc::clone(&pty.writer);
+                drop(pty);
+                use std::io::Write;
+                let mut writer = writer.lock();
+                writer
+                    .write_all(b"printf 'PANE_TTY=[%s]\\n' \"$TUIC_PTY_TTY\"\r")
+                    .unwrap();
+                writer.flush().unwrap();
+                device
+            };
+            let want = format!("PANE_TTY=[{}]", device.display());
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+            loop {
+                let output = state
+                    .session_maps
+                    .output_buffers
+                    .get(session)
+                    .map(|ring| {
+                        String::from_utf8_lossy(&ring.lock().read_last(65536).0).into_owned()
+                    })
+                    .unwrap_or_default();
+                if output.contains(&want) {
+                    break;
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "pane {session} never printed {want}; output: {output:?}"
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+            seen.push(device);
+        }
+        assert_ne!(seen[0], seen[1], "two panes must never share a pty device");
+
+        for session in [&lead, &teammate] {
+            crate::pty::cleanup_session(session, &state, "test done");
+        }
+    }
+
     #[tokio::test]
     async fn killing_a_materialized_pane_closes_its_tuic_session_and_topology_forgets_it() {
         let state = super::super::tests::test_state();

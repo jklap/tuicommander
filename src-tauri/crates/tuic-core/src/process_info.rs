@@ -23,6 +23,15 @@
 //! profile can deny process inspection outright, and the callers already treat
 //! "inventory unavailable" as "don't decide".
 //!
+//! Linux `/proc` mounted with `hidepid=1|2` (some hardened hosts and
+//! containers): other users' processes are hidden (`2`) or their
+//! `cmdline`/`stat` unreadable (`1`). A snapshot then lists only this user's
+//! processes, and a hidden pid reads as gone (`info`/`usage` → `None`) rather
+//! than as [`Unreadable::PermissionDenied`]. TUIC only judges its own subtree,
+//! which is this user's, so nothing it decides on is hidden; a `sudo` child is
+//! the exception and is reported missing, not unreadable. Not tested: it needs
+//! a remount, which no test can do.
+//!
 //! The [`ProcessSource`] trait is the test seam: production code takes a
 //! `&dyn ProcessSource`, tests hand it a [`FakeProcessSource`].
 
@@ -129,6 +138,12 @@ pub trait ProcessSource: Send + Sync {
     fn exe(&self, pid: u32) -> Option<PathBuf>;
     /// Direct children of `ppid` that are zombies (exited, not yet reaped).
     fn zombie_children(&self, ppid: u32) -> Option<Vec<u32>>;
+    /// When `pid` started. The default reads [`ProcessSource::info`]; the
+    /// native source skips argv (on macOS a `KERN_PROCARGS2` read per pid),
+    /// which a caller that only needs the start time should not pay for.
+    fn start_time(&self, pid: u32) -> Option<SystemTime> {
+        self.info(pid)?.start_time
+    }
 }
 
 /// The live operating system.
@@ -156,6 +171,9 @@ impl ProcessSource for NativeProcessSource {
     }
     fn zombie_children(&self, ppid: u32) -> Option<Vec<u32>> {
         platform::zombie_children(ppid)
+    }
+    fn start_time(&self, pid: u32) -> Option<SystemTime> {
+        platform::info(pid, false)?.start_time
     }
 }
 
@@ -263,9 +281,10 @@ pub fn usage_stats(
         let Some(usage) = source.usage(pid) else {
             continue;
         };
+        // The start time only: `info` would also read argv, once per pid of
+        // every snapshot the process manager takes.
         let cpu = source
-            .info(pid)
-            .and_then(|process| process.start_time)
+            .start_time(pid)
             .map_or(0.0, |start| lifetime_cpu_percent(&usage, start, now));
         stats.insert(pid, (usage.rss_bytes / 1024, cpu));
     }
@@ -732,6 +751,51 @@ mod platform {
         use std::os::unix::ffi::OsStringExt;
         Some(PathBuf::from(std::ffi::OsString::from_vec(buf)))
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        /// The pid table can grow between the count call and the listing
+        /// call. A listing that fills the whole buffer may have been cut off,
+        /// so it is retried with twice the room (at most four times), zero
+        /// pids are dropped, and a failing call is `None`.
+        #[test]
+        fn pid_listing_grows_until_the_table_fits_and_gives_up_after_four_tries() {
+            use std::cell::RefCell;
+            let table: Vec<i32> = (1..=300).collect();
+            let capacities = RefCell::new(Vec::new());
+            let pids = list_pids_into(100, |buffer, bytes| {
+                let capacity = bytes as usize / std::mem::size_of::<i32>();
+                capacities.borrow_mut().push(capacity);
+                let written = table.len().min(capacity);
+                // SAFETY: `buffer` holds `capacity` i32s; at most that many are written.
+                let out = unsafe { std::slice::from_raw_parts_mut(buffer.cast::<i32>(), written) };
+                out.copy_from_slice(&table[..written]);
+                written as libc::c_int
+            })
+            .expect("the table fits on the second try");
+            assert_eq!(pids, table);
+            assert_eq!(*capacities.borrow(), vec![164, 328]);
+
+            let tries = std::cell::Cell::new(0);
+            let never_fits = list_pids_into(1, |_, bytes| {
+                tries.set(tries.get() + 1);
+                (bytes as usize / std::mem::size_of::<i32>()) as libc::c_int
+            });
+            assert_eq!(never_fits, None);
+            assert_eq!(tries.get(), 4);
+
+            assert_eq!(list_pids_into(10, |_, _| -1), None);
+            let with_zero = list_pids_into(10, |buffer, _| {
+                // SAFETY: the buffer holds at least 74 i32s.
+                let out = unsafe { std::slice::from_raw_parts_mut(buffer.cast::<i32>(), 3) };
+                out.copy_from_slice(&[0, 7, 9]);
+                3
+            });
+            assert_eq!(with_zero, Some(vec![7, 9]));
+        }
+    }
 }
 
 // ─── Linux ──────────────────────────────────────────────────────────────────
@@ -1068,6 +1132,50 @@ mod tests {
         assert!(!stats.contains_key(&99));
     }
 
+    /// The process manager calls `usage_stats` for every pid of a snapshot, so
+    /// it must stay cheap: only the usage and the start time, never `info`
+    /// (which on macOS reads each process's argv with `KERN_PROCARGS2`).
+    #[test]
+    fn usage_stats_reads_only_the_start_time_never_argv() {
+        struct NoInfo;
+        impl ProcessSource for NoInfo {
+            fn snapshot(&self, _: bool) -> Option<Vec<ProcInfo>> {
+                None
+            }
+            fn children(&self, _: u32) -> Option<Vec<u32>> {
+                None
+            }
+            fn info(&self, pid: u32) -> Option<ProcInfo> {
+                panic!("usage_stats read the full info (argv) of {pid}")
+            }
+            fn usage(&self, pid: u32) -> Option<ProcUsage> {
+                (pid == 10).then_some(ProcUsage {
+                    rss_bytes: 2048,
+                    cpu_time: Duration::from_secs(10),
+                    threads: 1,
+                })
+            }
+            fn cwd(&self, _: u32) -> Option<PathBuf> {
+                None
+            }
+            fn exe(&self, _: u32) -> Option<PathBuf> {
+                None
+            }
+            fn zombie_children(&self, _: u32) -> Option<Vec<u32>> {
+                None
+            }
+            fn start_time(&self, pid: u32) -> Option<SystemTime> {
+                (pid == 10).then_some(SystemTime::UNIX_EPOCH + Duration::from_secs(1_000))
+            }
+        }
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_100);
+        let stats = usage_stats(&NoInfo, &[10, 11], now);
+        assert_eq!(stats.len(), 1);
+        let (rss_kb, cpu) = stats[&10];
+        assert_eq!(rss_kb, 2);
+        assert!((cpu - 10.0).abs() < 0.01, "{cpu}");
+    }
+
     #[test]
     fn children_cpu_lists_live_children_and_keeps_unreadable_usage_as_none() {
         let mut fake = FakeProcessSource::with_processes(vec![
@@ -1283,6 +1391,143 @@ mod tests {
             assert!(!signal(0, 0));
             assert!(!signal(1, 0));
             assert!(!signal(u32::MAX, 0));
+        }
+
+        /// The cheap start-time read agrees with the full `info`.
+        #[test]
+        fn start_time_matches_info_without_reading_argv() {
+            let own = std::process::id();
+            let full = info(own).and_then(|process| process.start_time);
+            assert!(full.is_some());
+            assert_eq!(NativeProcessSource.start_time(own), full);
+            assert_eq!(NativeProcessSource.start_time(u32::MAX), None);
+        }
+
+        /// EPERM: another user's process (launchd, root) keeps its identity but
+        /// its argv is `PermissionDenied`, never an empty `Ok` that would read
+        /// as "no command". macOS only: Linux lets any user read `cmdline`.
+        #[cfg(target_os = "macos")]
+        #[test]
+        fn another_users_process_has_identity_but_permission_denied_argv() {
+            // SAFETY: geteuid has no preconditions.
+            if unsafe { libc::geteuid() } == 0 {
+                eprintln!("UNCHECKED: running as root, every argv is readable");
+                return;
+            }
+            let launchd = info(1).expect("launchd's identity is readable by every uid");
+            assert_eq!(launchd.uid, 0);
+            assert_eq!(launchd.comm, "launchd");
+            assert_eq!(launchd.argv, Err(Unreadable::PermissionDenied));
+            assert_eq!(
+                launchd.display_name(),
+                launchd.exe.as_ref().map_or(launchd.comm.clone(), |exe| exe
+                    .to_string_lossy()
+                    .into_owned())
+            );
+        }
+
+        /// A process whose executable was deleted while it runs (an upgrade
+        /// replacing an agent binary) is still a live, readable process: its
+        /// identity and argv do not vanish with the file.
+        #[cfg(feature = "test-support")]
+        #[test]
+        fn a_process_whose_executable_was_deleted_is_still_readable() {
+            let dir = tempfile_dir();
+            let probe = tuic_test_support::install_identity_probe(&dir, "deleted-probe");
+            let child = KillOnDrop(
+                Command::new(&probe)
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+                    .expect("spawn the identity probe"),
+            );
+            let pid = child.0.id();
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            while info(pid).is_none_or(|p| p.comm != "deleted-probe") {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "probe {pid} never showed up"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            std::fs::remove_file(&probe).expect("delete the running executable");
+
+            let after = info(pid).expect("a deleted executable does not hide its process");
+            assert_eq!(after.comm, "deleted-probe");
+            assert_eq!(
+                after
+                    .argv
+                    .as_deref()
+                    .ok()
+                    .and_then(|argv| argv.first().cloned()),
+                Some(probe.to_string_lossy().into_owned())
+            );
+            // The path, when the kernel still reports one, still names the
+            // probe (Linux appends " (deleted)").
+            if let Some(exe) = after.exe {
+                let name = exe.file_name().unwrap().to_string_lossy().into_owned();
+                assert!(name.starts_with("deleted-probe"), "{}", exe.display());
+            }
+            drop(child);
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        /// M2: the native table against the real `ps`, where `ps` can run (it
+        /// cannot in the agent sandbox: the setuid exec is denied, and the test
+        /// says UNCHECKED). For every pid both list, the parent, group and uid
+        /// agree, and the native snapshot misses no more than churn explains.
+        #[cfg(target_os = "macos")]
+        #[test]
+        fn native_snapshot_agrees_with_ps() {
+            let ps = match Command::new("/bin/ps")
+                .args(["-axo", "pid=,ppid=,pgid=,uid="])
+                .stdin(Stdio::null())
+                .stderr(Stdio::null())
+                .output()
+            {
+                Ok(output) if output.status.success() => output,
+                other => {
+                    eprintln!("UNCHECKED: /bin/ps cannot run here: {other:?}");
+                    return;
+                }
+            };
+            let native: HashMap<u32, ProcInfo> = snapshot(false)
+                .expect("the native table is listable")
+                .into_iter()
+                .map(|process| (process.pid, process))
+                .collect();
+            let mut compared = 0;
+            let mut missing = Vec::new();
+            for line in String::from_utf8_lossy(&ps.stdout).lines() {
+                let fields: Vec<u32> = line
+                    .split_whitespace()
+                    .filter_map(|field| field.parse().ok())
+                    .collect();
+                let [pid, ppid, pgid, uid] = fields[..] else {
+                    continue;
+                };
+                let Some(process) = native.get(&pid) else {
+                    missing.push(pid);
+                    continue;
+                };
+                assert_eq!(
+                    (process.ppid, process.pgid, process.uid),
+                    (ppid, pgid, uid),
+                    "pid {pid}: native {process:?} vs ps {line:?}"
+                );
+                compared += 1;
+            }
+            assert!(compared > 10, "ps and native shared only {compared} pids");
+            // Processes that exited between the two listings (and ps's own
+            // short-lived pid) are fine; a large gap is not.
+            assert!(
+                missing.len() * 20 <= compared,
+                "native snapshot missed {} of {} ps pids: {missing:?}",
+                missing.len(),
+                compared + missing.len()
+            );
+            assert!(native.contains_key(&std::process::id()));
         }
 
         fn tempfile_dir() -> PathBuf {
