@@ -1457,3 +1457,59 @@
 .mobileTranscript :global(#markdown-content table) { display: block; max-width: 100%; overflow-x: auto; }
 
 .mobileComposerActions .parkedDraft { color: var(--accent); border-color: var(--accent); }
+
+/* Terminal Chat owns its reading layout; AI Chat retains the live conversation layout. */
+.messageList[data-terminal-chat] .userMsg {
+  width: fit-content;
+  max-width: min(80ch, 85%);
+  box-shadow: none;
+}
+
+.messageList[data-terminal-chat] .assistantMsg {
+  max-width: 96ch;
+}
+
+.messageList[data-terminal-chat] [data-answer-card] {
+  padding: 12px 16px;
+  border-left: 3px solid var(--success);
+  border-radius: 0 var(--radius-lg) var(--radius-lg) 0;
+  background: color-mix(in srgb, var(--success) 6%, var(--bg-primary));
+}
+
+.messageList[data-terminal-chat] [data-answer-card] .replyActions {
+  top: 4px;
+  right: 8px;
+  left: auto;
+}
+
+.messageList[data-terminal-chat] .systemNotice {
+  align-self: flex-start;
+  max-width: 100%;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-tertiary);
+  color: var(--fg-secondary);
+}
+
+.messageList[data-terminal-chat] .assistantMsg :global(#markdown-content [data-tuic-answer]::before) {
+  content: none;
+}
+
+.messageList[data-terminal-chat] .assistantMsg :global(#markdown-content [data-tuic-answer]::after) {
+  content: none;
+}
+
+.messageList[data-terminal-chat] .assistantMsg :global(#markdown-content [data-tuic-answer]) {
+  padding: 0;
+  margin-top: 0;
+  margin-bottom: 8px;
+}
+
+/* Only the last block of the last segment ends the card; every earlier segment's last block keeps its gap. */
+.messageList[data-terminal-chat] .assistantMsg :global(#markdown-content > div:last-child > [data-tuic-answer]:last-child) {
+  margin-bottom: 0;
+}
+
+.messageList[data-terminal-chat] .userMsg .copyAction {
+  white-space: nowrap;
+}

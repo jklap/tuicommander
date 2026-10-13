@@ -58,6 +58,7 @@ export const TerminalChatView: Component<{
 	return (
 		<div class={s.chatView} data-testid="terminal-chat-view">
 			<Transcript
+				terminalAgent={terminalsStore.get(props.terminalId)?.agentType ?? undefined}
 				onSearchRef={props.onSearchRef}
 				entries={() => acpTranscript.entries(chatViewKey(props.sessionId))}
 				busy={() => false}
