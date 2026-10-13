@@ -45,7 +45,7 @@ export interface AgentConfig {
 	name: string;
 	binary: string;
 	description: string;
-	/** The CLI starts an interactive session seeded with a trailing positional prompt (`<cli> "<prompt>"`, per its --help). */
+	/** The CLI starts an interactive session seeded with a trailing positional prompt (`<cli> -- "<prompt>"`): its --help lists the prompt and it honours `--` as the end of options. */
 	interactivePromptArg?: true;
 	resumeCommand: string | null;
 	/** Mobile Ctrl+Enter: native modified key, or a verified non-submitting newline fallback. */
@@ -312,7 +312,6 @@ export const AGENTS: Record<AgentType, AgentConfig> = {
 		name: "pi",
 		binary: "pi",
 		description: "Earendil's pi coding agent",
-		interactivePromptArg: true,
 		defaultHeadlessTemplate: 'pi --print "{prompt}"',
 		resumeCommand: "pi --continue",
 		ctrlEnterSequence: "\n",

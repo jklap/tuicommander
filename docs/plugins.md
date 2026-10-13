@@ -1932,8 +1932,9 @@ config supplies the command and env. The prompt sits inside an `<untrusted-conte
 block, control bytes removed, capped at 12000 characters. `delivery: "draft"`
 (default) waits for the agent's composer and types the prompt there, leaving Enter to
 the user. `"submit"` starts the agent with the prompt as its first message, quoted as
-one POSIX shell argument, for claude, codex, gemini, pi and grok (their `--help` lists a
-positional prompt for an interactive session); other agents, prompts over 16384
+one POSIX shell argument after a `--` option terminator, for claude, codex, gemini and grok
+(their `--help` lists a positional prompt for an interactive session and they honour `--`); other agents (pi has no `--`
+handling), prompts over 16384
 characters and cmd/PowerShell shells get the prompt typed and submitted instead. `link` links the item to the
 new worktree. It resolves to `{ repoPath, workspaceId, branch, worktreePath }`.
 The GitHub Auto-fix action uses the same path with `delivery: "submit"`.

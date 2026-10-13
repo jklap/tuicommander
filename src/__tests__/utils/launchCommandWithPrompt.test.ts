@@ -5,13 +5,14 @@ import { launchCommandWithPrompt } from "../../utils/agentLaunchCommand";
 
 /** What a POSIX shell hands the program for the quoted tail of `command`: the independent oracle for quoting. */
 function argvAfter(command: string, head: string): string {
-	const tail = command.slice(head.length + 1);
+	const tail = command.slice(`${head} -- `.length);
 	return execFileSync("sh", ["-c", `printf %s ${tail}`]).toString();
 }
 
-// Each agent below was checked against its own `--help`: a trailing [PROMPT]/query/[messages] starts the
-// interactive session with that message.
-const WITH_ARGV = ["claude", "codex", "gemini", "pi", "grok"] as const;
+// Each agent below was checked against its own `--help` (a trailing [PROMPT]/query starts the interactive session
+// with that message) and run as `<cli> -- --version`, which must not print a version. pi lists [messages] but its
+// parser has no `--` handling (`--` is an unknown flag that takes the next word as its value), so it is typed.
+const WITH_ARGV = ["claude", "codex", "gemini", "grok"] as const;
 
 describe("launchCommandWithPrompt", () => {
 	// Catches: an agent that takes no positional prompt being given one (opencode treats it as a project path).

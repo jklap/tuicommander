@@ -7,6 +7,9 @@ import { escapePosixShellArg } from "./shell";
 /** Longest prompt put on a launch command line; longer ones are typed into the running agent instead. */
 export const ARGV_PROMPT_MAX_CHARS = 16_384;
 
+/** First line of the brief Start Work passes as a launch argument. Resume must not replay it (agentSession.ts, agent_session.rs). */
+export const SEED_BRIEF_OPEN = '<untrusted-content source="work item">';
+
 /** Prefix an agent launch command with its run-config env, quoted for the shell that runs it. */
 export function scopedLaunchCommand(
 	command: string,
@@ -47,7 +50,7 @@ export function newTerminalShellFamily(): ShellFamily {
 }
 
 /** Launch command that starts `agentType` interactively with `prompt` as its first message, or null when the prompt
- *  has to be typed instead: the CLI takes no positional prompt, the prompt is too long, or the shell is cmd/PowerShell
+ *  has to be typed instead: the CLI takes no positional prompt after `--`, the prompt is too long, or the shell is cmd/PowerShell
  *  (their quoting cannot carry a newline). The prompt is quoted for a POSIX shell, so it reaches the agent verbatim. */
 export function launchCommandWithPrompt(
 	agentType: AgentType,
@@ -57,5 +60,6 @@ export function launchCommandWithPrompt(
 ): string | null {
 	if (!AGENTS[agentType].interactivePromptArg || shellFamily === "windows-native") return null;
 	if (prompt.length > ARGV_PROMPT_MAX_CHARS) return null;
-	return `${command} ${escapePosixShellArg(prompt)}`;
+	// `--` ends option parsing, so a run config ending in a variadic option (claude --add-dir <dirs...>) cannot swallow the prompt.
+	return `${command} -- ${escapePosixShellArg(prompt)}`;
 }
