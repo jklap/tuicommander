@@ -340,7 +340,13 @@ export const LiveMarkdownEditor: Component<LiveMarkdownEditorProps> = (props) =>
 					</button>
 				</Show>
 				<Show when={dirty()}>
-					<button type="button" class={s.btn} style={{ "margin-left": "auto" }} onClick={() => void save()}>
+					<button
+						type="button"
+						class={s.btn}
+						data-ready="true"
+						style={{ "margin-left": "auto" }}
+						onClick={() => void save()}
+					>
 						{t("markdownTab.saveLive", "Save")}
 					</button>
 				</Show>

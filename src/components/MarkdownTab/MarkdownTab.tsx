@@ -522,6 +522,7 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 	};
 
 	const reviewComments = createMemo(() => parseTweakComments(content()));
+	const canSend = () => !!selectedAgentSession() && !sendingChanges();
 	const hasReviewChanges = () => reviewComments().length > 0 || editedSinceSend();
 	const reviewAgents = createMemo(() => {
 		const tab = props.tab;
@@ -684,7 +685,8 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 							</Select>
 							<button
 								class={e.btn}
-								disabled={!selectedAgentSession() || sendingChanges()}
+								disabled={!canSend()}
+								data-ready={canSend() ? "true" : undefined}
 								onClick={() => void handleSendChanges()}
 								title={t("markdownTab.sendChanges", "Send changes to agent")}
 								aria-label={t("markdownTab.sendChanges", "Send changes to agent")}
