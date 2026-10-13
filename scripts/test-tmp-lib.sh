@@ -100,6 +100,17 @@ tuic_git_isolate_config() {
   unset GIT_CONFIG_SYSTEM GIT_CONFIG_PARAMETERS GIT_CONFIG_COUNT
 }
 
+# Usage: tuic_pin_compilers_for_sccache. On macOS with sccache on PATH, exports
+# CC=cc and CXX=c++ unless the caller set them (see scripts/with-test-tmp.sh for
+# why); anywhere else it changes nothing. Call it in the current shell.
+tuic_pin_compilers_for_sccache() {
+  [ "$(uname -s 2>/dev/null)" = Darwin ] || return 0
+  command -v sccache >/dev/null 2>&1 || return 0
+  CC=${CC:-cc}
+  CXX=${CXX:-c++}
+  export CC CXX
+}
+
 # Usage: tuic_unix_socket_path_max <repo root>. Prints the longest Unix socket
 # path the platform binds, read out of its one definition,
 # `tuic_ipc::UNIX_SOCKET_PATH_MAX` (src-tauri/crates/tuic-ipc/src/lib.rs), so
