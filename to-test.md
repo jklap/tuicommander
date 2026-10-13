@@ -5216,3 +5216,5 @@ Visual evidence: worktree Vite fixture mounted the real NotificationsTab and Toa
 ## Goose reply completion (1812-022d) — Rust restart required
 
 - [ ] After Boss restarts `make dev` or installs `make build`, send two prompts to Goose 1.49.0 with ollama. Each reply must return the tab to idle shortly after the ready composer appears; the second submit must be accepted without a five-minute wait or 409. The recorded first-turn replay covers the backend transition; this live check remains open until restart.
+
+- [ ] After Boss restarts `make dev` or installs `make build`, load the repository settings owners and verify defaults/local read, patch and readback when settings transport cutover is wired (#1825-4566). Current transports remain unchanged; Rust edits require restart.

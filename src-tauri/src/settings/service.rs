@@ -15,6 +15,13 @@ use std::{collections::BTreeMap, future::Future, sync::Arc};
 pub trait Store: Send + Sync + 'static {
     fn id(&self) -> &str;
     fn target(&self) -> Target;
+    /// Bind a request to its owner without changing fixed-target adapters.
+    fn resolve(self: Arc<Self>, target: &Target) -> Result<Arc<Self>, Failure> {
+        if *target != self.target() {
+            return Err(Error::new(self.id(), "not_found"));
+        }
+        Ok(self)
+    }
     fn read(&self) -> Result<Value, Failure>;
     fn commit(
         &self,
@@ -38,8 +45,8 @@ impl<S: Store> Service<S> {
         self.owner.id()
     }
 
-    fn check_owner(&self, target: &Target, store: &str) -> Result<(), Failure> {
-        if store != self.owner.id() || *target != self.owner.target() {
+    fn check_owner(&self, store: &str) -> Result<(), Failure> {
+        if store != self.owner.id() {
             // Use the registered store, never echo an arbitrary caller string.
             return Err(Error::new(self.owner.id(), "not_found"));
         }
@@ -98,7 +105,7 @@ impl<S: Store> Service<S> {
         store: String,
         paths: Vec<String>,
     ) -> Result<Snapshot, Failure> {
-        self.check_owner(&target, &store)?;
+        self.check_owner(&store)?;
         if paths.is_empty() || paths.len() > 128 {
             let mut error = Error::new(&store, "out_of_range");
             error.expected = Some("paths array".into());
@@ -109,6 +116,7 @@ impl<S: Store> Service<S> {
         let owner = self.owner.clone();
         let safe_store = store.clone();
         tokio::task::spawn_blocking(move || {
+            let owner = owner.resolve(&target)?;
             let mut latest = owner.read()?;
             let revision = transaction::revision(&latest)?;
             let mut values = BTreeMap::new();
@@ -173,19 +181,22 @@ impl<S: Store> Service<S> {
         expected_revision: String,
         operations: Vec<Edit>,
     ) -> Result<CommitReply, Failure> {
-        self.check_owner(&target, &store)?;
+        self.check_owner(&store)?;
         let owner = self.owner.clone();
         let cat = self.catalogue.clone();
         let safe_store = store.clone();
-        let mut reply = tokio::task::spawn_blocking(move || {
-            owner.commit(&mut |latest| {
-                transaction::prepare(&cat, &store, latest, &expected_revision, &operations)
-            })
+        let (mut reply, owner) = tokio::task::spawn_blocking(move || {
+            let owner = owner.resolve(&target)?;
+            owner
+                .commit(&mut |latest| {
+                    transaction::prepare(&cat, &store, latest, &expected_revision, &operations)
+                })
+                .map(|reply| (reply, owner))
         })
         .await
         .map_err(|_| Error::new(&safe_store, "store_failed"))??;
         if !reply.changed_ids.is_empty() {
-            match self.owner.apply(&reply).await {
+            match owner.apply(&reply).await {
                 Ok(applied) => reply.applied = applied,
                 Err(_) => {
                     let mut error = Error::new(&safe_store, "apply_failed");

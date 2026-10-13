@@ -13,6 +13,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Preserve beta installs in the macOS terminal installer and normalize release tag prefixes for default and pinned downloads.
 
 ### Added
+- Internal settings owners cover repository defaults and registered repository `.tuic.json` targets, with revision checks and isolated locked writes (#1825-4566).
 - Beta update channel: automatically check for the next beta and final stable release. Completed beta releases publish a rolling feed without changing stable updates.
 
 ### Added
