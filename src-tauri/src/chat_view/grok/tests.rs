@@ -132,6 +132,38 @@ fn grok_backend_web_search_is_a_completed_card() {
     assert_eq!(calls[0]["status"], "completed");
 }
 
+// Catches: dropping secret-bearing tool cards/results, or leaking the token in
+// a title, raw input or result while still returning the other redacted fields.
+#[test]
+fn grok_secret_bearing_tool_card_and_result_survive_with_redacted_content() {
+    let secret = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";
+    let call = json!({
+        "type": "assistant", "content": "", "tool_calls": [{
+            "id": "c1", "name": "run_terminal_command",
+            "arguments": json!({ "command": format!("echo {secret} safe") }).to_string(),
+        }],
+    });
+    let result = json!({
+        "type": "tool_result", "tool_call_id": "c1",
+        "content": format!("output: {secret} safe"),
+    });
+    let (updates, _) = run(&format!("{call}\n{result}"));
+    assert_eq!(updates.len(), 2, "the call and its result must survive");
+    assert_eq!(updates[0]["sessionUpdate"], "tool_call");
+    assert_eq!(
+        updates[0]["title"],
+        "run_terminal_command: echo [REDACTED] safe"
+    );
+    assert_eq!(updates[0]["rawInput"]["command"], "echo [REDACTED] safe");
+    assert_eq!(updates[1]["sessionUpdate"], "tool_call_update");
+    assert_eq!(updates[1]["toolCallId"], "c1");
+    assert_eq!(
+        updates[1]["content"][0]["content"]["text"],
+        "output: [REDACTED] safe"
+    );
+    assert!(!serde_json::to_string(&updates).unwrap().contains(secret));
+}
+
 #[test]
 fn grok_unknown_and_malformed_rows_are_counted_not_fatal() {
     let rows = [
