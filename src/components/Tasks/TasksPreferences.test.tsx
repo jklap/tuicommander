@@ -191,3 +191,24 @@ it("network_failure_keeps_saved_sort_and_error_visible", async () => {
 	// Observe the debounced app persistence boundary before the final test tears down.
 	await waitFor(() => expect(disk.prefs).toHaveProperty("sidebar_visible"));
 });
+
+// Catches: ui-prefs.json merge patches delete null leaves, so a restored query reaches the provider with
+// savedFilterId/sort/groupBy undefined instead of the null that the WorkItemQuery contract declares.
+it("restored_query_keeps_null_contract_when_disk_dropped_null_leaves", async () => {
+	const { a } = register();
+	const seen: WorkItemQuery[] = [];
+	const list = a.list;
+	a.list = async (request, signal) => {
+		seen.push(structuredClone(request));
+		return list(request, signal);
+	};
+	disk.prefs = {
+		tasks_view_preferences: {
+			'["/repo-a","demo","a"]': { query: { filters: [], search: "", limit: 100 } },
+		},
+	};
+	await uiStore.hydrate();
+	render(() => <TasksShell />);
+	await screen.findByRole("button", { name: /Task 00004/ });
+	expect(seen[0]).toMatchObject({ savedFilterId: null, sort: null, groupBy: null, cursor: null });
+});
