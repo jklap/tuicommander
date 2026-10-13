@@ -5238,3 +5238,7 @@ Visual evidence: worktree Vite fixture mounted the real NotificationsTab and Toa
 ## Goose reply completion (1812-022d) — Rust restart required
 
 - [ ] After Boss restarts `make dev` or installs `make build`, send two prompts to Goose 1.49.0 with ollama. Each reply must return the tab to idle shortly after the ready composer appears; the second submit must be accepted without a five-minute wait or 409. The recorded first-turn replay covers the backend transition; this live check remains open until restart.
+
+## Terminal Chat layout (#1832-b19a)
+
+- [ ] Verify the layout in a live Terminal Chat conversation: answer card grouping, whole-answer Copy on hover/focus, pasted-output expansion and compact inbox notices. Keep the collapsed tool row; only Claude Bash descriptions replace command titles. Browser-renderer screenshots are recorded in the story worklog; live adapter execution is an integration follow-up.

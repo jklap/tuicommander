@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Fixed
+- Make Terminal Chat easier to read with one lightly tinted answer card per turn, whole-answer Copy, reading-width limits, collapsible terminal pastes and compact inbox notices. Keep the collapsed tool row and show Claude Bash descriptions when available (#1832-b19a).
 - Ego model settings now honor the configured profile and AI Chat workspace. The internal settings service adds managed Ego configuration, readback and presence-only credentials through owner services (#1775-330c).
 - Goose returns to idle after a reply and accepts the next submission without waiting for the five-minute stale recovery (#1812-022d).
 - Aider returns to idle after a reply and accepts the next submission (#1823-8150).

@@ -26,6 +26,7 @@ import type { AcpToolCall, AcpToolCallContent } from "../../types/acp";
 import { cx } from "../../utils";
 import { writeClipboard } from "../../utils/clipboard";
 import { handleOpenUrl } from "../../utils/openUrl";
+import { TerminalUserText, terminalAnswerRows, terminalToolTitle } from "../Terminal/chatPresentation";
 import { filePathRegex, matchWebUrls } from "../Terminal/linkProvider";
 import { ANSWER_MARKER_RE, answerBlockRanges, type ChatBlock } from "../Terminal/suggestOverlay";
 import { ContentRenderer } from "../ui/ContentRenderer";
@@ -75,7 +76,9 @@ function toolName(title: string): string {
 	return title.split(/\s+-lc\s+|\s+-c\s+/, 1)[0];
 }
 
-const ToolActivity: Component<{ calls: () => AcpToolCall[]; observeDuration?: boolean }> = (props) => {
+const ToolActivity: Component<{ calls: () => AcpToolCall[]; observeDuration?: boolean; terminalAgent?: string }> = (
+	props,
+) => {
 	const startedAt = performance.now();
 	let finishedAt: number | undefined;
 	let observedCount = 0;
@@ -113,7 +116,7 @@ const ToolActivity: Component<{ calls: () => AcpToolCall[]; observeDuration?: bo
 					{props
 						.calls()
 						.slice(0, 2)
-						.map((call) => toolName(call.title))
+						.map((call) => (props.terminalAgent ? terminalToolTitle(call, props.terminalAgent) : toolName(call.title)))
 						.join(" · ")}
 					{props.calls().length > 2 ? " · …" : ""}
 				</span>
@@ -233,6 +236,8 @@ export interface TranscriptSearchRef {
 }
 
 export interface TranscriptProps {
+	/** Terminal-only reading layout; the agent scopes Claude Bash descriptions. */
+	terminalAgent?: string;
 	/** Lets a containing terminal route its Find action to this transcript. */
 	onSearchRef?: (ref: TranscriptSearchRef | undefined) => void;
 	/** Constrain intrinsic content to the phone viewport. */
@@ -394,7 +399,11 @@ function highlightAnswers(container: HTMLDivElement | undefined): void {
 }
 
 export const Transcript: Component<TranscriptProps> = (props) => {
-	const activity = createMemo(() => activityRows(props.entries(), !!props.onSuggestion));
+	const activity = createMemo(() => {
+		const activity = activityRows(props.entries(), !!props.onSuggestion);
+		if (props.terminalAgent) activity.visible = terminalAnswerRows(activity.visible, activity.intermediate);
+		return activity;
+	});
 	const firstLocalId = createMemo(() =>
 		activity().visible.some((entry) => entry.inherited)
 			? activity().visible.find((entry) => !entry.inherited)?.id
@@ -591,6 +600,7 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 				class={cx(s.messageList, props.mobile && s.mobileTranscript)}
 				ref={container}
 				aria-label="Chat transcript"
+				data-terminal-chat={props.terminalAgent ? "" : undefined}
 				tabIndex={0}
 				onKeyDown={onKeyDown}
 				onScroll={onScroll}
@@ -650,13 +660,23 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 											<Show
 												when={!isHarnessNotice(user().text)}
 												fallback={
-													<div class={s.systemNotice} role="note">
-														{user().text}
+													<div class={s.systemNotice} role="note" title={user().text}>
+														{props.terminalAgent && user().text.trim().startsWith("[TUIC]")
+															? "Message from an agent"
+															: user().text}
 													</div>
 												}
 											>
 												<div class={s.userMsg}>
-													<UserText text={user().text} onOpenFile={props.onOpenFile} />
+													<Show
+														when={props.terminalAgent}
+														fallback={<UserText text={user().text} onOpenFile={props.onOpenFile} />}
+													>
+														<TerminalUserText
+															text={user().text}
+															prose={(text) => <UserText text={text} onOpenFile={props.onOpenFile} />}
+														/>
+													</Show>
 													<CopyButton label="Copy user message" text={user().text} />
 												</div>
 											</Show>
@@ -683,6 +703,11 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 													<div
 														class={cx(s.assistantMsg, intermediate() && s.intermediateMsg)}
 														data-intermediate={intermediate() ? "" : undefined}
+														data-answer-card={
+															props.terminalAgent && !activity().intermediate.has(agent().id) && projected().body.trim()
+																? ""
+																: undefined
+														}
 													>
 														<Show when={projected().intent}>
 															{(intent) => (
@@ -771,6 +796,7 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 											<ToolActivity
 												calls={() => activity().calls.get(tool().id) ?? []}
 												observeDuration={props.observeToolDuration}
+												terminalAgent={props.terminalAgent}
 											/>
 										)}
 									</Match>
