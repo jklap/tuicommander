@@ -7,6 +7,26 @@ import { Select } from "../../components/ui/Select";
 import { Textarea } from "../../components/ui/Textarea";
 
 describe("shared form controls", () => {
+	// Catches: compact being dropped (a 36px field beside 20px buttons) or leaking onto the DOM as an attribute.
+	it("adds the compact size class without leaking the prop", () => {
+		render(() => (
+			<>
+				<Select aria-label="Plain">
+					<option>a</option>
+				</Select>
+				<Select compact aria-label="Dense">
+					<option>a</option>
+				</Select>
+				<Input compact aria-label="Dense input" />
+			</>
+		));
+		const plain = screen.getByRole("combobox", { name: "Plain" });
+		const dense = screen.getByRole("combobox", { name: "Dense" });
+		expect(dense.className.split(" ").length).toBe(plain.className.split(" ").length + 1);
+		expect(dense).not.toHaveAttribute("compact");
+		expect(screen.getByRole("textbox", { name: "Dense input" })).not.toHaveAttribute("compact");
+	});
+
 	// Catches: a wrapper freezing reactive props or losing native ref/event targets and form values.
 	it("preserves reactive selection, native refs, names and change targets", () => {
 		const [value, setValue] = createSignal("board");
