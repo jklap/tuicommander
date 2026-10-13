@@ -1389,8 +1389,7 @@ pub fn inspect_workspace_lifecycle_with_pr(
     pr_proves_tip: impl Fn(&Path, &str, &str) -> bool,
 ) -> WorkspaceLifecycleStatus {
     let inspected = (|| -> Result<WorkspaceLifecycleStatus, String> {
-        let workspace = resolve_any_workspace(base_repo, workspace_id)
-            .or_else(|_| resolve_missing_registered_workspace(base_repo, workspace_id))?;
+        let workspace = resolve_removable_workspace(base_repo, workspace_id)?;
         if !Path::new(&workspace.path).exists() {
             let default_branch = get_remote_default_branch(&base_repo.to_string_lossy())?;
             let tip = rev_at(base_repo, &format!("refs/heads/{}", workspace.branch))?;
@@ -1471,6 +1470,36 @@ pub fn resolve_any_workspace(
                 base_repo.display()
             )
         })
+}
+
+/// A checkout parked in the recycling pool, addressed by the id of its branch.
+fn resolve_archived_workspace(
+    base_repo: &Path,
+    workspace_id: &str,
+) -> Result<WorkspaceWorktree, String> {
+    let listed = git_cmd(base_repo)
+        .args(["worktree", "list", "--porcelain"])
+        .run()
+        .map_err(|error| format!("git worktree list failed: {error}"))?;
+    map_archived_workspace_paths(&listed.stdout)
+        .remove(workspace_id)
+        .ok_or_else(|| {
+            format!(
+                "No workspace found for id '{workspace_id}' in '{}'",
+                base_repo.display()
+            )
+        })
+}
+
+/// Every checkout removal and its safety inspection may act on: a live
+/// workspace, a registered one whose directory vanished, or a pooled one.
+pub fn resolve_removable_workspace(
+    base_repo: &Path,
+    workspace_id: &str,
+) -> Result<WorkspaceWorktree, String> {
+    resolve_any_workspace(base_repo, workspace_id)
+        .or_else(|_| resolve_missing_registered_workspace(base_repo, workspace_id))
+        .or_else(|_| resolve_archived_workspace(base_repo, workspace_id))
 }
 
 /// Removal alone may resolve a registered checkout whose directory disappeared.
@@ -2641,15 +2670,13 @@ pub fn remove_worktree_by_workspace_id_with_missing_confirmation_and_pr(
         "remove_worktree_by_workspace_id: start"
     );
 
-    let workspace = resolve_any_workspace(&base_repo, workspace_id)
-        .or_else(|_| resolve_missing_registered_workspace(&base_repo, workspace_id))
-        .inspect_err(|_| {
-            tracing::error!(
-                source = "worktree",
-                workspace_id = %workspace_id,
-                "remove_worktree_by_workspace_id: no workspace found for id"
-            );
-        })?;
+    let workspace = resolve_removable_workspace(&base_repo, workspace_id).inspect_err(|_| {
+        tracing::error!(
+            source = "worktree",
+            workspace_id = %workspace_id,
+            "remove_worktree_by_workspace_id: no workspace found for id"
+        );
+    })?;
     // The branch to delete comes off the resolved record instead of duplicating
     // the workspace-id representation at the call site.
     let branch_name = workspace.branch.as_str();
@@ -3374,6 +3401,22 @@ pub fn workspace_id_of_worktree(branch: &str) -> String {
 /// no persisted key moves and no id is invented for data that already works.
 /// This is not a placeholder — it is the migration.
 fn map_worktree_workspace_paths(porcelain: &str) -> HashMap<String, WorkspaceWorktree> {
+    map_checkouts(porcelain, false)
+}
+
+/// Checkouts parked in `__archived/` by archive or recycling. They stay on their
+/// branch so a later create can reuse them by rename, which makes them a pool:
+/// not a workspace the sidebar lists, but still removable by id.
+fn map_archived_workspace_paths(porcelain: &str) -> HashMap<String, WorkspaceWorktree> {
+    map_checkouts(porcelain, true)
+}
+
+/// Whether a checkout sits in the recycling pool: directly inside `__archived/`.
+pub(crate) fn is_archived_checkout(path: &Path) -> bool {
+    path.parent().and_then(Path::file_name) == Some(std::ffi::OsStr::new("__archived"))
+}
+
+fn map_checkouts(porcelain: &str, archived: bool) -> HashMap<String, WorkspaceWorktree> {
     let mut result = HashMap::new();
 
     for entry in parse_worktree_entries(porcelain) {
@@ -3384,8 +3427,7 @@ fn map_worktree_workspace_paths(porcelain: &str) -> HashMap<String, WorkspaceWor
         // Skip entries whose directory no longer exists (double safety after prune)
         if let Some(branch) = branch
             && Path::new(&entry.path).exists()
-            && Path::new(&entry.path).parent().and_then(Path::file_name)
-                != Some(std::ffi::OsStr::new("__archived"))
+            && is_archived_checkout(Path::new(&entry.path)) == archived
         {
             result.insert(
                 workspace_id_of_worktree(&branch),
@@ -8978,6 +9020,126 @@ branch refs/heads/feat
         );
         assert!(worktree.exists());
         assert!(gitdir.exists(), "local-only commit must stay reachable");
+    }
+
+    /// A merged branch whose checkout was archived (still on its branch).
+    fn archived_merged_branch(branch: &str) -> (TempDir, PathBuf, PathBuf) {
+        let (temp, repo, _) = workspace_fixture();
+        let worktree = add_worktree(&repo, branch);
+        commit_file(&worktree, "feature.txt", "feature\n");
+        commit_file(&repo, "main.txt", "main\n");
+        git_cmd(&repo)
+            .args(["merge", "--no-ff", "-m", "merge", branch])
+            .run()
+            .expect("merge");
+        let archived = archive_worktree(&repo, branch, None).expect("archive");
+        (temp, repo, PathBuf::from(archived))
+    }
+
+    fn branch_exists(repo: &Path, branch: &str) -> bool {
+        !git_cmd(repo)
+            .args(["branch", "--list", branch])
+            .run()
+            .expect("branch list")
+            .stdout
+            .trim()
+            .is_empty()
+    }
+
+    // Catches: archived checkouts invisible to workspace lookup, so Remove on a
+    // recycled Merged branch answers "No workspace found" and nothing can delete it.
+    #[test]
+    fn removing_a_merged_branch_recycled_into_archive_removes_checkout_and_branch() {
+        let (_temp, repo, archived) = archived_merged_branch("feat-agent-vm");
+        assert!(archived.exists());
+
+        let outcome = remove_worktree_by_workspace_id(
+            &repo.to_string_lossy(),
+            "feat-agent-vm",
+            true,
+            None,
+            false,
+        )
+        .expect("a pooled checkout is removable by its branch id");
+
+        assert_eq!(outcome.branch, "feat-agent-vm");
+        assert!(!archived.exists(), "archived checkout removed");
+        assert!(!branch_exists(&repo, "feat-agent-vm"), "branch removed");
+    }
+
+    // Catches: removal of a pooled checkout skipping the dirty and unmerged guards.
+    #[test]
+    fn pooled_checkout_keeps_dirty_and_unmerged_guards() {
+        let (_temp, repo, archived) = archived_merged_branch("feat-dirty");
+        fs::write(archived.join("scratch.txt"), "precious\n").unwrap();
+        let error = remove_worktree_by_workspace_id(
+            &repo.to_string_lossy(),
+            "feat-dirty",
+            true,
+            None,
+            false,
+        )
+        .unwrap_err();
+        assert!(error.contains("uncommitted"), "{error}");
+        assert!(archived.join("scratch.txt").exists());
+
+        let (_temp, repo, _) = workspace_fixture();
+        let worktree = add_worktree(&repo, "feat-unmerged");
+        commit_file(&worktree, "only-here.txt", "x\n");
+        let archived = PathBuf::from(archive_worktree(&repo, "feat-unmerged", None).unwrap());
+        let error = remove_worktree_by_workspace_id(
+            &repo.to_string_lossy(),
+            "feat-unmerged",
+            true,
+            None,
+            false,
+        )
+        .unwrap_err();
+        assert!(error.contains("unmerged"), "{error}");
+        assert!(archived.exists());
+        assert!(branch_exists(&repo, "feat-unmerged"));
+    }
+
+    // Catches: a recycled branch still listed by the CLI worktree parser (parity with the gix adapter).
+    #[test]
+    fn worktree_listing_hides_branches_parked_in_archive() {
+        let (_temp, repo, _) = archived_merged_branch("feat-parked");
+
+        assert!(
+            !get_worktree_paths_raw(&repo.to_string_lossy())
+                .unwrap()
+                .contains_key("feat-parked")
+        );
+    }
+
+    // Catches: the sidebar reads workspaces through the routed (gix) adapter,
+    // which lists `__archived/` checkouts that the CLI parser skips, so a
+    // recycled branch stays a sidebar row (Phase 2 lifecycle marks it Merged).
+    #[test]
+    fn routed_workspace_listing_hides_checkouts_parked_in_archive() {
+        let (_temp, repo, archived) = archived_merged_branch("feat-pooled-row");
+        assert!(archived.exists());
+
+        let listed = crate::git_reads::git_reads().worktree_paths(&repo).unwrap();
+
+        assert!(!listed.contains_key("feat-pooled-row"), "{listed:#?}");
+    }
+
+    // Catches: hiding pooled branches from the merged list also makes the Git
+    // panel report a merged branch as unmerged.
+    #[test]
+    fn git_panel_still_reports_a_pooled_merged_branch_as_merged() {
+        let (_temp, repo, _) = archived_merged_branch("feat-pooled-panel");
+
+        let branches = crate::git_reads::git_reads()
+            .branches_detail(&repo)
+            .unwrap();
+
+        let pooled = branches
+            .iter()
+            .find(|b| b.name == "feat-pooled-panel" && !b.is_remote)
+            .expect("pooled branch listed");
+        assert!(pooled.is_merged, "{branches:#?}");
     }
 
     fn commit_file(dir: &Path, name: &str, body: &str) {

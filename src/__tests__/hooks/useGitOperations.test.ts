@@ -12,6 +12,7 @@ import { paneLayoutStore, resetGroupCounter } from "../../stores/paneLayout";
 import { repoSettingsStore } from "../../stores/repoSettings";
 import { repositoriesStore } from "../../stores/repositories";
 import { terminalsStore } from "../../stores/terminals";
+import { toastsStore } from "../../stores/toasts";
 import type { BranchPrStatus } from "../../types";
 import { openDialog as open } from "../../utils/nativeDialog";
 import { navigateToTerminal } from "../../utils/navigateToTerminal";
@@ -2584,6 +2585,20 @@ describe("useGitOperations", () => {
 			expect(repositoriesStore.get("/repo")?.workspaces["feature"]).toBeDefined();
 			expect(repositoriesStore.get("/repo")?.workspaces["feature"]?.isRemoving).toBe(false);
 			expect(mockSetStatusInfo).toHaveBeenCalledWith("Failed to remove feature: git error");
+		});
+
+		// 1867-c863 — catches: a failed manual Remove shown only as scrolling status-bar text.
+		it("shows a sticky dismissable error card when a manual removal fails", async () => {
+			for (const toast of [...toastsStore.toasts]) toastsStore.remove(toast.id);
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
+			mockRepo.removeWorktree.mockRejectedValueOnce(new Error("No workspace found for id 'feature'"));
+
+			await gitOps.handleRemoveWorkspace("/repo", "feature");
+
+			const card = toastsStore.toasts.find((toast) => toast.level === "error");
+			expect(card?.message).toContain("No workspace found for id 'feature'");
+			expect(card?.message).toContain("Failed to remove feature");
 		});
 
 		it("blocks removal when lifecycle safety is unknown", async () => {

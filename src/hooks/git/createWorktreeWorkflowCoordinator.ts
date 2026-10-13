@@ -8,6 +8,7 @@ import { repositoriesStore } from "../../stores/repositories";
 import { terminalsStore } from "../../stores/terminals";
 import type { WorkspaceLifecycleStatus } from "../../stores/workspaceIdentity";
 import { effectiveMergeMethod, isMergeHeadChanged, isMergeMethodNotAllowed } from "../../utils/prMerge";
+import { reportActionError } from "../../utils/reportActionError";
 import { type AgentSeed, buildAgentSeed } from "./agentSeed";
 import type { PendingCreation } from "./createRepositoryRefreshCoordinator";
 import { bindStartWork, createStartWork } from "./startWork";
@@ -272,7 +273,7 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 				throw err;
 			}
 			appLogger.error("git", "Failed to merge and archive worktree", err);
-			deps.setStatusInfo(`Failed to merge: ${err}`);
+			reportActionError(deps.setStatusInfo, `Failed to merge: ${err}`);
 		}
 	};
 

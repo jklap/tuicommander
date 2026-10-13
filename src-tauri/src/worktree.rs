@@ -186,7 +186,7 @@ pub(crate) fn inspect_worktree_removal(
     workspace_id: &str,
 ) -> WorktreeRemovalPreview {
     let lifecycle = inspect_workspace_lifecycle(state, repo_path, workspace_id);
-    let worktree_path = resolve_any_workspace(repo_path, workspace_id)
+    let worktree_path = tuic_git::worktree::resolve_removable_workspace(repo_path, workspace_id)
         .ok()
         .map(|workspace| PathBuf::from(workspace.path));
     let untracked_files = worktree_path.as_ref().and_then(|path| {
@@ -270,7 +270,10 @@ fn retain_finished_checkout(
     {
         return Ok(None);
     }
-    let workspace = resolve_any_workspace(repo, workspace_id)?;
+    // A pooled checkout is already recycled; removal takes it from here.
+    let Ok(workspace) = resolve_any_workspace(repo, workspace_id) else {
+        return Ok(None);
+    };
     if !live_sessions_in(state, Path::new(&workspace.path)).is_empty() {
         return Err("Cannot recycle a checkout with a live session".into());
     }

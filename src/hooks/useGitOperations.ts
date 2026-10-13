@@ -12,6 +12,7 @@ import { terminalsStore } from "../stores/terminals";
 import { isTauri, rpc } from "../transport";
 import type { RepoInfo } from "../types";
 import { openDialog as open } from "../utils/nativeDialog";
+import { reportActionError } from "../utils/reportActionError";
 import { findOrphanTerminals } from "../utils/terminalOrphans";
 import { createBranchSelectionCoordinator } from "./git/createBranchSelectionCoordinator";
 import { createRepositoryRefreshCoordinator, type OrphanAssessment } from "./git/createRepositoryRefreshCoordinator";
@@ -338,7 +339,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 			await deps.repo.renameBranch(branch.repoPath, oldName, newName);
 		} catch (err) {
 			appLogger.error("git", "Failed to rename branch", err);
-			deps.setStatusInfo(`Failed to rename branch: ${err}`);
+			reportActionError(deps.setStatusInfo, `Failed to rename branch: ${err}`);
 			return;
 		}
 
@@ -421,7 +422,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 			await refreshAllBranchStats(info.path, { immediate: true });
 		} catch (err) {
 			appLogger.error("git", "Failed to add repository", err);
-			deps.setStatusInfo(`Failed to add repo: ${err}`);
+			reportActionError(deps.setStatusInfo, `Failed to add repo: ${err}`);
 		}
 	};
 
@@ -490,7 +491,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 			repositoriesStore.setActive(info.path);
 		} catch (err) {
 			appLogger.error("git", `Failed to add remote repo from ${connectionId}`, err);
-			deps.setStatusInfo(`Failed to add remote repo: ${err}`);
+			reportActionError(deps.setStatusInfo, `Failed to add remote repo: ${err}`);
 		}
 	};
 
@@ -721,7 +722,10 @@ export function useGitOperations(deps: GitOperationsDeps) {
 			for (const termId of branch.terminals) {
 				const term = terminalsStore.get(termId);
 				if (term?.shellState === "busy") {
-					deps.setStatusInfo(`Cannot switch branch: terminal "${term.name || termId}" has a running process`);
+					reportActionError(
+						deps.setStatusInfo,
+						`Cannot switch branch: terminal "${term.name || termId}" has a running process`,
+					);
 					return;
 				}
 			}
@@ -782,7 +786,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 			await handleBranchSelectInner(repoPath, branchName);
 		} catch (err) {
 			appLogger.error("git", "Failed to checkout remote branch", { error: String(err) });
-			deps.setStatusInfo(`Checkout failed: ${err}`);
+			reportActionError(deps.setStatusInfo, `Checkout failed: ${err}`);
 		}
 	};
 
