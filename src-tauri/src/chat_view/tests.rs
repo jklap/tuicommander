@@ -1,5 +1,6 @@
 use super::*;
 use serde_json::json;
+use std::path::Path;
 
 fn update(n: u64) -> Value {
     json!({ "sessionUpdate": "agent_message_chunk", "n": n })
@@ -77,7 +78,7 @@ fn view_log_new_session_id_bumps_epoch_and_clears() {
     append(&a, &assistant_row("1", "from a"));
     append(&b, &assistant_row("2", "from b"));
 
-    let mut view = View::new(a, 100, usize::MAX);
+    let mut view = View::for_agent(Agent::Claude, a, 100, usize::MAX);
     view.advance(1 << 20).expect("advance");
     let old_epoch = view.log.epoch;
     let seen = view.log.next_seq;
@@ -95,7 +96,7 @@ fn view_rebind_to_the_same_file_keeps_the_log() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let a = tmp.path().join("a.jsonl");
     append(&a, &assistant_row("1", "from a"));
-    let mut view = View::new(a.clone(), 100, usize::MAX);
+    let mut view = View::for_agent(Agent::Claude, a.clone(), 100, usize::MAX);
     view.advance(1 << 20).expect("advance");
     let epoch = view.log.epoch;
     view.rebind(a);
@@ -112,7 +113,7 @@ fn view_advance_emits_only_appended_rows() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let a = tmp.path().join("a.jsonl");
     append(&a, &assistant_row("1", "one"));
-    let mut view = View::new(a.clone(), 100, usize::MAX);
+    let mut view = View::for_agent(Agent::Claude, a.clone(), 100, usize::MAX);
     assert!(view.advance(1 << 20).expect("advance"));
     assert!(!view.advance(1 << 20).expect("advance"), "nothing new");
     append(&a, &assistant_row("2", "two"));
@@ -129,7 +130,7 @@ fn view_first_attach_reads_only_the_last_window() {
     for n in 0..200 {
         append(&a, &assistant_row(&n.to_string(), &format!("row {n}")));
     }
-    let mut view = View::new(a, 1_000, usize::MAX);
+    let mut view = View::for_agent(Agent::Claude, a, 1_000, usize::MAX);
     view.advance(2_000).expect("advance");
     let (_, updates) = view.log.since(None, 0);
     let texts = texts(&updates);
@@ -146,7 +147,7 @@ fn view_restarts_when_the_file_shrinks() {
     let a = tmp.path().join("a.jsonl");
     append(&a, &assistant_row("1", "old one"));
     append(&a, &assistant_row("2", "old two"));
-    let mut view = View::new(a.clone(), 100, usize::MAX);
+    let mut view = View::for_agent(Agent::Claude, a.clone(), 100, usize::MAX);
     view.advance(1 << 20).expect("advance");
     let epoch = view.log.epoch;
 
@@ -181,7 +182,7 @@ fn queued_human_prompts_survive_full_load_and_incremental_tail() {
     let tmp = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
     let path = tmp.path().join("queued.jsonl");
     std::fs::write(&path, fixture).unwrap();
-    let mut full = View::new(path.clone(), 100, usize::MAX);
+    let mut full = View::for_agent(Agent::Claude, path.clone(), 100, usize::MAX);
     full.advance(TAIL_WINDOW_BYTES).unwrap();
     assert_eq!(
         full.log.since(None, 0).1,
@@ -189,7 +190,7 @@ fn queued_human_prompts_survive_full_load_and_incremental_tail() {
         "full load lost queued human prompt"
     );
     std::fs::write(&path, "").unwrap();
-    let mut tail = View::new(path.clone(), 100, usize::MAX);
+    let mut tail = View::for_agent(Agent::Claude, path.clone(), 100, usize::MAX);
     tail.advance(TAIL_WINDOW_BYTES).unwrap();
     for line in fixture.lines() {
         append(&path, line);

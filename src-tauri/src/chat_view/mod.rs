@@ -15,7 +15,7 @@ pub(crate) mod claude;
 pub(crate) mod grok;
 
 use std::collections::{HashMap, VecDeque};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -171,10 +171,6 @@ struct View {
 }
 
 impl View {
-    fn new(path: PathBuf, max_entries: usize, max_bytes: usize) -> Self {
-        Self::for_agent(Agent::Claude, path, max_entries, max_bytes)
-    }
-
     fn for_agent(agent: Agent, path: PathBuf, max_entries: usize, max_bytes: usize) -> Self {
         Self {
             agent,
