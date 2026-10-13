@@ -5281,7 +5281,3 @@ Visual evidence: worktree Vite fixture mounted the real NotificationsTab and Toa
 ## Recycled checkouts in `__archived` (1866-142a) — Rust restart required
 
 - [ ] After restart, the orchestrator sidebar no longer lists `feat/agent-vm` and `feat/multi-coordinator` (neither as worktree nor as Merged branch row). Then `repo action=worktree_remove path=<orchestrator> branch=feat/agent-vm` removes the archived checkout and the branch (check `git worktree list` and `git branch` before and after). Run on the real repo only after Boss ok. _(REALITY criterion of 1866-142a.)_
-
-## Failed manual actions show an error card (1867-c863)
-
-- [ ] In a Vite worktree harness (or after the next TUIC build), force a sidebar Remove worktree failure (mock only the failing IPC call): a red "Action failed" toast card with the error text appears and stays until dismissed; a background failure (auto-archive, orphan sweep) still shows only in the status bar. Frontend only, no Rust restart. _(REALITY criterion of 1867-c863.)_

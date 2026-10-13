@@ -3411,6 +3411,11 @@ fn map_archived_workspace_paths(porcelain: &str) -> HashMap<String, WorkspaceWor
     map_checkouts(porcelain, true)
 }
 
+/// Whether a checkout sits in the recycling pool: directly inside `__archived/`.
+pub(crate) fn is_archived_checkout(path: &Path) -> bool {
+    path.parent().and_then(Path::file_name) == Some(std::ffi::OsStr::new("__archived"))
+}
+
 fn map_checkouts(porcelain: &str, archived: bool) -> HashMap<String, WorkspaceWorktree> {
     let mut result = HashMap::new();
 
@@ -3422,9 +3427,7 @@ fn map_checkouts(porcelain: &str, archived: bool) -> HashMap<String, WorkspaceWo
         // Skip entries whose directory no longer exists (double safety after prune)
         if let Some(branch) = branch
             && Path::new(&entry.path).exists()
-            && (Path::new(&entry.path).parent().and_then(Path::file_name)
-                == Some(std::ffi::OsStr::new("__archived")))
-                == archived
+            && is_archived_checkout(Path::new(&entry.path)) == archived
         {
             result.insert(
                 workspace_id_of_worktree(&branch),
@@ -3440,34 +3443,6 @@ fn map_checkouts(porcelain: &str, archived: bool) -> HashMap<String, WorkspaceWo
     }
 
     result
-}
-
-/// Branches whose checkout sits in the recycling pool (`__archived/`).
-///
-/// Read straight from the administrative directories: the sidebar polls this on
-/// every file save, and monitoring must not spawn a Git process for it.
-pub fn archived_pool_branches(git_dir: &Path) -> std::collections::HashSet<String> {
-    let Ok(entries) = std::fs::read_dir(git_dir.join("worktrees")) else {
-        return Default::default();
-    };
-    entries
-        .flatten()
-        .filter_map(|entry| {
-            let admin = entry.path();
-            let gitfile = std::fs::read_to_string(admin.join("gitdir")).ok()?;
-            let checkout = Path::new(gitfile.trim()).parent()?;
-            if !checkout.exists()
-                || checkout.parent().and_then(Path::file_name)
-                    != Some(std::ffi::OsStr::new("__archived"))
-            {
-                return None;
-            }
-            let head = std::fs::read_to_string(admin.join("HEAD")).ok()?;
-            head.trim()
-                .strip_prefix("ref: refs/heads/")
-                .map(str::to_owned)
-        })
-        .collect()
 }
 
 /// Get every linked workspace of a repository.
@@ -9125,24 +9100,11 @@ branch refs/heads/feat
         assert!(branch_exists(&repo, "feat-unmerged"));
     }
 
-    // Catches: a recycled branch still offered as a Merged sidebar row.
+    // Catches: a recycled branch still listed by the CLI worktree parser (parity with the gix adapter).
     #[test]
-    fn merged_branch_list_hides_branches_parked_in_archive() {
-        let (_temp, repo, _) = workspace_fixture();
-        let worktree = add_worktree(&repo, "feat-parked");
-        commit_file(&worktree, "feature.txt", "feature\n");
-        commit_file(&repo, "main.txt", "main\n");
-        git_cmd(&repo)
-            .args(["merge", "--no-ff", "-m", "merge", "feat-parked"])
-            .run()
-            .unwrap();
-        let before = crate::git::get_merged_branches_impl(&repo).unwrap();
-        assert!(before.contains(&"feat-parked".to_string()), "{before:?}");
+    fn worktree_listing_hides_branches_parked_in_archive() {
+        let (_temp, repo, _) = archived_merged_branch("feat-parked");
 
-        archive_worktree(&repo, "feat-parked", None).unwrap();
-
-        let after = crate::git::get_merged_branches_impl(&repo).unwrap();
-        assert!(!after.contains(&"feat-parked".to_string()), "{after:?}");
         assert!(
             !get_worktree_paths_raw(&repo.to_string_lossy())
                 .unwrap()
