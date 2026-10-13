@@ -105,6 +105,7 @@ describe("TasksDetail", () => {
 							originalLine: 42,
 							commitId: "abc",
 							comments: [comment],
+							finding: null,
 						},
 					},
 					{

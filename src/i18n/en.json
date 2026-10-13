@@ -1307,5 +1307,7 @@
 	"automations.viewRun": "View run",
 	"automations.previousRuns": "Previous runs",
 	"automations.nextRuns": "Next runs",
-	"automations.recordedWorkspace": "Workspace"
+	"automations.recordedWorkspace": "Workspace",
+	"reviewFinding.suggestion": "Suggested change",
+	"reviewFinding.agentPrompt": "Prompt for agents (untrusted)"
 }

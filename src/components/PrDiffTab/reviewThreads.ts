@@ -1,5 +1,7 @@
 /** Line-review model for the PR Files tab. Mirrors `github_review_threads.rs` payloads. */
 
+import type { WorkItemReviewFinding, WorkItemReviewSeverity } from "../../types/work-items.gen";
+
 export interface ReviewComment {
 	id: string;
 	databaseId?: number | null;
@@ -19,6 +21,8 @@ export interface ReviewThread {
 	isResolved: boolean;
 	isOutdated: boolean;
 	comments: { pageInfo: { hasNextPage: boolean; endCursor: string | null }; nodes: ReviewComment[] };
+	/** Parsed by the backend from the first comment; untrusted text, shown as text. */
+	finding: WorkItemReviewFinding | null;
 }
 
 export interface ReviewThreadsPage {
@@ -52,6 +56,11 @@ export interface FileReview {
 	outdated: ReviewThread[];
 }
 
+const SEVERITY_RANK: Record<WorkItemReviewSeverity, number> = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
+const rank = (thread: ReviewThread) => (thread.finding?.severity ? SEVERITY_RANK[thread.finding.severity] : 5);
+/** Most severe first; unrated threads keep their GitHub order after them. */
+const bySeverity = (a: ReviewThread, b: ReviewThread) => rank(a) - rank(b);
+
 const sideKey = (side: "LEFT" | "RIGHT"): AnnotationSide => (side === "LEFT" ? "oldFile" : "newFile");
 
 /** Group threads and drafts per file. An outdated thread is listed apart: GitHub reports `line: null` for it. */
@@ -69,7 +78,7 @@ export function groupByFile(threads: ReviewThread[], drafts: DraftComment[]): Ma
 		const lines = (review.lines[sideKey(side)] ??= {});
 		return (lines[String(line)] ??= { data: { threads: [], drafts: [] } }).data;
 	};
-	for (const thread of threads) {
+	for (const thread of threads.toSorted(bySeverity)) {
 		const review = fileOf(thread.path);
 		if (thread.isOutdated || thread.line === null) review.outdated.push(thread);
 		else annotation(review, thread.diffSide, thread.line).threads.push(thread);

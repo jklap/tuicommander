@@ -1,5 +1,6 @@
 import { For, Show } from "solid-js";
 import type { WorkItemComment, WorkItemCommentEntry } from "../../../types/work-items.gen";
+import { ReviewFindingView } from "../../shared/ReviewFindingView";
 import { TaskMarkdown } from "./TaskMarkdown";
 import styles from "./TasksDetail.module.css";
 
@@ -39,6 +40,7 @@ export function TaskComment(props: { entry: WorkItemCommentEntry }) {
 									: ""}
 							{value().outdated ? " · Outdated" : ""} · {value().resolved ? "Resolved" : "Open thread"}
 						</header>
+						<Show when={value().finding}>{(finding) => <ReviewFindingView finding={finding()} />}</Show>
 						<For each={value().comments.map((comment) => comment.id)}>
 							{(id) => {
 								const comment = () => value().comments.find((entry) => entry.id === id);

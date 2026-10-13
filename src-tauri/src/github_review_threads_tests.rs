@@ -239,3 +239,57 @@ async fn graphql_bot_login_without_suffix_is_marked_bot() {
     assert_eq!(author(5)["login"], "mikasenghaas");
     assert_eq!(author(5)["bot"], false);
 }
+
+/// One recorded Bugbot comment (cur-2833, comment 4251485369) and one human
+/// reply-less comment, as the GraphQL thread query returns them.
+struct FindingPage;
+
+impl PrApi for FindingPage {
+    fn graphql(
+        &self,
+        _query: &str,
+        _vars: Value,
+    ) -> impl std::future::Future<Output = Result<Value, String>> + Send {
+        let recorded: Value = serde_json::from_str(include_str!(
+            "../crates/tuic-git/src/review_bots/fixtures/comments.json"
+        ))
+        .unwrap();
+        let body = recorded["sources"]["cur-2833"]["comments"][0]["body"].clone();
+        let thread = |login: &str, kind: &str, body: Value| {
+            json!({"id": login, "path": "verifiers/v1/rollout.py", "line": 1, "isResolved": false, "isOutdated": false,
+                "comments": {"pageInfo": {"hasNextPage": false, "endCursor": null},
+                    "nodes": [{"id": "c", "body": body, "author": {"__typename": kind, "login": login}}]}})
+        };
+        std::future::ready(Ok(json!({"data":{"repository":{"pullRequest":{
+            "headRefOid": "recorded-head",
+            "reviewThreads": {"pageInfo": {"hasNextPage": false, "endCursor": null}, "nodes": [
+                thread("cursor", "Bot", body),
+                thread("mikasenghaas", "User", json!("Should this stay sync?")),
+            ]}
+        }}}})))
+    }
+    fn rest(
+        &self,
+        _method: &str,
+        _endpoint: &str,
+        _body: Value,
+    ) -> impl std::future::Future<Output = Result<Value, String>> + Send {
+        std::future::ready(Err("no REST in this stub".into()))
+    }
+}
+
+// Catches: the parser exists but read_threads never attaches its finding, so
+// the PR Files tab and the plugin port see only raw Markdown.
+#[tokio::test]
+async fn read_threads_attaches_the_parsed_finding() {
+    let page = read_threads(&FindingPage, json!({}), None).await.unwrap();
+    let finding = &page.threads[0]["finding"];
+    assert_eq!(finding["tool"], "cursor");
+    assert_eq!(finding["severity"], "high");
+    assert_eq!(finding["title"], "Sidecar timeout still scores isolated");
+    assert_eq!(
+        finding["externalId"],
+        "415bcdbf-9336-4062-a60b-ba008f1e2c7e"
+    );
+    assert_eq!(page.threads[1]["finding"], Value::Null);
+}

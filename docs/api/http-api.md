@@ -3064,7 +3064,7 @@ Desktop command arguments and HTTP bodies use the same camelCase fields.
 | POST | `/repo/pr-thread-reply` | `{repoPath, threadId, body}` |
 | POST | `/repo/pr-draft-review` | `{repoPath, prNumber, draft:{headSha, body, event, comments}}` |
 
-Draft submission rejects a moved reviewed head and pins REST `commit_id`. Thread and comment connections expose pagination; outdated threads retain null current lines.
+Draft submission rejects a moved reviewed head and pins REST `commit_id`. Thread and comment connections expose pagination; outdated threads retain null current lines. Thread shapes match `get_pr_line_threads`: comment authors carry `bot`, and each thread carries a nullable parsed `finding` (untrusted bot text).
 
 ### PR actions
 

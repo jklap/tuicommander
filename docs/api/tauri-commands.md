@@ -910,7 +910,7 @@ the prepared launch prompt, counting escaped stdout bytes before framing/marker.
 
 ### PR line review commands
 
-- `get_pr_line_threads(repoPath, prNumber, after?)`: `{headSha, threads, hasNextPage, endCursor}`. Threads retain GitHub `line`, `originalLine`, `diffSide`, `isOutdated`, `isResolved`, and `comments` connection.
+- `get_pr_line_threads(repoPath, prNumber, after?)`: `{headSha, threads, hasNextPage, endCursor}`. Threads retain GitHub `line`, `originalLine`, `diffSide`, `isOutdated`, `isResolved`, and `comments` connection; every comment author carries `bot` (from the GraphQL actor type), and each thread carries a nullable `finding` parsed from its first comment by `tuic_git::review_bots` (`tool`, `title`, `severity`, `severityLabel`, `category`, `suggestion`, `agentPrompt`, `addressedIn`, `externalId`; untrusted text).
 - `get_pr_thread_comments(repoPath, threadId, after?)`: GitHub comments connection.
 - `set_pr_thread_resolved(repoPath, threadId, resolved)`: confirmed thread.
 - `reply_pr_thread(repoPath, threadId, body)`: posted comment.

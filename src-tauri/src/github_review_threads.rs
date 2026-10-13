@@ -41,6 +41,14 @@ fn mark_bot_authors(comments: &mut Value) {
     }
 }
 
+/// Marks the authors and attaches the finding parsed from the first comment:
+/// the comment that opened the thread states the issue; replies discuss it.
+fn enrich_thread(thread: &mut Value) {
+    mark_bot_authors(&mut thread["comments"]);
+    let finding = tuic_git::review_bots::finding_for(&thread["comments"]["nodes"][0]);
+    thread["finding"] = json!(finding);
+}
+
 pub(crate) async fn read_threads(
     api: &impl PrApi,
     mut variables: Value,
@@ -60,9 +68,7 @@ pub(crate) async fn read_threads(
         .as_array()
         .ok_or("GitHub response missing review threads")?
         .clone();
-    for thread in &mut threads {
-        mark_bot_authors(&mut thread["comments"]);
-    }
+    threads.iter_mut().for_each(enrich_thread);
     Ok(ReviewThreadsPage {
         head_sha: head.into(),
         threads,
@@ -114,7 +120,7 @@ pub(crate) async fn resolve_thread(
     {
         return Err("GitHub did not confirm the requested thread resolution".into());
     }
-    mark_bot_authors(&mut thread["comments"]);
+    enrich_thread(&mut thread);
     Ok(thread)
 }
 

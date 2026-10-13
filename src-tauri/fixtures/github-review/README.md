@@ -28,4 +28,4 @@ Mutation stub ids and timestamps describe local stub effects only. They are not 
 
 Recorded read-only on 2026-10-13 by the bot-review analysis (`gh api graphql` query, no mutation):
 
-- `bot-threads-cur-2833.json`: https://github.com/PrimeIntellect-ai/verifiers/pull/2833 → `reviews` and `reviewThreads` selecting isResolved, isOutdated, line, originalLine, path and the first comment's `author { __typename login }`, lastEditedAt, createdAt. GraphQL bot logins carry no `[bot]` suffix (`cursor`, `macroscopeapp`); thread 3 is outdated (`line: null`, `originalLine: 148`). No body, id or URL was selected.
+- `bot-threads-cur-2833.json`: https://github.com/PrimeIntellect-ai/verifiers/pull/2833 → `reviews` and `reviewThreads` selecting isResolved, isOutdated, line, originalLine, path and the first comment's `author { __typename login }`, lastEditedAt, createdAt. GraphQL bot logins carry no `[bot]` suffix (`cursor`, `macroscopeapp`); thread index 2 is outdated (`line: null`, `originalLine: 148`). No body, id or URL was selected.

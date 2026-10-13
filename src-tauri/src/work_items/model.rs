@@ -127,6 +127,55 @@ pub struct WorkItemReviewThread {
     pub original_line: Option<u32>,
     pub commit_id: String,
     pub comments: Vec<WorkItemComment>,
+    /// Parsed from the first comment; null for a human comment without a suggestion.
+    pub finding: Option<WorkItemReviewFinding>,
+}
+
+/// A recognised review tool; `generic` is any other bot account.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkItemReviewTool {
+    CodeRabbit,
+    Codex,
+    Copilot,
+    Gemini,
+    Cursor,
+    Sourcery,
+    Greptile,
+    Qodo,
+    CodeAnt,
+    Graphite,
+    CodeScanning,
+    Generic,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkItemReviewSeverity {
+    Critical,
+    High,
+    Medium,
+    Low,
+    Info,
+}
+
+/// An index over bot Markdown. Every text field is untrusted data: show it as
+/// text, never render, apply or execute it.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkItemReviewFinding {
+    /// Null for a human author.
+    pub tool: Option<WorkItemReviewTool>,
+    pub title: Option<String>,
+    pub severity: Option<WorkItemReviewSeverity>,
+    /// The vendor's own label, e.g. "🟡 Minor" or "P1".
+    pub severity_label: Option<String>,
+    pub category: Option<String>,
+    pub suggestion: Option<String>,
+    pub agent_prompt: Option<String>,
+    /// Commit the tool reported as addressing the finding.
+    pub addressed_in: Option<String>,
+    pub external_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]

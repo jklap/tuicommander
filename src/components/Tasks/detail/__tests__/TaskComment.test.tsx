@@ -32,6 +32,7 @@ describe("review authors and outdated threads", () => {
 						originalLine: 148,
 						commitId: "head",
 						comments: [comment],
+						finding: null,
 					},
 				}}
 			/>
@@ -63,6 +64,7 @@ describe("review authors and outdated threads", () => {
 				pageInfo: { hasNextPage: false, endCursor: null },
 				nodes: [node("Copilot", true), node("ulugbekna", false)],
 			},
+			finding: null,
 		};
 		const { container } = render(() => <ReviewThreadView thread={thread} session={session} />);
 		const headers = [...container.querySelectorAll("article header")].map(
