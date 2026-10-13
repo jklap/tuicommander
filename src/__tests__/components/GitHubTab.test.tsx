@@ -9,7 +9,7 @@ const h = vi.hoisted(() => {
 	const resolutions: Record<string, unknown> = {};
 	const repos: Record<string, { path: string; displayName: string }> = {};
 	let circleCiStatus = { configured: false, source: "none" };
-	const rpc = vi.fn((cmd: string, args?: Record<string, unknown>) => {
+	const rpc = vi.fn((cmd: string, args?: Record<string, unknown>): Promise<unknown> => {
 		switch (cmd) {
 			case "github_resolve_repos": {
 				const map: Record<string, unknown> = {};
@@ -84,6 +84,7 @@ const h = vi.hoisted(() => {
 	});
 	return {
 		rpc,
+		defaultRpc: rpc.getMockImplementation()!,
 		accounts,
 		resolutions,
 		repos,
@@ -126,7 +127,8 @@ function resetState() {
 	for (const k of Object.keys(h.resolutions)) delete h.resolutions[k];
 	for (const k of Object.keys(h.repos)) delete h.repos[k];
 	h.circleCiStatus = { configured: false, source: "none" };
-	h.rpc.mockClear();
+	h.rpc.mockReset();
+	h.rpc.mockImplementation(h.defaultRpc);
 }
 
 describe("GitHubTab — single-account collapse (006)", () => {
@@ -151,6 +153,64 @@ describe("GitHubTab — single-account collapse (006)", () => {
 		fireEvent.click(await findByText("Add another GitHub account"));
 		expect(await findByText("Additional GitHub Accounts")).toBeTruthy();
 		expect(await findByText("No additional accounts configured.")).toBeTruthy();
+	});
+});
+
+describe("GitHubTab — default credential recovery", () => {
+	let GitHubTab: Awaited<ReturnType<typeof loadTab>>;
+	beforeEach(async () => {
+		resetState();
+		GitHubTab = await loadTab();
+	});
+
+	function authenticated(source: "oauth" | "env") {
+		const original = h.rpc.getMockImplementation()!;
+		let connected = true;
+		h.rpc.mockImplementation((cmd, args) => {
+			if (cmd === "github_auth_status" && connected) {
+				return Promise.resolve({
+					authenticated: true,
+					login: "octocat",
+					avatar_url: null,
+					source,
+					scopes: "read:org, repo",
+				});
+			}
+			if (cmd === "github_logout" || cmd === "github_disconnect") connected = false;
+			return original(cmd, args);
+		});
+	}
+
+	// Catches: a real authenticated OAuth response has no Logout/re-login path.
+	it("logs out the default OAuth account and offers device-flow login again", async () => {
+		authenticated("oauth");
+		const { findByText, queryByText } = render(() => <GitHubTab />);
+		fireEvent.click(await findByText("Logout"));
+		expect(await findByText("Login with GitHub")).toBeTruthy();
+		expect(queryByText("octocat")).toBeNull();
+		fireEvent.click(await findByText("Login with GitHub"));
+		expect(await findByText("WDJB-MJHT")).toBeTruthy();
+	});
+
+	// Catches: environment credentials leave no route back to device-flow login.
+	it("disconnects an environment account and offers device-flow login", async () => {
+		authenticated("env");
+		const { findByText, queryByText } = render(() => <GitHubTab />);
+		expect(await findByText("Switch to OAuth")).toBeTruthy();
+		fireEvent.click(await findByText("Disconnect"));
+		expect(await findByText("Login with GitHub")).toBeTruthy();
+		expect(queryByText("octocat")).toBeNull();
+	});
+
+	// Catches: a uniquely resolved repository opens the account binding manager.
+	it("keeps bindings hidden for a uniquely resolved default account repository", async () => {
+		authenticated("oauth");
+		h.repos["/work/proj"] = { path: "/work/proj", displayName: "proj" };
+		h.resolutions["/work/proj"] = { status: "bound", account: { id: "github.com" }, owner: "octocat", repo: "hello" };
+		const { findByText, queryByText } = render(() => <GitHubTab />);
+		await findByText("Logout");
+		expect(queryByText("Repository Bindings")).toBeNull();
+		expect(await findByText("Add another GitHub account")).toBeTruthy();
 	});
 });
 

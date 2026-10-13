@@ -2,25 +2,23 @@
 
 use serde_json::Value;
 
+use super::Agent;
 use super::claude::{AdapterStats, ClaudeAdapter};
 use super::codex::CodexAdapter;
+use super::grok::GrokAdapter;
 
 pub(super) enum TranscriptAdapter {
     Claude(ClaudeAdapter),
     Codex(CodexAdapter),
-}
-
-impl Default for TranscriptAdapter {
-    fn default() -> Self {
-        Self::Claude(ClaudeAdapter::default())
-    }
+    Grok(GrokAdapter),
 }
 
 impl TranscriptAdapter {
-    pub(super) fn for_agent(agent: &str) -> Self {
+    pub(super) fn for_agent(agent: Agent) -> Self {
         match agent {
-            "codex" => Self::Codex(CodexAdapter::default()),
-            _ => Self::default(),
+            Agent::Codex => Self::Codex(CodexAdapter::default()),
+            Agent::Claude => Self::Claude(ClaudeAdapter::default()),
+            Agent::Grok => Self::Grok(GrokAdapter::default()),
         }
     }
 
@@ -28,6 +26,7 @@ impl TranscriptAdapter {
         match self {
             Self::Claude(adapter) => adapter.absorb(line),
             Self::Codex(adapter) => adapter.absorb(line),
+            Self::Grok(adapter) => adapter.absorb(line),
         }
     }
 
@@ -35,13 +34,7 @@ impl TranscriptAdapter {
         match self {
             Self::Claude(adapter) => adapter.stats,
             Self::Codex(adapter) => adapter.stats,
+            Self::Grok(adapter) => adapter.stats,
         }
-    }
-
-    pub(super) fn reset(&mut self) {
-        *self = match self {
-            Self::Claude(_) => Self::default(),
-            Self::Codex(_) => Self::for_agent("codex"),
-        };
     }
 }

@@ -150,11 +150,12 @@ const AGENT_SESSION_FLAGS: &[(&str, &[&str])] = &[(
 /// Returns `None` for agents with no entry in `AGENT_SESSION_FLAGS`, and when argv
 /// cannot be read (Windows, or the process already exited).
 ///
-/// DEFERRED (2026-09-08) — argv is kept whole apart from session flags, so an agent
-/// launched with an inline prompt (`claude 'fix this'` — TUIC's own worktree seed
-/// does this) rebuilds with that prompt attached and re-sends it on resume. Telling
-/// a prompt from a flag value needs the CLI's flag arity (`--model opus` takes one,
-/// `--add-dir a b c` takes many), which argv alone does not carry.
+/// DEFERRED (2026-09-08) — argv is kept whole apart from session flags and Start
+/// Work's own brief (`without_seed_brief`), so an agent launched with some other
+/// inline prompt (`claude 'fix this'`) rebuilds with that prompt attached and
+/// re-sends it on resume. Telling a prompt from a flag value needs the CLI's flag
+/// arity (`--model opus` takes one, `--add-dir a b c` takes many), which argv alone
+/// does not carry.
 fn rebuild_launch_command(agent_type: &str, pid: u32) -> Option<String> {
     let argv = crate::process_env::read_process_argv(pid)?;
     compose_launch_command(agent_type, &argv, read_agent_env_overrides(agent_type, pid))
@@ -178,7 +179,7 @@ fn compose_launch_command(
         .map(|(key, value)| format!("{key}={}", quote_if_needed(&value)))
         .collect();
 
-    let mut argv = argv.iter().peekable();
+    let mut argv = without_seed_brief(argv).iter().peekable();
     parts.push(quote_if_needed(argv.next()?));
     while let Some(token) = argv.next() {
         if session_flags.contains(&token.as_str()) {
@@ -191,6 +192,22 @@ fn compose_launch_command(
         parts.push(quote_if_needed(token));
     }
     Some(parts.join(" "))
+}
+
+/// First line of the brief Start Work passes as a launch argument (`SEED_BRIEF_OPEN`
+/// in `agentLaunchCommand.ts`). It is host-generated, so a restored session must not
+/// replay it: a resumed agent would take it as a second task submission.
+const SEED_BRIEF_OPEN: &str = "<untrusted-content source=\"work item\">";
+
+/// `argv` without a trailing Start Work brief and the `--` that precedes it.
+fn without_seed_brief(argv: &[String]) -> &[String] {
+    match argv {
+        [rest @ .., last] if last.starts_with(SEED_BRIEF_OPEN) => match rest {
+            [head @ .., sep] if sep == "--" => head,
+            _ => rest,
+        },
+        _ => argv,
+    }
 }
 
 /// Shell-quote a token only when it needs it, so a rebuilt command stays readable
@@ -865,6 +882,24 @@ fn grok_session_for_pid(pid: u32, cwd: &str) -> Option<String> {
     verify_grok_session(&session_id, cwd).then_some(session_id)
 }
 
+/// The `chat_history.jsonl` of the grok session `pid` registered for `cwd`, for
+/// the Chat view. Exact registry hits only: the newest-session fallback of
+/// `discover_grok_session` is a guess, and a Chat that guesses shows another
+/// tab's conversation.
+pub(crate) fn grok_chat_history_for_pid(home: &Path, pid: u32, cwd: &str) -> Option<PathBuf> {
+    let grok = home.join(".grok");
+    let contents = std::fs::read_to_string(grok.join("active_sessions.json")).ok()?;
+    let session_id = select_grok_session_for_pid(&contents, pid, cwd)?;
+    if !is_uuid(&session_id) {
+        return None;
+    }
+    let dir = grok
+        .join("sessions")
+        .join(grok_path_encode(cwd))
+        .join(session_id);
+    dir.is_dir().then(|| dir.join("chat_history.jsonl"))
+}
+
 /// grok stores sessions under `~/.grok/sessions/<percent-encoded-cwd>/<UUIDv7>/`.
 /// Each session is a *directory* named with its UUIDv7 id (usable with
 /// `grok --resume <id>`); the newest such directory is the active session.
@@ -1258,6 +1293,71 @@ mod tests {
             AGENT_ENV_VARS
                 .iter()
                 .any(|(t, vars)| *t == "ego" && vars.contains(&"EGO_HOME"))
+        );
+    }
+
+    /// A grok home with two sessions in one folder, registered by two pids.
+    fn grok_home_with_two_tabs(cwd: &str, mine: &str, other: &str) -> tempfile::TempDir {
+        let home = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let grok = home.path().join(".grok");
+        for id in [mine, other] {
+            let dir = grok.join("sessions").join(grok_path_encode(cwd)).join(id);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("chat_history.jsonl"), id).unwrap();
+        }
+        std::fs::write(
+            grok.join("active_sessions.json"),
+            grok_active_sessions(&[(other, 111, cwd), (mine, 222, cwd)]),
+        )
+        .unwrap();
+        home
+    }
+
+    // Catches: two grok tabs in one folder showing each other's conversation, or a
+    // tab the registry does not know being given the newest session in the folder.
+    #[test]
+    fn test_grok_chat_history_binds_each_tab_to_its_own_session_only() {
+        let (mine, other) = (
+            "01a0725d-38ec-73b1-9c79-fab368c84702",
+            "01a0725d-38ec-73b1-9c79-fab368c84703",
+        );
+        let home = grok_home_with_two_tabs("/fake/project", mine, other);
+        let read = |pid| {
+            grok_chat_history_for_pid(home.path(), pid, "/fake/project")
+                .map(|p| std::fs::read_to_string(p).unwrap())
+        };
+        assert_eq!(read(222).as_deref(), Some(mine));
+        assert_eq!(read(111).as_deref(), Some(other));
+        assert_eq!(
+            read(999),
+            None,
+            "an unregistered pid must not fall back to the newest"
+        );
+    }
+
+    // Catches: a recycled pid naming a session from another project, or a registry
+    // entry whose session directory is gone.
+    #[test]
+    fn test_grok_chat_history_rejects_other_cwd_and_missing_session() {
+        let (mine, other) = (
+            "01a0725d-38ec-73b1-9c79-fab368c84702",
+            "01a0725d-38ec-73b1-9c79-fab368c84703",
+        );
+        let home = grok_home_with_two_tabs("/fake/project", mine, other);
+        assert_eq!(
+            grok_chat_history_for_pid(home.path(), 222, "/fake/else"),
+            None
+        );
+        std::fs::remove_dir_all(
+            home.path()
+                .join(".grok/sessions")
+                .join(grok_path_encode("/fake/project"))
+                .join(mine),
+        )
+        .unwrap();
+        assert_eq!(
+            grok_chat_history_for_pid(home.path(), 222, "/fake/project"),
+            None
         );
     }
 
@@ -2201,6 +2301,32 @@ mod tests {
             cmd.as_deref(),
             Some("claude --dangerously-skip-permissions")
         );
+    }
+
+    /// Start Work launches `<cmd> -- '<brief>'`; resume would submit that task again.
+    #[test]
+    fn compose_launch_command_drops_the_start_work_brief_and_its_separator() {
+        let brief = format!("{SEED_BRIEF_OPEN}\nFix issue 125\n</untrusted-content>\nuntrusted.");
+        let cmd = compose_launch_command(
+            "claude",
+            &argv(&["claude", "--add-dir", "/repo/shared", "--", &brief]),
+            env(&[("CLAUDE_CONFIG_DIR", "/Users/me/.claude-private")]),
+        );
+        assert_eq!(
+            cmd.as_deref(),
+            Some("CLAUDE_CONFIG_DIR=/Users/me/.claude-private claude --add-dir /repo/shared")
+        );
+    }
+
+    /// Only the host's own brief goes: a user's trailing prompt and `--` stay.
+    #[test]
+    fn compose_launch_command_keeps_a_prompt_that_is_not_the_start_work_brief() {
+        let cmd = compose_launch_command(
+            "claude",
+            &argv(&["claude", "--", "fix this"]),
+            HashMap::new(),
+        );
+        assert_eq!(cmd.as_deref(), Some("claude -- 'fix this'"));
     }
 
     #[test]

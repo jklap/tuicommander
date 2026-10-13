@@ -6,7 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- Terminal Chat view for Grok terminals, read from the session's `chat_history.jsonl` and offered only when `~/.grok/active_sessions.json` names the exact session of that terminal's process; the newest-session fallback never feeds Chat (#1791-b8be).
+
 ### Fixed
+- Make Terminal Chat easier to read with one lightly tinted answer card per turn, whole-answer Copy, reading-width limits, collapsible terminal pastes and compact inbox notices. Keep the collapsed tool row and show Claude Bash descriptions when available (#1832-b19a).
+- GitHub Settings hides bindings for a unique account/remote, restores Logout for OAuth credentials, and keeps an environment-token disconnect effective until login or restart (#1829-54c2).
 - Ego model settings now honor the configured profile and AI Chat workspace. The internal settings service adds managed Ego configuration, readback and presence-only credentials through owner services (#1775-330c).
 - Goose returns to idle after a reply and accepts the next submission without waiting for the five-minute stale recovery (#1812-022d).
 - Aider returns to idle after a reply and accepts the next submission (#1823-8150).
@@ -19,6 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 - Add internal Codex completed-rollout projection using the shared Chat transcript format; Codex Chat remains disabled pending exact terminal/session binding (#1792-7450).
+- Internal settings owners cover repository defaults and registered repository `.tuic.json` targets, with revision checks and isolated locked writes (#1825-4566).
 - Add the internal GitHub settings owner adapter for device login, verified Enterprise accounts, credential presence and revision-checked repository bindings (#1774-ce8f); shared settings transport wiring follows separately.
 - Beta update channel: automatically check for the next beta and final stable release. Completed beta releases publish a rolling feed without changing stable updates.
 

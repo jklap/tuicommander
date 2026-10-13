@@ -1,6 +1,7 @@
 import { AGENTS, type AgentType } from "../agents";
 import { agentConfigsForRepo, ensureAgentConfigsForRepo } from "../stores/agentConfigs";
 import { rpc } from "../transport";
+import { SEED_BRIEF_OPEN } from "./agentLaunchCommand";
 import { pathBasename } from "./pathUtils";
 
 /**
@@ -42,7 +43,7 @@ function applyDefaultRunConfig(
 
 	if (launch) {
 		// Use the original launch binary + its args, with resume flags in between
-		const [launchBinary, ...launchArgs] = launch.argv;
+		const [launchBinary, ...launchArgs] = withoutSeedBrief(launch.argv);
 		return [...launch.env, launchBinary, ...resumeFlags, ...launchArgs].join(" ");
 	}
 	// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
@@ -86,8 +87,12 @@ function tokenize(command: string): string[] {
 	let current = "";
 	let quoted = false;
 	let started = false;
-	for (const ch of command) {
-		if (ch === "'") {
+	for (let i = 0; i < command.length; i++) {
+		const ch = command[i];
+		if (ch === "\\" && !quoted && i + 1 < command.length) {
+			current += ch + command[++i];
+			started = true;
+		} else if (ch === "'") {
 			quoted = !quoted;
 			current += ch;
 			started = true;
@@ -102,6 +107,13 @@ function tokenize(command: string): string[] {
 	}
 	if (started) tokens.push(current);
 	return tokens;
+}
+
+/** Drop the Start Work brief (and the `--` before it) from the end of argv: replaying it on resume would resubmit the task. */
+function withoutSeedBrief(argv: string[]): string[] {
+	const last = argv.length - 1;
+	if (last < 0 || !argv[last].replace(/^'/, "").startsWith(SEED_BRIEF_OPEN)) return argv;
+	return argv.slice(0, argv[last - 1] === "--" ? last - 1 : last);
 }
 
 /** Separate a command's leading `KEY=VALUE` assignments from the command itself. */

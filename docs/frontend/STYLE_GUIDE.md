@@ -423,6 +423,7 @@ All follow the same structure:
 **Primary button**: `background: var(--accent); color: var(--text-on-accent); padding: 8px 16px; border-radius: var(--radius-lg);`
 **Secondary button**: `background: var(--bg-tertiary); color: var(--fg-secondary); same padding/radius.`
 **Danger button**: `background: var(--error); color: var(--text-on-error);`
+**Ready action** (Send, Save): set `data-ready="true"` on the button while it can act (unsaved changes, agent selected). `global.css` gives `button[data-ready]:not(:disabled)` the accent border, text and a faint accent tint; clean or disabled stays neutral. Never hand-roll a per-component "dirty" colour.
 
 ### Form Controls
 

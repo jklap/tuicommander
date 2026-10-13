@@ -120,9 +120,10 @@ Right-click an HTTP(S) terminal link (including localhost) and choose **Start in
 
 - **Remote replay health** — Stream failure, unreadable frames and initial replay stalls show a persistent error toast. Reconnect success requires a delivered frame; healthy idle terminals have no output-silence deadline.
 
-- **CLI / Chat view** — Claude terminals switch between the grid and a conversation view with docked Compose input, built from the agent's session file (including older prompts, human text/image follow-ups queued while Claude is busy, replies, folded tool cards, image/PDF markers and model-change cards). The grid is hidden, never unmounted.
+- **CLI / Chat view** — Claude and Grok terminals switch between the grid and a conversation view with docked Compose input, built from the agent's session file (Grok: its `chat_history.jsonl`, bound only through the exact `active_sessions.json` registry entry; including older prompts, human text/image follow-ups queued while Claude is busy, replies, folded tool cards, image/PDF markers and model-change cards). The grid is hidden, never unmounted.
 - **Deferred update restart** — After an in-app update installs, TUICommander restarts only when no session is busy or awaiting input; the APP UPDATE notification shows how many are busy and offers **Restart now** (with confirmation). Turn off in **Settings → General → Updates → Wait for agents before restarting** (`defer_update_relaunch`, default on).
 - **Eager resume after an update** — When the app restarts to apply an update, every agent tab with a confirmed session id resumes by itself on every branch, without selecting the branch first. Tabs without a confirmed id keep the click-to-resume banner. Turn off in **Settings → General → Updates → Resume all agents after an update** (`eager_resume_after_update`, default on).
+- **Terminal Chat reading layout** — One lightly tinted answer card per turn with whole-answer Copy on hover or focus, 96-character answer and 80-character prompt limits, collapsible two-line terminal pastes, and compact system notices. Tool activity stays in its collapsed row; Claude Bash uses its description when present. No time separators are shown because transcript entries carry no timestamp.
 - **Intermediate Chat text** — Assistant text that a tool call follows in the same turn renders smaller and dimmer in the terminal Chat view, AI Chat and the mobile chat; the last text of a turn keeps the normal style. Switch it off in **Settings → Appearance → Chat → Mute Intermediate Text** (`chat_mute_intermediate_text`, default on).
 - **Chat transcript presentation** — Harness notices use compact system notes, image placeholders use attachment chips, adjacent thinking blocks share a disclosure, and TUIC answers retain the CLI highlight. Historical tool cards show status without fabricated execution timing.
 
@@ -1255,7 +1256,8 @@ re-derived later.
 - Token stored in OS keyring (macOS Keychain, Windows Credential Manager, Linux Secret Service)
 - Requested scope: `repo`
 - Shows user avatar, login name, and token source after authentication
-- Logout removes OAuth token, falls back to the env tokens
+- OAuth status exposes Logout; it removes the OAuth token and falls back to environment tokens
+- Environment status exposes Switch to OAuth and Disconnect; disconnect remains in effect across status refresh and lazy requests until login or restart
 - On 401: auto-clears invalid OAuth token and prompts re-auth
 
 PR creation, issue creation, and review submission use account-aware REST requests for the bound repository, including GitHub Enterprise, without spawning `gh`.
@@ -1270,7 +1272,7 @@ GitHub integration is **account-centric**: TUICommander can manage N accounts an
 
 **Repository bindings** (Settings → Git & GitHub → *Repository Bindings*)
 - Each workspace repo resolves to one of: **Bound** (shows the account + *Unbind*), **NeedsBind** (a candidate chooser — no silent `origin` pick when multiple GitHub remotes/accounts match), **NeedsAccount** (a github.com repo with no account yet → points to setup), or **Unmonitored**.
-- A single matching account auto-confirms; ambiguity always asks. Worktrees of a repo share the main checkout's binding.
+- A single account/remote candidate resolves automatically without persisting a binding; the default-only setup hides Repository Bindings. Multiple candidates always ask, including fork/upstream repositories on one account. Worktrees of a repo share the main checkout's binding.
 
 **Per-account isolation** (hybrid model)
 - github.com keeps the global breaker/viewer/rate/cooldown state byte-for-byte; each GHE account gets its own `ghe_state` (circuit breaker, viewer login, rate budget).
@@ -2907,6 +2909,10 @@ permissions. Recurring cadence previews retain the existing runtime limitations.
 ### History-anchored viewport scrolling
 
 Terminal gestures hold the requested history row even when output arrives before the backend applies the scroll. If capped scrollback evicts that row, the viewport clamps to the oldest retained row.
+
+### Internal repository settings owners
+
+The typed settings service supports repository defaults and per-repository `.tuic.json` targets. One registered owner resolves only existing repository registrations; patches preserve sibling fields and check revisions under the file lock. Transport publication remains pending. Registration/group configuration remains an accepted inventory gap until its owner has a typed schema (#1825-4566).
 
 GitHub settings backend: an internal typed owner adapter supports device login,
 verified Enterprise PAT accounts, labels, write-only credentials and revision-checked
