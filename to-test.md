@@ -5295,3 +5295,7 @@ Visual evidence: worktree Vite fixture mounted the real NotificationsTab and Toa
 - [ ] Tasks board (#1844-858d): on a configured provider with multiple pages, More retains prior cards and updates loaded lane counts; cards show assignees/labels and Move… offers legal destinations.
 - [ ] Tasks capability schema: restart the Rust build, then verify GitHub, GitLab and Jira list selectors offer only declared fields; a rejected selection restores the previous value and shows its reason.
 - [ ] Jira create: choose Reporter and Assignee by search, enter new comma-separated Labels, fill required Parent for sub-tasks, and verify Project/Type do not require duplicate entry (#1859-c01f).
+## Jira JQL errors (#1861-8a4c)
+
+- [x] `jql: project =` shows the recorded Jira parse failure and a correction hint; the typed query remains intact and previous rows are marked stale. _(verified: real TasksShell and Jira provider in the read-only Vite harness, screenshot and UI request trace in `~/Gits/.tmp/fix-1861/`; no text fallback request.)_
+- [x] Explicit text, key lookup, valid JQL, saved-filter predicates and board query scoping retain their meanings. _(verified: `plugins/jira/jql-errors.test.js`, 31 Jira tests pass; 11 Tasks consumer tests pass.)_

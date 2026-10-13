@@ -123,3 +123,10 @@ MDKB and RTK dashboard lifetime handling needs v1.7.6. SQLite’s panel bundle k
 its ES2022 JavaScript target.
 
 In the Tasks board, lane counts say how many cards are loaded. Select **More** in any lane to load the next board page across all lanes. Cards show assignees and labels. Select **Move…** for a destination menu; unavailable transitions are disabled. Use the arrow keys to navigate, Enter to move, or Escape to close. Scroll inside the menu to reach more destinations. After a move, page one refreshes while other loaded cards remain visible; reload to refresh later pages.
+
+### Jira query errors
+
+In Tasks search, prefix a query with `jql:` to require JQL, or `text:` for
+literal text. Jira parse errors stay visible with the input unchanged. A previous
+result page remains marked as stale until a corrected query succeeds. Issue keys
+and saved-filter predicates such as `filter = 28712` keep their usual meaning.
