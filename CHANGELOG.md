@@ -16,6 +16,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Remove the Aider agent harness, including launch profiles, detection, screen adapters and mobile commands. Existing settings remain readable (#1849-0c19).
 
 ### Fixed
+
+- Tasks details display provider enum labels while retaining IDs for edits (#1839-dcbf).
 - Trackpad and wheel scrolling no longer stalls while the pointer is over the CLI/Chat switch, in either view (#1847-feb9).
 - Design Mode automatically loads its own extension on cold Edge launches and opens the discovered dev server. Running profiles and unsupported branded Chrome return clear errors (#1834-f6c4).
 - Make Terminal Chat easier to read with one lightly tinted answer card per turn, whole-answer Copy, reading-width limits, collapsible terminal pastes and compact inbox notices. Keep the collapsed tool row and show Claude Bash descriptions when available (#1832-b19a).
