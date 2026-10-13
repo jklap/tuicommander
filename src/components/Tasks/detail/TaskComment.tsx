@@ -7,7 +7,12 @@ function Comment(props: { comment: WorkItemComment }) {
 	return (
 		<article class={styles.comment}>
 			<header class={styles.commentHeader}>
-				<strong>{props.comment.author.name}</strong>
+				<strong>
+					{props.comment.author.name}
+					<Show when={props.comment.author.bot}>
+						<span class={styles.botBadge}>bot</span>
+					</Show>
+				</strong>
 				<time dateTime={props.comment.createdAt}>{new Date(props.comment.createdAt).toLocaleString()}</time>
 			</header>
 			<TaskMarkdown content={props.comment.body} />
@@ -27,7 +32,12 @@ export function TaskComment(props: { entry: WorkItemCommentEntry }) {
 					<section class={styles.thread} aria-label="Review thread">
 						<header>
 							{value().path}
-							{value().line !== null ? `:${value().line}` : ""} · {value().resolved ? "Resolved" : "Open thread"}
+							{value().line !== null
+								? `:${value().line}`
+								: value().originalLine !== null
+									? `:${value().originalLine}`
+									: ""}
+							{value().outdated ? " · Outdated" : ""} · {value().resolved ? "Resolved" : "Open thread"}
 						</header>
 						<For each={value().comments.map((comment) => comment.id)}>
 							{(id) => {

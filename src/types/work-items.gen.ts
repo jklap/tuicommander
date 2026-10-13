@@ -10,6 +10,7 @@ export interface WorkItemUser {
 	id: string;
 	name: string;
 	avatarUrl: string | null;
+	bot: boolean;
 }
 
 export interface WorkItemOption {
@@ -70,8 +71,10 @@ export interface WorkItemComment {
 export interface WorkItemReviewThread {
 	id: string;
 	resolved: boolean;
+	outdated: boolean;
 	path: string;
 	line: number | null;
+	originalLine: number | null;
 	commitId: string;
 	comments: Array<WorkItemComment>;
 }

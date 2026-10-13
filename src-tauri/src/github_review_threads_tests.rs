@@ -187,3 +187,51 @@ async fn thread_comments_read_from_full_graphql_envelope() {
         "Y3Vyc29yOnYyOpK0MjAyNi0xMC0wOVQyMTo0Mjo1MVrO_GmtNg=="
     );
 }
+
+/// Serves the recorded cursor/verifiers#2833 thread page (fixtures README). Like
+/// GitHub, it returns an author's `__typename` only when the query selects it.
+struct BotPage;
+impl PrApi for BotPage {
+    fn graphql(
+        &self,
+        query: &str,
+        _vars: Value,
+    ) -> impl std::future::Future<Output = Result<Value, String>> + Send {
+        let recorded: Value = serde_json::from_str(include_str!(
+            "../fixtures/github-review/bot-threads-cur-2833.json"
+        ))
+        .unwrap();
+        let mut nodes = recorded["data"]["repository"]["pullRequest"]["reviewThreads"]["nodes"].clone();
+        if !query.contains("author { __typename login }") {
+            for thread in nodes.as_array_mut().unwrap() {
+                for comment in thread["comments"]["nodes"].as_array_mut().unwrap() {
+                    comment["author"].as_object_mut().unwrap().remove("__typename");
+                }
+            }
+        }
+        std::future::ready(Ok(json!({"data":{"repository":{"pullRequest":{
+            "headRefOid": "recorded-head",
+            "reviewThreads": {"pageInfo": {"hasNextPage": false, "endCursor": null}, "nodes": nodes}
+        }}}})))
+    }
+    fn rest(
+        &self,
+        _method: &str,
+        _endpoint: &str,
+        _body: Value,
+    ) -> impl std::future::Future<Output = Result<Value, String>> + Send {
+        std::future::ready(Err("no REST in this stub".into()))
+    }
+}
+
+// Catches: a thread query without `author.__typename`, so a GraphQL bot login
+// (no `[bot]` suffix there, e.g. `cursor`) is shown as a human.
+#[tokio::test]
+async fn graphql_bot_login_without_suffix_is_marked_bot() {
+    let page = read_threads(&BotPage, json!({}), None).await.unwrap();
+    let author = |i: usize| &page.threads[i]["comments"]["nodes"][0]["author"];
+    assert_eq!(author(0)["login"], "cursor");
+    assert_eq!(author(0)["bot"], true);
+    assert_eq!(author(5)["login"], "mikasenghaas");
+    assert_eq!(author(5)["bot"], false);
+}

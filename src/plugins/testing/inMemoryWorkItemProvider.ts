@@ -283,7 +283,7 @@ export function createInMemoryWorkItemProvider(seed: WorkItemProviderSnapshot = 
 					kind: "normal",
 					value: {
 						id: `local-${revision}`,
-						author: { id: "demo-user", name: "Demo User", avatarUrl: null },
+						author: { id: "demo-user", name: "Demo User", avatarUrl: null, bot: false },
 						body: action.value,
 						createdAt: "2026-10-10T00:00:00Z",
 						url: null,

@@ -47,6 +47,9 @@ export const ReviewThreadView: Component<{ thread: ReviewThread; session: Review
 					<article class={s.comment}>
 						<header class={s.commentHeader}>
 							<strong>{comment.author?.login ?? t("prDiff.ghost", "ghost")}</strong>
+							<Show when={comment.author?.bot}>
+								<span class={cx(s.badge, s.badgeBot)}>{t("prDiff.bot", "bot")}</span>
+							</Show>
 							<time dateTime={comment.createdAt}>{new Date(comment.createdAt).toLocaleString()}</time>
 						</header>
 						<TaskMarkdown content={comment.body} />

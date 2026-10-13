@@ -83,7 +83,7 @@ describe("TasksDetail", () => {
 	// Catches: provider pagination or review variants are silently omitted from the conversation.
 	it("all_comment_sources_and_next_page_are_visible", async () => {
 		const value = detail();
-		const author = { id: "reviewer", name: "Reviewer", avatarUrl: null };
+		const author = { id: "reviewer", name: "Reviewer", avatarUrl: null, bot: false };
 		const comment = {
 			id: "thread-comment",
 			author,
@@ -99,8 +99,10 @@ describe("TasksDetail", () => {
 						value: {
 							id: "thread-1",
 							resolved: false,
+							outdated: false,
 							path: "src/main.rs",
 							line: 42,
+							originalLine: 42,
 							commitId: "abc",
 							comments: [comment],
 						},
@@ -141,7 +143,7 @@ describe("TasksDetail", () => {
 						kind: "normal",
 						value: {
 							id: "new-comment",
-							author: { id: "me", name: "Me", avatarUrl: null },
+							author: { id: "me", name: "Me", avatarUrl: null, bot: false },
 							body: action.value,
 							createdAt: "2026-10-10T12:03:00Z",
 							url: null,

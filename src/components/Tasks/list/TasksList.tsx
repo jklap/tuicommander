@@ -47,7 +47,12 @@ function filterValue(field: WorkItemFieldSchema, value: string): WorkItemFieldVa
 			return {
 				kind: "user",
 				value: [
-					{ id: value, name: field.options.find((option) => option.id === value)?.name ?? value, avatarUrl: null },
+					{
+						id: value,
+						name: field.options.find((option) => option.id === value)?.name ?? value,
+						avatarUrl: null,
+						bot: false,
+					},
 				],
 			};
 	}

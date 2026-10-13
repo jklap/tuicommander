@@ -5,7 +5,8 @@ export interface ReviewComment {
 	databaseId?: number | null;
 	body: string;
 	url?: string | null;
-	author: { login: string } | null;
+	/** `bot` is set by the backend from the forge actor type, never from the login. */
+	author: { login: string; bot: boolean } | null;
 	createdAt: string;
 }
 

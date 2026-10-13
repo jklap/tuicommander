@@ -253,12 +253,7 @@ pub fn count_review_threads(nodes: &serde_json::Value) -> ReviewThreadCounts {
         if node["isResolved"].as_bool().unwrap_or(true) {
             continue;
         }
-        let author = &node["comments"]["nodes"][0]["author"];
-        let is_bot = author["__typename"].as_str() == Some("Bot")
-            || author["login"]
-                .as_str()
-                .is_some_and(|l| l.ends_with("[bot]"));
-        if is_bot {
+        if crate::review_bots::is_bot(&node["comments"]["nodes"][0]["author"]) {
             counts.bot += 1;
         } else {
             counts.human += 1;

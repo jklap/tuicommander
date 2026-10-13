@@ -44,7 +44,7 @@ export function toFieldValue(
 		if (ids.length === 0) return null;
 		const name = (id: string) => schema.options.find((option) => option.id === id)?.name ?? id;
 		return schema.kind === "user"
-			? { kind: "user", value: ids.map((id) => ({ id, name: name(id), avatarUrl: null })) }
+			? { kind: "user", value: ids.map((id) => ({ id, name: name(id), avatarUrl: null, bot: false })) }
 			: { kind: "labels", value: ids.map((id) => ({ id, name: name(id) })) };
 	}
 	const text = typeof raw === "string" ? raw : "";

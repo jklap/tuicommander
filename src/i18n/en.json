@@ -744,6 +744,7 @@
 	"prDetail.requestChangesBody": "Review summary",
 	"prDetail.submitRequestChanges": "Submit",
 	"prDiff.addToReview": "Add to review",
+	"prDiff.bot": "bot",
 	"prDiff.cancel": "Cancel",
 	"prDiff.collapsed": "collapsed",
 	"prDiff.collapsedHint": "Lockfiles, generated and test files; click a file to expand",

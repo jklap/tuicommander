@@ -16,6 +16,8 @@ pub struct WorkItemUser {
     pub id: String,
     pub name: String,
     pub avatar_url: Option<String>,
+    /// The provider marks this account as a bot or app, not a person.
+    pub bot: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -117,8 +119,12 @@ pub struct WorkItemComment {
 pub struct WorkItemReviewThread {
     pub id: String,
     pub resolved: bool,
+    /// The code under the thread changed since it was opened.
+    pub outdated: bool,
     pub path: String,
+    /// Null when outdated: the commented line is not in the current diff.
     pub line: Option<u32>,
+    pub original_line: Option<u32>,
     pub commit_id: String,
     pub comments: Vec<WorkItemComment>,
 }
