@@ -92,6 +92,37 @@ describe("continuous answer regions (#1872-1870)", () => {
 		expect(buildAnswersTurn(rows, false).answers).toEqual(["💬 First.\n\n💬 Second.\n```text\n• 💬 literal\n```"]);
 	});
 
+	// Catches: an unmarked paragraph after a blank row tinted as part of the answer (Boss screenshot, 2026-10-13).
+	it.each([
+		{ multiple: false, boundary: "  Da confermare: report di pubblicazione." },
+		{ multiple: true, boundary: "  Da confermare: report di pubblicazione." },
+		{ multiple: true, boundary: "  ┌──────────┬─────────┐" },
+	])(
+		"ends the region before blank-separated unmarked output ($boundary, multiple markers=$multiple)",
+		({ multiple, boundary }) => {
+			const rows = snapshots([
+				"● 💬 Hai ragione.",
+				"",
+				"  💬 Ho riaperto la storia.",
+				"  continuation on the next hard row",
+				"",
+				"  💬 Ho scritto la regola.",
+				"",
+				boundary,
+				"  second row of it",
+			]);
+			rows[3].isWrapped = true;
+			if (!multiple) rows.splice(0, 5);
+			const get = (i: number) => rows[i] ?? null;
+			expect(answerExtent(0, rows.length, get)).toBe(multiple ? 5 : 0);
+			expect(
+				planSuggestOverlay(rows.length, get)
+					.blocks.filter((b) => b.kind === "answer")
+					.map((b) => b.row),
+			).toEqual(multiple ? [0, 1, 2, 3, 4, 5] : [0]);
+		},
+	);
+
 	// Catches: merging across actual tool output, prompts or protocol boundaries.
 	it.each([
 		"plain output",

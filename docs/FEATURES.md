@@ -90,7 +90,7 @@ Durable workflow run storage records event history, pinned graph revisions, node
 
 ## 1. Terminal Management
 
-Adjacent `💬` answer paragraphs share one continuous tint and left bar, including blank rows between them. A non-answer output row or prompt ends the region. The CLI blanks only the marker glyph cells; copy, selection and search keep the original text. Chat uses the same answer extent and strips every paragraph marker.
+Adjacent `💬` answer paragraphs share one continuous tint and left bar, including blank rows between them. An unmarked prose paragraph after a blank row ends the answer; an uninterrupted indented continuation stays inside. Lists, tables, quotations and fenced code remain attached to the answer. A non-answer output row or prompt ends the region. The CLI blanks only the marker glyph cells; copy, selection and search keep the original text. Chat uses the same answer extent and strips every paragraph marker.
 
 Terminal prompt colours apply to Chat user messages only. The CLI grid retains prompt scrollbar ticks and answers-only prompt grouping without tinting prompt rows.
 
