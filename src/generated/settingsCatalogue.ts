@@ -8411,8 +8411,7 @@ export const settingsCatalogue = {
       "nullable": false,
       "default": true,
       "availability": {
-        "status": "unavailable",
-        "reason": "This build has no native dictation backend"
+        "status": "available"
       },
       "choices": null,
       "sensitivity": "public",
@@ -8447,8 +8446,7 @@ export const settingsCatalogue = {
       "nullable": true,
       "default": null,
       "availability": {
-        "status": "unavailable",
-        "reason": "This build has no native dictation backend"
+        "status": "available"
       },
       "choices": {
         "kind": "dynamic",
@@ -8486,8 +8484,7 @@ export const settingsCatalogue = {
       "nullable": false,
       "default": false,
       "availability": {
-        "status": "unavailable",
-        "reason": "This build has no native dictation backend"
+        "status": "available"
       },
       "choices": null,
       "sensitivity": "public",
@@ -8519,8 +8516,7 @@ export const settingsCatalogue = {
       "nullable": false,
       "default": "",
       "availability": {
-        "status": "unavailable",
-        "reason": "This build has no native dictation backend"
+        "status": "available"
       },
       "choices": null,
       "sensitivity": "public",
@@ -8552,8 +8548,7 @@ export const settingsCatalogue = {
       "nullable": false,
       "default": true,
       "availability": {
-        "status": "unavailable",
-        "reason": "This build has no native dictation backend"
+        "status": "available"
       },
       "choices": null,
       "sensitivity": "public",
@@ -8587,8 +8582,7 @@ export const settingsCatalogue = {
       "nullable": false,
       "default": 1500,
       "availability": {
-        "status": "unavailable",
-        "reason": "This build has no native dictation backend"
+        "status": "available"
       },
       "choices": null,
       "sensitivity": "public",
@@ -8620,8 +8614,7 @@ export const settingsCatalogue = {
       "nullable": false,
       "default": true,
       "availability": {
-        "status": "unavailable",
-        "reason": "This build has no native dictation backend"
+        "status": "available"
       },
       "choices": null,
       "sensitivity": "public",
@@ -8653,8 +8646,7 @@ export const settingsCatalogue = {
       "nullable": false,
       "default": true,
       "availability": {
-        "status": "unavailable",
-        "reason": "This build has no native dictation backend"
+        "status": "available"
       },
       "choices": null,
       "sensitivity": "public",
@@ -8686,8 +8678,7 @@ export const settingsCatalogue = {
       "nullable": false,
       "default": true,
       "availability": {
-        "status": "unavailable",
-        "reason": "This build has no native dictation backend"
+        "status": "available"
       },
       "choices": null,
       "sensitivity": "public",
@@ -8719,8 +8710,7 @@ export const settingsCatalogue = {
       "nullable": false,
       "default": "",
       "availability": {
-        "status": "unavailable",
-        "reason": "This build has no native dictation backend"
+        "status": "available"
       },
       "choices": null,
       "sensitivity": "public",
@@ -8751,8 +8741,7 @@ export const settingsCatalogue = {
       "nullable": false,
       "default": "F5",
       "availability": {
-        "status": "unavailable",
-        "reason": "This build has no native dictation backend"
+        "status": "available"
       },
       "choices": null,
       "sensitivity": "public",
@@ -8783,8 +8772,7 @@ export const settingsCatalogue = {
       "nullable": false,
       "default": "auto",
       "availability": {
-        "status": "unavailable",
-        "reason": "This build has no native dictation backend"
+        "status": "available"
       },
       "choices": null,
       "sensitivity": "public",
@@ -8818,8 +8806,7 @@ export const settingsCatalogue = {
       "nullable": false,
       "default": 400,
       "availability": {
-        "status": "unavailable",
-        "reason": "This build has no native dictation backend"
+        "status": "available"
       },
       "choices": null,
       "sensitivity": "public",
@@ -8851,8 +8838,7 @@ export const settingsCatalogue = {
       "nullable": false,
       "default": "large-v3-turbo",
       "availability": {
-        "status": "unavailable",
-        "reason": "This build has no native dictation backend"
+        "status": "available"
       },
       "choices": {
         "kind": "dynamic",
@@ -8893,8 +8879,7 @@ export const settingsCatalogue = {
       "nullable": false,
       "default": 20,
       "availability": {
-        "status": "unavailable",
-        "reason": "This build has no native dictation backend"
+        "status": "available"
       },
       "choices": null,
       "sensitivity": "public",
@@ -8929,8 +8914,7 @@ export const settingsCatalogue = {
       "nullable": false,
       "default": 0.6000000238418579,
       "availability": {
-        "status": "unavailable",
-        "reason": "This build has no native dictation backend"
+        "status": "available"
       },
       "choices": null,
       "sensitivity": "public",
@@ -8963,8 +8947,7 @@ export const settingsCatalogue = {
       "nullable": false,
       "default": 0.0010000000474974513,
       "availability": {
-        "status": "unavailable",
-        "reason": "This build has no native dictation backend"
+        "status": "available"
       },
       "choices": null,
       "sensitivity": "public",
@@ -8999,8 +8982,7 @@ export const settingsCatalogue = {
       "nullable": false,
       "default": [],
       "availability": {
-        "status": "unavailable",
-        "reason": "This build has no native dictation backend"
+        "status": "available"
       },
       "choices": null,
       "sensitivity": "private",
@@ -9032,8 +9014,7 @@ export const settingsCatalogue = {
       "nullable": false,
       "default": "",
       "availability": {
-        "status": "unavailable",
-        "reason": "This build has no native dictation backend"
+        "status": "available"
       },
       "choices": {
         "kind": "dynamic",
@@ -9072,8 +9053,7 @@ export const settingsCatalogue = {
       "nullable": false,
       "default": "",
       "availability": {
-        "status": "unavailable",
-        "reason": "This build has no native dictation backend"
+        "status": "available"
       },
       "choices": null,
       "sensitivity": "public",
@@ -9108,8 +9088,7 @@ export const settingsCatalogue = {
       "nullable": false,
       "default": 0.6700000166893005,
       "availability": {
-        "status": "unavailable",
-        "reason": "This build has no native dictation backend"
+        "status": "available"
       },
       "choices": null,
       "sensitivity": "public",
@@ -9141,8 +9120,7 @@ export const settingsCatalogue = {
       "nullable": false,
       "default": "",
       "availability": {
-        "status": "unavailable",
-        "reason": "This build has no native dictation backend"
+        "status": "available"
       },
       "choices": {
         "kind": "dynamic",
@@ -9184,8 +9162,7 @@ export const settingsCatalogue = {
       "nullable": false,
       "default": -18.0,
       "availability": {
-        "status": "unavailable",
-        "reason": "This build has no native dictation backend"
+        "status": "available"
       },
       "choices": null,
       "sensitivity": "public",
