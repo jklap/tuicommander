@@ -2823,12 +2823,13 @@ pub fn remove_worktree_by_workspace_id_with_missing_confirmation_and_pr(
             &removal_rule,
         )
         .and_then(|()| {
-            // Cleanup may fetch --prune and remove the ref that proved safety.
             if lifecycle.commit_status == WorkspaceCommitStatus::PushedUnmerged {
-                removal_rule = containing_remote_ref(&worktree.base_repo, &expected_branch_oid)?
-                    .ok_or_else(|| {
-                        "remote refs no longer contain the captured branch tip".to_string()
-                    })?;
+                removal_rule = crate::git_ref_transaction::delete_remote_contained_branch(
+                    &worktree.base_repo,
+                    branch_name,
+                    &expected_branch_oid,
+                )?;
+                return Ok(());
             }
             git_cmd(&worktree.base_repo)
                 .args([
@@ -2838,6 +2839,7 @@ pub fn remove_worktree_by_workspace_id_with_missing_confirmation_and_pr(
                     &expected_branch_oid,
                 ])
                 .run()
+                .map(|_| ())
                 .map_err(|error| error.to_string())
         });
         match deleted {

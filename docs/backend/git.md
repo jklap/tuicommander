@@ -331,7 +331,7 @@ with a warning.
 
 The shared classifier also reports `pushed_unmerged` when the exact tip is reachable from any remote-tracking ref, regardless of branch name or configured upstream. `branch_integration.proof` and the removal result name the containing `refs/remotes/<remote>/<branch>` ref. Lifecycle, workspace-list and sidebar monitoring reuse this classifier; the monitoring key includes all remote-tracking refs so a fetch invalidates stale verdicts. This permits worktree removal with local branch deletion, while standalone integrated-branch deletion keeps its existing merge/archive policy.
 
-Removal rechecks remote containment after the cleanup script and immediately before deleting the local ref. If cleanup prunes the only containing remote ref, the checkout is removed but the local branch is preserved, and the result includes a branch-deletion warning.
+Removal captures the containing remote ref and its OID after the cleanup script. One `git update-ref --stdin` transaction verifies that proof OID and compare-deletes the captured local branch tip under the same ref locks. If cleanup prunes the proof or a concurrent fetch replaces or conflicts with it, the checkout is removed but the local branch is preserved, and the result includes a branch-deletion warning.
 
 When removal would delete an unmerged branch, the error card offers **Remove worktree, keep branch**. The action reruns lifecycle checks and confirmation with branch deletion disabled for that removal only; the repository setting stays unchanged.
 
