@@ -874,12 +874,15 @@ pub fn get_merged_branches_impl(repo_path: &Path) -> Result<Vec<String>, String>
         .peel_to_id()
         .map_err(|e| e.to_string())?
         .detach();
+    // A checkout parked in the recycling pool is not offered for removal.
+    let pooled = crate::worktree::archived_pool_branches(&git_dir);
     let refs = grepo.references().map_err(|e| e.to_string())?;
     let mut merged = Vec::new();
     for reference in refs.prefixed("refs/heads/").map_err(|e| e.to_string())? {
         let mut reference = reference.map_err(|e| e.to_string())?;
         let branch = reference.name().shorten().to_str_lossy().into_owned();
         if branch == default_branch
+            || pooled.contains(&branch)
             || reference.peel_to_id().map_err(|e| e.to_string())?.detach() == main_tip
         {
             continue;

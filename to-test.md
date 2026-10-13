@@ -5277,3 +5277,7 @@ Visual evidence: worktree Vite fixture mounted the real NotificationsTab and Toa
 ## Truncated dictation incident (1763-3361) — Rust restart required
 
 - [ ] When Boss meets a truncated dictation again, correlate its time with the file log (`focus-loss` stop lines, `~/Gits/.tmp/results/ui-1763-dictation-evidence.log` shows the method) and note whether the cause was the Fn focus-loss stop. The 11:49/11:51 focus-loss stops and the RED prove the native defect only; the link to all three reported truncations is unproven. _(Moved from the story by Boss's rule 2026-10-13.)_
+
+## Recycled checkouts in `__archived` (1866-142a) — Rust restart required
+
+- [ ] After restart, the orchestrator sidebar no longer lists `feat/agent-vm` and `feat/multi-coordinator` (neither as worktree nor as Merged branch row). Then `repo action=worktree_remove path=<orchestrator> branch=feat/agent-vm` removes the archived checkout and the branch (check `git worktree list` and `git branch` before and after). Run on the real repo only after Boss ok. _(REALITY criterion of 1866-142a.)_
