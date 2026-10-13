@@ -52,6 +52,8 @@ export interface ShortcutHandlers {
 	handleTerminalSelect: (id: string) => void;
 	handleSplit: (direction: "vertical" | "horizontal") => void;
 	handleRunCommand: (forceDialog: boolean) => void;
+	/** Reload the active web/preview tab. Returns false when there is none. */
+	reloadActiveTab: () => boolean;
 	switchToBranchByIndex: (index: number) => void;
 	isQuickSwitcherOpen: () => boolean;
 	toggleMarkdownPanel: () => void;
@@ -237,6 +239,8 @@ function dispatchAction(action: ActionName, handlers: ShortcutHandlers): boolean
 		case "edit-command":
 			handlers.handleRunCommand(true);
 			return true;
+		case "reload-tab":
+			return handlers.reloadActiveTab();
 
 		// Panel toggles
 		case "toggle-markdown":
