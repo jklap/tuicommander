@@ -22,7 +22,8 @@ export function CardMoveMenu(props: {
 	function outside(event: PointerEvent) {
 		if (event.target instanceof Node && !menu?.contains(event.target) && !trigger?.contains(event.target)) close();
 	}
-	function dismiss() {
+	function dismiss(event: Event) {
+		if (event.target instanceof Node && menu?.contains(event.target)) return;
 		close();
 	}
 	function toggle() {
@@ -43,12 +44,10 @@ export function CardMoveMenu(props: {
 			menu?.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus(),
 		);
 		document.addEventListener("pointerdown", outside);
-		window.addEventListener("resize", dismiss);
 		document.addEventListener("scroll", dismiss, true);
 		onCleanup(() => {
 			cancelAnimationFrame(focusFrame);
 			document.removeEventListener("pointerdown", outside);
-			window.removeEventListener("resize", dismiss);
 			document.removeEventListener("scroll", dismiss, true);
 		});
 	});
@@ -88,11 +87,7 @@ export function CardMoveMenu(props: {
 										? (index + 1) % buttons.length
 										: event.key === "ArrowUp"
 											? (index - 1 + buttons.length) % buttons.length
-											: event.key === "Home"
-												? 0
-												: event.key === "End"
-													? buttons.length - 1
-													: -1;
+											: -1;
 								if (next >= 0) {
 									event.preventDefault();
 									buttons[next]?.focus();

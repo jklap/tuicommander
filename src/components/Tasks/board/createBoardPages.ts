@@ -21,8 +21,6 @@ export function createBoardPages() {
 	let boardId = "";
 	let generation = 0;
 	let controller: AbortController | undefined;
-	let consumed = new Set<string>();
-	let depth = 1;
 	function cancel() {
 		generation++;
 		controller?.abort();
@@ -42,7 +40,6 @@ export function createBoardPages() {
 		return {
 			...next,
 			lanes: [...lanes.values()],
-			nextCursor: next.nextCursor && !consumed.has(next.nextCursor) ? next.nextCursor : null,
 		};
 	}
 	async function request(append: boolean) {
@@ -56,27 +53,12 @@ export function createBoardPages() {
 		controller = abort;
 		setLoading(true);
 		setError("");
-		const previousConsumed = consumed;
-		consumed = append ? new Set(consumed) : new Set();
 		try {
-			let next = await provider.board(id, { ...query, cursor }, abort.signal);
+			const next = await provider.board(id, { ...query, cursor }, abort.signal);
 			if (attempt !== generation || abort.signal.aborted) return;
-			if (cursor) consumed.add(cursor);
-			let snapshot = merge(append ? page() : undefined, next);
-			// Re-fetch the loaded depth after a move, so refresh does not collapse the board to page one.
-			if (!append)
-				for (let index = 1; index < depth && snapshot.nextCursor; index++) {
-					const following = snapshot.nextCursor;
-					next = await provider.board(id, { ...query, cursor: following }, abort.signal);
-					if (attempt !== generation || abort.signal.aborted) return;
-					consumed.add(following);
-					snapshot = merge(snapshot, next);
-				}
-			if (append) depth++;
-			setPage(snapshot);
+			setPage(merge(page(), next));
 		} catch (cause) {
 			if (attempt !== generation || abort.signal.aborted) return;
-			consumed = previousConsumed;
 			setError(cause instanceof Error ? cause.message : String(cause));
 		} finally {
 			if (attempt === generation) setLoading(false);
@@ -91,8 +73,6 @@ export function createBoardPages() {
 			cancel();
 			source = provider;
 			boardId = id;
-			depth = 1;
-			consumed = new Set();
 			setPage(undefined);
 			setError("");
 			if (id) void request(false);
