@@ -9509,7 +9509,7 @@ mod tests {
             std::path::Path::new("/var/folders/ab/cdefghijklmnop/T"),
         );
         assert!(
-            path.as_os_str().len() < 104,
+            path.as_os_str().len() <= tuic_ipc::UNIX_SOCKET_PATH_MAX,
             "named instance socket path must fit macOS SUN_LEN: {}",
             path.display()
         );

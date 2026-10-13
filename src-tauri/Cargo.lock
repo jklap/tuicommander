@@ -9737,6 +9737,8 @@ dependencies = [
  "ctor 0.8.0",
  "portable-pty",
  "tempfile",
+ "tuic-core",
+ "tuic-ipc",
 ]
 
 [[package]]
