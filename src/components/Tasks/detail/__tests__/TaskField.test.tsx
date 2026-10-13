@@ -10,6 +10,9 @@ describe("TaskField", () => {
 		render(() => (
 			<TaskField
 				schema={{
+					sortable: false,
+					groupable: false,
+					filterable: false,
 					id: "priority",
 					name: "Priority",
 					kind: "enum",
@@ -33,7 +36,17 @@ describe("TaskField", () => {
 	])("unknown enum %s remains visible", (value, expected) => {
 		render(() => (
 			<TaskField
-				schema={{ id: "priority", name: "Priority", kind: "enum", required: false, editable: false, options: [] }}
+				schema={{
+					sortable: false,
+					groupable: false,
+					filterable: false,
+					id: "priority",
+					name: "Priority",
+					kind: "enum",
+					required: false,
+					editable: false,
+					options: [],
+				}}
 				value={{ kind: "enum", value }}
 				disabled={false}
 				canEdit={false}
@@ -49,6 +62,9 @@ describe("TaskField", () => {
 		render(() => (
 			<TaskField
 				schema={{
+					sortable: false,
+					groupable: false,
+					filterable: false,
 					id: "priority",
 					name: "Priority",
 					kind: "enum",
@@ -159,7 +175,17 @@ describe("TaskField", () => {
 	it("read_only_field_renders_without_a_required_star", () => {
 		const locked = render(() => (
 			<TaskField
-				schema={{ id: "title", name: "Title", kind: "text", required: true, editable: false, options: [] }}
+				schema={{
+					sortable: false,
+					groupable: false,
+					filterable: false,
+					id: "title",
+					name: "Title",
+					kind: "text",
+					required: true,
+					editable: false,
+					options: [],
+				}}
 				value={{ kind: "text", value: "Fixed" }}
 				disabled={false}
 				canEdit
@@ -174,7 +200,17 @@ describe("TaskField", () => {
 	it("field_without_an_edit_action_renders_without_a_required_star", () => {
 		const { container } = render(() => (
 			<TaskField
-				schema={{ id: "title", name: "Title", kind: "text", required: true, editable: true, options: [] }}
+				schema={{
+					sortable: false,
+					groupable: false,
+					filterable: false,
+					id: "title",
+					name: "Title",
+					kind: "text",
+					required: true,
+					editable: true,
+					options: [],
+				}}
 				value={{ kind: "text", value: "Fixed" }}
 				disabled={false}
 				canEdit={false}
@@ -188,7 +224,17 @@ describe("TaskField", () => {
 	it("editable_required_field_keeps_its_required_star", () => {
 		const { container } = render(() => (
 			<TaskField
-				schema={{ id: "title", name: "Title", kind: "text", required: true, editable: true, options: [] }}
+				schema={{
+					sortable: false,
+					groupable: false,
+					filterable: false,
+					id: "title",
+					name: "Title",
+					kind: "text",
+					required: true,
+					editable: true,
+					options: [],
+				}}
 				value={{ kind: "text", value: "Editable" }}
 				disabled={false}
 				canEdit

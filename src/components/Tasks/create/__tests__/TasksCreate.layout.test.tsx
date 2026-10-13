@@ -59,6 +59,9 @@ it("optional_filter_hides_non_matches_without_removing_the_fields", async () => 
 // Catches: a filter hides the one optional field that blocks Create, leaving it disabled with no visible reason.
 it("optional_field_that_blocks_create_survives_the_filter_and_is_counted_in_the_summary", () => {
 	const field = (id: string, name: string): WorkItemFieldSchema => ({
+		sortable: false,
+		groupable: false,
+		filterable: false,
 		id,
 		name,
 		kind: "text",

@@ -8,6 +8,9 @@ import { TasksCreate } from "../TasksCreate";
 
 // Recorded LAN create review: Reporter is required, kind=user, with no choices.
 const reporter: WorkItemFieldSchema = {
+	sortable: false,
+	groupable: false,
+	filterable: false,
 	id: "reporter",
 	name: "Reporter",
 	kind: "user",
@@ -16,6 +19,9 @@ const reporter: WorkItemFieldSchema = {
 	options: [],
 };
 const labels: WorkItemFieldSchema = {
+	sortable: false,
+	groupable: false,
+	filterable: false,
 	id: "labels",
 	name: "Labels",
 	kind: "labels",
@@ -37,6 +43,9 @@ it("required_user_without_static_choices_can_be_selected_and_submitted", async (
 				? [reporter, labels]
 				: [
 						{
+							sortable: false,
+							groupable: false,
+							filterable: false,
 							id: "itemType",
 							name: "Type",
 							kind: "enum",
@@ -89,6 +98,9 @@ it("user_lookup_drops_stale_results_and_surfaces_failure_without_selecting_typed
 				? [reporter]
 				: [
 						{
+							sortable: false,
+							groupable: false,
+							filterable: false,
 							id: "itemType",
 							name: "Type",
 							kind: "enum",
@@ -131,9 +143,24 @@ it("required_validation_preserves_the_focused_control_while_typing", async () =>
 		...fake,
 		createFields: async (type) =>
 			type
-				? [{ id: "parent", name: "Parent", kind: "text", required: true, editable: true, options: [] }]
+				? [
+						{
+							sortable: false,
+							groupable: false,
+							filterable: false,
+							id: "parent",
+							name: "Parent",
+							kind: "text",
+							required: true,
+							editable: true,
+							options: [],
+						},
+					]
 				: [
 						{
+							sortable: false,
+							groupable: false,
+							filterable: false,
 							id: "itemType",
 							name: "Type",
 							kind: "enum",
