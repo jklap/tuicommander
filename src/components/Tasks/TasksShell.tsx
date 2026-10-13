@@ -63,10 +63,18 @@ export function TasksShell(props: { visible?: () => boolean }) {
 								aria-label="Tasks view"
 								onChange={(id) => {
 									setCreating(false);
+									setReference(null);
 									setView(id);
 								}}
 							/>
-							<button type="button" class={s.create} onClick={() => setCreating(true)}>
+							<button
+								type="button"
+								class={s.create}
+								onClick={() => {
+									setCreating(true);
+									setReference(null);
+								}}
+							>
 								New task
 							</button>
 						</header>
