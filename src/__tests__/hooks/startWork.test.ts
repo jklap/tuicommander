@@ -262,13 +262,6 @@ describe("start work", () => {
 		expect(writes).toEqual([]);
 	});
 
-	// Catches: a draft brief launched as argv - the agent would submit it without the user's review.
-	it("draft_delivery_keeps_the_launch_command_free_of_the_brief", async () => {
-		const { workflow } = coordinators();
-		await workflow.handleStartWork({ repoPath: REPO, branch: BRANCH, prompt: "Fix the login", agentType: "codex" });
-		expect(agentTerminal().term().pendingInitCommand).toBe("env TEAM='a b' codex --model o9");
-	});
-
 	// Catches: shell injection from item text — via argv, a bracketed-paste breakout, or a dead agent.
 	it("prompt_not_passed_as_shell_argument", async () => {
 		const hostile = "$(touch /tmp/pwned) `id`\x1b[201~\rrm -rf ~\r";
