@@ -201,11 +201,15 @@ impl PrApi for BotPage {
             "../fixtures/github-review/bot-threads-cur-2833.json"
         ))
         .unwrap();
-        let mut nodes = recorded["data"]["repository"]["pullRequest"]["reviewThreads"]["nodes"].clone();
+        let mut nodes =
+            recorded["data"]["repository"]["pullRequest"]["reviewThreads"]["nodes"].clone();
         if !query.contains("author { __typename login }") {
             for thread in nodes.as_array_mut().unwrap() {
                 for comment in thread["comments"]["nodes"].as_array_mut().unwrap() {
-                    comment["author"].as_object_mut().unwrap().remove("__typename");
+                    comment["author"]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("__typename");
                 }
             }
         }
