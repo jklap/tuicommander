@@ -10003,6 +10003,79 @@ async fn aider_padded_prompt_capture_accepts_the_first_submission() {
     );
 }
 
+/// agent-vm rerun of the #1822-5e0f fix: a headless `POST /sessions/agent` spawns the
+/// binary directly, so no launch command ever leaves the shell atom BUSY, and Aider
+/// paints no working screen before its prompt. The live daemon read the screen Ready
+/// ("Ready confirmed after shell became idle") yet still answered 409 agent_not_ready
+/// for the whole session, until a Ctrl-L redraw made the first real output. Catches: a
+/// Ready screen that cannot release a session whose shell state never became BUSY.
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn aider_padded_prompt_capture_accepts_the_first_submission_of_a_direct_spawn() {
+    tokio::time::pause();
+    let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(
+        "aider-0.86.2-padded-prompt-20261012.tcap",
+    ))
+    .expect("valid live capture");
+    let (rows, cols) = capture.geometry.expect("recorded terminal geometry");
+    let sid = "aider-direct-spawn";
+    let (state, silence) = chunk_trace_state(sid);
+    {
+        let mut session = state.session_maps.session_states.get_mut(sid).unwrap();
+        session.agent_type = Some("aider".into());
+        session.agent_type_from_run_config = true;
+        session.spawn_root_role = crate::state::SpawnRootRole::DirectProgram;
+    }
+    state
+        .grid
+        .vt_log_buffers
+        .insert(sid.into(), Mutex::new(VtLogBuffer::new(rows, cols, 2000)));
+    insert_recording_session(&state, sid);
+    let mut processor = ChunkProcessor::new(None, None);
+    for record in capture.records {
+        if record.direction == crate::pty_capture::CaptureDirection::Output {
+            processor.process_chunk(
+                std::str::from_utf8(&record.data).expect("UTF-8 terminal output"),
+                &silence,
+                sid,
+                &state,
+            );
+        }
+    }
+    {
+        let mut session = state.session_maps.session_states.get_mut(sid).unwrap();
+        session.background_probe_satisfied_turn_epoch = Some(session.turn_epoch);
+    }
+    {
+        let mut silence = silence.lock();
+        let settled = std::time::Instant::now() - std::time::Duration::from_secs(60);
+        silence.last_output_at = settled;
+        silence.last_chunk_at = settled;
+        silence.screen_ready_pending_since = Some(settled);
+    }
+    let running = Arc::new(AtomicBool::new(true));
+    spawn_silence_timer(silence.clone(), running.clone(), sid.into(), state.clone());
+    tokio::task::yield_now().await;
+    tokio::time::advance(SILENCE_CHECK_INTERVAL + std::time::Duration::from_millis(1)).await;
+    tokio::task::yield_now().await;
+    running.store(false, Ordering::Release);
+    let shell = state
+        .session_maps
+        .shell_states
+        .get(sid)
+        .unwrap()
+        .load(Ordering::Acquire);
+    let (idle_confirmed, cached_screen) = {
+        let silence = silence.lock();
+        (silence.idle_confirmed(), silence.cached_screen_activity)
+    };
+    assert!(
+        should_inject_now(&state, sid),
+        "submission gate closed: shell_state={shell} idle_confirmed={idle_confirmed} \
+         cached_screen={cached_screen:?}"
+    );
+}
+
 /// What a replay saw on the way through, beyond the events it produced.
 ///
 /// The counter that matters is `ticks_without_cutoff`: `find_chrome_cutoff`
