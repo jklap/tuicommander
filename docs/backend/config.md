@@ -1437,3 +1437,16 @@ committed revision: reread the affected paths rather than replaying the mutation
 ## Core provider accounts
 
 `accounts.json` stores provider/site/account metadata only. The first read migrates `github_accounts.json` while preserving IDs; the old file is retained for recovery and a durable marker prevents re-import after removals. `github_bindings.json` remains the GitHub binding store. Tokens migrate atomically within the credential vault to `account/{id}`; env/CLI credentials remain ambient. Unknown registry, site and account fields are ignored so mixed-version builds can still load every account. Corrupt metadata is retained and blocks account writes. See [Shared account registry](github.md#shared-account-registry) for APIs, credential presence and partial cross-store recovery.
+
+The internal GitHub settings adapter delegates account and credential mutations
+to the shared account owner. It does not use `ConfigFileStore` to bypass account
+verification or vault rules. Binding revisions are checked inside the GitHub
+owner's strict file update; account reads expose presence and runtime provenance.
+See [GitHub settings owner adapter](github.md#github-settings-owner-adapter).
+
+### Ego launch defaults through settings (#1775-330c)
+
+`ego_executable`, `ego_profile` and `ai_chat_workspace` are `app` store fields owned
+by `AppSettingsStore`; no separate launch adapter exists. Changes apply to later
+ACP or PTY launches. Ego-owned defaults use the separate `ego` profile store and
+the configured CLI; no Ego configuration files are edited.

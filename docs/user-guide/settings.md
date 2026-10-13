@@ -477,3 +477,8 @@ separate private native window for the PAT. Settings never displays or stores
 the PAT. Decline or close that window before submission to cancel. A headless
 server cannot open this native credential window. After Submit is accepted,
 verification finishes even if you close the window.
+
+The internal GitHub settings backend keeps OAuth device login for github.com and
+verifies Enterprise PAT identity before storage. Account reads expose credential
+status only. The new shared settings tool is published in a separate cutover step;
+this backend adapter does not add a new user-facing endpoint.

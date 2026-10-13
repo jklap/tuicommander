@@ -1,58 +1,14 @@
 //! User/profile perimeter edits and ego's own effective view. No config file I/O.
 
-use std::path::PathBuf;
-
 use serde::Deserialize;
 
-use super::{ConfigListing, EgoCliError, EgoCliErrorCode, executable, run_at, unreadable};
+use super::{ConfigContext, ConfigListing, EgoCliError, EgoCliErrorCode, unreadable};
 use crate::AppState;
 
 mod types;
 pub(crate) use types::*;
 
-struct Context {
-    program: PathBuf,
-    workspace: PathBuf,
-    profile: Option<String>,
-}
-
-impl Context {
-    fn configured(state: &AppState) -> Result<Self, EgoCliError> {
-        let program = executable(state)?;
-        let settings = state.config.read();
-        let workspace = if settings.ai_chat_workspace.trim().is_empty() {
-            dirs::home_dir().ok_or_else(|| EgoCliError::invalid_input("HOME is unavailable"))?
-        } else {
-            PathBuf::from(settings.ai_chat_workspace.trim())
-        };
-        if !workspace.is_absolute() || !workspace.is_dir() {
-            return Err(EgoCliError::invalid_input(
-                "AI Chat workspace must be an existing absolute directory (Settings > General)",
-            ));
-        }
-        let profile = settings.ego_profile.trim();
-        Ok(Self {
-            program,
-            workspace,
-            profile: (!profile.is_empty()).then(|| profile.to_string()),
-        })
-    }
-
-    async fn command(&self, operation: &str, tail: &[&str]) -> Result<String, EgoCliError> {
-        let mut args = vec!["config".to_string(), operation.to_string()];
-        if let Some(profile) = &self.profile {
-            args.push(format!("--profile={profile}"));
-        }
-        args.push("--".to_string());
-        // Flags must precede the separator; the only positional value is a
-        // closed-key assignment, never a caller-supplied option or command.
-        if operation == "ls" {
-            args.pop();
-        }
-        args.extend(tail.iter().map(|value| value.to_string()));
-        run_at(&self.program, &args, Some(&self.workspace)).await
-    }
-
+impl ConfigContext {
     async fn view(&self) -> Result<PerimeterView, EgoCliError> {
         let stored = self.command("ls", &["--json"]).await?;
         let listing: ConfigListing = serde_json::from_str(&stored)
@@ -218,7 +174,7 @@ fn roots_assignment(edit: &RootsEdit) -> Result<String, EgoCliError> {
 }
 
 pub(crate) async fn read(state: &AppState) -> Result<PerimeterView, EgoCliError> {
-    Context::configured(state)?.view().await
+    ConfigContext::configured(state)?.view().await
 }
 
 pub(crate) async fn set_roots(
@@ -226,7 +182,7 @@ pub(crate) async fn set_roots(
     roots: RootsEdit,
 ) -> Result<PerimeterView, EgoCliError> {
     let assignment = roots_assignment(&roots)?;
-    let context = Context::configured(state)?;
+    let context = ConfigContext::configured(state)?;
     context.command("set", &[&assignment]).await?;
     context.view().await
 }
@@ -235,7 +191,7 @@ pub(crate) async fn set_network(
     state: &AppState,
     enabled: bool,
 ) -> Result<PerimeterView, EgoCliError> {
-    let context = Context::configured(state)?;
+    let context = ConfigContext::configured(state)?;
     context
         .command(
             "set",
