@@ -136,7 +136,7 @@ fn view_first_attach_reads_only_the_last_window() {
     assert!(texts.len() < 200, "the head of the file was not read");
     assert_eq!(texts.last().map(String::as_str), Some("row 199"));
     // Every kept row is whole: a cut line would have failed to parse.
-    assert_eq!(view.adapter.stats.malformed_rows, 0);
+    assert_eq!(view.adapter.stats().malformed_rows, 0);
 }
 
 /// A truncated transcript must not leave the old conversation on screen.
@@ -204,5 +204,46 @@ fn queued_human_prompts_survive_full_load_and_incremental_tail() {
         !tail.advance(TAIL_WINDOW_BYTES).unwrap(),
         "unchanged file replays no prompts"
     );
-    assert_eq!(tail.adapter.stats.unknown_rows, 0);
+    assert_eq!(tail.adapter.stats().unknown_rows, 0);
+}
+
+// Catches: a Grok terminal tailed with the Claude adapter (every row unknown, empty
+// chat), or the old agent's conversation kept when the tab's agent changes.
+#[test]
+fn view_reads_a_grok_transcript_and_resets_when_the_agent_changes() {
+    let tmp = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let grok = tmp.path().join("chat_history.jsonl");
+    std::fs::write(
+        &grok,
+        include_str!("../fixtures/chat_view/grok_chat_history.jsonl"),
+    )
+    .unwrap();
+    let claude = tmp.path().join("a.jsonl");
+    append(&claude, &assistant_row("1", "from claude"));
+
+    let mut view = View::for_agent(Agent::Grok, grok.clone(), 100, usize::MAX);
+    assert!(view.advance(TAIL_WINDOW_BYTES).unwrap());
+    let (_, updates) = view.log.since(None, 0);
+    assert_eq!(
+        updates
+            .iter()
+            .filter(|u| u["sessionUpdate"] == "tool_call")
+            .count(),
+        7
+    );
+    assert_eq!(view.adapter.stats().unknown_rows, 0);
+
+    let epoch = view.log.epoch;
+    view.rebind_to(Bound {
+        path: claude,
+        agent: Agent::Claude,
+    });
+    view.advance(TAIL_WINDOW_BYTES).unwrap();
+    assert_ne!(view.log.epoch, epoch);
+    let (_, updates) = view.log.since(None, 0);
+    assert_eq!(
+        texts(&updates),
+        ["from claude"],
+        "nothing of the Grok tab remains"
+    );
 }
