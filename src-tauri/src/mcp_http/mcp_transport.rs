@@ -27497,7 +27497,10 @@ mod tests {
         assert!(!actual.is_empty(), "agent must record launch argv");
         let expected = format!(
             "projects={{{}={{trust_level=\"trusted\"}}}}",
-            serde_json::to_string(&cwd.to_string_lossy()).unwrap()
+            // The launch trusts the resolved cwd (Codex matches its trust table
+            // against the real path), so a `$TMPDIR` reached through a symlink
+            // is expected back in its canonical spelling.
+            serde_json::to_string(&crate::fs::long_form(&cwd).to_string_lossy()).unwrap()
         );
         assert!(
             actual
@@ -27647,7 +27650,10 @@ mod tests {
         );
         let expected = format!(
             "projects={{{}={{trust_level=\"trusted\"}}}}",
-            serde_json::to_string(&cwd.to_string_lossy()).unwrap()
+            // The launch trusts the resolved cwd (Codex matches its trust table
+            // against the real path), so a `$TMPDIR` reached through a symlink
+            // is expected back in its canonical spelling.
+            serde_json::to_string(&crate::fs::long_form(&cwd).to_string_lossy()).unwrap()
         );
         assert!(
             actual
