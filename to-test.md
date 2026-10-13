@@ -5216,3 +5216,5 @@ Visual evidence: worktree Vite fixture mounted the real NotificationsTab and Toa
 ## Goose reply completion (1812-022d) — Rust restart required
 
 - [ ] After Boss restarts `make dev` or installs `make build`, send two prompts to Goose 1.49.0 with ollama. Each reply must return the tab to idle shortly after the ready composer appears; the second submit must be accepted without a five-minute wait or 409. The recorded first-turn replay covers the backend transition; this live check remains open until restart.
+
+- [ ] GitHub Settings (#1829-54c2): after Boss restarts `make dev` or rebuilds release, verify one-account/one-remote repositories hide Repository Bindings, OAuth shows Logout, and environment Disconnect stays disconnected across reopening Settings. Then complete device-flow login; fork/upstream remotes must still offer a remote choice. Rust changes require restart; unit regressions use fake credentials.

@@ -165,15 +165,14 @@ pub(crate) struct BindCandidate {
 /// Outcome of resolving which account (if any) a repo belongs to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum RepoResolution {
-    /// Resolved to an account (explicit persisted binding).
+    /// Resolved to an account (persisted binding or one unambiguous candidate).
     Bound {
         account: GitHubAccount,
         owner: String,
         repo: String,
     },
-    /// One or more candidate bindings. `len == 1` → the caller auto-confirms +
-    /// persists the binding and proceeds (the single obvious choice). `len > 1`
-    /// → the caller must prompt the user (no silent origin pick).
+    /// Multiple candidate account/repository bindings require a user choice.
+    /// Different repositories on the same account still require a remote choice.
     NeedsBind(Vec<BindCandidate>),
     /// A known GitHub host (github.com) is present but no account is configured
     /// for it → the user must add/authenticate an account.
@@ -271,6 +270,16 @@ pub(crate) fn resolve_repo_account(
     match candidates.len() {
         0 if saw_cloud_without_account => RepoResolution::NeedsAccount,
         0 => RepoResolution::Unmonitored,
+        1 => {
+            let candidate = candidates.remove(0);
+            RepoResolution::Bound {
+                account: find_account(&candidate.account_id)
+                    .expect("candidate came from a configured account")
+                    .clone(),
+                owner: candidate.owner,
+                repo: candidate.repo,
+            }
+        }
         _ => RepoResolution::NeedsBind(candidates),
     }
 }
@@ -756,7 +765,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_unbound_single_github_com_needs_bind_one() {
+    fn resolve_single_candidate_does_not_require_a_binding_choice() {
         let dir = tempfile::tempdir().expect("tempdir");
         let repo = make_repo_with_remotes(
             dir.path(),
@@ -770,17 +779,38 @@ mod tests {
             &RepoBindingStore::default(),
             Some(&default),
         );
-        match res {
-            RepoResolution::NeedsBind(c) => {
-                assert_eq!(c.len(), 1);
-                assert_eq!(c[0].account_id, "github.com");
-                assert_eq!(
-                    (c[0].owner.as_str(), c[0].repo.as_str()),
-                    ("octocat", "hello")
-                );
+        assert_eq!(
+            res,
+            RepoResolution::Bound {
+                account: default,
+                owner: "octocat".into(),
+                repo: "hello".into(),
             }
-            other => panic!("expected NeedsBind([1]), got {other:?}"),
-        }
+        );
+    }
+
+    // Catches: resolving a unique named account incorrectly requires a binding,
+    // or silently substitutes the ambient account's identity.
+    #[test]
+    fn resolve_single_named_account_without_ambient_credentials() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let repo = make_repo_with_remotes(
+            dir.path(),
+            "main",
+            &[("origin", "git@ghe.acme.com:team/project.git")],
+        );
+        let account = GitHubAccount::ghe_pat(GitHubHost::new("ghe.acme.com").unwrap(), None);
+        let registry = GitHubAccountRegistry {
+            accounts: vec![account.clone()],
+        };
+        assert_eq!(
+            resolve_repo_account(&repo, &registry, &RepoBindingStore::default(), None),
+            RepoResolution::Bound {
+                account,
+                owner: "team".into(),
+                repo: "project".into()
+            }
+        );
     }
 
     #[test]
@@ -865,8 +895,8 @@ mod tests {
 
     #[test]
     fn resolve_binding_to_removed_account_falls_through() {
-        // A stale binding to an account that no longer exists must not resolve to
-        // Bound — it re-resolves from the remotes instead.
+        // A stale binding must not keep the removed identity: the single current
+        // candidate resolves from the remotes instead.
         let dir = tempfile::tempdir().expect("tempdir");
         let repo = make_repo_with_remotes(
             dir.path(),
@@ -890,7 +920,14 @@ mod tests {
             &bindings,
             Some(&default),
         );
-        assert!(matches!(res, RepoResolution::NeedsBind(_)));
+        assert_eq!(
+            res,
+            RepoResolution::Bound {
+                account: default,
+                owner: "octocat".into(),
+                repo: "hello".into(),
+            }
+        );
     }
 
     /// A second github.com account (same host as the implicit default), kept
