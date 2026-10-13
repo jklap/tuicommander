@@ -92,16 +92,11 @@ impl Store for AgentsSettingsStore {
         result.map_err(|_| failure.unwrap_or_else(|| Error::new(ID, "store_failed")))
     }
 
-    fn apply(
-        &self,
-        _: &CommitReply,
-    ) -> impl std::future::Future<Output = Result<bool, Failure>> + Send {
+    async fn apply(&self, _: &CommitReply) -> Result<bool, Failure> {
         // Launches read the instruction files; the config itself is re-read on every launch.
-        async {
-            tokio::task::spawn_blocking(crate::config::refresh_launch_instructions)
-                .await
-                .map_err(|_| Error::new(ID, "store_failed"))?;
-            Ok(true)
-        }
+        tokio::task::spawn_blocking(crate::config::refresh_launch_instructions)
+            .await
+            .map_err(|_| Error::new(ID, "store_failed"))?;
+        Ok(true)
     }
 }
