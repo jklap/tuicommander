@@ -1122,6 +1122,41 @@ describe("useGitOperations", () => {
 		});
 	});
 
+	describe("handleMergeAndArchiveIntoMain", () => {
+		// 1867-c863 — catches: a manual Merge & Archive on a repo without a main workspace shown only on the status bar.
+		it("shows a sticky error card when the repo has no main branch", async () => {
+			for (const toast of [...toastsStore.toasts]) toastsStore.remove(toast.id);
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setWorkspace("/repo", "feature/x", { worktreePath: "/repo/.wt/x" });
+
+			await gitOps.handleMergeAndArchiveIntoMain("/repo", "feature/x");
+
+			const card = toastsStore.toasts.find((toast) => toast.level === "error");
+			expect(card?.message).toBe("Cannot merge: no main branch found");
+			expect(mockRepo.mergeAndArchiveWorktree).not.toHaveBeenCalled();
+		});
+
+		// catches: the shared entry merging into the wrong target or ignoring the after-merge setting.
+		it("merges into the main workspace's branch with the repo's after-merge setting", async () => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setWorkspace("/repo", "trunk", { branchName: "trunk", worktreePath: "/repo", isMain: true });
+			repositoriesStore.setWorkspace("/repo", "feature/x", { worktreePath: "/repo/.wt/x" });
+			repoSettingsStore.getOrCreate("/repo", "Repo");
+			repoSettingsStore.update("/repo", { afterMerge: "delete" });
+			mockRepo.mergeAndArchiveWorktree.mockResolvedValue({ merged: true, action: "deleted", archive_path: null });
+
+			await gitOps.handleMergeAndArchiveIntoMain("/repo", "feature/x");
+
+			expect(mockRepo.mergeAndArchiveWorktree).toHaveBeenCalledWith(
+				"/repo",
+				"feature/x",
+				"feature/x",
+				"trunk",
+				"delete",
+			);
+		});
+	});
+
 	describe("handleMergeAndArchive", () => {
 		it("removes branch from sidebar when action is archive", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
@@ -3132,6 +3167,53 @@ describe("useGitOperations", () => {
 			expect(branch?.terminals.length).toBeGreaterThan(0);
 			// Should warn about failure
 			expect(mockSetStatusInfo).toHaveBeenCalledWith(expect.stringContaining("Setup script failed"));
+		});
+
+		// 1867-c863 — catches: a failed setup script of a manual worktree creation shown only on the status bar.
+		it("shows a sticky error card when the setup script fails", async () => {
+			for (const toast of [...toastsStore.toasts]) toastsStore.remove(toast.id);
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+			repoSettingsStore.getOrCreate("/repo", "Repo");
+			repoSettingsStore.update("/repo", { setupScript: "exit 1" });
+			mockRepo.createWorktree.mockResolvedValue({
+				name: "feat-test",
+				path: "/repo/wt/feat-test",
+				workspace_id: "feat-test",
+				branch: "feat-test",
+				base_repo: "/repo",
+			});
+			mockRepo.runSetupScript.mockResolvedValue({ exit_code: 1, stdout: "", stderr: "failed" });
+
+			await gitOps.handleAddWorktree("/repo");
+			await gitOps.confirmCreateWorktree({ branchName: "feat-test", createBranch: true, baseRef: "main" });
+
+			const card = toastsStore.toasts.find((toast) => toast.level === "error");
+			expect(card?.message).toBe("Setup script failed (exit 1)");
+		});
+
+		// 1867-c863 — catches: a setup script that cannot even start shown only on the status bar.
+		it("shows a sticky error card when the setup script cannot run", async () => {
+			for (const toast of [...toastsStore.toasts]) toastsStore.remove(toast.id);
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+			repoSettingsStore.getOrCreate("/repo", "Repo");
+			repoSettingsStore.update("/repo", { setupScript: "exit 1" });
+			mockRepo.createWorktree.mockResolvedValue({
+				name: "feat-test",
+				path: "/repo/wt/feat-test",
+				workspace_id: "feat-test",
+				branch: "feat-test",
+				base_repo: "/repo",
+			});
+			mockRepo.runSetupScript.mockRejectedValue(new Error("no shell"));
+
+			await gitOps.handleAddWorktree("/repo");
+			await gitOps.confirmCreateWorktree({ branchName: "feat-test", createBranch: true, baseRef: "main" });
+
+			const card = toastsStore.toasts.find((toast) => toast.level === "error");
+			expect(card?.message).toContain("Setup script failed:");
+			expect(card?.message).toContain("no shell");
 		});
 	});
 
