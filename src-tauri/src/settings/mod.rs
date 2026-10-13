@@ -10,6 +10,7 @@ pub mod request;
 pub mod service;
 pub mod telegram;
 pub mod transaction;
+pub mod upstreams;
 
 mod pointer;
 mod validation;
@@ -33,3 +34,6 @@ mod preferences_tests;
 
 #[cfg(test)]
 mod telegram_tests;
+
+#[cfg(test)]
+mod upstreams_tests;
