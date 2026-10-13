@@ -987,3 +987,9 @@ repair Git and submodule paths; preserve ignored artifacts and publish lifecycle
 ## Beta update channel (#1813-4bdf)
 
 The Beta channel checks a rolling signed manifest published only after the versioned beta release finishes. It also checks stable and selects the newer version, so beta users receive the final release. Stable users retain the stable endpoint. New beta installs default to Beta; explicit saved settings are preserved. Beta installers stay on the immutable versioned release and open in the browser; stable installs use the existing in-app updater.
+
+GitHub settings owner adapter (1774-ce8f): internal typed read/perform actions use
+the existing GitHub/account owners for authentication, credential handling and
+removal effects. Bindings require a registered repository, matching remote host
+and a current binding revision. Reads expose presence and runtime provenance.
+The shared settings transport cutover and refresh publisher remain separate steps.

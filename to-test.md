@@ -1,3 +1,8 @@
+## GitHub settings owner adapter (1774-ce8f) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, the GitHub owner adapter is loaded. Shared settings transport wiring is a separate step; this change adds no callable endpoint by itself.
+- [ ] After transport wiring, use a throwaway instance to complete default/additional cloud device login and add an Enterprise PAT. Confirm immediate presence-only readback, real identity, bindings and account-removal cleanup. Boss performs provider authentication; do not use production credentials for automated checks.
+
 ## Shared settings file store (1824-9c1e) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, the shared strict file-store refactor is loaded. Notifications, preferences, repositories, agents and voice keep their existing behavior; targeted settings tests cover persistence, normalization, corrupt input and apply hooks. No new settings transport is registered by this refactor.
