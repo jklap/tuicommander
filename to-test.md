@@ -1,3 +1,7 @@
+## Ego settings adapter (1775-330c) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, model reads/writes in Settings > Providers use the configured Ego profile and AI Chat workspace. Existing ACP and PTY sessions keep their launch configuration. Internal settings adapters await the later transport-registration step; targeted fixture tests cover owner commands and readback without touching production credentials.
+
 ## Shared settings file store (1824-9c1e) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, the shared strict file-store refactor is loaded. Notifications, preferences, repositories, agents and voice keep their existing behavior; targeted settings tests cover persistence, normalization, corrupt input and apply hooks. No new settings transport is registered by this refactor.

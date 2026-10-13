@@ -4017,6 +4017,681 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "execution_authority"
     },
+    "ego.artifact_dir": {
+      "id": "ego.artifact_dir",
+      "store": "ego",
+      "owner": "profile",
+      "area": "ego",
+      "group": "managed",
+      "order": 0,
+      "path": "/artifact_dir",
+      "labelKey": "settings.catalogue.ego.artifact_dir.label",
+      "helpKey": "settings.catalogue.ego.artifact_dir.help",
+      "label": "artifact_dir",
+      "schema": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null
+      },
+      "nullable": true,
+      "default": null,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "private",
+      "apply": "next_session",
+      "effect": "Used by the next Ego session; existing ACP and PTY sessions keep their configuration.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "ego.bare": {
+      "id": "ego.bare",
+      "store": "ego",
+      "owner": "profile",
+      "area": "ego",
+      "group": "managed",
+      "order": 0,
+      "path": "/bare",
+      "labelKey": "settings.catalogue.ego.bare.label",
+      "helpKey": "settings.catalogue.ego.bare.help",
+      "label": "bare",
+      "schema": {
+        "type": [
+          "boolean",
+          "null"
+        ],
+        "default": null
+      },
+      "nullable": true,
+      "default": null,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "private",
+      "apply": "next_session",
+      "effect": "Used by the next Ego session; existing ACP and PTY sessions keep their configuration.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "ego.budget": {
+      "id": "ego.budget",
+      "store": "ego",
+      "owner": "profile",
+      "area": "ego",
+      "group": "managed",
+      "order": 0,
+      "path": "/budget",
+      "labelKey": "settings.catalogue.ego.budget.label",
+      "helpKey": "settings.catalogue.ego.budget.help",
+      "label": "budget",
+      "schema": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null
+      },
+      "nullable": true,
+      "default": null,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "private",
+      "apply": "next_session",
+      "effect": "Used by the next Ego session; existing ACP and PTY sessions keep their configuration.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "ego.credentials.{key}": {
+      "id": "ego.credentials.{key}",
+      "store": "ego",
+      "owner": "profile",
+      "area": "ego",
+      "group": "managed",
+      "order": 0,
+      "path": "/credentials/{key}",
+      "labelKey": "settings.catalogue.ego.credentials.{key}.label",
+      "helpKey": "settings.catalogue.ego.credentials.{key}.help",
+      "label": "credentials/{key}",
+      "schema": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "nullable": true,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "secret",
+      "apply": "next_session",
+      "effect": "Used by the next Ego session; existing ACP and PTY sessions keep their configuration.",
+      "operations": [
+        "get"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "ego.exec.env": {
+      "id": "ego.exec.env",
+      "store": "ego",
+      "owner": "profile",
+      "area": "ego",
+      "group": "managed",
+      "order": 0,
+      "path": "/exec.env",
+      "labelKey": "settings.catalogue.ego.exec.env.label",
+      "helpKey": "settings.catalogue.ego.exec.env.help",
+      "label": "exec.env",
+      "schema": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "enum": [
+          "inherit",
+          "core",
+          "allowlist",
+          null
+        ],
+        "default": null
+      },
+      "nullable": true,
+      "default": null,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "private",
+      "apply": "next_session",
+      "effect": "Used by the next Ego session; existing ACP and PTY sessions keep their configuration.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "ego.exec.env_allowlist": {
+      "id": "ego.exec.env_allowlist",
+      "store": "ego",
+      "owner": "profile",
+      "area": "ego",
+      "group": "managed",
+      "order": 0,
+      "path": "/exec.env_allowlist",
+      "labelKey": "settings.catalogue.ego.exec.env_allowlist.label",
+      "helpKey": "settings.catalogue.ego.exec.env_allowlist.help",
+      "label": "exec.env_allowlist",
+      "schema": {
+        "type": [
+          "array",
+          "null"
+        ],
+        "items": {
+          "type": "string"
+        },
+        "default": null
+      },
+      "nullable": true,
+      "default": null,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "private",
+      "apply": "next_session",
+      "effect": "Used by the next Ego session; existing ACP and PTY sessions keep their configuration.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "ego.mode": {
+      "id": "ego.mode",
+      "store": "ego",
+      "owner": "profile",
+      "area": "ego",
+      "group": "managed",
+      "order": 0,
+      "path": "/mode",
+      "labelKey": "settings.catalogue.ego.mode.label",
+      "helpKey": "settings.catalogue.ego.mode.help",
+      "label": "mode",
+      "schema": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "enum": [
+          "plan",
+          "default",
+          "auto",
+          "edits",
+          "yolo",
+          null
+        ],
+        "default": null
+      },
+      "nullable": true,
+      "default": null,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "private",
+      "apply": "next_session",
+      "effect": "Used by the next Ego session; existing ACP and PTY sessions keep their configuration.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "ego.model": {
+      "id": "ego.model",
+      "store": "ego",
+      "owner": "profile",
+      "area": "ego",
+      "group": "managed",
+      "order": 0,
+      "path": "/model",
+      "labelKey": "settings.catalogue.ego.model.label",
+      "helpKey": "settings.catalogue.ego.model.help",
+      "label": "model",
+      "schema": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null
+      },
+      "nullable": true,
+      "default": null,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "private",
+      "apply": "next_session",
+      "effect": "Used by the next Ego session; existing ACP and PTY sessions keep their configuration.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "ego.network": {
+      "id": "ego.network",
+      "store": "ego",
+      "owner": "profile",
+      "area": "ego",
+      "group": "managed",
+      "order": 0,
+      "path": "/network",
+      "labelKey": "settings.catalogue.ego.network.label",
+      "helpKey": "settings.catalogue.ego.network.help",
+      "label": "network",
+      "schema": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "enum": [
+          "on",
+          "off",
+          null
+        ],
+        "default": null
+      },
+      "nullable": true,
+      "default": null,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "private",
+      "apply": "next_session",
+      "effect": "Used by the next Ego session; existing ACP and PTY sessions keep their configuration.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "ego.permissions.judge": {
+      "id": "ego.permissions.judge",
+      "store": "ego",
+      "owner": "profile",
+      "area": "ego",
+      "group": "managed",
+      "order": 0,
+      "path": "/permissions.judge",
+      "labelKey": "settings.catalogue.ego.permissions.judge.label",
+      "helpKey": "settings.catalogue.ego.permissions.judge.help",
+      "label": "permissions.judge",
+      "schema": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null
+      },
+      "nullable": true,
+      "default": null,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "private",
+      "apply": "next_session",
+      "effect": "Used by the next Ego session; existing ACP and PTY sessions keep their configuration.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "ego.roots": {
+      "id": "ego.roots",
+      "store": "ego",
+      "owner": "profile",
+      "area": "ego",
+      "group": "managed",
+      "order": 0,
+      "path": "/roots",
+      "labelKey": "settings.catalogue.ego.roots.label",
+      "helpKey": "settings.catalogue.ego.roots.help",
+      "label": "roots",
+      "schema": {
+        "type": [
+          "array",
+          "null"
+        ],
+        "items": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "access": {
+              "type": "string",
+              "enum": [
+                "read",
+                "read-write"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "path",
+            "access"
+          ]
+        },
+        "default": null
+      },
+      "nullable": true,
+      "default": null,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "private",
+      "apply": "next_session",
+      "effect": "Used by the next Ego session; existing ACP and PTY sessions keep their configuration.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "ego.sandbox": {
+      "id": "ego.sandbox",
+      "store": "ego",
+      "owner": "profile",
+      "area": "ego",
+      "group": "managed",
+      "order": 0,
+      "path": "/sandbox",
+      "labelKey": "settings.catalogue.ego.sandbox.label",
+      "helpKey": "settings.catalogue.ego.sandbox.help",
+      "label": "sandbox",
+      "schema": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "enum": [
+          "ro",
+          "workspace",
+          "adaptive",
+          "off",
+          null
+        ],
+        "default": null
+      },
+      "nullable": true,
+      "default": null,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "private",
+      "apply": "next_session",
+      "effect": "Used by the next Ego session; existing ACP and PTY sessions keep their configuration.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "ego.session_dir": {
+      "id": "ego.session_dir",
+      "store": "ego",
+      "owner": "profile",
+      "area": "ego",
+      "group": "managed",
+      "order": 0,
+      "path": "/session_dir",
+      "labelKey": "settings.catalogue.ego.session_dir.label",
+      "helpKey": "settings.catalogue.ego.session_dir.help",
+      "label": "session_dir",
+      "schema": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null
+      },
+      "nullable": true,
+      "default": null,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "private",
+      "apply": "next_session",
+      "effect": "Used by the next Ego session; existing ACP and PTY sessions keep their configuration.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "ego.thinking": {
+      "id": "ego.thinking",
+      "store": "ego",
+      "owner": "profile",
+      "area": "ego",
+      "group": "managed",
+      "order": 0,
+      "path": "/thinking",
+      "labelKey": "settings.catalogue.ego.thinking.label",
+      "helpKey": "settings.catalogue.ego.thinking.help",
+      "label": "thinking",
+      "schema": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "enum": [
+          "off",
+          "minimal",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max",
+          null
+        ],
+        "default": null
+      },
+      "nullable": true,
+      "default": null,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "private",
+      "apply": "next_session",
+      "effect": "Used by the next Ego session; existing ACP and PTY sessions keep their configuration.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "ego.ui.statusline.segments": {
+      "id": "ego.ui.statusline.segments",
+      "store": "ego",
+      "owner": "profile",
+      "area": "ego",
+      "group": "managed",
+      "order": 0,
+      "path": "/ui.statusline.segments",
+      "labelKey": "settings.catalogue.ego.ui.statusline.segments.label",
+      "helpKey": "settings.catalogue.ego.ui.statusline.segments.help",
+      "label": "ui.statusline.segments",
+      "schema": {
+        "type": [
+          "array",
+          "null"
+        ],
+        "items": {
+          "type": "string",
+          "enum": [
+            "model",
+            "effort",
+            "mode",
+            "context",
+            "cost",
+            "queue",
+            "drafts",
+            "interrupt",
+            "cwd",
+            "git",
+            "trust"
+          ]
+        },
+        "default": null
+      },
+      "nullable": true,
+      "default": null,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "private",
+      "apply": "next_session",
+      "effect": "Used by the next Ego session; existing ACP and PTY sessions keep their configuration.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "ego_launch.ai_chat_workspace": {
+      "id": "ego_launch.ai_chat_workspace",
+      "store": "ego_launch",
+      "owner": "machine",
+      "area": "app",
+      "group": "ai_chat_workspace",
+      "order": 10,
+      "path": "/ai_chat_workspace",
+      "labelKey": "settings.catalogue.app.ai_chat_workspace.label",
+      "helpKey": "settings.catalogue.app.ai_chat_workspace.help",
+      "label": "ai chat workspace",
+      "schema": {
+        "description": "Directory every AI Chat conversation runs in. Empty means the user's home\ndirectory. Must be absolute; a missing directory is created at connect.",
+        "type": "string",
+        "default": ""
+      },
+      "nullable": false,
+      "default": "",
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "private",
+      "apply": "next_session",
+      "effect": "Used when the next session or process starts; existing sessions retain their launch configuration.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "ego_launch.ego_executable": {
+      "id": "ego_launch.ego_executable",
+      "store": "ego_launch",
+      "owner": "machine",
+      "area": "app",
+      "group": "ego_executable",
+      "order": 8,
+      "path": "/ego_executable",
+      "labelKey": "settings.catalogue.app.ego_executable.label",
+      "helpKey": "settings.catalogue.app.ego_executable.help",
+      "label": "ego executable",
+      "schema": {
+        "description": "Absolute path to the one ego executable this host may launch for ACP.\n\nThe only place the ACP process authority comes from. No ACP command\ncarries it: a caller supplies a working directory and nothing else, so\nno connect request can choose which binary runs. It is configuration —\nedited in Settings and written through `save_config` like every other\nfield here. Empty means ACP is not configured on this host and every\nconnect is refused.",
+        "type": "string",
+        "default": ""
+      },
+      "nullable": false,
+      "default": "",
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "private",
+      "apply": "next_session",
+      "effect": "Selects the trusted executable for new ACP connections.",
+      "operations": [
+        "get"
+      ],
+      "confirmationClass": "execution_authority"
+    },
+    "ego_launch.ego_profile": {
+      "id": "ego_launch.ego_profile",
+      "store": "ego_launch",
+      "owner": "machine",
+      "area": "app",
+      "group": "ego_profile",
+      "order": 9,
+      "path": "/ego_profile",
+      "labelKey": "settings.catalogue.app.ego_profile.label",
+      "helpKey": "settings.catalogue.app.ego_profile.help",
+      "label": "ego profile",
+      "schema": {
+        "description": "Optional user-config profile passed to ego at ACP launch.",
+        "type": "string",
+        "default": ""
+      },
+      "nullable": false,
+      "default": "",
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "private",
+      "apply": "next_session",
+      "effect": "Used when the next session or process starts; existing sessions retain their launch configuration.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
     "github_accounts.accounts.{id}.host.host": {
       "id": "github_accounts.accounts.{id}.host.host",
       "store": "github_accounts",
@@ -9252,18 +9927,6 @@ export const settingsCatalogue = {
       "reason": "Recoverable credential presence and typed login/rotation actions need the account owner schema; registry metadata alone is not coverage."
     },
     {
-      "store": "ego",
-      "path": "/providers/{id}",
-      "ownerStep": "Step 3b",
-      "reason": "Discover installed ego provider/model/auth capabilities through the configured binary; never infer an external schema or read its credential files."
-    },
-    {
-      "store": "ego",
-      "path": "/profiles/{id}/perimeter",
-      "ownerStep": "Step 3b",
-      "reason": "Installed-owner perimeter and stored/effective/source schema must be recorded from ego with the trusted workspace/profile."
-    },
-    {
       "store": "repositories_registration",
       "path": "/repos/{path}",
       "ownerStep": "Step 4d",
@@ -9400,6 +10063,36 @@ export const settingsCatalogue = {
       "path": "/agents/{key}/run_configs/{name}/model",
       "ownerStep": "Step 4c",
       "reason": "Agent model availability requires the owning CLI capability resolver, without launching on save."
+    },
+    {
+      "store": "ego",
+      "path": "/exec_paths",
+      "ownerStep": "Step 3b",
+      "reason": "DEFERRED (2026-10-13): parent scopes this adapter to managed keys. Installed ego config set exec_paths=[] exits 2: unknown config key; an Ego owner extension must precede support."
+    },
+    {
+      "store": "ego",
+      "path": "/auth/{provider}/headers",
+      "ownerStep": "Step 3b",
+      "reason": "DEFERRED (2026-10-13): auth is base-only and outside ManagedConfigKey. Installed ego config set auth.openrouter.headers={} exits 2: unknown config key. No config-edit or raw-file bypass."
+    },
+    {
+      "store": "ego",
+      "path": "/auth/{provider}/credential_command",
+      "ownerStep": "Step 3b",
+      "reason": "DEFERRED (2026-10-13): installed ego config set auth.openrouter.credential_command exits 2: unknown config key. The program path is non-secret, its stdout secret; an owner extension is required."
+    },
+    {
+      "store": "ego",
+      "path": "/atomic_batch",
+      "ownerStep": "Step 3b",
+      "reason": "DEFERRED (2026-10-13): Ego managed CLI publishes one key per call. The adapter refuses patches changing multiple keys before any write; complete atomic batches require an owner API."
+    },
+    {
+      "store": "ego",
+      "path": "/compare_and_swap",
+      "ownerStep": "Step 3b",
+      "reason": "DEFERRED (2026-10-13): Ego CLI has no conditional revision write. The adapter serializes its own commits and checks latest state; external CLI writers can race between read and mutation. Full cross-process CAS requires an owner API."
     }
   ],
   "collections": [

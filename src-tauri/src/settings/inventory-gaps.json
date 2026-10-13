@@ -6,18 +6,6 @@
     "reason": "Recoverable credential presence and typed login/rotation actions need the account owner schema; registry metadata alone is not coverage."
   },
   {
-    "store": "ego",
-    "path": "/providers/{id}",
-    "ownerStep": "Step 3b",
-    "reason": "Discover installed ego provider/model/auth capabilities through the configured binary; never infer an external schema or read its credential files."
-  },
-  {
-    "store": "ego",
-    "path": "/profiles/{id}/perimeter",
-    "ownerStep": "Step 3b",
-    "reason": "Installed-owner perimeter and stored/effective/source schema must be recorded from ego with the trusted workspace/profile."
-  },
-  {
     "store": "repositories_registration",
     "path": "/repos/{path}",
     "ownerStep": "Step 4d",
@@ -154,5 +142,35 @@
     "path": "/agents/{key}/run_configs/{name}/model",
     "ownerStep": "Step 4c",
     "reason": "Agent model availability requires the owning CLI capability resolver, without launching on save."
+  },
+  {
+    "store": "ego",
+    "path": "/exec_paths",
+    "ownerStep": "Step 3b",
+    "reason": "DEFERRED (2026-10-13): parent scopes this adapter to managed keys. Installed ego config set exec_paths=[] exits 2: unknown config key; an Ego owner extension must precede support."
+  },
+  {
+    "store": "ego",
+    "path": "/auth/{provider}/headers",
+    "ownerStep": "Step 3b",
+    "reason": "DEFERRED (2026-10-13): auth is base-only and outside ManagedConfigKey. Installed ego config set auth.openrouter.headers={} exits 2: unknown config key. No config-edit or raw-file bypass."
+  },
+  {
+    "store": "ego",
+    "path": "/auth/{provider}/credential_command",
+    "ownerStep": "Step 3b",
+    "reason": "DEFERRED (2026-10-13): installed ego config set auth.openrouter.credential_command exits 2: unknown config key. The program path is non-secret, its stdout secret; an owner extension is required."
+  },
+  {
+    "store": "ego",
+    "path": "/atomic_batch",
+    "ownerStep": "Step 3b",
+    "reason": "DEFERRED (2026-10-13): Ego managed CLI publishes one key per call. The adapter refuses patches changing multiple keys before any write; complete atomic batches require an owner API."
+  },
+  {
+    "store": "ego",
+    "path": "/compare_and_swap",
+    "ownerStep": "Step 3b",
+    "reason": "DEFERRED (2026-10-13): Ego CLI has no conditional revision write. The adapter serializes its own commits and checks latest state; external CLI writers can race between read and mutation. Full cross-process CAS requires an owner API."
   }
 ]

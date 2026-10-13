@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Fixed
+- Ego model settings now honor the configured profile and AI Chat workspace. The internal settings service adds managed Ego configuration, readback and presence-only credentials through owner services (#1775-330c).
 - Goose returns to idle after a reply and accepts the next submission without waiting for the five-minute stale recovery (#1812-022d).
 - Aider returns to idle after a reply and accepts the next submission (#1823-8150).
 - Keep child agent MCP bridges on the spawning instance, including isolated `tuic-remote` instances and fallback sockets (#1811-a0fe).

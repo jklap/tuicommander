@@ -2204,3 +2204,33 @@ an explicit create action. These actions match across HTTP, IPC, MCP and CLI.
 ### Design Mode lifecycle tool
 
 The native `design_mode` tool exposes `start`, `stop`, `status`, `reload` and `navigate` through normal discovery and dispatch. Start accepts `session_id`, optional `browser` (`chrome` or `edge`) and optional absolute HTTP(S) `url`. Session references resolve like the session tool. Stop accepts `repo_path` from start/status. Reload takes the same `repo_path` and bumps a per-repository reload sequence; the extension reloads the reviewed tab once on its next heartbeat. Navigate takes `repo_path` and `url` (HTTP(S) on `localhost`, `127.0.0.1` or `[::1]`, no credentials); the heartbeat reply then carries `navigate: {seq, url}` and the extension opens the URL in the reviewed tab once per sequence. The sequence survives a re-arm but the URL does not, so a new Start never replays an old navigation. Reload and navigate answer "Design Mode is not running for this repository" when nothing is armed. The extension posts `heartbeat` to `/design-mode/extension` every 5 s (reply `{armed, reloadSeq, navigate?}`); an armed mode is stopped 60 s after the last heartbeat, or 10 min after Start when none arrived. The adapter uses the same lifecycle core as HTTP and IPC; headless builds return an explicit desktop-host-required error. URL-aware start is the default coordinator path for layout work.
+
+
+### Internal Ego settings adapters (#1775-330c)
+
+`settings::ego::EgoSettingsStore` targets `profile` with the configured profile ID,
+or `machine` for the user base. It captures trusted executable, workspace and
+profile together per operation, clears ambient `EGO_PROFILE`, and invokes only
+`config ls/set/unset`, `models --json` without refresh, and `auth status`.
+The model slug selects the provider. Managed DTOs discard unknown owner fields;
+credential type/expiry and process diagnostics never enter settings replies,
+effects or audit data. Credentials are read-only set/unset markers.
+
+Each managed key is one atomic leaf. Null/reset invokes owner `unset`; explicit
+`roots: []` invokes `set roots=[]`. Base-only and CI-only keys are rejected in the
+wrong scope. A patch changing multiple keys is rejected before any write because
+Ego's CLI has no atomic batch operation. The adapter checks latest revisions and
+serializes its own mutations, but an external CLI writer can race the read/write
+boundary; the owner-gap ledger records the missing conditional-write API. Failed
+readback after a successful write reports `persisted: true` and `nextAction: get`.
+
+`ego_launch` exposes only executable (read-only), profile and workspace and delegates
+to `config::settings_app::AppSettingsStore`, preserving its migrations, vault
+snapshot/rollback, locks, persistence and runtime effects. It does not launch a
+process. Both adapters are internal; settings transport registration and executable
+confirmation belong to later plan steps. Existing Ego IPC/HTTP commands retain
+identical shapes; model reads/writes now honor configured profile/workspace.
+
+`exec_paths`, `auth.PROVIDER.headers` and `credential_command` remain owner gaps:
+isolated installed-Ego probes returned exit 2 (`unknown config key`). No editor or
+raw-file fallback is used. Credentials are never read from `auth.json`.
