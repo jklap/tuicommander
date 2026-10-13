@@ -2484,7 +2484,6 @@ mod tests {
         }
         // An unknown agent has no config spec.
         assert!(get_mcp_config_spec("unknown-agent").is_none());
-        assert!(get_mcp_config_spec("unknown-agent").is_none());
     }
 
     // --- ensure_agent_mcp_entry tests ---
