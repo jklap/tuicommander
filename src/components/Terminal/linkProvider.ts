@@ -17,6 +17,12 @@ export function filePathRegex(): RegExp {
 	);
 }
 
+/** True when the whole text, ignoring surrounding whitespace, is a single file path. */
+export function isWholeFilePath(text: string): boolean {
+	const trimmed = text.trim();
+	return [...trimmed.matchAll(filePathRegex())].some((match) => match[1] === trimmed);
+}
+
 /** Factory — returns a fresh file:// URL regex. */
 export function fileUrlRegex(): RegExp {
 	return /\bfile:\/\/(\/[^\s"'`<>()[\]{}]+)/g;

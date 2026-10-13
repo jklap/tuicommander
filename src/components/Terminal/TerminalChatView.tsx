@@ -4,6 +4,7 @@ import { appLogger } from "../../stores/appLogger";
 import { chatViewAvailability, chatViewKey, chatViewStore } from "../../stores/chatView";
 import { settingsStore } from "../../stores/settings";
 import { terminalsStore } from "../../stores/terminals";
+import { openFileLinkHere, resolveFileLink } from "../../utils/openFileLink";
 import { Transcript, type TranscriptSearchRef } from "../AIChatPanel/Transcript";
 import s from "./TerminalChatView.module.css";
 
@@ -38,6 +39,19 @@ export const TerminalChatView: Component<{
 			.refresh(props.sessionId)
 			.catch((error) => appLogger.error("terminal", "Chat view refresh failed", { sessionId: props.sessionId, error }));
 
+	/** False when the path resolves to nothing, so the caller can drop the dead link. */
+	const openFile = async (href: string) => {
+		const cwd = terminalsStore.get(props.terminalId)?.cwd;
+		if (!cwd) return;
+		try {
+			const target = await resolveFileLink(cwd, href);
+			if (!target) return false;
+			openFileLinkHere(target);
+		} catch (error) {
+			appLogger.error("terminal", "Failed to resolve file link", error);
+		}
+	};
+
 	onMount(() => {
 		void chatViewStore.watch(props.sessionId).then((dispose) => {
 			if (disposed) {
@@ -60,6 +74,7 @@ export const TerminalChatView: Component<{
 			<Transcript
 				terminalAgent={terminalsStore.get(props.terminalId)?.agentType ?? undefined}
 				onSearchRef={props.onSearchRef}
+				onOpenFile={openFile}
 				entries={() => acpTranscript.entries(chatViewKey(props.sessionId))}
 				busy={() => false}
 				observeToolDuration={false}

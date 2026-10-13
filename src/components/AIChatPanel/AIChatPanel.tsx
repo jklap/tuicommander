@@ -7,7 +7,7 @@ import { settingsStore } from "../../stores/settings";
 import { uiStore } from "../../stores/ui";
 import { isTauri } from "../../transport";
 import { cx } from "../../utils";
-import { openTerminalFilePath } from "../../utils/filePreview";
+import { openFileLinkHere, resolveFileLink } from "../../utils/openFileLink";
 import { SETTINGS_SECTION_EGO } from "../SettingsPanel/sections";
 import p from "../shared/panel.module.css";
 import { PanelResizeHandle } from "../ui/PanelResizeHandle";
@@ -83,38 +83,24 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 		const cwd = chat.root() ?? viewed();
 		if (!cwd) return;
 		try {
-			const resolved = await invoke<{ absolute_path: string; is_directory: boolean } | null>("resolve_terminal_path", {
-				cwd,
-				candidate: href,
-			});
-			if (resolved) {
-				if (resolved.is_directory) {
-					if (isPanelMode() && isTauri()) {
-						await emitTo("main", "panel-action", {
-							panelId: "ai-chat",
-							action: "open-directory",
-							data: { path: resolved.absolute_path },
-						});
-						await invoke("focus_main_window");
-					} else {
-						uiStore.setFileBrowserExternalRoot(resolved.absolute_path);
-						uiStore.setFileBrowserPanelVisible(true);
-					}
-					return;
-				}
-				const position = href.match(/:(\d+)(?::(\d+))?$/);
-				const line = position ? Number(position[1]) : undefined;
-				const col = position?.[2] ? Number(position[2]) : undefined;
-				if (isPanelMode() && isTauri()) {
-					await emitTo("main", "panel-action", {
-						panelId: "ai-chat",
-						action: "open-file",
-						data: { path: resolved.absolute_path, ...(line ? { line } : {}), ...(col ? { col } : {}) },
-					});
-					await invoke("focus_main_window");
-				} else if (line) openTerminalFilePath(resolved.absolute_path, undefined, line, col);
-				else openTerminalFilePath(resolved.absolute_path);
+			const target = await resolveFileLink(cwd, href);
+			if (!target) return;
+			if (!(isPanelMode() && isTauri())) {
+				openFileLinkHere(target);
+				return;
 			}
+			await emitTo("main", "panel-action", {
+				panelId: "ai-chat",
+				action: target.isDirectory ? "open-directory" : "open-file",
+				data: target.isDirectory
+					? { path: target.absolutePath }
+					: {
+							path: target.absolutePath,
+							...(target.line ? { line: target.line } : {}),
+							...(target.col ? { col: target.col } : {}),
+						},
+			});
+			await invoke("focus_main_window");
 		} catch (error) {
 			appLogger.error("ai-chat", "Failed to resolve file link", error);
 		}
