@@ -28,7 +28,9 @@ pub struct UpstreamsSettingsStore {
 }
 
 impl UpstreamsSettingsStore {
-    pub fn new(registry: Arc<UpstreamRegistry>, self_port: u16) -> Self {
+    // DEFERRED (2026-10-13) — production wiring of the upstreams store (plan Step 4 registration); tests use `at_path`.
+    #[expect(dead_code, reason = "registered by the settings MCP wiring step")]
+    pub(crate) fn new(registry: Arc<UpstreamRegistry>, self_port: u16) -> Self {
         Self {
             file: ConfigFile::new(UPSTREAMS_FILE),
             registry,
