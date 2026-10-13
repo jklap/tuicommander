@@ -1917,6 +1917,15 @@ label appears immediately while the authoritative state ID stays intact.
 Success adopts the returned detail; rejection restores the state label and
 shows the error. Core does not infer a target state from a transition name.
 
+A `start_work` descriptor in `actions` shows a Start work button in the detail and
+in the board card's actions menu (the menu reads the item's detail when opened).
+Core sends the provider a `start_work` action (active repository, branch, item
+brief, `draft` delivery); the provider returns the intent and core runs the host
+start-work workflow with the item link. The button shows a pending state, then
+the started branch, or the error with Retry. The branch is the item field
+`branch` (text) when the provider fills it, else a slug of key and title. This
+field is a hint and needs no schema entry. "Copy branch name" copies that branch.
+
 Refresh is manual and periodic (60 seconds by default) while the detail, Tasks
 view and document are visible. Refresh preserves disclosure state and reloads
 comment pages already opened. Switching items rejects stale responses.

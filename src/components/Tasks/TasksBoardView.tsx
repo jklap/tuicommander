@@ -3,6 +3,7 @@ import type { WorkItemProvider } from "../../plugins/workItemProvider";
 import type { WorkItemBoardPage, WorkItemQuery, WorkItemRef } from "../../types/work-items.gen";
 import { Select } from "../ui/Select";
 import { TasksBoard } from "./board/TasksBoard";
+import { StartWorkMenu } from "./StartWorkMenu";
 import s from "./TasksShell.module.css";
 
 const allItems: WorkItemQuery = {
@@ -20,6 +21,8 @@ const message = (error: unknown) => (error instanceof Error ? error.message : St
 export function TasksBoardView(props: {
 	provider: WorkItemProvider;
 	visible?: boolean;
+	/** Repository that Start work creates its worktree in. */
+	repoPath?: string;
 	onOpen: (reference: WorkItemRef) => void;
 }) {
 	const [boardId, setBoardId] = createSignal("");
@@ -78,6 +81,9 @@ export function TasksBoardView(props: {
 						onMove={(reference, action) => props.provider.act(reference, action)}
 						onUpdated={() => void load()}
 						onOpen={props.onOpen}
+						cardActions={(card) => (
+							<StartWorkMenu provider={props.provider} item={card.item} repoPath={props.repoPath} />
+						)}
 					/>
 				)}
 			</Show>
