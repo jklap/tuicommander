@@ -1928,10 +1928,13 @@ comment pages already opened. Switching items rejects stale responses.
 (capability `pty:write`) creates a worktree on a new `branch` (from `baseRef`, default
 the repo's default branch) and opens an agent in it. The agent is `agentType` or, when
 omitted, the first enabled agent with a run config on the repo's machine; that run
-config supplies the command and env. The prompt is never a shell argument: the host
-waits for the agent's composer and types it there, inside an `<untrusted-content>`
+config supplies the command and env. The prompt sits inside an `<untrusted-content>`
 block, control bytes removed, capped at 12000 characters. `delivery: "draft"`
-(default) leaves Enter to the user; `"submit"` sends it. `link` links the item to the
+(default) waits for the agent's composer and types the prompt there, leaving Enter to
+the user. `"submit"` starts the agent with the prompt as its first message, quoted as
+one POSIX shell argument, for claude, codex, gemini, pi and grok (their `--help` lists a
+positional prompt for an interactive session); other agents, prompts over 16384
+characters and cmd/PowerShell shells get the prompt typed and submitted instead. `link` links the item to the
 new worktree. It resolves to `{ repoPath, workspaceId, branch, worktreePath }`.
 The GitHub Auto-fix action uses the same path with `delivery: "submit"`.
 

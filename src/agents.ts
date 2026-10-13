@@ -45,6 +45,8 @@ export interface AgentConfig {
 	name: string;
 	binary: string;
 	description: string;
+	/** The CLI starts an interactive session seeded with a trailing positional prompt (`<cli> "<prompt>"`, per its --help). */
+	interactivePromptArg?: true;
 	resumeCommand: string | null;
 	/** Mobile Ctrl+Enter: native modified key, or a verified non-submitting newline fallback. */
 	ctrlEnterSequence: string;
@@ -81,6 +83,7 @@ export const AGENTS: Record<AgentType, AgentConfig> = {
 		name: "Claude Code",
 		binary: "claude",
 		description: "Anthropic's Claude Code CLI",
+		interactivePromptArg: true,
 		defaultHeadlessTemplate:
 			'claude --bare --print --output-format text --no-session-persistence --system-prompt "Output only the raw requested text. No explanations, no markdown fences, no commentary." -p "{prompt}"',
 		resumeCommand: "claude --continue",
@@ -107,6 +110,7 @@ export const AGENTS: Record<AgentType, AgentConfig> = {
 		name: "Gemini CLI",
 		binary: "gemini",
 		description: "Google's Gemini CLI",
+		interactivePromptArg: true,
 		defaultHeadlessTemplate: 'gemini "{prompt}"',
 		resumeCommand: "gemini --resume",
 		ctrlEnterSequence: "\x1b[13;5u",
@@ -176,6 +180,7 @@ export const AGENTS: Record<AgentType, AgentConfig> = {
 		name: "Codex CLI",
 		binary: "codex",
 		description: "OpenAI Codex CLI",
+		interactivePromptArg: true,
 		defaultHeadlessTemplate: 'codex "{prompt}"',
 		resumeCommand: "codex resume --last",
 		ctrlEnterSequence: "\n",
@@ -263,6 +268,7 @@ export const AGENTS: Record<AgentType, AgentConfig> = {
 		name: "Grok",
 		binary: "grok",
 		description: "xAI's Grok coding CLI (Grok Build)",
+		interactivePromptArg: true,
 		defaultHeadlessTemplate: 'grok --single "{prompt}"',
 		resumeCommand: "grok --continue",
 		ctrlEnterSequence: "\n",
@@ -306,6 +312,7 @@ export const AGENTS: Record<AgentType, AgentConfig> = {
 		name: "pi",
 		binary: "pi",
 		description: "Earendil's pi coding agent",
+		interactivePromptArg: true,
 		defaultHeadlessTemplate: 'pi --print "{prompt}"',
 		resumeCommand: "pi --continue",
 		ctrlEnterSequence: "\n",

@@ -1,8 +1,11 @@
-import type { AgentRunConfig } from "../agents";
+import { AGENTS, type AgentRunConfig, type AgentType } from "../agents";
 import { isWindows } from "../platform";
 import { settingsStore } from "../stores/settings";
 import type { ShellFamily } from "./sendCommand";
 import { escapePosixShellArg } from "./shell";
+
+/** Longest prompt put on a launch command line; longer ones are typed into the running agent instead. */
+export const ARGV_PROMPT_MAX_CHARS = 16_384;
 
 /** Prefix an agent launch command with its run-config env, quoted for the shell that runs it. */
 export function scopedLaunchCommand(
@@ -41,4 +44,18 @@ export function newTerminalShellFamily(): ShellFamily {
 	return /(?:^|[\\/])(?:bash|zsh|sh|fish|dash|ksh|ash|tcsh|csh|mksh|wsl)(?:\.exe)?(?:\s|$)/.test(shell)
 		? "posix"
 		: "windows-native";
+}
+
+/** Launch command that starts `agentType` interactively with `prompt` as its first message, or null when the prompt
+ *  has to be typed instead: the CLI takes no positional prompt, the prompt is too long, or the shell is cmd/PowerShell
+ *  (their quoting cannot carry a newline). The prompt is quoted for a POSIX shell, so it reaches the agent verbatim. */
+export function launchCommandWithPrompt(
+	agentType: AgentType,
+	command: string,
+	prompt: string,
+	shellFamily: ShellFamily,
+): string | null {
+	if (!AGENTS[agentType].interactivePromptArg || shellFamily === "windows-native") return null;
+	if (prompt.length > ARGV_PROMPT_MAX_CHARS) return null;
+	return `${command} ${escapePosixShellArg(prompt)}`;
 }

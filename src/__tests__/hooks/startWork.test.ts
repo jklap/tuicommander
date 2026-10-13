@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createWorktreeCreationCoordinator } from "../../hooks/git/createWorktreeCreationCoordinator";
@@ -41,7 +42,7 @@ function invokeImpl(cmd: string, args?: Record<string, unknown>): Promise<unknow
 }
 
 /** The real coordinators over fake git/PTY seams: setupNewWorktree is production code. */
-function coordinators() {
+function coordinators(onDiffStats?: () => void) {
 	const [creating, setCreating] = createSignal<Set<string>>(new Set());
 	const createWorktree = vi.fn(async (_repo: string, branch: string) => ({
 		status: "ok" as const,
@@ -55,7 +56,10 @@ function coordinators() {
 		listBaseRefOptions: vi.fn(async () => [{ name: "main", kind: "local", is_default: true }]),
 		createWorktree,
 		runSetupScript: vi.fn(),
-		getDiffStats: vi.fn(async () => ({ additions: 0, deletions: 0 })),
+		getDiffStats: vi.fn(async () => {
+			onDiffStats?.();
+			return { additions: 0, deletions: 0 };
+		}),
 		generateWorktreeName: vi.fn(),
 		generateCloneBranchName: vi.fn(),
 		listLocalBranches: vi.fn(async () => []),
@@ -169,6 +173,19 @@ describe("start work", () => {
 		expect(writes).not.toContain("\r");
 	});
 
+	// Catches: the terminal looked up by agentLaunchCommand, which useAgentPolling rewrites to the discovered
+	// command while the worktree is still being set up - the brief was then dropped without a trace (#1626-fdab).
+	it("brief_is_delivered_when_discovery_rewrites_the_launch_command_during_setup", async () => {
+		const { workflow } = coordinators(() => {
+			const id = repositoriesStore.get(REPO)?.workspaces[BRANCH]?.terminals[0];
+			if (id) terminalsStore.update(id, { agentLaunchCommand: "env TEAM='a b' codex --model o9" });
+		});
+		await workflow.handleStartWork({ repoPath: REPO, branch: BRANCH, prompt: "Fix the login", agentType: "codex" });
+		agentReachesComposer(agentTerminal().id);
+
+		await vi.waitFor(() => expect(writes.some((w) => w.includes("Fix the login"))).toBe(true));
+	});
+
 	// Catches: the production link store never bound at startup, so Start Work logs and drops the link.
 	it("start_work_persists_the_link_through_the_production_store", async () => {
 		const { workflow } = coordinators();
@@ -223,16 +240,33 @@ describe("start work", () => {
 		expect(createWorktree).toHaveBeenCalledTimes(1);
 	});
 
-	// Catches: the auto-fix call site losing its submit after the extraction.
-	it("autofix_submits_the_confirmed_prompt", async () => {
+	// Catches: the auto-fix prompt typed into a composer that may still show a startup dialog, instead of
+	// being the agent's first message (#1626-fdab). The argument must reach the agent byte for byte.
+	it("autofix_launches_the_agent_with_the_confirmed_prompt_as_its_first_message", async () => {
 		const { workflow } = coordinators();
-		await workflow.handleAutofixIssue(REPO, 12, "Fix issue 12");
+		await workflow.handleAutofixIssue(REPO, 12, "Fix issue 12; it's $(broken)");
 		const { id, term } = agentTerminal("autofix/issue-12");
-		expect(term().pendingInitCommand).not.toContain("Fix issue 12");
-		agentReachesComposer(id);
+		expect(term().agentLaunchCommand).toBe("codex --model o9");
+		const init = term().pendingInitCommand ?? "";
+		expect(init.startsWith("env TEAM='a b' codex --model o9 '")).toBe(true);
+		const argv = JSON.parse(
+			execFileSync("sh", [
+				"-c",
+				`node -e 'console.log(JSON.stringify(process.argv.slice(1)))' ${init.slice("env TEAM='a b' codex --model o9 ".length)}`,
+			]).toString(),
+		);
+		expect(argv).toEqual([untrustedBrief("Fix issue 12; it's $(broken)")]);
 
-		await vi.waitFor(() => expect(writes.at(-1)).toBe("\r"));
-		expect(writes.some((w) => w.includes("Fix issue 12"))).toBe(true);
+		agentReachesComposer(id);
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		expect(writes).toEqual([]);
+	});
+
+	// Catches: a draft brief launched as argv - the agent would submit it without the user's review.
+	it("draft_delivery_keeps_the_launch_command_free_of_the_brief", async () => {
+		const { workflow } = coordinators();
+		await workflow.handleStartWork({ repoPath: REPO, branch: BRANCH, prompt: "Fix the login", agentType: "codex" });
+		expect(agentTerminal().term().pendingInitCommand).toBe("env TEAM='a b' codex --model o9");
 	});
 
 	// Catches: shell injection from item text — via argv, a bracketed-paste breakout, or a dead agent.
@@ -261,7 +295,7 @@ describe("start work", () => {
 			repoPath: REPO,
 			branch: BRANCH,
 			prompt: "echo hi",
-			agentType: "codex",
+			agentType: "opencode",
 			delivery: "submit",
 		});
 		agentReachesComposer(agentTerminal().id);

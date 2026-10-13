@@ -2,14 +2,13 @@ import { type Accessor, createEffect, createRoot, type Setter } from "solid-js";
 import { AGENT_TYPES, AGENTS, type AgentType } from "../../agents";
 import { ensureAgentConfigsForRepo } from "../../stores/agentConfigs";
 import { appLogger } from "../../stores/appLogger";
-import { repositoriesStore } from "../../stores/repositories";
 import { settingsStore } from "../../stores/settings";
 import { terminalsStore } from "../../stores/terminals";
 import { workItemLinksStore } from "../../stores/workItemLinks";
 import { rpc } from "../../transport";
 import type { WorkItemDelivery, WorkItemRef } from "../../types/work-items.gen";
 import type { WorkItemLink } from "../../types/workItemLinks";
-import { newTerminalShellFamily, scopedLaunchCommand } from "../../utils/agentLaunchCommand";
+import { launchCommandWithPrompt, newTerminalShellFamily, scopedLaunchCommand } from "../../utils/agentLaunchCommand";
 import { prepareAgentLaunchCommand } from "../../utils/agentSession";
 import { usePty } from "../usePty";
 import type { AgentSeed } from "./agentSeed";
@@ -60,7 +59,7 @@ export interface StartWorkDeps {
 		result: PendingCreation["result"],
 		displayName: string,
 		agentSeed?: AgentSeed,
-	) => Promise<void>;
+	) => Promise<string | undefined>;
 	setStatusInfo: (message: string) => void;
 	creatingWorktreeRepos: Accessor<Set<string>>;
 	setCreatingWorktreeRepos: Setter<Set<string>>;
@@ -86,8 +85,14 @@ export function untrustedBrief(prompt: string): string {
 const NOT_LAUNCHABLE = new Set<AgentType>(["ego", "git", "api"]);
 
 /** Launch command of the requested agent, or of the first enabled agent with a run config on the repo's machine.
- *  The command carries no prompt: the brief is typed later, so item text never reaches a shell parser. */
-export async function resolveStartWorkAgent(repoPath: string, requested?: string | null): Promise<AgentSeed> {
+ *  With a `brief` the agent starts with it as its first message when its CLI takes one as an argument
+ *  (`promptInArgv`); otherwise the command carries no prompt and the brief is typed later. Either way `launchCommand`
+ *  stays prompt-free, because resume re-runs it. */
+export async function resolveStartWorkAgent(
+	repoPath: string,
+	requested?: string | null,
+	brief?: string,
+): Promise<AgentSeed & { promptInArgv: boolean }> {
 	const configs = await ensureAgentConfigsForRepo(repoPath);
 	let agentType: AgentType | undefined;
 	if (requested) {
@@ -103,10 +108,13 @@ export async function resolveStartWorkAgent(repoPath: string, requested?: string
 	const config = configs.getDefaultConfig(agentType);
 	const launchCommand = config ? [config.command, ...config.args].join(" ") : AGENTS[agentType].binary;
 	const prepared = await prepareAgentLaunchCommand(launchCommand, null, agentType, repoPath);
+	const shellFamily = newTerminalShellFamily();
+	const withPrompt = brief === undefined ? null : launchCommandWithPrompt(agentType, prepared, brief, shellFamily);
 	return {
 		agentType,
-		initCommand: scopedLaunchCommand(prepared, config?.env, newTerminalShellFamily()),
+		initCommand: scopedLaunchCommand(withPrompt ?? prepared, config?.env, shellFamily),
 		launchCommand,
+		promptInArgv: withPrompt !== null,
 	};
 }
 
@@ -174,10 +182,13 @@ export function createStartWork(deps: StartWorkDeps) {
 			throw new Error(`A worktree is already being created in ${repoPath}`);
 		}
 		deps.setCreatingWorktreeRepos((prev) => new Set([...prev, repoPath]));
-		let seed: AgentSeed;
+		const brief = untrustedBrief(request.prompt);
+		let seed: Awaited<ReturnType<typeof resolveStartWorkAgent>>;
 		let result: PendingCreation["result"] & { status: "ok" };
+		let termId: string | undefined;
 		try {
-			seed = await resolveStartWorkAgent(repoPath, request.agentType);
+			const submit = request.delivery === "submit";
+			seed = await resolveStartWorkAgent(repoPath, request.agentType, submit ? brief : undefined);
 			let base = request.baseRef ?? undefined;
 			if (!base) {
 				const baseRefs = await deps.listBaseRefOptions(repoPath);
@@ -185,7 +196,7 @@ export function createStartWork(deps: StartWorkDeps) {
 			}
 			deps.setStatusInfo(`Creating worktree ${branch}...`);
 			result = await deps.createWorktree(repoPath, branch, true, base);
-			await deps.setupNewWorktree(repoPath, result, branch, seed);
+			termId = await deps.setupNewWorktree(repoPath, result, branch, seed);
 		} finally {
 			deps.setCreatingWorktreeRepos((prev) => {
 				const next = new Set(prev);
@@ -204,12 +215,8 @@ export function createStartWork(deps: StartWorkDeps) {
 			}
 		}
 
-		const termId = repositoriesStore
-			.get(repoPath)
-			?.workspaces[result.workspace_id]?.terminals.find(
-				(id) => terminalsStore.get(id)?.agentLaunchCommand === seed.launchCommand,
-			);
-		if (termId) void deliverWhenReady(termId, untrustedBrief(request.prompt), request.delivery === "submit", deps);
+		if (!termId) deps.setStatusInfo("Start work: no terminal was opened, so the brief was not delivered");
+		else if (!seed.promptInArgv) void deliverWhenReady(termId, brief, request.delivery === "submit", deps);
 		return { repoPath, workspaceId: result.workspace_id, branch: result.branch, worktreePath: result.path };
 	};
 }
