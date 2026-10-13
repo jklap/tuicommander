@@ -36,6 +36,29 @@ fn to_value(config: &AgentsConfig) -> Result<Value, Failure> {
     serde_json::to_value(config).map_err(|_| Error::new(ID, "store_failed"))
 }
 
+/// Launches use the first `is_default` run config, so promoting one must demote the rest;
+/// the settings UI keeps the same single-default invariant.
+fn single_default(latest: &AgentsConfig, next: &mut AgentsConfig) {
+    for (id, settings) in &mut next.agents {
+        let was_default = |name: &str| {
+            latest.agents.get(id).is_some_and(|old| {
+                old.run_configs
+                    .iter()
+                    .any(|rc| rc.is_default && rc.name == name)
+            })
+        };
+        let promoted = settings
+            .run_configs
+            .iter()
+            .position(|rc| rc.is_default && !was_default(&rc.name));
+        if let Some(keep) = promoted {
+            for (i, rc) in settings.run_configs.iter_mut().enumerate() {
+                rc.is_default = i == keep;
+            }
+        }
+    }
+}
+
 impl Store for AgentsSettingsStore {
     fn id(&self) -> &str {
         ID
@@ -65,10 +88,11 @@ impl Store for AgentsSettingsStore {
                 failure = Some(e);
                 "rejected".to_owned()
             })?;
-            let next: AgentsConfig = serde_json::from_value(value).map_err(|_| {
+            let mut next: AgentsConfig = serde_json::from_value(value).map_err(|_| {
                 failure = Some(Error::new(ID, "invalid_type"));
                 "invalid".to_owned()
             })?;
+            single_default(config, &mut next);
             let canonical = to_value(&next).map_err(|e| {
                 failure = Some(e);
                 "unreadable".to_owned()
