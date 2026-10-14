@@ -3108,3 +3108,13 @@ returns `not_bound` when evidence is missing or stale.
 ### Desktop close notification
 
 `close-dialog` SSE carries `{kind: "ask" | "confirm_quit", sessions: number}`, identical to the desktop event. Browser clients do not render host close prompts. Native lifecycle commands `request_quit` and `resolve_close` are deliberately desktop-only and have no HTTP route.
+
+### Tasks start-work brief
+
+`POST /tasks/start-work-prompt` accepts `{ "repoPath": "/repo", "input": {
+"key": "TASK-1", "url": null, "title": "Title", "body": "Description" } }`
+and returns a JSON string. It reads `.tuic-start-work.md` with repository
+containment and UTF-8/size guards, substitutes sanitized item fields once, or
+uses key/title/body when absent. Template read failures return an error. Its IPC
+twin is `build_start_work_prompt`; the host wraps and caps the returned brief
+at delivery.

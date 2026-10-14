@@ -2238,3 +2238,9 @@ identical shapes; model reads/writes now honor configured profile/workspace.
 `exec_paths`, `auth.PROVIDER.headers` and `credential_command` remain owner gaps:
 isolated installed-Ego probes returned exit 2 (`unknown config key`). No editor or
 raw-file fallback is used. Credentials are never read from `auth.json`.
+
+Tasks brief preparation uses `POST /tasks/start-work-prompt`, the HTTP twin of
+`build_start_work_prompt`. Both accept `repoPath` and `input` with key, nullable
+URL, title and body. The shared Rust implementation reads the repo-contained
+`.tuic-start-work.md` and sanitizes item fields before substitution. The frontend
+passes the result to the provider; host delivery still wraps and caps it.

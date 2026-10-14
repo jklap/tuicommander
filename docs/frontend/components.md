@@ -766,6 +766,12 @@ successful move by merging page one into the loaded cards. Other loaded pages ar
 retained until reload. The move menu stays open when its own list scrolls; scrolling
 outside it dismisses it. The view does not infer workflow transitions.
 
+Tasks `useStartWork` obtains the brief from `build_start_work_prompt` before the
+provider action, with a pending state covering that read. The Rust builder reads
+`.tuic-start-work.md` in the repository root; absent files use the legacy brief.
+Read failures use the existing error/Retry state. Host delivery retains the
+untrusted-content wrapper and 12,000-character cap.
+
 ### Terminal Compose attachments
 
 `ComposePanel` uses `useComposeImages` for paste, file drops and its image-only multi-file input. All three reuse `saveImageFile` in `pastedImage.ts`. Drop/picker insertion ranges track document edits during saving. Native file drops route to a registered mounted editor before the existing global terminal/tab dispatcher; closing or unmounting unregisters that target. Rejected files and save failures appear in an accessible alert.
