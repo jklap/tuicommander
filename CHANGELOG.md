@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Fix seeded workflow Pause resume targets, expose their target in the Designer, and report invalid publication fields as HTTP 422.
+
 ### Added
 - List the desktop repository’s open Markdown files in the mobile session menu, with live updates and the existing mobile viewer (#1879-05ad).
 - Add scoped plugin settings schemas, locked revision patches, secret redaction, typed migrations for the five existing configurable plugins, and unload-safe catalogue registration (#1785-c7a1).
@@ -20,6 +22,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 - Retract saved agent placement declarations when a linked worktree is removed or recycled (#1705-67b3).
+- AI Chat provider-retry waits now count down live to “retrying now”; user-message Copy buttons no longer wrap vertically.
 
 - Hide Markdown review Agent and Send controls after a successful send until a new change (#1881-f84a).
 
