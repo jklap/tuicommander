@@ -14,6 +14,7 @@
 // selection, search, links, scrollbar and suggest overlays stay on the main
 // thread's overlay canvas (see CanvasTerminal.repaintOverlay).
 
+import { contrastRatio } from "../../themes";
 import {
 	ATTR_BOLD,
 	ATTR_DEFAULT_BG,
@@ -65,7 +66,7 @@ export interface PaintGridOptions {
 }
 
 export interface GridRenderer {
-	setTheme(bgDefault: string, fgDefault: string): void;
+	setTheme(bgDefault: string, fgDefault: string, neutralSurface?: string): void;
 	/** Drop memoized color/font strings (call on theme/font/weight change). */
 	invalidateCaches(): void;
 	paintGrid(rowMap: Map<number, DecodedRow>, m: CellMetrics, opts: PaintGridOptions): void;
@@ -83,6 +84,9 @@ export function createGridRenderer(ctx: GridContext2D, deps: GridRendererDeps): 
 	// Theme colors (re-read on remeasure / posted to worker on theme change).
 	let cachedBgDefault = "#1e1e1e";
 	let cachedFgDefault = "#d4d4d4";
+	let cachedNeutralSurface = cachedBgDefault;
+	let lightTheme = false;
+	const neutralBackgroundCache = new Map<number, string>();
 
 	// Memo caches (per renderer instance).
 	const colorStringCache = new Map<number, string>();
@@ -133,7 +137,23 @@ export function createGridRenderer(ctx: GridContext2D, deps: GridRendererDeps): 
 		if (a & ATTR_INVERSE) {
 			return a & ATTR_DEFAULT_FG ? cachedFgDefault : cachedRgbString((fgP >> 16) & 0xff, (fgP >> 8) & 0xff, fgP & 0xff);
 		}
-		return a & ATTR_DEFAULT_BG ? cachedBgDefault : cachedRgbString((bgP >> 16) & 0xff, (bgP >> 8) & 0xff, bgP & 0xff);
+		if (a & ATTR_DEFAULT_BG) return cachedBgDefault;
+		const raw = cachedRgbString((bgP >> 16) & 0xff, (bgP >> 8) & 0xff, bgP & 0xff);
+		// Neutral SGR surfaces designed for dark terminals can collide with a
+		// light theme's default text. Keep explicit foreground/color pairs intact.
+		if (lightTheme && a & ATTR_DEFAULT_FG) {
+			const r = (bgP >> 16) & 0xff;
+			if (r === ((bgP >> 8) & 0xff) && r === (bgP & 0xff)) {
+				let mapped = neutralBackgroundCache.get(bgP);
+				if (mapped === undefined) {
+					const hex = `#${bgP.toString(16).padStart(6, "0")}`;
+					mapped = contrastRatio(cachedFgDefault, hex) < 4.5 ? cachedNeutralSurface : raw;
+					neutralBackgroundCache.set(bgP, mapped);
+				}
+				return mapped;
+			}
+		}
+		return raw;
 	}
 
 	function buildFontStyle(a: number, fontSize: number, fontFamily: string): string {
@@ -1370,9 +1390,12 @@ export function createGridRenderer(ctx: GridContext2D, deps: GridRendererDeps): 
 		}
 	}
 
-	function setTheme(bgDefault: string, fgDefault: string): void {
+	function setTheme(bgDefault: string, fgDefault: string, neutralSurface = bgDefault): void {
 		cachedBgDefault = bgDefault;
 		cachedFgDefault = fgDefault;
+		cachedNeutralSurface = neutralSurface;
+		lightTheme = contrastRatio(bgDefault, "#000000") > contrastRatio(bgDefault, "#ffffff");
+		neutralBackgroundCache.clear();
 	}
 
 	function invalidateCaches(): void {
