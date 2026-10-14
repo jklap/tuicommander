@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- Add scoped plugin settings schemas, locked revision patches, secret redaction, typed migrations for the five existing configurable plugins, and unload-safe catalogue registration (#1785-c7a1).
 
 - Read linked Tasks items and comments through MCP repo actions; allow provider comments and transitions only after enabling `mcp_work_item_writes` (#1854-4960).
 

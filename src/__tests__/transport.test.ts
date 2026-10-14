@@ -4,6 +4,16 @@ import * as ts from "@typescript/typescript6";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Catches: browser clients losing the provider bridge while desktop IPC works.
+it("maps scoped plugin settings actions without adding host authority", () => {
+	const action = { action: "get", paths: ["/retryDelayMs"] };
+	expect(mapCommandToHttp("plugin_settings_action", { pluginId: "retry-plugin", action })).toEqual({
+		method: "POST",
+		path: "/api/plugins/retry-plugin/settings",
+		body: action,
+	});
+});
+
+// Catches: browser clients losing the provider bridge while desktop IPC works.
 it("maps the work-item provider bridge to its HTTP twin", () => {
 	const input = { action: "claim", requestId: "request-1" };
 	expect(mapCommandToHttp("work_item_provider_bridge", { input })).toEqual({

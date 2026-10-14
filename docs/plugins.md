@@ -1,5 +1,42 @@
 # Plugin Authoring Guide
 
+## Scoped plugin settings (#1785-c7a1)
+
+Loaded plugins expose `plugins.<id>` descriptors through the Rust settings owner.
+`plugin_settings_action(pluginId, action)` and `POST /api/plugins/{id}/settings`
+share describe/get/set/reset/patch semantics. The backend fixes both the owner and
+`plugins/<id>/data/config.json`; requests cannot choose a store, target or file.
+Get requires explicit paths; writes require the last `expectedRevision`.
+
+A configurable manifest declares `settings: { schema, defaults }`. The schema is
+closed (`additionalProperties: false`), bounded to 128 annotated leaves, and uses
+only the supported object, scalar and scalar-array constraints. Every leaf needs
+`x-setting` sensitivity, apply mode, effect, operations and `confirmationClass`.
+Opaque objects, unsupported constraints, missing metadata and secret defaults are
+rejected. A plugin with an existing config file and no schema cannot load or write
+that config. Other plugin data, including statistics, remains separate.
+
+Core supplies typed migrations for build-cleaner, at-capacity-retry,
+cache-keepalive, claude-wakeup and the Telegram notifier example. Registration
+fills missing defaults without discarding saved values, validates the result and
+atomically writes an owner-only config file (0600 on Unix). Existing bot tokens
+remain available to the notifier's private config reader; the settings service
+returns only set/unset. Catalogue definitions, errors and reload events contain no
+stored credentials. Plugin enablement stays in `app.disabled_plugin_ids`; native
+agent usage has no private plugin store.
+
+Patches validate the entire batch against current state under the shared config
+and cross-process file locks. Stale revisions conflict, failed writes emit no
+reload event, and unload removes descriptors and revokes retained owner handles.
+After persistence, `plugin-changed` is dual-emitted to desktop and SSE so existing
+unload/load callbacks reread config. `applied: false` reports scheduled reload,
+not completed callback acknowledgement. Backend unregistration is awaited before
+reload registration. General MCP settings publication remains a separate cutover.
+
+Plugins can call `host.settings({ action: "get", paths: ["/enabled"] })` and pass
+the resulting revision to set/reset/patch. The host supplies its plugin ID.
+
+
 TUICommander uses an Obsidian-style plugin system. Plugins extend the Activity Center (bell dropdown), watch terminal output, and interact with app state. Plugins are external ES modules loaded at runtime from the user's plugins directory in the desktop app. The native agent usage feature is initialized separately; there is no built-in plugin registration list.
 
 ## Quick Start: External Plugin

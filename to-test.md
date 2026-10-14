@@ -1,3 +1,7 @@
+## Scoped plugin settings (1785-c7a1) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, use an isolated instance with a configurable plugin. Describe its settings, patch a non-secret field using its revision, and verify its existing unload/load callback consumes the new value. A token reads as set/unset through settings; unloading removes its catalogue entries. Automated isolated owner/HTTP tests cover persistence and dispatch; the current desktop needs a rebuild/restart to load this Rust change.
+
 ## Tasks MCP access (1854-4960) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, use an isolated instance with a loaded local test provider: `repo work_item` reads its worktree-linked item and comments, including when another worktree has an earlier link-store entry; `work_item_act` refuses writes by default. Enable `mcp_work_item_writes` through config save and verify one synthetic comment/transition, then disable it. Do not use a real tracker for automated writes. Targeted transport/provider tests cover the mechanics; the running desktop must be rebuilt to load the Rust bridge.

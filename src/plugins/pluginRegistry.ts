@@ -295,6 +295,10 @@ function createPluginRegistry() {
 				return track(workItemProviderRegistry.register(provider));
 			},
 
+			settings(action) {
+				return invoke("plugin_settings_action", { pluginId, action });
+			},
+
 			linkItem(repoPath, branch, link) {
 				return workItemLinksStore.link(repoPath, branch, link);
 			},
@@ -928,7 +932,7 @@ function createPluginRegistry() {
 	async function register(plugin: TuiPlugin, capabilities?: string[], agentTypes?: string[]): Promise<void> {
 		// Replace existing registration for same id
 		if (plugins.has(plugin.id)) {
-			unregister(plugin.id);
+			await unregister(plugin.id);
 		}
 
 		const disposables: Disposable[] = [];
@@ -995,9 +999,9 @@ function createPluginRegistry() {
 		pluginStore.updatePlugin(plugin.id, { loaded: true, error: null });
 	}
 
-	function unregister(id: string): void {
+	function unregister(id: string): Promise<void> {
 		const entry = plugins.get(id);
-		if (!entry) return;
+		if (!entry) return Promise.resolve();
 		plugins.delete(id);
 		try {
 			entry.plugin.onunload();
@@ -1008,10 +1012,11 @@ function createPluginRegistry() {
 		}
 		entry.disposable.dispose();
 		statusBarTicker.removeAllForPlugin(id);
-		invoke("unregister_loaded_plugin", { pluginId: id }).catch((e) =>
+		const disposed = invoke<void>("unregister_loaded_plugin", { pluginId: id }).catch((e) =>
 			appLogger.debug("plugin", `unregister_loaded_plugin cleanup failed for "${id}": ${e}`),
 		);
 		pluginStore.updatePlugin(id, { loaded: false });
+		return disposed;
 	}
 
 	// -------------------------------------------------------------------------

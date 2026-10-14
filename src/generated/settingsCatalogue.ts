@@ -9609,30 +9609,6 @@ export const settingsCatalogue = {
       "reason": "Chat allowlist is a separate private text file; use the existing setup owner, not raw file editing."
     },
     {
-      "store": "plugins.telegram-notifier",
-      "path": "/botToken",
-      "ownerStep": "Step 5",
-      "reason": "Plugin-private JS configuration has no scoped settings schema or credential migration yet."
-    },
-    {
-      "store": "plugins.telegram-notifier",
-      "path": "/chatId",
-      "ownerStep": "Step 5",
-      "reason": "Plugin-private JS configuration requires scoped schema registration."
-    },
-    {
-      "store": "plugins.telegram-notifier",
-      "path": "/events/{eventId}",
-      "ownerStep": "Step 5",
-      "reason": "Plugin-private enabled/silent event records require scoped schema registration and callbacks."
-    },
-    {
-      "store": "plugins",
-      "path": "/{pluginId}/{settingId}",
-      "ownerStep": "Step 5",
-      "reason": "Runtime-installed plugin schema enumeration and unload parity are not yet supported; registration must fail closed."
-    },
-    {
       "store": "app",
       "path": "/font_family",
       "ownerStep": "Step 4g",
