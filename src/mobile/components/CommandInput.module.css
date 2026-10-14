@@ -24,30 +24,6 @@
   border-color: var(--accent);
 }
 
-.attach {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 38px;
-  flex-shrink: 0;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--fg-muted);
-  cursor: pointer;
-}
-
-.attach:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.attach:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
-}
-
 .uploading {
   position: absolute;
   bottom: 100%;
@@ -148,28 +124,4 @@
 
 .dictate:disabled {
   opacity: 0.5;
-}
-
-.queueMenu {
-  position: absolute;
-  bottom: calc(100% + 4px);
-  right: 12px;
-  padding: 4px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-secondary);
-  z-index: 10;
-}
-
-.queueMenu button {
-  min-height: 44px;
-  padding: 8px 16px;
-  border: none;
-  background: transparent;
-  color: var(--fg-primary);
-  cursor: pointer;
-}
-
-.queueMenu button:hover {
-  background: var(--bg-highlight);
 }
