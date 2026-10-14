@@ -1,5 +1,9 @@
 # HTTP API Reference
 
+## Scoped plugin settings
+
+`POST /api/plugins/{id}/settings` accepts the same tagged PluginAction body as IPC: describe, get, set, reset, patch. Get takes paths; writes take expectedRevision. It returns descriptors, a redacted snapshot or a commit reply. Errors are structured settings failures: 400 invalid path/value, 404 unloaded owner, 409 stale revision. Existing API authentication applies. No caller-selected target, store or file is accepted.
+
 `POST /sessions/:id/queue` optionally accepts `expectedDraft`. It must match the tracked live composer and trim to `text`; the server clears that draft before using the existing ready-window queue. Preflight rejection writes nothing. A later error may have cleared the composer, so clients must report uncertainty and must not automatically retry this transfer.
 
 ## Request authentication and browser boundary

@@ -134,6 +134,7 @@ pub(crate) mod plugin_exec;
 pub(crate) mod plugin_fs;
 pub(crate) mod plugin_http;
 pub(crate) mod plugin_pty;
+pub(crate) mod plugin_settings;
 pub(crate) mod plugins;
 pub(crate) mod pr_review;
 #[cfg(feature = "desktop")]
@@ -2492,6 +2493,7 @@ pub fn run() {
             plugins::install_plugin_from_url,
             plugins::uninstall_plugin,
             plugins::register_loaded_plugin,
+            plugin_settings::plugin_settings_action,
             plugins::unregister_loaded_plugin,
             plugins::set_plugin_output_watchers,
             plugin_fs::plugin_read_file,

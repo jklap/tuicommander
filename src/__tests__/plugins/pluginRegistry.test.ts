@@ -40,6 +40,39 @@ function emitTauri(name: string, payload: unknown): void {
 	for (const handler of listeners.get(name) ?? []) handler({ payload });
 }
 
+// Catches: a host settings request being sent without the plugin's bound identity.
+it("binds settings requests to the plugin and returns owner readback", async () => {
+	let host: PluginHost | undefined;
+	await pluginRegistry.register(
+		makePlugin("settings-owner", (value) => {
+			host = value;
+		}),
+	);
+	const reply = { revision: "r1", values: { "/enabled": { stored: true, effective: true, source: "stored" } } };
+	vi.mocked(invoke).mockResolvedValueOnce(reply);
+	const action = { action: "get" as const, paths: ["/enabled"] };
+	expect(await host?.settings(action)).toEqual(reply);
+	expect(invoke).toHaveBeenLastCalledWith("plugin_settings_action", { pluginId: "settings-owner", action });
+});
+
+// Catches: a delayed old backend unregister revoking a freshly loaded settings owner.
+it("waits for backend unregister before replacing a loaded plugin", async () => {
+	await pluginRegistry.register(makePlugin("settings-reload"), []);
+	let release: (() => void) | undefined;
+	vi.mocked(invoke).mockImplementationOnce(
+		() =>
+			new Promise<void>((resolve) => {
+				release = resolve;
+			}),
+	);
+	const onload = vi.fn();
+	const replacement = pluginRegistry.register(makePlugin("settings-reload", onload), []);
+	expect(onload).not.toHaveBeenCalled();
+	release?.();
+	await replacement;
+	expect(onload).toHaveBeenCalledOnce();
+});
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -96,11 +129,11 @@ describe("register / unregister", () => {
 		expect(() => pluginRegistry.unregister("unknown")).not.toThrow();
 	});
 
-	it("re-registering same id replaces the old plugin", () => {
+	it("re-registering same id replaces the old plugin", async () => {
 		const onunload1 = vi.fn();
 		const onload2 = vi.fn();
 		pluginRegistry.register(makePlugin("p1", undefined, onunload1));
-		pluginRegistry.register(makePlugin("p1", onload2));
+		await pluginRegistry.register(makePlugin("p1", onload2));
 		expect(onunload1).toHaveBeenCalledOnce();
 		expect(onload2).toHaveBeenCalledOnce();
 	});
