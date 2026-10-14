@@ -114,4 +114,42 @@ describe("closeDialog", () => {
 		expect(screen.queryByRole("dialog")).not.toBeNull();
 		expect(screen.getByRole("dialog").textContent).toContain("Quit TUICommander?");
 	});
+	// Catches: an old failed answer attaching its error to a replacement prompt.
+	it("keeps a newer prompt clean when an earlier answer fails", async () => {
+		let fail!: (error: Error) => void;
+		mockInvoke.mockImplementationOnce(
+			() =>
+				new Promise<void>((_resolve, reject) => {
+					fail = reject;
+				}),
+		);
+		render(() => <CloseDialog />);
+		const cancelling = closeDialogStore.answer("cancel");
+		await waitFor(() => expect(mockInvoke).toHaveBeenCalledOnce());
+		closeDialogStore.present({ kind: "confirm_quit", sessions: 3 });
+		fail(new Error("Old answer failed"));
+		await cancelling;
+		expect(screen.getByRole("dialog").textContent).toContain("Quit TUICommander?");
+		expect(screen.queryByRole("alert")).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+		await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+	});
+
+	// Catches: treating two prompts with the same fields as the same request.
+	it("preserves an identical replacement prompt after an old answer succeeds", async () => {
+		let finish!: () => void;
+		mockInvoke.mockImplementationOnce(
+			() =>
+				new Promise<void>((resolve) => {
+					finish = resolve;
+				}),
+		);
+		render(() => <CloseDialog />);
+		const cancelling = closeDialogStore.answer("cancel");
+		await waitFor(() => expect(mockInvoke).toHaveBeenCalledOnce());
+		closeDialogStore.present({ kind: "ask", sessions: 2 });
+		finish();
+		await cancelling;
+		expect(screen.getByRole("dialog").textContent).toContain("Close TUICommander?");
+	});
 });

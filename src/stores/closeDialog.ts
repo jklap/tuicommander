@@ -16,9 +16,12 @@ const [state, setState] = createStore({
 	error: "",
 });
 
+let requestId = 0;
+
 export const closeDialogStore = {
 	state,
 	present(request: CloseRequest) {
+		requestId += 1;
 		setState({ request, remember: false, error: "" });
 	},
 	setRemember(remember: boolean) {
@@ -26,6 +29,7 @@ export const closeDialogStore = {
 	},
 	async answer(choice: CloseChoice) {
 		if (!state.request || state.saving) return;
+		const answeredRequestId = requestId;
 		const remember = state.request.kind === "ask" && state.remember && choice !== "cancel";
 		setState({ saving: true, error: "" });
 		try {
@@ -33,9 +37,9 @@ export const closeDialogStore = {
 				await invoke("resolve_close", { choice, remember });
 				if (remember) await settingsStore.hydrate();
 			});
-			setState("request", null);
+			if (requestId === answeredRequestId) setState("request", null);
 		} catch (error) {
-			setState("error", String(error));
+			if (requestId === answeredRequestId) setState("error", String(error));
 			appLogger.error("app", "Close decision failed", error);
 		} finally {
 			setState("saving", false);
