@@ -45,7 +45,14 @@ function filterValue(
 		case "user":
 			return {
 				kind: "user",
-				value: [{ id: value, name: options.find((option) => option.id === value)?.name ?? value, avatarUrl: null }],
+				value: [
+					{
+						id: value,
+						name: options.find((option) => option.id === value)?.name ?? value,
+						avatarUrl: null,
+						bot: false,
+					},
+				],
 			};
 	}
 }
@@ -172,7 +179,7 @@ export function TasksList(props: TasksListProps) {
 			<Show when={filtersOpen() ? provider() : undefined}>
 				{(current) => (
 					<div class={s.filters}>
-						<For each={current().fields.filter((field) => field.queryable !== false)}>
+						<For each={current().fields.filter((field) => field.filterable)}>
 							{(field) => (
 								<label>
 									{field.name}
@@ -216,9 +223,9 @@ export function TasksList(props: TasksListProps) {
 								}}
 							>
 								<option value="">Provider default</option>
-								<option value="key">Key</option>
-								<option value="title">Title</option>
-								<option value="updatedAt">Updated</option>
+								<For each={current().fields.filter((field) => field.sortable)}>
+									{(field) => <option value={field.id}>{field.name}</option>}
+								</For>
 							</Select>
 						</label>
 						<button
@@ -246,7 +253,7 @@ export function TasksList(props: TasksListProps) {
 								}}
 							>
 								<option value="">No grouping</option>
-								<For each={current().fields.filter((field) => field.queryable !== false)}>
+								<For each={current().fields.filter((field) => field.groupable)}>
 									{(field) => <option value={field.id}>{field.name}</option>}
 								</For>
 							</Select>

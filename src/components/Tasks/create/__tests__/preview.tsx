@@ -17,6 +17,9 @@ const due: WorkItemFieldSchema = {
 	kind: "date",
 	required: true,
 	editable: true,
+	sortable: false,
+	groupable: false,
+	filterable: false,
 	options: [],
 };
 // The A4 fake has one type and one schema; the fixture adds an Incident type with a required date

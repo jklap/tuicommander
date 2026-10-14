@@ -99,6 +99,9 @@ describe("Tasks list", () => {
 			kind: "labels" | "user",
 			options: { id: string; name: string }[] = [],
 		) => ({
+			sortable: false,
+			groupable: false,
+			filterable: true,
 			id,
 			name,
 			kind,
@@ -156,7 +159,7 @@ describe("Tasks list", () => {
 			await waitFor(() =>
 				expect(queries.at(-1)?.filters.at(-1)).toEqual({
 					fieldId: "assignee",
-					values: [{ kind: "user", value: [{ id: "ada", name: "ada", avatarUrl: null }] }],
+					values: [{ kind: "user", value: [{ bot: false, id: "ada", name: "ada", avatarUrl: null }] }],
 				}),
 			);
 		});
@@ -202,7 +205,9 @@ describe("Tasks list", () => {
 					required: false,
 					editable: false,
 					options: [],
-					queryable: false,
+					sortable: false,
+					filterable: false,
+					groupable: false,
 				},
 			],
 		};
@@ -288,7 +293,7 @@ describe("Tasks list", () => {
 			title: `Row ${id}`,
 			itemType: "task",
 			state,
-			assignees: assignees.map((name) => ({ id: name, name, avatarUrl: null })),
+			assignees: assignees.map((name) => ({ bot: false, id: name, name, avatarUrl: null })),
 			labels: [],
 			updatedAt,
 			url: "",

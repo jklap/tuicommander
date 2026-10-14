@@ -64,6 +64,23 @@ function filters() {
 // Catches: persisted stale sort is sent on startup and leaves the list broken rather than restoring the previous accepted order.
 it("restored_rejected_sort_falls_back_to_last_valid_sort", async () => {
 	const { a } = register();
+	// This provider supports the saved order; declare it so the capability-driven picker can render it.
+	Object.assign(a, {
+		fields: [
+			...a.fields,
+			{
+				id: "updatedAt",
+				name: "Updated",
+				kind: "date",
+				required: false,
+				editable: false,
+				options: [],
+				sortable: true,
+				filterable: false,
+				groupable: false,
+			},
+		],
+	});
 	const list = a.list;
 	a.list = async (request, signal) => {
 		if (request.sort?.fieldId === "title") throw new Error("Provider cannot sort by title");

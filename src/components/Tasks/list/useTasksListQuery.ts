@@ -26,6 +26,7 @@ export function useTasksListQuery(
 	let debounce: ReturnType<typeof setTimeout> | undefined;
 	let generation = 0;
 	let lastValidSort: WorkItemQuery["sort"] = null;
+	let restoredQuery: WorkItemQuery | undefined;
 	const scope = () => JSON.stringify([props.repoPath, provider()?.providerId, provider()?.accountId]);
 	createEffect(() => {
 		scope();
@@ -49,6 +50,11 @@ export function useTasksListQuery(
 		const key = scope();
 		if (props.visible === false) return;
 		untrack(() => {
+			if (request === restoredQuery) {
+				restoredQuery = undefined;
+				if (props.repoPath) uiStore.setTaskViewPreference(key, { query: request });
+				return;
+			}
 			const token = ++generation;
 			if (!current) {
 				model.clear();
@@ -58,11 +64,18 @@ export function useTasksListQuery(
 			void model.select(current, request).then(() => {
 				if (token !== generation) return;
 				const error = model.state().error;
-				if (error && request.sort && /sort|order.?by/i.test(error)) {
-					const fallback = JSON.stringify(lastValidSort) === JSON.stringify(request.sort) ? null : lastValidSort;
-					lastValidSort = null;
-					setQuery({ ...request, sort: fallback, savedFilterId: null });
-				} else if (!error) {
+				if (error) {
+					const accepted = model.acceptedQuery();
+					if (accepted) {
+						restoredQuery = structuredClone(accepted);
+						setSearch(restoredQuery.search);
+						setQuery(restoredQuery);
+					} else if (request.sort && /sort|order.?by/i.test(error)) {
+						const fallback = JSON.stringify(lastValidSort) === JSON.stringify(request.sort) ? null : lastValidSort;
+						lastValidSort = null;
+						setQuery({ ...request, sort: fallback, savedFilterId: null });
+					}
+				} else {
 					lastValidSort = request.sort;
 					if (props.repoPath) uiStore.setTaskViewPreference(key, { lastValidSort });
 				}

@@ -11,6 +11,8 @@ selects outside `ui/` and requires the explicit pending-migration list to shrink
 It renders schema-driven fields, sanitized Markdown, all declared comment
 variants, cursor pagination, a comment composer and provider transition actions.
 The shell must pass visibility to pause the default 60-second refresh timer.
+Read-only enum fields resolve provider option IDs to their schema labels, falling back to the stored value when an option is unknown. Editing still sends the option ID.
+
 `useTasksDetail` fences responses by item generation and serializes mutations.
 Committed mutations remain accepted if reloading opened comment pages fails;
 the view reports the history error and Retry reloads those pages.
@@ -22,6 +24,9 @@ Shell mounting and provider registration are owned by the Tasks integration.
 picker and per-type fields with `SettingField` and `SettingMultiSelect`.
 `useTasksCreate` fences schema responses by generation and submits once;
 `createDraft` converts control values to tagged field values.
+`TaskCreateUser` renders static choices and optional provider user searches, with
+request cancellation and stale-response fencing. Free labels keep raw text until
+collection; required-field messages sit beside their inputs.
 
 Slice F exposes `start_graph {target:{type:story|plan,id},expected_revision?,definition_id,definition_revision,request_id,limits?}` through the existing owning-daemon service. Story starts require the current native revision and pin the selected publication; the request ID is bound to its payload. Omitted limits use Rust defaults. Plan dispatch remains unavailable in this build and its start control says so. The `workflow_run` MCP tool uses an inline schema generated from `RunAction` and the public `RunCommand` variants; it returns the same scoped snapshots and cursor-ordered events as IPC/HTTP. Run history shows pinned activations, decisions/evidence, repair counters, pause targets and complete event payloads across pages. Graph recovery uses `resume_graph {execution_id,activation_id,resolution}` after answering pending input; pause and cancel use the existing sequence-fenced commands. Legacy runs offer inspection and cancellation in the UI. No new persistence or client scheduler is added.
 
@@ -784,3 +789,7 @@ Confirmations. It uses the shared setting toggle and persists
 `background.hide_dock_icon`; browser settings omit this native control.
 
 The mobile AI Chat composer uses the same device-local keyboard correction preference as the terminal composer; toggling it updates autocorrect, spellcheck and sentence capitalization on the open textarea. Desktop Chat retains its existing input attributes.
+
+
+Tasks list controls use provider-declared field sort, group and filter capabilities.
+A rejected selection restores the last successful query and shows the provider reason.

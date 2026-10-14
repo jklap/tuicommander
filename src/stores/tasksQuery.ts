@@ -38,6 +38,7 @@ export function createTasksQuery(options: { maxCachedPages?: number } = {}) {
 	let generation = 0;
 	let source: Source | undefined;
 	let query: WorkItemQuery | undefined;
+	let acceptedQuery: WorkItemQuery | undefined;
 	let controller: AbortController | undefined;
 	const consumedCursors = new Set<string>();
 	const key = (provider: Source, request: WorkItemQuery) =>
@@ -71,6 +72,7 @@ export function createTasksQuery(options: { maxCachedPages?: number } = {}) {
 				if (oldest === undefined) break;
 				cache.delete(oldest);
 			}
+			acceptedQuery = structuredClone({ ...pageQuery, cursor: null });
 			if (cursor) consumedCursors.add(cursor);
 			const rows = new Map<string, WorkItem>();
 			if (append) for (const item of state().items) rows.set(identity(item), item);
@@ -97,6 +99,7 @@ export function createTasksQuery(options: { maxCachedPages?: number } = {}) {
 			});
 		} catch (error) {
 			if (token !== generation || abort.signal.aborted) return;
+			query = acceptedQuery ?? query;
 			setState((previous) => ({
 				...previous,
 				loading: false,
@@ -108,10 +111,12 @@ export function createTasksQuery(options: { maxCachedPages?: number } = {}) {
 
 	return {
 		state,
+		acceptedQuery: () => acceptedQuery,
 		async select(provider: Source, nextQuery: WorkItemQuery) {
 			const sameSource = source?.providerId === provider.providerId && source?.accountId === provider.accountId;
 			generation++;
 			controller?.abort();
+			if (!sameSource) acceptedQuery = undefined;
 			source = provider;
 			query = structuredClone({ ...nextQuery, cursor: null });
 			consumedCursors.clear();
@@ -132,6 +137,7 @@ export function createTasksQuery(options: { maxCachedPages?: number } = {}) {
 			controller?.abort();
 			source = undefined;
 			query = undefined;
+			acceptedQuery = undefined;
 			consumedCursors.clear();
 			setState(empty());
 		},

@@ -5346,3 +5346,11 @@ Visual evidence: worktree Vite fixture mounted the real NotificationsTab and Toa
 - [ ] On stock GNOME without a StatusNotifier host, close configured as Background must minimize with the main window reachable; Ask must omit Background. Native Linux packaging requires the appindicator dependency.
 
 - [ ] Mobile composer + menu (#1880-d7ff): on iPhone, check both modes at 390px, native camera/file pickers, browser mic, Chat Park/Restore and busy Queue/Stop, terminal Queue and long-press Send. Confirm keyboard and safe-area positioning.
+- [ ] Tasks capability schema: restart the Rust build, then verify GitHub, GitLab and Jira list selectors offer only declared fields; a rejected selection restores the previous value and shows its reason.
+- [ ] Jira create: choose Reporter and Assignee by search, enter new comma-separated Labels, fill required Parent for sub-tasks, and verify Project/Type do not require duplicate entry (#1859-c01f).
+## Jira JQL errors (#1861-8a4c)
+
+- [x] `jql: project =` shows the recorded Jira parse failure and a correction hint; the typed query remains intact and previous rows are marked stale. _(verified: real TasksShell and Jira provider in the read-only Vite harness, screenshot and UI request trace in `~/Gits/.tmp/fix-1861/`; no text fallback request.)_
+- [x] Explicit text, key lookup, valid JQL, saved-filter predicates and board query scoping retain their meanings. _(verified: `plugins/jira/jql-errors.test.js`, 31 Jira tests pass; 11 Tasks consumer tests pass.)_
+
+- [ ] Tasks/plugins batch 1013: after Boss restarts `make dev` (or rebuilds release), verify review-bot findings in Tasks and PR review threads. The merged Rust changes require a backend restart to load.

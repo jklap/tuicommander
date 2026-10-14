@@ -12,13 +12,29 @@ const enumField = (id: string, name: string, required: boolean, options: string[
 	kind: "enum",
 	required,
 	editable: true,
+	sortable: false,
+	groupable: false,
+	filterable: false,
 	options: options.map((option) => ({ id: option, name: option.toUpperCase() })),
 });
 const picker = enumField("itemType", "Type", true, ["bug", "task"]);
 const priority = enumField("priority", "Priority", true, ["high", "low"]);
 const schemas: Record<string, WorkItemFieldSchema[]> = {
 	bug: [priority, enumField("severity", "Severity", true, ["s1", "s2"])],
-	task: [priority, { id: "component", name: "Component", kind: "text", required: true, editable: true, options: [] }],
+	task: [
+		priority,
+		{
+			id: "component",
+			name: "Component",
+			kind: "text",
+			required: true,
+			editable: true,
+			sortable: false,
+			groupable: false,
+			filterable: false,
+			options: [],
+		},
+	],
 };
 
 /** The A4 fake has one schema for every type; two types with different required fields need a wrapper. */

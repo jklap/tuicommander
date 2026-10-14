@@ -30,6 +30,7 @@
 .comment { margin-bottom: 16px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-lg); overflow-wrap: anywhere; }
 .commentHeader { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
 .commentHeader time, .muted { color: var(--fg-secondary); font-size: var(--font-sm, 12px); }
+.botBadge { margin-left: 6px; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0 4px; font-size: var(--font-xs); font-weight: normal; color: var(--fg-muted); }
 .thread { border-left: 2px solid var(--border); padding-left: 12px; margin-bottom: 16px; }
 .thread > header { color: var(--fg-secondary); margin-bottom: 8px; overflow-wrap: anywhere; }
 .composer { display: flex; flex-direction: column; align-items: stretch; gap: 8px; margin-top: 16px; }
@@ -42,3 +43,6 @@
 	.detail button { min-height: 44px; }
 	.statusRow { align-items: flex-start; }
 }
+.fieldGroup { margin-bottom: 24px; }
+.fieldGroup > summary { cursor: pointer; margin-bottom: 12px; color: var(--fg-secondary); font-size: var(--font-lg, 16px); }
+.fieldGroup > .fields { margin-bottom: 0; }

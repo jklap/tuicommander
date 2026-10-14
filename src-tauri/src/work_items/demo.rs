@@ -6,6 +6,7 @@ pub(super) fn user() -> WorkItemUser {
         id: "demo-user".into(),
         name: "Demo User".into(),
         avatar_url: None,
+        bot: false,
     }
 }
 

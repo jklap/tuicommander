@@ -1661,6 +1661,10 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         )
         .route("/repo/pr-line-threads", get(github_review_routes::threads))
         .route(
+            "/repo/pr-open-threads",
+            get(github_review_routes::open_threads),
+        )
+        .route(
             "/repo/pr-thread-comments",
             get(github_review_routes::comments),
         )

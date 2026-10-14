@@ -1020,7 +1020,7 @@ Unsupported auth overrides and exec_paths stay in the owner-gap ledger. Multi-ke
 changes are refused before writing; cross-process conditional writes await an Ego
 owner API. These are explicit limits rather than raw-file fallback paths.
 
-Tasks field schemas accept optional `queryable`; false excludes display-only fields from list filters and grouping while roadmap dates remain available. Setup edits preserve account keys outside the form and clear blank optional form fields. Create-form filter choices require exact field IDs.
+Tasks field schemas declare sort, filter and group capabilities; display-only fields disable all three while roadmap dates remain available. Setup edits preserve account keys outside the form and clear blank optional form fields. Create-form filter choices require exact field IDs.
 
 Tasks board paging (#1844-858d): lane headers show loaded counts, with More controls for the provider’s shared board cursor. Appended pages deduplicate cards by provider/account/item identity. Cards show assignees and labels; a Move button opens legal destination actions with keyboard navigation and rollback on failure. Refresh after a move merges page one into loaded cards; later pages remain cached until reload. Scrolling inside the move menu keeps it open.
 
@@ -1035,3 +1035,6 @@ The MCP repo tool adds `work_item` and `work_item_act`. Rust resolves the caller
 ### Background tray and menu-bar icon
 
 Background tray (B3): implemented. Native tray/menu-bar status reads current backend SessionState on transitions, with Show and explicit Quit using the shared background lifecycle. Tray preference defaults to background_only; never prevents hiding. Missing native tray support minimizes instead. Native template appearance and desktop-host integration require verification after a rebuild; WebView unload and hibernation remain separate work.
+
+Tasks list controls use provider-declared field sort, group and filter capabilities.
+A rejected selection restores the last successful query and shows the provider reason.

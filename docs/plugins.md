@@ -1908,7 +1908,7 @@ worktree. `repoPath` is the main repository path, `branch` the worktree branch n
 - `labels`: multiple labels with stable IDs; `date`: ISO-8601 date input.
 - `number`: finite numeric input; `link`: URL/link control.
 
-A field schema can set `queryable: false` to hide a display-only field from list filters and grouping. The roadmap still reads date fields. Omitted or null means queryable.
+Display-only fields set `sortable`, `filterable` and `groupable` to false. The roadmap still reads date fields.
 
 The canonical DTOs are `work_items::model` and `work_items::protocol` in Rust.
 Generate their TypeScript declarations with
@@ -1917,13 +1917,20 @@ Generate their TypeScript declarations with
 `{kind, value}` with snake_case kinds. `WorkItemRef` scopes opaque item IDs by
 `providerId` and `accountId`. Missing field keys mean not loaded; null means unset.
 
+Each field schema declares `sortable`, `groupable` and `filterable` booleans for
+the provider list endpoint. Tasks offers only those declared query controls.
+Create and detail schemas set these to false when they are not list fields.
+A rejected query restores the last successful controls and shows the reason.
+
 `WorkItemQuery` carries ANDed filters (values are ORed), saved filter ID, native
 search, sort, bounded page size and opaque cursor. Providers must bind cursors to
 the account/query; selecting a preset starts with no cursor. `WorkItemPage`
 contains items, `nextCursor` and an optional `total` (all matches, when the provider knows it). Details load body, field schemas, allowed action
 descriptors and a separately paginated comment page on open. Comment entries are
-`normal`, `review_thread` (resolved, path, line and reviewed commitId), or
-`review_summary` (state and reviewed commitId). Bodies are markdown, not trusted HTML.
+`normal`, `review_thread` (resolved, outdated, path, line, originalLine, reviewed
+commitId and a nullable parsed `finding`), or `review_summary` (state and reviewed
+commitId). Comment authors carry `bot`. Bodies are markdown, not trusted HTML; finding
+text is untrusted bot data, shown as plain text and never applied or executed.
 
 Actions are `create`, `edit_field`, `transition`, `comment`, and `start_work`.
 Transitions use provider action IDs, not state display names. Board columns may carry a default edit/transition action or null; per-card moves
@@ -1947,7 +1954,10 @@ Providers supply data and declared actions; they do not render this view.
 The header shows key, title, type, state and updated time. Detail field schemas
 select text, Markdown, enum, user, labels, date, number and link controls. Saving
 requires an editable field and an enabled `edit_field` action. Required fields
-cannot be cleared. Values retain their tagged field-value shape.
+cannot be cleared. Values retain their tagged field-value shape. The detail shows
+Description first, then the fields, then Comments. A schema of more than eight
+fields folds behind a "Fields (N)" summary so a wide Jira project does not push
+Description and Comments out of view; no field is dropped.
 
 Descriptions and normal comments, review threads and review summaries render
 through `ContentRenderer` with `untrustedContent`. Markdown, tables, images and
@@ -2012,10 +2022,28 @@ returns the fields of that type (an unknown type is an error, and `create`
 rejects an undeclared `itemType`). Title and Description are fixed inputs, so a
 schema does not repeat them. Only editable fields render.
 
+Create lists Type, Title, Description and the required fields first. Optional
+fields sit in a folded "Optional fields (N)" group with a name filter; the filter
+only hides a field and never hides one that blocks Create.
+
 A type change reloads the schema; values survive only for the same field id and
 kind, and a late schema of an earlier type is dropped. Create stays disabled until
 Title, Type and every required field of the current type are set. Submit sends one
 `create` action with every current field (unset is null). A rejection keeps the draft.
+
+Create user controls use optional `lookupUsers(fieldId, query, signal?)`, which
+returns `{id, name}` choices for that provider/account. Search text is never a
+selected user; rejected searches stay visible and late responses are discarded.
+Static user options remain selectable. Labels without static options accept
+comma-separated free text. Required-field errors are linked to their controls.
+The Jira provider omits configured Project and selected Issue Type from its
+create schema, searches project-assignable users for Assignee, and searches users
+for Reporter. Cloud choices use account IDs; Data Center choices use usernames.
+A provider may declare optional `singleUser(fieldId)`; Jira does, so a second pick in
+a user field replaces the first. The control shows and announces the chosen user.
+Jira create metadata that carries `hasDefaultValue` (Reporter) is not required in
+the form, and empty optional fields are left out of the create payload so Jira
+applies its own defaults.
 
 ## Tasks setup
 

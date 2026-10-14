@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Tasks offers only provider-supported sort, group and filter fields, and restores the last valid selection after a rejection.
+
 ### Added
 - Add scoped plugin settings schemas, locked revision patches, secret redaction, typed migrations for the five existing configurable plugins, and unload-safe catalogue registration (#1785-c7a1).
 
@@ -48,6 +50,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Tasks board lanes show loaded counts and More controls; cards show assignees and labels with a compact keyboard-accessible Move menu (#1844-858d).
 - Preserve account metadata when saving Tasks setup, keep assignee username filters as text, and hide unsupported GitLab roadmap date filters and grouping (#1841-bbac, #1843-9b0f, #1845-66f6).
 - Hide Codex/Ink hard-wrapped intent tails with their marker rows, stopping at blank rows and new output (#1761-7249).
+
+- Tasks details display provider enum labels while retaining IDs for edits (#1839-dcbf).
+- Jira create forms support searchable Reporter and Assignee, free labels, inline required errors, and configured Project/Type values (#1859-c01f).
+
+- Keep Jira JQL parse errors visible in Tasks lists and boards, with explicit `jql:` and `text:` search prefixes (#1861-8a4c).
 - Trackpad and wheel scrolling no longer stalls while the pointer is over the CLI/Chat switch, in either view (#1847-feb9).
 - Design Mode automatically loads its own extension on cold Edge launches and opens the discovered dev server. Running profiles and unsupported branded Chrome return clear errors (#1834-f6c4).
 - Make Terminal Chat easier to read with one lightly tinted answer card per turn, whole-answer Copy, reading-width limits, collapsible terminal pastes and compact inbox notices. Keep the collapsed tool row and show Claude Bash descriptions when available (#1832-b19a).

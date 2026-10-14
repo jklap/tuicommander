@@ -1160,6 +1160,12 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			path: `/repo/pr-line-threads?repoPath=${p("repoPath")}&prNumber=${p("prNumber")}${args.after ? `&after=${p("after")}` : ""}`,
 		}),
 	},
+	get_pr_open_threads: {
+		map: (_args, p) => ({
+			method: "GET",
+			path: `/repo/pr-open-threads?repoPath=${p("repoPath")}&prNumber=${p("prNumber")}`,
+		}),
+	},
 	get_pr_thread_comments: {
 		map: (args, p) => ({
 			method: "GET",

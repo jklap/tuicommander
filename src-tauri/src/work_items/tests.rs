@@ -308,14 +308,16 @@ fn create_fields_lists_item_types_and_rejects_unknown_types() {
     assert!(provider.act(None, create("issue")).is_ok());
 }
 
-// Catches: the schema transport rejecting display-only dates or dropping their list capability.
+// Catches: the schema transport dropping display-only field query capabilities.
 #[test]
-fn field_schema_preserves_queryable_and_accepts_omitted_capability() {
+fn field_schema_preserves_display_only_capabilities() {
     let mut value = serde_json::to_value(demo_provider().fields[0].clone()).unwrap();
-    value.as_object_mut().unwrap().remove("queryable");
-    let old: WorkItemFieldSchema = serde_json::from_value(value.clone()).unwrap();
-    assert_eq!(old.queryable, None);
-    value["queryable"] = json!(false);
+    for capability in ["sortable", "groupable", "filterable"] {
+        value[capability] = json!(false);
+    }
     let field: WorkItemFieldSchema = serde_json::from_value(value).unwrap();
-    assert_eq!(serde_json::to_value(field).unwrap()["queryable"], false);
+    let round_trip = serde_json::to_value(field).unwrap();
+    for capability in ["sortable", "groupable", "filterable"] {
+        assert_eq!(round_trip[capability], false);
+    }
 }

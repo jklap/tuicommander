@@ -147,3 +147,10 @@ item key, title and body as before. A template replaces that entire brief.
 Item control characters are removed before substitution. The delivered result
 retains the 12,000-character cap and untrusted-content wrapper. Read errors are
 shown before a worktree is created.
+
+### Jira query errors
+
+In Tasks search, prefix a query with `jql:` to require JQL, or `text:` for
+literal text. Jira parse errors stay visible with the input unchanged. A previous
+result page remains marked as stale until a corrected query succeeds. Issue keys
+and saved-filter predicates such as `filter = 28712` keep their usual meaning.
