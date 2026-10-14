@@ -3006,3 +3006,7 @@ The existing MCP `repo` tool reads linked work items or explicit references, URL
 ### Background tray and menu-bar icon
 
 Tray and menu-bar icon: Settings > General offers Always, Only in background (default), or Never. The native menu shows live working/awaiting agent counts, Show TUICommander and Quit. An attention mark appears for awaiting agents while hidden and clears on Show. Left-click shows the app on macOS and Windows; Linux uses the menu. Never, a failed tray build, or a Linux desktop without a StatusNotifier host falls back to minimizing without clearing terminal visibility. A native notice appears on the first background entry of each app run.
+
+Design Mode agent control: immediate native-port navigate, reload, screenshot,
+page-error read and explicitly host-granted MAIN-world eval. The extension sidebar
+shows the last fifty agent actions. Screenshots require the reviewed tab to be visible.

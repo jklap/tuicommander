@@ -548,7 +548,23 @@ async fn dispatch_mcp_tool_call_with_context(
         .map(|meta| meta.is_claude_code)
         .unwrap_or(false);
     match name {
-        "design_mode" => crate::design_mode::mcp::handle(state, args).await,
+        "design_mode" => {
+            let origin =
+                super::mcp_transport_ancillary::resolve_mcp_origin_pty(state, mcp_session_id);
+            if args["action"] != "start"
+                && !(crate::design_mode::mcp::visible_to(state, origin.as_deref())
+                    && (args["action"] == "status"
+                        || crate::design_mode::mcp::owns_repo(
+                            state,
+                            origin.as_deref(),
+                            args["repo_path"].as_str().unwrap_or(""),
+                        )))
+            {
+                serde_json::json!({"error":"Design Mode not armed for this session"})
+            } else {
+                crate::design_mode::mcp::handle(state, args).await
+            }
+        }
         "automations" => {
             crate::automations::mcp::handle(
                 args,

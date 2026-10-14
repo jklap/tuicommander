@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Add correlated Design Mode native-port browser commands, explicit host eval grants, screenshots, page-error reads and sidebar action history.
+
 ### Added
 - List the desktop repository’s open Markdown files in the mobile session menu, with live updates and the existing mobile viewer (#1879-05ad).
 - Add scoped plugin settings schemas, locked revision patches, secret redaction, typed migrations for the five existing configurable plugins, and unload-safe catalogue registration (#1785-c7a1).

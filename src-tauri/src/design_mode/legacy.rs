@@ -213,6 +213,7 @@ pub(crate) fn emit_changed(
     session_id: &str,
     status: &str,
 ) {
+    let _ = state.mcp.tools_changed.send(());
     let payload = serde_json::json!({
         "repo_path": repo_path,
         "session_id": session_id,
@@ -228,6 +229,77 @@ pub(crate) fn emit_changed(
     use tauri::Emitter;
     if let Some(app) = state.app_handle.read().as_ref() {
         let _ = app.emit("design-mode-changed", payload);
+    }
+}
+
+/// Executes on the existing extension port and returns its correlated reply.
+pub(crate) async fn browser_command(
+    state: &Arc<AppState>,
+    repo: &str,
+    action: &str,
+    args: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    if !matches!(
+        action,
+        "navigate" | "reload" | "screenshot" | "errors" | "eval"
+    ) {
+        return Err("unknown_command: Unsupported browser command".into());
+    }
+    if serde_json::to_vec(&args).map_err(|e| e.to_string())?.len() > 32 * 1024 {
+        return Err("command_too_large: Browser command exceeds 32 KiB".into());
+    }
+    let manager = manager(state).await;
+    let status = manager
+        .statuses()
+        .await
+        .into_iter()
+        .find(|s| s.repo_path == repo && s.status == "armed")
+        .ok_or("not_armed: Design Mode is not running for this repository")?;
+    let channel = manager
+        .command_channels
+        .lock()
+        .unwrap()
+        .get(repo)
+        .cloned()
+        .ok_or("browser_disconnected: No native browser command channel")?;
+    let reply = channel.request(action, args, &status.session_id).await?;
+    if reply["ok"] != true {
+        return Err(reply["error"]
+            .as_str()
+            .unwrap_or("browser_error: Browser command failed")
+            .to_owned());
+    }
+    let result = &reply["result"];
+    match action {
+        "errors" => Ok(
+            serde_json::json!({"evidence":super::extension::fenced(&super::page_errors::report(&result["errors"])?.unwrap_or_else(|| "No captured page errors".into()))}),
+        ),
+        "eval" => {
+            let text = serde_json::to_string(&result["value"]).map_err(|e| e.to_string())?;
+            if text.len() > 16 * 1024 {
+                return Err("result_too_large: Eval result exceeds 16 KiB".into());
+            }
+            Ok(
+                serde_json::json!({"evidence":super::extension::fenced(&crate::redaction::redact_secrets(&text))}),
+            )
+        }
+        "screenshot" => {
+            use base64::Engine;
+            let encoded = result["image"]
+                .as_str()
+                .and_then(|s| s.strip_prefix("data:image/png;base64,"))
+                .ok_or("invalid_image: Browser returned no PNG")?;
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(encoded)
+                .map_err(|e| e.to_string())?;
+            if !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+                return Err("invalid_image: Browser returned no PNG".into());
+            }
+            let path = super::captures::save_png(&state.data_dir.join("design-grabs"), &bytes)?
+                .ok_or("result_too_large: PNG exceeds limit")?;
+            Ok(serde_json::json!({"path":path}))
+        }
+        _ => Ok(result.clone()),
     }
 }
 

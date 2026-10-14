@@ -376,6 +376,13 @@ describe("transport", () => {
 				path: "/design-mode/navigate",
 				body: { repoPath: "/repo", url: "http://localhost:5173/x" },
 			});
+			expect(
+				mapCommandToHttp("design_mode_browser_command", { repoPath: "/repo", action: "eval", args: { script: "2+2" } }),
+			).toEqual({
+				method: "POST",
+				path: "/design-mode/command",
+				body: { repoPath: "/repo", action: "eval", args: { script: "2+2" } },
+			});
 			expect(mapCommandToHttp("get_design_mode_status", {})).toEqual({
 				method: "GET",
 				path: "/design-mode",

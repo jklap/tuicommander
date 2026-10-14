@@ -954,6 +954,10 @@ pub(super) fn merged_tool_definitions_for_mode(
     }
 
     let mut tools = filtered_native_tools(state);
+    let origin = super::mcp_transport_ancillary::resolve_mcp_origin_pty(state, mcp_session_id);
+    if !crate::design_mode::mcp::visible_to(state, origin.as_deref()) {
+        tools.retain(|tool| tool["name"] != "design_mode");
+    }
     let allowed = resolve_allowed_upstreams(state, mcp_session_id);
     let upstream_tools = state
         .mcp
@@ -964,6 +968,7 @@ pub(super) fn merged_tool_definitions_for_mode(
     serde_json::Value::Array(tools)
 }
 
+// DEFERRED (2026-10-14) — meta-tool search is a shared index; session filtering needs caller-aware search/schema adapters. Dispatch still gates browser commands.
 /// Build the full searchable tool corpus — native (filtered by
 /// `disabled_native_tools`) merged with upstream aggregated tools.
 ///

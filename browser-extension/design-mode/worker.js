@@ -1,3 +1,4 @@
+import {browserCommand} from './browserCommands.js';
 import {addPick, editPick, deletePick, addError, clearErrors, draftForTab, recipient, deliverDraft, serverSession} from './cards.js';
 import {reviewAgents} from './reviewAgents.js';
 import {connectNative, nativeRequest} from './native.js';
@@ -34,6 +35,33 @@ async function refreshConnection(tabId) {
 }
 let reviewedTab;
 let beating = false;
+let commandLoopStarted = false;
+async function commands() {
+  for (;;) {
+    try {
+      const command = await request('command_next');
+      if (!command) { await new Promise((resolve) => setTimeout(resolve, 250)); continue; }
+      const saved = await chrome.storage.session.get(['reviewedTab','actionHistory']);
+      const tabId = reviewedTab ?? saved.reviewedTab;
+      let reply;
+      try {
+        const mode = (await request('mode_status')).find((mode) => mode.repoPath === bound.repoPath);
+        if (mode?.status !== 'armed' || mode.sessionId !== command.sessionId) throw new Error('not_armed: Design Mode is not armed for this session.');
+        let timer;
+        try {
+          const result = await Promise.race([
+            browserCommand(command, chrome, tabId, async (id) => draftForTab(await drafts(), id).errors ?? []),
+            new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('command_timeout: Browser operation exceeded 8 seconds.')), 8000); }),
+          ]);
+          reply = {ok:true,result};
+        } finally { clearTimeout(timer); }
+      } catch (error) { reply = {ok:false,error:error.message}; }
+      const actionHistory = [...(saved.actionHistory ?? []), {who:command.sessionId, action:command.action, when:Date.now(), ok:reply.ok}].slice(-50);
+      await chrome.storage.session.set({actionHistory}); notify();
+      await request('command_reply', {requestId:command.requestId, reply});
+    } catch { await new Promise((resolve) => setTimeout(resolve, 1000)); }
+  }
+}
 async function beat() {
   if (beating) return;
   beating = true;
@@ -56,6 +84,7 @@ const notify = () => chrome.runtime.sendMessage({kind: 'changed'}).catch(() => {
 async function request(action, fields = {}) {
   const config = await binding;
   connectNative((error) => { connection = error; notify(); });
+  if (!commandLoopStarted) { commandLoopStarted = true; void commands(); }
   return nativeRequest({action, repoPath: config.repoPath, version: '2.0.0', ...fields});
 }
 async function selectedSession(tabId) {
@@ -82,7 +111,7 @@ async function snapshot(tabId) {
   const draft = draftForTab(all, tabId);
   const selection = connection.startsWith('Connected') ? recipient(draft, agents, armed ?? bound?.sessionId) : {};
   if (Object.keys(selection).some((key) => draft[key] !== selection[key])) { all[String(tabId)] = {...draft,...selection}; await chrome.storage.local.set({drafts:all}); }
-  return {tabId, ...draft, ...selection, repoPath: bound?.repoPath, connection, agents, servers: serversBySession.get(selection.selectedSessionId ?? '') ?? noServers, armedSessionId: armed ?? bound?.sessionId};
+  return {actionHistory:(await chrome.storage.session.get('actionHistory')).actionHistory ?? [], tabId, ...draft, ...selection, repoPath: bound?.repoPath, connection, agents, servers: serversBySession.get(selection.selectedSessionId ?? '') ?? noServers, armedSessionId: armed ?? bound?.sessionId};
 }
 async function capture(message, sender) {
   if (sender.frameId !== 0) return {captureError: 'Frame screenshot omitted; DOM evidence retained.'};

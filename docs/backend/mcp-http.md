@@ -2277,3 +2277,9 @@ Credentials stay in Rust's existing account-authenticated HTTP path, which redac
 ### Background tray and menu-bar icon
 
 The desktop `close-dialog` event and its SSE copy include `background_available: boolean`. The desktop Ask dialog uses it to omit Background when the tray is disabled or unavailable. Browser clients continue to ignore native close prompts; tray actions add no public request surface.
+
+Design Mode browser commands (`navigate`, `reload`, `screenshot`, `errors`, `eval`)
+return correlated native-port results with a ten-second timeout. Direct MCP tool
+lists filter Design Mode by the armed terminal session; cached-tool dispatch checks
+the caller and repository again. Start remains discoverable. Arm/Stop broadcasts
+`notifications/tools/list_changed`; live client refresh remains a verification item.

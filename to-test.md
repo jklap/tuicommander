@@ -5350,3 +5350,5 @@ Visual evidence: worktree Vite fixture mounted the real NotificationsTab and Toa
 - [ ] On stock GNOME without a StatusNotifier host, close configured as Background must minimize with the main window reachable; Ask must omit Background. Native Linux packaging requires the appindicator dependency.
 
 - [ ] Mobile composer + menu (#1880-d7ff): on iPhone, check both modes at 390px, native camera/file pickers, browser mic, Chat Park/Restore and busy Queue/Stop, terminal Queue and long-press Send. Confirm keyboard and safe-area positioning.
+
+- [ ] #1724-fe7e: After Boss rebuilds/restarts TUIC and reinstalls the Design Mode extension, navigate an armed worktree page, get a matching visible-tab PNG, read captured errors, grant/revoke host eval, and verify the sidebar action history. Rust is not hot-reloaded. Verify Claude Code, Codex and ego tool-list refresh on Arm/Stop; cached calls must refuse unarmed sessions.

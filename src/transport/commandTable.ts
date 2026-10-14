@@ -2163,6 +2163,13 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	reload_design_mode: {
 		map: (args) => ({ method: "POST", path: "/design-mode/reload", body: { repoPath: args.repoPath } }),
 	},
+	design_mode_browser_command: {
+		map: (a) => ({
+			method: "POST",
+			path: "/design-mode/command",
+			body: { repoPath: a.repoPath, action: a.action, args: a.args },
+		}),
+	},
 	navigate_design_mode: {
 		map: (args) => ({
 			method: "POST",
