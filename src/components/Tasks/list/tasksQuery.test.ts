@@ -186,6 +186,7 @@ describe("Tasks query consumer", () => {
 
 // Catches: GitLab username controls are compared against unrelated numeric REST identities locally.
 it("gitlab_username_filters_remain_in_server_mode", async () => {
+	// @ts-expect-error The GitLab plugin is plain JavaScript without declarations.
 	const { createGitLabProvider } = await import("../../../../plugins/gitlab/provider.js");
 	const { default: recorded } = await import("../../../../plugins/gitlab/fixtures/recorded.json");
 	for (const fieldId of ["assignee", "author"]) {

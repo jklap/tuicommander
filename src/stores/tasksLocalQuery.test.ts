@@ -58,6 +58,7 @@ it("unknown_or_large_totals_keep_server_mode", async () => {
 
 // Catches: local collection clears the MR discriminator and certifies an issue-only scope instead.
 it("local_collection_preserves_gitlab_merge_request_scope", async () => {
+	// @ts-expect-error The GitLab plugin is plain JavaScript without declarations.
 	const { createGitLabProvider } = await import("../../plugins/gitlab/provider.js");
 	const { default: recorded } = await import("../../plugins/gitlab/fixtures/recorded.json");
 	const provider = createGitLabProvider({
@@ -87,6 +88,7 @@ it("local_collection_preserves_gitlab_merge_request_scope", async () => {
 
 // Catches: state=all becomes the default opened scope, or an MR preset loses its endpoint.
 it("gitlab_collection_preserves_state_and_preset_scope", async () => {
+	// @ts-expect-error The GitLab plugin is plain JavaScript without declarations.
 	const { createGitLabProvider } = await import("../../plugins/gitlab/provider.js");
 	const { default: recorded } = await import("../../plugins/gitlab/fixtures/recorded.json");
 	const paths: URL[] = [];
@@ -97,7 +99,9 @@ it("gitlab_collection_preserves_state_and_preset_scope", async () => {
 			return { status: 200, headers: { "x-total": "1" }, json: [recorded.mr] };
 		},
 	});
-	const selected = provider.savedFilters.find((preset) => preset.id === "assigned-mrs");
+	const selected = provider.savedFilters.find(
+		(preset: { id: string; query: import("../types/work-items.gen").WorkItemQuery }) => preset.id === "assigned-mrs",
+	);
 	expect(selected).toBeDefined();
 	await collectLocalTasks(provider, selected!.query, new AbortController().signal);
 	expect(paths[0].pathname).toMatch(/merge_requests$/);

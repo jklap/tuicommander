@@ -6,16 +6,21 @@ fn value(item: &WorkItem, field: &WorkItemFieldSchema) -> Option<WorkItemFieldVa
     let id = field.id.as_str();
     if let Some(value) = item.fields.get(id) {
         return match (value, &field.kind) {
-            (Some(WorkItemFieldValue::Enum(id)), WorkItemFieldKind::Text) => {
-                Some(WorkItemFieldValue::Text(id.clone()))
-            }
+            (
+                Some(WorkItemFieldValue::Enum(id) | WorkItemFieldValue::Date(id)),
+                WorkItemFieldKind::Text,
+            ) => Some(WorkItemFieldValue::Text(id.clone())),
             _ => value.clone(),
         };
     }
     match id {
         "key" => Some(WorkItemFieldValue::Text(item.key.clone())),
         "title" | "summary" => Some(WorkItemFieldValue::Text(item.title.clone())),
-        "updatedAt" | "updated" => Some(WorkItemFieldValue::Date(item.updated_at.clone())),
+        "updatedAt" | "updated" => Some(if field.kind == WorkItemFieldKind::Text {
+            WorkItemFieldValue::Text(item.updated_at.clone())
+        } else {
+            WorkItemFieldValue::Date(item.updated_at.clone())
+        }),
         "state" | "status" => Some(if field.kind == WorkItemFieldKind::Text {
             WorkItemFieldValue::Text(item.state.id.clone())
         } else {
@@ -380,7 +385,7 @@ mod tests {
     // Catches: GitHub's enum Type or Jira's text Priority/Issue type cannot match stored enum identities.
     #[test]
     fn local_query_scalar_kinds_follow_list_schema_without_changing_identity() {
-        for id in ["itemType", "priority", "issuetype"] {
+        for id in ["itemType", "priority", "issuetype", "updated", "created"] {
             let mut data = input();
             data.items.truncate(1);
             let mut field = data.fields[0].clone();
