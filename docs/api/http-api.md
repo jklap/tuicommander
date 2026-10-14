@@ -236,7 +236,7 @@ falls through to a catch-all. That catch-all splits on the first path segment:
   `attachments`, `audio`, `claude`, `codex`, `config`, `debug`, `diagnostics`, `dictation`,
   `events`, `exec`, `fs`, `generators`, `github`, `health`, `logs`, `mcp`,
   `metrics`, `plugins`, `process`, `prompt`, `registry`, `repo`, `sessions`,
-  `stats`, `system`, `terminal`, `tunnels`, `watchers`, `worktrees`. The
+  `stats`, `system`, `tasks`, `terminal`, `tunnels`, `watchers`, `worktrees`. The
   response is `404` with `{ "error": "no such endpoint: /<path>" }`.
 - **Anything else** — a deep link such as `/settings` or `/mobile/session/<id>`.
   The response is `200` with the SPA shell (`index.html`, or `mobile.html` under

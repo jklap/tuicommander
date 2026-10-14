@@ -274,15 +274,12 @@ export function planSuggestOverlay(
 	return { key: parts.join(","), blocks, answerMarkers };
 }
 
-/**
- * Rows the terminal must not paint: every `suggest:`/`intent:` marker row in the
- * plan, wrapped continuations included. Row indexes stay where they are, so
- * selection, search and scrollback keep their coordinates. Rows outside the
- * viewport (the overscan rows, the lookback) may be in the set; they are inert.
+/** Suggest anchors and wrapped tails omitted by the frontend viewport projection.
+ * Intent remains visible. Stored backend row and cell coordinates never change.
  */
 export function hiddenMarkerRows(blocks: readonly OverlayBlock[]): Set<number> {
 	const hidden = new Set<number>();
-	for (const block of blocks) if (block.kind !== "answer") hidden.add(block.row);
+	for (const block of blocks) if (block.kind === "suggest" || block.kind === "continuation") hidden.add(block.row);
 	return hidden;
 }
 
