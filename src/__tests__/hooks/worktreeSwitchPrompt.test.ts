@@ -177,6 +177,23 @@ describe("useWorktreeSwitchPrompt — worktree-created", () => {
 		return handleBranchSelect;
 	}
 
+	// Catches: a recycled checkout remains actionable through its old creation offer.
+	it("removed_worktree_retires_only_its_creation_offer", async () => {
+		await testInScopeAsync(async () => {
+			await emitCreated();
+			const old = activityStore.getForSection("worktrees", REPO)[0];
+			activityStore.addItem({ ...old, id: "wt-feature-sibling-1" });
+			activityStore.addItem({ ...old, id: `wt-${BRANCH}-123`, onClick: undefined, dismissed: true });
+			activityStore.addItem({ ...old, id: old.id + "-foreign", repoPath: "/other" });
+			handlers.get("worktree-removed")?.({ payload: { repo_path: REPO, workspace_id: BRANCH, branch: BRANCH } });
+			await Promise.resolve();
+			expect(activityStore.state.items.map((item) => item.id)).not.toContain(old.id);
+			expect(activityStore.state.items.map((item) => item.id)).not.toContain(`wt-${BRANCH}-123`);
+			expect(activityStore.state.items.map((item) => item.id)).toContain("wt-feature-sibling-1");
+			expect(activityStore.state.items.map((item) => item.id)).toContain(old.id + "-foreign");
+		});
+	});
+
 	// Catches: moving siblings, a foreign caller, or the creator of an explicit spawn.
 	it.each([
 		["eligible", REPO, false, "creator"],

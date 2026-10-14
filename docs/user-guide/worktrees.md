@@ -23,6 +23,11 @@ worktree declaration also survives restart when a saved agent tab is restored.
 Removing the worktree also removes its saved placement declaration, so a recycled
 checkout does not leave an agent pointed at the old directory.
 
+Suspended tabs still own their checkout. Close or resume and move these tabs before
+removing, archiving, or recycling that checkout. Cleanup names the suspended tab
+and refuses even a forced removal; recycling skips it. A removed checkout also
+loses its old Worktrees bell offer, so that offer cannot open the obsolete path.
+
 ## Worktree Storage Strategies
 
 Configure where worktrees are stored (Settings → Git & GitHub → Worktree Defaults → Storage):

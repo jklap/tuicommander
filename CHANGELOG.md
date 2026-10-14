@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Fixed
+- Protect suspended tabs from worktree recycling and cleanup, and remove obsolete worktree bell actions (#1705-67b3).
 - Keep detached checkouts with a local feature branch at HEAD out of orphan cleanup, and stop reporting fresh in-sync branches as integrated (#1894-7683).
 ### Changed
 - Remove answer background tints from the terminal grid, Answers view, AI Chat and terminal Chat cards. Keep green left rules and spacing; use the darker success green for Paper answer rules; user-question styling is unchanged (#1896-f355).
