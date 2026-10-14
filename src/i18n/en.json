@@ -47,6 +47,8 @@
 	"mobile.dictation.error.noSpeech": "No speech detected",
 	"mobile.dictation.error.notAllowed": "Microphone or speech recognition permission denied",
 	"mobile.dictation.error.serviceNotAllowed": "Speech recognition is not allowed on this device",
+	"mobile.settings.input": "INPUT",
+	"mobile.settings.keyboardCorrection": "Autocorrect and spellcheck",
 	"mobile.dictation.start": "Dictate into draft",
 	"mobile.dictation.stop": "Stop dictation",
 	"perimeter.heading": "Perimeter",
@@ -1325,4 +1327,12 @@
 	"automations.previousRuns": "Previous runs",
 	"automations.nextRuns": "Next runs",
 	"automations.recordedWorkspace": "Workspace"
+,
+	"general.label.trayIcon": "Tray and menu-bar icon",
+	"general.trayIcon.always": "Always",
+	"general.trayIcon.backgroundOnly": "Only in background",
+	"general.trayIcon.never": "Never",
+	"general.hint.trayIcon": "Never disables Background. Without a tray host, including stock GNOME, closing minimizes the window so it remains reachable.",
+	"settings.catalogue.app.background.tray_icon.label": "Tray and menu-bar icon",
+	"settings.catalogue.app.background.tray_icon.help": "Always, only in background, or never. Without a tray, closing minimizes the window."
 }

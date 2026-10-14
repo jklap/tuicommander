@@ -5,7 +5,7 @@ use crate::AppState;
 use std::sync::Arc;
 use tauri::Manager;
 
-pub(super) struct DesktopWindows<'a>(pub &'a tauri::AppHandle);
+pub(crate) struct DesktopWindows<'a>(pub &'a tauri::AppHandle);
 impl DesktopWindows<'_> {
     fn window(&self, label: &str) -> Result<tauri::WebviewWindow, String> {
         self.0
@@ -33,6 +33,15 @@ impl super::super::hidden::Windows for DesktopWindows<'_> {
     }
     fn focus(&self, label: &str) -> Result<(), String> {
         self.window(label)?.set_focus().map_err(|e| e.to_string())
+    }
+    fn tray_available(&self) -> bool {
+        super::super::tray::desktop::available(self.0)
+    }
+    fn minimize(&self, label: &str) -> Result<(), String> {
+        self.window(label)?.minimize().map_err(|e| e.to_string())
+    }
+    fn tray_status(&self, text: &str, attention: bool) {
+        super::super::tray::desktop::render(self.0, text, attention);
     }
     fn background_resources(&self, hidden: bool) {
         #[cfg(target_os = "macos")]

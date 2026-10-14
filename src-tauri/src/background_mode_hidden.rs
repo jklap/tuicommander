@@ -8,6 +8,7 @@ use std::sync::atomic::Ordering;
 #[derive(Default)]
 pub(crate) struct Visibility {
     saved: Option<HashMap<String, bool>>,
+    attention: bool,
     desktop: HashMap<String, bool>,
     windows: Vec<String>,
     watchers: HashMap<String, usize>,
@@ -134,6 +135,13 @@ pub(crate) trait Windows {
     fn unminimize(&self, label: &str) -> Result<(), String>;
     fn focus(&self, label: &str) -> Result<(), String>;
     fn background_resources(&self, hidden: bool);
+    fn tray_available(&self) -> bool {
+        true
+    }
+    fn minimize(&self, _label: &str) -> Result<(), String> {
+        Ok(())
+    }
+    fn tray_status(&self, _text: &str, _attention: bool) {}
 }
 
 #[cfg(any(feature = "desktop", test))]
@@ -141,6 +149,12 @@ pub(crate) fn enter_background(state: &AppState, windows: &impl Windows) -> Resu
     let mut visibility = state.background_visibility.lock();
     if visibility.saved.is_some() {
         return Ok(());
+    }
+    if state.config.read().background.tray_icon == super::TrayPreference::Never
+        || !windows.tray_available()
+    {
+        // Keep both the window and desktop terminal visibility reachable without a tray.
+        return windows.minimize("main");
     }
     let labels = windows.visible_labels();
     // Main first: a failure must leave the desktop and its terminal state intact.
@@ -181,6 +195,8 @@ pub(crate) fn enter_background(state: &AppState, windows: &impl Windows) -> Resu
     }
     state.desktop_window_focused.store(false, Ordering::Relaxed);
     windows.background_resources(true);
+    drop(visibility);
+    refresh_tray(state, windows);
     Ok(())
 }
 
@@ -210,5 +226,25 @@ pub(crate) fn leave_background(state: &AppState, windows: &impl Windows) -> Resu
             }
         }
     }
+    visibility.attention = false;
+    drop(visibility);
+    refresh_tray(state, windows);
     windows.focus("main")
+}
+
+#[cfg(any(feature = "desktop", test))]
+pub(crate) fn is_hidden(state: &AppState) -> bool {
+    state.background_visibility.lock().saved.is_some()
+}
+
+#[cfg(any(feature = "desktop", test))]
+pub(crate) fn refresh_tray(state: &AppState, windows: &impl Windows) {
+    let (text, awaiting) = super::tray::status(state);
+    let mut visibility = state.background_visibility.lock();
+    if visibility.saved.is_some() && awaiting {
+        visibility.attention = true;
+    }
+    let attention = visibility.attention;
+    drop(visibility);
+    windows.tray_status(&text, attention);
 }

@@ -372,6 +372,12 @@ cleartext copy does not survive on disk.
 
 **Commands:** `load_app_config()`, `save_app_config(base, config)`
 
+Settings windows compare their current preferences with their own last successful
+local snapshot before building this pair. Only locally changed fields are applied
+to the freshly loaded `base`; unchanged store-owned fields keep the loaded values.
+This prevents a stale window from expressing another window's edits as unwanted
+reversals. The backend delta and locking protocol is unchanged.
+
 Every writer of `config.json` — IPC `save_config`, `PUT /config`, MCP
 `config action=save`, session-token rotation, `set_global_hotkey`, the
 `disabled_mcp_agents` toggle and the push auto-enable on first subscription —
@@ -1536,3 +1542,7 @@ visible; it does not resume every inactive tab.
 ### MCP work-item writes
 
 `mcp_work_item_writes` in `config.json` defaults to `false`, including when the field is absent in an older file. It permits only the `repo work_item_act` comment and transition operations. Reads need no opt-in. Use the existing configuration save surface to apply it live, or edit the file with the app stopped and restart. Supplying a flag in a work-item request cannot enable writes.
+
+### Background tray and menu-bar icon
+
+`background.tray_icon` accepts `always`, `background_only` (default), and `never`. It applies live. Never restores a hidden desktop before removing the tray. Close configured as background minimizes when the tray is disabled, fails to build, or Linux has no registered StatusNotifier host. This keeps desktop session visibility intact. The Ask dialog omits Background when unavailable. Tray state and the first-entry notice are process-local, not persisted.

@@ -26,6 +26,7 @@ export interface CustomLauncher {
 	platform?: "macos" | "windows" | "linux";
 }
 
+export type TrayIconPreference = "always" | "background_only" | "never";
 export type CloseBehavior = "ask" | "background" | "quit";
 
 interface RustAppConfig {
@@ -38,7 +39,7 @@ interface RustAppConfig {
 	ide: string;
 	default_font_size: number;
 	close_behavior: CloseBehavior;
-	background?: { hide_dock_icon?: boolean };
+	background?: { hide_dock_icon?: boolean; tray_icon?: TrayIconPreference };
 	confirm_before_quit: boolean;
 	confirm_before_closing_tab: boolean;
 	max_tab_name_length: number;
@@ -290,6 +291,7 @@ interface SettingsStoreState {
 	theme: string;
 	closeBehavior: CloseBehavior;
 	hideDockIcon: boolean;
+	trayIcon: TrayIconPreference;
 	confirmBeforeQuit: boolean;
 	confirmBeforeClosingTab: boolean;
 	maxTabNameLength: number;
@@ -357,6 +359,7 @@ function createSettingsStore() {
 		theme: DEFAULT_THEME,
 		closeBehavior: "ask",
 		hideDockIcon: true,
+		trayIcon: "background_only",
 		confirmBeforeQuit: true,
 		confirmBeforeClosingTab: true,
 		maxTabNameLength: 25,
@@ -407,86 +410,99 @@ function createSettingsStore() {
 	// on top of this snapshot (it does a fresh load-modify-save instead).
 	let baseConfig: RustAppConfig | null = null;
 	let saveTimer: ReturnType<typeof setTimeout> | null = null;
-	// Write lock: save() serializes the ENTIRE state, so a save before a
-	// successful hydrate would overwrite config.json with defaults, wiping the
-	// user's settings (observed in the field: full config reset to defaults).
+	// Write lock: a save before successful hydrate could overwrite config.json
+	// with defaults, wiping the user's settings (observed in the field).
 	// No successful hydrate, no persist.
 	let hydrated = false;
 
-	/** Overwrite the settings-store-owned fields on a freshly-loaded config.
-	 *  Fields owned by OTHER surfaces are deliberately left as loaded:
-	 *   - `services.*`        — RemoteAccessPanel (its own load-modify-save)
-	 *   - `mcp_server_enabled` — services panels (config type only)
-	 *   - `global_hotkey`      — the `set_global_hotkey` command
-	 *  This store must never write them from its own (possibly stale) snapshot,
-	 *  or a general-settings save clobbers a concurrent writer's change — the
-	 *  "web server disabled / hotkey lost on restart" bug. Mirrors the
-	 *  load-modify-save pattern the services panels already use. */
-	function applyOwnedFields(config: RustAppConfig): RustAppConfig {
-		config.shell = state.shell;
-		config.font_family = state.font;
-		config.font_size = state.defaultFontSize;
-		config.font_weight = state.fontWeight;
-		config.theme = state.theme;
-		config.ide = state.ide;
-		config.default_font_size = state.defaultFontSize;
-		config.close_behavior = state.closeBehavior;
-		config.background = { ...config.background, hide_dock_icon: state.hideDockIcon };
-		config.confirm_before_quit = state.confirmBeforeQuit;
-		config.confirm_before_closing_tab = state.confirmBeforeClosingTab;
-		config.max_tab_name_length = state.maxTabNameLength;
-		config.split_tab_mode = state.splitTabMode;
-		config.tab_ordering_mode = state.tabOrderingMode;
-		config.tab_cycling_all_types = state.tabCyclingAllTypes;
-		config.tab_tree_enabled = state.tabTreeEnabled;
-		config.chat_mute_intermediate_text = state.chatMuteIntermediateText;
-		config.auto_show_pr_popover = state.autoShowPrPopover;
-		config.prevent_sleep_when_busy = state.preventSleepWhenBusy;
-		config.auto_update_enabled = state.autoUpdateEnabled;
-		config.auto_update_plugins_enabled = state.autoUpdatePluginsEnabled;
-		config.defer_update_relaunch = state.deferUpdateRelaunch;
-		config.eager_resume_after_update = state.eagerResumeAfterUpdate;
-		config.language = state.language;
-		config.update_channel = state.updateChannel;
-		config.disabled_agents = [...state.disabledAgents];
-		config.intent_tab_title = state.intentTabTitle;
-		config.progress_tracking = state.progressTracking;
-		config.suggest_followups = state.suggestFollowups;
-		config.copy_on_select = state.copyOnSelect;
-		config.osc52_clipboard = state.osc52Clipboard;
-		config.show_last_prompt = state.showLastPrompt;
-		config.bell_style = state.bellStyle;
-		config.issue_filter = state.issueFilter;
-		config.pr_hide_drafts = state.prHideDrafts;
-		config.pr_hide_conflicting = state.prHideConflicting;
-		config.pr_hide_ci_failing = state.prHideCiFailing;
-		config.experimental_features_enabled = state.experimentalFeaturesEnabled;
-		config.scrollback_reflow = state.scrollbackReflow;
-		config.cursor_style = state.cursorStyle;
-		config.terminal_renderer = state.terminalRenderer;
-		config.show_block_timestamps = state.showBlockTimestamps;
-		config.show_scrollbar_marks = state.showScrollbarMarks;
-		config.block_folding_enabled = state.blockFoldingEnabled;
-		config.index_strategy = state.indexStrategy;
-		config.standby_timeout_minutes = state.standbyTimeoutMinutes;
-		config.custom_launchers = [...state.customLaunchers];
-		config.inline_blame_enabled = state.inlineBlameEnabled;
-		config.ego_executable = state.egoExecutable;
-		config.ego_profile = state.egoProfile;
-		config.ai_chat_workspace = state.aiChatWorkspace;
-		return config;
+	// Compare with this window's normalized local state, never a fresh disk load:
+	// another window may have changed even fields owned by this same store.
+	let savedFields: Record<string, string> = {};
+
+	/** The single mapping from settings state to config fields. Foreign-owned
+	 *  services, mcp_server_enabled and global_hotkey stay outside this projection. */
+	function ownedFields() {
+		return {
+			shell: state.shell,
+			font_family: state.font,
+			font_size: state.defaultFontSize,
+			font_weight: state.fontWeight,
+			theme: state.theme,
+			ide: state.ide,
+			default_font_size: state.defaultFontSize,
+			close_behavior: state.closeBehavior,
+			background: { hide_dock_icon: state.hideDockIcon, tray_icon: state.trayIcon },
+			confirm_before_quit: state.confirmBeforeQuit,
+			confirm_before_closing_tab: state.confirmBeforeClosingTab,
+			max_tab_name_length: state.maxTabNameLength,
+			split_tab_mode: state.splitTabMode,
+			tab_ordering_mode: state.tabOrderingMode,
+			tab_cycling_all_types: state.tabCyclingAllTypes,
+			tab_tree_enabled: state.tabTreeEnabled,
+			chat_mute_intermediate_text: state.chatMuteIntermediateText,
+			auto_show_pr_popover: state.autoShowPrPopover,
+			prevent_sleep_when_busy: state.preventSleepWhenBusy,
+			auto_update_enabled: state.autoUpdateEnabled,
+			auto_update_plugins_enabled: state.autoUpdatePluginsEnabled,
+			defer_update_relaunch: state.deferUpdateRelaunch,
+			eager_resume_after_update: state.eagerResumeAfterUpdate,
+			language: state.language,
+			update_channel: state.updateChannel,
+			disabled_agents: [...state.disabledAgents],
+			intent_tab_title: state.intentTabTitle,
+			progress_tracking: state.progressTracking,
+			suggest_followups: state.suggestFollowups,
+			copy_on_select: state.copyOnSelect,
+			osc52_clipboard: state.osc52Clipboard,
+			show_last_prompt: state.showLastPrompt,
+			bell_style: state.bellStyle,
+			issue_filter: state.issueFilter,
+			pr_hide_drafts: state.prHideDrafts,
+			pr_hide_conflicting: state.prHideConflicting,
+			pr_hide_ci_failing: state.prHideCiFailing,
+			experimental_features_enabled: state.experimentalFeaturesEnabled,
+			scrollback_reflow: state.scrollbackReflow,
+			cursor_style: state.cursorStyle,
+			terminal_renderer: state.terminalRenderer,
+			show_block_timestamps: state.showBlockTimestamps,
+			show_scrollbar_marks: state.showScrollbarMarks,
+			block_folding_enabled: state.blockFoldingEnabled,
+			index_strategy: state.indexStrategy,
+			standby_timeout_minutes: state.standbyTimeoutMinutes,
+			custom_launchers: [...state.customLaunchers],
+			inline_blame_enabled: state.inlineBlameEnabled,
+			ego_executable: state.egoExecutable,
+			ego_profile: state.egoProfile,
+			ai_chat_workspace: state.aiChatWorkspace,
+		} satisfies Partial<RustAppConfig>;
 	}
 
-	/** Load the current on-disk config, apply this store's owned fields, and
-	 *  persist. Load-modify-save guarantees fields written by other surfaces
-	 *  (services, global_hotkey, …) survive — never overwritten from a stale
-	 *  in-memory snapshot. If the fresh load fails we skip the save entirely
-	 *  rather than risk writing a partial config. */
+	/** Immutable values also detect edits to nested launcher arguments. */
+	function snapshotFields(fields: ReturnType<typeof ownedFields>): Record<string, string> {
+		return Object.fromEntries(Object.entries(fields).map(([key, value]) => [key, JSON.stringify(value)]));
+	}
+
+	/** Apply only local edits to a fresh document. The backend derives its delta
+	 *  from this base/config pair while holding the cross-process file lock. */
 	async function persist(): Promise<void> {
 		try {
+			let snapshot = savedFields;
 			const config = await updateAppConfig<RustAppConfig>((fresh) => {
-				applyOwnedFields(fresh);
+				const fields = ownedFields();
+				snapshot = snapshotFields(fields);
+				Object.assign(
+					fresh,
+					Object.fromEntries(
+						Object.entries(fields)
+							.filter(([key]) => snapshot[key] !== savedFields[key])
+							.map(([key, value]) => [
+								key,
+								key === "background" ? { ...fresh.background, ...fields.background } : value,
+							]),
+					),
+				);
 			});
+			savedFields = snapshot; // failed saves keep their edits pending for a later attempt
 			baseConfig = config; // keep the cache (loadFontFromConfig) current
 		} catch (err) {
 			appLogger.error("config", "Failed to save config", err);
@@ -538,6 +554,7 @@ function createSettingsStore() {
 				setState("theme", config.theme || DEFAULT_THEME);
 				setState("closeBehavior", config.close_behavior ?? "ask");
 				setState("hideDockIcon", config.background?.hide_dock_icon ?? true);
+				setState("trayIcon", config.background?.tray_icon ?? "background_only");
 				setState("confirmBeforeQuit", config.confirm_before_quit ?? true);
 				setState("confirmBeforeClosingTab", config.confirm_before_closing_tab ?? true);
 				setState("maxTabNameLength", config.max_tab_name_length || 25);
@@ -588,6 +605,7 @@ function createSettingsStore() {
 				setState("egoExecutable", config.ego_executable ?? "");
 				setState("egoProfile", config.ego_profile ?? "");
 				setState("aiChatWorkspace", config.ai_chat_workspace ?? "");
+				savedFields = snapshotFields(ownedFields());
 				hydrated = true;
 			} catch (err) {
 				appLogger.error("config", "Failed to hydrate settings — persistence disabled for this session", err);
@@ -638,6 +656,11 @@ function createSettingsStore() {
 		/** Set the main-window close preference. */
 		setCloseBehavior(behavior: CloseBehavior) {
 			setState("closeBehavior", behavior);
+			save();
+		},
+
+		setTrayIcon(value: TrayIconPreference) {
+			setState("trayIcon", value);
 			save();
 		},
 

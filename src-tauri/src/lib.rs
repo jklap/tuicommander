@@ -1831,6 +1831,7 @@ pub fn run() {
                 .build(),
         )
         .manage(background_mode::desktop::BackgroundMode::default())
+        .manage(background_mode::tray::desktop::NativeTray::default())
         .manage(state)
         .manage(crate::fs::ContentSearchCancel(std::sync::Mutex::new(None)))
         .on_window_event(|window, event| {
@@ -1895,6 +1896,7 @@ pub fn run() {
             // Store AppHandle so HTTP handlers can emit Tauri events
             let app_state: &Arc<AppState> = app.state::<Arc<AppState>>().inner();
             *app_state.app_handle.write() = Some(app.handle().clone());
+            background_mode::tray::desktop::sync(app.handle());
 
             // Ensure main window exists — if tauri.conf.json windows[] is
             // empty (accidental edit, merge conflict), create it programmatically

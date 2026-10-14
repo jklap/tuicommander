@@ -704,6 +704,7 @@ Some frontend-only stores persist to localStorage:
 - [x] Connected daemon MCP toasts reach the desktop Messages bell with host attribution, original level/sound and safe remote-terminal navigation; no disconnected replay
 - [x] Remote access / HTTP server
 - [x] SSH-managed remote daemon deployment, idle lifetime, pairing-token vaulting, and systemd/launchd installation
+- [x] Mobile terminal prompt keyboard correction defaults on, with a device-local Settings toggle for autocorrect, spellcheck and sentence capitalization (#1878-3a3c).
 - [x] Mobile terminal Ctrl menu (Ctrl+C, Ctrl+B, Ctrl+D, agent-aware Ctrl+Enter)
 - [x] Mobile Send long-press Queue transfers the live draft to the shared server ready-window queue; taps still submit immediately.
 - [x] Session uploads live under TUIC data, with launch grants and session-end cleanup; startup reclaims only provably dead owners, preserving concurrent instances; ego invocation-scoped binary-file read roots remain unsupported (#1833-aa60).
@@ -1029,3 +1030,7 @@ Tasks remembers the selected source per repository and List, Board or Roadmap pl
 ## Tasks MCP access (#1854-4960)
 
 The MCP repo tool adds `work_item` and `work_item_act`. Rust resolves the caller's worktree link or an explicit reference, URL or account-scoped key, validates DTOs and gates comment/transition writes with `mcp_work_item_writes` (default false). A typed event/claim/reply bridge dispatches to existing frontend provider ports. Claims prevent duplicate actions across frontend clients. Detail and paged comments return as JSON inside the start-work untrusted-content block; forged tags are escaped. Account credentials remain in the existing Rust HTTP injection/redaction boundary. Raw provider errors do not reach MCP. Providers require a connected frontend; a bare headless daemon reports timeout. A timed-out write must be read back before retrying.
+
+### Background tray and menu-bar icon
+
+Background tray (B3): implemented. Native tray/menu-bar status reads current backend SessionState on transitions, with Show and explicit Quit using the shared background lifecycle. Tray preference defaults to background_only; never prevents hiding. Missing native tray support minimizes instead. Native template appearance and desktop-host integration require verification after a rebuild; WebView unload and hibernation remain separate work.

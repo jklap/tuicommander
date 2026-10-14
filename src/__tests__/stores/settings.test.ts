@@ -46,6 +46,28 @@ describe("settingsStore", () => {
 		return mockInvoke.mock.calls.filter((c: unknown[]) => c[0] === "save_config");
 	}
 
+	// Catches: saving the tray preference overwrites another background setting.
+	it("persists the tray preference while retaining background fields", async () => {
+		mockInvoke.mockResolvedValueOnce({ background: { tray_icon: "always", hide_dock_icon: false } });
+		await store.hydrate();
+		expect(store.state.trayIcon).toBe("always");
+		mockInvoke.mockImplementation(async (command) =>
+			command === "load_config"
+				? { background: { tray_icon: "always", hide_dock_icon: false, webview_unload_minutes: 25 } }
+				: undefined,
+		);
+		store.setTrayIcon("never");
+		await vi.runAllTimersAsync();
+		expect(mockInvoke).toHaveBeenCalledWith(
+			"save_config",
+			expect.objectContaining({
+				config: expect.objectContaining({
+					background: { tray_icon: "never", hide_dock_icon: false, webview_unload_minutes: 25 },
+				}),
+			}),
+		);
+	});
+
 	// Catches: hydration silently turns a persisted beta channel back into stable.
 	it.each(["beta", "stable", "nightly"])("keeps the saved %s update channel", async (channel) => {
 		mockInvoke.mockResolvedValueOnce({ update_channel: channel });
@@ -833,7 +855,9 @@ describe("settingsStore", () => {
 		await vi.runAllTimersAsync();
 		expect(mockInvoke).toHaveBeenCalledWith("save_config", {
 			base: { background: { hide_dock_icon: false, webview_unload_minutes: 25 } },
-			config: expect.objectContaining({ background: { hide_dock_icon: true, webview_unload_minutes: 25 } }),
+			config: expect.objectContaining({
+				background: { hide_dock_icon: true, tray_icon: "background_only", webview_unload_minutes: 25 },
+			}),
 		});
 	});
 });

@@ -2236,6 +2236,7 @@ Phone-optimized progressive web app for monitoring AI agents remotely. Separate 
 
 ### 18.11 Standalone CSS
 - The mobile composer offers browser dictation directly next to Send (44 px touch targets) when `SpeechRecognition` or `webkitSpeechRecognition` is available. Interim and final speech append to the draft without focusing the textarea or sending; tap again to stop. Editing the draft cancels recognition and keeps the edit exactly; the mic becomes available again when the browser confirms the previous session has ended. Errors also retain the microphone claim until that confirmation, so repeated taps cannot overlap recognition sessions. Late results from the cancelled recording are ignored. Errors keep the draft and show a toast. It uses the configured dictation language, falling back to the browser language for automatic detection. Browser dictation and server hands-free conversation cannot record together.
+- Mobile Settings → Input → Autocorrect and spellcheck enables keyboard correction and sentence capitalization for the terminal prompt composer by default. Disable it for literal command entry. The preference stays on this device across reloads; file and code editors keep spellcheck off.
 - Dictated mobile drafts survive reload without automatic terminal input. Send or the first edit reconciles the restored draft with the current terminal line, preserving cleared text without duplicating text still present.
 - iPhone Home Screen availability remains device-dependent: [WebKit bug 225298](https://bugs.webkit.org/show_bug.cgi?id=225298#c3) documents the historical standalone restriction; Safari's [14.1 release notes](https://webkit.org/blog/11648/new-webkit-features-in-safari-14-1/) require Siri enabled. Feature detection and error handling apply; Safari tab support does not prove PWA support.
 - Mobile PWA uses its own standalone stylesheet (`src/mobile/mobile.css`), independent from the desktop `global.css`
@@ -2988,3 +2989,7 @@ Paste an image, drop PNG/JPEG/WebP/GIF files on Compose, or select several with 
 ### Tasks MCP access
 
 The existing MCP `repo` tool reads linked work items or explicit references, URLs and exact provider keys, including paged comments. Provider content is enclosed in an untrusted-content block. Optional comments and workflow transitions use the same provider actions; `mcp_work_item_writes` defaults to false. A frontend with the provider loaded is required (#1854-4960).
+
+### Background tray and menu-bar icon
+
+Tray and menu-bar icon: Settings > General offers Always, Only in background (default), or Never. The native menu shows live working/awaiting agent counts, Show TUICommander and Quit. An attention mark appears for awaiting agents while hidden and clears on Show. Left-click shows the app on macOS and Windows; Linux uses the menu. Never, a failed tray build, or a Linux desktop without a StatusNotifier host falls back to minimizing without clearing terminal visibility. A native notice appears on the first background entry of each app run.
