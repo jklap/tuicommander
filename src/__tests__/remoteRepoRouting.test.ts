@@ -86,6 +86,16 @@ describe("a repo registered on a remote machine runs its work there", () => {
 		expect(mockInvoke).not.toHaveBeenCalled();
 	});
 
+	// Catches: nesting the resume cwd in request silently routes a remote agent's resume to local IPC.
+	it("resolves a remote agent resume on its owning daemon", async () => {
+		(globalThis as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+		globalThis.fetch = vi.fn().mockResolvedValue(jsonResponse('{"cmd":null,"verified":false}'));
+		const { resolveAgentResume } = await import("../utils/agentSession");
+		await resolveAgentResume("claude", REMOTE_REPO, "remote-peer", "remote-agent");
+		expect(fetchedUrls()).toEqual([`${BASE_URL}/sessions/suspended?token=${TOKEN}`]);
+		expect(mockInvoke).not.toHaveBeenCalled();
+	});
+
 	it("sends a git write on a remote repo to that machine", async () => {
 		await rpc("git_commit", { path: REMOTE_REPO, message: "wip", amend: false });
 

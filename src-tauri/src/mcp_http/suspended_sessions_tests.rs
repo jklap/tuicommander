@@ -211,3 +211,36 @@ async fn suspended_shell_resumes_from_disk_with_the_same_identity() {
     assert_eq!(identity.as_deref(), Some(session));
     assert!(!records.contains_key(&sid));
 }
+
+// Catches: Resume reuses a tombstoned PTY key and the next Suspend rejects the live shell as exited.
+#[tokio::test]
+async fn resumed_idle_shell_can_suspend_again_without_inheriting_the_old_exit() {
+    let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let _config = crate::config::set_config_dir_override(root.path().to_path_buf());
+    let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
+    let id = crate::mcp_http::session::spawn_pty_session(
+        state.clone(),
+        crate::test_support::host_shell().0.into(),
+        Some(root.path().to_string_lossy().into_owned()),
+        24,
+        80,
+        None,
+        crate::mcp_http::session::RequestedIdentity::default(),
+    )
+    .expect("real idle shell must start");
+    let record = crate::suspended_sessions::suspend(&state, &id, &serde_json::Value::Null)
+        .expect("first suspend must work");
+    let resumed = crate::mcp_http::suspended_routes::dispatch(
+        state.clone(),
+        serde_json::json!({"action": "resume", "tuicSession": record.tuic_session}),
+    )
+    .await
+    .expect("resume must work");
+    let resumed_id = resumed["session_id"].as_str().unwrap();
+    let second = crate::suspended_sessions::suspend(&state, resumed_id, &serde_json::Value::Null);
+    crate::pty::close_pty_core_with_reason(&state, resumed_id, false, "test_cleanup");
+    assert!(
+        second.is_ok(),
+        "resumed idle shell must suspend again: {second:?}"
+    );
+}
