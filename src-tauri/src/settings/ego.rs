@@ -15,9 +15,9 @@ const ID: &str = "ego";
 
 pub struct EgoSettingsStore {
     state: Arc<AppState>,
-    profile: Option<String>,
+    context: Option<Arc<ConfigContext>>,
     runtime: tokio::runtime::Handle,
-    sequence: Mutex<()>,
+    sequence: Arc<Mutex<()>>,
 }
 
 impl EgoSettingsStore {
@@ -25,27 +25,19 @@ impl EgoSettingsStore {
     /// existing asynchronous process owner remains the only execution path.
     #[allow(dead_code)] // Registered by the settings facade in Step 4.
     pub(crate) fn new(state: Arc<AppState>) -> Result<Self, Failure> {
-        let profile = ConfigContext::configured(&state)
-            .map_err(|_| Error::new(ID, "unavailable"))?
-            .profile;
         Ok(Self {
             state,
-            profile,
+            context: None,
             runtime: tokio::runtime::Handle::try_current()
                 .map_err(|_| Error::new(ID, "unavailable"))?,
-            sequence: Mutex::new(()),
+            sequence: Arc::new(Mutex::new(())),
         })
     }
 
-    fn context(&self) -> Result<ConfigContext, Failure> {
-        let context =
-            ConfigContext::configured(&self.state).map_err(|_| Error::new(ID, "unavailable"))?;
-        // A registry entry is bound to its profile. A launch-setting change must reconstruct
-        // it rather than silently repoint an in-flight request to another profile.
-        if context.profile != self.profile {
-            return Err(Error::new(ID, "not_found"));
-        }
-        Ok(context)
+    fn context(&self) -> Result<Arc<ConfigContext>, Failure> {
+        self.context
+            .clone()
+            .ok_or_else(|| Error::new(ID, "unavailable"))
     }
 
     fn snapshot(&self, context: &ConfigContext) -> Result<Value, Failure> {
@@ -103,13 +95,32 @@ impl Store for EgoSettingsStore {
         ID
     }
     fn target(&self) -> Target {
-        self.profile
+        self.context
             .as_ref()
+            .and_then(|context| context.profile.as_ref())
             .map_or(Target::Machine, |id| Target::Profile { id: id.clone() })
+    }
+    fn resolve(self: Arc<Self>, target: &Target) -> Result<Arc<Self>, Failure> {
+        let context = Arc::new(
+            ConfigContext::configured(&self.state).map_err(|_| Error::new(ID, "unavailable"))?,
+        );
+        let current = context
+            .profile
+            .as_ref()
+            .map_or(Target::Machine, |id| Target::Profile { id: id.clone() });
+        if *target != current {
+            return Err(Error::new(ID, "not_found"));
+        }
+        Ok(Arc::new(Self {
+            state: self.state.clone(),
+            context: Some(context),
+            runtime: self.runtime.clone(),
+            sequence: self.sequence.clone(),
+        }))
     }
     fn read(&self) -> Result<Value, Failure> {
         let _sequence = self.sequence.lock();
-        self.snapshot(&self.context()?)
+        self.snapshot(self.context()?.as_ref())
     }
     fn commit(
         &self,

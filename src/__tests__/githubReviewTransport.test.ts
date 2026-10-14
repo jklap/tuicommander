@@ -9,6 +9,13 @@ describe("GitHub line review transport", () => {
 		const comments = mapCommandToHttp("get_pr_thread_comments", { repoPath: "/r", threadId: "t1", after: "c2" });
 		expect(comments.path).toBe("/repo/pr-thread-comments?repoPath=%2Fr&threadId=t1&after=c2");
 	});
+	// Catches: browser clients of "Address Review Comments" reading another repo's PR.
+	it("maps the open-threads prompt data to its route", () => {
+		expect(mapCommandToHttp("get_pr_open_threads", { repoPath: "/r", prNumber: 7 })).toEqual({
+			method: "GET",
+			path: "/repo/pr-open-threads?repoPath=%2Fr&prNumber=7",
+		});
+	});
 	// Catches: false resolution state or the reviewed SHA being lost on HTTP.
 	it("preserves mutation state and pinned draft", () => {
 		expect(mapCommandToHttp("set_pr_thread_resolved", { repoPath: "/r", threadId: "t1", resolved: false })).toEqual({

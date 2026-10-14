@@ -25,6 +25,9 @@ type CommandTableEntry = { map: (args: Record<string, unknown>, p: ArgEncoder) =
  * The `p` helper encodes a required argument for URL usage (throws if missing).
  */
 export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
+	resume_session: {
+		map: (args) => ({ method: "POST", path: "/sessions/wake", body: { tuicSession: args.tuicSession } }),
+	},
 	suspended_session_action: { map: (args) => ({ method: "POST", path: "/sessions/suspended", body: args.request }) },
 	work_item_provider_bridge: {
 		map: (args) => ({ method: "POST", path: "/work-items/provider-bridge", body: args.input }),
@@ -1160,6 +1163,12 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			path: `/repo/pr-line-threads?repoPath=${p("repoPath")}&prNumber=${p("prNumber")}${args.after ? `&after=${p("after")}` : ""}`,
 		}),
 	},
+	get_pr_open_threads: {
+		map: (_args, p) => ({
+			method: "GET",
+			path: `/repo/pr-open-threads?repoPath=${p("repoPath")}&prNumber=${p("prNumber")}`,
+		}),
+	},
 	get_pr_thread_comments: {
 		map: (args, p) => ({
 			method: "GET",
@@ -1920,6 +1929,9 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			if (args.limit != null) path += `&limit=${encodeURIComponent(String(args.limit))}`;
 			return { method: "GET", path };
 		},
+	},
+	project_work_items: {
+		map: (args) => ({ method: "POST", path: "/tasks/project", body: args.input }),
 	},
 	build_start_work_prompt: {
 		map: (args) => ({

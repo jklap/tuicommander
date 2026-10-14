@@ -10,6 +10,12 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "Tasks local queries",
+		description:
+			"Tasks loads complete scopes of at most 1,000 items for all-field sorting, grouping and filtering. Unknown or larger totals use the provider-supported server controls.",
+		shortcut: null,
+	},
+	{
 		feature: "Claude Chat on mobile",
 		description:
 			"Select Chat in a Claude session header to read the conversation. Use the same input to reply, and switch to CLI for prompts missing from Chat.",

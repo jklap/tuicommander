@@ -3,7 +3,10 @@ pub mod demo;
 pub mod fake;
 #[cfg(test)]
 mod filter_tests;
+#[cfg(test)]
+mod finding_tests;
 mod listing;
+pub(crate) mod local_query;
 pub mod model;
 mod projections;
 pub mod protocol;

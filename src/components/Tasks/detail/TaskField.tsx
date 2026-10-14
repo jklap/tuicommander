@@ -59,6 +59,7 @@ export function TaskField(props: {
 							id,
 							name: options().find((option) => option.id === id)?.name ?? id,
 							avatarUrl: null,
+							bot: false,
 						},
 				),
 			};
@@ -81,6 +82,11 @@ export function TaskField(props: {
 					when={editable()}
 					fallback={
 						<Switch fallback={<span>{text() || "Not set"}</span>}>
+							<Match when={props.schema.kind === "enum"}>
+								<span>
+									{props.schema.options.find((option) => option.id === text())?.name ?? (text() || "Not set")}
+								</span>
+							</Match>
 							<Match when={props.schema.kind === "markdown"}>
 								<TaskMarkdown content={text()} />
 							</Match>

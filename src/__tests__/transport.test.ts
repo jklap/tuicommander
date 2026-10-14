@@ -637,6 +637,14 @@ describe("transport", () => {
 			expect(result.path).toBe("/sessions/abc/resume");
 		});
 
+		it("maps resume_session to the shared wake route", () => {
+			expect(mapCommandToHttp("resume_session", { tuicSession: "identity" })).toMatchObject({
+				method: "POST",
+				path: "/sessions/wake",
+				body: { tuicSession: "identity" },
+			});
+		});
+
 		it("maps durable session actions to POST /sessions/suspended", () => {
 			const request = { action: "suspend", sessionId: "pty" };
 			expect(mapCommandToHttp("suspended_session_action", { request })).toMatchObject({
@@ -4141,6 +4149,16 @@ describe("default-app host boundary", () => {
 	it("does not map default-app opens to a remote host launcher", () => {
 		expect(INTENTIONALLY_UNMAPPED.has("open_default_app")).toBe(true);
 		expect(() => mapCommandToHttp("open_default_app", { target: "https://example.com", kind: "url" })).toThrow();
+	});
+});
+
+// Catches: browser projection receives a different input shape from desktop IPC.
+it("maps_local_tasks_projection_without_reshaping", () => {
+	const input = { items: [], fields: [], query: { filters: [] } };
+	expect(mapCommandToHttp("project_work_items", { input })).toEqual({
+		method: "POST",
+		path: "/tasks/project",
+		body: input,
 	});
 });
 

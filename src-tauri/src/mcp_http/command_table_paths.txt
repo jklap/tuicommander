@@ -276,6 +276,7 @@
 /repo/pr-line-threads
 /repo/pr-merge-or-enqueue
 /repo/pr-merge-queue
+/repo/pr-open-threads
 /repo/pr-rerun-failed
 /repo/pr-review
 /repo/pr-review-threads
@@ -308,6 +309,7 @@
 /sessions
 /sessions/agent
 /sessions/suspended
+/sessions/wake
 /sessions/worktree
 /sessions/x
 /sessions/x/chat-view
@@ -355,6 +357,7 @@
 /system/local-ips
 /system/notification-sound
 /system/relay-status
+/tasks/project
 /tasks/start-work-prompt
 /terminal/theme-colors
 /tunnels/active

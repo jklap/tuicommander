@@ -29,6 +29,7 @@ mod background_mode_tests;
 pub(crate) mod launch_instructions;
 pub(crate) mod prompt_receipt;
 pub(crate) mod session_resume;
+pub(crate) mod session_wake;
 pub(crate) mod suspended_sessions;
 pub mod work_items;
 pub use tuic_core::app_instance;
@@ -91,6 +92,7 @@ pub(crate) mod github_pr_action_commands;
 pub(crate) mod github_pr_actions;
 pub(crate) mod github_pr_api;
 pub(crate) mod github_review_threads;
+pub(crate) mod pr_open_threads;
 pub(crate) use tuic_git::github_debug;
 pub(crate) mod github_poller;
 #[cfg(feature = "desktop")]
@@ -2230,6 +2232,7 @@ pub fn run() {
             github_pr_action_commands::merge_or_enqueue_pr,
             github_pr_action_commands::rerun_failed_pr_jobs,
             github_review_threads::get_pr_line_threads,
+            pr_open_threads::get_pr_open_threads,
             github_review_threads::get_pr_thread_comments,
             github_review_threads::set_pr_thread_resolved,
             github_review_threads::reply_pr_thread,
@@ -2458,6 +2461,7 @@ pub fn run() {
             fs::search_content_all,
             fs::fs_read_file,
             work_items::start_work_prompt::build_start_work_prompt,
+            work_items::local_query::project_work_items,
             fs::write_file,
             fs::write_file_if_unchanged,
             fs::create_directory,
@@ -2513,6 +2517,7 @@ pub fn run() {
             secrets::forms::secret_form_submit,
             mcp_confirm_response,
             mcp_http::suspended_routes::suspended_session_action,
+            mcp_http::suspended_routes::resume_session,
             app_logger::push_log,
             app_logger::get_logs,
             app_logger::clear_logs,

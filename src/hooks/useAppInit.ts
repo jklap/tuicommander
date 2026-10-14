@@ -92,6 +92,7 @@ function replaceMcpToastListener(handler: (event: { payload: McpToastPayload }) 
 
 interface SessionCreatedPayload {
 	session_id: string;
+	tuic_session?: string | null;
 	cwd: string | null;
 	agent_type?: string | null;
 	display_name?: string | null;
@@ -677,7 +678,7 @@ export async function initApp(deps: AppInitDeps) {
 
 	// Listen for sessions created/closed by remote clients (browser UI or other Tauri windows)
 	listen<SessionCreatedPayload>("session-created", (event) => {
-		const { session_id, cwd, agent_type, display_name, parent_session } = event.payload;
+		const { session_id, tuic_session, cwd, agent_type, display_name, parent_session } = event.payload;
 		const parsedAgentType = parseAgentType(agent_type);
 		// A mirrored event describes a session on ANOTHER machine. It is stamped
 		// `__tuic_origin` by `remote_mirror.rs`; building a tab for it attaches the
@@ -692,7 +693,7 @@ export async function initApp(deps: AppInitDeps) {
 		if (existing) return;
 		const suspended = terminalsStore.getIds().find((id) => {
 			const tab = terminalsStore.get(id);
-			return tab?.suspended && tab.tuicSession === session_id;
+			return tab?.suspended && !!tuic_session && tab.tuicSession === tuic_session;
 		});
 		if (suspended) {
 			terminalsStore.setSessionId(suspended, session_id);

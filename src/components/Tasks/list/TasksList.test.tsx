@@ -1,6 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { appLogger } from "../../../stores/appLogger";
 import type { WorkItem, WorkItemQuery } from "../../../types/work-items.gen";
 import { allDemoRows, listDemo } from "./demo";
 import { TaskRows } from "./TaskRows";
@@ -99,6 +100,9 @@ describe("Tasks list", () => {
 			kind: "labels" | "user",
 			options: { id: string; name: string }[] = [],
 		) => ({
+			sortable: false,
+			groupable: false,
+			filterable: true,
 			id,
 			name,
 			kind,
@@ -156,13 +160,14 @@ describe("Tasks list", () => {
 			await waitFor(() =>
 				expect(queries.at(-1)?.filters.at(-1)).toEqual({
 					fieldId: "assignee",
-					values: [{ kind: "user", value: [{ id: "ada", name: "ada", avatarUrl: null }] }],
+					values: [{ kind: "user", value: [{ bot: false, id: "ada", name: "ada", avatarUrl: null }] }],
 				}),
 			);
 		});
 
 		// Catches: a failing value lookup removes the filter or leaves the panel without any control.
 		it("keeps a text box when the provider cannot list its values", async () => {
+			const warning = vi.spyOn(appLogger, "warn").mockImplementation(() => {});
 			const { provider } = withChoices(async () => {
 				throw new Error("offline");
 			});
@@ -170,6 +175,13 @@ describe("Tasks list", () => {
 			await screen.findByRole("button", { name: /Task 00002/ });
 			fireEvent.click(screen.getByRole("button", { name: "Filters" }));
 			expect(await screen.findByRole("textbox", { name: "Filter Labels" })).toBeInTheDocument();
+			await waitFor(() =>
+				expect(warning).toHaveBeenCalledWith(
+					"app",
+					"Task filter values unavailable",
+					expect.objectContaining({ error: "Error: offline" }),
+				),
+			);
 		});
 
 		// Catches: values re-fetched every time the panel opens, or fetched before it is ever opened.
@@ -202,7 +214,9 @@ describe("Tasks list", () => {
 					required: false,
 					editable: false,
 					options: [],
-					queryable: false,
+					sortable: false,
+					filterable: false,
+					groupable: false,
 				},
 			],
 		};
@@ -288,7 +302,7 @@ describe("Tasks list", () => {
 			title: `Row ${id}`,
 			itemType: "task",
 			state,
-			assignees: assignees.map((name) => ({ id: name, name, avatarUrl: null })),
+			assignees: assignees.map((name) => ({ bot: false, id: name, name, avatarUrl: null })),
 			labels: [],
 			updatedAt,
 			url: "",
@@ -367,4 +381,24 @@ describe("Tasks list", () => {
 			);
 		});
 	});
+});
+
+// Catches: an ordinary failed search rolls the input back to the previous successful query.
+it("failed_jql_search_keeps_the_typed_query_after_a_successful_load", async () => {
+	const provider = listDemo(2);
+	const list = provider.list.bind(provider);
+	const attempts: string[] = [];
+	provider.list = async (query, signal) => {
+		attempts.push(query.search);
+		if (query.search === "jql: project =") throw new Error("Jira request failed (400): expecting a value");
+		return list(query, signal);
+	};
+	render(() => <TasksList providers={[provider]} onOpen={() => {}} />);
+	await screen.findByRole("button", { name: /Task 00002/ });
+	fireEvent.input(screen.getByLabelText("Search tasks"), { target: { value: "jql: project =" } });
+	await screen.findByText(/expecting a value/);
+	await new Promise((resolve) => setTimeout(resolve, 0));
+	expect(screen.getByLabelText("Search tasks")).toHaveValue("jql: project =");
+	fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+	await waitFor(() => expect(attempts.filter((search) => search === "jql: project =")).toHaveLength(2));
 });

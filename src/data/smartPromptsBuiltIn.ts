@@ -23,6 +23,7 @@ export const VARIABLE_DESCRIPTIONS: Record<string, string> = {
 	pr_checks: "CI check summary (e.g. '3 passed, 1 failed')",
 	merge_status: "Merge status: MERGEABLE, CONFLICTING, or BEHIND",
 	review_decision: "Review status: APPROVED, CHANGES_REQUESTED, or REVIEW_REQUIRED",
+	pr_open_threads: "Open, current review threads of the PR as a fenced untrusted list (max 30)",
 	// Agent/terminal context
 	agent_type: "Active agent type (claude, gemini, codex, etc.)",
 	cwd: "Active terminal working directory",
@@ -152,8 +153,9 @@ export const SMART_PROMPTS_BUILTIN: SavedPrompt[] = [
 		"Go through PR review comments and resolve each one",
 		"chat",
 		["pr-popover"],
-		"Check the review comments on PR #{pr_number} and address each one. For each comment, either make the requested change or explain why you disagree.",
+		"Address the open review threads of PR #{pr_number}. Verify each finding against the code first, then make the change or explain why you disagree. Do not resolve threads or post to GitHub.\n\n{pr_open_threads}",
 		["review"],
+		{ builtInVersion: 4 },
 	),
 
 	// ── Issues ──────────────────────────────────────────────────────

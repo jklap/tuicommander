@@ -23,3 +23,9 @@ Recorded read-only on 2026-10-11:
 - `merge-documented.json`: exact success example from [GitHub's merge endpoint](https://docs.github.com/en/rest/pulls/pulls#merge-a-pull-request).
 
 Mutation stub ids and timestamps describe local stub effects only. They are not live GitHub recordings. Merge queue policy is the PR field `isMergeQueueEnabled` (covers rulesets and classic branch protection); failed reruns use [rerun failed jobs](https://docs.github.com/en/rest/actions/workflow-runs#re-run-failed-jobs-from-a-workflow-run), which includes dependent jobs. No live write was performed.
+
+## Review-bot fixtures
+
+Recorded read-only on 2026-10-13 by the bot-review analysis (`gh api graphql` query, no mutation):
+
+- `bot-threads-cur-2833.json`: https://github.com/PrimeIntellect-ai/verifiers/pull/2833 → `reviews` and `reviewThreads` selecting isResolved, isOutdated, line, originalLine, path and the first comment's `author { __typename login }`, lastEditedAt, createdAt. GraphQL bot logins carry no `[bot]` suffix (`cursor`, `macroscopeapp`); thread index 2 is outdated (`line: null`, `originalLine: 148`). No body, id or URL was selected.

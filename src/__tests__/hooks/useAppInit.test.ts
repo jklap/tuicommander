@@ -74,6 +74,35 @@ function createMockDeps(overrides: Partial<AppInitDeps> = {}): AppInitDeps {
 }
 
 describe("initApp", () => {
+	// Catches: a backend mail/submit wake creates a duplicate tab and leaves the original suspended.
+	it("reattaches a mail-woken replacement PTY to the suspended tab instead of adding a duplicate", async () => {
+		let created: ((event: { payload: unknown }) => void) | undefined;
+		vi.mocked(listen).mockImplementation(((event: string, handler: (event: { payload: unknown }) => void) => {
+			if (event === "session-created") created = handler;
+			return Promise.resolve(vi.fn());
+		}) as unknown as typeof listen);
+		await initApp(createMockDeps());
+		const id = terminalsStore.add(makeTerminal({ sessionId: null, tuicSession: "retained-identity", cwd: "/repo" }));
+		terminalsStore.update(id, { suspended: true });
+		// The wake producer includes the retained stable identity with the new PTY key.
+		created!({
+			payload: {
+				session_id: "replacement-pty",
+				tuic_session: "retained-identity",
+				cwd: "/repo",
+				agent_type: null,
+				display_name: null,
+				parent_session: null,
+			},
+		});
+		expect(terminalsStore.getIds()).toEqual([id]);
+		expect(terminalsStore.get(id)).toMatchObject({
+			suspended: false,
+			sessionId: "replacement-pty",
+			tuicSession: "retained-identity",
+		});
+	});
+
 	it("explains the browser fallback when desktop navigation blocks an external iframe link", async () => {
 		let onBlocked: ((event: { payload: string }) => void) | undefined;
 		vi.mocked(listen).mockImplementation(((event: string, handler: (event: { payload: string }) => void) => {

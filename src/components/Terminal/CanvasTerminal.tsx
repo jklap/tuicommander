@@ -84,6 +84,7 @@ import { filePathRegex, fileUrlRegex, matchWebUrls } from "./linkProvider";
 import { buildScrollbarMarksHtml } from "./scrollbarMarks";
 import {
 	ANSWER_MARKER_RE,
+	answerOverlayKey,
 	hiddenMarkerRows,
 	INTENT_HIGHLIGHT_RE,
 	type OverlayBlock,
@@ -322,6 +323,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
 	// Cached CSS custom properties (re-read on remeasure, not every frame)
 	let cachedBgDefault = "#1e1e1e";
+	let cachedNeutralSurface = cachedBgDefault;
 	let cachedFgDefault = "#d4d4d4";
 
 	// Tracks cumulative gesture distance (px) to ramp the scroll acceleration factor.
@@ -474,7 +476,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
 		cachedBgDefault = getComputedStyle(canvasRef).getPropertyValue("--bg-secondary").trim() || "#1e1e1e";
 		cachedFgDefault = getComputedStyle(canvasRef).getPropertyValue("--fg-primary").trim() || "#d4d4d4";
-		gridRenderer.setTheme(cachedBgDefault, cachedFgDefault);
+		cachedNeutralSurface = getComputedStyle(canvasRef).getPropertyValue("--bg-tertiary").trim() || cachedBgDefault;
+		gridRenderer.setTheme(cachedBgDefault, cachedFgDefault, cachedNeutralSurface);
 
 		// The emulator answers OSC 10/11/12 from these. It has no other way to
 		// know the theme, and staying silent makes a probing agent retry forever
@@ -531,7 +534,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				octxOverscan.setTransform(1, 0, 0, 1, 0, 0);
 				octxOverscan.scale(dpr, dpr);
 				octxOverscan.translate(GUTTER_PX, 0);
-				overscanRenderer.setTheme(cachedBgDefault, cachedFgDefault);
+				overscanRenderer.setTheme(cachedBgDefault, cachedFgDefault, cachedNeutralSurface);
 			}
 			scroll.clearCache();
 		}
@@ -1044,16 +1047,19 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	const rowToText = rowText;
 
 	function updateSuggestOverlay(m: CellMetrics, plan: MarkerPlan) {
-		if (!overlayRef || plan.key === lastSuggestOverlayKey) return;
-		lastSuggestOverlayKey = plan.key;
-		paintOverlayBlocks(
-			overlayRef,
-			plan.blocks.flatMap((block) => {
-				const row = viewportProjection.displayRow(block.row);
-				return row === null ? [] : [{ ...block, row }];
-			}),
+		if (!overlayRef) return;
+		const blocks = plan.blocks.flatMap((block) => {
+			const row = viewportProjection.displayRow(block.row);
+			return row === null ? [] : [{ ...block, row }];
+		});
+		const key = answerOverlayKey(
+			plan.key,
 			m.cellHeight,
+			blocks.map((block) => block.row),
 		);
+		if (key === lastSuggestOverlayKey) return;
+		lastSuggestOverlayKey = key;
+		paintOverlayBlocks(overlayRef, blocks, m.cellHeight);
 	}
 
 	function startBlink() {
