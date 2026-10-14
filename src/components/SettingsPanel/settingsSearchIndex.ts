@@ -703,6 +703,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	// cannot choose and expand a card, so it has no stable scroll target here.
 	{ tab: "agents", section: "Agents" },
 	{ tab: "agents", section: "ego permissions" },
+	{ tab: "agents", section: "Idle agent hibernation", sectionKey: "settings.agents.hibernateHeading" },
 	{ tab: "agents", section: "Agents", label: "Show agent intent as tab title" },
 	{ tab: "agents", section: "Agents", label: "Show suggested follow-up actions" },
 	{
@@ -715,6 +716,23 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{ tab: "agents", section: "Agents", label: "Launch instructions" },
 	{ tab: "agents", section: "ego permissions", label: "Permissions" },
 	{ tab: "agents", section: "ego permissions", label: "Filesystem sandbox" },
+	{
+		tab: "agents",
+		section: "Idle agent hibernation",
+		label: "Hibernate idle agents after",
+		labelKey: "settings.agents.hibernateMinutes",
+		expert: true,
+		configKey: "agents.hibernate_idle_minutes",
+	},
+	{
+		tab: "agents",
+		section: "Idle agent hibernation",
+		label: "Hibernate scope",
+		labelKey: "settings.agents.hibernateScope",
+		expert: true,
+		configKey: "agents.hibernate_scope",
+	},
+
 	// tabs/AiChatTab.tsx — the inlined former ProvidersTab content, in file order.
 	{ tab: "ai-chat", section: "Perimeter", sectionKey: "perimeter.heading" },
 	{ tab: "ai-chat", section: "Default Model", sectionKey: "providers.heading.defaultModel" },
