@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+- Remove answer background tints from the terminal grid, Answers view, AI Chat and terminal Chat cards. Keep green left rules and spacing; use the darker success green for Paper answer rules; user-question styling is unchanged (#1896-f355).
 - Tasks loads complete lists of at most 1,000 items for Rust-backed all-field queries; unknown or larger lists keep server controls (#1851-7ade).
 - Discover GitHub Projects v2 in Tasks Board with visible read:project scope errors (#1846-55d7).
 
@@ -34,6 +36,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Read linked Tasks items and comments through MCP repo actions; allow provider comments and transitions only after enabling `mcp_work_item_writes` (#1854-4960).
 
 ### Fixed
+- Repaint answer-rule strips when terminal cell metrics or projected row positions change, so font loading and theme remeasurement keep the rule aligned (#1896-f355).
 
 - Preserve GitLab endpoint and username-filter scope in small Tasks lists; align Jira and GitHub local field values, and keep Roadmap provider paging (#1851-7ade).
 - Run desktop orphan-worktree safety checks and removal on the blocking pool instead of the IPC main thread. Live heartbeat confirmation remains pending (#1638-c94c).

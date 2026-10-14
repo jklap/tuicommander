@@ -4,6 +4,7 @@ import { rowText } from "../canvasTerminalUtils";
 import {
 	answerBlockRanges,
 	answerExtent,
+	answerOverlayKey,
 	type ChatBlock,
 	continuationRowsAfterSuggest,
 	hiddenMarkerRows,
@@ -325,8 +326,9 @@ describe("planSuggestOverlay — 💬 answer marker", () => {
 });
 
 describe("paintOverlayBlocks", () => {
-	it("tints answer rows with a gutter and paints nothing for marker rows", () => {
-		// catches: a suggest/intent row still gets a strip (or an answer row a solid mask hiding its text)
+	it("keeps answer rows transparent with a gutter and paints nothing for marker rows", () => {
+		// TEST-CHANGE: rule-only answers must not restore the tint or mask terminal text.
+		// catches: an answer background returns, or a suggest/intent row gets a strip.
 		const container = document.createElement("div");
 		paintOverlayBlocks(
 			container,
@@ -340,8 +342,10 @@ describe("paintOverlayBlocks", () => {
 		const [answer, ...rest] = Array.from(container.children) as HTMLElement[];
 		expect(rest).toEqual([]);
 		expect(answer.style.top).toBe("40px");
-		expect(answer.style.background).toContain("0.14");
+		expect(answer.style.background).toBe("transparent");
 		expect(answer.style.boxShadow).toContain("inset 3px");
+		// Catches: a hard-coded rule bypasses the Paper contrast override.
+		expect(answer.style.boxShadow).toContain("var(--answer-rule)");
 	});
 
 	it("replaces the previous strips instead of stacking them", () => {
@@ -543,5 +547,44 @@ describe("hiddenMarkerRows — wrapped markers leave no visible fragment (#1761-
 		const container = document.createElement("div");
 		paintOverlayBlocks(container, plan.blocks, 20);
 		expect(Array.from(container.children).map((c) => (c as HTMLElement).style.top)).toEqual(["0px"]);
+	});
+});
+
+// Catches: font/theme remeasurement retains strips at old row heights, or a changed
+// viewport projection retains the old answer row positions despite identical markers.
+describe("answer overlay geometry cache", () => {
+	function cachedPainter() {
+		const container = document.createElement("div");
+		let key = "";
+		return {
+			container,
+			paint(cellHeight: number, rows: number[]) {
+				const next = answerOverlayKey("answer:18-22", cellHeight, rows);
+				if (next === key) return;
+				key = next;
+				paintOverlayBlocks(
+					container,
+					rows.map((row) => ({ row, kind: "answer" as const })),
+					cellHeight,
+				);
+			},
+		};
+	}
+	it("invalidates unchanged answer markers when cell height changes", () => {
+		const view = cachedPainter();
+		view.paint(19, [18, 19, 20, 21, 22]);
+		view.paint(21.5, [18, 19, 20, 21, 22]);
+		const strips = Array.from(view.container.children) as HTMLElement[];
+		expect(strips[0].style.top).toBe("387px");
+		expect(strips[4].style.top).toBe("473px");
+		expect(strips[4].style.height).toBe("21.5px");
+	});
+	it("invalidates unchanged answer markers when projected rows change", () => {
+		const view = cachedPainter();
+		view.paint(21.5, [18, 19, 20, 21, 22]);
+		view.paint(21.5, [17, 18, 19, 20, 21]);
+		const strips = Array.from(view.container.children) as HTMLElement[];
+		expect(strips[0].style.top).toBe("365.5px");
+		expect(strips[4].style.top).toBe("451.5px");
 	});
 });
