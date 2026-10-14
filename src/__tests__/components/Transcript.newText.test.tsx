@@ -140,3 +140,35 @@ describe("Transcript new text", () => {
 		expect(view.queryByRole("button", { name: "New text below" })).toBeNull();
 	});
 });
+
+// Catches: the final streamed answer remains below the viewport after a stationary touch ends.
+it("catches up followed output on touch end when the stream completed during touch", async () => {
+	append("An answer in progress.");
+	const view = render(() => (
+		<Transcript mobile entries={() => acpTranscript.entries("chat")} busy={() => false} emptyMessage="Empty" />
+	));
+	const viewport = view.getByLabelText("Chat transcript");
+	let height = 900;
+	let top = 700;
+	Object.defineProperties(viewport, {
+		clientHeight: { configurable: true, get: () => 200 },
+		scrollHeight: { configurable: true, get: () => height },
+		scrollTop: {
+			configurable: true,
+			get: () => top,
+			set: (value: number) => {
+				top = Math.min(value, height - 200);
+			},
+		},
+	});
+	await Promise.resolve();
+	fireEvent.scroll(viewport);
+	fireEvent.touchStart(viewport);
+	height = 1100;
+	append(" The final answer arrives while the finger rests on the screen.");
+	await Promise.resolve();
+	expect(top).toBe(700);
+	fireEvent.touchEnd(viewport);
+	await Promise.resolve();
+	expect(top).toBe(900);
+});
