@@ -3545,6 +3545,36 @@ pub async fn detect_orphan_worktrees(repo_path: String) -> Result<Vec<String>, S
         .map_err(|e| format!("orphan worktree detection task failed: {e}"))?
 }
 
+/// Validate an isolated branch checkout for launching work, without granting
+/// permission to remove it as a detached orphan.
+pub fn validate_branch_worktree_path(repo_path: &str, worktree_path: &str) -> Result<(), String> {
+    let path = Path::new(worktree_path);
+    if !path.is_absolute() {
+        return Err("worktree_path must be an absolute path".into());
+    }
+    let canonical = path
+        .canonicalize()
+        .map_err(|error| format!("resolve worktree: {error}"))?;
+    let repo = Path::new(repo_path)
+        .canonicalize()
+        .map_err(|error| format!("resolve repository: {error}"))?;
+    if canonical == repo {
+        return Err("worktree must be an isolated branch checkout".into());
+    }
+    let registered = get_worktree_paths_raw(repo_path)?;
+    if !registered.values().any(|worktree| {
+        Path::new(&worktree.path)
+            .canonicalize()
+            .is_ok_and(|registered| registered == canonical)
+    }) {
+        return Err("worktree is not a registered branch checkout".into());
+    }
+    if has_operation_in_progress(&canonical.to_string_lossy()) {
+        return Err("Cannot launch in worktree: a Git operation is in progress".into());
+    }
+    Ok(())
+}
+
 /// Validate that `worktree_path` is a detached orphan of the given repo, not a
 /// main or branch checkout or one with a Git operation in progress.
 pub fn validate_worktree_path(repo_path: &str, worktree_path: &str) -> Result<(), String> {
@@ -10839,6 +10869,75 @@ branch refs/heads/feat
         let error = remove_worktree_internal(&worktree, false).unwrap_err();
         assert!(error.contains("operation"), "{error}");
         assert!(path.exists());
+    }
+
+    // Catches: launch validation accepts the main checkout or a directory from another repository.
+    #[test]
+    fn branch_worktree_validation_rejects_main_foreign_and_unregistered_paths() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let path = add_worktree(&repo, "launch-branch");
+        let (_foreign_temp, foreign_repo, _) = workspace_fixture();
+        let foreign = add_worktree(&foreign_repo, "foreign-launch");
+        let unknown = repo.parent().unwrap().join("unregistered");
+        fs::create_dir(&unknown).unwrap();
+        let validate = |path: &Path| {
+            validate_branch_worktree_path(&repo.to_string_lossy(), &path.to_string_lossy())
+        };
+        validate(&path).unwrap();
+        assert!(validate(&repo).unwrap_err().contains("isolated"));
+        for path in [&foreign, &unknown] {
+            assert!(validate(path).unwrap_err().contains("not a registered"));
+        }
+        assert!(
+            validate(Path::new("relative"))
+                .unwrap_err()
+                .contains("absolute")
+        );
+    }
+
+    // Catches: replacing the orphan guard lets workflow launch interrupt an unfinished Git operation.
+    #[test]
+    fn branch_worktree_validation_rejects_operations_and_detached_orphans() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let path = add_worktree(&repo, "launch-operation");
+        let admin = worktree_admin_dir(&path.to_string_lossy()).unwrap();
+        fs::write(admin.join("MERGE_HEAD"), rev_at(&repo, "HEAD").unwrap()).unwrap();
+        let error = validate_branch_worktree_path(&repo.to_string_lossy(), &path.to_string_lossy())
+            .unwrap_err();
+        assert!(error.contains("operation"), "{error}");
+        fs::remove_file(admin.join("MERGE_HEAD")).unwrap();
+        git_cmd(&path).args(["checkout", "--detach"]).run().unwrap();
+        let error = validate_branch_worktree_path(&repo.to_string_lossy(), &path.to_string_lossy())
+            .unwrap_err();
+        assert!(error.contains("not a registered"), "{error}");
+        assert!(path.exists());
+    }
+
+    // Catches: separator normalization authorizes a different directory on Unix.
+    #[cfg(unix)]
+    #[test]
+    fn branch_worktree_validation_preserves_literal_backslash_paths() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let parent = repo.parent().unwrap();
+        let registered = parent.join(r"launch\checkout");
+        git_cmd(&repo)
+            .args([
+                "worktree",
+                "add",
+                "-b",
+                "literal-launch",
+                &registered.to_string_lossy(),
+            ])
+            .run()
+            .unwrap();
+        let other = parent.join("launch").join("checkout");
+        fs::create_dir_all(&other).unwrap();
+        validate_branch_worktree_path(&repo.to_string_lossy(), &registered.to_string_lossy())
+            .unwrap();
+        assert!(
+            validate_branch_worktree_path(&repo.to_string_lossy(), &other.to_string_lossy())
+                .is_err()
+        );
     }
 
     #[test]
