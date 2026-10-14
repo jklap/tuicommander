@@ -2043,8 +2043,7 @@ mod tests {
                 );
                 assert!(
                     result
-                        .err()
-                        .expect("suspended user must veto cleanup")
+                        .expect_err("suspended user must veto cleanup")
                         .contains("Sleeping agent")
                 );
             }

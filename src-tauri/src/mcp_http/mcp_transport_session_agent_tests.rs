@@ -3490,8 +3490,10 @@ fn session_kill_allows_other_session() {
 #[tokio::test]
 async fn agent_send_includes_managed_recipient_shell_and_agent_state_only() {
     let state = test_state();
+    // Session creation adds a login flag. cat rejects it on Linux and exits,
+    // racing reader cleanup against the recipient-state assertion below.
     #[cfg(unix)]
-    let stable_shell = "/bin/cat";
+    let stable_shell = "/bin/sh";
     #[cfg(windows)]
     let stable_shell = "cmd.exe";
     let created = handle_session(
