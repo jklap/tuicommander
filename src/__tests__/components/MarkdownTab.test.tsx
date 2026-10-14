@@ -192,9 +192,67 @@ describe("MarkdownTab agent review actions", () => {
 				text: expect.stringContaining("/repo/docs/review.md"),
 			}),
 		);
-		await waitFor(() => expect((send as HTMLButtonElement).disabled).toBe(false));
+		await waitFor(() => expect(screen.queryByRole("button", { name: "Send changes to agent" })).toBeNull());
 		expect(addToast).toHaveBeenCalledWith("Sent to agent", expect.stringContaining("queued"), "info");
-		expect(container.querySelector(".header")?.lastElementChild?.contains(send)).toBe(true);
+		expect(container.querySelector(".header")?.contains(send)).toBe(false);
+	});
+
+	// Catches: retained tweak markers leave Agent/Send rendered after delivery.
+	it("MarkdownTab send hides controls", async () => {
+		addAgent("Reviewer", "session-one", "/repo");
+		const tabId = mdTabsStore.add("/repo", "docs/review.md");
+		render(() => <MarkdownTab tab={mdTabsStore.get(tabId) as FileTab} />);
+		fireEvent.click(await screen.findByRole("button", { name: "Send changes to agent" }));
+		await waitFor(() => expect(screen.queryByRole("button", { name: "Send changes to agent" })).toBeNull());
+		expect(screen.queryByRole("combobox", { name: "Review agent" })).toBeNull();
+		repositoriesStore.bumpRevision("/repo");
+		await screen.findByRole("heading", { name: "Heading" });
+		expect(screen.queryByRole("button", { name: "Send changes to agent" })).toBeNull();
+	});
+
+	// Catches: remembering sent markers permanently hides controls for a new tweak or edit.
+	it.each(["tweak", "checkbox", "text"])("MarkdownTab new change after send: %s", async (change) => {
+		fileContent += "\n\n- [ ] Answer\n";
+		addAgent("Reviewer", "session-one", "/repo");
+		const tabId = mdTabsStore.add("/repo", "docs/review.md");
+		const { container } = render(() => <MarkdownTab tab={mdTabsStore.get(tabId) as FileTab} />);
+		fireEvent.click(await screen.findByRole("button", { name: "Send changes to agent" }));
+		await waitFor(() => expect(screen.queryByRole("button", { name: "Send changes to agent" })).toBeNull());
+		if (change === "tweak") {
+			fileContent += "\n<!--tweak:block:c_new @2026-10-14T08:00:00.000Z\nNew feedback-->\nNew paragraph\n";
+			repositoriesStore.bumpRevision("/repo");
+		} else if (change === "checkbox") {
+			fireEvent.click(container.querySelector<HTMLInputElement>('input[type="checkbox"]')!);
+		} else {
+			fireEvent.click(screen.getByText("Live"));
+			const heading = await waitFor(() => {
+				const element = container.querySelector<HTMLElement>("h1[data-comment-source-start]");
+				if (!element) throw new Error("Live heading not rendered");
+				return element;
+			});
+			fireEvent.click(heading);
+			await waitFor(() => expect(container.querySelector(".cm-editor")).not.toBeNull());
+			const view = (await import("@codemirror/view")).EditorView.findFromDOM(
+				container.querySelector(".cm-editor") as HTMLElement,
+			);
+			view?.dispatch({ changes: { from: 0, insert: "New " } });
+			fireEvent.click(await screen.findByText("Save"));
+		}
+		await screen.findByRole("button", { name: "Send changes to agent" });
+		expect(screen.getByRole("combobox", { name: "Review agent" })).not.toBeNull();
+	});
+
+	// Catches: a rejected enqueue consumes pending changes and hides retry controls.
+	it("MarkdownTab failed send keeps controls", async () => {
+		mockRpc.mockRejectedValueOnce(new Error("Agent unavailable"));
+		const addToast = vi.spyOn(toastsStore, "add").mockReturnValue(1);
+		addAgent("Reviewer", "session-one", "/repo");
+		const tabId = mdTabsStore.add("/repo", "docs/review.md");
+		render(() => <MarkdownTab tab={mdTabsStore.get(tabId) as FileTab} />);
+		fireEvent.click(await screen.findByRole("button", { name: "Send changes to agent" }));
+		await waitFor(() => expect(addToast).toHaveBeenCalledWith("Couldn't send changes", "Agent unavailable", "error"));
+		expect(screen.getByRole("button", { name: "Send changes to agent" }).hasAttribute("disabled")).toBe(false);
+		expect(screen.getByRole("combobox", { name: "Review agent" })).not.toBeNull();
 	});
 
 	it("marks Send ready only while it can send", async () => {
