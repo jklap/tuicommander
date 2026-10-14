@@ -125,7 +125,8 @@ async fn headless_listener_rebind_cannot_report_applied() {
         .unwrap();
     let caller = crate::settings::policy::Caller::native();
     assert_eq!(
-        crate::settings::policy_tests::answer(state.clone(), caller.clone(), id.clone(), true).await["confirmed"],
+        crate::settings::policy_tests::answer(state.clone(), caller.clone(), id.clone(), true)
+            .await["confirmed"],
         json!(true)
     );
     let error = service
