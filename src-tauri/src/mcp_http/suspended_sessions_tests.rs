@@ -215,9 +215,34 @@ async fn suspended_shell_resumes_from_disk_with_the_same_identity() {
 // Catches: Resume reuses a tombstoned PTY key and the next Suspend rejects the live shell as exited.
 #[tokio::test]
 async fn resumed_idle_shell_can_suspend_again_without_inheriting_the_old_exit() {
+    async fn wait_for_idle(
+        events: &mut tokio::sync::broadcast::Receiver<crate::state::AppEvent>,
+        id: &str,
+    ) {
+        // Setup readiness, not the behavior's timing: Resume starts the reader
+        // before the shell finishes startup. Await its real client-visible signal.
+        tokio::time::timeout(std::time::Duration::from_secs(120), async {
+            loop {
+                if let crate::state::AppEvent::PtyParsed { session_id, parsed } = events
+                    .recv()
+                    .await
+                    .expect("PTY event stream must stay open")
+                    && session_id == id
+                    && parsed["type"] == "shell-state"
+                    && parsed["state"] == "idle"
+                {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("shell startup never published idle readiness");
+    }
+
     let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
     let _config = crate::config::set_config_dir_override(root.path().to_path_buf());
     let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
+    let mut events = state.event_bus.subscribe();
     let id = crate::mcp_http::session::spawn_pty_session(
         state.clone(),
         crate::test_support::host_shell().0.into(),
@@ -228,6 +253,7 @@ async fn resumed_idle_shell_can_suspend_again_without_inheriting_the_old_exit() 
         crate::mcp_http::session::RequestedIdentity::default(),
     )
     .expect("real idle shell must start");
+    wait_for_idle(&mut events, &id).await;
     let record = crate::suspended_sessions::suspend(&state, &id, &serde_json::Value::Null)
         .expect("first suspend must work");
     let resumed = crate::mcp_http::suspended_routes::dispatch(
@@ -237,6 +263,7 @@ async fn resumed_idle_shell_can_suspend_again_without_inheriting_the_old_exit() 
     .await
     .expect("resume must work");
     let resumed_id = resumed["session_id"].as_str().unwrap();
+    wait_for_idle(&mut events, resumed_id).await;
     let second = crate::suspended_sessions::suspend(&state, resumed_id, &serde_json::Value::Null);
     crate::pty::close_pty_core_with_reason(&state, resumed_id, false, "test_cleanup");
     assert!(
