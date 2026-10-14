@@ -1,5 +1,11 @@
 # TUICommander — Complete Feature Reference
 
+Settings policy foundation (#1786-9cbd): shared owner-service writes enforce
+host-issued caller authority, write-only secrets and one-use, five-minute human
+approval for exposure/execution changes. The existing desktop/browser/mobile
+confirmation dialog shows a backend-built diff. Replacement settings transport
+publication remains a separate integration step.
+
 Mobile terminal Send supports long-press Queue for the next agent ready window.
 
 Published story workflows can start in Plans and Stories through the owning daemon. Run history renders graph positions, decisions, evidence and paged event payloads, with explicit graph recovery and cancellation. IPC/HTTP and the generated `workflow_run` MCP schema share the native run service. Plan start remains visibly unavailable pending plan dispatch.

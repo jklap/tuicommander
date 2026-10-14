@@ -19,7 +19,8 @@ fn service() -> (Arc<crate::AppState>, Service<AppSettingsStore>) {
     let service = Service::new(
         Arc::new(native_catalogue().unwrap()),
         Arc::new(AppSettingsStore::new(state.clone())),
-    );
+    )
+    .with_policy(state.settings_policy.clone());
     (state, service)
 }
 

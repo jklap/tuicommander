@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- Add the internal settings-policy foundation: host-issued origin checks, write-only secret reads and backend-built one-use confirmation proposals for exposure/execution settings. Replacement settings transport publication remains separate (#1786-9cbd).
 - Add scoped plugin settings schemas, locked revision patches, secret redaction, typed migrations for the five existing configurable plugins, and unload-safe catalogue registration (#1785-c7a1).
 
 - Add a device-local mobile Settings toggle for prompt autocorrect and spellcheck, enabled by default (#1878-3a3c).

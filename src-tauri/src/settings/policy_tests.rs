@@ -19,15 +19,24 @@ fn edit(rev: String, username: &str) -> Request {
         expected_revision: rev,
     }
 }
-async fn answer(state: Arc<crate::AppState>, caller: Caller, id: String, approved: bool) -> Value {
+pub(super) async fn answer(
+    state: Arc<crate::AppState>,
+    caller: Caller,
+    id: String,
+    approved: bool,
+) -> Value {
     let mut events = state.event_bus.subscribe();
     let host = state.clone();
-    let task = tokio::spawn(async move {
-        crate::mcp_http::confirm_settings(&host, &caller, &id, local(), None).await
-    });
+    let mut task =
+        tokio::spawn(
+            async move { crate::mcp_http::confirm_settings(&host, &caller, &id, None).await },
+        );
     loop {
-        if let crate::state::AppEvent::McpConfirm { request_id, .. } = events.recv().await.unwrap()
-        {
+        let event = tokio::select! {
+            event = events.recv() => event.unwrap(),
+            _ = &mut task => panic!("confirmation ended before showing the dialog"),
+        };
+        if let crate::state::AppEvent::McpConfirm { request_id, .. } = event {
             crate::mcp_http::resolve_mcp_confirm(&state, &request_id, approved);
             break;
         }
@@ -87,7 +96,7 @@ async fn secret_never_in_errors_events() {
     let mut events = state.event_bus.subscribe();
     let host = state.clone();
     let task = tokio::spawn(async move {
-        crate::mcp_http::confirm_settings(&host, &Caller::native(), &id, local(), None).await
+        crate::mcp_http::confirm_settings(&host, &Caller::native(), &id, None).await
     });
     loop {
         let event = events.recv().await.unwrap();
@@ -99,7 +108,11 @@ async fn secret_never_in_errors_events() {
         } = event
         {
             assert!(message.contains("app.services.auth.username"));
-            assert!(message.contains("[redacted]"));
+            assert!(message.contains("verification-user"));
+            eprintln!(
+                "POLICY_DIALOG_PREVIEW={}",
+                serde_json::json!({"title":"Approve settings change", "message":message})
+            );
             crate::mcp_http::resolve_mcp_confirm(&state, &request_id, false);
             break;
         }
@@ -213,7 +226,7 @@ async fn expired_confirm_no_write() {
                 tokio::time::advance(std::time::Duration::from_secs(300)).await;
             }
             _ => {
-                state.settings_policy.disconnect("expiry-connection");
+                state.settings_policy.disconnect_mcp("expiry-connection");
             }
         }
         assert!(

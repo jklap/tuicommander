@@ -975,3 +975,9 @@ an explicit create action. These actions match across HTTP, IPC, MCP and CLI.
 ### Tasks provider bridge
 
 `work_item_provider_bridge(input)` claims or completes one Rust-issued Tasks provider request. It uses the same input and reply as `POST /work-items/provider-bridge`; see the HTTP API reference. The command only moves requests and replies; the existing provider port owns tracker calls.
+
+Settings policy foundation (#1786-9cbd): `mcp_confirm_response` also settles the
+existing desktop/mobile dialog for a backend-built settings proposal. It grants
+only that connection/target/revision/content-bound proposal once, within its
+absolute five-minute lifetime. No new settings IPC command is registered by this
+step; the replacement settings transport is a separate cutover.

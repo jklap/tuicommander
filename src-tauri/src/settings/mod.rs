@@ -90,3 +90,12 @@ mod policy_baseline_tests;
 
 #[cfg(test)]
 mod policy_tests;
+
+#[cfg(test)]
+mod policy_scope_tests;
+
+#[cfg(test)]
+mod policy_domain_tests;
+
+#[cfg(test)]
+mod policy_lifecycle_tests;

@@ -1,10 +1,17 @@
 //! Host-issued origin and one-use approval authority. No stored values enter this pool.
-use super::{catalogue::Catalogue, model::Sensitivity, request::*, transaction};
+use super::{catalogue::Catalogue, request::*, transaction};
+#[path = "policy_context.rs"]
+mod context;
+#[path = "policy_patch.rs"]
+mod patch;
+#[path = "policy_scope.rs"]
+mod scope;
+pub use context::{Audit, Caller, Preview};
 use parking_lot::Mutex;
+pub(super) use patch::patch;
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, VecDeque},
-    net::SocketAddr,
     time::Duration,
 };
 use tokio::time::Instant;
@@ -12,54 +19,12 @@ use tokio::time::Instant;
 const TTL: Duration = Duration::from_secs(300);
 const MAX_PENDING: usize = 128;
 
-/// Constructed by the server transport, never deserialized from a model payload.
 #[derive(Clone)]
-pub struct Caller {
-    connection: String,
-    allowed: bool,
-    enabled: bool,
-}
-impl Caller {
-    pub fn native() -> Self {
-        Self {
-            connection: "native".into(),
-            allowed: true,
-            enabled: true,
-        }
-    }
-    pub fn http(connection: String, authenticated_or_local: bool) -> Self {
-        Self {
-            connection,
-            allowed: authenticated_or_local,
-            enabled: true,
-        }
-    }
-    pub fn mcp(addr: SocketAddr, connection: String, settings_enabled: bool) -> Self {
-        Self {
-            connection,
-            allowed: addr.ip().is_loopback(),
-            enabled: settings_enabled,
-        }
-    }
-    pub fn check(&self, mutation: bool) -> Result<(), Failure> {
-        if !self.enabled {
-            return Err(Error::new("settings", "unavailable"));
-        }
-        if mutation && !self.allowed {
-            return Err(Error::new("settings", "forbidden_origin"));
-        }
-        Ok(())
-    }
-}
-
-/// Only backend-built, redacted text may be offered to the confirmation dialog.
-#[derive(Clone)]
-pub struct Preview {
-    pub title: String,
-    pub message: String,
-}
 struct Proposal {
-    connection: String,
+    caller: context::CallerKey,
+    changed_ids: Vec<String>,
+    target: Target,
+    store: String,
     fingerprint: String,
     expires: Instant,
     preview: Preview,
@@ -71,13 +36,33 @@ struct State {
     proposals: BTreeMap<String, Proposal>,
     audit: VecDeque<Audit>,
 }
-/// Audit contains identifiers and outcomes only, never setting values or dynamic keys.
-#[derive(Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Audit {
-    pub connection: String,
-    pub changed_ids: Vec<String>,
-    pub outcome: String,
+impl State {
+    fn record(&mut self, proposal: &Proposal, outcome: &str) {
+        self.audit.push_back(Audit {
+            connection: proposal.caller.connection.clone(),
+            origin: proposal.caller.origin,
+            target: proposal.target.clone(),
+            store: proposal.store.clone(),
+            changed_ids: proposal.changed_ids.clone(),
+            outcome: outcome.into(),
+        });
+        while self.audit.len() > 256 {
+            self.audit.pop_front();
+        }
+    }
+    fn remove_expired(&mut self) {
+        let ids: Vec<_> = self
+            .proposals
+            .iter()
+            .filter(|(_, p)| p.expires <= Instant::now())
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in ids {
+            if let Some(proposal) = self.proposals.remove(&id) {
+                self.record(&proposal, "expired");
+            }
+        }
+    }
 }
 #[derive(Default)]
 pub struct Policy {
@@ -93,6 +78,7 @@ impl Policy {
         request: &Request,
         latest: &Value,
         approval: Option<&str>,
+        validate: impl Fn(&Value) -> Result<(), Failure>,
     ) -> Result<(), Failure> {
         caller.check(true)?;
         let (target, store, revision, edits) = patch(request)?;
@@ -103,51 +89,35 @@ impl Policy {
                 .proposals
                 .remove(id)
                 .ok_or_else(|| Error::new("settings", "confirmation_denied"))?;
-            if pending.connection != caller.connection
+            if pending.caller != caller.key
                 || pending.fingerprint != fingerprint
                 || pending.expires <= Instant::now()
                 || !pending.approved
             {
+                state.record(&pending, "confirmation_denied");
                 return Err(Error::new("settings", "confirmation_denied"));
             }
+            state.record(&pending, "approval_consumed");
             // Consume before revalidation: conflict/failure must never leave a reusable grant.
             drop(state);
-            transaction::prepare(cat, store, latest, revision, &edits)?;
+            let prepared = transaction::prepare(cat, store, latest, revision, &edits)?;
+            validate(&prepared.value)?;
             return Ok(());
         }
         let prepared = transaction::prepare(cat, store, latest, revision, &edits)?;
+        validate(&prepared.value)?;
         let fields: Vec<_> = prepared
             .reply
             .changed_ids
             .iter()
             .filter_map(|id| cat.fields.get(id))
             .collect();
-        if fields
-            .iter()
-            .all(|f| f.annotation.confirmation_class == "ordinary")
-        {
+        if !scope::requires_confirmation(&fields, latest, &prepared.value) {
             return Ok(());
         }
-        let message = fields
-            .iter()
-            .map(|f| {
-                let render = |value: &Value| {
-                    if f.annotation.sensitivity != Sensitivity::Public {
-                        return "[redacted]".to_owned();
-                    }
-                    let text = value.pointer(&f.path).unwrap_or(&Value::Null).to_string();
-                    if text.len() > 256 {
-                        "[value omitted]".into()
-                    } else {
-                        text
-                    }
-                };
-                format!("{}: {} → {}", f.id, render(latest), render(&prepared.value))
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
+        let message = patch::preview(cat, store, &fields, &edits, latest, &prepared.value);
         let mut state = self.state.lock();
-        state.proposals.retain(|_, p| p.expires > Instant::now());
+        state.remove_expired();
         if state.proposals.len() >= MAX_PENDING {
             return Err(Error::new("settings", "unavailable"));
         }
@@ -155,25 +125,23 @@ impl Policy {
         state.proposals.insert(
             id.clone(),
             Proposal {
-                connection: caller.connection.clone(),
+                caller: caller.key.clone(),
+                changed_ids: prepared.reply.changed_ids.clone(),
+                target: target.clone(),
+                store: store.into(),
                 fingerprint,
                 expires: Instant::now() + TTL,
                 preview: Preview {
                     title: "Approve settings change".into(),
                     message,
+                    remaining: TTL,
                 },
                 showing: false,
                 approved: false,
             },
         );
-        state.audit.push_back(Audit {
-            connection: caller.connection.clone(),
-            changed_ids: prepared.reply.changed_ids,
-            outcome: "confirmation_required".into(),
-        });
-        while state.audit.len() > 256 {
-            state.audit.pop_front();
-        }
+        let proposal = state.proposals[&id].clone();
+        state.record(&proposal, "confirmation_required");
         let mut error = Error::new(store, "confirmation_required");
         error.proposal_id = Some(id);
         error.next_action = "ui confirm proposalId".into();
@@ -188,7 +156,7 @@ impl Policy {
             .proposals
             .get_mut(id)
             .ok_or_else(|| Error::new("settings", "confirmation_denied"))?;
-        if pending.connection != caller.connection
+        if pending.caller != caller.key
             || pending.expires <= Instant::now()
             || pending.showing
             || pending.approved
@@ -196,7 +164,9 @@ impl Policy {
             return Err(Error::new("settings", "confirmation_denied"));
         }
         pending.showing = true;
-        Ok(pending.preview.clone())
+        let mut preview = pending.preview.clone();
+        preview.remaining = pending.expires.saturating_duration_since(Instant::now());
+        Ok(preview)
     }
     /// Called only after the existing human-response channel resolves.
     pub(crate) fn finish_confirmation(
@@ -206,76 +176,51 @@ impl Policy {
         approved: bool,
     ) -> Result<(), Failure> {
         let mut state = self.state.lock();
-        let Some(pending) = state.proposals.get_mut(id) else {
+        let Some(mut pending) = state.proposals.remove(id) else {
             return Err(Error::new("settings", "confirmation_denied"));
         };
         if !approved
-            || pending.connection != caller.connection
+            || pending.caller != caller.key
             || pending.expires <= Instant::now()
             || !pending.showing
         {
-            state.proposals.remove(id);
+            state.record(&pending, "confirmation_denied");
             return Err(Error::new("settings", "confirmation_denied"));
         }
         pending.approved = true;
+        state.record(&pending, "approved");
+        state.proposals.insert(id.to_owned(), pending);
         Ok(())
     }
+
     /// Teardown revokes pending and granted proposals for that protocol connection.
-    pub fn disconnect(&self, connection: &str) {
-        self.state
-            .lock()
+    pub fn disconnect_mcp(&self, connection: &str) {
+        let mut state = self.state.lock();
+        let ids: Vec<_> = state
             .proposals
-            .retain(|_, p| p.connection != connection);
+            .iter()
+            .filter(|(_, p)| p.caller.origin == "mcp" && p.caller.connection == connection)
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in ids {
+            if let Some(pending) = state.proposals.remove(&id) {
+                state.record(&pending, "disconnected");
+            }
+        }
     }
     pub(crate) fn cancel_confirmation(&self, caller: &Caller, id: &str) {
         let mut state = self.state.lock();
         if state
             .proposals
             .get(id)
-            .is_some_and(|p| p.connection == caller.connection)
+            .is_some_and(|p| p.caller == caller.key)
+            && let Some(pending) = state.proposals.remove(id)
         {
-            state.proposals.remove(id);
+            state.record(&pending, "cancelled");
         }
     }
+
     pub fn audit(&self) -> Vec<Audit> {
         self.state.lock().audit.iter().cloned().collect()
     }
-}
-
-pub(super) fn patch(request: &Request) -> Result<(&Target, &str, &str, Vec<Edit>), Failure> {
-    Ok(match request {
-        Request::Set {
-            target,
-            store,
-            path,
-            value,
-            expected_revision,
-        } => (
-            target,
-            store,
-            expected_revision,
-            vec![Edit::Set {
-                path: path.clone(),
-                value: value.clone(),
-            }],
-        ),
-        Request::Reset {
-            target,
-            store,
-            path,
-            expected_revision,
-        } => (
-            target,
-            store,
-            expected_revision,
-            vec![Edit::Reset { path: path.clone() }],
-        ),
-        Request::Patch {
-            target,
-            store,
-            expected_revision,
-            operations,
-        } => (target, store, expected_revision, operations.clone()),
-        Request::Get { .. } => return Err(Error::new("settings", "invalid_type")),
-    })
 }
