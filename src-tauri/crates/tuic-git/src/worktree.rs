@@ -485,7 +485,7 @@ pub struct WorkspaceLifecycleStatus {
     pub submodule_unpushed_commits: Vec<SubmoduleUnpushedCommits>,
     pub commit_status: WorkspaceCommitStatus,
     #[serde(skip)]
-    merge_proof: Option<&'static str>,
+    merge_proof: Option<String>,
     pub removal_safety: WorkspaceRemovalSafety,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -893,13 +893,18 @@ fn is_ancestor_of_any(repo: &Path, tip: &str, bases: &[String]) -> Result<bool, 
     Ok(false)
 }
 
-/// Every commit up to `tip` exists on the branch's own remote-tracking ref.
-fn pushed_to_own_remote(repo: &Path, branch: &str, tip: &str) -> Result<bool, String> {
-    let remote = format!("refs/remotes/origin/{branch}");
-    if rev_at(repo, &format!("{remote}^{{commit}}")).is_err() {
-        return Ok(false);
-    }
-    is_ancestor(repo, tip, &remote)
+/// A concrete remote-tracking ref preserves every commit up to `tip`.
+fn containing_remote_ref(repo: &Path, tip: &str) -> Result<Option<String>, String> {
+    let refs = git_cmd(repo)
+        .args([
+            "for-each-ref",
+            "--format=%(refname)",
+            &format!("--contains={tip}"),
+            "refs/remotes/",
+        ])
+        .run()
+        .map_err(|error| format!("could not inspect remote containment: {error}"))?;
+    Ok(refs.stdout.lines().next().map(str::to_owned))
 }
 
 fn classify_branch_merge(
@@ -908,7 +913,7 @@ fn classify_branch_merge(
     tip: &str,
     default_branch: &str,
     pr_proves_tip: impl Fn(&Path, &str, &str) -> bool,
-) -> Result<(WorkspaceCommitStatus, Option<&'static str>), String> {
+) -> Result<MonitoringMerge, String> {
     let bases = integration_bases(repo, default_branch);
     if bases.is_empty() {
         return Err(format!("default branch '{default_branch}' was not found"));
@@ -963,20 +968,23 @@ fn classify_branch_merge(
     if merged && from_default && follows_default {
         Ok((WorkspaceCommitStatus::InSync, None))
     } else if merged {
-        Ok((WorkspaceCommitStatus::Merged, Some("ancestry")))
+        Ok((WorkspaceCommitStatus::Merged, Some("ancestry".into())))
     } else if is_ancestor(repo, tip, &rev_at(repo, "HEAD")?)? {
-        Ok((WorkspaceCommitStatus::Merged, Some("integration_ancestry")))
+        Ok((
+            WorkspaceCommitStatus::Merged,
+            Some("integration_ancestry".into()),
+        ))
     } else if let Some(proof) = integrated_in_defaults(repo, &bases, tip)? {
         let proof = if proof == "content_superset" && pr_proves_tip(repo, branch, tip) {
             "github_pr"
         } else {
             proof
         };
-        Ok((WorkspaceCommitStatus::Merged, Some(proof)))
+        Ok((WorkspaceCommitStatus::Merged, Some(proof.into())))
     } else if pr_proves_tip(repo, branch, tip) {
-        Ok((WorkspaceCommitStatus::Merged, Some("github_pr")))
-    } else if pushed_to_own_remote(repo, branch, tip)? {
-        Ok((WorkspaceCommitStatus::PushedUnmerged, None))
+        Ok((WorkspaceCommitStatus::Merged, Some("github_pr".into())))
+    } else if let Some(remote) = containing_remote_ref(repo, tip)? {
+        Ok((WorkspaceCommitStatus::PushedUnmerged, Some(remote)))
     } else {
         Ok((WorkspaceCommitStatus::Unmerged, None))
     }
@@ -1241,9 +1249,9 @@ fn patches_integrated_in(repo: &Path, target: &str, tip: &str) -> Result<bool, S
 }
 
 /// Ref state that decides one branch's classification, read without git
-/// subprocesses: the branch and its remote twin, the default-branch refs
+/// subprocesses: the branch and all remote-tracking refs, the default-branch refs
 /// (origin/HEAD, its target, main, master), the main checkout's HEAD, config and
-/// the branch's own reflog. Other branches never enter the key: a commit in one
+/// the branch's own reflog. Other local branches never enter the key: a commit in one
 /// worktree must not re-run cherry/merge-tree for every sibling branch.
 pub fn monitoring_ref_key(repo: &Path, branch: &str) -> Result<String, String> {
     use gix::bstr::ByteSlice;
@@ -1271,6 +1279,14 @@ pub fn monitoring_ref_key(repo: &Path, branch: &str) -> Result<String, String> {
     if let Some(default) = origin_default {
         names.push(format!("refs/remotes/origin/{default}"));
         names.push(format!("refs/heads/{default}"));
+    }
+    let references = grepo.references().map_err(|e| e.to_string())?;
+    for reference in references
+        .prefixed("refs/remotes/")
+        .map_err(|e| e.to_string())?
+    {
+        let reference = reference.map_err(|e| e.to_string())?;
+        names.push(reference.name().as_bstr().to_str_lossy().into_owned());
     }
     names.sort();
     names.dedup();
@@ -1301,7 +1317,7 @@ pub fn monitoring_ref_key(repo: &Path, branch: &str) -> Result<String, String> {
     Ok(hex::encode(digest.finalize()))
 }
 
-type MonitoringMerge = (WorkspaceCommitStatus, Option<&'static str>);
+type MonitoringMerge = (WorkspaceCommitStatus, Option<String>);
 type MonitoringLocalMerge = (MonitoringMerge, String);
 static MONITORING_MERGES: LazyLock<
     moka::sync::Cache<(PathBuf, String, String), MonitoringLocalMerge>,
@@ -1330,10 +1346,10 @@ pub(crate) fn monitoring_branch_merge(
         && (matches!(
             local.0,
             WorkspaceCommitStatus::Unmerged | WorkspaceCommitStatus::PushedUnmerged
-        ) || local.1 == Some("content_superset"))
+        ) || local.1.as_deref() == Some("content_superset"))
         && pr_proves_tip(repo, branch, &tip)
     {
-        Ok((WorkspaceCommitStatus::Merged, Some("github_pr")))
+        Ok((WorkspaceCommitStatus::Merged, Some("github_pr".into())))
     } else {
         Ok(local)
     }
@@ -2661,7 +2677,7 @@ pub fn remove_worktree_by_workspace_id_with_missing_confirmation_and_pr(
 ) -> Result<RemoveWorktreeOutcome, String> {
     let base_repo = PathBuf::from(repo_path);
     let mut branch_delete_warning = None;
-    let mut removal_rule = if force { "force" } else { "kept_branch" };
+    let mut removal_rule = if force { "force" } else { "kept_branch" }.to_string();
 
     tracing::info!(
         source = "worktree",
@@ -2722,7 +2738,7 @@ pub fn remove_worktree_by_workspace_id_with_missing_confirmation_and_pr(
         ));
     }
     if delete_branch {
-        let branch_proof = (|| -> Result<&'static str, String> {
+        let branch_proof = (|| -> Result<String, String> {
             match lifecycle.commit_status {
                 WorkspaceCommitStatus::Unmerged => {
                     let default_branch = get_remote_default_branch(repo_path)?;
@@ -2732,22 +2748,26 @@ pub fn remove_worktree_by_workspace_id_with_missing_confirmation_and_pr(
                         describe_bases(&bases)
                     ))
                 }
-                WorkspaceCommitStatus::PushedUnmerged => Ok("remote_tracking"),
+                WorkspaceCommitStatus::PushedUnmerged => lifecycle
+                    .merge_proof
+                    .clone()
+                    .ok_or_else(|| format!("Cannot verify remote commits for {branch_name}")),
                 WorkspaceCommitStatus::Unknown => {
                     Err(lifecycle.error.clone().unwrap_or_else(|| {
                         format!("Cannot verify whether {branch_name} can be safely removed")
                     }))
                 }
-                WorkspaceCommitStatus::InSync => Ok("in_sync"),
+                WorkspaceCommitStatus::InSync => Ok("in_sync".into()),
                 WorkspaceCommitStatus::Merged => {
                     let proof = lifecycle
                         .merge_proof
+                        .clone()
                         .ok_or_else(|| format!("Cannot verify merged commits for {branch_name}"))?;
                     require_integration_archive(
                         &base_repo,
                         branch_name,
                         &expected_branch_oid,
-                        proof,
+                        &proof,
                     )?;
                     Ok(proof)
                 }
@@ -2800,9 +2820,17 @@ pub fn remove_worktree_by_workspace_id_with_missing_confirmation_and_pr(
             &worktree.base_repo,
             branch_name,
             &expected_branch_oid,
-            removal_rule,
+            &removal_rule,
         )
         .and_then(|()| {
+            if lifecycle.commit_status == WorkspaceCommitStatus::PushedUnmerged {
+                removal_rule = crate::git_ref_transaction::delete_remote_contained_branch(
+                    &worktree.base_repo,
+                    branch_name,
+                    &expected_branch_oid,
+                )?;
+                return Ok(());
+            }
             git_cmd(&worktree.base_repo)
                 .args([
                     "update-ref",
@@ -2811,6 +2839,7 @@ pub fn remove_worktree_by_workspace_id_with_missing_confirmation_and_pr(
                     &expected_branch_oid,
                 ])
                 .run()
+                .map(|_| ())
                 .map_err(|error| error.to_string())
         });
         match deleted {
@@ -2839,7 +2868,7 @@ pub fn remove_worktree_by_workspace_id_with_missing_confirmation_and_pr(
     );
     Ok(RemoveWorktreeOutcome {
         branch_delete_warning,
-        removal_rule: removal_rule.to_string(),
+        removal_rule,
         branch: branch_name.to_string(),
     })
 }
@@ -3063,7 +3092,7 @@ pub struct BranchIntegration {
     pub default_branch: String,
     pub commit_status: WorkspaceCommitStatus,
     pub integrated: bool,
-    pub proof: Option<&'static str>,
+    pub proof: Option<String>,
     pub archive_required: bool,
     pub archived: bool,
     pub archive_ref: String,
@@ -3109,8 +3138,9 @@ pub fn branch_integration_with_pr(
             WorkspaceCommitStatus::Merged | WorkspaceCommitStatus::InSync
         ),
         commit_status,
-        proof: proof.or((commit_status == WorkspaceCommitStatus::InSync).then_some("in_sync")),
-        archive_required: proof == Some("content_superset"),
+        archive_required: proof.as_deref() == Some("content_superset"),
+        proof: proof
+            .or_else(|| (commit_status == WorkspaceCommitStatus::InSync).then(|| "in_sync".into())),
         worktree_paths: parse_worktree_entries(&listed.stdout)
             .into_iter()
             .filter(|entry| entry.branch.as_deref() == Some(branch))
@@ -3158,7 +3188,7 @@ pub fn branch_integrations_with_pr(
 /// Evidence captured by branch deletion before the local ref disappears.
 #[derive(Debug)]
 pub struct DeletedBranch {
-    pub proof: &'static str,
+    pub proof: String,
     pub archive_ref: Option<String>,
 }
 
@@ -3218,12 +3248,12 @@ pub fn delete_integrated_local_branch_with_pr(
     let (status, merge_proof) =
         classify_branch_merge(repo, branch_name, &tip, &default_branch, pr_proves_tip)?;
     let proof = match status {
-        WorkspaceCommitStatus::InSync => "in_sync",
+        WorkspaceCommitStatus::InSync => "in_sync".to_string(),
         WorkspaceCommitStatus::Merged => merge_proof
             .ok_or_else(|| format!("Cannot verify merged commits for '{branch_name}'"))?,
         WorkspaceCommitStatus::Unmerged => {
             if archived_at_tip(repo, branch_name, &tip) {
-                "archived"
+                "archived".to_string()
             } else {
                 return Err(format!(
                     "Cannot delete '{branch_name}': unmerged commits are not in the default branch (compared against {})",
@@ -3232,7 +3262,7 @@ pub fn delete_integrated_local_branch_with_pr(
             }
         }
         WorkspaceCommitStatus::PushedUnmerged if archived_at_tip(repo, branch_name, &tip) => {
-            "archived"
+            "archived".to_string()
         }
         WorkspaceCommitStatus::PushedUnmerged => {
             return Err(format!(
@@ -3243,7 +3273,7 @@ pub fn delete_integrated_local_branch_with_pr(
             return Err(format!("Cannot verify merged commits for '{branch_name}'"));
         }
     };
-    require_integration_archive(repo, branch_name, &tip, proof)?;
+    require_integration_archive(repo, branch_name, &tip, &proof)?;
     let archive_ref = archive_ref_at_tip(repo, branch_name, &tip);
     if proof == "archived" && archive_ref.is_none() {
         return Err(format!(
@@ -9184,12 +9214,12 @@ branch refs/heads/feat
         // No fake GitHub payload is involved: the provider is now able to prove this tip.
         let fresh = inspect_workspace_lifecycle_with_pr(&repo, branch, |_, _, _| true);
         assert_eq!(fresh.commit_status, WorkspaceCommitStatus::Merged);
-        assert_eq!(fresh.merge_proof, Some("github_pr"));
+        assert_eq!(fresh.merge_proof.as_deref(), Some("github_pr"));
         let next_key = monitoring_ref_key(&repo, branch).unwrap();
         assert_eq!(key, next_key);
         let recovered = inspect_workspace_monitoring_with_pr(&repo, &workspace, |_, _, _| true);
         assert_eq!(recovered.commit_status, WorkspaceCommitStatus::Merged);
-        assert_eq!(recovered.merge_proof, Some("github_pr"));
+        assert_eq!(recovered.merge_proof.as_deref(), Some("github_pr"));
     }
 
     // Catches: deduplicating by pathname collapses separate staged-deletion and untracked rows.
@@ -9476,7 +9506,7 @@ branch refs/heads/feat
         let status = inspect_workspace_lifecycle(&repo, "completed-feature");
 
         assert_eq!(status.commit_status, WorkspaceCommitStatus::Merged);
-        assert_eq!(status.merge_proof, Some("ancestry"));
+        assert_eq!(status.merge_proof.as_deref(), Some("ancestry"));
         assert!(worktree.exists());
     }
 
@@ -9846,11 +9876,16 @@ branch refs/heads/feat
 
         let status = inspect_workspace_lifecycle_with_pr_fixture(&repo, "pr-fetch", &api(&head));
         assert_eq!(status.commit_status, WorkspaceCommitStatus::Merged);
+        assert_eq!(status.merge_proof.as_deref(), Some("github_pr"));
         commit_file(&upstream, "not-in-pr.txt", "newer\n");
         let stale_api_head = rev_at(&upstream, "HEAD").unwrap();
         let status =
             inspect_workspace_lifecycle_with_pr_fixture(&repo, "pr-fetch", &api(&stale_api_head));
-        assert_eq!(status.commit_status, WorkspaceCommitStatus::Unmerged);
+        assert_eq!(status.commit_status, WorkspaceCommitStatus::PushedUnmerged);
+        assert_eq!(
+            status.merge_proof.as_deref(),
+            Some("refs/remotes/origin/pr-source")
+        );
     }
 
     // Audit cases: wiz POC-00168/170 landed together in squash 4a190ec8;
@@ -9932,7 +9967,7 @@ branch refs/heads/feat
         commit_file(&wt, name, "rule A\n++literal\nrule B\n");
         commit_file(&repo, name, "rule B\nrule A\n++literal\nextra\n");
         let query = branch_integration_with_pr(&repo, "literal-1295", |_, _, _| false).unwrap();
-        assert_eq!(query.proof, Some("content_superset"));
+        assert_eq!(query.proof.as_deref(), Some("content_superset"));
         #[cfg(unix)]
         let expected = format!(
             "{}/literal-1295",
@@ -9977,7 +10012,7 @@ branch refs/heads/feat
         commit_file(&wt, name, "rule A\n++literal\nrule B\n");
         commit_file(&repo, name, "rule B\nrule A\n++literal\nextra\n");
         let query = branch_integration_with_pr(&repo, "suffixed-1462", |_, _, _| false).unwrap();
-        assert_eq!(query.proof, Some("content_superset"));
+        assert_eq!(query.proof.as_deref(), Some("content_superset"));
         assert!(!query.archived);
         let suffixed = format!("{}-{}", query.archive_ref, &query.tip[..7]);
         git_cmd(&repo)
@@ -9994,7 +10029,8 @@ branch refs/heads/feat
         assert_eq!(
             delete_integrated_local_branch(&repo.to_string_lossy(), "suffixed-1462")
                 .unwrap()
-                .proof,
+                .proof
+                .as_str(),
             "content_superset"
         );
         assert!(rev_at(&repo, "refs/heads/suffixed-1462").is_err());
@@ -10131,7 +10167,11 @@ branch refs/heads/feat
             "new context\nstatic NEXT_WARM_TOKEN: AtomicU64 = AtomicU64::new(1);\nuse std::sync::LazyLock;\nchanged context\n",
         );
         let query = branch_integration_with_pr(&repo, "twin-1295", |_, _, _| false).unwrap();
-        assert_eq!(query.proof, Some("content_superset"), "{query:?}");
+        assert_eq!(
+            query.proof.as_deref(),
+            Some("content_superset"),
+            "{query:?}"
+        );
         assert!(query.archive_required);
         assert!(
             remove_worktree_by_workspace_id(
@@ -10157,7 +10197,7 @@ branch refs/heads/feat
         let tip = rev_at(&repo, "refs/heads/content-1295").unwrap();
         let status = inspect_workspace_lifecycle(&repo, "content-1295");
         assert_eq!(status.commit_status, WorkspaceCommitStatus::Merged);
-        assert_eq!(status.merge_proof, Some("content_superset"));
+        assert_eq!(status.merge_proof.as_deref(), Some("content_superset"));
         assert!(
             remove_worktree_by_workspace_id(
                 &repo.to_string_lossy(),
@@ -10188,7 +10228,8 @@ branch refs/heads/feat
         assert_eq!(
             delete_integrated_local_branch(&repo.to_string_lossy(), "content-1295")
                 .unwrap()
-                .proof,
+                .proof
+                .as_str(),
             "content_superset"
         );
         assert_eq!(rev_at(&repo, "refs/archive/content-1295").unwrap(), tip);
@@ -10210,7 +10251,7 @@ branch refs/heads/feat
         // A one-subject release still corroborates the structural no-op proof.
         git_cmd(&repo).args(["commit", "--amend", "-m", "Poc 00170/wiz 5.0 pre (#189)\n\n* first.txt\n\n* fix(hud): add Opus 4.7 to pricing table (#343-d76a)"]).run().unwrap();
         let query = branch_integration_with_pr(&repo, "audit-1295", |_, _, _| false).unwrap();
-        assert_eq!(query.proof, Some("squash_message"));
+        assert_eq!(query.proof.as_deref(), Some("squash_message"));
     }
 
     #[test]
@@ -10342,7 +10383,7 @@ branch refs/heads/feat
         .unwrap();
         for entry in &listed {
             assert_eq!(
-                entry.proof == Some("github_pr"),
+                entry.proof.as_deref() == Some("github_pr"),
                 entry.branch == "extra-1295-05",
                 "wrong pull request proof on {}",
                 entry.branch
@@ -10359,7 +10400,7 @@ branch refs/heads/feat
         let (_temp, repo, wt) = integration_1295_fixture(true, false);
         let status = inspect_workspace_lifecycle(&repo, "audit-1295");
         assert_eq!(status.commit_status, WorkspaceCommitStatus::Merged);
-        assert_eq!(status.merge_proof, Some("squash_message"));
+        assert_eq!(status.merge_proof.as_deref(), Some("squash_message"));
         git_cmd(&repo)
             .args(["worktree", "remove", &wt.to_string_lossy()])
             .run()
@@ -10367,7 +10408,8 @@ branch refs/heads/feat
         assert_eq!(
             delete_integrated_local_branch(&repo.to_string_lossy(), "audit-1295")
                 .unwrap()
-                .proof,
+                .proof
+                .as_str(),
             "squash_message"
         );
         assert!(rev_at(&repo, "refs/heads/audit-1295").is_err());
@@ -10378,7 +10420,7 @@ branch refs/heads/feat
         let (_temp, repo, wt) = integration_1295_fixture(false, false);
         let status = inspect_workspace_lifecycle(&repo, "audit-1295");
         assert_eq!(status.commit_status, WorkspaceCommitStatus::Merged);
-        assert_eq!(status.merge_proof, Some("noop_merge"));
+        assert_eq!(status.merge_proof.as_deref(), Some("noop_merge"));
         git_cmd(&repo)
             .args(["worktree", "remove", &wt.to_string_lossy()])
             .run()
@@ -10386,7 +10428,8 @@ branch refs/heads/feat
         assert_eq!(
             delete_integrated_local_branch(&repo.to_string_lossy(), "audit-1295")
                 .unwrap()
-                .proof,
+                .proof
+                .as_str(),
             "noop_merge"
         );
         assert!(rev_at(&repo, "refs/heads/audit-1295").is_err());
@@ -11144,6 +11187,177 @@ branch refs/heads/feat
         origin
     }
 
+    // Catches: cleanup fetch prunes the sole remote proof, but deletion still drops local work.
+    #[test]
+    fn removal_keeps_local_branch_when_cleanup_prunes_its_remote_proof() {
+        let (_temp, repo, _) = workspace_fixture();
+        let origin = add_origin(&repo);
+        let worktree = add_worktree(&repo, "pruned-proof");
+        commit_file(&worktree, "unique.txt", "preserve this commit\n");
+        git_cmd(&worktree)
+            .args(["push", "origin", "HEAD:integration"])
+            .run()
+            .unwrap();
+        let tip = rev_at(&repo, "refs/heads/pruned-proof").unwrap();
+        // Another checkout deleted the remote branch; the local tracking ref is still stale.
+        git_cmd(&origin)
+            .args(["update-ref", "-d", "refs/heads/integration"])
+            .run()
+            .unwrap();
+        let outcome = remove_worktree_by_workspace_id(
+            &repo.to_string_lossy(),
+            "pruned-proof",
+            true,
+            Some("git fetch --prune origin"),
+            false,
+        );
+        assert!(rev_at(&repo, "refs/remotes/origin/integration").is_err());
+        assert_eq!(
+            rev_at(&repo, "refs/heads/pruned-proof").ok(),
+            Some(tip),
+            "cleanup removed the remote proof: local work must survive; outcome={outcome:?}"
+        );
+        let outcome = outcome.unwrap();
+        assert!(outcome.branch_delete_warning.is_some());
+        assert!(!worktree.exists());
+    }
+
+    // Catches: fetch replaces the sole proof after recheck but before local ref deletion commits.
+    #[test]
+    #[cfg(unix)]
+    fn removal_keeps_local_branch_when_fetch_replaces_proof_during_ref_deletion() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (_temp, repo, worktree) = remote_contained_fixture();
+        let tip = rev_at(&repo, "refs/heads/remote-contained").unwrap();
+        let base = rev_at(&repo, &base_branch_of(&repo)).unwrap();
+        let origin = git_cmd(&repo)
+            .args(["remote", "get-url", "origin"])
+            .run()
+            .unwrap();
+        git_cmd(Path::new(origin.stdout.trim()))
+            .args(["update-ref", "refs/heads/integration", &base])
+            .run()
+            .unwrap();
+        // Git invokes this after locking the deletion ref, before committing it.
+        // Run a real fetch here to deterministically order the concurrent writer.
+        let hook = repo.join(".git/hooks/reference-transaction");
+        fs::write(
+            &hook,
+            "#!/bin/sh\n[ \"$1\" = prepared ] || exit 0\nwhile read -r old new ref; do\n  if [ \"$ref\" = refs/heads/remote-contained ]; then\n    git fetch --force origin >/dev/null 2>&1 || exit 1\n  fi\ndone\n",
+        )
+        .unwrap();
+        fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let outcome = remove_worktree_by_workspace_id(
+            &repo.to_string_lossy(),
+            "remote-contained",
+            true,
+            None,
+            false,
+        );
+        assert_eq!(
+            rev_at(&repo, "refs/heads/remote-contained").ok(),
+            Some(tip),
+            "fetch attempted to replace the sole proof: local work must survive; outcome={outcome:?}"
+        );
+        assert!(outcome.unwrap().branch_delete_warning.is_some());
+        assert!(!worktree.exists());
+    }
+
+    fn remote_contained_fixture() -> (TempDir, PathBuf, PathBuf) {
+        let (temp, repo, _workspaces) = workspace_fixture();
+        add_origin(&repo);
+        let worktree = add_worktree(&repo, "remote-contained");
+        commit_file(&worktree, "feature.txt", "saved remotely\n");
+        git_cmd(&worktree)
+            .args(["push", "origin", "HEAD:integration"])
+            .run()
+            .unwrap();
+        git_cmd(&repo).args(["fetch", "origin"]).run().unwrap();
+        (temp, repo, worktree)
+    }
+
+    // Catches: lifecycle and sidebar refusing commits saved under another remote branch.
+    #[test]
+    fn remote_contained_without_upstream_has_one_verdict() {
+        let (_temp, repo, _) = remote_contained_fixture();
+        let status = inspect_workspace_lifecycle(&repo, "remote-contained");
+        assert_eq!(status.commit_status, WorkspaceCommitStatus::PushedUnmerged);
+        let query = branch_integration_with_pr(&repo, "remote-contained", |_, _, _| false).unwrap();
+        assert_eq!(query.commit_status, status.commit_status);
+        assert_eq!(
+            query.proof.as_deref(),
+            Some("refs/remotes/origin/integration")
+        );
+        let workspace = resolve_removable_workspace(&repo, "remote-contained").unwrap();
+        let monitoring = inspect_workspace_monitoring_with_pr(&repo, &workspace, |_, _, _| false);
+        assert_eq!(monitoring.commit_status, status.commit_status);
+    }
+
+    // Catches: removal refusing safe work instead of naming its containing ref.
+    #[test]
+    fn remote_contained_without_upstream_removes_with_proof() {
+        let (_temp, repo, worktree) = remote_contained_fixture();
+        let outcome = remove_worktree_by_workspace_id(
+            &repo.to_string_lossy(),
+            "remote-contained",
+            true,
+            None,
+            false,
+        )
+        .unwrap();
+        assert_eq!(outcome.removal_rule, "refs/remotes/origin/integration");
+        assert!(!worktree.exists());
+        assert!(rev_at(&repo, "refs/heads/remote-contained").is_err());
+        assert!(rev_at(&repo, "refs/remotes/origin/integration").is_ok());
+    }
+
+    // Catches: containment being restricted to origin or requiring an exact tip match.
+    #[test]
+    fn remote_contained_by_non_origin_descendant_is_safe() {
+        let (_temp, repo, worktree) = remote_contained_fixture();
+        git_cmd(&repo)
+            .args(["remote", "rename", "origin", "backup"])
+            .run()
+            .unwrap();
+        commit_file(&worktree, "later.txt", "later remote work\n");
+        git_cmd(&worktree)
+            .args(["push", "backup", "HEAD:integration"])
+            .run()
+            .unwrap();
+        git_cmd(&worktree)
+            .args(["reset", "--hard", "HEAD~1"])
+            .run()
+            .unwrap();
+        let query = branch_integration_with_pr(&repo, "remote-contained", |_, _, _| false).unwrap();
+        assert_eq!(query.commit_status, WorkspaceCommitStatus::PushedUnmerged);
+        assert_eq!(
+            query.proof.as_deref(),
+            Some("refs/remotes/backup/integration")
+        );
+    }
+
+    // Catches: a fetch leaving the sidebar's cached unmerged verdict stale.
+    #[test]
+    fn remote_contained_fetch_invalidates_monitoring_key() {
+        let (_temp, repo, _) = remote_contained_fixture();
+        git_cmd(&repo)
+            .args(["update-ref", "-d", "refs/remotes/origin/integration"])
+            .run()
+            .unwrap();
+        let workspace = resolve_removable_workspace(&repo, "remote-contained").unwrap();
+        let before = inspect_workspace_monitoring_with_pr(&repo, &workspace, |_, _, _| false);
+        assert_eq!(before.commit_status, WorkspaceCommitStatus::Unmerged);
+        git_cmd(&repo).args(["fetch", "origin"]).run().unwrap();
+        let after = inspect_workspace_monitoring_with_pr(&repo, &workspace, |_, _, _| false);
+        assert_eq!(after.commit_status, WorkspaceCommitStatus::PushedUnmerged);
+        assert_eq!(
+            after.merge_proof.as_deref(),
+            Some("refs/remotes/origin/integration")
+        );
+    }
+
     /// Local main is stale (10 behind origin/main in the field); the branch
     /// was merged upstream. Comparing only the local default branch called it
     /// unmerged and refused removal.
@@ -11200,7 +11414,7 @@ branch refs/heads/feat
             false,
         )
         .unwrap();
-        assert_eq!(outcome.removal_rule, "remote_tracking");
+        assert_eq!(outcome.removal_rule, "refs/remotes/origin/pushed-only");
         assert!(!worktree.exists());
         let remaining = git_cmd(&repo)
             .args(["branch", "--list", "pushed-only"])

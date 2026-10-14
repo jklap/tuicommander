@@ -47,7 +47,7 @@ export function createWorktreeRemovalCoordinator(deps: WorktreeRemovalCoordinato
 	/** `workspaceId` addresses the row and the backend. `branchName`, read off the
 	 *  record, is what the user sees in the confirm dialog and the status line —
 	 *  showing a minted id there would be showing a user an internal key. */
-	const handleRemoveWorkspace = async (repoPath: string, workspaceId: string) => {
+	const handleRemoveWorkspace = async (repoPath: string, workspaceId: string, keepBranch = false) => {
 		const removeKey = `${repoPath}::${workspaceId}`;
 		// Lock IMMEDIATELY (synchronously) to prevent concurrent invocations that race the awaits below
 		if (removingBranches().has(removeKey)) return;
@@ -71,7 +71,7 @@ export function createWorktreeRemovalCoordinator(deps: WorktreeRemovalCoordinato
 			const branchName = branch.branchName;
 
 			const effective = repoSettingsStore.getEffective(repoPath);
-			const deleteBranch = effective?.deleteBranchOnRemove ?? true;
+			const deleteBranch = !keepBranch && (effective?.deleteBranchOnRemove ?? true);
 			let lifecycle: WorkspaceLifecycleStatus;
 			try {
 				lifecycle = await deps.repo.getWorkspaceLifecycle(repoPath, workspaceId);
@@ -90,7 +90,14 @@ export function createWorktreeRemovalCoordinator(deps: WorktreeRemovalCoordinato
 			if (deleteBranch && lifecycle.commitStatus === "unmerged") {
 				reportActionError(
 					deps.setStatusInfo,
-					`Cannot remove ${branchName}: the branch has unmerged commits. Merge it first, or turn off Delete branch on remove.`,
+					`Cannot delete ${branchName}: the branch has unmerged commits. You can remove the worktree while keeping the branch.`,
+					{
+						label: "Remove worktree, keep branch",
+						onClick: () =>
+							handleRemoveWorkspace(repoPath, workspaceId, true).catch((err) => {
+								reportActionError(deps.setStatusInfo, `Failed to remove ${branchName}: ${String(err)}`);
+							}),
+					},
 				);
 				return;
 			}

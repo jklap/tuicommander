@@ -780,6 +780,35 @@ describe("useGitOperations", () => {
 			expect(repositoriesStore.get("/repo")?.workspaces["feature"]?.worktreePath).toBe("/repo/wt");
 			expect(mockSetStatusInfo).toHaveBeenCalledWith(expect.stringContaining("unmerged commits"));
 		});
+		// Catches: refusing local commits without an actionable checkout-only recovery.
+		it("offers_keep_branch_action_without_changing_the_setting", async () => {
+			for (const toast of [...toastsStore.toasts]) toastsStore.remove(toast.id);
+			mockRepo.getWorkspaceLifecycle
+				.mockResolvedValueOnce({ dirtyFiles: 0, commitStatus: "unmerged", removalSafety: "safe" })
+				.mockResolvedValueOnce({ dirtyFiles: 0, commitStatus: "unmerged", removalSafety: "safe" });
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
+			await gitOps.handleRemoveWorkspace("/repo", "feature");
+			expect(mockRepo.removeWorktree).not.toHaveBeenCalled();
+			const toast = toastsStore.toasts.findLast((item) => item.message.includes("unmerged commits"));
+			expect(toast?.action?.label).toBe("Remove worktree, keep branch");
+			await toast?.action?.onClick();
+			expect(mockDialogs.confirmRemoveWorktree).toHaveBeenCalledWith("feature", expect.anything(), false);
+			expect(mockRepo.removeWorktree).toHaveBeenCalledWith("/repo", "feature", false, false);
+			expect(repoSettingsStore.getEffective("/repo")?.deleteBranchOnRemove ?? true).toBe(true);
+		});
+		// Catches: frontend refusing the shared backend pushed verdict.
+		it("removes_remote_contained_branch_using_backend_verdict", async () => {
+			mockRepo.getWorkspaceLifecycle.mockResolvedValueOnce({
+				dirtyFiles: 0,
+				commitStatus: "pushed_unmerged",
+				removalSafety: "safe",
+			});
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
+			await gitOps.handleRemoveWorkspace("/repo", "feature");
+			expect(mockRepo.removeWorktree).toHaveBeenCalledWith("/repo", "feature", true, false);
+		});
 		// Catches: a rejected confirmation retaining the lock and suppressing a later removal.
 		it("rejected_confirmation_then_second_removal_proceeds", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
