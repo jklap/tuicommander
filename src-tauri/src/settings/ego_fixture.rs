@@ -23,6 +23,20 @@ pub(super) fn fixture() -> Fixture {
         ("doctor.json", include_str!("fixtures/ego/doctor.json")),
         ("auth.txt", include_str!("fixtures/ego/auth-empty.txt")),
     ] {
+        let bytes = match name {
+            "base.json" | "beta.json" => {
+                // Captured values stay unchanged; isolated replay profiles need their own
+                // transport identity instead of the captured alpha profile's identity.
+                let mut listing: Value = serde_json::from_str(bytes).unwrap();
+                listing["profile"] = if name == "base.json" {
+                    Value::Null
+                } else {
+                    json!("beta")
+                };
+                listing.to_string()
+            }
+            _ => bytes.to_owned(),
+        };
         std::fs::write(dir.path().join(name), bytes).unwrap();
     }
     let state = Arc::new(make_test_app_state());

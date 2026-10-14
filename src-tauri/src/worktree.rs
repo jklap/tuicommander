@@ -815,23 +815,29 @@ pub(crate) fn remove_orphan_checkout(
 /// Remove an orphan worktree by its filesystem path (detached HEAD — no branch to look up).
 ///
 /// Safety: `worktree_path` is validated against the repo's actual worktree list to prevent
-/// arbitrary directory deletion via a crafted path.
+/// arbitrary directory deletion via a crafted path. Safety checks, git subprocesses,
+/// and recursive deletion run on the blocking pool, not the desktop IPC thread.
 #[cfg(feature = "desktop")]
 #[tauri::command]
-pub(crate) fn remove_orphan_worktree(
+pub(crate) async fn remove_orphan_worktree(
     state: State<'_, Arc<AppState>>,
     repo_path: String,
     worktree_path: String,
     safe_only: Option<bool>,
     confirmed_sessions: Option<Vec<String>>,
 ) -> Result<(), String> {
-    remove_orphan_checkout(
-        &state,
-        &repo_path,
-        &worktree_path,
-        safe_only.unwrap_or(false),
-        &confirmed_sessions.unwrap_or_default(),
-    )
+    let state = state.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        remove_orphan_checkout(
+            &state,
+            &repo_path,
+            &worktree_path,
+            safe_only.unwrap_or(false),
+            &confirmed_sessions.unwrap_or_default(),
+        )
+    })
+    .await
+    .map_err(|e| format!("Task panic: {e}"))?
 }
 
 /// Result of switching the main worktree to a different branch.
@@ -1912,6 +1918,8 @@ mod tests {
     /// Execute froze the WebView for the length of every step. Their HTTP twins
     /// in `mcp_http/worktree_routes.rs` were already on the blocking pool, which
     /// is exactly the transport drift `docs/backend/command-threading.md` names.
+    /// Orphan removal has the same boundary: its safety checks and recursive
+    /// deletion must not block heartbeats while the desktop handles cleanup.
     #[test]
     fn post_merge_cleanup_commands_never_run_on_the_ipc_thread() {
         let source = include_str!("worktree.rs");
@@ -1919,6 +1927,7 @@ mod tests {
             "switch_branch",
             "delete_local_branch",
             "finalize_merged_worktree",
+            "remove_orphan_worktree",
         ] {
             let signature = format!("pub(crate) async fn {command}(");
             let at = source.find(&signature).unwrap_or_else(|| {
@@ -2788,6 +2797,46 @@ mod tests {
                 &repo.to_string_lossy(),
                 &checkout.to_string_lossy(),
             )
+        }
+
+        // Catches: automatic cleanup deleting a checkout rescued by a branch after discovery.
+        #[test]
+        fn automatic_orphan_removal_rechecks_a_branch_restored_after_discovery() {
+            let repo = setup_test_repo();
+            let linked = detached(repo.path(), "rescued-checkout");
+            let state = crate::state::tests_support::make_test_app_state();
+            let before =
+                assess_orphan_cleanup_with_sessions(&state, &repo.path().to_string_lossy())
+                    .unwrap();
+            assert!(
+                before.iter().any(|row| {
+                    Path::new(&row.assessment.path) == linked && row.assessment.safe
+                })
+            );
+            let rescue = std::process::Command::new("git")
+                .current_dir(&linked)
+                .args(["branch", "rescued-active", "HEAD"])
+                .output()
+                .unwrap();
+            assert!(rescue.status.success(), "{rescue:?}");
+            assert!(
+                assess_orphan_cleanup_with_sessions(&state, &repo.path().to_string_lossy(),)
+                    .unwrap()
+                    .is_empty()
+            );
+
+            let result = remove_orphan_checkout(
+                &state,
+                &repo.path().to_string_lossy(),
+                &linked.to_string_lossy(),
+                true,
+                &[],
+            );
+            assert!(
+                result.is_err(),
+                "rescued active checkout was removed: {result:?}"
+            );
+            assert!(linked.exists(), "rescued active checkout must survive");
         }
 
         // Catches: an equality or exact-match cwd test, so an agent whose shell sits

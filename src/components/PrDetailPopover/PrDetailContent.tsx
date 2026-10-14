@@ -252,7 +252,7 @@ export const PrDetailContent: Component<PrDetailContentProps> = (props) => {
 				: null;
 		},
 		({ path, prNumber }) =>
-			rpc<{ bot: number; human: number }>("get_pr_review_threads", { path, prNumber }).catch((e) => {
+			rpc<{ bot: number; human: number; ego: number }>("get_pr_review_threads", { path, prNumber }).catch((e) => {
 				appLogger.warn("github", "Failed to load review threads", { error: String(e) });
 				return null;
 			}),
@@ -314,9 +314,10 @@ export const PrDetailContent: Component<PrDetailContentProps> = (props) => {
 						<div class={s.statusRow} data-testid="unresolved-threads">
 							<span class={s.reviewStateBadge}>
 								{threadSplit()
-									? t("prDetail.unresolvedSplit", "{human} human, {bot} bot unresolved threads", {
+									? t("prDetail.unresolvedSplit", "{human} human, {bot} bot, {ego} ego unresolved threads", {
 											human: String(threadSplit()?.human),
 											bot: String(threadSplit()?.bot),
+											ego: String(threadSplit()?.ego),
 										})
 									: t("prDetail.unresolved", "{count} unresolved threads", {
 											count: `${pr().unresolved_threads}${pr().unresolved_threads_truncated ? "+" : ""}`,

@@ -54,6 +54,11 @@ afterEach(() => {
 function register() {
 	const a = listDemo(4, "a");
 	const b = listDemo(4, "b");
+	// These tests cover saved server-query preferences, not the Rust local-projection boundary.
+	for (const provider of [a, b]) {
+		const list = provider.list.bind(provider);
+		provider.list = async (query, signal) => ({ ...(await list(query, signal)), total: 1001 });
+	}
 	registrations = [workItemProviderRegistry.register(a), workItemProviderRegistry.register(b)];
 	return { a, b };
 }
@@ -64,6 +69,23 @@ function filters() {
 // Catches: persisted stale sort is sent on startup and leaves the list broken rather than restoring the previous accepted order.
 it("restored_rejected_sort_falls_back_to_last_valid_sort", async () => {
 	const { a } = register();
+	// This provider supports the saved order; declare it so the capability-driven picker can render it.
+	Object.assign(a, {
+		fields: [
+			...a.fields,
+			{
+				id: "updatedAt",
+				name: "Updated",
+				kind: "date",
+				required: false,
+				editable: false,
+				options: [],
+				sortable: true,
+				filterable: false,
+				groupable: false,
+			},
+		],
+	});
 	const list = a.list;
 	a.list = async (request, signal) => {
 		if (request.sort?.fieldId === "title") throw new Error("Provider cannot sort by title");

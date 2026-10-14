@@ -4144,6 +4144,16 @@ describe("default-app host boundary", () => {
 	});
 });
 
+// Catches: browser projection receives a different input shape from desktop IPC.
+it("maps_local_tasks_projection_without_reshaping", () => {
+	const input = { items: [], fields: [], query: { filters: [] } };
+	expect(mapCommandToHttp("project_work_items", { input })).toEqual({
+		method: "POST",
+		path: "/tasks/project",
+		body: input,
+	});
+});
+
 // Catches: the mobile metadata read or desktop publication having no equivalent HTTP shape.
 it("maps open Markdown metadata reads and loopback publication without document content", () => {
 	expect(mapCommandToHttp("list_open_markdown_tabs", { cwd: "/repo/src" })).toEqual({

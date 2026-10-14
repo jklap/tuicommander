@@ -1,7 +1,15 @@
 import { createEffect, createMemo, createSignal, on, onCleanup } from "solid-js";
 import type { WorkItemProvider } from "../../../plugins/workItemProvider";
 import type { WorkItemDetail, WorkItemFieldSchema, WorkItemOption } from "../../../types/work-items.gen";
-import { carryOver, collectFields, type Draft, type DraftValue, formFields, ITEM_TYPE_FIELD } from "./createDraft";
+import {
+	carryOver,
+	collectFields,
+	type Draft,
+	type DraftValue,
+	formFields,
+	ITEM_TYPE_FIELD,
+	toFieldValue,
+} from "./createDraft";
 
 export interface TasksCreateOptions {
 	provider: WorkItemProvider;
@@ -131,6 +139,14 @@ export function useTasksCreate(props: TasksCreateOptions) {
 		submitting,
 		error,
 		blocker,
+		fieldError: (field: WorkItemFieldSchema) => {
+			const value = toFieldValue(field, draft()[field.id]);
+			return value === undefined
+				? `Invalid: ${field.name}`
+				: value === null && field.required
+					? `Required: ${field.name}`
+					: undefined;
+		},
 		canSubmit,
 		submit,
 		retry: () => (types().length ? chooseType(itemType()) : loadTypes()),

@@ -2049,7 +2049,7 @@ query PRReviewThreads($owner: String!, $repo: String!, $number: Int!, $after: St
         pageInfo { hasNextPage endCursor }
         nodes {
           isResolved
-          comments(first: 1) { nodes { author { __typename login } } }
+          comments(first: 1) { nodes { body author { __typename login } } }
         }
       }
     }
@@ -2098,6 +2098,7 @@ where
         let page = count_review_threads(&threads["nodes"]);
         total.bot += page.bot;
         total.human += page.human;
+        total.ego += page.ego;
         if threads["pageInfo"]["hasNextPage"].as_bool() != Some(true) {
             return Ok((total, true));
         }
@@ -2156,7 +2157,7 @@ async fn settle_truncated_threads<W, Fut>(
         }
         let outcome = walk(pr.number.into()).await;
         let (unresolved, complete, failed) = match &outcome {
-            Ok((counts, complete)) => (counts.bot + counts.human, *complete, false),
+            Ok((counts, complete)) => (counts.total(), *complete, false),
             Err(_) => (pr.unresolved_threads, false, true),
         };
         cache.insert(
@@ -6681,7 +6682,14 @@ mod settled_threads_tests {
         let mut statuses = truncated_pr(updated_at);
         settle_truncated_threads(cache, "o", "r", &mut statuses, |_| async {
             walks.fetch_add(1, Ordering::SeqCst);
-            Ok((ReviewThreadCounts { bot: 0, human: 3 }, true))
+            Ok((
+                ReviewThreadCounts {
+                    bot: 0,
+                    human: 3,
+                    ego: 0,
+                },
+                true,
+            ))
         })
         .await;
         statuses.remove(0)
@@ -6736,7 +6744,14 @@ mod settled_threads_critic4_tests {
     ) -> impl Fn(i64) -> std::future::Ready<Result<(ReviewThreadCounts, bool), String>> + '_ {
         move |_| {
             walks.fetch_add(1, Ordering::SeqCst);
-            std::future::ready(Ok((ReviewThreadCounts { bot: 0, human }, complete)))
+            std::future::ready(Ok((
+                ReviewThreadCounts {
+                    bot: 0,
+                    human,
+                    ego: 0,
+                },
+                complete,
+            )))
         }
     }
 
@@ -6908,7 +6923,14 @@ mod settled_threads_critic4_tests {
             std::future::ready(if n == 7 {
                 Err("boom".to_string())
             } else {
-                Ok((ReviewThreadCounts { bot: 1, human: 1 }, true))
+                Ok((
+                    ReviewThreadCounts {
+                        bot: 1,
+                        human: 1,
+                        ego: 0,
+                    },
+                    true,
+                ))
             })
         })
         .await;
@@ -6973,7 +6995,14 @@ mod settled_threads_critic5_tests {
     fn walk_ok(walks: &AtomicUsize, human: u32) -> impl Fn(i64) -> WalkResult + '_ {
         move |_| {
             walks.fetch_add(1, Ordering::SeqCst);
-            std::future::ready(Ok((ReviewThreadCounts { bot: 0, human }, true)))
+            std::future::ready(Ok((
+                ReviewThreadCounts {
+                    bot: 0,
+                    human,
+                    ego: 0,
+                },
+                true,
+            )))
         }
     }
 
@@ -7144,6 +7173,24 @@ mod pr_panel_mutant_tests {
         assert_eq!((counts.human, counts.bot), (3, 3));
         assert!(complete, "the last page was reached");
         assert_eq!(cursors, vec![serde_json::Value::Null, "c1".into()]);
+    }
+
+    /// Catches: the walk dropping ego threads from the split, or the query not selecting the
+    /// first comment's body, which is the only place the ego marker lives.
+    #[tokio::test]
+    async fn review_thread_walk_sums_ego_threads_across_pages() {
+        let ego = serde_json::json!({"isResolved": false, "comments": {"nodes": [{
+            "author": {"__typename": "User", "login": "a"},
+            "body": format!("Null check\n\n{}", tuic_git::review_bots::EGO_MARKER)
+        }]}});
+        let (result, _) = walk(vec![
+            page(vec![ego.clone(), thread(false, "User")], Some("c1")),
+            page(vec![ego], None),
+        ])
+        .await;
+        let (counts, _) = result.expect("walk");
+        assert_eq!((counts.ego, counts.human, counts.bot), (2, 1, 0));
+        assert!(PR_REVIEW_THREADS_QUERY.contains("nodes { body author {"));
     }
 
     /// Catches (2087 `!=` -> `==`): a single page with no next page being walked again, and a
