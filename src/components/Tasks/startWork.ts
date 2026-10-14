@@ -1,6 +1,7 @@
 import { createSignal } from "solid-js";
 import { startWork } from "../../hooks/git/startWork";
 import type { WorkItemProvider } from "../../plugins/workItemProvider";
+import { rpc } from "../../transport";
 import type { WorkItem, WorkItemDetail, WorkItemStartWork } from "../../types/work-items.gen";
 
 /** Item field a provider fills with the branch it suggests; it is a hint, not a schema field. */
@@ -36,16 +37,20 @@ export function useStartWork() {
 		if (pending()) return;
 		const attempt = epoch;
 		const { item } = detail;
-		const request: WorkItemStartWork = {
-			repoPath,
-			branch: suggestedBranch(item),
-			baseRef: null,
-			prompt: `${item.key}: ${item.title}\n\n${detail.body}`.trimEnd(),
-			agentType: null,
-			delivery: "draft",
-		};
 		setState({ phase: "pending" });
 		try {
+			const prompt = await rpc<string>("build_start_work_prompt", {
+				repoPath,
+				input: { key: item.key, url: item.url, title: item.title, body: detail.body },
+			});
+			const request: WorkItemStartWork = {
+				repoPath,
+				branch: suggestedBranch(item),
+				baseRef: null,
+				prompt,
+				agentType: null,
+				delivery: "draft",
+			};
 			const result = await provider.act(item.reference, { kind: "start_work", value: request });
 			if (result.kind !== "start_work") throw new Error("The provider did not return a start-work request.");
 			const started = await startWork({

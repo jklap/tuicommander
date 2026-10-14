@@ -954,3 +954,9 @@ an explicit create action. These actions match across HTTP, IPC, MCP and CLI.
 ### History-anchored viewport scrolling
 
 `terminal_scroll_to_anchor` accepts `{ sessionId: string, anchor: number | null }` and returns `()`. The all-time row includes evicted rows, matching `historyBase + historySize - displayOffset`. Null follows output; a trimmed anchor clamps to the oldest retained row. HTTP uses `POST /sessions/:id/terminal/scroll-to-anchor` with the same anchor value.
+
+### Tasks start-work brief
+
+| Command | Arguments | Returns | Description |
+|---------|-----------|---------|-------------|
+| `build_start_work_prompt` | `repoPath, input: {key, url: string or null, title, body}` | `String` | Read `.tuic-start-work.md`, substitute sanitized fields once, or preserve the default brief when absent. HTTP: `POST /tasks/start-work-prompt`. Delivery applies the existing untrusted wrapper and 12,000-character cap. |

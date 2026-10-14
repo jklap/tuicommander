@@ -1890,6 +1890,7 @@ Transitions use provider action IDs, not state display names. Board columns may 
 carry the actual legal action to dispatch on drop (workflow IDs can vary by item). Start-work carries repoPath,
 branch, optional baseRef, prompt, agentType and explicit draft/submit delivery;
 core executes the existing worktree/agent workflow and owns errors/rollback.
+Core `CardMoveMenu` provides a portalled, keyboard-accessible menu of other columns and enables only destinations allowed by the card's moves.
 
 `work_items::demo::demo_provider()` supplies deterministic local-only data with
 list, detail, comments, schemas, saved filters, board columns and mutations.

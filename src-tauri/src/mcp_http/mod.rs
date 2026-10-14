@@ -880,6 +880,7 @@ const API_PREFIXES: &[&str] = &[
     "stats",
     "stories",
     "system",
+    "tasks",
     "terminal",
     "tunnels",
     "watchers",
@@ -1332,6 +1333,10 @@ fn shared_routes() -> Router<Arc<AppState>> {
             get(fs_routes::search_content_all_http),
         )
         .route("/fs/read", get(fs_routes::fs_read_file_http))
+        .route(
+            "/tasks/start-work-prompt",
+            post(fs_routes::start_work_prompt_http),
+        )
         .route("/fs/markdown-image", get(fs_routes::markdown_image_http))
         .route("/fs/read-external", get(fs_routes::read_external_file_http))
         .route("/fs/write", post(fs_routes::write_file_http))

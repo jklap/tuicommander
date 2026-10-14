@@ -2442,6 +2442,7 @@ pub fn run() {
             fs::search_content,
             fs::search_content_all,
             fs::fs_read_file,
+            work_items::start_work_prompt::build_start_work_prompt,
             fs::write_file,
             fs::write_file_if_unchanged,
             fs::create_directory,

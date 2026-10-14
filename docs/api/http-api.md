@@ -236,7 +236,7 @@ falls through to a catch-all. That catch-all splits on the first path segment:
   `attachments`, `audio`, `claude`, `codex`, `config`, `debug`, `diagnostics`, `dictation`,
   `events`, `exec`, `fs`, `generators`, `github`, `health`, `logs`, `mcp`,
   `metrics`, `plugins`, `process`, `prompt`, `registry`, `repo`, `sessions`,
-  `stats`, `system`, `terminal`, `tunnels`, `watchers`, `worktrees`. The
+  `stats`, `system`, `tasks`, `terminal`, `tunnels`, `watchers`, `worktrees`. The
   response is `404` with `{ "error": "no such endpoint: /<path>" }`.
 - **Anything else** — a deep link such as `/settings` or `/mobile/session/<id>`.
   The response is `200` with the SPA shell (`index.html`, or `mobile.html` under
@@ -3109,3 +3109,13 @@ hook evidence passes live PID, rollout id and cwd validation. Omission retracts
 exactness; clients must not substitute a heuristic discovery ID. The existing
 `GET /sessions/:id/chat-view` route repeats validation on every Codex read and
 returns `not_bound` when evidence is missing or stale.
+
+### Tasks start-work brief
+
+`POST /tasks/start-work-prompt` accepts `{ "repoPath": "/repo", "input": {
+"key": "TASK-1", "url": null, "title": "Title", "body": "Description" } }`
+and returns a JSON string. It reads `.tuic-start-work.md` with repository
+containment and UTF-8/size guards, substitutes sanitized item fields once, or
+uses key/title/body when absent. Template read failures return an error. Its IPC
+twin is `build_start_work_prompt`; the host wraps and caps the returned brief
+at delivery.

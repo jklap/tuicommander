@@ -615,3 +615,21 @@ mod tests {
         );
     }
 }
+
+/// HTTP twin of the Tasks brief builder, using the same input object as IPC.
+pub(super) async fn start_work_prompt_http(Json(body): Json<StartWorkPromptRequest>) -> Response {
+    if let Err(e) = validate_repo_path(&body.repo_path) {
+        return e.into_response();
+    }
+    json_result(
+        crate::work_items::start_work_prompt::build_start_work_prompt(body.repo_path, body.input)
+            .await,
+    )
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct StartWorkPromptRequest {
+    repo_path: String,
+    input: crate::work_items::start_work_prompt::PromptInput,
+}

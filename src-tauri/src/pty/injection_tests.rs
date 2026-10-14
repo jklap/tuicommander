@@ -954,13 +954,112 @@ fn background_work_defers_declared_completion_without_generic_idle() {
         .silence_states
         .insert(child_id.to_string(), silence.clone());
 
+    let mut events = state.event_bus.subscribe();
     assert!(!emit_pending_suggest_if_idle(&state, &silence, child_id));
+    let choices = events
+        .try_recv()
+        .expect("background work must not suppress choices");
+    assert!(
+        matches!(choices, crate::state::AppEvent::PtyParsed { parsed, .. }
+        if parsed["type"] == "suggest" && parsed["items"] == serde_json::json!(["Review result"]))
+    );
+    assert!(
+        state.agent_inbox.get(parent_id).unwrap().is_empty(),
+        "choices must not announce completion while background work runs"
+    );
+    assert!(!emit_pending_suggest_if_idle(&state, &silence, child_id));
+    assert!(
+        events.try_recv().is_err(),
+        "choices must emit once per turn"
+    );
     assert!(set_background_work_for_epoch(&state, child_id, 0, 1, false));
     let inbox = state.agent_inbox.get(parent_id).unwrap();
     assert_eq!(inbox.len(), 1);
     let content: serde_json::Value = serde_json::from_str(&inbox.front().unwrap().content).unwrap();
     assert_eq!(content["state"], "completed");
     assert!(!emit_pending_suggest_if_idle(&state, &silence, child_id));
+    while let Ok(event) = events.try_recv() {
+        assert!(
+            !matches!(event, crate::state::AppEvent::PtyParsed { parsed, .. }
+            if parsed["type"] == "suggest"),
+            "background settlement must not emit choices again"
+        );
+    }
+}
+
+// Catches: a ready agent's choices wait for unrelated descendants, or fire
+// during working output; recorded Claude/Codex turns exercise the parser too.
+#[test]
+fn recorded_agent_choices_publish_once_while_background_shell_is_busy() {
+    for capture in [
+        include_str!(
+            "../../../src/components/Terminal/__tests__/fixtures/claude-markers-1873.json"
+        ),
+        include_str!("../../../src/components/Terminal/__tests__/fixtures/codex-markers-1873.json"),
+    ] {
+        let capture: serde_json::Value = serde_json::from_str(capture).unwrap();
+        let rows: Vec<_> = capture["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .enumerate()
+            .map(|(row_index, text)| ChangedRow {
+                row_index,
+                text: text.as_str().unwrap().into(),
+            })
+            .collect();
+        let mut parser = OutputParser::new();
+        let items = parser
+            .parse_clean_lines(&rows, true)
+            .into_iter()
+            .find_map(|event| match event {
+                ParsedEvent::Suggest { items } => Some(items),
+                _ => None,
+            })
+            .expect("recorded agent turn must parse choices");
+        assert_eq!(
+            items,
+            [
+                "Inspect terminal coordinate mapping",
+                "Verify suggestion chips",
+                "Finish capture"
+            ]
+        );
+        let state = crate::state::tests_support::make_test_app_state();
+        let child_id = "recorded-choices-busy";
+        agent_session(&state, child_id, SHELL_BUSY);
+        state
+            .session_maps
+            .session_states
+            .get_mut(child_id)
+            .unwrap()
+            .background_work = true;
+        let silence = state
+            .session_maps
+            .silence_states
+            .get(child_id)
+            .unwrap()
+            .clone();
+        silence.lock().mark_suggest_candidate(items, 0);
+        let mut events = state.event_bus.subscribe();
+        assert!(!emit_pending_suggest_if_idle(&state, &silence, child_id));
+        assert!(
+            events.try_recv().is_err(),
+            "a busy agent must not publish mid-turn"
+        );
+        {
+            let mut silence = silence.lock();
+            silence.cached_screen_activity = AgentScreenActivity::Ready;
+            silence.last_output_at = std::time::Instant::now() - AGENT_READY_CONFIRM;
+        }
+        assert!(!emit_pending_suggest_if_idle(&state, &silence, child_id));
+        assert!(
+            matches!(events.try_recv().unwrap(), crate::state::AppEvent::PtyParsed { parsed, .. }
+            if parsed["type"] == "suggest")
+        );
+        assert!(!emit_pending_suggest_if_idle(&state, &silence, child_id));
+        assert!(events.try_recv().is_err());
+    }
 }
 
 #[cfg(unix)]
@@ -3695,4 +3794,71 @@ mod injection_fairness {
             started.elapsed()
         );
     }
+}
+
+// Catches: the live Claude redraw contains choices but the chunk pipeline loses them.
+#[test]
+fn recorded_claude_turn_publishes_retained_choices_once() {
+    let capture = crate::pty_capture::decode_capture(include_bytes!(
+        "../../../src/components/Terminal/__tests__/fixtures/claude-choices-1873.tcap"
+    ))
+    .unwrap();
+    let sid = "claude-choices-1873";
+    let (state, silence) = chunk_trace_state(sid);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("claude".into());
+    state
+        .grid
+        .vt_log_buffers
+        .get(sid)
+        .unwrap()
+        .lock()
+        .resize(29, 73);
+    silence.lock().startup_settled = true;
+    let mut events = state.event_bus.subscribe();
+    let mut choices = Vec::new();
+    let mut processor = ChunkProcessor::new(None, None);
+    let mut utf8 = Utf8ReadBuffer::new();
+    let mut escape = EscapeAwareBuffer::new();
+    for record in capture.records {
+        if record.direction != crate::pty_capture::CaptureDirection::Output {
+            continue;
+        }
+        let data = utf8.push(&record.data);
+        let data = escape.push(&data);
+        let (clean, _) = crate::state::strip_kitty_sequences(&data);
+        processor.process_chunk(&clean, &silence, sid, &state);
+        while let Ok(event) = events.try_recv() {
+            if let crate::state::AppEvent::PtyParsed { parsed, .. } = event
+                && parsed["type"] == "suggest"
+            {
+                choices.push(parsed["items"].clone());
+            }
+        }
+    }
+    assert!(try_shell_transition(
+        &state, sid, SHELL_BUSY, SHELL_IDLE, true
+    ));
+    emit_pending_suggest_if_idle(&state, &silence, sid);
+    emit_pending_suggest_if_idle(&state, &silence, sid);
+    while let Ok(event) = events.try_recv() {
+        if let crate::state::AppEvent::PtyParsed { parsed, .. } = event
+            && parsed["type"] == "suggest"
+        {
+            choices.push(parsed["items"].clone());
+        }
+    }
+    assert_eq!(
+        choices,
+        vec![serde_json::json!([
+            "Inspect mapping",
+            "Verify chips",
+            "Finish capture"
+        ])],
+        "recorded Claude choices must publish once after settlement"
+    );
 }

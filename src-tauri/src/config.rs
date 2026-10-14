@@ -1027,6 +1027,10 @@ pub(crate) struct AppConfig {
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates update channel for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     #[schemars(extend("enum" = ["stable","beta","nightly"]))]
     pub(crate) update_channel: String,
+    /// Internal one-shot beta-channel migration state; never a user setting.
+    #[serde(default)]
+    #[schemars(extend("x-not-setting" = "Internal one-time beta update-channel migration marker"))]
+    pub(crate) beta_channel_migrated: bool,
     /// Agent types disabled by the user (won't appear in sidebar "Add Agent" menu)
     #[serde(default)]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates disabled agents for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
@@ -1323,6 +1327,7 @@ impl Default for AppConfig {
             language: default_language(),
             disabled_plugin_ids: Vec::new(),
             update_channel: default_update_channel(),
+            beta_channel_migrated: true,
             disabled_agents: Vec::new(),
             disabled_mcp_agents: Vec::new(),
             disabled_native_tools: default_disabled_native_tools(),
@@ -3061,10 +3066,17 @@ pub(crate) fn persist_session_token(token: &str) -> Result<(), String> {
 /// The caller decides the locking span because both `load_app_config` and the
 /// delta commit path must keep the cross-process lock from this read through a
 /// possible rewrite. The boolean reports that plaintext credentials were moved
-/// to the vault, or the legacy session duration was migrated, and the document
+/// to the vault, or a legacy default was migrated, and the document
 /// must be persisted before releasing that lock.
 fn read_app_config_unlocked(
     path: &std::path::Path,
+) -> Result<(AppConfig, bool), AppConfigReadError> {
+    read_app_config_unlocked_for_version(path, env!("CARGO_PKG_VERSION"))
+}
+
+fn read_app_config_unlocked_for_version(
+    path: &std::path::Path,
+    version: &str,
 ) -> Result<(AppConfig, bool), AppConfigReadError> {
     if !path.exists() {
         return Ok((AppConfig::default(), false));
@@ -3096,7 +3108,11 @@ fn read_app_config_unlocked(
         Ok(mut config) => {
             let migrated_secret = hydrate_app_config_secrets(&mut config);
             let migrated_duration = migrate_legacy_session_token_duration(&mut config);
-            Ok((config, migrated_secret || migrated_duration))
+            let migrated_channel = migrate_legacy_beta_channel(&mut config, version);
+            Ok((
+                config,
+                migrated_secret || migrated_duration || migrated_channel,
+            ))
         }
         Err(e) => {
             tracing::error!(path = %path.display(), "Config deserialization failed after migration: {e}");
@@ -3106,6 +3122,18 @@ fn read_app_config_unlocked(
             )))
         }
     }
+}
+
+/// Enroll old beta installs once; later explicit channel choices remain authoritative.
+fn migrate_legacy_beta_channel(config: &mut AppConfig, version: &str) -> bool {
+    if config.beta_channel_migrated || default_update_channel_for_version(version) != "beta" {
+        return false;
+    }
+    if config.update_channel == "stable" {
+        config.update_channel = "beta".to_string();
+    }
+    config.beta_channel_migrated = true;
+    true
 }
 
 /// Migrate legacy files once, persisting completion even for non-legacy durations.
@@ -3145,6 +3173,10 @@ impl From<AppConfigReadError> for String {
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn load_app_config() -> AppConfig {
+    load_app_config_for_version(env!("CARGO_PKG_VERSION"))
+}
+
+fn load_app_config_for_version(version: &str) -> AppConfig {
     // CONFIG_WRITE_LOCK is held across the read AND the conditional migration write
     // below, so a concurrent writer *in this process* can never land between the two.
     // That alone is not enough: a second TUICommander process (e.g. a `make dev` debug
@@ -3170,7 +3202,7 @@ pub(crate) fn load_app_config() -> AppConfig {
     };
 
     let path = config_dir().join(APP_CONFIG_FILE);
-    let (config, migrated_secret) = match read_app_config_unlocked(&path) {
+    let (config, migrated) = match read_app_config_unlocked_for_version(&path, version) {
         Ok(loaded) => loaded,
         Err(error) => {
             // Defaults are the only value that can be returned here, and the very next
@@ -3198,9 +3230,9 @@ pub(crate) fn load_app_config() -> AppConfig {
             (AppConfig::default(), false)
         }
     };
-    if migrated_secret {
-        // A plaintext secret was just moved into the vault, or the legacy session
-        // duration was migrated. Rewrite immediately —
+    if migrated {
+        // A plaintext secret was moved into the vault, or a legacy default
+        // was migrated. Rewrite immediately —
         // config_for_disk strips the cleartext — otherwise it stays readable in
         // config.json until some unrelated setting happens to be saved.
         //
@@ -3213,7 +3245,7 @@ pub(crate) fn load_app_config() -> AppConfig {
         {
             tracing::warn!(
                 source = "config",
-                "Migrated a secret to the vault but could not rewrite config.json: {e}"
+                "Applied a config migration but could not rewrite config.json: {e}"
             );
         }
     }
@@ -5324,6 +5356,7 @@ mod tests {
             language: "it".to_string(),
             disabled_plugin_ids: vec!["test-disabled".to_string()],
             update_channel: "nightly".to_string(),
+            beta_channel_migrated: true,
             disabled_agents: vec!["codex".to_string()],
             disabled_mcp_agents: vec!["windsurf".to_string()],
             disabled_native_tools: vec!["plugin_dev_guide".to_string()],
@@ -5434,6 +5467,89 @@ mod tests {
             default_update_channel_for_version("2.0.0-beta.1-nightly.20261012.t1000"),
             "stable"
         );
+    }
+
+    // Catches: an old saved stable default strands beta users on the stable feed.
+    #[test]
+    #[serial_test::serial]
+    fn beta_channel_migration_persists_once_and_preserves_later_stable() {
+        crate::credentials::reset_test_faults();
+        let dir = TempDir::new().expect("temp dir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let path = write_config_with_duration(dir.path(), None);
+        let mut doc: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        doc["update_channel"] = serde_json::json!("stable");
+        fs::write(&path, doc.to_string()).unwrap();
+
+        let mut migrated = load_app_config_for_version("2.0.0-beta.1");
+        assert_eq!(
+            migrated.update_channel, "beta",
+            "legacy stable must migrate"
+        );
+        let persisted: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(persisted["update_channel"], "beta");
+        assert_eq!(persisted["beta_channel_migrated"], true);
+
+        // Catches: every restart overrides the user's later explicit stable choice.
+        migrated.update_channel = "stable".into();
+        save_app_config(migrated).unwrap();
+        let saved = fs::read(&path).unwrap();
+        for version in ["2.0.0-beta.1", "2.0.0-beta.2"] {
+            assert_eq!(
+                load_app_config_for_version(version).update_channel,
+                "stable"
+            );
+            assert_eq!(fs::read(&path).unwrap(), saved);
+        }
+    }
+
+    // Catches: beta enrollment also changes stable/nightly builds or non-stable choices.
+    #[test]
+    #[serial_test::serial]
+    fn beta_channel_migration_respects_build_and_saved_channel() {
+        crate::credentials::reset_test_faults();
+        for version in [
+            "2.0.0",
+            "2.0.0-beta.1-nightly.20261012.t1000",
+            "2.0.0-beta.1",
+        ] {
+            for channel in ["stable", "beta", "nightly"] {
+                let dir = TempDir::new().expect("temp dir");
+                let _guard = set_config_dir_override(dir.path().to_path_buf());
+                let path = write_config_with_duration(dir.path(), None);
+                let mut doc: serde_json::Value =
+                    serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+                doc["session_duration_migrated"] = serde_json::json!(true);
+                doc["update_channel"] = serde_json::json!(channel);
+                fs::write(&path, doc.to_string()).unwrap();
+                let before = fs::read(&path).unwrap();
+                let loaded = load_app_config_for_version(version);
+                let is_beta = version == "2.0.0-beta.1";
+                let expected = if is_beta && channel == "stable" {
+                    "beta"
+                } else {
+                    channel
+                };
+                assert_eq!(loaded.update_channel, expected, "{version}, {channel}");
+                if is_beta {
+                    let persisted: serde_json::Value =
+                        serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+                    assert_eq!(persisted["beta_channel_migrated"], true);
+                    assert_eq!(persisted["update_channel"], expected);
+                    let after = fs::read(&path).unwrap();
+                    load_app_config_for_version(version);
+                    assert_eq!(fs::read(&path).unwrap(), after);
+                } else {
+                    assert_eq!(
+                        fs::read(&path).unwrap(),
+                        before,
+                        "non-beta load rewrote config"
+                    );
+                }
+            }
+        }
     }
 
     // Catches: loading settings loses a saved beta choice or overwrites stable opt-out.
@@ -9579,6 +9695,8 @@ mod tests {
                 // A missing marker means a legacy file that still needs the
                 // one-shot duration migration; a fresh config has nothing to migrate.
                 "session_duration_migrated",
+                // Old files must enroll once; fresh files already express current intent.
+                "beta_channel_migrated",
             ],
         );
     }

@@ -334,6 +334,8 @@ Canceling a Codex approval with Esc clears its question indicator when Codex ret
 
 ### Queueing Follow-up Commands
 
+In Compose, paste an image, drop PNG, JPEG, WebP or GIF files on the editor, or use **Attach images** beside Send to choose several. Drops insert at the pointer; picked files replace the current selection in their chosen order. Each saved image appears as `[image: <path>]`. Other file types and failed saves show an error without inserting a tag.
+
 The Compose panel can leave work for an agent without steering its current turn:
 
 - **Ctrl+Enter** sends immediately.
