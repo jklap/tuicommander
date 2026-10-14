@@ -29,6 +29,15 @@ describe("closeDialog", () => {
 		expect(hydrate).toHaveBeenCalledOnce();
 	});
 
+	// Catches: a missing native tray still offering an unreachable Background choice.
+	it("omits Background when the backend reports no tray", () => {
+		closeDialogStore.present({ kind: "ask", sessions: 2, background_available: false });
+		render(() => <CloseDialog />);
+		expect(screen.queryByRole("button", { name: "Background" })).toBeNull();
+		expect(screen.getByRole("button", { name: "Quit" })).toBeTruthy();
+		expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy();
+	});
+
 	// Catches: explicit quit offering background and swallowing Cmd+Q.
 	it("offers only quit and cancel for Rust quit confirmation", async () => {
 		closeDialogStore.present({ kind: "confirm_quit", sessions: 2 });

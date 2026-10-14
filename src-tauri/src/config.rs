@@ -2943,6 +2943,10 @@ fn commit_config_change_locked(
     // remember to — and the relay toggle silently needing an app restart is
     // exactly what that costs.
     crate::relay_client::notify_config_changed(state);
+    #[cfg(feature = "desktop")]
+    if let Some(app) = state.app_handle.read().as_ref() {
+        crate::background_mode::tray::desktop::schedule_sync(app);
+    }
     Ok(effects)
 }
 

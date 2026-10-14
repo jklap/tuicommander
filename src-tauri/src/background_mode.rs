@@ -100,6 +100,9 @@ pub(crate) struct BackgroundConfig {
     #[serde(default = "default_hide_dock_icon")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Hides the macOS Dock icon while the desktop runs in background.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub hide_dock_icon: bool,
+    #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Controls tray visibility. Never prevents hiding and uses minimize instead.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    pub tray_icon: TrayPreference,
 }
 fn default_hide_dock_icon() -> bool {
     true
@@ -108,6 +111,20 @@ impl Default for BackgroundConfig {
     fn default() -> Self {
         Self {
             hide_dock_icon: true,
+            tray_icon: TrayPreference::default(),
         }
     }
 }
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum TrayPreference {
+    Always,
+    #[default]
+    BackgroundOnly,
+    Never,
+}
+
+#[cfg(any(feature = "desktop", test))]
+#[path = "background_mode_tray.rs"]
+pub(crate) mod tray;
