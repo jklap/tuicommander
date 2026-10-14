@@ -3217,3 +3217,18 @@ impl std::io::Write for WorkingOnEnterWriter {
         }
     }
 }
+
+// Catches: natural process exit retains attachments until the tombstone sweeper runs.
+#[test]
+fn attachment_natural_exit_cleans_files_before_tombstone_expiry() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let ended =
+        crate::attachments::prepare_session_directory(&state.data_dir, "pty", "exited").unwrap();
+    let live =
+        crate::attachments::prepare_session_directory(&state.data_dir, "pty", "live").unwrap();
+    std::fs::write(ended.join("fresh.txt"), b"ended").unwrap();
+    std::fs::write(live.join("fresh.txt"), b"live").unwrap();
+    tombstone_transient_cleanup("exited", &state);
+    assert!(!ended.exists());
+    assert_eq!(std::fs::read(live.join("fresh.txt")).unwrap(), b"live");
+}

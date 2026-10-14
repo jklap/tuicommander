@@ -896,6 +896,15 @@ alone does not establish identity. Unsupported versions, missing/untrusted hooks
 Windows (the existing tty hook transport is Unix-only), and remote terminals
 keep Codex Chat unavailable. TUIC never bypasses native hook trust.
 
+Session attachments live in the app data directory, keyed by the runtime PTY id.
+`bind_pty_identity` provisions the directory and shell grant environment; structured
+launches pass the same directory through `agent_hook_launch::launch_args`.
+`cleanup_session` and `tombstone_transient_cleanup` remove it at the existing close,
+kill and exit boundaries. `AppState::new` sweeps session directories only when their recorded
+owner PID is provably dead. Live, reused and unknown PIDs are preserved across
+concurrent instances. The owner marker sits outside the granted directory. No cleanup visits a repository directory. Resumed tabs use
+new runtime PTY ids, so their read grants point to fresh storage.
+
 Suggest choices are published once when the agent is ready, including while background descendants keep the shell busy. The completion lifecycle event still waits for an idle shell and settled background work; publishing choices does not release that gate.
 
 Pending follow-up choices survive a working spinner until the turn has settled. While the shell is busy, public Claude session snapshots use that same settled-completion predicate, so a retained final marker does not report completed/idle during active Claude Stop hooks. A final `suggest:` marker may share a Claude redraw with its spinner; this is not a new turn. Working evidence can still reopen an idle or delivered completion (including a blocking Stop hook or a Codex internal continuation).

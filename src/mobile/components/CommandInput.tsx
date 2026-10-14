@@ -245,6 +245,7 @@ export function CommandInput(props: CommandInputProps) {
 		setUploading(file.name);
 		try {
 			const receipt = await uploadAttachment(file, { kind: "pty", id: props.sessionId });
+			if (receipt.notice) toastsStore.add("Attachment access", receipt.notice, "warn", true);
 			const current = textareaEl?.value ?? value();
 			const next = `${current}${current && !/\s$/.test(current) ? " " : ""}@${receipt.path}`;
 			setValue(next);

@@ -4,16 +4,18 @@ import { getRemoteBaseUrl, getSessionConnection, withRemoteToken } from "../tran
 export interface AttachmentReceipt {
 	path: string;
 	size: number;
+	notice?: string;
 }
 
 export async function uploadAttachment(
 	file: File,
-	target: { kind: "pty"; id: string } | { kind: "acp"; id: string },
+	target: { kind: "pty"; id: string } | { kind: "acp"; id: string; session: string },
 ): Promise<AttachmentReceipt> {
 	const connection = target.kind === "pty" ? getSessionConnection(target.id) : undefined;
 	const baseUrl = connection ? getRemoteBaseUrl(connection) : undefined;
 	if (connection && !baseUrl) throw new Error("Remote session is not connected");
 	const query = new URLSearchParams({ kind: target.kind, id: target.id, name: file.name });
+	if (target.kind === "acp") query.set("session", target.session);
 	const url = withRemoteToken(buildHttpUrl(`/attachments/upload?${query}`, baseUrl), connection);
 	const response = await fetch(url, {
 		method: "POST",
@@ -40,5 +42,9 @@ export async function uploadAttachment(
 	) {
 		throw new Error("Attachment server returned an invalid receipt");
 	}
-	return { path: receipt.path, size: receipt.size };
+	return {
+		path: receipt.path,
+		size: receipt.size,
+		notice: "notice" in receipt && typeof receipt.notice === "string" ? receipt.notice : undefined,
+	};
 }
