@@ -14719,3 +14719,54 @@ fn coalesced_scroll_anchor_applies_after_output_and_latest_request_wins() {
     apply_scroll_target(&mut vt, take_pending_scroll(&state, sid).unwrap());
     assert_eq!(vt.grid_display_offset(), 0);
 }
+
+// Catches: retaining final choices reports completion while Claude's Stop hooks still run.
+#[test]
+fn recorded_claude_stop_hooks_keep_public_session_working_with_pending_choices() {
+    let capture = crate::pty_capture::decode_capture(include_bytes!(
+        "../fixtures/agent_prompts/claude-ready-idle-notify.tcap"
+    ))
+    .unwrap();
+    let sid = "claude-stop-hooks-pending-choices";
+    let (state, silence) = chunk_trace_state(sid);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("claude".into());
+    let mut events = state.event_bus.subscribe();
+    let mut processor = ChunkProcessor::new(None, None);
+    let mut utf8 = Utf8ReadBuffer::new();
+    let mut escapes = EscapeAwareBuffer::new();
+    let mut saw_running_stop_hooks = false;
+    for record in capture.records.iter().take(4) {
+        if record.direction != crate::pty_capture::CaptureDirection::Output {
+            continue;
+        }
+        let text = utf8.push(&record.data);
+        let escaped = escapes.push(&text);
+        let (clean, _) = crate::state::strip_kitty_sequences(&escaped);
+        processor.process_chunk(&clean, &silence, sid, &state);
+        while let Ok(event) = events.try_recv() {
+            crate::state::tests_support::apply_replay_event(&state, &event);
+            if let crate::state::AppEvent::PtyParsed { parsed, .. } = event {
+                saw_running_stop_hooks |= parsed["type"] == "status-line"
+                    && parsed["full_line"]
+                        .as_str()
+                        .is_some_and(|line| line.contains("running stop hooks"));
+            }
+        }
+    }
+    assert!(
+        saw_running_stop_hooks,
+        "recorded active Stop-hook phase must be replayed"
+    );
+    let snapshot = state.session_state_with_shell(sid).unwrap();
+    assert_eq!(
+        snapshot.agent_state.as_deref(),
+        Some("working"),
+        "a retained suggest candidate must not mark running Stop hooks completed"
+    );
+    assert_eq!(snapshot.shell_state.as_deref(), Some("busy"));
+}
