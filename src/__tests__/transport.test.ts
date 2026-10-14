@@ -2,6 +2,17 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import * as ts from "@typescript/typescript6";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// Catches: browser clients losing the provider bridge while desktop IPC works.
+it("maps the work-item provider bridge to its HTTP twin", () => {
+	const input = { action: "claim", requestId: "request-1" };
+	expect(mapCommandToHttp("work_item_provider_bridge", { input })).toEqual({
+		method: "POST",
+		path: "/work-items/provider-bridge",
+		body: input,
+	});
+});
+
 import {
 	buildHttpUrl,
 	DEDICATED_WS_COMMANDS,

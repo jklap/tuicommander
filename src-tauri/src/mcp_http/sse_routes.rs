@@ -278,6 +278,7 @@ pub(crate) fn event_type_name_for_test(event: &AppEvent) -> &str {
 
 fn event_type_name(event: &AppEvent) -> &str {
     match event {
+        AppEvent::WorkItemProviderRequest { .. } => "work-item-provider-request",
         AppEvent::HeadChanged { .. } => "head-changed",
         AppEvent::RepoChanged { .. } => "repo-changed",
         AppEvent::SessionCreated { .. } => "session-created",
@@ -348,6 +349,10 @@ pub(crate) fn event_payload_for_test(event: &AppEvent) -> serde_json::Value {
 
 fn event_payload(event: &AppEvent) -> serde_json::Value {
     match event {
+        AppEvent::WorkItemProviderRequest {
+            request_id,
+            request,
+        } => serde_json::json!({"request_id":request_id,"request":request}),
         AppEvent::HeadChanged { repo_path, branch } => {
             serde_json::json!({ "repo_path": repo_path, "branch": branch })
         }

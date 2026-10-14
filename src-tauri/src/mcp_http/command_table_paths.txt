@@ -368,6 +368,7 @@
 /watchers/dir
 /watchers/hot-repos
 /watchers/repo
+/work-items/provider-bridge
 /workflows/definition/action
 /workflows/run/action
 /workitem-links

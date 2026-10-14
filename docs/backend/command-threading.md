@@ -292,3 +292,5 @@ matching its HTTP twin and `finalize_merged_worktree`.
 the platform launcher, and hands spawn/wait ownership to the shared
 `tuic_core::child_reaping::spawn_reaped` thread. It never waits for application
 exit on the command caller.
+
+`work_item_provider_bridge` is synchronous: it atomically claims/completes an in-memory request and checks the cached write opt-in. Provider/network work is asynchronous in the frontend adapter; no filesystem or network work runs in this IPC handler.

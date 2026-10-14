@@ -2081,6 +2081,7 @@ pub fn run() {
             worktree::get_worktrees_dir,
             git::get_repo_info,
             git::get_remote_url,
+            work_items::provider_bridge::work_item_provider_bridge,
             workitem_links::get_git_remotes,
             workitem_links::list_workitem_links,
             workitem_links::link_workitem,
