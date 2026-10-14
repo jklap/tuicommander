@@ -19,6 +19,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Hide Markdown review Agent and Send controls after a successful send until a new change (#1881-f84a).
+
 - Preserve independent settings windows' edits when one changes agent visibility and another changes the IDE or other preferences (#1876-ceee).
 - Show cancelled story status and dependency removal actions from the API response; keep plan state visible beside cancellation counts (#1875-c3d9).
 
