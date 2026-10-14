@@ -460,10 +460,10 @@ fn begin_session_submit(
             },
         );
     }
-    if state.session_maps.sessions.contains_key(&session_id) {
-        if let Err(error) = crate::session_wake::ensure_live(state, &session_id) {
-            return BeginSubmission::Response(serde_json::json!({"error": error}));
-        }
+    if state.session_maps.sessions.contains_key(&session_id)
+        && let Err(error) = crate::session_wake::ensure_live(state, &session_id)
+    {
+        return BeginSubmission::Response(serde_json::json!({"error": error}));
     }
     let submission_id = Uuid::new_v4().to_string();
     let turn_epoch = submission_turn_epoch(state, &session_id);

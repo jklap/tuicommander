@@ -84,11 +84,11 @@ describe("initApp", () => {
 		await initApp(createMockDeps());
 		const id = terminalsStore.add(makeTerminal({ sessionId: null, tuicSession: "retained-identity", cwd: "/repo" }));
 		terminalsStore.update(id, { suspended: true });
-		// register_pty_session / spawn_pty_session publish this shape: a fresh PTY key,
-		// cwd and null spawn metadata, with no durable identity in the event.
+		// The wake producer includes the retained stable identity with the new PTY key.
 		created!({
 			payload: {
 				session_id: "replacement-pty",
+				tuic_session: "retained-identity",
 				cwd: "/repo",
 				agent_type: null,
 				display_name: null,
@@ -102,6 +102,7 @@ describe("initApp", () => {
 			tuicSession: "retained-identity",
 		});
 	});
+
 	it("explains the browser fallback when desktop navigation blocks an external iframe link", async () => {
 		let onBlocked: ((event: { payload: string }) => void) | undefined;
 		vi.mocked(listen).mockImplementation(((event: string, handler: (event: { payload: string }) => void) => {
