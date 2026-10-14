@@ -33,7 +33,13 @@ it("submits a root coordinator's answer atomically from the deep-linked session"
 		},
 	};
 	const { container } = render(() => (
-		<SessionDetailScreen session={session} sessionExists={true} onBack={() => {}} onOpenFiles={() => {}} />
+		<SessionDetailScreen
+			subscribeChatWake={() => () => {}}
+			session={session}
+			sessionExists={true}
+			onBack={() => {}}
+			onOpenFiles={() => {}}
+		/>
 	));
 	await fireEvent.input(container.querySelector("textarea")!, { target: { value: "Approve the change" } });
 	expect(rpc).not.toHaveBeenCalledWith("submit_agent_reply", expect.anything());
@@ -61,7 +67,13 @@ it("opens a waiting Codex question through the session's PTY", async () => {
 		},
 	};
 	const { getByRole } = render(() => (
-		<SessionDetailScreen session={session} sessionExists={true} onBack={() => {}} onOpenFiles={() => {}} />
+		<SessionDetailScreen
+			subscribeChatWake={() => () => {}}
+			session={session}
+			sessionExists={true}
+			onBack={() => {}}
+			onOpenFiles={() => {}}
+		/>
 	));
 	await fireEvent.click(getByRole("button", { name: "Open Codex question" }));
 	await waitFor(() =>
@@ -87,7 +99,13 @@ it("types into an opened Codex free-form question through the PTY", async () => 
 		},
 	};
 	const { getByRole, container } = render(() => (
-		<SessionDetailScreen session={session} sessionExists={true} onBack={() => {}} onOpenFiles={() => {}} />
+		<SessionDetailScreen
+			subscribeChatWake={() => () => {}}
+			session={session}
+			sessionExists={true}
+			onBack={() => {}}
+			onOpenFiles={() => {}}
+		/>
 	));
 	await fireEvent.click(getByRole("button", { name: "Open Codex question" }));
 	await fireEvent.input(container.querySelector("textarea")!, { target: { value: "Custom answer" } });
@@ -126,7 +144,13 @@ it.each([
 		},
 	};
 	const view = render(() => (
-		<SessionDetailScreen session={session} sessionExists={sessionExists} onBack={() => {}} onOpenFiles={() => {}} />
+		<SessionDetailScreen
+			subscribeChatWake={() => () => {}}
+			session={session}
+			sessionExists={sessionExists}
+			onBack={() => {}}
+			onOpenFiles={() => {}}
+		/>
 	));
 	expect(view.container.querySelector("header")).not.toBeNull();
 	await fireEvent.click(view.getByRole("button", { name: "claude" }));
@@ -148,7 +172,13 @@ it.each(["Reading files", "Waiting for background terminal"])("shows a real task
 		},
 	};
 	const view = render(() => (
-		<SessionDetailScreen session={session} sessionExists={true} onBack={() => {}} onOpenFiles={() => {}} />
+		<SessionDetailScreen
+			subscribeChatWake={() => () => {}}
+			session={session}
+			sessionExists={true}
+			onBack={() => {}}
+			onOpenFiles={() => {}}
+		/>
 	));
 	await fireEvent.click(view.getByRole("button", { name: "codex" }));
 	expect(view.getByText(task)).not.toBeNull();
