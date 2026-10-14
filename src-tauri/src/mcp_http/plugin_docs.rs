@@ -40,6 +40,42 @@ Constraints:
 - `providers`: optional account providers this plugin may use with `httpFetch({account})`; requires `net:http`. An entry is either a core provider id (only `"github"`) or a token-only descriptor that core registers when the plugin loads and removes when it unloads (accounts and credentials stay): `{ "id": "jira", "label": "Jira", "kinds": ["basic", "bearer"], "verify": { "path": "/rest/api/3/myself", "loginPointer": "/displayName" } }`. `kinds` accepts `bearer` and `basic`; `verify.path` is a path under the site URL that the account Test calls, and `loginPointer` is the JSON Pointer of the viewer name in its response. An id may appear once; a declared descriptor must not use a core id.
 - Module default export must have `id`, `onload(host)`, `onunload()`
 
+## Scoped plugin settings (#1785-c7a1)
+
+Loaded plugins expose `plugins.<id>` descriptors through the Rust settings owner.
+`plugin_settings_action(pluginId, action)` and `POST /api/plugins/{id}/settings`
+share describe/get/set/reset/patch semantics. The backend fixes both the owner and
+`plugins/<id>/data/config.json`; requests cannot choose a store, target or file.
+Get requires explicit paths; writes require the last `expectedRevision`.
+
+A configurable manifest declares `settings: { schema, defaults }`. The schema is
+closed (`additionalProperties: false`), bounded to 128 annotated leaves, and uses
+only the supported object, scalar and scalar-array constraints. Every leaf needs
+`x-setting` sensitivity, apply mode, effect, operations and `confirmationClass`.
+Opaque objects, unsupported constraints, missing metadata and secret defaults are
+rejected. A plugin with an existing config file and no schema cannot load or write
+that config. Other plugin data, including statistics, remains separate.
+
+Core supplies typed migrations for build-cleaner, at-capacity-retry,
+cache-keepalive, claude-wakeup and the Telegram notifier example. Registration
+fills missing defaults without discarding saved values, validates the result and
+atomically writes an owner-only config file (0600 on Unix). Existing bot tokens
+remain available to the notifier's private config reader; the settings service
+returns only set/unset. Catalogue definitions, errors and reload events contain no
+stored credentials. Plugin enablement stays in `app.disabled_plugin_ids`; native
+agent usage has no private plugin store.
+
+Patches validate the entire batch against current state under the shared config
+and cross-process file locks. Stale revisions conflict, failed writes emit no
+reload event, and unload removes descriptors and revokes retained owner handles.
+After persistence, `plugin-changed` is dual-emitted to desktop and SSE so existing
+unload/load callbacks reread config. `applied: false` reports scheduled reload,
+not completed callback acknowledgement. Backend unregistration is awaited before
+reload registration. General MCP settings publication remains a separate cutover.
+
+Plugins can call `host.settings({ action: "get", paths: ["/enabled"] })` and pass
+the resulting revision to set/reset/patch. The host supplies its plugin ID.
+
 ## Complete main.js Template
 
 ```javascript
@@ -160,7 +196,7 @@ These inventories are checked against the capability validator, the host object 
 `credentials:read`, `exec:cli`, `fs:delete`, `fs:list`, `fs:read`, `fs:rename`, `fs:scan`, `fs:watch`, `fs:write`, `git:read`, `invoke:list_markdown_files`, `invoke:read_file`, `net:http`, `pty:read`, `pty:write`, `ui:context-menu`, `ui:file-icons`, `ui:file-preview`, `ui:markdown`, `ui:panel`, `ui:sidebar`, `ui:sound`, `ui:ticker`.
 
 ### Host method inventory
-`addItem`, `clearTicker`, `deleteBuildArtifact`, `execCli`, `getActiveRepo`, `getActiveRepoPath`, `getActiveTerminalSessionId`, `getClaudeProjectDir`, `getGitBranches`, `getGitDiff`, `getPrNotifications`, `getRecentCommits`, `getRemotes`, `getRepoPathForSession`, `getRepos`, `getSessionCwd`, `getSettings`, `getTerminalState`, `httpFetch`, `invoke`, `linkItem`, `listDirectory`, `log`, `onStateChange`, `openEditorTab`, `openMarkdownFile`, `openMarkdownFileBackground`, `openMarkdownPanel`, `openPanel`, `playNotificationSound`, `readCredential`, `readFile`, `readFileBase64`, `readFileTail`, `readFiles`, `readSessionOutput`, `registerCommand`, `registerContextMenuAction`, `registerDashboard`, `registerFileIconProvider`, `registerFilePreview`, `registerMarkdownProvider`, `registerOutputWatcher`, `registerSection`, `registerSidebarPanel`, `registerStructuredEventHandler`, `registerTerminalAction`, `registerUrlResolver`, `registerWorkItemProvider`, `removeItem`, `renamePath`, `scanBuildArtifacts`, `sendAgentInput`, `setTicker`, `startWork`, `trimBuildArtifact`, `unlinkItem`, `updateItem`, `watchPath`, `writeFile`, `writeFileBase64`, `writePty`.
+`addItem`, `clearTicker`, `deleteBuildArtifact`, `execCli`, `getActiveRepo`, `getActiveRepoPath`, `getActiveTerminalSessionId`, `getClaudeProjectDir`, `getGitBranches`, `getGitDiff`, `getPrNotifications`, `getRecentCommits`, `getRemotes`, `getRepoPathForSession`, `getRepos`, `getSessionCwd`, `getSettings`, `getTerminalState`, `httpFetch`, `invoke`, `linkItem`, `listDirectory`, `log`, `onStateChange`, `openEditorTab`, `openMarkdownFile`, `openMarkdownFileBackground`, `openMarkdownPanel`, `openPanel`, `playNotificationSound`, `readCredential`, `readFile`, `readFileBase64`, `readFileTail`, `readFiles`, `readSessionOutput`, `registerCommand`, `registerContextMenuAction`, `registerDashboard`, `registerFileIconProvider`, `registerFilePreview`, `registerMarkdownProvider`, `registerOutputWatcher`, `registerSection`, `registerSidebarPanel`, `registerStructuredEventHandler`, `registerTerminalAction`, `registerUrlResolver`, `registerWorkItemProvider`, `removeItem`, `renamePath`, `scanBuildArtifacts`, `sendAgentInput`, `setTicker`, `settings`, `startWork`, `trimBuildArtifact`, `unlinkItem`, `updateItem`, `watchPath`, `writeFile`, `writeFileBase64`, `writePty`.
 
 ### Base CSS class inventory
 `badge`, `badge-accent`, `badge-error`, `badge-muted`, `badge-p1`, `badge-p2`, `badge-p3`, `badge-success`, `badge-warning`, `btn`, `btn-danger`, `btn-primary`, `card`, `critical`, `danger`, `dash-header`, `dash-meter`, `dash-meter-fill`, `dash-section`, `dash-section-hint`, `dash-section-title`, `dash-stat`, `dash-stat-grid`, `dash-stat-label`, `dash-stat-sub`, `dash-stat-value`, `dash-subtitle`, `dash-title`, `dashboard`, `empty-state`, `error`, `filter-bar`, `hint`, `num`, `ok`, `primary`, `show`, `success`, `toast`, `warn`.
@@ -397,7 +433,7 @@ await host.invoke("delete_plugin_data", {
 Core renders the following Solid components. Plugins supply manifest metadata and host registrations; they do not import or mount these components.
 
 ### Manifest UX field inventory
-`agentTypes`, `allowedUrls`, `author`, `binaries`, `capabilities`, `description`, `id`, `main`, `minAppVersion`, `name`, `providers`, `version`.
+`agentTypes`, `allowedUrls`, `author`, `binaries`, `capabilities`, `description`, `id`, `main`, `minAppVersion`, `name`, `providers`, `settings`, `version`.
 
 ### Core UX component inventory
 `BrowseRow`, `PluginLogViewer`, `PluginRow`, `PluginsTab`.

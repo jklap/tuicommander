@@ -37,6 +37,8 @@ A plugin directory contains at minimum `manifest.json` and `main.js`.
 
 ## Managing Plugins
 
+Loaded configurable plugins publish individual settings through a scoped settings service. Saved legacy configuration is retained and validated on load. Changes schedule a plugin reload; a stale revision or invalid batch writes nothing. Secret settings show only whether a value is set. Disabling/unloading removes the plugin settings from discovery.
+
 ### Settings → Plugins → Installed
 
 The Installed tab lists all installed plugins:

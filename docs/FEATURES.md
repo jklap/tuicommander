@@ -1962,6 +1962,7 @@ shortcuts and the Global Hotkey. Keys macOS itself claims before the process
 ## 17. Plugin System
 
 ### 17.1 Architecture
+- Rust-owned scoped plugin settings: typed schemas, revision-checked atomic patches, write-only secret readback, five legacy migrations, reload callbacks and unload cleanup.
 - Obsidian-style plugin API with 4 capability tiers
 - Built-in plugins (TypeScript, compiled with app) and external plugins (JS, loaded at runtime)
 - Hot-reload: file changes in plugin directories trigger automatic re-import

@@ -55,6 +55,7 @@
 /api/plugins/x/pty/output
 /api/plugins/x/readme
 /api/plugins/x/register
+/api/plugins/x/settings
 /api/plugins/x/unregister
 /audio/output-devices
 /automations/action

@@ -330,6 +330,27 @@ pub(super) async fn plugin_unregister(
     json_result(Ok::<_, String>(()))
 }
 
+pub(super) async fn plugin_settings(
+    State(state): State<Arc<AppState>>,
+    AxumPath(plugin_id): AxumPath<String>,
+    Json(action): Json<crate::settings::plugins::PluginAction>,
+) -> Response {
+    use axum::{http::StatusCode, response::IntoResponse};
+    match crate::plugin_settings::plugin_settings_action_impl(&state, plugin_id, action).await {
+        Ok(reply) => Json(reply).into_response(),
+        Err(error) => {
+            let status = if error.code == "not_found" {
+                StatusCode::NOT_FOUND
+            } else if error.code == "conflict" {
+                StatusCode::CONFLICT
+            } else {
+                StatusCode::BAD_REQUEST
+            };
+            (status, Json(error)).into_response()
+        }
+    }
+}
+
 #[derive(Deserialize)]
 pub(super) struct OutputWatchersBody {
     /// Identifies the frontend that owns this set — a desktop window and a
