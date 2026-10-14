@@ -36,6 +36,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 - Preserve GitLab endpoint and username-filter scope in small Tasks lists; align Jira and GitHub local field values, and keep Roadmap provider paging (#1851-7ade).
+- Run desktop orphan-worktree safety checks and removal on the blocking pool instead of the IPC main thread. Live heartbeat confirmation remains pending (#1638-c94c).
 - Include CSS tokens referenced by shorthand declarations in Design Mode grabs, including inline styles and adopted shadow-root sheets (#1888-14a3).
 - Allow workflow agents to launch in registered branch worktrees while preserving detached-orphan removal guards (#1883-eba0).
 
