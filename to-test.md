@@ -1057,12 +1057,6 @@ needs to re-run this: `command -v` still finds none of `amp`, `cursor`,
   enough. Hand the files over — writing the adapter is code work and stays on
   `699-c6e0`, not a check.
 
-- [ ] [HUMAN] Under `make dev`, edit any file in `src/` to force a Vite full reload _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_ _(audit 2026-10-13: HUMAN — Requires hardware, authentication/provider state, or credential mutation; prohibited by audit brief. Source: to-test.md:2317)_ _(triage 2026-10-14: DO — Runnable through scoped source/tests, isolated browser or throwaway API fixtures.)_
-  (story #716-031e). Every terminal pane must come back filling its pane, with no
-  window resize: no small canvas in the top-left corner with black around it, and
-  scrolling must show every row. Split a pane and reload again — both halves. Canvas
-  geometry is not observable over HTTP, which is why this is by eye.
-
 - [ ] [HUMAN] Reinstall the TUIC hooks from Settings → Agents, then confirm _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_ _(audit 2026-10-13: HUMAN — Requires hardware, authentication/provider state, or credential mutation; prohibited by audit brief. Source: to-test.md:2323)_ _(triage 2026-10-14: WAITS — Boss controls reinstalling native hooks in his agent profiles.)_
   `~/.claude/settings.json` gains TUIC references (measured 2026-09-06: 5 hook
   events present, **0** TUIC references). Then trigger a real elicitation — a
