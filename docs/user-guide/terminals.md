@@ -6,6 +6,8 @@ Adjacent `💬` answer paragraphs share one continuous tint and left bar, includ
 
 Turning **Show scrollbar marks** off or on updates history ticks immediately, even when the terminal is idle. Search-match ticks remain visible when history marks are off.
 
+The Context preview truncates before the CLI/Chat switch. Terminals without that switch use the full header width.
+
 ## Tablet Keyboard
 
 Tap the terminal to focus its keyboard input. Touch and mouse input use the same field, including soft-keyboard text entry and repeated deletion. Primary mouse presses keep focus on that input without a temporary canvas focus change.
