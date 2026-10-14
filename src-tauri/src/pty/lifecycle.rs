@@ -3934,10 +3934,16 @@ pub(crate) fn spawn_standby_checker(state: Arc<AppState>) {
 /// Returns Ok(true) if stopped, Ok(false) if already in standby or session gone.
 #[cfg(unix)]
 pub(crate) fn standby_session(state: &AppState, session_id: &str) -> Result<bool, String> {
-    // Serialize SIGSTOP with remote attach: the observer either prevents the
-    // stop or attaches afterwards and immediately SIGCONTs the parked process.
+    // Serialize SIGSTOP with Show and remote attach: current visibility must
+    // invalidate a checker tick selected before the session became visible.
     let visibility = state.background_visibility.lock();
-    if visibility.watched(state, session_id) {
+    if visibility.watched(state, session_id)
+        || state
+            .session_maps
+            .session_visibility
+            .get(session_id)
+            .is_some_and(|visible| *visible)
+    {
         return Ok(false);
     }
     if state.session_maps.standby_sessions.contains_key(session_id) {

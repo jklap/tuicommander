@@ -5323,6 +5323,7 @@ Visual evidence: worktree Vite fixture mounted the real NotificationsTab and Toa
 
 ## Background hidden state (#1803-00d9)
 
+- [ ] After Boss restarts `make dev` or rebuilds release, hide then Show an idle terminal around the standby timeout; confirm the restored active terminal remains responsive. The B1 visibility recheck requires a Rust restart to load.
 - [ ] After Boss restarts `make dev` or rebuilds release, close to Background with a main window, floating window and open panel. Verify all hide and Show restores only those previously open. The Rust change does not hot-reload.
 - [ ] After restart on macOS, verify Dock icon disappears with `background.hide_dock_icon=true`, remains with false, and returns on Show. Verify Dock Reopen (when icon retained), second app launch, a deep link and a native notification click restore the window and active terminal.
 - [ ] On Windows after rebuild, verify close/Show applies Low/Normal WebView memory target without losing terminal output. On Linux verify panel restore. Native tray Show is wired by the following tray story to `background_mode::desktop::leave_background`.

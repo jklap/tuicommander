@@ -916,5 +916,7 @@ hidden. All terminal WebSocket formats hold a session observation guard; SSE
 holds an all-session guard because its event stream is not session-scoped.
 The standby final eligibility check shares the visibility lock with observer
 attach: a client either prevents SIGSTOP or wakes the already parked process.
+The final check also reads current session visibility under that lock, so Show
+invalidates a standby tick selected while the desktop was hidden.
 Disconnect releases only that observer. Showing the desktop restores saved
 visibility and SIGCONTs only terminals that are visible again.
