@@ -36,13 +36,27 @@ describe("chatViewAvailability", () => {
 		expect(chatViewAvailability({ ...bound })).toEqual({ available: true });
 	});
 
+	it("is available for a Grok agent bound to a session", () => {
+		expect(chatViewAvailability({ ...bound, agentType: "grok" })).toEqual({ available: true });
+	});
+
+	// Catches: a restored/newest-file Codex ID enabling the Chat toggle without native hook evidence.
+	it("offers Codex Chat only with live exact binding", () => {
+		const codex = { ...bound, agentType: "codex" } as const;
+		expect(chatViewAvailability(codex).available).toBe(false);
+		expect(
+			chatViewAvailability({ ...codex, exactAgentSessionId: "own-thread", agentSessionId: "heuristic-other-thread" }),
+		).toEqual({ available: true });
+		expect(chatViewAvailability({ ...codex, exactAgentSessionId: null }).available).toBe(false);
+	});
+
 	// Catches: another tab's conversation shown for an agent TUIC has not bound (issue #119 class).
 	it("toggle_disabled_when_agent_unbound_with_reason", () => {
 		const result = chatViewAvailability({ ...bound, agentSessionId: null });
 		expect(result).toEqual({ available: false, reason: expect.stringContaining("not bound") });
 	});
 
-	it("names a reason for a shell tab, a non-Claude agent and a remote terminal", () => {
+	it("names a reason for a shell tab, an agent without an adapter and a remote terminal", () => {
 		for (const term of [
 			undefined,
 			{ ...bound, agentType: null },

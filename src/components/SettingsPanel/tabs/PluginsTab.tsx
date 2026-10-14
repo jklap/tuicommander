@@ -3,6 +3,7 @@ import { useConfirmDialog } from "../../../hooks/useConfirmDialog";
 import { invoke } from "../../../invoke";
 import { dashboardRegistry } from "../../../plugins/dashboardRegistry";
 import type { LogEntry } from "../../../plugins/pluginLogger";
+import { WORK_ITEM_PLUGINS } from "../../../plugins/workItemSetup";
 import { appLogger } from "../../../stores/appLogger";
 import { mdTabsStore } from "../../../stores/mdTabs";
 import type { PluginState } from "../../../stores/pluginStore";
@@ -13,6 +14,7 @@ import { isTauri } from "../../../transport";
 import { openDialog as open } from "../../../utils/nativeDialog";
 import { handleOpenUrl } from "../../../utils/openUrl";
 import { ConfirmDialog } from "../../ConfirmDialog";
+import { InstallWorkItemPlugin } from "../../Tasks/setup/InstallWorkItemPlugin";
 import { SettingToggle } from "../SettingFields";
 import s from "../Settings.module.css";
 import ps from "./PluginsTab.module.css";
@@ -438,6 +440,14 @@ export const PluginsTab: Component<{ onClose?: () => void }> = (props) => {
 						</For>
 					</div>
 				</Show>
+
+				<For each={WORK_ITEM_PLUGINS.filter((setup) => !pluginStore.getPlugin(setup.pluginId))}>
+					{(setup) => (
+						<div class={s.hint}>
+							<InstallWorkItemPlugin setup={setup} note="Install it to list those items in the Tasks tab." />
+						</div>
+					)}
+				</For>
 
 				<Show when={isTauri()}>
 					<div class={ps.installRow}>

@@ -224,8 +224,6 @@ fn get_mcp_config_spec(agent_type: &str) -> Option<McpConfigSpec> {
             requires_existing_config: true,
             ..json(pi_config_path(), vec!["mcpServers"], &["pi"])
         }),
-        // aider has no MCP client at all — the feature PRs were never merged.
-        "aider" => None,
         _ => None,
     }
 }
@@ -313,7 +311,6 @@ fn get_agent_settings_path(agent_type: &str) -> Option<PathBuf> {
     match agent_type {
         "claude" => Some(h.join(".claude/settings.json")),
         "cursor" => Some(h.join(".cursor")),
-        "aider" => Some(h.join(".aider.conf.yml")),
         "gemini" => Some(h.join(".gemini/settings.json")),
         "codex" => Some(codex_config_path()),
         "grok" => Some(h.join(".grok/config.toml")),
@@ -2331,7 +2328,7 @@ mod tests {
 
     #[test]
     fn unsupported_agent_returns_not_supported() {
-        let status = get_agent_mcp_status("aider".to_string());
+        let status = get_agent_mcp_status("unknown-agent".to_string());
         assert!(!status.supported);
         assert!(!status.installed);
         assert!(status.config_path.is_none());
@@ -2485,8 +2482,7 @@ mod tests {
             let spec = get_mcp_config_spec(agent).expect("{agent} should be supported");
             assert!(spec.format == *format, "{agent} uses the wrong format");
         }
-        // aider has no MCP client, so there is nothing to configure.
-        assert!(get_mcp_config_spec("aider").is_none());
+        // An unknown agent has no config spec.
         assert!(get_mcp_config_spec("unknown-agent").is_none());
     }
 

@@ -3,7 +3,7 @@ import type { WorkItemFieldSchema, WorkItemFieldValue } from "../../../types/wor
 /** Untyped `createFields()` declares the creatable item types as an enum field with this ID. */
 export const ITEM_TYPE_FIELD = "itemType";
 
-/** Raw control state: option IDs for user/labels, text for every other kind. */
+/** Raw control state: option IDs for users/static labels; free labels and other controls keep raw text. */
 export type DraftValue = string | string[];
 export type Draft = Record<string, DraftValue>;
 
@@ -27,8 +27,15 @@ export function carryOver(
 		const value = draft[field.id];
 		if (kinds.get(field.id) !== field.kind || value === undefined) return emptyValue(field);
 		if (field.kind === "enum") return typeof value === "string" && offered(field, value) ? value : emptyValue(field);
-		if (isMulti(field) && Array.isArray(value) && field.options.length > 0)
-			return value.filter((id) => offered(field, id));
+		if (isMulti(field) && field.options.length > 0) {
+			const ids = Array.isArray(value)
+				? value
+				: value
+						.split(",")
+						.map((label) => label.trim())
+						.filter(Boolean);
+			return ids.filter((id) => offered(field, id));
+		}
 		return value;
 	};
 	return Object.fromEntries(next.map((field) => [field.id, carried(field)]));
@@ -40,11 +47,22 @@ export function toFieldValue(
 	raw: DraftValue | undefined,
 ): WorkItemFieldValue | null | undefined {
 	if (schema.kind === "user" || schema.kind === "labels") {
-		const ids = Array.isArray(raw) ? raw : [];
+		const ids = Array.isArray(raw)
+			? raw
+			: schema.kind === "labels" && typeof raw === "string"
+				? [
+						...new Set(
+							raw
+								.split(",")
+								.map((label) => label.trim())
+								.filter(Boolean),
+						),
+					]
+				: [];
 		if (ids.length === 0) return null;
 		const name = (id: string) => schema.options.find((option) => option.id === id)?.name ?? id;
 		return schema.kind === "user"
-			? { kind: "user", value: ids.map((id) => ({ id, name: name(id), avatarUrl: null })) }
+			? { kind: "user", value: ids.map((id) => ({ id, name: name(id), avatarUrl: null, bot: false })) }
 			: { kind: "labels", value: ids.map((id) => ({ id, name: name(id) })) };
 	}
 	const text = typeof raw === "string" ? raw : "";

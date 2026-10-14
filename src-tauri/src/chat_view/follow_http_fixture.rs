@@ -5,6 +5,7 @@
 use super::*;
 use axum::{Json, extract::Path as RoutePath, routing::post};
 use serde_json::json;
+use std::path::Path;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "Requires TUIC_CHAT_FOLLOW_PROOF_DIR, installed JS dependencies and the authorized browser wrapper"]
@@ -27,7 +28,7 @@ async fn disk_ticker_http_store_browser_follow_proof() {
     ] {
         let path = evidence.join(format!("{sid}.jsonl"));
         std::fs::write(&path, row(sid, text)).expect("transcript");
-        let mut view = View::new(path.clone(), MAX_LOG_ENTRIES, MAX_LOG_BYTES);
+        let mut view = View::for_agent(Agent::Claude, path.clone(), MAX_LOG_ENTRIES, MAX_LOG_BYTES);
         // The fixture owns the binding; do not ask the real machine's Claude registry.
         view.bound_at = Instant::now() + Duration::from_secs(300);
         state

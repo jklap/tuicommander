@@ -3,7 +3,6 @@ export type AgentType =
 	| "claude"
 	| "gemini"
 	| "opencode"
-	| "aider"
 	| "codex"
 	| "amp"
 	| "cursor"
@@ -20,7 +19,6 @@ export const AGENT_TYPES: readonly AgentType[] = [
 	"claude",
 	"gemini",
 	"opencode",
-	"aider",
 	"codex",
 	"amp",
 	"cursor",
@@ -45,6 +43,8 @@ export interface AgentConfig {
 	name: string;
 	binary: string;
 	description: string;
+	/** The CLI starts an interactive session seeded with a trailing positional prompt (`<cli> -- "<prompt>"`): its --help lists the prompt and it honours `--` as the end of options. */
+	interactivePromptArg?: true;
 	resumeCommand: string | null;
 	/** Mobile Ctrl+Enter: native modified key, or a verified non-submitting newline fallback. */
 	ctrlEnterSequence: string;
@@ -81,6 +81,7 @@ export const AGENTS: Record<AgentType, AgentConfig> = {
 		name: "Claude Code",
 		binary: "claude",
 		description: "Anthropic's Claude Code CLI",
+		interactivePromptArg: true,
 		defaultHeadlessTemplate:
 			'claude --bare --print --output-format text --no-session-persistence --system-prompt "Output only the raw requested text. No explanations, no markdown fences, no commentary." -p "{prompt}"',
 		resumeCommand: "claude --continue",
@@ -107,6 +108,7 @@ export const AGENTS: Record<AgentType, AgentConfig> = {
 		name: "Gemini CLI",
 		binary: "gemini",
 		description: "Google's Gemini CLI",
+		interactivePromptArg: true,
 		defaultHeadlessTemplate: 'gemini "{prompt}"',
 		resumeCommand: "gemini --resume",
 		ctrlEnterSequence: "\x1b[13;5u",
@@ -148,34 +150,12 @@ export const AGENTS: Record<AgentType, AgentConfig> = {
 			prompt: [/^\s*\d+[.)]\s+.+$/gm],
 		},
 	},
-	aider: {
-		type: "aider",
-		name: "Aider",
-		binary: "aider",
-		description: "AI pair programming in terminal",
-		defaultHeadlessTemplate: 'aider --yes-always --message "{prompt}"',
-		resumeCommand: "aider --restore-chat-history",
-		ctrlEnterSequence: "\x1b[13;5u",
-		sessionDiscovery: null, // single .aider.chat.history.md per project, no session IDs
-		spawnArgs: (prompt, options = {}) => {
-			const args: string[] = ["--yes-always"];
-			if (options.model) args.push("--model", options.model);
-			args.push("--message", prompt);
-			return args;
-		},
-		outputFormat: "text",
-		detectPatterns: {
-			rateLimit: [/rate.?limit/i, /429/, /too many requests/i],
-			completion: [/Applied edit/i, /Committed/i],
-			error: [/error:/i, /failed:/i],
-			prompt: [/\[Y\/n\]/, /Enter.*:/i],
-		},
-	},
 	codex: {
 		type: "codex",
 		name: "Codex CLI",
 		binary: "codex",
 		description: "OpenAI Codex CLI",
+		interactivePromptArg: true,
 		defaultHeadlessTemplate: 'codex "{prompt}"',
 		resumeCommand: "codex resume --last",
 		ctrlEnterSequence: "\n",
@@ -263,6 +243,7 @@ export const AGENTS: Record<AgentType, AgentConfig> = {
 		name: "Grok",
 		binary: "grok",
 		description: "xAI's Grok coding CLI (Grok Build)",
+		interactivePromptArg: true,
 		defaultHeadlessTemplate: 'grok --single "{prompt}"',
 		resumeCommand: "grok --continue",
 		ctrlEnterSequence: "\n",
@@ -457,12 +438,17 @@ export function toHeadlessAgentChoice(value: string): HeadlessAgentChoice | null
 	return value as HeadlessAgentChoice;
 }
 
+/** Agents kept at basic support: busy state is unreliable and no vendor account is available to test. */
+export const LIMITED_SUPPORT_AGENTS: readonly AgentType[] = ["amp", "cursor", "droid"];
+
+/** The label Settings shows for them; docs/user-guide/ai-agents.md quotes it (checked by a test). */
+export const LIMITED_SUPPORT_LABEL = "limited support, need more tests";
+
 /** Which agents support MCP configuration */
 export const MCP_SUPPORT: Record<AgentType, boolean> = {
 	claude: true,
 	gemini: true,
 	opencode: true,
-	aider: false,
 	codex: true,
 	amp: true,
 	cursor: true,
@@ -487,7 +473,6 @@ export const HOOK_SUPPORT: Record<AgentType, boolean> = {
 	claude: true,
 	gemini: true,
 	opencode: true,
-	aider: false,
 	codex: true,
 	amp: false,
 	cursor: false,
@@ -508,7 +493,6 @@ export const AGENT_DISPLAY: Record<AgentType, { icon: string; color: string }> =
 	claude: { icon: "C", color: "#d97706" },
 	gemini: { icon: "G", color: "#4285f4" },
 	opencode: { icon: "O", color: "#10a37f" },
-	aider: { icon: "A", color: "#9333ea" },
 	codex: { icon: "X", color: "#ffffff" },
 	amp: { icon: "A", color: "#ff5543" },
 	cursor: { icon: "C", color: "#000000" },

@@ -204,7 +204,6 @@ export const PRESETS: Record<string, Preset> = {
 			rateLimitFor("claude", 15),
 			rateLimitFor("gemini", 10),
 			rateLimitFor("opencode", 20),
-			rateLimitFor("aider", 5),
 			rateLimitFor("codex", 30),
 		],
 	},

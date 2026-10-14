@@ -1,0 +1,24 @@
+.paste {
+  margin-top: 8px;
+  padding: 8px;
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+  color: var(--fg-secondary);
+  white-space: normal;
+}
+
+.paste pre {
+  margin: 0;
+  font: var(--font-sm) / 1.5 var(--font-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.paste button {
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  padding: 4px 0 0;
+  cursor: pointer;
+  font: var(--font-sm) var(--font-ui);
+}

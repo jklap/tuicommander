@@ -23,8 +23,14 @@ pub(crate) mod ai_agent;
 pub(crate) mod attachments;
 #[cfg(feature = "desktop")]
 pub(crate) mod audio_enumeration;
+pub(crate) mod background_mode;
+#[cfg(test)]
+mod background_mode_tests;
 pub(crate) mod launch_instructions;
 pub(crate) mod prompt_receipt;
+pub(crate) mod session_resume;
+pub(crate) mod session_wake;
+pub(crate) mod suspended_sessions;
 pub mod work_items;
 pub use tuic_core::app_instance;
 pub(crate) mod app_logger;
@@ -43,6 +49,7 @@ pub(crate) mod codex_usage;
 pub(crate) mod config;
 pub(crate) mod conflict_assist;
 pub(crate) mod content_index;
+mod open_markdown_tabs;
 pub mod settings;
 pub(crate) use tuic_git::cow;
 pub(crate) mod cpu_watchdog;
@@ -85,6 +92,7 @@ pub(crate) mod github_pr_action_commands;
 pub(crate) mod github_pr_actions;
 pub(crate) mod github_pr_api;
 pub(crate) mod github_review_threads;
+pub(crate) mod pr_open_threads;
 pub(crate) use tuic_git::github_debug;
 pub(crate) mod github_poller;
 #[cfg(feature = "desktop")]
@@ -131,6 +139,7 @@ pub(crate) mod plugin_exec;
 pub(crate) mod plugin_fs;
 pub(crate) mod plugin_http;
 pub(crate) mod plugin_pty;
+pub(crate) mod plugin_settings;
 pub(crate) mod plugins;
 pub(crate) mod pr_review;
 #[cfg(feature = "desktop")]
@@ -143,6 +152,7 @@ pub(crate) mod pty_capture;
 pub(crate) mod push;
 pub(crate) use tuic_core::redaction;
 pub(crate) mod chat_view;
+mod codex_binding;
 pub(crate) mod registry;
 pub(crate) mod relay_client;
 #[allow(dead_code)] // Constructors used by remote binary and future tests
@@ -616,18 +626,6 @@ fn screenshot_response(state: State<'_, Arc<AppState>>, request_id: String, data
 #[tauri::command]
 fn mcp_confirm_response(state: State<'_, Arc<AppState>>, request_id: String, confirmed: bool) {
     crate::mcp_http::resolve_mcp_confirm(&state, &request_id, confirmed);
-}
-
-/// The tab's verdict on a `session action=suspend` request.
-#[cfg(feature = "desktop")]
-#[tauri::command]
-fn session_suspend_response(
-    state: State<'_, Arc<AppState>>,
-    request_id: String,
-    ok: bool,
-    reason: Option<String>,
-) {
-    crate::mcp_http::mcp_transport::resolve_session_suspend(&state, &request_id, ok, reason);
 }
 
 /// One IPv4 address found on a network interface.
@@ -1825,9 +1823,29 @@ pub fn run() {
                 )
                 .build(),
         )
+        .manage(background_mode::desktop::BackgroundMode::default())
+        .manage(background_mode::tray::desktop::NativeTray::default())
         .manage(state)
         .manage(crate::fs::ContentSearchCancel(std::sync::Mutex::new(None)))
         .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                background_mode::desktop::close_window(window, api);
+            }
+            if window.label() == "main"
+                && let tauri::WindowEvent::Focused(focused) = event
+            {
+                window
+                    .state::<Arc<AppState>>()
+                    .desktop_window_focused
+                    .store(*focused, std::sync::atomic::Ordering::Relaxed);
+                #[cfg(all(target_os = "macos", feature = "dictation"))]
+                if !focused {
+                    dictation::fn_key_monitor::release_on_focus_loss(window.app_handle());
+                }
+            }
+            if matches!(event, tauri::WindowEvent::Focused(true)) && window.label() == "main" {
+                background_mode::desktop::shown(window.app_handle());
+            }
             if matches!(event, tauri::WindowEvent::Destroyed)
                 && let Some(state) = window.try_state::<Arc<AppState>>()
             {
@@ -1847,10 +1865,7 @@ pub fn run() {
     // alongside the installed TUIC-preview.app (they share the same identifier).
     #[cfg(not(debug_assertions))]
     let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-        if let Some(window) = app.get_webview_window("main") {
-            let _ = window.unminimize();
-            let _ = window.set_focus();
-        }
+        background_mode::desktop::leave_background(app);
     }));
 
     builder
@@ -1864,13 +1879,29 @@ pub fn run() {
                 let m = menu::build_menu(app)?;
                 app.set_menu(m)?;
                 app.on_menu_event(|app_handle, event| {
+                    // Tray Show uses the same menu event path as application menus.
+                    if event.id().0 == "show" {
+                        background_mode::desktop::leave_background(app_handle);
+                        return;
+                    }
+                    if event.id().0 == "quit-app" {
+                        background_mode::desktop::request_quit(app_handle.clone());
+                        return;
+                    }
                     let _ = app_handle.emit("menu-action", event.id().0.as_str());
                 });
+            }
+
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                let handle = app.handle().clone();
+                app.deep_link().on_open_url(move |_| background_mode::desktop::leave_background(&handle));
             }
 
             // Store AppHandle so HTTP handlers can emit Tauri events
             let app_state: &Arc<AppState> = app.state::<Arc<AppState>>().inner();
             *app_state.app_handle.write() = Some(app.handle().clone());
+            background_mode::tray::desktop::sync(app.handle());
 
             // Ensure main window exists — if tauri.conf.json windows[] is
             // empty (accidental edit, merge conflict), create it programmatically
@@ -1893,25 +1924,6 @@ pub fn run() {
                     .hidden_title(true)
                     .title_bar_style(tauri::TitleBarStyle::Overlay);
                 themes::window_background::configure(builder, startup_background).build()?;
-            }
-
-            // Track desktop window focus so push notifications can be
-            // suppressed while the user is at their machine.
-            if let Some(window) = app.get_webview_window("main") {
-                let push_flag = Arc::clone(app_state);
-                #[cfg(all(target_os = "macos", feature = "dictation"))]
-                let focus_app = app.handle().clone();
-                window.on_window_event(move |event| {
-                    if let tauri::WindowEvent::Focused(focused) = event {
-                        push_flag
-                            .desktop_window_focused
-                            .store(*focused, std::sync::atomic::Ordering::Relaxed);
-                        #[cfg(all(target_os = "macos", feature = "dictation"))]
-                        if !focused {
-                            dictation::fn_key_monitor::release_on_focus_loss(&focus_app);
-                        }
-                    }
-                });
             }
 
             #[cfg(feature = "desktop")]
@@ -2033,6 +2045,9 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            background_mode::desktop::request_quit,
+            background_mode::desktop::resolve_close,
+            background_mode::desktop::ack_background_snapshot,
             telegram::settings::telegram_settings,
             telegram::settings::telegram_setup,
             generators::generate_value,
@@ -2080,6 +2095,7 @@ pub fn run() {
             worktree::get_worktrees_dir,
             git::get_repo_info,
             git::get_remote_url,
+            work_items::provider_bridge::work_item_provider_bridge,
             workitem_links::get_git_remotes,
             workitem_links::list_workitem_links,
             workitem_links::link_workitem,
@@ -2131,6 +2147,8 @@ pub fn run() {
             pty::terminal_hyperlink_span,
             pty::set_session_visible,
             pty::set_session_name,
+            open_markdown_tabs::sync_open_markdown_tabs,
+            open_markdown_tabs::list_open_markdown_tabs,
             pty::get_session_foreground_process,
             pty::get_session_leaf_pid,
             pty::has_foreground_process,
@@ -2214,6 +2232,7 @@ pub fn run() {
             github_pr_action_commands::merge_or_enqueue_pr,
             github_pr_action_commands::rerun_failed_pr_jobs,
             github_review_threads::get_pr_line_threads,
+            pr_open_threads::get_pr_open_threads,
             github_review_threads::get_pr_thread_comments,
             github_review_threads::set_pr_thread_resolved,
             github_review_threads::reply_pr_thread,
@@ -2441,6 +2460,8 @@ pub fn run() {
             fs::search_content,
             fs::search_content_all,
             fs::fs_read_file,
+            work_items::start_work_prompt::build_start_work_prompt,
+            work_items::local_query::project_work_items,
             fs::write_file,
             fs::write_file_if_unchanged,
             fs::create_directory,
@@ -2462,6 +2483,7 @@ pub fn run() {
             plugins::install_plugin_from_url,
             plugins::uninstall_plugin,
             plugins::register_loaded_plugin,
+            plugin_settings::plugin_settings_action,
             plugins::unregister_loaded_plugin,
             plugins::set_plugin_output_watchers,
             plugin_fs::plugin_read_file,
@@ -2494,7 +2516,8 @@ pub fn run() {
             secrets::forms::secret_form_bootstrap,
             secrets::forms::secret_form_submit,
             mcp_confirm_response,
-            session_suspend_response,
+            mcp_http::suspended_routes::suspended_session_action,
+            mcp_http::suspended_routes::resume_session,
             app_logger::push_log,
             app_logger::get_logs,
             app_logger::clear_logs,
@@ -2524,6 +2547,7 @@ pub fn run() {
             design_mode::tauri_commands::stop_design_mode,
             design_mode::tauri_commands::reload_design_mode,
             design_mode::tauri_commands::navigate_design_mode,
+            design_mode::tauri_commands::design_mode_browser_command,
             design_mode::tauri_commands::get_design_mode_status,
             acp_commands::acp_workspace_root,
             acp_commands::acp_connect,
@@ -2561,6 +2585,11 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|app_handle, event| {
             match &event {
+                tauri::RunEvent::ExitRequested { code, api, .. } => {
+                    if background_mode::prevent_exit(*code, background_mode::desktop::is_hidden(app_handle)) {
+                        api.prevent_exit();
+                    }
+                }
                 // Guard against corrupted window-state applied by tauri-plugin-window-state.
                 // Must run at Ready (after plugins have restored persisted position/size),
                 // not in setup() which fires before the plugin applies its state.
@@ -2575,11 +2604,7 @@ pub fn run() {
                 // hidden. Explicitly restore main on every reopen.
                 #[cfg(target_os = "macos")]
                 tauri::RunEvent::Reopen { .. } => {
-                    if let Some(window) = app_handle.get_webview_window("main") {
-                        let _ = window.unminimize();
-                        let _ = window.show();
-                        let _ = window.set_focus();
-                    }
+                    background_mode::desktop::leave_background(app_handle);
                 }
                 // Forward file-open events (macOS file associations) to the frontend
                 #[cfg(target_os = "macos")]

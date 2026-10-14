@@ -189,6 +189,7 @@ export const SessionControls: Component<{ chat: AcpChat }> = (props) => {
 
 			<Show when={sessions().length > 1}>
 				<Select
+					compact
 					class={s.modelPicker}
 					title="Conversation"
 					value={props.chat.sessionId() ?? ""}

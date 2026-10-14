@@ -1,4 +1,4 @@
-import { render, waitFor } from "@solidjs/testing-library";
+import { fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CanvasTerminalRef } from "../../components/Terminal/CanvasTerminal";
 
@@ -24,6 +24,8 @@ vi.mock("../../components/Terminal/canvasTerminalTransport", async (importOrigin
 }));
 
 import CanvasTerminal from "../../components/Terminal/CanvasTerminal";
+import { appLogger } from "../../stores/appLogger";
+import { settingsStore } from "../../stores/settings";
 import { terminalsStore } from "../../stores/terminals";
 import { makeTerminal } from "../helpers/store";
 
@@ -236,5 +238,58 @@ it("paints no prompt strip for a terminal with recorded userPromptLines", async 
 	} finally {
 		terminal.view.unmount();
 		terminalsStore.remove(id);
+	}
+});
+
+// Catches: an idle terminal retains history ticks until an unrelated grid frame.
+it.each([false, true])("repaints scrollbar history marks immediately when enabled=%s", async (enabled) => {
+	const error = vi.spyOn(appLogger, "error").mockImplementation(() => {});
+	const debug = vi.spyOn(appLogger, "info").mockImplementation(() => {});
+	const id = terminalsStore.add(makeTerminal());
+	terminalsStore.update(id, {
+		commandBlocks: [
+			{ promptLine: 10, commandLine: 10, executionLine: 11, endLine: 20, exitCode: 1, startedAt: 0, endedAt: 1 },
+		],
+		userPromptLines: [30],
+	});
+	settingsStore.setShowScrollbarMarks(true);
+	const terminal = await open("f", id);
+	try {
+		const historyFrame = frame();
+		new DataView(historyFrame).setUint32(11, 100, true);
+		transport.sink?.(historyFrame);
+		await vi.advanceTimersByTimeAsync(32);
+		fireEvent.keyDown(terminal.view.container.querySelector("input")!, {
+			key: "Control",
+			ctrlKey: true,
+			metaKey: true,
+		});
+		const marks = () =>
+			[...terminal.view.container.querySelectorAll<HTMLDivElement>("div[style]")].filter(
+				(e) => e.style.height === "2px",
+			);
+		expect(marks().length).toBeGreaterThan(4);
+		if (enabled) {
+			settingsStore.setShowScrollbarMarks(false);
+			// Establish OFF using a frame, then test ON with no frame.
+			transport.sink?.(historyFrame);
+			await vi.advanceTimersByTimeAsync(32);
+		}
+		settingsStore.setShowScrollbarMarks(enabled);
+		await vi.advanceTimersByTimeAsync(32);
+		expect(marks()).toHaveLength(enabled ? 6 : 4);
+		expect(marks().filter((e) => ["#e8984c", "rgb(232, 152, 76)"].includes(e.style.background))).toHaveLength(4);
+	} finally {
+		terminal.view.unmount();
+		terminalsStore.remove(id);
+		settingsStore.setShowScrollbarMarks(true);
+		expect(
+			error.mock.calls.every(([source, message]) => source === "config" && String(message).includes("not hydrated")),
+		).toBe(true);
+		expect(
+			debug.mock.calls.some(
+				([source, message]) => source === "terminal" && String(message).includes("TermStore.remove"),
+			),
+		).toBe(true);
 	}
 });

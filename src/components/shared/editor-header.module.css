@@ -47,6 +47,11 @@
   color: var(--fg-primary);
 }
 
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .btn.active {
   background: var(--accent);
   color: var(--text-on-accent);

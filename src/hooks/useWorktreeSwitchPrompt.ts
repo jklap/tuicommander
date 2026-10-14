@@ -4,6 +4,7 @@ import { activityStore } from "../stores/activityStore";
 import { appLogger } from "../stores/appLogger";
 import { repositoriesStore } from "../stores/repositories";
 import { terminalsStore } from "../stores/terminals";
+import { workItemLinksStore } from "../stores/workItemLinks";
 import { pathBasename, pathDirname } from "../utils/pathUtils";
 
 interface WorktreeSwitchDeps {
@@ -207,7 +208,20 @@ export function useWorktreeSwitchPrompt(deps: WorktreeSwitchDeps): void {
 		.catch((err) => appLogger.error("app", "Failed to register session-worktree-declared listener", err));
 
 	listen<WorktreeRemovedPayload>("worktree-removed", (event) => {
-		const { repo_path, workspace_id } = event.payload;
+		const { repo_path, workspace_id, branch } = event.payload;
+		// Remove live and persisted offers: their action captured the removed checkout.
+		for (const item of [...activityStore.state.items]) {
+			if (
+				item.pluginId === "core" &&
+				item.sectionId === "worktrees" &&
+				item.repoPath === repo_path &&
+				item.id.startsWith(`wt-${workspace_id}-`) &&
+				/^\d+$/.test(item.id.slice(`wt-${workspace_id}-`.length))
+			) {
+				activityStore.removeItem(item.id);
+			}
+		}
+		workItemLinksStore.forget(repo_path, branch);
 		pruneRemovedWorktree(repo_path, workspace_id, deps.closeTerminalsForBranch).catch((err) =>
 			appLogger.warn("git", `Failed to prune removed worktree "${workspace_id}"`, err),
 		);

@@ -14,6 +14,9 @@ const priority = (options: string[]): WorkItemFieldSchema => ({
 	kind: "enum",
 	required: false,
 	editable: true,
+	sortable: false,
+	groupable: false,
+	filterable: false,
 	options: options.map((id) => ({ id, name: id })),
 });
 
@@ -34,6 +37,9 @@ it("drops a carried enum value the new type does not offer", async () => {
 						kind: "enum",
 						required: true,
 						editable: true,
+						sortable: false,
+						groupable: false,
+						filterable: false,
 						options: [
 							{ id: "bug", name: "Bug" },
 							{ id: "issue", name: "Issue" },
@@ -74,6 +80,9 @@ it("collectFields reports an invalid optional number as invalid, not required", 
 		kind: "number",
 		required: false,
 		editable: true,
+		sortable: false,
+		groupable: false,
+		filterable: false,
 		options: [],
 	};
 	expect(collectFields([points], { points: "abc" })).toEqual({ ok: false, blocker: "Points", invalid: true });

@@ -7,9 +7,110 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Fixed
+- Protect suspended tabs from worktree recycling and cleanup, and remove obsolete worktree bell actions (#1705-67b3).
+- Keep detached checkouts with a local feature branch at HEAD out of orphan cleanup, and stop reporting fresh in-sync branches as integrated (#1894-7683).
+### Changed
+- Remove answer background tints from the terminal grid, Answers view, AI Chat and terminal Chat cards. Keep green left rules and spacing; use the darker success green for Paper answer rules; user-question styling is unchanged (#1896-f355).
+- Tasks loads complete lists of at most 1,000 items for Rust-backed all-field queries; unknown or larger lists keep server controls (#1851-7ade).
+- Discover GitHub Projects v2 in Tasks Board with visible read:project scope errors (#1846-55d7).
+
+- Tasks offers only provider-supported sort, group and filter fields, and restores the last valid selection after a rejection.
+
+### Added
+- Background desktop WebViews unload after a configurable awake delay (default 10 minutes, 0 disables) and reconnect tabs on Show. Rust sessions keep running; frontend plugins pause while unloaded.
+
+
+- Add correlated Design Mode native-port browser commands, explicit host eval grants, screenshots, page-error reads and sidebar action history.
+- Fix seeded workflow Pause resume targets, expose their target in the Designer, and report invalid publication fields as HTTP 422.
+
+### Added
+- Add the internal settings-policy foundation: host-issued origin checks, write-only secret reads and backend-built one-use confirmation proposals for exposure/execution settings. Replacement settings transport publication remains separate (#1786-9cbd).
+- Render searchable Integrations settings pages from live plugin catalogue entries, with scoped revision-checked edits and unload removal (#1683-c04b).
+- List the desktop repository’s open Markdown files in the mobile session menu, with live updates and the existing mobile viewer (#1879-05ad).
+- Add scoped plugin settings schemas, locked revision patches, secret redaction, typed migrations for the five existing configurable plugins, and unload-safe catalogue registration (#1785-c7a1).
+
+- Unify mobile terminal and AI Chat composers with a shared + menu for files, camera capture and supported draft, queue and command actions (#1880-d7ff).
+
+- Persist suspended tabs in Rust and allow suspension without an attached UI; verify and restore agent sessions through the backend (#1806-ed18).
+
+- Add a device-local mobile Settings toggle for prompt autocorrect and spellcheck, enabled by default (#1878-3a3c).
+
+- Native tray and menu-bar icon with live agent counts, attention indicator, Show and Quit. Choose Always, Only in background or Never in General settings. Missing tray support safely minimizes the window (#1804-d44b).
+- Read linked Tasks items and comments through MCP repo actions; allow provider comments and transitions only after enabling `mcp_work_item_writes` (#1854-4960).
+
+### Fixed
+- Repaint answer-rule strips when terminal cell metrics or projected row positions change, so font loading and theme remeasurement keep the rule aligned (#1896-f355).
+
+- Preserve GitLab endpoint and username-filter scope in small Tasks lists; align Jira and GitHub local field values, and keep Roadmap provider paging (#1851-7ade).
+- Run desktop orphan-worktree safety checks and removal on the blocking pool instead of the IPC main thread. Live heartbeat confirmation remains pending (#1638-c94c).
+- Include CSS tokens referenced by shorthand declarations in Design Mode grabs, including inline styles and adopted shadow-root sheets (#1888-14a3).
+- Allow workflow agents to launch in registered branch worktrees while preserving detached-orphan removal guards (#1883-eba0).
+
+- Preserve attached Goose session names and legacy paths without injecting a duplicate or conflicting `--name`.
+- Keep the Context preview clear of the terminal CLI/Chat switch (#1893-a053).
+
+- Apply scrollbar history-mark visibility changes immediately on idle terminals (#1891-a933).
+
+- Start status-bar agent usage blinking at 96% instead of 90%; dashboard critical colours remain at 90% (#1887-86a5).
+
+- Retract saved agent placement declarations when a linked worktree is removed or recycled (#1705-67b3).
+- AI Chat provider-retry waits now count down live to “retrying now”; user-message Copy buttons no longer wrap vertically.
+
+- Hide Markdown review Agent and Send controls after a successful send until a new change (#1881-f84a).
+
+- Preserve independent settings windows' edits when one changes agent visibility and another changes the IDE or other preferences (#1876-ceee).
+- Show cancelled story status and dependency removal actions from the API response; keep plan state visible beside cancellation counts (#1875-c3d9).
+
+- Preserve live attachment uploads when another TUIC instance starts; keep Claude attachment access with disabled instructions and preserve custom wrapper arguments (#1833-aa60).
+
+- Allow worktree removal when its branch tip is contained in any remote-tracking branch, naming that ref as proof. Offer a one-click action to keep branches with local-only commits (#1874-1758).
+- Preserve the local branch and report a warning if a concurrent fetch conflicts with the remote proof during worktree removal (#1874-1758).
+
+### Added
+- Let Rust own desktop close and quit. Choose Ask, Background or Quit for the main window; Ask can remember the choice, and explicit Quit keeps its own confirmation (#1802-e6b8).
+- Attach PNG, JPEG, WebP and GIF images in terminal Compose by dropping them on the editor or choosing multiple images with the file button; paste keeps its existing behavior (#1758-1613).
+- Remember Tasks source, view, grouping, sort and filters per repository and provider account; recover rejected saved sorts with the last accepted order (#1852-35a8).
+- Keep the Tasks move menu open while scrolling its destinations; simplify board refresh to merge page one into loaded cards (#1844-858d).
+- Terminal Chat view for Grok terminals, read from the session's `chat_history.jsonl` and offered only when `~/.grok/active_sessions.json` names the exact session of that terminal's process; the newest-session fallback never feeds Chat (#1791-b8be).
+
+### Changed
+- Store uploads in TUIC-owned session directories, grant supported agents access at launch, and remove files at session end without touching repositories (#1833-aa60).
+- Run saved command moves from `Cmd+R` to `Cmd+Shift+R`. `Cmd+R` now reloads the active web/preview tab (new `reload-tab` action). `edit-command` has no default shortcut because `Cmd+Alt+R` belongs to answers-only; an existing `keybindings.json` override keeps working (#1871-4cfd).
+
+### Removed
+- Remove the Aider agent harness, including launch profiles, detection, screen adapters and mobile commands. Existing settings remain readable (#1849-0c19).
+
+### Fixed
+
+- Tasks view preferences keep the settings catalogue available and restore nullable query defaults correctly (#1852-35a8).
+- Stop answer tint before blank-separated unmarked prose, while retaining wrapped continuations and structured answer content (#1872-1870).
+- Merge adjacent marked answer paragraphs into one continuous CLI and Chat tint, including blank paragraph gaps and excluding Codex duration footers. Hide answer glyphs in the CLI grid while keeping raw copy and search text (#1872-1870).
+- Tasks board lanes show loaded counts and More controls; cards show assignees and labels with a compact keyboard-accessible Move menu (#1844-858d).
+- Preserve account metadata when saving Tasks setup, keep assignee username filters as text, and hide unsupported GitLab roadmap date filters and grouping (#1841-bbac, #1843-9b0f, #1845-66f6).
+- Hide Codex/Ink hard-wrapped intent tails with their marker rows, stopping at blank rows and new output (#1761-7249).
+
+- Tasks details display provider enum labels while retaining IDs for edits (#1839-dcbf).
+- Jira create forms support searchable Reporter and Assignee, free labels, inline required errors, and configured Project/Type values (#1859-c01f).
+
+- Keep Jira JQL parse errors visible in Tasks lists and boards, with explicit `jql:` and `text:` search prefixes (#1861-8a4c).
+- Trackpad and wheel scrolling no longer stalls while the pointer is over the CLI/Chat switch, in either view (#1847-feb9).
+- Design Mode automatically loads its own extension on cold Edge launches and opens the discovered dev server. Running profiles and unsupported branded Chrome return clear errors (#1834-f6c4).
+- Make Terminal Chat easier to read with one lightly tinted answer card per turn, whole-answer Copy, reading-width limits, collapsible terminal pastes and compact inbox notices. Keep the collapsed tool row and show Claude Bash descriptions when available (#1832-b19a).
+- GitHub Settings hides bindings for a unique account/remote, restores Logout for OAuth credentials, and keeps an environment-token disconnect effective until login or restart (#1829-54c2).
+- Ego model settings now honor the configured profile and AI Chat workspace. The internal settings service adds managed Ego configuration, readback and presence-only credentials through owner services (#1775-330c).
+- Goose returns to idle after a reply and accepts the next submission without waiting for the five-minute stale recovery (#1812-022d).
+- Aider returns to idle after a reply and accepts the next submission (#1823-8150).
+- Keep child agent MCP bridges on the spawning instance, including isolated `tuic-remote` instances and fallback sockets (#1811-a0fe).
+- Align community plugin permissions, CLI binaries and minimum app versions with shipped manifests.
+- Keep document preview panels separate for files with the same name in different repositories.
+- Cancel pending retry and wakeup decisions when session state changes during composer inspection.
+- Discard obsolete plan, story and dashboard results after repository switches or plugin unloads; refresh the MDKB ticker on repository switches.
 - Preserve beta installs in the macOS terminal installer and normalize release tag prefixes for default and pinned downloads.
 
 ### Added
+- Offer Codex terminal Chat after a trusted native SessionStart hook establishes exact session ownership; validate rollout id/cwd and live process identity, isolate tabs in the same folder, and revoke stale bindings (#1792-7450).
+- Internal settings owners cover repository defaults and registered repository `.tuic.json` targets, with revision checks and isolated locked writes (#1825-4566).
+- Add the internal GitHub settings owner adapter for device login, verified Enterprise accounts, credential presence and revision-checked repository bindings (#1774-ce8f); shared settings transport wiring follows separately.
 - Beta update channel: automatically check for the next beta and final stable release. Completed beta releases publish a rolling feed without changing stable updates.
 
 ### Added
@@ -3139,3 +3240,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Add Telegram setup in desktop and mobile Settings: token check/replacement, expiring one-use pairing or explicit chat IDs, live agent selection and safe daemon status.
 
 - Reuse explicitly finished, clean, integrated worktrees while preserving ignored build artifacts. Reserve new allocations before returning them.
+
+
+- Wake suspended sessions through one Rust path for tab open, submit and peer mail; concurrent wakes reuse one PTY and keep its TUIC identity (#1807-4f1f).

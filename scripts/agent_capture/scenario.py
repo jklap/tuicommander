@@ -1,12 +1,14 @@
 """Validate and execute developer-authored scenarios against the real HTTP API."""
 import math
+from pathlib import Path
 import re
 import time
 
 AGENTS = {
     "claude": "claude", "codex": "codex", "grok": "grok", "opencode": "opencode",
-    "ego": "ego", "gemini": "gemini", "aider": "aider", "pi": "pi", "goose": "goose",
+    "ego": "ego", "gemini": "gemini", "pi": "pi", "goose": "goose",
     "amp": "amp", "cursor": "cursor-agent", "droid": "droid",
+    "qwen": "qwen", "crush": "crush", "copilot": "copilot", "kiro": "kiro-cli",
 }
 KEYS = {"enter": "\r", "escape": "\x1b", "up": "\x1b[A", "down": "\x1b[B",
         "right": "\x1b[C", "left": "\x1b[D"}
@@ -28,11 +30,44 @@ def expand(value, values):
     return [one(text) for text in value]
 
 
+def passthrough_env(scenario, environ):
+    """Credentials the scenario names (env_passthrough) taken from the driver's own environment.
+
+    An entry is NAME or TARGET=SOURCE (the agent sees TARGET with the value of SOURCE)."""
+    pairs = (entry.partition("=")[::2] for entry in scenario.get("env_passthrough", []))
+    return {target: environ[source or target] for target, source in pairs if (source or target) in environ}
+
+
+def _cwd_files(files, allow_delete):
+    ok = isinstance(files, dict) and files and all(
+        isinstance(name, str) and name and not name.startswith("/") and ".." not in name.split("/")
+        and (isinstance(text, str) or (allow_delete and text is None))
+        for name, text in files.items())
+    if not ok:
+        raise ValueError("cwd_files must map relative paths to text" + (" or null" if allow_delete else ""))
+
+
+def write_cwd_files(directory, files, values):
+    """Create (text) or delete (None) instruction files in the agent's working directory."""
+    for name, text in files.items():
+        path = Path(directory) / name
+        if text is None:
+            path.unlink(missing_ok=True)
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(expand([text], values)[0] + "\n")
+
+
+def _echoed(prompt):
+    """Gemini's history echoes "What is 10+7?" as "What is 10+7": match without the trailing question mark."""
+    return prompt.rstrip("?")
+
+
 def judge_reply(lines, prompt, answer, canary, ignore_prefixes=()):
     """Judge the reply below the latest echo of prompt; None until it shows the answer.
 
     Lines starting with one of ignore_prefixes (an agent's reasoning panel) are not reply."""
-    echo = max((i for i, line in enumerate(lines) if prompt in line), default=None)
+    echo = max((i for i, line in enumerate(lines) if _echoed(prompt) in line), default=None)
     if echo is None:
         return None
     region = [line for line in lines[echo + 1:]
@@ -49,7 +84,7 @@ def judge_reply(lines, prompt, answer, canary, ignore_prefixes=()):
 
 
 def _turn(lines, prompt, limit=80):
-    echo = max((i for i, line in enumerate(lines) if prompt in line), default=max(0, len(lines) - 15))
+    echo = max((i for i, line in enumerate(lines) if _echoed(prompt) in line), default=max(0, len(lines) - 15))
     return [line for line in lines[echo:] if line.strip()][:limit]
 
 
@@ -132,6 +167,8 @@ def validate(scenario):
                 raise ValueError("restart requires explicit args")
             if "exit_text" in step:
                 _text(step, "exit_text")
+            if "cwd_files" in step:
+                _cwd_files(step["cwd_files"], True)
             if "env" in step and not (isinstance(step["env"], dict) and all(
                     isinstance(v, str) for v in step["env"].values())):
                 raise ValueError("restart env must map names to strings")
@@ -139,6 +176,12 @@ def validate(scenario):
             raise ValueError(f"unknown scenario action: {action}")
     if not isinstance(scenario.get("idle_gate", False), bool):
         raise ValueError("idle_gate must be boolean")
+    if "cwd_files" in scenario:
+        _cwd_files(scenario["cwd_files"], False)
+    passthrough = scenario.get("env_passthrough", [])
+    if not isinstance(passthrough, list) or not all(
+            isinstance(n, str) and re.fullmatch(r"[A-Z_][A-Z0-9_]*(=[A-Z_][A-Z0-9_]*)?", n) for n in passthrough):
+        raise ValueError("env_passthrough must list environment variable names")
     ignore = scenario.get("ignore_prefixes", [])
     if not isinstance(ignore, list) or not all(isinstance(p, str) and p.strip() for p in ignore):
         raise ValueError("ignore_prefixes must list nonempty strings")
@@ -201,7 +244,7 @@ def _working(api, session_id):
 
 def run_steps(api, session_id, steps, canary=None, relaunch=None, results=None, ignore_prefixes=(),
               idle_gate=False):
-    """Run steps; check verdicts go to results, restart calls relaunch(old_id, args, env, exit_text)."""
+    """Run steps; check verdicts go to results, restart calls relaunch(old_id, args, env, exit_text, cwd_files)."""
     observed = []
     for step in steps:
         action = step["action"]
@@ -233,7 +276,8 @@ def run_steps(api, session_id, steps, canary=None, relaunch=None, results=None, 
                 api("POST", f"/sessions/{session_id}/write", {"data": KEYS[step["key"]]})
         elif action == "restart":
             # env replaces the scenario env for this launch (e.g. resume without injection).
-            session_id = relaunch(session_id, step["args"], step.get("env"), step.get("exit_text"))
+            session_id = relaunch(session_id, step["args"], step.get("env"), step.get("exit_text"),
+                                 step.get("cwd_files"))
         elif action == "interrupt":
             api("POST", f"/sessions/{session_id}/write", {"data": "\x03"})
         elif action == "wait":

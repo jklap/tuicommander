@@ -64,8 +64,8 @@ async fn critic_codex_profile_named_review_keeps_task_submission() {
 async fn critic_named_wrappers_deliver_positional_task_for_every_agent() {
     use std::os::unix::fs::PermissionsExt;
     for agent in [
-        "claude", "codex", "gemini", "grok", "opencode", "aider", "amp", "cursor", "goose",
-        "droid", "pi", "ego",
+        "claude", "codex", "gemini", "grok", "opencode", "amp", "cursor", "goose", "droid", "pi",
+        "ego",
     ] {
         let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
         let output = root.path().join("argv");
@@ -394,35 +394,6 @@ async fn suspend(state: &Arc<AppState>, sid: &str) -> serde_json::Value {
         None,
     )
     .await
-}
-
-/// Run `suspend` against an attached UI that answers the request with `verdict`.
-async fn suspend_answered_with(verdict: Option<(bool, Option<String>)>) -> serde_json::Value {
-    let state = test_state();
-    let idle = "550e8400-e29b-41d4-a716-446655440c04";
-    idle_suspend_candidate(&state, idle);
-    state
-        .sse_client_count
-        .store(1, std::sync::atomic::Ordering::Relaxed);
-    let mut events = state.event_bus.subscribe();
-    let call = tokio::spawn({
-        let state = state.clone();
-        async move { suspend(&state, idle).await }
-    });
-    let request_id = loop {
-        if let Ok(crate::state::AppEvent::SessionSuspendRequested {
-            session_id,
-            request_id,
-        }) = events.recv().await
-        {
-            assert_eq!(session_id, idle);
-            break request_id;
-        }
-    };
-    if let Some((ok, reason)) = verdict {
-        crate::mcp_http::mcp_transport::resolve_session_suspend(&state, &request_id, ok, reason);
-    }
-    call.await.expect("suspend task")
 }
 
 #[tokio::test]
@@ -892,7 +863,7 @@ async fn agent_spawn_layers_caller_env_and_protects_peer_identity() {
     );
     let _config = crate::config::set_config_dir_override(root.path().join("tuic-config"));
     let config: crate::config::AgentsConfig = serde_json::from_value(serde_json::json!({
-            "agents": {"aider": {"run_configs": [{
+            "agents": {"opencode": {"run_configs": [{
                 "name": "Env Profile", "command": "/bin/sh", "args": ["-c", command],
                 "env": {"CLAUDE_CONFIG_DIR": "/run", "LAYER": "run", "ONLY_RUN": "present", "CARGO_INCREMENTAL": "1",
                         "TUIC_SESSION": "run-spoof", "TUIC_PARENT": "run-spoof"}
@@ -1081,7 +1052,7 @@ async fn agent_spawn_run_config_model_is_overridable_and_legacy_args_keep_confli
     let output = root.path().join("argv");
     let command = format!("printf '%s|%s' \"$0\" \"$1\" > '{}'", output.display());
     let config: crate::config::AgentsConfig = serde_json::from_value(serde_json::json!({
-            "agents": {"aider": {"run_configs": [
+            "agents": {"opencode": {"run_configs": [
                 {"name": "Structured", "command": "/bin/sh", "args": ["-c", command], "model": "sonnet"},
                 {"name": "Legacy", "command": "/bin/sh", "args": ["-c", "exit 0", "--model", "opus"]}
             ]}}
@@ -3903,7 +3874,7 @@ async fn managed_claude_spawn_accepts_only_its_startup_trust_dialog() {
     let script = root.path().join("claude");
     let accepted = root.path().join("accepted");
     let observed_keys = root.path().join("keys");
-    std::fs::write(&script, format!("#!/bin/sh\nif [ \"$1\" = --version ]; then exit 0; fi\nstty -echo -icanon -icrnl min 1 time 0\nprintf 'Quick safety check: Is this a project you created or one you trust?\\n  Yes, I trust this folder\\n❯ No, exit\\n'\nkeys=$(dd bs=1 count=4 2>/dev/null | od -An -tx1 | tr -d ' \\n')\nprintf '%s' \"$keys\" > '{}'\nif [ \"$keys\" = 1b5b410d ]; then printf '%s' \"$1\" > '{}'; fi\nexec cat >/dev/null\n", observed_keys.display(), accepted.display())).unwrap();
+    std::fs::write(&script, format!("#!/bin/sh\nif [ \"$1\" = --version ]; then exit 0; fi\nwhile [ \"$#\" -gt 0 ]; do\n  case \"$1\" in\n    --add-dir=*|--settings=*) shift;;\n    --add-dir|--settings|--append-system-prompt-file|--model) shift 2;;\n    --) shift; break;;\n    -*) shift;;\n    *) break;;\n  esac\ndone\nstty -echo -icanon -icrnl min 1 time 0\nprintf 'Quick safety check: Is this a project you created or one you trust?\\n  Yes, I trust this folder\\n❯ No, exit\\n'\nkeys=$(dd bs=1 count=4 2>/dev/null | od -An -tx1 | tr -d ' \\n')\nprintf '%s' \"$keys\" > '{}'\nif [ \"$keys\" = 1b5b410d ]; then printf '%s' \"$1\" > '{}'; fi\nexec cat >/dev/null\n", observed_keys.display(), accepted.display())).unwrap();
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
     assert!(
         std::process::Command::new(&script)
@@ -4040,6 +4011,28 @@ fn resolve_run_config_matches_by_name_case_insensitive() {
         resolved.env.get("OLLAMA_HOST").map(|s| s.as_str()),
         Some("localhost:11434")
     );
+}
+
+// Catches: persisted retired-harness profiles still launching managed peers.
+#[test]
+fn saved_aider_settings_load_but_are_ignored_for_agent_spawns() {
+    let cfg: crate::config::AgentsConfig = serde_json::from_value(serde_json::json!({
+        "agents": {"aider": {"run_configs": [{"name": "Retired profile", "command": "aider", "args": [], "env": {}}]}}
+    })).expect("old settings remain readable");
+    assert!(
+        resolve_run_config("Retired profile", &cfg)
+            .command
+            .is_none()
+    );
+    for agent in [
+        "claude", "codex", "gemini", "grok", "opencode", "amp", "cursor", "goose", "droid", "pi",
+        "ego",
+    ] {
+        assert_eq!(
+            resolve_spawn_agent_type("/custom/wrapper", Some(agent)).as_deref(),
+            Some(agent)
+        );
+    }
 }
 
 // Catches: literal Codex rewrites a configured wrapper task into an undeliverable PTY injection.
@@ -4628,115 +4621,6 @@ async fn the_session_tool_addresses_a_session_by_alias_or_tuic_session() {
         "the guidance must name the alias as an accepted address, got: {error}"
     );
     kill_test_session(&state, &session_id);
-}
-
-// Catches: a verdict for another request id (a different session, or a made-up id)
-// resolving this pending call.
-#[tokio::test]
-async fn crit1358_a_verdict_for_another_request_does_not_resolve_this_one() {
-    let sid = "550e8400-e29b-41d4-a716-446655440d03";
-    let state = crit1358_attached_state(&[sid]);
-    let mut events = state.event_bus.subscribe();
-    let call = tokio::spawn({
-        let state = state.clone();
-        async move { suspend(&state, sid).await }
-    });
-    let (_, request_id) = crit1358_next_request(&mut events).await;
-
-    resolve_session_suspend(&state, "not-the-request-id", true, None);
-    tokio::task::yield_now().await;
-    assert!(!call.is_finished(), "a foreign id resolved the call");
-    assert!(state.suspend_responses.contains_key(&request_id));
-
-    resolve_session_suspend(&state, &request_id, false, None);
-    let result = call.await.unwrap();
-    assert_eq!(result["error"], "Cannot suspend: refused");
-}
-
-// Catches: two concurrent suspends sharing one request id (or one slot), so one tab's
-// refusal is delivered to the other session's caller.
-#[tokio::test]
-async fn crit1358_concurrent_suspends_each_get_their_own_verdict() {
-    let a = "550e8400-e29b-41d4-a716-446655440d04";
-    let b = "550e8400-e29b-41d4-a716-446655440d05";
-    let state = crit1358_attached_state(&[a, b]);
-    let mut events = state.event_bus.subscribe();
-    let call_a = tokio::spawn({
-        let state = state.clone();
-        async move { suspend(&state, a).await }
-    });
-    let call_b = tokio::spawn({
-        let state = state.clone();
-        async move { suspend(&state, b).await }
-    });
-    let mut ids = std::collections::HashMap::new();
-    for _ in 0..2 {
-        let (sid, rid) = crit1358_next_request(&mut events).await;
-        ids.insert(sid, rid);
-    }
-    assert_ne!(ids[a], ids[b], "request ids must be unique per call");
-
-    resolve_session_suspend(&state, &ids[b], false, Some("agent working".into()));
-    resolve_session_suspend(&state, &ids[a], true, None);
-
-    assert_eq!(call_a.await.unwrap(), serde_json::json!({"ok": true}));
-    assert_eq!(
-        call_b.await.unwrap()["error"],
-        "Cannot suspend: agent working"
-    );
-    assert!(state.suspend_responses.is_empty());
-}
-
-// Catches: a second client answering the same request (two UIs own the tab) overriding
-// or panicking after the first verdict, or leaving the slot behind.
-#[tokio::test]
-async fn crit1358_the_first_verdict_wins_and_a_duplicate_is_ignored() {
-    let sid = "550e8400-e29b-41d4-a716-446655440d06";
-    let state = crit1358_attached_state(&[sid]);
-    let mut events = state.event_bus.subscribe();
-    let call = tokio::spawn({
-        let state = state.clone();
-        async move { suspend(&state, sid).await }
-    });
-    let (_, request_id) = crit1358_next_request(&mut events).await;
-
-    resolve_session_suspend(&state, &request_id, true, None);
-    resolve_session_suspend(&state, &request_id, false, Some("late".into()));
-
-    assert_eq!(call.await.unwrap(), serde_json::json!({"ok": true}));
-    assert!(state.suspend_responses.is_empty());
-}
-
-// Catches: a verdict arriving after the 20 s timeout re-creating or leaking state, or the
-// timed-out slot blocking a later suspend of the same session.
-#[tokio::test(start_paused = true)]
-async fn crit1358_a_late_verdict_after_the_timeout_is_ignored_and_a_retry_works() {
-    let sid = "550e8400-e29b-41d4-a716-446655440d07";
-    let state = crit1358_attached_state(&[sid]);
-    let mut events = state.event_bus.subscribe();
-    let first = tokio::spawn({
-        let state = state.clone();
-        async move { suspend(&state, sid).await }
-    });
-    let (_, stale_id) = crit1358_next_request(&mut events).await;
-    assert_eq!(
-        first.await.unwrap()["error"],
-        "Cannot suspend: no tab answered the request"
-    );
-    assert!(state.suspend_responses.is_empty());
-
-    resolve_session_suspend(&state, &stale_id, true, None);
-    assert!(state.suspend_responses.is_empty());
-
-    let retry = tokio::spawn({
-        let state = state.clone();
-        async move { suspend(&state, sid).await }
-    });
-    let (_, fresh_id) = crit1358_next_request(&mut events).await;
-    assert_ne!(fresh_id, stale_id);
-    resolve_session_suspend(&state, &stale_id, false, Some("stale".into()));
-    resolve_session_suspend(&state, &fresh_id, true, None);
-    assert_eq!(retry.await.unwrap(), serde_json::json!({"ok": true}));
 }
 
 // Catches: self-suspend allowed once the arm moved out of handle_session (the guard

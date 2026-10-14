@@ -4,6 +4,7 @@ import { appLogger } from "../../stores/appLogger";
 import { chatViewAvailability, chatViewKey, chatViewStore } from "../../stores/chatView";
 import { settingsStore } from "../../stores/settings";
 import { terminalsStore } from "../../stores/terminals";
+import { openFileLinkHere, resolveFileLink } from "../../utils/openFileLink";
 import { Transcript, type TranscriptSearchRef } from "../AIChatPanel/Transcript";
 import s from "./TerminalChatView.module.css";
 
@@ -38,6 +39,19 @@ export const TerminalChatView: Component<{
 			.refresh(props.sessionId)
 			.catch((error) => appLogger.error("terminal", "Chat view refresh failed", { sessionId: props.sessionId, error }));
 
+	/** False when the path resolves to nothing, so the caller can drop the dead link. */
+	const openFile = async (href: string) => {
+		const cwd = terminalsStore.get(props.terminalId)?.cwd;
+		if (!cwd) return;
+		try {
+			const target = await resolveFileLink(cwd, href);
+			if (!target) return false;
+			openFileLinkHere(target);
+		} catch (error) {
+			appLogger.error("terminal", "Failed to resolve file link", error);
+		}
+	};
+
 	onMount(() => {
 		void chatViewStore.watch(props.sessionId).then((dispose) => {
 			if (disposed) {
@@ -58,7 +72,9 @@ export const TerminalChatView: Component<{
 	return (
 		<div class={s.chatView} data-testid="terminal-chat-view">
 			<Transcript
+				terminalAgent={terminalsStore.get(props.terminalId)?.agentType ?? undefined}
 				onSearchRef={props.onSearchRef}
+				onOpenFile={openFile}
 				entries={() => acpTranscript.entries(chatViewKey(props.sessionId))}
 				busy={() => false}
 				observeToolDuration={false}
@@ -71,7 +87,7 @@ export const TerminalChatView: Component<{
 };
 
 /** The CLI | Chat switch of a terminal that runs an agent. */
-export const ViewModeToggle: Component<{ terminalId: string }> = (props) => {
+export const ViewModeToggle: Component<{ terminalId: string; onWheel?: (e: WheelEvent) => void }> = (props) => {
 	const term = () => terminalsStore.get(props.terminalId);
 	const availability = () => chatViewAvailability(term());
 	const mode = () => term()?.viewMode ?? "cli";
@@ -81,7 +97,7 @@ export const ViewModeToggle: Component<{ terminalId: string }> = (props) => {
 	};
 	return (
 		<Show when={term()?.agentType}>
-			<div class={s.toggle} role="group" aria-label="Terminal view">
+			<div class={s.toggle} role="group" aria-label="Terminal view" onWheel={props.onWheel}>
 				<button
 					type="button"
 					class={s.toggleButton}

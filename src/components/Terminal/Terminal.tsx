@@ -479,8 +479,9 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					// Record the prompt row for the green scrollbar marker. line < 0 (the
 					// keystroke-reconstructed path) is ignored by the store.
 					terminalsStore.addUserPromptLine(props.id, parsed.line);
-					// Clear suggest bar, pending buffer, and mark dismissed
-					terminalsStore.update(props.id, { suggestDismissed: true, suggestedActions: null, activeSubTasks: 0 });
+					// A submitted prompt starts a new turn. Clear old choices and allow
+					// new ones even when busy was emitted before this input echo.
+					terminalsStore.update(props.id, { suggestDismissed: false, suggestedActions: null, activeSubTasks: 0 });
 					// User resumed typing — clear any stale error/question badge. See comment
 					// in stores/terminals.ts handleShellStateChange: error state should be
 					// cleared on explicit agent activity, user-input, or process exit.
@@ -578,10 +579,9 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					break;
 				}
 				case "suggest":
-					// Backend guarantees `suggest` events only arrive once the shell has
-					// transitioned to IDLE (see `drain_pending_suggest` in pty.rs, gated
-					// on `SHELL_IDLE`). No frontend buffering needed: if the user hasn't
-					// dismissed the previous cycle's chips, show the new set directly.
+					// The backend publishes choices once the agent is ready, even
+					// while background descendants keep the shell busy. Completion
+					// remains separately gated; show this turn's choices directly.
 					if (settingsStore.state.suggestFollowups && parsed.items?.length) {
 						const t = terminalsStore.get(props.id);
 						if (t && !t.suggestDismissed) {
@@ -852,6 +852,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 				try {
 					await pty.resize(sessionId, grid.rows, grid.cols);
 					reconnected = true;
+					await attachSessionListeners(sessionId);
 					appLogger.info("terminal", `initSession(${props.id}) — reconnected to ${sessionId}`);
 					detectAgentForTerminal(props.id, "idle").catch(() => {});
 				} catch {
@@ -949,6 +950,10 @@ export const Terminal: Component<TerminalProps> = (props) => {
 	createEffect(
 		on(isVisible, (visible) => {
 			if (!visible) return;
+			if (terminalsStore.get(props.id)?.suspended) {
+				void resumeTerminal(props.id);
+				return;
+			}
 			const containerIsSized = () => !!containerRef && containerRef.offsetWidth > 0 && containerRef.offsetHeight > 0;
 
 			rafHandle = requestAnimationFrame(() => {
@@ -989,7 +994,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 		}),
 	);
 
-	// Suspend ends the PTY and keeps the tab; resume opens a new PTY through initSession.
+	// Suspend detaches the PTY; resume attaches the replacement already opened by Rust.
 	createEffect(
 		on(
 			() => terminalsStore.get(props.id)?.suspended ?? false,
@@ -1001,10 +1006,13 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					sessionId = null;
 					setCurrentSessionId(null);
 					sessionInitialized = false;
-				} else if (isVisible()) {
-					initSession().catch((e) =>
-						appLogger.error("terminal", "initSession failed after resume", { error: String(e) }),
-					);
+				} else {
+					sessionId = terminalsStore.get(props.id)?.sessionId ?? null;
+					setCurrentSessionId(sessionId);
+					if (isVisible())
+						initSession().catch((e) =>
+							appLogger.error("terminal", "initSession failed after resume", { error: String(e) }),
+						);
 				}
 			},
 			{ defer: true },
@@ -1267,6 +1275,20 @@ export const Terminal: Component<TerminalProps> = (props) => {
 		canvasTerminalRef()?.focus();
 	};
 
+	// The switch floats over the top-right corner of both views and is a sibling of each, so a wheel
+	// landing on it reaches neither scroller: the scroll stalls while the pointer crosses it.
+	const handleToggleWheel = (e: WheelEvent) => {
+		e.preventDefault();
+		if (!chatActive()) {
+			canvasTerminalRef()?.wheel(e);
+			return;
+		}
+		const transcript = (e.currentTarget as HTMLElement)
+			.closest("[data-terminal-id]")
+			?.querySelector("[data-terminal-chat]");
+		transcript?.scrollBy({ top: e.deltaY, left: e.deltaX });
+	};
+
 	return (
 		<div
 			class={s.wrapper}
@@ -1284,7 +1306,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					canvasTerminalRef()?.focus();
 				}}
 			/>
-			<ViewModeToggle terminalId={props.id} />
+			<ViewModeToggle terminalId={props.id} onWheel={handleToggleWheel} />
 			<ChatViewFallbackBanner terminalId={props.id} />
 			<Show
 				when={

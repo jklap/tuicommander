@@ -417,6 +417,34 @@ describe("repositoriesStore", () => {
 	});
 
 	describe("removeWorkspace()", () => {
+		// Catches: recycling retracts the sidebar row but a saved peer placement still opens the obsolete path.
+		it("retracts declarations of a removed checkout without dropping sibling placements", async () => {
+			await testInScopeAsync(async () => {
+				store.add({ path: "/repo", displayName: "test" });
+				store.setWorkspace("/repo", "feature", { worktreePath: "/repo__wt/old" });
+				const persisted = JSON.parse(
+					JSON.stringify({
+						repos: {
+							"/repo": {
+								...store.get("/repo"),
+								declaredWorktrees: {
+									old: { workspaceId: "feature", branch: "feature", worktreePath: "/repo__wt/old" },
+									sibling: { workspaceId: "other", branch: "other", worktreePath: "/repo__wt/other" },
+								},
+							},
+						},
+						repoOrder: ["/repo"],
+						activeRepoPath: "/repo",
+					}),
+				);
+				mockInvoke.mockImplementation(async (command) => (command === "load_repositories" ? persisted : undefined));
+				await store.hydrate();
+				expect(store.get("/repo")!.declaredWorktrees?.old.worktreePath).toBe("/repo__wt/old");
+				store.removeWorkspace("/repo", "feature");
+				expect(store.get("/repo")!.declaredWorktrees?.old).toBeUndefined();
+				expect(store.get("/repo")!.declaredWorktrees?.sibling.worktreePath).toBe("/repo__wt/other");
+			});
+		});
 		it("removes a branch", () => {
 			testInScope(() => {
 				store.add({ path: "/repo", displayName: "test" });
@@ -2027,5 +2055,30 @@ describe("repositoriesStore", () => {
 				expect(placementWorkspaceFor({ repoPath: "/repo", workspaceId: "feature" })).toBe("feature");
 			});
 		});
+	});
+	// Catches: a snapshot ack observes only the first save while a newer terminal snapshot is queued.
+	it("flushSave waits for both the in-flight save and the queued snapshot", async () => {
+		const completions: Array<() => void> = [];
+		mockInvoke.mockImplementation((command: string) =>
+			command === "save_repositories"
+				? new Promise<void>((resolve) => completions.push(resolve))
+				: Promise.resolve(undefined),
+		);
+		store.add({ path: "/first", displayName: "first" });
+		store.snapshotTerminals(new Map());
+		store.add({ path: "/second", displayName: "second" });
+		store.snapshotTerminals(new Map());
+		let settled = false;
+		const flushed = store.flushSave().then(() => {
+			settled = true;
+		});
+		expect(completions).toHaveLength(1);
+		completions[0]();
+		for (let i = 0; i < 10; i++) await Promise.resolve();
+		expect(completions).toHaveLength(2);
+		expect(settled).toBe(false);
+		completions[1]();
+		await flushed;
+		expect(settled).toBe(true);
 	});
 });

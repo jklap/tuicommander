@@ -14,6 +14,7 @@
 // selection, search, links, scrollbar and suggest overlays stay on the main
 // thread's overlay canvas (see CanvasTerminal.repaintOverlay).
 
+import { contrastRatio } from "../../themes";
 import {
 	ATTR_BOLD,
 	ATTR_DEFAULT_BG,
@@ -29,6 +30,7 @@ import {
 	type DecodedRow,
 	GUTTER_PX,
 } from "./canvasTerminalUtils";
+import { omitAnswerMarker, ViewportProjection } from "./viewportProjection";
 
 /**
  * Codepoints that mobile browsers (and some WebViews) render as color emoji
@@ -56,14 +58,19 @@ export interface PaintGridOptions {
 	fullRepaint: boolean;
 	/** When set (and not fullRepaint), only these row indices are repainted. */
 	dirtyIndices?: Set<number>;
+	/** Backend row indices omitted from the viewport layout. */
+	hiddenRows?: ReadonlySet<number>;
+	projection?: ViewportProjection;
+	/** Answer markers omitted from layout, without changing stored cells. */
+	hiddenAnswerMarkers?: ReadonlySet<number>;
 }
 
 export interface GridRenderer {
-	setTheme(bgDefault: string, fgDefault: string): void;
+	setTheme(bgDefault: string, fgDefault: string, neutralSurface?: string): void;
 	/** Drop memoized color/font strings (call on theme/font/weight change). */
 	invalidateCaches(): void;
 	paintGrid(rowMap: Map<number, DecodedRow>, m: CellMetrics, opts: PaintGridOptions): void;
-	paintRow(row: DecodedRow, y: number, m: CellMetrics, fontFamily?: string): void;
+	paintRow(row: DecodedRow, y: number, m: CellMetrics, fontFamily?: string, hideAnswerMarker?: boolean): void;
 	/** Cell fg, honouring ATTR_INVERSE — falls back to the theme defaults set via setTheme. */
 	resolveFg(fgP: number, bgP: number, a: number): string;
 	/** Cell bg, honouring ATTR_INVERSE — falls back to the theme defaults set via setTheme. */
@@ -77,6 +84,9 @@ export function createGridRenderer(ctx: GridContext2D, deps: GridRendererDeps): 
 	// Theme colors (re-read on remeasure / posted to worker on theme change).
 	let cachedBgDefault = "#1e1e1e";
 	let cachedFgDefault = "#d4d4d4";
+	let cachedNeutralSurface = cachedBgDefault;
+	let lightTheme = false;
+	const neutralBackgroundCache = new Map<number, string>();
 
 	// Memo caches (per renderer instance).
 	const colorStringCache = new Map<number, string>();
@@ -127,7 +137,23 @@ export function createGridRenderer(ctx: GridContext2D, deps: GridRendererDeps): 
 		if (a & ATTR_INVERSE) {
 			return a & ATTR_DEFAULT_FG ? cachedFgDefault : cachedRgbString((fgP >> 16) & 0xff, (fgP >> 8) & 0xff, fgP & 0xff);
 		}
-		return a & ATTR_DEFAULT_BG ? cachedBgDefault : cachedRgbString((bgP >> 16) & 0xff, (bgP >> 8) & 0xff, bgP & 0xff);
+		if (a & ATTR_DEFAULT_BG) return cachedBgDefault;
+		const raw = cachedRgbString((bgP >> 16) & 0xff, (bgP >> 8) & 0xff, bgP & 0xff);
+		// Neutral SGR surfaces designed for dark terminals can collide with a
+		// light theme's default text. Keep explicit foreground/color pairs intact.
+		if (lightTheme && a & ATTR_DEFAULT_FG) {
+			const r = (bgP >> 16) & 0xff;
+			if (r === ((bgP >> 8) & 0xff) && r === (bgP & 0xff)) {
+				let mapped = neutralBackgroundCache.get(bgP);
+				if (mapped === undefined) {
+					const hex = `#${bgP.toString(16).padStart(6, "0")}`;
+					mapped = contrastRatio(cachedFgDefault, hex) < 4.5 ? cachedNeutralSurface : raw;
+					neutralBackgroundCache.set(bgP, mapped);
+				}
+				return mapped;
+			}
+		}
+		return raw;
 	}
 
 	function buildFontStyle(a: number, fontSize: number, fontFamily: string): string {
@@ -1206,7 +1232,14 @@ export function createGridRenderer(ctx: GridContext2D, deps: GridRendererDeps): 
 		}
 	}
 
-	function paintRow(row: DecodedFrame["rows"][0], y: number, m: CellMetrics, fontFamily?: string) {
+	function paintRow(
+		row: DecodedFrame["rows"][0],
+		y: number,
+		m: CellMetrics,
+		fontFamily?: string,
+		hideAnswerMarker = false,
+	) {
+		if (hideAnswerMarker) row = omitAnswerMarker(row);
 		fontFamily ??= deps.getFontFamily();
 
 		let lastVisibleCol = -1;
@@ -1332,15 +1365,17 @@ export function createGridRenderer(ctx: GridContext2D, deps: GridRendererDeps): 
 	}
 
 	function paintGrid(rowMap: Map<number, DecodedRow>, m: CellMetrics, opts: PaintGridOptions): void {
+		const projection = opts.projection ?? new ViewportProjection(rowMap, opts.hiddenRows, opts.hiddenAnswerMarkers);
 		const fontFamily = deps.getFontFamily();
 		const w = ctx.canvas.width / m.dpr;
-		if (opts.fullRepaint || !opts.dirtyIndices) {
+		if (opts.fullRepaint || !opts.dirtyIndices || projection.hidden.size > 0) {
 			// Full repaint: clear canvas + paint all rows (include gutter area)
 			const h = ctx.canvas.height / m.dpr;
 			ctx.fillStyle = cachedBgDefault;
 			ctx.fillRect(-GUTTER_PX, 0, w, h);
 			for (const [, row] of rowMap) {
-				paintRow(row, row.index * m.cellHeight, m, fontFamily);
+				const display = projection.projectRow(row);
+				if (display) paintRow(display, display.index * m.cellHeight, m, fontFamily);
 			}
 		} else {
 			// Incremental: repaint only dirty text rows (overlay handles cursor/selection/search)
@@ -1349,14 +1384,18 @@ export function createGridRenderer(ctx: GridContext2D, deps: GridRendererDeps): 
 				ctx.fillStyle = cachedBgDefault;
 				ctx.fillRect(-GUTTER_PX, y, w, m.cellHeight);
 				const row = rowMap.get(idx);
-				if (row) paintRow(row, y, m, fontFamily);
+				const display = row && projection.projectRow(row);
+				if (display) paintRow(display, display.index * m.cellHeight, m, fontFamily);
 			}
 		}
 	}
 
-	function setTheme(bgDefault: string, fgDefault: string): void {
+	function setTheme(bgDefault: string, fgDefault: string, neutralSurface = bgDefault): void {
 		cachedBgDefault = bgDefault;
 		cachedFgDefault = fgDefault;
+		cachedNeutralSurface = neutralSurface;
+		lightTheme = contrastRatio(bgDefault, "#000000") > contrastRatio(bgDefault, "#ffffff");
+		neutralBackgroundCache.clear();
 	}
 
 	function invalidateCaches(): void {

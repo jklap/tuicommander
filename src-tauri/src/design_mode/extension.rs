@@ -108,6 +108,10 @@ pub(crate) async fn message(
                 },
                 None => Err("Missing repository".into()),
             },
+            #[cfg(feature = "desktop")]
+            Some("command_next" | "command_reply" | "command_disconnect") => {
+                browser_channel(&state, &body).await
+            }
             Some("heartbeat") => heartbeat(&state, &body).await,
             Some("send") => super::send::send(state, body.clone()).await,
             Some("pick") => pick_evidence(&body["raw"]).map(Value::String),
@@ -118,6 +122,48 @@ pub(crate) async fn message(
         Ok(value) => json!({"id":body["id"],"ok":true,"result":value}),
         Err(error) => json!({"id":body["id"],"ok":false,"error":error}),
     })
+}
+
+#[cfg(feature = "desktop")]
+async fn browser_channel(state: &Arc<AppState>, body: &Value) -> Result<Value, String> {
+    let repo = body["repoPath"].as_str().ok_or("Missing repository")?;
+    let channel = super::manager(state)
+        .await
+        .command_channels
+        .lock()
+        .unwrap()
+        .get(repo)
+        .cloned();
+    let Some(channel) = channel else {
+        return Ok(Value::Null);
+    };
+    match body["action"].as_str() {
+        Some("command_next") => Ok(tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            channel.next(),
+        )
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or(Value::Null)),
+        Some("command_reply") => {
+            let id = body["requestId"]
+                .as_str()
+                .ok_or("Missing command request id")?;
+            if serde_json::to_vec(&body["reply"])
+                .map_err(|e| e.to_string())?
+                .len()
+                > 768 * 1024
+            {
+                return Err("Browser reply exceeds 768 KiB".into());
+            }
+            Ok(json!({"accepted":channel.reply(id, body["reply"].clone())}))
+        }
+        _ => {
+            channel.cancel();
+            Ok(Value::Null)
+        }
+    }
 }
 
 #[cfg(test)]

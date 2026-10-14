@@ -1373,7 +1373,7 @@
   position: relative;
   display: flex;
   align-items: center;
-  margin: 0 12px 8px;
+  margin: 0 4px 8px;
   flex-shrink: 0;
 }
 
@@ -1384,7 +1384,9 @@
   pointer-events: none;
 }
 
-.searchBox input { width: 100%; padding: 4px 22px 4px 24px; font-family: var(--font-ui); }
+.searchBox input { width: 100%; padding: 4px 4px 4px 24px; font-family: var(--font-ui); }
+
+.searchBox:has(.searchClear) input { padding-right: 22px; }
 
 
 

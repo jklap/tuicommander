@@ -118,14 +118,14 @@ describe("transcript presentation", () => {
 		await Promise.resolve();
 		const blocks = Array.from(container.querySelectorAll<HTMLElement>("#markdown-content > div > *"));
 		expect(blocks.map((block) => block.tagName)).toEqual(["P", "UL", "P", "UL", "P", "P"]);
-		expect(blocks.map((block) => block.getAttribute("data-tuic-answer"))).toEqual(["", "end", "", "", "", "end"]);
+		expect(blocks.map((block) => block.getAttribute("data-tuic-answer"))).toEqual(["", "", "", "end", null, null]);
 		const heads = blocks.filter((block) => block.hasAttribute("data-tuic-answer-start"));
 		expect(heads.map((head) => head.textContent)).toEqual([
 			"Sì, l'avevamo valutata e scartata nel piano originale di Design Mode, a settembre. Non funziona per due motivi:",
 			"Il plugin secondo me è la strada giusta, come estensione di Chrome:",
 		]);
 		expect(container.textContent).not.toContain("💬");
-		expect(grid).toHaveLength(heads.length);
-		expect(grid[1].endsWith(blocks[5].textContent ?? "")).toBe(true);
+		expect(grid).toHaveLength(1);
+		expect(grid[0]).not.toContain(blocks[4].textContent ?? "");
 	});
 });

@@ -77,7 +77,7 @@ describe("activitySnapshot", () => {
 			cwd: null,
 			fontSize: 14,
 			awaitingInput: null,
-			agentType: "aider",
+			agentType: "opencode",
 		});
 		terminalsStore.update(id, { currentTask: "Running migration" });
 

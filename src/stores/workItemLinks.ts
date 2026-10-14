@@ -63,8 +63,8 @@ export function createWorkItemLinksStore() {
 		mutate((all) => ({ ...all, [repoPath]: { ...all[repoPath], [branch]: value } }));
 	}
 
-	async function unlink(repoPath: string, branch: string): Promise<boolean> {
-		const removed = await invoke<boolean>("unlink_workitem", { repoPath, branch });
+	/** Drop a link from the mirror only; the backend already dropped it when it removed the worktree. */
+	function forget(repoPath: string, branch: string) {
 		mutate((all) => {
 			if (!all[repoPath]?.[branch]) return all;
 			const { [branch]: _gone, ...rest } = all[repoPath];
@@ -72,10 +72,15 @@ export function createWorkItemLinksStore() {
 			if (Object.keys(rest).length === 0) delete next[repoPath];
 			return next;
 		});
+	}
+
+	async function unlink(repoPath: string, branch: string): Promise<boolean> {
+		const removed = await invoke<boolean>("unlink_workitem", { repoPath, branch });
+		forget(repoPath, branch);
 		return removed;
 	}
 
-	return { refresh, get, findByItem, link, unlink };
+	return { refresh, get, findByItem, link, unlink, forget };
 }
 
 export const workItemLinksStore = createWorkItemLinksStore();

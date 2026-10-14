@@ -21,7 +21,7 @@ first.comments.entries.unshift({
 	kind: "normal",
 	value: {
 		id: "recorded-bot",
-		author: { id: "bot", name: "CodeRabbit", avatarUrl: null },
+		author: { id: "bot", name: "CodeRabbit", avatarUrl: null, bot: true },
 		body: recordedComment,
 		createdAt: "2026-10-10T12:00:00Z",
 		url: null,

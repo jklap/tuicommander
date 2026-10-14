@@ -1,7 +1,7 @@
-//! The chat view of a Claude terminal: its transcript, tailed and projected.
+//! The chat view of a Claude, Grok or Codex terminal: its transcript, tailed and projected.
 //!
 //! The grid is never read. The bound transcript file is tailed by byte offset
-//! (`transcript_tail`), each row goes through the Claude adapter, and the
+//! (`transcript_tail`), each row goes through the agent's adapter, and the
 //! resulting ACP updates land in a bounded per-terminal log. A client asks for
 //! the log from the sequence it last saw; if the ring no longer holds that
 //! sequence, or the conversation changed, it gets the whole retained log marked
@@ -11,10 +11,13 @@
 //! clients with `chat-view-changed`; when nobody has read for `VIEWER_IDLE` the
 //! ticker stops and the log is dropped.
 
+mod adapter;
 pub(crate) mod claude;
+pub(crate) mod codex;
+pub(crate) mod grok;
 
 use std::collections::{HashMap, VecDeque};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -25,7 +28,7 @@ use serde_json::Value;
 
 use crate::state::AppState;
 use crate::transcript_tail::{read_appended, read_last_window};
-use claude::ClaudeAdapter;
+use adapter::TranscriptAdapter;
 
 /// How much of the end of a transcript is read on first attach. The opt-in
 /// `measurement` test measures this and a full parse against a real disk file.
@@ -111,15 +114,30 @@ impl ViewLog {
     }
 }
 
+/// Which transcript format a terminal's agent writes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Agent {
+    Claude,
+    Grok,
+    Codex,
+}
+
+/// The transcript a terminal's agent is bound to.
+struct Bound {
+    path: PathBuf,
+    agent: Agent,
+}
+
 /// One terminal's tail.
 struct View {
+    agent: Agent,
     path: PathBuf,
     offset: u64,
     /// The first window has been read; later reads are plain appends.
     attached: bool,
     /// Keep the old file open so its identity cannot be reused after replacement.
     file_identity: Option<same_file::Handle>,
-    adapter: ClaudeAdapter,
+    adapter: TranscriptAdapter,
     log: ViewLog,
     last_read: Instant,
     bound_at: Instant,
@@ -127,13 +145,14 @@ struct View {
 }
 
 impl View {
-    fn new(path: PathBuf, max_entries: usize, max_bytes: usize) -> Self {
+    fn for_agent(agent: Agent, path: PathBuf, max_entries: usize, max_bytes: usize) -> Self {
         Self {
+            agent,
             path,
             offset: 0,
             attached: false,
             file_identity: None,
-            adapter: ClaudeAdapter::default(),
+            adapter: TranscriptAdapter::for_agent(agent),
             log: ViewLog::new(max_entries, max_bytes),
             last_read: Instant::now(),
             bound_at: Instant::now(),
@@ -151,11 +170,23 @@ impl View {
         self.restart();
     }
 
+    /// Point at the transcript of an agent that may differ from the last one
+    /// (the tab's agent exited and another started): never mixes two formats.
+    fn rebind_to(&mut self, bound: Bound) {
+        if bound.agent == self.agent {
+            return self.rebind(bound.path);
+        }
+        self.agent = bound.agent;
+        self.bound_at = Instant::now();
+        self.path = bound.path;
+        self.restart();
+    }
+
     fn restart(&mut self) {
         self.offset = 0;
         self.attached = false;
         self.file_identity = None;
-        self.adapter = ClaudeAdapter::default();
+        self.adapter = TranscriptAdapter::for_agent(self.agent);
         self.log.reset();
     }
 
@@ -214,19 +245,54 @@ pub(crate) struct ChatViews {
     views: Mutex<HashMap<String, Arc<Mutex<View>>>>,
 }
 
+impl ChatViews {
+    pub(crate) fn invalidate(&self, session_id: &str) {
+        self.views.lock().remove(session_id);
+    }
+}
+
 fn not_bound(why: &str) -> String {
     format!("not_bound: {why}")
 }
 
-/// Resolve the transcript the same way Progress Flow does. `None` for a shell
-/// tab, another agent, or a Claude without a published session.
-fn bound_transcript(state: &AppState, session_id: &str) -> Result<PathBuf, String> {
-    let source = crate::subagent_map::transcript_source(state, session_id)
-        .ok_or_else(|| not_bound("no Claude agent is bound to this terminal"))?;
-    if !Path::new(&source.parent_transcript).is_file() {
+/// Resolve the transcript the same way Progress Flow does for Claude; Grok is
+/// bound by its own registry. Not bound for a shell tab, another agent, or an
+/// agent without a published session.
+fn bound_transcript(state: &AppState, session_id: &str) -> Result<Bound, String> {
+    let agent_type = state
+        .session_maps
+        .session_states
+        .get(session_id)
+        .and_then(|s| s.agent_type.clone());
+    let (agent, path) = if agent_type.as_deref() == Some("codex") {
+        let path = crate::codex_binding::transcript(state, session_id)
+            .ok_or_else(|| not_bound("no exact Codex hook binding for this terminal"))?;
+        (Agent::Codex, path)
+    } else if agent_type.as_deref() == Some("grok") {
+        let path = grok_transcript(state, session_id)
+            .ok_or_else(|| not_bound("no Grok session is registered for this terminal"))?;
+        (Agent::Grok, path)
+    } else {
+        let source = crate::subagent_map::transcript_source(state, session_id)
+            .ok_or_else(|| not_bound("no Claude agent is bound to this terminal"))?;
+        (Agent::Claude, source.parent_transcript)
+    };
+    if !path.is_file() {
         return Err(not_bound("the agent has not written a transcript yet"));
     }
-    Ok(source.parent_transcript)
+    Ok(Bound { path, agent })
+}
+
+/// The Grok transcript of the process in this terminal, from `active_sessions.json`
+/// only. Discovery falls back to the newest session of the folder; Chat must not.
+fn grok_transcript(state: &AppState, session_id: &str) -> Option<PathBuf> {
+    let cwd = {
+        let entry = state.session_maps.sessions.get(session_id)?;
+        let session = entry.value().lock();
+        session.cwd.clone()?
+    };
+    let pid = crate::pty::session_leaf_pid(state, session_id)?;
+    crate::agent_session::grok_chat_history_for_pid(&dirs::home_dir()?, pid, &cwd)
 }
 
 /// The chat view of one terminal from `from_seq`. Blocking: stat, read, parse.
@@ -239,19 +305,33 @@ pub(crate) fn chat_view_snapshot(
     let existing = state.chat_views.views.lock().get(session_id).cloned();
     let view = match existing {
         Some(view) => {
-            let bound_for = view.lock().bound_at.elapsed();
-            if bound_for >= REBIND_EVERY {
+            let must_rebind = {
+                let guard = view.lock();
+                guard.agent == Agent::Codex
+                    || state
+                        .session_maps
+                        .session_states
+                        .get(session_id)
+                        .is_some_and(|s| s.agent_type.as_deref() == Some("codex"))
+                    || guard.bound_at.elapsed() >= REBIND_EVERY
+            };
+            if must_rebind {
                 rebind(state, session_id, &view)?;
             }
             view
         }
         None => {
-            let path = bound_transcript(state, session_id)?;
+            let bound = bound_transcript(state, session_id)?;
             let mut views = state.chat_views.views.lock();
             views
                 .entry(session_id.to_owned())
                 .or_insert_with(|| {
-                    Arc::new(Mutex::new(View::new(path, MAX_LOG_ENTRIES, MAX_LOG_BYTES)))
+                    Arc::new(Mutex::new(View::for_agent(
+                        bound.agent,
+                        bound.path,
+                        MAX_LOG_ENTRIES,
+                        MAX_LOG_BYTES,
+                    )))
                 })
                 .clone()
         }
@@ -268,8 +348,8 @@ pub(crate) fn chat_view_snapshot(
             next_seq: view.log.next_seq,
             reset,
             updates,
-            unknown_rows: view.adapter.stats.unknown_rows,
-            malformed_rows: view.adapter.stats.malformed_rows,
+            unknown_rows: view.adapter.stats().unknown_rows,
+            malformed_rows: view.adapter.stats().malformed_rows,
         };
         let start = !view.ticking;
         view.ticking = true;
@@ -284,12 +364,15 @@ pub(crate) fn chat_view_snapshot(
 /// Re-check the binding. A lost binding drops the view and answers not bound.
 fn rebind(state: &AppState, session_id: &str, view: &Arc<Mutex<View>>) -> Result<(), String> {
     match bound_transcript(state, session_id) {
-        Ok(path) => {
-            view.lock().rebind(path);
+        Ok(bound) => {
+            view.lock().rebind_to(bound);
             Ok(())
         }
         Err(e) => {
-            state.chat_views.views.lock().remove(session_id);
+            let mut views = state.chat_views.views.lock();
+            if views.get(session_id).is_some_and(|v| Arc::ptr_eq(v, view)) {
+                views.remove(session_id);
+            }
             Err(e)
         }
     }
@@ -354,16 +437,26 @@ fn tick(state: &AppState, session_id: &str, view: &Arc<Mutex<View>>) -> Tick {
         view.lock().ticking = false;
         Tick::Stop(reason)
     };
-    let (unread_for, bound_for) = {
+    let registered = state
+        .chat_views
+        .views
+        .lock()
+        .get(session_id)
+        .is_some_and(|v| Arc::ptr_eq(v, view));
+    if !registered {
+        return stop(view, "binding replaced".into());
+    }
+    let (unread_for, must_rebind) = {
         let v = view.lock();
-        (v.last_read.elapsed(), v.bound_at.elapsed())
+        (
+            v.last_read.elapsed(),
+            v.agent == Agent::Codex || v.bound_at.elapsed() >= REBIND_EVERY,
+        )
     };
     if unread_for > VIEWER_IDLE {
         return stop(view, "viewer idle".into());
     }
-    if bound_for >= REBIND_EVERY
-        && let Err(error) = rebind(state, session_id, view)
-    {
+    if must_rebind && let Err(error) = rebind(state, session_id, view) {
         return stop(view, error);
     }
     let mut guard = view.lock();

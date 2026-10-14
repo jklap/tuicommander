@@ -11,6 +11,8 @@ Answers-only history includes a retained prompt-less prefix before the first tra
 
 Submitted prompts are not tinted in the terminal grid. Recorded `userPromptLines` still drive scrollbar ticks and answers-only turn grouping; Chat user messages retain the theme prompt tint and gutter.
 
+Adjacent `💬` answer paragraphs share one continuous tint and left bar, including blank rows between them. An unmarked prose paragraph after a blank row ends the answer; an uninterrupted indented continuation stays inside. Lists, tables, quotations and fenced code remain attached to the answer. A non-answer output row or prompt ends the region. The CLI blanks only the marker glyph cells; copy, selection and search keep the original text. Chat uses the same answer extent and strips every paragraph marker.
+
 ## Architecture
 
 ```
@@ -146,7 +148,7 @@ cell's full text span, since native search points have no subcell index.
 | Overlay canvas (cursor+selection+search) | OK | Separate canvas cleared+redrawn every frame; base canvas only repaints dirty rows |
 | DPI/Retina scaling | OK | `dpr * logical` sizing + `ctx.scale()` |
 | DPR change listener | OK | `matchMedia(resolution)` re-register on change |
-| Theme colors (ANSI 16) | OK | Colors come from Rust/Alacritty in frame data |
+| Theme colors (ANSI 16) | OK | Colors come from Rust/Alacritty in frame data. In light themes, an explicit neutral SGR background with default foreground and contrast below 4.5:1 maps to `--bg-tertiary`. Explicit foreground pairs, colored backgrounds, inverse cells, and dark themes keep their wire colors. |
 | Default fg/bg from terminal theme | OK | `getTerminalTheme(settingsStore.state.theme)` |
 | Scrollbar themed | OK | Uses `var(--fg-primary)` CSS custom property with configurable opacity |
 
@@ -320,3 +322,9 @@ HTTP(S) link context menus include **Start in Design Mode**, passing the resolve
 ### History-anchored viewport scrolling
 
 Wheel, touch and scrollbar gestures send `terminal_scroll_to_anchor` with `historyBase + historySize - offset`. Null resumes following output. The cache keeps rendering until the backend frame reaches the target; there is no timed settle handoff that can skip rows during sustained output.
+
+### Hidden agent marker rows
+
+The marker plan blanks intent and suggest rows without changing grid coordinates. Intent continuation includes soft wraps and adjacent rows with at least two leading spaces (Codex/Ink cursor-move hard wraps). A blank row ends the walk. Unwrapped output, answer, prompt, suggest and intent rows start separate blocks.
+
+Answer-rule overlay geometry is invalidated on cell-height and projected-row changes, even when the answer markers are unchanged. This keeps font-load and theme remeasurements aligned with the grid.

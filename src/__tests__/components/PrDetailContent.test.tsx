@@ -9,7 +9,9 @@ const mockGithubStore = vi.hoisted(() => ({
 	getCheckDetails: vi.fn((): CheckDetail[] => []),
 	loadCheckDetails: vi.fn(() => Promise.resolve()),
 }));
-const mockRpc = vi.hoisted(() => vi.fn());
+const mockRpc = vi.hoisted(() =>
+	vi.fn<(command: string, args?: Record<string, unknown>) => Promise<unknown>>(async () => undefined),
+);
 const mockOpenUrl = vi.hoisted(() => vi.fn());
 
 vi.mock("../../stores/github", () => ({ githubStore: mockGithubStore }));
@@ -47,6 +49,12 @@ const cleanFile = (path: string) => ({ path, summary: "changed stuff", findings:
 // inside the JSX would hand the component a different repo on every read.
 let repoSeq = 0;
 const nextRepo = () => `/repo-${++repoSeq}`;
+
+beforeEach(() => {
+	// Catches: isolated error tests logging through an undefined RPC return,
+	// or inheriting a previous test's command-specific response.
+	mockRpc.mockReset();
+});
 
 describe("PrDetailContent — ego review result metadata", () => {
 	beforeEach(() => {
@@ -239,11 +247,13 @@ describe("PrDetailContent — readiness and unresolved threads", () => {
 			unresolved_threads: 3,
 			unresolved_threads_truncated: false,
 		});
-		mockRpc.mockImplementation(async (cmd: string) => (cmd === "get_pr_review_threads" ? { bot: 2, human: 1 } : null));
+		mockRpc.mockImplementation(async (cmd: string) =>
+			cmd === "get_pr_review_threads" ? { bot: 2, human: 1, ego: 1 } : null,
+		);
 		const repo = nextRepo();
 		const { container, findByText } = render(() => <PrDetailContent repoPath={repo} branch="feature" />);
 		expect(container.querySelector("[data-readiness]")?.getAttribute("data-readiness")).toBe("unresolved-comments");
-		expect(await findByText("1 human, 2 bot unresolved threads")).toBeTruthy();
+		expect(await findByText("1 human, 2 bot, 1 ego unresolved threads")).toBeTruthy();
 		expect(mockRpc).toHaveBeenCalledWith("get_pr_review_threads", { path: repo, prNumber: 42 });
 	});
 

@@ -45,6 +45,18 @@ pub struct WorkItemSavedFilter {
 pub struct WorkItemPage {
     pub items: Vec<WorkItem>,
     pub next_cursor: Option<String>,
+    /// Count of every match across all pages; None when the provider cannot know it.
+    #[serde(default)]
+    pub total: Option<u32>,
+}
+
+/// A complete provider scope collected before local query projection.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkItemLocalQuery {
+    pub items: Vec<WorkItem>,
+    pub fields: Vec<WorkItemFieldSchema>,
+    pub query: WorkItemQuery,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -214,6 +226,9 @@ pub struct WorkItemGroup {
 pub struct WorkItemGroupedPage {
     pub groups: Vec<WorkItemGroup>,
     pub next_cursor: Option<String>,
+    /// Count of every match across all pages; None when the provider cannot know it.
+    #[serde(default)]
+    pub total: Option<u32>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]

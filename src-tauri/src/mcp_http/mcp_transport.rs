@@ -85,8 +85,8 @@ use super::mcp_transport_catalogue::build_mcp_instructions_for_session;
 #[cfg(test)]
 use super::mcp_transport_catalogue::filtered_native_tools;
 use super::mcp_transport_catalogue::handle_call_tool;
-use super::mcp_transport_catalogue::handle_get_tool_schema;
-use super::mcp_transport_catalogue::handle_search_tools;
+use super::mcp_transport_catalogue::handle_get_tool_schema_for_session;
+use super::mcp_transport_catalogue::handle_search_tools_for_session;
 use super::mcp_transport_catalogue::merged_tool_definitions;
 #[cfg(test)]
 use super::mcp_transport_catalogue::merged_tool_definitions_for_mode;
@@ -111,6 +111,8 @@ use super::mcp_transport_catalogue::tag_repo_connection;
 #[cfg(test)]
 use super::mcp_transport_catalogue::validate_mcp_repo_path;
 #[cfg(test)]
+use super::mcp_transport_catalogue::{handle_get_tool_schema, handle_search_tools};
+#[cfg(test)]
 pub(super) use super::mcp_transport_peer::CLIENT_PID_HEADER;
 use super::mcp_transport_peer::InitializeKind;
 #[cfg(test)]
@@ -125,7 +127,6 @@ use super::mcp_transport_peer::TAKEOVER_REJECT_SUMMARY_INTERVAL;
 #[cfg(test)]
 use super::mcp_transport_peer::TASK_POLL_INTERVAL_MS;
 pub(super) use super::mcp_transport_peer::TUIC_SESSION_HEADER;
-use super::mcp_transport_peer::apply_initialize_identity;
 pub(super) use super::mcp_transport_peer::client_pid_header;
 use super::mcp_transport_peer::drop_identity_buffers;
 use super::mcp_transport_peer::handle_agent_wait;
@@ -147,6 +148,7 @@ use super::mcp_transport_peer::retire_repaired_phantom_identity;
 use super::mcp_transport_peer::takeover_rejection_report;
 #[cfg(test)]
 use super::mcp_transport_peer::task_owner_identity;
+use super::mcp_transport_peer::{apply_initialize_identity, identity_from_client_ancestry};
 #[cfg(test)]
 use super::mcp_transport_session_agent::INFERRED_PTY_DESCRIPTION_MAX_CHARS;
 #[cfg(test)]
@@ -194,7 +196,6 @@ use super::mcp_transport_session_agent::parse_pty_description;
 use super::mcp_transport_session_agent::resolve_effective_spawn_cwd;
 #[cfg(test)]
 use super::mcp_transport_session_agent::resolve_run_config;
-pub(crate) use super::mcp_transport_session_agent::resolve_session_suspend;
 #[cfg(test)]
 use super::mcp_transport_session_agent::resolve_spawn_agent_type;
 #[cfg(test)]
@@ -345,8 +346,6 @@ pub(super) fn resolve_agent_type(client_name: Option<&str>) -> Option<&'static s
         Some("cursor")
     } else if name.contains("gemini") {
         Some("gemini")
-    } else if name.contains("aider") {
-        Some("aider")
     } else if name.contains("amp") {
         Some("amp")
     } else if name.contains("goose") {
@@ -550,7 +549,23 @@ async fn dispatch_mcp_tool_call_with_context(
         .map(|meta| meta.is_claude_code)
         .unwrap_or(false);
     match name {
-        "design_mode" => crate::design_mode::mcp::handle(state, args).await,
+        "design_mode" => {
+            let origin =
+                super::mcp_transport_ancillary::resolve_mcp_origin_pty(state, mcp_session_id);
+            if args["action"] != "start"
+                && !(crate::design_mode::mcp::visible_to(state, origin.as_deref())
+                    && (args["action"] == "status"
+                        || crate::design_mode::mcp::owns_repo(
+                            state,
+                            origin.as_deref(),
+                            args["repo_path"].as_str().unwrap_or(""),
+                        )))
+            {
+                serde_json::json!({"error":"Design Mode not armed for this session"})
+            } else {
+                crate::design_mode::mcp::handle(state, args).await
+            }
+        }
         "automations" => {
             crate::automations::mcp::handle(
                 args,
@@ -736,8 +751,8 @@ async fn dispatch_mcp_tool_call_with_context(
             let sid = mcp_session_id.map(str::to_owned);
             run_blocking_handler(move || handle_voice(&state, &args, sid.as_deref())).await
         }
-        "search_tools" => handle_search_tools(state, args),
-        "get_tool_schema" => handle_get_tool_schema(state, args),
+        "search_tools" => handle_search_tools_for_session(state, args, mcp_session_id),
+        "get_tool_schema" => handle_get_tool_schema_for_session(state, args, mcp_session_id),
         "call_tool" => {
             handle_call_tool(state, addr, args, mcp_session_id, managed_parent_cwd).await
         }
@@ -924,7 +939,24 @@ pub(super) async fn mcp_post(
             let tuic_session_header = headers
                 .get(TUIC_SESSION_HEADER)
                 .and_then(|v| v.to_str().ok());
-            apply_initialize_identity(&state, &session_id, tuic_session_header);
+            let ancestry_identity = match tuic_session_header.filter(|s| !s.is_empty()) {
+                Some(_) => None,
+                // Forks `ps` and reads process environments: off the async workers.
+                None => {
+                    let client_pid = client_pid_header(&headers).to_owned();
+                    tokio::task::spawn_blocking(move || identity_from_client_ancestry(&client_pid))
+                        .await
+                        .ok()
+                        .flatten()
+                }
+            };
+            apply_initialize_identity(
+                &state,
+                &session_id,
+                tuic_session_header
+                    .filter(|s| !s.is_empty())
+                    .or(ancestry_identity.as_deref()),
+            );
 
             // One record per handshake. `initialize` happens once per client
             // connection, so this is not a hot path, and it is the only evidence
@@ -1419,6 +1451,7 @@ pub(super) async fn mcp_delete(
 /// last transport for. Shared by DELETE `/mcp` and an MCP-over-ACP disconnect,
 /// which end the same kind of session over different transports.
 pub(super) fn end_mcp_session(state: &AppState, sid: &str) {
+    state.settings_policy.disconnect_mcp(sid);
     state.mcp.sessions.remove(sid);
     // Now that an identity can have co-owners, teardown has to read the
     // survivor list and act on it as one step: a bridge joining in the middle

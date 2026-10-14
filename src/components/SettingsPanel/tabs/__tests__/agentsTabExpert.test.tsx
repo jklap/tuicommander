@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockInvoke } from "../../../../__tests__/mocks/tauri";
@@ -40,7 +41,7 @@ vi.mock("../../../../plugins/pluginLoader", () => ({
 	setPluginEnabled: vi.fn(),
 }));
 
-import { AGENTS, type AgentsConfig } from "../../../../agents";
+import { AGENTS, type AgentsConfig, LIMITED_SUPPORT_LABEL } from "../../../../agents";
 import { agentConfigsStore } from "../../../../stores/agentConfigs";
 import { settingsExpertStore } from "../../../../stores/settingsExpert";
 import { uiStore } from "../../../../stores/ui";
@@ -125,6 +126,29 @@ describe("AgentsTab expert controls", () => {
 	afterEach(() => {
 		settingsExpertStore._resetForTests();
 		uiStore.setSettingsExpertMode(false);
+	});
+
+	it("labels only amp, cursor and droid as limited support", async () => {
+		await setup();
+		const { container } = render(() => <AgentsTab />);
+		const labelled = [...container.querySelectorAll("[role='button']")]
+			.filter((row) => row.textContent?.includes(LIMITED_SUPPORT_LABEL))
+			.map((row) => row.textContent ?? "");
+		expect(LIMITED_SUPPORT_LABEL).toBe("limited support, need more tests");
+		expect(labelled).toHaveLength(3);
+		for (const agent of ["amp", "cursor", "droid"] as const) {
+			expect(labelled.filter((text) => text.includes(AGENTS[agent].name))).toHaveLength(1);
+		}
+		for (const agent of ["claude", "codex", "grok", "ego"] as const) {
+			expect(labelled.some((text) => text.includes(AGENTS[agent].name))).toBe(false);
+		}
+	});
+
+	it("quotes the same label in the user guide for the same three agents", () => {
+		const rows = readFileSync("docs/user-guide/ai-agents.md", "utf8")
+			.split("\n")
+			.filter((line) => line.includes(LIMITED_SUPPORT_LABEL));
+		expect(rows.map((row) => row.split("|")[1].trim().split(" ")[0])).toEqual(["Amp", "Cursor", "Droid"]);
 	});
 
 	it("persists ego permission choices through config transport instead of losing them on reload", async () => {

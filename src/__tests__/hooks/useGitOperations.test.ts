@@ -12,6 +12,8 @@ import { paneLayoutStore, resetGroupCounter } from "../../stores/paneLayout";
 import { repoSettingsStore } from "../../stores/repoSettings";
 import { repositoriesStore } from "../../stores/repositories";
 import { terminalsStore } from "../../stores/terminals";
+import { toastsStore } from "../../stores/toasts";
+import * as transport from "../../transport";
 import type { BranchPrStatus } from "../../types";
 import { openDialog as open } from "../../utils/nativeDialog";
 import { navigateToTerminal } from "../../utils/navigateToTerminal";
@@ -35,6 +37,7 @@ function resetStores() {
 }
 
 function defaultInvoke(cmd: string): Promise<unknown> {
+	if (cmd === "suspended_session_action") return Promise.resolve({ cmd: "claude --continue", verified: false });
 	if (cmd === "load_agents_config") return Promise.resolve({ agents: {} });
 	if (cmd === "run_git_command") return Promise.resolve({ stdout: "", stderr: "" });
 	if (cmd === "check_worktree_dirty") return Promise.resolve(false);
@@ -518,6 +521,12 @@ describe("useGitOperations", () => {
 		});
 
 		it("sets pendingResumeCommand on restored agent terminals", async () => {
+			const resumeRpc = vi
+				.spyOn(transport, "rpc")
+				.mockImplementation(async (cmd) =>
+					cmd === "suspended_session_action" ? { cmd: "claude --continue", verified: false } : undefined,
+				);
+			onTestFinished(() => resumeRpc.mockRestore());
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 			repositoriesStore.setWorkspace("/repo", "feature", {
 				worktreePath: "/repo/wt",
@@ -778,6 +787,35 @@ describe("useGitOperations", () => {
 			expect(mockCloseTerminal).not.toHaveBeenCalled();
 			expect(repositoriesStore.get("/repo")?.workspaces["feature"]?.worktreePath).toBe("/repo/wt");
 			expect(mockSetStatusInfo).toHaveBeenCalledWith(expect.stringContaining("unmerged commits"));
+		});
+		// Catches: refusing local commits without an actionable checkout-only recovery.
+		it("offers_keep_branch_action_without_changing_the_setting", async () => {
+			for (const toast of [...toastsStore.toasts]) toastsStore.remove(toast.id);
+			mockRepo.getWorkspaceLifecycle
+				.mockResolvedValueOnce({ dirtyFiles: 0, commitStatus: "unmerged", removalSafety: "safe" })
+				.mockResolvedValueOnce({ dirtyFiles: 0, commitStatus: "unmerged", removalSafety: "safe" });
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
+			await gitOps.handleRemoveWorkspace("/repo", "feature");
+			expect(mockRepo.removeWorktree).not.toHaveBeenCalled();
+			const toast = toastsStore.toasts.findLast((item) => item.message.includes("unmerged commits"));
+			expect(toast?.action?.label).toBe("Remove worktree, keep branch");
+			await toast?.action?.onClick();
+			expect(mockDialogs.confirmRemoveWorktree).toHaveBeenCalledWith("feature", expect.anything(), false);
+			expect(mockRepo.removeWorktree).toHaveBeenCalledWith("/repo", "feature", false, false);
+			expect(repoSettingsStore.getEffective("/repo")?.deleteBranchOnRemove ?? true).toBe(true);
+		});
+		// Catches: frontend refusing the shared backend pushed verdict.
+		it("removes_remote_contained_branch_using_backend_verdict", async () => {
+			mockRepo.getWorkspaceLifecycle.mockResolvedValueOnce({
+				dirtyFiles: 0,
+				commitStatus: "pushed_unmerged",
+				removalSafety: "safe",
+			});
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
+			await gitOps.handleRemoveWorkspace("/repo", "feature");
+			expect(mockRepo.removeWorktree).toHaveBeenCalledWith("/repo", "feature", true, false);
 		});
 		// Catches: a rejected confirmation retaining the lock and suppressing a later removal.
 		it("rejected_confirmation_then_second_removal_proceeds", async () => {
@@ -1118,6 +1156,41 @@ describe("useGitOperations", () => {
 			expect(newBranch?.terminals.length).toBe(2);
 			const oldBranch = repositoriesStore.get("/repo")?.workspaces["old-branch"];
 			expect(oldBranch?.terminals.length).toBe(0);
+		});
+	});
+
+	describe("handleMergeAndArchiveIntoMain", () => {
+		// 1867-c863 — catches: a manual Merge & Archive on a repo without a main workspace shown only on the status bar.
+		it("shows a sticky error card when the repo has no main branch", async () => {
+			for (const toast of [...toastsStore.toasts]) toastsStore.remove(toast.id);
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setWorkspace("/repo", "feature/x", { worktreePath: "/repo/.wt/x" });
+
+			await gitOps.handleMergeAndArchiveIntoMain("/repo", "feature/x");
+
+			const card = toastsStore.toasts.find((toast) => toast.level === "error");
+			expect(card?.message).toBe("Cannot merge: no main branch found");
+			expect(mockRepo.mergeAndArchiveWorktree).not.toHaveBeenCalled();
+		});
+
+		// catches: the shared entry merging into the wrong target or ignoring the after-merge setting.
+		it("merges into the main workspace's branch with the repo's after-merge setting", async () => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setWorkspace("/repo", "trunk", { branchName: "trunk", worktreePath: "/repo", isMain: true });
+			repositoriesStore.setWorkspace("/repo", "feature/x", { worktreePath: "/repo/.wt/x" });
+			repoSettingsStore.getOrCreate("/repo", "Repo");
+			repoSettingsStore.update("/repo", { afterMerge: "delete" });
+			mockRepo.mergeAndArchiveWorktree.mockResolvedValue({ merged: true, action: "deleted", archive_path: null });
+
+			await gitOps.handleMergeAndArchiveIntoMain("/repo", "feature/x");
+
+			expect(mockRepo.mergeAndArchiveWorktree).toHaveBeenCalledWith(
+				"/repo",
+				"feature/x",
+				"feature/x",
+				"trunk",
+				"delete",
+			);
 		});
 	});
 
@@ -2586,6 +2659,20 @@ describe("useGitOperations", () => {
 			expect(mockSetStatusInfo).toHaveBeenCalledWith("Failed to remove feature: git error");
 		});
 
+		// 1867-c863 — catches: a failed manual Remove shown only as scrolling status-bar text.
+		it("shows a sticky dismissable error card when a manual removal fails", async () => {
+			for (const toast of [...toastsStore.toasts]) toastsStore.remove(toast.id);
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
+			mockRepo.removeWorktree.mockRejectedValueOnce(new Error("No workspace found for id 'feature'"));
+
+			await gitOps.handleRemoveWorkspace("/repo", "feature");
+
+			const card = toastsStore.toasts.find((toast) => toast.level === "error");
+			expect(card?.message).toContain("No workspace found for id 'feature'");
+			expect(card?.message).toContain("Failed to remove feature");
+		});
+
 		it("blocks removal when lifecycle safety is unknown", async () => {
 			mockRepo.getWorkspaceLifecycle.mockResolvedValueOnce({
 				dirtyFiles: null,
@@ -3117,6 +3204,53 @@ describe("useGitOperations", () => {
 			expect(branch?.terminals.length).toBeGreaterThan(0);
 			// Should warn about failure
 			expect(mockSetStatusInfo).toHaveBeenCalledWith(expect.stringContaining("Setup script failed"));
+		});
+
+		// 1867-c863 — catches: a failed setup script of a manual worktree creation shown only on the status bar.
+		it("shows a sticky error card when the setup script fails", async () => {
+			for (const toast of [...toastsStore.toasts]) toastsStore.remove(toast.id);
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+			repoSettingsStore.getOrCreate("/repo", "Repo");
+			repoSettingsStore.update("/repo", { setupScript: "exit 1" });
+			mockRepo.createWorktree.mockResolvedValue({
+				name: "feat-test",
+				path: "/repo/wt/feat-test",
+				workspace_id: "feat-test",
+				branch: "feat-test",
+				base_repo: "/repo",
+			});
+			mockRepo.runSetupScript.mockResolvedValue({ exit_code: 1, stdout: "", stderr: "failed" });
+
+			await gitOps.handleAddWorktree("/repo");
+			await gitOps.confirmCreateWorktree({ branchName: "feat-test", createBranch: true, baseRef: "main" });
+
+			const card = toastsStore.toasts.find((toast) => toast.level === "error");
+			expect(card?.message).toBe("Setup script failed (exit 1)");
+		});
+
+		// 1867-c863 — catches: a setup script that cannot even start shown only on the status bar.
+		it("shows a sticky error card when the setup script cannot run", async () => {
+			for (const toast of [...toastsStore.toasts]) toastsStore.remove(toast.id);
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+			repoSettingsStore.getOrCreate("/repo", "Repo");
+			repoSettingsStore.update("/repo", { setupScript: "exit 1" });
+			mockRepo.createWorktree.mockResolvedValue({
+				name: "feat-test",
+				path: "/repo/wt/feat-test",
+				workspace_id: "feat-test",
+				branch: "feat-test",
+				base_repo: "/repo",
+			});
+			mockRepo.runSetupScript.mockRejectedValue(new Error("no shell"));
+
+			await gitOps.handleAddWorktree("/repo");
+			await gitOps.confirmCreateWorktree({ branchName: "feat-test", createBranch: true, baseRef: "main" });
+
+			const card = toastsStore.toasts.find((toast) => toast.level === "error");
+			expect(card?.message).toContain("Setup script failed:");
+			expect(card?.message).toContain("no shell");
 		});
 	});
 

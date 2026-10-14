@@ -64,7 +64,7 @@ function getConfirmKeys(agentType?: string | null, questionConfident?: boolean):
 		];
 	}
 
-	// Text-based prompts (Aider Y/N, generic questions, non-confident detection):
+	// Text-based prompts (generic Y/N questions, non-confident detection):
 	// send the actual letter + Enter
 	return [
 		{ label: "Yes", seq: "y\r", confirm: true },

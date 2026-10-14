@@ -1,3 +1,47 @@
+// Catches: child bridges escaping to the default instance or an inherited stale socket.
+#[cfg(unix)]
+#[test]
+fn child_env_points_the_bridge_at_the_spawning_instance() {
+    let dir = crate::test_support::short_socket_tempdir();
+    for socket_name in ["tuic-mcp-named.sock", "mcp.sock", "mcp-123.sock"] {
+        let listener = std::os::unix::net::UnixListener::bind(dir.path().join(socket_name))
+            .expect("bind spawning instance socket");
+        let socket = listener
+            .local_addr()
+            .unwrap()
+            .as_pathname()
+            .unwrap()
+            .to_path_buf();
+        let state = crate::state::tests_support::make_test_app_state();
+        *state.bound_socket_path.write() = socket.clone();
+        let output = dir.path().join("child-socket");
+        let (pair, mut child) = spawn_pty_pair_with_retry(
+            PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            },
+            || {
+                let mut cmd = CommandBuilder::new("/bin/sh");
+                cmd.args(["-c", r#"printf '%s' "$TUIC_SOCKET" > "$1""#, "child"]);
+                cmd.arg(&output);
+                cmd.env("TUIC_SOCKET", dir.path().join("stale-parent.sock"));
+                bind_pty_identity(&state, &mut cmd, "socket-child", None);
+                cmd
+            },
+        )
+        .expect("spawn child through production PTY path");
+        assert!(child.wait().unwrap().success());
+        drop(pair);
+        assert_eq!(
+            std::fs::read_to_string(&output).unwrap(),
+            socket.to_string_lossy(),
+            "child must reach the server socket actually bound: {socket_name}"
+        );
+    }
+}
+
 #[test]
 fn pty_identity_defaults_claude_to_native_scrollback() {
     let state = crate::state::tests_support::make_test_app_state();
@@ -956,7 +1000,6 @@ fn replay_sanitized_agent_trace(agent: &str, steps: &[SanitizedTraceStep]) -> Si
                     "codex" => vec!["sanitized final".into(), "› sanitized prompt".into()],
                     "claude" => vec!["sanitized final".into(), "❯".into()],
                     "gemini" => vec!["> Type your message".into()],
-                    "aider" => vec![">".into()],
                     _ => Vec::new(),
                 };
                 if detect_agent_screen_activity(Some(agent), &rows) == AgentScreenActivity::Ready {
@@ -1689,6 +1732,28 @@ fn pty_spawn_env_child_checks_inherited_build_context() {
         agent.get_env("MBX_SOCKET"),
         Some(std::ffi::OsStr::new("/intentional-agent-mbx.sock"))
     );
+}
+
+#[cfg(unix)]
+#[test]
+// Catches: a standby tick selected while hidden SIGSTOPs the active terminal after Show.
+fn standby_tick_selected_before_show_does_not_stop_restored_desktop_session() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let sid = "show-before-standby";
+    spawn_real_pty_session(&state, sid, 24, 80);
+    crate::background_mode::hidden::set_visible(&state, sid, false, true);
+    // The checker has selected this hidden session; Show wins the lock before SIGSTOP.
+    crate::background_mode::hidden::set_visible(&state, sid, true, true);
+    let stopped = standby_session(&state, sid);
+    let parked = state.session_maps.standby_sessions.contains_key(sid);
+    let _ = wake_session(&state, sid);
+    close_pty_core(&state, sid, false);
+    assert_eq!(
+        stopped,
+        Ok(false),
+        "Show must invalidate the stale standby decision"
+    );
+    assert!(!parked, "the restored active terminal must remain runnable");
 }
 
 #[cfg(unix)]
@@ -3151,4 +3216,19 @@ impl std::io::Write for WorkingOnEnterWriter {
             _ => Ok(()),
         }
     }
+}
+
+// Catches: natural process exit retains attachments until the tombstone sweeper runs.
+#[test]
+fn attachment_natural_exit_cleans_files_before_tombstone_expiry() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let ended =
+        crate::attachments::prepare_session_directory(&state.data_dir, "pty", "exited").unwrap();
+    let live =
+        crate::attachments::prepare_session_directory(&state.data_dir, "pty", "live").unwrap();
+    std::fs::write(ended.join("fresh.txt"), b"ended").unwrap();
+    std::fs::write(live.join("fresh.txt"), b"live").unwrap();
+    tombstone_transient_cleanup("exited", &state);
+    assert!(!ended.exists());
+    assert_eq!(std::fs::read(live.join("fresh.txt")).unwrap(), b"live");
 }

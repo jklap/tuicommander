@@ -1,5 +1,5 @@
 import { createEffect, onCleanup, type Setter } from "solid-js";
-import { listen } from "../invoke";
+import { invoke, listen } from "../invoke";
 import { setLastMenuActionTime } from "../menuDedup";
 import { togglePanel } from "../panelRouter";
 import { appLogger } from "../stores/appLogger";
@@ -10,7 +10,6 @@ import { mcpPopupStore } from "../stores/mcpPopup";
 import { promptLibraryStore } from "../stores/promptLibrary";
 import { repositoriesStore } from "../stores/repositories";
 import { settingsStore } from "../stores/settings";
-import { terminalsStore } from "../stores/terminals";
 import { tunnelPanelStore } from "../stores/tunnelPanel";
 import { uiStore } from "../stores/ui";
 import { updaterStore } from "../stores/updater";
@@ -27,9 +26,7 @@ interface NativeMenuBridgeOptions {
 	gitOps: ReturnType<typeof useGitOperations>;
 	splitPanes: ReturnType<typeof useSplitPanes>;
 	closeActiveTabOrPane: () => void;
-	forceQuit: () => void | Promise<void>;
 	setSettingsPanelVisible: Setter<boolean>;
-	setQuitDialogVisible: Setter<boolean>;
 	setRunCommandDialogVisible: Setter<boolean>;
 	setTaskQueueVisible: Setter<boolean>;
 	setShowProcessManager: Setter<boolean>;
@@ -64,17 +61,10 @@ export function dispatchNativeMenuAction(action: string, options: NativeMenuBrid
 		case "settings":
 			options.setSettingsPanelVisible((visible) => !visible);
 			break;
-		case "quit-app": {
-			if (settingsStore.state.confirmBeforeQuit) {
-				const hasActiveTerminals = terminalsStore.getIds().some((id) => terminalsStore.get(id)?.sessionId);
-				if (hasActiveTerminals) {
-					options.setQuitDialogVisible(true);
-					break;
-				}
-			}
-			void options.forceQuit();
+		case "quit-app":
+			void invoke("request_quit").catch((error) => appLogger.error("app", "Quit request failed", error));
 			break;
-		}
+
 		case "copy":
 			terminalLifecycle.copyFromTerminal();
 			break;

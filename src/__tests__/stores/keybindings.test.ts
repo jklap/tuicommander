@@ -64,6 +64,15 @@ describe("keybindingDefaults", () => {
 			expect(DEFAULT_BINDINGS["answers-only"]).toBe("Cmd+Alt+R");
 		});
 
+		it("binds run-command to Cmd+Shift+R so Cmd+R stays a reload", () => {
+			expect(DEFAULT_BINDINGS["run-command"]).toBe("Cmd+Shift+R");
+			expect(DEFAULT_BINDINGS["reload-tab"]).toBe("Cmd+R");
+		});
+
+		it("leaves edit-command unbound: Cmd+Alt+R belongs to answers-only", () => {
+			expect(DEFAULT_BINDINGS["edit-command"]).toBe("");
+		});
+
 		it("leaves the hands-free toggle unbound: it is a Command Palette action", () => {
 			expect(DEFAULT_BINDINGS["toggle-hands-free"]).toBe("");
 		});

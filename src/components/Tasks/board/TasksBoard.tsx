@@ -142,6 +142,9 @@ export const TasksBoard: Component<TasksBoardProps> = (props) => {
 					{(column) => (
 						<BoardLane
 							column={column}
+							hasMore={props.hasMore}
+							loadingMore={props.loadingMore}
+							onMore={props.onMore}
 							columns={props.board.columns}
 							cards={lanes().get(column.id) ?? []}
 							target={drag.drag()?.target === column.id}
@@ -154,6 +157,7 @@ export const TasksBoard: Component<TasksBoardProps> = (props) => {
 								if (!pending(cardKey(card.item.reference))) drag.start(event, card, column.id);
 							}}
 							onOpen={props.onOpen ? (card) => props.onOpen?.(card.item.reference) : undefined}
+							cardActions={props.cardActions}
 						/>
 					)}
 				</For>

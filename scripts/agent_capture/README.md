@@ -67,6 +67,10 @@ a prefix (reasoning rows such as grok's `┃` or opencode's `Thinking:`) before
 judging. `idle_gate: true` waits until the agent state is not `working` before
 each submission, for agents that accept input while a turn still streams.
 
+`env_passthrough` lists variable names (for example `GEMINI_API_KEY`) that the driver copies from its
+own environment into the agent launch; the daemon never inherits them. It serves hosts with no logged-in
+HOME, such as the disposable Linux VM matrix; values are never written to `capture.json`.
+
 A scenario with checks names a `canary` and a `canary_rule` containing it. The
 driver writes the rule to `<output>/canary-rule.md` and substitutes
 `{canary_rule}` (the text), `{canary_file}` (the path) and `{home}` (the agent
@@ -130,7 +134,6 @@ scenario metadata and the generated oracle files together.
 | Agent | Installation | Capture verification |
 | --- | --- | --- |
 | Gemini | Not found on PATH | Unverified |
-| aider | Not found on PATH | Unverified |
 | Claude | `~/.local/bin/claude` | Unverified: real CLI reports login expired; never logged in automatically |
 | Codex | `/opt/homebrew/bin/codex` | Recorded and replayed real READY turn; fixture `codex-headless-short-20261008` |
 | pi | `/opt/homebrew/bin/pi` | Recorded and replayed READY turn and real question/answer (Gemini 2.5 Flash); fixtures `pi-headless-short-20261008`, `pi-headless-question-20261008` |

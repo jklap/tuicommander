@@ -1,5 +1,6 @@
 {"fixture":"src-tauri/crates/tuic-terminal/src/fixtures/claude-resize-1407/idle.tcap","events":264}
 {"fixture":"src-tauri/crates/tuic-terminal/src/fixtures/claude-resize-1407/streaming.tcap","events":236}
+{"fixture":"src-tauri/src/fixtures/agent_prompts/claude-2.1.294-remote-startup-idle-20261013.tcap","events":13}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/claude-askuser-esc-20260929.tcap","events":203}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/claude-askuser-multi-question-20261012.tcap","events":205}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/claude-quoted-ink-footer.tcap","events":127}
@@ -23,6 +24,7 @@
 {"fixture":"src-tauri/src/fixtures/agent_prompts/goose-1.49.0-idle.tcap","events":97}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/goose-1.49.0-interrupted.tcap","events":80}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/goose-1.49.0-mid-turn.tcap","events":137}
+{"fixture":"src-tauri/src/fixtures/agent_prompts/goose-1.49.0-submitted-turn-20261012.tcap","events":58}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/grok-1.0.5-minimal-turn.tcap","events":282}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/opencode-1.18.30-mini-narrow-tool-turn.tcap","events":368}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/opencode-1.18.30-mini-resize.tcap","events":11}

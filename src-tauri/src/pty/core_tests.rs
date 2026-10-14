@@ -138,7 +138,7 @@ fn alt_screen_toast_text_names_the_fix_per_agent() {
     assert!(claude.contains("CLAUDE_CODE_DISABLE_AGENT_VIEW"));
     assert!(alt_screen_toast_message("s", Some("codex")).contains("--no-alt-screen"));
     assert!(alt_screen_toast_message("s", Some("opencode")).contains("--mini"));
-    for agent in [None, Some("aider")] {
+    for agent in [None, Some("opencode")] {
         let text = alt_screen_toast_message("s", agent);
         assert!(text.contains("scrollback"), "{agent:?}: {text}");
         assert!(text.contains("state detection"), "{agent:?}: {text}");
@@ -623,7 +623,7 @@ fn test_is_retry_line_matches_connection_retries() {
     assert!(is_retry_line(
         "Teammate @spinach-mail-validate failed: API Error: Unable to connect to API (ConnectionRefused)"
     ));
-    // Goose/Aider stream-error retry form.
+    // Goose stream-error retry form.
     assert!(is_retry_line(
         "⚠  stream error: exceeded retry limit, last status: 401; retrying 5/5 in 3s…"
     ));
@@ -1168,41 +1168,6 @@ fn test_content_zone_spinner_still_keeps_alive() {
     }
 }
 
-/// Aider during generation has NO bottom input box (prompt_toolkit has
-/// returned), so `find_chrome_cutoff` finds no separator/prompt and returns
-/// None → nothing is filtered → the Knight Rider spinner survives and keeps
-/// the agent alive. This is why the positional fix does not false-idle Aider
-/// even though its spinner is a bare block run.
-#[test]
-fn test_aider_generation_spinner_keeps_alive() {
-    let screen: Vec<&str> = vec![
-        "Applied edit to src/main.rs",
-        "█░  Waiting for openrouter/anthropic/claude-sonnet-4.5",
-    ];
-    assert_eq!(
-        crate::chrome::find_chrome_cutoff(&screen),
-        None,
-        "Aider generation view has no input box → no cutoff"
-    );
-    let changed = changed_at(&screen, &[1]);
-    let filtered = filter_below_cutoff(&screen, changed);
-    assert!(
-        filtered.iter().any(|r| r.row_index == 1),
-        "Knight Rider spinner must survive (no cutoff to drop it)"
-    );
-    let chrome_only = !filtered.is_empty() && filtered.iter().all(|r| is_chrome_row(&r.text));
-    // Aider's Knight Rider bar leads its row, so the structural is_spinner_row
-    // matches it (#446-596f).
-    let has_spinner = chrome_only
-        && filtered
-            .iter()
-            .any(|r| crate::chrome::is_spinner_row(&r.text));
-    assert!(
-        !chrome_only || has_spinner,
-        "Aider Knight Rider spinner must pass the busy transition gate"
-    );
-}
-
 // --- Presence-driven working-status keepalive (Codex frozen-TUI false-idle) ---
 
 /// Codex freezes its TUI during a child subprocess (long `cargo`/`git`): the
@@ -1405,7 +1370,7 @@ fn gemini_prompt_above_tall_hud_is_current_chrome() {
 // active — period." BUSY is latched/kept ONLY by movement (post-cutoff
 // `changed_rows` are text-equality diffed, so a frozen glyph produces no
 // ChangedRow and is inert by construction), by user submission, and by
-// hooks. The Claude/Gemini/Aider screen classifiers are PROMPT-based only
+// hooks. The Claude/Gemini screen classifiers are PROMPT-based only
 // (Ready/Unknown, never Working), so a static glyph can never mask the
 // ready prompt or hold the idle path hostage. Codex is the one deliberate
 // exception: its presence-based `• Working (… esc to interrupt)` line holds
@@ -1502,6 +1467,23 @@ fn claude_submitted_prompt_row_is_not_a_ready_composer() {
     }
 }
 
+/// A narrow PTY (phone) wraps or truncates the placeholder, so the closing
+/// quote may be missing; the tab must still read Ready, not Busy forever.
+#[test]
+fn claude_truncated_placeholder_hint_is_a_ready_composer() {
+    for row in [
+        "❯\u{a0}Try \"fix typec",
+        "❯\u{a0}Try \"fix typecheck errors\"",
+    ] {
+        let screen = vec![row.to_string()];
+        assert_eq!(
+            detect_claude_screen_activity(&screen),
+            AgentScreenActivity::Ready,
+            "placeholder hint must read Ready: {row:?}"
+        );
+    }
+}
+
 /// THE core invariant of the movement design: a byte-identical repaint of a
 /// frozen "spinner" line produces NO ChangedRow (text-equality diff in
 /// `TerminalGrid::process`), so it can never pass the reader's busy gate —
@@ -1577,25 +1559,6 @@ fn wiz_hud_progress_bar_is_not_a_claude_spinner() {
     assert!(
         !crate::chrome::is_spinner_row(&hud),
         "a status-line progress bar is not an animated spinner"
-    );
-}
-
-/// Guardrail: the fix must NOT break Aider, whose real "Knight Rider" spinner
-/// IS a run of block glyphs that LEADS its row, so the structural
-/// `is_spinner_row` still matches it — its movement latches/keeps BUSY via
-/// the reader gate. Classification stays prompt-based: mid-generation Aider
-/// has no input box, so the screen is Unknown (never a false Ready).
-#[test]
-fn aider_knight_rider_block_spinner_still_movement_evidence() {
-    assert!(
-        crate::chrome::is_spinner_row("░░░█░░░░░░"),
-        "Aider's Knight Rider block spinner leads the row → still a spinner"
-    );
-    let generating: Vec<String> = vec!["Applied edit to src/main.rs".into(), "░░░█░░░░░░".into()];
-    assert_eq!(
-        detect_aider_screen_activity(&generating),
-        AgentScreenActivity::Unknown,
-        "no input box during generation → Unknown, BUSY held by movement"
     );
 }
 
@@ -6263,7 +6226,7 @@ fn enqueue_refuses_shells_and_dead_sessions() {
 #[test]
 fn queued_wake_without_agent_response_reports_uncertain_delivery() {
     for agent_type in [
-        "codex", "claude", "gemini", "opencode", "aider", "goose", "grok", "pi", "unknown",
+        "codex", "claude", "gemini", "opencode", "goose", "grok", "pi", "unknown",
     ] {
         let state = crate::state::tests_support::make_test_app_state();
         let sid = format!("silent-{agent_type}");
@@ -9700,6 +9663,175 @@ async fn queued_command_drains_after_a_captured_opencode_mini_turn() {
         String::from_utf8(bytes.lock().unwrap()[replayed..].to_vec()).unwrap(),
         "\u{15}resume queued work\r",
         "the Ready screen must release the queue into the composer"
+    );
+}
+
+// Catches: a Claude launched from a shell that paints its Ready composer and
+// status-line HUD but never returns the tab to idle, so tuic-remote shows the
+// blue activity dot for hours on an agent nobody is driving (story 1864-23d0).
+// The capture is a reconstruction of session pe-1 on a remote daemon: bytes
+// are real, chunk boundaries and geometry are approximated.
+#[test]
+fn captured_claude_launch_from_shell_returns_idle_at_its_ready_composer() {
+    let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(
+        "claude-2.1.294-remote-startup-idle-20261013.tcap",
+    ))
+    .expect("valid recorded Claude launch");
+    let (rows, cols) = capture.geometry.expect("recorded geometry");
+    let sid = "claude-launch-idle";
+    let (state, silence) = chunk_trace_state(sid);
+    state
+        .grid
+        .vt_log_buffers
+        .insert(sid.into(), Mutex::new(VtLogBuffer::new(rows, cols, 2000)));
+    {
+        let mut session = state.session_maps.session_states.get_mut(sid).unwrap();
+        session.agent_type = Some("claude".into());
+        session.agent_type_from_run_config = true;
+    }
+    record_submitted_line(&state, sid, "claude".into(), 0);
+    let mut processor = ChunkProcessor::new(None, None);
+    let mut utf8 = Utf8ReadBuffer::new();
+    let mut escapes = EscapeAwareBuffer::new();
+    for record in capture.records {
+        let text = utf8.push(&record.data);
+        let text = escapes.push(&text);
+        let (text, _) = crate::state::strip_kitty_sequences(&text);
+        processor.process_chunk(&text, &silence, sid, &state);
+    }
+    let activity = silence.lock().cached_screen_activity;
+    assert_eq!(
+        activity,
+        AgentScreenActivity::Ready,
+        "{:?}",
+        silence.lock().evidence
+    );
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .background_probe_satisfied_turn_epoch = Some(1);
+    let _ = try_timer_idle_transition(&state, &silence, sid, activity, Some("claude"), Some(1));
+    silence.lock().screen_ready_pending_since =
+        Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
+    assert!(
+        try_timer_idle_transition(&state, &silence, sid, activity, Some("claude"), Some(1))
+            .transitioned,
+        "the recorded Ready composer must release the launch BUSY: {:?}",
+        silence.lock().evidence
+    );
+}
+
+// Catches: a submitted Goose turn retaining Protocol busy after its real reply
+// and ready composer, blocking the next submission until protocol-stale.
+#[test]
+fn captured_goose_submitted_turn_returns_idle_without_protocol_stale() {
+    let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(
+        "goose-1.49.0-submitted-turn-20261012.tcap",
+    ))
+    .expect("valid recorded Goose turn");
+    let (rows, cols) = capture.geometry.expect("recorded geometry");
+    let sid = "goose-submitted-turn";
+    let (state, silence) = chunk_trace_state(sid);
+    {
+        let mut session = state.session_maps.session_states.get_mut(sid).unwrap();
+        session.agent_type = Some("goose".into());
+        session.agent_type_from_run_config = true;
+    }
+    state
+        .grid
+        .vt_log_buffers
+        .insert(sid.into(), Mutex::new(VtLogBuffer::new(rows, cols, 2000)));
+    let mut processor = ChunkProcessor::new(None, None);
+    let mut utf8 = Utf8ReadBuffer::new();
+    let mut escapes = EscapeAwareBuffer::new();
+    let mut input = String::new();
+    for record in capture.records {
+        match record.direction {
+            crate::pty_capture::CaptureDirection::Input => {
+                if record.data == b"\r" {
+                    record_submitted_line(&state, sid, std::mem::take(&mut input), 0);
+                    assert_eq!(
+                        state
+                            .session_maps
+                            .session_states
+                            .get(sid)
+                            .unwrap()
+                            .turn_epoch,
+                        1
+                    );
+                    assert_eq!(
+                        state
+                            .session_maps
+                            .shell_states
+                            .get(sid)
+                            .unwrap()
+                            .load(Ordering::Acquire),
+                        SHELL_BUSY
+                    );
+                } else {
+                    input.push_str(std::str::from_utf8(&record.data).unwrap());
+                }
+            }
+            crate::pty_capture::CaptureDirection::Output => {
+                let text = utf8.push(&record.data);
+                let text = escapes.push(&text);
+                let (text, _) = crate::state::strip_kitty_sequences(&text);
+                processor.process_chunk(&text, &silence, sid, &state);
+            }
+        }
+    }
+    let activity = silence.lock().cached_screen_activity;
+    assert_eq!(activity, AgentScreenActivity::Ready);
+    // A byte replay has no agent process tree. Supply only the independent
+    // foreground probe's quiet result; busy/idle evidence comes from replay.
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .background_probe_satisfied_turn_epoch = Some(1);
+    assert!(
+        !try_timer_idle_transition(&state, &silence, sid, activity, Some("goose"), Some(1))
+            .transitioned
+    );
+    // Advance the Ready debounce, never the five-minute stale deadline.
+    silence.lock().screen_ready_pending_since =
+        Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
+    assert!(
+        try_timer_idle_transition(&state, &silence, sid, activity, Some("goose"), Some(1))
+            .transitioned,
+        "the recorded Ready composer must release the submitted turn: {:?}",
+        silence.lock().evidence
+    );
+    assert_eq!(
+        state
+            .session_maps
+            .shell_states
+            .get(sid)
+            .unwrap()
+            .load(Ordering::Acquire),
+        SHELL_IDLE
+    );
+    record_submitted_line(&state, sid, "What is 30+12?".into(), 0);
+    assert_eq!(
+        state
+            .session_maps
+            .session_states
+            .get(sid)
+            .unwrap()
+            .turn_epoch,
+        2
+    );
+    assert_eq!(
+        state
+            .session_maps
+            .shell_states
+            .get(sid)
+            .unwrap()
+            .load(Ordering::Acquire),
+        SHELL_BUSY
     );
 }
 
@@ -13906,8 +14038,8 @@ fn replay_oracle_all_committed_tcap_preserves_chunk_decisions() {
     let mut manifest = Vec::new();
     for fixture in fixtures {
         let agent = [
-            "claude", "codex", "grok", "goose", "opencode", "gemini", "aider", "pi", "amp",
-            "cursor", "droid", "ego",
+            "claude", "codex", "grok", "goose", "opencode", "gemini", "pi", "amp", "cursor",
+            "droid", "ego",
         ]
         .into_iter()
         .find(|agent| {
@@ -14586,4 +14718,55 @@ fn coalesced_scroll_anchor_applies_after_output_and_latest_request_wins() {
     queue_scroll_anchor(&state, sid, Some(usize::MAX));
     apply_scroll_target(&mut vt, take_pending_scroll(&state, sid).unwrap());
     assert_eq!(vt.grid_display_offset(), 0);
+}
+
+// Catches: retaining final choices reports completion while Claude's Stop hooks still run.
+#[test]
+fn recorded_claude_stop_hooks_keep_public_session_working_with_pending_choices() {
+    let capture = crate::pty_capture::decode_capture(include_bytes!(
+        "../fixtures/agent_prompts/claude-ready-idle-notify.tcap"
+    ))
+    .unwrap();
+    let sid = "claude-stop-hooks-pending-choices";
+    let (state, silence) = chunk_trace_state(sid);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("claude".into());
+    let mut events = state.event_bus.subscribe();
+    let mut processor = ChunkProcessor::new(None, None);
+    let mut utf8 = Utf8ReadBuffer::new();
+    let mut escapes = EscapeAwareBuffer::new();
+    let mut saw_running_stop_hooks = false;
+    for record in capture.records.iter().take(4) {
+        if record.direction != crate::pty_capture::CaptureDirection::Output {
+            continue;
+        }
+        let text = utf8.push(&record.data);
+        let escaped = escapes.push(&text);
+        let (clean, _) = crate::state::strip_kitty_sequences(&escaped);
+        processor.process_chunk(&clean, &silence, sid, &state);
+        while let Ok(event) = events.try_recv() {
+            crate::state::tests_support::apply_replay_event(&state, &event);
+            if let crate::state::AppEvent::PtyParsed { parsed, .. } = event {
+                saw_running_stop_hooks |= parsed["type"] == "status-line"
+                    && parsed["full_line"]
+                        .as_str()
+                        .is_some_and(|line| line.contains("running stop hooks"));
+            }
+        }
+    }
+    assert!(
+        saw_running_stop_hooks,
+        "recorded active Stop-hook phase must be replayed"
+    );
+    let snapshot = state.session_state_with_shell(sid).unwrap();
+    assert_eq!(
+        snapshot.agent_state.as_deref(),
+        Some("working"),
+        "a retained suggest candidate must not mark running Stop hooks completed"
+    );
+    assert_eq!(snapshot.shell_state.as_deref(), Some("busy"));
 }

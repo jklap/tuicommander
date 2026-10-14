@@ -40,6 +40,7 @@ function createMockHandlers(): ShortcutHandlers {
 		handleTerminalSelect: vi.fn(),
 		handleSplit: vi.fn(),
 		handleRunCommand: vi.fn(),
+		reloadActiveTab: vi.fn(),
 		switchToBranchByIndex: vi.fn(),
 		isQuickSwitcherOpen: vi.fn().mockReturnValue(false),
 		toggleMarkdownPanel: vi.fn(),
@@ -125,17 +126,17 @@ describe("actionRegistry", () => {
 			expect(ids).toContain("toggle-focus-mode");
 		});
 
-		// Catches: a Tasks entry that opens an empty tab when no provider plugin is loaded.
-		it("open-tasks is offered only while a work-item provider is registered", () => {
+		// Catches: Open Tasks vanishing with no provider installed, so the install hint in the Tasks tab is unreachable.
+		it("open-tasks is offered with or without a registered work-item provider", () => {
 			const ids = () => getActionEntries(createMockHandlers()).map((entry) => entry.id);
-			expect(ids()).not.toContain("open-tasks");
+			expect(ids()).toContain("open-tasks");
 			const registration = workItemProviderRegistry.register(listDemo(1));
 			try {
 				expect(ids()).toContain("open-tasks");
 			} finally {
 				registration.dispose();
 			}
-			expect(ids()).not.toContain("open-tasks");
+			expect(ids()).toContain("open-tasks");
 		});
 
 		it("Progress action advertises its shortcut and opens the active repository", () => {

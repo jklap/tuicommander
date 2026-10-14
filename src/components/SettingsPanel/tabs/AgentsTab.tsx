@@ -7,6 +7,8 @@ import {
 	type AgentRunConfig,
 	type AgentType,
 	HOOK_SUPPORT,
+	LIMITED_SUPPORT_AGENTS,
+	LIMITED_SUPPORT_LABEL,
 	MCP_SUPPORT,
 } from "../../../agents";
 import {
@@ -653,6 +655,7 @@ const EnvFlagsSection: Component<{ agentType: AgentType }> = (props) => {
 													</Show>
 													<Show when={flag.type === "enum"}>
 														<Select
+															compact
 															class={a.envFlagSelect}
 															value={getFlagValue(flag.key)}
 															onChange={(e) => handleValueChange(flag.key, e.currentTarget.value)}
@@ -663,6 +666,7 @@ const EnvFlagsSection: Component<{ agentType: AgentType }> = (props) => {
 													</Show>
 													<Show when={flag.type === "number"}>
 														<Input
+															compact
 															type="number"
 															class={a.envFlagInput}
 															value={getFlagValue(flag.key)}
@@ -672,6 +676,7 @@ const EnvFlagsSection: Component<{ agentType: AgentType }> = (props) => {
 													</Show>
 													<Show when={flag.type === "string"}>
 														<Input
+															compact
 															type="text"
 															class={a.envFlagInput}
 															value={getFlagValue(flag.key)}
@@ -876,6 +881,11 @@ const AgentRow: Component<{
 						<span class={a.agentName} style={{ opacity: isEnabled() ? 1 : 0.5 }}>
 							{agent().name}
 						</span>
+						<Show when={LIMITED_SUPPORT_AGENTS.includes(props.agentType)}>
+							<span class={a.badge} data-type="limited">
+								{LIMITED_SUPPORT_LABEL}
+							</span>
+						</Show>
 						<Show when={props.detection?.version}>
 							<span class={a.agentVersion}>{props.detection!.version}</span>
 						</Show>

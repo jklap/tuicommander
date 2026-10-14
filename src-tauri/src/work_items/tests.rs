@@ -307,3 +307,17 @@ fn create_fields_lists_item_types_and_rejects_unknown_types() {
     );
     assert!(provider.act(None, create("issue")).is_ok());
 }
+
+// Catches: the schema transport dropping display-only field query capabilities.
+#[test]
+fn field_schema_preserves_display_only_capabilities() {
+    let mut value = serde_json::to_value(demo_provider().fields[0].clone()).unwrap();
+    for capability in ["sortable", "groupable", "filterable"] {
+        value[capability] = json!(false);
+    }
+    let field: WorkItemFieldSchema = serde_json::from_value(value).unwrap();
+    let round_trip = serde_json::to_value(field).unwrap();
+    for capability in ["sortable", "groupable", "filterable"] {
+        assert_eq!(round_trip[capability], false);
+    }
+}

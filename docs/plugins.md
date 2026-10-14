@@ -1,5 +1,45 @@
 # Plugin Authoring Guide
 
+## Scoped plugin settings (#1785-c7a1)
+
+Loaded plugins expose `plugins.<id>` descriptors through the Rust settings owner.
+`plugin_settings_action(pluginId, action)` and `POST /api/plugins/{id}/settings`
+share describe/get/set/reset/patch semantics. The backend fixes both the owner and
+`plugins/<id>/data/config.json`; requests cannot choose a store, target or file.
+Get requires explicit paths; writes require the last `expectedRevision`.
+
+A configurable manifest declares `settings: { schema, defaults }`. The schema is
+closed (`additionalProperties: false`), bounded to 128 annotated leaves, and uses
+only the supported object, scalar and scalar-array constraints. Every leaf needs
+`x-setting` sensitivity, apply mode, effect, operations and `confirmationClass`.
+Opaque objects, unsupported constraints, missing metadata and secret defaults are
+rejected. A plugin with an existing config file and no schema cannot load or write
+that config. Other plugin data, including statistics, remains separate.
+
+Core supplies typed migrations for build-cleaner, at-capacity-retry,
+cache-keepalive, claude-wakeup and the Telegram notifier example. Registration
+fills missing defaults without discarding saved values, validates the result and
+atomically writes an owner-only config file (0600 on Unix). Numeric settings retain
+their typed domains without adding new policy limits to legacy values. Data, config
+and lock paths must stay inside the canonical plugin root and cannot be symlinks;
+links of the whole plugin directory remain supported. Existing bot tokens
+remain available to the notifier's private config reader; the settings service
+returns only set/unset. Catalogue definitions, errors and reload events contain no
+stored credentials. Plugin enablement stays in `app.disabled_plugin_ids`; native
+agent usage has no private plugin store.
+
+Patches validate the entire batch against current state under the shared config
+and cross-process file locks. Stale revisions conflict, failed writes emit no
+reload event, and unload removes descriptors and revokes retained owner handles.
+After persistence, `plugin-changed` is dual-emitted to desktop and SSE so existing
+unload/load callbacks reread config. `applied: false` reports scheduled reload,
+not completed callback acknowledgement. Backend unregistration is awaited before
+reload registration. General MCP settings publication remains a separate cutover.
+
+Plugins can call `host.settings({ action: "get", paths: ["/enabled"] })` and pass
+the resulting revision to set/reset/patch. The host supplies its plugin ID.
+
+
 TUICommander uses an Obsidian-style plugin system. Plugins extend the Activity Center (bell dropdown), watch terminal output, and interact with app state. Plugins are external ES modules loaded at runtime from the user's plugins directory in the desktop app. The native agent usage feature is initialized separately; there is no built-in plugin registration list.
 
 ## Quick Start: External Plugin
@@ -1355,7 +1395,6 @@ TUICommander polls the foreground process of each terminal's PTY every 3 seconds
 | `claude` | `"claude"` |
 | `gemini` | `"gemini"` |
 | `opencode` | `"opencode"` |
-| `aider` | `"aider"` |
 | `codex` | `"codex"` |
 | `amp` | `"amp"` |
 | `cursor-agent` | `"cursor"` |
@@ -1489,7 +1528,7 @@ An obsolete request cannot replace current rows. A failed refresh retains
 available rows and marks them stale. Detail data is requested by the detail
 view after the host receives `onOpen(reference)`. Shell mounting is separate.
 
-The current PluginManifest has no settings schema, field-kind union or generic Tasks-view declaration. Core does not render schema-driven plugin settings or generic plugin Tasks views. Do not invent manifest fields or import core Settings components. Plugins can open their own UI with `host.openPanel` or `host.openMarkdownPanel`. When a settings schema or Tasks-view API is added, document its fields, kinds and core-rendered controls here and extend the source-derived UX drift check to its real schema/renderer. The manifest field and host method inventories fail on new API entries until the guide is updated.
+The optional manifest `settings: { schema, defaults }` registers a scoped settings owner. Core renders one searchable Integrations page per live plugin catalogue and removes it on unload. All reads, edits and resets use the existing revision-checked plugin settings service. Titles and descriptions label controls; secrets show only set/unset. Objects group leaves; string enums render selects, booleans toggles, integers and numbers numeric inputs. Bounded arrays use multi-selects for string enums, lists for strings, and JSON inputs for other item types. Read-only fields render status controls. Plugins do not import core Settings components or save a second configuration file.
 
 ## Plugin Management (Settings > Plugins)
 
@@ -1825,6 +1864,9 @@ and clip to the visible period. A single endpoint gives a one-day milestone.
 Missing, invalid or reversed dates stay clickable in the **Without usable dates**
 side list; out-of-period tasks stay listed in the timeline.
 
+The shell hides the Roadmap view while the selected provider declares no
+`kind: "date"` field.
+
 Both lists use virtual rows. **Load more** follows provider cursors. Failed
 refreshes retain stale results; obsolete provider responses cannot replace the
 active view. This component adds no manifest, IPC or HTTP API. Tasks shell mounting
@@ -1866,6 +1908,8 @@ worktree. `repoPath` is the main repository path, `branch` the worktree branch n
 - `labels`: multiple labels with stable IDs; `date`: ISO-8601 date input.
 - `number`: finite numeric input; `link`: URL/link control.
 
+Display-only fields set `sortable`, `filterable` and `groupable` to false. The roadmap still reads date fields.
+
 The canonical DTOs are `work_items::model` and `work_items::protocol` in Rust.
 Generate their TypeScript declarations with
 `python3 scripts/generate-work-item-types.py`; import from
@@ -1873,19 +1917,27 @@ Generate their TypeScript declarations with
 `{kind, value}` with snake_case kinds. `WorkItemRef` scopes opaque item IDs by
 `providerId` and `accountId`. Missing field keys mean not loaded; null means unset.
 
+Each field schema declares `sortable`, `groupable` and `filterable` booleans for
+the provider list endpoint. Tasks offers only those declared query controls.
+Create and detail schemas set these to false when they are not list fields.
+A rejected query restores the last successful controls and shows the reason.
+
 `WorkItemQuery` carries ANDed filters (values are ORed), saved filter ID, native
 search, sort, bounded page size and opaque cursor. Providers must bind cursors to
 the account/query; selecting a preset starts with no cursor. `WorkItemPage`
-contains items and `nextCursor`. Details load body, field schemas, allowed action
+contains items, `nextCursor` and an optional `total` (all matches, when the provider knows it). Details load body, field schemas, allowed action
 descriptors and a separately paginated comment page on open. Comment entries are
-`normal`, `review_thread` (resolved, path, line and reviewed commitId), or
-`review_summary` (state and reviewed commitId). Bodies are markdown, not trusted HTML.
+`normal`, `review_thread` (resolved, outdated, path, line, originalLine, reviewed
+commitId and a nullable parsed `finding`), or `review_summary` (state and reviewed
+commitId). Comment authors carry `bot`. Bodies are markdown, not trusted HTML; finding
+text is untrusted bot data, shown as plain text and never applied or executed.
 
 Actions are `create`, `edit_field`, `transition`, `comment`, and `start_work`.
 Transitions use provider action IDs, not state display names. Board columns may carry a default edit/transition action or null; per-card moves
 carry the actual legal action to dispatch on drop (workflow IDs can vary by item). Start-work carries repoPath,
 branch, optional baseRef, prompt, agentType and explicit draft/submit delivery;
 core executes the existing worktree/agent workflow and owns errors/rollback.
+Core `CardMoveMenu` provides a portalled, keyboard-accessible menu of other columns and enables only destinations allowed by the card's moves.
 
 `work_items::demo::demo_provider()` supplies deterministic local-only data with
 list, detail, comments, schemas, saved filters, board columns and mutations.
@@ -1902,7 +1954,10 @@ Providers supply data and declared actions; they do not render this view.
 The header shows key, title, type, state and updated time. Detail field schemas
 select text, Markdown, enum, user, labels, date, number and link controls. Saving
 requires an editable field and an enabled `edit_field` action. Required fields
-cannot be cleared. Values retain their tagged field-value shape.
+cannot be cleared. Values retain their tagged field-value shape. The detail shows
+Description first, then the fields, then Comments. A schema of more than eight
+fields folds behind a "Fields (N)" summary so a wide Jira project does not push
+Description and Comments out of view; no field is dropped.
 
 Descriptions and normal comments, review threads and review summaries render
 through `ContentRenderer` with `untrustedContent`. Markdown, tables, images and
@@ -1918,6 +1973,15 @@ label appears immediately while the authoritative state ID stays intact.
 Success adopts the returned detail; rejection restores the state label and
 shows the error. Core does not infer a target state from a transition name.
 
+A `start_work` descriptor in `actions` shows a Start work button in the detail and
+in the board card's actions menu (the menu reads the item's detail when opened).
+Core sends the provider a `start_work` action (active repository, branch, item
+brief, `draft` delivery); the provider returns the intent and core runs the host
+start-work workflow with the item link. The button shows a pending state, then
+the started branch, or the error with Retry. The branch is the item field
+`branch` (text) when the provider fills it, else a slug of key and title. This
+field is a hint and needs no schema entry. "Copy branch name" copies that branch.
+
 Refresh is manual and periodic (60 seconds by default) while the detail, Tasks
 view and document are visible. Refresh preserves disclosure state and reloads
 comment pages already opened. Switching items rejects stale responses.
@@ -1928,10 +1992,14 @@ comment pages already opened. Switching items rejects stale responses.
 (capability `pty:write`) creates a worktree on a new `branch` (from `baseRef`, default
 the repo's default branch) and opens an agent in it. The agent is `agentType` or, when
 omitted, the first enabled agent with a run config on the repo's machine; that run
-config supplies the command and env. The prompt is never a shell argument: the host
-waits for the agent's composer and types it there, inside an `<untrusted-content>`
+config supplies the command and env. The prompt sits inside an `<untrusted-content>`
 block, control bytes removed, capped at 12000 characters. `delivery: "draft"`
-(default) leaves Enter to the user; `"submit"` sends it. `link` links the item to the
+(default) waits for the agent's composer and types the prompt there, leaving Enter to
+the user. `"submit"` starts the agent with the prompt as its first message, quoted as
+one POSIX shell argument after a `--` option terminator, for claude, codex, gemini and grok
+(their `--help` lists a positional prompt for an interactive session and they honour `--`); other agents (pi has no `--`
+handling), prompts over 16384
+characters and cmd/PowerShell shells get the prompt typed and submitted instead. `link` links the item to the
 new worktree. It resolves to `{ repoPath, workspaceId, branch, worktreePath }`.
 The GitHub Auto-fix action uses the same path with `delivery: "submit"`.
 
@@ -1954,7 +2022,39 @@ returns the fields of that type (an unknown type is an error, and `create`
 rejects an undeclared `itemType`). Title and Description are fixed inputs, so a
 schema does not repeat them. Only editable fields render.
 
+Create lists Type, Title, Description and the required fields first. Optional
+fields sit in a folded "Optional fields (N)" group with a name filter; the filter
+only hides a field and never hides one that blocks Create.
+
 A type change reloads the schema; values survive only for the same field id and
 kind, and a late schema of an earlier type is dropped. Create stays disabled until
 Title, Type and every required field of the current type are set. Submit sends one
 `create` action with every current field (unset is null). A rejection keeps the draft.
+
+Create user controls use optional `lookupUsers(fieldId, query, signal?)`, which
+returns `{id, name}` choices for that provider/account. Search text is never a
+selected user; rejected searches stay visible and late responses are discarded.
+Static user options remain selectable. Labels without static options accept
+comma-separated free text. Required-field errors are linked to their controls.
+The Jira provider omits configured Project and selected Issue Type from its
+create schema, searches project-assignable users for Assignee, and searches users
+for Reporter. Cloud choices use account IDs; Data Center choices use usernames.
+A provider may declare optional `singleUser(fieldId)`; Jira does, so a second pick in
+a user field replaces the first. The control shows and announces the chosen user.
+Jira create metadata that carries `hasDefaultValue` (Reporter) is not required in
+the form, and empty optional fields are left out of the create payload so Jira
+applies its own defaults.
+
+## Tasks setup
+
+With no work-item provider registered, the Tasks tab shows install prompts for
+`github-work`, `gitlab` and `jira`. Once a plugin is installed, a form edits its
+account (`id`, `repository`, `host`, `project`/`projectId`, `boards`) and merges it
+into the plugin's `data/config.json`, then reloads the plugin. Other accounts and keys
+stay; a file that is not valid JSON is never overwritten. **Provider settings** in the
+Tasks header opens the same form. The Plugins settings tab lists install hints for
+the work-item plugins that are missing. Open Tasks is always offered.
+
+A provider page with `total <= 1000` can enable complete local Tasks queries after every page is collected and its unique item count matches the stable total. Omit `total` when unknown; never infer a count from a cursor or loaded rows. Local query projection is the host Rust command `project_work_items`, shared with `/tasks/project`. Collection preserves GitLab type, state and preset scope. GitLab username filters remain server-side because list rows hold numeric user identities, not usernames. Roadmap keeps provider paging and does not collect complete scopes automatically.
+
+GitHub Tasks boards (#1846-55d7): the optional provider `listBoards(signal)` port discovers the current user Projects v2 when Board opens. The existing picker selects a project; paging preserves project identities. Missing `read:project` stays visible instead of claiming there are no boards. Providers without discovery retain their configured boards. Discovery does not persist selections or write to GitHub.

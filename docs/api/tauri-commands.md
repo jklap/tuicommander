@@ -1,5 +1,9 @@
 # Tauri Commands Reference
 
+## Scoped plugin settings
+
+`plugin_settings_action(plugin_id: String, action: PluginAction)` returns catalogue descriptors, a redacted snapshot, or a commit reply. Actions: describe, get with paths, set/reset with path and expectedRevision, patch with operations and expectedRevision. The backend binds the plugin owner and config file; unloaded or schema-less plugins are unavailable. HTTP twin: `POST /api/plugins/{id}/settings`.
+
 Slice F exposes `start_graph {target:{type:story|plan,id},expected_revision?,definition_id,definition_revision,request_id,limits?}` through the existing owning-daemon service. Story starts require the current native revision and pin the selected publication; the request ID is bound to its payload. Omitted limits use Rust defaults. Plan dispatch remains unavailable in this build and its start control says so. The `workflow_run` MCP tool uses an inline schema generated from `RunAction` and the public `RunCommand` variants; it returns the same scoped snapshots and cursor-ordered events as IPC/HTTP. Run history shows pinned activations, decisions/evidence, repair counters, pause targets and complete event payloads across pages. Graph recovery uses `resume_graph {execution_id,activation_id,resolution}` after answering pending input; pause and cancel use the existing sequence-fenced commands. Legacy runs offer inspection and cancellation in the UI. No new persistence or client scheduler is added.
 
 ## Workflow runs
@@ -84,7 +88,7 @@ grid-cell coordinates. Both match the stored sequence without normalization.
 | `subscribe_terminal_grid` | `session_id, channel: Channel<Response>` | `u64` (epoch) | Register the grid-frame channel for the calling WebView and install a fresh delivery gate (counting from zero). Navigation or destruction releases only that WebView's subscriptions. Returns the subscription epoch the client must carry on `ack_terminal_frame` and `unsubscribe_terminal_grid`. Frames are **raw bytes**, not JSON. Browser parity: `WS /sessions/:id/stream?format=grid` |
 | `ack_terminal_frame` | `session_id, epoch: u64, received: u64` | `()` | Report the total number of frames this client has received. The gate opens when the echo catches up with what was sent, which is what tells a fresh ack from a late one for an abandoned frame. An ack whose epoch is not the live subscription's is dropped. Browser parity: none — the WS path uses sequence numbers instead |
 | `unsubscribe_terminal_grid` | `session_id, epoch: u64` | `()` | Tear down the grid channel and its gate. The pending scroll target is NOT torn down — it belongs to the session, so an attached browser keeps scrolling after the desktop terminal closes. A non-matching epoch is ignored: a remount subscribes before the outgoing instance unsubscribes, and honouring the stale call would blank a mounted terminal. Browser parity: closing the WS |
-| `chat_view_snapshot` | `session_id, epoch: Option<u64>, from_seq: Option<u64>` | `ChatViewSnapshot` | Chat view of a Claude terminal: transcript entries from the bound session file as ACP updates, with a bounded log, epoch and `reset` flag. Errors `not_bound: <reason>` for a terminal with no bound Claude agent. Browser parity: `GET /sessions/:id/chat-view` |
+| `chat_view_snapshot` | `session_id, epoch: Option<u64>, from_seq: Option<u64>` | `ChatViewSnapshot` | Chat view of a Claude or Grok terminal: transcript entries from the bound session file as ACP updates, with a bounded log, epoch and `reset` flag. Errors `not_bound: <reason>` for a terminal with no bound Claude or Grok agent. Browser parity: `GET /sessions/:id/chat-view` |
 | `terminal_styled_rows` | `session_id, start, count` | `Result<Response, String>` (packed bytes) | A range of styled rows by absolute index, filling the client-side scroll cache. Raw bytes for the same reason as grid frames. Browser parity: `GET /sessions/:id/terminal/styled-rows` (`application/octet-stream`) |
 
 Every terminal grid **read** — the two rows above plus `terminal_get_block_rows`,
@@ -195,7 +199,7 @@ receive it on `/events`.
 |---------|------|---------|-------------|
 | `get_github_status` | `path` | `GitHubStatus` | PR + CI for current branch |
 | `get_ci_checks` | `path` | `Vec<JSON>` | CI check details |
-| `get_pr_review_threads` | `path, pr_number` | `{bot, human}` | Unresolved review threads of one PR, split bot vs human |
+| `get_pr_review_threads` | `path, pr_number` | `{bot, human, ego}` | Unresolved review threads of one PR, split bot vs human vs ego (first comment carries `<!-- tuic:ego-review -->`) |
 | `get_repo_pr_statuses` | `path, include_merged` | `Vec<BranchPrStatus>` | Batch PR status (all branches) |
 | `approve_pr` | `repo_path, pr_number` | `String` | Submit approving review via GitHub API |
 | `update_pr_branch` | `repo_path, pr_number, expected_head_sha` | `()` | Update a BEHIND PR branch from its base, pinned to the shown head |
@@ -550,8 +554,8 @@ are unaffected (they build `NSAlert`) and stay as they are.
 ## Filesystem (`fs.rs`)
 
 `upload_attachment` is the desktop IPC twin of `POST /attachments/upload`.
-It accepts `kind`, `id`, `name`, and binary `bytes`, returns the same `{ path,
-size }` receipt, and uses the same destination, cap, and cleanup rules.
+It accepts `kind`, `id`, optional `session` (required for ACP), `name`, and
+binary `bytes`, returns the same `{ path, size, notice? }` receipt, and uses the same destination, cap, and cleanup rules.
 
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
@@ -698,7 +702,7 @@ empty result.
 | `list_markdown_files` | `path` | `Vec<MarkdownFileEntry>` | List .md files in dir |
 | `read_file` | `path, file` | `String` | Read file contents |
 | `get_mcp_status` | -- | `JSON` | MCP server status plus unfiltered `native_tools: [{name, summary, description}]` Settings inventory (no token — use `get_connect_url` for QR) |
-| `session_suspend_response` | `request_id, ok, reason?` | `()` | The tab's verdict on MCP `session action=suspend`; the MCP call returns it. HTTP: `POST /mcp/suspend-response`. Unknown or already-answered ids are a no-op |
+| `suspended_session_action` | `request` | JSON | Rust-owned durable suspend/resume, metadata sync, list, forget and verified resume resolution. HTTP: `POST /sessions/suspended`; actions and shapes documented in HTTP API |
 | `mcp_confirm_response` | `request_id, confirmed` | `()` | Answer a pending `ui(action=confirm)`. HTTP: `POST /mcp/confirm-response`. Every client is shown the same request and the first answer wins, so an unknown or already-answered id is a no-op, not an error |
 | `get_connect_url` | `ip` | `String` | Build QR connect URL server-side (token stays in backend) |
 | `check_update_channel` | `channel` | `UpdateCheckResult` | Check beta/nightly channel for updates (hardcoded URLs, SSRF-safe) |
@@ -804,8 +808,8 @@ Four rules hold this surface down:
 
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
-| `ego_providers` | `refresh?` | `EgoProviders` | `config ls --json` + `models --json` + `doctor --json`, joined. `refresh: true` adds `--refresh`, the only call that reaches a provider |
-| `ego_set_default_model` | `model` | `EgoProviders` | `config set model="<slug>"`, then a fresh read — the answer is what ego persisted, not what was sent |
+| `ego_providers` | `refresh?` | `EgoProviders` | `config ls --profile=<configured> --json` + `models --json` + `doctor --json`, joined in the configured AI Chat workspace. The profile flag is omitted for the base. `refresh: true` adds `--refresh`, the only call that reaches a provider |
+| `ego_set_default_model` | `model` | `EgoProviders` | `config set --profile=<configured> -- model="<slug>"` in the configured AI Chat workspace (profile omitted for the base), then a fresh read — the answer is what ego persisted, not what was sent |
 | `ego_perimeter` | -- | `PerimeterView` | Stored `config ls --json` plus `config ls --effective --json` in the AI Chat workspace/profile |
 | `ego_set_perimeter_roots` | `roots: {rootDir, rootAccess, readAllowlist, writableDirs}` | `PerimeterView` | Encode a typed `roots=[...]` assignment, run `config set --`, then read back |
 | `ego_set_perimeter_network` | `enabled: bool` | `PerimeterView` | `config set -- network="on"` or `network="off"`, then read back |
@@ -910,7 +914,8 @@ the prepared launch prompt, counting escaped stdout bytes before framing/marker.
 
 ### PR line review commands
 
-- `get_pr_line_threads(repoPath, prNumber, after?)`: `{headSha, threads, hasNextPage, endCursor}`. Threads retain GitHub `line`, `originalLine`, `diffSide`, `isOutdated`, `isResolved`, and `comments` connection.
+- `get_pr_line_threads(repoPath, prNumber, after?)`: `{headSha, threads, hasNextPage, endCursor}`. Threads retain GitHub `line`, `originalLine`, `diffSide`, `isOutdated`, `isResolved`, and `comments` connection; every comment author carries `bot` (from the GraphQL actor type), and each thread carries a nullable `finding` parsed from its first comment by `tuic_git::review_bots` (`tool`, `title`, `severity`, `severityLabel`, `category`, `suggestion`, `agentPrompt`, `addressedIn`, `externalId`; untrusted text).
+- `get_pr_open_threads(repoPath, prNumber)`: the `{pr_open_threads}` smart-prompt variable. A string: a preface, then a fenced untrusted block with one line per unresolved, non-outdated thread (`- path:line · tool · severity · title · url`, most severe first, at most 30 plus `+N more open threads not listed`). Each value is flattened to one line without control characters, and the fence is longer than any backtick run in the data.
 - `get_pr_thread_comments(repoPath, threadId, after?)`: GitHub comments connection.
 - `set_pr_thread_resolved(repoPath, threadId, resolved)`: confirmed thread.
 - `reply_pr_thread(repoPath, threadId, body)`: posted comment.
@@ -954,3 +959,46 @@ an explicit create action. These actions match across HTTP, IPC, MCP and CLI.
 ### History-anchored viewport scrolling
 
 `terminal_scroll_to_anchor` accepts `{ sessionId: string, anchor: number | null }` and returns `()`. The all-time row includes evicted rows, matching `historyBase + historySize - displayOffset`. Null follows output; a trimmed anchor clamps to the oldest retained row. HTTP uses `POST /sessions/:id/terminal/scroll-to-anchor` with the same anchor value.
+
+### Desktop close policy
+
+- `request_quit()` requests real quit regardless of `app.close_behavior`, with confirmation if enabled and terminal sessions exist.
+- `ack_background_snapshot(request_id: string)` acknowledges a completed persisted terminal snapshot requested by `snapshot-now { request_id }`. Native lifecycle only; intentionally unmapped over HTTP. The desktop waits at most two seconds before hiding.
+- `resolve_close(choice: "background" | "quit" | "cancel", remember: bool)` answers the pending Rust-owned close dialog. Background and Remember apply only to Ask. A failed save leaves the dialog pending.
+- These native lifecycle commands are deliberately in `INTENTIONALLY_UNMAPPED`; remote clients cannot hide or quit the host. `close-dialog` carries `{kind: "ask" | "confirm_quit", sessions: number, background_available: boolean}` on desktop events and `/events` SSE.
+
+### Tasks start-work brief
+
+| Command | Arguments | Returns | Description |
+|---------|-----------|---------|-------------|
+| `build_start_work_prompt` | `repoPath, input: {key, url: string or null, title, body}` | `String` | Read `.tuic-start-work.md`, substitute sanitized fields once, or preserve the default brief when absent. HTTP: `POST /tasks/start-work-prompt`. Delivery applies the existing untrusted wrapper and 12,000-character cap. |
+
+### Tasks provider bridge
+
+`work_item_provider_bridge(input)` claims or completes one Rust-issued Tasks provider request. It uses the same input and reply as `POST /work-items/provider-bridge`; see the HTTP API reference. The command only moves requests and replies; the existing provider port owns tracker calls.
+
+`project_work_items` / `POST /tasks/project`: accepts `{items, fields, query}` using the work-item DTOs. Returns `WorkItemGroupedPage` with the filtered unique count, no cursor and one unnamed group when no grouping is selected. Pure Rust projection, maximum 1,000 collected items, no provider access or persisted state.
+
+Settings policy foundation (#1786-9cbd): `mcp_confirm_response` also settles the
+existing desktop/mobile dialog for a backend-built settings proposal. It grants
+only that connection/target/revision/content-bound proposal once, within its
+absolute five-minute lifetime. No new settings IPC command is registered by this
+step; the replacement settings transport is a separate cutover.
+
+## Open desktop Markdown metadata
+
+| Command | Arguments | Result | HTTP twin |
+| --- | --- | --- | --- |
+| `sync_open_markdown_tabs` | `tabs: {id,repoPath,filePath,fsRoot?}[]` | `void` | `PUT /config/open-markdown-tabs` (loopback only) |
+| `list_open_markdown_tabs` | `cwd: string` | `{id,title,relative_path,absolute_path,fs_root}[]` | `GET /repo/open-markdown-tabs?cwd=...` |
+
+The read command runs configuration I/O on the blocking pool. Publication stores
+only metadata in memory and invalidates consumers with `open-markdown-tabs-changed`.
+The list is scoped to registered repository/workspace ownership.
+
+`design_mode_browser_command(repo_path, action, args)` executes an immediate
+Design Mode native-port browser command. HTTP parity: `POST /design-mode/command`.
+See the HTTP reference for action arguments and typed error prefixes.
+
+
+`resume_session(tuic_session)` returns `{ok:true,session_id}` through the shared Rust wake path. HTTP parity: `POST /sessions/wake` with `{tuicSession}`. Live targets are idempotent; failed resume retains the suspended record.

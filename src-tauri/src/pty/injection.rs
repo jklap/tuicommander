@@ -905,7 +905,7 @@ const DELAYED_AGENT_QUEUED_SUBMISSION_CONFIRMATION: std::time::Duration =
 /// | pi       | 0.84.2  | ok at 0ms | ok at 50ms | ok at 0/50ms |
 /// | opencode | 1.18.30 | ok at 50ms | ok at 50ms | ok at 50ms |
 /// | goose    | 1.49.0  | ok at 50ms | ok at 50ms | ok at 50ms |
-/// | gemini, aider, amp, cursor, droid | not installed: UNVERIFIED |
+/// | gemini, amp, cursor, droid | not installed: UNVERIFIED |
 ///
 /// Ground truth of the probe was an answer token that exists only if the turn
 /// ran; the `confirmation` signals below were NOT re-measured against the screen
@@ -945,7 +945,7 @@ pub(super) fn agent_submit_profile(agent_type: Option<&str>) -> AgentSubmitProfi
     let (enter_gap, confirmation) = match agent_type {
         Some("codex") => (INJECT_ENTER_GAP, WorkingScreen),
         Some("claude" | "opencode" | "goose" | "grok" | "pi") => (INJECT_ENTER_GAP, WorkingScreen),
-        Some("gemini" | "aider") => (INJECT_ENTER_GAP, PromptGone),
+        Some("gemini") => (INJECT_ENTER_GAP, PromptGone),
         Some("amp" | "cursor" | "droid") => (INJECT_ENTER_GAP, LegacyWrite),
         _ => (UNVERIFIED_ENTER_GAP, HookOnly),
     };

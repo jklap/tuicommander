@@ -959,7 +959,7 @@ export const GitHubTab: Component = () => {
 					onInput={(e) => setCircleCiToken(e.currentTarget.value)}
 				/>
 				<div class={g.actions}>
-					<button class={cx(g.btn, g.btnPrimary)} onClick={saveCircleCiToken}>
+					<button class={g.btn} data-ready={circleCiToken().trim() ? "true" : undefined} onClick={saveCircleCiToken}>
 						{t("github.circleCiSave", "Save token")}
 					</button>
 					<button class={g.btn} onClick={removeCircleCiToken} disabled={!circleCiStatus()?.configured}>

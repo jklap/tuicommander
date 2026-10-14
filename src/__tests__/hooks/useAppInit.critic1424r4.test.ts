@@ -34,7 +34,6 @@ async function boot(handleBranchSelect: () => Promise<void>) {
 	repositoriesStore.setActive("/repo");
 	const deps = {
 		pty: { listActiveSessions: vi.fn().mockResolvedValue([]), close: vi.fn().mockResolvedValue(undefined) },
-		setQuitDialogVisible: vi.fn(),
 		setStatusInfo: vi.fn(),
 		handleBranchSelect,
 		refreshAllBranchStats: vi.fn(),
@@ -50,7 +49,6 @@ async function boot(handleBranchSelect: () => Promise<void>) {
 			startUserActivityListening: vi.fn(),
 		},
 		applyPlatformClass: vi.fn().mockReturnValue("macos"),
-		onCloseRequested: vi.fn().mockResolvedValue(undefined),
 		registerRepo: vi.fn().mockResolvedValue(undefined),
 	} as unknown as Parameters<typeof initApp>[0];
 	return { initApp, deps, mdTabsStore, handlers };

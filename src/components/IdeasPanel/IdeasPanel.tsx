@@ -251,6 +251,7 @@ export const IdeasPanel: Component<IdeasPanelProps> = (props) => {
 										}
 									>
 										<Select
+											compact
 											class={s.reassignSelect}
 											value={idea.repoPath ?? "__global__"}
 											onChange={(e) => handleReassign(idea.id, e.currentTarget.value)}

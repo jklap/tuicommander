@@ -6,6 +6,13 @@ one uniquely matching foreground process environment. Session-list consumers
 use the repaired association for parent-child routing; they do not infer it
 from terminal names or working directories.
 
+On Unix, spawn binding also sets `TUIC_SOCKET` to the socket recorded after
+this server binds its IPC listener. Named instances, the default instance, and
+collision fallback sockets use this same path, so child agent bridges reach
+the spawning server even when the parent environment names another socket.
+Before the listener binds, no socket override is injected. Windows continues
+to use the shared named-pipe transport.
+
 **Module:** `src-tauri/src/pty.rs`
 
 Manages pseudo-terminal sessions for all terminal tabs in the application.
@@ -324,7 +331,7 @@ OS samples receive a generation under the session lock. Older samples cannot ove
 
 The output reader checks the grid's alternate-screen state for agent sessions. On the first entry per session, it logs a warning with the agent type and detected CLI version. This catches agent versions or launch paths that bypass the native-scrollback launch defaults without spamming on repaints.
 
-PTY identity applies Claude's primary-screen environment control only while that agent's `prevent_alt_screen` setting is enabled. `apply_agent_screen_env` covers IPC, HTTP and MCP spawns before explicit caller environment values are installed. Rust also probes Codex, Grok and OpenCode when creating a shell PTY and exports supported flags and subcommand exclusions into its environment. The zsh, bash and fish wrappers apply those values to manually typed agent commands; `command <agent>` bypasses them. The same Rust policy builds structured launch arguments, with a bounded CLI help probe that retries inconclusive checks.
+PTY identity applies Claude's primary-screen environment control only while that agent's `prevent_alt_screen` setting is enabled. `apply_agent_screen_env` covers IPC, HTTP and MCP spawns before explicit caller environment values are installed. Rust also probes Codex, Grok and OpenCode when creating a shell PTY and exports supported flags and Codex’s `exec` exclusion into its environment. OpenCode wrappers apply `--mini` only to the interactive TUI: recorded subcommands and aliases bypass it, including after root options. Option values and project paths retain the interactive policy. Goose wrappers omit TUIC session naming for `--no-session`, `--name NAME`, `--name=NAME`, `-n NAME`, `-nNAME`, `--path PATH`, `--path=PATH`, `--resume` or `-r`. The zsh, bash and fish wrappers apply those values to manually typed agent commands; `command <agent>` bypasses them. The same Rust policy builds structured launch arguments, with a bounded CLI help probe that retries inconclusive checks.
 
 Grid WebSocket attachment sends the existing viewport as a full frame, including history metadata, without waiting for new PTY output. If a live grid watch has no available frame, the server sends `{"type":"grid-replay-empty"}` so an idle empty session completes replay explicitly. The client bounds initial replay to 15 seconds and reconnects with a persistent error toast when replay stalls or decoding fails. Healthy idle sessions have no subsequent-output deadline.
 
@@ -588,9 +595,12 @@ strand the sticky awaiting/idle state.
 - **Interrupts:** Ctrl-C and bare Escape record `interrupt pending` but never force idle. Idle follows only after an interrupted/ready screen, explicit Stop, or process exit.
 - **Nested prompts (plain shells only):** an interactive subshell — `sh`, `bash -l`, `su`, `sudo su` — is one OSC 133 command that never ends, because the inner shell has no integration of its own and so never emits the closing marker. The outer shell stayed latched `busy` for the subshell's whole life while the user looked at an idle prompt. A plain shell (no `agent_type`) that has been silent for 3s therefore has its foreground process group inspected: if that group and everything under it are shells and privilege wrappers, the explicit busy marker is overruled and the silence path may idle it. Any non-shell descendant (`dd` under `sudo`, a `-c` script) keeps it busy, and the reader still relatches busy on the next byte of output, so this only ever moves an idle prompt. Agents are excluded — their ready-screen adapters already own this. The probe reads the app-wide process snapshot, whose 1s refresher now counts these sessions as demand.
 
+Goose appends its reply below the submitted `> prompt`, so the reader does not apply the fixed input-area chrome cutoff to Goose. Its reply supplies the real activity required to release `user-submit` busy at a stable Ready composer. Protocol ranks and hook-held turns keep their existing rules (#1812-022d).
+
+
 **Movement is the default busy signal (#446-596f):** "if the text above the input area moves, the agent is active." Post-cutoff `changed_rows` are text-equality diffed (`TerminalGrid::process`), so a byte-identical repaint produces no ChangedRow. Static completed summaries, hints, HUD bars, and banner art are inert. Spinner rows among the changed rows additionally refresh `last_output_ms` while they animate. Claude and Codex have narrowly scoped semantic presence exceptions described below because current versions can freeze a valid active status while a child or blocking hook runs.
 
-**Agent screen adapters:** Gemini and Aider remain prompt-based (`Ready` or `Unknown`). Gemini and Codex accept composers only in the current bottom chrome zone (or the final three rows when no input box can be identified), so a historical submitted prompt or markdown quote cannot report `Ready`. Codex detects `Working`/`Ready`/`Interrupted` from its semantic status near that current composer; both `›` and the newer `»` composer glyph are accepted. Claude treats only a spinner-prefixed phase containing an ellipsis and parenthesized progress as `Working`; this outranks the empty `❯` composer that current Claude versions leave visible during long tools. Completed summaries such as `✻ Sautéed for 1m 25s` remain `Ready`. If Claude emits a premature Stop/suggest before a blocking Stop hook, a live phase marker reopens that turn and clears the stale completion suggestions. Grok similarly keeps its `❯` composer visible during a turn: a leading Braille spinner in its bottom status row is `Working`, and the stable composer becomes `Ready` only after that row disappears. These adapters repair the shell's long-lived OSC 133 busy marker even when native hooks are unavailable or disabled.
+**Agent screen adapters:** Gemini remains prompt-based (`Ready` or `Unknown`). Gemini and Codex accept composers only in the current bottom chrome zone (or the final three rows when no input box can be identified), so a historical submitted prompt or markdown quote cannot report `Ready`. Codex detects `Working`/`Ready`/`Interrupted` from its semantic status near that current composer; both `›` and the newer `»` composer glyph are accepted. Claude treats only a spinner-prefixed phase containing an ellipsis and parenthesized progress as `Working`; this outranks the empty `❯` composer that current Claude versions leave visible during long tools. Completed summaries such as `✻ Sautéed for 1m 25s` remain `Ready`. If Claude emits a premature Stop/suggest before a blocking Stop hook, a live phase marker reopens that turn and clears the stale completion suggestions. Grok similarly keeps its `❯` composer visible during a turn: a leading Braille spinner in its bottom status row is `Working`, and the stable composer becomes `Ready` only after that row disappears. These adapters repair the shell's long-lived OSC 133 busy marker even when native hooks are unavailable or disabled.
 
 **Signal precedence and confirmation:** Explicit hook busy > current Claude/Codex/Grok semantic Working marker > movement (real output / animated spinner) > silence. A ready prompt visible from the previous turn cannot cancel a newly submitted prompt until real activity has been observed; after activity, a stable ready composer can repair a missed hook idle. A current-turn completion marker prevents a stale static Codex Working row from relatching BUSY; movement of that exact semantic row can reopen a Codex internal continuation that starts without PTY input. Claude's current live phase marker can supersede a premature completion from a blocking Stop hook. A pending process probe or confirmed meaningful descendant still owns the task lifecycle. Hook-based question suppression activates only after an OSC 7770 state marker is actually received.
 
@@ -673,7 +683,7 @@ queued BUSY-to-IDLE transition also carries the task epoch observed before it
 waited for the lock and is discarded if a new submitted turn won first.
 Without a fresh marker the new task epoch returns to `idle`, not `completed`.
 
-**Transactional peer injection:** Reserving an idle composer creates an ownership token before the PTY write. A failure proven to occur before any byte was written rolls the synthetic BUSY state back to the prior confirmed IDLE state and keeps the message queued. Once any byte may have escaped, failure is `delivery_uncertain`: the session remains conservatively BUSY, the authoritative inbox remains readable, and TUIC does not automatically retry into the terminal. A queued injection waits up to six seconds for Codex and Claude and one second for other agents after Enter for child output plus an agent hook, a new Working screen, or (for Gemini and Aider) the ready prompt disappearing. Codex's stop hook delayed its accepted turn's Working repaint by four seconds; a live Claude notice took 3.8 seconds to leave Claude's internal queue after Enter. A Working screen already present before Enter cannot confirm the new turn: the rb-tool capture showed cursor updates while the queued wake remained in a Codex composer until a manual Enter. A Ready-to-Working transition in output *after* Enter does confirm it, even if the pre-write screen classification was stale. A silent or unrecognised composer reports `delivery_uncertain` and emits an error toast to desktop and browser clients. The toast tells the user to inspect the transcript and composer, and to press Enter once only if the text remains. Further queued entries wait until a human submission or later activity resolves the uncertainty. Enter alone never proves submission. Real output, a Working screen, or an explicit state marker invalidates rollback ownership so a late error cannot erase genuine activity. Amp, Cursor, and Droid retain the previous PTY-write result because they have neither verified screen adapters nor hook support; they need live captures before semantic confirmation can be enabled. `session status` exposes the additive `delivery_uncertain` flag.
+**Transactional peer injection:** Reserving an idle composer creates an ownership token before the PTY write. A failure proven to occur before any byte was written rolls the synthetic BUSY state back to the prior confirmed IDLE state and keeps the message queued. Once any byte may have escaped, failure is `delivery_uncertain`: the session remains conservatively BUSY, the authoritative inbox remains readable, and TUIC does not automatically retry into the terminal. A queued injection waits up to six seconds for Codex and Claude and one second for other agents after Enter for child output plus an agent hook, a new Working screen, or (for Gemini) the ready prompt disappearing. Codex's stop hook delayed its accepted turn's Working repaint by four seconds; a live Claude notice took 3.8 seconds to leave Claude's internal queue after Enter. A Working screen already present before Enter cannot confirm the new turn: the rb-tool capture showed cursor updates while the queued wake remained in a Codex composer until a manual Enter. A Ready-to-Working transition in output *after* Enter does confirm it, even if the pre-write screen classification was stale. A silent or unrecognised composer reports `delivery_uncertain` and emits an error toast to desktop and browser clients. The toast tells the user to inspect the transcript and composer, and to press Enter once only if the text remains. Further queued entries wait until a human submission or later activity resolves the uncertainty. Enter alone never proves submission. Real output, a Working screen, or an explicit state marker invalidates rollback ownership so a late error cannot erase genuine activity. Amp, Cursor, and Droid retain the previous PTY-write result because they have neither verified screen adapters nor hook support; they need live captures before semantic confirmation can be enabled. `session status` exposes the additive `delivery_uncertain` flag.
 
 Queued confirmation waits run per session so a silent agent does not block other sessions or ordered lifecycle notices on the global injection worker. Each idle edge with a nonempty queue can start a worker; there is no global thread cap. A blocked claim returns promptly, and an active acknowledgement wait lasts at most six seconds for Codex or Claude or one second for other agents. The HTTP queue handler runs the blocking delivery on Tokio's blocking pool. If an agent remains silent with no human input after uncertain delivery, the uncertainty flag and later queued entries remain held until activity or a human submission supplies new evidence.
 
@@ -770,6 +780,23 @@ start/end positions, including omitted chrome slots. The end is a page boundary,
 not the total scrollback size. Logical wrap lines stay whole; raw pages use the
 existing output ring and original-byte cursors. See [MCP output paging](mcp-http.md#mcp-tool-session-output).
 
+### Grok transcript Chat view
+
+A Grok terminal is tailed through the same `chat_view::View`, with `GrokAdapter`
+(`chat_view/grok.rs`) reading `~/.grok/sessions/<cwd>/<id>/chat_history.jsonl`.
+`updates.jsonl` is not read: it carries no user turns. A human prompt is a
+`user` row with `prompt_index` and no `synthetic_reason`, unwrapped from
+`<user_query>`; context, reminders, hook feedback and task notices are dropped,
+`compaction_meta` becomes a notice card. Reasoning summaries become thoughts,
+tool calls and results become folded cards (orphan results dropped), and
+server-side `backend_tool_call` rows become finished cards. The binding is
+`agent_session::grok_chat_history_for_pid`: the pid must have an
+`active_sessions.json` entry for the terminal's cwd and its session directory
+must exist. The newest-session fallback of `discover_grok_session` never feeds
+Chat; without an exact entry the snapshot answers `not_bound`. A tab whose agent
+changes between Claude and Grok restarts the view. Fixture:
+`fixtures/chat_view/grok_chat_history.jsonl` (real rows, payloads replaced).
+
 ### Claude transcript Chat view
 
 `chat_view::View::advance` reads complete JSONL rows through `transcript_tail`,
@@ -833,3 +860,77 @@ apply `agent_type` immediately, including removal when the shell returns; the
 ### History-anchored viewport scrolling
 
 Coalesced scrolling uses one atomic latest-wins slot for both transports. `terminal_scroll_to_anchor` encodes an all-time row anchor in that slot; the ticker resolves it under the VT lock after pending output. Null follows output. Evicted anchors clamp to the oldest retained row. Offset commands share the slot, so mixed clients retain request order.
+
+### Codex Chat: exact native hook binding
+
+The Rust `chat_view::codex::CodexAdapter` maps Codex 0.162.1
+`event_msg.item_completed` records to the same ACP updates as the Claude adapter.
+It retains completed user/assistant text, reasoning summaries, command executions
+and MCP tool calls. Tool cards include a main-argument title, bounded `rawInput`,
+final status and bounded output. Shared Claude redaction and truncation rules apply.
+`response_item` duplicates, unfinished tools and hook instructions are ignored.
+Unknown row/item kinds and malformed JSON are counted without stopping later rows.
+
+The shared tail/log has an adapter dispatch seam and preserves its parser on reset.
+Codex Chat accepts only native `SessionStart`/`UserPromptSubmit` evidence. The
+existing managed Codex hook base64-encodes its JSON stdin on OSC 7770 as
+`codex-session=<TUIC_SESSION>:<payload>`. The terminal reader checks its own
+inherited TUIC UUID and stores the thread id, rollout path, cwd and foreground
+PID in live session state. Every Chat read validates that PID is still live,
+the hook/terminal/rollout cwd agree, and the first `session_meta.payload.id`
+exactly matches the native thread id. Header reads are bounded to 64 KiB.
+No directory scan or newest-file fallback participates in this binding.
+
+Thread replacement discards the cached conversation. Shell return, foreground
+agent change and PTY exit revoke identity; a changed/dead PID also fails each
+read and lifecycle snapshot immediately. IPC and HTTP/SSE publish only validated
+`codex_binding: { session_id }`; absence retracts frontend exactness. Native
+evidence is live state, not a persisted proof that can survive process exit.
+The normal persisted `agentSessionId` remains available for resume.
+
+Codex 0.162.1 was verified with an isolated CODEX_HOME, inherited TUIC_SESSION
+and a native SessionStart hook that cancelled before inference: no model request
+was made. Native hooks must be installed/updated through the existing global
+hook installer, enabled and trusted by Codex. Launch-scoped turn-complete notify
+alone does not establish identity. Unsupported versions, missing/untrusted hooks,
+Windows (the existing tty hook transport is Unix-only), and remote terminals
+keep Codex Chat unavailable. TUIC never bypasses native hook trust.
+
+Session attachments live in the app data directory, keyed by the runtime PTY id.
+`bind_pty_identity` provisions the directory and shell grant environment; structured
+launches pass the same directory through `agent_hook_launch::launch_args`.
+`cleanup_session` and `tombstone_transient_cleanup` remove it at the existing close,
+kill and exit boundaries. `AppState::new` sweeps session directories only when their recorded
+owner PID is provably dead. Live, reused and unknown PIDs are preserved across
+concurrent instances. The owner marker sits outside the granted directory. No cleanup visits a repository directory. Resumed tabs use
+new runtime PTY ids, so their read grants point to fresh storage.
+
+Suggest choices are published once when the agent is ready, including while background descendants keep the shell busy. The completion lifecycle event still waits for an idle shell and settled background work; publishing choices does not release that gate.
+
+Pending follow-up choices survive a working spinner until the turn has settled. While the shell is busy, public Claude session snapshots use that same settled-completion predicate, so a retained final marker does not report completed/idle during active Claude Stop hooks. A final `suggest:` marker may share a Claude redraw with its spinner; this is not a new turn. Working evidence can still reopen an idle or delivered completion (including a blocking Stop hook or a Codex internal continuation).
+
+### Background desktop visibility and remote observers
+
+Background mode saves desktop visibility, then clears it while the windows are
+hidden. All terminal WebSocket formats hold a session observation guard; SSE
+holds an all-session guard because its event stream is not session-scoped.
+The standby final eligibility check shares the visibility lock with observer
+attach: a client either prevents SIGSTOP or wakes the already parked process.
+The final check also reads current session visibility under that lock, so Show
+invalidates a standby tick selected while the desktop was hidden.
+Disconnect releases only that observer. Showing the desktop restores saved
+visibility and SIGCONTs only terminals that are visible again.
+
+
+### Rust-owned suspended tabs
+
+Rust owns tab suspension in `suspended_sessions.rs`. It checks the current parsed/shell state, persists a record keyed by stable TUIC identity before closing the PTY, and dual-emits `session-suspended` before EOF. `session_resume.rs` verifies the agent store using the saved launch environment. Resume creates the replacement PTY in Rust and the frontend attaches its returned id. No WebView response is needed; working agents, busy shells, unanswered input and queued commands remain refused.
+
+Each Resume allocates a fresh PTY key and binds the saved TUIC identity before spawning the child. Exit tombstones and delayed cleanup belong to the previous PTY. Suspended-session RPC callers supply top-level session/repository/cwd ownership context, so remote operations stay on the owning daemon even after suspension clears the live session id.
+
+
+### Shared session wake
+
+`session_wake::ensure_live` checks the live identity map under the suspend lock. Live standby sessions receive SIGCONT; retained sessions resume from the durable record with the same TUIC identity. Concurrent callers receive the same PTY. Creation or storage failure returns a reason and retains the record. Submit uses the existing pending-injection ready gate; mail remains in the inbox and queues only a payload-free wake notice.
+
+Backend wake creation events include `tuic_session` alongside the fresh PTY id. Clients reattach the existing suspended tab by that identity; cwd never identifies a tab. Retained aliases resolve to the saved peer identity before mail validation.

@@ -130,6 +130,7 @@ authors and communities behind each project.
 | Crate | Version | License | Platform |
 |-------|---------|---------|----------|
 | block2 | 0.6.2 | MIT | macOS |
+| gio | 0.18.4 | MIT | Linux |
 | mac-notification-sys | 0.6.15 | MIT OR Apache-2.0 | macOS |
 | miow | 0.6.1 | MIT OR Apache-2.0 | Windows |
 | objc2 | 0.6.4 | MIT | macOS |
@@ -139,6 +140,8 @@ authors and communities behind each project.
 | rustix | 1.1.4 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | Linux |
 | rustix-openpty | 0.2.0 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | Linux |
 | signal-hook | 0.4.4 | MIT OR Apache-2.0 | Linux |
+| webview2-com | 0.39.1 | MIT | Windows |
+| windows-core | 0.62.2 | MIT OR Apache-2.0 | Windows |
 | windows-sys | 0.59.0 | MIT OR Apache-2.0 | Windows |
 | windows-sys | 0.61.2 | MIT OR Apache-2.0 | Windows |
 <!-- END GENERATED:rust-platform -->
@@ -230,8 +233,8 @@ Counts below collapse equivalent SPDX expressions (`MIT OR Apache-2.0` ≡ `Apac
 <!-- BEGIN GENERATED:summary -->
 | License | Count |
 |---------|-------|
-| MIT OR Apache-2.0 | 79 |
-| MIT | 67 |
+| MIT OR Apache-2.0 | 80 |
+| MIT | 69 |
 | Apache-2.0 | 8 |
 | Unlicense OR MIT | 7 |
 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | 4 |

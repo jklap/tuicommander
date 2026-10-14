@@ -9,6 +9,9 @@ const { mockRpc, mockNavigate } = vi.hoisted(() => ({
 vi.mock("../../transport", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../../transport")>()),
 	rpc: mockRpc,
+	// Progress/workflow subscriptions are outside this toast listener fixture.
+	// Keep their async registration from outliving the test's Tauri mocks.
+	subscribeEvents: vi.fn().mockResolvedValue(() => {}),
 }));
 vi.mock("../../utils/navigateToTerminal", () => ({ navigateToTerminal: mockNavigate }));
 
@@ -27,7 +30,6 @@ type Payload = Record<string, unknown>;
 function deps(): AppInitDeps {
 	return {
 		pty: { listActiveSessions: vi.fn().mockResolvedValue([]), close: vi.fn().mockResolvedValue(undefined) },
-		setQuitDialogVisible: vi.fn(),
 		setStatusInfo: vi.fn(),
 		handleBranchSelect: vi.fn().mockResolvedValue(undefined),
 		refreshAllBranchStats: vi.fn(),
@@ -43,7 +45,6 @@ function deps(): AppInitDeps {
 			startUserActivityListening: vi.fn(),
 		},
 		applyPlatformClass: vi.fn().mockReturnValue("macos"),
-		onCloseRequested: vi.fn().mockResolvedValue(undefined),
 		registerRepo: vi.fn().mockResolvedValue(undefined),
 	};
 }

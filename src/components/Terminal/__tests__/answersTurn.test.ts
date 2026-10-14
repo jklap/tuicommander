@@ -31,6 +31,36 @@ function decoded(text: string, wrapped = false): DecodedRow {
 }
 
 describe("buildAnswersTurn", () => {
+	// Catches: a pasted bullet list being mistaken for Codex output and cut out of the prompt.
+	it("keeps bullet list items in a multiline user prompt", () => {
+		const turn = buildAnswersTurn(
+			[
+				row("❯ Compare these constraints:"),
+				row("  • keep local changes"),
+				row("  • preserve backups"),
+				row("⏺ 💬 Done."),
+			],
+			true,
+		);
+		expect(turn.prompt).toBe("❯ Compare these constraints:\n  • keep local changes\n  • preserve backups");
+	});
+
+	// Catches: an ordinary bullet in an answer hiding the list and all following caveats from answers-only mode.
+	it("keeps indented bullet list items and the following caveat in an answer", () => {
+		const turn = buildAnswersTurn(
+			[
+				row("• 💬 Before deleting the branch:"),
+				row("  • keep local changes"),
+				row("  • preserve backups"),
+				row("  Do not delete until both are done."),
+			],
+			false,
+		);
+		expect(turn.answers).toEqual([
+			"💬 Before deleting the branch:\n• keep local changes\n• preserve backups\nDo not delete until both are done.",
+		]);
+	});
+
 	it("keeps the prompt and only the answers, joining wrapped rows", () => {
 		const turn = buildAnswersTurn(
 			[
@@ -122,12 +152,12 @@ describe("buildAnswersTurn", () => {
 			row("⏺ 💬 First line that wraps onto"),
 			{ text: " the next row.", isWrapped: true },
 			row(""),
-			row("  Second paragraph."),
+			row("  💬 Second paragraph."),
 			row("⏺ Bash(make test)"),
 			row("  ⎿  ok"),
 		];
 		expect(buildAnswersTurn(rows, true).answers).toEqual([
-			"💬 First line that wraps onto the next row.\n\nSecond paragraph.",
+			"💬 First line that wraps onto the next row.\n\n💬 Second paragraph.",
 		]);
 	});
 
@@ -285,8 +315,11 @@ describe("readAnswersHistory", () => {
 			newTurnCache(),
 		);
 		expect(turns?.[0].prompt).toBeNull();
-		// catches: the answers-only view keeping only the 💬 row, or running an answer past its end into the next one
-		const answers = turns?.[0].answers ?? [];
+		// Catches: retained adjacent marked paragraphs being split or losing continuation content.
+		// Blank-separated box tables and the unmarked smartmem paragraph end regions (#1872-1870 D1).
+		const merged = turns?.[0].answers ?? [];
+		expect(merged).toHaveLength(3);
+		const answers = merged.flatMap((region) => region.split(/\n\n(?=💬)/));
 		expect(answers.map((a) => a.split("\n")[0])).toEqual([
 			"💬 Green bar in the terminal scrollbar: green is the colour TUIC uses to mark the",
 			'💬 Project by project: the full status is in the tab "Stato progetti 03/10"',
@@ -305,8 +338,8 @@ describe("readAnswersHistory", () => {
 				"fixing it.",
 			].join("\n"),
 		);
-		expect(answers[1]).toMatch(/gate status per repo\.$/);
-		expect(answers[2]).toMatch(/so TUIC sees them as unmerged\.$/);
+		expect(answers[1]).toMatch(/here is the short version\.$/);
+		expect(answers[2]).toMatch(/smartmem: critic-011-015, critic-021$/);
 	});
 
 	it("reads only retained prefix rows and caches them while the tracked turn grows", async () => {
