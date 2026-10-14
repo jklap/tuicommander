@@ -34,3 +34,10 @@ overrides:
   # only consumer is postcss, which imports the CJS `nanoid/non-secure`, and
   # a bare ">=" resolves to the ESM-only 6.x.
   nanoid: "^3.3.18"
+  # seroval <= 1.6.2 (via @git-diff-view/solid > solid-js) — GHSA-p6vx-979v-rg4c
+  # (fromJSON promise-thenable assimilation) and GHSA-jp82-f5mq-hwhp (TypedArray
+  # memory exhaustion). Pin to the patched line.
+  seroval: ">=1.6.3"
+  # source-map-js < 1.2.2 (build/test-only, via postcss + coverage-v8) — GHSA-68fv-2mgg-jv7q:
+  # event-loop denial of service.
+  source-map-js: ">=1.2.2"
