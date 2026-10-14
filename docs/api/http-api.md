@@ -3156,3 +3156,14 @@ PUT is the desktop publication twin and refuses non-loopback clients, including
 authenticated remote clients. The in-memory list resets with the backend.
 `open-markdown-tabs-changed` has an empty payload and is emitted on IPC and SSE;
 consumers reread after this event or SSE resynchronization.
+
+### Immediate Design Mode browser commands
+
+`POST /design-mode/command` accepts `{repoPath, action, args}`. Actions are
+`navigate` (`args.url`), `reload`, `screenshot`, `errors`, and `eval` (`args.script`).
+It shares the `design_mode_browser_command` IPC implementation. The extension's
+existing native port receives commands over a pending native-host IPC receive;
+replies match UUIDs and expire after ten seconds. Errors include `not_armed`,
+`command_timeout`, `host_denied`, `eval_not_granted` and `tab_not_visible`.
+Legacy `/design-mode/navigate` and `/design-mode/reload` keep the restart-safe
+heartbeat sequence contract. Immediate commands do not change those sequences.

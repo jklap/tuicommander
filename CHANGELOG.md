@@ -6,6 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Add correlated Design Mode native-port browser commands, explicit host eval grants, screenshots, page-error reads and sidebar action history.
 - Fix seeded workflow Pause resume targets, expose their target in the Designer, and report invalid publication fields as HTTP 422.
 
 ### Added

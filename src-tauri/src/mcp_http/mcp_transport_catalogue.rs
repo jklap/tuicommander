@@ -955,6 +955,10 @@ pub(super) fn merged_tool_definitions_for_mode(
     }
 
     let mut tools = filtered_native_tools(state);
+    let origin = super::mcp_transport_ancillary::resolve_mcp_origin_pty(state, mcp_session_id);
+    if !crate::design_mode::mcp::visible_to(state, origin.as_deref()) {
+        tools.retain(|tool| tool["name"] != "design_mode");
+    }
     let allowed = resolve_allowed_upstreams(state, mcp_session_id);
     let upstream_tools = state
         .mcp
@@ -1016,9 +1020,18 @@ pub(crate) fn spawn_tool_search_index_updater(state: Arc<AppState>) {
 }
 
 /// Handle `search_tools` meta-tool — BM25 search over the full corpus.
+#[cfg(test)]
 pub(super) fn handle_search_tools(
     state: &Arc<AppState>,
     args: &serde_json::Value,
+) -> serde_json::Value {
+    handle_search_tools_for_session(state, args, None)
+}
+
+pub(super) fn handle_search_tools_for_session(
+    state: &Arc<AppState>,
+    args: &serde_json::Value,
+    mcp_session_id: Option<&str>,
 ) -> serde_json::Value {
     let query = match args["query"].as_str() {
         Some(q) if !q.trim().is_empty() => q,
@@ -1031,19 +1044,33 @@ pub(super) fn handle_search_tools(
     let limit = args["limit"].as_u64().unwrap_or(10).clamp(1, 100) as usize;
 
     let index = state.mcp.tool_search_index.read();
-    let results = index.search(query, limit);
+    // Filter after ranking, not the shared index: one caller must not rewrite another's corpus.
+    let origin = super::mcp_transport_ancillary::resolve_mcp_origin_pty(state, mcp_session_id);
+    let visible = crate::design_mode::mcp::visible_to(state, origin.as_deref());
+    let results = index.search(query, 100);
 
     let ranked: Vec<serde_json::Value> = results
         .iter()
+        .filter(|e| e.name != "design_mode" || visible)
+        .take(limit)
         .map(|e| serde_json::json!({ "name": e.name, "summary": e.summary }))
         .collect();
     serde_json::json!({ "results": ranked, "count": ranked.len() })
 }
 
 /// Handle `get_tool_schema` meta-tool — exact-name lookup of a tool's full definition.
+#[cfg(test)]
 pub(super) fn handle_get_tool_schema(
     state: &Arc<AppState>,
     args: &serde_json::Value,
+) -> serde_json::Value {
+    handle_get_tool_schema_for_session(state, args, None)
+}
+
+pub(super) fn handle_get_tool_schema_for_session(
+    state: &Arc<AppState>,
+    args: &serde_json::Value,
+    mcp_session_id: Option<&str>,
 ) -> serde_json::Value {
     let tool_name = match args["tool_name"].as_str() {
         Some(n) if !n.trim().is_empty() => n,
@@ -1054,6 +1081,11 @@ pub(super) fn handle_get_tool_schema(
         }
     };
 
+    let origin = super::mcp_transport_ancillary::resolve_mcp_origin_pty(state, mcp_session_id);
+    if tool_name == "design_mode" && !crate::design_mode::mcp::visible_to(state, origin.as_deref())
+    {
+        return serde_json::json!({"error":"Design Mode not armed for this session"});
+    }
     let index = state.mcp.tool_search_index.read();
 
     match index.get_schema(tool_name) {
