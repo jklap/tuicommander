@@ -33,7 +33,10 @@ const { handlers, mockListen, mockSetLastMenuActionTime, mockSettings, mockStore
 		mockWorkspace: { active: false, ids: [] as string[] },
 	}));
 
-vi.mock("../../invoke", () => ({ listen: mockListen }));
+vi.mock("../../invoke", () => ({ listen: mockListen, invoke: vi.fn().mockResolvedValue(undefined) }));
+
+import { invoke } from "../../invoke";
+
 vi.mock("../../menuDedup", () => ({ setLastMenuActionTime: mockSetLastMenuActionTime }));
 vi.mock("../../panelRouter", () => ({ togglePanel: mockTogglePanel }));
 vi.mock("../../stores/appLogger", () => ({ appLogger: { error: vi.fn(), warn: vi.fn() } }));
@@ -162,7 +165,7 @@ describe("native menu bridge", () => {
 		expect(options.terminalLifecycle.handleTerminalSelect).toHaveBeenCalledWith("w3");
 	});
 
-	it("shows quit confirmation only when configured terminals are active", () => {
+	it("delegates explicit quit to Rust regardless of frontend terminal state", () => {
 		const options = createOptions();
 		mockSettings.state.confirmBeforeQuit = true;
 		mockStores.terminals.getIds.mockReturnValue(["tab-1"]);
@@ -170,7 +173,8 @@ describe("native menu bridge", () => {
 
 		dispatchNativeMenuAction("quit-app", options as never);
 
-		expect(options.setQuitDialogVisible).toHaveBeenCalledWith(true);
+		expect(invoke).toHaveBeenCalledWith("request_quit");
+		expect(options.setQuitDialogVisible).not.toHaveBeenCalled();
 		expect(options.forceQuit).not.toHaveBeenCalled();
 	});
 

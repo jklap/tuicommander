@@ -1,5 +1,7 @@
 # TUICommander Specification
 
+Desktop close policy (B1, #1802-e6b8): Rust owns `app.close_behavior` (`ask` default, `background`, `quit`). Ask offers Remember; Background hides main only. Explicit Quit uses `confirm_before_quit` and closes live PTYs in Rust. Detached panels close independently. Tray and WebView unload belong to later stages.
+
 Agent capture tooling: `scripts/agent_capture/run.py` records real installed CLIs through isolated headless sessions, promotes reviewed captures with ordered expected states, and integrates with the 1342 replay oracle. Missing or unauthenticated CLIs remain unverified.
 
 

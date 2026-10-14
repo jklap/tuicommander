@@ -226,6 +226,24 @@ describe("settingsStore", () => {
 		});
 	});
 
+	// Catches: the UI dropping the close choice when saving or hydrating config.
+	it("persists and hydrates the main-window close preference", async () => {
+		await testInScopeAsync(async () => {
+			await hydrateStore();
+			expect(store.state.closeBehavior).toBe("ask");
+			store.setCloseBehavior("background");
+			vi.advanceTimersByTime(600);
+			await vi.runAllTimersAsync();
+			expect(mockInvoke).toHaveBeenCalledWith("save_config", {
+				base: expect.anything(),
+				config: expect.objectContaining({ close_behavior: "background" }),
+			});
+			mockInvoke.mockResolvedValueOnce({ close_behavior: "quit" });
+			await store.hydrate();
+			expect(store.state.closeBehavior).toBe("quit");
+		});
+	});
+
 	describe("defaults", () => {
 		it("has correct default values", () => {
 			testInScope(() => {

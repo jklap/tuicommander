@@ -1,4 +1,4 @@
-import { cleanup, render } from "@solidjs/testing-library";
+import { cleanup, fireEvent, render } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../../mocks/tauri";
 
@@ -24,6 +24,7 @@ vi.mock("../../../transport", async (importOriginal) => ({
 }));
 
 import { GeneralTab } from "../../../components/SettingsPanel/tabs/GeneralTab";
+import { settingsStore } from "../../../stores/settings";
 
 function headingTexts(container: HTMLElement): string[] {
 	return Array.from(container.querySelectorAll("h3")).map((h) => h.childNodes[0]?.textContent?.trim() ?? "");
@@ -54,6 +55,23 @@ describe("GeneralTab developer tools sections", () => {
 	});
 
 	afterEach(() => cleanup());
+
+	// Catches: the close preference being visible but not wired to persistence, or exposed in browser mode.
+	it("offers a working close-policy select only on desktop", () => {
+		const save = vi.spyOn(settingsStore, "setCloseBehavior").mockImplementation(() => {});
+		const view = render(() => <GeneralTab />);
+		const select = Array.from(view.container.querySelectorAll("select")).find((element) =>
+			Array.from(element.options).some((option) => option.value === "background"),
+		);
+		expect(select).toBeDefined();
+		fireEvent.change(select!, { target: { value: "background" } });
+		expect(save).toHaveBeenCalledWith("background");
+		view.unmount();
+		mockIsTauri.mockReturnValue(false);
+		const browser = render(() => <GeneralTab />);
+		expect(hasLabel(browser.container, "When closing the main window")).toBe(false);
+		save.mockRestore();
+	});
 
 	it("renders TUIC CLI, Code Intelligence, IDE and Custom Launchers on desktop", async () => {
 		const { container, findByText } = render(() => <GeneralTab />);

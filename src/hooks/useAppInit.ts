@@ -6,6 +6,7 @@ import { presentAutomationNotice } from "../services/automationNotifications";
 import { listenForNativeNoticeClicks } from "../services/nativeNotificationNavigation";
 import { activityStore } from "../stores/activityStore";
 import { appLogger } from "../stores/appLogger";
+import { type CloseRequest, closeDialogStore } from "../stores/closeDialog";
 import { editorTabsStore } from "../stores/editorTabs";
 import { githubStore } from "../stores/github";
 import { globalWorkspaceStore, MANUAL_SCOPE } from "../stores/globalWorkspace";
@@ -132,7 +133,6 @@ export interface AppInitDeps {
 		>;
 		close: (sessionId: string) => Promise<void>;
 	};
-	setQuitDialogVisible: (visible: boolean) => void;
 	setStatusInfo: (msg: string) => void;
 	handleBranchSelect: (repoPath: string, branchName: string) => Promise<void>;
 	refreshAllBranchStats: (scopeRepoPath?: string) => Promise<void> | void;
@@ -148,7 +148,6 @@ export interface AppInitDeps {
 		startUserActivityListening: () => void;
 	};
 	applyPlatformClass: () => string;
-	onCloseRequested: (handler: (event: { preventDefault: () => void }) => void) => void;
 	/** Register a repository by path. Same entry point as the `tuic://open-repo`
 	 *  deep link (`gitOps.addRepoByPath`), so registration has one implementation.
 	 *  Init NEVER calls this on its own — only the parked-tab toast's button does,
@@ -319,14 +318,8 @@ export async function initApp(deps: AppInitDeps) {
 	const platform = deps.applyPlatformClass();
 	appLogger.debug("app", `Platform detected: ${platform}`);
 
-	// Intercept window close for quit confirmation (Story 057)
-	deps.onCloseRequested((event) => {
-		if (!settingsStore.state.confirmBeforeQuit) return;
-		const activeTerminals = terminalsStore.getIds().filter((id) => terminalsStore.get(id)?.sessionId);
-		if (activeTerminals.length > 0) {
-			event.preventDefault();
-			deps.setQuitDialogVisible(true);
-		}
+	await listen<CloseRequest>("close-dialog", (event) => {
+		if (isTauri()) closeDialogStore.present(event.payload);
 	});
 
 	// Periodic terminal snapshot — ensures savedTerminals is always fresh
@@ -358,7 +351,7 @@ export async function initApp(deps: AppInitDeps) {
 		// 2. Close PTY sessions — but NOT in Tauri mode during webview reloads
 		// (Vite HMR, manual reload). The Rust backend survives the reload and
 		// list_active_sessions will re-adopt the surviving sessions on re-init.
-		// In Tauri, real quit is handled by the close-requested handler which
+		// In Tauri, real quit is handled by the Rust close policy which
 		// calls app.exit() — beforeunload during quit is a no-op for PTY cleanup.
 		if (!isTauri()) {
 			// Browser only closes sessions it created — leave Tauri-created ones alive

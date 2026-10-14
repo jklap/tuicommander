@@ -17,6 +17,10 @@ Desktop AI Chat uses the terminal composer’s pin and blue play buttons. The pi
 
 AI Chat image paste discovers capabilities on first use and shares clipboard precedence with Ideas, terminal Compose, and terminal input: Finder image filenames allow attachments, while substantive text takes priority.
 
+## Desktop close and quit
+
+Rust owns main-window close: Ask (default) offers Background, Quit and Cancel with Remember; Background hides only the main window and keeps sessions running. Explicit Quit ignores the close preference and confirms if enabled with live terminals. Detached-panel close affects only that panel. This stage keeps the WebView loaded and does not add a tray.
+
 ## Shared form controls
 
 Desktop and mobile select fields use a shared native Select, with consistent theme

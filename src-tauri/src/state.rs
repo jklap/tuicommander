@@ -163,6 +163,8 @@ pub(crate) struct WorktreeRemovedPayload {
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "event", content = "payload")]
 pub enum AppEvent {
+    #[serde(rename = "close-dialog")]
+    CloseDialog { payload: serde_json::Value },
     #[serde(rename = "automation-run-changed")]
     AutomationRunChanged { payload: serde_json::Value },
     #[serde(rename = "head-changed")]
@@ -5267,6 +5269,7 @@ impl AppState {
             | AppEvent::ProgressRecorded { .. }
             | AppEvent::WorkflowRunChanged { .. }
             | AppEvent::AutomationRunChanged { .. }
+            | AppEvent::CloseDialog { .. }
             | AppEvent::ReviewProgress { .. }
             | AppEvent::ProposalsReady { .. }
             // This accumulator's own output. Feeding it back in would make the

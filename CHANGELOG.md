@@ -14,6 +14,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Preserve the local branch and report a warning if a concurrent fetch conflicts with the remote proof during worktree removal (#1874-1758).
 
 ### Added
+- Let Rust own desktop close and quit. Choose Ask, Background or Quit for the main window; Ask can remember the choice, and explicit Quit keeps its own confirmation (#1802-e6b8).
 - Attach PNG, JPEG, WebP and GIF images in terminal Compose by dropping them on the editor or choosing multiple images with the file button; paste keeps its existing behavior (#1758-1613).
 - Remember Tasks source, view, grouping, sort and filters per repository and provider account; recover rejected saved sorts with the last accepted order (#1852-35a8).
 - Keep the Tasks move menu open while scrolling its destinations; simplify board refresh to merge page one into loaded cards (#1844-858d).
