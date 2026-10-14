@@ -1530,6 +1530,20 @@ view after the host receives `onOpen(reference)`. Shell mounting is separate.
 
 The optional manifest `settings: { schema, defaults }` registers a scoped settings owner. Core renders one searchable Integrations page per live plugin catalogue and removes it on unload. All reads, edits and resets use the existing revision-checked plugin settings service. Titles and descriptions label controls; secrets show only set/unset. Objects group leaves; string enums render selects, booleans toggles, integers and numbers numeric inputs. Bounded arrays use multi-selects for string enums, lists for strings, and JSON inputs for other item types. Read-only fields render status controls. Plugins do not import core Settings components or save a second configuration file.
 
+### GitHub Work adapter status
+
+`plugins/github-work/provider.js` exports `createGitHubProvider` against the A4
+contract and an injected account-scoped fetch port. It returns data only; core owns
+rendering and start-work execution. Recorded GitHub fixtures cover REST read shapes.
+The adapter does not receive tokens or maintain a separate rate limiter.
+
+The plugin lifecycle and manifest use `host.httpFetch(url, {account})` from
+story 1697-4cdc; the catalog lists GitHub Work. Configure `data/config.json` with
+account IDs and repositories as described in the module README. B6/B7 core ports and the duplicate-picker consumer also need integration.
+The current `host.invoke` whitelist must not be bypassed to reach core PR commands.
+Projects v2 success paths remain unverified because the recording credential lacks
+`read:project`. See the module README for the open integration tasks.
+
 ## Plugin Management (Settings > Plugins)
 
 The Settings panel has a **Plugins** tab with two sub-tabs:

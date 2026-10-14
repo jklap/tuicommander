@@ -62,6 +62,7 @@ describe("mobile session header", () => {
 		});
 		const view = render(() => (
 			<SessionDetailScreen
+				subscribeChatWake={() => () => {}}
 				session={session("codex-1", "codex", "Merge risk")}
 				sessionExists
 				onBack={() => {}}
@@ -94,6 +95,7 @@ describe("mobile session header", () => {
 		});
 		const view = render(() => (
 			<SessionDetailScreen
+				subscribeChatWake={() => () => {}}
 				session={session("claude-2", "claude", "Audit workspace")}
 				sessionExists
 				onBack={() => {}}
@@ -119,6 +121,7 @@ describe("mobile session header", () => {
 		const onOpenFiles = vi.fn();
 		const view = render(() => (
 			<SessionDetailScreen
+				subscribeChatWake={() => () => {}}
 				session={session("codex-1", "codex", "Merge risk")}
 				sessionExists
 				onBack={() => {}}
@@ -136,7 +139,13 @@ describe("mobile session header", () => {
 	it("explains when a session has no project instead of showing another session's journal", async () => {
 		const detached = { ...session("codex-3", "codex", "Detached"), cwd: null, worktree_path: null };
 		const view = render(() => (
-			<SessionDetailScreen session={detached} sessionExists onBack={() => {}} onOpenFiles={() => {}} />
+			<SessionDetailScreen
+				subscribeChatWake={() => () => {}}
+				session={detached}
+				sessionExists
+				onBack={() => {}}
+				onOpenFiles={() => {}}
+			/>
 		));
 		await fireEvent.click(view.getByRole("button", { name: "More session actions" }));
 		await fireEvent.click(view.getByRole("button", { name: /Progress/ }));

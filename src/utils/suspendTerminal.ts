@@ -94,10 +94,10 @@ export async function resumeTerminal(id: string): Promise<SuspendOutcome> {
 	const term = terminalsStore.get(id);
 	if (!term?.suspended) return { ok: false, reason: "not suspended" };
 	try {
-		const result = await rpc<{ session_id: string }>("suspended_session_action", {
+		const result = await rpc<{ session_id: string }>("resume_session", {
 			repoPath: term.repoPath,
 			cwd: term.cwd,
-			request: { action: "resume", tuicSession: term.tuicSession },
+			tuicSession: term.tuicSession,
 		});
 		terminalsStore.setSessionId(id, result.session_id);
 		terminalsStore.update(id, { suspended: false, pendingInitCommand: null, pendingResumeCommand: null });

@@ -3228,6 +3228,9 @@ pub(super) fn emit_open_intent_if_idle(
 /// [`remove_live_session_state`] enforces for per-session state: a new
 /// peer-keyed map belongs in this function and nowhere else.
 fn retire_peer_identity(state: &AppState, tuic_session: &str) {
+    if state.hibernated_peers.contains(tuic_session) {
+        return;
+    }
     crate::mcp_http::remote_peer::unregister_peer(state, tuic_session);
     state.orchestrator_peers.remove(tuic_session);
     state.agent_inbox.remove(tuic_session);
@@ -3312,12 +3315,14 @@ fn remove_live_session_state(session_id: &str, state: &AppState) {
     state.pending_initial_prompts.remove(session_id);
     state.managed_trust_dialogs.remove(session_id);
     state.active_agent_waiters.remove(session_id);
-    crate::mcp_http::remote_peer::unregister_peer(state, session_id);
-    state.orchestrator_peers.remove(session_id);
-    state.agent_inbox.remove(session_id);
-    state.agent_inbox_evictions.remove(session_id);
-    // The inbox read position is meaningless once the inbox is gone.
-    state.agent_read_cursor.remove(session_id);
+    if !state.hibernated_peers.contains(session_id) {
+        crate::mcp_http::remote_peer::unregister_peer(state, session_id);
+        state.orchestrator_peers.remove(session_id);
+        state.agent_inbox.remove(session_id);
+        state.agent_inbox_evictions.remove(session_id);
+        // The inbox read position is meaningless once the inbox is gone.
+        state.agent_read_cursor.remove(session_id);
+    }
     #[cfg(unix)]
     state.session_maps.standby_sessions.remove(session_id);
     // DEFERRED (2026-08-25) — a parent identity retained ONLY because this child

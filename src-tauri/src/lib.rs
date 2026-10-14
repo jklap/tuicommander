@@ -29,6 +29,7 @@ mod background_mode_tests;
 pub(crate) mod launch_instructions;
 pub(crate) mod prompt_receipt;
 pub(crate) mod session_resume;
+pub(crate) mod session_wake;
 pub(crate) mod suspended_sessions;
 pub mod work_items;
 pub use tuic_core::app_instance;
@@ -2516,6 +2517,7 @@ pub fn run() {
             secrets::forms::secret_form_submit,
             mcp_confirm_response,
             mcp_http::suspended_routes::suspended_session_action,
+            mcp_http::suspended_routes::resume_session,
             app_logger::push_log,
             app_logger::get_logs,
             app_logger::clear_logs,

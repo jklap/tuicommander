@@ -53,63 +53,18 @@ fn action(state: &Arc<AppState>, request: &serde_json::Value) -> Result<serde_js
             Ok(serde_json::json!({"ok": true}))
         }
         "forget" => {
-            suspended_sessions::remove(
-                request["tuicSession"]
-                    .as_str()
-                    .ok_or("tuicSession is required")?,
-            )?;
-            Ok(serde_json::json!({"ok": true}))
-        }
-        "resume" => {
-            let _guard = state.suspend_lock.lock();
             let identity = request["tuicSession"]
                 .as_str()
                 .ok_or("tuicSession is required")?;
-            let records = suspended_sessions::list()?;
-            let record = records.get(identity).ok_or("not suspended")?;
-            let command = if record.agent_type.is_some() {
-                Some(
-                    crate::session_resume::resolve(&record.resume_request())
-                        .cmd
-                        .ok_or("no resumable agent session")?,
-                )
-            } else {
-                None
-            };
-            if state.session_maps.sessions.len() >= crate::MAX_CONCURRENT_SESSIONS {
-                return Err("Max concurrent sessions reached".into());
-            }
-            if state
-                .session_maps
-                .live_pty_by_tuic_session
-                .contains_key(identity)
-            {
-                return Err("session is already live".into());
-            }
-            let session_id = super::session::spawn_pty_session(
-                state.clone(),
-                record.shell.clone(),
-                Some(record.cwd.clone()),
-                24,
-                80,
-                record.worktree.clone(),
-                super::session::RequestedIdentity {
-                    session_id: None,
-                    tuic_session: Some(identity.into()),
-                    alias: record.alias.clone(),
-                    startup_command: command,
-                },
-            )
-            .map_err(|(_, Json(error))| error.to_string())?;
-            if let Err(error) = suspended_sessions::remove(identity) {
-                crate::pty::close_pty_core_with_reason(
-                    state,
-                    &session_id,
-                    false,
-                    "resume_storage_failed",
-                );
-                return Err(error);
-            }
+            suspended_sessions::remove(identity)?;
+            state.hibernated_peers.remove(identity);
+            Ok(serde_json::json!({"ok": true}))
+        }
+        "resume" => {
+            let identity = request["tuicSession"]
+                .as_str()
+                .ok_or("tuicSession is required")?;
+            let session_id = crate::session_wake::ensure_live(state, identity)?;
             Ok(serde_json::json!({"ok": true, "session_id": session_id}))
         }
         _ => Err("Unknown suspended session action".into()),
@@ -133,4 +88,33 @@ pub(super) async fn action_http(
         )
             .into_response(),
     }
+}
+
+/// IPC and HTTP share the same durable wake transition.
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) async fn resume_session(
+    state: tauri::State<'_, Arc<AppState>>,
+    tuic_session: String,
+) -> Result<serde_json::Value, String> {
+    dispatch(
+        state.inner().clone(),
+        serde_json::json!({"action": "resume", "tuicSession": tuic_session}),
+    )
+    .await
+}
+
+pub(super) async fn resume_http(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
+    auth: Option<Extension<super::guards::Authenticated>>,
+    Json(request): Json<serde_json::Value>,
+) -> Response {
+    action_http(
+        State(state),
+        ConnectInfo(addr),
+        auth,
+        Json(serde_json::json!({"action": "resume", "tuicSession": request["tuicSession"]})),
+    )
+    .await
 }

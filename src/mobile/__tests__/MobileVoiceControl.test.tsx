@@ -62,7 +62,13 @@ const armedStatus = { armed: true, phase: "waiting", sessionId: "s1", owner: "br
 
 function mount() {
 	return render(() => (
-		<SessionDetailScreen session={session} sessionExists={true} onBack={() => {}} onOpenFiles={() => {}} />
+		<SessionDetailScreen
+			subscribeChatWake={() => () => {}}
+			session={session}
+			sessionExists={true}
+			onBack={() => {}}
+			onOpenFiles={() => {}}
+		/>
 	));
 }
 

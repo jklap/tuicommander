@@ -1066,6 +1066,7 @@ fn shared_routes() -> Router<Arc<AppState>> {
         .route("/sessions/{id}/raw-ring", get(session::get_raw_ring))
         .route("/sessions/{id}/pause", post(session::pause_session))
         .route("/sessions/{id}/resume", post(session::resume_session))
+        .route("/sessions/wake", post(suspended_routes::resume_http))
         .route("/sessions/{id}/kitty-flags", get(session::get_kitty_flags))
         .route(
             "/sessions/{id}/foreground",

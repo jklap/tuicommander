@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
+import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SubscribePtyOptions } from "../../transport";
 import { OutputView } from "../components/OutputView";
@@ -14,6 +15,7 @@ let stream: SubscribePtyOptions;
 
 beforeEach(() => {
 	frames = [];
+	subscribePty.mockClear();
 	vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
 		frames.push(callback);
 		return frames.length;
@@ -215,3 +217,35 @@ async function mountCappedOutput() {
 	fireEvent.scroll(viewport);
 	return { viewport, rows, append, visibleLine: () => rows()[Math.floor(viewport.scrollTop / 20)]?.textContent };
 }
+
+// Catches: display:none leaves CLI detached or remounting loses the existing PTY stream.
+it("returns the mounted output to bottom after hidden Chat output", async () => {
+	const [visible, setVisible] = createSignal(true);
+	const view = render(() => <OutputView sessionId="hidden-output" visible={visible()} />);
+	const viewport = view.container.firstElementChild as HTMLDivElement;
+	let top = 0;
+	Object.defineProperties(viewport, {
+		clientHeight: { value: 400 },
+		scrollHeight: { value: 2000 },
+		scrollTop: {
+			get: () => top,
+			set: (value: number) => {
+				top = Math.min(value, 1600);
+			},
+		},
+	});
+	await waitFor(() => expect(subscribePty).toHaveBeenCalled());
+	paint();
+	fireEvent.scroll(viewport);
+	dragUp(viewport, 240);
+	setVisible(false);
+	stream.onScreenRows?.(["output during Chat"]);
+	paint();
+	expect(viewport.style.display).toBe("none");
+	setVisible(true);
+	paint();
+	expect(view.container.firstElementChild).toBe(viewport);
+	expect(subscribePty).toHaveBeenCalledTimes(1);
+	expect(viewport.scrollTop).toBe(1600);
+	expect(viewport.textContent).toContain("output during Chat");
+});

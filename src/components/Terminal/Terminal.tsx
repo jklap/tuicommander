@@ -950,6 +950,10 @@ export const Terminal: Component<TerminalProps> = (props) => {
 	createEffect(
 		on(isVisible, (visible) => {
 			if (!visible) return;
+			if (terminalsStore.get(props.id)?.suspended) {
+				void resumeTerminal(props.id);
+				return;
+			}
 			const containerIsSized = () => !!containerRef && containerRef.offsetWidth > 0 && containerRef.offsetHeight > 0;
 
 			rafHandle = requestAnimationFrame(() => {

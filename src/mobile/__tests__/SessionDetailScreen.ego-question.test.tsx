@@ -46,7 +46,13 @@ const session: SessionInfo = {
 // Catches: waiting ego questions showing no readable, explicit mobile question action.
 it("opens the full recorded ego question on demand and submits the selected option once", async () => {
 	const view = render(() => (
-		<SessionDetailScreen session={session} sessionExists onBack={() => {}} onOpenFiles={() => {}} />
+		<SessionDetailScreen
+			subscribeChatWake={() => () => {}}
+			session={session}
+			sessionExists
+			onBack={() => {}}
+			onOpenFiles={() => {}}
+		/>
 	));
 	expect(view.container.textContent).toContain("Input");
 	expect(view.queryByText(question.title)).toBeNull();

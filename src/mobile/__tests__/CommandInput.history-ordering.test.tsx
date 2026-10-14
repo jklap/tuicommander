@@ -38,6 +38,7 @@ afterEach(() => {
 function mountSession() {
 	return render(() => (
 		<SessionDetailScreen
+			subscribeChatWake={() => () => {}}
 			session={{
 				session_id: "history-session",
 				cwd: "/repo",

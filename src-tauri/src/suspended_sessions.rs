@@ -23,7 +23,7 @@ pub(crate) struct SuspendedSession {
 type Records = BTreeMap<String, SuspendedSession>;
 
 pub(crate) fn list() -> Result<Records, String> {
-    ConfigFile::<Records>::new(FILE).update_with_strict(|records| Ok((records.clone(), false)))
+    ConfigFile::<Records>::new(FILE).read_preserving_invalid()
 }
 
 pub(crate) fn remove(identity: &str) -> Result<(), String> {
@@ -141,6 +141,7 @@ pub(crate) fn suspend(
         Ok(((), true))
     })?;
     // Publish before EOF: clients must preserve the tab when the reader reports exit.
+    state.hibernated_peers.insert(record.tuic_session.clone());
     state.notify_session_suspended(&record);
     crate::pty::close_pty_core_with_reason(state, session_id, false, "suspended");
     Ok(record)

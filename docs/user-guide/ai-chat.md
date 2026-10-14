@@ -151,7 +151,9 @@ is the reference for stashing and
 restoring an empty prompt; automatic restoration after Send and swapping two
 nonempty drafts are TUICommander behaviors requested for this composer.
 The transcript follows new output while you are at the bottom and keeps your
-position when you scroll up. Tool activity rows show names; expand a call to
+position when you scroll up. A touch pauses automatic scrolling until you release
+or cancel it. If you did not scroll up, the transcript then catches up to the latest
+output, even when the answer finished during the touch. Tool activity rows show names; expand a call to
 read its full command and output.
 
 - **Streamed answer.** Text arrives a chunk at a time. Reasoning is folded into
