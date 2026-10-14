@@ -1127,10 +1127,6 @@ needs to re-run this: `command -v` still finds none of `amp`, `cursor`,
   `/mobile.html`: the desktop dialog must disappear by itself, and the reverse must
   work too. Then, with a push subscription registered and the PWA closed, confirm the
   push carries the title. Needs a real phone and a real subscription.
-- [ ] [HUMAN] Comment a word that repeats many times in a markdown preview ("reason" _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_ _(audit 2026-10-13: VISUAL-OWED — Real canvas/vendor rendering or subjective visual observation unavailable. Related tests run where applicable but do not prove rendered native surface; no screenshot attempts.)_ _(triage 2026-10-14: DO — Runnable through scoped source/tests, isolated browser or throwaway API fixtures.)_
-  ×18) and confirm the highlight lands on the occurrence you selected, and that
-  selecting across an existing highlight hides "Add comment". The offsets are asserted
-  in `tweakComments.test.ts`; where the highlight is *drawn* is not.
 - [ ] [HUMAN] Boss's call: **Trim** the real `src-tauri/target` row in Build Cleaner. It _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_ _(audit 2026-10-13: HUMAN — Requires hardware, authentication/provider state, or credential mutation; prohibited by audit brief. Source: to-test.md:2385)_ _(triage 2026-10-14: WAITS — MacControl Screen Recording: needs native desktop/cross-app observation.)_
   is 58 GiB and a Trim forces a full rebuild of the running dev app, so no agent may
   run it. Trim against other repos' `target/` is covered.
