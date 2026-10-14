@@ -138,7 +138,7 @@ describe("native notification delivery", () => {
 			const { uiStore } = await import("../stores/ui");
 			const { notificationsStore } = await import("../stores/notifications");
 			const { notifyPrTransition } = await import("../services/prNativeNotifications");
-			notificationsStore.state.config.pr_native_notifications = false;
+			notificationsStore.setPrNativeNotifications(false);
 			uiStore.setTaskViewPreference("tasks:notification-policy", { notificationsEnabled: true });
 			notifyPrTransition({
 				repoName: "acme/api",
