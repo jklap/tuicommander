@@ -141,6 +141,7 @@ describe("verifyAndBuildResumeCommand", () => {
 			"CLAUDE_CONFIG_DIR=private claude --resume exact",
 		);
 		expect(mockRpc).toHaveBeenCalledWith("suspended_session_action", {
+			cwd: "/repo",
 			request: {
 				action: "resolve_resume",
 				agentType: "claude",

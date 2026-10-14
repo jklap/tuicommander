@@ -175,6 +175,25 @@ describe("a repo registered on a remote machine runs its work there", () => {
 			expect(fetchedUrls()[0]).toBe(`${BASE_URL}/sessions/${SESSION}/write?token=${TOKEN}`);
 		});
 
+		// Catches: nested Suspend/Resume routing loses the owning daemon after sessionId is cleared.
+		it("suspends and resumes a remote tab on its daemon without a live session id", async () => {
+			(globalThis as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+			const id = openRemoteTab(REMOTE_REPO, REMOTE_REPO);
+			(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+				jsonResponse('{"ok":true,"session_id":"remote-replacement"}'),
+			);
+			const { suspendTerminal, resumeTerminal } = await import("../utils/suspendTerminal");
+			expect(await suspendTerminal(id)).toEqual({ ok: true });
+			expect(terminalsStore.get(id)?.sessionId).toBeNull();
+			expect(await resumeTerminal(id)).toEqual({ ok: true });
+			expect(terminalsStore.get(id)?.sessionId).toBe("remote-replacement");
+			expect(fetchedUrls()).toEqual([
+				`${BASE_URL}/sessions/suspended?token=${TOKEN}`,
+				`${BASE_URL}/sessions/suspended?token=${TOKEN}`,
+			]);
+			expect(mockInvoke).not.toHaveBeenCalled();
+		});
+
 		it("resizes and closes on the same daemon", async () => {
 			openRemoteTab(REMOTE_REPO, REMOTE_REPO);
 

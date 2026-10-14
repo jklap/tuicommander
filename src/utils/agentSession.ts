@@ -122,6 +122,7 @@ export async function resolveAgentResume(
 	launchCommand?: string | null,
 ): Promise<{ cmd: string | null; verified: boolean }> {
 	return rpc("suspended_session_action", {
+		cwd,
 		request: { action: "resolve_resume", agentType, cwd, tuicSession, agentSessionId, launchCommand },
 	});
 }

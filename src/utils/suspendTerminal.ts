@@ -56,6 +56,9 @@ async function suspendTab(id: string): Promise<SuspendOutcome> {
 	try {
 		clearShellFamilyCache(sessionId);
 		await rpc("suspended_session_action", {
+			sessionId,
+			repoPath: term.repoPath,
+			cwd: term.cwd,
 			request: {
 				action: "suspend",
 				sessionId,
@@ -92,6 +95,8 @@ export async function resumeTerminal(id: string): Promise<SuspendOutcome> {
 	if (!term?.suspended) return { ok: false, reason: "not suspended" };
 	try {
 		const result = await rpc<{ session_id: string }>("suspended_session_action", {
+			repoPath: term.repoPath,
+			cwd: term.cwd,
 			request: { action: "resume", tuicSession: term.tuicSession },
 		});
 		terminalsStore.setSessionId(id, result.session_id);

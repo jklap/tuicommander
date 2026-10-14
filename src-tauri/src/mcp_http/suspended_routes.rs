@@ -79,7 +79,11 @@ fn action(state: &Arc<AppState>, request: &serde_json::Value) -> Result<serde_js
             if state.session_maps.sessions.len() >= crate::MAX_CONCURRENT_SESSIONS {
                 return Err("Max concurrent sessions reached".into());
             }
-            if state.session_maps.sessions.contains_key(identity) {
+            if state
+                .session_maps
+                .live_pty_by_tuic_session
+                .contains_key(identity)
+            {
                 return Err("session is already live".into());
             }
             let session_id = super::session::spawn_pty_session(
@@ -90,7 +94,8 @@ fn action(state: &Arc<AppState>, request: &serde_json::Value) -> Result<serde_js
                 80,
                 record.worktree.clone(),
                 super::session::RequestedIdentity {
-                    session_id: Some(identity.into()),
+                    session_id: None,
+                    tuic_session: Some(identity.into()),
                     alias: record.alias.clone(),
                     startup_command: command,
                 },

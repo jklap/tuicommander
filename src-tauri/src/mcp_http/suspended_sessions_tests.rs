@@ -243,4 +243,6 @@ async fn resumed_idle_shell_can_suspend_again_without_inheriting_the_old_exit() 
         second.is_ok(),
         "resumed idle shell must suspend again: {second:?}"
     );
+    assert_ne!(resumed_id, id, "a replacement must have its own PTY key");
+    assert_eq!(second.unwrap().tuic_session, record.tuic_session);
 }

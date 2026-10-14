@@ -1,3 +1,7 @@
+## Suspend replacement identity (1806-ed18) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, suspend and resume a throwaway idle shell twice. The TUIC identity stays stable, each Resume has a fresh PTY id, and the second Suspend succeeds. On a remote repository, Resume and closing a suspended tab must act on that daemon. Automated targeted tests cover the lifecycle and routing; the running desktop requires a restart to load the Rust change.
+
 ## Mobile keyboard correction (1878-3a3c)
 
 - [ ] [HUMAN] On iPhone Safari or the installed PWA, check autocorrect suggestions, spellcheck and sentence capitalization in the terminal prompt with Settings → Input → Autocorrect and spellcheck on and off. Reload and confirm the choice persists. Native keyboard behavior requires the real phone; rendered attributes and persistence are covered by Vitest.

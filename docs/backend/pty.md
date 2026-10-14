@@ -925,3 +925,5 @@ visibility and SIGCONTs only terminals that are visible again.
 ### Rust-owned suspended tabs
 
 Rust owns tab suspension in `suspended_sessions.rs`. It checks the current parsed/shell state, persists a record keyed by stable TUIC identity before closing the PTY, and dual-emits `session-suspended` before EOF. `session_resume.rs` verifies the agent store using the saved launch environment. Resume creates the replacement PTY in Rust and the frontend attaches its returned id. No WebView response is needed; working agents, busy shells, unanswered input and queued commands remain refused.
+
+Each Resume allocates a fresh PTY key and binds the saved TUIC identity before spawning the child. Exit tombstones and delayed cleanup belong to the previous PTY. Suspended-session RPC callers supply top-level session/repository/cwd ownership context, so remote operations stay on the owning daemon even after suspension clears the live session id.

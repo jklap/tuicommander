@@ -735,12 +735,13 @@ pub(super) fn register_pty_session(
 /// Returns `(session_id, cwd_string)` on success. Both `create_session` and
 /// `create_session_with_worktree` delegate here after deriving the cwd and worktree.
 /// What a client asks to keep when it is *restoring* a tab rather than opening a
-/// new one: the PTY key it pre-registered locally, and the alias other agents
-/// already address it by. Both are requests, not commands — each is honoured only
-/// when nothing live holds it.
+/// new one: its stable TUIC identity, requested PTY key, and terminal alias.
+/// Resume preserves the TUIC identity while minting a fresh PTY key. A requested
+/// PTY key or alias is honoured only when nothing live holds it.
 #[derive(Default)]
 pub(super) struct RequestedIdentity {
     pub session_id: Option<String>,
+    pub tuic_session: Option<String>,
     pub alias: Option<String>,
     pub startup_command: Option<String>,
 }
@@ -796,9 +797,14 @@ pub(super) fn spawn_pty_session(
             // This path used to inject neither shell integration nor an identity, so
             // every browser/remote/MCP-created session ran without OSC 133 markers and
             // without a `$TUIC_SESSION` to announce. Bring it in line with the desktop
-            // path: no caller identity exists here, so the PTY key serves as both.
+            // path: absent a durable caller identity, the PTY key serves as both.
             crate::shell_integration::inject(&state.data_dir, &shell, &mut cmd);
-            crate::pty::bind_pty_identity(&state, &mut cmd, &session_id, None);
+            crate::pty::bind_pty_identity(
+                &state,
+                &mut cmd,
+                &session_id,
+                requested.tuic_session.as_deref(),
+            );
             crate::pty::apply_agent_screen_env(&mut cmd, &std::collections::HashMap::new());
             if let Some(command) = &requested.startup_command {
                 let (env, command) = crate::session_resume::shell_launch(command);

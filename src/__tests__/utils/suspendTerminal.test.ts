@@ -109,6 +109,8 @@ describe("Rust-owned suspend and resume", () => {
 				pendingInitCommand: null,
 			});
 			expect(mockRpc).toHaveBeenCalledWith("suspended_session_action", {
+				repoPath: null,
+				cwd: "/Gits/alpha",
 				request: { action: "resume", tuicSession: "tab-uuid" },
 			});
 		}));

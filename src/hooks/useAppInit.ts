@@ -180,6 +180,9 @@ function collectTerminalSnapshots(): Map<string, Map<string, SavedTerminal[]>> {
 				if (!t) continue;
 				if (t.sessionId && !t.suspended)
 					void rpc("suspended_session_action", {
+						sessionId: t.sessionId,
+						repoPath: t.repoPath,
+						cwd: t.cwd,
 						request: {
 							action: "sync",
 							sessionId: t.sessionId,
@@ -895,9 +898,11 @@ export async function initApp(deps: AppInitDeps) {
 	terminalsStore.onRemove((termId) => {
 		const term = terminalsStore.get(termId);
 		if (term?.suspended)
-			void rpc("suspended_session_action", { request: { action: "forget", tuicSession: term.tuicSession } }).catch(
-				(error) => appLogger.warn("terminal", "Failed to remove suspended record", { error: String(error) }),
-			);
+			void rpc("suspended_session_action", {
+				repoPath: term.repoPath,
+				cwd: term.cwd,
+				request: { action: "forget", tuicSession: term.tuicSession },
+			}).catch((error) => appLogger.warn("terminal", "Failed to remove suspended record", { error: String(error) }));
 		for (const [sid, tid] of remoteSessionTabs) {
 			if (tid === termId) remoteSessionTabs.delete(sid);
 		}
