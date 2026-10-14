@@ -5295,7 +5295,7 @@ Visual evidence: worktree Vite fixture mounted the real NotificationsTab and Toa
 
 ## Worktree recycling benchmark (1705-67b3) — Rust restart required
 
-- [ ] After Boss rebuilds/restarts the Rust backend, create 15 worktrees in a row with recycling and compare the time and the Defender/fseventsd CPU with the 2026-10-10 benchmark. Rust does not hot-reload. _(Moved from the story by Boss's rule 2026-10-13.)_
+- [x] Native isolated headless API measurement completed on 2026-10-14: 15 recycled creations, 10.802 s total; Defender peak 284.4%, fseventsd peak 19.1%. See `docs/evidence/worktree-recycling-1705-native.md` for raw data and baseline comparison. The small serial fixture does not prove production speedup or Defender reduction. No desktop restart needed for this isolated check.
 
 ## Launch marker instructions (1810-c28c) — Rust restart required
 
@@ -5356,3 +5356,7 @@ Visual evidence: worktree Vite fixture mounted the real NotificationsTab and Toa
 
 - [ ] Workflow Pause fix (#1882-bc88): after Boss restarts `make dev` or rebuilds release, edit a seeded story, publish it, and use Pause → Resume to → Save draft to repair an existing draft. Rust seed/API changes require restart.
 - [ ] Mobile composer + menu (#1880-d7ff): on iPhone, check both modes at 390px, native camera/file pickers, browser mic, Chat Park/Restore and busy Queue/Stop, terminal Queue and long-press Send. Confirm keyboard and safe-area positioning.
+
+## Worktree rename restore records (1705-67b3) — Rust restart required
+
+- [ ] After Boss restarts the backend, recycle a finished linked checkout and confirm the old workspace and declared agent placements are absent from repositories.json and the sidebar; sibling workspaces stay intact. Automated persisted-state and frontend regression tests cover the change; the live app does not load Rust edits through HMR.

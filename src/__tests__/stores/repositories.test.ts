@@ -417,6 +417,34 @@ describe("repositoriesStore", () => {
 	});
 
 	describe("removeWorkspace()", () => {
+		// Catches: recycling retracts the sidebar row but a saved peer placement still opens the obsolete path.
+		it("retracts declarations of a removed checkout without dropping sibling placements", async () => {
+			await testInScopeAsync(async () => {
+				store.add({ path: "/repo", displayName: "test" });
+				store.setWorkspace("/repo", "feature", { worktreePath: "/repo__wt/old" });
+				const persisted = JSON.parse(
+					JSON.stringify({
+						repos: {
+							"/repo": {
+								...store.get("/repo"),
+								declaredWorktrees: {
+									old: { workspaceId: "feature", branch: "feature", worktreePath: "/repo__wt/old" },
+									sibling: { workspaceId: "other", branch: "other", worktreePath: "/repo__wt/other" },
+								},
+							},
+						},
+						repoOrder: ["/repo"],
+						activeRepoPath: "/repo",
+					}),
+				);
+				mockInvoke.mockImplementation(async (command) => (command === "load_repositories" ? persisted : undefined));
+				await store.hydrate();
+				expect(store.get("/repo")!.declaredWorktrees?.old.worktreePath).toBe("/repo__wt/old");
+				store.removeWorkspace("/repo", "feature");
+				expect(store.get("/repo")!.declaredWorktrees?.old).toBeUndefined();
+				expect(store.get("/repo")!.declaredWorktrees?.sibling.worktreePath).toBe("/repo__wt/other");
+			});
+		});
 		it("removes a branch", () => {
 			testInScope(() => {
 				store.add({ path: "/repo", displayName: "test" });
