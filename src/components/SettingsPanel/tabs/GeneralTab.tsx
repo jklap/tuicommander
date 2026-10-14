@@ -1,6 +1,7 @@
 import { type Component, createEffect, createSignal, For, onMount, Show } from "solid-js";
 import { AVAILABLE_LOCALES, localeName, t } from "../../../i18n";
 import { invoke } from "../../../invoke";
+import { isMacOS } from "../../../platform";
 import { appLogger } from "../../../stores/appLogger";
 import type { CloseBehavior, CustomLauncher, IdeType, UpdateChannel } from "../../../stores/settings";
 import { IDE_NAMES, settingsStore } from "../../../stores/settings";
@@ -187,11 +188,19 @@ export const GeneralTab: Component = () => {
 					]}
 					hint={t(
 						"general.hint.closeBehavior",
-						"Background hides the main window and keeps sessions running. Quit still confirms when enabled.",
+						"Background hides visible windows and keeps sessions running. Quit still confirms when enabled.",
 					)}
 				/>
 			</Show>
 
+			<Show when={isTauri() && isMacOS()}>
+				<SettingToggle
+					checked={settingsStore.state.hideDockIcon}
+					onChange={(enabled) => settingsStore.setHideDockIcon(enabled)}
+					label={t("general.toggle.hideDockIcon", "Hide Dock icon in background")}
+					hint={t("general.hint.hideDockIcon", "Restore the Dock icon when TUICommander is shown again")}
+				/>
+			</Show>
 			<SettingToggle
 				checked={settingsStore.state.confirmBeforeQuit}
 				onChange={(v) => settingsStore.setConfirmBeforeQuit(v)}

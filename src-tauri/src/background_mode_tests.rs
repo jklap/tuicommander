@@ -125,3 +125,6 @@ fn background_mode_close_dialog_has_sse_parity() {
         payload
     );
 }
+
+#[path = "background_mode_hidden_tests.rs"]
+mod hidden_tests;

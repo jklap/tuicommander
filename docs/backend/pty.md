@@ -908,3 +908,15 @@ new runtime PTY ids, so their read grants point to fresh storage.
 Suggest choices are published once when the agent is ready, including while background descendants keep the shell busy. The completion lifecycle event still waits for an idle shell and settled background work; publishing choices does not release that gate.
 
 Pending follow-up choices survive a working spinner until the turn has settled. While the shell is busy, public Claude session snapshots use that same settled-completion predicate, so a retained final marker does not report completed/idle during active Claude Stop hooks. A final `suggest:` marker may share a Claude redraw with its spinner; this is not a new turn. Working evidence can still reopen an idle or delivered completion (including a blocking Stop hook or a Codex internal continuation).
+
+### Background desktop visibility and remote observers
+
+Background mode saves desktop visibility, then clears it while the windows are
+hidden. All terminal WebSocket formats hold a session observation guard; SSE
+holds an all-session guard because its event stream is not session-scoped.
+The standby final eligibility check shares the visibility lock with observer
+attach: a client either prevents SIGSTOP or wakes the already parked process.
+The final check also reads current session visibility under that lock, so Show
+invalidates a standby tick selected while the desktop was hidden.
+Disconnect releases only that observer. Showing the desktop restores saved
+visibility and SIGCONTs only terminals that are visible again.

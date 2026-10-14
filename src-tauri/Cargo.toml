@@ -304,6 +304,8 @@ desktop = [
     "dep:chromey",
     "dep:sourcemap",
     "dep:tauri",
+    "dep:webview2-com",
+    "dep:windows-core",
     "dep:tauri-build",
     "dep:tauri-plugin-opener",
     "dep:tauri-plugin-dialog",
@@ -343,6 +345,8 @@ objc2-app-kit = { version = "0.3", features = ["NSEvent", "block2"], optional = 
 block2 = { version = "0.6", optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
+webview2-com = { version = "0.39.1", optional = true }
+windows-core = { version = "0.62.2", optional = true }
 # CPU-only on Windows: the Vulkan backend (vulkan-shaders-gen) fails to build on
 # the CI runner. Dictation runs on CPU; re-enable "vulkan" only once the
 # whisper.cpp Windows shader build is stabilized.

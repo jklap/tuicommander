@@ -186,6 +186,7 @@ pub(super) async fn sse_events(
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let mut rx = state.event_bus.subscribe();
     let client_guard = SseClientGuard::new(state.clone());
+    let watch = crate::background_mode::hidden::RemoteWatch::new(state.clone(), None);
     let initial_types: Option<Vec<String>> = query.types.map(|t| {
         t.split(',')
             .map(|s| s.trim().to_string())
@@ -206,6 +207,7 @@ pub(super) async fn sse_events(
 
     let stream = async_stream::stream! {
         let _client_guard = client_guard;
+        let _watch = watch;
         // Moved in so it lives exactly as long as the stream does.
         let _filter_guard = filter_guard;
         // Send retry directive as first event

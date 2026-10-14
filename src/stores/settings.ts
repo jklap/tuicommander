@@ -38,6 +38,7 @@ interface RustAppConfig {
 	ide: string;
 	default_font_size: number;
 	close_behavior: CloseBehavior;
+	background?: { hide_dock_icon?: boolean };
 	confirm_before_quit: boolean;
 	confirm_before_closing_tab: boolean;
 	max_tab_name_length: number;
@@ -288,6 +289,7 @@ interface SettingsStoreState {
 	shell: string | null;
 	theme: string;
 	closeBehavior: CloseBehavior;
+	hideDockIcon: boolean;
 	confirmBeforeQuit: boolean;
 	confirmBeforeClosingTab: boolean;
 	maxTabNameLength: number;
@@ -354,6 +356,7 @@ function createSettingsStore() {
 		shell: null,
 		theme: DEFAULT_THEME,
 		closeBehavior: "ask",
+		hideDockIcon: true,
 		confirmBeforeQuit: true,
 		confirmBeforeClosingTab: true,
 		maxTabNameLength: 25,
@@ -428,6 +431,7 @@ function createSettingsStore() {
 		config.ide = state.ide;
 		config.default_font_size = state.defaultFontSize;
 		config.close_behavior = state.closeBehavior;
+		config.background = { ...config.background, hide_dock_icon: state.hideDockIcon };
 		config.confirm_before_quit = state.confirmBeforeQuit;
 		config.confirm_before_closing_tab = state.confirmBeforeClosingTab;
 		config.max_tab_name_length = state.maxTabNameLength;
@@ -533,6 +537,7 @@ function createSettingsStore() {
 				setState("shell", config.shell || null);
 				setState("theme", config.theme || DEFAULT_THEME);
 				setState("closeBehavior", config.close_behavior ?? "ask");
+				setState("hideDockIcon", config.background?.hide_dock_icon ?? true);
 				setState("confirmBeforeQuit", config.confirm_before_quit ?? true);
 				setState("confirmBeforeClosingTab", config.confirm_before_closing_tab ?? true);
 				setState("maxTabNameLength", config.max_tab_name_length || 25);
@@ -633,6 +638,11 @@ function createSettingsStore() {
 		/** Set the main-window close preference. */
 		setCloseBehavior(behavior: CloseBehavior) {
 			setState("closeBehavior", behavior);
+			save();
+		},
+
+		setHideDockIcon(enabled: boolean) {
+			setState("hideDockIcon", enabled);
 			save();
 		},
 

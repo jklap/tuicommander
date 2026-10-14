@@ -112,6 +112,13 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{
 		tab: "general",
 		section: "Confirmations",
+		label: "Hide Dock icon in background",
+		labelKey: "general.toggle.hideDockIcon",
+		platform: "desktop",
+	},
+	{
+		tab: "general",
+		section: "Confirmations",
 		label: "Confirm before quitting",
 		labelKey: "general.toggle.confirmBeforeQuit",
 	},

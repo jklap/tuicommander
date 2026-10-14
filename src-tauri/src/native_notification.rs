@@ -27,7 +27,7 @@ pub(crate) enum NativeNoticeTarget {
 mod macos {
     use std::{ffi::CString, os::raw::c_char, sync::OnceLock};
 
-    use tauri::{Emitter, Manager};
+    use tauri::Emitter;
 
     use super::NativeNoticeTarget;
 
@@ -93,10 +93,7 @@ mod macos {
             let Ok(target) = serde_json::from_str::<NativeNoticeTarget>(json) else {
                 return;
             };
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.show();
-                let _ = window.set_focus();
-            }
+            crate::background_mode::desktop::leave_background(app);
             let _ = app.emit("native-notification-click", target);
         });
     }

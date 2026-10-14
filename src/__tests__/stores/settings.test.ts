@@ -819,4 +819,21 @@ describe("settingsStore", () => {
 			});
 		});
 	});
+	// Catches: saving General settings drops a future background key or ignores the Dock preference.
+	it("hydrates and persists the Dock preference while preserving other background settings", async () => {
+		mockInvoke.mockResolvedValueOnce({ background: { hide_dock_icon: false } });
+		await store.hydrate();
+		expect(store.state.hideDockIcon).toBe(false);
+		mockInvoke.mockImplementation((command: string) =>
+			Promise.resolve(
+				command === "load_config" ? { background: { hide_dock_icon: false, webview_unload_minutes: 25 } } : undefined,
+			),
+		);
+		store.setHideDockIcon(true);
+		await vi.runAllTimersAsync();
+		expect(mockInvoke).toHaveBeenCalledWith("save_config", {
+			base: { background: { hide_dock_icon: false, webview_unload_minutes: 25 } },
+			config: expect.objectContaining({ background: { hide_dock_icon: true, webview_unload_minutes: 25 } }),
+		});
+	});
 });

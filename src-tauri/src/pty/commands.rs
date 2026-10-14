@@ -1222,13 +1222,6 @@ pub(crate) async fn set_session_visible(
     session_id: String,
     visible: bool,
 ) -> Result<(), String> {
-    state
-        .session_maps
-        .session_visibility
-        .insert(session_id.clone(), visible);
-    #[cfg(unix)]
-    if visible && let Err(e) = wake_session(&state, &session_id) {
-        tracing::warn!(session_id, error = %e, "Wake on focus failed");
-    }
+    crate::background_mode::hidden::set_visible(&state, &session_id, visible, true);
     Ok(())
 }
