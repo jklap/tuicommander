@@ -802,7 +802,7 @@ When an agent is detected running in a terminal, TUICommander automatically disc
 - **Gemini CLI** — Sessions stored in `~/.gemini/tmp/<hash>/chats/session-*.json`; `sessionId` field from JSON
 - **Codex CLI** — Sessions stored in `~/.codex/sessions/YYYY/MM/DD/rollout-*-<UUID>.jsonl`; UUID from filename. Codex does *not* partition by project, so candidates are filtered on the working directory recorded in the rollout's first `session_meta` record — otherwise a terminal in one project would bind to another project's session. A rollout whose `cwd` can't be read is rejected rather than accepted
 - **Goose turn completion** — A reply followed by the ready composer returns the tab to idle and allows the next submission, without the five-minute stale recovery (#1812-022d).
-- **Goose** — Sessions stored in SQLite (`~/Library/Application Support/Block/goose/sessions/sessions.db`); shell wrapper injects `--name $TUIC_SESSION` for deterministic binding, resume by name
+- **Goose** — Sessions stored in SQLite (`~/Library/Application Support/Block/goose/sessions/sessions.db`); shell wrapper injects `--name $TUIC_SESSION` for deterministic binding on normal `session`/`run` launches, preserving explicit names, paths, resume and stateless arguments; resume by name
 
 Discovery runs once per terminal on `null→agent` transition. Multiple concurrent agents are handled via a `claimed_ids` deduplication list. On agent exit, the stored session ID is cleared to allow re-discovery on next launch.
 
