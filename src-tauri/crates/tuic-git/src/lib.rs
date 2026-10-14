@@ -10,6 +10,7 @@ pub mod git_cli;
 pub mod git_graph;
 pub mod git_locks;
 pub mod git_reads;
+mod git_ref_transaction;
 pub mod github;
 pub mod github_account;
 pub mod github_auth;

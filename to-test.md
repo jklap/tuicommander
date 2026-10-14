@@ -1,3 +1,7 @@
+## One-time beta channel migration (1817-beab) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build` with a beta version, an old config with `update_channel=stable` and no `beta_channel_migrated` marker switches to Beta once. Selecting Stable afterwards survives restarts. Use a throwaway isolated instance; stable builds must preserve the saved channel. Targeted Rust tests cover the load/save migration; the running desktop needs a rebuild/restart to load it.
+
 ## Continuous answer regions (1872-1870)
 
 - [x] Recorded Codex paragraphs form one CLI and Chat tint with no visible answer glyphs. _(verified: worktree CanvasTerminal and Transcript screenshots in ~/Gits/.tmp/results/1872/before-grid-chat.png and after-grid-chat.png; real Codex VT replayed with the Rust grid.)_
@@ -5300,3 +5304,6 @@ Visual evidence: worktree Vite fixture mounted the real NotificationsTab and Toa
 - [ ] Tasks board (#1844-858d): on a configured provider with multiple pages, More retains prior cards and updates loaded lane counts; cards show assignees/labels and Move… offers legal destinations.
 
 - [ ] After Boss rebuilds/restarts, verify Tasks Start work in a repository with `.tuic-start-work.md`: key/title/URL substitutions appear in the draft inside the untrusted wrapper; remove the file and confirm the original key/title/body brief. Rust does not hot-reload. (#1855-8ee0)
+- [ ] #1874-1758: After restarting `make dev`, remove a scratch worktree whose tip is contained only in another remote branch with Delete branch on remove enabled; verify it succeeds. For unique local commits, verify the refusal offers “Remove worktree, keep branch” and preserves the branch.
+- [ ] #1874-1758: After the Rust restart, remove a scratch worktree whose cleanup runs `git fetch --prune` after its sole containing remote branch was deleted. Verify the checkout is removed, the local branch remains, and the branch-deletion warning is shown. Automated backend regression: `removal_keeps_local_branch_when_cleanup_prunes_its_remote_proof`.
+- [ ] #1874-1758 F3: After a manual Rust restart, verify a scratch worktree removal warns and keeps the local branch when a concurrent force-fetch conflicts with its remote proof. Automated backend regression: `removal_keeps_local_branch_when_fetch_replaces_proof_during_ref_deletion`.

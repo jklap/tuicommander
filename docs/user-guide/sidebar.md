@@ -83,6 +83,10 @@ Each branch row can show:
 - **Double-click** the branch name to rename the branch
 - **Right-click** for context menu: Copy Path, Add Terminal, Create Worktree (for branches without a worktree), Delete Worktree, Open in IDE, Rename Branch/Worktree, Merge & Archive
 
+A clean worktree can be removed with its local branch when the branch tip is contained in any remote-tracking branch, even with a different name and no upstream. The remote branch stays intact.
+
+When removal would delete an unmerged branch, the error card offers **Remove worktree, keep branch**. The action reruns lifecycle checks and confirmation with branch deletion disabled for that removal only; the repository setting stays unchanged.
+
 ### Agent and session activity
 
 Nested agent and terminal rows are an opt-in feature and are disabled by default. Enable **Settings → Appearance → Tabs → Nested Terminal Tabs** to show them; the change applies immediately.

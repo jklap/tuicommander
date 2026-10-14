@@ -9408,6 +9408,11 @@ export const settingsCatalogue = {
       "reason": "Read-only redaction presence marker, not a persisted setting."
     },
     {
+      "store": "app",
+      "path": "/beta_channel_migrated",
+      "reason": "Internal one-time beta update-channel migration marker"
+    },
+    {
       "store": "agents",
       "path": "/agents/{key}/codex_bypass_migrated",
       "reason": "One-time bypass migration marker; cannot be edited to rerun migration."
