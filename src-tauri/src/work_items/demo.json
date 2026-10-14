@@ -18,7 +18,10 @@
           "id": "low",
           "name": "Low"
         }
-      ]
+      ],
+      "sortable": false,
+      "groupable": true,
+      "filterable": true
     },
     {
       "id": "state",
@@ -35,7 +38,10 @@
           "id": "closed",
           "name": "Closed"
         }
-      ]
+      ],
+      "sortable": false,
+      "groupable": true,
+      "filterable": true
     },
     {
       "id": "assignees",
@@ -43,7 +49,10 @@
       "kind": "user",
       "required": false,
       "editable": true,
-      "options": []
+      "options": [],
+      "sortable": false,
+      "groupable": true,
+      "filterable": true
     },
     {
       "id": "labels",
@@ -51,7 +60,32 @@
       "kind": "labels",
       "required": false,
       "editable": true,
-      "options": []
+      "options": [],
+      "sortable": false,
+      "groupable": true,
+      "filterable": true
+    },
+    {
+      "id": "key",
+      "name": "Key",
+      "kind": "text",
+      "required": false,
+      "editable": false,
+      "options": [],
+      "sortable": true,
+      "groupable": false,
+      "filterable": false
+    },
+    {
+      "id": "title",
+      "name": "Title",
+      "kind": "text",
+      "required": false,
+      "editable": false,
+      "options": [],
+      "sortable": true,
+      "groupable": false,
+      "filterable": false
     }
   ],
   "savedFilters": [
@@ -164,7 +198,10 @@
               "id": "low",
               "name": "Low"
             }
-          ]
+          ],
+          "sortable": false,
+          "groupable": true,
+          "filterable": true
         },
         {
           "id": "state",
@@ -181,7 +218,10 @@
               "id": "closed",
               "name": "Closed"
             }
-          ]
+          ],
+          "sortable": false,
+          "groupable": true,
+          "filterable": true
         },
         {
           "id": "assignees",
@@ -189,7 +229,10 @@
           "kind": "user",
           "required": false,
           "editable": true,
-          "options": []
+          "options": [],
+          "sortable": false,
+          "groupable": true,
+          "filterable": true
         },
         {
           "id": "labels",
@@ -197,7 +240,10 @@
           "kind": "labels",
           "required": false,
           "editable": true,
-          "options": []
+          "options": [],
+          "sortable": false,
+          "groupable": true,
+          "filterable": true
         }
       ],
       "actions": [
@@ -351,7 +397,10 @@
               "id": "low",
               "name": "Low"
             }
-          ]
+          ],
+          "sortable": false,
+          "groupable": true,
+          "filterable": true
         },
         {
           "id": "state",
@@ -368,7 +417,10 @@
               "id": "closed",
               "name": "Closed"
             }
-          ]
+          ],
+          "sortable": false,
+          "groupable": true,
+          "filterable": true
         },
         {
           "id": "assignees",
@@ -376,7 +428,10 @@
           "kind": "user",
           "required": false,
           "editable": true,
-          "options": []
+          "options": [],
+          "sortable": false,
+          "groupable": true,
+          "filterable": true
         },
         {
           "id": "labels",
@@ -384,7 +439,10 @@
           "kind": "labels",
           "required": false,
           "editable": true,
-          "options": []
+          "options": [],
+          "sortable": false,
+          "groupable": true,
+          "filterable": true
         }
       ],
       "actions": [
@@ -476,7 +534,10 @@
               "id": "low",
               "name": "Low"
             }
-          ]
+          ],
+          "sortable": false,
+          "groupable": true,
+          "filterable": true
         },
         {
           "id": "state",
@@ -493,7 +554,10 @@
               "id": "closed",
               "name": "Closed"
             }
-          ]
+          ],
+          "sortable": false,
+          "groupable": true,
+          "filterable": true
         },
         {
           "id": "assignees",
@@ -501,7 +565,10 @@
           "kind": "user",
           "required": false,
           "editable": true,
-          "options": []
+          "options": [],
+          "sortable": false,
+          "groupable": true,
+          "filterable": true
         },
         {
           "id": "labels",
@@ -509,7 +576,10 @@
           "kind": "labels",
           "required": false,
           "editable": true,
-          "options": []
+          "options": [],
+          "sortable": false,
+          "groupable": true,
+          "filterable": true
         }
       ],
       "actions": [

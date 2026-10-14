@@ -1392,22 +1392,30 @@ pub(crate) fn teardown(state: &Arc<AppState>, id: &str) {
 /// connection owns. Disconnect deliberately does not do this — it is allowed
 /// to leave the daemon alive for a cheap reconnect within `survive_secs`.
 pub(crate) fn teardown_deleted(state: &Arc<AppState>, id: &str) {
-    stop_deleted_ephemeral(state, id);
+    match RemoteConnectionStore::load(&state.data_dir) {
+        Ok(connections) => {
+            if let Some(connection) = connections.iter().find(|connection| connection.id == id) {
+                teardown_deleted_record(state, connection);
+                return;
+            }
+        }
+        Err(error) => {
+            tracing::warn!(source = "remote", connection = id, %error, "Could not inspect deleted connection for ephemeral cleanup")
+        }
+    }
     teardown(state, id);
     state.remote.attempted_updates.remove(id);
 }
 
-fn stop_deleted_ephemeral(state: &Arc<AppState>, id: &str) {
-    let connection = match RemoteConnectionStore::load(&state.data_dir) {
-        Ok(connections) => connections
-            .into_iter()
-            .find(|connection| connection.id == id),
-        Err(error) => {
-            tracing::warn!(source = "remote", connection = id, %error, "Could not inspect deleted connection for ephemeral cleanup");
-            None
-        }
-    };
-    let Some(profile) = connection.as_ref().and_then(delete_stop_profile) else {
+/// Settings removal retains this record across persistence instead of rereading a deleted row.
+pub(crate) fn teardown_deleted_record(state: &Arc<AppState>, connection: &RemoteConnection) {
+    stop_deleted_ephemeral(connection);
+    teardown(state, &connection.id);
+    state.remote.attempted_updates.remove(&connection.id);
+}
+
+fn stop_deleted_ephemeral(connection: &RemoteConnection) {
+    let Some(profile) = delete_stop_profile(connection) else {
         return;
     };
     tokio::spawn(async move {
@@ -3644,6 +3652,47 @@ mod tests {
         let mut direct = RemoteConnection::new_direct("lan", "http://host:9877", "boss");
         direct.deploy = DeployMode::OnConnect;
         assert!(delete_stop_profile(&direct).is_none());
+    }
+
+    // Catches: a retained deleted record no longer selecting the stop command's SSH authority.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn removed_record_stops_ephemeral_daemon_after_disk_removal() {
+        let state = test_state();
+        let mut connection = RemoteConnection::new_ssh("ephemeral", "host", "boss");
+        connection.deploy = DeployMode::OnConnect;
+        RemoteConnectionStore::save(&state.data_dir, std::slice::from_ref(&connection)).unwrap();
+        crate::remote_connection::remove_remote_connection(&state.data_dir, &connection.id)
+            .unwrap();
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let cache = dir.path().join(".cache/tuic");
+        std::fs::create_dir_all(&cache).unwrap();
+        let mut daemon = tokio::process::Command::new("sh")
+            .args(["-c", "exec sleep 120"])
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        std::fs::write(
+            cache.join("tuic-remote.pid"),
+            daemon.id().unwrap().to_string(),
+        )
+        .unwrap();
+        let script = format!(
+            "export HOME={}\nfor arg do command=\"$arg\"; done\nexec sh -c \"$command\"",
+            dir.path().display()
+        );
+        let ssh = crate::test_support::fake_ssh_script("removed_record_stop", &script, "exit /b 0");
+        let profile =
+            delete_stop_profile(&connection).expect("retained record owns ephemeral SSH authority");
+        crate::remote_deploy::stop_ephemeral_with_binary(&profile, &ssh)
+            .await
+            .unwrap();
+        let status = tokio::time::timeout(std::time::Duration::from_secs(15), daemon.wait())
+            .await
+            .expect("the owned daemon must exit after its stop command")
+            .unwrap();
+        assert!(!status.success());
+        assert!(!cache.join("tuic-remote.pid").exists());
     }
 
     #[test]

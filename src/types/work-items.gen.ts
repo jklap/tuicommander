@@ -44,7 +44,9 @@ export interface WorkItemFieldSchema {
 	kind: WorkItemFieldKind;
 	required: boolean;
 	editable: boolean;
-	queryable?: boolean | null;
+	sortable: boolean;
+	groupable: boolean;
+	filterable: boolean;
 	options: Array<WorkItemOption>;
 }
 
@@ -150,6 +152,12 @@ export interface WorkItemPage {
 	items: Array<WorkItem>;
 	nextCursor: string | null;
 	total?: number | null;
+}
+
+export interface WorkItemLocalQuery {
+	items: Array<WorkItem>;
+	fields: Array<WorkItemFieldSchema>;
+	query: WorkItemQuery;
 }
 
 export interface WorkItemCommentPage {

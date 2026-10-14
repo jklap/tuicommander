@@ -37,10 +37,11 @@ describe("TasksDetail", () => {
 
 	// Catches: sanitization drops a real bot comment's collapsible HTML.
 	it("bot_comment_details_survive_sanitize", async () => {
-		const { container } = render(() => <TasksDetail provider={provider()} reference={reference} />);
+		render(() => <TasksDetail provider={provider()} reference={reference} />);
 		await screen.findByText("CodeRabbit");
-		expect(container.querySelector("details summary")?.textContent).toContain("Actions performed");
-		expect(container.querySelector("details")?.textContent).toContain("Review triggered.");
+		const comments = screen.getByLabelText("Comments");
+		expect(comments.querySelector("details summary")?.textContent).toContain("Actions performed");
+		expect(comments.querySelector("details")?.textContent).toContain("Review triggered.");
 	});
 
 	// Catches: comment HTML executes script, event handlers, CSS or javascript links.
@@ -68,16 +69,17 @@ describe("TasksDetail", () => {
 				return value;
 			},
 		});
-		const { container } = render(() => <TasksDetail provider={source} reference={reference} />);
+		render(() => <TasksDetail provider={source} reference={reference} />);
 		await screen.findByText("CodeRabbit");
-		const section = container.querySelector("details");
+		const comments = () => screen.getByLabelText("Comments");
+		const section = comments().querySelector("details");
 		if (!section) throw new Error("Missing recorded details");
 		section.open = true;
 		fireEvent(section, new Event("toggle"));
 		changed = true;
 		fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
 		await screen.findByText("Updated comment.");
-		await waitFor(() => expect(container.querySelector("details")?.open).toBe(true));
+		await waitFor(() => expect(comments().querySelector("details")?.open).toBe(true));
 	});
 
 	// Catches: provider pagination or review variants are silently omitted from the conversation.

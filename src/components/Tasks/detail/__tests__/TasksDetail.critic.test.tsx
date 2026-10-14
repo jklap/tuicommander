@@ -103,6 +103,9 @@ describe("critic: Tasks detail", () => {
 			kind: "user",
 			required: false,
 			editable: true,
+			sortable: false,
+			groupable: false,
+			filterable: false,
 			options: [
 				{ id: "alice", name: "Alice" },
 				{ id: "bob", name: "Bob" },

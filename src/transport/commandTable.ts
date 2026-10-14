@@ -1927,6 +1927,9 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			return { method: "GET", path };
 		},
 	},
+	project_work_items: {
+		map: (args) => ({ method: "POST", path: "/tasks/project", body: args.input }),
+	},
 	build_start_work_prompt: {
 		map: (args) => ({
 			method: "POST",
