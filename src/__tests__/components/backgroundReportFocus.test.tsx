@@ -111,7 +111,6 @@ it("background_report_open_and_update_preserve_terminal_input_focus — catches:
 	const noop = vi.fn();
 	await initApp({
 		pty: { listActiveSessions: vi.fn().mockResolvedValue([]), close: vi.fn().mockResolvedValue(undefined) },
-		setQuitDialogVisible: noop,
 		setStatusInfo: noop,
 		handleBranchSelect: vi.fn().mockResolvedValue(undefined),
 		refreshAllBranchStats: noop,
@@ -127,7 +126,6 @@ it("background_report_open_and_update_preserve_terminal_input_focus — catches:
 			startUserActivityListening: noop,
 		},
 		applyPlatformClass: () => "macos",
-		onCloseRequested: vi.fn().mockResolvedValue(undefined),
 		registerRepo: vi.fn().mockResolvedValue(undefined),
 	} satisfies AppInitDeps);
 	repositoriesStore.add({ path: "/repo/typing", displayName: "typing" });

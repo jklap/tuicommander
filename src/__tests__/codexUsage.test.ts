@@ -118,7 +118,7 @@ describe("buildCodexTickerText", () => {
 
 describe("getCodexTickerPriority", () => {
 	it("escalates on the hottest window, account or per-model", () => {
-		expect(getCodexTickerPriority(exhausted)).toBe(90);
+		expect(getCodexTickerPriority(exhausted)).toBe(96);
 	});
 
 	it("escalates on a per-model limit even when the account is cold", () => {
@@ -143,7 +143,7 @@ describe("getCodexTickerPriority", () => {
 						allowed: false,
 						limit_reached: true,
 						primary_window: {
-							used_percent: 95,
+							used_percent: 96,
 							limit_window_seconds: 18_000,
 							reset_after_seconds: 60,
 							reset_at: null,
@@ -153,7 +153,20 @@ describe("getCodexTickerPriority", () => {
 				},
 			],
 		};
-		expect(getCodexTickerPriority(hotModel)).toBe(90);
+		expect(getCodexTickerPriority(hotModel)).toBe(96);
+	});
+
+	it("does not escalate below 96 percent, catching premature blinking", () => {
+		for (const used_percent of [90, 95, 95.9, 96]) {
+			const api = {
+				...empty,
+				rate_limit: {
+					...exhausted.rate_limit!,
+					primary_window: { ...exhausted.rate_limit!.primary_window!, used_percent },
+				},
+			};
+			expect(getCodexTickerPriority(api)).toBe(used_percent < 96 ? 50 : 96);
+		}
 	});
 
 	it("stays quiet when nothing is close to a limit", () => {
@@ -169,7 +182,7 @@ describe("toUsageAgent", () => {
 	});
 
 	it("rejects agents without one, so the ticker keeps the last known agent", () => {
-		expect(toUsageAgent("aider")).toBeNull();
+		expect(toUsageAgent("opencode")).toBeNull();
 		expect(toUsageAgent("gemini")).toBeNull();
 		expect(toUsageAgent(null)).toBeNull();
 		expect(toUsageAgent(undefined)).toBeNull();

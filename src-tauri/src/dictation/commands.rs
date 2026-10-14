@@ -2900,7 +2900,7 @@ fn dictation_config_from_value(value: serde_json::Value) -> DictationConfig {
     config
 }
 
-const DICTATION_CONFIG_FILE: &str = "dictation-config.json";
+pub(crate) const DICTATION_CONFIG_FILE: &str = "dictation-config.json";
 
 /// The built-in hands-free start notice, sent while
 /// [`DictationConfig::hands_free_start_notice`] is empty.
@@ -2978,24 +2978,42 @@ pub(crate) fn save_dictation_config(
         file.save_delta_strict(&base, &config)?;
     }
     let config = get_dictation_config();
-    // The configured model is part of the cached status snapshot.
-    invalidate_model_snapshot();
-    // A voice belongs to a language and to an engine. Change either and every
-    // reply already queued for the old one is wrong — a sentence half spoken
-    // in Italian does not become English by finishing it. Dropping the queue
-    // stops the device and cancels what is in flight; the next reply opens a
-    // voice for the language now configured.
-    //
-    // Only on those three fields. Every other setting here is a threshold or a
-    // hotkey, and cutting a reply off mid-word because somebody moved a slider
-    // would be a worse bug than the one this prevents.
+    // A voice belongs to a language and to an engine: see `refresh_voice_runtime`.
     let voice_changed = previous.language != config.language
         || previous.speech_engine != config.speech_engine
         || previous.speech_command != config.speech_command
         || previous.speech_voice != config.speech_voice
         || previous.speech_edge_voice != config.speech_edge_voice;
-    if let Some(dictation) = dictation {
-        let mut slot = dictation.speaker.lock();
+    refresh_voice_runtime(
+        voice_changed,
+        &config,
+        dictation.map(|dictation| &*dictation.speaker),
+    );
+    Ok(())
+}
+
+/// What a saved dictation config means for the voice that is running now. Shared by every
+/// writer of `dictation-config.json`, so none can leave the old voice speaking.
+///
+/// The configured model is part of the cached status snapshot, so it is always dropped.
+///
+/// A voice belongs to a language and to an engine. Change either and every
+/// reply already queued for the old one is wrong — a sentence half spoken
+/// in Italian does not become English by finishing it. Dropping the queue
+/// stops the device and cancels what is in flight; the next reply opens a
+/// voice for the language now configured.
+///
+/// Only on those voice fields (`voice_changed`). Every other setting here is a threshold or a
+/// hotkey, and cutting a reply off mid-word because somebody moved a slider
+/// would be a worse bug than the one this prevents.
+pub(crate) fn refresh_voice_runtime(
+    voice_changed: bool,
+    config: &DictationConfig,
+    speaker: Option<&parking_lot::Mutex<Option<speaker::Armed>>>,
+) {
+    invalidate_model_snapshot();
+    if let Some(slot) = speaker {
+        let mut slot = slot.lock();
         if voice_changed || !config.hands_free_spoken_replies {
             *slot = None;
         } else if let Some(armed) = slot.as_ref() {
@@ -3004,7 +3022,6 @@ pub(crate) fn save_dictation_config(
             armed.speaker.set_loudness(config.loudness());
         }
     }
-    Ok(())
 }
 
 /// Check microphone permission status (macOS TCC).

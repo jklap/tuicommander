@@ -509,8 +509,9 @@ pub(crate) fn resume_pty(
         .get(&session_id)
         .ok_or_else(|| format!("Session not found: {session_id}"))?;
     entry.lock().paused.store(false, Ordering::Relaxed);
+    drop(entry);
     #[cfg(unix)]
-    if let Err(e) = wake_session(&state, &session_id) {
+    if let Err(e) = crate::session_wake::ensure_live(&state, &session_id) {
         tracing::debug!(session_id = %session_id, error = %e, "Wake on resume (may not be in standby)");
     }
     tracing::debug!(session_id = %session_id, "PTY reader resumed (flow control)");
@@ -740,6 +741,7 @@ pub(crate) fn enqueue_agent_command(
     if let Some(draft) = expected_draft {
         return enqueue_owned_draft(&state, &session_id, &text, &draft);
     }
+    let session_id = crate::session_wake::ensure_live(&state, &session_id)?;
     enqueue_user_command(&state, &session_id, &text, idempotency_key.as_deref())
 }
 
@@ -1222,13 +1224,6 @@ pub(crate) async fn set_session_visible(
     session_id: String,
     visible: bool,
 ) -> Result<(), String> {
-    state
-        .session_maps
-        .session_visibility
-        .insert(session_id.clone(), visible);
-    #[cfg(unix)]
-    if visible && let Err(e) = wake_session(&state, &session_id) {
-        tracing::warn!(session_id, error = %e, "Wake on focus failed");
-    }
+    crate::background_mode::hidden::set_visible(&state, &session_id, visible, true);
     Ok(())
 }

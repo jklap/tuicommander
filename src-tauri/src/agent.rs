@@ -1056,7 +1056,6 @@ pub(crate) const KNOWN_AGENT_BINARIES: &[&str] = &[
     "gemini",
     "grok",
     "opencode",
-    "aider",
     "amp",
     "cursor-agent",
     "goose",
@@ -1064,6 +1063,15 @@ pub(crate) const KNOWN_AGENT_BINARIES: &[&str] = &[
     "pi",
     "ego",
 ];
+
+pub(crate) fn is_known_agent_type(agent_type: &str) -> bool {
+    let binary = if agent_type == "cursor" {
+        "cursor-agent"
+    } else {
+        agent_type
+    };
+    KNOWN_AGENT_BINARIES.contains(&binary)
+}
 
 /// Detect any agent binary location
 pub(crate) fn detect_agent_binary_sync(binary: String) -> AgentBinaryDetection {
@@ -1310,7 +1318,7 @@ fn get_binary_version(path: &str) -> Option<String> {
 
 /// Whether an agent's CLI accepts a bare positional prompt as its first argument.
 ///
-/// Only Claude's CLI does. codex/gemini/aider/goose require a subcommand or an
+/// Only Claude's CLI does. codex/gemini/goose require a subcommand or an
 /// explicit flag, and hand a bare prompt straight to their clap parser, which
 /// rejects it with a usage error and exits with code 2. Spawn paths use this to
 /// fail fast instead of launching a process that dies immediately with no report.
@@ -1334,8 +1342,6 @@ pub(crate) fn default_prompt_args(agent_type: &str) -> Option<Vec<String>> {
         "claude" => &["{prompt}"],
         // Positional prompt (interactive with the task pre-filled).
         "gemini" | "codex" | "opencode" | "grok" | "amp" | "cursor" | "droid" => &["{prompt}"],
-        // Aider: non-interactive single message, auto-confirm edits.
-        "aider" => &["--yes-always", "--message", "{prompt}"],
         // Goose 1.49: `session` takes no positional prompt (exit 2); `run -s -t`
         // runs the text, then stays interactive.
         "goose" => &["run", "-s", "-t", "{prompt}"],
@@ -1402,6 +1408,9 @@ pub(crate) async fn spawn_agent(
 
     let session_id = Uuid::new_v4().to_string();
 
+    let attachment_dir =
+        crate::attachments::prepare_session_directory(&state.data_dir, "pty", &session_id)?;
+
     let spawn_binary_path = binary_path.clone();
     let spawn_agent_config = agent_config.clone();
     let spawn_pty_config = pty_config.clone();
@@ -1450,6 +1459,7 @@ pub(crate) async fn spawn_agent(
                 &spawn_binary_path,
                 &launch_args,
                 &crate::config::config_dir(),
+                &attachment_dir,
             );
             crate::launch_instructions::apply_env(
                 &mut cmd,
@@ -1912,6 +1922,12 @@ mod tests {
         }
     }
 
+    // Catches: a removed harness still reported by MCP/HTTP agent detection.
+    #[test]
+    fn known_agent_binaries_exclude_removed_aider() {
+        assert!(!KNOWN_AGENT_BINARIES.contains(&"aider"));
+    }
+
     #[tokio::test]
     async fn batch_agent_detection_uses_async_runtime_and_skips_empty_names() {
         let detections = detect_all_agent_binaries(vec![String::new(), "git".to_string()]).await;
@@ -1924,7 +1940,7 @@ mod tests {
     fn only_claude_accepts_a_bare_prompt() {
         assert!(agent_accepts_bare_prompt("claude"));
         // Every other known agent CLI would exit with code 2 on a bare prompt.
-        for agent in ["codex", "gemini", "aider", "goose", "opencode", "amp"] {
+        for agent in ["codex", "gemini", "goose", "opencode", "amp"] {
             assert!(
                 !agent_accepts_bare_prompt(agent),
                 "{agent} must not be treated as accepting a bare prompt"
@@ -1944,15 +1960,6 @@ mod tests {
                 "{agent} should get a positional prompt template"
             );
         }
-        // Aider: non-interactive message with auto-confirm.
-        assert_eq!(
-            default_prompt_args("aider"),
-            Some(vec![
-                "--yes-always".to_string(),
-                "--message".to_string(),
-                "{prompt}".to_string()
-            ])
-        );
         // Goose 1.49: `goose session <prompt>` exits 2 (unrecognized subcommand);
         // `run -s -t` runs the text and stays interactive.
         assert_eq!(
@@ -1960,7 +1967,7 @@ mod tests {
             Some(["run", "-s", "-t", "{prompt}"].map(String::from).to_vec())
         );
         // Every template must contain the placeholder so substitution works.
-        for agent in ["gemini", "codex", "aider", "goose"] {
+        for agent in ["gemini", "codex", "goose"] {
             assert!(
                 default_prompt_args(agent)
                     .unwrap()

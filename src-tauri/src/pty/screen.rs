@@ -611,7 +611,9 @@ pub(super) fn set_background_work_for_epoch_with_hook<F: FnOnce()>(
         let completion = silence_state.drain_pending_suggest_with_epoch();
         match completion {
             Some((turn_epoch, items)) if turn_epoch == observed_turn_epoch => {
-                emit_suggest_event(state, session_id, turn_epoch, items);
+                if !silence_state.pending_suggest_emitted {
+                    emit_suggest_event(state, session_id, turn_epoch, items);
+                }
                 parent_dispatch = enqueue_state_change_to_parent(
                     state,
                     session_id,
@@ -932,6 +934,19 @@ where
         .find(|&index| is_prompt(&rows[index]))
 }
 
+/// Claude's composer row: the bare `❯`, or `❯` over the dim placeholder hint a
+/// fresh session shows (`❯ Try "fix typecheck errors"`, the gap is a no-break
+/// space). Missing the hint row left a freshly launched Claude BUSY for as long
+/// as it sat unused (#1864-23d0).
+fn is_claude_composer_row(row: &str) -> bool {
+    let row = row.trim();
+    row == "\u{276F}"
+        || row
+            .strip_prefix('\u{276F}')
+            .map(str::trim_start)
+            .is_some_and(|hint| hint.starts_with("Try \""))
+}
+
 /// Claude's active status is presence-based because current Claude versions can
 /// keep the empty composer visible while a long tool call is still running.
 /// The live marker is deliberately semantic rather than glyph-only: an animated
@@ -947,7 +962,7 @@ pub(super) fn detect_claude_screen_activity(rows: &[String]) -> AgentScreenActiv
     let chrome_start = content_end.saturating_sub(crate::chrome::CHROME_SCAN_ROWS);
     let prompt_idx = rows[chrome_start..content_end]
         .iter()
-        .rposition(|row| row.trim() == "\u{276F}")
+        .rposition(|row| is_claude_composer_row(row))
         .map(|idx| chrome_start + idx);
     let activity_end = prompt_idx.unwrap_or(content_end);
     let activity_start = activity_end.saturating_sub(crate::chrome::CHROME_SCAN_ROWS);
@@ -977,17 +992,6 @@ fn gemini_prompt_present(rows: &[String]) -> bool {
 /// Prompt-based only — see `detect_claude_screen_activity` for the rationale.
 pub(super) fn detect_gemini_screen_activity(rows: &[String]) -> AgentScreenActivity {
     if gemini_prompt_present(rows) {
-        AgentScreenActivity::Ready
-    } else {
-        AgentScreenActivity::Unknown
-    }
-}
-
-/// Prompt-based only — see `detect_claude_screen_activity` for the rationale.
-/// During generation Aider has no bottom input box (prompt_toolkit returned),
-/// so the screen reads Unknown and BUSY is held by spinner movement + silence.
-pub(super) fn detect_aider_screen_activity(rows: &[String]) -> AgentScreenActivity {
-    if rows.iter().rev().take(3).any(|row| row.trim() == ">") {
         AgentScreenActivity::Ready
     } else {
         AgentScreenActivity::Unknown
@@ -1315,7 +1319,6 @@ pub(super) fn detect_agent_screen_activity_at(
         Some("claude") => detect_claude_screen_activity(rows),
         Some("codex") => detect_codex_screen_activity(rows),
         Some("gemini") => detect_gemini_screen_activity(rows),
-        Some("aider") => detect_aider_screen_activity(rows),
         Some("grok") => detect_grok_screen_activity(rows),
         Some("pi") => detect_pi_screen_activity(rows),
         Some("opencode") => detect_opencode_screen_activity_at(rows, columns),
@@ -1381,7 +1384,7 @@ pub(crate) fn agent_submission_ack_kind(state: &AppState, session_id: &str) -> &
 pub(crate) fn has_ready_screen_adapter(agent_type: Option<&str>) -> bool {
     matches!(
         agent_type,
-        Some("claude" | "codex" | "gemini" | "aider" | "grok" | "pi" | "opencode" | "goose")
+        Some("claude" | "codex" | "gemini" | "grok" | "pi" | "opencode" | "goose")
     )
 }
 
@@ -1637,6 +1640,9 @@ pub(super) fn apply_foreground_agent_observation(
         let changed = entry.agent_type != next;
         if changed {
             entry.telegram_registration_lifetime = None;
+            if next.as_deref() != Some("codex") || entry.agent_type.is_some() {
+                entry.codex_binding = None;
+            }
             entry.agent_type = next;
             entry.hook_instrumented = hook_instrumented_for(
                 &crate::config::load_agents_config(),
@@ -1798,7 +1804,6 @@ fn exact_agent_name(process_name: &str) -> Option<&'static str> {
         "claude" => Some("claude"),
         "gemini" => Some("gemini"),
         "opencode" => Some("opencode"),
-        "aider" => Some("aider"),
         "codex" => Some("codex"),
         "amp" => Some("amp"),
         "cursor-agent" => Some("cursor"),
@@ -1890,7 +1895,7 @@ pub(crate) fn collect_process_stats(state: &AppState) -> Vec<ProcessStats> {
 /// table inside that loop forked `ps` once per session — N+1 forks per refresh,
 /// each one taken while the session lock was held. One shared map serves every
 /// root, so the cost no longer scales with the number of sessions.
-pub(super) fn process_parent_map() -> Option<std::collections::HashMap<u32, Vec<u32>>> {
+pub(crate) fn process_parent_map() -> Option<std::collections::HashMap<u32, Vec<u32>>> {
     #[cfg(not(windows))]
     {
         let output = std::process::Command::new("ps")

@@ -3,13 +3,12 @@ import { drawSelection, EditorView, keymap } from "@codemirror/view";
 import { createCodeMirror } from "solid-codemirror";
 import { type Accessor, type Component, createEffect, createSignal, For, on, onCleanup, Show } from "solid-js";
 import type { QueuedCommand } from "../../hooks/usePty";
-import { appLogger } from "../../stores/appLogger";
-import { generateId } from "../../stores/ideas";
 import { cx } from "../../utils";
-import { savePastedImage } from "../../utils/pastedImage";
+import { IMAGE_FILE_ACCEPT } from "../../utils/pastedImage";
 import { ComposePinIcon, ComposeSendIcon } from "../shared/ComposeActionIcons";
 import actions from "../shared/ComposeActions.module.css";
 import s from "./ComposePanel.module.css";
+import { useComposeImages } from "./useComposeImages";
 
 const composeTheme = EditorView.theme(
 	{
@@ -144,33 +143,9 @@ export const ComposePanel: Component<ComposePanelProps> = (props) => {
 	createExtension(drawSelection());
 	createExtension(history());
 	createExtension(EditorView.lineWrapping);
-	// A pasted image is saved to disk and referenced inline in the same
-	// `[image: path]` form Ideas appends on send, so the agent can read it.
-	let imageNoteId: string | undefined;
-	// Saves settle in any order; chaining the insertions keeps the tags in paste order.
-	let insertions: Promise<void> = Promise.resolve();
-	createExtension(
-		EditorView.domEventHandlers({
-			paste: (event, view) => {
-				const saved = savePastedImage(event, () => {
-					imageNoteId ??= generateId();
-					return imageNoteId;
-				});
-				// preventDefault runs synchronously inside the helper.
-				if (!event.defaultPrevented) return false;
-				// The chain must always resolve: a throwing dispatch (torn-down view)
-				// would otherwise drop every later pasted image.
-				insertions = insertions.then(() =>
-					saved
-						.then((path) => {
-							if (path) view.dispatch(view.state.replaceSelection(`[image: ${path}]`));
-						})
-						.catch((err) => appLogger.error("store", "Failed to insert pasted image", err)),
-				);
-				return true;
-			},
-		}),
-	);
+	const images = useComposeImages(editorView, props.isOpen);
+	createExtension(images.extension);
+	let fileInput: HTMLInputElement | undefined;
 	createExtension(
 		keymap.of([
 			// Shift first: CodeMirror matches the more specific binding, so plain
@@ -349,6 +324,11 @@ export const ComposePanel: Component<ComposePanelProps> = (props) => {
 					</For>
 				</div>
 			</Show>
+			<Show when={images.error()}>
+				<div class={s.imageError} role="alert">
+					{images.error()}
+				</div>
+			</Show>
 			<div class={s.statusBar}>
 				{/* Same legend shape as the command palette footer. The bindings are
 				    literal Control on every platform: CodeMirror's "Ctrl-" is not "Mod-". */}
@@ -408,6 +388,29 @@ export const ComposePanel: Component<ComposePanelProps> = (props) => {
 							</svg>
 						</button>
 					</Show>
+					<input
+						ref={fileInput}
+						type="file"
+						accept={IMAGE_FILE_ACCEPT}
+						multiple
+						hidden
+						aria-label="Choose images"
+						onChange={(event) => {
+							images.pick(Array.from(event.currentTarget.files ?? []));
+							event.currentTarget.value = "";
+						}}
+					/>
+					<button
+						type="button"
+						class={actions.pinButton}
+						onClick={() => fileInput?.click()}
+						title="Attach images"
+						aria-label="Attach images"
+					>
+						<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+							<path d="M16.5 3a4.5 4.5 0 0 1 3.18 7.68l-8.49 8.49a6 6 0 0 1-8.48-8.48l8.49-8.49 1.41 1.41-8.49 8.49a4 4 0 0 0 5.66 5.66l8.49-8.49a2.5 2.5 0 0 0-3.54-3.54l-8.49 8.49a1 1 0 0 0 1.42 1.42l7.78-7.78 1.41 1.41-7.78 7.78a3 3 0 0 1-4.24-4.24l8.49-8.49A4.49 4.49 0 0 1 16.5 3z" />
+						</svg>
+					</button>
 					<button class={actions.sendButton} onClick={handleSend} title="Send (Ctrl+Enter)">
 						<ComposeSendIcon />
 					</button>

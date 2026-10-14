@@ -163,6 +163,15 @@ pub(crate) struct WorktreeRemovedPayload {
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "event", content = "payload")]
 pub enum AppEvent {
+    #[serde(rename = "work-item-provider-request")]
+    WorkItemProviderRequest {
+        request_id: String,
+        request: crate::work_items::provider_bridge::ProviderRequest,
+    },
+    #[serde(rename = "close-dialog")]
+    CloseDialog { payload: serde_json::Value },
+    #[serde(rename = "background-mode-changed")]
+    BackgroundModeChanged { payload: serde_json::Value },
     #[serde(rename = "automation-run-changed")]
     AutomationRunChanged { payload: serde_json::Value },
     #[serde(rename = "head-changed")]
@@ -186,6 +195,7 @@ pub enum AppEvent {
     #[serde(rename = "session-created")]
     SessionCreated {
         session_id: String,
+        tuic_session: Option<String>,
         cwd: Option<String>,
         agent_type: Option<String>,
         display_name: Option<String>,
@@ -252,13 +262,10 @@ pub enum AppEvent {
         name: String,
         is_custom: bool,
     },
-    /// An MCP client asked for a tab to be suspended (`session action=suspend`).
-    /// The tab, its agent identity and its resume path live in the frontend, so it
-    /// performs the suspend; the backend has already refused a busy session.
-    #[serde(rename = "session-suspend-requested")]
-    SessionSuspendRequested {
-        session_id: String,
-        request_id: String,
+    /// A durable Rust suspend record was saved; clients preserve the tab before EOF.
+    #[serde(rename = "session-suspended")]
+    SessionSuspended {
+        record: Box<crate::suspended_sessions::SuspendedSession>,
     },
     /// Orchestrator-supplied description of the work currently assigned to a PTY.
     /// The chat view of a Claude terminal has new entries. Wake only: the entries
@@ -353,6 +360,8 @@ pub enum AppEvent {
     /// every save — including the client that just wrote it.
     #[serde(rename = "repositories-changed")]
     RepositoriesChanged,
+    #[serde(rename = "open-markdown-tabs-changed")]
+    OpenMarkdownTabsChanged,
     /// Directory contents changed (non-git filesystem watcher)
     #[serde(rename = "dir-changed")]
     DirChanged { dir_path: String },
@@ -554,7 +563,6 @@ impl AppEvent {
             | AppEvent::PtyCwd { session_id, .. }
             | AppEvent::PtyDescriptionChanged { session_id, .. }
             | AppEvent::SessionRenamed { session_id, .. }
-            | AppEvent::SessionSuspendRequested { session_id, .. }
             | AppEvent::TermAliasAssigned { session_id, .. }
             | AppEvent::SessionClosed { session_id, .. } => Some(session_id),
             _ => None,
@@ -581,6 +589,9 @@ fn is_zero(v: &u32) -> bool {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct SessionState {
+    /// Validated native hook identity; never a discovery heuristic.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub codex_binding: Option<crate::codex_binding::CodexBinding>,
     /// True when a Question parsed event is pending (no subsequent user-input or pty-exit)
     pub awaiting_input: bool,
     /// The question text, if awaiting input
@@ -842,6 +853,7 @@ impl SessionState {
     pub(crate) fn seed_configured_agent(&mut self, agent_type: Option<String>) {
         self.agent_type_from_run_config = agent_type.is_some();
         self.agent_foreground_observed = false;
+        self.codex_binding = None;
         self.agent_type = agent_type;
     }
 }
@@ -859,6 +871,7 @@ impl PartialEq for SessionState {
             && self.agent_state == other.agent_state
             && self.background_work == other.background_work
             && self.agent_type == other.agent_type
+            && self.codex_binding == other.codex_binding
             && self.last_error == other.last_error
             && self.agent_intent == other.agent_intent
             && self.current_task == other.current_task
@@ -1780,6 +1793,9 @@ pub(crate) struct GitHubState {
     pub(crate) token: parking_lot::RwLock<Option<String>>,
     /// Where the current GitHub token came from (env, OAuth keyring, gh CLI)
     pub(crate) token_source: parking_lot::RwLock<crate::github_auth::TokenSource>,
+    /// Explicit runtime disconnect; read/write while holding the token lock.
+    /// Prevents lazy resolution from restoring credentials.
+    pub(crate) disconnected: std::sync::atomic::AtomicBool,
     /// Circuit breaker for GitHub API calls
     pub(crate) circuit_breaker: crate::github::GitHubCircuitBreaker,
     /// Background GitHub poller task handle
@@ -1801,6 +1817,7 @@ impl Default for GitHubState {
         Self {
             token: parking_lot::RwLock::new(None),
             token_source: parking_lot::RwLock::new(Default::default()),
+            disconnected: std::sync::atomic::AtomicBool::new(false),
             circuit_breaker: crate::github::GitHubCircuitBreaker::new(),
             poller: parking_lot::Mutex::new(None),
             viewer_login: parking_lot::RwLock::new(None),
@@ -1935,6 +1952,8 @@ pub(crate) struct AiAgentState {
 #[derive(Default)]
 pub struct SessionMaps {
     pub sessions: DashMap<String, Mutex<PtySession>>,
+    /// Session-scoped directory provisioned at launch; absent for legacy agents.
+    pub(crate) attachment_launch_dirs: DashMap<String, PathBuf>,
     /// Ring buffers for MCP output access (one per session)
     pub output_buffers: DashMap<String, Mutex<OutputRingBuffer>>,
     /// Per-session kitty keyboard protocol state (session_id → state).
@@ -2053,6 +2072,8 @@ pub struct AppState {
     pub(crate) secrets: crate::secrets::SecretStore,
     /// Every per-session side table, keyed by session id.
     pub(crate) session_maps: SessionMaps,
+    pub(crate) open_markdown_tabs:
+        parking_lot::RwLock<Vec<crate::open_markdown_tabs::DesktopMarkdownTab>>,
     pub(crate) data_dir: PathBuf,
     pub(crate) worktrees_dir: PathBuf,
     pub(crate) metrics: SessionMetrics,
@@ -2061,6 +2082,8 @@ pub struct AppState {
     pub mcp: McpState,
     /// WebSocket clients per PTY session for streaming output
     pub ws_clients: DashMap<String, Vec<WsClientTx>>,
+    pub(crate) webview_unloaded: AtomicBool,
+    pub(crate) background_visibility: Mutex<crate::background_mode::hidden::Visibility>,
     /// Cached AppConfig to avoid re-reading from disk on every request
     pub(crate) config: parking_lot::RwLock<crate::config::AppConfig>,
     /// TTL caches for git and GitHub query results
@@ -2197,6 +2220,7 @@ pub struct AppState {
     /// Populated by the frontend via `register_loaded_plugin` on plugin load.
     /// Used by Rust plugin commands to enforce capability checks server-side.
     pub(crate) loaded_plugins: DashMap<String, Vec<String>>,
+    pub(crate) plugin_settings: crate::settings::plugins::PluginSettings,
     /// Compiled plugin OutputWatcher patterns, one set per connected frontend,
     /// pushed via `set_plugin_output_watchers`. The PTY reader assembles lines
     /// and matches them here, so the WebView main thread only hears about the
@@ -2306,11 +2330,14 @@ pub struct AppState {
     pub(crate) connections_lock: tokio::sync::Mutex<()>,
     /// Pending screenshot requests: request_id → oneshot sender for base64 image data.
     /// Populated by MCP `ui(action=screenshot)`, consumed by `screenshot_response` command.
+    pub(crate) work_item_requests:
+        DashMap<String, crate::work_items::provider_bridge::PendingProviderRequest>,
     pub(crate) screenshot_responses: DashMap<String, tokio::sync::oneshot::Sender<Option<String>>>,
-    /// Pending suspend requests: request_id → oneshot sender for the tab's verdict
-    /// (`Ok(())` suspended, `Err(reason)` refused). Populated by MCP `session action=suspend`,
-    /// consumed by `session_suspend_response`.
-    pub(crate) suspend_responses: DashMap<String, tokio::sync::oneshot::Sender<Result<(), String>>>,
+    /// Serialize durable suspend/resume transitions and retain frontend-discovered metadata.
+    pub(crate) suspend_metadata: DashMap<String, serde_json::Value>,
+    pub(crate) suspend_lock: Mutex<()>,
+    /// Identities retained while a durable tab has no live PTY.
+    pub(crate) hibernated_peers: dashmap::DashSet<String>,
     /// Pending confirmation requests: request_id → oneshot sender for the human's answer.
     /// Populated by MCP `ui(action=confirm)`, consumed by `mcp_confirm_response`.
     ///
@@ -2318,6 +2345,7 @@ pub struct AppState {
     /// the same request and the first answer wins, because a remote human must be
     /// able to unblock an agent that a native desktop dialog would have pinned to
     /// whoever is sitting at the machine.
+    pub(crate) settings_policy: Arc<crate::settings::policy::Policy>,
     pub(crate) confirm_responses: DashMap<String, tokio::sync::oneshot::Sender<bool>>,
     /// App-wide process-tree snapshot shared by agent lifecycle polling.
     pub(crate) process_snapshot_cache: crate::pty::ProcessSnapshotCache,
@@ -2447,20 +2475,16 @@ impl AppState {
         true
     }
 
-    /// Ask the UI to suspend the tab that owns this session. Dual-emitted like a
-    /// rename: Tauri listeners on desktop, the event bus for browser/SSE clients.
-    /// The tab answers through `resolve_session_suspend` with `request_id`.
-    pub(crate) fn request_session_suspend(&self, session_id: &str, request_id: &str) {
-        self.emit_pty_event(AppEvent::SessionSuspendRequested {
-            session_id: session_id.to_string(),
-            request_id: request_id.to_string(),
+    pub(crate) fn notify_session_suspended(
+        &self,
+        record: &crate::suspended_sessions::SuspendedSession,
+    ) {
+        self.emit_pty_event(AppEvent::SessionSuspended {
+            record: Box::new(record.clone()),
         });
         #[cfg(feature = "desktop")]
         if let Some(app) = self.app_handle.read().as_ref() {
-            let _ = app.emit(
-                "session-suspend-requested",
-                serde_json::json!({ "session_id": session_id, "request_id": request_id }),
-            );
+            let _ = app.emit("session-suspended", serde_json::json!({"record": record}));
         }
     }
 
@@ -3355,7 +3379,7 @@ impl AppState {
     /// agent that spends a long turn thinking, without calling a TUIC tool, had
     /// its address deleted out from under it while it was still running.
     ///
-    /// Two things keep an identity addressable:
+    /// Three things keep an identity addressable:
     ///
     /// - it owns a live PTY. The agent is sitting right there mid-turn and will
     ///   call `agent action=send` when the turn ends.
@@ -3363,10 +3387,12 @@ impl AppState {
     ///   child's handoff permanently: re-registering a headerless caller mints a
     ///   fresh UUID, and nothing tells the child what the new one is.
     ///
-    /// Both conditions are bounded by live sessions, so retention cannot grow
-    /// without bound — a reaped identity with neither is genuinely unreachable.
+    /// - a durable suspended tab retains it until resume or explicit forget.
+    ///
+    /// Retention is bounded by live sessions and retained tabs.
     pub(crate) fn peer_identity_is_reapable(&self, peer_id: &str) -> bool {
-        self.live_pty_for_peer(peer_id).is_none()
+        !self.hibernated_peers.contains(peer_id)
+            && self.live_pty_for_peer(peer_id).is_none()
             && !self
                 .session_maps
                 .session_parent
@@ -3491,6 +3517,7 @@ impl AppState {
         config: crate::config::AppConfig,
         log_buffer: Arc<Mutex<crate::app_logger::LogRingBuffer>>,
     ) -> Self {
+        crate::attachments::cleanup_orphans(&data_dir);
         let session_token = config.services.auth.session_token.clone();
         let push_store = crate::push::PushStore::load(&data_dir);
         let audit_path = data_dir.join("tunnel_audit.db");
@@ -3506,11 +3533,14 @@ impl AppState {
             automation_runtime: Default::default(),
             secrets: crate::secrets::SecretStore::default(),
             session_maps: SessionMaps::default(),
+            open_markdown_tabs: Default::default(),
             data_dir,
             worktrees_dir,
             metrics: SessionMetrics::new(),
             mcp: McpState::default(),
             ws_clients: DashMap::new(),
+            webview_unloaded: AtomicBool::new(false),
+            background_visibility: Mutex::new(Default::default()),
             config: parking_lot::RwLock::new(config),
             git_cache: GitCacheState::new(),
             repo_watchers: DashMap::new(),
@@ -3553,6 +3583,7 @@ impl AppState {
             index_build_sem: Arc::new(tokio::sync::Semaphore::new(1)),
             monitoring_git_sem: Arc::new(tokio::sync::Semaphore::new(MONITORING_GIT_CONCURRENCY)),
             loaded_plugins: DashMap::new(),
+            plugin_settings: Default::default(),
             plugin_output_watchers: parking_lot::RwLock::new(Default::default()),
             relay: RelayState::new(),
             peer_agents: DashMap::new(),
@@ -3585,8 +3616,12 @@ impl AppState {
             tunnel_audit,
             tasks: Arc::new(crate::tasks::TaskRegistry::new()),
             connections_lock: tokio::sync::Mutex::new(()),
+            work_item_requests: DashMap::new(),
             screenshot_responses: DashMap::new(),
-            suspend_responses: DashMap::new(),
+            suspend_metadata: DashMap::new(),
+            suspend_lock: Mutex::new(()),
+            hibernated_peers: dashmap::DashSet::new(),
+            settings_policy: Arc::new(crate::settings::policy::Policy::default()),
             confirm_responses: DashMap::new(),
             process_snapshot_cache: crate::pty::ProcessSnapshotCache::default(),
             hot_repo_paths: parking_lot::RwLock::new(std::collections::HashSet::new()),
@@ -4307,6 +4342,13 @@ impl AppState {
     /// post-removal worktree state.
     pub(crate) fn notify_worktree_removed(&self, payload: WorktreeRemovedPayload) {
         self.invalidate_repo_caches(&payload.repo_path);
+        match crate::config::retract_removed_workspace(&payload.repo_path, &payload.workspace_id) {
+            Ok(true) => self.notify_repositories_changed(),
+            Ok(false) => {}
+            Err(error) => {
+                tracing::error!(source = "config", %error, "Failed to retract removed workspace restore records")
+            }
+        }
         crate::workitem_links::drop_link_of_removed_worktree(&payload.repo_path, &payload.branch);
         #[cfg(feature = "desktop")]
         if let Some(ref app) = *self.app_handle.read() {
@@ -4391,6 +4433,7 @@ impl AppState {
             .session_states
             .get(session_id)
             .map(|s| s.clone())?;
+        crate::codex_binding::validate_snapshot(self, session_id, &mut state);
         state.queued_commands = crate::pty::queued_command_count(self, session_id) as u32;
         state.shell_state = self
             .session_maps
@@ -4400,22 +4443,28 @@ impl AppState {
                 crate::pty::shell_state_wire(atom.load(std::sync::atomic::Ordering::Relaxed))
                     .map(str::to_string)
             });
-        let completion_declared = state.suggested_actions.is_some()
+        let completion_settled = state.suggested_actions.is_some()
             || self
                 .session_maps
                 .silence_states
                 .get(session_id)
                 .is_some_and(|silence| {
-                    silence
-                        .lock()
-                        .completion_declared_for_epoch(state.turn_epoch)
+                    let silence = silence.lock();
+                    if state.agent_type.as_deref() == Some("claude")
+                        && state.shell_state.as_deref() != Some("idle")
+                    {
+                        silence.completion_settled_for_epoch(state.turn_epoch)
+                    } else {
+                        silence.completion_declared_for_epoch(state.turn_epoch)
+                    }
                 });
         let background_work = state.has_pending_background_probe() || state.background_work;
         // A current-turn completion marker is stronger than a stale BUSY atom
         // (for example a completed Codex screen that still contains its last
         // Working row). Keep real background work authoritative, but normalize
-        // the terminal state once the agent has explicitly ended the turn.
-        if completion_declared && !background_work {
+        // the terminal state once the agent has settled its explicit end-of-turn marker.
+        // Claude can retain that marker while blocking Stop hooks still run.
+        if completion_settled && !background_work {
             state.shell_state = Some("idle".to_string());
         }
         state.agent_state = if state.agent_type.is_none() {
@@ -4428,7 +4477,7 @@ impl AppState {
             Some("awaiting_input".to_string())
         } else if background_work {
             Some("working".to_string())
-        } else if completion_declared {
+        } else if completion_settled {
             Some("completed".to_string())
         } else if state.shell_state.as_deref() == Some("busy") {
             Some("working".to_string())
@@ -4658,6 +4707,10 @@ impl AppState {
         let Some(session_id) = event.pty_session_id() else {
             return;
         };
+        #[cfg(feature = "desktop")]
+        if let Some(app) = state.app_handle.read().as_ref() {
+            crate::background_mode::tray::desktop::schedule_sync(app);
+        }
         let Some(current) = state.session_state_with_shell(session_id) else {
             // The row is gone (`SessionClosed`). Drop the baseline too: a reused
             // id must not be deduped against the state of a dead session.
@@ -4756,7 +4809,7 @@ impl AppState {
             AppEvent::PtyDescriptionChanged { .. } => {}
             AppEvent::ChatViewChanged { .. } => {}
             AppEvent::SessionRenamed { .. } => {}
-            AppEvent::SessionSuspendRequested { .. } => {}
+            AppEvent::SessionSuspended { .. } => {}
             AppEvent::TermAliasAssigned { .. } => {}
             // A watcher hit says nothing about the session's own state — it is a
             // plugin-facing signal that rides the bus for browser clients only.
@@ -5170,6 +5223,7 @@ impl AppState {
                 }
             }
             AppEvent::PtyExit { session_id } => {
+                crate::codex_binding::revoke(state, session_id);
                 let push_ready = {
                     let config = state.config.read();
                     config.services.push.enabled
@@ -5222,7 +5276,8 @@ impl AppState {
                 }
             }
             // Global events don't affect per-session state
-            AppEvent::HeadChanged { .. }
+            AppEvent::WorkItemProviderRequest { .. }
+            | AppEvent::HeadChanged { .. }
             | AppEvent::RepoChanged { .. }
             | AppEvent::PluginChanged { .. }
             | AppEvent::UpstreamStatusChanged { .. }
@@ -5230,6 +5285,7 @@ impl AppState {
             | AppEvent::McpToast { .. }
             | AppEvent::McpConfirm { .. }
             | AppEvent::McpConfirmResolved { .. }
+            | AppEvent::OpenMarkdownTabsChanged
             | AppEvent::RepositoriesChanged
             | AppEvent::DirChanged { .. }
             | AppEvent::SessionWorktreeDeclared { .. }
@@ -5247,6 +5303,8 @@ impl AppState {
             | AppEvent::ProgressRecorded { .. }
             | AppEvent::WorkflowRunChanged { .. }
             | AppEvent::AutomationRunChanged { .. }
+            | AppEvent::CloseDialog { .. }
+            | AppEvent::BackgroundModeChanged { .. }
             | AppEvent::ReviewProgress { .. }
             | AppEvent::ProposalsReady { .. }
             // This accumulator's own output. Feeding it back in would make the
@@ -8615,6 +8673,7 @@ mod tests {
     fn session_created(session_id: &str, agent_type: &str) -> AppEvent {
         AppEvent::SessionCreated {
             session_id: session_id.to_string(),
+            tuic_session: None,
             cwd: None,
             agent_type: Some(agent_type.to_string()),
             display_name: None,

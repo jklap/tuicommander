@@ -19,7 +19,7 @@ import {
 	parseTweakComments,
 } from "../../utils/tweakComments";
 import { applyTweakDomHighlights } from "../../utils/tweakDomHighlight";
-import { filePathRegex } from "../Terminal/linkProvider";
+import { filePathRegex, isWholeFilePath } from "../Terminal/linkProvider";
 
 /** DOMPurify's default allowed-URI schemes plus Tauri's local asset protocols
  *  (`asset:`, `tauri:`). Without these, DOMPurify strips the rewritten image
@@ -38,8 +38,11 @@ export interface ContentRendererProps {
 	/** Turn plain file paths into links; the caller still resolves and validates them. */
 	autoLinkFiles?: boolean;
 	emptyMessage?: string;
-	/** Called for local file, directory, and heading links (raw href passed as argument). */
-	onLinkClick?: (href: string) => void;
+	/**
+	 * Called for local file, directory, and heading links (raw href passed as argument).
+	 * Resolving to `false` reports a dead target: the clicked link is replaced by its text.
+	 */
+	onLinkClick?: (href: string) => void | Promise<boolean | void>;
 	/**
 	 * Called when a checkbox is clicked (source line, new mark, and — for a
 	 * whole-cell checkbox in a table — the column of its `[`, since one row can
@@ -540,7 +543,11 @@ export const ContentRenderer: Component<ContentRendererProps> = (props) => {
 		) {
 			appLogger.debug("app", "Blocked Markdown link scheme", { href });
 		} else if (props.onLinkClick) {
-			props.onLinkClick(href);
+			void Promise.resolve(props.onLinkClick(href)).then((opened) => {
+				if (opened !== false) return;
+				deadHrefs.add(href);
+				if (anchor.isConnected) anchor.replaceWith(...anchor.childNodes);
+			});
 		} else if (href.startsWith("#")) {
 			const heading = Array.from(containerRef?.querySelectorAll("h1,h2,h3,h4,h5,h6") ?? []).find(
 				(el) =>
@@ -558,6 +565,8 @@ export const ContentRenderer: Component<ContentRendererProps> = (props) => {
 	};
 
 	let containerRef: HTMLDivElement | undefined;
+	// Hrefs that resolved to nothing; the auto-link pass must not turn their text back into links.
+	const deadHrefs = new Set<string>();
 
 	// After render, set indeterminate property on [~] checkboxes (not settable via HTML attribute)
 	// and render Mermaid diagrams from ```mermaid code blocks.
@@ -579,7 +588,11 @@ export const ContentRenderer: Component<ContentRendererProps> = (props) => {
 				const nodes: Text[] = [];
 				while (walker.nextNode()) {
 					const node = walker.currentNode as Text;
-					if (!node.parentElement?.closest("a, code, pre, button, textarea, input")) nodes.push(node);
+					const parent = node.parentElement;
+					if (!parent) continue;
+					// Inline code links only when the whole span is one path: `src/a.ts:12`, not `cat src/a.ts`.
+					const wholePath = parent.tagName === "CODE" && !parent.closest("a, pre") && isWholeFilePath(node.data);
+					if (wholePath || !parent.closest("a, code, pre, button, textarea, input")) nodes.push(node);
 				}
 				for (const node of nodes) {
 					const source = node.textContent ?? "";
@@ -588,6 +601,7 @@ export const ContentRenderer: Component<ContentRendererProps> = (props) => {
 					let end = 0;
 					for (const match of source.matchAll(regex)) {
 						const path = match[1];
+						if (deadHrefs.has(path)) continue;
 						const start = match.index + match[0].indexOf(path);
 						fragment.append(document.createTextNode(source.slice(end, start)));
 						const anchor = document.createElement("a");

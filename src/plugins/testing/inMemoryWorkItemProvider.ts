@@ -98,6 +98,9 @@ export function createInMemoryWorkItemProvider(seed: WorkItemProviderSnapshot = 
 						kind: "enum",
 						required: true,
 						editable: true,
+						sortable: false,
+						groupable: false,
+						filterable: false,
 						options: itemTypes().map((id) => ({ id, name: id.charAt(0).toUpperCase() + id.slice(1) })),
 					},
 				];
@@ -137,7 +140,7 @@ export function createInMemoryWorkItemProvider(seed: WorkItemProviderSnapshot = 
 					return (sort.descending ? -order : order) || a.reference.id.localeCompare(b.reference.id);
 				});
 			const result = page(values, query.cursor, query.limit, JSON.stringify({ ...query, cursor: null }));
-			return { items: result.values, nextCursor: result.nextCursor };
+			return { items: result.values, nextCursor: result.nextCursor, total: values.length };
 		},
 		async detail(reference, signal) {
 			guard(signal);
@@ -181,6 +184,7 @@ export function createInMemoryWorkItemProvider(seed: WorkItemProviderSnapshot = 
 			return {
 				groups: [...groups.values()].toSorted((a, b) => a.id.localeCompare(b.id)),
 				nextCursor: result.nextCursor,
+				total: result.total,
 			};
 		},
 		async board(id, query, signal): Promise<WorkItemBoardPage> {
@@ -283,7 +287,7 @@ export function createInMemoryWorkItemProvider(seed: WorkItemProviderSnapshot = 
 					kind: "normal",
 					value: {
 						id: `local-${revision}`,
-						author: { id: "demo-user", name: "Demo User", avatarUrl: null },
+						author: { id: "demo-user", name: "Demo User", avatarUrl: null, bot: false },
 						body: action.value,
 						createdAt: "2026-10-10T00:00:00Z",
 						url: null,

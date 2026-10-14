@@ -8,6 +8,7 @@ import { resolve } from "node:path";
 import { cleanup, render } from "@solidjs/testing-library";
 import { createRoot, createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import recordedProviderRetry from "../fixtures/ego-provider-retry.json";
 import { cleanupToasts } from "../helpers/toasts";
 
 const { mockDetachPanel, mockReattachPanel, mockClosePanel } = vi.hoisted(() => ({
@@ -67,6 +68,7 @@ vi.mock("../../stores/ui", () => ({
 vi.mock("../../transport", () => ({
 	isTauri: () => true,
 	owningConnectionFor: () => undefined,
+	rpc: vi.fn(async () => ({})),
 }));
 
 // Whether an ego binary is configured is the one setting this panel reads, and
@@ -117,9 +119,11 @@ vi.mock("../../services/acpClient", () => ({ acpClient: client }));
 import { invoke } from "@tauri-apps/api/core";
 import { emitTo } from "@tauri-apps/api/event";
 import { AIChatPanel } from "../../components/AIChatPanel/AIChatPanel";
+import { Composer } from "../../components/AIChatPanel/Composer";
 import { aiChatDraft } from "../../components/AIChatPanel/draft";
 import { elicitationFields } from "../../components/AIChatPanel/Interactions";
 import { createAcpChat, resetAcpChatBindings } from "../../components/AIChatPanel/useAcpChat";
+import { useKeyboardCorrection } from "../../mobile/useKeyboardCorrection";
 import { aiChatPanelAdapter } from "../../panelAdapters/aiChat";
 import { acpStore } from "../../stores/acp";
 import { acpTranscript } from "../../stores/acpTranscript";
@@ -2278,6 +2282,25 @@ describe("AIChatPanel: a turn", () => {
 });
 
 describe("AIChatPanel: durable conversations", () => {
+	// Catches: the conversation picker left at the 36px default beside the 19px settings button in the control bar.
+	it("sizes the conversation picker compact like its control bar neighbours", async () => {
+		client.listSessions.mockResolvedValue({
+			sessions: [
+				{ sessionId: SESSION, cwd: CHAT_ROOT, title: null, updatedAt: "2026-09-27T09:00:00Z" },
+				{
+					sessionId: "01932d5e-0000-7000-8000-0000000000bb",
+					cwd: CHAT_ROOT,
+					title: null,
+					updatedAt: "2026-09-26T09:00:00Z",
+				},
+			],
+			nextCursor: null,
+		});
+		const { container } = await renderPanel();
+		await settle();
+		expect(container.querySelector('select[title="Conversation"]')?.className).toMatch(/compact/);
+	});
+
 	it("labels untitled conversations without exposing an id as the option text", async () => {
 		client.listSessions.mockResolvedValue({
 			sessions: [
@@ -3491,6 +3514,86 @@ describe("AIChatPanel: provider retry status", () => {
 		return view;
 	}
 
+	// Catches: the prompt's pre-wrap leaking into Copy and wrapping its letters vertically.
+	it("keeps the user Copy action on one line", async () => {
+		const style = document.createElement("style");
+		style.textContent = readFileSync(
+			resolve(process.cwd(), "src/components/AIChatPanel/AIChatPanel.module.css"),
+			"utf8",
+		);
+		document.head.append(style);
+		try {
+			const { container } = await retryingPanel();
+			feed({ kind: "promptSent", text: "A real user prompt" });
+			const copy = container.querySelector<HTMLElement>('[aria-label="Copy user message"]');
+			expect(copy).not.toBeNull();
+			expect(getComputedStyle(copy!).whiteSpace).toBe("nowrap");
+		} finally {
+			style.remove();
+		}
+	});
+
+	// Catches: the absolutely positioned user Copy collapsing to 7.9px and wrapping at a 500px panel.
+	// jsdom has no layout engine. Chromium measured the one-line label at 27.109375x16.5px;
+	// verify the production CSS preserves that intrinsic line and budgets enough transcript gutter.
+	it("keeps Copy within the transcript gutter at a 500px AI Chat panel", async () => {
+		const style = document.createElement("style");
+		style.textContent = readFileSync(
+			resolve(process.cwd(), "src/components/AIChatPanel/AIChatPanel.module.css"),
+			"utf8",
+		);
+		document.head.append(style);
+		try {
+			const { container } = await retryingPanel();
+			const panel = container.querySelector<HTMLElement>("#ai-chat-panel")!;
+			panel.style.width = "500px";
+			feed({ kind: "promptSent", text: "Question for geometry verification" });
+			feed({
+				kind: "sessionUpdate",
+				update: {
+					sessionUpdate: "agent_message_chunk",
+					content: { type: "text", text: "Assistant answer for geometry verification." },
+				},
+			});
+			await settle();
+			const transcript = container.querySelector<HTMLElement>('[aria-label="Chat transcript"]')!;
+			const userCopy = container.querySelector<HTMLElement>('[aria-label="Copy user message"]')!;
+			const assistantCopy = container.querySelector<HTMLElement>('[aria-label="Copy assistant message"]')!;
+			expect(userCopy.textContent).toBe("Copy");
+			expect(assistantCopy.textContent).toBe("Copy");
+			const copy = getComputedStyle(userCopy);
+			const bubble = getComputedStyle(userCopy.parentElement!);
+			const list = getComputedStyle(transcript);
+			expect(copy.whiteSpace).toBe("nowrap");
+			expect(copy.position).toBe("absolute");
+			expect(copy.right).toBe("100%");
+			const rowWidth = 500 - parseFloat(list.paddingLeft) - parseFloat(list.paddingRight);
+			const gutter = rowWidth * (1 - parseFloat(bubble.maxWidth) / 100);
+			expect(gutter).toBeGreaterThanOrEqual(27.109375 + parseFloat(copy.marginRight));
+		} finally {
+			style.remove();
+		}
+	});
+
+	// Catches: retaining the provider's initial text instead of counting down from update arrival.
+	it("counts a recorded 12s provider retry down to 4s after 8s", async () => {
+		const { container } = await retryingPanel();
+		vi.useFakeTimers();
+		try {
+			feed({ kind: "sessionUpdate", update: recordedProviderRetry as never });
+			expect(statusLines(container)[0].textContent).toContain("retrying in 12s");
+			await vi.advanceTimersByTimeAsync(8000);
+			expect(statusLines(container)[0].textContent).toContain("retrying in 4s");
+			await vi.advanceTimersByTimeAsync(4000);
+			expect(statusLines(container)[0].textContent).toContain("retrying now (attempt 1/6)");
+			await vi.advanceTimersByTimeAsync(5000);
+			expect(statusLines(container)[0].textContent).toContain("retrying now");
+		} finally {
+			cleanup();
+			vi.useRealTimers();
+		}
+	});
+
 	// Catches: one line per retry, or a retry that never shows its n/6 counter.
 	it("shows one status line that a later attempt updates in place", async () => {
 		const { container } = await retryingPanel();
@@ -3983,4 +4086,164 @@ describe("AI Chat clipboard precedence", () => {
 		await settle();
 		expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SESSION, longText, [], ROOT);
 	});
+});
+
+// Catches: mobile Chat retains a separate Park button or loses the shared +/mic order.
+it("mobile plus Chat shares the control order and restores its parked text", async () => {
+	vi.stubGlobal("SpeechRecognition", class {});
+	const chat = createAcpChat(
+		() => ROOT,
+		() => true,
+		client,
+	);
+	const view = render(() => <Composer chat={chat} mobileAttachments />);
+	await chat.ensureStarted();
+	await settle();
+	const plus = view.getByRole("button", { name: "More composer actions" });
+	const textarea = view.container.querySelector("textarea")!;
+	const mic = view.getByRole("button", { name: "Dictate into draft" });
+	expect(plus.compareDocumentPosition(textarea) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+	expect(textarea.parentElement?.contains(mic)).toBe(true);
+	expect(
+		textarea.compareDocumentPosition(view.getByRole("button", { name: "Send" })) & Node.DOCUMENT_POSITION_FOLLOWING,
+	).toBeTruthy();
+	expect(view.queryByRole("button", { name: "Park draft" })).toBeNull();
+	textarea.value = "Keep this mobile draft";
+	textarea.dispatchEvent(new Event("input", { bubbles: true }));
+	plus.click();
+	expect(view.queryByRole("menuitem", { name: "Commands (/)" })).toBeNull();
+	expect(view.queryByRole("menuitem", { name: "Queue" })).toBeNull();
+	view.getByRole("menuitem", { name: "Park draft" }).click();
+	expect(textarea.value).toBe("");
+	plus.click();
+	view.getByRole("menuitem", { name: "Restore parked draft" }).click();
+	expect(textarea.value).toBe("Keep this mobile draft");
+	expect(view.queryByRole("menu")).toBeNull();
+	vi.unstubAllGlobals();
+});
+
+// Catches: the moved Chat picker stages no image, or Queue sends through a different path.
+it("mobile plus Chat stages a captured image and queues it through ACP while busy", async () => {
+	supportsImages = true;
+	const chat = createAcpChat(
+		() => ROOT,
+		() => true,
+		client,
+	);
+	const view = render(() => <Composer chat={chat} mobileAttachments />);
+	await chat.ensureStarted();
+	await settle();
+	acpStore.applySnapshot(
+		snapshot({
+			attachments: [
+				attachment({
+					state: "prompting",
+					activeTurn: { turnId: "running", state: "running", stopReason: null, usage: null },
+				}),
+			],
+		}),
+	);
+	const plus = view.getByRole("button", { name: "More composer actions" });
+	plus.click();
+	const camera = view.getByLabelText("Take photo") as HTMLInputElement;
+	const clickCamera = vi.spyOn(camera, "click");
+	view.getByRole("menuitem", { name: "Take photo" }).click();
+	expect(clickCamera).toHaveBeenCalledOnce();
+	const file = new File([Uint8Array.from(atob(PNG_1X1), (byte) => byte.charCodeAt(0))], "photo.png", {
+		type: "image/png",
+	});
+	Object.defineProperty(camera, "files", { value: [file], configurable: true });
+	camera.dispatchEvent(new Event("change", { bubbles: true }));
+	await vi.waitFor(() => expect(view.getByAltText("Pasted image")).toBeTruthy());
+	plus.click();
+	view.getByRole("menuitem", { name: "Queue" }).click();
+	await settle();
+	expect(client.prompt).toHaveBeenCalledWith(
+		CONNECTION,
+		SESSION,
+		"",
+		[{ type: "image", mimeType: "image/png", data: PNG_1X1 }],
+		ROOT,
+	);
+	expect(view.queryByAltText("Pasted image")).toBeNull();
+});
+
+// Catches: Chat's new mic writes nowhere or appends stale recognition after manual typing.
+it("mobile plus Chat dictates into the visible draft and ignores speech after an edit", async () => {
+	class Recognition {
+		static current: Recognition;
+		onresult: ((event: { results: { 0: { transcript: string }; isFinal: boolean }[] }) => void) | null = null;
+		onend: (() => void) | null = null;
+		constructor() {
+			Recognition.current = this;
+		}
+		start() {}
+		stop() {}
+		abort() {
+			this.onend?.();
+		}
+		result(transcript: string) {
+			this.onresult?.({ results: [{ 0: { transcript }, isFinal: true }] });
+		}
+	}
+	vi.stubGlobal("SpeechRecognition", Recognition);
+	try {
+		let chat!: ReturnType<typeof createAcpChat>;
+		const view = render(() => {
+			chat = createAcpChat(
+				() => ROOT,
+				() => true,
+				client,
+			);
+			return <Composer chat={chat} mobileAttachments />;
+		});
+		await chat.ensureStarted();
+		await settle();
+		view.getByRole("button", { name: "Dictate into draft" }).click();
+		Recognition.current.result("Review this change");
+		const textarea = view.container.querySelector("textarea")!;
+		expect(textarea.value).toBe("Review this change");
+		textarea.value = "Review this change carefully";
+		textarea.dispatchEvent(new Event("input", { bubbles: true }));
+		Recognition.current.result("stale words");
+		expect(textarea.value).toBe("Review this change carefully");
+		view.getByRole("button", { name: "Send" }).click();
+		await settle();
+		expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SESSION, "Review this change carefully", [], ROOT);
+	} finally {
+		vi.unstubAllGlobals();
+	}
+});
+
+// Catches: the mounted mobile Chat textarea ignores the shared keyboard correction setting.
+it("mobile Chat updates keyboard correction without changing desktop attributes", () => {
+	const view = render(() => {
+		const chat = createAcpChat(
+			() => ROOT,
+			() => true,
+			client,
+		);
+		const correction = useKeyboardCorrection();
+		return (
+			<>
+				<button onClick={correction.toggle}>Toggle correction</button>
+				<Composer chat={chat} mobileAttachments />
+				<Composer chat={chat} />
+			</>
+		);
+	});
+	const [mobile, desktop] = view.container.querySelectorAll("textarea");
+	const expectAttributes = (enabled: boolean) => {
+		expect(mobile.getAttribute("autocorrect")).toBe(enabled ? "on" : "off");
+		expect(mobile.getAttribute("spellcheck")).toBe(String(enabled));
+		expect(mobile.getAttribute("autocapitalize")).toBe(enabled ? "sentences" : "off");
+		for (const attribute of ["autocorrect", "spellcheck", "autocapitalize"]) {
+			expect(desktop.hasAttribute(attribute)).toBe(false);
+		}
+	};
+	expectAttributes(true);
+	view.getByRole("button", { name: "Toggle correction" }).click();
+	expectAttributes(false);
+	view.getByRole("button", { name: "Toggle correction" }).click();
+	expectAttributes(true);
 });

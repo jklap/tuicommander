@@ -25,6 +25,13 @@ type CommandTableEntry = { map: (args: Record<string, unknown>, p: ArgEncoder) =
  * The `p` helper encodes a required argument for URL usage (throws if missing).
  */
 export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
+	resume_session: {
+		map: (args) => ({ method: "POST", path: "/sessions/wake", body: { tuicSession: args.tuicSession } }),
+	},
+	suspended_session_action: { map: (args) => ({ method: "POST", path: "/sessions/suspended", body: args.request }) },
+	work_item_provider_bridge: {
+		map: (args) => ({ method: "POST", path: "/work-items/provider-bridge", body: args.input }),
+	},
 	account_secret_form: { map: (args) => ({ method: "POST", path: "/accounts/secret-form", body: args.request }) },
 	account_action: { map: (args) => ({ method: "POST", path: "/accounts/action", body: args.request }) },
 	telegram_settings: { map: () => ({ method: "GET", path: "/config/telegram" }) },
@@ -466,14 +473,6 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			body: { request_id: args.requestId, confirmed: args.confirmed },
 		}),
 	},
-	// The tab's verdict on `session action=suspend`; the MCP call waits for it.
-	session_suspend_response: {
-		map: (args) => ({
-			method: "POST",
-			path: "/mcp/suspend-response",
-			body: { request_id: args.requestId, ok: args.ok, reason: args.reason ?? null },
-		}),
-	},
 	get_session_foreground_process: {
 		map: (args) => ({
 			method: "GET",
@@ -763,6 +762,13 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		map: (args) => ({ method: "POST", path: "/config/repositories/stale-temp", body: { paths: args.paths } }),
 	},
 
+	// --- Desktop Markdown metadata (mobile reads; publication stays loopback-only) ---
+	list_open_markdown_tabs: {
+		map: (args) => ({ method: "GET", path: `/repo/open-markdown-tabs?cwd=${encodeURIComponent(String(args.cwd))}` }),
+	},
+	sync_open_markdown_tabs: {
+		map: (args) => ({ method: "PUT", path: "/config/open-markdown-tabs", body: { tabs: args.tabs } }),
+	},
 	// --- Config: pane layout ---
 	load_pane_layout: { map: () => ({ method: "GET", path: "/config/pane-layout" }) },
 	save_pane_layout: {
@@ -1155,6 +1161,12 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		map: (args, p) => ({
 			method: "GET",
 			path: `/repo/pr-line-threads?repoPath=${p("repoPath")}&prNumber=${p("prNumber")}${args.after ? `&after=${p("after")}` : ""}`,
+		}),
+	},
+	get_pr_open_threads: {
+		map: (_args, p) => ({
+			method: "GET",
+			path: `/repo/pr-open-threads?repoPath=${p("repoPath")}&prNumber=${p("prNumber")}`,
 		}),
 	},
 	get_pr_thread_comments: {
@@ -1918,6 +1930,16 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			return { method: "GET", path };
 		},
 	},
+	project_work_items: {
+		map: (args) => ({ method: "POST", path: "/tasks/project", body: args.input }),
+	},
+	build_start_work_prompt: {
+		map: (args) => ({
+			method: "POST",
+			path: "/tasks/start-work-prompt",
+			body: { repoPath: args.repoPath, input: args.input },
+		}),
+	},
 	fs_read_file: {
 		map: (_args, p) => ({ method: "GET", path: `/fs/read?repoPath=${p("repoPath")}&file=${p("file")}` }),
 	},
@@ -2146,6 +2168,13 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	reload_design_mode: {
 		map: (args) => ({ method: "POST", path: "/design-mode/reload", body: { repoPath: args.repoPath } }),
 	},
+	design_mode_browser_command: {
+		map: (a) => ({
+			method: "POST",
+			path: "/design-mode/command",
+			body: { repoPath: a.repoPath, action: a.action, args: a.args },
+		}),
+	},
 	navigate_design_mode: {
 		map: (args) => ({
 			method: "POST",
@@ -2312,6 +2341,13 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			body: { capabilities: args.capabilities },
 		}),
 	},
+	plugin_settings_action: {
+		map: (args, p) => ({
+			method: "POST",
+			path: `/api/plugins/${p("pluginId")}/settings`,
+			body: args.action,
+		}),
+	},
 	unregister_loaded_plugin: {
 		map: (_args, p) => ({
 			method: "POST",
@@ -2346,6 +2382,10 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
  * This is NOT a feature gap — these commands have no meaning off the host machine.
  */
 export const INTENTIONALLY_UNMAPPED: ReadonlySet<string> = new Set<string>([
+	// Native desktop lifecycle; remote clients must not hide or quit the host.
+	"request_quit",
+	"resolve_close",
+	"ack_background_snapshot",
 	// Browser clients use their own navigator.clipboard, never the host pasteboard.
 	"write_clipboard_text",
 	"read_clipboard_text",

@@ -7,7 +7,6 @@
 
 import type { ShortcutHandlers } from "../hooks/useKeyboardShortcuts";
 import type { ActionName } from "../keybindingDefaults";
-import { workItemProviderRegistry } from "../plugins/workItemProviderRegistry";
 import { automationsUi } from "../stores/automations";
 import { dictationStore } from "../stores/dictation";
 import { keybindingsStore } from "../stores/keybindings";
@@ -45,6 +44,7 @@ const ACTION_META: Partial<Record<ActionName, ActionMeta>> = {
 	"find-in-terminal": { label: "Find in content", category: "Terminal" },
 	"run-command": { label: "Run saved command", category: "Terminal" },
 	"edit-command": { label: "Edit saved command", category: "Terminal" },
+	"reload-tab": { label: "Reload active tab", category: "Terminal" },
 	"prev-tab": { label: "Previous tab", category: "Terminal" },
 	"next-tab": { label: "Next tab", category: "Terminal" },
 	"focus-last-terminal": { label: "Return to last terminal", category: "Navigation" },
@@ -143,6 +143,9 @@ export function getActionEntries(handlers: ShortcutHandlers): ActionEntry[] {
 		"find-in-terminal": handlers.findInTerminal,
 		"run-command": () => handlers.handleRunCommand(false),
 		"edit-command": () => handlers.handleRunCommand(true),
+		"reload-tab": () => {
+			handlers.reloadActiveTab();
+		},
 		"prev-tab": () => handlers.navigateTab("prev"),
 		"next-tab": () => handlers.navigateTab("next"),
 		"focus-last-terminal": handlers.focusLastTerminal,
@@ -213,8 +216,6 @@ export function getActionEntries(handlers: ShortcutHandlers): ActionEntry[] {
 	for (const [actionId, meta] of Object.entries(ACTION_META)) {
 		if (!meta) continue;
 		if (seen.has(actionId)) continue;
-		// The Tasks tab has nothing to show until a work-item provider plugin has registered.
-		if (actionId === "open-tasks" && workItemProviderRegistry.list().length === 0) continue;
 		if (actionId === "toggle-ai-chat" && !settingsStore.isAiChatEnabled()) continue;
 		// A browser tab never loads the dictation config (`refreshConfig` is
 		// desktop-only), so there the backend's answer to arming is the gate.

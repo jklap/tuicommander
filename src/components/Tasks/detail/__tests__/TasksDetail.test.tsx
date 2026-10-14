@@ -37,10 +37,11 @@ describe("TasksDetail", () => {
 
 	// Catches: sanitization drops a real bot comment's collapsible HTML.
 	it("bot_comment_details_survive_sanitize", async () => {
-		const { container } = render(() => <TasksDetail provider={provider()} reference={reference} />);
+		render(() => <TasksDetail provider={provider()} reference={reference} />);
 		await screen.findByText("CodeRabbit");
-		expect(container.querySelector("details summary")?.textContent).toContain("Actions performed");
-		expect(container.querySelector("details")?.textContent).toContain("Review triggered.");
+		const comments = screen.getByLabelText("Comments");
+		expect(comments.querySelector("details summary")?.textContent).toContain("Actions performed");
+		expect(comments.querySelector("details")?.textContent).toContain("Review triggered.");
 	});
 
 	// Catches: comment HTML executes script, event handlers, CSS or javascript links.
@@ -68,22 +69,23 @@ describe("TasksDetail", () => {
 				return value;
 			},
 		});
-		const { container } = render(() => <TasksDetail provider={source} reference={reference} />);
+		render(() => <TasksDetail provider={source} reference={reference} />);
 		await screen.findByText("CodeRabbit");
-		const section = container.querySelector("details");
+		const comments = () => screen.getByLabelText("Comments");
+		const section = comments().querySelector("details");
 		if (!section) throw new Error("Missing recorded details");
 		section.open = true;
 		fireEvent(section, new Event("toggle"));
 		changed = true;
 		fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
 		await screen.findByText("Updated comment.");
-		await waitFor(() => expect(container.querySelector("details")?.open).toBe(true));
+		await waitFor(() => expect(comments().querySelector("details")?.open).toBe(true));
 	});
 
 	// Catches: provider pagination or review variants are silently omitted from the conversation.
 	it("all_comment_sources_and_next_page_are_visible", async () => {
 		const value = detail();
-		const author = { id: "reviewer", name: "Reviewer", avatarUrl: null };
+		const author = { id: "reviewer", name: "Reviewer", avatarUrl: null, bot: false };
 		const comment = {
 			id: "thread-comment",
 			author,
@@ -99,10 +101,13 @@ describe("TasksDetail", () => {
 						value: {
 							id: "thread-1",
 							resolved: false,
+							outdated: false,
 							path: "src/main.rs",
 							line: 42,
+							originalLine: 42,
 							commitId: "abc",
 							comments: [comment],
+							finding: null,
 						},
 					},
 					{
@@ -141,7 +146,7 @@ describe("TasksDetail", () => {
 						kind: "normal",
 						value: {
 							id: "new-comment",
-							author: { id: "me", name: "Me", avatarUrl: null },
+							author: { id: "me", name: "Me", avatarUrl: null, bot: false },
 							body: action.value,
 							createdAt: "2026-10-10T12:03:00Z",
 							url: null,

@@ -10,6 +10,7 @@ import {
 	Switch,
 } from "solid-js";
 import { AGENT_DISPLAY } from "../../agents";
+import { AGENT_USAGE_BLINK_THRESHOLD } from "../../features/usageThresholds";
 import { useGitHub } from "../../hooks/useGitHub";
 import { useOutsideDismiss } from "../../hooks/useOutsideDismiss";
 import { t } from "../../i18n";
@@ -347,8 +348,10 @@ export const StatusBar: Component<StatusBarProps> = (props) => {
 											<span
 												class={cx(
 													s.agentUsage,
-													ticker().priority >= 90 && s.agentUsageCritical,
-													ticker().priority >= 50 && ticker().priority < 90 && s.agentUsageWarning,
+													ticker().priority >= AGENT_USAGE_BLINK_THRESHOLD && s.agentUsageCritical,
+													ticker().priority >= 50 &&
+														ticker().priority < AGENT_USAGE_BLINK_THRESHOLD &&
+														s.agentUsageWarning,
 												)}
 											>
 												{" "}
@@ -361,8 +364,8 @@ export const StatusBar: Component<StatusBarProps> = (props) => {
 											<span
 												class={cx(
 													s.agentUsage,
-													ul().percentage >= 90 && s.agentUsageCritical,
-													ul().percentage >= 70 && ul().percentage < 90 && s.agentUsageWarning,
+													ul().percentage >= AGENT_USAGE_BLINK_THRESHOLD && s.agentUsageCritical,
+													ul().percentage >= 70 && ul().percentage < AGENT_USAGE_BLINK_THRESHOLD && s.agentUsageWarning,
 												)}
 											>
 												{" "}

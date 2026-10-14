@@ -10,6 +10,7 @@ export interface WorkItemUser {
 	id: string;
 	name: string;
 	avatarUrl: string | null;
+	bot: boolean;
 }
 
 export interface WorkItemOption {
@@ -43,6 +44,9 @@ export interface WorkItemFieldSchema {
 	kind: WorkItemFieldKind;
 	required: boolean;
 	editable: boolean;
+	sortable: boolean;
+	groupable: boolean;
+	filterable: boolean;
 	options: Array<WorkItemOption>;
 }
 
@@ -70,10 +74,41 @@ export interface WorkItemComment {
 export interface WorkItemReviewThread {
 	id: string;
 	resolved: boolean;
+	outdated: boolean;
 	path: string;
 	line: number | null;
+	originalLine: number | null;
 	commitId: string;
 	comments: Array<WorkItemComment>;
+	finding: WorkItemReviewFinding | null;
+}
+
+export type WorkItemReviewTool =
+	| "code_rabbit"
+	| "codex"
+	| "copilot"
+	| "gemini"
+	| "cursor"
+	| "sourcery"
+	| "greptile"
+	| "qodo"
+	| "code_ant"
+	| "graphite"
+	| "code_scanning"
+	| "generic";
+
+export type WorkItemReviewSeverity = "critical" | "high" | "medium" | "low" | "info";
+
+export interface WorkItemReviewFinding {
+	tool: WorkItemReviewTool | null;
+	title: string | null;
+	severity: WorkItemReviewSeverity | null;
+	severityLabel: string | null;
+	category: string | null;
+	suggestion: string | null;
+	agentPrompt: string | null;
+	addressedIn: string | null;
+	externalId: string | null;
 }
 
 export interface WorkItemReviewSummary {
@@ -116,6 +151,13 @@ export interface WorkItemSavedFilter {
 export interface WorkItemPage {
 	items: Array<WorkItem>;
 	nextCursor: string | null;
+	total?: number | null;
+}
+
+export interface WorkItemLocalQuery {
+	items: Array<WorkItem>;
+	fields: Array<WorkItemFieldSchema>;
+	query: WorkItemQuery;
 }
 
 export interface WorkItemCommentPage {
@@ -223,6 +265,7 @@ export interface WorkItemGroup {
 export interface WorkItemGroupedPage {
 	groups: Array<WorkItemGroup>;
 	nextCursor: string | null;
+	total?: number | null;
 }
 
 export interface WorkItemBoardMove {

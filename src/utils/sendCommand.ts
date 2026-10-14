@@ -40,7 +40,6 @@ const SHORT_ENTER_GAP_AGENTS = new Set([
 	"codex",
 	"gemini",
 	"opencode",
-	"aider",
 	"amp",
 	"cursor",
 	"goose",

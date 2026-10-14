@@ -21,7 +21,10 @@ export const workItemsDemo = {
 					"id": "low",
 					"name": "Low"
 				}
-			]
+			],
+			"sortable": false,
+			"groupable": true,
+			"filterable": true
 		},
 		{
 			"id": "state",
@@ -38,7 +41,10 @@ export const workItemsDemo = {
 					"id": "closed",
 					"name": "Closed"
 				}
-			]
+			],
+			"sortable": false,
+			"groupable": true,
+			"filterable": true
 		},
 		{
 			"id": "assignees",
@@ -46,7 +52,10 @@ export const workItemsDemo = {
 			"kind": "user",
 			"required": false,
 			"editable": true,
-			"options": []
+			"options": [],
+			"sortable": false,
+			"groupable": true,
+			"filterable": true
 		},
 		{
 			"id": "labels",
@@ -54,7 +63,32 @@ export const workItemsDemo = {
 			"kind": "labels",
 			"required": false,
 			"editable": true,
-			"options": []
+			"options": [],
+			"sortable": false,
+			"groupable": true,
+			"filterable": true
+		},
+		{
+			"id": "key",
+			"name": "Key",
+			"kind": "text",
+			"required": false,
+			"editable": false,
+			"options": [],
+			"sortable": true,
+			"groupable": false,
+			"filterable": false
+		},
+		{
+			"id": "title",
+			"name": "Title",
+			"kind": "text",
+			"required": false,
+			"editable": false,
+			"options": [],
+			"sortable": true,
+			"groupable": false,
+			"filterable": false
 		}
 	],
 	"savedFilters": [
@@ -167,7 +201,10 @@ export const workItemsDemo = {
 							"id": "low",
 							"name": "Low"
 						}
-					]
+					],
+					"sortable": false,
+					"groupable": true,
+					"filterable": true
 				},
 				{
 					"id": "state",
@@ -184,7 +221,10 @@ export const workItemsDemo = {
 							"id": "closed",
 							"name": "Closed"
 						}
-					]
+					],
+					"sortable": false,
+					"groupable": true,
+					"filterable": true
 				},
 				{
 					"id": "assignees",
@@ -192,7 +232,10 @@ export const workItemsDemo = {
 					"kind": "user",
 					"required": false,
 					"editable": true,
-					"options": []
+					"options": [],
+					"sortable": false,
+					"groupable": true,
+					"filterable": true
 				},
 				{
 					"id": "labels",
@@ -200,7 +243,10 @@ export const workItemsDemo = {
 					"kind": "labels",
 					"required": false,
 					"editable": true,
-					"options": []
+					"options": [],
+					"sortable": false,
+					"groupable": true,
+					"filterable": true
 				}
 			],
 			"actions": [
@@ -249,7 +295,8 @@ export const workItemsDemo = {
 							"author": {
 								"id": "demo-user",
 								"name": "Demo User",
-								"avatarUrl": null
+								"avatarUrl": null,
+								"bot": false
 							},
 							"body": "**Synthetic** review comment",
 							"createdAt": "2026-10-10T00:00:00Z",
@@ -261,8 +308,10 @@ export const workItemsDemo = {
 						"value": {
 							"id": "demo-thread",
 							"resolved": true,
+							"outdated": false,
 							"path": "src/example.rs",
 							"line": 12,
+							"originalLine": 12,
 							"commitId": "demo-sha",
 							"comments": [
 								{
@@ -270,13 +319,15 @@ export const workItemsDemo = {
 									"author": {
 										"id": "demo-user",
 										"name": "Demo User",
-										"avatarUrl": null
+										"avatarUrl": null,
+										"bot": false
 									},
 									"body": "**Synthetic** review comment",
 									"createdAt": "2026-10-10T00:00:00Z",
 									"url": null
 								}
-							]
+							],
+							"finding": null
 						}
 					},
 					{
@@ -287,7 +338,8 @@ export const workItemsDemo = {
 								"author": {
 									"id": "demo-user",
 									"name": "Demo User",
-									"avatarUrl": null
+									"avatarUrl": null,
+									"bot": false
 								},
 								"body": "**Synthetic** review comment",
 								"createdAt": "2026-10-10T00:00:00Z",
@@ -348,7 +400,10 @@ export const workItemsDemo = {
 							"id": "low",
 							"name": "Low"
 						}
-					]
+					],
+					"sortable": false,
+					"groupable": true,
+					"filterable": true
 				},
 				{
 					"id": "state",
@@ -365,7 +420,10 @@ export const workItemsDemo = {
 							"id": "closed",
 							"name": "Closed"
 						}
-					]
+					],
+					"sortable": false,
+					"groupable": true,
+					"filterable": true
 				},
 				{
 					"id": "assignees",
@@ -373,7 +431,10 @@ export const workItemsDemo = {
 					"kind": "user",
 					"required": false,
 					"editable": true,
-					"options": []
+					"options": [],
+					"sortable": false,
+					"groupable": true,
+					"filterable": true
 				},
 				{
 					"id": "labels",
@@ -381,7 +442,10 @@ export const workItemsDemo = {
 					"kind": "labels",
 					"required": false,
 					"editable": true,
-					"options": []
+					"options": [],
+					"sortable": false,
+					"groupable": true,
+					"filterable": true
 				}
 			],
 			"actions": [
@@ -473,7 +537,10 @@ export const workItemsDemo = {
 							"id": "low",
 							"name": "Low"
 						}
-					]
+					],
+					"sortable": false,
+					"groupable": true,
+					"filterable": true
 				},
 				{
 					"id": "state",
@@ -490,7 +557,10 @@ export const workItemsDemo = {
 							"id": "closed",
 							"name": "Closed"
 						}
-					]
+					],
+					"sortable": false,
+					"groupable": true,
+					"filterable": true
 				},
 				{
 					"id": "assignees",
@@ -498,7 +568,10 @@ export const workItemsDemo = {
 					"kind": "user",
 					"required": false,
 					"editable": true,
-					"options": []
+					"options": [],
+					"sortable": false,
+					"groupable": true,
+					"filterable": true
 				},
 				{
 					"id": "labels",
@@ -506,7 +579,10 @@ export const workItemsDemo = {
 					"kind": "labels",
 					"required": false,
 					"editable": true,
-					"options": []
+					"options": [],
+					"sortable": false,
+					"groupable": true,
+					"filterable": true
 				}
 			],
 			"actions": [

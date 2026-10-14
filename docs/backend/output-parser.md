@@ -231,7 +231,7 @@ ParsedEvent::ApiError {
 ```
 
 Detects errors from two tiers:
-- **Agent-specific**: Claude Code, Aider, Codex CLI, Gemini CLI, Copilot CLI (note: the generic "request failed unexpectedly" pattern was removed from Copilot detection due to false positives on Claude Code output)
+- **Agent-specific**: Claude Code, Codex CLI, Gemini CLI, Copilot CLI (note: the generic "request failed unexpectedly" pattern was removed from Copilot detection due to false positives on Claude Code output)
 - **Provider-level**: OpenAI, Anthropic, Google, OpenRouter, MiniMax JSON error structures
 
 Claude Code has two 5xx renderings and both are covered. `claude-api-error` matches
@@ -269,6 +269,8 @@ parentheses. Ambiguous unbalanced or nested markers remain literal body text.
 It leaves fenced or indented code and prose mentions literal. This is a separate
 logical-line projection of the terminal grammar: reusing the Rust VT parser here would require
 a new backend ACP projection and wire contract, including HTTP/IPC parity.
+
+Answer rendering is shared by the grid and Chat through `answerExtent` in `suggestOverlay.ts`. Adjacent answer markers extend one region across blank rows; non-answer output and prompt rows still end it. The renderer blanks marker cells without changing parsed or copied text. Fenced examples keep literal markers.
 
 Two shapes the row-anchored regex cannot read on its own, both rejoined before it runs:
 
@@ -397,6 +399,9 @@ Emitted by the reader thread on real-output→busy and idle transitions. The fro
 
 The backend foreground probe enables agent parsing for hand-launched agents in both desktop and headless sessions. HTTP foreground queries update the same stored identity. Screen activity cached before identity discovery is reclassified when that identity changes.
 
+Goose replies are append-only below the submitted prompt. The PTY reader preserves those changed rows instead of trimming them as fixed composer chrome. This lets the reply prove consumption before a stable Ready screen closes the submitted turn; no protocol-stale timeout is needed (#1812-022d).
+
+
 Ordinary output and spinner repaints cannot override a protocol idle marker.
 The reader preserves that evidence until the ranked busy decision, and the
 ready-screen timer preserves its rank. A new submission or accepted semantic
@@ -491,7 +496,7 @@ Scans screen bottom rows (from VtLogBuffer) for slash command menus. Only called
 ## Pattern Detection
 
 The parser uses regex patterns to detect:
-- Rate limit messages from Claude, Aider, OpenCode, Gemini, Codex
+- Rate limit messages from Claude, Codex, OpenCode, Gemini, Codex
 - Questions and interactive prompts (hardcoded, Y/N, inquirer, Ink menus, generic `?` lines)
 - API errors from agents and API providers (5xx, auth failures)
 - GitHub/GitLab PR URLs in `gh pr create` output
@@ -518,8 +523,6 @@ The `strip_ansi()` function pre-processes CUF (Cursor Forward, `\x1b[nC`) escape
 | Agent | Pattern | Example |
 |-------|---------|---------|
 | Claude Code | `·`/`✢`/`✳`/`✶`/`✻`/`✽`/`*` + ellipsis | `✢Reading files… (12s)` or `· Considering…` |
-| Aider | Knight Rider scanner `░█` / `█░` + task text | `░█        Waiting for claude-3-5-sonnet` |
-| Aider | Token report `Tokens:` prefix | `Tokens: 5.2k sent, 1.3k received.` |
 | Codex CLI | Bullet `•`/`◦` + task + parenthesized time | `• Working (4m 55s • esc to interrupt)` |
 | Copilot CLI | `∴`/`●`/`○` + task + dots/ellipsis | `∴ Thinking…` or `● Read file...` |
 | Gemini CLI | Braille spinner `⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏` + phrase | `⠋ Analyzing your codebase` |
@@ -609,3 +612,13 @@ Viewport scroll requests do not alter parsed output. History-anchored scrolling 
 ### ego terminal questions
 
 The terminal ego CLI reports human-question waits with OSC 7770 awaiting and resumes busy after settlement. TUIC also recognizes its single-choice selector only for ego sessions, anchored to `Up/Down or number selects; Enter answers; Esc cancels.` and a highlighted numbered option. Wrapped question and option rows are joined in Rust into `choice-prompt`, using `navigate-enter` selection. This creates authoritative awaiting state even for older ego builds without the native signal. Multiple-choice and free-text questions keep the native awaiting signal and terminal/composer controls; they are not misrepresented as single-choice dialogs.
+
+## Codex native session identity
+
+The existing OSC 7770 consumer accepts `codex-session=<TUIC_SESSION>:<base64>`
+from managed native SessionStart/UserPromptSubmit hooks. JSON carries
+`session_id`, `transcript_path`, `cwd` and `hook_event_name`; encoded payloads
+above 32 KiB and foreign TUIC UUIDs are rejected. `codex_binding.rs` validates
+live foreground ownership and the rollout header before Chat or lifecycle
+snapshots expose exactness. Ordinary text and heuristic discovery cannot bind
+Codex Chat. Shell OSC 133 A revokes the binding.

@@ -69,6 +69,29 @@ describe("useAgentPolling", () => {
 		}
 	});
 
+	// Catches: hook exactness attached to the wrong tab or surviving an omitted/retracted lifecycle field.
+	it("keeps native Codex binding on its tab and retracts it with the snapshot", async () => {
+		const a = store.add(makeTerminal({ sessionId: "codex-a", agentType: "codex" }));
+		const b = store.add(makeTerminal({ sessionId: "codex-b", agentType: "codex" }));
+		const { applySessionStateEvent } = await import("../../hooks/useAgentPolling");
+		applySessionStateEvent({
+			session_id: "codex-b",
+			state: { agent_type: "codex", codex_binding: { session_id: "thread-b" } },
+		});
+		applySessionStateEvent({
+			session_id: "codex-a",
+			state: { agent_type: "codex", codex_binding: { session_id: "thread-a" } },
+		});
+		expect(store.get(a)?.exactAgentSessionId).toBe("thread-a");
+		expect(store.get(b)?.exactAgentSessionId).toBe("thread-b");
+		expect(store.get(a)?.agentSessionId).toBe("thread-a");
+		applySessionStateEvent({ session_id: "codex-a", state: { agent_type: "codex" } });
+		expect(store.get(a)?.exactAgentSessionId).toBeNull();
+		expect(store.get(b)?.exactAgentSessionId).toBe("thread-b");
+		applySessionStateEvent({ session_id: "codex-b", state: { agent_type: null } });
+		expect(store.get(b)?.exactAgentSessionId).toBeNull();
+	});
+
 	// Catches: an older catch-up undoes an identity push that arrived while the snapshot was in flight.
 	it("does not let a stale snapshot replace a newer pushed identity", async () => {
 		const id = store.add(makeTerminal({ sessionId: "identity-race", agentType: "claude" }));
@@ -579,8 +602,8 @@ describe("useAgentPolling", () => {
 			});
 		});
 
-		it("skips discovery for agents without sessionDiscovery config (e.g. aider)", async () => {
-			mockInvoke.mockResolvedValue("aider");
+		it("skips discovery for agents without sessionDiscovery config (e.g. opencode)", async () => {
+			mockInvoke.mockResolvedValue("opencode");
 
 			await testInScopeAsync(async () => {
 				const id = store.add(makeTerminal({ name: "T1", sessionId: "sess-1" }));
@@ -589,7 +612,7 @@ describe("useAgentPolling", () => {
 				useAgentPolling();
 
 				await tick(30_000);
-				expect(store.get(id)?.agentType).toBe("aider");
+				expect(store.get(id)?.agentType).toBe("opencode");
 
 				const discoveryCalls = mockInvoke.mock.calls.filter(([cmd]) => cmd === "discover_agent_session");
 				expect(discoveryCalls).toHaveLength(0);

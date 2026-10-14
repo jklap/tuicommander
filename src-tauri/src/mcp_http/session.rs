@@ -206,6 +206,7 @@ pub(super) async fn enqueue_command(
         if let Some(draft) = body.expected_draft.as_deref() {
             return crate::pty::enqueue_owned_draft(&state, &session_id, &body.text, draft);
         }
+        let session_id = crate::session_wake::ensure_live(&state, &session_id)?;
         crate::pty::enqueue_user_command(
             &state,
             &session_id,
@@ -717,6 +718,7 @@ pub(super) fn register_pty_session(
     // Broadcast to SSE/WebSocket consumers before the reader thread starts.
     state.emit_pty_event(crate::state::AppEvent::SessionCreated {
         session_id: session_id.to_string(),
+        tuic_session: live_tuic_sessions_by_pty(state).remove(session_id),
         cwd,
         agent_type,
         display_name,
@@ -735,16 +737,19 @@ pub(super) fn register_pty_session(
 /// Returns `(session_id, cwd_string)` on success. Both `create_session` and
 /// `create_session_with_worktree` delegate here after deriving the cwd and worktree.
 /// What a client asks to keep when it is *restoring* a tab rather than opening a
-/// new one: the PTY key it pre-registered locally, and the alias other agents
-/// already address it by. Both are requests, not commands — each is honoured only
-/// when nothing live holds it.
+/// new one: its stable TUIC identity, requested PTY key, and terminal alias.
+/// Resume preserves the TUIC identity while minting a fresh PTY key. A requested
+/// PTY key or alias is honoured only when nothing live holds it.
 #[derive(Default)]
-pub(super) struct RequestedIdentity {
+pub(crate) struct RequestedIdentity {
     pub session_id: Option<String>,
+    pub tuic_session: Option<String>,
     pub alias: Option<String>,
+    pub startup_command: Option<String>,
+    pub agent_type: Option<String>,
 }
 
-pub(super) fn spawn_pty_session(
+pub(crate) fn spawn_pty_session(
     state: Arc<AppState>,
     shell: String,
     cwd: Option<String>,
@@ -795,10 +800,40 @@ pub(super) fn spawn_pty_session(
             // This path used to inject neither shell integration nor an identity, so
             // every browser/remote/MCP-created session ran without OSC 133 markers and
             // without a `$TUIC_SESSION` to announce. Bring it in line with the desktop
-            // path: no caller identity exists here, so the PTY key serves as both.
+            // path: absent a durable caller identity, the PTY key serves as both.
             crate::shell_integration::inject(&state.data_dir, &shell, &mut cmd);
-            crate::pty::bind_pty_identity(&state, &mut cmd, &session_id, None);
+            crate::pty::bind_pty_identity(
+                &state,
+                &mut cmd,
+                &session_id,
+                requested.tuic_session.as_deref(),
+            );
             crate::pty::apply_agent_screen_env(&mut cmd, &std::collections::HashMap::new());
+            if let Some(command) = &requested.startup_command {
+                let (env, command) = crate::session_resume::shell_launch(command);
+                for (key, value) in env {
+                    cmd.env(key, value);
+                }
+                #[cfg(not(windows))]
+                {
+                    cmd.arg("-i");
+                    cmd.arg("-c");
+                    cmd.arg(&command);
+                }
+                #[cfg(windows)]
+                {
+                    let name = shell.to_ascii_lowercase();
+                    if name.contains("powershell") || name.contains("pwsh") {
+                        cmd.arg("-NoExit");
+                        cmd.arg("-Command");
+                    } else if name.contains("cmd.exe") {
+                        cmd.arg("/K");
+                    } else {
+                        cmd.arg("-c");
+                    }
+                    cmd.arg(&command);
+                }
+            }
             cmd
         },
     )
@@ -829,6 +864,12 @@ pub(super) fn spawn_pty_session(
         .entry(session_id.clone())
         .or_default()
         .spawn_root_role = crate::state::SpawnRootRole::Shell;
+    if let Some(mut snapshot) = state.session_maps.session_states.get_mut(&session_id) {
+        snapshot.agent_type = requested.agent_type.clone();
+        if requested.agent_type.is_some() {
+            snapshot.agent_state = Some("starting".into());
+        }
+    }
     let paused = Arc::new(AtomicBool::new(false));
     register_pty_session(
         &state,
@@ -865,6 +906,7 @@ pub(super) fn spawn_pty_session(
             "session-created",
             serde_json::json!({
                 "session_id": session_id,
+                "tuic_session": requested.tuic_session,
                 "cwd": cwd,
                 "display_name": null,
             }),
@@ -906,6 +948,7 @@ pub(super) async fn create_session(
             RequestedIdentity {
                 session_id: body.session_id,
                 alias: body.alias,
+                ..Default::default()
             },
         )
     })
@@ -950,6 +993,13 @@ pub(super) async fn resume_session(
         None => return session_not_found(),
     };
     entry.lock().paused.store(false, Ordering::Relaxed);
+    drop(entry);
+    if let Err(error) = crate::session_wake::ensure_live(&state, &session_id) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": error})),
+        );
+    }
     (StatusCode::OK, Json(serde_json::json!({"ok": true})))
 }
 
@@ -1084,16 +1134,7 @@ pub(super) async fn set_session_visible(
     Path(session_id): Path<String>,
     Json(body): Json<SessionVisibleRequest>,
 ) -> impl IntoResponse {
-    state
-        .session_maps
-        .session_visibility
-        .insert(session_id.clone(), body.visible);
-    #[cfg(unix)]
-    if body.visible
-        && let Err(e) = crate::pty::wake_session(&state, &session_id)
-    {
-        tracing::warn!(session_id, error = %e, "Wake on focus failed");
-    }
+    crate::background_mode::hidden::set_visible(&state, &session_id, body.visible, false);
     (StatusCode::OK, Json(serde_json::json!({ "ok": true })))
 }
 
@@ -1194,6 +1235,7 @@ pub(super) async fn create_session_with_worktree(
             RequestedIdentity {
                 session_id: body.config.session_id,
                 alias: body.config.alias,
+                ..Default::default()
             },
         )
     })
@@ -1384,6 +1426,8 @@ async fn handle_ws_session(
     initial_offset: Option<usize>,
     compression: WsCompression,
 ) {
+    let _watch =
+        crate::background_mode::hidden::RemoteWatch::new(state.clone(), Some(session_id.clone()));
     let (ws_sender, mut ws_receiver) = socket.split();
     let mut ws_sender = WsFrameSender::new(ws_sender, compression);
 
@@ -1537,8 +1581,9 @@ async fn handle_ws_session(
         }
     }
 
-    // Client disconnected — abort the send task and purge the dead sender
+    // Drop the receiver before reaping senders and releasing the remote watch.
     send_task.abort();
+    let _ = send_task.await;
     crate::state::purge_dead_ws_clients(&state.ws_clients, &session_id);
 }
 
@@ -1812,6 +1857,8 @@ async fn handle_ws_grid_session(
     state: Arc<AppState>,
     compression: WsCompression,
 ) {
+    let _watch =
+        crate::background_mode::hidden::RemoteWatch::new(state.clone(), Some(session_id.clone()));
     let (ws_sender, mut ws_receiver) = socket.split();
     let mut ws_sender = WsFrameSender::new(ws_sender, compression);
 
@@ -4440,6 +4487,7 @@ mod tests {
             super::RequestedIdentity {
                 session_id: Some("client-provided-id".to_string()),
                 alias: None,
+                ..Default::default()
             },
         );
         // PTY unavailable in CI — skip gracefully
@@ -4468,6 +4516,7 @@ mod tests {
             super::RequestedIdentity {
                 session_id: Some("dup-id".to_string()),
                 alias: None,
+                ..Default::default()
             },
         ) {
             Ok(id) => id,
@@ -4484,6 +4533,7 @@ mod tests {
             super::RequestedIdentity {
                 session_id: Some("dup-id".to_string()),
                 alias: None,
+                ..Default::default()
             },
         )
         .expect("second spawn should succeed with a fresh id");
@@ -4510,6 +4560,7 @@ mod tests {
             super::RequestedIdentity {
                 session_id: Some("aliased-row".to_string()),
                 alias: Some("tu-7".to_string()),
+                ..Default::default()
             },
         ) {
             Ok(id) => id,

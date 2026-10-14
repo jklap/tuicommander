@@ -765,7 +765,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "ai_chat_launches",
-      "order": 11,
+      "order": 12,
       "path": "/ai_chat_launches/{key}/executable",
       "labelKey": "settings.catalogue.app.ai_chat_launches.{key}.executable.label",
       "helpKey": "settings.catalogue.app.ai_chat_launches.{key}.executable.help",
@@ -793,7 +793,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "ai_chat_launches",
-      "order": 12,
+      "order": 13,
       "path": "/ai_chat_launches/{key}/profile",
       "labelKey": "settings.catalogue.app.ai_chat_launches.{key}.profile.label",
       "helpKey": "settings.catalogue.app.ai_chat_launches.{key}.profile.help",
@@ -821,7 +821,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "ai_chat_launches",
-      "order": 13,
+      "order": 14,
       "path": "/ai_chat_launches/{key}/workspace",
       "labelKey": "settings.catalogue.app.ai_chat_launches.{key}.workspace.label",
       "helpKey": "settings.catalogue.app.ai_chat_launches.{key}.workspace.help",
@@ -849,7 +849,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "ai_chat_workspace",
-      "order": 10,
+      "order": 11,
       "path": "/ai_chat_workspace",
       "labelKey": "settings.catalogue.app.ai_chat_workspace.label",
       "helpKey": "settings.catalogue.app.ai_chat_workspace.help",
@@ -881,7 +881,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "attachment_max_bytes",
-      "order": 15,
+      "order": 16,
       "path": "/attachment_max_bytes",
       "labelKey": "settings.catalogue.app.attachment_max_bytes.label",
       "helpKey": "settings.catalogue.app.attachment_max_bytes.help",
@@ -915,13 +915,13 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "attachment_retention_days",
-      "order": 16,
+      "order": 17,
       "path": "/attachment_retention_days",
       "labelKey": "settings.catalogue.app.attachment_retention_days.label",
       "helpKey": "settings.catalogue.app.attachment_retention_days.help",
       "label": "attachment retention days",
       "schema": {
-        "description": "Remove uploaded files older than this many days when their session closes.",
+        "description": "Legacy stored value; uploads now have session lifetime regardless of this value.",
         "type": "integer",
         "format": "uint32",
         "minimum": 0,
@@ -949,7 +949,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "auto_show_pr_popover",
-      "order": 45,
+      "order": 50,
       "path": "/auto_show_pr_popover",
       "labelKey": "settings.catalogue.app.auto_show_pr_popover.label",
       "helpKey": "settings.catalogue.app.auto_show_pr_popover.help",
@@ -981,7 +981,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "auto_update_enabled",
-      "order": 47,
+      "order": 52,
       "path": "/auto_update_enabled",
       "labelKey": "settings.catalogue.app.auto_update_enabled.label",
       "helpKey": "settings.catalogue.app.auto_update_enabled.help",
@@ -1013,7 +1013,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "auto_update_plugins_enabled",
-      "order": 48,
+      "order": 53,
       "path": "/auto_update_plugins_enabled",
       "labelKey": "settings.catalogue.app.auto_update_plugins_enabled.label",
       "helpKey": "settings.catalogue.app.auto_update_plugins_enabled.help",
@@ -1039,13 +1039,120 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
+    "app.background.hide_dock_icon": {
+      "id": "app.background.hide_dock_icon",
+      "store": "app",
+      "owner": "machine",
+      "area": "app",
+      "group": "background",
+      "order": 40,
+      "path": "/background/hide_dock_icon",
+      "labelKey": "settings.catalogue.app.background.hide_dock_icon.label",
+      "helpKey": "settings.catalogue.app.background.hide_dock_icon.help",
+      "label": "hide dock icon",
+      "schema": {
+        "type": "boolean",
+        "default": true
+      },
+      "nullable": false,
+      "default": true,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Hides the macOS Dock icon while the desktop runs in background.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "app.background.tray_icon": {
+      "id": "app.background.tray_icon",
+      "store": "app",
+      "owner": "machine",
+      "area": "app",
+      "group": "background",
+      "order": 42,
+      "path": "/background/tray_icon",
+      "labelKey": "settings.catalogue.app.background.tray_icon.label",
+      "helpKey": "settings.catalogue.app.background.tray_icon.help",
+      "label": "tray icon",
+      "schema": {
+        "type": "string",
+        "enum": [
+          "always",
+          "background_only",
+          "never"
+        ],
+        "default": "background_only"
+      },
+      "nullable": false,
+      "default": "background_only",
+      "availability": {
+        "status": "available"
+      },
+      "choices": {
+        "kind": "static",
+        "values": [
+          "always",
+          "background_only",
+          "never"
+        ]
+      },
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Controls tray visibility. Never prevents hiding and uses minimize instead.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "app.background.webview_unload_minutes": {
+      "id": "app.background.webview_unload_minutes",
+      "store": "app",
+      "owner": "machine",
+      "area": "app",
+      "group": "background",
+      "order": 41,
+      "path": "/background/webview_unload_minutes",
+      "labelKey": "settings.catalogue.app.background.webview_unload_minutes.label",
+      "helpKey": "settings.catalogue.app.background.webview_unload_minutes.help",
+      "label": "webview unload minutes",
+      "schema": {
+        "type": "integer",
+        "format": "uint32",
+        "minimum": 0,
+        "default": 10
+      },
+      "nullable": false,
+      "default": 10,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Unloads desktop WebViews after awake minutes in background; zero disables. JavaScript plugins, sounds and updater checks pause until Show. Memory release measured only on macOS.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
     "app.bell_style": {
       "id": "app.bell_style",
       "store": "app",
       "owner": "machine",
       "area": "app",
       "group": "bell_style",
-      "order": 64,
+      "order": 69,
       "path": "/bell_style",
       "labelKey": "settings.catalogue.app.bell_style.label",
       "helpKey": "settings.catalogue.app.bell_style.help",
@@ -1091,7 +1198,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "block_folding_enabled",
-      "order": 73,
+      "order": 78,
       "path": "/block_folding_enabled",
       "labelKey": "settings.catalogue.app.block_folding_enabled.label",
       "helpKey": "settings.catalogue.app.block_folding_enabled.help",
@@ -1123,7 +1230,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "chat_mute_intermediate_text",
-      "order": 44,
+      "order": 49,
       "path": "/chat_mute_intermediate_text",
       "labelKey": "settings.catalogue.app.chat_mute_intermediate_text.label",
       "helpKey": "settings.catalogue.app.chat_mute_intermediate_text.help",
@@ -1149,13 +1256,57 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
+    "app.close_behavior": {
+      "id": "app.close_behavior",
+      "store": "app",
+      "owner": "machine",
+      "area": "app",
+      "group": "close_behavior",
+      "order": 39,
+      "path": "/close_behavior",
+      "labelKey": "settings.catalogue.app.close_behavior.label",
+      "helpKey": "settings.catalogue.app.close_behavior.help",
+      "label": "close behavior",
+      "schema": {
+        "description": "Main window close policy: ask, background (hide), or quit.",
+        "type": "string",
+        "enum": [
+          "ask",
+          "background",
+          "quit"
+        ],
+        "default": "ask"
+      },
+      "nullable": false,
+      "default": "ask",
+      "availability": {
+        "status": "available"
+      },
+      "choices": {
+        "kind": "static",
+        "values": [
+          "ask",
+          "background",
+          "quit"
+        ]
+      },
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Selects whether main window close asks, hides or quits.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
     "app.collapse_tools": {
       "id": "app.collapse_tools",
       "store": "app",
       "owner": "machine",
       "area": "app",
       "group": "collapse_tools",
-      "order": 57,
+      "order": 62,
       "path": "/collapse_tools",
       "labelKey": "settings.catalogue.app.collapse_tools.label",
       "helpKey": "settings.catalogue.app.collapse_tools.help",
@@ -1187,7 +1338,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "confirm_before_closing_tab",
-      "order": 38,
+      "order": 43,
       "path": "/confirm_before_closing_tab",
       "labelKey": "settings.catalogue.app.confirm_before_closing_tab.label",
       "helpKey": "settings.catalogue.app.confirm_before_closing_tab.help",
@@ -1219,7 +1370,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "confirm_before_quit",
-      "order": 37,
+      "order": 38,
       "path": "/confirm_before_quit",
       "labelKey": "settings.catalogue.app.confirm_before_quit.label",
       "helpKey": "settings.catalogue.app.confirm_before_quit.help",
@@ -1251,7 +1402,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "copy_on_select",
-      "order": 61,
+      "order": 66,
       "path": "/copy_on_select",
       "labelKey": "settings.catalogue.app.copy_on_select.label",
       "helpKey": "settings.catalogue.app.copy_on_select.help",
@@ -1283,7 +1434,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "cursor_style",
-      "order": 69,
+      "order": 74,
       "path": "/cursor_style",
       "labelKey": "settings.catalogue.app.cursor_style.label",
       "helpKey": "settings.catalogue.app.cursor_style.help",
@@ -1327,7 +1478,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "custom_launchers",
-      "order": 80,
+      "order": 85,
       "path": "/custom_launchers/{id}/args",
       "labelKey": "settings.catalogue.app.custom_launchers.{id}.args.label",
       "helpKey": "settings.catalogue.app.custom_launchers.{id}.args.help",
@@ -1361,7 +1512,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "custom_launchers",
-      "order": 81,
+      "order": 86,
       "path": "/custom_launchers/{id}/enabled",
       "labelKey": "settings.catalogue.app.custom_launchers.{id}.enabled.label",
       "helpKey": "settings.catalogue.app.custom_launchers.{id}.enabled.help",
@@ -1392,7 +1543,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "custom_launchers",
-      "order": 79,
+      "order": 84,
       "path": "/custom_launchers/{id}/executable",
       "labelKey": "settings.catalogue.app.custom_launchers.{id}.executable.label",
       "helpKey": "settings.catalogue.app.custom_launchers.{id}.executable.help",
@@ -1420,7 +1571,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "custom_launchers",
-      "order": 77,
+      "order": 82,
       "path": "/custom_launchers/{id}/id",
       "labelKey": "settings.catalogue.app.custom_launchers.{id}.id.label",
       "helpKey": "settings.catalogue.app.custom_launchers.{id}.id.help",
@@ -1447,7 +1598,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "custom_launchers",
-      "order": 78,
+      "order": 83,
       "path": "/custom_launchers/{id}/name",
       "labelKey": "settings.catalogue.app.custom_launchers.{id}.name.label",
       "helpKey": "settings.catalogue.app.custom_launchers.{id}.name.help",
@@ -1475,7 +1626,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "custom_launchers",
-      "order": 82,
+      "order": 87,
       "path": "/custom_launchers/{id}/platform",
       "labelKey": "settings.catalogue.app.custom_launchers.{id}.platform.label",
       "helpKey": "settings.catalogue.app.custom_launchers.{id}.platform.help",
@@ -1524,7 +1675,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "default_font_size",
-      "order": 14,
+      "order": 15,
       "path": "/default_font_size",
       "labelKey": "settings.catalogue.app.default_font_size.label",
       "helpKey": "settings.catalogue.app.default_font_size.help",
@@ -1559,7 +1710,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "defer_update_relaunch",
-      "order": 49,
+      "order": 54,
       "path": "/defer_update_relaunch",
       "labelKey": "settings.catalogue.app.defer_update_relaunch.label",
       "helpKey": "settings.catalogue.app.defer_update_relaunch.help",
@@ -1591,7 +1742,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "disabled_agents",
-      "order": 54,
+      "order": 59,
       "path": "/disabled_agents",
       "labelKey": "settings.catalogue.app.disabled_agents.label",
       "helpKey": "settings.catalogue.app.disabled_agents.help",
@@ -1626,7 +1777,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "disabled_mcp_agents",
-      "order": 55,
+      "order": 60,
       "path": "/disabled_mcp_agents",
       "labelKey": "settings.catalogue.app.disabled_mcp_agents.label",
       "helpKey": "settings.catalogue.app.disabled_mcp_agents.help",
@@ -1661,7 +1812,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "disabled_native_tools",
-      "order": 56,
+      "order": 61,
       "path": "/disabled_native_tools",
       "labelKey": "settings.catalogue.app.disabled_native_tools.label",
       "helpKey": "settings.catalogue.app.disabled_native_tools.help",
@@ -1702,7 +1853,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "disabled_plugin_ids",
-      "order": 52,
+      "order": 57,
       "path": "/disabled_plugin_ids",
       "labelKey": "settings.catalogue.app.disabled_plugin_ids.label",
       "helpKey": "settings.catalogue.app.disabled_plugin_ids.help",
@@ -1737,7 +1888,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "eager_resume_after_update",
-      "order": 50,
+      "order": 55,
       "path": "/eager_resume_after_update",
       "labelKey": "settings.catalogue.app.eager_resume_after_update.label",
       "helpKey": "settings.catalogue.app.eager_resume_after_update.help",
@@ -1769,7 +1920,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "ego_executable",
-      "order": 8,
+      "order": 9,
       "path": "/ego_executable",
       "labelKey": "settings.catalogue.app.ego_executable.label",
       "helpKey": "settings.catalogue.app.ego_executable.help",
@@ -1801,7 +1952,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "ego_profile",
-      "order": 9,
+      "order": 10,
       "path": "/ego_profile",
       "labelKey": "settings.catalogue.app.ego_profile.label",
       "helpKey": "settings.catalogue.app.ego_profile.help",
@@ -1833,7 +1984,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "experimental_features_enabled",
-      "order": 67,
+      "order": 72,
       "path": "/experimental_features_enabled",
       "labelKey": "settings.catalogue.app.experimental_features_enabled.label",
       "helpKey": "settings.catalogue.app.experimental_features_enabled.help",
@@ -1970,7 +2121,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "global_hotkey",
-      "order": 65,
+      "order": 70,
       "path": "/global_hotkey",
       "labelKey": "settings.catalogue.app.global_hotkey.label",
       "helpKey": "settings.catalogue.app.global_hotkey.help",
@@ -2005,7 +2156,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "ide",
-      "order": 7,
+      "order": 8,
       "path": "/ide",
       "labelKey": "settings.catalogue.app.ide.label",
       "helpKey": "settings.catalogue.app.ide.help",
@@ -2044,7 +2195,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "index_memory_budget_mb",
-      "order": 75,
+      "order": 80,
       "path": "/index_memory_budget_mb",
       "labelKey": "settings.catalogue.app.index_memory_budget_mb.label",
       "helpKey": "settings.catalogue.app.index_memory_budget_mb.help",
@@ -2078,7 +2229,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "index_strategy",
-      "order": 74,
+      "order": 79,
       "path": "/index_strategy",
       "labelKey": "settings.catalogue.app.index_strategy.label",
       "helpKey": "settings.catalogue.app.index_strategy.help",
@@ -2122,7 +2273,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "inline_blame_enabled",
-      "order": 83,
+      "order": 88,
       "path": "/inline_blame_enabled",
       "labelKey": "settings.catalogue.app.inline_blame_enabled.label",
       "helpKey": "settings.catalogue.app.inline_blame_enabled.help",
@@ -2154,7 +2305,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "intent_tab_title",
-      "order": 58,
+      "order": 63,
       "path": "/intent_tab_title",
       "labelKey": "settings.catalogue.app.intent_tab_title.label",
       "helpKey": "settings.catalogue.app.intent_tab_title.help",
@@ -2186,7 +2337,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "issue_filter",
-      "order": 66,
+      "order": 71,
       "path": "/issue_filter",
       "labelKey": "settings.catalogue.app.issue_filter.label",
       "helpKey": "settings.catalogue.app.issue_filter.help",
@@ -2234,7 +2385,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "language",
-      "order": 51,
+      "order": 56,
       "path": "/language",
       "labelKey": "settings.catalogue.app.language.label",
       "helpKey": "settings.catalogue.app.language.help",
@@ -2266,7 +2417,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "max_tab_name_length",
-      "order": 39,
+      "order": 44,
       "path": "/max_tab_name_length",
       "labelKey": "settings.catalogue.app.max_tab_name_length.label",
       "helpKey": "settings.catalogue.app.max_tab_name_length.help",
@@ -2300,7 +2451,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "mcp_port",
-      "order": 6,
+      "order": 7,
       "path": "/mcp_port",
       "labelKey": "settings.catalogue.app.mcp_port.label",
       "helpKey": "settings.catalogue.app.mcp_port.help",
@@ -2361,13 +2512,45 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "execution_authority"
     },
+    "app.mcp_work_item_writes": {
+      "id": "app.mcp_work_item_writes",
+      "store": "app",
+      "owner": "machine",
+      "area": "app",
+      "group": "mcp_work_item_writes",
+      "order": 6,
+      "path": "/mcp_work_item_writes",
+      "labelKey": "settings.catalogue.app.mcp_work_item_writes.label",
+      "helpKey": "settings.catalogue.app.mcp_work_item_writes.help",
+      "label": "mcp work item writes",
+      "schema": {
+        "description": "Allow MCP agents to comment or transition Tasks items. Reads need no opt-in.",
+        "type": "boolean",
+        "default": false
+      },
+      "nullable": false,
+      "default": false,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Allows MCP agents to write work items.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "execution_authority"
+    },
     "app.osc52_clipboard": {
       "id": "app.osc52_clipboard",
       "store": "app",
       "owner": "machine",
       "area": "app",
       "group": "osc52_clipboard",
-      "order": 62,
+      "order": 67,
       "path": "/osc52_clipboard",
       "labelKey": "settings.catalogue.app.osc52_clipboard.label",
       "helpKey": "settings.catalogue.app.osc52_clipboard.help",
@@ -2399,7 +2582,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "prevent_sleep_when_busy",
-      "order": 46,
+      "order": 51,
       "path": "/prevent_sleep_when_busy",
       "labelKey": "settings.catalogue.app.prevent_sleep_when_busy.label",
       "helpKey": "settings.catalogue.app.prevent_sleep_when_busy.help",
@@ -2431,7 +2614,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "progress_tracking",
-      "order": 60,
+      "order": 65,
       "path": "/progress_tracking",
       "labelKey": "settings.catalogue.app.progress_tracking.label",
       "helpKey": "settings.catalogue.app.progress_tracking.help",
@@ -2463,7 +2646,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "scrollback_reflow",
-      "order": 68,
+      "order": 73,
       "path": "/scrollback_reflow",
       "labelKey": "settings.catalogue.app.scrollback_reflow.label",
       "helpKey": "settings.catalogue.app.scrollback_reflow.help",
@@ -2495,7 +2678,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "services",
-      "order": 25,
+      "order": 26,
       "path": "/services/auth/auth_rate_limit_max",
       "labelKey": "settings.catalogue.app.services.auth.auth_rate_limit_max.label",
       "helpKey": "settings.catalogue.app.services.auth.auth_rate_limit_max.help",
@@ -2528,7 +2711,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "services",
-      "order": 26,
+      "order": 27,
       "path": "/services/auth/auth_rate_limit_window_secs",
       "labelKey": "settings.catalogue.app.services.auth.auth_rate_limit_window_secs.label",
       "helpKey": "settings.catalogue.app.services.auth.auth_rate_limit_window_secs.help",
@@ -2561,7 +2744,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "services",
-      "order": 24,
+      "order": 25,
       "path": "/services/auth/lan_auth_bypass",
       "labelKey": "settings.catalogue.app.services.auth.lan_auth_bypass.label",
       "helpKey": "settings.catalogue.app.services.auth.lan_auth_bypass.help",
@@ -2592,7 +2775,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "services",
-      "order": 21,
+      "order": 22,
       "path": "/services/auth/password_hash",
       "labelKey": "settings.catalogue.app.services.auth.password_hash.label",
       "helpKey": "settings.catalogue.app.services.auth.password_hash.help",
@@ -2619,7 +2802,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "services",
-      "order": 22,
+      "order": 23,
       "path": "/services/auth/session_token",
       "labelKey": "settings.catalogue.app.services.auth.session_token.label",
       "helpKey": "settings.catalogue.app.services.auth.session_token.help",
@@ -2648,7 +2831,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "services",
-      "order": 23,
+      "order": 24,
       "path": "/services/auth/session_token_duration_secs",
       "labelKey": "settings.catalogue.app.services.auth.session_token_duration_secs.label",
       "helpKey": "settings.catalogue.app.services.auth.session_token_duration_secs.help",
@@ -2681,7 +2864,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "services",
-      "order": 20,
+      "order": 21,
       "path": "/services/auth/username",
       "labelKey": "settings.catalogue.app.services.auth.username.label",
       "helpKey": "settings.catalogue.app.services.auth.username.help",
@@ -2712,7 +2895,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "services",
-      "order": 33,
+      "order": 34,
       "path": "/services/push/enabled",
       "labelKey": "settings.catalogue.app.services.push.enabled.label",
       "helpKey": "settings.catalogue.app.services.push.enabled.help",
@@ -2743,7 +2926,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "services",
-      "order": 34,
+      "order": 35,
       "path": "/services/push/vapid_private_key",
       "labelKey": "settings.catalogue.app.services.push.vapid_private_key.label",
       "helpKey": "settings.catalogue.app.services.push.vapid_private_key.help",
@@ -2772,7 +2955,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "services",
-      "order": 35,
+      "order": 36,
       "path": "/services/push/vapid_public_key",
       "labelKey": "settings.catalogue.app.services.push.vapid_public_key.label",
       "helpKey": "settings.catalogue.app.services.push.vapid_public_key.help",
@@ -2803,7 +2986,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "services",
-      "order": 36,
+      "order": 37,
       "path": "/services/push/vapid_subject",
       "labelKey": "settings.catalogue.app.services.push.vapid_subject.label",
       "helpKey": "settings.catalogue.app.services.push.vapid_subject.help",
@@ -2834,7 +3017,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "services",
-      "order": 30,
+      "order": 31,
       "path": "/services/relay/enabled",
       "labelKey": "settings.catalogue.app.services.relay.enabled.label",
       "helpKey": "settings.catalogue.app.services.relay.enabled.help",
@@ -2865,7 +3048,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "services",
-      "order": 32,
+      "order": 33,
       "path": "/services/relay/token",
       "labelKey": "settings.catalogue.app.services.relay.token.label",
       "helpKey": "settings.catalogue.app.services.relay.token.help",
@@ -2894,7 +3077,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "services",
-      "order": 31,
+      "order": 32,
       "path": "/services/relay/url",
       "labelKey": "settings.catalogue.app.services.relay.url.label",
       "helpKey": "settings.catalogue.app.services.relay.url.help",
@@ -2925,7 +3108,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "services",
-      "order": 17,
+      "order": 18,
       "path": "/services/server/enabled",
       "labelKey": "settings.catalogue.app.services.server.enabled.label",
       "helpKey": "settings.catalogue.app.services.server.enabled.help",
@@ -2956,7 +3139,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "services",
-      "order": 19,
+      "order": 20,
       "path": "/services/server/ipv6_enabled",
       "labelKey": "settings.catalogue.app.services.server.ipv6_enabled.label",
       "helpKey": "settings.catalogue.app.services.server.ipv6_enabled.help",
@@ -2987,7 +3170,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "services",
-      "order": 18,
+      "order": 19,
       "path": "/services/server/port",
       "labelKey": "settings.catalogue.app.services.server.port.label",
       "helpKey": "settings.catalogue.app.services.server.port.help",
@@ -3021,7 +3204,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "services",
-      "order": 28,
+      "order": 29,
       "path": "/services/tls/cert_path",
       "labelKey": "settings.catalogue.app.services.tls.cert_path.label",
       "helpKey": "settings.catalogue.app.services.tls.cert_path.help",
@@ -3049,7 +3232,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "services",
-      "order": 29,
+      "order": 30,
       "path": "/services/tls/key_path",
       "labelKey": "settings.catalogue.app.services.tls.key_path.label",
       "helpKey": "settings.catalogue.app.services.tls.key_path.help",
@@ -3077,7 +3260,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "services",
-      "order": 27,
+      "order": 28,
       "path": "/services/tls/mode",
       "labelKey": "settings.catalogue.app.services.tls.mode.label",
       "helpKey": "settings.catalogue.app.services.tls.mode.help",
@@ -3102,14 +3285,14 @@ export const settingsCatalogue = {
         ]
       },
       "sensitivity": "public",
-      "apply": "live",
-      "effect": "Updates tls for the current owner.",
+      "apply": "service_restart",
+      "effect": "Reconfigures TLS protection after persistence.",
       "operations": [
         "get",
         "set",
         "reset"
       ],
-      "confirmationClass": "ordinary"
+      "confirmationClass": "execution_authority"
     },
     "app.shell": {
       "id": "app.shell",
@@ -3150,7 +3333,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "show_block_timestamps",
-      "order": 71,
+      "order": 76,
       "path": "/show_block_timestamps",
       "labelKey": "settings.catalogue.app.show_block_timestamps.label",
       "helpKey": "settings.catalogue.app.show_block_timestamps.help",
@@ -3182,7 +3365,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "show_last_prompt",
-      "order": 63,
+      "order": 68,
       "path": "/show_last_prompt",
       "labelKey": "settings.catalogue.app.show_last_prompt.label",
       "helpKey": "settings.catalogue.app.show_last_prompt.help",
@@ -3214,7 +3397,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "show_scrollbar_marks",
-      "order": 72,
+      "order": 77,
       "path": "/show_scrollbar_marks",
       "labelKey": "settings.catalogue.app.show_scrollbar_marks.label",
       "helpKey": "settings.catalogue.app.show_scrollbar_marks.help",
@@ -3246,7 +3429,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "split_tab_mode",
-      "order": 40,
+      "order": 45,
       "path": "/split_tab_mode",
       "labelKey": "settings.catalogue.app.split_tab_mode.label",
       "helpKey": "settings.catalogue.app.split_tab_mode.help",
@@ -3288,7 +3471,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "standby_timeout_minutes",
-      "order": 76,
+      "order": 81,
       "path": "/standby_timeout_minutes",
       "labelKey": "settings.catalogue.app.standby_timeout_minutes.label",
       "helpKey": "settings.catalogue.app.standby_timeout_minutes.help",
@@ -3323,7 +3506,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "suggest_followups",
-      "order": 59,
+      "order": 64,
       "path": "/suggest_followups",
       "labelKey": "settings.catalogue.app.suggest_followups.label",
       "helpKey": "settings.catalogue.app.suggest_followups.help",
@@ -3355,7 +3538,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "tab_cycling_all_types",
-      "order": 42,
+      "order": 47,
       "path": "/tab_cycling_all_types",
       "labelKey": "settings.catalogue.app.tab_cycling_all_types.label",
       "helpKey": "settings.catalogue.app.tab_cycling_all_types.help",
@@ -3387,7 +3570,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "tab_ordering_mode",
-      "order": 41,
+      "order": 46,
       "path": "/tab_ordering_mode",
       "labelKey": "settings.catalogue.app.tab_ordering_mode.label",
       "helpKey": "settings.catalogue.app.tab_ordering_mode.help",
@@ -3431,7 +3614,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "tab_tree_enabled",
-      "order": 43,
+      "order": 48,
       "path": "/tab_tree_enabled",
       "labelKey": "settings.catalogue.app.tab_tree_enabled.label",
       "helpKey": "settings.catalogue.app.tab_tree_enabled.help",
@@ -3463,7 +3646,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "terminal_renderer",
-      "order": 70,
+      "order": 75,
       "path": "/terminal_renderer",
       "labelKey": "settings.catalogue.app.terminal_renderer.label",
       "helpKey": "settings.catalogue.app.terminal_renderer.help",
@@ -3544,17 +3727,18 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "update_channel",
-      "order": 53,
+      "order": 58,
       "path": "/update_channel",
       "labelKey": "settings.catalogue.app.update_channel.label",
       "helpKey": "settings.catalogue.app.update_channel.help",
       "label": "update channel",
       "schema": {
-        "description": "Update channel: \"stable\" or \"nightly\"",
+        "description": "Update channel: \"stable\", \"beta\" or \"nightly\"",
         "type": "string",
         "default": "stable",
         "enum": [
           "stable",
+          "beta",
           "nightly"
         ]
       },
@@ -3567,6 +3751,7 @@ export const settingsCatalogue = {
         "kind": "static",
         "values": [
           "stable",
+          "beta",
           "nightly"
         ]
       },
@@ -3580,16 +3765,16 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
-    "connections.auth_username": {
-      "id": "connections.auth_username",
+    "connections.connections.{id}.auth_username": {
+      "id": "connections.connections.{id}.auth_username",
       "store": "connections",
       "owner": "machine",
       "area": "connections",
-      "group": "auth_username",
+      "group": "connections",
       "order": 9,
-      "path": "/auth_username",
-      "labelKey": "settings.catalogue.connections.auth_username.label",
-      "helpKey": "settings.catalogue.connections.auth_username.help",
+      "path": "/connections/{id}/auth_username",
+      "labelKey": "settings.catalogue.connections.connections.{id}.auth_username.label",
+      "helpKey": "settings.catalogue.connections.connections.{id}.auth_username.help",
       "label": "auth username",
       "schema": {
         "type": "string"
@@ -3608,16 +3793,16 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
-    "connections.auto_update": {
-      "id": "connections.auto_update",
+    "connections.connections.{id}.auto_update": {
+      "id": "connections.connections.{id}.auto_update",
       "store": "connections",
       "owner": "machine",
       "area": "connections",
-      "group": "auto_update",
+      "group": "connections",
       "order": 11,
-      "path": "/auto_update",
-      "labelKey": "settings.catalogue.connections.auto_update.label",
-      "helpKey": "settings.catalogue.connections.auto_update.help",
+      "path": "/connections/{id}/auto_update",
+      "labelKey": "settings.catalogue.connections.connections.{id}.auto_update.label",
+      "helpKey": "settings.catalogue.connections.connections.{id}.auto_update.help",
       "label": "auto update",
       "schema": {
         "type": "boolean",
@@ -3639,16 +3824,16 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
-    "connections.deploy": {
-      "id": "connections.deploy",
+    "connections.connections.{id}.deploy": {
+      "id": "connections.connections.{id}.deploy",
       "store": "connections",
       "owner": "machine",
       "area": "connections",
-      "group": "deploy",
+      "group": "connections",
       "order": 12,
-      "path": "/deploy",
-      "labelKey": "settings.catalogue.connections.deploy.label",
-      "helpKey": "settings.catalogue.connections.deploy.help",
+      "path": "/connections/{id}/deploy",
+      "labelKey": "settings.catalogue.connections.connections.{id}.deploy.label",
+      "helpKey": "settings.catalogue.connections.connections.{id}.deploy.help",
       "label": "deploy",
       "schema": {
         "type": "string",
@@ -3682,16 +3867,16 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
-    "connections.enabled": {
-      "id": "connections.enabled",
+    "connections.connections.{id}.enabled": {
+      "id": "connections.connections.{id}.enabled",
       "store": "connections",
       "owner": "machine",
       "area": "connections",
-      "group": "enabled",
+      "group": "connections",
       "order": 10,
-      "path": "/enabled",
-      "labelKey": "settings.catalogue.connections.enabled.label",
-      "helpKey": "settings.catalogue.connections.enabled.help",
+      "path": "/connections/{id}/enabled",
+      "labelKey": "settings.catalogue.connections.connections.{id}.enabled.label",
+      "helpKey": "settings.catalogue.connections.connections.{id}.enabled.help",
       "label": "enabled",
       "schema": {
         "type": "boolean"
@@ -3710,16 +3895,16 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
-    "connections.id": {
-      "id": "connections.id",
+    "connections.connections.{id}.id": {
+      "id": "connections.connections.{id}.id",
       "store": "connections",
       "owner": "machine",
       "area": "connections",
-      "group": "id",
+      "group": "connections",
       "order": 0,
-      "path": "/id",
-      "labelKey": "settings.catalogue.connections.id.label",
-      "helpKey": "settings.catalogue.connections.id.help",
+      "path": "/connections/{id}/id",
+      "labelKey": "settings.catalogue.connections.connections.{id}.id.label",
+      "helpKey": "settings.catalogue.connections.connections.{id}.id.help",
       "label": "id",
       "schema": {
         "type": "string"
@@ -3737,16 +3922,16 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
-    "connections.name": {
-      "id": "connections.name",
+    "connections.connections.{id}.name": {
+      "id": "connections.connections.{id}.name",
       "store": "connections",
       "owner": "machine",
       "area": "connections",
-      "group": "name",
+      "group": "connections",
       "order": 1,
-      "path": "/name",
-      "labelKey": "settings.catalogue.connections.name.label",
-      "helpKey": "settings.catalogue.connections.name.help",
+      "path": "/connections/{id}/name",
+      "labelKey": "settings.catalogue.connections.connections.{id}.name.label",
+      "helpKey": "settings.catalogue.connections.connections.{id}.name.help",
       "label": "name",
       "schema": {
         "type": "string"
@@ -3765,16 +3950,16 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
-    "connections.survive_secs": {
-      "id": "connections.survive_secs",
+    "connections.connections.{id}.survive_secs": {
+      "id": "connections.connections.{id}.survive_secs",
       "store": "connections",
       "owner": "machine",
       "area": "connections",
-      "group": "survive_secs",
+      "group": "connections",
       "order": 13,
-      "path": "/survive_secs",
-      "labelKey": "settings.catalogue.connections.survive_secs.label",
-      "helpKey": "settings.catalogue.connections.survive_secs.help",
+      "path": "/connections/{id}/survive_secs",
+      "labelKey": "settings.catalogue.connections.connections.{id}.survive_secs.label",
+      "helpKey": "settings.catalogue.connections.connections.{id}.survive_secs.help",
       "label": "survive secs",
       "schema": {
         "type": "integer",
@@ -3798,16 +3983,16 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
-    "connections.transport.identity_file": {
-      "id": "connections.transport.identity_file",
+    "connections.connections.{id}.transport.identity_file": {
+      "id": "connections.connections.{id}.transport.identity_file",
       "store": "connections",
       "owner": "machine",
       "area": "connections",
-      "group": "transport",
+      "group": "connections",
       "order": 5,
-      "path": "/transport/identity_file",
-      "labelKey": "settings.catalogue.connections.transport.identity_file.label",
-      "helpKey": "settings.catalogue.connections.transport.identity_file.help",
+      "path": "/connections/{id}/transport/identity_file",
+      "labelKey": "settings.catalogue.connections.connections.{id}.transport.identity_file.label",
+      "helpKey": "settings.catalogue.connections.connections.{id}.transport.identity_file.help",
       "label": "identity file",
       "schema": {
         "type": [
@@ -3831,16 +4016,16 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
-    "connections.transport.remote_daemon_port": {
-      "id": "connections.transport.remote_daemon_port",
+    "connections.connections.{id}.transport.remote_daemon_port": {
+      "id": "connections.connections.{id}.transport.remote_daemon_port",
       "store": "connections",
       "owner": "machine",
       "area": "connections",
-      "group": "transport",
+      "group": "connections",
       "order": 6,
-      "path": "/transport/remote_daemon_port",
-      "labelKey": "settings.catalogue.connections.transport.remote_daemon_port.label",
-      "helpKey": "settings.catalogue.connections.transport.remote_daemon_port.help",
+      "path": "/connections/{id}/transport/remote_daemon_port",
+      "labelKey": "settings.catalogue.connections.connections.{id}.transport.remote_daemon_port.label",
+      "helpKey": "settings.catalogue.connections.connections.{id}.transport.remote_daemon_port.help",
       "label": "remote daemon port",
       "schema": {
         "type": "integer",
@@ -3862,16 +4047,16 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
-    "connections.transport.ssh_host": {
-      "id": "connections.transport.ssh_host",
+    "connections.connections.{id}.transport.ssh_host": {
+      "id": "connections.connections.{id}.transport.ssh_host",
       "store": "connections",
       "owner": "machine",
       "area": "connections",
-      "group": "transport",
+      "group": "connections",
       "order": 2,
-      "path": "/transport/ssh_host",
-      "labelKey": "settings.catalogue.connections.transport.ssh_host.label",
-      "helpKey": "settings.catalogue.connections.transport.ssh_host.help",
+      "path": "/connections/{id}/transport/ssh_host",
+      "labelKey": "settings.catalogue.connections.connections.{id}.transport.ssh_host.label",
+      "helpKey": "settings.catalogue.connections.connections.{id}.transport.ssh_host.help",
       "label": "ssh host",
       "schema": {
         "type": "string"
@@ -3890,16 +4075,16 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
-    "connections.transport.ssh_port": {
-      "id": "connections.transport.ssh_port",
+    "connections.connections.{id}.transport.ssh_port": {
+      "id": "connections.connections.{id}.transport.ssh_port",
       "store": "connections",
       "owner": "machine",
       "area": "connections",
-      "group": "transport",
+      "group": "connections",
       "order": 3,
-      "path": "/transport/ssh_port",
-      "labelKey": "settings.catalogue.connections.transport.ssh_port.label",
-      "helpKey": "settings.catalogue.connections.transport.ssh_port.help",
+      "path": "/connections/{id}/transport/ssh_port",
+      "labelKey": "settings.catalogue.connections.connections.{id}.transport.ssh_port.label",
+      "helpKey": "settings.catalogue.connections.connections.{id}.transport.ssh_port.help",
       "label": "ssh port",
       "schema": {
         "type": "integer",
@@ -3921,16 +4106,16 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
-    "connections.transport.ssh_user": {
-      "id": "connections.transport.ssh_user",
+    "connections.connections.{id}.transport.ssh_user": {
+      "id": "connections.connections.{id}.transport.ssh_user",
       "store": "connections",
       "owner": "machine",
       "area": "connections",
-      "group": "transport",
+      "group": "connections",
       "order": 4,
-      "path": "/transport/ssh_user",
-      "labelKey": "settings.catalogue.connections.transport.ssh_user.label",
-      "helpKey": "settings.catalogue.connections.transport.ssh_user.help",
+      "path": "/connections/{id}/transport/ssh_user",
+      "labelKey": "settings.catalogue.connections.connections.{id}.transport.ssh_user.label",
+      "helpKey": "settings.catalogue.connections.connections.{id}.transport.ssh_user.help",
       "label": "ssh user",
       "schema": {
         "type": "string"
@@ -3949,16 +4134,16 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
-    "connections.transport.type": {
-      "id": "connections.transport.type",
+    "connections.connections.{id}.transport.type": {
+      "id": "connections.connections.{id}.transport.type",
       "store": "connections",
       "owner": "machine",
       "area": "connections",
-      "group": "transport",
+      "group": "connections",
       "order": 7,
-      "path": "/transport/type",
-      "labelKey": "settings.catalogue.connections.transport.type.label",
-      "helpKey": "settings.catalogue.connections.transport.type.help",
+      "path": "/connections/{id}/transport/type",
+      "labelKey": "settings.catalogue.connections.connections.{id}.transport.type.label",
+      "helpKey": "settings.catalogue.connections.connections.{id}.transport.type.help",
       "label": "type",
       "schema": {
         "type": "string",
@@ -3987,16 +4172,16 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
-    "connections.transport.url": {
-      "id": "connections.transport.url",
+    "connections.connections.{id}.transport.url": {
+      "id": "connections.connections.{id}.transport.url",
       "store": "connections",
       "owner": "machine",
       "area": "connections",
-      "group": "transport",
+      "group": "connections",
       "order": 8,
-      "path": "/transport/url",
-      "labelKey": "settings.catalogue.connections.transport.url.label",
-      "helpKey": "settings.catalogue.connections.transport.url.help",
+      "path": "/connections/{id}/transport/url",
+      "labelKey": "settings.catalogue.connections.connections.{id}.transport.url.label",
+      "helpKey": "settings.catalogue.connections.connections.{id}.transport.url.help",
       "label": "url",
       "schema": {
         "type": "string"
@@ -4014,6 +4199,163 @@ export const settingsCatalogue = {
         "set"
       ],
       "confirmationClass": "execution_authority"
+    },
+    "ego.credentials.{key}": {
+      "id": "ego.credentials.{key}",
+      "store": "ego",
+      "owner": "profile",
+      "area": "ego",
+      "group": "managed",
+      "order": 0,
+      "path": "/credentials/{key}",
+      "labelKey": "settings.catalogue.ego.credentials.{key}.label",
+      "helpKey": "settings.catalogue.ego.credentials.{key}.help",
+      "label": "credentials/{key}",
+      "schema": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "nullable": true,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "secret",
+      "apply": "next_session",
+      "effect": "Used by the next Ego session; existing ACP and PTY sessions keep their configuration.",
+      "operations": [
+        "get"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "ego.model": {
+      "id": "ego.model",
+      "store": "ego",
+      "owner": "profile",
+      "area": "ego",
+      "group": "managed",
+      "order": 0,
+      "path": "/model",
+      "labelKey": "settings.catalogue.ego.model.label",
+      "helpKey": "settings.catalogue.ego.model.help",
+      "label": "model",
+      "schema": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null
+      },
+      "nullable": true,
+      "default": null,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "private",
+      "apply": "next_session",
+      "effect": "Used by the next Ego session; existing ACP and PTY sessions keep their configuration.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "ego.network": {
+      "id": "ego.network",
+      "store": "ego",
+      "owner": "profile",
+      "area": "ego",
+      "group": "managed",
+      "order": 0,
+      "path": "/network",
+      "labelKey": "settings.catalogue.ego.network.label",
+      "helpKey": "settings.catalogue.ego.network.help",
+      "label": "network",
+      "schema": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "enum": [
+          "on",
+          "off",
+          null
+        ],
+        "default": null
+      },
+      "nullable": true,
+      "default": null,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "private",
+      "apply": "next_session",
+      "effect": "Used by the next Ego session; existing ACP and PTY sessions keep their configuration.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "ego.roots": {
+      "id": "ego.roots",
+      "store": "ego",
+      "owner": "profile",
+      "area": "ego",
+      "group": "managed",
+      "order": 0,
+      "path": "/roots",
+      "labelKey": "settings.catalogue.ego.roots.label",
+      "helpKey": "settings.catalogue.ego.roots.help",
+      "label": "roots",
+      "schema": {
+        "type": [
+          "array",
+          "null"
+        ],
+        "items": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "access": {
+              "type": "string",
+              "enum": [
+                "read",
+                "read-write"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "path",
+            "access"
+          ]
+        },
+        "default": null
+      },
+      "nullable": true,
+      "default": null,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "private",
+      "apply": "next_session",
+      "effect": "Used by the next Ego session; existing ACP and PTY sessions keep their configuration.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
     },
     "github_accounts.accounts.{id}.host.host": {
       "id": "github_accounts.accounts.{id}.host.host",
@@ -5397,6 +5739,34 @@ export const settingsCatalogue = {
         "get",
         "set",
         "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "preferences.tasks_view_preferences.{key}": {
+      "id": "preferences.tasks_view_preferences.{key}",
+      "store": "preferences",
+      "owner": "instance",
+      "area": "preferences",
+      "group": "tasks_view_preferences",
+      "order": 24,
+      "path": "/tasks_view_preferences/{key}",
+      "labelKey": "settings.catalogue.preferences.tasks_view_preferences.{key}.label",
+      "helpKey": "settings.catalogue.preferences.tasks_view_preferences.{key}.help",
+      "label": "{key}",
+      "schema": {
+        "type": "string"
+      },
+      "nullable": false,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Remembers Tasks source, view and query per repository and account.",
+      "operations": [
+        "get",
+        "set"
       ],
       "confirmationClass": "ordinary"
     },
@@ -7385,16 +7755,16 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
-    "tunnels.auto_connect": {
-      "id": "tunnels.auto_connect",
+    "tunnels.profiles.{id}.auto_connect": {
+      "id": "tunnels.profiles.{id}.auto_connect",
       "store": "tunnels",
       "owner": "machine",
       "area": "tunnels",
-      "group": "auto_connect",
+      "group": "profiles",
       "order": 10,
-      "path": "/auto_connect",
-      "labelKey": "settings.catalogue.tunnels.auto_connect.label",
-      "helpKey": "settings.catalogue.tunnels.auto_connect.help",
+      "path": "/profiles/{id}/auto_connect",
+      "labelKey": "settings.catalogue.tunnels.profiles.{id}.auto_connect.label",
+      "helpKey": "settings.catalogue.tunnels.profiles.{id}.auto_connect.help",
       "label": "auto connect",
       "schema": {
         "type": "boolean",
@@ -7416,16 +7786,16 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
-    "tunnels.host": {
-      "id": "tunnels.host",
+    "tunnels.profiles.{id}.host": {
+      "id": "tunnels.profiles.{id}.host",
       "store": "tunnels",
       "owner": "machine",
       "area": "tunnels",
-      "group": "host",
+      "group": "profiles",
       "order": 2,
-      "path": "/host",
-      "labelKey": "settings.catalogue.tunnels.host.label",
-      "helpKey": "settings.catalogue.tunnels.host.help",
+      "path": "/profiles/{id}/host",
+      "labelKey": "settings.catalogue.tunnels.profiles.{id}.host.label",
+      "helpKey": "settings.catalogue.tunnels.profiles.{id}.host.help",
       "label": "host",
       "schema": {
         "type": "string"
@@ -7444,16 +7814,16 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
-    "tunnels.id": {
-      "id": "tunnels.id",
+    "tunnels.profiles.{id}.id": {
+      "id": "tunnels.profiles.{id}.id",
       "store": "tunnels",
       "owner": "machine",
       "area": "tunnels",
-      "group": "id",
+      "group": "profiles",
       "order": 0,
-      "path": "/id",
-      "labelKey": "settings.catalogue.tunnels.id.label",
-      "helpKey": "settings.catalogue.tunnels.id.help",
+      "path": "/profiles/{id}/id",
+      "labelKey": "settings.catalogue.tunnels.profiles.{id}.id.label",
+      "helpKey": "settings.catalogue.tunnels.profiles.{id}.id.help",
       "label": "id",
       "schema": {
         "type": "string"
@@ -7471,16 +7841,16 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
-    "tunnels.identity_file": {
-      "id": "tunnels.identity_file",
+    "tunnels.profiles.{id}.identity_file": {
+      "id": "tunnels.profiles.{id}.identity_file",
       "store": "tunnels",
       "owner": "machine",
       "area": "tunnels",
-      "group": "identity_file",
+      "group": "profiles",
       "order": 5,
-      "path": "/identity_file",
-      "labelKey": "settings.catalogue.tunnels.identity_file.label",
-      "helpKey": "settings.catalogue.tunnels.identity_file.help",
+      "path": "/profiles/{id}/identity_file",
+      "labelKey": "settings.catalogue.tunnels.profiles.{id}.identity_file.label",
+      "helpKey": "settings.catalogue.tunnels.profiles.{id}.identity_file.help",
       "label": "identity file",
       "schema": {
         "type": [
@@ -7504,16 +7874,16 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
-    "tunnels.name": {
-      "id": "tunnels.name",
+    "tunnels.profiles.{id}.name": {
+      "id": "tunnels.profiles.{id}.name",
       "store": "tunnels",
       "owner": "machine",
       "area": "tunnels",
-      "group": "name",
+      "group": "profiles",
       "order": 1,
-      "path": "/name",
-      "labelKey": "settings.catalogue.tunnels.name.label",
-      "helpKey": "settings.catalogue.tunnels.name.help",
+      "path": "/profiles/{id}/name",
+      "labelKey": "settings.catalogue.tunnels.profiles.{id}.name.label",
+      "helpKey": "settings.catalogue.tunnels.profiles.{id}.name.help",
       "label": "name",
       "schema": {
         "type": "string"
@@ -7532,16 +7902,16 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
-    "tunnels.options.compression": {
-      "id": "tunnels.options.compression",
+    "tunnels.profiles.{id}.options.compression": {
+      "id": "tunnels.profiles.{id}.options.compression",
       "store": "tunnels",
       "owner": "machine",
       "area": "tunnels",
-      "group": "options",
+      "group": "profiles",
       "order": 9,
-      "path": "/options/compression",
-      "labelKey": "settings.catalogue.tunnels.options.compression.label",
-      "helpKey": "settings.catalogue.tunnels.options.compression.help",
+      "path": "/profiles/{id}/options/compression",
+      "labelKey": "settings.catalogue.tunnels.profiles.{id}.options.compression.label",
+      "helpKey": "settings.catalogue.tunnels.profiles.{id}.options.compression.help",
       "label": "compression",
       "schema": {
         "description": "`ssh -C`. On by default, and the reason the WebSocket layer refuses to\ndeflate a loopback peer: a tunnelled client reaches this machine through\nthe local ssh process, so its address is loopback and its link is\nalready compressed here. Turn it off for a link that is fast and a CPU\nthat is not — a tunnel to another machine on the same LAN.",
@@ -7564,16 +7934,16 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
-    "tunnels.options.server_alive_count_max": {
-      "id": "tunnels.options.server_alive_count_max",
+    "tunnels.profiles.{id}.options.server_alive_count_max": {
+      "id": "tunnels.profiles.{id}.options.server_alive_count_max",
       "store": "tunnels",
       "owner": "machine",
       "area": "tunnels",
-      "group": "options",
+      "group": "profiles",
       "order": 7,
-      "path": "/options/server_alive_count_max",
-      "labelKey": "settings.catalogue.tunnels.options.server_alive_count_max.label",
-      "helpKey": "settings.catalogue.tunnels.options.server_alive_count_max.help",
+      "path": "/profiles/{id}/options/server_alive_count_max",
+      "labelKey": "settings.catalogue.tunnels.profiles.{id}.options.server_alive_count_max.label",
+      "helpKey": "settings.catalogue.tunnels.profiles.{id}.options.server_alive_count_max.help",
       "label": "server alive count max",
       "schema": {
         "type": "integer",
@@ -7595,16 +7965,16 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
-    "tunnels.options.server_alive_interval": {
-      "id": "tunnels.options.server_alive_interval",
+    "tunnels.profiles.{id}.options.server_alive_interval": {
+      "id": "tunnels.profiles.{id}.options.server_alive_interval",
       "store": "tunnels",
       "owner": "machine",
       "area": "tunnels",
-      "group": "options",
+      "group": "profiles",
       "order": 6,
-      "path": "/options/server_alive_interval",
-      "labelKey": "settings.catalogue.tunnels.options.server_alive_interval.label",
-      "helpKey": "settings.catalogue.tunnels.options.server_alive_interval.help",
+      "path": "/profiles/{id}/options/server_alive_interval",
+      "labelKey": "settings.catalogue.tunnels.profiles.{id}.options.server_alive_interval.label",
+      "helpKey": "settings.catalogue.tunnels.profiles.{id}.options.server_alive_interval.help",
       "label": "server alive interval",
       "schema": {
         "type": "integer",
@@ -7626,16 +7996,16 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
-    "tunnels.options.strict_host_key_checking": {
-      "id": "tunnels.options.strict_host_key_checking",
+    "tunnels.profiles.{id}.options.strict_host_key_checking": {
+      "id": "tunnels.profiles.{id}.options.strict_host_key_checking",
       "store": "tunnels",
       "owner": "machine",
       "area": "tunnels",
-      "group": "options",
+      "group": "profiles",
       "order": 8,
-      "path": "/options/strict_host_key_checking",
-      "labelKey": "settings.catalogue.tunnels.options.strict_host_key_checking.label",
-      "helpKey": "settings.catalogue.tunnels.options.strict_host_key_checking.help",
+      "path": "/profiles/{id}/options/strict_host_key_checking",
+      "labelKey": "settings.catalogue.tunnels.profiles.{id}.options.strict_host_key_checking.label",
+      "helpKey": "settings.catalogue.tunnels.profiles.{id}.options.strict_host_key_checking.help",
       "label": "strict host key checking",
       "schema": {
         "type": "string",
@@ -7664,16 +8034,16 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
-    "tunnels.port": {
-      "id": "tunnels.port",
+    "tunnels.profiles.{id}.port": {
+      "id": "tunnels.profiles.{id}.port",
       "store": "tunnels",
       "owner": "machine",
       "area": "tunnels",
-      "group": "port",
+      "group": "profiles",
       "order": 3,
-      "path": "/port",
-      "labelKey": "settings.catalogue.tunnels.port.label",
-      "helpKey": "settings.catalogue.tunnels.port.help",
+      "path": "/profiles/{id}/port",
+      "labelKey": "settings.catalogue.tunnels.profiles.{id}.port.label",
+      "helpKey": "settings.catalogue.tunnels.profiles.{id}.port.help",
       "label": "port",
       "schema": {
         "type": "integer",
@@ -7695,16 +8065,16 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "execution_authority"
     },
-    "tunnels.user": {
-      "id": "tunnels.user",
+    "tunnels.profiles.{id}.user": {
+      "id": "tunnels.profiles.{id}.user",
       "store": "tunnels",
       "owner": "machine",
       "area": "tunnels",
-      "group": "user",
+      "group": "profiles",
       "order": 4,
-      "path": "/user",
-      "labelKey": "settings.catalogue.tunnels.user.label",
-      "helpKey": "settings.catalogue.tunnels.user.help",
+      "path": "/profiles/{id}/user",
+      "labelKey": "settings.catalogue.tunnels.profiles.{id}.user.label",
+      "helpKey": "settings.catalogue.tunnels.profiles.{id}.user.help",
       "label": "user",
       "schema": {
         "type": "string"
@@ -8409,8 +8779,7 @@ export const settingsCatalogue = {
       "nullable": false,
       "default": true,
       "availability": {
-        "status": "unavailable",
-        "reason": "This build has no native dictation backend"
+        "status": "available"
       },
       "choices": null,
       "sensitivity": "public",
@@ -8445,8 +8814,7 @@ export const settingsCatalogue = {
       "nullable": true,
       "default": null,
       "availability": {
-        "status": "unavailable",
-        "reason": "This build has no native dictation backend"
+        "status": "available"
       },
       "choices": {
         "kind": "dynamic",
@@ -8484,8 +8852,7 @@ export const settingsCatalogue = {
       "nullable": false,
       "default": false,
       "availability": {
-        "status": "unavailable",
-        "reason": "This build has no native dictation backend"
+        "status": "available"
       },
       "choices": null,
       "sensitivity": "public",
@@ -8517,8 +8884,7 @@ export const settingsCatalogue = {
       "nullable": false,
       "default": "",
       "availability": {
-        "status": "unavailable",
-        "reason": "This build has no native dictation backend"
+        "status": "available"
       },
       "choices": null,
       "sensitivity": "public",
@@ -8550,8 +8916,7 @@ export const settingsCatalogue = {
       "nullable": false,
       "default": true,
       "availability": {
-        "status": "unavailable",
-        "reason": "This build has no native dictation backend"
+        "status": "available"
       },
       "choices": null,
       "sensitivity": "public",
@@ -8585,8 +8950,7 @@ export const settingsCatalogue = {
       "nullable": false,
       "default": 1500,
       "availability": {
-        "status": "unavailable",
-        "reason": "This build has no native dictation backend"
+        "status": "available"
       },
       "choices": null,
       "sensitivity": "public",
@@ -8618,8 +8982,7 @@ export const settingsCatalogue = {
       "nullable": false,
       "default": true,
       "availability": {
-        "status": "unavailable",
-        "reason": "This build has no native dictation backend"
+        "status": "available"
       },
       "choices": null,
       "sensitivity": "public",
@@ -8651,8 +9014,7 @@ export const settingsCatalogue = {
       "nullable": false,
       "default": true,
       "availability": {
-        "status": "unavailable",
-        "reason": "This build has no native dictation backend"
+        "status": "available"
       },
       "choices": null,
       "sensitivity": "public",
@@ -8684,8 +9046,7 @@ export const settingsCatalogue = {
       "nullable": false,
       "default": true,
       "availability": {
-        "status": "unavailable",
-        "reason": "This build has no native dictation backend"
+        "status": "available"
       },
       "choices": null,
       "sensitivity": "public",
@@ -8717,8 +9078,7 @@ export const settingsCatalogue = {
       "nullable": false,
       "default": "",
       "availability": {
-        "status": "unavailable",
-        "reason": "This build has no native dictation backend"
+        "status": "available"
       },
       "choices": null,
       "sensitivity": "public",
@@ -8749,8 +9109,7 @@ export const settingsCatalogue = {
       "nullable": false,
       "default": "F5",
       "availability": {
-        "status": "unavailable",
-        "reason": "This build has no native dictation backend"
+        "status": "available"
       },
       "choices": null,
       "sensitivity": "public",
@@ -8781,8 +9140,7 @@ export const settingsCatalogue = {
       "nullable": false,
       "default": "auto",
       "availability": {
-        "status": "unavailable",
-        "reason": "This build has no native dictation backend"
+        "status": "available"
       },
       "choices": null,
       "sensitivity": "public",
@@ -8816,8 +9174,7 @@ export const settingsCatalogue = {
       "nullable": false,
       "default": 400,
       "availability": {
-        "status": "unavailable",
-        "reason": "This build has no native dictation backend"
+        "status": "available"
       },
       "choices": null,
       "sensitivity": "public",
@@ -8849,8 +9206,7 @@ export const settingsCatalogue = {
       "nullable": false,
       "default": "large-v3-turbo",
       "availability": {
-        "status": "unavailable",
-        "reason": "This build has no native dictation backend"
+        "status": "available"
       },
       "choices": {
         "kind": "dynamic",
@@ -8891,8 +9247,7 @@ export const settingsCatalogue = {
       "nullable": false,
       "default": 20,
       "availability": {
-        "status": "unavailable",
-        "reason": "This build has no native dictation backend"
+        "status": "available"
       },
       "choices": null,
       "sensitivity": "public",
@@ -8927,8 +9282,7 @@ export const settingsCatalogue = {
       "nullable": false,
       "default": 0.6000000238418579,
       "availability": {
-        "status": "unavailable",
-        "reason": "This build has no native dictation backend"
+        "status": "available"
       },
       "choices": null,
       "sensitivity": "public",
@@ -8961,8 +9315,7 @@ export const settingsCatalogue = {
       "nullable": false,
       "default": 0.0010000000474974513,
       "availability": {
-        "status": "unavailable",
-        "reason": "This build has no native dictation backend"
+        "status": "available"
       },
       "choices": null,
       "sensitivity": "public",
@@ -8997,8 +9350,7 @@ export const settingsCatalogue = {
       "nullable": false,
       "default": [],
       "availability": {
-        "status": "unavailable",
-        "reason": "This build has no native dictation backend"
+        "status": "available"
       },
       "choices": null,
       "sensitivity": "private",
@@ -9030,8 +9382,7 @@ export const settingsCatalogue = {
       "nullable": false,
       "default": "",
       "availability": {
-        "status": "unavailable",
-        "reason": "This build has no native dictation backend"
+        "status": "available"
       },
       "choices": {
         "kind": "dynamic",
@@ -9070,8 +9421,7 @@ export const settingsCatalogue = {
       "nullable": false,
       "default": "",
       "availability": {
-        "status": "unavailable",
-        "reason": "This build has no native dictation backend"
+        "status": "available"
       },
       "choices": null,
       "sensitivity": "public",
@@ -9106,8 +9456,7 @@ export const settingsCatalogue = {
       "nullable": false,
       "default": 0.6700000166893005,
       "availability": {
-        "status": "unavailable",
-        "reason": "This build has no native dictation backend"
+        "status": "available"
       },
       "choices": null,
       "sensitivity": "public",
@@ -9139,8 +9488,7 @@ export const settingsCatalogue = {
       "nullable": false,
       "default": "",
       "availability": {
-        "status": "unavailable",
-        "reason": "This build has no native dictation backend"
+        "status": "available"
       },
       "choices": {
         "kind": "dynamic",
@@ -9182,8 +9530,7 @@ export const settingsCatalogue = {
       "nullable": false,
       "default": -18.0,
       "availability": {
-        "status": "unavailable",
-        "reason": "This build has no native dictation backend"
+        "status": "available"
       },
       "choices": null,
       "sensitivity": "public",
@@ -9244,6 +9591,11 @@ export const settingsCatalogue = {
       "reason": "Read-only redaction presence marker, not a persisted setting."
     },
     {
+      "store": "app",
+      "path": "/beta_channel_migrated",
+      "reason": "Internal one-time beta update-channel migration marker"
+    },
+    {
       "store": "agents",
       "path": "/agents/{key}/codex_bypass_migrated",
       "reason": "One-time bypass migration marker; cannot be edited to rerun migration."
@@ -9262,7 +9614,7 @@ export const settingsCatalogue = {
   "gaps": [
     {
       "store": "tunnels",
-      "path": "/forwards",
+      "path": "/profiles/{id}/forwards",
       "ownerStep": "Step 4f",
       "reason": "ForwardSpec records have no stable IDs; owner must define stable record edits."
     },
@@ -9273,28 +9625,16 @@ export const settingsCatalogue = {
       "reason": "Recoverable credential presence and typed login/rotation actions need the account owner schema; registry metadata alone is not coverage."
     },
     {
-      "store": "ego",
-      "path": "/providers/{id}",
-      "ownerStep": "Step 3b",
-      "reason": "Discover installed ego provider/model/auth capabilities through the configured binary; never infer an external schema or read its credential files."
-    },
-    {
-      "store": "ego",
-      "path": "/profiles/{id}/perimeter",
-      "ownerStep": "Step 3b",
-      "reason": "Installed-owner perimeter and stored/effective/source schema must be recorded from ego with the trusted workspace/profile."
-    },
-    {
       "store": "repositories_registration",
       "path": "/repos/{path}",
       "ownerStep": "Step 4d",
-      "reason": "repositories.json uses untyped JSON for registration/groups/branch display preferences; classify runtime fields individually and define the owner's stable identities."
+      "reason": "Accepted gap for story 1825-4566: repositories.json registration and group records remain untyped; converting the owner requires classification of runtime tab/worktree identities and delta-save contracts. A raw JSON settings adapter would bypass those owner invariants. Keep Step 4d ownership and block cutover until a typed owner schema is delivered."
     },
     {
       "store": "repositories_registration",
       "path": "/groups/{id}",
       "ownerStep": "Step 4d",
-      "reason": "Repository group settings are currently untyped JSON and must receive an owner schema."
+      "reason": "Accepted gap for story 1825-4566: repositories.json registration and group records remain untyped; converting the owner requires classification of runtime tab/worktree identities and delta-save contracts. A raw JSON settings adapter would bypass those owner invariants. Keep Step 4d ownership and block cutover until a typed owner schema is delivered."
     },
     {
       "store": "keybindings",
@@ -9343,30 +9683,6 @@ export const settingsCatalogue = {
       "path": "/allowed_chat_ids/{chatId}",
       "ownerStep": "Step 4h",
       "reason": "Chat allowlist is a separate private text file; use the existing setup owner, not raw file editing."
-    },
-    {
-      "store": "plugins.telegram-notifier",
-      "path": "/botToken",
-      "ownerStep": "Step 5",
-      "reason": "Plugin-private JS configuration has no scoped settings schema or credential migration yet."
-    },
-    {
-      "store": "plugins.telegram-notifier",
-      "path": "/chatId",
-      "ownerStep": "Step 5",
-      "reason": "Plugin-private JS configuration requires scoped schema registration."
-    },
-    {
-      "store": "plugins.telegram-notifier",
-      "path": "/events/{eventId}",
-      "ownerStep": "Step 5",
-      "reason": "Plugin-private enabled/silent event records require scoped schema registration and callbacks."
-    },
-    {
-      "store": "plugins",
-      "path": "/{pluginId}/{settingId}",
-      "ownerStep": "Step 5",
-      "reason": "Runtime-installed plugin schema enumeration and unload parity are not yet supported; registration must fail closed."
     },
     {
       "store": "app",
@@ -9421,6 +9737,36 @@ export const settingsCatalogue = {
       "path": "/agents/{key}/run_configs/{name}/model",
       "ownerStep": "Step 4c",
       "reason": "Agent model availability requires the owning CLI capability resolver, without launching on save."
+    },
+    {
+      "store": "ego",
+      "path": "/exec_paths",
+      "ownerStep": "Step 3b",
+      "reason": "DEFERRED (2026-10-13): parent scopes this adapter to managed keys. Installed ego config set exec_paths=[] exits 2: unknown config key; an Ego owner extension must precede support."
+    },
+    {
+      "store": "ego",
+      "path": "/auth/{provider}/headers",
+      "ownerStep": "Step 3b",
+      "reason": "DEFERRED (2026-10-13): auth is base-only and outside ManagedConfigKey. Installed ego config set auth.openrouter.headers={} exits 2: unknown config key. No config-edit or raw-file bypass."
+    },
+    {
+      "store": "ego",
+      "path": "/auth/{provider}/credential_command",
+      "ownerStep": "Step 3b",
+      "reason": "DEFERRED (2026-10-13): installed ego config set auth.openrouter.credential_command exits 2: unknown config key. The program path is non-secret, its stdout secret; an owner extension is required."
+    },
+    {
+      "store": "ego",
+      "path": "/atomic_batch",
+      "ownerStep": "Step 3b",
+      "reason": "DEFERRED (2026-10-13): Ego managed CLI publishes one key per call. The adapter refuses patches changing multiple keys before any write; complete atomic batches require an owner API."
+    },
+    {
+      "store": "ego",
+      "path": "/compare_and_swap",
+      "ownerStep": "Step 3b",
+      "reason": "DEFERRED (2026-10-13): Ego CLI has no conditional revision write. The adapter serializes its own commits and checks latest state; external CLI writers can race between read and mutation. Full cross-process CAS requires an owner API."
     }
   ],
   "collections": [
@@ -9850,6 +10196,273 @@ export const settingsCatalogue = {
           "id",
           "host",
           "kind"
+        ]
+      },
+      "operations": [
+        "get",
+        "create",
+        "remove"
+      ]
+    },
+    {
+      "store": "connections",
+      "path": "/connections",
+      "key": "id",
+      "schema": {
+        "description": "A saved remote connection.",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "transport": {
+            "description": "Transport layer for a remote connection.",
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "ssh_host": {
+                    "type": "string"
+                  },
+                  "ssh_port": {
+                    "type": "integer",
+                    "format": "uint16",
+                    "minimum": 0,
+                    "maximum": 65535
+                  },
+                  "ssh_user": {
+                    "type": "string"
+                  },
+                  "identity_file": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "remote_daemon_port": {
+                    "type": "integer",
+                    "format": "uint16",
+                    "minimum": 0,
+                    "maximum": 65535
+                  },
+                  "type": {
+                    "type": "string",
+                    "const": "Ssh"
+                  }
+                },
+                "required": [
+                  "type",
+                  "ssh_host",
+                  "ssh_port",
+                  "ssh_user",
+                  "remote_daemon_port"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "url": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "type": "string",
+                    "const": "Direct"
+                  }
+                },
+                "required": [
+                  "type",
+                  "url"
+                ]
+              }
+            ]
+          },
+          "auth_username": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "auto_update": {
+            "type": "boolean"
+          },
+          "deploy": {
+            "type": "string",
+            "enum": [
+              "never",
+              "on_connect",
+              "installed"
+            ]
+          },
+          "survive_secs": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "transport",
+          "auth_username",
+          "enabled"
+        ]
+      },
+      "operations": [
+        "get",
+        "create",
+        "remove"
+      ]
+    },
+    {
+      "store": "tunnels",
+      "path": "/profiles",
+      "key": "id",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "host": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer",
+            "format": "uint16",
+            "minimum": 0,
+            "maximum": 65535
+          },
+          "user": {
+            "type": "string"
+          },
+          "identity_file": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "forwards": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "bind_port": {
+                      "type": "integer",
+                      "format": "uint16",
+                      "minimum": 0,
+                      "maximum": 65535
+                    },
+                    "remote_host": {
+                      "type": "string"
+                    },
+                    "remote_port": {
+                      "type": "integer",
+                      "format": "uint16",
+                      "minimum": 0,
+                      "maximum": 65535
+                    },
+                    "type": {
+                      "type": "string",
+                      "const": "Local"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "bind_port",
+                    "remote_host",
+                    "remote_port"
+                  ]
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "bind_port": {
+                      "type": "integer",
+                      "format": "uint16",
+                      "minimum": 0,
+                      "maximum": 65535
+                    },
+                    "local_host": {
+                      "type": "string"
+                    },
+                    "local_port": {
+                      "type": "integer",
+                      "format": "uint16",
+                      "minimum": 0,
+                      "maximum": 65535
+                    },
+                    "type": {
+                      "type": "string",
+                      "const": "Remote"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "bind_port",
+                    "local_host",
+                    "local_port"
+                  ]
+                }
+              ]
+            },
+            "x-inventory-gap": {
+              "ownerStep": "Step 4f",
+              "reason": "ForwardSpec records have no stable IDs; owner must define stable record edits."
+            }
+          },
+          "options": {
+            "type": "object",
+            "properties": {
+              "server_alive_interval": {
+                "type": "integer",
+                "format": "uint16",
+                "minimum": 0,
+                "maximum": 65535
+              },
+              "server_alive_count_max": {
+                "type": "integer",
+                "format": "uint16",
+                "minimum": 0,
+                "maximum": 65535
+              },
+              "strict_host_key_checking": {
+                "type": "string",
+                "enum": [
+                  "Yes",
+                  "AcceptNew"
+                ]
+              },
+              "compression": {
+                "description": "`ssh -C`. On by default, and the reason the WebSocket layer refuses to\ndeflate a loopback peer: a tunnelled client reaches this machine through\nthe local ssh process, so its address is loopback and its link is\nalready compressed here. Turn it off for a link that is fast and a CPU\nthat is not — a tunnel to another machine on the same LAN.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "server_alive_interval",
+              "server_alive_count_max",
+              "strict_host_key_checking"
+            ]
+          },
+          "auto_connect": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "host",
+          "port",
+          "user",
+          "forwards",
+          "options"
         ]
       },
       "operations": [

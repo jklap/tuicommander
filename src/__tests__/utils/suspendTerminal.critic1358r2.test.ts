@@ -85,7 +85,7 @@ describe("suspendTerminal close ordering (critic 1358 r2)", () => {
 			expect(await suspendTerminal(id)).toEqual({ ok: false, reason: "already suspending" });
 			release();
 			expect(await first).toEqual({ ok: true });
-			expect(mockRpc.mock.calls.filter(([cmd]) => cmd === "close_pty")).toHaveLength(1);
+			expect(mockRpc.mock.calls.filter(([cmd]) => cmd === "suspended_session_action")).toHaveLength(1);
 		}));
 
 	// Catches: close_pty resolving after the user closed the tab recreating a ghost tab (a

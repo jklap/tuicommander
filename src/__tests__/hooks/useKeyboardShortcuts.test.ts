@@ -38,6 +38,7 @@ function createMockHandlers(): ShortcutHandlers {
 		handleTerminalSelect: vi.fn(),
 		handleSplit: vi.fn(),
 		handleRunCommand: vi.fn(),
+		reloadActiveTab: vi.fn(() => true),
 		switchToBranchByIndex: vi.fn(),
 		isQuickSwitcherOpen: vi.fn().mockReturnValue(false),
 		toggleMarkdownPanel: vi.fn(),
@@ -342,14 +343,21 @@ describe("useKeyboardShortcuts", () => {
 	});
 
 	describe("run command", () => {
-		it("Cmd+R runs command", () => {
-			fireKeydown("r", { metaKey: true });
+		it("Cmd+Shift+R runs command", () => {
+			fireKeydown("R", { metaKey: true, shiftKey: true });
 			expect(handlers.handleRunCommand).toHaveBeenCalledWith(false);
 		});
 
-		it("Cmd+Shift+R edits run command", () => {
-			fireKeydown("R", { metaKey: true, shiftKey: true });
-			expect(handlers.handleRunCommand).toHaveBeenCalledWith(true);
+		it("Cmd+R reloads the active tab and never runs the command", () => {
+			fireKeydown("r", { metaKey: true });
+			expect(handlers.reloadActiveTab).toHaveBeenCalledOnce();
+			expect(handlers.handleRunCommand).not.toHaveBeenCalled();
+		});
+
+		it("Cmd+R is left to the platform when no tab can reload", () => {
+			vi.mocked(handlers.reloadActiveTab).mockReturnValue(false);
+			const event = fireKeydown("r", { metaKey: true });
+			expect(event.defaultPrevented).toBe(false);
 		});
 	});
 

@@ -424,7 +424,7 @@ impl WorkflowStore {
                 WorkflowKind::Story,
                 "story_delivery",
                 story_template_graph(),
-                &default_story_checks(),
+                &default_repository_checks(),
             )?;
             insert_seed(
                 &tx,
@@ -434,7 +434,7 @@ impl WorkflowStore {
                 WorkflowKind::Plan,
                 "resolve_plan",
                 resolve_plan_graph(&story_id, 1),
-                &[],
+                &default_repository_checks(),
             )?;
         } else {
             migrate_unchecked_story_seed(&tx, project)?;
@@ -490,8 +490,20 @@ fn migrate_unchecked_story_seed(conn: &Connection, project: &str) -> Result<(), 
                 && published.required_checks == checks,
         )
     };
-    if !is_original(&story_id, &story_template_graph(), &[])?
-        || !is_original(&plan_id, &resolve_plan_graph(&story_id, 1), &[])?
+    let legacy_graph = |mut graph: WorkflowGraph| {
+        for node in &mut graph.nodes {
+            if let NodeKind::Pause { resume_to } = &mut node.kind {
+                *resume_to = None;
+            }
+        }
+        graph
+    };
+    if !is_original(&story_id, &legacy_graph(story_template_graph()), &[])?
+        || !is_original(
+            &plan_id,
+            &legacy_graph(resolve_plan_graph(&story_id, 1)),
+            &[],
+        )?
     {
         return Ok(());
     }
@@ -499,7 +511,7 @@ fn migrate_unchecked_story_seed(conn: &Connection, project: &str) -> Result<(), 
         conn,
         &story_id,
         &story_template_graph(),
-        &default_story_checks(),
+        &default_repository_checks(),
     )?;
     republish_seed(conn, &plan_id, &resolve_plan_graph(&story_id, 2), &[])
 }
@@ -608,10 +620,10 @@ fn validate_pinned_templates(conn: &Connection, draft: &WorkflowDraft) -> Result
     Ok(())
 }
 
-/// Project-independent default policy for seeded story workflows: the repository
+/// Project-independent default policy for seeded story and plan workflows: the repository
 /// object graph must be intact at the checked commit. Projects pin their own
 /// build/test checks in a new revision.
-fn default_story_checks() -> Vec<CheckDefinition> {
+fn default_repository_checks() -> Vec<CheckDefinition> {
     vec![CheckDefinition {
         id: "repository-integrity".into(),
         argv: ["git", "fsck", "--connectivity-only", "--no-progress"]
@@ -691,7 +703,12 @@ fn story_template_graph() -> WorkflowGraph {
             ),
             node("judge", NodeKind::Judge),
             node("repair", NodeKind::Loop { max_iterations: 3 }),
-            node("pause", NodeKind::Pause { resume_to: None }),
+            node(
+                "pause",
+                NodeKind::Pause {
+                    resume_to: Some("implement".into()),
+                },
+            ),
             node("end", NodeKind::End),
         ],
         edges: vec![
@@ -728,7 +745,12 @@ fn resolve_plan_graph(story_template_id: &str, story_revision: i64) -> WorkflowG
             ),
             node("judge", NodeKind::Judge),
             node("replan", NodeKind::Loop { max_iterations: 8 }),
-            node("pause", NodeKind::Pause { resume_to: None }),
+            node(
+                "pause",
+                NodeKind::Pause {
+                    resume_to: Some("create".into()),
+                },
+            ),
             node("end", NodeKind::End),
         ],
         edges: vec![

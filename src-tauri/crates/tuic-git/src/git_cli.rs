@@ -132,7 +132,7 @@ impl GitCmd {
     }
 
     /// Run the command to completion, honoring [`GitCmd::timeout`] when set.
-    fn output(&mut self) -> Result<std::process::Output, GitError> {
+    fn output(&mut self, input: Option<&[u8]>) -> Result<std::process::Output, GitError> {
         #[cfg(test)]
         COMMAND_COUNTS.with(|counts| {
             let args = self
@@ -152,6 +152,9 @@ impl GitCmd {
                 .unwrap_or_default();
             *counts.borrow_mut().entry(family).or_default() += 1;
         });
+        if let Some(input) = input {
+            return output_with_input(&mut self.cmd, self.timeout, Some(input));
+        }
         match self.timeout {
             Some(t) => output_with_deadline(&mut self.cmd, t),
             None => self.cmd.output().map_err(GitError::SpawnFailed),
@@ -162,8 +165,17 @@ impl GitCmd {
     ///
     /// Returns `GitOutput` containing raw (untrimmed) stdout on success.
     pub fn run(mut self) -> Result<GitOutput, GitError> {
-        let output = self.output()?;
+        let output = self.output(None)?;
+        Self::checked_output(output)
+    }
 
+    /// Run git with a finite stdin payload, requiring success.
+    pub fn run_with_input(mut self, input: &str) -> Result<GitOutput, GitError> {
+        let output = self.output(Some(input.as_bytes()))?;
+        Self::checked_output(output)
+    }
+
+    fn checked_output(output: std::process::Output) -> Result<GitOutput, GitError> {
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
             return Err(GitError::NonZeroExit {
@@ -214,7 +226,7 @@ impl GitCmd {
     /// of exit code. Use for callsites that need to inspect exit code and
     /// stderr independently (e.g. `run_git_command` which never returns Err).
     pub fn run_raw(mut self) -> Result<std::process::Output, GitError> {
-        self.output()
+        self.output(None)
     }
 }
 
@@ -233,17 +245,35 @@ pub fn output_with_deadline(
     cmd: &mut Command,
     timeout: Duration,
 ) -> Result<std::process::Output, GitError> {
+    output_with_input(cmd, Some(timeout), None)
+}
+
+fn output_with_input(
+    cmd: &mut Command,
+    timeout: Option<Duration>,
+    input: Option<&[u8]>,
+) -> Result<std::process::Output, GitError> {
     use std::io::Read;
+    use std::io::Write;
 
     // `Command::output()` nulls stdin; `spawn()` inherits it. Match `output()`,
     // or a deadlined child could park on a read of the app's stdin — the exact
     // unbounded wait this function exists to bound.
     let mut child = cmd
-        .stdin(Stdio::null())
+        .stdin(if input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .map_err(GitError::SpawnFailed)?;
+    let writer = input.map(|input| {
+        let input = input.to_vec();
+        let mut stdin = child.stdin.take().expect("stdin piped above");
+        std::thread::spawn(move || stdin.write_all(&input))
+    });
     let mut out_pipe = child.stdout.take().expect("stdout piped above");
     let mut err_pipe = child.stderr.take().expect("stderr piped above");
     let out_reader = std::thread::spawn(move || {
@@ -257,7 +287,7 @@ pub fn output_with_deadline(
         buf
     });
 
-    let deadline = Instant::now() + timeout;
+    let deadline = timeout.map(|timeout| Instant::now() + timeout);
     // Backs off from 1ms to 50ms so a fast command is not delayed by the poll
     // granularity while a slow one costs almost no wakeups.
     let mut poll = Duration::from_millis(1);
@@ -265,7 +295,9 @@ pub fn output_with_deadline(
         match child.try_wait().map_err(GitError::SpawnFailed)? {
             Some(status) => break status,
             None => {
-                let remaining = deadline.saturating_duration_since(Instant::now());
+                let remaining = deadline
+                    .map(|deadline| deadline.saturating_duration_since(Instant::now()))
+                    .unwrap_or(poll);
                 if remaining.is_zero() {
                     // DEFERRED (2026-09-25) — kill/reap covers the direct child only.
                     // Killing a whole process tree needs process groups on
@@ -274,7 +306,9 @@ pub fn output_with_deadline(
                     let _ = child.kill();
                     // Reap it, so a timeout never leaves a zombie behind.
                     let _ = child.wait();
-                    return Err(GitError::TimedOut { after: timeout });
+                    return Err(GitError::TimedOut {
+                        after: timeout.expect("deadline set"),
+                    });
                 }
                 std::thread::sleep(poll.min(remaining));
                 poll = (poll * 2).min(Duration::from_millis(50));
@@ -282,6 +316,13 @@ pub fn output_with_deadline(
         }
     };
 
+    if let Some(writer) = writer {
+        let written = writer.join().expect("stdin writer panicked");
+        // Preserve Git's diagnostic if it rejected input and closed the pipe.
+        if status.success() {
+            written.map_err(GitError::SpawnFailed)?;
+        }
+    }
     Ok(std::process::Output {
         status,
         stdout: out_reader.join().unwrap_or_default(),

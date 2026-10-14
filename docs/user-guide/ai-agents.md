@@ -2,21 +2,23 @@
 
 TUICommander detects, monitors, and manages AI coding agents running in your terminals.
 
+Aider is no longer an agent harness. An `aider` command runs as a plain terminal command. Old settings remain readable, but Aider profiles are excluded from agent pickers and managed peer launches.
+
 ## Supported Agents
 
 | Agent | Binary | Resume Command | Session Binding |
 |-------|--------|----------------|-----------------|
 | Claude Code | `claude` | `claude --continue` | `claude --resume $TUIC_SESSION` |
 | Codex CLI | `codex` | `codex resume --last` | `codex resume $TUIC_SESSION` |
-| Aider | `aider` | `aider --restore-chat-history` | — |
 | Gemini CLI | `gemini` | `gemini --resume` | `gemini --resume $TUIC_SESSION` |
 | OpenCode | `opencode` | `opencode -c` | — |
-| Amp | `amp` | `amp threads continue` | — |
-| Cursor Agent | `cursor-agent` | `cursor-agent resume` | — |
-| Droid (Factory) | `droid` | — | — |
+| Amp *(limited support, need more tests)* | `amp` | `amp threads continue` | — |
+| Cursor Agent *(limited support, need more tests)* | `cursor-agent` | `cursor-agent resume` | — |
+| Droid (Factory) *(limited support, need more tests)* | `droid` | — | — |
 | Goose | `goose` | `goose session --resume` | `goose session --resume --name $TUIC_SESSION` |
 | Grok | `grok` | `grok --continue` | `grok --resume <discovered id>` |
 | pi | `pi` | `pi --continue` | — |
+| ego (terminal CLI) | `ego` | `ego resume` | `ego resume <discovered id>` |
 
 ### Claude MCP profiles
 
@@ -31,7 +33,7 @@ absolute bridge path that is missing or not executable.
 
 ### Native scrollback on launch
 
-**Prevent alternate screen** in Settings → AI → Agents is enabled by default for every agent. TUIC applies Claude Code's `CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1` and `CLAUDE_CODE_DISABLE_AGENT_VIEW=1` environment controls when enabled. A terminal that enters the alternate screen within its first seconds raises a warning toast naming the session and the fix. Codex and Grok receive `--no-alt-screen` when their installed CLI advertises it in `--help`; OpenCode receives `--mini` when available. On Windows, the probe selects an executable `.exe` or `.cmd` launcher ahead of an extensionless npm shell shim. TUICommander checks the executable with a two-second deadline and shares concurrent checks. A timed-out check is not retried until that binary changes; a quick inconclusive exit is retried after a short cooldown. Older versions still start without an unsupported option. Existing flags are not duplicated. Rust applies the same policy to structured IPC, HTTP and MCP launches and exports it to new TUIC shells, where zsh, bash and fish wrappers apply it to commands typed manually. `command <agent>` bypasses those wrappers, but not the launch-instructions shim. Reopen an existing shell after changing the setting.
+**Prevent alternate screen** in Settings → AI → Agents is enabled by default for every agent. TUIC applies Claude Code's `CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1` and `CLAUDE_CODE_DISABLE_AGENT_VIEW=1` environment controls when enabled. A terminal that enters the alternate screen within its first seconds raises a warning toast naming the session and the fix. Codex and Grok receive `--no-alt-screen` when their installed CLI advertises it in `--help`; OpenCode receives `--mini` when available. On Windows, the probe selects an executable `.exe` or `.cmd` launcher ahead of an extensionless npm shell shim. TUICommander checks the executable with a two-second deadline and shares concurrent checks. A timed-out check is not retried until that binary changes; a quick inconclusive exit is retried after a short cooldown. Older versions still start without an unsupported option. Existing flags are not duplicated. Rust applies the same policy to structured IPC, HTTP and MCP launches and exports it to new TUIC shells, where zsh, bash and fish wrappers apply it to commands typed manually. `command <agent>` bypasses those wrappers, but not the launch-instructions shim. Reopen an existing shell after changing the setting. In typed OpenCode commands, `--mini` applies to interactive launches (bare, options or a project path), and skips all recorded subcommands and aliases, including `mcp list` and `run`. Goose wrappers omit TUIC `--name` when arguments include `--no-session`, `--name NAME`, `--name=NAME`, `-n NAME`, `-nNAME`, `--path PATH`, `--path=PATH`, `--resume` or `-r`. Normal `session` and `run` launches retain tab naming.
 
 Gemini currently defaults to the primary screen (`ui.useAlternateBuffer: false`), Cursor enables fullscreen only when requested, and pi defaults to regular TUI mode. Other agents without a documented alternate-screen control keep their own defaults. If an agent enters the alternate screen despite these defaults, TUICommander records one warning for that session with the agent name and detected version.
 
@@ -55,7 +57,6 @@ TUICommander auto-detects which agent is running in each terminal by matching ou
 
 - **Claude Code**: Middle dot `·` (U+00B7), dingbat asterisks `✢` `✳` `✶` `✻` `✽` (U+2720–273F), or ASCII `*`
 - **Copilot CLI**: Therefore sign `∴` (U+2234), filled circle `●` (U+25CF), empty circle `○` (U+25CB)
-- **Aider**: Knight Rider scanner blocks `░█`
 - **Gemini CLI / Amazon Q / Cline**: Braille spinners `⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`
 - **Codex CLI**: Bullets `•` `◦`
 
@@ -138,9 +139,23 @@ For Claude, `awaiting` also covers **MCP elicitation** — the dialog an MCP ser
 | Codex | `~/.codex/hooks.json` + `~/.codex/config.toml` (`[features] hooks = true`) | Supported |
 | Grok | `~/.grok/hooks/tuic.json` (own file) | Supported |
 | OpenCode | `~/.config/opencode/plugin/tuic.ts` (Bun/TS plugin) | Supported |
-| Others (Aider, Amp, Cursor, Goose, Droid, pi) | — | No TUIC-managed hook system — stays heuristic |
+| Others (Amp, Cursor, Goose, Droid, pi) | — | No TUIC-managed hook system — stays heuristic |
 
 > **Platform note:** Hook instrumentation is **macOS/Linux only** — it resolves the controlling tty via `ps`/`/dev/tty`, which has no Windows equivalent. On Windows the toggle is hidden and agents keep heuristic detection (no regression).
+
+### Codex terminal Chat
+
+Codex terminals offer **CLI | Chat** after trusted native hooks identify their
+own conversation. Install or update TUIC's Codex hooks through the existing
+hook-instrumentation setting/API, enable native hooks in Codex, and accept
+Codex's hook trust prompt before launching a new session. Codex 0.162.1 is
+verified. The launch-scoped status notification alone cannot enable Chat.
+
+Each tab reads only the rollout whose native session id and cwd match that tab.
+An ID inferred from the newest file, including a restored resume ID, never
+enables Chat. Missing/untrusted hooks, unsupported versions, Windows and remote
+terminals leave Chat unavailable. Session replacement resets the conversation;
+process exit or return to the shell retracts the binding.
 
 ## Usage Limit Tracking
 
@@ -148,8 +163,8 @@ For Claude Code, TUICommander detects weekly and session usage limit messages fr
 
 - **Unified agent badge** — When Claude is the active agent, the status bar shows a single badge combining the agent icon with usage data. The badge displays rate limit countdowns (when rate-limited), Claude Usage API data (5h/7d utilization percentages), or terminal-detected usage limits, in that priority order.
   - Blue: < 70% utilization
-  - Yellow: 70–89%
-  - Red (pulsing): >= 90%
+  - Yellow: 70–95%
+  - Red (pulsing): >= 96%
 - Clicking the badge opens the Claude Usage Dashboard.
 
 The API quota follows the focused Claude session's `CLAUDE_CONFIG_DIR`. Switching between Claude sessions using different accounts updates the badge. If the session's profile or its credentials cannot be read, the badge shows unknown rather than the default account's quota.
@@ -242,6 +257,9 @@ claude --session-id $TUIC_SESSION   # explicit, wrapper bypassed
 
 Claude Code stores the session locally. When you restart TUICommander and switch to this branch, the session resumes automatically via `claude --resume <uuid>`.
 
+Goose returns to idle after a reply when its ready composer appears, so you can send the next prompt without waiting for stale-state recovery.
+
+
 **Automatic session binding (Goose):**
 
 Shell integration injects `--name $TUIC_SESSION` into `goose session` and `goose run` subcommands. The wrapper is bypassed when you explicitly pass `--name`, `-n`, `--resume`, or `-r`.
@@ -311,7 +329,7 @@ This is useful for enabling feature flags (e.g., `CLAUDE_CODE_EXPERIMENTAL_AGENT
 ## Tips
 
 - **Multiple agents on the same repo** — Use split panes (`Cmd+\`) to run two agents side by side on the same branch
-- **Different agents per branch** — Each worktree is independent, so you can run Claude on one branch and Aider on another
+- **Different agents per branch** — Each worktree is independent, so you can run Claude on one branch and Codex on another
 - **Monitor all at once** — Use the Activity Dashboard (`Cmd+Shift+A`) to see every terminal's agent status in one view
 
 ### ego launch permissions

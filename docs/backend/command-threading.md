@@ -1,5 +1,9 @@
 # Command threading
 
+## Plugin settings
+
+`plugin_settings_action` is async. Service reads and locked transactions run through spawn_blocking; apply only publishes the existing plugin reload event. Existing synchronous plugin registration performs its small private-file migration before granting capabilities.
+
 Where a `#[tauri::command]` runs, and how to decide for a new one.
 
 ## The rule
@@ -88,6 +92,8 @@ unnoticed.
 `fs.rs`: `write_file`, `write_file_if_unchanged`, `create_directory`, `delete_path`, `rename_path`,
 `copy_path`, `copy_path_abs`, `move_path_abs`, `add_to_gitignore`,
 `fs_read_file`, `list_directory`, `search_files`.
+`work_items/start_work_prompt.rs`: `build_start_work_prompt` uses the same
+`spawn_blocking_fs` lane to read and expand repository brief templates.
 `lib.rs`: `read_file`, `read_editor_file`, `read_external_file`,
 `read_editor_file_external`, `write_external_file`.
 `ai_agent/tools.rs`: `read_file`, `write_file`, `edit_file`, `list_files`,
@@ -160,6 +166,19 @@ Each `--help` probe owns a process group on Unix or a Job Object on Windows,
 so timeout cleanup includes descendants of a launcher script. A timeout is
 cached as unsupported for that binary's path, size and modification time;
 quick inconclusive exits remain retryable after a short cooldown.
+
+### Orphan removal (1638-c94c)
+
+`remove_orphan_worktree` now uses `async fn` and `spawn_blocking` for its entire
+shared removal helper, including path validation, live-session safety checks,
+git subprocesses, recursive deletion and cache invalidation. Its HTTP route
+already used the blocking pool. Arguments, safety rules and result shapes are
+unchanged. The module-boundary regression checks the desktop command placement.
+
+Retained macOS logs show a heartbeat gap on 2026-10-13 while sequential worktree
+removals ran on `ThreadId(01)`. This is correlation, not a captured replay or
+proof that this command caused that historical gap. Live desktop confirmation
+requires Boss to restart the build; no second desktop instance was launched.
 
 ### Known gaps, with reasons
 
@@ -290,3 +309,15 @@ matching its HTTP twin and `finalize_merged_worktree`.
 the platform launcher, and hands spawn/wait ownership to the shared
 `tuic_core::child_reaping::spawn_reaped` thread. It never waits for application
 exit on the command caller.
+
+`work_item_provider_bridge` is synchronous: it atomically claims/completes an in-memory request and checks the cached write opt-in. Provider/network work is asynchronous in the frontend adapter; no filesystem or network work runs in this IPC handler.
+
+Desktop close policy: `request_quit` selects a policy action on the main thread without disk I/O. `resolve_close` saves Remember through `spawn_blocking`; real quit closes PTYs through `spawn_blocking` before calling `AppHandle::exit(0)`.
+
+`list_open_markdown_tabs` is async and reads repository configuration through
+`spawn_blocking`. `sync_open_markdown_tabs` only updates an in-memory metadata
+snapshot and emits invalidation; it does no file I/O.
+
+### Suspended tabs (2026-10-14)
+
+The async `suspended_session_action` command and its HTTP route both call `suspended_routes::dispatch`, which owns `spawn_blocking`. Config locking, agent-store verification, process discovery and PTY creation run on the blocking pool. MCP suspend uses the same blocking Rust owner and never waits for a frontend verdict.

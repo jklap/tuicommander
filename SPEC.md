@@ -1,5 +1,11 @@
 # TUICommander Specification
 
+Plugin settings (Step 5, #1785-c7a1): loaded plugins register complete scoped schemas and typed private-file owners; patches preserve siblings, redact secrets and schedule reload. Core migrations cover build-cleaner, at-capacity-retry, cache-keepalive, claude-wakeup and the Telegram notifier example. Unload revokes catalogue entries and write authority. General settings MCP cutover remains separate.
+
+Settings policy (Step 6, #1786-9cbd): the shared service/registry enforce host-issued origin context, write-only reads, and backend-built exposure/execution proposals. Only the existing human confirmation channel grants a connection/target/revision/content-bound approval, consumed once within 300 seconds. No lock spans the wait; failed, refused, disconnected or expired proposals write nothing. The explicit host scope covers remote services, trusted/custom executables, stdio execution selection and tunnel port/auto-connect; ordinary settings remain immediate. Transport publication remains Step 7.
+
+Desktop close policy (B1, #1802-e6b8): Rust owns `app.close_behavior` (`ask` default, `background`, `quit`). Ask offers Remember; Background hides main only. Explicit Quit uses `confirm_before_quit` and closes live PTYs in Rust. Detached panels close independently. Tray and WebView unload belong to later stages.
+
 Agent capture tooling: `scripts/agent_capture/run.py` records real installed CLIs through isolated headless sessions, promotes reviewed captures with ordered expected states, and integrates with the 1342 replay oracle. Missing or unauthenticated CLIs remain unverified.
 
 
@@ -49,7 +55,7 @@ The query controller keeps at most 32 cached pages, ignores obsolete requests,
 and labels retained rows stale after an error. Mounting the Tasks shell is a
 separate integration step.
 
-TUICommander is a multi-agent terminal orchestrator designed to manage supported AI coding agents, including Claude Code, Gemini CLI, OpenCode, Aider, and Codex, in parallel. It provides per-pane zoom, git worktree isolation, and GitHub integration.
+TUICommander is a multi-agent terminal orchestrator designed to manage supported AI coding agents, including Claude Code, Gemini CLI, OpenCode, and Codex, in parallel. It provides per-pane zoom, git worktree isolation, and GitHub integration.
 
 ## Goals
 
@@ -260,7 +266,7 @@ See `src/hooks/` for full signatures — the above is a representative summary.
 ## Agent Types
 
 ```typescript
-type AgentType = "claude" | "gemini" | "opencode" | "aider" | "codex" | "amp" | "cursor" | "goose" | "grok" | "droid" | "pi" | "git" | "api";
+type AgentType = "claude" | "gemini" | "opencode" | "codex" | "amp" | "cursor" | "goose" | "grok" | "droid" | "pi" | "git" | "api";
 ```
 
 Full agent configuration (binary, resume command, session discovery, detection patterns) lives in `src/agents.ts`.
@@ -639,7 +645,7 @@ Some frontend-only stores persist to localStorage:
 ### Completed (P2)
 - [x] Terminal HTTP(S) link menu starts Design Mode with the owning agent and exact URL; HTTP/IPC optional `url` and MCP `design_mode` start/stop/status share the lifecycle. Agents use URL-aware start as the default path for layout work.
 - [x] Design Mode extension heartbeat: every 5 seconds, expiry after 60 seconds without a beat (600 seconds before the first beat), and MCP `design_mode action=reload` delivered on the next heartbeat.
-- [x] Design Mode v2 pilot: dedicated Chrome/Edge profile, unpacked extension sidebar, explicit picking, per-pick comments, launching-agent default, same-repository recipient selection, native messaging, idle-gated Send and live dev-server discovery; native Edge validation remains tracked in to-test.md
+- [x] Design Mode v2 pilot: dedicated browser profile with automatic extension loading on cold Edge starts (running profiles must close first; branded Chrome reports an unsupported-autoload error), extension sidebar, explicit picking, per-pick comments, launching-agent default, same-repository recipient selection, native messaging, idle-gated Send and live dev-server discovery; native Edge validation remains tracked in to-test.md
 - [x] Split pane layout
 - [x] Touch branch action trays: left swipe reveals existing actions; vertical scrolling and desktop hover controls remain unchanged
 - [x] Multi-repository sidebar
@@ -659,6 +665,9 @@ Some frontend-only stores persist to localStorage:
 - [x] Tab bar with keyboard navigation
 - [x] Density modes for readability
 - [x] Terminal Find routes to the visible CLI buffer or Chat transcript; Chat supports next/previous selected matches and switching views closes search and clears highlights (#1633-f2cc).
+- [x] Answer surfaces use a green left rule without a background tint; Paper uses its darker success green for the rule; paragraph spacing and user-question styling stay unchanged (#1896-f355).
+- [x] Terminal Chat groups answer blocks into one reading-width card per turn, copies the whole card, compresses terminal pastes and system notices, and keeps the collapsed tool row with Claude Bash descriptions. Turn separators are omitted until transcript timestamps reach the frontend (#1832-b19a).
+- [x] Terminal Compose accepts ordered image drops and an image-only multi-file picker through the existing paste save path. Drop inserts at the pointer; unsupported images and failed saves show an error.
 - [x] Terminal Chat uses focused, docked Compose input with existing send/queue semantics; CLI open/pin preferences and shared unsent drafts survive view switches. Permission prompts remain in CLI.
 - [x] Terminal selection copy unwraps soft-wrapped rows, removes coherent Claude visual gutters and composer margins, and preserves literal block characters, pasted prompt glyphs, and short typed line breaks
 - [x] Status bar with branch and PR info
@@ -698,8 +707,11 @@ Some frontend-only stores persist to localStorage:
 - [x] Connected daemon MCP toasts reach the desktop Messages bell with host attribution, original level/sound and safe remote-terminal navigation; no disconnected replay
 - [x] Remote access / HTTP server
 - [x] SSH-managed remote daemon deployment, idle lifetime, pairing-token vaulting, and systemd/launchd installation
+- [x] Mobile terminal prompt keyboard correction defaults on, with a device-local Settings toggle for autocorrect, spellcheck and sentence capitalization (#1878-3a3c).
 - [x] Mobile terminal Ctrl menu (Ctrl+C, Ctrl+B, Ctrl+D, agent-aware Ctrl+Enter)
 - [x] Mobile Send long-press Queue transfers the live draft to the shared server ready-window queue; taps still submit immediately.
+- [x] Session uploads live under TUIC data, with launch grants and session-end cleanup; startup reclaims only provably dead owners, preserving concurrent instances; ego invocation-scoped binary-file read roots remain unsupported (#1833-aa60).
+- [x] Shared mobile composer + menu: attach file, camera capture, supported queue/commands and Chat draft parking; browser mic inside the text box (#1880-d7ff).
 - [x] Mobile Companion PWA (searchable sessions, live output, question reply including Codex interactive choices, activity feed)
   - [x] Compact bare attachment icon left of the session composer; smaller mic and Send sit inside its right border (#1719-ff5d)
   - [x] Files tree search, hidden-folder ordering, long-path preview, and full-height wrapped editing
@@ -991,3 +1003,76 @@ repair Git and submodule paths; preserve ignored artifacts and publish lifecycle
 ## Beta update channel (#1813-4bdf)
 
 The Beta channel checks a rolling signed manifest published only after the versioned beta release finishes. It also checks stable and selects the newer version, so beta users receive the final release. Stable users retain the stable endpoint. New beta installs default to Beta; explicit saved settings are preserved. Beta installers stay on the immutable versioned release and open in the browser; stable installs use the existing in-app updater.
+
+### Repository settings owner coverage
+
+Implemented internal `repo_defaults` and `repo_local` adapters (#1825-4566). Repository targets resolve through one owner per store, with existing fixed-target adapters unchanged. `.tuic.json` writes use the shared locked file owner; arbitrary unregistered targets are rejected. Transport cutover remains pending. `repositories_registration` is an accepted inventory gap until registration/group runtime identities and delta-save contracts have a typed owner schema.
+
+GitHub settings owner adapter (1774-ce8f): internal typed read/perform actions use
+the existing GitHub/account owners for authentication, credential handling and
+removal effects. Bindings require a registered repository, matching remote host
+and a current binding revision. Reads expose presence and runtime provenance.
+The shared settings transport cutover and refresh publisher remain separate steps.
+
+## Ego settings owner adapters (#1775-330c)
+
+The internal `ego` settings store is bound to one configured profile (or the user
+base). Managed keys use the trusted Ego CLI with the AI Chat workspace as cwd,
+then read back stored values. Provider selection is the model slug prefix.
+Credential reads expose stored presence only through `ego auth status`.
+Managed keys are `model`, `roots` and `network`. Launch defaults stay in the
+`app` store; executable writes await Step 6 confirmation. Existing ACP/PTY sessions
+keep their launch state. Transport publication remains a later integration step.
+Unsupported auth overrides and exec_paths stay in the owner-gap ledger. Multi-key
+changes are refused before writing; cross-process conditional writes await an Ego
+owner API. These are explicit limits rather than raw-file fallback paths.
+
+Tasks field schemas declare sort, filter and group capabilities; display-only fields disable all three while roadmap dates remain available. Setup edits preserve account keys outside the form and clear blank optional form fields. Create-form filter choices require exact field IDs.
+
+Tasks board paging (#1844-858d): lane headers show loaded counts, with More controls for the provider’s shared board cursor. Appended pages deduplicate cards by provider/account/item identity. Cards show assignees and labels; a Move button opens legal destination actions with keyboard navigation and rollback on failure. Refresh after a move merges page one into loaded cards; later pages remain cached until reload. Scrolling inside the move menu keeps it open.
+
+## Tasks view memory
+
+Tasks remembers the selected source per repository and List, Board or Roadmap plus list grouping, sort, preset, search and filters per repository/provider/account. The existing `uiStore` saves these preferences through `load_ui_prefs` and `save_ui_prefs` in `ui-prefs.json`. Results and page cursors remain transient. A rejected saved sort retries the last accepted order, then the provider default. Other query failures keep their error and Retry control. An unsaved scope keeps the normal defaults.
+
+## Tasks MCP access (#1854-4960)
+
+The MCP repo tool adds `work_item` and `work_item_act`. Rust resolves the caller's worktree link or an explicit reference, URL or account-scoped key, validates DTOs and gates comment/transition writes with `mcp_work_item_writes` (default false). A typed event/claim/reply bridge dispatches to existing frontend provider ports. Claims prevent duplicate actions across frontend clients. Detail and paged comments return as JSON inside the start-work untrusted-content block; forged tags are escaped. Account credentials remain in the existing Rust HTTP injection/redaction boundary. Raw provider errors do not reach MCP. Providers require a connected frontend; a bare headless daemon reports timeout. A timed-out write must be read back before retrying.
+
+### Mobile desktop Markdown tabs (#1879-05ad)
+
+Implemented: session overflow lists the desktop’s open file-based Markdown tabs
+for the registered session repository, with titles and relative paths. Entries
+open the existing mobile viewer from their original workspace. A temporary Rust
+snapshot receives desktop metadata; the read-only HTTP list shares remote auth,
+and SSE invalidation updates open menus without a page reload. Virtual/plugin
+panels and document contents are excluded. The iPhone visual check remains manual.
+
+### Background tray and menu-bar icon
+
+Background tray (B3): implemented. Native tray/menu-bar status reads current backend SessionState on transitions, with Show and explicit Quit using the shared background lifecycle. Tray preference defaults to background_only; never prevents hiding. Missing native tray support minimizes instead. Native template appearance and desktop-host integration require verification after a rebuild; WebView unload and hibernation remain separate work.
+
+Tasks list controls use provider-declared field sort, group and filter capabilities.
+A rejected selection restores the last successful sort, group and filter controls, keeps attempted search text for Retry, and shows the provider reason.
+
+Tasks small-list mode (#1851-7ade): when the provider reports at most 1,000 matches, Tasks collects the complete search/preset scope and uses the Rust projection for all-field sort, group and filter. A changed total, missing rows or a nonterminal cursor cannot establish completeness. Unknown totals and larger lists keep provider-supported server controls. No extra cache or persisted state is added.
+
+GitHub Tasks boards (#1846-55d7): the optional provider `listBoards(signal)` port discovers the current user Projects v2 when Board opens. The existing picker selects a project; paging preserves project identities. Missing `read:project` stays visible instead of claiming there are no boards. Providers without discovery retain their configured boards. Discovery does not persist selections or write to GitHub.
+
+Design Mode agent browser commands use bounded per-repository native-port requests
+and UUID replies, with ten-second timeouts and Stop cancellation. The extension
+owns reviewed-tab and host-permission checks. Eval needs explicit optional-origin
+consent, including all-sites consent. The legacy heartbeat restart identity and
+navigation sequences remain unchanged. Browser screenshot/client-refresh reality
+verification is still required before story 1724-fe7e can close.
+
+### Rust-owned suspended tabs
+
+Tab suspension is owned by Rust and remains available with no UI attached. Durable config records keyed by `tuic_session` survive document recreation and process restart, retaining agent/profile, cwd/worktree, alias and pane placement. Rust verifies resume commands and opens the replacement PTY; the frontend renders records and attaches the returned session. Lifecycle events are available over IPC and SSE.
+
+## Plugin settings pages
+
+Loaded plugins with registered settings appear under Settings > Integrations. Search includes their catalogue field labels. Unloading removes the page and search entries. Reads, revision-checked edits, resets and secret set/unset status use the scoped Rust settings service; the UI owns no second configuration store.
+
+
+Shared wake (B6, #1807-4f1f): `session_wake::ensure_live` serializes durable resume with suspension. Tab open, submit and peer mail use this path; input waits in the existing ready-window queue. Failed creation retains the durable tab. IPC `resume_session` maps to `POST /sessions/wake`; MCP list/status expose retained sessions as `hibernated`.

@@ -176,7 +176,7 @@ agent-client-protocol = { version = "=2.0.0", features = [
     "unstable_mcp_over_acp",
     "unstable_session_fork",
 ] }
-tauri = { version = "2", features = ["protocol-asset"], optional = true }
+tauri = { version = "2", features = ["protocol-asset", "tray-icon", "image-png"], optional = true }
 tauri-plugin-opener = { version = "2", optional = true }
 # `rc` (Serialize for Arc<T>) is required by AppEvent::PtyParsed, which carries its
 # payload behind an Arc so the three broadcast lanes share it instead of deep-cloning
@@ -300,10 +300,13 @@ ssh2-config = "0.7"
 [features]
 default = ["desktop"]
 desktop = [
+    "dep:gio",
     "tuic-core/audio-output",
     "dep:chromey",
     "dep:sourcemap",
     "dep:tauri",
+    "dep:webview2-com",
+    "dep:windows-core",
     "dep:tauri-build",
     "dep:tauri-plugin-opener",
     "dep:tauri-plugin-dialog",
@@ -335,6 +338,9 @@ cuda = ["dictation", "tuic-dictation/cuda"]
 vulkan = ["dictation", "tuic-dictation/vulkan"]
 tokio-console = ["console-subscriber"]
 
+[target.'cfg(target_os = "linux")'.dependencies]
+gio = { version = "0.18", optional = true }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { version = "0.6", optional = true }
 mac-notification-sys = { version = "0.6.15", optional = true }
@@ -343,6 +349,8 @@ objc2-app-kit = { version = "0.3", features = ["NSEvent", "block2"], optional = 
 block2 = { version = "0.6", optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
+webview2-com = { version = "0.39.1", optional = true }
+windows-core = { version = "0.62.2", optional = true }
 # CPU-only on Windows: the Vulkan backend (vulkan-shaders-gen) fails to build on
 # the CI runner. Dictation runs on CPU; re-enable "vulkan" only once the
 # whisper.cpp Windows shader build is stabilized.

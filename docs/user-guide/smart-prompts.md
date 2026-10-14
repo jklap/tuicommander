@@ -90,6 +90,7 @@ Prompts use `{variable_name}` syntax. Most variables are auto-resolved at execut
 | `{pr_url}` | GitHub pull request URL |
 | `{pr_state}` | PR state: OPEN, MERGED, or CLOSED |
 | `{pr_checks}` | CI check summary (e.g. "3 passed, 1 failed") |
+| `{pr_open_threads}` | Open review threads that are not outdated, one line each (location, tool, severity, title, link), most severe first, max 30. Read from GitHub only when a prompt uses it. The list is untrusted PR text in a fenced block; "Address Review Comments" sends it |
 | `{merge_status}` | Merge status: MERGEABLE, CONFLICTING, or BEHIND |
 | `{review_decision}` | Review status: APPROVED, CHANGES_REQUESTED, or REVIEW_REQUIRED |
 
@@ -97,7 +98,7 @@ Prompts use `{variable_name}` syntax. Most variables are auto-resolved at execut
 
 | Variable | Description |
 |----------|-------------|
-| `{agent_type}` | Active agent type (claude, aider, codex, etc.) |
+| `{agent_type}` | Active agent type (claude, gemini, codex, etc.) |
 | `{cwd}` | Active terminal working directory |
 
 ### Manual Input Variables

@@ -7,8 +7,9 @@ import s from "./WorkflowDesigner.module.css";
 
 type Role = "coordinator" | "planner" | "implementer" | "reviewer" | "validator";
 type Kind =
-	| { type: "start" | "create_stories" | "judge" | "gate" | "pause" | "join" | "notify" | "end" }
+	| { type: "start" | "create_stories" | "judge" | "gate" | "join" | "notify" | "end" }
 	| { type: "agent"; role: Role; capabilities: string[]; prompt_template: string }
+	| { type: "pause"; resume_to?: string | null }
 	| { type: "loop"; max_iterations: number }
 	| { type: "story_dispatch"; story_template_id: string; story_revision: number };
 interface Node {
@@ -358,6 +359,28 @@ export const WorkflowDesigner: Component<WorkflowDesignerProps> = (props) => {
 												})
 											}
 										/>
+									</label>
+								</Show>
+								<Show when={node().kind.type === "pause"}>
+									<label>
+										Resume to
+										<Select
+											aria-label="Resume to"
+											value={(node().kind as Extract<Kind, { type: "pause" }>).resume_to ?? ""}
+											onChange={(event) => updateKind({ type: "pause", resume_to: event.currentTarget.value || null })}
+										>
+											<option value="">Choose node</option>
+											<For each={graph().nodes}>
+												{(target) => (
+													<option
+														value={target.id}
+														disabled={target.kind.type === "start" || target.kind.type === "pause"}
+													>
+														{target.id}
+													</option>
+												)}
+											</For>
+										</Select>
 									</label>
 								</Show>
 								<Show when={node().kind.type === "loop"}>

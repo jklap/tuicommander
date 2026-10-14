@@ -20,7 +20,6 @@ submit command. Ordinary Enter remains available separately.
 | pi | 0.84.2 | ignored | ignored | newline | submit | LF |
 | ego terminal CLI | 0.1.0 | ignored | ignored | submit | submit | LF |
 | Gemini | not installed | unverified | unverified | documented newline | documented submit | CSI-u, native intent unverified |
-| Aider | not installed | unverified | unverified | unverified | mode-dependent | CSI-u, native intent unverified |
 | Amp | not installed | unverified | unverified | documented newline | documented submit | LF, documented fallback |
 | Cursor agent | not installed | unverified | unverified | documented newline | documented submit | LF, documented fallback |
 | Droid | not installed | unverified | unverified | changelog shortcut | documented submit | CSI-u, native intent unverified |
@@ -30,13 +29,12 @@ submit command. Ordinary Enter remains available separately.
 An unverified conservative mapping can be ignored by the target. It preserves
 modified-key intent without pretending a plain Enter is equivalent. Gemini's
 native Ctrl+Enter is documented as newline, but its byte spelling was not
-verified locally. Aider multiline mode changes Enter behavior. Droid Ctrl+J
+verified locally. Droid Ctrl+J
 opens the changelog, so LF is deliberately not used there.
 
 Vendor references consulted:
 
 - [Gemini keyboard shortcuts](https://geminicli.com/docs/reference/keyboard-shortcuts/)
-- [Aider commands and multiline mode](https://aider.chat/docs/usage/commands.html)
 - [Amp CLI keybindings](https://ampcode.com/docs/cli/keybindings)
 - [Cursor terminal setup](https://prod.cursor.com/docs/cli/reference/terminal-setup)
 - [Droid quickstart](https://docs.factory.com/droid-cli/quickstart)

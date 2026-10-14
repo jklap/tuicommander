@@ -43,4 +43,34 @@ describe("groupByFile", () => {
 		const lines = groupByFile([], [draft]).get("b.ts")?.lines;
 		expect(lines?.newFile?.["9"]?.data.drafts).toEqual([draft]);
 	});
+
+	// Catches: a critical bot finding buried under nits because threads keep GitHub's order.
+	it("orders threads by finding severity, unrated last", () => {
+		const base = recordedPr(340803).threads[0];
+		const at = (id: string, severity: ReviewThread["finding"]) => ({
+			...base,
+			id,
+			path: "a.ts",
+			line: 3,
+			diffSide: "RIGHT" as const,
+			isOutdated: false,
+			finding: severity,
+		});
+		const rated = (severity: "critical" | "low") => ({
+			tool: "generic" as const,
+			title: null,
+			severity,
+			severityLabel: null,
+			category: null,
+			suggestion: null,
+			agentPrompt: null,
+			addressedIn: null,
+			externalId: null,
+		});
+		const threads = [at("none", null), at("low", rated("low")), at("crit", rated("critical"))];
+		const ids = groupByFile(threads, [])
+			.get("a.ts")
+			?.lines.newFile?.["3"]?.data.threads.map((t) => t.id);
+		expect(ids).toEqual(["crit", "low", "none"]);
+	});
 });

@@ -186,6 +186,7 @@ pub(super) async fn sse_events(
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let mut rx = state.event_bus.subscribe();
     let client_guard = SseClientGuard::new(state.clone());
+    let watch = crate::background_mode::hidden::RemoteWatch::new(state.clone(), None);
     let initial_types: Option<Vec<String>> = query.types.map(|t| {
         t.split(',')
             .map(|s| s.trim().to_string())
@@ -206,6 +207,7 @@ pub(super) async fn sse_events(
 
     let stream = async_stream::stream! {
         let _client_guard = client_guard;
+        let _watch = watch;
         // Moved in so it lives exactly as long as the stream does.
         let _filter_guard = filter_guard;
         // Send retry directive as first event
@@ -278,6 +280,9 @@ pub(crate) fn event_type_name_for_test(event: &AppEvent) -> &str {
 
 fn event_type_name(event: &AppEvent) -> &str {
     match event {
+        AppEvent::WorkItemProviderRequest { .. } => "work-item-provider-request",
+        AppEvent::CloseDialog { .. } => "close-dialog",
+        AppEvent::BackgroundModeChanged { .. } => "background-mode-changed",
         AppEvent::HeadChanged { .. } => "head-changed",
         AppEvent::RepoChanged { .. } => "repo-changed",
         AppEvent::SessionCreated { .. } => "session-created",
@@ -293,7 +298,7 @@ fn event_type_name(event: &AppEvent) -> &str {
         AppEvent::PtyDescriptionChanged { .. } => "pty-description-changed",
         AppEvent::ChatViewChanged { .. } => "chat-view-changed",
         AppEvent::SessionRenamed { .. } => "session-renamed",
-        AppEvent::SessionSuspendRequested { .. } => "session-suspend-requested",
+        AppEvent::SessionSuspended { .. } => "session-suspended",
         AppEvent::TermAliasAssigned { .. } => "term-alias-assigned",
         AppEvent::PluginChanged { .. } => "plugin-changed",
         AppEvent::UpstreamStatusChanged { .. } => "upstream-status-changed",
@@ -303,6 +308,7 @@ fn event_type_name(event: &AppEvent) -> &str {
         AppEvent::McpConfirmResolved { .. } => "mcp-confirm-resolved",
         AppEvent::AcpNotice(_) => "acp-notice",
         AppEvent::RepositoriesChanged => "repositories-changed",
+        AppEvent::OpenMarkdownTabsChanged => "open-markdown-tabs-changed",
         AppEvent::DirChanged { .. } => "dir-changed",
         AppEvent::SessionWorktreeDeclared { .. } => "session-worktree-declared",
         AppEvent::WorktreeCreated { .. } => "worktree-created",
@@ -348,6 +354,11 @@ pub(crate) fn event_payload_for_test(event: &AppEvent) -> serde_json::Value {
 
 fn event_payload(event: &AppEvent) -> serde_json::Value {
     match event {
+        AppEvent::OpenMarkdownTabsChanged => serde_json::json!({}),
+        AppEvent::WorkItemProviderRequest {
+            request_id,
+            request,
+        } => serde_json::json!({"request_id":request_id,"request":request}),
         AppEvent::HeadChanged { repo_path, branch } => {
             serde_json::json!({ "repo_path": repo_path, "branch": branch })
         }
@@ -356,6 +367,7 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
         }
         AppEvent::SessionCreated {
             session_id,
+            tuic_session,
             cwd,
             agent_type,
             display_name,
@@ -363,6 +375,7 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
         } => {
             serde_json::json!({
                 "session_id": session_id,
+                "tuic_session": tuic_session,
                 "cwd": cwd,
                 "agent_type": agent_type,
                 "display_name": display_name,
@@ -426,12 +439,7 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
         } => {
             serde_json::json!({ "session_id": session_id, "name": name, "is_custom": is_custom })
         }
-        AppEvent::SessionSuspendRequested {
-            session_id,
-            request_id,
-        } => {
-            serde_json::json!({ "session_id": session_id, "request_id": request_id })
-        }
+        AppEvent::SessionSuspended { record } => serde_json::json!({"record": record}),
         AppEvent::TermAliasAssigned { session_id, alias } => {
             serde_json::json!({ "session_id": session_id, "alias": alias })
         }
@@ -557,7 +565,9 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
         AppEvent::RemoteConnectionStatusChanged { payload } => payload.clone(),
         // The daemon's own body, untouched.
         AppEvent::RemoteMirrored { payload, .. } => payload.clone(),
-        AppEvent::AutomationRunChanged { payload } => payload.clone(),
+        AppEvent::AutomationRunChanged { payload }
+        | AppEvent::CloseDialog { payload }
+        | AppEvent::BackgroundModeChanged { payload } => payload.clone(),
         // Built once by the producer and handed to both transports, for the
         // same reason as `SessionStateChanged` above: the frontend applies one
         // shape, and a pair built from separate code in separate files drifts.
@@ -764,6 +774,7 @@ mod tests {
     fn session_created_preserves_stable_display_name() {
         let event = AppEvent::SessionCreated {
             session_id: "session-1".into(),
+            tuic_session: Some("stable-identity".into()),
             cwd: Some("/repo".into()),
             agent_type: Some("codex".into()),
             display_name: Some("linux-primary".into()),

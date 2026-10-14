@@ -16,7 +16,6 @@ describe("useAgentDetection", () => {
 			"claude",
 			"gemini",
 			"opencode",
-			"aider",
 			"codex",
 			"amp",
 			"cursor-agent",
@@ -56,7 +55,6 @@ describe("useAgentDetection", () => {
 				expect(map.get("claude")?.available).toBe(true);
 				expect(map.get("gemini")?.available).toBe(false);
 				expect(map.get("opencode")?.available).toBe(true);
-				expect(map.get("aider")?.available).toBe(false);
 				expect(map.get("codex")?.available).toBe(true);
 				expect(map.get("grok")?.available).toBe(false);
 				expect(map.get("pi")?.available).toBe(false);

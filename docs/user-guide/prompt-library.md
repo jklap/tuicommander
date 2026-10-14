@@ -103,7 +103,7 @@ The drawer closes automatically after a successful injection and focus returns t
 
 A lighter-weight alternative for per-branch one-off commands:
 
-- **Cmd+R** — Run the saved command for the active branch
-- **Cmd+Shift+R** — Edit the command before running
+- **Cmd+Shift+R** — Run the saved command for the active branch
+- **Cmd+R** — Reload the active web/preview tab
 
 Configure run commands in **Settings → Repository → Scripts** tab.

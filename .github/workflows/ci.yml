@@ -260,6 +260,11 @@ jobs:
       - name: Install launch-matrix shells
         run: scripts/install-launch-shells.sh
 
+      # The Ego settings fixture replay imports tomllib (Python 3.11+); 22.04 ships 3.10.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       - name: Install Rust ${{ env.RUST_VERSION }}
         uses: dtolnay/rust-toolchain@stable
         with:

@@ -122,13 +122,14 @@ describe("CommandWidget", () => {
 		});
 	});
 
-	it("does not render model section for aider", () => {
+	// Catches: removed harness commands remaining available on mobile terminals.
+	it("does not render agent commands or models for a removed harness", () => {
 		const { container } = render(() => <CommandWidget sessionId="s1" agentType="aider" onDismiss={() => {}} />);
 		const buttons = container.querySelectorAll("button");
 		const texts = Array.from(buttons).map((b) => b.textContent);
-		expect(texts).toContain("/clear");
-		expect(texts).toContain("/help");
-		expect(texts).toContain("/tokens");
+		expect(texts).not.toContain("/clear");
+		expect(texts).not.toContain("/help");
+		expect(texts).not.toContain("/tokens");
 		expect(texts).not.toContain("opus");
 	});
 

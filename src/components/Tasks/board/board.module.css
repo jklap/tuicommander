@@ -6,19 +6,32 @@
 .lane { display: flex; flex-direction: column; flex: 1 0 280px; min-width: 280px; min-height: 0; max-width: 400px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--radius-md); }
 .laneHeader { display: flex; align-items: center; justify-content: space-between; padding: 12px; border-bottom: 1px solid var(--border); }
 .laneHeader h3 { margin: 0; font-size: var(--font-sm); }
-.laneHeader span, .key { color: var(--fg-muted); font-family: var(--font-mono); font-size: var(--font-xs); }
+.laneHeader span, .key { color: var(--fg-secondary); font-family: var(--font-mono); font-size: var(--font-xs); }
 .laneScroll { flex: 1; overflow-y: auto; min-height: 0; padding: 8px; }
 .card { box-sizing: border-box; display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1px solid var(--border); border-bottom-width: 8px; border-radius: var(--radius-sm); background: var(--bg-tertiary); touch-action: pan-y; user-select: none; cursor: grab; }
 .card[aria-busy="true"] { opacity: 0.5; cursor: progress; }
-.key { padding: 0; border: 0; background: transparent; text-align: left; cursor: pointer; }
+.cardHead { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.key { padding: 0; border: 0; background: transparent; color: var(--fg-primary); text-align: left; cursor: pointer; }
 .title { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; text-align: left; padding: 0; border: 0; background: transparent; color: var(--fg-primary); font: inherit; font-size: var(--font-sm); cursor: pointer; }
-.card select { width: 100%; margin-top: auto; touch-action: auto; }
-.key:focus-visible, .card select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.key:focus-visible, .moveTrigger:focus-visible, .moveMenu button:focus-visible, .more:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .dropTarget { border-color: var(--accent); background: var(--bg-highlight); }
 .ghost { position: fixed; z-index: 1000; pointer-events: none; width: 256px; padding: 12px; color: var(--fg-primary); background: var(--bg-tertiary); border: 1px solid var(--accent); border-radius: var(--radius-sm); box-shadow: var(--shadow-popup); }
 .ghost p { margin: 8px 0 0; }
 .error { margin: 8px 16px; color: var(--error); font-size: var(--font-sm); }
-.empty { color: var(--fg-muted); text-align: center; font-size: var(--font-sm); }
+.empty { color: var(--fg-secondary); text-align: center; font-size: var(--font-sm); }
 .pending { color: var(--warning); font-size: var(--font-xs); }
 .announcement { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
-@media (max-width: 600px) { .lane { flex-basis: 85vw; min-width: 85vw; }  }
+@container (max-width: 600px) { .lane { flex-basis: 85cqw; min-width: 85cqw; }  }
+
+.metadata { display: flex; flex-wrap: wrap; align-content: flex-start; gap: 4px; max-height: 44px; overflow: auto; font-size: var(--font-xs); color: var(--fg-secondary); }
+.assignee, .label { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.assignee { padding: 0 4px; }
+.label { padding: 0 4px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-secondary); }
+.moveTrigger, .more, .moveMenu button { min-height: 28px; padding: 4px 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-secondary); color: var(--fg-primary); font: inherit; font-size: var(--font-sm); cursor: pointer; touch-action: auto; }
+.moveTrigger { align-self: flex-start; margin-top: auto; }
+.more { margin: 8px; }
+.moveTrigger:hover, .more:hover:enabled, .moveMenu button:hover:enabled { background: var(--bg-highlight); }
+.more:disabled, .moveMenu button:disabled { opacity: 0.5; cursor: not-allowed; }
+.moveMenu { position: fixed; z-index: 1000; display: flex; flex-direction: column; width: 200px; max-height: 184px; overflow-y: auto; gap: 4px; padding: 4px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-secondary); box-shadow: var(--shadow-dropdown); }
+.moveMenu button { text-align: left; flex-shrink: 0; }

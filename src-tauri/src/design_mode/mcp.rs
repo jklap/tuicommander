@@ -6,11 +6,12 @@ use std::sync::Arc;
 pub(crate) fn tool_definition() -> Value {
     json!({
         "name": "design_mode",
-        "description": "Start or stop Design Mode on the host. Use start with session_id and url as the default path for layout work: it binds the browser to the agent that printed the link and opens that HTTP(S) URL directly. Omit url to use dev-server discovery/onboarding. Requires a live terminal agent; an ACP coordinator should name the target terminal agent. stop, reload and navigate use repo_path from start/status; reload makes the browser reload the reviewed tab once, after you change the page; navigate opens url (HTTP(S) on localhost, 127.0.0.1 or [::1] only) in the reviewed tab once; status lists repository bindings. Browser extension setup is required once per repository profile.",
+        "description": "Start or stop Design Mode on the host. Use start with session_id and url as the default path for layout work: it binds the browser to the agent that printed the link and opens that HTTP(S) URL directly. Omit url to use dev-server discovery/onboarding. Requires a live terminal agent; an ACP coordinator should name the target terminal agent. stop, reload and navigate use repo_path from start/status; reload makes the browser reload the reviewed tab once, after you change the page; navigate opens HTTP(S) pages (local by default; remote hosts require an extension host grant); screenshot returns a PNG path; errors returns captured page errors; eval runs JavaScript only with an explicit optional host grant, including an all-sites grant. Browser commands return correlated replies within 10 seconds; status lists repository bindings. Browser extension setup is required once per repository profile.",
         "inputSchema": {"type":"object", "additionalProperties":false, "required":["action"], "properties": {
-            "action":{"type":"string","enum":["start","stop","status","reload","navigate"]},
+            "action":{"type":"string","enum":["start","stop","status","reload","navigate","screenshot","errors","eval"]},
             "session_id":{"type":"string","description":"Live agent PTY id, TUIC session, alias, unique prefix or display name; required for start"},
             "repo_path":{"type":"string","description":"Repository path returned by start/status; required for stop, reload and navigate"},
+            "script":{"type":"string","description":"JavaScript expression for eval; requires an explicit host permission grant"},
             "browser":{"type":"string","enum":["chrome","edge"]},
             "url":{"type":"string","description":"Absolute HTTP or HTTPS URL, including localhost, opened directly on start; for navigate, the page to open"}
         }}
@@ -54,12 +55,59 @@ async fn execute(state: &Arc<AppState>, args: &Value) -> Result<Value, String> {
             super::start(state, session, browser, url).await
         }
         Some("stop") => super::stop(state, &required("repo_path")?).await,
-        Some("reload") => super::reload(state, &required("repo_path")?).await,
-        Some("navigate") => {
-            super::navigate(state, &required("repo_path")?, &required("url")?).await
+        Some(action @ ("reload" | "navigate" | "screenshot" | "errors" | "eval")) => {
+            let repo = required("repo_path")?;
+            let fields = match action {
+                "navigate" => json!({"url":required("url")?}),
+                "eval" => json!({"script":required("script")?}),
+                _ => json!({}),
+            };
+            super::browser_command(state, &repo, action, fields).await
         }
         Some("status") => Ok(json!(super::statuses(state).await)),
         _ => Err("Choose Design Mode start, stop, status, reload or navigate".into()),
+    }
+}
+
+/// Fallback for clients that cache schemas: dispatch still rejects an unarmed caller.
+pub(crate) fn owns_repo(state: &Arc<AppState>, session: Option<&str>, repo: &str) -> bool {
+    #[cfg(feature = "desktop")]
+    {
+        state.design_mode.get().is_some_and(|manager| {
+            manager
+                .command_channels
+                .lock()
+                .unwrap()
+                .get(repo)
+                .is_some_and(|channel| Some(channel.session_id.as_str()) == session)
+        })
+    }
+    #[cfg(not(feature = "desktop"))]
+    {
+        let _ = (state, session, repo);
+        false
+    }
+}
+
+pub(crate) fn visible_to(state: &Arc<AppState>, session: Option<&str>) -> bool {
+    #[cfg(feature = "desktop")]
+    {
+        let Some(session) = session else {
+            return false;
+        };
+        state.design_mode.get().is_some_and(|manager| {
+            manager
+                .command_channels
+                .lock()
+                .unwrap()
+                .values()
+                .any(|channel| channel.session_id == session)
+        })
+    }
+    #[cfg(not(feature = "desktop"))]
+    {
+        let _ = (state, session);
+        false
     }
 }
 
@@ -90,6 +138,8 @@ mod tests {
                 "url must be a string",
             ),
         ] {
+            #[cfg(not(feature = "desktop"))]
+            let expected = "Design Mode requires the desktop host";
             assert_eq!(handle(&state, &args).await["error"], expected, "{args}");
         }
     }
@@ -106,5 +156,23 @@ mod tests {
                 .get("error")
                 .is_some()
         );
+    }
+
+    // Catches: an unarmed or different agent inheriting another session's browser tool.
+    #[cfg(feature = "desktop")]
+    #[tokio::test]
+    async fn tool_visibility_tracks_arm_rebind_and_stop() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        assert!(!visible_to(&state, Some("one")));
+        let manager = super::super::manager(&state).await;
+        manager.arm_extension("/repo".into(), "one".into()).await;
+        assert!(visible_to(&state, Some("one")));
+        assert!(!visible_to(&state, Some("two")));
+        assert!(!owns_repo(&state, Some("one"), "/other"));
+        manager.arm_extension("/repo".into(), "two".into()).await;
+        assert!(!visible_to(&state, Some("one")));
+        assert!(owns_repo(&state, Some("two"), "/repo"));
+        manager.stop("/repo").await.unwrap();
+        assert!(!visible_to(&state, Some("two")));
     }
 }

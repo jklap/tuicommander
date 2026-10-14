@@ -37,6 +37,24 @@ describe("agentConfigsStore", () => {
 	});
 
 	describe("hydrate()", () => {
+		// Catches: saved removed-agent settings failing load or remaining the headless selection.
+		it("loads saved aider settings without offering the retired headless agent", async () => {
+			const persisted = JSON.parse(
+				JSON.stringify({
+					...configWithClaude(),
+					headless_agent: "aider:Old profile",
+					agents: {
+						...configWithClaude().agents,
+						aider: { run_configs: [{ name: "Old profile", command: "aider", args: [], env: {} }] },
+					},
+				}),
+			);
+			const machine = createAgentConfigsStore({ load: async () => persisted, save: vi.fn() });
+			await expect(machine.hydrate()).resolves.toBeUndefined();
+			expect(machine.state.loaded).toBe(true);
+			expect(machine.getHeadlessAgent()).toBeNull();
+			expect(machine.getDefaultConfig("claude")?.command).toBe("claude");
+		});
 		it("reports a failed load and permits a later successful retry", async () => {
 			const load = vi
 				.fn()
@@ -157,7 +175,7 @@ describe("agentConfigsStore", () => {
 		it("returns undefined for agent with no configs", async () => {
 			await testInScopeAsync(async () => {
 				await hydrateWith({ agents: {} });
-				const def = store.getDefaultConfig("aider");
+				const def = store.getDefaultConfig("opencode");
 				expect(def).toBeUndefined();
 			});
 		});

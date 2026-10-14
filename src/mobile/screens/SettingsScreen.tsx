@@ -1,11 +1,13 @@
 import { createSignal, onMount, Show } from "solid-js";
 import { TelegramTab } from "../../components/SettingsPanel/tabs/TelegramTab";
 import { Select } from "../../components/ui/Select";
+import { t } from "../../i18n";
 import { appLogger } from "../../stores/appLogger";
 import { transcriptPreferences } from "../../stores/transcriptPreferences";
 import { KEEP_AWAKE_KEY } from "../../utils/screenWakeLock";
 import { setDesktopUI } from "../../utils/tabletRouting";
 import { loadMobileTheme, mobileTheme, setMobileTheme } from "../mobileTheme";
+import { useKeyboardCorrection } from "../useKeyboardCorrection";
 import { useMobileVoice } from "../useMobileVoice";
 import styles from "./SettingsScreen.module.css";
 
@@ -26,6 +28,7 @@ function urlBase64ToUint8Array(base64String: string): Uint8Array {
 type PushState = "unsupported" | "requires-https" | "requires-install" | "denied" | "default" | "subscribed";
 
 export function SettingsScreen(props: SettingsScreenProps) {
+	const keyboardCorrection = useKeyboardCorrection();
 	const voice = useMobileVoice(
 		() => "",
 		() => props.isConnected,
@@ -235,6 +238,23 @@ export function SettingsScreen(props: SettingsScreenProps) {
 				<div class={styles.row}>
 					<span class={styles.label}>Server version</span>
 					<span class={styles.value}>{serverVersion() ?? "Unavailable"}</span>
+				</div>
+			</section>
+
+			<section class={styles.section}>
+				<h3 class={styles.sectionTitle}>{t("mobile.settings.input", "INPUT")}</h3>
+				<div class={styles.row}>
+					<span class={styles.label}>{t("mobile.settings.keyboardCorrection", "Autocorrect and spellcheck")}</span>
+					<button
+						type="button"
+						class={styles.toggle}
+						classList={{ [styles.toggleOn]: keyboardCorrection.enabled() }}
+						aria-label={t("mobile.settings.keyboardCorrection", "Autocorrect and spellcheck")}
+						aria-pressed={keyboardCorrection.enabled()}
+						onClick={keyboardCorrection.toggle}
+					>
+						<span class={styles.toggleThumb} />
+					</button>
 				</div>
 			</section>
 

@@ -67,12 +67,24 @@ if [[ -n "$TUIC_SESSION" ]]; then
     command grok ${screen:+"$screen"} "$@"
   }
   opencode() {
-    local screen=$(__tuic_screen_arg "$TUIC_OPENCODE_SCREEN_FLAG" "$TUIC_OPENCODE_SCREEN_SKIP" "$@")
+    # Only the default project command starts the interactive TUI.
+    local a takes_value=0
+    for a in "$@"; do
+      if [[ "$takes_value" == 1 ]]; then takes_value=0; continue; fi
+      case "$a" in
+        --) break;;
+        __TUIC_OPENCODE_VALUE_OPTIONS__) takes_value=1;;
+        -*) ;;
+        __TUIC_OPENCODE_COMMANDS__) command opencode "$@"; return;;
+        *) break;;
+      esac
+    done
+    local screen=$(__tuic_screen_arg "$TUIC_OPENCODE_SCREEN_FLAG" "" "$@")
     command opencode ${screen:+"$screen"} "$@"
   }
   goose() {
     local a; for a in "$@"; do
-      case "$a" in --name|-n|--resume|-r) command goose "$@"; return;; esac
+      case "$a" in --name|--name=*|-n|-n?*|--path|--path=*|--resume|-r|--no-session) command goose "$@"; return;; esac
     done
     case "$1" in
       session|run) command goose "$1" --name "$TUIC_SESSION" "${@:2}";;
@@ -143,12 +155,24 @@ if [[ -n "$TUIC_SESSION" ]]; then
     command grok ${screen:+"$screen"} "$@"
   }
   opencode() {
-    local screen=$(__tuic_screen_arg "$TUIC_OPENCODE_SCREEN_FLAG" "$TUIC_OPENCODE_SCREEN_SKIP" "$@")
+    # Only the default project command starts the interactive TUI.
+    local a takes_value=0
+    for a in "$@"; do
+      if [[ "$takes_value" == 1 ]]; then takes_value=0; continue; fi
+      case "$a" in
+        --) break;;
+        __TUIC_OPENCODE_VALUE_OPTIONS__) takes_value=1;;
+        -*) ;;
+        __TUIC_OPENCODE_COMMANDS__) command opencode "$@"; return;;
+        *) break;;
+      esac
+    done
+    local screen=$(__tuic_screen_arg "$TUIC_OPENCODE_SCREEN_FLAG" "" "$@")
     command opencode ${screen:+"$screen"} "$@"
   }
   goose() {
     local a; for a in "$@"; do
-      case "$a" in --name|-n|--resume|-r) command goose "$@"; return;; esac
+      case "$a" in --name|--name=*|-n|-n?*|--path|--path=*|--resume|-r|--no-session) command goose "$@"; return;; esac
     done
     case "$1" in
       session|run) command goose "$1" --name "$TUIC_SESSION" "${@:2}";;
@@ -254,17 +278,34 @@ if set -q TUIC_SESSION
     command grok $screen $argv
   end
   function opencode --wraps opencode
+    # Only the default project command starts the interactive TUI.
+    set -l takes_value 0
+    for a in $argv
+      if test "$takes_value" = 1
+        set takes_value 0
+        continue
+      end
+      switch $a
+        case --
+          break
+        case __TUIC_OPENCODE_VALUE_OPTIONS_FISH__
+          set takes_value 1
+        case '-*'
+        case __TUIC_OPENCODE_COMMANDS_FISH__
+          command opencode $argv; return
+        case '*'
+          break
+      end
+    end
     set -l flag ''
-    set -l skip ''
     if set -q TUIC_OPENCODE_SCREEN_FLAG; set flag $TUIC_OPENCODE_SCREEN_FLAG; end
-    if set -q TUIC_OPENCODE_SCREEN_SKIP; set skip $TUIC_OPENCODE_SCREEN_SKIP; end
-    set -l screen (__tuic_screen_arg "$flag" "$skip" $argv)
+    set -l screen (__tuic_screen_arg "$flag" '' $argv)
     command opencode $screen $argv
   end
   function goose --wraps goose
     for a in $argv
       switch $a
-        case --name -n --resume -r
+        case --name '--name=*' '-n*' --path '--path=*' --resume -r --no-session
           command goose $argv
           return
       end
@@ -314,6 +355,21 @@ fi
 ext=md
 [ "$name" = codex ] && ext=toml
 file=${TUIC_AGENT_INSTRUCTIONS_DIR:+$TUIC_AGENT_INSTRUCTIONS_DIR/instructions-$name.$ext}
+if [ "$name" = gemini ]; then
+  [ -z "$TUIC_ATTACHMENTS_DIR" ] || set -- "--include-directories=$TUIC_ATTACHMENTS_DIR" "$@"
+  exec "$real" "$@"
+fi
+if [ "$name" = claude ]; then
+  case $1 in
+    ""|-*) ;;
+    remote-control) exec "$real" "$@";;
+    *)
+      help=$TUIC_CLAUDE_HELP
+      printf '%s\n' "$help" | awk '__TUIC_CLAUDE_HELP_USABLE__' || help=__TUIC_RECORDED_CLAUDE_HELP__
+      if printf '%s\n' "$help" | awk -v verb="$1" '/^Commands:/ {commands=1; next} commands && /^  [^ ]/ {split($1, names, "|"); for (i in names) if (names[i] == verb) found=1} END {exit !found}'; then exec "$real" "$@"; fi;;
+  esac
+  [ -z "$TUIC_ATTACHMENTS_DIR" ] || set -- "--add-dir=$TUIC_ATTACHMENTS_DIR" "$@"
+fi
 [ -n "$file" ] && [ -s "$file" ] || exec "$real" "$@"
 # True when an argument before a bare -- is one of $flags, alone or as flag=value.
 has_flag() {
@@ -327,14 +383,6 @@ has_flag() {
 }
 case $name in
   claude)
-    case $1 in
-      ""|-*) ;;
-      remote-control) exec "$real" "$@";;
-      *)
-        help=$TUIC_CLAUDE_HELP
-        printf '%s\n' "$help" | awk '__TUIC_CLAUDE_HELP_USABLE__' || help=__TUIC_RECORDED_CLAUDE_HELP__
-        if printf '%s\n' "$help" | awk -v verb="$1" '/^Commands:/ {commands=1; next} commands && /^  [^ ]/ {split($1, names, "|"); for (i in names) if (names[i] == verb) found=1} END {exit !found}'; then exec "$real" "$@"; fi;;
-    esac
     flags="-p --print --system-prompt --system-prompt-file --append-system-prompt --append-system-prompt-file"
     has_flag "$@" || exec "$real" --append-system-prompt-file "$file" "$@";;
   codex)
@@ -373,7 +421,7 @@ exec "$real" "$@"
 
 /// Agents the shim serves. OpenCode is absent: TUIC shells export its native
 /// `OPENCODE_CONFIG_CONTENT`, which reaches absolute-path launches too.
-const SHIM_AGENTS: [&str; 6] = ["claude", "codex", "grok", "goose", "pi", "ego"];
+const SHIM_AGENTS: [&str; 7] = ["claude", "codex", "grok", "goose", "pi", "ego", "gemini"];
 
 /// The marker file the shim looks for to skip a TUIC shim dir on `PATH`.
 const SHIM_FILE: &str = "tuic-agent-shim";
@@ -543,7 +591,11 @@ fn inject_screen_policy(
         return;
     }
     cmd.env(flag_key, flag);
-    if let Some(command) = skipped_command {
+    // OpenCode shell wrappers classify all verbs; the shared run exclusion
+    // remains relevant only to structured launches.
+    if agent_type != "opencode"
+        && let Some(command) = skipped_command
+    {
         cmd.env(skip_key, command);
     }
 }
@@ -559,10 +611,21 @@ fn write_if_changed(path: &Path, content: &str) -> bool {
     }
 }
 
+/// Subcommands and aliases advertised by the recorded OpenCode 2026-10-14 help.
+/// Shared by the three shell wrappers; paths such as `./mcp` remain interactive.
+const OPENCODE_COMMANDS: &str = "completion|acp|mcp|attach|run|debug|providers|auth|agent|upgrade|uninstall|serve|web|models|stats|export|import|github|pr|session|plugin|plug|db";
+
+/// Root options that consume a value in the same recorded OpenCode help.
+const OPENCODE_VALUE_OPTIONS: &str = "--log-level|--port|--hostname|--mdns-domain|--cors|-m|--model|-s|--session|--prompt|--agent|--replay-limit";
+
 /// Embed the recorded help as one shell-quoted value, shared by all wrappers.
 fn render_integration(template: &str) -> String {
     let help = crate::agent_hook_launch::RECORDED_CLAUDE_HELP.replace('\'', "'\\''");
     template
+        .replace("__TUIC_OPENCODE_COMMANDS__", OPENCODE_COMMANDS)
+        .replace("__TUIC_OPENCODE_COMMANDS_FISH__", &OPENCODE_COMMANDS.replace('|', " "))
+        .replace("__TUIC_OPENCODE_VALUE_OPTIONS__", OPENCODE_VALUE_OPTIONS)
+        .replace("__TUIC_OPENCODE_VALUE_OPTIONS_FISH__", &OPENCODE_VALUE_OPTIONS.replace('|', " "))
         .replace("__TUIC_RECORDED_CLAUDE_HELP__", &format!("'{help}'"))
         .replace(
             "__TUIC_CLAUDE_HELP_USABLE__",
@@ -815,10 +878,6 @@ mod tests {
             cmd.get_env("TUIC_OPENCODE_SCREEN_FLAG"),
             Some(OsStr::new("--mini"))
         );
-        assert_eq!(
-            cmd.get_env("TUIC_OPENCODE_SCREEN_SKIP"),
-            Some(OsStr::new("run"))
-        );
 
         inject_screen_policy(&mut cmd, &config, "codex", &unsupported.to_string_lossy());
         assert_eq!(cmd.get_env("TUIC_CODEX_SCREEN_FLAG"), None);
@@ -832,7 +891,6 @@ mod tests {
         );
         inject_screen_policy(&mut cmd, &config, "opencode", &supported.to_string_lossy());
         assert_eq!(cmd.get_env("TUIC_OPENCODE_SCREEN_FLAG"), None);
-        assert_eq!(cmd.get_env("TUIC_OPENCODE_SCREEN_SKIP"), None);
     }
 
     fn assert_wrapper_paths(shell: &str, script: &str) {
@@ -1252,6 +1310,37 @@ mod tests {
                 .to_string()
         }
 
+        // Catches: disabling marker instructions also drops Claude's attachment grant.
+        #[test]
+        fn claude_attachment_grant_survives_disabled_launch_instructions() {
+            let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+            let agents = crate::config::AgentsConfig {
+                launch_instructions: Some(String::new()),
+                ..Default::default()
+            };
+            crate::launch_instructions::write_files_with(
+                root.path(),
+                &crate::config::AppConfig::default(),
+                &agents,
+            )
+            .unwrap();
+            let instructions = root.path().join("agent-hooks").display().to_string();
+            let lines = wrapper_command_lines(
+                "bash",
+                &[
+                    ("TUIC_AGENT_INSTRUCTIONS_DIR", instructions.as_str()),
+                    ("TUIC_ATTACHMENTS_DIR", "/tuic/attachments/pty-settings-off"),
+                ],
+                "claude --model opus",
+            );
+            assert!(
+                lines[0]
+                    .split_whitespace()
+                    .any(|arg| arg == "--add-dir=/tuic/attachments/pty-settings-off"),
+                "disabling marker instructions removed attachment access: {lines:?}"
+            );
+        }
+
         /// Catches: a typed agent launched without the marker flag (fresh or
         /// resume), the flag on a headless or verb launch, or a second flag
         /// when the user already passed one.
@@ -1398,8 +1487,6 @@ mod tests {
                 ("TUIC_CODEX_SCREEN_FLAG", "--no-alt-screen"),
                 ("TUIC_CODEX_SCREEN_SKIP", "exec"),
                 ("TUIC_GROK_SCREEN_FLAG", "--no-alt-screen"),
-                ("TUIC_OPENCODE_SCREEN_FLAG", "--mini"),
-                ("TUIC_OPENCODE_SCREEN_SKIP", "run"),
             ];
             assert_in_shell(
                 shell,
@@ -1410,9 +1497,6 @@ mod tests {
                  codex --no-alt-screen --model o3\n\
                  grok --model fast\n\
                  grok --fullscreen --model fast\n\
-                 opencode --model fast\n\
-                 opencode run task\n\
-                 opencode --mini --model fast\n\
                  command codex --model o3",
                 &[
                     "--no-alt-screen --model o3",
@@ -1420,13 +1504,130 @@ mod tests {
                     "--no-alt-screen --model o3",
                     "--no-alt-screen --model fast",
                     "--no-alt-screen --fullscreen --model fast",
-                    "--mini --model fast",
-                    "run task",
-                    "--mini --model fast",
                     "--model o3",
                 ],
             );
         }
+
+        // Catches: --no-session is combined with TUIC's conflicting --name.
+        fn goose_no_session_preserves_stateless_argv(shell: &str) {
+            assert_in_shell(
+                shell,
+                "stateless Goose must not receive a session name",
+                &[],
+                "goose session --no-session\ngoose run --no-session -t task",
+                &["session --no-session", "run --no-session -t task"],
+            );
+        }
+
+        // Catches: attached names or legacy paths receive a duplicate/conflicting --name.
+        fn goose_explicit_name_or_path_preserves_argv(shell: &str) {
+            assert_in_shell(
+                shell,
+                "Goose explicit names and paths must not receive TUIC naming",
+                &[],
+                "goose run --name=work -t hi\n\
+                 goose session --name=work\n\
+                 goose run -nwork -t hi\n\
+                 goose session -nwork\n\
+                 goose run --path f.jsonl -t hi\n\
+                 goose session --path f.jsonl\n\
+                 goose run -t hi --path=f.jsonl\n\
+                 goose session --path=f.jsonl",
+                &[
+                    "run --name=work -t hi",
+                    "session --name=work",
+                    "run -nwork -t hi",
+                    "session -nwork",
+                    "run --path f.jsonl -t hi",
+                    "session --path f.jsonl",
+                    "run -t hi --path=f.jsonl",
+                    "session --path=f.jsonl",
+                ],
+            );
+        }
+
+        // Catches: suppressing stateless naming also removes normal tab/session binding.
+        fn goose_session_keeps_naming_and_explicit_resume(shell: &str) {
+            assert_in_shell(
+                shell,
+                "normal Goose naming and user choices remain authoritative",
+                &[],
+                "goose session\ngoose run -t task\ngoose session --name user\ngoose session --resume",
+                &[
+                    "session --name wrapper-launch-test",
+                    "run --name wrapper-launch-test -t task",
+                    "session --name user",
+                    "session --resume",
+                ],
+            );
+        }
+
+        // Catches: OpenCode admin verbs receive a TUI-only flag, including after root options.
+        fn opencode_admin_verbs_skip_screen_flag(shell: &str) {
+            require_shell(shell);
+            let help = include_str!("../tests/fixtures/agent-help/opencode-2026-10-14.txt");
+            let mut verbs: Vec<&str> = help
+                .lines()
+                .filter_map(|line| {
+                    let verb = line
+                        .strip_prefix("  opencode ")?
+                        .split_whitespace()
+                        .next()?;
+                    (verb != "[project]").then_some(verb)
+                })
+                .collect();
+            verbs.extend(["auth", "plug"]);
+            assert!(
+                !verbs.is_empty(),
+                "recorded OpenCode help must contain commands"
+            );
+            for verb in verbs {
+                let invocation = format!("opencode {verb}\nopencode --print-logs {verb}");
+                let expected = [verb.to_owned(), format!("--print-logs {verb}")];
+                assert_in_shell(
+                    shell,
+                    "admin commands bypass screen injection",
+                    &[("TUIC_OPENCODE_SCREEN_FLAG", "--mini")],
+                    &invocation,
+                    &[&expected[0], &expected[1]],
+                );
+            }
+            assert_in_shell(
+                shell,
+                "MCP arguments and run arguments stay intact",
+                &[("TUIC_OPENCODE_SCREEN_FLAG", "--mini")],
+                "opencode mcp list\nopencode run task",
+                &["mcp list", "run task"],
+            );
+        }
+
+        // Catches: filtering verbs mistakes a project path or option value for an admin command.
+        fn opencode_interactive_launch_keeps_screen_flag(shell: &str) {
+            assert_in_shell(
+                shell,
+                "only interactive launches gain the screen flag",
+                &[("TUIC_OPENCODE_SCREEN_FLAG", "--mini")],
+                "opencode\nopencode ./mcp\nopencode project\nopencode --model mcp\nopencode --model=mcp\nopencode --mini\nopencode -- ./mcp",
+                &[
+                    "--mini",
+                    "--mini ./mcp",
+                    "--mini project",
+                    "--mini --model mcp",
+                    "--mini --model=mcp",
+                    "--mini",
+                    "--mini -- ./mcp",
+                ],
+            );
+        }
+
+        launch_matrix!(
+            goose_no_session_preserves_stateless_argv,
+            goose_explicit_name_or_path_preserves_argv,
+            goose_session_keeps_naming_and_explicit_resume,
+            opencode_admin_verbs_skip_screen_flag,
+            opencode_interactive_launch_keeps_screen_flag,
+        );
 
         const CLAUDE_SETTINGS: &str = "/tuic/agent-hooks/claude.json";
         const CODEX_NOTIFY: &str = "/tuic/agent-hooks/codex-notify.sh";

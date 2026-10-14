@@ -39,6 +39,7 @@ import type {
 	AcpSessionId,
 } from "../../types/acp";
 import { updateAppConfig } from "../../utils/updateAppConfig";
+import { createRetryCountdown } from "./retryCountdown";
 
 /** The one connection this app uses and the tab it last showed. Module scope,
  *  so a panel that unmounts and comes back finds it rather than starting another. */
@@ -138,6 +139,10 @@ export function createAcpChat(
 ) {
 	const [connectionId, setConnectionId] = createSignal<AcpConnectionId | null>(null);
 	const [sessionId, setSessionId] = createSignal<AcpSessionId | null>(null);
+	const retry = createRetryCountdown(() => {
+		const session = sessionId();
+		return session ? acpTranscript.retry(session) : null;
+	});
 	const [root, setRoot] = createSignal<string | null>(null);
 	const [connecting, setConnecting] = createSignal(false);
 	const [error, setError] = createSignal<string | null>(null);
@@ -474,10 +479,7 @@ export function createAcpChat(
 			const session = sessionId();
 			return session ? acpTranscript.usage(session) : null;
 		},
-		retry: () => {
-			const session = sessionId();
-			return session ? acpTranscript.retry(session) : null;
-		},
+		retry,
 		busy,
 		queuedPrompts: () => attachment()?.queuedPrompts ?? [],
 		held,

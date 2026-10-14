@@ -922,14 +922,7 @@ impl UpstreamRegistry {
         for (id, old_server) in &old_by_id {
             let should_disconnect = match new_by_id.get(id) {
                 None => true, // removed
-                Some(new_server) => {
-                    old_server.name != new_server.name
-                        || old_server.transport != new_server.transport
-                        || old_server.enabled != new_server.enabled
-                        || old_server.timeout_secs != new_server.timeout_secs
-                        || old_server.tool_filter != new_server.tool_filter
-                        || old_server.auth != new_server.auth
-                }
+                Some(new_server) => server_config_changed(old_server, new_server),
             };
             if should_disconnect {
                 let _ = self.disconnect_upstream(&old_server.name);
@@ -941,14 +934,7 @@ impl UpstreamRegistry {
             let old = old_by_id.get(new_server.id.as_str());
             let should_connect = match old {
                 None => true, // new
-                Some(old_server) => {
-                    old_server.name != new_server.name
-                        || old_server.transport != new_server.transport
-                        || old_server.enabled != new_server.enabled
-                        || old_server.timeout_secs != new_server.timeout_secs
-                        || old_server.tool_filter != new_server.tool_filter
-                        || old_server.auth != new_server.auth
-                }
+                Some(old_server) => server_config_changed(old_server, new_server),
             };
             if should_connect
                 && let Err(e) = self
@@ -989,6 +975,18 @@ impl UpstreamRegistry {
 // ---------------------------------------------------------------------------
 // Helpers (module-private)
 // ---------------------------------------------------------------------------
+
+/// Whether a config edit needs the live client rebuilt. Every field that
+/// `build_client` reads belongs here, or the edit stays invisible until restart.
+fn server_config_changed(old: &UpstreamMcpServer, new: &UpstreamMcpServer) -> bool {
+    old.name != new.name
+        || old.transport != new.transport
+        || old.enabled != new.enabled
+        || old.timeout_secs != new.timeout_secs
+        || old.tool_filter != new.tool_filter
+        || old.auth != new.auth
+        || old.headers != new.headers
+}
 
 /// Build the appropriate client variant from the upstream config.
 fn build_client(name: &str, config: &UpstreamMcpServer) -> Result<UpstreamClient, String> {

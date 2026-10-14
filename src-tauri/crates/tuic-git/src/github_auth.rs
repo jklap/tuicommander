@@ -51,6 +51,7 @@ pub enum TokenSource {
     /// GH_TOKEN or GITHUB_TOKEN environment variable
     Env,
     /// OAuth Device Flow token stored in OS keyring
+    #[serde(rename = "oauth")]
     OAuth,
     /// Personal Access Token pasted for a GitHub Enterprise Server account
     Pat,
@@ -70,4 +71,35 @@ pub struct AuthStatus {
     /// Human-readable error when the token exists but validation failed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Catches: Serde spelling OAuth as o_auth hides Logout in both transports.
+    #[test]
+    fn oauth_status_uses_the_frontend_source_spelling() {
+        let status = AuthStatus {
+            authenticated: true,
+            login: Some("octocat".into()),
+            avatar_url: None,
+            source: TokenSource::OAuth,
+            scopes: Some("read:org, repo".into()),
+            error: None,
+        };
+        assert_eq!(serde_json::to_value(status).unwrap()["source"], "oauth");
+        for (source, wire) in [
+            (TokenSource::Env, "env"),
+            (TokenSource::OAuth, "oauth"),
+            (TokenSource::Pat, "pat"),
+            (TokenSource::None, "none"),
+        ] {
+            assert_eq!(serde_json::to_value(source).unwrap(), wire);
+            assert_eq!(
+                serde_json::from_value::<TokenSource>(serde_json::json!(wire)).unwrap(),
+                source
+            );
+        }
+    }
 }

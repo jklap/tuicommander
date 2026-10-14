@@ -143,6 +143,17 @@ pub(crate) fn bind_pty_identity(
 ) {
     let identity = tuic_session.unwrap_or(session_id);
     cmd.env("TUIC_SESSION", identity);
+    match crate::attachments::prepare_session_directory(&state.data_dir, "pty", session_id) {
+        Ok(directory) => {
+            cmd.env("TUIC_ATTACHMENTS_DIR", &directory);
+            state
+                .session_maps
+                .attachment_launch_dirs
+                .insert(session_id.into(), directory);
+        }
+        Err(error) => tracing::warn!(session_id, %error, "Could not provision session attachments"),
+    }
+
     // Manually typed Claude inherits the same per-agent preference as TUIC spawns.
     if crate::agent_hook_launch::prevents_alt_screen("claude") {
         cmd.env("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN", "1");
@@ -153,6 +164,15 @@ pub(crate) fn bind_pty_identity(
         "TUIC_CONFIG_DIR",
         crate::config::config_dir().to_string_lossy().as_ref(),
     );
+    // Use the socket the server actually bound, including collision fallbacks.
+    // Recomputing from config would let isolated child bridges reach another instance.
+    #[cfg(unix)]
+    {
+        let socket = state.bound_socket_path.read();
+        if !socket.as_os_str().is_empty() {
+            cmd.env("TUIC_SOCKET", socket.as_os_str());
+        }
+    }
     state.bind_live_pty(identity, session_id);
 }
 
@@ -1221,6 +1241,8 @@ pub(crate) struct SilenceState {
     pub(super) pending_suggest_items: Option<Vec<String>>,
     /// Input-turn epoch associated with `pending_suggest_items`.
     pub(super) pending_suggest_turn_epoch: u64,
+    /// Choices were published, while the completion payload remains parked.
+    pub(super) pending_suggest_emitted: bool,
     /// Timestamp when `pending_suggest_items` was parked. Currently for
     /// diagnostics only — the flush decision is driven by `last_output_at`,
     /// not the park time.
@@ -1361,6 +1383,7 @@ impl SilenceState {
             parser_dedup_reset_pending: false,
             pending_suggest_items: None,
             pending_suggest_turn_epoch: 0,
+            pending_suggest_emitted: false,
             pending_suggest_at: None,
             completion_declared: false,
             completion_turn_epoch: 0,
@@ -2060,6 +2083,7 @@ impl SilenceState {
         self.completion_declared = true;
         self.completion_turn_epoch = turn_epoch;
         self.pending_suggest_items = Some(items);
+        self.pending_suggest_emitted = false;
         self.pending_suggest_turn_epoch = turn_epoch;
         self.pending_suggest_at = Some(std::time::Instant::now());
     }
@@ -2087,6 +2111,7 @@ impl SilenceState {
     pub(crate) fn reset_suggest_memory(&mut self) {
         self.pending_suggest_items = None;
         self.pending_suggest_turn_epoch = 0;
+        self.pending_suggest_emitted = false;
         self.pending_suggest_at = None;
         self.completion_declared = false;
         self.completion_turn_epoch = 0;
@@ -2099,6 +2124,15 @@ impl SilenceState {
 
     pub(crate) fn completion_declared_for_epoch(&self, turn_epoch: u64) -> bool {
         self.completion_declared && self.completion_turn_epoch == turn_epoch
+    }
+
+    /// A final marker can arrive while the same redraw still contains a spinner.
+    /// Only settled/delivered completion is a boundary that new work can reopen.
+    pub(crate) fn completion_settled_for_epoch(&self, turn_epoch: u64) -> bool {
+        self.completion_declared_for_epoch(turn_epoch)
+            && (self.pending_suggest_items.is_none()
+                || self.pending_suggest_emitted
+                || self.idle_confirmed())
     }
 
     /// Returns true if the session has been silent long enough and the spinner
@@ -2537,7 +2571,7 @@ pub(super) fn apply_working_evidence(
             .session_maps
             .session_states
             .get(session_id)
-            .is_some_and(|session| sl.completion_declared_for_epoch(session.turn_epoch));
+            .is_some_and(|session| sl.completion_settled_for_epoch(session.turn_epoch));
         if turn_completed && !can_reopen_completed {
             return;
         }
@@ -3095,9 +3129,6 @@ pub(super) fn emit_pending_suggest_if_idle(
         .get(session_id)
         .map(|atom| atom.load(std::sync::atomic::Ordering::Acquire) == SHELL_IDLE)
         .unwrap_or(false);
-    if !shell_is_idle {
-        return false;
-    }
     // Serialize completion emission against note_submitted_input, which takes
     // this same lock before advancing SessionState.turn_epoch and clearing the
     // old turn. Whichever owns the lock first defines the lifecycle order.
@@ -3110,7 +3141,22 @@ pub(super) fn emit_pending_suggest_if_idle(
     else {
         return false;
     };
-    if background_work {
+    // A ready agent can finish its turn while descendants keep the shell busy.
+    // Publish choices independently; retain the payload for the existing
+    // completion gate and background-settlement path.
+    let agent_is_ready = silence_state.cached_screen_activity == AgentScreenActivity::Ready
+        && silence_state.last_output_at.elapsed() >= AGENT_READY_CONFIRM;
+    if !shell_is_idle && !agent_is_ready {
+        return false;
+    }
+    if silence_state.pending_suggest_turn_epoch == current_turn_epoch
+        && !silence_state.pending_suggest_emitted
+        && let Some(items) = silence_state.pending_suggest_items.clone()
+    {
+        emit_suggest_event(state, session_id, current_turn_epoch, items);
+        silence_state.pending_suggest_emitted = true;
+    }
+    if !shell_is_idle || background_work {
         return false;
     }
     let Some((turn_epoch, items)) = silence_state.drain_pending_suggest_with_epoch() else {
@@ -3123,7 +3169,9 @@ pub(super) fn emit_pending_suggest_if_idle(
         }
         return false;
     }
-    emit_suggest_event(state, session_id, turn_epoch, items);
+    if !silence_state.pending_suggest_emitted {
+        emit_suggest_event(state, session_id, turn_epoch, items);
+    }
     let parent_dispatch = enqueue_state_change_to_parent(
         state,
         session_id,
@@ -3180,6 +3228,9 @@ pub(super) fn emit_open_intent_if_idle(
 /// [`remove_live_session_state`] enforces for per-session state: a new
 /// peer-keyed map belongs in this function and nowhere else.
 fn retire_peer_identity(state: &AppState, tuic_session: &str) {
+    if state.hibernated_peers.contains(tuic_session) {
+        return;
+    }
     crate::mcp_http::remote_peer::unregister_peer(state, tuic_session);
     state.orchestrator_peers.remove(tuic_session);
     state.agent_inbox.remove(tuic_session);
@@ -3226,6 +3277,8 @@ fn remove_live_session_state(session_id: &str, state: &AppState) {
     if let Err(error) = crate::stories::StoryStore::release_closed_session(session_id) {
         tracing::warn!(session_id = %session_id, error = %error, "Could not release story claim for closed session");
     }
+    state.suspend_metadata.remove(session_id);
+    state.session_maps.attachment_launch_dirs.remove(session_id);
     state.ws_clients.remove(session_id);
     // Drop the per-session PTY event channel alongside ws_clients. Any final
     // SessionClosed already emitted stays buffered for live subscribers (broadcast
@@ -3262,12 +3315,14 @@ fn remove_live_session_state(session_id: &str, state: &AppState) {
     state.pending_initial_prompts.remove(session_id);
     state.managed_trust_dialogs.remove(session_id);
     state.active_agent_waiters.remove(session_id);
-    crate::mcp_http::remote_peer::unregister_peer(state, session_id);
-    state.orchestrator_peers.remove(session_id);
-    state.agent_inbox.remove(session_id);
-    state.agent_inbox_evictions.remove(session_id);
-    // The inbox read position is meaningless once the inbox is gone.
-    state.agent_read_cursor.remove(session_id);
+    if !state.hibernated_peers.contains(session_id) {
+        crate::mcp_http::remote_peer::unregister_peer(state, session_id);
+        state.orchestrator_peers.remove(session_id);
+        state.agent_inbox.remove(session_id);
+        state.agent_inbox_evictions.remove(session_id);
+        // The inbox read position is meaningless once the inbox is gone.
+        state.agent_read_cursor.remove(session_id);
+    }
     #[cfg(unix)]
     state.session_maps.standby_sessions.remove(session_id);
     // DEFERRED (2026-08-25) — a parent identity retained ONLY because this child
@@ -3316,6 +3371,7 @@ pub(super) fn remove_post_mortem_session_state(session_id: &str, state: &AppStat
     state.session_maps.term_aliases.remove(session_id);
     state.session_maps.marker_stats.remove(session_id);
     state.session_maps.session_visibility.remove(session_id);
+    crate::background_mode::hidden::forget_session(state, session_id);
     output_removed || grid_removed || raw_removed
 }
 
@@ -3390,19 +3446,9 @@ fn release_pty_session(session_id: &str, session: PtySession) {
 /// Fully remove session state from all DashMaps.
 /// Called on explicit close/kill — caller has already consumed any output they need.
 pub(crate) fn cleanup_session(session_id: &str, state: &AppState) {
-    if let Some(cwd) = state
-        .session_maps
-        .sessions
-        .get(session_id)
-        .and_then(|session| session.lock().cwd.clone())
-    {
-        crate::attachments::cleanup_old(
-            std::path::Path::new(&cwd),
-            state.config.read().attachment_retention_days,
-        );
-    }
     flush_open_intent_before_session_removal(session_id, state);
     remove_pty_session(session_id, state);
+    crate::attachments::cleanup_session(&state.data_dir, "pty", session_id);
     remove_live_session_state(session_id, state);
     if remove_post_mortem_session_state(session_id, state) {
         trim_unused_session_heap();
@@ -3413,17 +3459,7 @@ pub(crate) fn cleanup_session(session_id: &str, state: &AppState) {
 /// tombstone sweeper can age the entry out. What a post-mortem read needs stays —
 /// see [`remove_post_mortem_session_state`].
 pub(super) fn tombstone_transient_cleanup(session_id: &str, state: &AppState) {
-    if let Some(cwd) = state
-        .session_maps
-        .sessions
-        .get(session_id)
-        .and_then(|session| session.lock().cwd.clone())
-    {
-        crate::attachments::cleanup_old(
-            std::path::Path::new(&cwd),
-            state.config.read().attachment_retention_days,
-        );
-    }
+    crate::attachments::cleanup_session(&state.data_dir, "pty", session_id);
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -3813,10 +3849,14 @@ pub(crate) fn spawn_standby_checker(state: Arc<AppState>) {
                 "Standby checker tick"
             );
 
-            for entry in state.session_maps.session_visibility.iter() {
-                let session_id = entry.key();
-                let visible = *entry.value();
-                if visible {
+            let visibility: Vec<(String, bool)> = state
+                .session_maps
+                .session_visibility
+                .iter()
+                .map(|entry| (entry.key().clone(), *entry.value()))
+                .collect();
+            for (session_id, visible) in &visibility {
+                if *visible {
                     continue;
                 }
                 if state
@@ -3900,6 +3940,18 @@ pub(crate) fn spawn_standby_checker(state: Arc<AppState>) {
 /// Returns Ok(true) if stopped, Ok(false) if already in standby or session gone.
 #[cfg(unix)]
 pub(crate) fn standby_session(state: &AppState, session_id: &str) -> Result<bool, String> {
+    // Serialize SIGSTOP with Show and remote attach: current visibility must
+    // invalidate a checker tick selected before the session became visible.
+    let visibility = state.background_visibility.lock();
+    if visibility.watched(state, session_id)
+        || state
+            .session_maps
+            .session_visibility
+            .get(session_id)
+            .is_some_and(|visible| *visible)
+    {
+        return Ok(false);
+    }
     if state.session_maps.standby_sessions.contains_key(session_id) {
         return Ok(false);
     }

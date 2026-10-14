@@ -71,3 +71,18 @@ pub(crate) async fn navigate(
 pub(crate) async fn statuses(State(state): State<Arc<AppState>>) -> Json<Vec<serde_json::Value>> {
     Json(super::statuses(&state).await)
 }
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct BrowserCommandBody {
+    repo_path: String,
+    action: String,
+    #[serde(default)]
+    args: serde_json::Value,
+}
+pub(crate) async fn browser_command(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<BrowserCommandBody>,
+) -> Response {
+    response(super::browser_command(&state, &body.repo_path, &body.action, body.args).await)
+}

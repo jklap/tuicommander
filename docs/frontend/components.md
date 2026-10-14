@@ -11,6 +11,8 @@ selects outside `ui/` and requires the explicit pending-migration list to shrink
 It renders schema-driven fields, sanitized Markdown, all declared comment
 variants, cursor pagination, a comment composer and provider transition actions.
 The shell must pass visibility to pause the default 60-second refresh timer.
+Read-only enum fields resolve provider option IDs to their schema labels, falling back to the stored value when an option is unknown. Editing still sends the option ID.
+
 `useTasksDetail` fences responses by item generation and serializes mutations.
 Committed mutations remain accepted if reloading opened comment pages fails;
 the view reports the history error and Retry reloads those pages.
@@ -22,6 +24,9 @@ Shell mounting and provider registration are owned by the Tasks integration.
 picker and per-type fields with `SettingField` and `SettingMultiSelect`.
 `useTasksCreate` fences schema responses by generation and submits once;
 `createDraft` converts control values to tagged field values.
+`TaskCreateUser` renders static choices and optional provider user searches, with
+request cancellation and stale-response fencing. Free labels keep raw text until
+collection; required-field messages sit beside their inputs.
 
 Slice F exposes `start_graph {target:{type:story|plan,id},expected_revision?,definition_id,definition_revision,request_id,limits?}` through the existing owning-daemon service. Story starts require the current native revision and pin the selected publication; the request ID is bound to its payload. Omitted limits use Rust defaults. Plan dispatch remains unavailable in this build and its start control says so. The `workflow_run` MCP tool uses an inline schema generated from `RunAction` and the public `RunCommand` variants; it returns the same scoped snapshots and cursor-ordered events as IPC/HTTP. Run history shows pinned activations, decisions/evidence, repair counters, pause targets and complete event payloads across pages. Graph recovery uses `resume_graph {execution_id,activation_id,resolution}` after answering pending input; pause and cancel use the existing sequence-fenced commands. Legacy runs offer inspection and cancellation in the UI. No new persistence or client scheduler is added.
 
@@ -167,6 +172,10 @@ Untitled sessions use their first prompt or latest activity time in tabs and the
 with the session ID in the tooltip. Small single-choice elicitation
 forms use direct answer buttons and Cancel. Prompt failures and empty completed
 turns appear in the transcript.
+`Transcript` displays one provider-retry status line. `useAcpChat` supplies its
+live countdown, clamped at “retrying now”, through a panel-owned timer. User-message
+Copy buttons use a single unwrapped line, including in the full app shell.
+
 `Transcript` interprets complete ACP answer text as it streams: it hides the
 connection acknowledgement, shows a declared intent as status, and offers
 bracketed `suggest:` items as prompt buttons. Markdown examples stay literal.
@@ -192,6 +201,11 @@ prompts, and can remove any queued ID. The list follows ACP snapshots and
 events, so another window or a phone sees the same order and cancellations.
 
 ## Mobile Screens (`src/mobile/`)
+
+`OpenMarkdownMenu` adds a scrollable Markdown section to session overflow.
+It reads repository-scoped desktop file metadata and refetches on tab changes,
+repository changes and SSE resynchronization. Selecting an entry keeps the
+session mounted and opens `FilesScreen` with the entry’s original checkout root.
 
 `OutputView` keeps a 500-line live tail while following. While the reader is
 scrolled up or touching the output, it retains the loaded rows instead of
@@ -533,6 +547,8 @@ The agent badge appears when the active terminal has a recognized agent type. It
 - **PTY usage limit (priority 3):** Parsed from terminal output by the output parser (e.g. Claude's `[C1 S30 K26]` status line). Stored on the terminal entry as `usageLimit`. Applies to all agents that emit usage info.
 - **Agent name (priority 4):** Fallback — just shows the agent type name.
 
+**Usage blink threshold:** API ticker priorities and PTY percentages apply the critical animation only from 96% usage. Usage from 70% to below 96% stays warning-coloured. Dashboard critical colours remain at 90%.
+
 **Ticker integration:** When the active agent is `claude` and the Claude Usage ticker is active, the ticker message is absorbed into the agent badge (priority 2) and hidden from the separate ticker area. Other ticker messages (from plugins, etc.) display normally.
 
 **Pendulum ticker:** When the status info text overflows its container, a CSS pendulum animation scrolls the text back and forth at ~50px/s. Clicking the text dismisses the notification until the message changes.
@@ -555,7 +571,7 @@ Ideas panel with per-repo filtering and terminal integration.
 
 ### StoriesDialog (`StoriesDialog/`)
 
-The project-scoped plan and story dialog creates manual plans and stories, presents criteria and dependency status, and sends revision-checked actions through the shared IPC/HTTP transport. It renders the Rust `plan_view` projection, including transitive abandoned dependency labels and the WontFix count or all-cancelled label. Only a direct WontFix dependency on a Backlog story offers the human Remove action; the backend decides whether the dependent becomes Ready. Visible labels use `t()` and English catalog entries, the controls use style-guide tokens and button variants, and the close button takes focus when the dialog opens.
+The project-scoped plan and story dialog creates manual plans and stories, presents criteria and dependency status, and sends revision-checked actions through the shared IPC/HTTP transport. It uses wire status types generated from Rust with `python3 scripts/generate-story-types.py` (`--check` detects drift). The selected plan state stays visible beside cancellation counts while a story is selected. It renders the Rust `plan_view` projection, including transitive abandoned dependency labels and the WontFix count or all-cancelled label. Only a direct WontFix dependency on a Backlog story offers the human Remove action; the backend decides whether the dependent becomes Ready. Visible labels use `t()` and English catalog entries, the controls use style-guide tokens and button variants, and the close button takes focus when the dialog opens.
 
 The dialog probes `story_capabilities` before loading. A missing capability receives the restart message; action failures retain their own error details.
 
@@ -762,4 +778,38 @@ has a virtualized card list. Pointer capture supports drag and drop; the native
 move menu provides keyboard and touch access. Moves dispatch the provider's per-card
 action, show pending feedback, and restore the origin on rejection. Cancellation
 and scope changes clean up drag state. Consumers refresh the projection after a
-successful move; the view does not infer workflow transitions.
+successful move by merging page one into the loaded cards. Other loaded pages are
+retained until reload. The move menu stays open when its own list scrolls; scrolling
+outside it dismisses it. The view does not infer workflow transitions.
+
+Terminal marker layout uses `viewportProjection.ts`: suggest anchors and hard-wrapped tails consume no display row; answer marker cells and their trailing space consume no display columns. Intent stays visible. Grid painting, cursor/IME, selection, search and link hit testing use the same reversible projection, including cache-driven smooth scrolling; PTY cells and absolute scrollback/copy coordinates remain unchanged.
+
+Submitting a new prompt clears old choices and reopens follow-up delivery. A `user-input` event can arrive after `shell-state: busy`, so it must not dismiss the choices for the new turn.
+Tasks `useStartWork` obtains the brief from `build_start_work_prompt` before the
+provider action, with a pending state covering that read. The Rust builder reads
+`.tuic-start-work.md` in the repository root; absent files use the legacy brief.
+Read failures use the existing error/Retry state. Host delivery retains the
+untrusted-content wrapper and 12,000-character cap.
+
+### Terminal Compose attachments
+
+`ComposePanel` uses `useComposeImages` for paste, file drops and its image-only multi-file input. All three reuse `saveImageFile` in `pastedImage.ts`. Drop/picker insertion ranges track document edits during saving. Native file drops route to a registered mounted editor before the existing global terminal/tab dispatcher; closing or unmounting unregisters that target. Rejected files and save failures appear in an accessible alert.
+
+The desktop macOS General page includes **Hide Dock icon in background** under
+Confirmations. It uses the shared setting toggle and persists
+`background.hide_dock_icon`; browser settings omit this native control.
+
+The mobile AI Chat composer uses the same device-local keyboard correction preference as the terminal composer; toggling it updates autocorrect, spellcheck and sentence capitalization on the open textarea. Desktop Chat retains its existing input attributes.
+
+Answer highlights in the terminal grid, AnswersPanel, AI Chat markdown and terminal Chat cards use a green left rule without an answer background layer. Paragraph spacing and each content block's own background stay unchanged. User-question styling is separate.
+
+The shared `--answer-rule` token preserves the dark-theme rule and uses `--success` in Paper to keep the rule visible on the light page. Terminal Chat cards already use `--success`.
+
+Answer overlay caching includes cell height and projected row positions as well as marker content, so font loading and theme remeasurement cannot retain old rule geometry.
+
+Tasks list controls use provider-declared field sort, group and filter capabilities.
+A rejected selection restores the last successful query and shows the provider reason.
+
+Tasks small-list mode (#1851-7ade): when the provider reports at most 1,000 matches, Tasks collects the complete search/preset scope and uses the Rust projection for all-field sort, group and filter. A changed total, missing rows or a nonterminal cursor cannot establish completeness. Unknown totals and larger lists keep provider-supported server controls. No extra cache or persisted state is added.
+
+GitHub Tasks boards (#1846-55d7): the optional provider `listBoards(signal)` port discovers the current user Projects v2 when Board opens. The existing picker selects a project; paging preserves project identities. Missing `read:project` stays visible instead of claiming there are no boards. Providers without discovery retain their configured boards. Discovery does not persist selections or write to GitHub.

@@ -109,24 +109,18 @@ describe("Resume of a suspended agent tab", () => {
 		ptyOptions.clear();
 	});
 
-	// Catches: Resume opens the PTY but never types the agent's resume command (the user gets a
-	// bare shell), or types it again on every later idle (the agent is relaunched inside itself).
-	it("types the resume command once, when the new shell first goes idle", async () => {
+	// Catches: the frontend spawning a duplicate PTY or typing a second resume command.
+	it("attaches the Rust-restored PTY without typing another resume command", async () => {
 		const id = openIdleAgentTab();
 		await waitFor(() => expect(resize).toHaveBeenCalledWith("live-session", expect.any(Number), expect.any(Number)));
 		expect((await suspendTerminal(id)).ok).toBe(true);
-
+		mockRpc.mockResolvedValue({ session_id: "tab-uuid" });
 		expect((await resumeTerminal(id)).ok).toBe(true);
-		await waitFor(() => expect(terminalsStore.get(id)?.sessionId).toBe("fresh-session"));
-		await waitFor(() => expect(ptyOptions.get("fresh-session")?.onParsed).toBeDefined());
+		await waitFor(() => expect(ptyOptions.get("tab-uuid")?.onParsed).toBeDefined());
+		expect(terminalsStore.get(id)?.sessionId).toBe("tab-uuid");
+		shellIdle("tab-uuid");
 		expect(sendCommand).not.toHaveBeenCalled();
-
-		shellIdle("fresh-session");
-		shellIdle("fresh-session");
-
-		expect(sendCommand).toHaveBeenCalledTimes(1);
-		expect(sendCommand).toHaveBeenCalledWith("fresh-session", "claude --resume agent-uuid", null);
-		expect(createSession).toHaveBeenCalledWith(expect.objectContaining({ agent_type: "claude" }));
+		expect(createSession).not.toHaveBeenCalled();
 	});
 });
 

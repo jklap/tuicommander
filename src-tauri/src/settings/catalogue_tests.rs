@@ -1,4 +1,4 @@
-use super::super::native::native_catalogue;
+use super::super::native::{native_catalogue, native_catalogue_for};
 use super::*;
 use serde_json::json;
 
@@ -147,7 +147,7 @@ fn opaque_or_unkeyed_records_are_rejected() {
 // Catches: checked-in UI descriptors diverging from the Rust schema used by consumers.
 #[test]
 fn generated_typescript_matches_native_catalogue() {
-    let expected = native_catalogue().unwrap().typescript().unwrap();
+    let expected = native_catalogue_for(true).unwrap().typescript().unwrap();
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../src/generated/settingsCatalogue.ts");
     if std::env::var_os("TUIC_UPDATE_SETTINGS_CATALOGUE").is_some() {

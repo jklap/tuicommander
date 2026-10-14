@@ -27,7 +27,8 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: 24
-          cache: pnpm
+          # No `cache: pnpm`: this job never runs `pnpm install`, so the store path
+          # does not exist and the post step failed the whole run on 2026-10-12.
 
       - name: Install Rust ${{ env.RUST_VERSION }}
         uses: dtolnay/rust-toolchain@stable

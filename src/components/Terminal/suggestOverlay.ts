@@ -7,7 +7,9 @@ export interface RowSnapshot {
 /** Re-declared here instead of imported: keeps the helper self-contained and
  *  avoids pulling the full Terminal module into unit tests. Must stay in
  *  sync with the patterns used in Terminal.tsx. */
-export const SUGGEST_ANCHOR_RE = /^[\s●⏺]*suggest:\s+\S/;
+/** Agent bullet glyphs: Claude's `●`/`⏺`, Codex's `•`. A new agent's bullet is added here, once. */
+export const AGENT_BULLETS = "●⏺•";
+export const SUGGEST_ANCHOR_RE = new RegExp(`^[\\s${AGENT_BULLETS}]*suggest:\\s+\\S`);
 /** Stop condition for the continuation walk: a new `intent:` token at column 0. */
 const INTENT_RE = /^intent:\s+\S/;
 /**
@@ -16,35 +18,49 @@ const INTENT_RE = /^intent:\s+\S/;
  * row must still be tinted. It is NOT a walk stop condition — ending a suggest
  * block on an indented mention would swallow the block's closing bracket.
  */
-export const INTENT_HIGHLIGHT_RE = /^[\s●⏺]*intent:\s+/;
+export const INTENT_HIGHLIGHT_RE = new RegExp(`^[\\s${AGENT_BULLETS}]*intent:\\s+`);
 /**
  * The answer marker an agent prefixes to every sentence that directly answers
  * the user (💬). Matched on row text, which carries no escape sequences — bold,
  * colour and the like live in cell attributes — so styling cannot hide it.
- * Like `intent:`, it may sit behind the agent's own bullet: Claude's `●`/`⏺`
- * or Codex's `•`.
+ * Like `intent:`, it may sit behind the agent's own bullet: an agent bullet (see [`AGENT_BULLETS`]).
  */
-export const ANSWER_MARKER_RE = /^[\s●⏺•]*💬/;
-/** An agent output row: a bullet glyph at the start of the line. */
-const OUTPUT_ROW_RE = /^\s*[●⏺]/;
+export const ANSWER_MARKER_RE = new RegExp(`^[\\s${AGENT_BULLETS}]*💬`);
+/** An agent output row: a bullet glyph at the start of the line. Codex's `•` also
+ *  marks ordinary list items, so it counts only at column 0; an indented one is content. */
+export const OUTPUT_ROW_RE = /^(?:\s*[●⏺]|•)/;
 /** A continuation row of an answer: indented under the agent's bullet. */
 const ANSWER_CONTINUATION_RE = /^ {2,}\S/;
 /** A user prompt row; an indented one still ends the answer. */
 const PROMPT_ROW_RE = /^\s*❯/;
 /** A fenced code block delimiter. Inside a fence a bullet, marker or prompt glyph is content. */
 const FENCE_RE = /^\s*```/;
+/** A list item, table row or quotation belongs to the answer above it. */
+const ANSWER_STRUCTURE_RE = /^ {2,}(?:[-*+•] |\d+[.)] |\||>)/;
+/** Codex's indented turn-duration footer is terminal status, not answer prose. */
+const CODEX_FOOTER_RE =
+	/^\s*Worked for \d+(?:\.\d+)?(?:ms|[smh])(?:\s+\d+(?:\.\d+)?(?:ms|[smh]))*(?:\s*•\s*\d{1,2}:\d{2})?\s*$/;
 
 /**
  * Last row of the answer that starts at `start` (a row matching
  * [`ANSWER_MARKER_RE`]). An answer is the marker row, every row it wraps onto and
- * the indented rows that follow, blank paragraph gaps included. It ends before the
- * next bullet (a tool call or another answer), before a `suggest:`/`intent:` row, before a row that starts at column
+ * the indented rows that follow. Blank gaps join marked paragraphs and structured
+ * content, but an unmarked prose paragraph after a blank row ends the region. It ends before the
+ * next non-answer bullet (a tool call), before a `suggest:`/`intent:` row, before a row that starts at column
  * 0 (user prompt, separator, status line) and before the trailing blank rows.
+ * Adjacent answer markers extend the same region, including blank rows between them.
  * Rows inside a fenced code block belong to the answer whatever glyph they start with.
  */
-export function answerExtent(start: number, totalRows: number, getRow: (i: number) => RowSnapshot | null): number {
+export function answerExtent(
+	start: number,
+	totalRows: number,
+	getRow: (i: number) => RowSnapshot | null,
+	onMarker?: (row: number) => void,
+): number {
+	onMarker?.(start);
 	let last = start;
 	let inFence = false;
+	let afterBlank = false;
 	for (let i = start + 1; i < totalRows; i++) {
 		const row = getRow(i);
 		if (!row) break;
@@ -52,12 +68,23 @@ export function answerExtent(start: number, totalRows: number, getRow: (i: numbe
 			last = i;
 			continue;
 		}
-		if (row.text.trim() === "") continue;
+		if (row.text.trim() === "") {
+			afterBlank = true;
+			continue;
+		}
+		if (!inFence && ANSWER_MARKER_RE.test(row.text)) {
+			onMarker?.(i);
+			last = i;
+			afterBlank = false;
+			continue;
+		}
 		if (!ANSWER_CONTINUATION_RE.test(row.text)) break;
+		if (afterBlank && !inFence && !ANSWER_STRUCTURE_RE.test(row.text) && !FENCE_RE.test(row.text)) break;
+		afterBlank = false;
 		if (inFence) {
 			inFence = !FENCE_RE.test(row.text);
 		} else {
-			if (OUTPUT_ROW_RE.test(row.text) || ANSWER_MARKER_RE.test(row.text) || PROMPT_ROW_RE.test(row.text)) break;
+			if (OUTPUT_ROW_RE.test(row.text) || PROMPT_ROW_RE.test(row.text) || CODEX_FOOTER_RE.test(row.text)) break;
 			if (SUGGEST_ANCHOR_RE.test(row.text) || INTENT_HIGHLIGHT_RE.test(row.text)) break;
 			inFence = FENCE_RE.test(row.text);
 		}
@@ -109,7 +136,7 @@ export function answerBlockRanges(blocks: readonly ChatBlock[]): [number, number
  *  first `|` to arrive on a wrapped continuation line, so a row like
  *  `suggest: long item that wraps...` (with the pipe on the next row) is
  *  still a new block boundary and the walk MUST stop here. (#1380-3b9c) */
-const SUGGEST_STOP_RE = /^[\t ]*(?:[●⏺][\t ]+)?suggest:\s+\S/;
+const SUGGEST_STOP_RE = new RegExp(`^[\\t ]*(?:[${AGENT_BULLETS}][\\t ]+)?suggest:\\s+\\S`);
 
 /**
  * Given a suggest anchor row at `anchorIndex`, return the 0-based indexes of
@@ -177,15 +204,20 @@ export function isSuggestBlock(
 	return false;
 }
 
-/** One row the overlay masks, and why. */
+/** One row the plan classifies, and why. */
 export interface OverlayBlock {
 	row: number;
 	kind: "suggest" | "continuation" | "intent" | "answer";
 }
 
 /**
- * Which rows the suggest/intent overlay must mask on this screen, plus a key
- * that changes exactly when that set does.
+ * Which rows hold a `suggest:`/`intent:` marker or an answer on this screen, plus
+ * a key that changes exactly when that set does. The marker rows are not painted
+ * at all (see [`hiddenMarkerRows`]); only answer rows get an overlay strip.
+ *
+ * `firstRow` lets the caller start the scan above the viewport (negative row
+ * indexes). A marker whose first row has scrolled off the top still has its
+ * continuation rows on screen, and they are only recognisable from the anchor.
  *
  * The key is the point: the overlay rebuilds its DOM only when the plan differs
  * from the last one, and most repaints do not move a suggest block. Deciding
@@ -196,10 +228,12 @@ export interface OverlayBlock {
 export function planSuggestOverlay(
 	totalRows: number,
 	getRow: (i: number) => RowSnapshot | null,
-): { key: string; blocks: OverlayBlock[] } {
+	firstRow = 0,
+): { key: string; blocks: OverlayBlock[]; answerMarkers: ReadonlySet<number> } {
+	const answerMarkers = new Set<number>();
 	const blocks: OverlayBlock[] = [];
 	const parts: string[] = [];
-	for (let row = 0; row < totalRows; row++) {
+	for (let row = firstRow; row < totalRows; row++) {
 		const snapshot = getRow(row);
 		if (!snapshot) continue;
 		const text = snapshot.text;
@@ -216,18 +250,37 @@ export function planSuggestOverlay(
 		} else if (!snapshot.isWrapped && ANSWER_MARKER_RE.test(text)) {
 			// The whole answer, not only its marker row. A wrapped row is never a
 			// line start, so an emoji the wrap happens to land on is not a marker.
-			const last = answerExtent(row, totalRows, getRow);
+			const last = answerExtent(row, totalRows, getRow, (marker) => answerMarkers.add(marker));
 			for (; row <= last; row++) {
 				blocks.push({ row, kind: "answer" });
 				parts.push(`a${row}`);
 			}
 			row = last;
 		} else if (INTENT_HIGHLIGHT_RE.test(text)) {
-			blocks.push({ row, kind: "intent" });
-			parts.push(`i${row}`);
+			// Ink also hard-wraps with cursor moves and indentation, without isWrapped.
+			for (; ; row++) {
+				blocks.push({ row, kind: "intent" });
+				parts.push(`i${row}`);
+				if (row + 1 >= totalRows) break;
+				const next = getRow(row + 1);
+				if (!next || next.text.trim() === "") break;
+				if (next.isWrapped) continue;
+				if (!ANSWER_CONTINUATION_RE.test(next.text)) break;
+				if (OUTPUT_ROW_RE.test(next.text) || ANSWER_MARKER_RE.test(next.text) || PROMPT_ROW_RE.test(next.text)) break;
+				if (SUGGEST_ANCHOR_RE.test(next.text) || INTENT_HIGHLIGHT_RE.test(next.text)) break;
+			}
 		}
 	}
-	return { key: parts.join(","), blocks };
+	return { key: parts.join(","), blocks, answerMarkers };
+}
+
+/** Suggest anchors and wrapped tails omitted by the frontend viewport projection.
+ * Intent remains visible. Stored backend row and cell coordinates never change.
+ */
+export function hiddenMarkerRows(blocks: readonly OverlayBlock[]): Set<number> {
+	const hidden = new Set<number>();
+	for (const block of blocks) if (block.kind === "suggest" || block.kind === "continuation") hidden.add(block.row);
+	return hidden;
 }
 
 function overlayDiv(top: number, height: number, background: string): HTMLDivElement {
@@ -238,25 +291,19 @@ function overlayDiv(top: number, height: number, background: string): HTMLDivEle
 
 /**
  * Replace the contents of `container` with one absolutely positioned strip per
- * planned block. Masks (`suggest`, `continuation`) paint the terminal
- * background over the row; `intent` and `answer` are translucent tints, so the
- * row's text stays readable underneath. An answer also gets a solid gutter bar.
+ * answer row: a transparent strip with a solid gutter bar. Marker rows get no strip — they are not painted.
  */
-export function paintOverlayBlocks(
-	container: HTMLElement,
-	blocks: readonly OverlayBlock[],
-	cellHeight: number,
-	bg: string,
-): void {
+export function paintOverlayBlocks(container: HTMLElement, blocks: readonly OverlayBlock[], cellHeight: number): void {
 	container.textContent = "";
 	for (const block of blocks) {
-		const top = block.row * cellHeight;
-		if (block.kind === "answer") {
-			const div = overlayDiv(top, cellHeight, "rgba(94,190,140,0.14)");
-			div.style.boxShadow = "inset 3px 0 0 rgba(94,190,140,0.9)";
-			container.appendChild(div);
-		} else {
-			container.appendChild(overlayDiv(top, cellHeight, block.kind === "intent" ? "rgba(181,147,90,0.12)" : bg));
-		}
+		if (block.kind !== "answer" || block.row < 0) continue;
+		const div = overlayDiv(block.row * cellHeight, cellHeight, "transparent");
+		div.style.boxShadow = "inset 3px 0 0 var(--answer-rule)";
+		container.appendChild(div);
 	}
+}
+
+/** Cache identity for the answer overlay geometry. */
+export function answerOverlayKey(markerKey: string, cellHeight: number, rows: readonly number[]): string {
+	return JSON.stringify([markerKey, cellHeight, rows]);
 }

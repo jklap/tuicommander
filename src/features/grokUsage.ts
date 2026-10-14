@@ -1,3 +1,5 @@
+import { AGENT_USAGE_BLINK_THRESHOLD } from "./usageThresholds";
+
 export interface GrokMoney {
 	val: number;
 }
@@ -37,7 +39,7 @@ export function buildGrokTickerText(api: GrokUsageApiResponse): string {
 
 export function getGrokTickerPriority(api: GrokUsageApiResponse): number {
 	const used = api.config.credit_usage_percent;
-	if (used !== null && used >= 90) return 90;
+	if (used !== null && used >= AGENT_USAGE_BLINK_THRESHOLD) return AGENT_USAGE_BLINK_THRESHOLD;
 	if (used !== null && used >= 70) return 50;
 	return 10;
 }

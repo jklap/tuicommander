@@ -4,6 +4,11 @@ use crate::config::*;
 
 /// Build descriptors even on hosts without the optional native audio backend.
 pub fn native_catalogue() -> Result<Catalogue, CatalogueError> {
+    native_catalogue_for(cfg!(feature = "dictation"))
+}
+
+/// The committed TypeScript is one file for every build, so it is generated with `dictation` on.
+pub(super) fn native_catalogue_for(dictation: bool) -> Result<Catalogue, CatalogueError> {
     let mut catalogue = Catalogue::default();
     let available = Availability::Available;
     catalogue.register(
@@ -72,20 +77,20 @@ pub fn native_catalogue() -> Result<Catalogue, CatalogueError> {
         Some(&crate::github_account::RepoBindingStore::default()),
         available.clone(),
     )?;
-    catalogue.register::<crate::remote_connection::RemoteConnection>(
+    catalogue.register::<super::remote::RemoteConnections>(
         "connections",
         "machine",
         None,
         available.clone(),
     )?;
-    catalogue.register::<crate::tunnels::profile::TunnelProfile>(
+    catalogue.register::<super::remote::TunnelProfiles>(
         "tunnels",
         "machine",
         None,
         available.clone(),
     )?;
     catalogue.register::<crate::telegram::Config>("telegram", "machine", None, available)?;
-    let voice = if cfg!(feature = "dictation") {
+    let voice = if dictation {
         Availability::Available
     } else {
         Availability::Unavailable {
@@ -93,6 +98,7 @@ pub fn native_catalogue() -> Result<Catalogue, CatalogueError> {
         }
     };
     catalogue.register("voice", "machine", Some(&DictationConfig::default()), voice)?;
+    super::ego_schema::register(&mut catalogue)?;
     catalogue.gaps.extend(
         serde_json::from_str::<Vec<InventoryGap>>(include_str!("inventory-gaps.json")).map_err(
             |_| CatalogueError {
