@@ -778,3 +778,7 @@ untrusted-content wrapper and 12,000-character cap.
 ### Terminal Compose attachments
 
 `ComposePanel` uses `useComposeImages` for paste, file drops and its image-only multi-file input. All three reuse `saveImageFile` in `pastedImage.ts`. Drop/picker insertion ranges track document edits during saving. Native file drops route to a registered mounted editor before the existing global terminal/tab dispatcher; closing or unmounting unregisters that target. Rejected files and save failures appear in an accessible alert.
+
+The desktop macOS General page includes **Hide Dock icon in background** under
+Confirmations. It uses the shared setting toggle and persists
+`background.hide_dock_icon`; browser settings omit this native control.

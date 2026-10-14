@@ -1084,16 +1084,7 @@ pub(super) async fn set_session_visible(
     Path(session_id): Path<String>,
     Json(body): Json<SessionVisibleRequest>,
 ) -> impl IntoResponse {
-    state
-        .session_maps
-        .session_visibility
-        .insert(session_id.clone(), body.visible);
-    #[cfg(unix)]
-    if body.visible
-        && let Err(e) = crate::pty::wake_session(&state, &session_id)
-    {
-        tracing::warn!(session_id, error = %e, "Wake on focus failed");
-    }
+    crate::background_mode::hidden::set_visible(&state, &session_id, body.visible, false);
     (StatusCode::OK, Json(serde_json::json!({ "ok": true })))
 }
 
@@ -1384,6 +1375,8 @@ async fn handle_ws_session(
     initial_offset: Option<usize>,
     compression: WsCompression,
 ) {
+    let _watch =
+        crate::background_mode::hidden::RemoteWatch::new(state.clone(), Some(session_id.clone()));
     let (ws_sender, mut ws_receiver) = socket.split();
     let mut ws_sender = WsFrameSender::new(ws_sender, compression);
 
@@ -1537,8 +1530,9 @@ async fn handle_ws_session(
         }
     }
 
-    // Client disconnected — abort the send task and purge the dead sender
+    // Drop the receiver before reaping senders and releasing the remote watch.
     send_task.abort();
+    let _ = send_task.await;
     crate::state::purge_dead_ws_clients(&state.ws_clients, &session_id);
 }
 
@@ -1812,6 +1806,8 @@ async fn handle_ws_grid_session(
     state: Arc<AppState>,
     compression: WsCompression,
 ) {
+    let _watch =
+        crate::background_mode::hidden::RemoteWatch::new(state.clone(), Some(session_id.clone()));
     let (ws_sender, mut ws_receiver) = socket.split();
     let mut ws_sender = WsFrameSender::new(ws_sender, compression);
 

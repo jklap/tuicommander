@@ -895,6 +895,10 @@ pub(crate) struct AppConfig {
     #[serde(default)]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates mcp server enabled for the current owner.","operations":["get","set"],"confirmationClass":"execution_authority"}))]
     pub(crate) mcp_server_enabled: bool,
+    /// Allow MCP agents to comment or transition Tasks items. Reads need no opt-in.
+    #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Allows MCP agents to write work items.","operations":["get","set"],"confirmationClass":"execution_authority"}))]
+    pub(crate) mcp_work_item_writes: bool,
     /// Fixed port for MCP server (0 = OS-assigned)
     #[serde(default = "default_mcp_port")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates mcp port for the current owner.","operations":["get","set"],"confirmationClass":"execution_authority"}))]
@@ -965,6 +969,8 @@ pub(crate) struct AppConfig {
     #[serde(default)]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Selects whether main window close asks, hides or quits.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) close_behavior: crate::background_mode::CloseBehavior,
+    #[serde(default)]
+    pub(crate) background: crate::background_mode::BackgroundConfig,
     /// Show confirmation dialog when closing a terminal tab
     #[serde(default = "default_true")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates confirm before closing tab for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
@@ -1301,6 +1307,7 @@ impl Default for AppConfig {
             font_weight: default_font_weight(),
             theme: "commander".to_string(),
             mcp_server_enabled: true,
+            mcp_work_item_writes: false,
             mcp_port: default_mcp_port(),
             mcp_config_installed: false,
             ide: String::new(),
@@ -1316,6 +1323,7 @@ impl Default for AppConfig {
             services: ServicesConfig::default(),
             confirm_before_quit: true,
             close_behavior: Default::default(),
+            background: Default::default(),
             confirm_before_closing_tab: true,
             max_tab_name_length: default_max_tab_name_length(),
             split_tab_mode: SplitTabMode::default(),
@@ -5300,6 +5308,7 @@ mod tests {
             font_weight: 200,
             theme: "dark".to_string(),
             mcp_server_enabled: true,
+            mcp_work_item_writes: false,
             mcp_port: 4000,
             mcp_config_installed: false,
             ide: "cursor".to_string(),
@@ -5349,6 +5358,7 @@ mod tests {
             },
             confirm_before_quit: false,
             close_behavior: Default::default(),
+            background: Default::default(),
             confirm_before_closing_tab: true,
             max_tab_name_length: 40,
             split_tab_mode: SplitTabMode::Unified,

@@ -83,7 +83,8 @@ never all expert: in basic mode it would show an empty page.
 |---------|-------------|
 | **Language** | UI language. The list offers the locales that ship with a message catalog, each named in its own language, and the pick applies immediately — no reload. A locale without a catalog is never offered, because it would render English while claiming to be translated. The picker is hidden while only one catalog ships — today that is English alone — because a list of one is not a choice. |
 | **Show agent context bar** | Show the model's current intent, its orchestrator-assigned task, and the last prompt sent to an agent. |
-| **When closing the main window** | Desktop: Ask (default), Background, or Quit. Ask offers Remember. Background hides the main window and keeps sessions running. Use the application menu to quit; on macOS, click the Dock icon to show the window again. |
+| **When closing the main window** | Desktop: Ask (default), Background, or Quit. Ask offers Remember. Background hides visible windows and keeps sessions running. Use the application menu to quit; on macOS, click the Dock icon to show the window again. |
+| **Hide Dock icon in background** | On | macOS desktop only. Hide the Dock icon while windows are hidden; restore it on Show. |
 | **Confirm before quitting** | Confirm real quit with active terminals, including Cmd/Ctrl+Q. Background does not prompt. Detached-panel close closes only that panel. |
 | **Confirm before closing a tab** | Ask before closing terminal tab |
 | **Prevent sleep when busy** | Keep the machine awake while agents are working (**Power Management** section) |
@@ -483,3 +484,7 @@ The internal GitHub settings backend keeps OAuth device login for github.com and
 verifies Enterprise PAT identity before storage. Account reads expose credential
 status only. The new shared settings tool is published in a separate cutover step;
 this backend adapter does not add a new user-facing endpoint.
+
+### Work-item access for agents
+
+Agents can read linked Tasks items through the MCP repo tool. Tracker comments and status changes are disabled by default. To enable them, set `mcp_work_item_writes` to `true` through the configuration save API, or edit `config.json` while the app is stopped. There is no separate Tasks write toggle in Settings. A frontend with the provider loaded must remain connected. After a write times out, read the item before retrying.

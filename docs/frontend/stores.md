@@ -761,3 +761,8 @@ MCP toast notices show a transient card only while their origin terminal tab is 
 ### Transcript view preference
 
 `transcriptPreferences` stores the shared terminal Chat and AI Chat new-text indicator toggle in client localStorage (`tui-commander-new-text-indicator`, default on). Desktop Appearance → Chat and mobile Settings edit the same client preference. It does not write backend configuration. The Transcript compares entry identities and text lengths to detect arrivals while detached, clears unread state when content is replaced, and follows in-place streamed text while attached.
+
+Background entry uses `repositoriesStore.snapshotTerminals()` followed by
+`flushSave()` to await both the in-flight save and the newest queued snapshot.
+Only then does the main WebView acknowledge `snapshot-now`. A persistence error
+is logged and leaves the acknowledgement pending for the backend timeout.

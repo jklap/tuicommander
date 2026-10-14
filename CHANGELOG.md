@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Read linked Tasks items and comments through MCP repo actions; allow provider comments and transitions only after enabling `mcp_work_item_writes` (#1854-4960).
+
 ### Fixed
 
 - Show cancelled story status and dependency removal actions from the API response; keep plan state visible beside cancellation counts (#1875-c3d9).

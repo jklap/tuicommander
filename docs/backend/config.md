@@ -303,7 +303,7 @@ save delete a live credential. Plaintext still found in `config.json` is moved
 into the vault at load time and the file is rewritten immediately, so the
 cleartext copy does not survive on disk.
 
-| `close_behavior` | `ask \| background \| quit` | `ask` | Main-window close asks, hides only main, or quits. Ask offers Remember. Explicit Quit ignores this policy. |
+| `close_behavior` | `ask \| background \| quit` | `ask` | Main-window close asks, hides visible windows, or quits. Ask offers Remember. Explicit Quit ignores this policy. |
 | `confirm_before_quit` | `bool` | `true` | Confirm real quit when live terminal sessions exist; does not block Background |
 | `confirm_before_closing_tab` | `bool` | `true` | Show tab close confirmation |
 | `copy_on_select` | `bool` | `true` | Auto-copy terminal selection to clipboard |
@@ -1477,3 +1477,25 @@ including when the saved channel is already `beta` or `nightly`. Later explicit
 choices, including `stable`, survive restarts. Stable and nightly builds do not
 run this migration. Fresh configs already carry the marker. It is not a setting
 and cannot be edited through the settings catalogue.
+
+### Background window visibility
+
+`background.hide_dock_icon` defaults to `true`. On macOS, background entry uses
+Accessory activation policy when enabled; Show restores Regular policy. The
+General page exposes this setting on macOS only. Other platforms retain the
+field without changing their taskbar or launcher policy.
+
+Background entry requests a persisted terminal snapshot from the main WebView
+and waits up to two seconds for `ack_background_snapshot`. Failure or timeout is
+logged and does not prevent hiding. Main, floating and visible panel windows
+are hidden; Show restores only the panels that were visible before entry.
+Desktop terminal visibility is saved separately from remote observations.
+Every terminal WebSocket lane prevents standby for its session. An open SSE
+event stream conservatively protects all sessions until that stream disconnects.
+An observer that attaches after SIGSTOP wakes the terminal immediately.
+Show restores the desktop visibility flags and wakes only terminals that become
+visible; it does not resume every inactive tab.
+
+### MCP work-item writes
+
+`mcp_work_item_writes` in `config.json` defaults to `false`, including when the field is absent in an older file. It permits only the `repo work_item_act` comment and transition operations. Reads need no opt-in. Use the existing configuration save surface to apply it live, or edit the file with the app stopped and restart. Supplying a flag in a work-item request cannot enable writes.

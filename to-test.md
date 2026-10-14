@@ -1,3 +1,7 @@
+## Tasks MCP access (1854-4960) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, use an isolated instance with a loaded local test provider: `repo work_item` reads its worktree-linked item and comments, including when another worktree has an earlier link-store entry; `work_item_act` refuses writes by default. Enable `mcp_work_item_writes` through config save and verify one synthetic comment/transition, then disable it. Do not use a real tracker for automated writes. Targeted transport/provider tests cover the mechanics; the running desktop must be rebuilt to load the Rust bridge.
+
 ## One-time beta channel migration (1817-beab) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build` with a beta version, an old config with `update_channel=stable` and no `beta_channel_migrated` marker switches to Beta once. Selecting Stable afterwards survives restarts. Use a throwaway isolated instance; stable builds must preserve the saved channel. Targeted Rust tests cover the load/save migration; the running desktop needs a rebuild/restart to load it.
@@ -5320,4 +5324,11 @@ Visual evidence: worktree Vite fixture mounted the real NotificationsTab and Toa
 - [ ] After a manual backend restart, verify an unknown `/tasks/no-such-endpoint` returns JSON 404 rather than the SPA shell (tasks API prefix fix).
 - [ ] #1873-bbc2 revision: After a manual Rust restart/rebuild, verify Claude stays working/busy while blocking Stop hooks run after final choices; chips publish once when ready. Automated recorded Stop-hook regression and replay oracle cover the backend.
 
+
+## Background hidden state (#1803-00d9)
+
+- [ ] After Boss restarts `make dev` or rebuilds release, hide then Show an idle terminal around the standby timeout; confirm the restored active terminal remains responsive. The B1 visibility recheck requires a Rust restart to load.
+- [ ] After Boss restarts `make dev` or rebuilds release, close to Background with a main window, floating window and open panel. Verify all hide and Show restores only those previously open. The Rust change does not hot-reload.
+- [ ] After restart on macOS, verify Dock icon disappears with `background.hide_dock_icon=true`, remains with false, and returns on Show. Verify Dock Reopen (when icon retained), second app launch, a deep link and a native notification click restore the window and active terminal.
+- [ ] On Windows after rebuild, verify close/Show applies Low/Normal WebView memory target without losing terminal output. On Linux verify panel restore. Native tray Show is wired by the following tray story to `background_mode::desktop::leave_background`.
 - [ ] #1833-aa60 round 1: after Boss restarts `make dev` or runs `make build`, confirm shared-data instances preserve live uploads, disabled Claude instructions retain attachment access, and custom wrappers launch normally. Rust changes require restart; no desktop was launched or reloaded by the peer.

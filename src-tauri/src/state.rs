@@ -163,6 +163,11 @@ pub(crate) struct WorktreeRemovedPayload {
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "event", content = "payload")]
 pub enum AppEvent {
+    #[serde(rename = "work-item-provider-request")]
+    WorkItemProviderRequest {
+        request_id: String,
+        request: crate::work_items::provider_bridge::ProviderRequest,
+    },
     #[serde(rename = "close-dialog")]
     CloseDialog { payload: serde_json::Value },
     #[serde(rename = "automation-run-changed")]
@@ -2074,6 +2079,7 @@ pub struct AppState {
     pub mcp: McpState,
     /// WebSocket clients per PTY session for streaming output
     pub ws_clients: DashMap<String, Vec<WsClientTx>>,
+    pub(crate) background_visibility: Mutex<crate::background_mode::hidden::Visibility>,
     /// Cached AppConfig to avoid re-reading from disk on every request
     pub(crate) config: parking_lot::RwLock<crate::config::AppConfig>,
     /// TTL caches for git and GitHub query results
@@ -2319,6 +2325,8 @@ pub struct AppState {
     pub(crate) connections_lock: tokio::sync::Mutex<()>,
     /// Pending screenshot requests: request_id → oneshot sender for base64 image data.
     /// Populated by MCP `ui(action=screenshot)`, consumed by `screenshot_response` command.
+    pub(crate) work_item_requests:
+        DashMap<String, crate::work_items::provider_bridge::PendingProviderRequest>,
     pub(crate) screenshot_responses: DashMap<String, tokio::sync::oneshot::Sender<Option<String>>>,
     /// Pending suspend requests: request_id → oneshot sender for the tab's verdict
     /// (`Ok(())` suspended, `Err(reason)` refused). Populated by MCP `session action=suspend`,
@@ -3525,6 +3533,7 @@ impl AppState {
             metrics: SessionMetrics::new(),
             mcp: McpState::default(),
             ws_clients: DashMap::new(),
+            background_visibility: Mutex::new(Default::default()),
             config: parking_lot::RwLock::new(config),
             git_cache: GitCacheState::new(),
             repo_watchers: DashMap::new(),
@@ -3599,6 +3608,7 @@ impl AppState {
             tunnel_audit,
             tasks: Arc::new(crate::tasks::TaskRegistry::new()),
             connections_lock: tokio::sync::Mutex::new(()),
+            work_item_requests: DashMap::new(),
             screenshot_responses: DashMap::new(),
             suspend_responses: DashMap::new(),
             confirm_responses: DashMap::new(),
@@ -5244,7 +5254,8 @@ impl AppState {
                 }
             }
             // Global events don't affect per-session state
-            AppEvent::HeadChanged { .. }
+            AppEvent::WorkItemProviderRequest { .. }
+            | AppEvent::HeadChanged { .. }
             | AppEvent::RepoChanged { .. }
             | AppEvent::PluginChanged { .. }
             | AppEvent::UpstreamStatusChanged { .. }
