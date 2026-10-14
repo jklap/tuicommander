@@ -302,3 +302,8 @@ export function paintOverlayBlocks(container: HTMLElement, blocks: readonly Over
 		container.appendChild(div);
 	}
 }
+
+/** Cache identity for the answer overlay geometry. */
+export function answerOverlayKey(markerKey: string, cellHeight: number, rows: readonly number[]): string {
+	return JSON.stringify([markerKey, cellHeight, rows]);
+}

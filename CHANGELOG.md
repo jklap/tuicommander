@@ -32,6 +32,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Read linked Tasks items and comments through MCP repo actions; allow provider comments and transitions only after enabling `mcp_work_item_writes` (#1854-4960).
 
 ### Fixed
+- Repaint answer-rule strips when terminal cell metrics or projected row positions change, so font loading and theme remeasurement keep the rule aligned (#1896-f355).
 
 - Run desktop orphan-worktree safety checks and removal on the blocking pool instead of the IPC main thread. Live heartbeat confirmation remains pending (#1638-c94c).
 - Include CSS tokens referenced by shorthand declarations in Design Mode grabs, including inline styles and adopted shadow-root sheets (#1888-14a3).

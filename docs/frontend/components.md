@@ -799,3 +799,5 @@ The mobile AI Chat composer uses the same device-local keyboard correction prefe
 Answer highlights in the terminal grid, AnswersPanel, AI Chat markdown and terminal Chat cards use a green left rule without an answer background layer. Paragraph spacing and each content block's own background stay unchanged. User-question styling is separate.
 
 The shared `--answer-rule` token preserves the dark-theme rule and uses `--success` in Paper to keep the rule visible on the light page. Terminal Chat cards already use `--success`.
+
+Answer overlay caching includes cell height and projected row positions as well as marker content, so font loading and theme remeasurement cannot retain old rule geometry.
