@@ -129,6 +129,43 @@ describe("native notification delivery", () => {
 		}
 	});
 
+	// Catches: disabling Tasks while OS permission is pending still sends a linked-check notice.
+	it("cancels linked task checks when Tasks is disabled during permission await", async () => {
+		const focus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
+		let allowPermission: (value: string) => void = () => {};
+		request.mockImplementation(() => new Promise<string>((resolve) => (allowPermission = resolve)));
+		try {
+			const { uiStore } = await import("../stores/ui");
+			const { notificationsStore } = await import("../stores/notifications");
+			const { notifyPrTransition } = await import("../services/prNativeNotifications");
+			notificationsStore.state.config.pr_native_notifications = false;
+			uiStore.setTaskViewPreference("tasks:notification-policy", { notificationsEnabled: true });
+			notifyPrTransition({
+				repoName: "acme/api",
+				prNumber: 12,
+				title: "Fix login",
+				type: "ci_failed",
+				url: "https://github.com/acme/api/pull/12",
+				linkedItem: {
+					reference: { providerId: "jira", accountId: "work", id: "123" },
+					key: "APP-123",
+					title: "Fix login",
+					url: "https://example.test/APP-123",
+					state: null,
+				},
+			});
+			uiStore.setTaskViewPreference("tasks:notification-policy", { notificationsEnabled: false });
+			allowPermission("granted");
+			await Promise.resolve();
+			await Promise.resolve();
+			await Promise.resolve();
+			expect(send).not.toHaveBeenCalled();
+			expect(nativeInvoke.mock.calls.filter(([command]) => command === "show_native_notification")).toHaveLength(0);
+		} finally {
+			focus.mockRestore();
+		}
+	});
+
 	it("uses the macOS click-aware native sender with a terminal target", async () => {
 		const focus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
 		const userAgent = vi

@@ -170,6 +170,24 @@ mod tests {
             assert!(!compare(input).notify);
         }
     }
+    // Catches: distinct GitLab comments posted within one timestamp tick are missed.
+    #[test]
+    fn distinct_comment_at_baseline_timestamp_notifies() {
+        let mut input = observation();
+        input.detail.item.reference.provider_id = "gitlab".into();
+        comment(&mut input, "first", "2026-10-14T10:00:00Z");
+        let baseline = compare(input).snapshot;
+        let mut input = observation();
+        input.detail.item.reference.provider_id = "gitlab".into();
+        input.enabled = true;
+        input.previous = Some(baseline);
+        comment(&mut input, "second", "2026-10-14T10:00:00Z");
+        assert!(
+            compare(input).notify,
+            "a new comment ID at the latest observed timestamp must notify"
+        );
+    }
+
     // Catches: a GitHub first page hides new comments beyond its page size.
     #[test]
     fn github_full_count_detects_comments_beyond_first_page() {
