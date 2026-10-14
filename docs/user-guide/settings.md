@@ -1,5 +1,12 @@
 # Settings
 
+The settings-service policy foundation keeps secrets write-only. Changes that
+expose TUIC or select executable code require the existing confirmation dialog;
+ordinary preferences, push settings and outbound HTTP destinations do not. The
+dialog uses a backend-built diff and approvals expire after five minutes and
+cannot be reused. The replacement settings MCP/API transport is still awaiting
+its separate cutover (#1786-9cbd).
+
 Open settings with `Cmd+,`. Settings are organized into pages. The navigation
 groups the pages by task:
 

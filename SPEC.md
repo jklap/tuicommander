@@ -2,6 +2,8 @@
 
 Plugin settings (Step 5, #1785-c7a1): loaded plugins register complete scoped schemas and typed private-file owners; patches preserve siblings, redact secrets and schedule reload. Core migrations cover build-cleaner, at-capacity-retry, cache-keepalive, claude-wakeup and the Telegram notifier example. Unload revokes catalogue entries and write authority. General settings MCP cutover remains separate.
 
+Settings policy (Step 6, #1786-9cbd): the shared service/registry enforce host-issued origin context, write-only reads, and backend-built exposure/execution proposals. Only the existing human confirmation channel grants a connection/target/revision/content-bound approval, consumed once within 300 seconds. No lock spans the wait; failed, refused, disconnected or expired proposals write nothing. The explicit host scope covers remote services, trusted/custom executables, stdio execution selection and tunnel port/auto-connect; ordinary settings remain immediate. Transport publication remains Step 7.
+
 Desktop close policy (B1, #1802-e6b8): Rust owns `app.close_behavior` (`ask` default, `background`, `quit`). Ask offers Remember; Background hides main only. Explicit Quit uses `confirm_before_quit` and closes live PTYs in Rust. Detached panels close independently. Tray and WebView unload belong to later stages.
 
 Agent capture tooling: `scripts/agent_capture/run.py` records real installed CLIs through isolated headless sessions, promotes reviewed captures with ordered expected states, and integrates with the 1342 replay oracle. Missing or unauthenticated CLIs remain unverified.

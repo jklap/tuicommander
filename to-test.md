@@ -2148,6 +2148,11 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] After Boss restarts `make dev` or builds release: verify the template icon on light/dark macOS menu bars, Windows overflow area and KDE. Check Always/background-only/Never, Show via click/menu, Quit confirmation, one first-entry native notice, live working/awaiting counts and attention clearing on Show. The current Rust process does not hot-reload.
 - [ ] On stock GNOME without a StatusNotifier host, close configured as Background must minimize with the main window reachable; Ask must omit Background. Native Linux packaging requires the appindicator dependency.
 
+## Settings policy foundation (#1786-9cbd)
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, queued approved writes must honor disconnect and expiry before owner preparation. Automated owner-boundary regressions cover both; settings transport publication remains a separate step.
+
+- [ ] After Boss's manual Rust restart and the separate settings-transport cutover, request a protected remote/auth/TLS/relay/executable edit: verify the desktop/phone dialog uses the backend diff, refusal writes nothing, acceptance commits once, and replay is refused. The policy foundation is covered through isolated owner files and the existing human-response channel; settings transport publication is still separate. Do not restart a live desktop session solely for this check.
 - [ ] Workflow Pause fix (#1882-bc88): after Boss restarts `make dev` or rebuilds release, edit a seeded story, publish it, and use Pause → Resume to → Save draft to repair an existing draft. Rust seed/API changes require restart.
 - [ ] Mobile composer + menu (#1880-d7ff): on iPhone, check both modes at 390px, native camera/file pickers, browser mic, Chat Park/Restore and busy Queue/Stop, terminal Queue and long-press Send. Confirm keyboard and safe-area positioning.
 

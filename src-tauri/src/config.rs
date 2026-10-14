@@ -859,7 +859,7 @@ pub(crate) struct ServicesConfig {
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates auth for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) auth: AuthConfig,
     #[serde(default)]
-    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates tls for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"service_restart","effect":"Reconfigures TLS protection after persistence.","operations":["get","set"],"confirmationClass":"execution_authority"}))]
     pub(crate) tls: TlsConfig,
     #[serde(default)]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates relay for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
