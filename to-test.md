@@ -651,10 +651,6 @@ the parser; these items are the part a live terminal shows.
       Investigation and validation: `plans/terminal-selection-output-integrity.md`.
 ## Terminal Unicode integrity (2026-09-21) — **Rust, needs a `make dev` restart**
 
-- [ ] Finish the block-cursor-on-decomposed-glyph visual check using a browser _(NOT VERIFIED 2026-09-30: needs the desktop frontend; deferred until after Boss restart. Backend: Block cursor on decomposed glyph is canvas rendering (no DOM). Backend: 'e'+U+0301 stays 2 code points in 1 cell (hyperlink span after decomposed text is cell-aligned [14,19]); needs desktop/browser canvas build with clipboard interception.)_ _(audit 2026-10-13: HUMAN — Unicode/cursor/selection rendering requires image access and verified clipboard guard; no real selection/copy attempted. Backend prior Unicode/search/reflow evidence retained.)_ _(triage 2026-10-14: DO — Runnable through scoped source/tests, isolated browser or throwaway API fixtures.)_
-      with verified clipboard interception. The prior run was interrupted after
-      terminal auto-copy overwrote the host clipboard; do not repeat real
-      selection/copy/paste against the shared clipboard.
 - [ ] After loading the rebuilt backend, print precomposed and decomposed accents, _(NOT VERIFIED 2026-09-30: needs the desktop frontend; deferred until after Boss restart. Backend: Backend half verified: printf PRE U+00E9, e+U+0301, a+U+0300 and accent written after base in a second printf -> lines keep code points 0xe9,0x65 0x301,0x61 0x300,0x65 0x301; resize 60->14->10->60 reflow keeps all combining marks; OSC8 span after accented text cell-aligned; POST search-buffer matche)_ _(audit 2026-10-13: HUMAN — Unicode/cursor/selection rendering requires image access and verified clipboard guard; no real selection/copy attempted. Backend prior Unicode/search/reflow evidence retained.)_ _(triage 2026-10-14: DO — Runnable through scoped source/tests, isolated browser or throwaway API fixtures.)_
       including an accent written after its base letter. Verify rendering, block
       cursor, selection/copy, search and a link following accented text; scroll
