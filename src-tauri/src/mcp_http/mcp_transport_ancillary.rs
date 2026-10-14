@@ -1388,7 +1388,7 @@ fn launch_workflow_effect(
     if worktree == owner {
         return Err("workflow agents require an isolated worktree".into());
     }
-    crate::worktree::validate_worktree_path(owner, &worktree)?;
+    crate::worktree::validate_branch_worktree_path(owner, &worktree)?;
     let store = crate::workflows::RunStore::open()?;
     let run = store.snapshot(&input.run_id)?;
     if run.project != owner {

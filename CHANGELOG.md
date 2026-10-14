@@ -21,6 +21,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Allow workflow agents to launch in registered branch worktrees while preserving detached-orphan removal guards (#1883-eba0).
+
 - AI Chat provider-retry waits now count down live to “retrying now”; user-message Copy buttons no longer wrap vertically.
 
 - Hide Markdown review Agent and Send controls after a successful send until a new change (#1881-f84a).
