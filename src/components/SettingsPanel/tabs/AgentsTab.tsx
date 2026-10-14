@@ -19,6 +19,7 @@ import {
 	type EnvFlagDef,
 } from "../../../data/ccEnvFlags";
 import { type AgentAvailability, useAgentDetection } from "../../../hooks/useAgentDetection";
+import { t } from "../../../i18n";
 import { invoke } from "../../../invoke";
 import { setClaudeUsageEnabled } from "../../../plugins";
 import { isPluginDisabled, setPluginEnabled } from "../../../plugins/pluginLoader";
@@ -1452,6 +1453,7 @@ export const AgentsTab: Component<AgentsTabProps> = (props) => {
 						</For>
 					</div>
 
+					<HibernationSection />
 					<EgoPermissionsSection />
 
 					<McpIntegrationsSection />
@@ -1505,6 +1507,50 @@ const EgoPermissionsSection: Component = () => {
 					uses its own ACP settings.
 				</p>
 			</div>
+		</div>
+	);
+};
+
+const HibernationSection: Component = () => {
+	const store = useAgentConfig();
+	return (
+		<div class={s.section}>
+			<h3>{t("settings.agents.hibernateHeading", "Idle agent hibernation")}</h3>
+			<ExpertSetting configKey="agents.hibernate_idle_minutes" value={store.state.hibernate_idle_minutes}>
+				<label for="hibernate-minutes">{t("settings.agents.hibernateMinutes", "Hibernate idle agents after")}</label>
+				<Input
+					id="hibernate-minutes"
+					class={a.formInput}
+					type="number"
+					min="0"
+					max="1440"
+					value={store.state.hibernate_idle_minutes}
+					onChange={(event) => void store.setHibernate(event.currentTarget.valueAsNumber, store.state.hibernate_scope)}
+				/>
+			</ExpertSetting>
+			<ExpertSetting configKey="agents.hibernate_scope" value={store.state.hibernate_scope}>
+				<label for="hibernate-scope">{t("settings.agents.hibernateScope", "Hibernate scope")}</label>
+				<Select
+					id="hibernate-scope"
+					class={a.formInput}
+					value={store.state.hibernate_scope}
+					onChange={(event) =>
+						void store.setHibernate(
+							store.state.hibernate_idle_minutes,
+							event.currentTarget.value as "background_only" | "always",
+						)
+					}
+				>
+					<option value="background_only">{t("settings.agents.hibernateBackground", "Only in background")}</option>
+					<option value="always">{t("settings.agents.hibernateAlways", "Always")}</option>
+				</Select>
+			</ExpertSetting>
+			<p class={s.hint}>
+				{t(
+					"settings.agents.hibernateHint",
+					"Minutes of awake idle time. Set to 0 to disable. Only unattended resumable agents hibernate; managed children keep their idle-close policy.",
+				)}
+			</p>
 		</div>
 	);
 };

@@ -2120,8 +2120,25 @@ impl Default for AgentSettings {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
+fn default_hibernate_minutes() -> u32 {
+    60
+}
+#[derive(Clone, Copy, Default, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum HibernateScope {
+    #[default]
+    BackgroundOnly,
+    Always,
+}
+
+#[derive(Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct AgentsConfig {
+    #[serde(default = "default_hibernate_minutes")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Hibernates unattended resumable agents after awake idle minutes; zero disables.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    pub(crate) hibernate_idle_minutes: u32,
+    #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Selects whether idle agents hibernate only in background or always.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    pub(crate) hibernate_scope: HibernateScope,
     #[serde(default)]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates agents for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) agents: HashMap<String, AgentSettings>,
@@ -2135,6 +2152,18 @@ pub(crate) struct AgentsConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"next_session","effect":"Used when the next session or process starts; existing sessions retain their launch configuration.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) launch_instructions: Option<String>,
+}
+
+impl Default for AgentsConfig {
+    fn default() -> Self {
+        Self {
+            agents: HashMap::new(),
+            headless_agent: None,
+            launch_instructions: None,
+            hibernate_idle_minutes: default_hibernate_minutes(),
+            hibernate_scope: HibernateScope::default(),
+        }
+    }
 }
 
 #[derive(Deserialize)]

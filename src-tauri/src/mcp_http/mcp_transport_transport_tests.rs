@@ -4240,6 +4240,7 @@ fn make_agents_config() -> crate::config::AgentsConfig {
         agents,
         launch_instructions: None,
         headless_agent: None,
+        ..Default::default()
     }
 }
 
