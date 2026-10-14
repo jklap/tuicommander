@@ -28,6 +28,8 @@ pub(crate) mod background_mode;
 mod background_mode_tests;
 pub(crate) mod launch_instructions;
 pub(crate) mod prompt_receipt;
+pub(crate) mod session_resume;
+pub(crate) mod suspended_sessions;
 pub mod work_items;
 pub use tuic_core::app_instance;
 pub(crate) mod app_logger;
@@ -622,18 +624,6 @@ fn screenshot_response(state: State<'_, Arc<AppState>>, request_id: String, data
 #[tauri::command]
 fn mcp_confirm_response(state: State<'_, Arc<AppState>>, request_id: String, confirmed: bool) {
     crate::mcp_http::resolve_mcp_confirm(&state, &request_id, confirmed);
-}
-
-/// The tab's verdict on a `session action=suspend` request.
-#[cfg(feature = "desktop")]
-#[tauri::command]
-fn session_suspend_response(
-    state: State<'_, Arc<AppState>>,
-    request_id: String,
-    ok: bool,
-    reason: Option<String>,
-) {
-    crate::mcp_http::mcp_transport::resolve_session_suspend(&state, &request_id, ok, reason);
 }
 
 /// One IPv4 address found on a network interface.
@@ -2529,7 +2519,7 @@ pub fn run() {
             secrets::forms::secret_form_bootstrap,
             secrets::forms::secret_form_submit,
             mcp_confirm_response,
-            session_suspend_response,
+            mcp_http::suspended_routes::suspended_session_action,
             app_logger::push_log,
             app_logger::get_logs,
             app_logger::clear_logs,
@@ -2559,6 +2549,7 @@ pub fn run() {
             design_mode::tauri_commands::stop_design_mode,
             design_mode::tauri_commands::reload_design_mode,
             design_mode::tauri_commands::navigate_design_mode,
+            design_mode::tauri_commands::design_mode_browser_command,
             design_mode::tauri_commands::get_design_mode_status,
             acp_commands::acp_workspace_root,
             acp_commands::acp_connect,

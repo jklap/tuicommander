@@ -63,6 +63,7 @@ import { toastsStore } from "../../stores/toasts";
 import { uiStore } from "../../stores/ui";
 import * as transport from "../../transport";
 import { keyFor } from "../../utils/hotkey";
+import { adoptSuspendedSession } from "../../utils/suspendedSessions";
 
 describe("TabBar", () => {
 	beforeEach(() => {
@@ -126,6 +127,38 @@ describe("TabBar", () => {
 			awaitingInput: overrides.awaitingInput ?? null,
 		});
 	}
+
+	// Catches: a persisted backend record being lost when a fresh frontend mounts.
+	it("suspended_record_survives_restart_and_frontend_renders_it", () => {
+		const id = adoptSuspendedSession(
+			{
+				tuic_session: "durable-tab",
+				session_id: "old-pty",
+				agent_type: null,
+				cwd: "/Gits/alpha",
+				worktree: null,
+				agent_session_id: null,
+				launch_command: null,
+				alias: "parked",
+				pane_slot: null,
+				reason: "user",
+				name: "Durable shell",
+			},
+			14,
+		);
+		const view = render(() => (
+			<TabBar
+				onTabSelect={() => {}}
+				onTabClose={() => {}}
+				onCloseOthers={() => {}}
+				onCloseToRight={() => {}}
+				onNewTab={() => {}}
+			/>
+		));
+		expect(view.getByText("Durable shell")).toBeTruthy();
+		expect(terminalsStore.get(id)?.suspended).toBe(true);
+		expect(view.container.querySelector(".suspendedBadge")).toBeTruthy();
+	});
 
 	it("clicking new tab button calls onNewTab directly", () => {
 		const onNewTab = vi.fn();

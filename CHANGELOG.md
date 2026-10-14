@@ -6,13 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Add correlated Design Mode native-port browser commands, explicit host eval grants, screenshots, page-error reads and sidebar action history.
 - Fix seeded workflow Pause resume targets, expose their target in the Designer, and report invalid publication fields as HTTP 422.
 
 ### Added
+- Add the internal settings-policy foundation: host-issued origin checks, write-only secret reads and backend-built one-use confirmation proposals for exposure/execution settings. Replacement settings transport publication remains separate (#1786-9cbd).
+- Render searchable Integrations settings pages from live plugin catalogue entries, with scoped revision-checked edits and unload removal (#1683-c04b).
 - List the desktop repository’s open Markdown files in the mobile session menu, with live updates and the existing mobile viewer (#1879-05ad).
 - Add scoped plugin settings schemas, locked revision patches, secret redaction, typed migrations for the five existing configurable plugins, and unload-safe catalogue registration (#1785-c7a1).
 
 - Unify mobile terminal and AI Chat composers with a shared + menu for files, camera capture and supported draft, queue and command actions (#1880-d7ff).
+
+- Persist suspended tabs in Rust and allow suspension without an attached UI; verify and restore agent sessions through the backend (#1806-ed18).
 
 - Add a device-local mobile Settings toggle for prompt autocorrect and spellcheck, enabled by default (#1878-3a3c).
 
@@ -22,6 +27,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 - Include CSS tokens referenced by shorthand declarations in Design Mode grabs, including inline styles and adopted shadow-root sheets (#1888-14a3).
+- Allow workflow agents to launch in registered branch worktrees while preserving detached-orphan removal guards (#1883-eba0).
+
+- Preserve attached Goose session names and legacy paths without injecting a duplicate or conflicting `--name`.
+- Keep the Context preview clear of the terminal CLI/Chat switch (#1893-a053).
+
+- Apply scrollbar history-mark visibility changes immediately on idle terminals (#1891-a933).
 
 - Start status-bar agent usage blinking at 96% instead of 90%; dashboard critical colours remain at 90% (#1887-86a5).
 

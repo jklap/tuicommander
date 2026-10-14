@@ -1,5 +1,12 @@
 # Settings
 
+The settings-service policy foundation keeps secrets write-only. Changes that
+expose TUIC or select executable code require the existing confirmation dialog;
+ordinary preferences, push settings and outbound HTTP destinations do not. The
+dialog uses a backend-built diff and approvals expire after five minutes and
+cannot be reused. The replacement settings MCP/API transport is still awaiting
+its separate cutover (#1786-9cbd).
+
 Open settings with `Cmd+,`. Settings are organized into pages. The navigation
 groups the pages by task:
 
@@ -492,3 +499,9 @@ Agents can read linked Tasks items through the MCP repo tool. Tracker comments a
 ### Background tray and menu-bar icon
 
 In General > Confirmations, Tray and menu-bar icon selects Always, Only in background (default), or Never. Never disables the Background choice. If the tray cannot be created, or the Linux desktop has no tray host (such as stock GNOME), closing minimizes the window so it remains reachable. The tray menu offers Show TUICommander, live working/awaiting counts and Quit. An attention mark clears when you show the window. Linux uses the menu; macOS and Windows also support left-click to show.
+
+## Plugin integration pages
+
+Loaded plugins with registered settings appear under Settings > Integrations. Search includes their catalogue field labels. Unloading removes the page and search entries. Reads, revision-checked edits, resets and secret set/unset status use the scoped Rust settings service; the UI owns no second configuration store.
+
+String-list edits, added rows, and removed rows stay in a draft until focus leaves the list. Read failures show an alert on the plugin page and do not close Settings.

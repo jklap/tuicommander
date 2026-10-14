@@ -876,56 +876,6 @@ async fn session_suspend_refuses_an_exited_session_that_keeps_its_state_entry() 
     assert!(events.try_recv().is_err());
 }
 
-// Catches: reporting `ok` when nothing can perform the suspend (headless daemon with no client).
-#[tokio::test]
-async fn session_suspend_errors_when_no_ui_is_attached() {
-    let state = test_state();
-    let idle = "550e8400-e29b-41d4-a716-446655440c02";
-    idle_suspend_candidate(&state, idle);
-    let mut events = state.event_bus.subscribe();
-
-    let result = suspend(&state, idle).await;
-
-    assert!(
-        result["error"]
-            .as_str()
-            .is_some_and(|e| e.contains("no UI is attached")),
-        "got {result}"
-    );
-    assert!(
-        events.try_recv().is_err(),
-        "nobody is listening: nothing to emit"
-    );
-    assert!(state.suspend_responses.is_empty());
-}
-
-// Catches: answering `ok` as soon as the request is emitted, before the tab has acted.
-#[tokio::test]
-async fn session_suspend_returns_ok_once_the_tab_suspended() {
-    assert_eq!(
-        suspend_answered_with(Some((true, None))).await,
-        serde_json::json!({"ok": true})
-    );
-}
-
-// Catches: the old `{"ok":true,"requested":true}` that hid a frontend refusal.
-#[tokio::test]
-async fn session_suspend_returns_the_tabs_refusal() {
-    let result = suspend_answered_with(Some((false, Some("waiting for input".to_string())))).await;
-    assert_eq!(result["error"], "Cannot suspend: waiting for input");
-    assert!(result.get("ok").is_none());
-}
-
-// Catches: a request nobody answers hanging the MCP call for ever.
-#[tokio::test(start_paused = true)]
-async fn session_suspend_gives_up_when_no_tab_answers() {
-    let result = suspend_answered_with(None).await;
-    assert_eq!(
-        result["error"],
-        "Cannot suspend: no tab answered the request"
-    );
-}
-
 #[tokio::test]
 async fn session_suspend_reports_an_unknown_session() {
     let state = test_state();
@@ -4337,6 +4287,46 @@ async fn mcp_codex_spawn_carries_launch_instructions() {
 }
 
 #[cfg(unix)]
+const MOCK_CODEX_ARGV_SCRIPT: &str = "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$ARGV_OUTPUT.tmp\" && mv \"$ARGV_OUTPUT.tmp\" \"$ARGV_OUTPUT\"\n";
+
+// Catches: a paused mock writer publishes a partial argv prefix before finishing.
+#[cfg(unix)]
+#[tokio::test]
+async fn codex_mock_argv_is_published_only_after_writer_finishes() {
+    use std::io::Write;
+    let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let output = root.path().join("argv");
+    let ready = root.path().join("ready");
+    // Override printf to stop after the first argument. stdin releases the writer,
+    // so the partial-write window stays open until the test has observed it.
+    let script = format!(
+        "printf() {{\n shift\n command printf '%s\\n' \"$1\"\n shift\n command printf ready > \"$ARGV_READY\"\n read -r release\n command printf '%s\\n' \"$@\"\n}}\n{MOCK_CODEX_ARGV_SCRIPT}"
+    );
+    let mut writer = std::process::Command::new("/bin/sh")
+        .args(["-c", &script, "mock-codex", "--search", "exec", "task"])
+        .env("ARGV_OUTPUT", &output)
+        .env("ARGV_READY", &ready)
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let ready_content =
+        wait_for_file_content_async(&ready, std::time::Duration::from_secs(60)).await;
+    let partial = std::fs::read_to_string(&output).ok();
+    writer
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"release\n")
+        .unwrap();
+    let status = writer.wait().unwrap();
+    assert_eq!(ready_content, "ready", "writer must reach the paused state");
+    assert!(status.success());
+    assert_eq!(partial, None, "incomplete argv must not be published");
+    let actual = wait_for_file_content_async(&output, std::time::Duration::from_secs(60)).await;
+    assert_eq!(actual, "--search\nexec\ntask\n");
+}
+
+#[cfg(unix)]
 async fn capture_codex_spawn_with(
     args: &[&str],
     prompt: &str,
@@ -4348,11 +4338,7 @@ async fn capture_codex_spawn_with(
     let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
     let output = root.path().join("argv");
     let binary = root.path().join(command_name);
-    std::fs::write(
-        &binary,
-        "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$ARGV_OUTPUT\"\n",
-    )
-    .unwrap();
+    std::fs::write(&binary, MOCK_CODEX_ARGV_SCRIPT).unwrap();
     std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
     let _config = crate::config::set_config_dir_override(root.path().join("config"));
     let cfg = serde_json::from_value(serde_json::json!({
@@ -5065,20 +5051,6 @@ async fn session_list_drops_process_internals_and_quiet_flags() {
 
 // ---- critic 1358 round 2: the suspend request/verdict handshake ----
 
-async fn crit1358_next_request(
-    events: &mut tokio::sync::broadcast::Receiver<crate::state::AppEvent>,
-) -> (String, String) {
-    loop {
-        if let Ok(crate::state::AppEvent::SessionSuspendRequested {
-            session_id,
-            request_id,
-        }) = events.recv().await
-        {
-            return (session_id, request_id);
-        }
-    }
-}
-
 fn crit1358_attached_state(sessions: &[&str]) -> Arc<AppState> {
     let state = test_state();
     for sid in sessions {
@@ -5114,33 +5086,6 @@ async fn crit1358_suspend_is_rejected_before_any_request_for_non_loopback_caller
         "got {response}"
     );
     assert!(events.try_recv().is_err(), "no request may reach the UI");
-    assert!(state.suspend_responses.is_empty());
-}
-
-// Catches: loopback dispatch not reaching the waiting handler (old sync arm answering
-// `requested`): the tool call must return the tab's verdict.
-#[tokio::test]
-async fn crit1358_loopback_tool_call_returns_the_tabs_verdict() {
-    let sid = "550e8400-e29b-41d4-a716-446655440d02";
-    let state = crit1358_attached_state(&[sid]);
-    let mut events = state.event_bus.subscribe();
-    let call = tokio::spawn({
-        let state = state.clone();
-        async move {
-            handle_mcp_tool_call(
-                &state,
-                "127.0.0.1:1".parse().unwrap(),
-                "session",
-                &serde_json::json!({"action": "suspend", "session_id": sid}),
-                None,
-            )
-            .await
-        }
-    });
-    let (_, request_id) = crit1358_next_request(&mut events).await;
-    resolve_session_suspend(&state, &request_id, false, Some("no live session".into()));
-    let result = call.await.unwrap();
-    assert_eq!(result["error"], "Cannot suspend: no live session");
 }
 
 // Catches: the exited check running after the UI request, or only for the PTY id (an
@@ -5156,7 +5101,6 @@ async fn crit1358_an_exited_session_is_refused_before_the_ui_is_asked() {
 
     assert_eq!(result["error"], "Cannot suspend: session has exited");
     assert!(events.try_recv().is_err());
-    assert!(state.suspend_responses.is_empty());
 }
 
 // Catches: the busy rule skipped for an attached UI (refusal reported only by the tab).
@@ -5172,5 +5116,61 @@ async fn crit1358_a_working_agent_is_refused_even_with_a_ui_attached() {
         .insert(sid.to_string(), working);
     let result = suspend(&state, sid).await;
     assert_eq!(result["error"], "Cannot suspend: waiting for input");
-    assert!(state.suspend_responses.is_empty());
+}
+
+// Catches: shared meta discovery leaking an armed browser tool to unrelated MCP sessions.
+#[cfg(all(unix, feature = "desktop"))]
+#[tokio::test]
+async fn design_mode_meta_discovery_is_scoped_to_the_armed_session() {
+    let state = test_state();
+    insert_managed_test_session(&state, "owner", "/repo");
+    insert_managed_test_session(&state, "other", "/repo");
+    state
+        .mcp
+        .to_session
+        .insert("owner-mcp".into(), "owner".into());
+    state
+        .mcp
+        .to_session
+        .insert("other-mcp".into(), "other".into());
+    crate::mcp_http::mcp_transport_catalogue::rebuild_tool_search_index(&state);
+    let manager = crate::design_mode::manager(&state).await;
+    manager.arm_extension("/repo".into(), "owner".into()).await;
+    for (sid, expected) in [("owner-mcp", true), ("other-mcp", false)] {
+        let result = handle_mcp_tool_call(
+            &state,
+            loopback_addr(),
+            "search_tools",
+            &serde_json::json!({"query":"design_mode browser", "limit":100}),
+            Some(sid),
+        )
+        .await;
+        assert_eq!(
+            result["results"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|r| r["name"] == "design_mode"),
+            expected
+        );
+        let schema = handle_mcp_tool_call(
+            &state,
+            loopback_addr(),
+            "get_tool_schema",
+            &serde_json::json!({"tool_name":"design_mode"}),
+            Some(sid),
+        )
+        .await;
+        assert_eq!(schema["name"] == "design_mode", expected);
+    }
+    manager.stop("/repo").await.unwrap();
+    let schema = handle_mcp_tool_call(
+        &state,
+        loopback_addr(),
+        "get_tool_schema",
+        &serde_json::json!({"tool_name":"design_mode"}),
+        Some("owner-mcp"),
+    )
+    .await;
+    assert_eq!(schema["error"], "Design Mode not armed for this session");
 }

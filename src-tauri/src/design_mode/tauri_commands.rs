@@ -43,3 +43,13 @@ pub(crate) async fn navigate_design_mode(
 ) -> Result<serde_json::Value, String> {
     super::navigate(state.inner(), &repo_path, &url).await
 }
+
+#[tauri::command]
+pub(crate) async fn design_mode_browser_command(
+    state: tauri::State<'_, Arc<AppState>>,
+    repo_path: String,
+    action: String,
+    args: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    super::browser_command(state.inner(), &repo_path, &action, args).await
+}

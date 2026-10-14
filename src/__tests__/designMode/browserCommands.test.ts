@@ -1,0 +1,61 @@
+import { describe, expect, it, vi } from "vitest";
+// @ts-expect-error plain MV3 module
+import { browserCommand } from "../../../browser-extension/design-mode/browserCommands.js";
+
+function browser(origins: string[] = []) {
+	return {
+		tabs: {
+			get: vi.fn(async () => ({ id: 7, active: true, windowId: 2, url: "http://localhost:5173/" })),
+			update: vi.fn(async () => {}),
+			reload: vi.fn(async () => {}),
+			captureVisibleTab: vi.fn(async () => "data:image/png;base64,iVBORw0KGgo="),
+		},
+		permissions: { contains: vi.fn(async () => origins.length > 0), getAll: vi.fn(async () => ({ origins })) },
+		scripting: { executeScript: vi.fn(async () => [{ result: { value: 4 } }]) },
+	};
+}
+describe("native browser command boundary", () => {
+	it("refuses remote navigation without a grant and accepts a granted host", async () => {
+		// Catches: optional host permissions ignored or silently bypassed.
+		const chrome = browser();
+		await expect(
+			browserCommand({ action: "navigate", args: { url: "https://example.com/" } }, chrome, 7),
+		).rejects.toThrow("host_denied");
+		expect(chrome.tabs.update).not.toHaveBeenCalled();
+		chrome.permissions.contains.mockResolvedValue(true);
+		await browserCommand({ action: "navigate", args: { url: "https://example.com/" } }, chrome, 7);
+		expect(chrome.tabs.update).toHaveBeenCalledWith(7, { url: "https://example.com/" });
+		await expect(
+			browserCommand({ action: "navigate", args: { url: "javascript:alert(1)" } }, chrome, 7),
+		).rejects.toThrow("host_denied");
+	});
+	it("requires explicit eval consent even on static localhost access", async () => {
+		// Catches: ordinary local inspection permission treated as eval consent.
+		const chrome = browser(["http://localhost/*"]);
+		await expect(browserCommand({ action: "eval", args: { script: "2+2" } }, chrome, 7)).rejects.toThrow(
+			"eval_not_granted",
+		);
+		expect(chrome.scripting.executeScript).not.toHaveBeenCalled();
+		const granted = browser(["http://*/*", "https://*/*"]);
+		expect(await browserCommand({ action: "eval", args: { script: "2+2" } }, granted, 7)).toEqual({ value: 4 });
+		expect(granted.scripting.executeScript).toHaveBeenCalledWith(
+			expect.objectContaining({ world: "MAIN", target: { tabId: 7 } }),
+		);
+	});
+	it("refuses hidden-tab screenshots rather than capturing a different page", async () => {
+		// Catches: captureVisibleTab returning another tab as the reviewed screenshot.
+		const chrome = browser();
+		chrome.tabs.get.mockResolvedValue({ id: 7, active: false, windowId: 2, url: "http://localhost:5173/" });
+		await expect(browserCommand({ action: "screenshot" }, chrome, 7)).rejects.toThrow("tab_not_visible");
+		expect(chrome.tabs.captureVisibleTab).not.toHaveBeenCalled();
+	});
+	it("returns errors from the reviewed tab and refuses missing tab identity", async () => {
+		// Catches: browser commands falling back to an unrelated active tab.
+		const errors = vi.fn(async () => [{ message: "broken" }]);
+		expect(await browserCommand({ action: "errors" }, browser(), 7, errors)).toEqual({
+			errors: [{ message: "broken" }],
+		});
+		expect(errors).toHaveBeenCalledWith(7);
+		await expect(browserCommand({ action: "reload" }, browser(), undefined)).rejects.toThrow("no_reviewed_tab");
+	});
+});

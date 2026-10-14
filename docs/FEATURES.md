@@ -1,5 +1,11 @@
 # TUICommander — Complete Feature Reference
 
+Settings policy foundation (#1786-9cbd): shared owner-service writes enforce
+host-issued caller authority, write-only secrets and one-use, five-minute human
+approval for exposure/execution changes. The existing desktop/browser/mobile
+confirmation dialog shows a backend-built diff. Replacement settings transport
+publication remains a separate integration step.
+
 Mobile terminal Send supports long-press Queue for the next agent ready window.
 
 Published story workflows can start in Plans and Stories through the owning daemon. Run history renders graph positions, decisions, evidence and paged event payloads, with explicit graph recovery and cancellation. IPC/HTTP and the generated `workflow_run` MCP schema share the native run service. Plan start remains visibly unavailable pending plan dispatch.
@@ -331,11 +337,11 @@ Idle, unfocused terminals are suspended to stop them consuming CPU and battery. 
 A terminal tab can be suspended from its context menu (**Suspend Tab**) or with MCP `session action=suspend`. The PTY and its agent end, so memory and CPU are released, while the tab stays restorable exactly like a tab after a TUICommander restart.
 
 - **Kept on the tab** — cwd, worktree, alias, `tuic_session`, agent type, agent session id and launch command. The tab shows a `zz` badge and a **Suspended** notice with a **Resume** button.
-- **Resume** — the **Resume** button or **Resume Tab** menu entry opens a new PTY with the same cwd and, for an agent tab, types the command `verifyAndBuildResumeCommand` builds, the function the restart-restore path uses. A plain shell tab reopens a shell. The command is typed automatically at the first idle prompt, with no restart banner: clicking Resume is the confirmation, and the banner would ask for a second click.
-- **Persistence** — `suspended` is stored in the tab's `savedTerminals` record, so a restart restores the tab suspended (a plain shell tab too) and never resumes it by itself.
-- **Refusals** — the tab is not suspended while the agent is working (`working`/`starting` or background work), a question awaits input, compose commands are queued, or a plain shell is busy. An agent tab whose session cannot be resumed is refused. MCP returns `Cannot suspend: <reason>` before any event is emitted, and also for a session that already exited.
-- **MCP verdict** — `session action=suspend` waits (up to 20 s) for the tab's answer and returns `{ok:true}` or `Cannot suspend: <reason>` when the tab refuses. With no UI attached (a headless `tuic-remote` with no open client) it returns an error instead of reporting success.
-- **Event** — `session-suspend-requested` (`{ session_id, request_id }`) from MCP `session action=suspend`; the UI owns the tab and performs the suspend
+- **Resume** — the button and menu ask Rust to verify the saved agent session against its launch profile and open a replacement PTY in the same folder. A shell tab reopens its shell; the frontend attaches the returned PTY without sending another command.
+- **Persistence** — Rust writes `suspended-sessions.json` in the config directory before ending the PTY. Records keyed by `tuic_session` retain cwd, worktree, alias, agent type, agent session id, launch command, pane slot and reason (`user`, reserved `idle_hibernate`). A recreated frontend lists these records and renders suspended tabs without starting processes.
+- **Refusals** — working/starting agents, background work, unanswered questions, queued commands, busy shells, exited sessions and non-resumable agents remain protected by Rust checks.
+- **MCP verdict** — `session action=suspend` returns `{ok:true}` after Rust persists and ends the PTY, including when no UI is attached. Refusals return `Cannot suspend: <reason>`.
+- **Event** — `session-suspended` carries `{record}` over desktop events and SSE before the PTY closes. The IPC/HTTP `suspended_session_action` endpoint supports listing, suspending, resuming, forgetting and metadata synchronization.
 
 ---
 
@@ -796,7 +802,7 @@ When an agent is detected running in a terminal, TUICommander automatically disc
 - **Gemini CLI** — Sessions stored in `~/.gemini/tmp/<hash>/chats/session-*.json`; `sessionId` field from JSON
 - **Codex CLI** — Sessions stored in `~/.codex/sessions/YYYY/MM/DD/rollout-*-<UUID>.jsonl`; UUID from filename. Codex does *not* partition by project, so candidates are filtered on the working directory recorded in the rollout's first `session_meta` record — otherwise a terminal in one project would bind to another project's session. A rollout whose `cwd` can't be read is rejected rather than accepted
 - **Goose turn completion** — A reply followed by the ready composer returns the tab to idle and allows the next submission, without the five-minute stale recovery (#1812-022d).
-- **Goose** — Sessions stored in SQLite (`~/Library/Application Support/Block/goose/sessions/sessions.db`); shell wrapper injects `--name $TUIC_SESSION` for deterministic binding, resume by name
+- **Goose** — Sessions stored in SQLite (`~/Library/Application Support/Block/goose/sessions/sessions.db`); shell wrapper injects `--name $TUIC_SESSION` for deterministic binding on normal `session`/`run` launches, preserving explicit names, paths, resume and stateless arguments; resume by name
 
 Discovery runs once per terminal on `null→agent` transition. Multiple concurrent agents are handled via a `claimed_ids` deduplication list. On agent exit, the stored session ID is cleared to allow re-discovery on next launch.
 
@@ -3009,3 +3015,11 @@ The existing MCP `repo` tool reads linked work items or explicit references, URL
 ### Background tray and menu-bar icon
 
 Tray and menu-bar icon: Settings > General offers Always, Only in background (default), or Never. The native menu shows live working/awaiting agent counts, Show TUICommander and Quit. An attention mark appears for awaiting agents while hidden and clears on Show. Left-click shows the app on macOS and Windows; Linux uses the menu. Never, a failed tray build, or a Linux desktop without a StatusNotifier host falls back to minimizing without clearing terminal visibility. A native notice appears on the first background entry of each app run.
+
+Design Mode agent control: immediate native-port navigate, reload, screenshot,
+page-error read and explicitly host-granted MAIN-world eval. The extension sidebar
+shows the last fifty agent actions. Screenshots require the reviewed tab to be visible.
+
+## Plugin settings pages
+
+Loaded plugins with registered settings appear under Settings > Integrations. Search includes their catalogue field labels. Unloading removes the page and search entries. Reads, revision-checked edits, resets and secret set/unset status use the scoped Rust settings service; the UI owns no second configuration store.

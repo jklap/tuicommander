@@ -104,6 +104,7 @@
 /config/themes
 /config/ui-prefs
 /design-mode
+/design-mode/command
 /design-mode/navigate
 /design-mode/reload
 /design-mode/start
@@ -187,7 +188,6 @@
 /logs
 /mcp/confirm-response
 /mcp/status
-/mcp/suspend-response
 /mcp/upstream-status
 /mcp/upstreams
 /mcp/upstreams/credential
@@ -307,6 +307,7 @@
 /secrets/forms/submit
 /sessions
 /sessions/agent
+/sessions/suspended
 /sessions/worktree
 /sessions/x
 /sessions/x/chat-view
