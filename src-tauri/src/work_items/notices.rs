@@ -29,13 +29,16 @@ pub(crate) struct CommentComparison {
 pub(crate) fn compare(input: CommentObservation) -> CommentComparison {
     let mut snapshot = input.previous.clone().unwrap_or_default();
     let previous_latest = snapshot.latest;
+    let previous_ids = snapshot.ids.clone();
     let mut fresh = false;
     let mut observe = |comment: &WorkItemComment| {
         let Ok(time) = chrono::DateTime::parse_from_rfc3339(&comment.created_at) else {
             return;
         };
         let time = time.timestamp_millis();
-        if previous_latest.is_some_and(|previous| time > previous) {
+        if previous_latest.is_some_and(|previous| {
+            time > previous || (time == previous && !previous_ids.contains(&comment.id))
+        }) {
             fresh = true;
         }
         match snapshot.latest {
@@ -63,16 +66,16 @@ pub(crate) fn compare(input: CommentObservation) -> CommentComparison {
         }
     }
     // GitHub includes the full issue-comment count even when detail contains only the first page.
-    if input.detail.item.reference.provider_id == "github" {
-        if let Some(Some(WorkItemFieldValue::Number(count))) =
+    if input.detail.item.reference.provider_id == "github"
+        && let Some(Some(WorkItemFieldValue::Number(count))) =
             input.detail.item.fields.get("comments")
-        {
-            if count.is_finite() && *count >= 0.0 && count.fract() == 0.0 {
-                let count = *count as u64;
-                fresh |= snapshot.count.is_some_and(|previous| count > previous);
-                snapshot.count = Some(count);
-            }
-        }
+        && count.is_finite()
+        && *count >= 0.0
+        && count.fract() == 0.0
+    {
+        let count = *count as u64;
+        fresh |= snapshot.count.is_some_and(|previous| count > previous);
+        snapshot.count = Some(count);
     }
     // An empty first page still establishes a baseline for a later first comment.
     if snapshot.latest.is_none() {
@@ -161,7 +164,15 @@ mod tests {
         for date in ["2026-10-14T09:00:00Z", "2026-10-14T10:00:00Z", "invalid"] {
             let mut input = observation();
             input.enabled = true;
-            comment(&mut input, "different-id", date);
+            comment(
+                &mut input,
+                if date == "2026-10-14T10:00:00Z" {
+                    "first"
+                } else {
+                    "different-id"
+                },
+                date,
+            );
             input.previous = Some(CommentSnapshot {
                 latest: Some(1791972000000),
                 ids: vec!["first".into()],

@@ -46,6 +46,10 @@ export function notifyPrTransition(n: PrTransitionNotice): void {
 	lastSent.set(key, now);
 
 	void showNativeNotice({
+		isCurrent: () =>
+			linked
+				? uiStore.state.tasksViewPreferences["tasks:notification-policy"]?.notificationsEnabled === true
+				: notificationsStore.state.config.pr_native_notifications,
 		title: linked ? "Linked task checks failed" : heading,
 		body: linked
 			? `${linked.key}: ${linked.title} — ${n.repoName} #${n.prNumber}`

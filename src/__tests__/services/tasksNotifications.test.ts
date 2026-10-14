@@ -39,8 +39,9 @@ it("default_policy_is_off_and_unfollowed_refresh_is_silent", async () => {
 	expect(notifyTasksItem).not.toHaveBeenCalled();
 });
 
-// Catches: follow state is transient, or the provider comparison result never reaches native delivery.
-it("persists_follow_and_routes_new_comment_using_the_existing_notice_service", async () => {
+// Catches: the provider comparison result never reaches native delivery or the next comparison baseline.
+// Persistence is covered by tasksNotificationsPersistence.test.ts through the real UI preferences round-trip.
+it("routes_new_comment_and_reuses_the_saved_comparison_baseline", async () => {
 	const value = detail();
 	tasksNotifications.setEnabled(true);
 	tasksNotifications.setFollowed(value.item.reference, true);
@@ -53,9 +54,8 @@ it("persists_follow_and_routes_new_comment_using_the_existing_notice_service", a
 	expect(notifyTasksItem).toHaveBeenCalledWith(
 		expect.objectContaining({ body: "DEMO-1: Inspect the work item", url: value.item.url }),
 	);
-	expect(save).toHaveBeenLastCalledWith(expect.stringContaining("tasks:follow:"), {
-		commentSnapshot: { latest: 2, ids: ["new"], count: null },
-	});
+	await tasksNotifications.observe(value);
+	expect(invoke.mock.calls[1][1].input.previous).toEqual({ latest: 2, ids: ["new"], count: null });
 });
 
 // Catches: delayed provider replies notify after unfollow or after the policy is disabled.
@@ -91,4 +91,6 @@ it("own_comment_advances_baseline_without_requesting_a_notice", async () => {
 	await tasksNotifications.observe(detail(), true);
 	expect(invoke.mock.calls[0][1].input.enabled).toBe(false);
 	expect(notifyTasksItem).not.toHaveBeenCalled();
+	await tasksNotifications.observe(detail());
+	expect(invoke.mock.calls[1][1].input.previous).toEqual({ latest: 4, ids: [], count: null });
 });

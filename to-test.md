@@ -2200,3 +2200,5 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 ## Tasks notifications (#1856-1d20)
 
 - [ ] After Boss restarts `make dev` or installs a rebuilt release, enable Settings → Notifications → Tasks, follow an item, and refresh after a new provider comment while the window is in the background. Check the item-labelled OS notice and its provider URL. Confirm a linked GitHub PR failure names the Tasks item without a second notice. Rust comparison changes require the restart; they do not hot-reload.
+
+- [ ] After Boss restarts the Rust backend, verify a followed task notifies for a distinct comment ID at the latest baseline timestamp, while repeated IDs and edits remain silent. The current live backend does not load this comparator fix through HMR.
