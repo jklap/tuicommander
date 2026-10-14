@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+- Keep detached checkouts with a local feature branch at HEAD out of orphan cleanup, and stop reporting fresh in-sync branches as integrated (#1894-7683).
 ### Changed
 - Remove answer background tints from the terminal grid, Answers view, AI Chat and terminal Chat cards. Keep green left rules and spacing; use the darker success green for Paper answer rules; user-question styling is unchanged (#1896-f355).
 - Tasks loads complete lists of at most 1,000 items for Rust-backed all-field queries; unknown or larger lists keep server controls (#1851-7ade).
