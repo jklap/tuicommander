@@ -21,6 +21,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Preserve attached Goose session names and legacy paths without injecting a duplicate or conflicting `--name`.
+
 - Start status-bar agent usage blinking at 96% instead of 90%; dashboard critical colours remain at 90% (#1887-86a5).
 
 - Retract saved agent placement declarations when a linked worktree is removed or recycled (#1705-67b3).

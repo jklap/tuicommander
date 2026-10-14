@@ -79,12 +79,12 @@ if [[ -n "$TUIC_SESSION" ]]; then
         *) break;;
       esac
     done
-    local screen=$(__tuic_screen_arg "$TUIC_OPENCODE_SCREEN_FLAG" "$TUIC_OPENCODE_SCREEN_SKIP" "$@")
+    local screen=$(__tuic_screen_arg "$TUIC_OPENCODE_SCREEN_FLAG" "" "$@")
     command opencode ${screen:+"$screen"} "$@"
   }
   goose() {
     local a; for a in "$@"; do
-      case "$a" in --name|-n|--resume|-r|--no-session) command goose "$@"; return;; esac
+      case "$a" in --name|--name=*|-n|-n?*|--path|--path=*|--resume|-r|--no-session) command goose "$@"; return;; esac
     done
     case "$1" in
       session|run) command goose "$1" --name "$TUIC_SESSION" "${@:2}";;
@@ -167,12 +167,12 @@ if [[ -n "$TUIC_SESSION" ]]; then
         *) break;;
       esac
     done
-    local screen=$(__tuic_screen_arg "$TUIC_OPENCODE_SCREEN_FLAG" "$TUIC_OPENCODE_SCREEN_SKIP" "$@")
+    local screen=$(__tuic_screen_arg "$TUIC_OPENCODE_SCREEN_FLAG" "" "$@")
     command opencode ${screen:+"$screen"} "$@"
   }
   goose() {
     local a; for a in "$@"; do
-      case "$a" in --name|-n|--resume|-r|--no-session) command goose "$@"; return;; esac
+      case "$a" in --name|--name=*|-n|-n?*|--path|--path=*|--resume|-r|--no-session) command goose "$@"; return;; esac
     done
     case "$1" in
       session|run) command goose "$1" --name "$TUIC_SESSION" "${@:2}";;
@@ -298,16 +298,14 @@ if set -q TUIC_SESSION
       end
     end
     set -l flag ''
-    set -l skip ''
     if set -q TUIC_OPENCODE_SCREEN_FLAG; set flag $TUIC_OPENCODE_SCREEN_FLAG; end
-    if set -q TUIC_OPENCODE_SCREEN_SKIP; set skip $TUIC_OPENCODE_SCREEN_SKIP; end
-    set -l screen (__tuic_screen_arg "$flag" "$skip" $argv)
+    set -l screen (__tuic_screen_arg "$flag" '' $argv)
     command opencode $screen $argv
   end
   function goose --wraps goose
     for a in $argv
       switch $a
-        case --name -n --resume -r --no-session
+        case --name '--name=*' '-n*' --path '--path=*' --resume -r --no-session
           command goose $argv
           return
       end
@@ -593,7 +591,11 @@ fn inject_screen_policy(
         return;
     }
     cmd.env(flag_key, flag);
-    if let Some(command) = skipped_command {
+    // OpenCode shell wrappers classify all verbs; the shared run exclusion
+    // remains relevant only to structured launches.
+    if agent_type != "opencode"
+        && let Some(command) = skipped_command
+    {
         cmd.env(skip_key, command);
     }
 }
@@ -876,10 +878,6 @@ mod tests {
             cmd.get_env("TUIC_OPENCODE_SCREEN_FLAG"),
             Some(OsStr::new("--mini"))
         );
-        assert_eq!(
-            cmd.get_env("TUIC_OPENCODE_SCREEN_SKIP"),
-            Some(OsStr::new("run"))
-        );
 
         inject_screen_policy(&mut cmd, &config, "codex", &unsupported.to_string_lossy());
         assert_eq!(cmd.get_env("TUIC_CODEX_SCREEN_FLAG"), None);
@@ -893,7 +891,6 @@ mod tests {
         );
         inject_screen_policy(&mut cmd, &config, "opencode", &supported.to_string_lossy());
         assert_eq!(cmd.get_env("TUIC_OPENCODE_SCREEN_FLAG"), None);
-        assert_eq!(cmd.get_env("TUIC_OPENCODE_SCREEN_SKIP"), None);
     }
 
     fn assert_wrapper_paths(shell: &str, script: &str) {
@@ -1490,8 +1487,6 @@ mod tests {
                 ("TUIC_CODEX_SCREEN_FLAG", "--no-alt-screen"),
                 ("TUIC_CODEX_SCREEN_SKIP", "exec"),
                 ("TUIC_GROK_SCREEN_FLAG", "--no-alt-screen"),
-                ("TUIC_OPENCODE_SCREEN_FLAG", "--mini"),
-                ("TUIC_OPENCODE_SCREEN_SKIP", "run"),
             ];
             assert_in_shell(
                 shell,
@@ -1502,9 +1497,6 @@ mod tests {
                  codex --no-alt-screen --model o3\n\
                  grok --model fast\n\
                  grok --fullscreen --model fast\n\
-                 opencode --model fast\n\
-                 opencode run task\n\
-                 opencode --mini --model fast\n\
                  command codex --model o3",
                 &[
                     "--no-alt-screen --model o3",
@@ -1512,9 +1504,6 @@ mod tests {
                     "--no-alt-screen --model o3",
                     "--no-alt-screen --model fast",
                     "--no-alt-screen --fullscreen --model fast",
-                    "--mini --model fast",
-                    "run task",
-                    "--mini --model fast",
                     "--model o3",
                 ],
             );
@@ -1528,6 +1517,33 @@ mod tests {
                 &[],
                 "goose session --no-session\ngoose run --no-session -t task",
                 &["session --no-session", "run --no-session -t task"],
+            );
+        }
+
+        // Catches: attached names or legacy paths receive a duplicate/conflicting --name.
+        fn goose_explicit_name_or_path_preserves_argv(shell: &str) {
+            assert_in_shell(
+                shell,
+                "Goose explicit names and paths must not receive TUIC naming",
+                &[],
+                "goose run --name=work -t hi\n\
+                 goose session --name=work\n\
+                 goose run -nwork -t hi\n\
+                 goose session -nwork\n\
+                 goose run --path f.jsonl -t hi\n\
+                 goose session --path f.jsonl\n\
+                 goose run -t hi --path=f.jsonl\n\
+                 goose session --path=f.jsonl",
+                &[
+                    "run --name=work -t hi",
+                    "session --name=work",
+                    "run -nwork -t hi",
+                    "session -nwork",
+                    "run --path f.jsonl -t hi",
+                    "session --path f.jsonl",
+                    "run -t hi --path=f.jsonl",
+                    "session --path=f.jsonl",
+                ],
             );
         }
 
@@ -1572,10 +1588,7 @@ mod tests {
                 assert_in_shell(
                     shell,
                     "admin commands bypass screen injection",
-                    &[
-                        ("TUIC_OPENCODE_SCREEN_FLAG", "--mini"),
-                        ("TUIC_OPENCODE_SCREEN_SKIP", "run"),
-                    ],
+                    &[("TUIC_OPENCODE_SCREEN_FLAG", "--mini")],
                     &invocation,
                     &[&expected[0], &expected[1]],
                 );
@@ -1610,6 +1623,7 @@ mod tests {
 
         launch_matrix!(
             goose_no_session_preserves_stateless_argv,
+            goose_explicit_name_or_path_preserves_argv,
             goose_session_keeps_naming_and_explicit_resume,
             opencode_admin_verbs_skip_screen_flag,
             opencode_interactive_launch_keeps_screen_flag,
