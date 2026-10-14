@@ -82,6 +82,7 @@
 /config/note-image
 /config/notes
 /config/notifications
+/config/open-markdown-tabs
 /config/pane-layout
 /config/project-mcp-upstreams
 /config/prompt-library
@@ -260,6 +261,7 @@
 /repo/merge-archive-worktree
 /repo/merge-pr
 /repo/merged-prs
+/repo/open-markdown-tabs
 /repo/orphan-cleanup-assessment
 /repo/orphan-cleanup/begin
 /repo/orphan-cleanup/clear

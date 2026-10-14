@@ -5340,6 +5340,10 @@ Visual evidence: worktree Vite fixture mounted the real NotificationsTab and Toa
 - [ ] On Windows after rebuild, verify close/Show applies Low/Normal WebView memory target without losing terminal output. On Linux verify panel restore. Native tray Show is wired by the following tray story to `background_mode::desktop::leave_background`.
 - [ ] #1833-aa60 round 1: after Boss restarts `make dev` or runs `make build`, confirm shared-data instances preserve live uploads, disabled Claude instructions retain attachment access, and custom wrappers launch normally. Rust changes require restart; no desktop was launched or reloaded by the peer.
 
+- [ ] #1879-05ad — After Boss restarts `make dev` or rebuilds the release, open a
+  repository Markdown tab on desktop and inspect the session overflow Markdown
+  section on iPhone. Confirm title/path, tap to view, and live open/close updates.
+  The backend metadata publication and routes need the rebuilt Rust process.
 ## Background tray and menu-bar icon (#1804-d44b)
 
 - [ ] After Boss restarts `make dev` or builds release: verify the template icon on light/dark macOS menu bars, Windows overflow area and KDE. Check Always/background-only/Never, Show via click/menu, Quit confirmation, one first-entry native notice, live working/awaiting counts and attention clearing on Show. The current Rust process does not hot-reload.

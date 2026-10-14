@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- List the desktop repository’s open Markdown files in the mobile session menu, with live updates and the existing mobile viewer (#1879-05ad).
 - Add scoped plugin settings schemas, locked revision patches, secret redaction, typed migrations for the five existing configurable plugins, and unload-safe catalogue registration (#1785-c7a1).
 
 - Unify mobile terminal and AI Chat composers with a shared + menu for files, camera capture and supported draft, queue and command actions (#1880-d7ff).

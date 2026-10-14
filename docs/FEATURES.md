@@ -2065,6 +2065,12 @@ Agent-scoped plugin (`agentTypes: ["claude"]`) that wakes Claude Code when it st
 
 ## 18. Mobile Companion UI
 
+The session overflow menu has a **Markdown** section with the file tabs open on
+the desktop for the session repository. Each entry shows its title and relative
+path and opens the existing mobile Markdown viewer. Desktop opens and closes
+update the list through SSE; worktree files retain their original checkout.
+
+
 Waiting terminal ego questions show **Input**. Tap the question icon in the session header to open or close the full question and its wrapping options. The card overlays the terminal without reserving rows. Prior suggested actions are hidden while a human answer is pending.
 
 Phone-optimized progressive web app for monitoring AI agents remotely. Separate SolidJS entry point (`src/mobile/`) served by the existing HTTP server at `/mobile`.
