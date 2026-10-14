@@ -2159,8 +2159,32 @@ Phone-optimized progressive web app for monitoring AI agents remotely. Separate 
 - Mobile session attachments use a bare icon on the left. Smaller mic and
   Send controls sit inside the input border on the right; compact gaps preserve draft width.
 - Mobile session and AI Chat composers accept camera photos and files from one
-  picker. Binary files stream to `.tuic/attachments/` in the session working
-  directory and are excluded from Git locally; older files are cleaned at close.
+  picker. Binary files stream to `attachments/<session>/` under TUIC's data
+  directory. Uploads never create repository files or edit `.git/info/exclude`.
+  Claude gets `--add-dir` and Gemini gets `--include-directories`. Codex and Grok
+  need no extra flag. Ego rejects invocation-scoped roots: confined PTY/ACP runs
+  need an existing user/profile read root covering the TUIC attachment directory.
+  Upload receipts explain this limitation; TUIC does not change ego configuration.
+- Close, kill and process exit delete that session's uploads. Startup removes
+  session directories whose recorded owner process is provably dead. Live and
+  unknown owners are preserved; resumed tabs get fresh PTY directories and grants.
+  Old attachment references in a resumed transcript are unavailable and must be
+  uploaded again. Generated old grants are removed from saved launch commands.
+- An agent started before attachment grants were provisioned receives a clear
+  upload error asking for a new session. Absolute binary paths bypass shell
+  shims; use TUIC's structured agent launch to receive its directory grant.
+  Custom wrapper binaries keep their arguments without added harness grant flags.
+  A wrapper that calls Claude/Gemini by name uses the inherited shell shim; an
+  absolute harness hop must arrange its own read access. Disabling launch marker
+  instructions does not disable the Claude directory grant.
+  Typed ego commands have the same stored read-root requirement.
+- ACP binary uploads are scoped to the attached conversation and removed on
+  detach or connection settlement (including EOF). Ego over ACP currently rejects
+  extra read directories: the composer displays a notice that the stored path
+  requires an existing ego profile root. Inline ACP images keep their native
+  image-content transport and do not need a filesystem grant.
+- Existing repository `.tuic/attachments/` directories and local excludes are
+  untouched. You can remove these old directories and exclude entries by hand.
 - Installed Android Chrome PWAs accept shared files through the manifest share
   target and stage them in AI Chat. Safari on iOS has no Web Share Target support.
 - Web app manifest (`mobile-manifest.json`) with standalone display mode

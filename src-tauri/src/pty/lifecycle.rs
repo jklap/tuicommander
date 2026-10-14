@@ -143,6 +143,17 @@ pub(crate) fn bind_pty_identity(
 ) {
     let identity = tuic_session.unwrap_or(session_id);
     cmd.env("TUIC_SESSION", identity);
+    match crate::attachments::prepare_session_directory(&state.data_dir, "pty", session_id) {
+        Ok(directory) => {
+            cmd.env("TUIC_ATTACHMENTS_DIR", &directory);
+            state
+                .session_maps
+                .attachment_launch_dirs
+                .insert(session_id.into(), directory);
+        }
+        Err(error) => tracing::warn!(session_id, %error, "Could not provision session attachments"),
+    }
+
     // Manually typed Claude inherits the same per-agent preference as TUIC spawns.
     if crate::agent_hook_launch::prevents_alt_screen("claude") {
         cmd.env("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN", "1");
@@ -3263,6 +3274,7 @@ fn remove_live_session_state(session_id: &str, state: &AppState) {
     if let Err(error) = crate::stories::StoryStore::release_closed_session(session_id) {
         tracing::warn!(session_id = %session_id, error = %error, "Could not release story claim for closed session");
     }
+    state.session_maps.attachment_launch_dirs.remove(session_id);
     state.ws_clients.remove(session_id);
     // Drop the per-session PTY event channel alongside ws_clients. Any final
     // SessionClosed already emitted stays buffered for live subscribers (broadcast
@@ -3427,19 +3439,9 @@ fn release_pty_session(session_id: &str, session: PtySession) {
 /// Fully remove session state from all DashMaps.
 /// Called on explicit close/kill — caller has already consumed any output they need.
 pub(crate) fn cleanup_session(session_id: &str, state: &AppState) {
-    if let Some(cwd) = state
-        .session_maps
-        .sessions
-        .get(session_id)
-        .and_then(|session| session.lock().cwd.clone())
-    {
-        crate::attachments::cleanup_old(
-            std::path::Path::new(&cwd),
-            state.config.read().attachment_retention_days,
-        );
-    }
     flush_open_intent_before_session_removal(session_id, state);
     remove_pty_session(session_id, state);
+    crate::attachments::cleanup_session(&state.data_dir, "pty", session_id);
     remove_live_session_state(session_id, state);
     if remove_post_mortem_session_state(session_id, state) {
         trim_unused_session_heap();
@@ -3450,17 +3452,7 @@ pub(crate) fn cleanup_session(session_id: &str, state: &AppState) {
 /// tombstone sweeper can age the entry out. What a post-mortem read needs stays —
 /// see [`remove_post_mortem_session_state`].
 pub(super) fn tombstone_transient_cleanup(session_id: &str, state: &AppState) {
-    if let Some(cwd) = state
-        .session_maps
-        .sessions
-        .get(session_id)
-        .and_then(|session| session.lock().cwd.clone())
-    {
-        crate::attachments::cleanup_old(
-            std::path::Path::new(&cwd),
-            state.config.read().attachment_retention_days,
-        );
-    }
+    crate::attachments::cleanup_session(&state.data_dir, "pty", session_id);
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()

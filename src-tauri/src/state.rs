@@ -1946,6 +1946,8 @@ pub(crate) struct AiAgentState {
 #[derive(Default)]
 pub struct SessionMaps {
     pub sessions: DashMap<String, Mutex<PtySession>>,
+    /// Session-scoped directory provisioned at launch; absent for legacy agents.
+    pub(crate) attachment_launch_dirs: DashMap<String, PathBuf>,
     /// Ring buffers for MCP output access (one per session)
     pub output_buffers: DashMap<String, Mutex<OutputRingBuffer>>,
     /// Per-session kitty keyboard protocol state (session_id → state).
@@ -3502,6 +3504,7 @@ impl AppState {
         config: crate::config::AppConfig,
         log_buffer: Arc<Mutex<crate::app_logger::LogRingBuffer>>,
     ) -> Self {
+        crate::attachments::cleanup_orphans(&data_dir);
         let session_token = config.services.auth.session_token.clone();
         let push_store = crate::push::PushStore::load(&data_dir);
         let audit_path = data_dir.join("tunnel_audit.db");

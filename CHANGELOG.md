@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Preserve live attachment uploads when another TUIC instance starts; keep Claude attachment access with disabled instructions and preserve custom wrapper arguments (#1833-aa60).
+
 - Allow worktree removal when its branch tip is contained in any remote-tracking branch, naming that ref as proof. Offer a one-click action to keep branches with local-only commits (#1874-1758).
 - Preserve the local branch and report a warning if a concurrent fetch conflicts with the remote proof during worktree removal (#1874-1758).
 
@@ -19,6 +21,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Terminal Chat view for Grok terminals, read from the session's `chat_history.jsonl` and offered only when `~/.grok/active_sessions.json` names the exact session of that terminal's process; the newest-session fallback never feeds Chat (#1791-b8be).
 
 ### Changed
+- Store uploads in TUIC-owned session directories, grant supported agents access at launch, and remove files at session end without touching repositories (#1833-aa60).
 - Run saved command moves from `Cmd+R` to `Cmd+Shift+R`. `Cmd+R` now reloads the active web/preview tab (new `reload-tab` action). `edit-command` has no default shortcut because `Cmd+Alt+R` belongs to answers-only; an existing `keybindings.json` override keeps working (#1871-4cfd).
 
 ### Removed

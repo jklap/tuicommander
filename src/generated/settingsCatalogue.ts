@@ -921,7 +921,7 @@ export const settingsCatalogue = {
       "helpKey": "settings.catalogue.app.attachment_retention_days.help",
       "label": "attachment retention days",
       "schema": {
-        "description": "Remove uploaded files older than this many days when their session closes.",
+        "description": "Legacy stored value; uploads now have session lifetime regardless of this value.",
         "type": "integer",
         "format": "uint32",
         "minimum": 0,

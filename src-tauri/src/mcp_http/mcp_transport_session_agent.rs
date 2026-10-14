@@ -1913,6 +1913,15 @@ pub(super) fn handle_agent_with_parent_cwd(
                 mcp_session_id,
             );
 
+            let attachment_dir = match crate::attachments::prepare_session_directory(
+                &state.data_dir,
+                "pty",
+                &session_id,
+            ) {
+                Ok(directory) => directory,
+                Err(error) => return serde_json::json!({"error": error}),
+            };
+
             let mut cmd = CommandBuilder::new(&binary_path);
             crate::pty::sanitize_pty_parent_env(&mut cmd);
 
@@ -2092,6 +2101,7 @@ pub(super) fn handle_agent_with_parent_cwd(
                     &binary_path,
                     &launch_args,
                     &crate::config::config_dir(),
+                    &attachment_dir,
                 );
                 crate::launch_instructions::apply_env(
                     &mut cmd,
