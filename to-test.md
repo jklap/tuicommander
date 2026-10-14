@@ -293,13 +293,6 @@
 
 ## Queued agent command diagnostics — Rust restart required
 
-- [ ] After loading the story 1106 Rust build in an isolated `TUIC_APP_INSTANCE`, _(NOT VERIFIED 2026-09-30: partial — Item text truncated (only NOT VERIFIED note). Codex queue while busy verified delivered (see 110); idle_unconfirmed diagnostic not observed.)_ _(audit 2026-10-13: PARTIAL — live /logs show `queue delivery attempt` (agent_state, shell_state, queued_before/after, typed, submitted, enter_separate) and `queue delivery attempt deferred` with defer_reason=shell_not_idle for a…)_ _(triage 2026-10-14: DO — Runnable through scoped source/tests, isolated browser or throwaway API fixtures.)_
-      queue a command for a throwaway Codex session while it is busy. Confirm it
-      runs once when Codex reaches Ready and the queue reaches zero. If the shell
-      first becomes idle without confirmed readiness, logs must name
-      `defer_reason=idle_unconfirmed`, then `Ready confirmed after shell became
-      idle` before the successful flush. The current backend cannot load this
-      fix without a restart.
 ## Mobile remote sessions, Progress, and Activity — Rust restart required
 
 - [ ] [HUMAN] After Boss restarts `make dev` when current PTYs can be interrupted, verify `/api/version` identifies the integrated build, then open the Tailscale HTTPS `/mobile` PWA on a phone. _(NOT VERIFIED 2026-09-30: blocked — HUMAN item needing a real phone/Tailscale HTTPS PWA (real phone blocked). Only /api/version checked: {"version":"1.7.7","git_hash":"bef15c20f"} on rust0930 instance.)_ _(audit 2026-10-13: HUMAN — real phone + Tailscale HTTPS + second machine)_ _(triage 2026-10-14: WAITS — Needs Boss’s phone/tablet or installed PWA for the specified device behavior.)_
