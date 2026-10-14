@@ -547,6 +547,7 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 		const comments = reviewComments();
 		const count = comments.length;
 		if (!sessionId || !path || !hasReviewChanges() || sendingChanges()) return;
+		const sentContent = content();
 		setSendingChanges(true);
 		try {
 			const noun = count === 1 ? "comment" : "comments";
@@ -557,7 +558,7 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 				`Open ${path}, re-read the whole file: ${tweaks}treat every other change since your last write (checkbox toggles, edited text) as the user's answer, ${cleanup} unrelated files unchanged.`,
 			);
 			setSentCommentIds(new Set(comments.map((comment) => comment.id)));
-			setEditedSinceSend(false);
+			if (content() === sentContent) setEditedSinceSend(false);
 			const terminalId = terminalsStore.findBySessionId(sessionId);
 			if (terminalId) terminalsStore.update(terminalId, { queuedCommands: outcome.queued });
 			toastsStore.add(
