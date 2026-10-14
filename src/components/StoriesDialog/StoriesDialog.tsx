@@ -5,6 +5,7 @@ import { appLogger } from "../../stores/appLogger";
 import { registerModal } from "../../stores/modalStack";
 import { workflowRunSignals } from "../../stores/workflowRunSignals";
 import { HttpRpcError, isTauri } from "../../transport";
+import type { PlanState, StoryStatus } from "../../types/stories.gen";
 import d from "../shared/dialog.module.css";
 import { Input } from "../ui/Input";
 import { Select } from "../ui/Select";
@@ -23,7 +24,6 @@ interface PlanSource {
 	title: string;
 	source: string;
 }
-type Status = "backlog" | "ready" | "in_progress" | "review" | "done" | "blocked" | "wontfix";
 interface Story {
 	id: string;
 	planId: string;
@@ -34,7 +34,7 @@ interface Story {
 	priority: number;
 	origin: unknown;
 	fileScope: string[];
-	status: Status;
+	status: StoryStatus;
 	revision: number;
 	claimSession: string | null;
 	abandoned: boolean;
@@ -43,10 +43,10 @@ type Reply =
 	| { type: "plan"; value: Plan }
 	| { type: "plans"; value: Plan[] }
 	| { type: "plan_sources"; value: PlanSource[] }
-	| { type: "plan_state"; value: "draft" | "active" | "done" }
+	| { type: "plan_state"; value: PlanState }
 	| {
 			type: "plan_view";
-			value: { stories: Story[]; state: "draft" | "active" | "done"; wontFixCount: number; allCancelled: boolean };
+			value: { stories: Story[]; state: PlanState; wontFixCount: number; allCancelled: boolean };
 	  }
 	| { type: "story"; value: Story }
 	| { type: "stories"; value: Story[] };
@@ -114,7 +114,7 @@ class MissingStoriesBackendError extends Error {
 	}
 }
 
-const statusLabel = (status: Status): string => {
+const statusLabel = (status: StoryStatus): string => {
 	switch (status) {
 		case "backlog":
 			return t("stories.status.backlog", "Backlog");
@@ -128,7 +128,7 @@ const statusLabel = (status: Status): string => {
 			return t("stories.status.done", "Done");
 		case "blocked":
 			return t("stories.status.blocked", "Blocked");
-		case "wontfix":
+		case "wont_fix":
 			return t("stories.status.wontFix", "Won't fix");
 	}
 };
@@ -1002,6 +1002,11 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 									{t("stories.newPlan", "New plan")}
 								</button>
 							</div>
+							<Show when={selectedPlan()}>
+								<p class={s.planNotice}>
+									{t("stories.state", "State")}: {planStateLabel(planState())}
+								</p>
+							</Show>
 							<Show when={selectedPlan() && wontFixCount() > 0}>
 								<p class={s.planNotice}>
 									{allCancelled()
@@ -1213,7 +1218,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 																		{dependency ? statusLabel(dependency.status) : t("stories.unknown", "Unknown")}
 																		{dependency?.abandoned ? ` · ${t("stories.abandoned", "abandoned")}` : ""}
 																	</span>
-																	<Show when={story().status === "backlog" && dependency?.status === "wontfix"}>
+																	<Show when={story().status === "backlog" && dependency?.status === "wont_fix"}>
 																		<button
 																			type="button"
 																			disabled={busy()}
@@ -1294,7 +1299,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 													{t("stories.unblock", "Unblock")}
 												</button>
 											</Show>
-											<Show when={story().status !== "done" && story().status !== "wontfix"}>
+											<Show when={story().status !== "done" && story().status !== "wont_fix"}>
 												<button type="button" class={s.danger} disabled={busy()} onClick={() => transition("wont_fix")}>
 													{t("stories.status.wontFix", "Won't fix")}
 												</button>

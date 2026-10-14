@@ -335,6 +335,12 @@ cleartext copy does not survive on disk.
 
 **Commands:** `load_app_config()`, `save_app_config(base, config)`
 
+Settings windows compare their current preferences with their own last successful
+local snapshot before building this pair. Only locally changed fields are applied
+to the freshly loaded `base`; unchanged store-owned fields keep the loaded values.
+This prevents a stale window from expressing another window's edits as unwanted
+reversals. The backend delta and locking protocol is unchanged.
+
 Every writer of `config.json` — IPC `save_config`, `PUT /config`, MCP
 `config action=save`, session-token rotation, `set_global_hotkey`, the
 `disabled_mcp_agents` toggle and the push auto-enable on first subscription —

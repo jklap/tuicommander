@@ -49,6 +49,7 @@ ideas
 benchmarks
 .mdkb
 scripts/*
+!scripts/generate-story-types.py
 !scripts/agent_capture/
 !scripts/replay-oracle.sh
 !scripts/record-chat-fixtures.py
