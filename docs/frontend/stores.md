@@ -230,6 +230,13 @@ checkout changes under the user's feet — resolve it late through
 
 Application settings: font, shell, IDE, theme, confirmations.
 
+Each hydrated window tracks its own normalized settings baseline. Debounced saves
+apply only preferences changed since that window's last successful save to a fresh
+config load, then submit the existing `base`/`config` pair through `updateAppConfig`.
+Unchanged preferences stay as loaded, including fields another settings window
+edited. Failed saves retain pending edits; edits made during a save remain pending
+for the next save. Hydration itself does not persist normalized defaults.
+
 ### State Fields
 
 | Field | Type | Default | Description |
