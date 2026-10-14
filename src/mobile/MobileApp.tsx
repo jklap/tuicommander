@@ -105,7 +105,11 @@ export default function MobileApp() {
 	});
 	const [selectedSessionId, setSelectedSessionId] = createSignal<string | null>(sessionIdFromUrl());
 	const [sessionFilesOpen, setSessionFilesOpen] = createSignal(false);
-	const [sessionFileLink, setSessionFileLink] = createSignal<{ candidate: string; line?: number } | null>(null);
+	const [sessionFileLink, setSessionFileLink] = createSignal<{
+		candidate: string;
+		line?: number;
+		root?: string;
+	} | null>(null);
 	const { sessions, loading, refreshing, error, authError, refresh, questionCount, markSeen } = useSessions();
 	const { updateAvailable, serverDown, applyUpdate } = useVersionCheck();
 	ideasStore.hydrate();
@@ -248,8 +252,8 @@ export default function MobileApp() {
 							setSessionFileLink(null);
 							setSessionFilesOpen(true);
 						}}
-						onOpenFileLink={(candidate, line) => {
-							setSessionFileLink({ candidate, line });
+						onOpenFileLink={(candidate, line, root) => {
+							setSessionFileLink({ candidate, line, root });
 							setSessionFilesOpen(true);
 						}}
 					/>
@@ -259,7 +263,7 @@ export default function MobileApp() {
 						<FilesScreen
 							initialLink={sessionFileLink() ?? undefined}
 							initialRepo={{
-								worktreePath: lastKnownSession()!.worktree_path,
+								worktreePath: sessionFileLink()?.root ?? lastKnownSession()!.worktree_path,
 								cwd: lastKnownSession()!.cwd,
 							}}
 							onExit={() => {

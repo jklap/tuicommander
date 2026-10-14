@@ -155,8 +155,8 @@ export interface SubscribePtyOptions {
 	onReconnected?: () => void;
 }
 
-/** Why `onResync` fired: events were missed, and this says how. */
-export type ResyncReason = "reconnect" | "lagged";
+/** Why `onResync` fired: the subscription is live or events may have been missed. */
+export type ResyncReason = "connect" | "reconnect" | "lagged";
 
 export interface SubscribeEventsOptions {
 	/** Base URL of a remote instance. Omit to talk to this one. */
@@ -164,8 +164,8 @@ export interface SubscribeEventsOptions {
 	/**
 	 * Called when a gap opened in the stream and the consumer should re-read
 	 * whatever state it derives from these events. NOT called for a normal
-	 * event, and NOT called on the first connection — a consumer that has just
-	 * subscribed does its own initial read.
+	 * event. Also called on the first connection: an initial read may finish
+	 * before the server subscribes, so consumers must reread once it is live.
 	 *
 	 * Only the SSE transport can fire it. Tauri `listen()` is in-process: there
 	 * is no connection to drop and no bounded channel to fall behind, so a

@@ -164,7 +164,7 @@ For Claude Code, TUICommander detects weekly and session usage limit messages fr
 - **Unified agent badge** — When Claude is the active agent, the status bar shows a single badge combining the agent icon with usage data. The badge displays rate limit countdowns (when rate-limited), Claude Usage API data (5h/7d utilization percentages), or terminal-detected usage limits, in that priority order.
   - Blue: < 70% utilization
   - Yellow: 70–89%
-  - Red (pulsing): >= 90%
+  - Red (pulsing): >= 96%
 - Clicking the badge opens the Claude Usage Dashboard.
 
 The API quota follows the focused Claude session's `CLAUDE_CONFIG_DIR`. Switching between Claude sessions using different accounts updates the badge. If the session's profile or its credentials cannot be read, the badge shows unknown rather than the default account's quota.

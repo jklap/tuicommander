@@ -33,13 +33,16 @@ it("does not queue an incomplete prompt while its selected attachment is still u
 	fireEvent.input(input, { target: { value: "Review this file" } });
 	const picker = container.querySelector<HTMLInputElement>('input[type="file"]')!;
 	const openPicker = vi.spyOn(picker, "click");
-	fireEvent.click(getByRole("button", { name: "Attach file" }));
+	fireEvent.click(getByRole("button", { name: "More composer actions" }));
+	fireEvent.click(getByRole("menuitem", { name: "Attach file" }));
 	expect(openPicker).toHaveBeenCalledOnce();
 	fireEvent.change(picker, {
 		target: { files: [new File(["important context"], "notes.txt", { type: "text/plain" })] },
 	});
 	expect(getByRole("status").textContent).toBe("Uploading notes.txt…");
-	expect(getByRole("button", { name: "Attach file" })).toBeDisabled();
+	fireEvent.click(getByRole("button", { name: "More composer actions" }));
+	expect(getByRole("menuitem", { name: "Attach file" })).toBeDisabled();
+	fireEvent.click(getByRole("button", { name: "More composer actions" }));
 	const send = getByRole("button", { name: "Send" });
 	fireEvent.pointerDown(send, { button: 0, pointerType: "touch" });
 	await vi.advanceTimersByTimeAsync(600);
@@ -56,7 +59,9 @@ it("does not queue an incomplete prompt while its selected attachment is still u
 	finishUpload({ path: "/repo/.tuic/attachments/notes.txt", size: 17 });
 	await vi.advanceTimersByTimeAsync(0);
 	expect(container.querySelector('[role="status"]')).toBeNull();
-	expect(getByRole("button", { name: "Attach file" })).not.toBeDisabled();
+	fireEvent.keyDown(document, { key: "Escape" });
+	fireEvent.click(getByRole("button", { name: "More composer actions" }));
+	expect(getByRole("menuitem", { name: "Attach file" })).not.toBeDisabled();
 	expect(queuedBeforeUpload).toEqual([]);
 	expect(input.value).toBe("Review this file @/repo/.tuic/attachments/notes.txt");
 });

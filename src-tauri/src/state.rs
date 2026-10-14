@@ -360,6 +360,8 @@ pub enum AppEvent {
     /// every save — including the client that just wrote it.
     #[serde(rename = "repositories-changed")]
     RepositoriesChanged,
+    #[serde(rename = "open-markdown-tabs-changed")]
+    OpenMarkdownTabsChanged,
     /// Directory contents changed (non-git filesystem watcher)
     #[serde(rename = "dir-changed")]
     DirChanged { dir_path: String },
@@ -2071,6 +2073,8 @@ pub struct AppState {
     pub(crate) secrets: crate::secrets::SecretStore,
     /// Every per-session side table, keyed by session id.
     pub(crate) session_maps: SessionMaps,
+    pub(crate) open_markdown_tabs:
+        parking_lot::RwLock<Vec<crate::open_markdown_tabs::DesktopMarkdownTab>>,
     pub(crate) data_dir: PathBuf,
     pub(crate) worktrees_dir: PathBuf,
     pub(crate) metrics: SessionMetrics,
@@ -3530,6 +3534,7 @@ impl AppState {
             automation_runtime: Default::default(),
             secrets: crate::secrets::SecretStore::default(),
             session_maps: SessionMaps::default(),
+            open_markdown_tabs: Default::default(),
             data_dir,
             worktrees_dir,
             metrics: SessionMetrics::new(),
@@ -4335,6 +4340,13 @@ impl AppState {
     /// post-removal worktree state.
     pub(crate) fn notify_worktree_removed(&self, payload: WorktreeRemovedPayload) {
         self.invalidate_repo_caches(&payload.repo_path);
+        match crate::config::retract_removed_workspace(&payload.repo_path, &payload.workspace_id) {
+            Ok(true) => self.notify_repositories_changed(),
+            Ok(false) => {}
+            Err(error) => {
+                tracing::error!(source = "config", %error, "Failed to retract removed workspace restore records")
+            }
+        }
         crate::workitem_links::drop_link_of_removed_worktree(&payload.repo_path, &payload.branch);
         #[cfg(feature = "desktop")]
         if let Some(ref app) = *self.app_handle.read() {
@@ -5271,6 +5283,7 @@ impl AppState {
             | AppEvent::McpToast { .. }
             | AppEvent::McpConfirm { .. }
             | AppEvent::McpConfirmResolved { .. }
+            | AppEvent::OpenMarkdownTabsChanged
             | AppEvent::RepositoriesChanged
             | AppEvent::DirChanged { .. }
             | AppEvent::SessionWorktreeDeclared { .. }

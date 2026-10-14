@@ -20,6 +20,8 @@ When an agent creates a worktree without spawning a separate session, its tab
 stays associated with that worktree during repository refreshes. This changes
 sidebar placement while preserving the shell's working directory. An explicit
 worktree declaration also survives restart when a saved agent tab is restored.
+Removing the worktree also removes its saved placement declaration, so a recycled
+checkout does not leave an agent pointed at the old directory.
 
 ## Worktree Storage Strategies
 

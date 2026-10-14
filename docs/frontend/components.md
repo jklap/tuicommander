@@ -167,6 +167,10 @@ Untitled sessions use their first prompt or latest activity time in tabs and the
 with the session ID in the tooltip. Small single-choice elicitation
 forms use direct answer buttons and Cancel. Prompt failures and empty completed
 turns appear in the transcript.
+`Transcript` displays one provider-retry status line. `useAcpChat` supplies its
+live countdown, clamped at “retrying now”, through a panel-owned timer. User-message
+Copy buttons use a single unwrapped line, including in the full app shell.
+
 `Transcript` interprets complete ACP answer text as it streams: it hides the
 connection acknowledgement, shows a declared intent as status, and offers
 bracketed `suggest:` items as prompt buttons. Markdown examples stay literal.
@@ -192,6 +196,11 @@ prompts, and can remove any queued ID. The list follows ACP snapshots and
 events, so another window or a phone sees the same order and cancellations.
 
 ## Mobile Screens (`src/mobile/`)
+
+`OpenMarkdownMenu` adds a scrollable Markdown section to session overflow.
+It reads repository-scoped desktop file metadata and refetches on tab changes,
+repository changes and SSE resynchronization. Selecting an entry keeps the
+session mounted and opens `FilesScreen` with the entry’s original checkout root.
 
 `OutputView` keeps a 500-line live tail while following. While the reader is
 scrolled up or touching the output, it retains the loaded rows instead of
@@ -533,6 +542,8 @@ The agent badge appears when the active terminal has a recognized agent type. It
 - **PTY usage limit (priority 3):** Parsed from terminal output by the output parser (e.g. Claude's `[C1 S30 K26]` status line). Stored on the terminal entry as `usageLimit`. Applies to all agents that emit usage info.
 - **Agent name (priority 4):** Fallback — just shows the agent type name.
 
+**Usage blink threshold:** API ticker priorities and PTY percentages apply the critical animation only from 96% usage. Usage from 70% to below 96% stays warning-coloured. Dashboard critical colours remain at 90%.
+
 **Ticker integration:** When the active agent is `claude` and the Claude Usage ticker is active, the ticker message is absorbed into the agent badge (priority 2) and hidden from the separate ticker area. Other ticker messages (from plugins, etc.) display normally.
 
 **Pendulum ticker:** When the status info text overflows its container, a CSS pendulum animation scrolls the text back and forth at ~50px/s. Clicking the text dismisses the notification until the message changes.
@@ -782,3 +793,5 @@ untrusted-content wrapper and 12,000-character cap.
 The desktop macOS General page includes **Hide Dock icon in background** under
 Confirmations. It uses the shared setting toggle and persists
 `background.hide_dock_icon`; browser settings omit this native control.
+
+The mobile AI Chat composer uses the same device-local keyboard correction preference as the terminal composer; toggling it updates autocorrect, spellcheck and sentence capitalization on the open textarea. Desktop Chat retains its existing input attributes.
