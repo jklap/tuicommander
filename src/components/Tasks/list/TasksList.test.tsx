@@ -382,3 +382,18 @@ describe("Tasks list", () => {
 		});
 	});
 });
+
+// Catches: an ordinary failed search rolls the input back to the previous successful query.
+it("failed_jql_search_keeps_the_typed_query_after_a_successful_load", async () => {
+	const provider = listDemo(2);
+	const list = provider.list.bind(provider);
+	provider.list = async (query, signal) => {
+		if (query.search === "jql: project =") throw new Error("Jira request failed (400): expecting a value");
+		return list(query, signal);
+	};
+	render(() => <TasksList providers={[provider]} onOpen={() => {}} />);
+	await screen.findByRole("button", { name: /Task 00002/ });
+	fireEvent.input(screen.getByLabelText("Search tasks"), { target: { value: "jql: project =" } });
+	await screen.findByText(/expecting a value/);
+	expect(screen.getByLabelText("Search tasks")).toHaveValue("jql: project =");
+});

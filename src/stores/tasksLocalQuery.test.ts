@@ -55,3 +55,32 @@ it("unknown_or_large_totals_keep_server_mode", async () => {
 		expect(list).toHaveBeenCalledTimes(1);
 	}
 });
+
+// Catches: local collection clears the MR discriminator and certifies an issue-only scope instead.
+it("local_collection_preserves_gitlab_merge_request_scope", async () => {
+	const { createGitLabProvider } = await import("../../plugins/gitlab/provider.js");
+	const { default: recorded } = await import("../../plugins/gitlab/fixtures/recorded.json");
+	const provider = createGitLabProvider({
+		account: { id: "local", host: "https://gitlab.example.invalid:8443", login: "root" },
+		project: "review/demo",
+		fetch: async (request: { url: string }) => ({
+			status: 200,
+			headers: { "x-total": "1" },
+			json: [request.url.includes("/merge_requests?") ? recorded.mr : recorded.issue],
+		}),
+	});
+	const rows = await collectLocalTasks(
+		provider,
+		{
+			filters: [{ fieldId: "type", values: [{ kind: "enum", value: "merge_request" }] }],
+			savedFilterId: null,
+			search: "",
+			sort: null,
+			groupBy: null,
+			cursor: null,
+			limit: 100,
+		},
+		new AbortController().signal,
+	);
+	expect(rows?.map((item) => item.itemType)).toEqual(["merge_request"]);
+});

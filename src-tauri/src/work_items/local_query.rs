@@ -315,4 +315,80 @@ mod tests {
         data.query.group_by = Some("missing".into());
         assert!(project(data).unwrap_err().contains("Unknown task field"));
     }
+
+    // Catches: a small Jira list's text-declared Status filter cannot match its enum header.
+    #[test]
+    fn local_query_jira_status_filter_matches_the_declared_control_kind() {
+        let mut data = input();
+        data.items.truncate(1);
+        data.items[0].fields.remove("status");
+        data.items[0].state.id = "10001".into();
+        let mut field = data.fields[0].clone();
+        field.id = "status".into();
+        field.kind = WorkItemFieldKind::Text;
+        field.options.clear();
+        data.fields = vec![field];
+        data.query.filters = vec![WorkItemFilter {
+            field_id: "status".into(),
+            values: vec![WorkItemFieldValue::Text("10001".into())],
+        }];
+        assert_eq!(project(data).unwrap().total, Some(1));
+    }
+
+    // Catches: local GitLab Type and Assignee filters silently discard matching MR rows.
+    #[test]
+    fn local_query_gitlab_type_alias_keeps_matching_rows() {
+        let mut data = input();
+        data.items.truncate(1);
+        data.items[0].item_type = "merge_request".into();
+        data.items[0].fields.remove("assignee");
+        data.items[0].assignees = vec![WorkItemUser {
+            id: "1".into(),
+            name: "Administrator".into(),
+            avatar_url: None,
+            bot: false,
+        }];
+        let mut field = data.fields[0].clone();
+        field.id = "type".into();
+        field.kind = WorkItemFieldKind::Enum;
+        field.options.clear();
+        data.fields = vec![field.clone()];
+        field.id = "assignee".into();
+        field.kind = WorkItemFieldKind::User;
+        data.fields.push(field);
+        data.query.filters = vec![WorkItemFilter {
+            field_id: "type".into(),
+            values: vec![WorkItemFieldValue::Enum("merge_request".into())],
+        }];
+        assert_eq!(project(data).unwrap().total, Some(1));
+    }
+
+    // Catches: GitLab's username text control compares against numeric REST user IDs locally.
+    #[test]
+    fn local_query_gitlab_assignee_username_keeps_matching_rows() {
+        let mut data = input();
+        data.items.truncate(1);
+        data.items[0].fields.remove("assignee");
+        data.items[0].assignees = vec![WorkItemUser {
+            id: "1".into(),
+            name: "Administrator".into(),
+            avatar_url: None,
+            bot: false,
+        }];
+        let mut field = data.fields[0].clone();
+        field.id = "assignee".into();
+        field.kind = WorkItemFieldKind::User;
+        field.options.clear();
+        data.fields = vec![field];
+        data.query.filters = vec![WorkItemFilter {
+            field_id: "assignee".into(),
+            values: vec![WorkItemFieldValue::User(vec![WorkItemUser {
+                id: "root".into(),
+                name: "root".into(),
+                avatar_url: None,
+                bot: false,
+            }])],
+        }];
+        assert_eq!(project(data).unwrap().total, Some(1));
+    }
 }
