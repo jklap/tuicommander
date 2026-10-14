@@ -3,8 +3,16 @@ use crate::{AppState, state::AppEvent};
 use std::sync::Arc;
 use tauri::{Emitter, Manager};
 
+#[path = "background_mode_windows.rs"]
+mod windows;
+use windows::DesktopWindows;
+
 #[derive(Default)]
-pub(crate) struct BackgroundMode(parking_lot::Mutex<CloseState>);
+pub(crate) struct BackgroundMode {
+    close: parking_lot::Mutex<CloseState>,
+    snapshot: parking_lot::Mutex<Option<(String, tokio::sync::oneshot::Sender<()>)>>,
+    generation: std::sync::atomic::AtomicU64,
+}
 
 pub(crate) fn close_window(window: &tauri::Window, api: &tauri::CloseRequestApi) {
     let state = window.state::<Arc<AppState>>();
@@ -26,7 +34,7 @@ pub(crate) fn close_window(window: &tauri::Window, api: &tauri::CloseRequestApi)
 pub(crate) fn request_quit(app: tauri::AppHandle) {
     {
         let mode = app.state::<BackgroundMode>();
-        let mut close = mode.0.lock();
+        let mut close = mode.close.lock();
         if close.pending == Some(CloseAction::Ask) {
             close.pending = None;
         }
@@ -44,16 +52,18 @@ pub(crate) fn request_quit(app: tauri::AppHandle) {
 }
 
 pub(crate) fn is_hidden(app: &tauri::AppHandle) -> bool {
-    app.state::<BackgroundMode>().0.lock().hidden
+    app.state::<BackgroundMode>().close.lock().hidden
 }
 
 pub(crate) fn shown(app: &tauri::AppHandle) {
-    app.state::<BackgroundMode>().0.lock().hidden = false;
+    if is_hidden(app) {
+        leave_background(app);
+    }
 }
 
 fn apply(app: &tauri::AppHandle, action: CloseAction) {
     let mode = app.state::<BackgroundMode>();
-    let mut close = mode.0.lock();
+    let mut close = mode.close.lock();
     apply_locked(app, action, &mut close);
 }
 
@@ -65,21 +75,44 @@ fn apply_locked(app: &tauri::AppHandle, action: CloseAction, close: &mut CloseSt
     let action = close.pending.unwrap_or(action);
     match action {
         CloseAction::Hide => {
-            if let Some(window) = app.get_webview_window("main") {
-                match window.hide() {
-                    Ok(()) => close.hidden = true,
-                    Err(error) => tracing::warn!("Cannot hide main window: {error}"),
-                }
+            if close.hidden {
+                return;
             }
+            close.hidden = true;
+            let mode = app.state::<BackgroundMode>();
+            let generation = mode
+                .generation
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                + 1;
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                snapshot_before_hide(&app, generation).await;
+                let handle = app.clone();
+                if let Err(error) = app.run_on_main_thread(move || {
+                    let mode = handle.state::<BackgroundMode>();
+                    let mut close = mode.close.lock();
+                    if !close.hidden
+                        || close.quitting
+                        || mode.generation.load(std::sync::atomic::Ordering::SeqCst) != generation
+                    {
+                        return;
+                    }
+                    if let Err(error) = super::hidden::enter_background(
+                        &handle.state::<Arc<AppState>>(),
+                        &DesktopWindows(&handle),
+                    ) {
+                        close.hidden = false;
+                        tracing::warn!(%error, "Cannot enter background");
+                    }
+                }) {
+                    tracing::warn!(%error, "Cannot schedule background transition");
+                }
+            });
         }
         CloseAction::Ask | CloseAction::ConfirmQuit => {
             close.pending = Some(action);
             // Explicit quit may come from the menu while the main window is hidden.
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.show();
-                let _ = window.set_focus();
-                close.hidden = false;
-            }
+            restore_locked(app, close);
             let state = app.state::<Arc<AppState>>();
             let payload = serde_json::json!({
                 "kind": action,
@@ -124,7 +157,7 @@ pub(crate) async fn resolve_close(
     let handle = app.clone();
     tokio::task::spawn_blocking(move || {
         let mode = handle.state::<BackgroundMode>();
-        let mut close = mode.0.lock();
+        let mut close = mode.close.lock();
         // Do not consume the dialog on a failed config write.
         let mut next = CloseState {
             hidden: close.hidden,
@@ -149,4 +182,60 @@ pub(crate) async fn resolve_close(
     .await
     .map_err(|error| error.to_string())??;
     Ok(())
+}
+
+async fn snapshot_before_hide(app: &tauri::AppHandle, generation: u64) {
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    {
+        let mode = app.state::<BackgroundMode>();
+        let close = mode.close.lock();
+        if !close.hidden || mode.generation.load(std::sync::atomic::Ordering::SeqCst) != generation
+        {
+            return;
+        }
+        *mode.snapshot.lock() = Some((request_id.clone(), tx));
+    }
+    let payload = serde_json::json!({ "request_id": request_id });
+    if let Err(error) = app.emit_to("main", "snapshot-now", payload) {
+        tracing::warn!(%error, "Cannot request background snapshot");
+    } else if !matches!(
+        tokio::time::timeout(std::time::Duration::from_secs(2), rx).await,
+        Ok(Ok(()))
+    ) {
+        tracing::warn!("Background snapshot acknowledgement timed out; hiding anyway");
+    }
+    let mode = app.state::<BackgroundMode>();
+    let mut pending = mode.snapshot.lock();
+    if pending.as_ref().is_some_and(|(id, _)| id == &request_id) {
+        pending.take();
+    }
+}
+
+#[tauri::command]
+pub(crate) fn ack_background_snapshot(app: tauri::AppHandle, request_id: String) {
+    let mode = app.state::<BackgroundMode>();
+    let mut pending = mode.snapshot.lock();
+    if pending.as_ref().is_some_and(|(id, _)| id == &request_id)
+        && let Some((_, tx)) = pending.take()
+    {
+        let _ = tx.send(());
+    }
+}
+
+fn restore_locked(app: &tauri::AppHandle, close: &mut CloseState) {
+    let mode = app.state::<BackgroundMode>();
+    mode.generation
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    mode.snapshot.lock().take();
+    match super::hidden::leave_background(&app.state::<Arc<AppState>>(), &DesktopWindows(app)) {
+        Ok(()) => close.hidden = false,
+        Err(error) => tracing::warn!(%error, "Cannot leave background"),
+    }
+}
+
+/// Shared by tray Show, Dock Reopen, second launch, deep links and notice clicks.
+pub(crate) fn leave_background(app: &tauri::AppHandle) {
+    let mode = app.state::<BackgroundMode>();
+    restore_locked(app, &mut mode.close.lock());
 }

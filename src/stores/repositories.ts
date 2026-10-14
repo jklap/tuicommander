@@ -529,6 +529,8 @@ let hydrated = false;
 let persistedSnapshot: RepositorySnapshot | null = null;
 let queuedSnapshot: RepositorySnapshot | null = null;
 let saveInFlight = false;
+let saveCompletion: Promise<void> = Promise.resolve();
+let saveError: unknown;
 
 /** Set by the store so an adoption that arrived mid-save can run once the baseline
  *  is settled. A save writes `persistedSnapshot` when its request resolves, which
@@ -548,8 +550,10 @@ function drainRepositorySaveQueue(): void {
 	}
 
 	saveInFlight = true;
-	persistRepositoryMutation(mutation, next)
+	saveError = undefined;
+	saveCompletion = persistRepositoryMutation(mutation, next)
 		.catch((err: unknown) => {
+			saveError = err;
 			// An error-level entry increments the visible Errors badge. In particular,
 			// same-record conflicts must never remain a debug-only lost mutation.
 			appLogger.error("store", "Repository changes were not saved", err);
@@ -1549,6 +1553,15 @@ function createRepositoriesStore() {
 			);
 			// Flush immediately (not debounced) — app is about to exit
 			saveNow();
+		},
+
+		/** Wait until the latest queued snapshot reaches the backend. */
+		async flushSave(): Promise<void> {
+			while (saveInFlight || queuedSnapshot) {
+				drainRepositorySaveQueue();
+				await saveCompletion;
+			}
+			if (saveError !== undefined) throw saveError;
 		},
 
 		/** Clear savedTerminals from all workspaces (consume-once after restore) */

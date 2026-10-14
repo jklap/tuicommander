@@ -3353,6 +3353,7 @@ pub(super) fn remove_post_mortem_session_state(session_id: &str, state: &AppStat
     state.session_maps.term_aliases.remove(session_id);
     state.session_maps.marker_stats.remove(session_id);
     state.session_maps.session_visibility.remove(session_id);
+    crate::background_mode::hidden::forget_session(state, session_id);
     output_removed || grid_removed || raw_removed
 }
 
@@ -3850,10 +3851,14 @@ pub(crate) fn spawn_standby_checker(state: Arc<AppState>) {
                 "Standby checker tick"
             );
 
-            for entry in state.session_maps.session_visibility.iter() {
-                let session_id = entry.key();
-                let visible = *entry.value();
-                if visible {
+            let visibility: Vec<(String, bool)> = state
+                .session_maps
+                .session_visibility
+                .iter()
+                .map(|entry| (entry.key().clone(), *entry.value()))
+                .collect();
+            for (session_id, visible) in &visibility {
+                if *visible {
                     continue;
                 }
                 if state
@@ -3937,6 +3942,12 @@ pub(crate) fn spawn_standby_checker(state: Arc<AppState>) {
 /// Returns Ok(true) if stopped, Ok(false) if already in standby or session gone.
 #[cfg(unix)]
 pub(crate) fn standby_session(state: &AppState, session_id: &str) -> Result<bool, String> {
+    // Serialize SIGSTOP with remote attach: the observer either prevents the
+    // stop or attaches afterwards and immediately SIGCONTs the parked process.
+    let visibility = state.background_visibility.lock();
+    if visibility.watched(state, session_id) {
+        return Ok(false);
+    }
     if state.session_maps.standby_sessions.contains_key(session_id) {
         return Ok(false);
     }

@@ -2356,6 +2356,7 @@ export const INTENTIONALLY_UNMAPPED: ReadonlySet<string> = new Set<string>([
 	// Native desktop lifecycle; remote clients must not hide or quit the host.
 	"request_quit",
 	"resolve_close",
+	"ack_background_snapshot",
 	// Browser clients use their own navigator.clipboard, never the host pasteboard.
 	"write_clipboard_text",
 	"read_clipboard_text",

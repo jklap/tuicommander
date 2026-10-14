@@ -91,3 +91,23 @@ impl CloseState {
 #[cfg(feature = "desktop")]
 #[path = "background_mode_desktop.rs"]
 pub(crate) mod desktop;
+
+#[path = "background_mode_hidden.rs"]
+pub(crate) mod hidden;
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub(crate) struct BackgroundConfig {
+    #[serde(default = "default_hide_dock_icon")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Hides the macOS Dock icon while the desktop runs in background.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    pub hide_dock_icon: bool,
+}
+fn default_hide_dock_icon() -> bool {
+    true
+}
+impl Default for BackgroundConfig {
+    fn default() -> Self {
+        Self {
+            hide_dock_icon: true,
+        }
+    }
+}

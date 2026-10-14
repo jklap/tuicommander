@@ -19,7 +19,7 @@ AI Chat image paste discovers capabilities on first use and shares clipboard pre
 
 ## Desktop close and quit
 
-Rust owns main-window close: Ask (default) offers Background, Quit and Cancel with Remember; Background hides only the main window and keeps sessions running. Explicit Quit ignores the close preference and confirms if enabled with live terminals. Detached-panel close affects only that panel. This stage keeps the WebView loaded and does not add a tray.
+Rust owns main-window close: Ask (default) offers Background, Quit and Cancel with Remember; Background hides all visible windows and keeps sessions running. Explicit Quit ignores the close preference and confirms if enabled with live terminals. Detached-panel close affects only that panel. This stage keeps the WebView loaded and does not add a tray.
 
 ## Shared form controls
 
@@ -1626,6 +1626,8 @@ ego's own configuration; the `ego_executable` path and the `ai_chat_workspace` f
 - Four failure states, each distinct: ego not configured (names the field to fill), a configured path that will not start, an ego command that failed (shown with the command, exit code and its verbatim output), and a transport fault that is not attributed to ego
 
 ### 11.9 Terminal
+- Background entry hides all visible desktop windows after a forced terminal snapshot (two-second acknowledgement limit). It clears desktop focus for phone push and saves terminal visibility. Showing the app restores open panels and wakes the previous visible terminal. Remote terminal WebSockets and SSE observers prevent standby while connected.
+- macOS General setting: **Hide Dock icon in background** (default on). Show restores the Dock icon. Windows requests a low WebView memory target while hidden and the normal target on Show.
 - Theme: terminal and app color theme, color swatches. Bundled themes include **Commander** (default and fallback for an unknown key), **Paper** (key `vscode-light`, the light theme), **Minimal Kiwi** (dark green-tinted background with muted warm accents) and **Ink** (key `clean`; neutral dark: `#0a0a0a` canvas, `#171717` surfaces, white accent, Ghostty ANSI palette, neutral tab-type tints keyed on `html[data-theme]`). The UI uses `antialiased` font smoothing with 0.01em tracking on every theme
 - Shell
 - Terminal font: bundled monospace fonts (JetBrains Mono default), default font size (8-32px slider), font weight, cursor style (bar / block / underline)

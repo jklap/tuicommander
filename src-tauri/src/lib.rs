@@ -1858,10 +1858,7 @@ pub fn run() {
     // alongside the installed TUIC-preview.app (they share the same identifier).
     #[cfg(not(debug_assertions))]
     let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-        if let Some(window) = app.get_webview_window("main") {
-            let _ = window.unminimize();
-            let _ = window.set_focus();
-        }
+        background_mode::desktop::leave_background(app);
     }));
 
     builder
@@ -1875,12 +1872,23 @@ pub fn run() {
                 let m = menu::build_menu(app)?;
                 app.set_menu(m)?;
                 app.on_menu_event(|app_handle, event| {
+                    // Tray Show uses the same menu event path as application menus.
+                    if event.id().0 == "show" {
+                        background_mode::desktop::leave_background(app_handle);
+                        return;
+                    }
                     if event.id().0 == "quit-app" {
                         background_mode::desktop::request_quit(app_handle.clone());
                         return;
                     }
                     let _ = app_handle.emit("menu-action", event.id().0.as_str());
                 });
+            }
+
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                let handle = app.handle().clone();
+                app.deep_link().on_open_url(move |_| background_mode::desktop::leave_background(&handle));
             }
 
             // Store AppHandle so HTTP handlers can emit Tauri events
@@ -2050,6 +2058,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             background_mode::desktop::request_quit,
             background_mode::desktop::resolve_close,
+            background_mode::desktop::ack_background_snapshot,
             telegram::settings::telegram_settings,
             telegram::settings::telegram_setup,
             generators::generate_value,
@@ -2598,11 +2607,7 @@ pub fn run() {
                 // hidden. Explicitly restore main on every reopen.
                 #[cfg(target_os = "macos")]
                 tauri::RunEvent::Reopen { .. } => {
-                    if let Some(window) = app_handle.get_webview_window("main") {
-                        let _ = window.unminimize();
-                        let _ = window.show();
-                        let _ = window.set_focus();
-                    }
+                    background_mode::desktop::leave_background(app_handle);
                 }
                 // Forward file-open events (macOS file associations) to the frontend
                 #[cfg(target_os = "macos")]

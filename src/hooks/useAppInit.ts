@@ -3,6 +3,7 @@ import { handleAgentExitCompletion } from "../components/Terminal/agentExitCompl
 import { invoke, listen } from "../invoke";
 import { isNotificationSound } from "../notifications";
 import { presentAutomationNotice } from "../services/automationNotifications";
+import { persistBackgroundSnapshot } from "../services/backgroundSnapshot";
 import { listenForNativeNoticeClicks } from "../services/nativeNotificationNavigation";
 import { activityStore } from "../stores/activityStore";
 import { appLogger } from "../stores/appLogger";
@@ -321,6 +322,19 @@ export async function initApp(deps: AppInitDeps) {
 	await listen<CloseRequest>("close-dialog", (event) => {
 		if (isTauri()) closeDialogStore.present(event.payload);
 	});
+
+	if (isTauri()) {
+		await listen<{ request_id: string }>("snapshot-now", (event) => {
+			void persistBackgroundSnapshot(
+				event.payload.request_id,
+				async () => {
+					repositoriesStore.snapshotTerminals(collectTerminalSnapshots());
+					await repositoriesStore.flushSave();
+				},
+				(requestId) => invoke("ack_background_snapshot", { requestId }),
+			);
+		});
+	}
 
 	// Periodic terminal snapshot — ensures savedTerminals is always fresh
 	// so app restart recovers terminals even if beforeunload fails.

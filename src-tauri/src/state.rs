@@ -2072,6 +2072,7 @@ pub struct AppState {
     pub mcp: McpState,
     /// WebSocket clients per PTY session for streaming output
     pub ws_clients: DashMap<String, Vec<WsClientTx>>,
+    pub(crate) background_visibility: Mutex<crate::background_mode::hidden::Visibility>,
     /// Cached AppConfig to avoid re-reading from disk on every request
     pub(crate) config: parking_lot::RwLock<crate::config::AppConfig>,
     /// TTL caches for git and GitHub query results
@@ -3522,6 +3523,7 @@ impl AppState {
             metrics: SessionMetrics::new(),
             mcp: McpState::default(),
             ws_clients: DashMap::new(),
+            background_visibility: Mutex::new(Default::default()),
             config: parking_lot::RwLock::new(config),
             git_cache: GitCacheState::new(),
             repo_watchers: DashMap::new(),
