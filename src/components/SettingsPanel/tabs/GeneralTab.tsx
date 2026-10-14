@@ -1,8 +1,15 @@
 import { type Component, createEffect, createSignal, For, onMount, Show } from "solid-js";
 import { AVAILABLE_LOCALES, localeName, t } from "../../../i18n";
 import { invoke } from "../../../invoke";
+import { isMacOS } from "../../../platform";
 import { appLogger } from "../../../stores/appLogger";
-import type { CustomLauncher, IdeType, UpdateChannel } from "../../../stores/settings";
+import type {
+	CloseBehavior,
+	CustomLauncher,
+	IdeType,
+	TrayIconPreference,
+	UpdateChannel,
+} from "../../../stores/settings";
 import { IDE_NAMES, settingsStore } from "../../../stores/settings";
 import { updaterStore } from "../../../stores/updater";
 import { isTauri } from "../../../transport";
@@ -175,11 +182,55 @@ export const GeneralTab: Component = () => {
 
 			<h3>{t("general.heading.confirmations", "Confirmations")}</h3>
 
+			<Show when={isTauri()}>
+				<SettingSelect
+					label={t("general.label.closeBehavior", "When closing the main window")}
+					value={settingsStore.state.closeBehavior}
+					onChange={(value) => settingsStore.setCloseBehavior(value as CloseBehavior)}
+					options={[
+						{ value: "ask", label: t("general.closeBehavior.ask", "Ask") },
+						...(settingsStore.state.trayIcon === "never"
+							? []
+							: [{ value: "background", label: t("general.closeBehavior.background", "Background") }]),
+						{ value: "quit", label: t("general.closeBehavior.quit", "Quit") },
+					]}
+					hint={t(
+						"general.hint.closeBehavior",
+						"Background hides visible windows and keeps sessions running. Quit still confirms when enabled.",
+					)}
+				/>
+			</Show>
+
+			<Show when={isTauri()}>
+				<SettingSelect
+					label={t("general.label.trayIcon", "Tray and menu-bar icon")}
+					value={settingsStore.state.trayIcon}
+					onChange={(value) => settingsStore.setTrayIcon(value as TrayIconPreference)}
+					options={[
+						{ value: "always", label: t("general.trayIcon.always", "Always") },
+						{ value: "background_only", label: t("general.trayIcon.backgroundOnly", "Only in background") },
+						{ value: "never", label: t("general.trayIcon.never", "Never") },
+					]}
+					hint={t(
+						"general.hint.trayIcon",
+						"Never disables Background. Without a tray host, including stock GNOME, closing minimizes the window so it remains reachable.",
+					)}
+				/>
+			</Show>
+
+			<Show when={isTauri() && isMacOS()}>
+				<SettingToggle
+					checked={settingsStore.state.hideDockIcon}
+					onChange={(enabled) => settingsStore.setHideDockIcon(enabled)}
+					label={t("general.toggle.hideDockIcon", "Hide Dock icon in background")}
+					hint={t("general.hint.hideDockIcon", "Restore the Dock icon when TUICommander is shown again")}
+				/>
+			</Show>
 			<SettingToggle
 				checked={settingsStore.state.confirmBeforeQuit}
 				onChange={(v) => settingsStore.setConfirmBeforeQuit(v)}
 				label={t("general.toggle.confirmBeforeQuit", "Confirm before quitting")}
-				hint={t("general.hint.confirmBeforeQuit", "Show a confirmation dialog when closing the app")}
+				hint={t("general.hint.confirmBeforeQuit", "Confirm real quit when terminal sessions are active")}
 			/>
 
 			<SettingToggle

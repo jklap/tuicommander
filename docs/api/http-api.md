@@ -1,5 +1,9 @@
 # HTTP API Reference
 
+## Scoped plugin settings
+
+`POST /api/plugins/{id}/settings` accepts the same tagged PluginAction body as IPC: describe, get, set, reset, patch. Get takes paths; writes take expectedRevision. It returns descriptors, a redacted snapshot or a commit reply. Errors are structured settings failures: 400 invalid path/value, 404 unloaded owner, 409 stale revision. Existing API authentication applies. No caller-selected target, store or file is accepted.
+
 `POST /sessions/:id/queue` optionally accepts `expectedDraft`. It must match the tracked live composer and trim to `text`; the server clears that draft before using the existing ready-window queue. Preflight rejection writes nothing. A later error may have cleared the composer, so clients must report uncertainty and must not automatically retry this transfer.
 
 ## Request authentication and browser boundary
@@ -24,7 +28,7 @@ A distinct second start on a plan with a running or paused run is refused with `
 
 ## Workflow definitions
 
-`POST /workflows/definition/action?path=<absolute-project>` accepts one `WorkflowAction` object and returns `{ type, value }`. Actions are `seed_templates`, `create_draft {name,kind,graph}`, `list_drafts`, `get_draft {id}`, `update_draft {id,expected_revision,graph}`, `update_closure {id,expected_revision,closure}`, `update_checks {id,expected_revision,checks}`, `publish {id,expected_revision}`, and `get_published {id,revision}`. `closure` is `human` or `automatic`, defaults to `human`, and `automatic` cannot be published until its evidence gate exists. Each check has `id`, `argv`, and camel-case `timeoutSecs`; the published revision pins its `requiredChecks`. A graph has `nodes` and `edges`; see [Workflow definitions](../backend/workflows.md) for node, outcome, and publication rules. The path resolves to the canonical owning project. Published revisions are immutable. This endpoint defines workflows; it does not start one.
+`POST /workflows/definition/action?path=<absolute-project>` accepts one `WorkflowAction` object and returns `{ type, value }`. Actions are `seed_templates`, `create_draft {name,kind,graph}`, `list_drafts`, `get_draft {id}`, `update_draft {id,expected_revision,graph}`, `update_closure {id,expected_revision,closure}`, `update_checks {id,expected_revision,checks}`, `publish {id,expected_revision}`, and `get_published {id,revision}`. `closure` is `human` or `automatic`, defaults to `human`, and `automatic` cannot be published until its evidence gate exists. Each check has `id`, `argv`, and camel-case `timeoutSecs`; the published revision pins its `requiredChecks`. A graph has `nodes` and `edges`; see [Workflow definitions](../backend/workflows.md) for node, outcome, and publication rules. The path resolves to the canonical owning project. Published revisions are immutable. This endpoint defines workflows; it does not start one. Executable-graph validation errors during `publish` return HTTP 422 with `{ "error": "invalid workflow definition: ..." }`; invalid Pause targets name `resume_to`.
 
 ## Native stories
 
@@ -236,7 +240,7 @@ falls through to a catch-all. That catch-all splits on the first path segment:
   `attachments`, `audio`, `claude`, `codex`, `config`, `debug`, `diagnostics`, `dictation`,
   `events`, `exec`, `fs`, `generators`, `github`, `health`, `logs`, `mcp`,
   `metrics`, `plugins`, `process`, `prompt`, `registry`, `repo`, `sessions`,
-  `stats`, `system`, `terminal`, `tunnels`, `watchers`, `worktrees`. The
+  `stats`, `system`, `tasks`, `terminal`, `tunnels`, `watchers`, `worktrees`. The
   response is `404` with `{ "error": "no such endpoint: /<path>" }`.
 - **Anything else** — a deep link such as `/settings` or `/mobile/session/<id>`.
   The response is `200` with the SPA shell (`index.html`, or `mobile.html` under
@@ -849,7 +853,7 @@ the server is back to the filter the connection was opened with.
 | `pty-description-changed` | `{session_id, description}` | Orchestrator updates the short task description shown above a PTY |
 | `chat-view-changed` | `{session_id, seq}` | The chat view of a Claude, Grok or exactly bound Codex terminal has entries past `seq`; read them with `GET /sessions/:id/chat-view` |
 | `session-renamed` | `{session_id, name, is_custom}` | An MCP `session action=rename` changed a tab's display name |
-| `session-suspend-requested` | `{session_id, request_id}` | An MCP `session action=suspend` asked the UI to suspend that tab |
+| `session-suspended` | `{record}` | Rust persisted a suspended tab before ending its PTY; record fields use snake_case |
 | `term-alias-assigned` | `{session_id, alias}` | A session received its terminal alias (e.g. `tu-3`); published once, after `session-created` |
 | `session-closed` | `{session_id}` | Session ended |
 | `design-mode-changed` | `{repo_path, session_id, status}` | Design Mode for the repository changed to `armed` or `stopped`; the bound agent tab follows this status |
@@ -869,7 +873,7 @@ the server is back to the filter the connection was opened with.
 | `speech-download-progress` | `{asset, downloaded, total, percent}`, then `{asset, done: true}` | A speech asset is downloading; the `done` event ends it, success or failure. `asset` is the only difference from the line above, and it is what a client joins the bar against |
 | `speech-utterance` | `{utteranceId, state, error?, turn}` — the `SpokenReply` shape `POST /dictation/speech/speak` returns | A reply moved between `queued`, `rendering`, `speaking` and one of `finished` / `interrupted` / `failed`. Pushed by the render thread that performed the transition, so a client no longer polls `speech/status` |
 | *(any of the above, mirrored)* | the daemon's own payload plus `__tuic_origin: {connection}` | An event this machine repeated from a connected remote daemon (`remote_mirror.rs`). It arrives under the daemon's own event name, so a client needs no new subscription; `__tuic_origin` says which connection it came from. A frame that already carries the key is dropped rather than repeated, so a mirrored event never crosses a second hop |
-| `lagged` | `{missed}` | Client fell behind; N events were dropped. Dropped events are never resent, so a client that derives state from the stream must re-read it — `subscribeEvents`' `onResync("lagged")` callback exists for that. It also fires with `"reconnect"` on any EventSource re-open after the first, because a drop loses the same way silently. Both are SSE-only: Tauri `listen()` is in-process and cannot drop |
+| `lagged` | `{missed}` | Client fell behind; N events were dropped. Dropped events are never resent, so a client that derives state from the stream must re-read it — `subscribeEvents`' `onResync("lagged")` callback exists for that. It fires with `"connect"` once the initial subscription is live, closing any gap after the initial snapshot read, and with `"reconnect"` on any EventSource re-open after the first, because a drop loses the same way silently. Both are SSE-only: Tauri `listen()` is in-process and cannot drop |
 
 ### MCP Streamable HTTP
 
@@ -1608,16 +1612,18 @@ GET /mcp/status
 
 Returns MCP server status (enabled, running, active sessions, connected MCP clients, maximum sessions). `native_tools` contains the unfiltered native MCP registry as `{name, summary, description}` entries, including disabled tools. `summary` is the first line of the full registry description. This Settings inventory is independent of upstream tools, collapse mode and progress tracking; MCP client discovery still applies all configured filters.
 
-### MCP Suspend Response
+### Suspended Sessions
 
-```
-POST /mcp/suspend-response
-Content-Type: application/json
+`POST /sessions/suspended` accepts the same request as IPC `suspended_session_action`, from loopback or an authenticated client.
 
-{"request_id": "...", "ok": false, "reason": "agent working"}
-```
+- `{"action":"list"}` returns an object keyed by stable `tuic_session`. Each record contains `session_id`, `agent_type`, `cwd`, `worktree`, `agent_session_id`, `launch_command`, `alias`, `pane_slot`, `reason`, `name` and `shell`.
+- `{"action":"suspend","sessionId":"...","metadata":{...}}` persists before ending an idle PTY and returns `{ok:true}`. Optional camelCase metadata contains `name`, `agentSessionId`, `agentLaunchCommand` and `paneSlot`; live backend state controls refusal and identity.
+- `{"action":"resume","tuicSession":"..."}` verifies and spawns the replacement PTY, removes its durable record after successful creation and returns `{ok:true,session_id:"..."}`.
+- `{"action":"forget","tuicSession":"..."}` removes a closed suspended tab.
+- `{"action":"sync","sessionId":"...","metadata":{...}}` retains live frontend metadata for later headless suspension.
+- `{"action":"resolve_resume","agentType":"...","cwd":"...","tuicSession":"...","agentSessionId":"...","launchCommand":"..."}` returns `{cmd,verified}` for existing restart restoration consumers. Verification checks the saved launch profile's store; an unavailable session returns `cmd:null`.
 
-The tab's verdict on a `session action=suspend` request announced by the `session-suspend-requested` event. The waiting MCP call returns it. Unknown or already-answered ids are ignored.
+Errors return HTTP 400 with `{error}`. MCP `session action=suspend` uses the same Rust operation without requiring a WebView or a frontend verdict. `session-suspended` precedes the close event so connected clients retain the tab.
 
 ### MCP Upstream Credentials
 
@@ -1669,13 +1675,20 @@ The sender-side `fs_transfer_remote_paths` coordinator is desktop IPC only (`INT
 
 `POST /fs/upload-copy?destDir=<absolute-directory>&name=<leaf-name>&directory=true|false` accepts a streamed, uncompressed tar body under the existing daemon authentication. All archive paths must start with `name`; only files and directories are accepted. Limits: 256 MiB of archive and extracted file data, 10,000 entries, two concurrent uploads. Destination resolution uses registered repository directory capabilities, rejects traversal and escapes through symlinks, and never follows a target symlink. Staging is removed on failure/disconnect; the completed top-level file or directory is published with a no-replace atomic rename. A concurrently created target is skipped; existing targets drain the bounded body before returning `skipped`. The upload is exempt from the global response timeout and aborts after 30 s without a body chunk. Its total receive budget is 17 minutes. A connection below roughly 2 Mbit/s cannot finish a 256 MiB drop within that budget. The concurrency permit lasts through extraction even if the handler is cancelled. Filenames use the receiver platform rules (POSIX permits colon and backslash); Windows rejects colon and backslash. Unix tar permissions are masked to `0755` for executable files/directories and `0644` for ordinary files, with the receiving umask applied and no privilege bits. Normal request-drop cleanup consumes the staging directory handle before removing its tree, including on Windows. Abrupt process termination (for example, kill -9) can leave a `.tuic-upload-<uuid>` directory in the destination; there is no startup sweep, and the leftover can be removed manually once no upload is running. Final directory permissions are applied after publication; a permission failure is logged and the already published copy remains successful. The sender uses the existing `tui-session` cookie header; tokens are absent from upload URLs and reqwest error text. No new listener or credential is created.
 
-`POST /attachments/upload?kind=pty|acp&id=<session-or-connection-id>&name=<filename>`
-streams a binary request body into the target's working directory at
-`.tuic/attachments/<timestamp>-<safe-name>`. It returns `{ "path": "/absolute/path", "size": N }`.
+`POST /attachments/upload?kind=pty|acp&id=<pty-or-connection-id>&session=<acp-session-id>&name=<filename>`
+streams a binary request body into `attachments/<session>/<timestamp>-<safe-name>`
+under TUIC's data directory. `session` is required for ACP and omitted for PTY.
+It returns `{ "path": "/absolute/path", "size": N, "notice"?: "..." }`.
 The default per-file cap is 25 MiB (`attachment_max_bytes`), including uploads
-without `Content-Length`; partial and empty files are removed on failure. Git
-repositories receive a local `.git/info/exclude` entry for that directory.
-Authentication matches the other shared HTTP routes.
+without `Content-Length`; partial and empty files are removed on failure.
+Uploads never touch the cwd or Git excludes. PTY close, kill and exit, ACP
+conversation detach and connection settlement remove their uploads; startup
+removes only directories whose recorded owner process is provably dead. Live or
+unknown ownership is preserved, including concurrent instances sharing the data
+directory. Symlinked attachment roots/sessions are rejected.
+Legacy agents without a launch grant receive HTTP 409 with a new-session notice.
+Ego PTY and ACP receipts carry a notice because ego currently cannot accept extra
+read roots through invocation flags or ACP. Authentication matches the other shared HTTP routes.
 
 ```
 GET  /fs/list?repoPath=/path/to/repo&subdir=src
@@ -3105,3 +3118,55 @@ hook evidence passes live PID, rollout id and cwd validation. Omission retracts
 exactness; clients must not substitute a heuristic discovery ID. The existing
 `GET /sessions/:id/chat-view` route repeats validation on every Codex read and
 returns `not_bound` when evidence is missing or stale.
+
+### Desktop close notification
+
+`close-dialog` SSE carries `{kind: "ask" | "confirm_quit", sessions: number, background_available: boolean}`, identical to the desktop event. Browser clients do not render host close prompts. Native lifecycle commands `request_quit` and `resolve_close` are deliberately desktop-only and have no HTTP route.
+
+### Tasks start-work brief
+
+`POST /tasks/start-work-prompt` accepts `{ "repoPath": "/repo", "input": {
+"key": "TASK-1", "url": null, "title": "Title", "body": "Description" } }`
+and returns a JSON string. It reads `.tuic-start-work.md` with repository
+containment and UTF-8/size guards, substitutes sanitized item fields once, or
+uses key/title/body when absent. Template read failures return an error. Its IPC
+twin is `build_start_work_prompt`; the host wraps and caps the returned brief
+at delivery.
+
+### Tasks provider bridge
+
+`POST /work-items/provider-bridge` is the HTTP twin of `work_item_provider_bridge({input})`. Body: `{action:"claim", requestId}` returns the typed provider request or null when already claimed/expired; `{action:"complete", requestId, value}` completes a claimed request and returns null. The route requires local or authenticated access. Clients subscribe to `work-item-provider-request` on `/events`, whose payload contains `request_id` and `request`; only a client with the target provider loaded should claim it. Rust alone creates pending requests after MCP validation and write opt-in. Replies are validated as Tasks DTOs before entering model output.
+
+Settings policy foundation (#1786-9cbd): the existing
+`POST /mcp/confirm-response` also answers backend-built settings proposals shown
+by `mcp-confirm`. Only the first answer settles a question. A settings grant is
+bound to its origin connection and original target/revision/content, lasts at
+most 300 seconds from proposal creation, and cannot be replayed. There is no new
+settings HTTP endpoint in this step; replacement settings transport publication
+remains separate.
+
+## Open desktop Markdown files
+
+| Method | Path | Request | Response |
+| --- | --- | --- | --- |
+| GET | `/repo/open-markdown-tabs` | `cwd` query: session directory | Array of `{id,title,relative_path,absolute_path,fs_root}` |
+| PUT | `/config/open-markdown-tabs` | `{tabs:[{id,repoPath,filePath,fsRoot?}]}` | `null` |
+
+GET uses the existing remote authentication and returns 403 for unregistered
+directories. Repository/workspace ownership is computed by Rust. Only file tabs
+inside registered roots with a `.md` suffix are listed; no contents are included.
+PUT is the desktop publication twin and refuses non-loopback clients, including
+authenticated remote clients. The in-memory list resets with the backend.
+`open-markdown-tabs-changed` has an empty payload and is emitted on IPC and SSE;
+consumers reread after this event or SSE resynchronization.
+
+### Immediate Design Mode browser commands
+
+`POST /design-mode/command` accepts `{repoPath, action, args}`. Actions are
+`navigate` (`args.url`), `reload`, `screenshot`, `errors`, and `eval` (`args.script`).
+It shares the `design_mode_browser_command` IPC implementation. The extension's
+existing native port receives commands over a pending native-host IPC receive;
+replies match UUIDs and expire after ten seconds. Errors include `not_armed`,
+`command_timeout`, `host_denied`, `eval_not_granted` and `tab_not_visible`.
+Legacy `/design-mode/navigate` and `/design-mode/reload` keep the restart-safe
+heartbeat sequence contract. Immediate commands do not change those sequences.

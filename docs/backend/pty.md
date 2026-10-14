@@ -331,7 +331,7 @@ OS samples receive a generation under the session lock. Older samples cannot ove
 
 The output reader checks the grid's alternate-screen state for agent sessions. On the first entry per session, it logs a warning with the agent type and detected CLI version. This catches agent versions or launch paths that bypass the native-scrollback launch defaults without spamming on repaints.
 
-PTY identity applies Claude's primary-screen environment control only while that agent's `prevent_alt_screen` setting is enabled. `apply_agent_screen_env` covers IPC, HTTP and MCP spawns before explicit caller environment values are installed. Rust also probes Codex, Grok and OpenCode when creating a shell PTY and exports supported flags and subcommand exclusions into its environment. The zsh, bash and fish wrappers apply those values to manually typed agent commands; `command <agent>` bypasses them. The same Rust policy builds structured launch arguments, with a bounded CLI help probe that retries inconclusive checks.
+PTY identity applies Claude's primary-screen environment control only while that agent's `prevent_alt_screen` setting is enabled. `apply_agent_screen_env` covers IPC, HTTP and MCP spawns before explicit caller environment values are installed. Rust also probes Codex, Grok and OpenCode when creating a shell PTY and exports supported flags and Codex’s `exec` exclusion into its environment. OpenCode wrappers apply `--mini` only to the interactive TUI: recorded subcommands and aliases bypass it, including after root options. Option values and project paths retain the interactive policy. Goose wrappers omit TUIC session naming for `--no-session`, `--name NAME`, `--name=NAME`, `-n NAME`, `-nNAME`, `--path PATH`, `--path=PATH`, `--resume` or `-r`. The zsh, bash and fish wrappers apply those values to manually typed agent commands; `command <agent>` bypasses them. The same Rust policy builds structured launch arguments, with a bounded CLI help probe that retries inconclusive checks.
 
 Grid WebSocket attachment sends the existing viewport as a full frame, including history metadata, without waiting for new PTY output. If a live grid watch has no available frame, the server sends `{"type":"grid-replay-empty"}` so an idle empty session completes replay explicitly. The client bounds initial replay to 15 seconds and reconnects with a persistent error toast when replay stalls or decoding fails. Healthy idle sessions have no subsequent-output deadline.
 
@@ -895,3 +895,35 @@ hook installer, enabled and trusted by Codex. Launch-scoped turn-complete notify
 alone does not establish identity. Unsupported versions, missing/untrusted hooks,
 Windows (the existing tty hook transport is Unix-only), and remote terminals
 keep Codex Chat unavailable. TUIC never bypasses native hook trust.
+
+Session attachments live in the app data directory, keyed by the runtime PTY id.
+`bind_pty_identity` provisions the directory and shell grant environment; structured
+launches pass the same directory through `agent_hook_launch::launch_args`.
+`cleanup_session` and `tombstone_transient_cleanup` remove it at the existing close,
+kill and exit boundaries. `AppState::new` sweeps session directories only when their recorded
+owner PID is provably dead. Live, reused and unknown PIDs are preserved across
+concurrent instances. The owner marker sits outside the granted directory. No cleanup visits a repository directory. Resumed tabs use
+new runtime PTY ids, so their read grants point to fresh storage.
+
+Suggest choices are published once when the agent is ready, including while background descendants keep the shell busy. The completion lifecycle event still waits for an idle shell and settled background work; publishing choices does not release that gate.
+
+Pending follow-up choices survive a working spinner until the turn has settled. While the shell is busy, public Claude session snapshots use that same settled-completion predicate, so a retained final marker does not report completed/idle during active Claude Stop hooks. A final `suggest:` marker may share a Claude redraw with its spinner; this is not a new turn. Working evidence can still reopen an idle or delivered completion (including a blocking Stop hook or a Codex internal continuation).
+
+### Background desktop visibility and remote observers
+
+Background mode saves desktop visibility, then clears it while the windows are
+hidden. All terminal WebSocket formats hold a session observation guard; SSE
+holds an all-session guard because its event stream is not session-scoped.
+The standby final eligibility check shares the visibility lock with observer
+attach: a client either prevents SIGSTOP or wakes the already parked process.
+The final check also reads current session visibility under that lock, so Show
+invalidates a standby tick selected while the desktop was hidden.
+Disconnect releases only that observer. Showing the desktop restores saved
+visibility and SIGCONTs only terminals that are visible again.
+
+
+### Rust-owned suspended tabs
+
+Rust owns tab suspension in `suspended_sessions.rs`. It checks the current parsed/shell state, persists a record keyed by stable TUIC identity before closing the PTY, and dual-emits `session-suspended` before EOF. `session_resume.rs` verifies the agent store using the saved launch environment. Resume creates the replacement PTY in Rust and the frontend attaches its returned id. No WebView response is needed; working agents, busy shells, unanswered input and queued commands remain refused.
+
+Each Resume allocates a fresh PTY key and binds the saved TUIC identity before spawning the child. Exit tombstones and delayed cleanup belong to the previous PTY. Suspended-session RPC callers supply top-level session/repository/cwd ownership context, so remote operations stay on the owning daemon even after suspension clears the live session id.

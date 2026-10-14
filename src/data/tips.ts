@@ -10,6 +10,54 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "Plugin settings",
+		description:
+			"Find loaded plugin settings under Integrations, or search for a field in Settings. Plugin pages disappear when the plugin unloads.",
+		shortcut: null,
+	},
+	{
+		feature: "Desktop Markdown on mobile",
+		description:
+			"Open a session’s More actions menu on your phone to read the Markdown files open on desktop for that repository.",
+		shortcut: null,
+	},
+	{
+		feature: "Mobile composer actions",
+		description:
+			"Tap + beside a mobile draft to attach a file, take a photo, or use the draft and queue actions supported by that conversation.",
+		shortcut: null,
+	},
+	{
+		feature: "Mobile keyboard correction",
+		description:
+			"In the mobile Settings tab, use the Input section to disable autocorrect and spellcheck for literal terminal command entry. The choice stays on your device.",
+		shortcut: null,
+	},
+	{
+		feature: "Close to background",
+		description:
+			"In desktop Settings > General, choose Ask, Background or Quit for main-window close. Background keeps sessions running. The tray or menu-bar icon shows working and awaiting agents and offers Show and Quit.",
+		shortcut: null,
+	},
+	{
+		feature: "Compose images",
+		description:
+			"Drop images on Compose or use Attach images beside Send to choose several. Paste still works; image paths appear in your draft.",
+		shortcut: null,
+	},
+	{
+		feature: "Tasks view memory",
+		description:
+			"Tasks remembers your source, view, grouping, sort and filters separately for each repository and provider account.",
+		shortcut: null,
+	},
+	{
+		feature: "Tasks board",
+		description:
+			"Use More in any lane to load the next board page. Select Move… on a card to change its lane without dragging.",
+		shortcut: null,
+	},
+	{
 		feature: "Terminal Chat answers",
 		description:
 			"Hover or focus an answer card to copy the whole reply. Pasted terminal output shows two lines; select + N lines to expand it.",

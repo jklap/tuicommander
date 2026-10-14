@@ -22,7 +22,7 @@ import { ContextMenu, createContextMenu } from "../ContextMenu/ContextMenu";
 import { AnswersPanel } from "./AnswersPanel";
 import { type AnswersTurn, newTurnCache, readAnswersHistory, sameAnswersHistory } from "./answersTurn";
 import { createCanvasTerminalBindings } from "./canvasTerminalBindings";
-import { canvasToGrid, sgrMouseSequence } from "./canvasTerminalInputGeometry";
+import { canvasToGrid as canvasToViewport, sgrMouseSequence } from "./canvasTerminalInputGeometry";
 import {
 	createCanvasLinkController,
 	createLinkPressTracker,
@@ -84,7 +84,9 @@ import { filePathRegex, fileUrlRegex, matchWebUrls } from "./linkProvider";
 import { buildScrollbarMarksHtml } from "./scrollbarMarks";
 import {
 	ANSWER_MARKER_RE,
+	hiddenMarkerRows,
 	INTENT_HIGHLIGHT_RE,
+	type OverlayBlock,
 	paintOverlayBlocks,
 	planSuggestOverlay,
 	SUGGEST_ANCHOR_RE,
@@ -98,6 +100,7 @@ import {
 } from "./terminalInput";
 import { cssColorToRgb, publishTerminalPalette } from "./terminalPalette";
 import { openTerminalPathLink } from "./terminalPathLink";
+import { ViewportProjection } from "./viewportProjection";
 import { latestIntersectionVisibility, retryUntilMeasured, SIZE_RETRY_MAX_FRAMES } from "./visibilityLifecycle";
 
 // Re-export for external consumers
@@ -324,6 +327,14 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	// Tracks cumulative gesture distance (px) to ramp the scroll acceleration factor.
 	// Row index → row data lookup (persistent, updated incrementally)
 	const rowMap = new Map<number, DecodedFrame["rows"][0]>();
+	let viewportProjection = new ViewportProjection(rowMap);
+	let projectedDisplayOffset = 0;
+	function canvasToGrid(...args: Parameters<typeof canvasToViewport>) {
+		const point = canvasToViewport(...args);
+		let row = Math.min(viewportProjection.backendRow(point.row), Math.max(0, lastResizeRows - 1));
+		while (row > 0 && viewportProjection.hidden.has(row)) row--;
+		return { row, col: Math.min(viewportProjection.backendCol(row, point.col), Math.max(0, lastResizeCols - 1)) };
+	}
 	// Rows that arrived in the latest onFrame batch (drives incremental repaint)
 	const pendingDirtyRows = new Set<number>();
 	// When true, next paint must redraw everything (scroll, resize, clear)
@@ -415,7 +426,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			const scrollDir = delta > 0 ? 1 : -1;
 			invokeRef("terminal_scroll", { sessionId: props.sessionId, delta: scrollDir }).catch(ipcErr("terminal_scroll"));
 			const edgeRow = scrollDir > 0 ? 0 : (currentFrame.screenRows || lastResizeRows) - 1;
-			const absRow = viewportRowToAbs(edgeRow);
+			const absRow = viewportRowToAbs(
+				Math.min(viewportProjection.backendRow(edgeRow), (currentFrame.screenRows || lastResizeRows) - 1),
+			);
 			if (absRow !== null) {
 				selection.end = { col: scrollDir > 0 ? 0 : 9999, row: absRow + scrollDir };
 				const m = metrics();
@@ -435,7 +448,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	function viewportRowToAbs(viewportRow: number): number | null {
 		if (!currentFrame) return null;
 		return viewportRowToSelectionRow(
-			{ ...currentFrame, screenRows: currentFrame.screenRows || lastResizeRows },
+			{ ...currentFrame, displayOffset: projectedDisplayOffset, screenRows: currentFrame.screenRows || lastResizeRows },
 			viewportRow,
 		);
 	}
@@ -573,21 +586,61 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	}
 
 	function paintFrame(frame: DecodedFrame, m: CellMetrics, dirtyIndices?: Set<number>) {
-		gridRenderer.paintGrid(rowMap, m, { fullRepaint: fullRepaintNeeded, dirtyIndices });
+		// A wrapped suggest may start above the first frame a client received.
+		// Fetch its bounded lookback rather than leaving an orphaned tail visible.
+		const top = frame.historyBase + frame.historySize - frame.displayOffset;
+		for (
+			let chunk = Math.floor(Math.max(frame.historyBase, top - MARKER_LOOKBACK_ROWS) / ROW_CACHE_CHUNK);
+			chunk < Math.ceil(top / ROW_CACHE_CHUNK);
+			chunk++
+		) {
+			if (requestedChunks.has(chunk)) continue;
+			requestedChunks.add(chunk);
+			void fetchChunk(chunk);
+		}
+		const markers = planViewportMarkers(frame, dirtyIndices);
+		projectedDisplayOffset = frame.displayOffset;
+		const projection = new ViewportProjection(rowMap, markers.hidden, markers.answerMarkers);
+		const projectionChanged = projection.key !== viewportProjection.key;
+		viewportProjection = projection;
+		gridRenderer.paintGrid(rowMap, m, {
+			fullRepaint: fullRepaintNeeded || projectionChanged,
+			projection: viewportProjection,
+			dirtyIndices:
+				dirtyIndices &&
+				withToggledRows(
+					withToggledRows(dirtyIndices, paintedHiddenRows, markers.hidden),
+					paintedAnswerMarkers,
+					markers.answerMarkers,
+				),
+			hiddenRows: markers.hidden,
+			hiddenAnswerMarkers: markers.answerMarkers,
+		});
+		paintedHiddenRows = markers.hidden;
+		paintedAnswerMarkers = markers.answerMarkers;
 		fullRepaintNeeded = false;
 
 		// Overlay (cursor/selection/search/links/scrollbar/suggest) always stays on main.
 		repaintOverlay(frame, m);
 
 		updateScrollbar(frame);
-		updateSuggestOverlay(frame, m, dirtyIndices);
+		updateSuggestOverlay(m, markers);
 		if (answersView() !== null) scheduleAnswersRefresh();
 	}
 
 	function repaintOverlay(frame: DecodedFrame, m: CellMetrics) {
 		octx.clearRect(-GUTTER_PX, 0, overlayCanvasRef.width / m.dpr, overlayCanvasRef.height / m.dpr);
-		paintSelection(selection, selectionAbsRowToViewport, overlayScrollOffset, rowCache, rowMap, octx, m);
-		paintSearchHighlights(search, absRowToViewport, octx, m);
+		paintSelection(
+			selection,
+			selectionAbsRowToViewport,
+			overlayScrollOffset,
+			rowCache,
+			rowMap,
+			octx,
+			m,
+			viewportProjection,
+		);
+		paintSearchHighlights(search, absRowToViewport, octx, m, viewportProjection);
 		paintLinkUnderline(frame, m);
 		paintGutterMarkers(m);
 		paintBlockTimestamps(m);
@@ -601,8 +654,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			gridRenderer,
 			cachedBgDefault,
 			keyInputRef,
-			frame,
+			{ ...frame, displayOffset: overlayScrollOffset ?? frame.displayOffset },
 			m,
+			viewportProjection,
 		);
 	}
 
@@ -618,10 +672,12 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			octx.beginPath();
 			for (const [row, spans] of detectedLinks) {
 				if (row < 0 || row >= maxRow) continue;
-				const y = row * m.cellHeight + m.cellHeight - 1 + 0.5;
+				const displayRow = viewportProjection.displayRow(row);
+				if (displayRow === null) continue;
+				const y = displayRow * m.cellHeight + m.cellHeight - 1 + 0.5;
 				for (const span of spans) {
-					octx.moveTo(span.colStart * m.cellWidth, y);
-					octx.lineTo(span.colEnd * m.cellWidth, y);
+					octx.moveTo(viewportProjection.displayCol(row, span.colStart) * m.cellWidth, y);
+					octx.lineTo(viewportProjection.displayCol(row, span.colEnd) * m.cellWidth, y);
 				}
 			}
 			octx.stroke();
@@ -636,9 +692,13 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			];
 			for (const span of rowSpans) {
 				if (span.row >= 0 && span.row < maxRow) {
-					const x = span.colStart * m.cellWidth;
-					const w = (span.colEnd - span.colStart) * m.cellWidth;
-					const y = span.row * m.cellHeight + m.cellHeight - 1 + 0.5;
+					const row = viewportProjection.displayRow(span.row);
+					if (row === null) continue;
+					const start = viewportProjection.displayCol(span.row, span.colStart);
+					const end = viewportProjection.displayCol(span.row, span.colEnd);
+					const x = start * m.cellWidth;
+					const w = (end - start) * m.cellWidth;
+					const y = row * m.cellHeight + m.cellHeight - 1 + 0.5;
 					octx.beginPath();
 					octx.moveTo(x, y);
 					octx.lineTo(x + w, y);
@@ -728,7 +788,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		if (!currentFrame) return null;
 		// During a smooth-scroll gesture the base is cache-rendered at overlayScrollOffset
 		// (the backend frame lags), so map overlay rows against that same offset.
-		const offset = overlayScrollOffset ?? currentFrame.displayOffset;
+		const offset = overlayScrollOffset ?? projectedDisplayOffset;
 		const viewportTop = currentFrame.historySize - offset;
 		const viewportRow = absRow - viewportTop;
 		if (viewportRow < 0 || viewportRow >= (currentFrame.screenRows || lastResizeRows)) return null;
@@ -737,7 +797,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
 	function selectionAbsRowToViewport(absRow: number): number | null {
 		if (!currentFrame) return null;
-		const offset = overlayScrollOffset ?? currentFrame.displayOffset;
+		const offset = overlayScrollOffset ?? projectedDisplayOffset;
 		return selectionRowToViewport(
 			{ ...currentFrame, displayOffset: offset, screenRows: currentFrame.screenRows || lastResizeRows },
 			absRow,
@@ -754,6 +814,11 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		}
 	}
 
+	function paintAbsRowToViewport(absRow: number): number | null {
+		const row = absRowToViewport(absRow);
+		return row === null ? null : viewportProjection.displayRow(row);
+	}
+
 	function paintGutterMarkers(m: CellMetrics) {
 		const term = terminalsStore.get(props.terminalId);
 		if (!term) return;
@@ -761,7 +826,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		if (blocks.length === 0) return;
 		for (const block of blocks) {
 			if (block.exitCode === null || block.exitCode === 0) continue;
-			const vpRow = absRowToViewport(block.promptLine - (currentFrame?.historyBase ?? 0));
+			const vpRow = paintAbsRowToViewport(block.promptLine - (currentFrame?.historyBase ?? 0));
 			if (vpRow === null) continue;
 			octx.fillStyle = "#f85149";
 			octx.fillRect(-GUTTER_PX, vpRow * m.cellHeight, 3, m.cellHeight);
@@ -782,9 +847,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			const foldEnd = block.endLine;
 			const foldedCount = foldEnd - foldStart;
 			if (foldedCount <= 0) continue;
-			const startVp = absRowToViewport(foldStart - (currentFrame?.historyBase ?? 0));
+			const startVp = paintAbsRowToViewport(foldStart - (currentFrame?.historyBase ?? 0));
 			if (startVp === null) continue;
-			const endVp = absRowToViewport(foldEnd - 1 - (currentFrame?.historyBase ?? 0));
+			const endVp = paintAbsRowToViewport(foldEnd - 1 - (currentFrame?.historyBase ?? 0));
 			const lastVp = endVp ?? lastResizeRows - 1;
 			const y = startVp * m.cellHeight;
 			const h = (lastVp - startVp + 1) * m.cellHeight;
@@ -798,7 +863,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			octx.fillText(label, 4, y + m.cellHeight * 0.75);
 			// Fold gutter indicator
 			octx.fillStyle = "rgba(88,166,255,0.5)";
-			const gutterVp = absRowToViewport(block.promptLine - (currentFrame?.historyBase ?? 0));
+			const gutterVp = paintAbsRowToViewport(block.promptLine - (currentFrame?.historyBase ?? 0));
 			if (gutterVp !== null) {
 				octx.fillRect(-GUTTER_PX, gutterVp * m.cellHeight, 3, m.cellHeight);
 			}
@@ -820,7 +885,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		const canvasW = overlayCanvasRef.width / m.dpr;
 		let lastLabelBottom = -Infinity;
 		for (const block of all) {
-			const vpRow = absRowToViewport(block.promptLine - (currentFrame?.historyBase ?? 0));
+			const vpRow = paintAbsRowToViewport(block.promptLine - (currentFrame?.historyBase ?? 0));
 			if (vpRow === null) continue;
 			const y = vpRow * m.cellHeight;
 			if (y < lastLabelBottom) continue;
@@ -852,6 +917,13 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
 	let scrollbarMarksContainer: HTMLDivElement | null = null;
 	let lastScrollbarMarksKey = "";
+
+	createEffect(() => {
+		settingsStore.state.showScrollbarMarks;
+		untrack(() => {
+			if (currentFrame) updateScrollbar(currentFrame);
+		});
+	});
 
 	function paintScrollbarMarks(totalRows: number) {
 		if (!scrollbarRef) return;
@@ -895,59 +967,93 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
 	// --- Suggest / Intent overlay ---
 
-	const rowToText = rowText;
-
-	// Cached suggest/intent overlay state to avoid full DOM rebuild
+	// Cached answer overlay state to avoid full DOM rebuild
 	let lastSuggestOverlayKey = "";
 
-	function updateSuggestOverlay(
-		_frame: DecodedFrame,
-		m: CellMetrics,
-		dirtyIndices?: Set<number>,
-		snapshotOverride?: (i: number) => { text: string; isWrapped: boolean } | null,
-	) {
-		if (!overlayRef) return;
+	/** Rows of the cache above the viewport scanned for the anchor of a marker that scrolled off the top. */
+	const MARKER_LOOKBACK_ROWS = 32;
 
-		// Skip full rescan if no dirty rows touch suggest/intent/answer patterns
-		// (skipped entirely when rendering from the cache during a scroll gesture).
-		if (!snapshotOverride && dirtyIndices && !fullRepaintNeeded) {
-			let hasSuggestContent = false;
+	interface MarkerPlan {
+		/** Rows not to paint: agent `suggest:`/`intent:` rows, overscan rows included. */
+		hidden: ReadonlySet<number>;
+		answerMarkers: ReadonlySet<number>;
+		/** Plan key plus the answer strips, viewport rows only. */
+		key: string;
+		blocks: OverlayBlock[];
+	}
+	const NO_MARKERS: MarkerPlan = { hidden: new Set(), answerMarkers: new Set(), key: "", blocks: [] };
+	let lastMarkerPlan: MarkerPlan = NO_MARKERS;
+	/** The hidden set the main canvas was last painted with. */
+	let paintedHiddenRows: ReadonlySet<number> = NO_MARKERS.hidden;
+	let paintedAnswerMarkers: ReadonlySet<number> = NO_MARKERS.answerMarkers;
+
+	/** `dirty` plus every viewport row whose hidden state differs between `before` and `after`. */
+	function withToggledRows(dirty: Set<number>, before: ReadonlySet<number>, after: ReadonlySet<number>): Set<number> {
+		if (before === after) return dirty;
+		const out = new Set(dirty);
+		for (const idx of before) if (idx >= 0 && !after.has(idx)) out.add(idx);
+		for (const idx of after) if (idx >= 0 && !before.has(idx)) out.add(idx);
+		return out;
+	}
+
+	/**
+	 * Classify the screen rows (plus one overscan row below, and a lookback above
+	 * the viewport) by `getRow`. The plan covers `rows + 1` so the overscan row
+	 * below the viewport is classified too.
+	 */
+	function planMarkers(rows: number, getRow: (i: number) => { text: string; isWrapped: boolean } | null): MarkerPlan {
+		const plan = planSuggestOverlay(rows + 1, getRow, -MARKER_LOOKBACK_ROWS);
+		return {
+			hidden: hiddenMarkerRows(plan.blocks),
+			answerMarkers: plan.answerMarkers,
+			key: plan.key,
+			blocks: plan.blocks.filter((b) => b.row < rows),
+		};
+	}
+
+	/** Marker plan of the live frame; a dirty-row prefilter skips the scan on screens that never had a marker. */
+	function planViewportMarkers(frame: DecodedFrame, dirtyIndices?: Set<number>): MarkerPlan {
+		if (dirtyIndices && !fullRepaintNeeded && lastMarkerPlan.key === "") {
+			let touchesMarker = false;
 			for (const idx of dirtyIndices) {
 				const row = rowMap.get(idx);
 				if (!row) continue;
 				const text = rowToText(row);
-				if (SUGGEST_ANCHOR_RE.test(text) || INTENT_HIGHLIGHT_RE.test(text) || ANSWER_MARKER_RE.test(text)) {
-					hasSuggestContent = true;
+				// A wrapped row can complete a marker whose anchor row did not change.
+				if (
+					rowMap.get(idx - 1)?.wrapped ||
+					SUGGEST_ANCHOR_RE.test(text) ||
+					INTENT_HIGHLIGHT_RE.test(text) ||
+					ANSWER_MARKER_RE.test(text)
+				) {
+					touchesMarker = true;
 					break;
 				}
 			}
-			if (!hasSuggestContent) {
-				if (lastSuggestOverlayKey === "") return;
-				// Stale overlay — fall through to rebuild/clear it
-			}
+			if (!touchesMarker) return lastMarkerPlan;
 		}
+		const base = frame.historyBase + frame.historySize - frame.displayOffset;
+		const wrappedAbove = (i: number) => (i > 0 ? rowMap.get(i - 1) : rowCache.get(base + i - 1))?.wrapped ?? false;
+		lastMarkerPlan = planMarkers(lastResizeRows || 24, (i) => {
+			const row = i >= 0 ? rowMap.get(i) : rowCache.get(base + i);
+			return row ? { text: rowToText(row), isWrapped: wrappedAbove(i) } : null;
+		});
+		return lastMarkerPlan;
+	}
 
-		const bg = cachedBgDefault;
-		const numRows = lastResizeRows || 24;
+	const rowToText = rowText;
 
-		const getRowSnapshot =
-			snapshotOverride ??
-			((i: number) => {
-				const row = rowMap.get(i);
-				if (!row) return null;
-				// `row.wrapped` says the row continues onto the NEXT one; the overlay
-				// wants "this row continues the previous one".
-				return { text: rowToText(row), isWrapped: rowMap.get(i - 1)?.wrapped ?? false };
-			});
-
-		// Decide what to mask before building anything: most repaints leave the
-		// plan untouched, and the elements were being created and dropped just to
-		// discover that.
-		const { key, blocks } = planSuggestOverlay(numRows, getRowSnapshot);
-		if (key === lastSuggestOverlayKey) return;
-		lastSuggestOverlayKey = key;
-
-		paintOverlayBlocks(overlayRef, blocks, m.cellHeight, bg);
+	function updateSuggestOverlay(m: CellMetrics, plan: MarkerPlan) {
+		if (!overlayRef || plan.key === lastSuggestOverlayKey) return;
+		lastSuggestOverlayKey = plan.key;
+		paintOverlayBlocks(
+			overlayRef,
+			plan.blocks.flatMap((block) => {
+				const row = viewportProjection.displayRow(block.row);
+				return row === null ? [] : [{ ...block, row }];
+			}),
+			m.cellHeight,
+		);
 	}
 
 	function startBlink() {
@@ -1102,12 +1208,34 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	// keeps up at 60fps regardless of scroll speed.
 	function renderCachedBase(intOffset: number, m: CellMetrics, rows: number, hist: number) {
 		const cacheRow = (abs: number): DecodedRow | null => rowCache.get(abs) ?? null;
+		projectedDisplayOffset = intOffset;
 		const tempMap = new Map<number, DecodedRow>();
 		for (let r = 0; r < rows; r++) {
 			const cached = cacheRow(hist - intOffset + r);
 			if (cached) tempMap.set(r, cached.index === r ? cached : { ...cached, index: r });
 		}
-		gridRenderer.paintGrid(tempMap, m, { fullRepaint: true });
+		// Classify from the cache at this offset so the marker rows track the scrolling
+		// content instead of the lagging backend frame (no flicker, no raw marker).
+		const markers = planMarkers(rows, (i) => {
+			const cached = cacheRow(hist - intOffset + i);
+			if (!cached) return null;
+			return { text: rowToText(cached), isWrapped: cacheRow(hist - intOffset + i - 1)?.wrapped ?? false };
+		});
+		const projectionRows = new Map(tempMap);
+		for (const index of [-1, rows]) {
+			const cached = cacheRow(hist - intOffset + index);
+			if (cached) projectionRows.set(index, { ...cached, index });
+		}
+		viewportProjection = new ViewportProjection(projectionRows, markers.hidden, markers.answerMarkers);
+		gridRenderer.paintGrid(tempMap, m, {
+			fullRepaint: true,
+			projection: viewportProjection,
+			hiddenRows: markers.hidden,
+			hiddenAnswerMarkers: markers.answerMarkers,
+		});
+		paintedHiddenRows = markers.hidden;
+		paintedAnswerMarkers = markers.answerMarkers;
+		lastMarkerPlan = markers;
 		if (octxOverscan && overscanRenderer) {
 			const ch = m.cellHeight;
 			const w = overscanCanvasRef.width / m.dpr;
@@ -1117,26 +1245,19 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			if (above) {
 				octxOverscan.fillStyle = cachedBgDefault;
 				octxOverscan.fillRect(-GUTTER_PX, 0, w, ch);
-				overscanRenderer.paintRow(above, 0, m);
+				const display = viewportProjection.projectRow({ ...above, index: -1 });
+				if (display) overscanRenderer.paintRow(display, (display.index + 1) * ch, m);
 			}
 			if (below) {
 				const y = (rows + 1) * ch;
 				octxOverscan.fillStyle = cachedBgDefault;
 				octxOverscan.fillRect(-GUTTER_PX, y, w, ch);
-				overscanRenderer.paintRow(below, y, m);
+				const display = viewportProjection.projectRow({ ...below, index: rows });
+				if (display && display.index === rows) overscanRenderer.paintRow(display, y, m);
 			}
 		}
 		ensureCacheBand(intOffset, rows, hist);
-		// Rebuild suggest/intent masks from the cache at this offset so they track the
-		// scrolling content instead of the lagging backend frame (no flicker, and the
-		// raw suggest line stays masked).
-		if (currentFrame) {
-			updateSuggestOverlay(currentFrame, m, undefined, (i) => {
-				const cached = cacheRow(hist - intOffset + i);
-				if (!cached) return null;
-				return { text: rowToText(cached), isWrapped: cacheRow(hist - intOffset + i - 1)?.wrapped ?? false };
-			});
-		}
+		if (currentFrame) updateSuggestOverlay(m, markers);
 	}
 
 	function renderSmooth() {
@@ -1150,8 +1271,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		// All-time top-of-history index: cache keys live in this eviction-stable space.
 		const hist = currentFrame.historyBase + currentFrame.historySize;
 		const intOffset = Math.floor(scroll.position);
-		const frac = (scroll.position - intOffset) * ch; // [0, ch): how far past the line
 		renderCachedBase(intOffset, m, rows, hist);
+		// Advancing across an omitted row moves no visible content.
+		const frac = viewportProjection.hidden.has(-1) ? 0 : (scroll.position - intOffset) * ch;
 		// Repaint the selection/cursor/search overlay aligned to the cached offset so the
 		// highlight tracks the content while scrolling (the overlay canvas is inside the
 		// stage, so the fractional translate below keeps it pixel-aligned with the base).
@@ -1210,6 +1332,10 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			}
 			if (!scroll.cacheFetchedRows(decoded.rows, liveEpoch, liveFromAbs)) requestedChunks.delete(chunk);
 			if (scroll.position != null) scheduleSmoothRender();
+			else {
+				fullRepaintNeeded = true;
+				scheduleRepaint();
+			}
 		} catch (e) {
 			if (!scroll.isCacheGenerationCurrent(cacheGeneration)) return;
 			requestedChunks.delete(chunk);
@@ -2465,7 +2591,10 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		const composition = createCompositionState();
 		bindings.listen(keyInputRef, "compositionstart", () => {
 			const m = metrics();
-			if (currentFrame && m) syncImePosition(keyInputRef, currentFrame.cursorRow, currentFrame.cursorCol, m);
+			if (currentFrame && m) {
+				const point = viewportProjection.toDisplay(currentFrame.cursorRow, currentFrame.cursorCol);
+				if (point) syncImePosition(keyInputRef, point.row, point.col, m);
+			}
 		});
 		bindings.listen(keyInputRef, "compositionend", (e) => {
 			const data = composition.onCompositionEnd(e.data);
@@ -3362,7 +3491,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		// gets pushed up. Anchoring to the cursor bottom self-clamps: the cursor can't
 		// overshoot above containerRef.top.
 		const keyboardTop = window.innerHeight - occ;
-		const cursorBottomY = containerRef.getBoundingClientRect().top + (frame.cursorRow + 1) * m.cellHeight;
+		const cursorBottomY =
+			containerRef.getBoundingClientRect().top +
+			((viewportProjection.displayRow(frame.cursorRow) ?? frame.cursorRow) + 1) * m.cellHeight;
 		const lift = Math.max(0, Math.round(cursorBottomY - keyboardTop));
 		kbLiftRef.style.transform = lift > 0 ? `translateY(${-lift}px)` : "";
 	}

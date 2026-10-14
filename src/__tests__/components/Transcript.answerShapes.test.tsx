@@ -3,6 +3,7 @@ import { cleanup, render } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it } from "vitest";
 import { Transcript } from "../../components/AIChatPanel/Transcript";
+import recordedCodex from "../../components/Terminal/__tests__/fixtures/codex-answer-paragraphs-1872.json";
 import type { AcpTranscriptEntry } from "../../stores/acpTranscript";
 
 afterEach(cleanup);
@@ -35,7 +36,7 @@ describe("chat answer shapes follow the CLI grid extent", () => {
 			"💬 Result:\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n- x\n  - nested\n\n```text\n💬 literal\n```\n\nClosing words.";
 		const { blocks, marks, container } = await show(text);
 		expect(blocks.map((b) => b.tagName)).toEqual(["P", "TABLE", "UL", "PRE", "P"]);
-		expect(marks).toEqual(["", "", "", "", "end"]);
+		expect(marks).toEqual(["", "", "", "end", null]);
 		expect(container.querySelectorAll("[data-tuic-answer-start]")).toHaveLength(1);
 		expect(container.querySelector("pre")?.textContent).toContain("💬 literal");
 	});
@@ -43,22 +44,35 @@ describe("chat answer shapes follow the CLI grid extent", () => {
 	// Catches: prose before the first marker being swept into the answer.
 	it("does not tint text before the first marker", async () => {
 		const { marks } = await show("Intro.\n\n💬 Answer.\n\nMore.");
-		expect(marks).toEqual([null, "", "end"]);
+		expect(marks).toEqual([null, "end", null]);
 	});
 
 	// Catches: streaming a second answer onto a finished one leaving a raw 💬 or a stale "end" mark.
-	it("re-marks each answer when a second one streams in", async () => {
+	it("extends the region when a second marked paragraph streams in", async () => {
 		const [entries, setEntries] = createSignal<AcpTranscriptEntry[]>([
-			{ id: "a", kind: "agent", text: "💬 One.\n\nMore." },
+			{ id: "a", kind: "agent", text: "💬 One.\nMore." },
 		]);
 		const { container } = render(() => <Transcript entries={entries} busy={() => false} emptyMessage="Empty" />);
 		await Promise.resolve();
-		setEntries([{ id: "a", kind: "agent", text: "💬 One.\n\nMore.\n\n💬 Two.\n\nEnd." }]);
+		setEntries([{ id: "a", kind: "agent", text: "💬 One.\nMore.\n\n💬 Two.\n\nEnd." }]);
 		await Promise.resolve();
 		await Promise.resolve();
 		const blocks = Array.from(container.querySelectorAll<HTMLElement>("#markdown-content > div > *"));
-		expect(blocks.map((b) => b.getAttribute("data-tuic-answer"))).toEqual(["", "end", "", "end"]);
+		expect(blocks.map((b) => b.getAttribute("data-tuic-answer"))).toEqual(["", "end", null]);
 		expect(container.textContent).not.toContain("💬");
+	});
+
+	// Catches: the shared range merging while the chat still draws gaps or leaves later glyphs raw.
+	it("merges the recorded Codex paragraphs into one region and strips each marker", async () => {
+		const text = recordedCodex.answerRows.map((row) => row.text.replace(/^[• ]+/, "")).join("\n");
+		const { container, blocks, marks } = await show(text);
+		expect(marks).toEqual(["", "", "end"]);
+		expect(container.querySelectorAll("[data-tuic-answer-region-start]")).toHaveLength(1);
+		expect(blocks.map((block) => block.textContent)).toEqual([
+			"The answer highlight runs continuously across the full response.",
+			"Blank paragraph spacing stays preserved.",
+			"Raw copy text remains untouched.",
+		]);
 	});
 
 	// Catches: a 💬 on its own line inside one paragraph (soft break) staying raw, though the grid row starts an answer.

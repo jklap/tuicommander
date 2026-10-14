@@ -3,6 +3,7 @@ import { appLogger } from "../../stores/appLogger";
 import { repoSettingsStore } from "../../stores/repoSettings";
 import { repositoriesStore } from "../../stores/repositories";
 import type { WorkspaceLifecycleStatus } from "../../stores/workspaceIdentity";
+import { reportActionError } from "../../utils/reportActionError";
 import type { RemoveWorktreeResult } from "../useRepository";
 
 interface WorktreeRemovalCoordinatorDeps {
@@ -46,7 +47,7 @@ export function createWorktreeRemovalCoordinator(deps: WorktreeRemovalCoordinato
 	/** `workspaceId` addresses the row and the backend. `branchName`, read off the
 	 *  record, is what the user sees in the confirm dialog and the status line —
 	 *  showing a minted id there would be showing a user an internal key. */
-	const handleRemoveWorkspace = async (repoPath: string, workspaceId: string) => {
+	const handleRemoveWorkspace = async (repoPath: string, workspaceId: string, keepBranch = false) => {
 		const removeKey = `${repoPath}::${workspaceId}`;
 		// Lock IMMEDIATELY (synchronously) to prevent concurrent invocations that race the awaits below
 		if (removingBranches().has(removeKey)) return;
@@ -64,30 +65,39 @@ export function createWorktreeRemovalCoordinator(deps: WorktreeRemovalCoordinato
 			const repoState = repositoriesStore.get(repoPath);
 			const branch = repoState?.workspaces[workspaceId];
 			if (!branch?.worktreePath) {
-				deps.setStatusInfo(`Cannot remove ${workspaceId}: not a worktree`);
+				reportActionError(deps.setStatusInfo, `Cannot remove ${workspaceId}: not a worktree`);
 				return;
 			}
 			const branchName = branch.branchName;
 
 			const effective = repoSettingsStore.getEffective(repoPath);
-			const deleteBranch = effective?.deleteBranchOnRemove ?? true;
+			const deleteBranch = !keepBranch && (effective?.deleteBranchOnRemove ?? true);
 			let lifecycle: WorkspaceLifecycleStatus;
 			try {
 				lifecycle = await deps.repo.getWorkspaceLifecycle(repoPath, workspaceId);
 			} catch (err) {
 				appLogger.warn("git", `workspace lifecycle preflight failed for ${workspaceId}`, err);
-				deps.setStatusInfo(`Cannot verify whether ${branchName} is safe to remove`);
+				reportActionError(deps.setStatusInfo, `Cannot verify whether ${branchName} is safe to remove`);
 				return;
 			}
 			if (lifecycle.removalSafety === "unknown") {
-				deps.setStatusInfo(
+				reportActionError(
+					deps.setStatusInfo,
 					`Cannot verify whether ${branchName} is safe to remove: ${lifecycle.error ?? "unknown state"}`,
 				);
 				return;
 			}
 			if (deleteBranch && lifecycle.commitStatus === "unmerged") {
-				deps.setStatusInfo(
-					`Cannot remove ${branchName}: the branch has unmerged commits. Merge it first, or turn off Delete branch on remove.`,
+				reportActionError(
+					deps.setStatusInfo,
+					`Cannot delete ${branchName}: the branch has unmerged commits. You can remove the worktree while keeping the branch.`,
+					{
+						label: "Remove worktree, keep branch",
+						onClick: () =>
+							handleRemoveWorkspace(repoPath, workspaceId, true).catch((err) => {
+								reportActionError(deps.setStatusInfo, `Failed to remove ${branchName}: ${String(err)}`);
+							}),
+					},
 				);
 				return;
 			}
@@ -177,7 +187,7 @@ export function createWorktreeRemovalCoordinator(deps: WorktreeRemovalCoordinato
 							workspaceId,
 							error: dialogErr instanceof Error ? dialogErr.message : String(dialogErr),
 						});
-						deps.setStatusInfo(`Failed to confirm force-remove for ${branchName}`);
+						reportActionError(deps.setStatusInfo, `Failed to confirm force-remove for ${branchName}`);
 						return;
 					}
 					if (!forceConfirmed) {
@@ -199,7 +209,7 @@ export function createWorktreeRemovalCoordinator(deps: WorktreeRemovalCoordinato
 							workspaceId,
 							reason: forceReason,
 						});
-						deps.setStatusInfo(`Failed to remove ${branchName}: ${forceReason}`);
+						reportActionError(deps.setStatusInfo, `Failed to remove ${branchName}: ${forceReason}`);
 						repositoriesStore.setWorkspace(repoPath, workspaceId, { isRemoving: false });
 						return;
 					}
@@ -207,7 +217,10 @@ export function createWorktreeRemovalCoordinator(deps: WorktreeRemovalCoordinato
 					appLogger.warn("git", `handleRemoveWorkspace: branch is in main worktree — cannot remove as worktree`, {
 						workspaceId,
 					});
-					deps.setStatusInfo(`Cannot remove ${branchName}: branch is in the main worktree, not a linked worktree`);
+					reportActionError(
+						deps.setStatusInfo,
+						`Cannot remove ${branchName}: branch is in the main worktree, not a linked worktree`,
+					);
 					repositoriesStore.setWorkspace(repoPath, workspaceId, { isRemoving: false });
 					return;
 				} else {
@@ -215,7 +228,7 @@ export function createWorktreeRemovalCoordinator(deps: WorktreeRemovalCoordinato
 						workspaceId,
 						reason,
 					});
-					deps.setStatusInfo(`Failed to remove ${branchName}: ${reason}`);
+					reportActionError(deps.setStatusInfo, `Failed to remove ${branchName}: ${reason}`);
 					repositoriesStore.setWorkspace(repoPath, workspaceId, { isRemoving: false });
 					return;
 				}

@@ -5,9 +5,13 @@ pub mod catalogue;
 pub mod ego;
 mod ego_schema;
 pub mod model;
+pub mod policy;
 
 pub mod native;
 pub mod notifications;
+pub(crate) mod plugin_migrations;
+pub mod plugin_schema;
+pub mod plugins;
 pub mod preferences;
 pub mod registry;
 pub mod remote;
@@ -80,3 +84,18 @@ mod accounts_safety_tests;
 mod ego_fixture;
 #[cfg(all(test, unix))]
 mod ego_tests;
+
+#[cfg(test)]
+mod policy_baseline_tests;
+
+#[cfg(test)]
+mod policy_tests;
+
+#[cfg(test)]
+mod policy_scope_tests;
+
+#[cfg(test)]
+mod policy_domain_tests;
+
+#[cfg(test)]
+mod policy_lifecycle_tests;

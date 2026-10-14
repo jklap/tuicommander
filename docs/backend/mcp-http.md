@@ -1,5 +1,9 @@
 # MCP & HTTP Server
 
+## Scoped plugin settings
+
+The plugin settings IPC command and `POST /api/plugins/{id}/settings` dispatch to the same scoped Rust owner. Catalogue descriptors contain no stored values; secrets read as set/unset. `plugin-changed` carries only plugin IDs over desktop and SSE after a durable commit, scheduling existing reload callbacks. This adapter does not publish the general settings MCP tool.
+
 Slice F exposes `start_graph {target:{type:story|plan,id},expected_revision?,definition_id,definition_revision,request_id,limits?}` through the existing owning-daemon service. Story starts require the current native revision and pin the selected publication; the request ID is bound to its payload. Omitted limits use Rust defaults. Plan dispatch remains unavailable in this build and its start control says so. The `workflow_run` MCP tool uses an inline schema generated from `RunAction` and the public `RunCommand` variants; it returns the same scoped snapshots and cursor-ordered events as IPC/HTTP. Run history shows pinned activations, decisions/evidence, repair counters, pause targets and complete event payloads across pages. Graph recovery uses `resume_graph {execution_id,activation_id,resolution}` after answering pending input; pause and cancel use the existing sequence-fenced commands. Legacy runs offer inspection and cancellation in the UI. No new persistence or client scheduler is added.
 
 ## Explicit repository registration
@@ -26,6 +30,19 @@ Unauthenticated HTML navigation to `/` and `/mobile` redirects to the existing `
 
 The shared filesystem router exposes streamed `/fs/upload-copy` on the daemon through existing authentication. Sender-side `fs_transfer_remote_paths` coordination is desktop IPC only and intentionally unmapped: data leaves the machine, Finder source paths cannot be gated to registered roots, and HTTP token holders must not trigger exfiltration. There is no `/fs/transfer-remote` HTTP route. The receiver resolves registered repository roots through `cap-std` directory handles, validates archive paths, rejects links, bounds bytes/entries/concurrency, and publishes the staged top-level source with an atomic no-replace rename. Uploads use the existing session-cookie header, a 30-second chunk idle deadline (exempt from the global response deadline), and hold their concurrency permit through blocking extraction. Daemon startup sweeps abandoned upload staging inside registered roots without following symlink directories. Cleanup restores owner directory access only inside disposable staging when restrictive tar modes would prevent removal; published permissions remain unchanged. This path uses neither SSH nor shell commands. See the filesystem HTTP API for the wire contract.
 
+## Open desktop Markdown tabs
+
+`GET /repo/open-markdown-tabs?cwd=<session-directory>` returns file-tab metadata
+for the deepest registered repository or workspace containing the directory.
+It uses the existing remote authentication middleware and returns 403 for an
+unregistered directory. No file contents are returned.
+
+The desktop publishes through `sync_open_markdown_tabs`; its HTTP twin is
+`PUT /config/open-markdown-tabs`, restricted to loopback. Rust stores a temporary
+snapshot and emits `open-markdown-tabs-changed` on desktop IPC and SSE whenever
+it changes. Mobile clients refetch after invalidation or reconnect. Saved pane
+layouts contain only tab IDs/types and cannot supply these file paths.
+
 ## CI logs
 
 Use HTTP `GET /repo/ci-failure-logs` with `repoPath` and `branch` to fetch logs
@@ -44,7 +61,7 @@ HTTP's access marker does not prove human identity, because loopback requests al
 
 Workflow definitions use the shared `/workflows/definition/action` HTTP route and `workflow_definition_action` desktop command. They are project-scoped and published by immutable revision; execution has its own API.
 
-`workflow_launch` takes `{input:{runId,attemptId,worktreePath,agentType,skills?,feedback?}}` from a bound local managed PTY. The worktree must be known to the project and cannot be the main checkout. Plan attempts use the caller's isolated worktree; story attempts require that run's active coordinator and bind a distinct registered worktree to the story before worker spawn. It renders the pinned prompt in Rust, reserves the spawn effect, launches through the existing managed-agent path, and binds the returned session and task handle to the durable attempt. A story worker requires the caller to own the run's active coordinator attempt. `workflow_report` takes `{input:AttemptReport}` with `contractVersion`, `runId`, `storyId`, `storyRevision`, `attemptId`, `generation`, `outcome`, `summary`, `criterionResults`, and `evidence`. The server derives the reporting PTY and project from the MCP connection, validates attempt ownership and revision, and records an idempotent run event. Plan-agent reports use `storyId=planId`, `storyRevision=0`, and no criterion results. Generic `agent send` and process exit are observations, never semantic completion reports.
+`workflow_launch` takes `{input:{runId,attemptId,worktreePath,agentType,skills?,feedback?}}` from a bound local managed PTY. The worktree must be a registered branch checkout of the project, outside the archive pool, and cannot be the main checkout or have a Git operation in progress. Launch validation is separate from detached-orphan removal, which still refuses attached branch checkouts. Plan attempts use the caller's isolated worktree; story attempts require that run's active coordinator and bind a distinct registered worktree to the story before worker spawn. It renders the pinned prompt in Rust, reserves the spawn effect, launches through the existing managed-agent path, and binds the returned session and task handle to the durable attempt. A story worker requires the caller to own the run's active coordinator attempt. `workflow_report` takes `{input:AttemptReport}` with `contractVersion`, `runId`, `storyId`, `storyRevision`, `attemptId`, `generation`, `outcome`, `summary`, `criterionResults`, and `evidence`. The server derives the reporting PTY and project from the MCP connection, validates attempt ownership and revision, and records an idempotent run event. Plan-agent reports use `storyId=planId`, `storyRevision=0`, and no criterion results. Generic `agent send` and process exit are observations, never semantic completion reports.
 
 For `workflow_report`, a `needs_input` outcome requires `inputRequest {question,options}`. A completed reviewer report requires `review {decision,artifactDigest,findings}` with criterion-indexed findings. These fields are durable evidence; they do not promote a story to Done. After a committed story report, the active coordinator's inbox receives a `workflow_event` cursor with `runId`, `storyId` and `sequence`; the coordinator replays the run log rather than treating mail as an outcome.
 
@@ -2238,3 +2255,52 @@ identical shapes; model reads/writes now honor configured profile/workspace.
 `exec_paths`, `auth.PROVIDER.headers` and `credential_command` remain owner gaps:
 isolated installed-Ego probes returned exit 2 (`unknown config key`). No editor or
 raw-file fallback is used. Credentials are never read from `auth.json`.
+
+Tasks brief preparation uses `POST /tasks/start-work-prompt`, the HTTP twin of
+`build_start_work_prompt`. Both accept `repoPath` and `input` with key, nullable
+URL, title and body. The shared Rust implementation reads the repo-contained
+`.tuic-start-work.md` and sanitizes item fields before substitution. The frontend
+passes the result to the provider; host delivery still wraps and caps it.
+
+## Tasks items through the repo tool
+
+`repo action=work_item` reads the item linked to the caller's current Git worktree branch in `workitem_links.json`, searching all registered paths sharing its canonical repository root. Explicit targets are `reference: {providerId, accountId, id}`, `url`, or `key` with `provider_id` and `account_id`. URL lookup uses registered plugin resolvers. Key lookup uses the selected provider's search and requires an exact key match; repeated cursors and ambiguous matches fail. Use a reference or URL when the provider cannot find a key through search.
+
+The response has `content`, with a JSON detail inside `<untrusted-content source="work item">` and its closing tag. Detail includes the first comments page. Pass `cursor` from `comments.nextCursor` to read the next comments page, with `limit` (1–100, default 50). All provider text, including metadata, stays inside the block. JSON escapes angle brackets so item text cannot forge a closing tag.
+
+`repo action=work_item_act` accepts the same target and `operation: {kind: "comment" | "transition", value: string}`. Transitions use provider action IDs. Writes fail before provider dispatch unless `mcp_work_item_writes` is true; it defaults to false. The setting is checked again before a frontend claims the write. An action result contains the updated detail in the same block.
+
+Rust owns target selection, input/reply validation and opt-in. A typed `work-item-provider-request` event reaches the existing frontend registry through desktop events and SSE. The frontend atomically claims a request with `work_item_provider_bridge`, calls the existing provider port and completes the reply. Multiple clients cannot dispatch the same request twice. Claims and completions have matching IPC and HTTP transports (`POST /work-items/provider-bridge`). A running frontend with the provider loaded is required; a headless daemon alone has no JS providers. Requests time out after 30 seconds. A dispatched write may have completed when the reply times out: read before retrying.
+
+Credentials stay in Rust's existing account-authenticated HTTP path, which redacts raw tokens and Basic encodings before provider JavaScript receives a response. MCP accepts only the Tasks DTOs and suppresses raw provider errors; it never serializes account objects or configuration.
+
+### Background tray and menu-bar icon
+
+The desktop `close-dialog` event and its SSE copy include `background_available: boolean`. The desktop Ask dialog uses it to omit Background when the tray is disabled or unavailable. Browser clients continue to ignore native close prompts; tray actions add no public request surface.
+
+When the desktop WebViews are deliberately unloaded in background mode, `ui` actions return `{"error":"webview_unloaded"}` immediately. This does not affect PTYs or remote terminal streams. SSE emits `background-mode-changed` with `state` equal to `hidden`, `unloaded` or `visible`.
+
+Design Mode browser commands (`navigate`, `reload`, `screenshot`, `errors`, `eval`)
+return correlated native-port results with a ten-second timeout. Direct MCP tool
+lists, meta search and schema lookup filter Design Mode by the armed terminal
+session; cached-tool dispatch checks the caller and repository again. Start remains
+callable by its known tool name before arming. Arm/Stop broadcasts
+`notifications/tools/list_changed`; live client refresh remains a verification item.
+
+### Settings proposal confirmation (#1786-9cbd)
+
+`ui(action=confirm, proposalId=...)` accepts an opaque proposal from the shared
+settings service. The host supplies the title and redacted diff; supplied
+`title`, `message` and `confirmed` cannot approve or replace it. The existing
+`mcp-confirm` event reaches desktop and SSE clients, and the existing human
+response endpoint/IPC command settles the first answer. A pending dialog uses the
+remaining portion of the proposal's absolute 300-second lifetime. Cancelling its
+handler dismisses the question and revokes the proposal. Ending an MCP protocol
+session revokes its proposals and grants. Headerless confirmation requires a
+server-issued connection identity.
+
+The service boundary rejects remote MCP writes regardless of peer registration.
+Local MCP enablement, HTTP local-or-authenticated access and native OS-user trust
+remain distinct host-issued contexts. The replacement settings tool and HTTP/IPC
+routes are not published by the policy foundation; cutover wires those contexts
+into the same service rather than duplicating policy.

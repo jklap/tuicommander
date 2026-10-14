@@ -2,6 +2,13 @@
 
 Hooks contain business logic and side effects, bridging stores and Tauri commands.
 
+## useOpenMarkdownPublication
+
+`src/hooks/useOpenMarkdownPublication.ts` observes main-window desktop file tabs and sends
+metadata to `sync_open_markdown_tabs`. It serializes writes, coalesces rapid
+changes and retries failures. Browser and mobile documents do not publish.
+The Rust snapshot is temporary and contains no file contents.
+
 ## useAppInit
 
 **File:** `src/hooks/useAppInit.ts`
@@ -436,3 +443,5 @@ File browser panel logic: directory listing, file operations (create, delete, re
 ### Automatic agent toast cards (#1760-bab7)
 
 MCP toast notices show a transient card when their origin terminal is not active or the window is unfocused. Settings → Notifications → **Show cards from other terminals** defaults on and is saved per client; turning it off restores urgent-only cards. Urgent notices always show a card, and notices without an origin session remain bell-only unless urgent. The listener reads `terminalsStore.state.activeId` and `document.hasFocus()` at arrival; `notificationsStore.state.autoToastCards` is stored under `tui-commander-auto-toast-cards` in localStorage. Bell deduplication, sound and terminal navigation are preserved.
+
+Desktop close decisions come from Rust through `close-dialog`; `useAppInit` forwards the request to the close dialog store. There is no JavaScript `onCloseRequested` interceptor or frontend PTY teardown on desktop Quit.

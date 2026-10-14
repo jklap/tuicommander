@@ -51,6 +51,12 @@ export type AcpTranscriptEntry = { messageId?: string; inherited?: boolean } & (
 	| { id: string; kind: "failed"; message: string }
 );
 
+export interface AcpProviderRetry {
+	text: string;
+	/** Presentation deadline measured when the update arrived, never from panel mount. */
+	retryAt?: number;
+}
+
 interface TranscriptState {
 	sessions: Record<AcpSessionId, AcpTranscriptEntry[]>;
 	titles: Record<AcpSessionId, string>;
@@ -58,7 +64,7 @@ interface TranscriptState {
 	turnHasReply: Record<AcpSessionId, boolean>;
 	pendingUserEcho: Record<AcpSessionId, { entryId: string; received: string }>;
 	/** ego's provider-retry status while a turn waits to retry (`_meta.ego.providerRetry`). */
-	retries: Record<AcpSessionId, string>;
+	retries: Record<AcpSessionId, AcpProviderRetry>;
 	/** Next entry id. Monotonic across sessions; only distinctness matters. */
 	nextId: number;
 }
@@ -233,11 +239,18 @@ function reduceUpdate(
 		case "session_info_update": {
 			if (typeof record.title === "string" && record.title.trim()) draft.titles[sessionId] = record.title;
 			// A patch: only a present key changes the status, and null clears it.
-			const ego = egoMeta(record) as { providerRetry?: { text?: unknown } | null } | undefined;
+			const ego = egoMeta(record) as { providerRetry?: { text?: unknown; delayMs?: unknown } | null } | undefined;
 			if (ego && "providerRetry" in ego) {
 				const text = ego.providerRetry?.text;
-				if (typeof text === "string" && text) draft.retries[sessionId] = text;
-				else delete draft.retries[sessionId];
+				if (typeof text === "string" && text) {
+					const delay = ego.providerRetry?.delayMs;
+					draft.retries[sessionId] = {
+						text,
+						...(typeof delay === "number" && Number.isFinite(delay) && delay >= 0
+							? { retryAt: Date.now() + delay }
+							: {}),
+					};
+				} else delete draft.retries[sessionId];
 			}
 			break;
 		}
@@ -522,7 +535,7 @@ export const acpTranscript = {
 	},
 
 	/** ego's provider-retry line for a turn waiting to retry, or null. */
-	retry(sessionId: AcpSessionId): string | null {
+	retry(sessionId: AcpSessionId): AcpProviderRetry | null {
 		return state.retries[sessionId] ?? null;
 	},
 

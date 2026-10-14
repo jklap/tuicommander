@@ -38,7 +38,7 @@
 .composer button { align-self: flex-end; background: var(--accent); color: var(--text-on-accent); }
 .error { color: var(--error); padding: 12px 16px; margin: 0; border-top: 1px solid var(--border); overflow-wrap: anywhere; }
 .error button { margin-left: 8px; }
-@media (max-width: 600px) {
+@container (max-width: 600px) {
 	.header, .content { padding: 12px; }
 	.detail button { min-height: 44px; }
 	.statusRow { align-items: flex-start; }

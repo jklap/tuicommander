@@ -123,7 +123,10 @@ async fn dispatch(config: &Value, message: &Value) -> Result<Value, String> {
             )?))
         }
         // Feedback and discovery stay in the core backend. No generic proxy is exposed.
-        Some("pick" | "send" | "list_dev_servers" | "start_dev_server" | "heartbeat") => {
+        Some(
+            "pick" | "send" | "list_dev_servers" | "start_dev_server" | "heartbeat"
+            | "command_next" | "command_reply" | "command_disconnect",
+        ) => {
             let reply = ipc(endpoint, "POST", "/design-mode/extension", Some(message)).await?;
             if reply["ok"] == true {
                 Ok(reply["result"].clone())
@@ -166,14 +169,44 @@ pub(crate) async fn run(origin: &str, config_path: &Path) -> Result<(), String> 
             }
         }
     });
-    while let Some(message) = rx.recv().await {
-        let message = message?;
-        let reply = match dispatch(&config, &message).await {
-            Ok(result) => json!({"id":message["id"],"ok":true,"result":result}),
-            Err(error) => json!({"id":message["id"],"ok":false,"error":error}),
-        };
-        write_frame(&mut std::io::stdout().lock(), &reply)?;
+    // A long-lived receive must not block replies or normal extension requests.
+    let (out_tx, mut out_rx) = tokio::sync::mpsc::channel::<Value>(32);
+    let mut tasks = tokio::task::JoinSet::new();
+    let mut input_open = true;
+    let mut outstanding = 0usize;
+    loop {
+        if !input_open && outstanding == 0 {
+            break;
+        }
+        tokio::select! {
+            message = rx.recv(), if input_open => {
+                let Some(message) = message else {
+                    input_open = false;
+                    let disconnected = json!({"version":"2.0.0", "repoPath":config["repoPath"], "action":"command_disconnect"});
+                    let _ = tokio::time::timeout(std::time::Duration::from_secs(1), dispatch(&config, &disconnected)).await;
+                    continue;
+                };
+                let message = message?;
+                if tasks.len() >= 32 {
+                    write_frame(&mut std::io::stdout().lock(), &json!({"id":message["id"],"ok":false,"error":"Too many native requests"}))?;
+                    continue;
+                }
+                outstanding += 1;
+                let config = config.clone();
+                let tx = out_tx.clone();
+                tasks.spawn(async move {
+                    let reply = match dispatch(&config, &message).await {
+                        Ok(result) => json!({"id":message["id"],"ok":true,"result":result}),
+                        Err(error) => json!({"id":message["id"],"ok":false,"error":error}),
+                    };
+                    let _ = tx.send(reply).await;
+                });
+            }
+            Some(reply) = out_rx.recv() => { outstanding -= 1; write_frame(&mut std::io::stdout().lock(), &reply)?; }
+            Some(_) = tasks.join_next(), if !tasks.is_empty() => {}
+        }
     }
+    tasks.abort_all();
     Ok(())
 }
 

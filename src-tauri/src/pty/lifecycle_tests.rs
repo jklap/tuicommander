@@ -1736,6 +1736,28 @@ fn pty_spawn_env_child_checks_inherited_build_context() {
 
 #[cfg(unix)]
 #[test]
+// Catches: a standby tick selected while hidden SIGSTOPs the active terminal after Show.
+fn standby_tick_selected_before_show_does_not_stop_restored_desktop_session() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let sid = "show-before-standby";
+    spawn_real_pty_session(&state, sid, 24, 80);
+    crate::background_mode::hidden::set_visible(&state, sid, false, true);
+    // The checker has selected this hidden session; Show wins the lock before SIGSTOP.
+    crate::background_mode::hidden::set_visible(&state, sid, true, true);
+    let stopped = standby_session(&state, sid);
+    let parked = state.session_maps.standby_sessions.contains_key(sid);
+    let _ = wake_session(&state, sid);
+    close_pty_core(&state, sid, false);
+    assert_eq!(
+        stopped,
+        Ok(false),
+        "Show must invalidate the stale standby decision"
+    );
+    assert!(!parked, "the restored active terminal must remain runnable");
+}
+
+#[cfg(unix)]
+#[test]
 fn standby_refuses_session_with_background_work() {
     let state = crate::state::tests_support::make_test_app_state();
     let session_id = "background-standby";
@@ -3194,4 +3216,19 @@ impl std::io::Write for WorkingOnEnterWriter {
             _ => Ok(()),
         }
     }
+}
+
+// Catches: natural process exit retains attachments until the tombstone sweeper runs.
+#[test]
+fn attachment_natural_exit_cleans_files_before_tombstone_expiry() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let ended =
+        crate::attachments::prepare_session_directory(&state.data_dir, "pty", "exited").unwrap();
+    let live =
+        crate::attachments::prepare_session_directory(&state.data_dir, "pty", "live").unwrap();
+    std::fs::write(ended.join("fresh.txt"), b"ended").unwrap();
+    std::fs::write(live.join("fresh.txt"), b"live").unwrap();
+    tombstone_transient_cleanup("exited", &state);
+    assert!(!ended.exists());
+    assert_eq!(std::fs::read(live.join("fresh.txt")).unwrap(), b"live");
 }

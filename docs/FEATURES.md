@@ -1,5 +1,11 @@
 # TUICommander — Complete Feature Reference
 
+Settings policy foundation (#1786-9cbd): shared owner-service writes enforce
+host-issued caller authority, write-only secrets and one-use, five-minute human
+approval for exposure/execution changes. The existing desktop/browser/mobile
+confirmation dialog shows a backend-built diff. Replacement settings transport
+publication remains a separate integration step.
+
 Mobile terminal Send supports long-press Queue for the next agent ready window.
 
 Published story workflows can start in Plans and Stories through the owning daemon. Run history renders graph positions, decisions, evidence and paged event payloads, with explicit graph recovery and cancellation. IPC/HTTP and the generated `workflow_run` MCP schema share the native run service. Plan start remains visibly unavailable pending plan dispatch.
@@ -16,6 +22,10 @@ Published story workflows can start in Plans and Stories through the owning daem
 Desktop AI Chat uses the terminal composer’s pin and blue play buttons. The pin highlights a parked draft; tooltips identify Park, Restore, Swap, Send and Queue. Mobile Park and Stop share the input row with Attach and Send.
 
 AI Chat image paste discovers capabilities on first use and shares clipboard precedence with Ideas, terminal Compose, and terminal input: Finder image filenames allow attachments, while substantive text takes priority.
+
+## Desktop close and quit
+
+Rust owns main-window close: Ask (default) offers Background, Quit and Cancel with Remember; Background hides all visible windows and keeps sessions running. Explicit Quit ignores the close preference and confirms if enabled with live terminals. Detached-panel close affects only that panel. This stage keeps the WebView loaded and does not add a tray.
 
 ## Shared form controls
 
@@ -39,6 +49,11 @@ The component is ready for Tasks shell integration and does not add a tab by its
 The generic Tasks list renders data-only work-item providers with account-scoped
 sources, saved presets, field filters, debounced search, sorting, virtual rows,
 and provider cursor pagination. Failed refreshes retain rows with a stale label.
+Filters, sort and group sit behind a Filters button that shows the active count. The Tasks
+shell uses container queries: below 700 px the list and the detail take turns, with a Back to
+list control.
+Rows show the open task, assignee, age, a state shape and a mark for tasks linked to a worktree; a
+Filters checkbox lists only linked tasks among the loaded rows.
 The component is available for Tasks shell integration; it does not add a tab by itself.
 
 ## ego Perimeter Settings
@@ -75,7 +90,7 @@ The component is available for Tasks shell integration; it does not add a tab by
 
  Native plans and stories are available through `tuic story`, the `story` MCP tool, desktop IPC, and authenticated HTTP. They support criteria, dependencies, revision-checked transitions, and live-tab claims. WontFix closes cancelled scope but never satisfies a prerequisite; a human can remove a cancelled dependency from a Backlog story. In manual plans, approving a prerequisite immediately releases eligible dependents. Plans with a workflow run require current integration receipts before release. Story import/export is outside this release.
 
-The Plans and Stories dialog provides a manual project view on desktop and in the browser: choose a top-level Markdown plan from the project, add a path or link when needed, create stories, inspect criteria and dependency status, identify transitively abandoned prerequisites, remove a direct cancelled prerequisite, start work without a terminal, check criteria, submit reviews, approve, and block outcomes. It renders the service's cancellation count and all-cancelled flag. A coordinator or independent reviewer may approve after checking the acceptance criteria; the session that claimed a story cannot approve it. Approval records the acting session or local API provenance.
+The Plans and Stories dialog provides a manual project view on desktop and in the browser: choose a top-level Markdown plan from the project, add a path or link when needed, create stories, inspect criteria and dependency status, identify transitively abandoned prerequisites, remove a direct cancelled prerequisite, start work without a terminal, check criteria, submit reviews, approve, and block outcomes. It renders the service's cancellation count, all-cancelled flag, and plan state, including while a story is selected. A coordinator or independent reviewer may approve after checking the acceptance criteria; the session that claimed a story cannot approve it. Approval records the acting session or local API provenance.
 
 Versioned workflow definitions are available through IPC and HTTP. The Plans and Stories Designer tab can select a seeded draft, add nodes by dragging or clicking, connect outcomes, edit node settings, save, and publish. Published revisions are immutable and validated before use. The two built-in templates are `Story delivery` and `Resolve plan`; automatic graph execution is still under development.
 
@@ -84,6 +99,8 @@ Durable workflow run storage records event history, pinned graph revisions, node
 ---
 
 ## 1. Terminal Management
+
+Adjacent `💬` answer paragraphs share one continuous tint and left bar, including blank rows between them. An unmarked prose paragraph after a blank row ends the answer; an uninterrupted indented continuation stays inside. Lists, tables, quotations and fenced code remain attached to the answer. A non-answer output row or prompt ends the region. The CLI blanks only the marker glyph cells; copy, selection and search keep the original text. Chat uses the same answer extent and strips every paragraph marker.
 
 Terminal prompt colours apply to Chat user messages only. The CLI grid retains prompt scrollbar ticks and answers-only prompt grouping without tinting prompt rows.
 
@@ -320,11 +337,11 @@ Idle, unfocused terminals are suspended to stop them consuming CPU and battery. 
 A terminal tab can be suspended from its context menu (**Suspend Tab**) or with MCP `session action=suspend`. The PTY and its agent end, so memory and CPU are released, while the tab stays restorable exactly like a tab after a TUICommander restart.
 
 - **Kept on the tab** — cwd, worktree, alias, `tuic_session`, agent type, agent session id and launch command. The tab shows a `zz` badge and a **Suspended** notice with a **Resume** button.
-- **Resume** — the **Resume** button or **Resume Tab** menu entry opens a new PTY with the same cwd and, for an agent tab, types the command `verifyAndBuildResumeCommand` builds, the function the restart-restore path uses. A plain shell tab reopens a shell. The command is typed automatically at the first idle prompt, with no restart banner: clicking Resume is the confirmation, and the banner would ask for a second click.
-- **Persistence** — `suspended` is stored in the tab's `savedTerminals` record, so a restart restores the tab suspended (a plain shell tab too) and never resumes it by itself.
-- **Refusals** — the tab is not suspended while the agent is working (`working`/`starting` or background work), a question awaits input, compose commands are queued, or a plain shell is busy. An agent tab whose session cannot be resumed is refused. MCP returns `Cannot suspend: <reason>` before any event is emitted, and also for a session that already exited.
-- **MCP verdict** — `session action=suspend` waits (up to 20 s) for the tab's answer and returns `{ok:true}` or `Cannot suspend: <reason>` when the tab refuses. With no UI attached (a headless `tuic-remote` with no open client) it returns an error instead of reporting success.
-- **Event** — `session-suspend-requested` (`{ session_id, request_id }`) from MCP `session action=suspend`; the UI owns the tab and performs the suspend
+- **Resume** — the button and menu ask Rust to verify the saved agent session against its launch profile and open a replacement PTY in the same folder. A shell tab reopens its shell; the frontend attaches the returned PTY without sending another command.
+- **Persistence** — Rust writes `suspended-sessions.json` in the config directory before ending the PTY. Records keyed by `tuic_session` retain cwd, worktree, alias, agent type, agent session id, launch command, pane slot and reason (`user`, reserved `idle_hibernate`). A recreated frontend lists these records and renders suspended tabs without starting processes.
+- **Refusals** — working/starting agents, background work, unanswered questions, queued commands, busy shells, exited sessions and non-resumable agents remain protected by Rust checks.
+- **MCP verdict** — `session action=suspend` returns `{ok:true}` after Rust persists and ends the PTY, including when no UI is attached. Refusals return `Cannot suspend: <reason>`.
+- **Event** — `session-suspended` carries `{record}` over desktop events and SSE before the PTY closes. The IPC/HTTP `suspended_session_action` endpoint supports listing, suspending, resuming, forgetting and metadata synchronization.
 
 ---
 
@@ -448,7 +465,7 @@ Replaced by the Git Panel's Changes tab (section 3.8). `Cmd+Shift+D` now opens t
   - **Create**: select text in the rendered markdown → a floating **Comment** button appears next to the selection → click it to open an inline popover and type the note (`Ctrl+Enter` to save)
   - **Block comments**: move through the gutter left of a heading, paragraph, individual list item (including task and nested items), quote, table, or code block to highlight its exact Markdown source and reveal its comment button. List-item markers sit on an indented continuation line below the chosen item's own content, preserving the list. Block anchors use the renderer's raw-source ranges, so links and inline HTML do not depend on matching rendered text back to Markdown
   - After each save, block ranges and highlights are refreshed from the updated source even when the visible Markdown is unchanged by the invisible comment markers. Consecutive comments remain attached to the items that were selected.
-  - **Send to agent**: the Markdown topbar lists live agents belonging to the same repository. Sending queues one file-scoped instruction through the existing agent idle gate; an idle agent receives it immediately, while a busy agent receives it at its next idle window
+  - **Send to agent**: the Markdown topbar lists live agents belonging to the same repository. Sending queues one file-scoped instruction through the existing agent idle gate; an idle agent receives it immediately, while a busy agent receives it at its next idle window. After a successful send, Agent and Send hide until a new tweak comment, checkbox change or saved text edit. Edits saved while a send is pending keep the controls available for another send. Failed sends keep the controls available for retry
   - **View / edit / delete**: commented passages and blocks are highlighted; hovering one shows the comment in a tooltip, clicking it reopens the popover to edit or delete
   - **Storage**: comments live *inside* the `.md` source as HTML-comment markers. Inline comments wrap their source text with `tweak:begin` / `tweak:end`; block comments use a `tweak:block` marker immediately before the target block, while list-item comments use a `tweak:item` marker within that item. Both forms are invisible to standard Markdown renderers, survive round-trips, and are committed with the file. The only escaped sequence is `-->` (→ `--&gt;`)
   - **Save failures**: Markdown files opened by absolute path use the external file writer. A failed comment save shows an error toast and keeps the comment popover and draft open for retry.
@@ -656,7 +673,7 @@ Tabbed side panel with four tabs: Changes, Log, Stashes, Branches. Replaces the 
   - **Audio** — MP3, WAV, FLAC, AAC, M4A — rendered as `<audio>` with native controls
   - **Text / data** — TXT, JSON, CSV, LOG, XML, YAML, TOML, INI, CFG, CONF — raw text in a `<pre>` block
 - Header bar shows shortened file path with **Edit** button (pencil icon — opens file in code editor) and **Open externally** button
-- **Reload:** when a web or HTML-preview tab is active, `Cmd/Ctrl+R` reloads its content instead of opening the Run Command dialog
+- **Reload:** when a web or HTML-preview tab is active, `Cmd/Ctrl+R` (action `reload-tab`) reloads its content
 - File content auto-refreshes on repository revision bumps (git change detection)
 - Uses Tauri's `convertFileSrc()` asset protocol for binary files, `read_external_file` IPC for text content
 - The permissive `default-src` CSP allows `asset:` and `http://asset.localhost` for frames and media; no per-directive CSP overrides it
@@ -718,7 +735,7 @@ Tabbed side panel with four tabs: Changes, Log, Stashes, Branches. Replaces the 
 - JetBrains family: IntelliJ IDEA, PyCharm, WebStorm, GoLand, CLion, PhpStorm, RubyMine, Rider, DataGrip, RustRover, Android Studio, Fleet — launched via their CLI launcher (`idea`, `pycharm`, …) with `--line`/`--column` goto, falling back to `open -a` on macOS when the Toolbox shell scripts aren't on PATH
 - File-capable editors (including JetBrains IDEs) open the focused file (from editor or MD tab); others open the repo
 - Custom launchers (#71): user-defined entries configured at Settings → General → Custom Launchers (name, executable on `PATH` or absolute, args, per-OS platform, enable toggle), shown under a "Custom" section in the dropdown. Args support placeholder tokens resolved at launch: `{path}`/`{file}` (focused file, else repo), `{repo}`, `{fileDir}` (focused file's directory, else repo), `{cwd}` (focused terminal cwd, else repo), `{home}`, and `{line}`/`{column}` (editor cursor, default 1)
-- Run command button: `Cmd+R` (run), `Cmd+Shift+R` (edit & run)
+- Run command button: `Cmd+Shift+R` (run); edit & run has no default shortcut (action `edit-command`)
 
 ---
 
@@ -733,7 +750,7 @@ Tabbed side panel with four tabs: Changes, Log, Stashes, Branches. Replaces the 
   2. Matching Claude or Codex Usage API ticker: live utilization from the active provider (click opens that provider's dashboard)
   3. PTY usage limit: weekly/session percentage from terminal output detection
   4. Agent name (lowest): icon + name of detected agent
-  - Color coding: blue < 70%, yellow 70-89%, red pulsing >= 90%
+  - Color coding: blue < 70%, yellow 70–95%, red pulsing >= 96%
   - The shared usage ticker is absorbed into the badge only when its provider label matches the active Claude or Codex agent; stale results from the previous provider stay hidden during an asynchronous tab switch
   - The usage poll has no default provider: it stays silent until a Claude or Codex tab is focused, then follows that provider and stays on it while the active tab is a shell. A Codex-only install is therefore never shown a Claude reading (or a Claude "no token") it did not ask for
   - Codex windows are named by duration (`5h`, `7d`) because the API does not label them, and only the account limit is rendered. A plan whose account limit reports a single window shows a single reading; per-model limits stay in the dashboard, where their model name is visible
@@ -785,7 +802,7 @@ When an agent is detected running in a terminal, TUICommander automatically disc
 - **Gemini CLI** — Sessions stored in `~/.gemini/tmp/<hash>/chats/session-*.json`; `sessionId` field from JSON
 - **Codex CLI** — Sessions stored in `~/.codex/sessions/YYYY/MM/DD/rollout-*-<UUID>.jsonl`; UUID from filename. Codex does *not* partition by project, so candidates are filtered on the working directory recorded in the rollout's first `session_meta` record — otherwise a terminal in one project would bind to another project's session. A rollout whose `cwd` can't be read is rejected rather than accepted
 - **Goose turn completion** — A reply followed by the ready composer returns the tab to idle and allows the next submission, without the five-minute stale recovery (#1812-022d).
-- **Goose** — Sessions stored in SQLite (`~/Library/Application Support/Block/goose/sessions/sessions.db`); shell wrapper injects `--name $TUIC_SESSION` for deterministic binding, resume by name
+- **Goose** — Sessions stored in SQLite (`~/Library/Application Support/Block/goose/sessions/sessions.db`); shell wrapper injects `--name $TUIC_SESSION` for deterministic binding on normal `session`/`run` launches, preserving explicit names, paths, resume and stateless arguments; resume by name
 
 Discovery runs once per terminal on `null→agent` transition. Multiple concurrent agents are handled via a `claimed_ids` deduplication list. On agent exit, the stored session ID is cleared to allow re-discovery on next launch.
 
@@ -840,7 +857,7 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 
 ### 6.5 Usage Limit Detection
 - Claude Code weekly and session usage percentage (from PTY output patterns)
-- Color-coded badge in status bar (blue < 70%, yellow 70-89%, red pulsing >= 90%)
+- Color-coded badge in status bar (blue < 70%, yellow 70–95%, red pulsing >= 96%)
 - Integrated into unified agent badge (see section 5.1)
 
 ### 6.6 Provider Usage Dashboards
@@ -876,7 +893,7 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
   quota interface. Session-local `/stats` is not treated as account headroom.
 
 ### 6.7 Intent Event Tracking
-- Agents declare work phases via `intent: text (Title)` tokens at the start of a row, colorized dim yellow in terminal output. The token is also read when it follows the ack sentence on one row, and when the agent's own wrapping split it across many rows; terminal width distinguishes wrapped text from adjacent indented prose, and input-box chrome is excluded. A long intent keeps its full tab-title event while the Progress journal stores a redacted, capped copy
+- Agents declare work phases via `intent: text (Title)` tokens at the start of a row. The canvas leaves marker rows and their soft-wrapped or indented hard-wrapped tails blank, preserving row coordinates. Blank rows and new output, answer, prompt or marker blocks end an indented tail. The token is also read when it follows the ack sentence on one row, and when the agent's own wrapping split it across many rows; terminal width distinguishes wrapped text from adjacent indented prose, and input-box chrome is excluded. A long intent keeps its full tab-title event while the Progress journal stores a redacted, capped copy
 - MCP instructions request an intent on its own line, at the start of every task and on each material phase change; the terminal Context bar shows it separately from the orchestrator assignment and user prompt
 - Session snapshots restore captured intent and the last substantial prompt after reconnect, even while the agent remains idle; live state updates use the same reconciliation path.
 - Intent titles may replace spawn-assigned tab labels; only an explicit user rename locks the tab title, including after reconnect
@@ -968,7 +985,10 @@ one configured ego binary and speaks ACP to it, per
   within one panel. Open tabs and the selected tab survive hide/show and detach;
   closing a tab leaves its durable ego conversation available in the picker.
   Selecting a saved tab attaches or replays it without sending a message, with
-  connecting status or a failure reason and Retry. Tabs use conversation titles
+  connecting status or a failure reason and Retry. Provider retries show one live
+  countdown from the received delay, with cause and attempt number; zero reads
+  “retrying now”. Recovery or final failure clears the retry status.
+  Tabs use conversation titles
   or prompts; model/mode controls show pending values until options arrive.
   The focused panel uses `Cmd/Ctrl+T` for a new tab (`Cmd/Ctrl+Alt+T` in browser
   mode) and `Cmd/Ctrl+W` to close one (`Cmd/Ctrl+Alt+W` in browser mode)
@@ -1211,7 +1231,8 @@ re-derived later.
 - Triggered when GitHub polling detects PR merged or closed transition
 - If branch has a linked worktree, removes worktree first then deletes branch
 - Safety: never deletes default/main branch; dirty worktrees always escalate to ask mode
-- Uses safe `git branch -d` (refuses unmerged branches)
+- Removes the checkout and local branch when the shared backend verdict proves integration or finds its tip on any remote-tracking ref; the containing ref is named as proof.
+- When removal would delete an unmerged branch, the error card offers **Remove worktree, keep branch**. The action reruns lifecycle checks and confirmation with branch deletion disabled for that removal only; the repository setting stays unchanged.
 - Deduplication prevents double-firing on the same PR
 
 ### 8.9 GitHub Issues Panel
@@ -1418,8 +1439,9 @@ The `tuic-dictation` Rust crate implements audio, transcription and speech; the 
 - `↑/↓`: navigate, `Enter`: insert (restores terminal focus), `Ctrl+N`: new, `Ctrl+E`: edit, `Ctrl+F`: toggle favorite, `Esc`: close
 
 ### 10.4 Run Commands
-- `Cmd+R`: run saved command for active branch
-- `Cmd+Shift+R`: edit command before running
+- `Cmd+Shift+R`: run saved command for active branch
+- `edit-command`: edit command before running (no default shortcut; bind it in `keybindings.json`)
+- `Cmd+R`: reload the active web/preview tab
 - Configure per-repo in Settings → Repository → Scripts
 
 ### 10.5 Smart Prompts
@@ -1548,7 +1570,7 @@ The navigation groups the global pages by task. Each group is a static label row
 - Show agent context bar
 - Confirmations: quit, close tab (only when a process is running — agents or busy shell; idle shells close immediately)
 - Power management: prevent sleep when busy, auto-standby timeout, content indexing strategy
-- Updates: auto-check, update channel, check now
+- Updates: auto-check, update channel, check now. Beta builds migrate old saved Stable preferences to Beta once; later explicit channel choices are preserved
 - TUIC CLI install/uninstall (see **21**), Code Intelligence (MDKB, see **14.8**)
 - ego executable (**ego** section, after Code Intelligence): the ego binary the AI Chat panel talks to over ACP. Desktop: status line with Select…/Clear; browser: a text field. Always shown, also while Experimental Features is off
 - Default IDE, custom launchers (see **4.5**)
@@ -1577,7 +1599,7 @@ Three pages under **Integrations**. They were one "Services & MCP" tab; each pag
 ### 11.4 Repository Settings (per-repo)
 - Display name
 - Worktree tab: storage strategy, prompt on create, delete branch on remove, auto-archive, orphan cleanup, PR merge strategy, after-merge action (each overridable from global defaults)
-- Scripts tab: setup script (post-worktree), run script (`Cmd+R`), archive script (pre-archive/delete hook), and optional local development-server URL for Design Mode
+- Scripts tab: setup script (post-worktree), run script (`Cmd+Shift+R`), archive script (pre-archive/delete hook), and optional local development-server URL for Design Mode
 - Repo-local config: `.tuic.json` in repo root provides team-shared settings. Three-tier precedence: `.tuic.json` > per-repo app settings > global defaults. **Scripts (setup, run, archive) are intentionally excluded from `.tuic.json` merging** — arbitrary script execution by a checked-in file poses a security risk; scripts are always sourced from the local per-repo app settings only
 
 ### 11.5 Notifications
@@ -1614,6 +1636,8 @@ ego's own configuration; the `ego_executable` path and the `ai_chat_workspace` f
 - Four failure states, each distinct: ego not configured (names the field to fill), a configured path that will not start, an ego command that failed (shown with the command, exit code and its verbatim output), and a transport fault that is not attributed to ego
 
 ### 11.9 Terminal
+- Background entry hides all visible desktop windows after a forced terminal snapshot (two-second acknowledgement limit). It clears desktop focus for phone push and saves terminal visibility. Showing the app restores open panels and wakes the previous visible terminal. Remote terminal WebSockets and SSE observers prevent standby while connected.
+- macOS General setting: **Hide Dock icon in background** (default on). Show restores the Dock icon. Windows requests a low WebView memory target while hidden and the normal target on Show.
 - Theme: terminal and app color theme, color swatches. Bundled themes include **Commander** (default and fallback for an unknown key), **Paper** (key `vscode-light`, the light theme), **Minimal Kiwi** (dark green-tinted background with muted warm accents) and **Ink** (key `clean`; neutral dark: `#0a0a0a` canvas, `#171717` surfaces, white accent, Ghostty ANSI palette, neutral tab-type tints keyed on `html[data-theme]`). The UI uses `antialiased` font smoothing with 0.01em tracking on every theme
 - Shell
 - Terminal font: bundled monospace fonts (JetBrains Mono default), default font size (8-32px slider), font weight, cursor style (bar / block / underline)
@@ -1771,8 +1795,8 @@ Buffer eviction is reported; it does not create another output store.
 | `Cmd+End` | Scroll to bottom |
 | `Shift+PageUp` | Scroll one page up |
 | `Shift+PageDown` | Scroll one page down |
-| `Cmd+R` | Run saved command |
-| `Cmd+Shift+R` | Edit and run command |
+| `Cmd+Shift+R` | Run saved command |
+| `Cmd+R` | Reload active web/preview tab |
 | `Cmd+Shift+.` | Toggle block folding |
 | `Cmd+Shift+Up` | Jump to previous block |
 | `Cmd+Shift+Down` | Jump to next block |
@@ -1948,6 +1972,7 @@ shortcuts and the Global Hotkey. Keys macOS itself claims before the process
 ## 17. Plugin System
 
 ### 17.1 Architecture
+- Rust-owned scoped plugin settings: typed schemas, revision-checked atomic patches, write-only secret readback, five legacy migrations, reload callbacks and unload cleanup.
 - Obsidian-style plugin API with 4 capability tiers
 - Built-in plugins (TypeScript, compiled with app) and external plugins (JS, loaded at runtime)
 - Hot-reload: file changes in plugin directories trigger automatic re-import
@@ -2050,9 +2075,22 @@ Agent-scoped plugin (`agentTypes: ["claude"]`) that wakes Claude Code when it st
 
 ## 18. Mobile Companion UI
 
+The session overflow menu has a **Markdown** section with the file tabs open on
+the desktop for the session repository. Each entry shows its title and relative
+path and opens the existing mobile Markdown viewer. Desktop opens and closes
+update the list through SSE; worktree files retain their original checkout.
+
+
 Waiting terminal ego questions show **Input**. Tap the question icon in the session header to open or close the full question and its wrapping options. The card overlays the terminal without reserving rows. Prior suggested actions are hidden while a human answer is pending.
 
 Phone-optimized progressive web app for monitoring AI agents remotely. Separate SolidJS entry point (`src/mobile/`) served by the existing HTTP server at `/mobile`.
+
+Both mobile composers share the + menu, text box with browser dictation, and
+Send layout. Attach file and Take photo use separate pickers. Terminal Queue
+keeps its long-press shortcut; Commands (/) inserts a slash in agent terminals.
+AI Chat offers Park/Restore/Swap draft, plus Queue and Stop while busy.
+Unsupported actions are hidden. Menus close on outside tap or Escape and use
+44 px action targets. Desktop Chat controls and Ctrl+S are unchanged.
 
 ### 18.1 Architecture
 - Separate Vite entry point (`mobile.html` + `src/mobile/index.tsx`)
@@ -2147,8 +2185,32 @@ Phone-optimized progressive web app for monitoring AI agents remotely. Separate 
 - Mobile session attachments use a bare icon on the left. Smaller mic and
   Send controls sit inside the input border on the right; compact gaps preserve draft width.
 - Mobile session and AI Chat composers accept camera photos and files from one
-  picker. Binary files stream to `.tuic/attachments/` in the session working
-  directory and are excluded from Git locally; older files are cleaned at close.
+  picker. Binary files stream to `attachments/<session>/` under TUIC's data
+  directory. Uploads never create repository files or edit `.git/info/exclude`.
+  Claude gets `--add-dir` and Gemini gets `--include-directories`. Codex and Grok
+  need no extra flag. Ego rejects invocation-scoped roots: confined PTY/ACP runs
+  need an existing user/profile read root covering the TUIC attachment directory.
+  Upload receipts explain this limitation; TUIC does not change ego configuration.
+- Close, kill and process exit delete that session's uploads. Startup removes
+  session directories whose recorded owner process is provably dead. Live and
+  unknown owners are preserved; resumed tabs get fresh PTY directories and grants.
+  Old attachment references in a resumed transcript are unavailable and must be
+  uploaded again. Generated old grants are removed from saved launch commands.
+- An agent started before attachment grants were provisioned receives a clear
+  upload error asking for a new session. Absolute binary paths bypass shell
+  shims; use TUIC's structured agent launch to receive its directory grant.
+  Custom wrapper binaries keep their arguments without added harness grant flags.
+  A wrapper that calls Claude/Gemini by name uses the inherited shell shim; an
+  absolute harness hop must arrange its own read access. Disabling launch marker
+  instructions does not disable the Claude directory grant.
+  Typed ego commands have the same stored read-root requirement.
+- ACP binary uploads are scoped to the attached conversation and removed on
+  detach or connection settlement (including EOF). Ego over ACP currently rejects
+  extra read directories: the composer displays a notice that the stored path
+  requires an existing ego profile root. Inline ACP images keep their native
+  image-content transport and do not need a filesystem grant.
+- Existing repository `.tuic/attachments/` directories and local excludes are
+  untouched. You can remove these old directories and exclude entries by hand.
 - Installed Android Chrome PWAs accept shared files through the manifest share
   target and stage them in AI Chat. Safari on iOS has no Web Share Target support.
 - Web app manifest (`mobile-manifest.json`) with standalone display mode
@@ -2197,6 +2259,7 @@ Phone-optimized progressive web app for monitoring AI agents remotely. Separate 
 
 ### 18.11 Standalone CSS
 - The mobile composer offers browser dictation directly next to Send (44 px touch targets) when `SpeechRecognition` or `webkitSpeechRecognition` is available. Interim and final speech append to the draft without focusing the textarea or sending; tap again to stop. Editing the draft cancels recognition and keeps the edit exactly; the mic becomes available again when the browser confirms the previous session has ended. Errors also retain the microphone claim until that confirmation, so repeated taps cannot overlap recognition sessions. Late results from the cancelled recording are ignored. Errors keep the draft and show a toast. It uses the configured dictation language, falling back to the browser language for automatic detection. Browser dictation and server hands-free conversation cannot record together.
+- Mobile Settings → Input → Autocorrect and spellcheck enables keyboard correction and sentence capitalization for the terminal prompt and mobile Chat composers by default. Disable it for literal command entry. The preference stays on this device across reloads; file and code editors keep spellcheck off.
 - Dictated mobile drafts survive reload without automatic terminal input. Send or the first edit reconciles the restored draft with the current terminal line, preserving cleared text without duplicating text still present.
 - iPhone Home Screen availability remains device-dependent: [WebKit bug 225298](https://bugs.webkit.org/show_bug.cgi?id=225298#c3) documents the historical standalone restriction; Safari's [14.1 release notes](https://webkit.org/blog/11648/new-webkit-features-in-safari-14-1/) require Siri enabled. Feature detection and error handling apply; Safari tab support does not prove PWA support.
 - Mobile PWA uses its own standalone stylesheet (`src/mobile/mobile.css`), independent from the desktop `global.css`
@@ -2879,7 +2942,7 @@ GitHub backend: failed-job reruns, auto-merge enable/disable, merge queue state/
 ## Tasks board component
 
 The core Tasks board component renders provider-declared columns and virtualized
-lanes. Cards support drag and drop and a keyboard-accessible move menu. Pending
+lanes. Each lane shows its loaded count and a More control while the provider has another board page. More loads the next page across all lanes, retaining earlier cards. Cards show assignee names and label chips, and support drag and drop and a keyboard-accessible Move button menu. Pending
 moves cannot be repeated; rejected actions restore the card and show the error.
 This component is available to the Tasks host; provider registration and the
 Tasks navigation surface determine where it is shown.
@@ -2927,3 +2990,45 @@ Launch profile/workspace stay in the `app` store; trusted executable writes awai
 the confirmation step. No new public settings transport is registered
 by this adapter. Model changes from the existing Providers UI now use the same
 configured profile and workspace as perimeter changes.
+
+Tasks setup preserves saved account keys outside the form, including Enterprise hosts and login. Label choices use matching provider field IDs; assignee username filters stay text when create-form IDs differ. Display-only roadmap dates do not appear in list filters or grouping.
+
+## Tasks view memory
+
+Tasks remembers the selected source per repository and List, Board or Roadmap plus list grouping, sort, preset, search and filters per repository/provider/account. The existing `uiStore` saves these preferences through `load_ui_prefs` and `save_ui_prefs` in `ui-prefs.json`. Results and page cursors remain transient. A rejected saved sort retries the last accepted order, then the provider default. Other query failures keep their error and Retry control. An unsaved scope keeps the normal defaults.
+
+### Tasks start-work briefs
+
+Tasks Start work reads `.tuic-start-work.md` in the active repository root,
+next to `.tuic.json`, with `{{key}}`, `{{url}}` and `{{title}}` placeholders.
+Without the file, the existing key/title/body brief remains. Item control
+characters are stripped before substitution; delivery keeps its 12,000-character
+cap and untrusted-content wrapper. Desktop and browser use the same Rust builder.
+
+### Terminal Compose image attachments
+
+Paste an image, drop PNG/JPEG/WebP/GIF files on Compose, or select several with **Attach images** beside Send. Each image is saved through the shared paste helper and inserted as `[image: <path>]` in gesture order. Drops use the pointer position; the picker replaces the selection. Unsupported files and save failures show a visible error. Native desktop drops are claimed by the mounted Compose editor before terminal and tab routing.
+
+### Tasks MCP access
+
+The existing MCP `repo` tool reads linked work items or explicit references, URLs and exact provider keys, including paged comments. Provider content is enclosed in an untrusted-content block. Optional comments and workflow transitions use the same provider actions; `mcp_work_item_writes` defaults to false. A frontend with the provider loaded is required (#1854-4960).
+
+### Background tray and menu-bar icon
+
+Tray and menu-bar icon: Settings > General offers Always, Only in background (default), or Never. The native menu shows live working/awaiting agent counts, Show TUICommander and Quit. An attention mark appears for awaiting agents while hidden and clears on Show. Left-click shows the app on macOS and Windows; Linux uses the menu. Never, a failed tray build, or a Linux desktop without a StatusNotifier host falls back to minimizing without clearing terminal visibility. A native notice appears on the first background entry of each app run.
+
+### Background WebView unload
+
+`background.webview_unload_minutes` defaults to 10 awake minutes; 0 keeps the hidden WebViews loaded. Changing it takes effect while hidden. Unload waits for a saved snapshot and defers during dictation or a close dialog. Rust PTYs, HTTP/MCP, Automations and remote terminal subscriptions continue. JavaScript plugins (including cache-keepalive, claude-wakeup and at-capacity-retry), sounds and updater checks pause until Show.
+
+Show recreates the main window from Tauri configuration, restores window geometry through the window-state plugin and reconnects the saved tabs, split layout and live sessions created while unloaded. Suspended tabs remain suspended. The updater checks again when the frontend starts. Quit confirmation uses a native dialog while unloaded. `ui` MCP actions return `{"error":"webview_unloaded"}` immediately in that state. `background-mode-changed` is dual-emitted to desktop and SSE with `{state:"hidden"|"unloaded"|"visible"}`.
+
+B0 measured WebContent exiting and about 1,090 MB released from a synthetic 1 GiB allocation on macOS. Actual TUIC workload savings, Windows and Linux are unmeasured. GPU and Networking processes may remain.
+
+Design Mode agent control: immediate native-port navigate, reload, screenshot,
+page-error read and explicitly host-granted MAIN-world eval. The extension sidebar
+shows the last fifty agent actions. Screenshots require the reviewed tab to be visible.
+
+## Plugin settings pages
+
+Loaded plugins with registered settings appear under Settings > Integrations. Search includes their catalogue field labels. Unloading removes the page and search entries. Reads, revision-checked edits, resets and secret set/unset status use the scoped Rust settings service; the UI owns no second configuration store.

@@ -219,7 +219,6 @@ async fn native_tool_definitions_are_the_one_surviving_family() {
         names,
         vec![
             "automations",
-            "design_mode",
             "secret",
             "telegram",
             "session",
@@ -545,10 +544,14 @@ fn merged_tools_collapse_false_returns_all_native_tools() {
     let merged = merged_tool_definitions(&state, None, None);
     let names = tool_names(&merged);
 
-    let native = tool_names(&native_tool_definitions());
+    // Design Mode is visible only to the armed owner, not an unbound caller.
+    let native: Vec<_> = tool_names(&native_tool_definitions())
+        .into_iter()
+        .filter(|name| name != "design_mode")
+        .collect();
     assert_eq!(
         names, native,
-        "collapse_tools=false should return all native tools"
+        "collapse_tools=false should return every native tool visible to this caller"
     );
     assert!(
         names.len() > 3,

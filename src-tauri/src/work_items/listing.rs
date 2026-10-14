@@ -112,6 +112,7 @@ impl InMemoryWorkItemProvider {
         Ok(WorkItemPage {
             items: items[offset..end].to_vec(),
             next_cursor,
+            total: u32::try_from(items.len()).ok(),
         })
     }
 

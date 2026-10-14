@@ -198,6 +198,10 @@ pub(crate) fn seed_externalized_builtin_plugins(config_dir: &Path) -> Result<(),
 // Manifest
 // ---------------------------------------------------------------------------
 
+#[cfg(test)]
+#[path = "settings/plugin_contract_tests.rs"]
+mod settings_contract_tests;
+
 /// Plugin manifest as declared in `manifest.json`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginManifest {
@@ -228,6 +232,9 @@ pub struct PluginManifest {
     /// provider id (`"github"`) or a token-only descriptor registered on load.
     #[serde(default)]
     pub providers: Vec<ManifestProvider>,
+    /// Complete scoped settings schema. Existing configurable plugins use host migrations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settings: Option<crate::settings::plugin_schema::Definition>,
 }
 
 /// One manifest `providers` entry.
@@ -653,6 +660,8 @@ pub(crate) fn register_loaded_plugin_impl(
     // Read only the specific plugin's manifest instead of scanning the entire dir.
     let manifest = read_single_manifest(&plugin_id)?;
 
+    let settings = crate::plugin_settings::prepare_settings(&manifest, Some(state))?;
+
     // Only allow capabilities that appear in the manifest
     for cap in &capabilities {
         if !manifest.capabilities.contains(cap) {
@@ -662,6 +671,12 @@ pub(crate) fn register_loaded_plugin_impl(
         }
     }
 
+    if let Some(settings) = &settings {
+        settings
+            .migrate()
+            .map_err(|_| "Plugin settings migration failed".to_owned())?;
+    }
+
     // A WebView reload re-registers an already-loaded plugin without ever
     // calling uninstall. Dispose its previous runtime state (fs watchers,
     // rate-limiter history) before granting the fresh capability set, or
@@ -669,6 +684,10 @@ pub(crate) fn register_loaded_plugin_impl(
     // after a handful of reloads (#649-56fb). Idempotent: a no-op on first load.
     dispose_plugin_runtime_state(state, &plugin_id);
     register_manifest_providers(&manifest)?;
+
+    if let Some(settings) = settings {
+        state.plugin_settings.register(settings);
+    }
 
     state.loaded_plugins.insert(plugin_id, capabilities);
     Ok(())
@@ -699,6 +718,7 @@ pub fn unregister_loaded_plugin(
 }
 
 pub(crate) fn unregister_loaded_plugin_impl(state: &crate::AppState, plugin_id: &str) {
+    state.plugin_settings.unregister(plugin_id);
     state.loaded_plugins.remove(plugin_id);
     crate::accounts::unregister_providers(plugin_id);
 }
@@ -808,6 +828,9 @@ fn resolve_data_path(plugin_id: &str, relative_path: &str) -> Result<PathBuf, St
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub fn read_plugin_data(plugin_id: String, path: String) -> Result<Option<String>, String> {
     let file_path = resolve_data_path(&plugin_id, &path)?;
+    if file_path == plugin_data_dir(&plugin_id)?.join("config.json") {
+        return crate::plugin_settings::read_config(&plugin_id);
+    }
     match std::fs::read_to_string(&file_path) {
         Ok(content) => Ok(Some(content)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -818,6 +841,9 @@ pub fn read_plugin_data(plugin_id: String, path: String) -> Result<Option<String
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub fn write_plugin_data(plugin_id: String, path: String, content: String) -> Result<(), String> {
     let file_path = resolve_data_path(&plugin_id, &path)?;
+    if file_path == plugin_data_dir(&plugin_id)?.join("config.json") {
+        return crate::plugin_settings::write_config(&plugin_id, &content);
+    }
     if let Some(parent) = file_path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("Failed to create data directory: {e}"))?;
@@ -829,6 +855,9 @@ pub fn write_plugin_data(plugin_id: String, path: String, content: String) -> Re
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub fn delete_plugin_data(plugin_id: String, path: String) -> Result<(), String> {
     let file_path = resolve_data_path(&plugin_id, &path)?;
+    if file_path == plugin_data_dir(&plugin_id)?.join("config.json") {
+        return Err("Use typed settings reset for plugin configuration".into());
+    }
     match std::fs::remove_file(&file_path) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -1165,6 +1194,7 @@ fn find_manifest_in_zip(archive: &zip::ZipArchive<std::fs::File>) -> Result<Stri
 /// registered watch (the `debounce_loop`), the capability grant, and the
 /// exec:cli rate-limiter history.
 pub(crate) fn dispose_plugin_runtime_state(state: &crate::AppState, id: &str) {
+    state.plugin_settings.unregister(id);
     // Drop every watcher this plugin registered. Dropping the `RecommendedWatcher`
     // closes its notify channel, so the matching `debounce_loop` thread exits.
     state.plugin_watchers.retain(|_, (pid, _)| pid != id);
@@ -1694,6 +1724,7 @@ mod tests {
             agent_types: vec![],
             binaries: vec![],
             providers: vec![],
+            settings: None,
         }
     }
 

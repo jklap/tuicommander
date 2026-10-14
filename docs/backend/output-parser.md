@@ -270,6 +270,8 @@ It leaves fenced or indented code and prose mentions literal. This is a separate
 logical-line projection of the terminal grammar: reusing the Rust VT parser here would require
 a new backend ACP projection and wire contract, including HTTP/IPC parity.
 
+Answer rendering is shared by the grid and Chat through `answerExtent` in `suggestOverlay.ts`. Adjacent answer markers extend one region across blank rows; non-answer output and prompt rows still end it. The renderer blanks marker cells without changing parsed or copied text. Fenced examples keep literal markers.
+
 Two shapes the row-anchored regex cannot read on its own, both rejoined before it runs:
 
 - **After the ack sentence.** The protocol puts the ack and the first `intent:` in the same message by construction, so an agent that writes them as one sentence run leaves the token mid-row. `ACK_SENTENCE_PREFIX` allows that one sentence and nothing else — any other leading prose is still rejected, so `The intent: of this code` stays prose.

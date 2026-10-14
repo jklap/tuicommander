@@ -426,7 +426,7 @@ pub(super) fn validate_mcp_repo_path(path: &str) -> Result<(), serde_json::Value
 
 pub(super) const SESSION_ACTIONS: &str = "list, create, submit, input, output, resize, rename, keep_open, suspend, close, kill, pause, resume, status, wait, declare_worktree";
 pub(super) const AGENT_ACTIONS: &str = "spawn, register, list_peers, send, inbox, wait";
-pub(super) const REPO_ACTIONS: &str = "list, add, active, status, branch_integrations, branch_integration, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, orphan_cleanup_answer, branch_delete, progress_list";
+pub(super) const REPO_ACTIONS: &str = "list, add, active, status, branch_integrations, branch_integration, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, orphan_cleanup_answer, branch_delete, progress_list, work_item, work_item_act";
 pub(super) const UI_ACTIONS: &str = "tab, toast, confirm, screenshot";
 pub(super) const TASK_ACTIONS: &str = "get, cancel";
 pub(super) const CONFIG_ACTIONS: &str = "get, save, list_prompts, load_prompt, save_prompt";
@@ -601,10 +601,18 @@ pub(super) fn native_tool_definitions() -> serde_json::Value {
         },
         {
             "name": "repo",
-            "description": "Repository and version control. Query workspace repos, their GitHub PR/CI status, and manage git worktrees.\n\nActions:\n- add: Register and activate an existing local directory. Requires absolute path. Persists a usable Git or shell workspace, preserves existing terminals/settings on repeat calls, and broadcasts repositories-changed. No desktop URL handler required; does not spawn a terminal. Returns ok, path, name, branch, is_git_repo, and an optional watcher warning.\n- list: Open repos with branch, dirty status, worktrees.\n- active: Focused repo path, branch, group.\n- status: Cross-repo GitHub PR and CI summary {path, branch, ahead, behind, open_prs, failing_ci}.\n- branch_integrations: Integration status and proof for every local branch, including worktree_paths. Requires path.\n- branch_integration: Same verdict for one branch. Requires path and branch. Returns tip, integrated, proof, archive_required, archived and archive_ref. Content-based proof requires an archive at that tip before deletion; unknown is never proof.\n- worktree_list: Worktrees for a repo. Requires path. Each entry includes lifecycle_status {commit_status: merged|unmerged|in_sync|unknown, dirty_files, removal_safety: safe|requires_force|unknown}, the same verdict worktree_lifecycle and the sidebar use.\n- worktree_lifecycle: Fresh safety, fingerprint and submodule commit counts. Requires path and branch.\n- worktree_create: Create a linked worktree. Requires path. Optional: branch, base_ref, spawn_session (starts a bare shell PTY, not an agent). Refs and objects are shared with the parent; parent tracked changes are not copied. Git-ignored build directories warm in the background. Wait for warm_artifacts.status in worktree_list to become done or failed before installing dependencies or building.\n- worktree_remove: Remove worktree. Requires path and branch, or path and worktree_path for a detached checkout (removed only when clean, reachable from a branch and free of live sessions).\n- orphan_cleanup_answer: Answer the pending orphan-removal dialog for path with decision=remove|keep; remove rechecks every worktree for uncommitted/untracked files and branch reachability.\n- branch_delete: Delete only a local branch with no checkout after proving its commits are integrated or preserved. Requires path and branch. Proof is in_sync, a merge proof, patch_equivalence, or archived (refs/archive/<branch> points at the exact tip; the response then carries archive_ref and the archive ref is kept). Refuses current/default branches, unmerged commits with no exact archive, and unsafe or changed refs; never touches a remote.\n- progress_list: The project's journal, newest first, paged with total and nextCursor. Requires path. Optional input.blockedOnly, input.ptyId, input.limit (default 8, maximum 100), input.cursor (previous nextCursor). Record a NEW outcome with the `progress` tool, not here.",
+            "description": "Repository and version control. Query workspace repos, their GitHub PR/CI status, and manage git worktrees.\n\nActions:\n- add: Register and activate an existing local directory. Requires absolute path. Persists a usable Git or shell workspace, preserves existing terminals/settings on repeat calls, and broadcasts repositories-changed. No desktop URL handler required; does not spawn a terminal. Returns ok, path, name, branch, is_git_repo, and an optional watcher warning.\n- list: Open repos with branch, dirty status, worktrees.\n- active: Focused repo path, branch, group.\n- status: Cross-repo GitHub PR and CI summary {path, branch, ahead, behind, open_prs, failing_ci}.\n- branch_integrations: Integration status and proof for every local branch, including worktree_paths. Requires path.\n- branch_integration: Same verdict for one branch. Requires path and branch. Returns tip, integrated, proof, archive_required, archived and archive_ref. Content-based proof requires an archive at that tip before deletion; unknown is never proof.\n- worktree_list: Worktrees for a repo. Requires path. Each entry includes lifecycle_status {commit_status: merged|unmerged|in_sync|unknown, dirty_files, removal_safety: safe|requires_force|unknown}, the same verdict worktree_lifecycle and the sidebar use.\n- worktree_lifecycle: Fresh safety, fingerprint and submodule commit counts. Requires path and branch.\n- worktree_create: Create a linked worktree. Requires path. Optional: branch, base_ref, spawn_session (starts a bare shell PTY, not an agent). Refs and objects are shared with the parent; parent tracked changes are not copied. Git-ignored build directories warm in the background. Wait for warm_artifacts.status in worktree_list to become done or failed before installing dependencies or building.\n- worktree_remove: Remove worktree. Requires path and branch, or path and worktree_path for a detached checkout (removed only when clean, reachable from a branch and free of live sessions).\n- orphan_cleanup_answer: Answer the pending orphan-removal dialog for path with decision=remove|keep; remove rechecks every worktree for uncommitted/untracked files and branch reachability.\n- branch_delete: Delete only a local branch with no checkout after proving its commits are integrated or preserved. Requires path and branch. Proof is in_sync, a merge proof, patch_equivalence, or archived (refs/archive/<branch> points at the exact tip; the response then carries archive_ref and the archive ref is kept). Refuses current/default branches, unmerged commits with no exact archive, and unsafe or changed refs; never touches a remote.\n- work_item: Read Tasks detail and comments. Omit the target for the caller worktree link, or pass reference {providerId,accountId,id}, url, or key with provider_id/account_id. Pass cursor from comments.nextCursor for another comment page (limit 1..100, default 50). All provider text is returned in an untrusted-content block. Requires a running frontend with the provider loaded.\n- work_item_act: Comment or transition through the Tasks provider. Requires mcp_work_item_writes=true (default false) and operation {kind:comment|transition,value:string}; transition values are provider action IDs, not labels. Uses the same target selection. A timed-out write may have completed: read before retrying.\n- progress_list: The project's journal, newest first, paged with total and nextCursor. Requires path. Optional input.blockedOnly, input.ptyId, input.limit (default 8, maximum 100), input.cursor (previous nextCursor). Record a NEW outcome with the `progress` tool, not here.",
             "inputSchema": { "type": "object", "properties": {
-                "action": { "type": "string", "description": "One of: list, add, active, status, branch_integrations, branch_integration, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, orphan_cleanup_answer, branch_delete, progress_list" },
+                "action": { "type": "string", "description": "One of: list, add, active, status, branch_integrations, branch_integration, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, orphan_cleanup_answer, branch_delete, progress_list, work_item, work_item_act" },
                 "path": { "type": "string", "description": "Absolute path to git repository (required for worktree_list, worktree_lifecycle, worktree_create, worktree_remove, branch_delete, progress_list)" },
+                "reference": { "type": "object", "description": "WorkItemRef for work_item/work_item_act", "properties": {"providerId":{"type":"string"},"accountId":{"type":"string"},"id":{"type":"string"}}, "required":["providerId","accountId","id"], "additionalProperties":false },
+                "url": {"type":"string", "description":"Work-item URL resolved by the loaded plugin"},
+                "key": {"type":"string", "description":"Exact provider key; requires provider_id and account_id"},
+                "provider_id": {"type":"string", "description":"Provider owning key"},
+                "account_id": {"type":"string", "description":"Account owning key"},
+                "cursor": {"type":"string", "description":"Next comment cursor returned inside the content block"},
+                "limit": {"type":"integer", "minimum":1, "maximum":100, "description":"Comment page size (default 50)"},
+                "operation": {"type":"object", "description":"Opt-in work_item_act operation", "properties":{"kind":{"type":"string","enum":["comment","transition"]},"value":{"type":"string"}}, "required":["kind","value"], "additionalProperties":false},
                 "force": { "type": "boolean", "description": "action=worktree_remove optional, default false. Explicitly permits discarding dirty workspace state; obtain user confirmation before setting it." },
                 "delete_branch": { "type": "boolean", "description": "action=worktree_remove optional. Defaults to true unless force is true; an explicit true still requires branch safety proof." },
                 "override_lock": { "type": "boolean", "description": "action=worktree_remove optional, default false. Override a locked worktree only after explicit user confirmation." },
@@ -671,11 +679,12 @@ pub(super) fn native_tool_definitions() -> serde_json::Value {
         },
         {
             "name": "ui",
-            "description": "Control TUIC UI. Actions:\n- tab: open/update panel tab. Requires id, title, + html OR url.\n- toast: non-blocking notification. Requires title. Optional: message, level (info/warn/error), sound, urgency (normal/urgent).\n- confirm: blocking dialog, shown on every client (desktop, browser, mobile PWA) plus a mobile push — the first answer wins. Returns {confirmed}, plus {reason} when it expired unanswered after 300s (treat that as a refusal, not a yes). Requires title.\n- screenshot: capture a panel as WebP. Requires id. Returns {path}. Read the path to view.\n\nURL schemes for tab:\n- http(s): loaded in sandboxed iframe using the permissive default-src CSP (external HTTPS and localhost HTTP supported). Site frame policies can still refuse embedding.\n- file:///path: read via IPC and rendered as inline HTML (sandbox blocks direct file:// access).\n- tuic://edit/<path>?line=N: native code editor (no iframe). Prefix absolute paths with `//` (tuic://edit//Users/x/a.rs). Relative = active repo.\n- tuic://open/<path>: native markdown/preview tab.\n\n- tuic://open-repo is rejected; use repo action=add with path to register a directory. Other tuic actions are not tab content.\n\nCustom schemes (vscode://) do NOT work in iframes.\n\nUse:\n- A project outcome — a milestone, a decision, a discovery, a blocker — belongs to the `progress` tool, which records it AND shows a toast. `ui action=toast` is the transient half only: it says something happened and keeps no record of it.\n- toast for done/error/long-job end; error=failure, warn=recoverable. Skip for micro-steps.\n- toast urgency: normal (default) records the notice in the bell only; urgent also shows a transient card on the desktop window. The caller chooses; the card never covers the focused input.\n- toast with sound=attention when you are working unattended and are BLOCKED on the user (question, approval, ambiguous requirement). It is the only sound that carries across a room; do not spend it on progress updates.\n- confirm BEFORE destructive ops (rm -rf, git reset --hard, force-push, DROP). Only proceed if confirmed.\n- tab http(s) for dashboards, reports, >20-line structured output.\n- tab tuic://edit to point user at source file+line (review, bug discussion) — beats pasting snippets.\n- screenshot to visually verify rendered HTML content in a panel you created.",
+            "description": "Control TUIC UI. Actions:\n- tab: open/update panel tab. Requires id, title, + html OR url.\n- toast: non-blocking notification. Requires title. Optional: message, level (info/warn/error), sound, urgency (normal/urgent).\n- confirm: blocking dialog, shown on every client (desktop, browser, mobile PWA) plus a mobile push — the first answer wins. Returns {confirmed}, plus {reason} when it expired unanswered after 300s (treat that as a refusal, not a yes). Requires title, except settings proposals: pass proposalId to show the backend redacted diff; model title/message/confirmed cannot grant approval.\n- screenshot: capture a panel as WebP. Requires id. Returns {path}. Read the path to view.\n\nURL schemes for tab:\n- http(s): loaded in sandboxed iframe using the permissive default-src CSP (external HTTPS and localhost HTTP supported). Site frame policies can still refuse embedding.\n- file:///path: read via IPC and rendered as inline HTML (sandbox blocks direct file:// access).\n- tuic://edit/<path>?line=N: native code editor (no iframe). Prefix absolute paths with `//` (tuic://edit//Users/x/a.rs). Relative = active repo.\n- tuic://open/<path>: native markdown/preview tab.\n\n- tuic://open-repo is rejected; use repo action=add with path to register a directory. Other tuic actions are not tab content.\n\nCustom schemes (vscode://) do NOT work in iframes.\n\nUse:\n- A project outcome — a milestone, a decision, a discovery, a blocker — belongs to the `progress` tool, which records it AND shows a toast. `ui action=toast` is the transient half only: it says something happened and keeps no record of it.\n- toast for done/error/long-job end; error=failure, warn=recoverable. Skip for micro-steps.\n- toast urgency: normal (default) records the notice in the bell only; urgent also shows a transient card on the desktop window. The caller chooses; the card never covers the focused input.\n- toast with sound=attention when you are working unattended and are BLOCKED on the user (question, approval, ambiguous requirement). It is the only sound that carries across a room; do not spend it on progress updates.\n- confirm BEFORE destructive ops (rm -rf, git reset --hard, force-push, DROP). Only proceed if confirmed.\n- tab http(s) for dashboards, reports, >20-line structured output.\n- tab tuic://edit to point user at source file+line (review, bug discussion) — beats pasting snippets.\n- screenshot to visually verify rendered HTML content in a panel you created.",
             "inputSchema": { "type": "object", "properties": {
                 "action": { "type": "string", "description": "One of: tab, toast, confirm, screenshot" },
                 "id": { "type": "string", "description": "Stable identifier for dedup — same id reuses existing tab (action=tab, required)" },
-                "title": { "type": "string", "description": "Tab or notification title (action=tab/toast/confirm, required)" },
+                "title": { "type": "string", "description": "Tab or notification title (action=tab/toast/confirm, required except settings proposal confirmation)" },
+                "proposalId": { "type": "string", "description": "Opaque backend-issued settings proposal (action=confirm). Displays the backend redacted diff; ignores supplied title/message. Human answer required; never accepts a confirmed flag." },
                 "html": { "type": "string", "description": "Inline HTML content to render in sandboxed iframe (action=tab, mutually exclusive with url)" },
                 "url": { "type": "string", "description": "Tab URL (action=tab, xor html). http(s) → iframe. file:///path → read and inline. tuic://edit/<path>?line=N → native editor. tuic://open/<path> → markdown tab. Absolute paths need `//` prefix." },
                 "pinned": { "type": "boolean", "description": "Pin tab across all branches (default false)" },
@@ -946,6 +955,10 @@ pub(super) fn merged_tool_definitions_for_mode(
     }
 
     let mut tools = filtered_native_tools(state);
+    let origin = super::mcp_transport_ancillary::resolve_mcp_origin_pty(state, mcp_session_id);
+    if !crate::design_mode::mcp::visible_to(state, origin.as_deref()) {
+        tools.retain(|tool| tool["name"] != "design_mode");
+    }
     let allowed = resolve_allowed_upstreams(state, mcp_session_id);
     let upstream_tools = state
         .mcp
@@ -1007,9 +1020,18 @@ pub(crate) fn spawn_tool_search_index_updater(state: Arc<AppState>) {
 }
 
 /// Handle `search_tools` meta-tool — BM25 search over the full corpus.
+#[cfg(test)]
 pub(super) fn handle_search_tools(
     state: &Arc<AppState>,
     args: &serde_json::Value,
+) -> serde_json::Value {
+    handle_search_tools_for_session(state, args, None)
+}
+
+pub(super) fn handle_search_tools_for_session(
+    state: &Arc<AppState>,
+    args: &serde_json::Value,
+    mcp_session_id: Option<&str>,
 ) -> serde_json::Value {
     let query = match args["query"].as_str() {
         Some(q) if !q.trim().is_empty() => q,
@@ -1022,19 +1044,33 @@ pub(super) fn handle_search_tools(
     let limit = args["limit"].as_u64().unwrap_or(10).clamp(1, 100) as usize;
 
     let index = state.mcp.tool_search_index.read();
-    let results = index.search(query, limit);
+    // Filter after ranking, not the shared index: one caller must not rewrite another's corpus.
+    let origin = super::mcp_transport_ancillary::resolve_mcp_origin_pty(state, mcp_session_id);
+    let visible = crate::design_mode::mcp::visible_to(state, origin.as_deref());
+    let results = index.search(query, 100);
 
     let ranked: Vec<serde_json::Value> = results
         .iter()
+        .filter(|e| e.name != "design_mode" || visible)
+        .take(limit)
         .map(|e| serde_json::json!({ "name": e.name, "summary": e.summary }))
         .collect();
     serde_json::json!({ "results": ranked, "count": ranked.len() })
 }
 
 /// Handle `get_tool_schema` meta-tool — exact-name lookup of a tool's full definition.
+#[cfg(test)]
 pub(super) fn handle_get_tool_schema(
     state: &Arc<AppState>,
     args: &serde_json::Value,
+) -> serde_json::Value {
+    handle_get_tool_schema_for_session(state, args, None)
+}
+
+pub(super) fn handle_get_tool_schema_for_session(
+    state: &Arc<AppState>,
+    args: &serde_json::Value,
+    mcp_session_id: Option<&str>,
 ) -> serde_json::Value {
     let tool_name = match args["tool_name"].as_str() {
         Some(n) if !n.trim().is_empty() => n,
@@ -1045,6 +1081,11 @@ pub(super) fn handle_get_tool_schema(
         }
     };
 
+    let origin = super::mcp_transport_ancillary::resolve_mcp_origin_pty(state, mcp_session_id);
+    if tool_name == "design_mode" && !crate::design_mode::mcp::visible_to(state, origin.as_deref())
+    {
+        return serde_json::json!({"error":"Design Mode not armed for this session"});
+    }
     let index = state.mcp.tool_search_index.read();
 
     match index.get_schema(tool_name) {

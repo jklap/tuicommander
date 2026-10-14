@@ -6,12 +6,14 @@ import {
 	answerExtent,
 	type ChatBlock,
 	continuationRowsAfterSuggest,
+	hiddenMarkerRows,
 	isSuggestBlock,
 	paintOverlayBlocks,
 	planSuggestOverlay,
 	type RowSnapshot,
 } from "../suggestOverlay";
 import recordedCodex from "./fixtures/codex-answer-marker-1720.json";
+import { metrics, painter } from "./gridPaintTestUtils";
 
 /** Build a `getRow` lookup from a compact string/bool list, with null past end. */
 function rows(snapshots: Array<[string, boolean]>): (i: number) => RowSnapshot | null {
@@ -178,7 +180,7 @@ describe("planSuggestOverlay", () => {
 	// The highlight pattern is looser than the walk's stop pattern on purpose: an
 	// agent prints its intent line behind a bullet, and that row must still be
 	// tinted. Using the stop pattern here would silently leave it untinted.
-	it("tints an intent line that sits behind a bullet", () => {
+	it("classifies an intent line that sits behind a bullet", () => {
 		const plan = planSuggestOverlay(1, rows([["\u23fa intent: doing a thing (Thing)", false]]));
 		expect(plan.blocks).toEqual([{ row: 0, kind: "intent" }]);
 	});
@@ -213,6 +215,7 @@ describe("planSuggestOverlay", () => {
 		).toEqual({
 			key: "",
 			blocks: [],
+			answerMarkers: new Set(),
 		});
 	});
 });
@@ -247,7 +250,7 @@ describe("planSuggestOverlay — 💬 answer marker", () => {
 			["⏺ 💬 The build passes because the cache was warm and", false],
 			["  the lockfile did not change.", true],
 			["", false],
-			["  Second paragraph of the same answer.", false],
+			["  💬 Second paragraph of the same answer.", false],
 			["  - a bullet item inside the answer", false],
 			["⏺ Bash(make test)", false],
 			["  ⎿  ok", false],
@@ -267,14 +270,14 @@ describe("planSuggestOverlay — 💬 answer marker", () => {
 		expect(planSuggestOverlay(5, get).blocks.map((b) => b.row)).toEqual([0, 1]);
 	});
 
-	it("starts a new answer at a second marker instead of extending the first", () => {
-		// catches: the marker break deleted from answerExtent, so the first answer swallows the second
+	it("extends the answer through a second adjacent marker", () => {
+		// Catches: adjacent marked paragraphs being split into separate answer regions.
 		const get = rows([
 			["⏺ 💬 First.", false],
 			["  more first", false],
 			["⏺ 💬 Second.", false],
 		]);
-		expect(answerExtent(0, 3, get)).toBe(1);
+		expect(answerExtent(0, 3, get)).toBe(2);
 		expect(answerExtent(2, 3, get)).toBe(2);
 	});
 
@@ -322,21 +325,20 @@ describe("planSuggestOverlay — 💬 answer marker", () => {
 });
 
 describe("paintOverlayBlocks", () => {
-	it("masks suggest rows with the background and keeps answer rows translucent with a gutter", () => {
-		// catches: an answer row masked like a suggest row, hiding the answer text
+	it("tints answer rows with a gutter and paints nothing for marker rows", () => {
+		// catches: a suggest/intent row still gets a strip (or an answer row a solid mask hiding its text)
 		const container = document.createElement("div");
 		paintOverlayBlocks(
 			container,
 			[
 				{ row: 1, kind: "suggest" },
 				{ row: 2, kind: "answer" },
+				{ row: 3, kind: "intent" },
 			],
 			20,
-			"rgb(10, 10, 10)",
 		);
-		const [masked, answer] = Array.from(container.children) as HTMLElement[];
-		expect(masked.style.top).toBe("20px");
-		expect(masked.style.background).toBe("rgb(10, 10, 10)");
+		const [answer, ...rest] = Array.from(container.children) as HTMLElement[];
+		expect(rest).toEqual([]);
 		expect(answer.style.top).toBe("40px");
 		expect(answer.style.background).toContain("0.14");
 		expect(answer.style.boxShadow).toContain("inset 3px");
@@ -344,8 +346,8 @@ describe("paintOverlayBlocks", () => {
 
 	it("replaces the previous strips instead of stacking them", () => {
 		const container = document.createElement("div");
-		paintOverlayBlocks(container, [{ row: 0, kind: "answer" }], 20, "#000");
-		paintOverlayBlocks(container, [], 20, "#000");
+		paintOverlayBlocks(container, [{ row: 0, kind: "answer" }], 20);
+		paintOverlayBlocks(container, [], 20);
 		expect(container.children.length).toBe(0);
 	});
 });
@@ -355,18 +357,15 @@ describe("answerBlockRanges", () => {
 	const code = (text: string): ChatBlock => ({ kind: "code", text, marker: false });
 	const other = (text: string): ChatBlock => ({ kind: "other", text, marker: false });
 
-	// Catches: the tint stopping at the marker paragraph, or a second answer swallowed into the first.
-	it("spans each answer from its marker to the next marker or the end", () => {
+	// Catches: each adjacent marker starting another tinted region, or an unmarked closing paragraph tinted after a blank row.
+	it("spans adjacent answer paragraphs and their lists, not an unmarked prose tail", () => {
 		const blocks = [p("intro"), p("A", true), other("- x"), p("B", true), other("- y"), p("tail")];
-		expect(answerBlockRanges(blocks)).toEqual([
-			[1, 2],
-			[3, 5],
-		]);
+		expect(answerBlockRanges(blocks)).toEqual([[1, 4]]);
 	});
 
 	// Catches: a literal 💬 line inside a code block ending the answer, as the grid never does.
 	it("keeps a code block that shows a marker inside the answer", () => {
-		expect(answerBlockRanges([p("A", true), code("💬 example"), p("after")])).toEqual([[0, 2]]);
+		expect(answerBlockRanges([p("A", true), code("💬 example"), p("after")])).toEqual([[0, 1]]);
 	});
 });
 
@@ -448,5 +447,101 @@ describe("planSuggestOverlay — Codex bullet-prefixed intent and suggest (#1858
 				{ row: 1, kind: "suggest" },
 			]);
 		}
+	});
+});
+
+describe("hiddenMarkerRows — wrapped markers leave no visible fragment (#1761-7249)", () => {
+	/** Rows -above..n-1 of a screen whose first `above` rows are scrolled off the top. */
+	function screen(snapshots: Array<[string, boolean]>, above: number) {
+		const get = (i: number) => {
+			const k = i + above;
+			if (k < 0 || k >= snapshots.length) return null;
+			const [text, isWrapped] = snapshots[k];
+			return { text, isWrapped };
+		};
+		const viewportRows = snapshots.length - above;
+		return hiddenMarkerRows(planSuggestOverlay(viewportRows, get, -above).blocks);
+	}
+
+	// catches: the anchor row is above the viewport, so the plan never sees it and the
+	// continuation row at the top of the viewport is painted as a bare fragment
+	it("hides the continuation of a suggest whose anchor row is above the viewport (the anchor too)", () => {
+		const hidden = screen(
+			[
+				["suggest: [ Run the full test suite | Skip the", false],
+				["slow integration tests | Stop here ]", true],
+				["normal output", false],
+			],
+			1,
+		);
+		expect([...hidden]).toEqual([-1, 0]);
+	});
+
+	function paint(snapshots: Array<[string, boolean]>) {
+		const decoded = new Map<number, DecodedRow>(
+			snapshots.map(([text, wrapped], index) => {
+				const codepoints = Uint32Array.from(text, (char) => char.codePointAt(0)!);
+				return [
+					index,
+					{
+						index,
+						count: codepoints.length,
+						wrapped,
+						codepoints,
+						fg: new Uint32Array(codepoints.length),
+						bg: new Uint32Array(codepoints.length),
+						attrs: new Uint8Array(codepoints.length),
+					},
+				];
+			}),
+		);
+		const { renderer, textAt } = painter();
+		renderer.paintGrid(decoded, metrics, { fullRepaint: true, hiddenRows: screen(snapshots, 0) });
+		return (row: number) => textAt(row * 20 + 15);
+	}
+
+	// catches: intent rows hidden again, so the user cannot read what the agent is doing (D3, 2026-10-13)
+	it("never hides an intent row, wrapped or not", () => {
+		const painted = paint([
+			["intent: Investigating why the terminal keeps repainting marker", false],
+			["rows after a resize (Marker rows)", true],
+			["normal output", false],
+		]);
+		expect(painted(0)).toBe("intent: Investigating why the terminal keeps repainting marker");
+		expect(painted(1)).toBe("rows after a resize (Marker rows)");
+	});
+
+	// catches: only soft-wrapped (isWrapped) intent tails are hidden; Codex/Ink hard-wrap with
+	// cursor moves and a two-space indent, so the tail row keeps painting (recorded in
+	// codex-narrow-progress-intent-20260925.tcap: `intent: ...con` then `  righe di continuazione ...`)
+	it("keeps the indented tail of a hard-wrapped intent line painted", () => {
+		const painted = paint([
+			["• intent: Controllo la cattura a 80 colonne e preparo la prova del journal con", false],
+			["  righe di continuazione e titolo finale (Verifica stretta)", false],
+			["", false],
+			["  La registrazione riguarda solo", false],
+		]);
+		expect(painted(0)).toBe("• intent: Controllo la cattura a 80 colonne e preparo la prova del journal con");
+		expect(painted(1)).toBe("  righe di continuazione e titolo finale (Verifica stretta)");
+		expect(painted(3)).toBe("  La registrazione riguarda solo");
+	});
+
+	// catches: the answer tint is hidden like a marker, removing the 💬 text
+	it("never hides an answer row", () => {
+		expect([...screen([["💬 yes", false]], 0)]).toEqual([]);
+	});
+
+	// catches: lookback rows leak into the painted overlay strips at negative offsets
+	it("keeps rows above the viewport out of the answer strips", () => {
+		const get = (i: number) =>
+			i === -1
+				? { text: "💬 an answer", isWrapped: false }
+				: i === 0
+					? { text: "  continued", isWrapped: false }
+					: null;
+		const plan = planSuggestOverlay(1, get, -1);
+		const container = document.createElement("div");
+		paintOverlayBlocks(container, plan.blocks, 20);
+		expect(Array.from(container.children).map((c) => (c as HTMLElement).style.top)).toEqual(["0px"]);
 	});
 });

@@ -55,6 +55,7 @@
 /api/plugins/x/pty/output
 /api/plugins/x/readme
 /api/plugins/x/register
+/api/plugins/x/settings
 /api/plugins/x/unregister
 /audio/output-devices
 /automations/action
@@ -81,6 +82,7 @@
 /config/note-image
 /config/notes
 /config/notifications
+/config/open-markdown-tabs
 /config/pane-layout
 /config/project-mcp-upstreams
 /config/prompt-library
@@ -102,6 +104,7 @@
 /config/themes
 /config/ui-prefs
 /design-mode
+/design-mode/command
 /design-mode/navigate
 /design-mode/reload
 /design-mode/start
@@ -185,7 +188,6 @@
 /logs
 /mcp/confirm-response
 /mcp/status
-/mcp/suspend-response
 /mcp/upstream-status
 /mcp/upstreams
 /mcp/upstreams/credential
@@ -259,6 +261,7 @@
 /repo/merge-archive-worktree
 /repo/merge-pr
 /repo/merged-prs
+/repo/open-markdown-tabs
 /repo/orphan-cleanup-assessment
 /repo/orphan-cleanup/begin
 /repo/orphan-cleanup/clear
@@ -305,6 +308,7 @@
 /secrets/forms/submit
 /sessions
 /sessions/agent
+/sessions/suspended
 /sessions/worktree
 /sessions/x
 /sessions/x/chat-view
@@ -352,6 +356,7 @@
 /system/local-ips
 /system/notification-sound
 /system/relay-status
+/tasks/start-work-prompt
 /terminal/theme-colors
 /tunnels/active
 /tunnels/agent-keys
@@ -368,6 +373,7 @@
 /watchers/dir
 /watchers/hot-repos
 /watchers/repo
+/work-items/provider-bridge
 /workflows/definition/action
 /workflows/run/action
 /workitem-links

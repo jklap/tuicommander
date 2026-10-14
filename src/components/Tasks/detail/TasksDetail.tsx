@@ -1,8 +1,11 @@
 import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
 import type { WorkItemProvider } from "../../../plugins/workItemProvider";
+import { appLogger } from "../../../stores/appLogger";
 import type { WorkItemDetail, WorkItemRef } from "../../../types/work-items.gen";
+import { writeClipboard } from "../../../utils/clipboard";
 import { handleOpenUrl } from "../../../utils/openUrl";
 import { Textarea } from "../../ui/Textarea";
+import { START_WORK_NEEDS_REPO, suggestedBranch, useStartWork } from "../startWork";
 import { TaskComment } from "./TaskComment";
 import { TaskField } from "./TaskField";
 import { TaskMarkdown } from "./TaskMarkdown";
@@ -13,6 +16,8 @@ export interface TasksDetailProps {
 	provider: WorkItemProvider;
 	reference: WorkItemRef | null;
 	visible?: boolean;
+	/** Repository that Start work creates its worktree in. */
+	repoPath?: string;
 	onClose?: () => void;
 	onItemChange?: (detail: WorkItemDetail) => void;
 }
@@ -20,19 +25,26 @@ export interface TasksDetailProps {
 /** Core-owned detail surface. Providers supply data and declared actions, never markup. */
 export function TasksDetail(props: TasksDetailProps) {
 	const model = useTasksDetail(props);
+	const start = useStartWork();
 	const [draft, setDraft] = createSignal("");
 	createEffect(() => {
 		model.identity();
 		props.provider;
 		setDraft("");
+		start.reset();
 	});
-	const busy = () => Boolean(model.pending()) || model.paging();
+	const busy = () => Boolean(model.pending()) || model.paging() || start.pending();
 	const commentEntries = createMemo(
 		() => new Map(model.detail()?.comments.entries.map((entry) => [commentKey(entry), entry])),
 	);
 	const transitions = () => model.detail()?.actions.filter((action) => action.kind === "transition") ?? [];
+	const startActions = () => model.detail()?.actions.filter((action) => action.kind === "start_work") ?? [];
 	const commentAction = () => model.detail()?.actions.find((action) => action.kind === "comment");
 	const editAction = () => model.detail()?.actions.find((action) => action.kind === "edit_field");
+	function runStart() {
+		const value = model.detail();
+		if (value && props.repoPath) void start.run(props.provider, value, props.repoPath);
+	}
 	async function submitComment(event: SubmitEvent) {
 		event.preventDefault();
 		const body = draft();
@@ -102,7 +114,46 @@ export function TasksDetail(props: TasksDetailProps) {
 										</button>
 									)}
 								</For>
+								<For each={startActions()}>
+									{(action) => (
+										<button
+											type="button"
+											disabled={busy() || !action.enabled || !props.repoPath}
+											title={action.disabledReason ?? (props.repoPath ? undefined : START_WORK_NEEDS_REPO)}
+											onClick={runStart}
+										>
+											{start.pending() ? "Starting…" : action.name}
+										</button>
+									)}
+								</For>
+								<button
+									type="button"
+									onClick={() => {
+										writeClipboard(suggestedBranch(detail().item)).catch((cause) =>
+											appLogger.error("app", "Failed to copy branch name", cause),
+										);
+									}}
+								>
+									Copy branch name
+								</button>
 							</div>
+							<Show when={start.startedBranch()}>
+								{(branch) => (
+									<p class={styles.muted} role="status">
+										Started work on {branch()}
+									</p>
+								)}
+							</Show>
+							<Show when={start.failure()}>
+								{(message) => (
+									<p class={styles.error} role="alert">
+										{message()}
+										<button type="button" disabled={busy()} onClick={runStart}>
+											Retry start work
+										</button>
+									</p>
+								)}
+							</Show>
 						</header>
 						<div class={styles.content}>
 							<section class={styles.fields} aria-label="Task fields">

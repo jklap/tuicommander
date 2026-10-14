@@ -55,26 +55,38 @@ export function pastedImageFiles(e: ClipboardEvent): File[] {
  *  `getNoteId` is only called once an image is found: it names the asset
  *  directory (`note-images/<id>/`) on the backend. */
 export async function savePastedImage(e: ClipboardEvent, getNoteId: () => string): Promise<string | null> {
-	for (const blob of pastedImageFiles(e)) {
-		const extension = IMAGE_EXTENSIONS.get(blob.type);
-		if (!extension) continue;
-		e.preventDefault();
+	const blob = pastedImageFiles(e)[0];
+	if (!blob) return null;
+	e.preventDefault();
+	return saveImageFile(blob, getNoteId);
+}
 
-		const noteId = getNoteId();
-		try {
-			const dataBase64 = await blobToBase64(blob);
-			// `noteId` is the backend argument name and the on-disk asset
-			// directory (`note-images/<id>/`). It keeps the old vocabulary
-			// on purpose — see the boundary note in `stores/ideas.ts`.
-			return await invoke<string>("save_note_image", {
-				noteId,
-				dataBase64,
-				extension,
-			});
-		} catch (err) {
-			appLogger.error("store", "Failed to save pasted image", err);
-			return null;
-		}
+/** The picker and native drops accept exactly the formats supported by image saving. */
+export const IMAGE_FILE_ACCEPT = Array.from(IMAGE_EXTENSIONS.keys()).join(",");
+
+export function isImageFileType(type: string): boolean {
+	return IMAGE_EXTENSIONS.has(type);
+}
+
+export function imageFileType(name: string): string | undefined {
+	const extension = name.split(".").pop()?.toLowerCase();
+	for (const [type, suffix] of IMAGE_EXTENSIONS) {
+		if (suffix === extension || (suffix === "jpg" && extension === "jpeg")) return type;
 	}
-	return null;
+	return undefined;
+}
+
+/** One file-backed save path for paste, drop and picker. */
+export async function saveImageFile(blob: File, getNoteId: () => string): Promise<string | null> {
+	const extension = IMAGE_EXTENSIONS.get(blob.type);
+	if (!extension) return null;
+	const noteId = getNoteId();
+	try {
+		const dataBase64 = await blobToBase64(blob);
+		// `noteId` remains the backend argument and asset-directory name.
+		return await invoke<string>("save_note_image", { noteId, dataBase64, extension });
+	} catch (err) {
+		appLogger.error("store", "Failed to save pasted image", err);
+		return null;
+	}
 }

@@ -170,7 +170,21 @@ describe("useAppShortcutHandlers", () => {
 		expect(terminalSearch).toHaveBeenCalledOnce();
 	});
 
-	it("reloads an active preview before falling back to the run-command workflow", () => {
+	it("reloadActiveTab reloads an active preview and reports whether it did", () => {
+		const reload = vi.fn();
+		const options = createOptions();
+		const handlers = useAppShortcutHandlers(options as never);
+		mockStores.markdown.state.activeId = "preview";
+		mockStores.markdown.getHandle.mockReturnValue({ reload });
+
+		expect(handlers.reloadActiveTab()).toBe(true);
+		expect(reload).toHaveBeenCalledOnce();
+
+		mockStores.markdown.state.activeId = null;
+		expect(handlers.reloadActiveTab()).toBe(false);
+	});
+
+	it("handleRunCommand runs the command even while a preview is active", () => {
 		const reload = vi.fn();
 		const options = createOptions();
 		const handlers = useAppShortcutHandlers(options as never);
@@ -178,12 +192,8 @@ describe("useAppShortcutHandlers", () => {
 		mockStores.markdown.getHandle.mockReturnValue({ reload });
 
 		handlers.handleRunCommand(false);
-		expect(reload).toHaveBeenCalledOnce();
-		expect(options.gitOps.handleRunCommand).not.toHaveBeenCalled();
-
-		mockStores.markdown.state.activeId = null;
-		handlers.handleRunCommand(true);
-		expect(options.gitOps.handleRunCommand).toHaveBeenCalledWith(true, expect.any(Function));
+		expect(reload).not.toHaveBeenCalled();
+		expect(options.gitOps.handleRunCommand).toHaveBeenCalledWith(false, expect.any(Function));
 	});
 
 	it("routes typed paths by stat result", async () => {

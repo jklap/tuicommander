@@ -11,6 +11,8 @@ Answers-only history includes a retained prompt-less prefix before the first tra
 
 Submitted prompts are not tinted in the terminal grid. Recorded `userPromptLines` still drive scrollbar ticks and answers-only turn grouping; Chat user messages retain the theme prompt tint and gutter.
 
+Adjacent `💬` answer paragraphs share one continuous tint and left bar, including blank rows between them. An unmarked prose paragraph after a blank row ends the answer; an uninterrupted indented continuation stays inside. Lists, tables, quotations and fenced code remain attached to the answer. A non-answer output row or prompt ends the region. The CLI blanks only the marker glyph cells; copy, selection and search keep the original text. Chat uses the same answer extent and strips every paragraph marker.
+
 ## Architecture
 
 ```
@@ -320,3 +322,7 @@ HTTP(S) link context menus include **Start in Design Mode**, passing the resolve
 ### History-anchored viewport scrolling
 
 Wheel, touch and scrollbar gestures send `terminal_scroll_to_anchor` with `historyBase + historySize - offset`. Null resumes following output. The cache keeps rendering until the backend frame reaches the target; there is no timed settle handoff that can skip rows during sustained output.
+
+### Hidden agent marker rows
+
+The marker plan blanks intent and suggest rows without changing grid coordinates. Intent continuation includes soft wraps and adjacent rows with at least two leading spaces (Codex/Ink cursor-move hard wraps). A blank row ends the walk. Unwrapped output, answer, prompt, suggest and intent rows start separate blocks.

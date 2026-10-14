@@ -1,5 +1,12 @@
 # Settings
 
+The settings-service policy foundation keeps secrets write-only. Changes that
+expose TUIC or select executable code require the existing confirmation dialog;
+ordinary preferences, push settings and outbound HTTP destinations do not. The
+dialog uses a backend-built diff and approvals expire after five minutes and
+cannot be reused. The replacement settings MCP/API transport is still awaiting
+its separate cutover (#1786-9cbd).
+
 Open settings with `Cmd+,`. Settings are organized into pages. The navigation
 groups the pages by task:
 
@@ -83,13 +90,15 @@ never all expert: in basic mode it would show an empty page.
 |---------|-------------|
 | **Language** | UI language. The list offers the locales that ship with a message catalog, each named in its own language, and the pick applies immediately — no reload. A locale without a catalog is never offered, because it would render English while claiming to be translated. The picker is hidden while only one catalog ships — today that is English alone — because a list of one is not a choice. |
 | **Show agent context bar** | Show the model's current intent, its orchestrator-assigned task, and the last prompt sent to an agent. |
-| **Confirm before quitting** | Show dialog when closing app with active terminals |
+| **When closing the main window** | Desktop: Ask (default), Background, or Quit. Ask offers Remember. Background hides visible windows and keeps sessions running. Use the application menu to quit; on macOS, click the Dock icon to show the window again. |
+| **Hide Dock icon in background** | On | macOS desktop only. Hide the Dock icon while windows are hidden; restore it on Show. |
+| **Confirm before quitting** | Confirm real quit with active terminals, including Cmd/Ctrl+Q. Background does not prompt. Detached-panel close closes only that panel. |
 | **Confirm before closing a tab** | Ask before closing terminal tab |
 | **Prevent sleep when busy** | Keep the machine awake while agents are working (**Power Management** section) |
 | **Auto-Standby Timeout** | Pause idle background sessions after this duration to save resources. Default 5 min; `0` disables it. |
 | **Content Indexing** | When to build search indexes: Disabled, Active repo only, Active + on switch, or All repos at boot |
 | **Automatically check for updates** | Check for new versions on startup |
-| **Update Channel** | Stable, Beta or Nightly. Beta checks the next beta and final stable; beta downloads open their release page. New beta installs default to Beta; existing saved choices stay unchanged |
+| **Update Channel** | Stable, Beta or Nightly. Beta checks the next beta and final stable; beta downloads open their release page. New beta installs default to Beta. Older beta installs with Stable saved move to Beta once; selecting Stable afterwards keeps that choice |
 | **Wait for agents before restarting** | After an update installs, restart only when no session is busy or awaiting input. The APP UPDATE notification shows the busy count and offers Restart now. Default on |
 | **Resume all agents after an update** | After the app restarts for an update, resume every agent tab with a confirmed session on every branch. Default on |
 | **TUIC CLI** | Install or uninstall the `tuic` command-line tool, with its status. Desktop app only. See [CLI](cli.md). |
@@ -446,7 +455,7 @@ Settings navigation, or from the sidebar `⋯` → "Repo Settings".
 ### Scripts Tab
 
 - **Setup Script** — Runs once after worktree creation (e.g., `npm install`)
-- **Run Script** — On-demand script launchable from toolbar with `Cmd+R`
+- **Run Script** — On-demand script launchable from toolbar with `Cmd+Shift+R`
 - **Archive Script** — Runs before a worktree is archived or deleted; non-zero exit blocks the operation
 - **Dev Server URL** — Optional address of this repository's development server. Design Mode opens it in a dedicated Chrome window; with no URL, Chrome opens `about:blank` so you can navigate manually. See [Design Mode](design-mode.md).
 
@@ -482,3 +491,17 @@ The internal GitHub settings backend keeps OAuth device login for github.com and
 verifies Enterprise PAT identity before storage. Account reads expose credential
 status only. The new shared settings tool is published in a separate cutover step;
 this backend adapter does not add a new user-facing endpoint.
+
+### Work-item access for agents
+
+Agents can read linked Tasks items through the MCP repo tool. Tracker comments and status changes are disabled by default. To enable them, set `mcp_work_item_writes` to `true` through the configuration save API, or edit `config.json` while the app is stopped. There is no separate Tasks write toggle in Settings. A frontend with the provider loaded must remain connected. After a write times out, read the item before retrying.
+
+### Background tray and menu-bar icon
+
+In General > Confirmations, Tray and menu-bar icon selects Always, Only in background (default), or Never. Never disables the Background choice. If the tray cannot be created, or the Linux desktop has no tray host (such as stock GNOME), closing minimizes the window so it remains reachable. The tray menu offers Show TUICommander, live working/awaiting counts and Quit. An attention mark clears when you show the window. Linux uses the menu; macOS and Windows also support left-click to show.
+
+## Plugin integration pages
+
+Loaded plugins with registered settings appear under Settings > Integrations. Search includes their catalogue field labels. Unloading removes the page and search entries. Reads, revision-checked edits, resets and secret set/unset status use the scoped Rust settings service; the UI owns no second configuration store.
+
+String-list edits, added rows, and removed rows stay in a draft until focus leaves the list. Read failures show an alert on the plugin page and do not close Settings.

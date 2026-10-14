@@ -9,6 +9,8 @@ Cold saved-terminal restoration recovers explicit placement from the repository'
 
 The `tuic-git` crate owns Git subprocesses, reads, branch operations, worktree operations, and artifact warming. It depends on `tuic-core` for path spelling. The root app retains Tokio scheduling, `AppState` caches, configuration lookup, Tauri commands, and event emission; its adapters re-export the moved domain items at their former crate paths. The domain crate has no normal Tokio or Tauri dependency. The root `worktree.rs` adapter also fetches complete, paginated merged GitHub PR evidence over account-aware HTTP GraphQL and passes the response to `tuic-git` for SHA and ancestry verification. Workspace removal and MCP `branch_delete` both use that boundary.
 
+Workflow launch uses `validate_branch_worktree_path`: the canonical path must identify a registered isolated branch checkout outside the archive pool, with no Git operation in progress. Detached-orphan removal uses the separate `validate_worktree_path` guard, which continues to refuse attached branch checkouts. Launch authorization never grants removal permission (#1883-eba0).
+
 Worktree removal verifies checkout and submodule safety before asking Git to unregister it. Git can return `Directory not empty` after removing the registration and some files. In that state, the removal call finishes deleting the known checkout directory and only then compares and deletes the branch ref. A failed cleanup reports the remaining path; an unregistered directory without TUIC ownership evidence is never recursively deleted.
 
 Git **writes** are performed by shelling out to the `git` CLI via the unified `git_cli` module. Git **reads** go through the reversible `GitReads` port (see below), which serves some ops from in-process gix and the rest from the same CLI. The `git_cli::git_cmd(path)` builder provides consistent error handling, binary resolution, and credential prompt suppression across all callsites.
@@ -329,6 +331,12 @@ stops the combined operation and leaves the worktree in place. With force,
 removal may discard dirty checkout files, but an unmerged branch is retained
 with a warning.
 
+The shared classifier also reports `pushed_unmerged` when the exact tip is reachable from any remote-tracking ref, regardless of branch name or configured upstream. `branch_integration.proof` and the removal result name the containing `refs/remotes/<remote>/<branch>` ref. Lifecycle, workspace-list and sidebar monitoring reuse this classifier; the monitoring key includes all remote-tracking refs so a fetch invalidates stale verdicts. This permits worktree removal with local branch deletion, while standalone integrated-branch deletion keeps its existing merge/archive policy.
+
+Removal captures the containing remote ref and its OID after the cleanup script. One `git update-ref --stdin` transaction verifies that proof OID and compare-deletes the captured local branch tip under the same ref locks. If cleanup prunes the proof or a concurrent fetch replaces or conflicts with it, the checkout is removed but the local branch is preserved, and the result includes a branch-deletion warning.
+
+When removal would delete an unmerged branch, the error card offers **Remove worktree, keep branch**. The action reruns lifecycle checks and confirmation with branch deletion disabled for that removal only; the repository setting stays unchanged.
+
 The frontend uses `get_repo_structure` (Phase 1) and `get_repo_diff_stats` (Phase 2) for progressive loading — UI rows appear immediately, stats fill in later. Refresh is single-flight per repository, with at least five seconds between automatic refresh starts. Requests inside that window join one trailing refresh at the window end, which reads the latest state. Requests during an active pass request one subsequent pass; repositories have independent windows. Explicit repository additions, branch checkouts and merge cleanup refreshes bypass the waiting window for the affected repository while preserving single-flight reads. Sidebar badges can lag by up to five seconds plus the backend read duration. This guarantees that sustained filesystem events cannot repeatedly cancel Phase 1 and leave deleted worktrees in the persisted sidebar cache. `get_repo_summary` remains for backward compatibility.
 
 ### Branch Operations
@@ -471,3 +479,12 @@ concurrent creates wait, and a process exit releases the lock. A failed recycle 
 the old checkout path, registration, branch and finished allocation state before returning
 the error. Live sessions prevent recycling; fingerprint-confirmed forced deletion keeps
 the existing deletion contract.
+
+The existing removal/creation events are the frontend rename boundary; clients do not
+need a separate `worktree_rename` response listener. The shared backend removal
+notification retracts restore rows and declarations in the locked repository file,
+even with no connected frontend. It announces the changed repository snapshot.
+Frontend removal retracts saved peer placement declarations together with the old
+sidebar workspace. Live PTY working
+directories do not move with sidebar placement. The allocation guard excludes live
+sessions rooted in the candidate checkout or its descendants.

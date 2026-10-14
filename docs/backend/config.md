@@ -1,5 +1,42 @@
 # Configuration
 
+## Scoped plugin settings (#1785-c7a1)
+
+Loaded plugins expose `plugins.<id>` descriptors through the Rust settings owner.
+`plugin_settings_action(pluginId, action)` and `POST /api/plugins/{id}/settings`
+share describe/get/set/reset/patch semantics. The backend fixes both the owner and
+`plugins/<id>/data/config.json`; requests cannot choose a store, target or file.
+Get requires explicit paths; writes require the last `expectedRevision`.
+
+A configurable manifest declares `settings: { schema, defaults }`. The schema is
+closed (`additionalProperties: false`), bounded to 128 annotated leaves, and uses
+only the supported object, scalar and scalar-array constraints. Every leaf needs
+`x-setting` sensitivity, apply mode, effect, operations and `confirmationClass`.
+Opaque objects, unsupported constraints, missing metadata and secret defaults are
+rejected. A plugin with an existing config file and no schema cannot load or write
+that config. Other plugin data, including statistics, remains separate.
+
+Core supplies typed migrations for build-cleaner, at-capacity-retry,
+cache-keepalive, claude-wakeup and the Telegram notifier example. Registration
+fills missing defaults without discarding saved values, validates the result and
+atomically writes an owner-only config file (0600 on Unix). Existing bot tokens
+remain available to the notifier's private config reader; the settings service
+returns only set/unset. Catalogue definitions, errors and reload events contain no
+stored credentials. Plugin enablement stays in `app.disabled_plugin_ids`; native
+agent usage has no private plugin store.
+
+Patches validate the entire batch against current state under the shared config
+and cross-process file locks. Stale revisions conflict, failed writes emit no
+reload event, and unload removes descriptors and revokes retained owner handles.
+After persistence, `plugin-changed` is dual-emitted to desktop and SSE so existing
+unload/load callbacks reread config. `applied: false` reports scheduled reload,
+not completed callback acknowledgement. Backend unregistration is awaited before
+reload registration. General MCP settings publication remains a separate cutover.
+
+Plugins can call `host.settings({ action: "get", paths: ["/enabled"] })` and pass
+the resulting revision to set/reset/patch. The host supplies its plugin ID.
+
+
 **Module:** `src-tauri/src/config.rs`
 
 Manages all application configuration as JSON files in the platform config directory.
@@ -282,11 +319,13 @@ needs an app restart is what that costs.
 | `ai_chat_peer_ids` | `Map<String, String>` | `{}` | Host-issued ACP orchestration peer UUID per canonical repository root. The backend persists it before launching ego and reuses it across reconnect and restart. It is not a PTY tab ID. |
 | `default_font_size` | `u16` | `13` | Default font size for reset |
 | `attachment_max_bytes` | `u64` | `26214400` (25 MiB) | Binary upload cap per file; must be positive. |
-| `attachment_retention_days` | `u32` | `7` | Uploaded files older than this are removed when their PTY or ACP session closes. |
+| `attachment_retention_days` | `u32` | `7` | Obsolete for uploads: attachment lifetime is now the session. This stored value has no effect on attachment cleanup. |
 | `mcp_server_enabled` | `bool` | `true` | Enable MCP HTTP server |
 | `mcp_port` | `u16` | `9876` | Fixed port for MCP server (0 = OS-assigned) |
 | `collapse_tools` | `bool` | `false` | Replace the full MCP tool list with 3 lazy-discovery meta-tools (`search_tools`, `get_tool_schema`, `call_tool`). Discovered native schemas are unchanged: managed commands still use one `call_tool` invocation of `session action=submit` and receive the bounded receipt in that response. Grok sessions use this surface automatically without changing the stored value — see [`mcp-http.md`](mcp-http.md#lazy-tool-discovery-collapse_tools). Size figures for both surfaces, and how to reproduce them, are in [Measuring the surfaces](mcp-http.md#measuring-the-surfaces) — the reduction is measured, never estimated |
 | `services` | `ServicesConfig` | `{}` | Nested remote-access config: `server`, `auth`, `tls`, `relay`, `push` (replaces the former flat `remote_access_*`/`push_enabled`/`relay_enabled` fields) |
+
+Session attachment directories record their owner PID outside the granted directory. Startup cleanup preserves live or unknown owners and removes only provably dead owners; multiple processes may share the data directory safely.
 
 Remote-access secrets under `services` are not persisted in plaintext
 `config.json`: `auth.session_token`, `relay.token`, and
@@ -301,7 +340,8 @@ save delete a live credential. Plaintext still found in `config.json` is moved
 into the vault at load time and the file is rewritten immediately, so the
 cleartext copy does not survive on disk.
 
-| `confirm_before_quit` | `bool` | `true` | Show quit confirmation |
+| `close_behavior` | `ask \| background \| quit` | `ask` | Main-window close asks, hides visible windows, or quits. Ask offers Remember. Explicit Quit ignores this policy. |
+| `confirm_before_quit` | `bool` | `true` | Confirm real quit when live terminal sessions exist; does not block Background |
 | `confirm_before_closing_tab` | `bool` | `true` | Show tab close confirmation |
 | `copy_on_select` | `bool` | `true` | Auto-copy terminal selection to clipboard |
 | `osc52_clipboard` | `bool` | `true` | Honor OSC 52 clipboard-write sequences from terminal output (a notice shows on each write; disable to ignore them) |
@@ -321,7 +361,7 @@ cleartext copy does not survive on disk.
 | `issue_filter` | `Option<String>` | `"assigned"` | GitHub Issues filter: "assigned", "created", "mentioned", "all", "disabled" |
 | `experimental_features_enabled` | `bool` | `false` | Opts in to the AI Chat panel shell and SSH Tunnels. It has no sub-flags: `ai_chat_enabled`, `ai_triage_enabled` and `ai_watchers_enabled` went with the embedded AI engine (#784-0aec). A `config.json` written before that upgrade still carries them and still loads — `AppConfig` has no `deny_unknown_fields`, and `a_config_written_before_the_ai_engine_was_deleted_still_loads` holds that open |
 | `auto_show_pr_popover` | `bool` | `false` | Auto-show PR popover when switching to a branch with a PR |
-| `update_channel` | `String` | `"stable"` (`"beta"` in beta builds) | Update channel: "stable", "beta" or "nightly"; saved choices are preserved |
+| `update_channel` | `String` | `"stable"` (`"beta"` in beta builds) | Update channel: "stable", "beta" or "nightly"; legacy stable choices migrate once on beta builds |
 | `inline_blame_enabled` | `bool` | `true` | Show GitLens-style inline git blame on the code editor's active line |
 | `show_block_timestamps` | `bool` | `true` | Label each command block with its elapsed time while Ctrl+Cmd is held. Frontend-gated (painted by the renderer); stored here for persistence |
 | `show_scrollbar_marks` | `bool` | `true` | Draw command-block marks on the terminal scrollbar. Frontend-gated, toggled from Settings > Terminal |
@@ -331,6 +371,12 @@ cleartext copy does not survive on disk.
 | `index_memory_budget_mb` | `usize` | `1024` | Total heap the resident content indices may hold before `content_index::enforce_memory_budget` drops the least recently used. An ordinary repo indexes to 60–100 MB, so 1 GB holds 10–15 resident and only evicts for an outlier. An evicted index is snapshotted to `<data_dir>/content-index/` and reloaded on return, so eviction costs a stat walk rather than a rebuild. Configurable rather than a constant because the Rust backend does not hot-reload |
 
 **Commands:** `load_app_config()`, `save_app_config(base, config)`
+
+Settings windows compare their current preferences with their own last successful
+local snapshot before building this pair. Only locally changed fields are applied
+to the freshly loaded `base`; unchanged store-owned fields keep the loaded values.
+This prevents a stale window from expressing another window's edits as unwanted
+reversals. The backend delta and locking protocol is unchanged.
 
 Every writer of `config.json` — IPC `save_config`, `PUT /config`, MCP
 `config action=save`, session-token rotation, `set_global_hotkey`, the
@@ -565,6 +611,7 @@ neither of which involves a model. Nothing reads them back yet.
 | `settings_expert_mode` | `bool` | `false` | Settings "expert mode": off hides an expert control that is still at its default; on shows every control |
 | `diff_view_mode` | `String` | `"split"` | Diff viewer: `split` or `unified` |
 | `detached_panels` | `HashMap<String, String>` | `{}` | Panel id to detached window label |
+| `tasks_view_preferences` | `HashMap<String, String>` | `{}` | JSON-encoded Tasks source per repository and view/query intent per repository/provider/account; saved sort fallback, no result pages |
 | `github_section_collapsed` | `HashMap<String, bool>` | `{}` | Collapsed GitHub sections (`my-prs`, `prs`, `issues`); absent key means the section's own default |
 
 The eight `*_panel_visible` flags for markdown, file browser, git, outline,
@@ -628,6 +675,11 @@ configuration survive repeated calls. Corrupt configuration aborts registration
 and is moved to the existing `repositories.corrupt-<uuid>` recovery backup. Successful changes emit
 `repositories-changed` to both transports.
 
+Workspace removal also uses a strict locked update. It removes the old workspace
+restore row, its saved terminals and peer placement declarations, and clears a
+selection of that workspace. Sibling records and the main checkout remain intact.
+A changed file emits `repositories-changed` before the removal lifecycle event,
+so disconnected clients do not depend on a frontend save to retract stale paths.
 
 **Type:** `serde_json::Value` (flexible persisted JSON, shape defined by frontend)
 
@@ -1371,6 +1423,39 @@ runtime exclusions. Plugin schema registration must also fail closed.
 
 ### Internal settings transactions
 
+#### Host policy and one-use approval (#1786-9cbd)
+
+The shared service and registry accept a server-issued `policy::Caller` separately
+from request JSON. Remote MCP mutations are refused; local MCP still requires the
+tool to be enabled. HTTP retains local-or-authenticated access, and native IPC
+retains OS-user trust. A peer registration grants no settings authority.
+
+Ordinary settings commit immediately. The host-owned policy requires approval for
+remote listener/auth/TLS/relay settings, the trusted Ego executable, custom launch
+executables/arguments/enablement, tunnel port/auto-connect, and upstream stdio
+execution selection (command, arguments, environment, directory, transport and
+enablement). Push/VAPID, outbound HTTP destinations and local MCP controls do not
+inherit confirmation from the broader catalogue annotations.
+
+Owners validate a proposed patch without writing. A protected edit returns
+`confirmation_required` and an opaque `proposalId`; `ui confirm` displays a
+backend-built diff through the existing desktop/browser/mobile dialog. Secret
+fields remain write-only and are omitted from previews, replies and bounded audit
+records. A model-supplied `confirmed` flag is rejected by the request schema.
+
+After the human approves, the caller resubmits the identical request with the
+proposal ID through the service's approval parameter. The grant is bound to the
+instance, transport/connection, target, revision and request content, and is
+consumed once. Refusal, cancellation, disconnect and the proposal's absolute
+300-second deadline revoke it, including while an approved write is queued for
+the owner. Commit consumes and revalidates the grant and latest revision under the
+owner lock; no owner or proposal lock spans the human wait. Audit retains at most
+256 identifier/outcome records; at most 128 proposals may be pending.
+
+This is the internal policy foundation. Publishing the replacement settings MCP,
+HTTP and IPC entry points is a separate cutover; the legacy config tool has not
+been replaced by this step.
+
 `settings::service::Service` executes typed get/set/reset/per-store patch requests
 against registered owner adapters. The request enum and operation enums reject
 unknown fields; `settings::request::request_schema()` derives their action schema.
@@ -1449,3 +1534,69 @@ See [GitHub settings owner adapter](github.md#github-settings-owner-adapter).
 by `AppSettingsStore`; no separate launch adapter exists. Changes apply to later
 ACP or PTY launches. Ego-owned defaults use the separate `ego` profile store and
 the configured CLI; no Ego configuration files are edited.
+
+### Repository start-work brief
+
+Place `.tuic-start-work.md` in the repository root, next to `.tuic.json`. This
+keeps the shared brief with the existing team configuration without embedding
+Markdown in JSON. Tasks reads it for each Start work action through the backend's
+repo-contained, size-limited UTF-8 file reader.
+
+Use `{{key}}`, `{{url}}` and `{{title}}`. Substitution runs once; unknown tokens
+remain literal and a missing URL becomes empty text. Item controls are stripped
+before substitution (TAB and LF remain). Without the file, the brief remains
+`key: title`, a blank line and the item body. Invalid or inaccessible templates
+fail the action. Delivery still caps the brief at 12,000 characters and encloses
+it in the untrusted-content wrapper.
+
+### One-time beta update-channel enrollment
+
+On beta builds, loading an older `config.json` without the internal
+`beta_channel_migrated` marker changes a saved `stable` channel to `beta`.
+The existing locked load/save path persists the marker in that same file,
+including when the saved channel is already `beta` or `nightly`. Later explicit
+choices, including `stable`, survive restarts. Stable and nightly builds do not
+run this migration. Fresh configs already carry the marker. It is not a setting
+and cannot be edited through the settings catalogue.
+
+### Background window visibility
+
+`background.hide_dock_icon` defaults to `true`. On macOS, background entry uses
+Accessory activation policy when enabled; Show restores Regular policy. The
+General page exposes this setting on macOS only. Other platforms retain the
+field without changing their taskbar or launcher policy.
+
+Background entry requests a persisted terminal snapshot from the main WebView
+and waits up to two seconds for `ack_background_snapshot`. Failure or timeout is
+logged and does not prevent hiding. Main, floating and visible panel windows
+are hidden; Show restores only the panels that were visible before entry.
+Desktop terminal visibility is saved separately from remote observations.
+Every terminal WebSocket lane prevents standby for its session. An open SSE
+event stream conservatively protects all sessions until that stream disconnects.
+An observer that attaches after SIGSTOP wakes the terminal immediately.
+Show restores the desktop visibility flags and wakes only terminals that become
+visible; it does not resume every inactive tab.
+
+### MCP work-item writes
+
+`mcp_work_item_writes` in `config.json` defaults to `false`, including when the field is absent in an older file. It permits only the `repo work_item_act` comment and transition operations. Reads need no opt-in. Use the existing configuration save surface to apply it live, or edit the file with the app stopped and restart. Supplying a flag in a work-item request cannot enable writes.
+
+### Background tray and menu-bar icon
+
+`background.tray_icon` accepts `always`, `background_only` (default), and `never`. It applies live. Never restores a hidden desktop before removing the tray. Close configured as background minimizes when the tray is disabled, fails to build, or Linux has no registered StatusNotifier host. This keeps desktop session visibility intact. The Ask dialog omits Background when unavailable. Tray state and the first-entry notice are process-local, not persisted.
+
+### Background WebView unload
+
+`background.webview_unload_minutes` defaults to 10 awake minutes; 0 keeps the hidden WebViews loaded. Changing it takes effect while hidden. Unload waits for a saved snapshot and defers during dictation or a close dialog. Rust PTYs, HTTP/MCP, Automations and remote terminal subscriptions continue. JavaScript plugins (including cache-keepalive, claude-wakeup and at-capacity-retry), sounds and updater checks pause until Show.
+
+Show recreates the main window from Tauri configuration, restores window geometry through the window-state plugin and reconnects the saved tabs, split layout and live sessions created while unloaded. Suspended tabs remain suspended. The updater checks again when the frontend starts. Quit confirmation uses a native dialog while unloaded. `ui` MCP actions return `{"error":"webview_unloaded"}` immediately in that state. `background-mode-changed` is dual-emitted to desktop and SSE with `{state:"hidden"|"unloaded"|"visible"}`.
+
+B0 measured WebContent exiting and about 1,090 MB released from a synthetic 1 GiB allocation on macOS. Actual TUIC workload savings, Windows and Linux are unmeasured. GPU and Networking processes may remain.
+
+### Rust-owned suspended tabs
+
+`suspended-sessions.json` stores an object keyed by stable `tuic_session`, with agent type, cwd/worktree, agent session id, launch command, alias, pane slot, reason, name and shell. It uses the config directory (including instance isolation), strict loading, cross-process locking and atomic updates. A failed/corrupt write leaves the live PTY intact. Frontends restore these records independently of their tab snapshot; resume removes a record after PTY creation.
+
+## Plugin settings UI
+
+Loaded plugins with registered settings appear under Settings > Integrations. Search includes their catalogue field labels. Unloading removes the page and search entries. Reads, revision-checked edits, resets and secret set/unset status use the scoped Rust settings service; the UI owns no second configuration store.

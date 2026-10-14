@@ -80,6 +80,8 @@ ends, including when a test fails. `make check`, `make test-shell`, `make cov`, 
 `make mutants` do this automatically. `make dev` and `cargo run` retain their
 normal runtime temporary directory.
 
+When `src-tauri/src/design_mode/extract.js` changes, run `TUIC_DESIGN_BROWSER=/path/to/browser-stealth/ab-stealth.sh scripts/with-test-tmp.sh pnpm test:design-mode-browser`; this test requires real Chromium and is not in CI.
+
 Mutation testing runs on a change, not on the tree: `make mutants RANGE=<base>`
 (default `HEAD~1`) needs `cargo install --locked cargo-mutants` and reports the
 mutants of the changed Rust lines that no test caught. A surviving mutant is a

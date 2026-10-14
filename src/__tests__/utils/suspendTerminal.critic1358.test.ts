@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { terminalsStore } from "../../stores/terminals";
-import { resumeTerminal, suspendRefusal, suspendTerminal } from "../../utils/suspendTerminal";
+import { suspendRefusal, suspendTerminal } from "../../utils/suspendTerminal";
 import { makeTerminal, testInScope } from "../helpers/store";
 
 const mockRpc = vi.fn();
@@ -43,7 +43,11 @@ describe("suspendTerminal (critic 1358)", () => {
 			const id = addTab();
 			const [a, b] = await Promise.all([suspendTerminal(id), suspendTerminal(id)]);
 			expect([a.ok, b.ok].sort()).toEqual([false, true]);
-			expect(mockRpc.mock.calls.filter(([cmd]) => cmd === "close_pty")).toHaveLength(1);
+			expect(
+				mockRpc.mock.calls.filter(
+					([cmd, args]) => cmd === "suspended_session_action" && args.request.action === "suspend",
+				),
+			).toHaveLength(1);
 		}));
 
 	// Catches: a failed close wipes the pending commands or the live session id, leaving a tab that
@@ -94,30 +98,6 @@ describe("suspendRefusal boundaries (critic 1358)", () => {
 		testInScope(() => {
 			const id = terminalsStore.add(makeTerminal({ sessionId: "pty-z", awaitingInput: "error" }));
 			expect(suspendRefusal(terminalsStore.get(id)!)).toBe("waiting for input");
-		}));
-});
-
-describe("resumeTerminal (critic 1358)", () => {
-	beforeEach(() => {
-		mockRpc.mockReset().mockResolvedValue(undefined);
-		mockVerifyResume.mockReset().mockResolvedValue("claude --resume agent-uuid");
-	});
-
-	// Catches: resume builds the command from different inputs than the restart restore (no cwd,
-	// no launch command), so a CLAUDE_CONFIG_DIR alias resumes in the wrong store.
-	it("builds the resume command from the saved record the restart uses", () =>
-		testInScope(async () => {
-			const id = addTab();
-			await suspendTerminal(id);
-			mockVerifyResume.mockClear();
-			await resumeTerminal(id);
-			expect(mockVerifyResume).toHaveBeenCalledWith(
-				"claude",
-				"/Gits/wt/feature",
-				"tab-uuid",
-				"agent-uuid",
-				"claude --dangerously-skip-permissions",
-			);
 		}));
 });
 

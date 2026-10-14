@@ -8,6 +8,7 @@ import { repositoriesStore } from "../../stores/repositories";
 import { terminalsStore } from "../../stores/terminals";
 import type { WorkspaceLifecycleStatus } from "../../stores/workspaceIdentity";
 import { effectiveMergeMethod, isMergeHeadChanged, isMergeMethodNotAllowed } from "../../utils/prMerge";
+import { reportActionError } from "../../utils/reportActionError";
 import { type AgentSeed, buildAgentSeed } from "./agentSeed";
 import type { PendingCreation } from "./createRepositoryRefreshCoordinator";
 import { bindStartWork, createStartWork } from "./startWork";
@@ -272,8 +273,21 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 				throw err;
 			}
 			appLogger.error("git", "Failed to merge and archive worktree", err);
-			deps.setStatusInfo(`Failed to merge: ${err}`);
+			reportActionError(deps.setStatusInfo, `Failed to merge: ${err}`);
 		}
+	};
+
+	/** Merge a workspace into the repo's main branch with the repo's after-merge setting.
+	 *  Shared by the sidebar and branch-menu Merge & Archive entries. */
+	const handleMergeAndArchiveIntoMain = async (repoPath: string, workspaceId: string) => {
+		const repoState = repositoriesStore.get(repoPath);
+		const mainBranch = repoState ? Object.values(repoState.workspaces).find((b) => b.isMain)?.branchName : undefined;
+		if (!mainBranch) {
+			reportActionError(deps.setStatusInfo, "Cannot merge: no main branch found");
+			return;
+		}
+		const afterMerge = repoSettingsStore.getEffective(repoPath)?.afterMerge ?? "archive";
+		await handleMergeAndArchive(repoPath, workspaceId, mainBranch, afterMerge);
 	};
 
 	/** Collect everything the post-merge cleanup dialog needs to warn honestly.
@@ -423,6 +437,7 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 		handleAutofixIssue,
 		handleConflictAssist,
 		handleMergeAndArchive,
+		handleMergeAndArchiveIntoMain,
 		handleStartWork,
 	};
 }

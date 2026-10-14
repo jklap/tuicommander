@@ -284,24 +284,7 @@ fn session_wait_response(
     response
 }
 
-/// How long the tab has to answer a suspend request: it verifies the agent's resume
-/// command and closes the PTY before it can say yes.
-const SUSPEND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
-
-/// A UI that can own the tab is attached: the desktop window, or an open HTTP event stream.
-fn ui_attached(state: &AppState) -> bool {
-    #[cfg(feature = "desktop")]
-    if state.app_handle.read().is_some() {
-        return true;
-    }
-    state
-        .sse_client_count
-        .load(std::sync::atomic::Ordering::Relaxed)
-        > 0
-}
-
-/// `session action=suspend`. The tab lives in the frontend, which ends the PTY and keeps
-/// the tab; this returns the tab's verdict, so a refusal there is never reported as success.
+/// Suspend through the durable Rust owner, including when no UI is attached.
 pub(super) async fn handle_session_suspend(
     state: &Arc<AppState>,
     args: &serde_json::Value,
@@ -330,39 +313,16 @@ pub(super) async fn handle_session_suspend(
     if let Some(reason) = suspend_refusal(&ss) {
         return serde_json::json!({"error": format!("Cannot suspend: {reason}")});
     }
-    if !ui_attached(state) {
-        return serde_json::json!({"error": "Cannot suspend: no UI is attached to own the tab (headless)"});
-    }
-    let request_id = uuid::Uuid::new_v4().to_string();
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    state.suspend_responses.insert(request_id.clone(), tx);
-    state.request_session_suspend(session_id, &request_id);
-    match tokio::time::timeout(SUSPEND_TIMEOUT, rx).await {
-        Ok(Ok(Ok(()))) => serde_json::json!({"ok": true}),
-        Ok(Ok(Err(reason))) => serde_json::json!({"error": format!("Cannot suspend: {reason}")}),
-        // Sender dropped, or no tab answered: no UI owns this session's tab.
-        _ => {
-            state.suspend_responses.remove(&request_id);
-            serde_json::json!({"error": "Cannot suspend: no tab answered the request"})
-        }
-    }
-}
-
-/// Deliver a tab's suspend verdict to the waiting MCP call. Shared by the Tauri command
-/// and the HTTP route. Unknown or already-answered ids are ignored: every attached client
-/// that owns the tab may answer, and only the first can win.
-pub(crate) fn resolve_session_suspend(
-    state: &AppState,
-    request_id: &str,
-    ok: bool,
-    reason: Option<String>,
-) {
-    if let Some((_, tx)) = state.suspend_responses.remove(request_id) {
-        let _ = tx.send(if ok {
-            Ok(())
-        } else {
-            Err(reason.unwrap_or_else(|| "refused".to_string()))
-        });
+    let state = state.clone();
+    let session_id = session_id.to_owned();
+    match tokio::task::spawn_blocking(move || {
+        crate::suspended_sessions::suspend(&state, &session_id, &serde_json::Value::Null)
+    })
+    .await
+    {
+        Ok(Ok(_)) => serde_json::json!({"ok": true}),
+        Ok(Err(reason)) => serde_json::json!({"error": format!("Cannot suspend: {reason}")}),
+        Err(error) => serde_json::json!({"error": format!("Cannot suspend: {error}")}),
     }
 }
 
@@ -1605,7 +1565,7 @@ pub(super) fn handle_session(
 /// Why a session must not be suspended now, or None. Ending the PTY mid-turn would
 /// cut the agent's work or an unanswered question. The UI applies the same rule to
 /// the tab (`suspendRefusal` in src/utils/suspendTerminal.ts).
-pub(super) fn suspend_refusal(ss: &crate::state::SessionState) -> Option<&'static str> {
+pub(crate) fn suspend_refusal(ss: &crate::state::SessionState) -> Option<&'static str> {
     if ss.awaiting_input {
         return Some("waiting for input");
     }
@@ -1913,6 +1873,15 @@ pub(super) fn handle_agent_with_parent_cwd(
                 mcp_session_id,
             );
 
+            let attachment_dir = match crate::attachments::prepare_session_directory(
+                &state.data_dir,
+                "pty",
+                &session_id,
+            ) {
+                Ok(directory) => directory,
+                Err(error) => return serde_json::json!({"error": error}),
+            };
+
             let mut cmd = CommandBuilder::new(&binary_path);
             crate::pty::sanitize_pty_parent_env(&mut cmd);
 
@@ -2092,6 +2061,7 @@ pub(super) fn handle_agent_with_parent_cwd(
                     &binary_path,
                     &launch_args,
                     &crate::config::config_dir(),
+                    &attachment_dir,
                 );
                 crate::launch_instructions::apply_env(
                     &mut cmd,

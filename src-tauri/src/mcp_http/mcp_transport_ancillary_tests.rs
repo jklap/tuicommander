@@ -2192,3 +2192,55 @@ async fn ui_screenshot_channel_delivers_result() {
         );
     }
 }
+// Catches: an MCP write reaching the provider before the user opts in.
+#[tokio::test]
+async fn work_item_act_disabled_changes_nothing() {
+    let state = test_state();
+    let mut events = state.event_bus.subscribe();
+    let response = handle_repo(&state, &serde_json::json!({
+        "action": "work_item_act", "reference": {"providerId":"demo","accountId":"local","id":"1"},
+        "operation": {"kind":"comment","value":"must not be sent"}
+    }), false).await;
+    assert_eq!(
+        response["error"],
+        "Work-item writes are disabled; enable mcp_work_item_writes to opt in"
+    );
+    assert!(
+        events.try_recv().is_err(),
+        "disabled writes must not dispatch to any provider"
+    );
+}
+
+// Catches: provider metadata carrying an account credential into the model payload.
+#[tokio::test]
+async fn work_item_rejects_credentials_in_provider_payload() {
+    use tower::ServiceExt;
+    let state = test_state();
+    let mut events = state.event_bus.subscribe();
+    let args = serde_json::json!({"action":"work_item", "reference":{"providerId":"demo","accountId":"local","id":"1"}});
+    let call = handle_repo(&state, &args, false);
+    tokio::pin!(call);
+    let response = tokio::select! {
+        response = &mut call => response,
+        event = events.recv() => {
+            let event = event.unwrap();
+            let payload = super::super::sse_routes::event_payload_for_test(&event);
+            let router = super::super::build_router(state.clone(), false, true);
+            let post = |body: serde_json::Value| {
+                axum::http::Request::builder().method("POST").uri("/work-items/provider-bridge")
+                    .header("content-type", "application/json")
+                    .extension(axum::extract::ConnectInfo("127.0.0.1:12345".parse::<std::net::SocketAddr>().unwrap()))
+                    .body(axum::body::Body::from(body.to_string())).unwrap()
+            };
+            let claimed = router.clone().oneshot(post(serde_json::json!({"requestId":payload["request_id"],"action":"claim"}))).await.unwrap();
+            assert_eq!(claimed.status(), axum::http::StatusCode::OK);
+            let mut detail = serde_json::from_str::<serde_json::Value>(include_str!("../work_items/demo.json")).unwrap()["items"][0].clone();
+            detail["token"] = "account-secret-sentinel".into();
+            let reply = router.oneshot(post(serde_json::json!({"requestId":payload["request_id"],"action":"complete","value":detail}))).await.unwrap();
+            assert_eq!(reply.status(), axum::http::StatusCode::OK);
+            call.await
+        }
+    };
+    assert_eq!(response["error"], "Invalid work-item provider response");
+    assert!(!response.to_string().contains("account-secret-sentinel"));
+}

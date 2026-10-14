@@ -82,14 +82,14 @@ describe("getTickerPriority", () => {
 		meta: null,
 	};
 
-	it("returns 90 when any bucket is at/above 90%", () => {
-		expect(getTickerPriority({ ...empty, five_hour: { utilization: 90, resets_at: null } })).toBe(90);
-		expect(getTickerPriority({ ...empty, seven_day_opus: { utilization: 99, resets_at: null } })).toBe(90);
+	it("returns critical priority only from 96 percent, catching premature blinking", () => {
+		expect(getTickerPriority({ ...empty, five_hour: { utilization: 96, resets_at: null } })).toBe(96);
+		expect(getTickerPriority({ ...empty, seven_day_opus: { utilization: 99, resets_at: null } })).toBe(96);
 	});
 
-	it("returns 50 at the 70% boundary (below 90)", () => {
+	it("returns 50 at the 70% boundary (below 96)", () => {
 		expect(getTickerPriority({ ...empty, seven_day: { utilization: 70, resets_at: null } })).toBe(50);
-		expect(getTickerPriority({ ...empty, seven_day: { utilization: 89, resets_at: null } })).toBe(50);
+		expect(getTickerPriority({ ...empty, seven_day: { utilization: 95.9, resets_at: null } })).toBe(50);
 	});
 
 	it("returns 10 for low utilization or no data", () => {
@@ -102,8 +102,8 @@ describe("getTickerPriority", () => {
 			getTickerPriority({
 				...empty,
 				five_hour: { utilization: 10, resets_at: null },
-				seven_day_sonnet: { utilization: 95, resets_at: null },
+				seven_day_sonnet: { utilization: 96, resets_at: null },
 			}),
-		).toBe(90);
+		).toBe(96);
 	});
 });

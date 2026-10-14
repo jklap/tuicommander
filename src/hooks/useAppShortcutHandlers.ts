@@ -113,15 +113,14 @@ export function useAppShortcutHandlers(options: AppShortcutHandlerOptions): Shor
 		handleTerminalSelect: terminalLifecycle.handleTerminalSelect,
 		handleSplit: splitPanes.handleSplit,
 		handleRunCommand: (forceDialog) => {
-			const activeId = mdTabsStore.state.activeId;
-			if (activeId) {
-				const handle = mdTabsStore.getHandle<{ reload?: () => void }>(activeId);
-				if (handle?.reload) {
-					handle.reload();
-					return;
-				}
-			}
 			gitOps.handleRunCommand(forceDialog, () => options.setRunCommandDialogVisible(true));
+		},
+		reloadActiveTab: () => {
+			const activeId = mdTabsStore.state.activeId;
+			const handle = activeId ? mdTabsStore.getHandle<{ reload?: () => void }>(activeId) : undefined;
+			if (!handle?.reload) return false;
+			handle.reload();
+			return true;
 		},
 		switchToBranchByIndex: quickSwitcher.switchToBranchByIndex,
 		isQuickSwitcherOpen: options.quickSwitcherVisible,

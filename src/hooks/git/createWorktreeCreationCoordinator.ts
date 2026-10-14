@@ -5,6 +5,7 @@ import { appLogger } from "../../stores/appLogger";
 import { repoSettingsStore } from "../../stores/repoSettings";
 import { repositoriesStore } from "../../stores/repositories";
 import { terminalsStore } from "../../stores/terminals";
+import { reportActionError } from "../../utils/reportActionError";
 import type { BaseRefOption } from "../useRepository";
 import type { AgentSeed } from "./agentSeed";
 import type { PendingCreation } from "./createRepositoryRefreshCoordinator";
@@ -126,11 +127,11 @@ export function createWorktreeCreationCoordinator(deps: WorktreeCreationCoordina
 				const scriptResult = await deps.repo.runSetupScript(effective.setupScript, result.path);
 				if (scriptResult.exit_code !== 0) {
 					appLogger.warn("git", `Setup script failed (exit ${scriptResult.exit_code})`, scriptResult.stderr);
-					deps.setStatusInfo(`Setup script failed (exit ${scriptResult.exit_code})`);
+					reportActionError(deps.setStatusInfo, `Setup script failed (exit ${scriptResult.exit_code})`);
 				}
 			} catch (err) {
 				appLogger.warn("git", "Setup script execution error", err);
-				deps.setStatusInfo(`Setup script failed: ${err}`);
+				reportActionError(deps.setStatusInfo, `Setup script failed: ${err}`);
 			}
 		}
 
@@ -215,7 +216,7 @@ export function createWorktreeCreationCoordinator(deps: WorktreeCreationCoordina
 			await setupNewWorktree(repoPath, result, cloneName);
 		} catch (err) {
 			appLogger.error("git", "Failed to create worktree from branch", err);
-			deps.setStatusInfo(`Failed to create worktree: ${err}`);
+			reportActionError(deps.setStatusInfo, `Failed to create worktree: ${err}`);
 		} finally {
 			setCreatingWorktreeRepos((prev) => {
 				const next = new Set(prev);

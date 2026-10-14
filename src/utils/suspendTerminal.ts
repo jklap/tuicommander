@@ -1,7 +1,7 @@
 import { appLogger } from "../stores/appLogger";
+import { paneLayoutStore } from "../stores/paneLayout";
 import { type TerminalData, terminalsStore } from "../stores/terminals";
 import { rpc } from "../transport";
-import { verifyAndBuildResumeCommand } from "./agentSession";
 import { clearShellFamilyCache } from "./sendCommand";
 
 export type SuspendOutcome = { ok: true } | { ok: false; reason: string };
@@ -21,17 +21,6 @@ export function suspendRefusal(term: TerminalData): string | null {
 		return "command running";
 	}
 	return null;
-}
-
-function resumeCommandFor(term: TerminalData): Promise<string | null> {
-	if (!term.agentType) return Promise.resolve(null);
-	return verifyAndBuildResumeCommand(
-		term.agentType,
-		term.cwd,
-		term.tuicSession,
-		term.agentSessionId,
-		term.agentLaunchCommand,
-	);
 }
 
 /** Tabs whose suspend is in flight. The PTY's exit event can arrive before the tab is
@@ -62,21 +51,25 @@ async function suspendTab(id: string): Promise<SuspendOutcome> {
 	const refusal = suspendRefusal(initial);
 	if (refusal) return { ok: false, reason: refusal };
 
-	// An agent tab whose session cannot be resumed would lose the agent for good.
-	if (initial.agentType && !(await resumeCommandFor(initial))) {
-		return { ok: false, reason: "no resumable agent session" };
-	}
-
-	// The verification awaited: the tab may have started a turn or been closed meanwhile.
-	const term = terminalsStore.get(id);
-	if (!term) return { ok: false, reason: "unknown tab" };
-	const recheck = suspendRefusal(term);
-	if (recheck) return { ok: false, reason: recheck };
+	const term = initial;
 	const sessionId = term.sessionId as string;
-
 	try {
 		clearShellFamilyCache(sessionId);
-		await rpc("close_pty", { sessionId, cleanupWorktree: false });
+		await rpc("suspended_session_action", {
+			sessionId,
+			repoPath: term.repoPath,
+			cwd: term.cwd,
+			request: {
+				action: "suspend",
+				sessionId,
+				metadata: {
+					name: term.name,
+					agentSessionId: term.agentSessionId,
+					agentLaunchCommand: term.agentLaunchCommand,
+					paneSlot: paneLayoutStore.getGroupForTab(id),
+				},
+			},
+		});
 	} catch (e) {
 		appLogger.warn("terminal", "Suspend: closing the PTY failed", { id, error: String(e) });
 		return { ok: false, reason: "closing the session failed" };
@@ -96,15 +89,21 @@ async function suspendTab(id: string): Promise<SuspendOutcome> {
 	return { ok: true };
 }
 
-/** Bring a suspended tab back: a new PTY in the same cwd, and for an agent tab the same
- *  resume command a restart uses, typed when the shell first goes idle. */
+/** Ask Rust to restore the durable tab and attach its new PTY. */
 export async function resumeTerminal(id: string): Promise<SuspendOutcome> {
 	const term = terminalsStore.get(id);
 	if (!term?.suspended) return { ok: false, reason: "not suspended" };
-	const command = await resumeCommandFor(term);
-	if (term.agentType && !command) {
-		appLogger.warn("terminal", "Resume: no resumable agent session, opening a plain shell", { id });
+	try {
+		const result = await rpc<{ session_id: string }>("suspended_session_action", {
+			repoPath: term.repoPath,
+			cwd: term.cwd,
+			request: { action: "resume", tuicSession: term.tuicSession },
+		});
+		terminalsStore.setSessionId(id, result.session_id);
+		terminalsStore.update(id, { suspended: false, pendingInitCommand: null, pendingResumeCommand: null });
+		return { ok: true };
+	} catch (error) {
+		appLogger.warn("terminal", "Resume failed", { id, error: String(error) });
+		return { ok: false, reason: String(error) };
 	}
-	terminalsStore.update(id, { suspended: false, pendingInitCommand: command });
-	return { ok: true };
 }

@@ -2,6 +2,12 @@
 
 Remote terminals replay their current viewport when attached or reconnected. A stream failure or stalled initial replay shows a persistent error toast; the client retries without requiring new terminal output. See [Remote Access](remote-access.md).
 
+Adjacent `💬` answer paragraphs share one continuous tint and left bar, including blank rows between them. An unmarked prose paragraph after a blank row ends the answer; an uninterrupted indented continuation stays inside. Lists, tables, quotations and fenced code remain attached to the answer. A non-answer output row, prompt or Codex `Worked for` duration footer ends the region. The CLI blanks only the marker glyph cells; copy, selection and search keep the original text. Chat uses the same answer extent and strips every paragraph marker.
+
+Turning **Show scrollbar marks** off or on updates history ticks immediately, even when the terminal is idle. Search-match ticks remain visible when history marks are off.
+
+The Context preview truncates before the CLI/Chat switch. Terminals without that switch use the full header width.
+
 ## Tablet Keyboard
 
 Tap the terminal to focus its keyboard input. Touch and mouse input use the same field, including soft-keyboard text entry and repeated deletion. Primary mouse presses keep focus on that input without a temporary canvas focus change.
@@ -9,6 +15,8 @@ Tap the terminal to focus its keyboard input. Touch and mouse input use the same
 ## Terminal Sessions
 
 Each terminal tab runs an independent PTY (pseudo-terminal) session with your shell. Up to 50 concurrent sessions.
+
+Files uploaded through the mobile picker live in a session directory under TUICommander’s data directory. New Claude and Gemini sessions receive read access at launch. Closing the terminal or ending its process removes these uploads; resumed sessions need files uploaded again. Uploads leave your repository and Git excludes untouched. Old `.tuic/attachments/` directories can be removed by hand. Confined ego sessions need an existing user/profile read root; the picker shows an access notice.
 
 Accents sent separately from their base letters remain part of terminal text
 when you scroll, select, copy or search. Search matches the exact characters
@@ -72,7 +80,7 @@ Older recorded prompts with a prompt ID also appear when Claude did not record a
 **Right-click → Suspend Tab** ends the tab's process and its agent, freeing the memory and CPU they used, and keeps the tab in the tab bar marked `zz`. It is not auto-standby: auto-standby only pauses an idle process, which keeps its memory, and wakes it when you focus the tab. A suspended tab holds no process at all.
 
 - **Resume** — click **Resume** in the tab, or right-click → **Resume Tab**. A new session opens in the same folder. An agent tab runs the same resume command a tab gets after a TUICommander restart, so the agent continues its conversation. A plain shell tab opens a fresh shell.
-- **Restart** — a suspended tab stays suspended after TUICommander restarts; it is never resumed automatically.
+- **Restart** — Rust saves suspended tabs before ending their processes. They stay suspended after a restart or frontend recreation, even when suspension happened with no UI open; they are never resumed automatically.
 - **Refused while busy** — Suspend is disabled while the agent is working, a question waits for your answer, commands are queued, or a command runs in a plain shell, so no turn is cut. An agent tab with no resumable session is refused too.
 - **MCP** — `session action=suspend session_id=<id>` does the same for a tab another agent wants to park, under the same refusals.
 
@@ -85,6 +93,7 @@ Older recorded prompts with a prompt ID also appear when Claude did not record a
 - Press **Enter** to confirm, **Escape** to cancel
 - Explicit custom names persist through reconnects and are never replaced by agent output
 - Spawn-assigned agent labels are base names: an `intent: text (Title)` marker may replace them with the current work phase, even when its text wraps across many terminal rows
+- The canvas leaves `intent:` and `suggest:` marker rows blank without moving other rows. Intent tails wrapped by the terminal or indented by the agent are hidden too; a blank row ends an indented tail. Answer, tool output and prompt rows remain visible.
 - Agent terminals show an expandable **Context** bar. It separates the model's current **Intent**, the orchestrator-owned **Assignment**, and the last substantial user **Prompt**. MCP-connected models are instructed to refresh intent at task start and whenever the material work phase changes
 - Captured intent and prompt are recovered when reconnecting to a live session, including an idle agent. **Prompt** retains the most recent submission with at least ten words; shorter follow-ups do not replace it.
 
@@ -328,6 +337,8 @@ Questions inside a wrapped suggested follow-up action do not mark the tab as awa
 Canceling a Codex approval with Esc clears its question indicator when Codex returns to its composer.
 
 ### Queueing Follow-up Commands
+
+In Compose, paste an image, drop PNG, JPEG, WebP or GIF files on the editor, or use **Attach images** beside Send to choose several. Drops insert at the pointer; picked files replace the current selection in their chosen order. Each saved image appears as `[image: <path>]`. Other file types and failed saves show an error without inserting a tag.
 
 The Compose panel can leave work for an agent without steering its current turn:
 
