@@ -2068,6 +2068,13 @@ Waiting terminal ego questions show **Input**. Tap the question icon in the sess
 
 Phone-optimized progressive web app for monitoring AI agents remotely. Separate SolidJS entry point (`src/mobile/`) served by the existing HTTP server at `/mobile`.
 
+Both mobile composers share the + menu, text box with browser dictation, and
+Send layout. Attach file and Take photo use separate pickers. Terminal Queue
+keeps its long-press shortcut; Commands (/) inserts a slash in agent terminals.
+AI Chat offers Park/Restore/Swap draft, plus Queue and Stop while busy.
+Unsupported actions are hidden. Menus close on outside tap or Escape and use
+44 px action targets. Desktop Chat controls and Ctrl+S are unchanged.
+
 ### 18.1 Architecture
 - Separate Vite entry point (`mobile.html` + `src/mobile/index.tsx`)
 - Shares transport layer, stores, and notification manager with desktop

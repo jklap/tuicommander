@@ -6,8 +6,11 @@
  * the next thing a person wants during a turn they regret is not a second turn.
  */
 
-import { type Component, createEffect, createSignal, For, Show } from "solid-js";
+import { type Component, createEffect, createSignal, For, on, Show } from "solid-js";
 import mobileInput from "../../mobile/components/CommandInput.module.css";
+import { MobileComposerMenu } from "../../mobile/components/MobileComposerMenu";
+import { MobileDictationButton } from "../../mobile/components/MobileDictationButton";
+import { useBrowserDictation } from "../../mobile/useBrowserDictation";
 import { uploadAttachment } from "../../services/uploadAttachment";
 import { pastedImageFiles } from "../../utils/pastedImage";
 import { ComposePinIcon, ComposeSendIcon } from "../shared/ComposeActionIcons";
@@ -31,12 +34,25 @@ export const Composer: Component<{
 	const [uploading, setUploading] = createSignal(false);
 	let textarea: HTMLTextAreaElement | undefined;
 	let inputArea: HTMLDivElement | undefined;
-	let fileInput: HTMLInputElement | undefined;
+	const browserDictation = useBrowserDictation({
+		enabled: !!props.mobileAttachments,
+		blocked: () => !props.mobileAttachments || uploading(),
+		getDraft: () => aiChatDraft.text(),
+		setDraft: (text) => aiChatDraft.set(text),
+	});
 	const hasContent = () =>
 		!!aiChatDraft.text().trim() || aiChatDraft.images().length > 0 || aiChatDraft.files().length > 0;
 	const parkLabel = () =>
 		!aiChatDraft.parked() ? "Park draft" : hasContent() ? "Swap parked draft" : "Restore parked draft";
-	createEffect(() => aiChatDraft.activate(props.chat.sessionId() ?? ""));
+	createEffect(
+		on(
+			() => props.chat.sessionId() ?? "",
+			(session) => {
+				browserDictation.cancel();
+				aiChatDraft.activate(session);
+			},
+		),
+	);
 	const resize = () => {
 		if (!textarea || props.mobileAttachments) return;
 		const previous = textarea.offsetHeight;
@@ -58,6 +74,8 @@ export const Composer: Component<{
 		queueMicrotask(resize);
 	});
 	const send = () => {
+		if (props.mobileAttachments && uploading()) return;
+		browserDictation.cancel();
 		const text = aiChatDraft.expandedText();
 		const images = aiChatDraft.images().map((image) => image.block);
 		const files = aiChatDraft.files();
@@ -87,12 +105,13 @@ export const Composer: Component<{
 
 	const attachFile = async (file: File) => {
 		setPasteError(null);
-		if (file.type.startsWith("image/")) {
-			setPasteError(await stageImages([file]));
-			return;
-		}
+
 		setUploading(true);
 		try {
+			if (file.type.startsWith("image/")) {
+				setPasteError(await stageImages([file]));
+				return;
+			}
 			await props.chat.ensureStarted();
 			const connectionId = props.chat.connectionId();
 			const session = props.chat.sessionId();
@@ -104,7 +123,6 @@ export const Composer: Component<{
 			setPasteError(error instanceof Error ? error.message : String(error));
 		} finally {
 			setUploading(false);
-			if (fileInput) fileInput.value = "";
 		}
 	};
 	createEffect(() => {
@@ -115,6 +133,7 @@ export const Composer: Component<{
 	});
 
 	const onPaste = (event: ClipboardEvent) => {
+		browserDictation.cancel();
 		// DEFERRED (2026-09-28) — image drop needs Boss's explicit approval for drag/drop handlers.
 		const files = pastedImageFiles(event);
 		if (files.length === 0) {
@@ -140,6 +159,7 @@ export const Composer: Component<{
 		if (event.key.toLowerCase() === "s" && event.ctrlKey && !event.metaKey && !event.altKey) {
 			event.preventDefault();
 			if (event.repeat) return;
+			browserDictation.cancel();
 			aiChatDraft.parkOrSwap();
 			queueMicrotask(resize);
 			return;
@@ -149,46 +169,11 @@ export const Composer: Component<{
 		send();
 	};
 
-	const attachmentButton = () => (
-		<button
-			type="button"
-			class={props.mobileAttachments ? mobileInput.attach : s.attachBtn}
-			aria-label="Attach file"
-			disabled={uploading()}
-			onClick={() => fileInput?.click()}
-		>
-			<svg
-				width="18"
-				height="18"
-				viewBox="0 0 24 24"
-				fill="none"
-				stroke="currentColor"
-				stroke-width="2"
-				aria-hidden="true"
-			>
-				<path d="M20 11.5l-8.6 8.6a5 5 0 0 1-7.1-7.1L13 4.3a3.5 3.5 0 0 1 5 5l-8.7 8.7a2 2 0 0 1-2.8-2.8l8-8" />
-			</svg>
-		</button>
-	);
-
 	return (
 		<div
 			ref={inputArea}
 			class={props.mobileAttachments ? `${s.inputArea} ${s.mobileComposer} ${mobileInput.form}` : s.inputArea}
 		>
-			<Show when={props.mobileAttachments}>
-				<input
-					ref={fileInput}
-					type="file"
-					accept="image/*,application/pdf,text/*"
-					aria-label="Choose attachment"
-					hidden
-					onChange={(event) => {
-						const file = event.currentTarget.files?.[0];
-						if (file) void attachFile(file);
-					}}
-				/>
-			</Show>
 			<Show when={props.chat.queuedPrompts().length > 0}>
 				<div class={s.queueList} aria-label="Queued prompts">
 					<div class={s.queueHeader}>
@@ -215,6 +200,21 @@ export const Composer: Component<{
 						}}
 					</For>
 				</div>
+			</Show>
+			<Show when={props.mobileAttachments}>
+				<MobileComposerMenu
+					uploading={uploading()}
+					onAttach={(file) => void attachFile(file)}
+					onPark={() => {
+						browserDictation.cancel();
+						aiChatDraft.parkOrSwap();
+					}}
+					parkLabel={parkLabel()}
+					parkDisabled={!aiChatDraft.parked() && !hasContent()}
+					onQueue={props.chat.busy() ? send : undefined}
+					onStop={props.chat.busy() ? () => void props.chat.cancel() : undefined}
+					queueDisabled={!hasContent()}
+				/>
 			</Show>
 			<div class={s.inputBody}>
 				<Show when={aiChatDraft.images().length > 0}>
@@ -262,23 +262,28 @@ export const Composer: Component<{
 						Browser storage is unavailable; reload may lose it.
 					</span>
 				</Show>
-				<textarea
-					ref={textarea}
-					class={props.mobileAttachments ? mobileInput.input : s.textarea}
-					placeholder={props.mobileAttachments ? "Message ego..." : "Ask ego about this repository"}
-					value={aiChatDraft.text()}
-					onInput={(event) => {
-						aiChatDraft.set(event.currentTarget.value);
-						resize();
-					}}
-					onKeyDown={onKeyDown}
-					onPaste={onPaste}
-					rows={1}
-				/>
+				<div class={props.mobileAttachments ? mobileInput.composer : s.composerActions}>
+					<textarea
+						ref={textarea}
+						class={props.mobileAttachments ? mobileInput.input : s.textarea}
+						placeholder={props.mobileAttachments ? "Message ego..." : "Ask ego about this repository"}
+						value={aiChatDraft.text()}
+						onInput={(event) => {
+							browserDictation.cancel();
+							aiChatDraft.set(event.currentTarget.value);
+							resize();
+						}}
+						onKeyDown={onKeyDown}
+						onPaste={onPaste}
+						rows={1}
+					/>
+					<Show when={props.mobileAttachments}>
+						<MobileDictationButton dictation={browserDictation} disabled={uploading()} />
+					</Show>
+				</div>
 			</div>
-			<Show when={props.mobileAttachments}>{attachmentButton()}</Show>
 			<div class={props.mobileAttachments ? s.mobileComposerActions : s.composerActions}>
-				<Show when={props.chat.busy()}>
+				<Show when={props.chat.busy() && !props.mobileAttachments}>
 					<button
 						type="button"
 						class={s.stopBtn}
@@ -295,34 +300,29 @@ export const Composer: Component<{
 						)}
 					</button>
 				</Show>
-				<button
-					type="button"
-					class={props.mobileAttachments ? s.parkBtn : actions.pinButton}
-					classList={{
-						[s.parkedDraft]: !!props.mobileAttachments && !!aiChatDraft.parked(),
-						[actions.pinButtonActive]: !props.mobileAttachments && !!aiChatDraft.parked(),
-					}}
-					aria-label={parkLabel()}
-					title={parkLabel()}
-					aria-pressed={!!aiChatDraft.parked()}
-					disabled={!aiChatDraft.parked() && !hasContent()}
-					onClick={() => aiChatDraft.parkOrSwap()}
-				>
-					{props.mobileAttachments ? (
-						<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-							<path d="M3 3h18v5H3zm2 7h14v11H5zm4 2v2h6v-2z" />
-						</svg>
-					) : (
+				<Show when={!props.mobileAttachments}>
+					<button
+						type="button"
+						class={actions.pinButton}
+						classList={{
+							[actions.pinButtonActive]: !!aiChatDraft.parked(),
+						}}
+						aria-label={parkLabel()}
+						title={parkLabel()}
+						aria-pressed={!!aiChatDraft.parked()}
+						disabled={!aiChatDraft.parked() && !hasContent()}
+						onClick={() => aiChatDraft.parkOrSwap()}
+					>
 						<ComposePinIcon />
-					)}
-				</button>
+					</button>
+				</Show>
 			</div>
 			<button
 				type="button"
-				aria-label={props.chat.busy() ? "Queue" : "Send"}
+				aria-label={!props.mobileAttachments && props.chat.busy() ? "Queue" : "Send"}
 				title={props.chat.busy() ? "Queue" : "Send"}
 				class={props.mobileAttachments ? mobileInput.send : actions.sendButton}
-				disabled={!aiChatDraft.text().trim() && aiChatDraft.images().length === 0 && aiChatDraft.files().length === 0}
+				disabled={(!!props.mobileAttachments && uploading()) || !hasContent()}
 				onClick={send}
 			>
 				{props.mobileAttachments ? (
