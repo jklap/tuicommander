@@ -2220,3 +2220,8 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] After a manual restart/rebuild, verify that a detached worktree whose non-default branch still points at HEAD does not trigger orphan cleanup. Restore a non-default branch at HEAD after orphan discovery; automatic removal must refuse the stale candidate and preserve its checkout. Fresh in-sync branches must report no integration proof (#1894-7683). Rust changes require restart; do not restart live sessions for this check.
 
 - [ ] After Boss restarts `make dev` or builds release, verify Settings → Agents idle hibernation (60 minutes/background-only by default): an eligible tab frees its process and wakes on open, input or peer mail. Rust backend changes do not hot-reload (#1808-389f).
+## Tasks notifications (#1856-1d20)
+
+- [ ] After Boss restarts `make dev` or installs a rebuilt release, enable Settings → Notifications → Tasks, follow an item, and refresh after a new provider comment while the window is in the background. Check the item-labelled OS notice and its provider URL. Confirm a linked GitHub PR failure names the Tasks item without a second notice. Rust comparison changes require the restart; they do not hot-reload.
+
+- [ ] After Boss restarts the Rust backend, verify a followed task notifies for a distinct comment ID at the latest baseline timestamp, while repeated IDs and edits remain silent. The current live backend does not load this comparator fix through HMR.

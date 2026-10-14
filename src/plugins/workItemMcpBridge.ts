@@ -1,8 +1,9 @@
 /** Transport adapter only: Rust resolves targets, validates replies and authorizes writes. */
 import { urlResolverRegistry } from "../components/CommandPalette/urlPaste";
 import { invoke, listen } from "../invoke";
+import { tasksNotifications } from "../services/tasksNotifications";
 import { appLogger } from "../stores/appLogger";
-import type { WorkItemAction, WorkItemRef } from "../types/work-items.gen";
+import type { WorkItemAction, WorkItemDetail, WorkItemRef } from "../types/work-items.gen";
 import { workItemProviderRegistry } from "./workItemProviderRegistry";
 
 type ProviderRequest =
@@ -61,6 +62,10 @@ export async function handleWorkItemProviderRequest(event: {
 	let value: unknown = null;
 	try {
 		value = await dispatch(request, controller.signal);
+		if (request.kind === "detail" && value) void tasksNotifications.observe(value as WorkItemDetail);
+		if (request.kind === "act" && value && (value as { kind?: string }).kind === "item") {
+			void tasksNotifications.observe((value as { value: WorkItemDetail }).value, request.operation.kind === "comment");
+		}
 	} catch {
 		// Raw provider errors can contain URLs, headers or account data.
 		appLogger.warn("plugin", "Work-item MCP provider request failed");

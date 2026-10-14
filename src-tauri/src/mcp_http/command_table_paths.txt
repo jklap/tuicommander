@@ -357,6 +357,7 @@
 /system/local-ips
 /system/notification-sound
 /system/relay-status
+/tasks/compare-comments
 /tasks/project
 /tasks/start-work-prompt
 /terminal/theme-colors

@@ -22,7 +22,7 @@ vi.mock("../../../stores/appLogger", () => ({
 // The real uiStore persists the expert pref through a debounced timer.
 vi.mock("../../../stores/ui", async () => {
 	const { createStore } = await import("solid-js/store");
-	const [state, setState] = createStore({ settingsExpertMode: false });
+	const [state, setState] = createStore({ settingsExpertMode: false, tasksViewPreferences: {} });
 	return {
 		uiStore: {
 			state,

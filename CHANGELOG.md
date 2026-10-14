@@ -10,6 +10,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Hibernate unattended resumable agent tabs after configurable awake idle time, with background-only scope by default and shared wake on open, input or mail (#1808-389f).
 
 
+- Opt-in Tasks OS notices for linked GitHub check failures and comments on locally followed items, using existing detail refreshes and native notice delivery.
+
 ### Fixed
 
 - GitHub OAuth now requests `read:project` for Projects v2 reads. Existing logins need reauthorization.

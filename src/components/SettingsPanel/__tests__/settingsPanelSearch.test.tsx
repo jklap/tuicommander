@@ -41,7 +41,11 @@ vi.mock("../../../stores/notifications", () => ({
 }));
 
 vi.mock("../../../stores/ui", () => ({
-	uiStore: { state: { settingsNavWidth: 180 }, setSettingsNavWidth: vi.fn(), persistUIPrefs: vi.fn() },
+	uiStore: {
+		state: { settingsNavWidth: 180, tasksViewPreferences: {} },
+		setSettingsNavWidth: vi.fn(),
+		persistUIPrefs: vi.fn(),
+	},
 }));
 
 vi.mock("../../../stores/repositories", () => ({

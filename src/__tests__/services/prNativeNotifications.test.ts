@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const showNativeNotice = vi.fn().mockResolvedValue(undefined);
+const preferences: Record<string, { notificationsEnabled?: boolean }> = {};
+vi.mock("../../stores/ui", () => ({ uiStore: { state: { tasksViewPreferences: preferences } } }));
 const config = { pr_native_notifications: true };
 
 vi.mock("../../services/nativeNotifications", () => ({ showNativeNotice }));
@@ -15,6 +17,7 @@ describe("notifyPrTransition", () => {
 		vi.resetModules();
 		showNativeNotice.mockClear();
 		config.pr_native_notifications = true;
+		delete preferences["tasks:notification-policy"];
 		notifyPrTransition = (await import("../../services/prNativeNotifications")).notifyPrTransition;
 	});
 
@@ -50,4 +53,28 @@ describe("notifyPrTransition", () => {
 		notifyPrTransition({ ...base, type: "merged" });
 		expect(showNativeNotice).not.toHaveBeenCalled();
 	});
+});
+
+// Catches: linked Tasks failures bypass their default-off setting, or depend on the PR preference.
+it("linked_failures_are_opt_in_independent_and_name_the_task_once", async () => {
+	const { notifyPrTransition } = await import("../../services/prNativeNotifications");
+	const linkedItem = {
+		key: "TASK-1",
+		title: "Restore login",
+		reference: { providerId: "jira", accountId: "work", id: "1" },
+		url: "https://jira.example/TASK-1",
+		state: null,
+	};
+	config.pr_native_notifications = false;
+	showNativeNotice.mockClear();
+	delete preferences["tasks:notification-policy"];
+	notifyPrTransition({ ...base, url: `${base.url}0`, type: "ci_failed", linkedItem });
+	expect(showNativeNotice).not.toHaveBeenCalled();
+	preferences["tasks:notification-policy"] = { notificationsEnabled: true };
+	notifyPrTransition({ ...base, url: `${base.url}0`, type: "ci_failed", linkedItem });
+	notifyPrTransition({ ...base, url: `${base.url}0`, type: "ci_failed", linkedItem });
+	expect(showNativeNotice).toHaveBeenCalledOnce();
+	expect(showNativeNotice.mock.calls[0][0].body).toBe("TASK-1: Restore login — acme/api #12");
+	notifyPrTransition({ ...base, url: `${base.url}1`, type: "ci_failed" });
+	expect(showNativeNotice).toHaveBeenCalledOnce();
 });
