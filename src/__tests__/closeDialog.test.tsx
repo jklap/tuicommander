@@ -94,4 +94,24 @@ describe("closeDialog", () => {
 		finish();
 		await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 	});
+	// Catches: completing an old Cancel erases the new confirmation from a rapid second Quit.
+	it("keeps the newer quit prompt when an earlier cancel finishes", async () => {
+		let completeCancel!: () => void;
+		mockInvoke.mockImplementationOnce(
+			() =>
+				new Promise<void>((resolve) => {
+					completeCancel = resolve;
+				}),
+		);
+		render(() => <CloseDialog />);
+		const cancelling = closeDialogStore.answer("cancel");
+		await waitFor(() =>
+			expect(mockInvoke).toHaveBeenCalledWith("resolve_close", { choice: "cancel", remember: false }),
+		);
+		closeDialogStore.present({ kind: "confirm_quit", sessions: 2 });
+		completeCancel();
+		await cancelling;
+		expect(screen.queryByRole("dialog")).not.toBeNull();
+		expect(screen.getByRole("dialog").textContent).toContain("Quit TUICommander?");
+	});
 });
