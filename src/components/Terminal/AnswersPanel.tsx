@@ -76,7 +76,6 @@ export const AnswersPanel: Component<AnswersPanelProps> = (props) => {
 										padding: "2px 0 2px 8px",
 										"margin-bottom": "6px",
 										"border-left": "3px solid rgba(94,190,140,0.9)",
-										background: "rgba(94,190,140,0.14)",
 									}}
 								>
 									{answer}
