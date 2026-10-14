@@ -1,6 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { appLogger } from "../../../stores/appLogger";
 import type { WorkItem, WorkItemQuery } from "../../../types/work-items.gen";
 import { allDemoRows, listDemo } from "./demo";
 import { TaskRows } from "./TaskRows";
@@ -166,6 +167,7 @@ describe("Tasks list", () => {
 
 		// Catches: a failing value lookup removes the filter or leaves the panel without any control.
 		it("keeps a text box when the provider cannot list its values", async () => {
+			const warning = vi.spyOn(appLogger, "warn").mockImplementation(() => {});
 			const { provider } = withChoices(async () => {
 				throw new Error("offline");
 			});
@@ -173,6 +175,13 @@ describe("Tasks list", () => {
 			await screen.findByRole("button", { name: /Task 00002/ });
 			fireEvent.click(screen.getByRole("button", { name: "Filters" }));
 			expect(await screen.findByRole("textbox", { name: "Filter Labels" })).toBeInTheDocument();
+			await waitFor(() =>
+				expect(warning).toHaveBeenCalledWith(
+					"app",
+					"Task filter values unavailable",
+					expect.objectContaining({ error: "Error: offline" }),
+				),
+			);
 		});
 
 		// Catches: values re-fetched every time the panel opens, or fetched before it is ever opened.
