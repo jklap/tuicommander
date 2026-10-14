@@ -2,6 +2,8 @@
 
 Plugin settings (Step 5, #1785-c7a1): loaded plugins register complete scoped schemas and typed private-file owners; patches preserve siblings, redact secrets and schedule reload. Core migrations cover build-cleaner, at-capacity-retry, cache-keepalive, claude-wakeup and the Telegram notifier example. Unload revokes catalogue entries and write authority. General settings MCP cutover remains separate.
 
+Settings policy (Step 6, #1786-9cbd): the shared service/registry enforce host-issued origin context, write-only reads, and backend-built exposure/execution proposals. Only the existing human confirmation channel grants a connection/target/revision/content-bound approval, consumed once within 300 seconds. No lock spans the wait; failed, refused, disconnected or expired proposals write nothing. The explicit host scope covers remote services, trusted/custom executables, stdio execution selection and tunnel port/auto-connect; ordinary settings remain immediate. Transport publication remains Step 7.
+
 Desktop close policy (B1, #1802-e6b8): Rust owns `app.close_behavior` (`ask` default, `background`, `quit`). Ask offers Remember; Background hides main only. Explicit Quit uses `confirm_before_quit` and closes live PTYs in Rust. Detached panels close independently. Tray and WebView unload belong to later stages.
 
 Agent capture tooling: `scripts/agent_capture/run.py` records real installed CLIs through isolated headless sessions, promotes reviewed captures with ordered expected states, and integrates with the 1342 replay oracle. Missing or unauthenticated CLIs remain unverified.
@@ -1032,13 +1034,37 @@ Tasks remembers the selected source per repository and List, Board or Roadmap pl
 
 The MCP repo tool adds `work_item` and `work_item_act`. Rust resolves the caller's worktree link or an explicit reference, URL or account-scoped key, validates DTOs and gates comment/transition writes with `mcp_work_item_writes` (default false). A typed event/claim/reply bridge dispatches to existing frontend provider ports. Claims prevent duplicate actions across frontend clients. Detail and paged comments return as JSON inside the start-work untrusted-content block; forged tags are escaped. Account credentials remain in the existing Rust HTTP injection/redaction boundary. Raw provider errors do not reach MCP. Providers require a connected frontend; a bare headless daemon reports timeout. A timed-out write must be read back before retrying.
 
+### Mobile desktop Markdown tabs (#1879-05ad)
+
+Implemented: session overflow lists the desktop’s open file-based Markdown tabs
+for the registered session repository, with titles and relative paths. Entries
+open the existing mobile viewer from their original workspace. A temporary Rust
+snapshot receives desktop metadata; the read-only HTTP list shares remote auth,
+and SSE invalidation updates open menus without a page reload. Virtual/plugin
+panels and document contents are excluded. The iPhone visual check remains manual.
+
 ### Background tray and menu-bar icon
 
 Background tray (B3): implemented. Native tray/menu-bar status reads current backend SessionState on transitions, with Show and explicit Quit using the shared background lifecycle. Tray preference defaults to background_only; never prevents hiding. Missing native tray support minimizes instead. Native template appearance and desktop-host integration require verification after a rebuild; WebView unload and hibernation remain separate work.
 
 Tasks list controls use provider-declared field sort, group and filter capabilities.
-A rejected selection restores the last successful query and shows the provider reason.
+A rejected selection restores the last successful sort, group and filter controls, keeps attempted search text for Retry, and shows the provider reason.
 
 Tasks small-list mode (#1851-7ade): when the provider reports at most 1,000 matches, Tasks collects the complete search/preset scope and uses the Rust projection for all-field sort, group and filter. A changed total, missing rows or a nonterminal cursor cannot establish completeness. Unknown totals and larger lists keep provider-supported server controls. No extra cache or persisted state is added.
 
 GitHub Tasks boards (#1846-55d7): the optional provider `listBoards(signal)` port discovers the current user Projects v2 when Board opens. The existing picker selects a project; paging preserves project identities. Missing `read:project` stays visible instead of claiming there are no boards. Providers without discovery retain their configured boards. Discovery does not persist selections or write to GitHub.
+
+Design Mode agent browser commands use bounded per-repository native-port requests
+and UUID replies, with ten-second timeouts and Stop cancellation. The extension
+owns reviewed-tab and host-permission checks. Eval needs explicit optional-origin
+consent, including all-sites consent. The legacy heartbeat restart identity and
+navigation sequences remain unchanged. Browser screenshot/client-refresh reality
+verification is still required before story 1724-fe7e can close.
+
+### Rust-owned suspended tabs
+
+Tab suspension is owned by Rust and remains available with no UI attached. Durable config records keyed by `tuic_session` survive document recreation and process restart, retaining agent/profile, cwd/worktree, alias and pane placement. Rust verifies resume commands and opens the replacement PTY; the frontend renders records and attaches the returned session. Lifecycle events are available over IPC and SSE.
+
+## Plugin settings pages
+
+Loaded plugins with registered settings appear under Settings > Integrations. Search includes their catalogue field labels. Unloading removes the page and search entries. Reads, revision-checked edits, resets and secret set/unset status use the scoped Rust settings service; the UI owns no second configuration store.

@@ -300,3 +300,11 @@ exit on the command caller.
 `work_item_provider_bridge` is synchronous: it atomically claims/completes an in-memory request and checks the cached write opt-in. Provider/network work is asynchronous in the frontend adapter; no filesystem or network work runs in this IPC handler.
 
 Desktop close policy: `request_quit` selects a policy action on the main thread without disk I/O. `resolve_close` saves Remember through `spawn_blocking`; real quit closes PTYs through `spawn_blocking` before calling `AppHandle::exit(0)`.
+
+`list_open_markdown_tabs` is async and reads repository configuration through
+`spawn_blocking`. `sync_open_markdown_tabs` only updates an in-memory metadata
+snapshot and emits invalidation; it does no file I/O.
+
+### Suspended tabs (2026-10-14)
+
+The async `suspended_session_action` command and its HTTP route both call `suspended_routes::dispatch`, which owns `spawn_blocking`. Config locking, agent-store verification, process discovery and PTY creation run on the blocking pool. MCP suspend uses the same blocking Rust owner and never waits for a frontend verdict.

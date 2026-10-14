@@ -4,6 +4,10 @@ Remote terminals replay their current viewport when attached or reconnected. A s
 
 Adjacent `💬` answer paragraphs share one continuous tint and left bar, including blank rows between them. An unmarked prose paragraph after a blank row ends the answer; an uninterrupted indented continuation stays inside. Lists, tables, quotations and fenced code remain attached to the answer. A non-answer output row, prompt or Codex `Worked for` duration footer ends the region. The CLI blanks only the marker glyph cells; copy, selection and search keep the original text. Chat uses the same answer extent and strips every paragraph marker.
 
+Turning **Show scrollbar marks** off or on updates history ticks immediately, even when the terminal is idle. Search-match ticks remain visible when history marks are off.
+
+The Context preview truncates before the CLI/Chat switch. Terminals without that switch use the full header width.
+
 ## Tablet Keyboard
 
 Tap the terminal to focus its keyboard input. Touch and mouse input use the same field, including soft-keyboard text entry and repeated deletion. Primary mouse presses keep focus on that input without a temporary canvas focus change.
@@ -76,7 +80,7 @@ Older recorded prompts with a prompt ID also appear when Claude did not record a
 **Right-click → Suspend Tab** ends the tab's process and its agent, freeing the memory and CPU they used, and keeps the tab in the tab bar marked `zz`. It is not auto-standby: auto-standby only pauses an idle process, which keeps its memory, and wakes it when you focus the tab. A suspended tab holds no process at all.
 
 - **Resume** — click **Resume** in the tab, or right-click → **Resume Tab**. A new session opens in the same folder. An agent tab runs the same resume command a tab gets after a TUICommander restart, so the agent continues its conversation. A plain shell tab opens a fresh shell.
-- **Restart** — a suspended tab stays suspended after TUICommander restarts; it is never resumed automatically.
+- **Restart** — Rust saves suspended tabs before ending their processes. They stay suspended after a restart or frontend recreation, even when suspension happened with no UI open; they are never resumed automatically.
 - **Refused while busy** — Suspend is disabled while the agent is working, a question waits for your answer, commands are queued, or a command runs in a plain shell, so no turn is cut. An agent tab with no resumable session is refused too.
 - **MCP** — `session action=suspend session_id=<id>` does the same for a tab another agent wants to park, under the same refusals.
 

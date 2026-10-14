@@ -73,6 +73,15 @@ impl Store for UpstreamsSettingsStore {
             .map_err(|_| Error::new(ID, "store_failed"))?
     }
 
+    fn validate_proposal(&self, _latest: &Value, value: &Value) -> Result<(), Failure> {
+        let next: UpstreamMcpConfig =
+            serde_json::from_value(value.clone()).map_err(|_| Error::new(ID, "invalid_type"))?;
+        if !validate_upstream_config(&next, self.self_port).is_empty() {
+            return Err(Error::new(ID, "out_of_range"));
+        }
+        Ok(())
+    }
+
     fn commit(
         &self,
         prepare: &mut dyn FnMut(&Value) -> Result<Prepared, Failure>,

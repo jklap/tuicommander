@@ -1528,7 +1528,7 @@ An obsolete request cannot replace current rows. A failed refresh retains
 available rows and marks them stale. Detail data is requested by the detail
 view after the host receives `onOpen(reference)`. Shell mounting is separate.
 
-The current PluginManifest has no settings schema, field-kind union or generic Tasks-view declaration. Core does not render schema-driven plugin settings or generic plugin Tasks views. Do not invent manifest fields or import core Settings components. Plugins can open their own UI with `host.openPanel` or `host.openMarkdownPanel`. When a settings schema or Tasks-view API is added, document its fields, kinds and core-rendered controls here and extend the source-derived UX drift check to its real schema/renderer. The manifest field and host method inventories fail on new API entries until the guide is updated.
+The optional manifest `settings: { schema, defaults }` registers a scoped settings owner. Core renders one searchable Integrations page per live plugin catalogue and removes it on unload. All reads, edits and resets use the existing revision-checked plugin settings service. Titles and descriptions label controls; secrets show only set/unset. Objects group leaves; string enums render selects, booleans toggles, integers and numbers numeric inputs. Bounded arrays use multi-selects for string enums, lists for strings, and JSON inputs for other item types. Read-only fields render status controls. Plugins do not import core Settings components or save a second configuration file.
 
 ## Plugin Management (Settings > Plugins)
 

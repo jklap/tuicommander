@@ -28,7 +28,7 @@ A distinct second start on a plan with a running or paused run is refused with `
 
 ## Workflow definitions
 
-`POST /workflows/definition/action?path=<absolute-project>` accepts one `WorkflowAction` object and returns `{ type, value }`. Actions are `seed_templates`, `create_draft {name,kind,graph}`, `list_drafts`, `get_draft {id}`, `update_draft {id,expected_revision,graph}`, `update_closure {id,expected_revision,closure}`, `update_checks {id,expected_revision,checks}`, `publish {id,expected_revision}`, and `get_published {id,revision}`. `closure` is `human` or `automatic`, defaults to `human`, and `automatic` cannot be published until its evidence gate exists. Each check has `id`, `argv`, and camel-case `timeoutSecs`; the published revision pins its `requiredChecks`. A graph has `nodes` and `edges`; see [Workflow definitions](../backend/workflows.md) for node, outcome, and publication rules. The path resolves to the canonical owning project. Published revisions are immutable. This endpoint defines workflows; it does not start one.
+`POST /workflows/definition/action?path=<absolute-project>` accepts one `WorkflowAction` object and returns `{ type, value }`. Actions are `seed_templates`, `create_draft {name,kind,graph}`, `list_drafts`, `get_draft {id}`, `update_draft {id,expected_revision,graph}`, `update_closure {id,expected_revision,closure}`, `update_checks {id,expected_revision,checks}`, `publish {id,expected_revision}`, and `get_published {id,revision}`. `closure` is `human` or `automatic`, defaults to `human`, and `automatic` cannot be published until its evidence gate exists. Each check has `id`, `argv`, and camel-case `timeoutSecs`; the published revision pins its `requiredChecks`. A graph has `nodes` and `edges`; see [Workflow definitions](../backend/workflows.md) for node, outcome, and publication rules. The path resolves to the canonical owning project. Published revisions are immutable. This endpoint defines workflows; it does not start one. Executable-graph validation errors during `publish` return HTTP 422 with `{ "error": "invalid workflow definition: ..." }`; invalid Pause targets name `resume_to`.
 
 ## Native stories
 
@@ -853,7 +853,7 @@ the server is back to the filter the connection was opened with.
 | `pty-description-changed` | `{session_id, description}` | Orchestrator updates the short task description shown above a PTY |
 | `chat-view-changed` | `{session_id, seq}` | The chat view of a Claude, Grok or exactly bound Codex terminal has entries past `seq`; read them with `GET /sessions/:id/chat-view` |
 | `session-renamed` | `{session_id, name, is_custom}` | An MCP `session action=rename` changed a tab's display name |
-| `session-suspend-requested` | `{session_id, request_id}` | An MCP `session action=suspend` asked the UI to suspend that tab |
+| `session-suspended` | `{record}` | Rust persisted a suspended tab before ending its PTY; record fields use snake_case |
 | `term-alias-assigned` | `{session_id, alias}` | A session received its terminal alias (e.g. `tu-3`); published once, after `session-created` |
 | `session-closed` | `{session_id}` | Session ended |
 | `design-mode-changed` | `{repo_path, session_id, status}` | Design Mode for the repository changed to `armed` or `stopped`; the bound agent tab follows this status |
@@ -873,7 +873,7 @@ the server is back to the filter the connection was opened with.
 | `speech-download-progress` | `{asset, downloaded, total, percent}`, then `{asset, done: true}` | A speech asset is downloading; the `done` event ends it, success or failure. `asset` is the only difference from the line above, and it is what a client joins the bar against |
 | `speech-utterance` | `{utteranceId, state, error?, turn}` — the `SpokenReply` shape `POST /dictation/speech/speak` returns | A reply moved between `queued`, `rendering`, `speaking` and one of `finished` / `interrupted` / `failed`. Pushed by the render thread that performed the transition, so a client no longer polls `speech/status` |
 | *(any of the above, mirrored)* | the daemon's own payload plus `__tuic_origin: {connection}` | An event this machine repeated from a connected remote daemon (`remote_mirror.rs`). It arrives under the daemon's own event name, so a client needs no new subscription; `__tuic_origin` says which connection it came from. A frame that already carries the key is dropped rather than repeated, so a mirrored event never crosses a second hop |
-| `lagged` | `{missed}` | Client fell behind; N events were dropped. Dropped events are never resent, so a client that derives state from the stream must re-read it — `subscribeEvents`' `onResync("lagged")` callback exists for that. It also fires with `"reconnect"` on any EventSource re-open after the first, because a drop loses the same way silently. Both are SSE-only: Tauri `listen()` is in-process and cannot drop |
+| `lagged` | `{missed}` | Client fell behind; N events were dropped. Dropped events are never resent, so a client that derives state from the stream must re-read it — `subscribeEvents`' `onResync("lagged")` callback exists for that. It fires with `"connect"` once the initial subscription is live, closing any gap after the initial snapshot read, and with `"reconnect"` on any EventSource re-open after the first, because a drop loses the same way silently. Both are SSE-only: Tauri `listen()` is in-process and cannot drop |
 
 ### MCP Streamable HTTP
 
@@ -1612,16 +1612,18 @@ GET /mcp/status
 
 Returns MCP server status (enabled, running, active sessions, connected MCP clients, maximum sessions). `native_tools` contains the unfiltered native MCP registry as `{name, summary, description}` entries, including disabled tools. `summary` is the first line of the full registry description. This Settings inventory is independent of upstream tools, collapse mode and progress tracking; MCP client discovery still applies all configured filters.
 
-### MCP Suspend Response
+### Suspended Sessions
 
-```
-POST /mcp/suspend-response
-Content-Type: application/json
+`POST /sessions/suspended` accepts the same request as IPC `suspended_session_action`, from loopback or an authenticated client.
 
-{"request_id": "...", "ok": false, "reason": "agent working"}
-```
+- `{"action":"list"}` returns an object keyed by stable `tuic_session`. Each record contains `session_id`, `agent_type`, `cwd`, `worktree`, `agent_session_id`, `launch_command`, `alias`, `pane_slot`, `reason`, `name` and `shell`.
+- `{"action":"suspend","sessionId":"...","metadata":{...}}` persists before ending an idle PTY and returns `{ok:true}`. Optional camelCase metadata contains `name`, `agentSessionId`, `agentLaunchCommand` and `paneSlot`; live backend state controls refusal and identity.
+- `{"action":"resume","tuicSession":"..."}` verifies and spawns the replacement PTY, removes its durable record after successful creation and returns `{ok:true,session_id:"..."}`.
+- `{"action":"forget","tuicSession":"..."}` removes a closed suspended tab.
+- `{"action":"sync","sessionId":"...","metadata":{...}}` retains live frontend metadata for later headless suspension.
+- `{"action":"resolve_resume","agentType":"...","cwd":"...","tuicSession":"...","agentSessionId":"...","launchCommand":"..."}` returns `{cmd,verified}` for existing restart restoration consumers. Verification checks the saved launch profile's store; an unavailable session returns `cmd:null`.
 
-The tab's verdict on a `session action=suspend` request announced by the `session-suspend-requested` event. The waiting MCP call returns it. Unknown or already-answered ids are ignored.
+Errors return HTTP 400 with `{error}`. MCP `session action=suspend` uses the same Rust operation without requiring a WebView or a frontend verdict. `session-suspended` precedes the close event so connected clients retain the tab.
 
 ### MCP Upstream Credentials
 
@@ -3136,3 +3138,37 @@ at delivery.
 `POST /work-items/provider-bridge` is the HTTP twin of `work_item_provider_bridge({input})`. Body: `{action:"claim", requestId}` returns the typed provider request or null when already claimed/expired; `{action:"complete", requestId, value}` completes a claimed request and returns null. The route requires local or authenticated access. Clients subscribe to `work-item-provider-request` on `/events`, whose payload contains `request_id` and `request`; only a client with the target provider loaded should claim it. Rust alone creates pending requests after MCP validation and write opt-in. Replies are validated as Tasks DTOs before entering model output.
 
 `project_work_items` / `POST /tasks/project`: accepts `{items, fields, query}` using the work-item DTOs. Returns `WorkItemGroupedPage` with the filtered unique count, no cursor and one unnamed group when no grouping is selected. Pure Rust projection, maximum 1,000 collected items, no provider access or persisted state.
+
+Settings policy foundation (#1786-9cbd): the existing
+`POST /mcp/confirm-response` also answers backend-built settings proposals shown
+by `mcp-confirm`. Only the first answer settles a question. A settings grant is
+bound to its origin connection and original target/revision/content, lasts at
+most 300 seconds from proposal creation, and cannot be replayed. There is no new
+settings HTTP endpoint in this step; replacement settings transport publication
+remains separate.
+
+## Open desktop Markdown files
+
+| Method | Path | Request | Response |
+| --- | --- | --- | --- |
+| GET | `/repo/open-markdown-tabs` | `cwd` query: session directory | Array of `{id,title,relative_path,absolute_path,fs_root}` |
+| PUT | `/config/open-markdown-tabs` | `{tabs:[{id,repoPath,filePath,fsRoot?}]}` | `null` |
+
+GET uses the existing remote authentication and returns 403 for unregistered
+directories. Repository/workspace ownership is computed by Rust. Only file tabs
+inside registered roots with a `.md` suffix are listed; no contents are included.
+PUT is the desktop publication twin and refuses non-loopback clients, including
+authenticated remote clients. The in-memory list resets with the backend.
+`open-markdown-tabs-changed` has an empty payload and is emitted on IPC and SSE;
+consumers reread after this event or SSE resynchronization.
+
+### Immediate Design Mode browser commands
+
+`POST /design-mode/command` accepts `{repoPath, action, args}`. Actions are
+`navigate` (`args.url`), `reload`, `screenshot`, `errors`, and `eval` (`args.script`).
+It shares the `design_mode_browser_command` IPC implementation. The extension's
+existing native port receives commands over a pending native-host IPC receive;
+replies match UUIDs and expire after ten seconds. Errors include `not_armed`,
+`command_timeout`, `host_denied`, `eval_not_granted` and `tab_not_visible`.
+Legacy `/design-mode/navigate` and `/design-mode/reload` keep the restart-safe
+heartbeat sequence contract. Immediate commands do not change those sequences.

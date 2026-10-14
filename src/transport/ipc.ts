@@ -394,13 +394,10 @@ export async function subscribeEvents(
 		onResync?.("lagged");
 	}) as EventListener);
 
-	// `onopen` fires on every successful connection, so the FIRST one is the
-	// initial connect and every later one is a reconnect. Only the later ones are
-	// a gap: EventSource reconnects itself, silently, and whatever the backend
-	// published while it was down was never queued for us.
+	// A snapshot read can finish before the server subscribes, even on initial connect.
 	let everOpened = false;
 	es.onopen = () => {
-		if (everOpened) onResync?.("reconnect");
+		onResync?.(everOpened ? "reconnect" : "connect");
 		everOpened = true;
 	};
 

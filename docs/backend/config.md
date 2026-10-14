@@ -675,6 +675,11 @@ configuration survive repeated calls. Corrupt configuration aborts registration
 and is moved to the existing `repositories.corrupt-<uuid>` recovery backup. Successful changes emit
 `repositories-changed` to both transports.
 
+Workspace removal also uses a strict locked update. It removes the old workspace
+restore row, its saved terminals and peer placement declarations, and clears a
+selection of that workspace. Sibling records and the main checkout remain intact.
+A changed file emits `repositories-changed` before the removal lifecycle event,
+so disconnected clients do not depend on a frontend save to retract stale paths.
 
 **Type:** `serde_json::Value` (flexible persisted JSON, shape defined by frontend)
 
@@ -1418,6 +1423,39 @@ runtime exclusions. Plugin schema registration must also fail closed.
 
 ### Internal settings transactions
 
+#### Host policy and one-use approval (#1786-9cbd)
+
+The shared service and registry accept a server-issued `policy::Caller` separately
+from request JSON. Remote MCP mutations are refused; local MCP still requires the
+tool to be enabled. HTTP retains local-or-authenticated access, and native IPC
+retains OS-user trust. A peer registration grants no settings authority.
+
+Ordinary settings commit immediately. The host-owned policy requires approval for
+remote listener/auth/TLS/relay settings, the trusted Ego executable, custom launch
+executables/arguments/enablement, tunnel port/auto-connect, and upstream stdio
+execution selection (command, arguments, environment, directory, transport and
+enablement). Push/VAPID, outbound HTTP destinations and local MCP controls do not
+inherit confirmation from the broader catalogue annotations.
+
+Owners validate a proposed patch without writing. A protected edit returns
+`confirmation_required` and an opaque `proposalId`; `ui confirm` displays a
+backend-built diff through the existing desktop/browser/mobile dialog. Secret
+fields remain write-only and are omitted from previews, replies and bounded audit
+records. A model-supplied `confirmed` flag is rejected by the request schema.
+
+After the human approves, the caller resubmits the identical request with the
+proposal ID through the service's approval parameter. The grant is bound to the
+instance, transport/connection, target, revision and request content, and is
+consumed once. Refusal, cancellation, disconnect and the proposal's absolute
+300-second deadline revoke it, including while an approved write is queued for
+the owner. Commit consumes and revalidates the grant and latest revision under the
+owner lock; no owner or proposal lock spans the human wait. Audit retains at most
+256 identifier/outcome records; at most 128 proposals may be pending.
+
+This is the internal policy foundation. Publishing the replacement settings MCP,
+HTTP and IPC entry points is a separate cutover; the legacy config tool has not
+been replaced by this step.
+
 `settings::service::Service` executes typed get/set/reset/per-store patch requests
 against registered owner adapters. The request enum and operation enums reject
 unknown fields; `settings::request::request_schema()` derives their action schema.
@@ -1546,3 +1584,19 @@ visible; it does not resume every inactive tab.
 ### Background tray and menu-bar icon
 
 `background.tray_icon` accepts `always`, `background_only` (default), and `never`. It applies live. Never restores a hidden desktop before removing the tray. Close configured as background minimizes when the tray is disabled, fails to build, or Linux has no registered StatusNotifier host. This keeps desktop session visibility intact. The Ask dialog omits Background when unavailable. Tray state and the first-entry notice are process-local, not persisted.
+
+### Background WebView unload
+
+`background.webview_unload_minutes` defaults to 10 awake minutes; 0 keeps the hidden WebViews loaded. Changing it takes effect while hidden. Unload waits for a saved snapshot and defers during dictation or a close dialog. Rust PTYs, HTTP/MCP, Automations and remote terminal subscriptions continue. JavaScript plugins (including cache-keepalive, claude-wakeup and at-capacity-retry), sounds and updater checks pause until Show.
+
+Show recreates the main window from Tauri configuration, restores window geometry through the window-state plugin and reconnects the saved tabs, split layout and live sessions created while unloaded. Suspended tabs remain suspended. The updater checks again when the frontend starts. Quit confirmation uses a native dialog while unloaded. `ui` MCP actions return `{"error":"webview_unloaded"}` immediately in that state. `background-mode-changed` is dual-emitted to desktop and SSE with `{state:"hidden"|"unloaded"|"visible"}`.
+
+B0 measured WebContent exiting and about 1,090 MB released from a synthetic 1 GiB allocation on macOS. Actual TUIC workload savings, Windows and Linux are unmeasured. GPU and Networking processes may remain.
+
+### Rust-owned suspended tabs
+
+`suspended-sessions.json` stores an object keyed by stable `tuic_session`, with agent type, cwd/worktree, agent session id, launch command, alias, pane slot, reason, name and shell. It uses the config directory (including instance isolation), strict loading, cross-process locking and atomic updates. A failed/corrupt write leaves the live PTY intact. Frontends restore these records independently of their tab snapshot; resume removes a record after PTY creation.
+
+## Plugin settings UI
+
+Loaded plugins with registered settings appear under Settings > Integrations. Search includes their catalogue field labels. Unloading removes the page and search entries. Reads, revision-checked edits, resets and secret set/unset status use the scoped Rust settings service; the UI owns no second configuration store.

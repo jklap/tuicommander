@@ -376,6 +376,13 @@ describe("transport", () => {
 				path: "/design-mode/navigate",
 				body: { repoPath: "/repo", url: "http://localhost:5173/x" },
 			});
+			expect(
+				mapCommandToHttp("design_mode_browser_command", { repoPath: "/repo", action: "eval", args: { script: "2+2" } }),
+			).toEqual({
+				method: "POST",
+				path: "/design-mode/command",
+				body: { repoPath: "/repo", action: "eval", args: { script: "2+2" } },
+			});
 			expect(mapCommandToHttp("get_design_mode_status", {})).toEqual({
 				method: "GET",
 				path: "/design-mode",
@@ -630,16 +637,12 @@ describe("transport", () => {
 			expect(result.path).toBe("/sessions/abc/resume");
 		});
 
-		it("maps session_suspend_response to POST /mcp/suspend-response", () => {
-			const result = mapCommandToHttp("session_suspend_response", {
-				requestId: "r1",
-				ok: false,
-				reason: "agent working",
-			});
-			expect(result).toMatchObject({
+		it("maps durable session actions to POST /sessions/suspended", () => {
+			const request = { action: "suspend", sessionId: "pty" };
+			expect(mapCommandToHttp("suspended_session_action", { request })).toMatchObject({
 				method: "POST",
-				path: "/mcp/suspend-response",
-				body: { request_id: "r1", ok: false, reason: "agent working" },
+				path: "/sessions/suspended",
+				body: request,
 			});
 		});
 
@@ -4148,5 +4151,19 @@ it("maps_local_tasks_projection_without_reshaping", () => {
 		method: "POST",
 		path: "/tasks/project",
 		body: input,
+	});
+});
+
+// Catches: the mobile metadata read or desktop publication having no equivalent HTTP shape.
+it("maps open Markdown metadata reads and loopback publication without document content", () => {
+	expect(mapCommandToHttp("list_open_markdown_tabs", { cwd: "/repo/src" })).toEqual({
+		method: "GET",
+		path: "/repo/open-markdown-tabs?cwd=%2Frepo%2Fsrc",
+	});
+	const tabs = [{ id: "md-1", repoPath: "/repo", filePath: "guide.md", fsRoot: "/repo" }];
+	expect(mapCommandToHttp("sync_open_markdown_tabs", { tabs })).toEqual({
+		method: "PUT",
+		path: "/config/open-markdown-tabs",
+		body: { tabs },
 	});
 });

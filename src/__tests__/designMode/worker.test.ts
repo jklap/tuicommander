@@ -37,6 +37,14 @@ async function boot() {
 			},
 		},
 		sidePanel: { setPanelBehavior: () => {} },
+		permissions: {
+			getAll: async () => ({
+				origins: ["http://localhost/*", "http://127.0.0.1/*", "http://[::1]/*", "https://localhost/*"],
+			}),
+			onAdded: { addListener: () => {} },
+			onRemoved: { addListener: () => {} },
+		},
+		scripting: { getRegisteredContentScripts: async () => [] },
 		storage: {
 			session: {
 				get: async () => ({ ...sessionStore }),

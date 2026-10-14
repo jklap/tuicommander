@@ -184,6 +184,7 @@ type TerminalCreateData = Omit<
 	agentSessionId?: string | null;
 	agentLaunchCommand?: string | null;
 	ptyDescription?: string | null;
+	suspended?: boolean;
 };
 
 /** Terminal component ref interface */
@@ -447,10 +448,18 @@ function createTerminalsStore() {
 	}
 
 	const actions = {
+		/** Reserve presentation IDs before adopting sessions created while the document was absent. */
+		reserveSnapshotIds(ids: (string | undefined)[]): void {
+			const numbers = ids.map((id) => Number(id?.match(/^term-(\d+)$/)?.[1] ?? 0)).filter(Number.isSafeInteger);
+			setState("counter", Math.max(state.counter, ...numbers));
+		},
 		/** Add a new terminal */
-		add(data: TerminalCreateData): string {
-			const id = `term-${state.counter + 1}`;
-			setState("counter", (c) => c + 1);
+		add(data: TerminalCreateData, restoredId?: string): string {
+			const restoredNumber = Number(restoredId?.match(/^term-(\d+)$/)?.[1] ?? 0);
+			const validRestoredId = Number.isSafeInteger(restoredNumber) && restoredNumber > 0;
+			const counter = validRestoredId ? Math.max(state.counter, restoredNumber) : state.counter;
+			const id = validRestoredId && !state.terminals[restoredId!] ? restoredId! : `term-${counter + 1}`;
+			setState("counter", Math.max(counter, Number(id.slice(5))));
 			setState("terminals", id, {
 				id,
 				activity: false,

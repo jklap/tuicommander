@@ -16,6 +16,18 @@ export const TIPS: Tip[] = [
 		shortcut: null,
 	},
 	{
+		feature: "Plugin settings",
+		description:
+			"Find loaded plugin settings under Integrations, or search for a field in Settings. Plugin pages disappear when the plugin unloads.",
+		shortcut: null,
+	},
+	{
+		feature: "Desktop Markdown on mobile",
+		description:
+			"Open a session’s More actions menu on your phone to read the Markdown files open on desktop for that repository.",
+		shortcut: null,
+	},
+	{
 		feature: "Mobile composer actions",
 		description:
 			"Tap + beside a mobile draft to attach a file, take a photo, or use the draft and queue actions supported by that conversation.",

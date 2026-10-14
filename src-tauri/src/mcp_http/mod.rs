@@ -19,9 +19,13 @@ mod log_routes;
 pub(crate) mod managed_launch;
 pub(crate) mod mcp_transport;
 mod mcp_transport_ancillary;
+#[cfg(test)]
+mod settings_policy_confirm_tests;
+pub(crate) use mcp_transport_ancillary::confirm_settings;
 mod mcp_transport_catalogue;
 mod mcp_transport_peer;
-mod mcp_transport_session_agent;
+pub(crate) mod mcp_transport_session_agent;
+mod open_markdown_routes;
 
 mod mcp_work_item;
 mod plugin_docs;
@@ -34,6 +38,7 @@ pub(crate) mod session;
 mod session_placement;
 pub(crate) mod sse_routes;
 pub(crate) mod static_files;
+pub(crate) mod suspended_routes;
 #[cfg(feature = "desktop")]
 mod system_routes;
 mod telegram_routes;
@@ -582,7 +587,14 @@ async fn post_workflow_definition_action(
             .await
             .map_err(|error| format!("workflow definition task failed: {error}"))
             .and_then(|result| result);
-    json_result(result)
+    match result {
+        Err(error) if error.starts_with(crate::workflows::WORKFLOW_VALIDATION_ERROR_PREFIX) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({"error": error})),
+        )
+            .into_response(),
+        result => json_result(result),
+    }
 }
 async fn post_workflow_run_action(
     State(state): State<Arc<AppState>>,
@@ -1018,6 +1030,15 @@ fn shared_routes() -> Router<Arc<AppState>> {
         .route(
             "/sessions",
             get(session::list_sessions).post(session::create_session),
+        )
+        .route("/sessions/suspended", post(suspended_routes::action_http))
+        .route(
+            "/repo/open-markdown-tabs",
+            get(open_markdown_routes::get_tabs),
+        )
+        .route(
+            "/config/open-markdown-tabs",
+            put(open_markdown_routes::put_tabs),
         )
         .route("/sessions/{id}/write", post(session::write_to_session))
         .route("/sessions/{id}/submit", post(submit_agent_reply))
@@ -1481,9 +1502,6 @@ fn shared_routes() -> Router<Arc<AppState>> {
         // Answer a pending MCP confirmation (the browser/PWA half of the desktop
         // `mcp_confirm_response` command).
         .route("/mcp/confirm-response", post(mcp_confirm_response_http))
-        // The tab's verdict on a `session action=suspend` request (browser/PWA half
-        // of the desktop `session_suspend_response` command).
-        .route("/mcp/suspend-response", post(session_suspend_response_http))
         // ACP (ego). Shared, not desktop-only: driving ego from a phone is the
         // whole point of the client, and the binary it may launch comes from
         // this host's configuration rather than from any request.
@@ -1508,22 +1526,6 @@ async fn mcp_confirm_response_http(
     Json(body): Json<McpConfirmResponseBody>,
 ) -> Json<serde_json::Value> {
     resolve_mcp_confirm(&state, &body.request_id, body.confirmed);
-    Json(serde_json::json!({ "ok": true }))
-}
-
-/// Body of `POST /mcp/suspend-response`.
-#[derive(serde::Deserialize)]
-struct SessionSuspendResponseBody {
-    request_id: String,
-    ok: bool,
-    reason: Option<String>,
-}
-
-async fn session_suspend_response_http(
-    State(state): State<Arc<AppState>>,
-    Json(body): Json<SessionSuspendResponseBody>,
-) -> Json<serde_json::Value> {
-    mcp_transport::resolve_session_suspend(&state, &body.request_id, body.ok, body.reason);
     Json(serde_json::json!({ "ok": true }))
 }
 
@@ -2144,6 +2146,10 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             .route(
                 "/design-mode/navigate",
                 post(crate::design_mode::commands::navigate),
+            )
+            .route(
+                "/design-mode/command",
+                post(crate::design_mode::commands::browser_command),
             )
             .route("/design-mode", get(crate::design_mode::commands::statuses));
     }
@@ -3014,6 +3020,105 @@ mod tests {
     use axum::extract::connect_info::ConnectInfo;
     use axum::http::{Request, StatusCode};
     use tower::ServiceExt;
+
+    // Catches: seeded Pause targets missing from otherwise publishable story drafts.
+    #[tokio::test]
+    async fn seeded_story_draft_publishes() {
+        workflow_pause_publish_case(crate::workflows::WorkflowKind::Story, false, false).await;
+    }
+
+    // Catches: a user validation failure being returned as HTTP 500.
+    #[tokio::test]
+    async fn invalid_pause_publish_is_a_client_error() {
+        workflow_pause_publish_case(crate::workflows::WorkflowKind::Story, true, false).await;
+    }
+
+    // Catches: Resolve plan seeds lacking checks and therefore refusing HTTP publication.
+    #[tokio::test]
+    async fn seeded_plan_draft_publishes() {
+        workflow_pause_publish_case(crate::workflows::WorkflowKind::Plan, false, false).await;
+    }
+
+    // Catches: adding seed checks accidentally allowing edited plans with no final check.
+    #[tokio::test]
+    async fn plan_without_final_checks_publish_is_a_client_error() {
+        workflow_pause_publish_case(crate::workflows::WorkflowKind::Plan, false, true).await;
+    }
+
+    async fn workflow_pause_publish_case(
+        kind: crate::workflows::WorkflowKind,
+        invalid: bool,
+        missing_checks: bool,
+    ) {
+        use crate::workflows::{NodeKind, WorkflowStore};
+        let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let project = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let project = project.path().to_str().unwrap();
+        let store = WorkflowStore::open().unwrap();
+        let draft = store
+            .seed_templates(project)
+            .unwrap()
+            .into_iter()
+            .find(|draft| draft.kind == kind)
+            .unwrap();
+        let mut graph = draft.graph;
+        if invalid {
+            for node in &mut graph.nodes {
+                if let NodeKind::Pause { resume_to } = &mut node.kind {
+                    *resume_to = None;
+                }
+            }
+        }
+        let edited = store
+            .update_draft(&draft.id, draft.draft_revision, graph)
+            .unwrap();
+        let edited = if missing_checks {
+            store
+                .update_checks(&draft.id, edited.draft_revision, vec![])
+                .unwrap()
+        } else {
+            edited
+        };
+        let response = post_workflow_definition_action(
+            None,
+            None,
+            Query(types::PathQuery {
+                path: project.into(),
+            }),
+            Json(crate::workflows::WorkflowAction::Publish {
+                id: draft.id.clone(),
+                expected_revision: edited.draft_revision,
+            }),
+        )
+        .await;
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body = String::from_utf8(body.to_vec()).unwrap();
+        if invalid || missing_checks {
+            assert!(status.is_client_error(), "{status}: {body}");
+            assert!(
+                body.contains(if missing_checks {
+                    "deterministic final checks"
+                } else {
+                    "resume_to"
+                }),
+                "{body}"
+            );
+            assert_eq!(
+                store
+                    .get_draft(&draft.id)
+                    .unwrap()
+                    .latest_published_revision,
+                1
+            );
+        } else {
+            assert_eq!(status, StatusCode::OK, "{body}");
+            assert_eq!(store.get_published(&draft.id, 2).unwrap().revision, 2);
+        }
+    }
 
     /// Build a POST request with ConnectInfo from the given address.
     fn mcp_post_from(
@@ -6187,7 +6292,19 @@ mod tests {
                 .unwrap();
             let listing: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
             let listed = listing["result"]["tools"].as_array().unwrap();
-            assert_eq!(listed.len(), catalog.len() - 1, "disabled {name}");
+            let expected: Vec<_> = catalog
+                .iter()
+                .filter(|entry| entry["name"] != name && entry["name"] != "design_mode")
+                .map(|entry| entry["name"].as_str().unwrap())
+                .collect();
+            let actual: Vec<_> = listed
+                .iter()
+                .map(|entry| entry["name"].as_str().unwrap())
+                .collect();
+            assert_eq!(
+                actual, expected,
+                "disabled {name}; unbound Design Mode stays hidden"
+            );
             assert!(
                 listed.iter().all(|entry| entry["name"] != name),
                 "disabled {name} remains discoverable"
@@ -6272,8 +6389,8 @@ mod tests {
             .as_array()
             .unwrap()
             .len();
-        // total native − 1 disabled
-        assert_eq!(tools.len(), total - 1);
+        // One disabled tool and owner-scoped Design Mode are absent for this caller.
+        assert_eq!(tools.len(), total - 2);
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         assert!(
             !names.contains(&"debug"),
@@ -8689,13 +8806,14 @@ mod tests {
             .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         let tools = json["result"]["tools"].as_array().unwrap();
-        // No upstream → all native tools only
+        // No upstream → native tools visible to an unbound caller only
         let expected = mcp_transport::test_mcp_tool_definitions()
             .as_array()
             .unwrap()
             .len();
-        assert_eq!(tools.len(), expected);
+        assert_eq!(tools.len(), expected - 1);
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
+        assert!(!names.contains(&"design_mode"));
         assert!(names.contains(&"session"));
         assert!(names.contains(&"agent"));
         assert!(names.contains(&"repo"));
@@ -10484,55 +10602,6 @@ mod tests {
             saved["agents"]["claude"]["run_configs"][0]["name"],
             "remote"
         );
-    }
-
-    // Catches: /mcp/suspend-response missing from the router the app serves (the browser/PWA
-    // half of session_suspend_response), so a web tab's verdict never reaches the MCP caller.
-    #[tokio::test]
-    async fn crit1358_suspend_response_route_delivers_the_verdict_and_ignores_unknown_ids() {
-        let state = test_state();
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        state.suspend_responses.insert("req-1".to_string(), tx);
-
-        let unknown = build_router(state.clone(), false, true)
-            .oneshot(mcp_post(
-                "/mcp/suspend-response",
-                &serde_json::json!({"request_id": "other", "ok": true, "reason": null}),
-            ))
-            .await
-            .expect("unknown id response");
-        assert_eq!(unknown.status(), StatusCode::OK);
-        assert!(state.suspend_responses.contains_key("req-1"));
-
-        let known = build_router(state.clone(), false, true)
-            .oneshot(mcp_post(
-                "/mcp/suspend-response",
-                &serde_json::json!({"request_id": "req-1", "ok": false, "reason": "agent working"}),
-            ))
-            .await
-            .expect("known id response");
-        assert_eq!(known.status(), StatusCode::OK);
-        assert_eq!(rx.await.unwrap(), Err("agent working".to_string()));
-    }
-
-    // Catches: a body without `reason` (the web client sends null, other clients may omit it)
-    // being rejected, so a refusal never arrives and the caller waits 20 s.
-    #[tokio::test]
-    async fn crit1358_suspend_response_route_accepts_a_missing_reason() {
-        let state = test_state();
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        state.suspend_responses.insert("req-2".to_string(), tx);
-
-        let response = build_router(state, false, true)
-            .oneshot(mcp_post(
-                "/mcp/suspend-response",
-                &serde_json::json!({"request_id": "req-2", "ok": false}),
-            ))
-            .await
-            .expect("response");
-
-        assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(rx.await.unwrap(), Err("refused".to_string()));
     }
 }
 

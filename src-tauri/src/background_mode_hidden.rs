@@ -130,6 +130,15 @@ pub(crate) fn forget_session(state: &AppState, id: &str) {
 #[cfg(any(feature = "desktop", test))]
 pub(crate) trait Windows {
     fn visible_labels(&self) -> Vec<String>;
+    fn ensure_main(&self) -> Result<(), String> {
+        Ok(())
+    }
+    fn all_labels(&self) -> Vec<String> {
+        self.visible_labels()
+    }
+    fn destroy(&self, _label: &str) -> Result<(), String> {
+        Err("Destroy unsupported".into())
+    }
     fn hide(&self, label: &str) -> Result<(), String>;
     fn show(&self, label: &str) -> Result<(), String>;
     fn unminimize(&self, label: &str) -> Result<(), String>;
@@ -197,6 +206,7 @@ pub(crate) fn enter_background(state: &AppState, windows: &impl Windows) -> Resu
     windows.background_resources(true);
     drop(visibility);
     refresh_tray(state, windows);
+    super::unload::notify(state, "hidden");
     Ok(())
 }
 
@@ -204,6 +214,7 @@ pub(crate) fn enter_background(state: &AppState, windows: &impl Windows) -> Resu
 pub(crate) fn leave_background(state: &AppState, windows: &impl Windows) -> Result<(), String> {
     let mut visibility = state.background_visibility.lock();
     // Keep the saved record on failure so another Show can retry.
+    windows.ensure_main()?;
     windows.background_resources(false);
     windows.show("main")?;
     windows.unminimize("main")?;
@@ -229,7 +240,11 @@ pub(crate) fn leave_background(state: &AppState, windows: &impl Windows) -> Resu
     visibility.attention = false;
     drop(visibility);
     refresh_tray(state, windows);
-    windows.focus("main")
+    windows.focus("main")?;
+    state.frontend_liveness.rebaseline();
+    state.webview_unloaded.store(false, Ordering::Release);
+    super::unload::notify(state, "visible");
+    Ok(())
 }
 
 #[cfg(any(feature = "desktop", test))]

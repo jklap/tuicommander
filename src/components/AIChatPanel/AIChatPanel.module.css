@@ -252,6 +252,7 @@
 /* The bubble is only as tall as its text. Copy sits in the gutter to its left
    (the bubble is capped at 85% of the row) instead of holding a hidden row. */
 .userMsg .copyAction {
+  white-space: nowrap;
   position: absolute;
   right: 100%;
   bottom: 6px;
@@ -1476,8 +1477,4 @@
 /* Only the last block of the last segment ends the card; every earlier segment's last block keeps its gap. */
 .messageList[data-terminal-chat] .assistantMsg :global(#markdown-content > div:last-child > [data-tuic-answer]:last-child) {
   margin-bottom: 0;
-}
-
-.messageList[data-terminal-chat] .userMsg .copyAction {
-  white-space: nowrap;
 }

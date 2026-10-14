@@ -82,6 +82,7 @@
 /config/note-image
 /config/notes
 /config/notifications
+/config/open-markdown-tabs
 /config/pane-layout
 /config/project-mcp-upstreams
 /config/prompt-library
@@ -103,6 +104,7 @@
 /config/themes
 /config/ui-prefs
 /design-mode
+/design-mode/command
 /design-mode/navigate
 /design-mode/reload
 /design-mode/start
@@ -186,7 +188,6 @@
 /logs
 /mcp/confirm-response
 /mcp/status
-/mcp/suspend-response
 /mcp/upstream-status
 /mcp/upstreams
 /mcp/upstreams/credential
@@ -260,6 +261,7 @@
 /repo/merge-archive-worktree
 /repo/merge-pr
 /repo/merged-prs
+/repo/open-markdown-tabs
 /repo/orphan-cleanup-assessment
 /repo/orphan-cleanup/begin
 /repo/orphan-cleanup/clear
@@ -306,6 +308,7 @@
 /secrets/forms/submit
 /sessions
 /sessions/agent
+/sessions/suspended
 /sessions/worktree
 /sessions/x
 /sessions/x/chat-view

@@ -23,6 +23,11 @@ pub trait Store: Send + Sync + 'static {
         Ok(self)
     }
     fn read(&self) -> Result<Value, Failure>;
+    /// Pure owner validation before an exposure proposal is offered to the human.
+    /// `commit` must still repeat domain validation on the locked latest state.
+    fn validate_proposal(&self, _latest: &Value, _value: &Value) -> Result<(), Failure> {
+        Ok(())
+    }
     fn commit(
         &self,
         prepare: &mut dyn FnMut(&Value) -> Result<Prepared, Failure>,
@@ -34,11 +39,68 @@ pub trait Store: Send + Sync + 'static {
 pub struct Service<S> {
     catalogue: Arc<Catalogue>,
     owner: Arc<S>,
+    policy: Arc<super::policy::Policy>,
 }
 
 impl<S: Store> Service<S> {
     pub fn new(catalogue: Arc<Catalogue>, owner: Arc<S>) -> Self {
-        Self { catalogue, owner }
+        Self {
+            catalogue,
+            owner,
+            policy: Arc::new(super::policy::Policy::default()),
+        }
+    }
+
+    /// Share the host proposal pool with the real all-client confirmation path.
+    pub fn with_policy(mut self, policy: Arc<super::policy::Policy>) -> Self {
+        self.policy = policy;
+        self
+    }
+
+    /// Host-issued caller context is separate from the model's request payload.
+    pub async fn execute_as(
+        &self,
+        request: Request,
+        caller: &super::policy::Caller,
+        approval: Option<&str>,
+    ) -> Result<Reply, Failure> {
+        caller.check(!matches!(request, Request::Get { .. }))?;
+        if let Request::Get {
+            target,
+            store,
+            paths,
+        } = request
+        {
+            return self.get(target, store, paths).await.map(Reply::Snapshot);
+        }
+        self.check_owner(request.store())?;
+        let owner = self.owner.clone();
+        let cat = self.catalogue.clone();
+        let policy = self.policy.clone();
+        let context = caller.clone();
+        let grant = approval.map(str::to_owned);
+        let safe_store = self.owner.id().to_owned();
+        let request = tokio::task::spawn_blocking(move || {
+            let (target, _, _, _) = super::policy::patch(&request)?;
+            let owner = owner.resolve(target)?;
+            let latest = owner.read()?;
+            if grant.is_none() {
+                policy.authorize(
+                    &cat,
+                    &context,
+                    &request,
+                    &latest,
+                    grant.as_deref(),
+                    |value| owner.validate_proposal(&latest, value),
+                )?;
+            }
+            Ok::<_, Failure>(request)
+        })
+        .await
+        .map_err(|_| Error::new(&safe_store, "store_failed"))??;
+        self.commit_patch(request, caller.clone(), approval.map(str::to_owned))
+            .await
+            .map(Reply::Commit)
     }
 
     pub fn store_id(&self) -> &str {
@@ -57,46 +119,8 @@ impl<S: Store> Service<S> {
     }
 
     pub async fn execute(&self, request: Request) -> Result<Reply, Failure> {
-        match request {
-            Request::Get {
-                target,
-                store,
-                paths,
-            } => self.get(target, store, paths).await.map(Reply::Snapshot),
-            Request::Set {
-                target,
-                store,
-                path,
-                value,
-                expected_revision,
-            } => self
-                .patch(
-                    target,
-                    store,
-                    expected_revision,
-                    vec![Edit::Set { path, value }],
-                )
-                .await
-                .map(Reply::Commit),
-            Request::Reset {
-                target,
-                store,
-                path,
-                expected_revision,
-            } => self
-                .patch(target, store, expected_revision, vec![Edit::Reset { path }])
-                .await
-                .map(Reply::Commit),
-            Request::Patch {
-                target,
-                store,
-                expected_revision,
-                operations,
-            } => self
-                .patch(target, store, expected_revision, operations)
-                .await
-                .map(Reply::Commit),
-        }
+        self.execute_as(request, &super::policy::Caller::native(), None)
+            .await
     }
 
     pub async fn get(
@@ -131,7 +155,14 @@ impl<S: Store> Service<S> {
                 let value =
                     match pointer::at_mut(&mut latest, &parts, &cat, &store, &mut Vec::new()) {
                         Ok(value) => value.clone(),
-                        Err(error) if field.nullable && error.code == "not_found" => {
+                        Err(error)
+                            if error.code == "not_found"
+                                && (field.nullable
+                                    || matches!(
+                                        field.annotation.sensitivity,
+                                        Sensitivity::Secret | Sensitivity::DerivedSecret
+                                    )) =>
+                        {
                             let (key, parent) = parts.split_last().expect("nonempty pointer");
                             let parent = pointer::at_mut(
                                 &mut latest,
@@ -181,15 +212,48 @@ impl<S: Store> Service<S> {
         expected_revision: String,
         operations: Vec<Edit>,
     ) -> Result<CommitReply, Failure> {
+        match self
+            .execute(Request::Patch {
+                target,
+                store,
+                expected_revision,
+                operations,
+            })
+            .await?
+        {
+            Reply::Commit(reply) => Ok(reply),
+            Reply::Snapshot(_) => unreachable!("patch returns a commit"),
+        }
+    }
+
+    async fn commit_patch(
+        &self,
+        request: Request,
+        caller: super::policy::Caller,
+        approval: Option<String>,
+    ) -> Result<CommitReply, Failure> {
+        let store = request.store().to_owned();
         self.check_owner(&store)?;
         let owner = self.owner.clone();
         let cat = self.catalogue.clone();
         let safe_store = store.clone();
+        let policy = self.policy.clone();
         let (mut reply, owner) = tokio::task::spawn_blocking(move || {
-            let owner = owner.resolve(&target)?;
+            let (target, _, expected_revision, operations) = super::policy::patch(&request)?;
+            let owner = owner.resolve(target)?;
             owner
                 .commit(&mut |latest| {
-                    transaction::prepare(&cat, &store, latest, &expected_revision, &operations)
+                    // Retain revocable grants while queued; consume and revalidate only
+                    // after the owner lock is acquired, immediately before preparation.
+                    policy.authorize(
+                        &cat,
+                        &caller,
+                        &request,
+                        latest,
+                        approval.as_deref(),
+                        |value| owner.validate_proposal(latest, value),
+                    )?;
+                    transaction::prepare(&cat, &store, latest, expected_revision, &operations)
                 })
                 .map(|reply| (reply, owner))
         })

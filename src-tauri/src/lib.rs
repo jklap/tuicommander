@@ -28,6 +28,8 @@ pub(crate) mod background_mode;
 mod background_mode_tests;
 pub(crate) mod launch_instructions;
 pub(crate) mod prompt_receipt;
+pub(crate) mod session_resume;
+pub(crate) mod suspended_sessions;
 pub mod work_items;
 pub use tuic_core::app_instance;
 pub(crate) mod app_logger;
@@ -46,6 +48,7 @@ pub(crate) mod codex_usage;
 pub(crate) mod config;
 pub(crate) mod conflict_assist;
 pub(crate) mod content_index;
+mod open_markdown_tabs;
 pub mod settings;
 pub(crate) use tuic_git::cow;
 pub(crate) mod cpu_watchdog;
@@ -622,18 +625,6 @@ fn screenshot_response(state: State<'_, Arc<AppState>>, request_id: String, data
 #[tauri::command]
 fn mcp_confirm_response(state: State<'_, Arc<AppState>>, request_id: String, confirmed: bool) {
     crate::mcp_http::resolve_mcp_confirm(&state, &request_id, confirmed);
-}
-
-/// The tab's verdict on a `session action=suspend` request.
-#[cfg(feature = "desktop")]
-#[tauri::command]
-fn session_suspend_response(
-    state: State<'_, Arc<AppState>>,
-    request_id: String,
-    ok: bool,
-    reason: Option<String>,
-) {
-    crate::mcp_http::mcp_transport::resolve_session_suspend(&state, &request_id, ok, reason);
 }
 
 /// One IPv4 address found on a network interface.
@@ -1839,6 +1830,18 @@ pub fn run() {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 background_mode::desktop::close_window(window, api);
             }
+            if window.label() == "main"
+                && let tauri::WindowEvent::Focused(focused) = event
+            {
+                window
+                    .state::<Arc<AppState>>()
+                    .desktop_window_focused
+                    .store(*focused, std::sync::atomic::Ordering::Relaxed);
+                #[cfg(all(target_os = "macos", feature = "dictation"))]
+                if !focused {
+                    dictation::fn_key_monitor::release_on_focus_loss(window.app_handle());
+                }
+            }
             if matches!(event, tauri::WindowEvent::Focused(true)) && window.label() == "main" {
                 background_mode::desktop::shown(window.app_handle());
             }
@@ -1920,25 +1923,6 @@ pub fn run() {
                     .hidden_title(true)
                     .title_bar_style(tauri::TitleBarStyle::Overlay);
                 themes::window_background::configure(builder, startup_background).build()?;
-            }
-
-            // Track desktop window focus so push notifications can be
-            // suppressed while the user is at their machine.
-            if let Some(window) = app.get_webview_window("main") {
-                let push_flag = Arc::clone(app_state);
-                #[cfg(all(target_os = "macos", feature = "dictation"))]
-                let focus_app = app.handle().clone();
-                window.on_window_event(move |event| {
-                    if let tauri::WindowEvent::Focused(focused) = event {
-                        push_flag
-                            .desktop_window_focused
-                            .store(*focused, std::sync::atomic::Ordering::Relaxed);
-                        #[cfg(all(target_os = "macos", feature = "dictation"))]
-                        if !focused {
-                            dictation::fn_key_monitor::release_on_focus_loss(&focus_app);
-                        }
-                    }
-                });
             }
 
             #[cfg(feature = "desktop")]
@@ -2162,6 +2146,8 @@ pub fn run() {
             pty::terminal_hyperlink_span,
             pty::set_session_visible,
             pty::set_session_name,
+            open_markdown_tabs::sync_open_markdown_tabs,
+            open_markdown_tabs::list_open_markdown_tabs,
             pty::get_session_foreground_process,
             pty::get_session_leaf_pid,
             pty::has_foreground_process,
@@ -2529,7 +2515,7 @@ pub fn run() {
             secrets::forms::secret_form_bootstrap,
             secrets::forms::secret_form_submit,
             mcp_confirm_response,
-            session_suspend_response,
+            mcp_http::suspended_routes::suspended_session_action,
             app_logger::push_log,
             app_logger::get_logs,
             app_logger::clear_logs,
@@ -2559,6 +2545,7 @@ pub fn run() {
             design_mode::tauri_commands::stop_design_mode,
             design_mode::tauri_commands::reload_design_mode,
             design_mode::tauri_commands::navigate_design_mode,
+            design_mode::tauri_commands::design_mode_browser_command,
             design_mode::tauri_commands::get_design_mode_status,
             acp_commands::acp_workspace_root,
             acp_commands::acp_connect,

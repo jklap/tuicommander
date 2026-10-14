@@ -25,6 +25,7 @@ type CommandTableEntry = { map: (args: Record<string, unknown>, p: ArgEncoder) =
  * The `p` helper encodes a required argument for URL usage (throws if missing).
  */
 export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
+	suspended_session_action: { map: (args) => ({ method: "POST", path: "/sessions/suspended", body: args.request }) },
 	work_item_provider_bridge: {
 		map: (args) => ({ method: "POST", path: "/work-items/provider-bridge", body: args.input }),
 	},
@@ -469,14 +470,6 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			body: { request_id: args.requestId, confirmed: args.confirmed },
 		}),
 	},
-	// The tab's verdict on `session action=suspend`; the MCP call waits for it.
-	session_suspend_response: {
-		map: (args) => ({
-			method: "POST",
-			path: "/mcp/suspend-response",
-			body: { request_id: args.requestId, ok: args.ok, reason: args.reason ?? null },
-		}),
-	},
 	get_session_foreground_process: {
 		map: (args) => ({
 			method: "GET",
@@ -766,6 +759,13 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		map: (args) => ({ method: "POST", path: "/config/repositories/stale-temp", body: { paths: args.paths } }),
 	},
 
+	// --- Desktop Markdown metadata (mobile reads; publication stays loopback-only) ---
+	list_open_markdown_tabs: {
+		map: (args) => ({ method: "GET", path: `/repo/open-markdown-tabs?cwd=${encodeURIComponent(String(args.cwd))}` }),
+	},
+	sync_open_markdown_tabs: {
+		map: (args) => ({ method: "PUT", path: "/config/open-markdown-tabs", body: { tabs: args.tabs } }),
+	},
 	// --- Config: pane layout ---
 	load_pane_layout: { map: () => ({ method: "GET", path: "/config/pane-layout" }) },
 	save_pane_layout: {
@@ -2164,6 +2164,13 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	},
 	reload_design_mode: {
 		map: (args) => ({ method: "POST", path: "/design-mode/reload", body: { repoPath: args.repoPath } }),
+	},
+	design_mode_browser_command: {
+		map: (a) => ({
+			method: "POST",
+			path: "/design-mode/command",
+			body: { repoPath: a.repoPath, action: a.action, args: a.args },
+		}),
 	},
 	navigate_design_mode: {
 		map: (args) => ({

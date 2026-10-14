@@ -9,9 +9,10 @@ use windows::DesktopWindows;
 
 #[derive(Default)]
 pub(crate) struct BackgroundMode {
-    close: parking_lot::Mutex<CloseState>,
+    pub(super) close: parking_lot::Mutex<CloseState>,
+    panels: parking_lot::Mutex<std::collections::HashMap<String, windows::PanelRestore>>,
     snapshot: parking_lot::Mutex<Option<(String, tokio::sync::oneshot::Sender<()>)>>,
-    generation: std::sync::atomic::AtomicU64,
+    pub(super) generation: std::sync::atomic::AtomicU64,
     notified: std::sync::atomic::AtomicBool,
 }
 
@@ -68,7 +69,7 @@ fn apply(app: &tauri::AppHandle, action: CloseAction) {
     apply_locked(app, action, &mut close);
 }
 
-fn apply_locked(app: &tauri::AppHandle, action: CloseAction, close: &mut CloseState) {
+pub(super) fn apply_locked(app: &tauri::AppHandle, action: CloseAction, close: &mut CloseState) {
     if close.quitting {
         return;
     }
@@ -106,6 +107,9 @@ fn apply_locked(app: &tauri::AppHandle, action: CloseAction, close: &mut CloseSt
                         tracing::warn!(%error, "Cannot enter background");
                     }
                     close.hidden = super::hidden::is_hidden(&handle.state::<Arc<AppState>>());
+                    if close.hidden {
+                        super::unload::desktop::start(&handle, generation);
+                    }
                     if close.hidden
                         && !mode
                             .notified
@@ -119,8 +123,19 @@ fn apply_locked(app: &tauri::AppHandle, action: CloseAction, close: &mut CloseSt
             });
         }
         CloseAction::Ask | CloseAction::ConfirmQuit => {
+            let already_pending = close.pending.is_some();
             close.pending = Some(action);
             // Explicit quit may come from the menu while the main window is hidden.
+            if app
+                .state::<Arc<AppState>>()
+                .webview_unloaded
+                .load(std::sync::atomic::Ordering::Acquire)
+            {
+                if !already_pending {
+                    super::unload::desktop::confirm_quit(app);
+                }
+                return;
+            }
             restore_locked(app, close);
             let state = app.state::<Arc<AppState>>();
             let payload = serde_json::json!({
@@ -197,7 +212,7 @@ pub(crate) async fn resolve_close(
     Ok(())
 }
 
-async fn snapshot_before_hide(app: &tauri::AppHandle, generation: u64) {
+pub(super) async fn snapshot_before_hide(app: &tauri::AppHandle, generation: u64) -> bool {
     let request_id = uuid::Uuid::new_v4().to_string();
     let (tx, rx) = tokio::sync::oneshot::channel();
     {
@@ -205,24 +220,26 @@ async fn snapshot_before_hide(app: &tauri::AppHandle, generation: u64) {
         let close = mode.close.lock();
         if !close.hidden || mode.generation.load(std::sync::atomic::Ordering::SeqCst) != generation
         {
-            return;
+            return false;
         }
         *mode.snapshot.lock() = Some((request_id.clone(), tx));
     }
     let payload = serde_json::json!({ "request_id": request_id });
-    if let Err(error) = app.emit_to("main", "snapshot-now", payload) {
+    let acknowledged = if let Err(error) = app.emit_to("main", "snapshot-now", payload) {
         tracing::warn!(%error, "Cannot request background snapshot");
-    } else if !matches!(
-        tokio::time::timeout(std::time::Duration::from_secs(2), rx).await,
-        Ok(Ok(()))
-    ) {
-        tracing::warn!("Background snapshot acknowledgement timed out; hiding anyway");
-    }
+        false
+    } else {
+        matches!(
+            tokio::time::timeout(std::time::Duration::from_secs(2), rx).await,
+            Ok(Ok(()))
+        )
+    };
     let mode = app.state::<BackgroundMode>();
     let mut pending = mode.snapshot.lock();
     if pending.as_ref().is_some_and(|(id, _)| id == &request_id) {
         pending.take();
     }
+    acknowledged
 }
 
 #[tauri::command]

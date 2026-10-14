@@ -456,7 +456,12 @@ The Browse row shows registry name, version, description, author, tags and minim
 
 ### Settings schema and Tasks views
 
-PluginManifest has no plugin settings schema or settings field-kind union. Core does not yet render schema-driven plugin settings. Do not invent manifest fields or import core Settings components. Plugins can open their own UI with `host.openPanel` or `host.openMarkdownPanel`. Core does render the generic Tasks views described below; plugins register data-only WorkItemProvider ports with `host.registerWorkItemProvider(provider)`, not manifest view declarations. The source-derived UX drift check covers the real Tasks components, work-item DTO fields and roadmap date roles. Extend it to the real plugin settings schema when that API lands.
+PluginManifest declares optional `settings: { schema, defaults }`. Loaded plugin catalogue entries render searchable Integrations pages in Settings; unloading removes the page. Core reads descriptors and values and writes revision-checked edits through `plugin_settings_action`, the same scoped Rust service as `host.settings`. Schema titles and descriptions label the controls. Secrets show only set/unset and accept a replacement without displaying the stored value. Core Tasks views use data-only WorkItemProvider ports, not manifest view declarations.
+
+### Plugin settings schema type inventory
+`object`, `array`, `string`, `boolean`, `integer`, `number`.
+
+Objects group leaf fields and require closed properties. Arrays contain bounded non-object items: string enums use SettingMultiSelect, string lists use SettingList, other arrays accept JSON. Strings use text inputs or enum selects, booleans use toggles, integers and numbers use numeric inputs. Read-only fields use SettingStatus. Reset and edit operations come from the live catalogue, not a second persistence path.
 
 ### Settings field kinds
 
@@ -1179,6 +1184,28 @@ mod tests {
             PLUGIN_DOCS,
             "### Work-item field kind inventory\n",
             expected,
+        );
+    }
+
+    // Catches: plugin schema types change without corresponding authoring documentation.
+    #[test]
+    fn plugin_docs_matches_plugin_settings_schema_types() {
+        let source = include_str!("../settings/plugin_schema.rs");
+        let accepted = section(
+            source,
+            r#"match schema["type"].as_str() {"#,
+            "_ => return Err(fail()),",
+        );
+        assert_inventory(
+            PLUGIN_DOCS,
+            "### Plugin settings schema type inventory\n",
+            captures(
+                &captures(accepted, r"(?m)^        Some\(([^)]+)\) =>")
+                    .into_iter()
+                    .collect::<Vec<_>>()
+                    .join(" "),
+                r#""([a-z]+)""#,
+            ),
         );
     }
 

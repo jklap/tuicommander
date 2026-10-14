@@ -445,6 +445,10 @@ re-render cannot send a duplicate. Settlement closes the matching notification.
 
 `acpTranscript` also projects ACP session titles and usage by session ID. The
 AI Chat header, conversation picker and usage footer read that projection.
+Provider-retry patches retain the provider text and an arrival-based presentation
+deadline. `createRetryCountdown` owns one timer for the selected conversation;
+recovery, final failure, settlement or panel disposal stops it. Missing or invalid
+delays keep the provider text without starting a timer.
 `aiChatTabs` is the single per-root store for open chat session IDs and the
 selected tab. It mirrors its state to localStorage so a detached WebView can
 restore the same tabs; `useAcpChat` replays their ACP histories after connecting.

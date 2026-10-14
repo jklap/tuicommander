@@ -282,6 +282,7 @@ fn event_type_name(event: &AppEvent) -> &str {
     match event {
         AppEvent::WorkItemProviderRequest { .. } => "work-item-provider-request",
         AppEvent::CloseDialog { .. } => "close-dialog",
+        AppEvent::BackgroundModeChanged { .. } => "background-mode-changed",
         AppEvent::HeadChanged { .. } => "head-changed",
         AppEvent::RepoChanged { .. } => "repo-changed",
         AppEvent::SessionCreated { .. } => "session-created",
@@ -297,7 +298,7 @@ fn event_type_name(event: &AppEvent) -> &str {
         AppEvent::PtyDescriptionChanged { .. } => "pty-description-changed",
         AppEvent::ChatViewChanged { .. } => "chat-view-changed",
         AppEvent::SessionRenamed { .. } => "session-renamed",
-        AppEvent::SessionSuspendRequested { .. } => "session-suspend-requested",
+        AppEvent::SessionSuspended { .. } => "session-suspended",
         AppEvent::TermAliasAssigned { .. } => "term-alias-assigned",
         AppEvent::PluginChanged { .. } => "plugin-changed",
         AppEvent::UpstreamStatusChanged { .. } => "upstream-status-changed",
@@ -307,6 +308,7 @@ fn event_type_name(event: &AppEvent) -> &str {
         AppEvent::McpConfirmResolved { .. } => "mcp-confirm-resolved",
         AppEvent::AcpNotice(_) => "acp-notice",
         AppEvent::RepositoriesChanged => "repositories-changed",
+        AppEvent::OpenMarkdownTabsChanged => "open-markdown-tabs-changed",
         AppEvent::DirChanged { .. } => "dir-changed",
         AppEvent::SessionWorktreeDeclared { .. } => "session-worktree-declared",
         AppEvent::WorktreeCreated { .. } => "worktree-created",
@@ -352,6 +354,7 @@ pub(crate) fn event_payload_for_test(event: &AppEvent) -> serde_json::Value {
 
 fn event_payload(event: &AppEvent) -> serde_json::Value {
     match event {
+        AppEvent::OpenMarkdownTabsChanged => serde_json::json!({}),
         AppEvent::WorkItemProviderRequest {
             request_id,
             request,
@@ -434,12 +437,7 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
         } => {
             serde_json::json!({ "session_id": session_id, "name": name, "is_custom": is_custom })
         }
-        AppEvent::SessionSuspendRequested {
-            session_id,
-            request_id,
-        } => {
-            serde_json::json!({ "session_id": session_id, "request_id": request_id })
-        }
+        AppEvent::SessionSuspended { record } => serde_json::json!({"record": record}),
         AppEvent::TermAliasAssigned { session_id, alias } => {
             serde_json::json!({ "session_id": session_id, "alias": alias })
         }
@@ -565,9 +563,9 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
         AppEvent::RemoteConnectionStatusChanged { payload } => payload.clone(),
         // The daemon's own body, untouched.
         AppEvent::RemoteMirrored { payload, .. } => payload.clone(),
-        AppEvent::AutomationRunChanged { payload } | AppEvent::CloseDialog { payload } => {
-            payload.clone()
-        }
+        AppEvent::AutomationRunChanged { payload }
+        | AppEvent::CloseDialog { payload }
+        | AppEvent::BackgroundModeChanged { payload } => payload.clone(),
         // Built once by the producer and handed to both transports, for the
         // same reason as `SessionStateChanged` above: the frontend applies one
         // shape, and a pair built from separate code in separate files drifts.

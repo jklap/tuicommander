@@ -170,6 +170,8 @@ pub enum AppEvent {
     },
     #[serde(rename = "close-dialog")]
     CloseDialog { payload: serde_json::Value },
+    #[serde(rename = "background-mode-changed")]
+    BackgroundModeChanged { payload: serde_json::Value },
     #[serde(rename = "automation-run-changed")]
     AutomationRunChanged { payload: serde_json::Value },
     #[serde(rename = "head-changed")]
@@ -259,13 +261,10 @@ pub enum AppEvent {
         name: String,
         is_custom: bool,
     },
-    /// An MCP client asked for a tab to be suspended (`session action=suspend`).
-    /// The tab, its agent identity and its resume path live in the frontend, so it
-    /// performs the suspend; the backend has already refused a busy session.
-    #[serde(rename = "session-suspend-requested")]
-    SessionSuspendRequested {
-        session_id: String,
-        request_id: String,
+    /// A durable Rust suspend record was saved; clients preserve the tab before EOF.
+    #[serde(rename = "session-suspended")]
+    SessionSuspended {
+        record: Box<crate::suspended_sessions::SuspendedSession>,
     },
     /// Orchestrator-supplied description of the work currently assigned to a PTY.
     /// The chat view of a Claude terminal has new entries. Wake only: the entries
@@ -360,6 +359,8 @@ pub enum AppEvent {
     /// every save — including the client that just wrote it.
     #[serde(rename = "repositories-changed")]
     RepositoriesChanged,
+    #[serde(rename = "open-markdown-tabs-changed")]
+    OpenMarkdownTabsChanged,
     /// Directory contents changed (non-git filesystem watcher)
     #[serde(rename = "dir-changed")]
     DirChanged { dir_path: String },
@@ -561,7 +562,6 @@ impl AppEvent {
             | AppEvent::PtyCwd { session_id, .. }
             | AppEvent::PtyDescriptionChanged { session_id, .. }
             | AppEvent::SessionRenamed { session_id, .. }
-            | AppEvent::SessionSuspendRequested { session_id, .. }
             | AppEvent::TermAliasAssigned { session_id, .. }
             | AppEvent::SessionClosed { session_id, .. } => Some(session_id),
             _ => None,
@@ -2071,6 +2071,8 @@ pub struct AppState {
     pub(crate) secrets: crate::secrets::SecretStore,
     /// Every per-session side table, keyed by session id.
     pub(crate) session_maps: SessionMaps,
+    pub(crate) open_markdown_tabs:
+        parking_lot::RwLock<Vec<crate::open_markdown_tabs::DesktopMarkdownTab>>,
     pub(crate) data_dir: PathBuf,
     pub(crate) worktrees_dir: PathBuf,
     pub(crate) metrics: SessionMetrics,
@@ -2079,6 +2081,7 @@ pub struct AppState {
     pub mcp: McpState,
     /// WebSocket clients per PTY session for streaming output
     pub ws_clients: DashMap<String, Vec<WsClientTx>>,
+    pub(crate) webview_unloaded: AtomicBool,
     pub(crate) background_visibility: Mutex<crate::background_mode::hidden::Visibility>,
     /// Cached AppConfig to avoid re-reading from disk on every request
     pub(crate) config: parking_lot::RwLock<crate::config::AppConfig>,
@@ -2329,10 +2332,9 @@ pub struct AppState {
     pub(crate) work_item_requests:
         DashMap<String, crate::work_items::provider_bridge::PendingProviderRequest>,
     pub(crate) screenshot_responses: DashMap<String, tokio::sync::oneshot::Sender<Option<String>>>,
-    /// Pending suspend requests: request_id → oneshot sender for the tab's verdict
-    /// (`Ok(())` suspended, `Err(reason)` refused). Populated by MCP `session action=suspend`,
-    /// consumed by `session_suspend_response`.
-    pub(crate) suspend_responses: DashMap<String, tokio::sync::oneshot::Sender<Result<(), String>>>,
+    /// Serialize durable suspend/resume transitions and retain frontend-discovered metadata.
+    pub(crate) suspend_metadata: DashMap<String, serde_json::Value>,
+    pub(crate) suspend_lock: Mutex<()>,
     /// Pending confirmation requests: request_id → oneshot sender for the human's answer.
     /// Populated by MCP `ui(action=confirm)`, consumed by `mcp_confirm_response`.
     ///
@@ -2340,6 +2342,7 @@ pub struct AppState {
     /// the same request and the first answer wins, because a remote human must be
     /// able to unblock an agent that a native desktop dialog would have pinned to
     /// whoever is sitting at the machine.
+    pub(crate) settings_policy: Arc<crate::settings::policy::Policy>,
     pub(crate) confirm_responses: DashMap<String, tokio::sync::oneshot::Sender<bool>>,
     /// App-wide process-tree snapshot shared by agent lifecycle polling.
     pub(crate) process_snapshot_cache: crate::pty::ProcessSnapshotCache,
@@ -2469,20 +2472,16 @@ impl AppState {
         true
     }
 
-    /// Ask the UI to suspend the tab that owns this session. Dual-emitted like a
-    /// rename: Tauri listeners on desktop, the event bus for browser/SSE clients.
-    /// The tab answers through `resolve_session_suspend` with `request_id`.
-    pub(crate) fn request_session_suspend(&self, session_id: &str, request_id: &str) {
-        self.emit_pty_event(AppEvent::SessionSuspendRequested {
-            session_id: session_id.to_string(),
-            request_id: request_id.to_string(),
+    pub(crate) fn notify_session_suspended(
+        &self,
+        record: &crate::suspended_sessions::SuspendedSession,
+    ) {
+        self.emit_pty_event(AppEvent::SessionSuspended {
+            record: Box::new(record.clone()),
         });
         #[cfg(feature = "desktop")]
         if let Some(app) = self.app_handle.read().as_ref() {
-            let _ = app.emit(
-                "session-suspend-requested",
-                serde_json::json!({ "session_id": session_id, "request_id": request_id }),
-            );
+            let _ = app.emit("session-suspended", serde_json::json!({"record": record}));
         }
     }
 
@@ -3529,11 +3528,13 @@ impl AppState {
             automation_runtime: Default::default(),
             secrets: crate::secrets::SecretStore::default(),
             session_maps: SessionMaps::default(),
+            open_markdown_tabs: Default::default(),
             data_dir,
             worktrees_dir,
             metrics: SessionMetrics::new(),
             mcp: McpState::default(),
             ws_clients: DashMap::new(),
+            webview_unloaded: AtomicBool::new(false),
             background_visibility: Mutex::new(Default::default()),
             config: parking_lot::RwLock::new(config),
             git_cache: GitCacheState::new(),
@@ -3612,7 +3613,9 @@ impl AppState {
             connections_lock: tokio::sync::Mutex::new(()),
             work_item_requests: DashMap::new(),
             screenshot_responses: DashMap::new(),
-            suspend_responses: DashMap::new(),
+            suspend_metadata: DashMap::new(),
+            suspend_lock: Mutex::new(()),
+            settings_policy: Arc::new(crate::settings::policy::Policy::default()),
             confirm_responses: DashMap::new(),
             process_snapshot_cache: crate::pty::ProcessSnapshotCache::default(),
             hot_repo_paths: parking_lot::RwLock::new(std::collections::HashSet::new()),
@@ -4333,6 +4336,13 @@ impl AppState {
     /// post-removal worktree state.
     pub(crate) fn notify_worktree_removed(&self, payload: WorktreeRemovedPayload) {
         self.invalidate_repo_caches(&payload.repo_path);
+        match crate::config::retract_removed_workspace(&payload.repo_path, &payload.workspace_id) {
+            Ok(true) => self.notify_repositories_changed(),
+            Ok(false) => {}
+            Err(error) => {
+                tracing::error!(source = "config", %error, "Failed to retract removed workspace restore records")
+            }
+        }
         crate::workitem_links::drop_link_of_removed_worktree(&payload.repo_path, &payload.branch);
         #[cfg(feature = "desktop")]
         if let Some(ref app) = *self.app_handle.read() {
@@ -4793,7 +4803,7 @@ impl AppState {
             AppEvent::PtyDescriptionChanged { .. } => {}
             AppEvent::ChatViewChanged { .. } => {}
             AppEvent::SessionRenamed { .. } => {}
-            AppEvent::SessionSuspendRequested { .. } => {}
+            AppEvent::SessionSuspended { .. } => {}
             AppEvent::TermAliasAssigned { .. } => {}
             // A watcher hit says nothing about the session's own state — it is a
             // plugin-facing signal that rides the bus for browser clients only.
@@ -5269,6 +5279,7 @@ impl AppState {
             | AppEvent::McpToast { .. }
             | AppEvent::McpConfirm { .. }
             | AppEvent::McpConfirmResolved { .. }
+            | AppEvent::OpenMarkdownTabsChanged
             | AppEvent::RepositoriesChanged
             | AppEvent::DirChanged { .. }
             | AppEvent::SessionWorktreeDeclared { .. }
@@ -5287,6 +5298,7 @@ impl AppState {
             | AppEvent::WorkflowRunChanged { .. }
             | AppEvent::AutomationRunChanged { .. }
             | AppEvent::CloseDialog { .. }
+            | AppEvent::BackgroundModeChanged { .. }
             | AppEvent::ReviewProgress { .. }
             | AppEvent::ProposalsReady { .. }
             // This accumulator's own output. Feeding it back in would make the
