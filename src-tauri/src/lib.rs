@@ -2082,6 +2082,7 @@ pub fn run() {
             pty::write_pty_parts,
             attachments::upload_attachment,
             pty::get_input_buffer_content,
+            pty::send_agent_input_if_empty,
             pty::resize_pty,
             pty::set_ansi_colors,
             pty::pause_pty,

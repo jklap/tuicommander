@@ -934,3 +934,7 @@ Each Resume allocates a fresh PTY key and binds the saved TUIC identity before s
 `session_wake::ensure_live` checks the live identity map under the suspend lock. Live standby sessions receive SIGCONT; retained sessions resume from the durable record with the same TUIC identity. Concurrent callers receive the same PTY. Creation or storage failure returns a reason and retains the record. Submit uses the existing pending-injection ready gate; mail remains in the inbox and queues only a payload-free wake notice.
 
 Backend wake creation events include `tuic_session` alongside the fresh PTY id. Clients reattach the existing suspended tab by that identity; cwd never identifies a tab. Retained aliases resolve to the saved peer identity before mail validation.
+
+### Guarded plugin submissions
+
+`send_agent_input_if_empty_blocking` reserves a per-session reentrant input transaction across readiness/draft checks, the existing agent submission writer, and input bookkeeping. Desktop raw input and HTTP/WS raw input hold the same transaction through bookkeeping, so typing before a guarded send prevents it; typing during either scheduling gap waits until after Enter and remains a draft. The lock is reentrant because bookkeeping can synchronously enter another input helper. The ordinary explicit plugin reply path is unchanged.

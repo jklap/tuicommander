@@ -262,6 +262,7 @@ async function loadPlugin(manifest: PluginManifest): Promise<void> {
 	// actually complete (race).
 	await pluginRegistry.register(plugin, manifest.capabilities, manifest.agentTypes);
 	loadedPluginIds.add(manifest.id);
+	replayActiveAgents(terminalsStore);
 
 	logger.info(`Loaded v${manifest.version}`);
 	appLogger.info("plugin", `Loaded plugin "${manifest.id}" v${manifest.version}`);
@@ -278,8 +279,6 @@ async function loadPlugin(manifest: PluginManifest): Promise<void> {
 async function handlePluginChanged(event: { payload: string[] }): Promise<void> {
 	const changedIds = event.payload;
 	if (!Array.isArray(changedIds) || changedIds.length === 0) return;
-
-	let anyReloaded = false;
 
 	for (const pluginId of changedIds) {
 		// Skip disabled plugins early — no IPC, no store churn
@@ -322,11 +321,6 @@ async function handlePluginChanged(event: { payload: string[] }): Promise<void> 
 		}
 
 		await loadPlugin(manifest);
-		anyReloaded = true;
-	}
-
-	if (anyReloaded) {
-		replayActiveAgents(terminalsStore);
 	}
 }
 
@@ -336,7 +330,7 @@ export function reloadPlugin(pluginId: string): Promise<void> {
 }
 
 /** Replay agent-started events for terminals that already have a running agent. */
-function replayActiveAgents(store: typeof terminalsStore): void {
+export function replayActiveAgents(store: typeof terminalsStore): void {
 	for (const id of store.getIds()) {
 		const t = store.get(id);
 		if (t?.agentType && t.sessionId) {
@@ -345,8 +339,17 @@ function replayActiveAgents(store: typeof terminalsStore): void {
 				sessionId: t.sessionId,
 				terminalId: id,
 			});
+			pluginRegistry.dispatchStructuredEvent(
+				"awaiting",
+				{ awaiting: t.awaitingInput === "question", confident: t.awaitingInputConfident === true },
+				t.sessionId,
+			);
 			if (t.shellState) {
-				pluginRegistry.dispatchStructuredEvent("shell-state", { state: t.shellState }, t.sessionId);
+				pluginRegistry.dispatchStructuredEvent(
+					"shell-state",
+					{ state: t.shellState, agent_type: t.agentType },
+					t.sessionId,
+				);
 			}
 		}
 	}
