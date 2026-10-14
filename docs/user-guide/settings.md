@@ -484,3 +484,7 @@ The internal GitHub settings backend keeps OAuth device login for github.com and
 verifies Enterprise PAT identity before storage. Account reads expose credential
 status only. The new shared settings tool is published in a separate cutover step;
 this backend adapter does not add a new user-facing endpoint.
+
+### Work-item access for agents
+
+Agents can read linked Tasks items through the MCP repo tool. Tracker comments and status changes are disabled by default. To enable them, set `mcp_work_item_writes` to `true` through the configuration save API, or edit `config.json` while the app is stopped. There is no separate Tasks write toggle in Settings. A frontend with the provider loaded must remain connected. After a write times out, read the item before retrying.

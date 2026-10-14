@@ -2983,3 +2983,7 @@ cap and untrusted-content wrapper. Desktop and browser use the same Rust builder
 ### Terminal Compose image attachments
 
 Paste an image, drop PNG/JPEG/WebP/GIF files on Compose, or select several with **Attach images** beside Send. Each image is saved through the shared paste helper and inserted as `[image: <path>]` in gesture order. Drops use the pointer position; the picker replaces the selection. Unsupported files and save failures show a visible error. Native desktop drops are claimed by the mounted Compose editor before terminal and tab routing.
+
+### Tasks MCP access
+
+The existing MCP `repo` tool reads linked work items or explicit references, URLs and exact provider keys, including paged comments. Provider content is enclosed in an untrusted-content block. Optional comments and workflow transitions use the same provider actions; `mcp_work_item_writes` defaults to false. A frontend with the provider loaded is required (#1854-4960).

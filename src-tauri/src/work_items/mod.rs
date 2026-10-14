@@ -11,4 +11,5 @@ pub mod protocol;
 mod tests;
 mod validation;
 
+pub(crate) mod provider_bridge;
 pub(crate) mod start_work_prompt;

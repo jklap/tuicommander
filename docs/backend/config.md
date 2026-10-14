@@ -1495,3 +1495,7 @@ event stream conservatively protects all sessions until that stream disconnects.
 An observer that attaches after SIGSTOP wakes the terminal immediately.
 Show restores the desktop visibility flags and wakes only terminals that become
 visible; it does not resume every inactive tab.
+
+### MCP work-item writes
+
+`mcp_work_item_writes` in `config.json` defaults to `false`, including when the field is absent in an older file. It permits only the `repo work_item_act` comment and transition operations. Reads need no opt-in. Use the existing configuration save surface to apply it live, or edit the file with the app stopped and restart. Supplying a flag in a work-item request cannot enable writes.
