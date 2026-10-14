@@ -1,3 +1,6 @@
+## Design Mode shorthand tokens (1888-14a3) — backend rebuild required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, confirm a native Design Mode grab includes `--gap` for `padding: var(--gap)`, including an open shadow root with an adopted sheet. Real Chromium extraction and the Rust payload consumer passed; the embedded `include_str!` asset needs a backend rebuild to load. No desktop instance was launched by this peer.
 ## Suspend replacement identity (1806-ed18) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, suspend and resume a throwaway idle shell twice. The TUIC identity stays stable, each Resume has a fresh PTY id, and the second Suspend succeeds. On a remote repository, Resume and closing a suspended tab must act on that daemon. Automated targeted tests cover the lifecycle and routing; the running desktop requires a restart to load the Rust change.

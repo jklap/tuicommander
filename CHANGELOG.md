@@ -30,6 +30,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Include CSS tokens referenced by shorthand declarations in Design Mode grabs, including inline styles and adopted shadow-root sheets (#1888-14a3).
 - Allow workflow agents to launch in registered branch worktrees while preserving detached-orphan removal guards (#1883-eba0).
 
 - Preserve attached Goose session names and legacy paths without injecting a duplicate or conflicting `--name`.
