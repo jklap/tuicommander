@@ -6270,7 +6270,19 @@ mod tests {
                 .unwrap();
             let listing: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
             let listed = listing["result"]["tools"].as_array().unwrap();
-            assert_eq!(listed.len(), catalog.len() - 1, "disabled {name}");
+            let expected: Vec<_> = catalog
+                .iter()
+                .filter(|entry| entry["name"] != name && entry["name"] != "design_mode")
+                .map(|entry| entry["name"].as_str().unwrap())
+                .collect();
+            let actual: Vec<_> = listed
+                .iter()
+                .map(|entry| entry["name"].as_str().unwrap())
+                .collect();
+            assert_eq!(
+                actual, expected,
+                "disabled {name}; unbound Design Mode stays hidden"
+            );
             assert!(
                 listed.iter().all(|entry| entry["name"] != name),
                 "disabled {name} remains discoverable"
@@ -6355,8 +6367,8 @@ mod tests {
             .as_array()
             .unwrap()
             .len();
-        // total native − 1 disabled
-        assert_eq!(tools.len(), total - 1);
+        // One disabled tool and owner-scoped Design Mode are absent for this caller.
+        assert_eq!(tools.len(), total - 2);
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         assert!(
             !names.contains(&"debug"),
@@ -8772,13 +8784,14 @@ mod tests {
             .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         let tools = json["result"]["tools"].as_array().unwrap();
-        // No upstream → all native tools only
+        // No upstream → native tools visible to an unbound caller only
         let expected = mcp_transport::test_mcp_tool_definitions()
             .as_array()
             .unwrap()
             .len();
-        assert_eq!(tools.len(), expected);
+        assert_eq!(tools.len(), expected - 1);
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
+        assert!(!names.contains(&"design_mode"));
         assert!(names.contains(&"session"));
         assert!(names.contains(&"agent"));
         assert!(names.contains(&"repo"));
