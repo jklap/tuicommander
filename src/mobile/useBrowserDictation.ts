@@ -44,6 +44,8 @@ function failureText(code: string): string {
 
 /** Browser input interaction only; server hands-free remains a separate conversation. */
 export function useBrowserDictation(options: {
+	/** Desktop composers must not initialize browser speech or fetch its config. */
+	enabled?: boolean;
 	blocked: Accessor<boolean>;
 	getDraft: Accessor<string>;
 	setDraft: (text: string) => void;
@@ -53,7 +55,8 @@ export function useBrowserDictation(options: {
 		SpeechRecognition?: RecognitionConstructor;
 		webkitSpeechRecognition?: RecognitionConstructor;
 	};
-	const Constructor = browser.SpeechRecognition ?? browser.webkitSpeechRecognition;
+	const Constructor =
+		options.enabled === false ? undefined : (browser.SpeechRecognition ?? browser.webkitSpeechRecognition);
 	const [recording, setRecording] = createSignal(false);
 	let recognition: BrowserRecognition | null = null;
 	let discarding = false;

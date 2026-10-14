@@ -782,3 +782,5 @@ untrusted-content wrapper and 12,000-character cap.
 The desktop macOS General page includes **Hide Dock icon in background** under
 Confirmations. It uses the shared setting toggle and persists
 `background.hide_dock_icon`; browser settings omit this native control.
+
+The mobile AI Chat composer uses the same device-local keyboard correction preference as the terminal composer; toggling it updates autocorrect, spellcheck and sentence capitalization on the open textarea. Desktop Chat retains its existing input attributes.
