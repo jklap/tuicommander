@@ -1299,10 +1299,6 @@ restart, not before.
 - [ ] The AI Chat panel still detaches into its own window and the main window _(NOT VERIFIED 2026-09-30: needs the desktop frontend; deferred until after Boss restart. Backend: Detached AI Chat window + 'Bring back' placeholder are desktop-only (PanelWindowControls).)_ _(audit 2026-10-13: VISUAL-OWED — Panel/popover/dashboard/detached-window/transcript runtime presentation not observed; no screenshot access, no live UI mutation…)_ _(triage 2026-10-14: WAITS — MacControl Screen Recording: needs native desktop/cross-app observation.)_
       shows the *Bring back* placeholder; closing the detached window restores
       the docked shell.
-- [ ] **Needs a `make dev` restart (Rust).** Load an ego conversation whose _(NOT VERIFIED 2026-09-30: needs the desktop frontend; deferred until after Boss restart. Backend: Ego conversation transcript rendering (no clipped ack) is frontend; ego exists at /usr/local/bin/ego but the transcript UI is needed.)_ _(audit 2026-10-13: VISUAL-OWED — Panel/popover/dashboard/detached-window/transcript runtime presentation not observed; no screenshot access, no live UI mutation…)_ _(triage 2026-10-14: DO — Runnable through scoped source/tests, isolated browser or throwaway API fixtures.)_
-      first answer starts with `TUICommander v1.7.7 is connected.` followed by
-      `intent:`. The status appears and no clipped acknowledgement such as
-      `.7.7 is connected.` remains in the transcript.
 ## Remote repo browser (2026-09-20) — frontend only, Vite HMR picks it up
 
 `RemoteRepoPicker` replaces the "type the absolute path" prompt when adding a
