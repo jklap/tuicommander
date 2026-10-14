@@ -1546,3 +1546,7 @@ visible; it does not resume every inactive tab.
 ### Background tray and menu-bar icon
 
 `background.tray_icon` accepts `always`, `background_only` (default), and `never`. It applies live. Never restores a hidden desktop before removing the tray. Close configured as background minimizes when the tray is disabled, fails to build, or Linux has no registered StatusNotifier host. This keeps desktop session visibility intact. The Ask dialog omits Background when unavailable. Tray state and the first-entry notice are process-local, not persisted.
+
+## Plugin settings UI
+
+Loaded plugins with registered settings appear under Settings > Integrations. Search includes their catalogue field labels. Unloading removes the page and search entries. Reads, revision-checked edits, resets and secret set/unset status use the scoped Rust settings service; the UI owns no second configuration store.
