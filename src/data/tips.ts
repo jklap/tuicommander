@@ -10,6 +10,12 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "Compose images",
+		description:
+			"Drop images on Compose or use Attach images beside Send to choose several. Paste still works; image paths appear in your draft.",
+		shortcut: null,
+	},
+	{
 		feature: "Tasks view memory",
 		description:
 			"Tasks remembers your source, view, grouping, sort and filters separately for each repository and provider account.",

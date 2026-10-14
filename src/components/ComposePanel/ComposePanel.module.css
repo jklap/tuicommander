@@ -238,3 +238,10 @@
   color: var(--fg-primary);
   background: var(--bg-tertiary);
 }
+
+.imageError {
+  padding: 4px 12px;
+  color: var(--error);
+  font-size: var(--font-xs);
+  font-family: var(--font-ui);
+}

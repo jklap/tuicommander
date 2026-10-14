@@ -2949,3 +2949,7 @@ next to `.tuic.json`, with `{{key}}`, `{{url}}` and `{{title}}` placeholders.
 Without the file, the existing key/title/body brief remains. Item control
 characters are stripped before substitution; delivery keeps its 12,000-character
 cap and untrusted-content wrapper. Desktop and browser use the same Rust builder.
+
+### Terminal Compose image attachments
+
+Paste an image, drop PNG/JPEG/WebP/GIF files on Compose, or select several with **Attach images** beside Send. Each image is saved through the shared paste helper and inserted as `[image: <path>]` in gesture order. Drops use the pointer position; the picker replaces the selection. Unsupported files and save failures show a visible error. Native desktop drops are claimed by the mounted Compose editor before terminal and tab routing.
