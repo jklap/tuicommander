@@ -3024,6 +3024,10 @@ Show recreates the main window from Tauri configuration, restores window geometr
 
 B0 measured WebContent exiting and about 1,090 MB released from a synthetic 1 GiB allocation on macOS. Actual TUIC workload savings, Windows and Linux are unmeasured. GPU and Networking processes may remain.
 
+Design Mode agent control: immediate native-port navigate, reload, screenshot,
+page-error read and explicitly host-granted MAIN-world eval. The extension sidebar
+shows the last fifty agent actions. Screenshots require the reviewed tab to be visible.
+
 ## Plugin settings pages
 
 Loaded plugins with registered settings appear under Settings > Integrations. Search includes their catalogue field labels. Unloading removes the page and search entries. Reads, revision-checked edits, resets and secret set/unset status use the scoped Rust settings service; the UI owns no second configuration store.

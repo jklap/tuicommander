@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Background desktop WebViews unload after a configurable awake delay (default 10 minutes, 0 disables) and reconnect tabs on Show. Rust sessions keep running; frontend plugins pause while unloaded.
 
 
+- Add correlated Design Mode native-port browser commands, explicit host eval grants, screenshots, page-error reads and sidebar action history.
 - Fix seeded workflow Pause resume targets, expose their target in the Designer, and report invalid publication fields as HTTP 422.
 
 ### Added
@@ -26,6 +27,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Read linked Tasks items and comments through MCP repo actions; allow provider comments and transitions only after enabling `mcp_work_item_writes` (#1854-4960).
 
 ### Fixed
+
+- Allow workflow agents to launch in registered branch worktrees while preserving detached-orphan removal guards (#1883-eba0).
 
 - Preserve attached Goose session names and legacy paths without injecting a duplicate or conflicting `--name`.
 - Keep the Context preview clear of the terminal CLI/Chat switch (#1893-a053).

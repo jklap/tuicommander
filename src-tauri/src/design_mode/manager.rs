@@ -146,6 +146,7 @@ struct Mode {
 #[derive(Clone)]
 pub(crate) struct DesignModeManager {
     pub(crate) heartbeat_id: String,
+    pub(crate) command_channels: super::command_channel::Channels,
     modes: Arc<Mutex<HashMap<String, Mode>>>,
     liveness: Arc<std::sync::Mutex<super::liveness::Liveness>>,
     #[cfg_attr(
@@ -171,6 +172,7 @@ impl DesignModeManager {
     pub(crate) fn new(grab_dir: PathBuf, prefill: Prefill, notify: Notify) -> Self {
         Self {
             heartbeat_id: uuid::Uuid::new_v4().to_string(),
+            command_channels: Arc::default(),
             modes: Arc::new(Mutex::new(HashMap::new())),
             liveness: Arc::default(),
             grab_dir,
@@ -187,6 +189,14 @@ impl DesignModeManager {
             status: "armed",
         };
         let mut modes = self.modes.lock().await;
+        if let Some(old) = self.command_channels.lock().unwrap().insert(
+            repo_path.clone(),
+            Arc::new(super::command_channel::CommandChannel::new(
+                status.session_id.clone(),
+            )),
+        ) {
+            old.cancel();
+        }
         let old = modes.insert(
             repo_path,
             Mode {
@@ -247,6 +257,9 @@ impl DesignModeManager {
         let mut modes = self.modes.lock().await;
         let expired = self.liveness.lock().unwrap().expire(Instant::now());
         for (repo_path, _) in expired {
+            if let Some(channel) = self.command_channels.lock().unwrap().remove(&repo_path) {
+                channel.cancel();
+            }
             // Expiry and Start share the mode lock: an old deadline cannot stop a replacement.
             if let Some(mode) = modes.get_mut(&repo_path) {
                 mode.status.status = "stopped";
@@ -536,6 +549,9 @@ impl DesignModeManager {
     }
 
     pub(crate) async fn stop(&self, repo_path: &str) -> Result<Option<ModeStatus>, String> {
+        if let Some(channel) = self.command_channels.lock().unwrap().remove(repo_path) {
+            channel.cancel();
+        }
         let (browser, status, changed) = {
             let mut modes = self.modes.lock().await;
             self.liveness.lock().unwrap().stopped(repo_path);

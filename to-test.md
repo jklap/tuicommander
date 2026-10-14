@@ -2133,6 +2133,8 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 
 ## Background hidden state (#1803-00d9)
 
+- [ ] Workflow branch launch (#1883-eba0): after Boss restarts `make dev` or rebuilds release, launch a workflow coordinator in its registered branch worktree and confirm the attempt binds its session and prompt. Rust changes require restart; the peer did not restart the desktop.
+
 - [ ] After Boss restarts `make dev` or rebuilds release, hide then Show an idle terminal around the standby timeout; confirm the restored active terminal remains responsive. The B1 visibility recheck requires a Rust restart to load.
 - [ ] After Boss restarts `make dev` or rebuilds release, close to Background with a main window, floating window and open panel. Verify all hide and Show restores only those previously open. The Rust change does not hot-reload.
 - [ ] After restart on macOS, verify Dock icon disappears with `background.hide_dock_icon=true`, remains with false, and returns on Show. Verify Dock Reopen (when icon retained), second app launch, a deep link and a native notification click restore the window and active terminal.
@@ -2160,6 +2162,8 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 
 - [ ] [VISUAL] After Boss rebuilds/restarts desktop TUIC, set unload to one minute, hide with live and suspended tabs plus split panes and detached panels: all WebViews disappear; backend sessions/remote streams continue; Show recreates main and restores tabs/layout and native focus. Check Dock Reopen, tray Show, second launch, deep link and notification entry points.
 - [ ] [VISUAL] On the rebuilt desktop, zero disables unload; sleeping does not consume the timer; dictation and close dialogs defer it; Quit while unloaded uses a native confirmation, Cancel keeps sessions, Confirm quits. Verify geometry and updater check after Show. Windows/Linux native unload behavior and memory savings remain unmeasured. No desktop instance was launched by this peer.
+- [ ] #1724-fe7e: After Boss rebuilds/restarts TUIC and reinstalls the Design Mode extension, navigate an armed worktree page, get a matching visible-tab PNG, read captured errors, grant/revoke host eval, and verify the sidebar action history. Rust is not hot-reloaded. Verify Claude Code, Codex and ego tool-list refresh on Arm/Stop; cached calls must refuse unarmed sessions.
+- [ ] #1885-0352 After Boss restarts `make dev` or rebuilds release, use an isolated fresh project in Workflow Designer: publish Resolve plan as revision 2 with its repository-integrity check; clearing all final checks must reject publication.
 ## Worktree rename restore records (1705-67b3) — Rust restart required
 
 - [ ] After Boss restarts the backend, recycle a finished linked checkout and confirm the old workspace and declared agent placements are absent from repositories.json and the sidebar; sibling workspaces stay intact. Automated persisted-state and frontend regression tests cover the change; the live app does not load Rust edits through HMR.

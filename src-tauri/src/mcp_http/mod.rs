@@ -2158,6 +2158,10 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
                 "/design-mode/navigate",
                 post(crate::design_mode::commands::navigate),
             )
+            .route(
+                "/design-mode/command",
+                post(crate::design_mode::commands::browser_command),
+            )
             .route("/design-mode", get(crate::design_mode::commands::statuses));
     }
 
@@ -3031,17 +3035,33 @@ mod tests {
     // Catches: seeded Pause targets missing from otherwise publishable story drafts.
     #[tokio::test]
     async fn seeded_story_draft_publishes() {
-        workflow_pause_publish_case(false).await;
+        workflow_pause_publish_case(crate::workflows::WorkflowKind::Story, false, false).await;
     }
 
     // Catches: a user validation failure being returned as HTTP 500.
     #[tokio::test]
     async fn invalid_pause_publish_is_a_client_error() {
-        workflow_pause_publish_case(true).await;
+        workflow_pause_publish_case(crate::workflows::WorkflowKind::Story, true, false).await;
     }
 
-    async fn workflow_pause_publish_case(invalid: bool) {
-        use crate::workflows::{NodeKind, WorkflowKind, WorkflowStore};
+    // Catches: Resolve plan seeds lacking checks and therefore refusing HTTP publication.
+    #[tokio::test]
+    async fn seeded_plan_draft_publishes() {
+        workflow_pause_publish_case(crate::workflows::WorkflowKind::Plan, false, false).await;
+    }
+
+    // Catches: adding seed checks accidentally allowing edited plans with no final check.
+    #[tokio::test]
+    async fn plan_without_final_checks_publish_is_a_client_error() {
+        workflow_pause_publish_case(crate::workflows::WorkflowKind::Plan, false, true).await;
+    }
+
+    async fn workflow_pause_publish_case(
+        kind: crate::workflows::WorkflowKind,
+        invalid: bool,
+        missing_checks: bool,
+    ) {
+        use crate::workflows::{NodeKind, WorkflowStore};
         let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
         let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
         let project = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
@@ -3051,7 +3071,7 @@ mod tests {
             .seed_templates(project)
             .unwrap()
             .into_iter()
-            .find(|draft| draft.kind == WorkflowKind::Story)
+            .find(|draft| draft.kind == kind)
             .unwrap();
         let mut graph = draft.graph;
         if invalid {
@@ -3064,6 +3084,13 @@ mod tests {
         let edited = store
             .update_draft(&draft.id, draft.draft_revision, graph)
             .unwrap();
+        let edited = if missing_checks {
+            store
+                .update_checks(&draft.id, edited.draft_revision, vec![])
+                .unwrap()
+        } else {
+            edited
+        };
         let response = post_workflow_definition_action(
             None,
             None,
@@ -3081,9 +3108,16 @@ mod tests {
             .await
             .unwrap();
         let body = String::from_utf8(body.to_vec()).unwrap();
-        if invalid {
+        if invalid || missing_checks {
             assert!(status.is_client_error(), "{status}: {body}");
-            assert!(body.contains("resume_to"), "{body}");
+            assert!(
+                body.contains(if missing_checks {
+                    "deterministic final checks"
+                } else {
+                    "resume_to"
+                }),
+                "{body}"
+            );
             assert_eq!(
                 store
                     .get_draft(&draft.id)
@@ -6269,7 +6303,19 @@ mod tests {
                 .unwrap();
             let listing: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
             let listed = listing["result"]["tools"].as_array().unwrap();
-            assert_eq!(listed.len(), catalog.len() - 1, "disabled {name}");
+            let expected: Vec<_> = catalog
+                .iter()
+                .filter(|entry| entry["name"] != name && entry["name"] != "design_mode")
+                .map(|entry| entry["name"].as_str().unwrap())
+                .collect();
+            let actual: Vec<_> = listed
+                .iter()
+                .map(|entry| entry["name"].as_str().unwrap())
+                .collect();
+            assert_eq!(
+                actual, expected,
+                "disabled {name}; unbound Design Mode stays hidden"
+            );
             assert!(
                 listed.iter().all(|entry| entry["name"] != name),
                 "disabled {name} remains discoverable"
@@ -6354,8 +6400,8 @@ mod tests {
             .as_array()
             .unwrap()
             .len();
-        // total native − 1 disabled
-        assert_eq!(tools.len(), total - 1);
+        // One disabled tool and owner-scoped Design Mode are absent for this caller.
+        assert_eq!(tools.len(), total - 2);
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         assert!(
             !names.contains(&"debug"),
@@ -8771,13 +8817,14 @@ mod tests {
             .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         let tools = json["result"]["tools"].as_array().unwrap();
-        // No upstream → all native tools only
+        // No upstream → native tools visible to an unbound caller only
         let expected = mcp_transport::test_mcp_tool_definitions()
             .as_array()
             .unwrap()
             .len();
-        assert_eq!(tools.len(), expected);
+        assert_eq!(tools.len(), expected - 1);
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
+        assert!(!names.contains(&"design_mode"));
         assert!(names.contains(&"session"));
         assert!(names.contains(&"agent"));
         assert!(names.contains(&"repo"));
