@@ -290,3 +290,5 @@ matching its HTTP twin and `finalize_merged_worktree`.
 the platform launcher, and hands spawn/wait ownership to the shared
 `tuic_core::child_reaping::spawn_reaped` thread. It never waits for application
 exit on the command caller.
+
+Desktop close policy: `request_quit` selects a policy action on the main thread without disk I/O. `resolve_close` saves Remember through `spawn_blocking`; real quit closes PTYs through `spawn_blocking` before calling `AppHandle::exit(0)`.

@@ -301,7 +301,8 @@ save delete a live credential. Plaintext still found in `config.json` is moved
 into the vault at load time and the file is rewritten immediately, so the
 cleartext copy does not survive on disk.
 
-| `confirm_before_quit` | `bool` | `true` | Show quit confirmation |
+| `close_behavior` | `ask \| background \| quit` | `ask` | Main-window close asks, hides only main, or quits. Ask offers Remember. Explicit Quit ignores this policy. |
+| `confirm_before_quit` | `bool` | `true` | Confirm real quit when live terminal sessions exist; does not block Background |
 | `confirm_before_closing_tab` | `bool` | `true` | Show tab close confirmation |
 | `copy_on_select` | `bool` | `true` | Auto-copy terminal selection to clipboard |
 | `osc52_clipboard` | `bool` | `true` | Honor OSC 52 clipboard-write sequences from terminal output (a notice shows on each write; disable to ignore them) |

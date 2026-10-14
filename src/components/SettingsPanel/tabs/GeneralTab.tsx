@@ -2,7 +2,7 @@ import { type Component, createEffect, createSignal, For, onMount, Show } from "
 import { AVAILABLE_LOCALES, localeName, t } from "../../../i18n";
 import { invoke } from "../../../invoke";
 import { appLogger } from "../../../stores/appLogger";
-import type { CustomLauncher, IdeType, UpdateChannel } from "../../../stores/settings";
+import type { CloseBehavior, CustomLauncher, IdeType, UpdateChannel } from "../../../stores/settings";
 import { IDE_NAMES, settingsStore } from "../../../stores/settings";
 import { updaterStore } from "../../../stores/updater";
 import { isTauri } from "../../../transport";
@@ -175,11 +175,28 @@ export const GeneralTab: Component = () => {
 
 			<h3>{t("general.heading.confirmations", "Confirmations")}</h3>
 
+			<Show when={isTauri()}>
+				<SettingSelect
+					label={t("general.label.closeBehavior", "When closing the main window")}
+					value={settingsStore.state.closeBehavior}
+					onChange={(value) => settingsStore.setCloseBehavior(value as CloseBehavior)}
+					options={[
+						{ value: "ask", label: t("general.closeBehavior.ask", "Ask") },
+						{ value: "background", label: t("general.closeBehavior.background", "Background") },
+						{ value: "quit", label: t("general.closeBehavior.quit", "Quit") },
+					]}
+					hint={t(
+						"general.hint.closeBehavior",
+						"Background hides the main window and keeps sessions running. Quit still confirms when enabled.",
+					)}
+				/>
+			</Show>
+
 			<SettingToggle
 				checked={settingsStore.state.confirmBeforeQuit}
 				onChange={(v) => settingsStore.setConfirmBeforeQuit(v)}
 				label={t("general.toggle.confirmBeforeQuit", "Confirm before quitting")}
-				hint={t("general.hint.confirmBeforeQuit", "Show a confirmation dialog when closing the app")}
+				hint={t("general.hint.confirmBeforeQuit", "Confirm real quit when terminal sessions are active")}
 			/>
 
 			<SettingToggle

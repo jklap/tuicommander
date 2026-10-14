@@ -17,7 +17,6 @@ import { terminalsStore } from "../../stores/terminals";
 function createMockDeps(): AppInitDeps {
 	return {
 		pty: { listActiveSessions: vi.fn().mockResolvedValue([]), close: vi.fn().mockResolvedValue(undefined) },
-		setQuitDialogVisible: vi.fn(),
 		setStatusInfo: vi.fn(),
 		handleBranchSelect: vi.fn().mockResolvedValue(undefined),
 		refreshAllBranchStats: vi.fn(),
@@ -33,7 +32,6 @@ function createMockDeps(): AppInitDeps {
 			startUserActivityListening: vi.fn(),
 		},
 		applyPlatformClass: vi.fn().mockReturnValue("macos"),
-		onCloseRequested: vi.fn().mockResolvedValue(undefined),
 		registerRepo: vi.fn().mockResolvedValue(undefined),
 	};
 }

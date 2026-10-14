@@ -954,3 +954,9 @@ an explicit create action. These actions match across HTTP, IPC, MCP and CLI.
 ### History-anchored viewport scrolling
 
 `terminal_scroll_to_anchor` accepts `{ sessionId: string, anchor: number | null }` and returns `()`. The all-time row includes evicted rows, matching `historyBase + historySize - displayOffset`. Null follows output; a trimmed anchor clamps to the oldest retained row. HTTP uses `POST /sessions/:id/terminal/scroll-to-anchor` with the same anchor value.
+
+### Desktop close policy
+
+- `request_quit()` requests real quit regardless of `app.close_behavior`, with confirmation if enabled and terminal sessions exist.
+- `resolve_close(choice: "background" | "quit" | "cancel", remember: bool)` answers the pending Rust-owned close dialog. Background and Remember apply only to Ask. A failed save leaves the dialog pending.
+- These native lifecycle commands are deliberately in `INTENTIONALLY_UNMAPPED`; remote clients cannot hide or quit the host. `close-dialog` carries `{kind: "ask" | "confirm_quit", sessions: number}` on desktop events and `/events` SSE.

@@ -13,6 +13,7 @@ import { handleIntentEvent, shouldApplyIntentTitle } from "../../components/Term
 import { type AppInitDeps, browserCreatedSessions, initApp } from "../../hooks/useAppInit";
 import { activityStore } from "../../stores/activityStore";
 import { appLogger } from "../../stores/appLogger";
+import { closeDialogStore } from "../../stores/closeDialog";
 import { editorTabsStore } from "../../stores/editorTabs";
 import { globalWorkspaceStore, MANUAL_SCOPE } from "../../stores/globalWorkspace";
 import { mdTabsStore } from "../../stores/mdTabs";
@@ -52,7 +53,6 @@ function createMockDeps(overrides: Partial<AppInitDeps> = {}): AppInitDeps {
 			listActiveSessions: vi.fn().mockResolvedValue([]),
 			close: vi.fn().mockResolvedValue(undefined),
 		},
-		setQuitDialogVisible: vi.fn(),
 		setStatusInfo: vi.fn(),
 		handleBranchSelect: vi.fn().mockResolvedValue(undefined),
 		refreshAllBranchStats: vi.fn(),
@@ -68,7 +68,6 @@ function createMockDeps(overrides: Partial<AppInitDeps> = {}): AppInitDeps {
 			startUserActivityListening: vi.fn(),
 		},
 		applyPlatformClass: vi.fn().mockReturnValue("macos"),
-		onCloseRequested: vi.fn().mockResolvedValue(undefined),
 		registerRepo: vi.fn().mockResolvedValue(undefined),
 		...overrides,
 	};
@@ -1851,41 +1850,30 @@ describe("initApp", () => {
 		expect(deps.stores.refreshDictationConfig).toHaveBeenCalled();
 	});
 
-	it("onCloseRequested prevents close when active terminals exist", async () => {
-		let capturedCallback: ((event: { preventDefault: () => void }) => void) | null = null;
-		const deps = createMockDeps({
-			onCloseRequested: vi.fn((cb: (event: { preventDefault: () => void }) => void) => {
-				capturedCallback = cb;
-				return Promise.resolve(undefined);
-			}) as AppInitDeps["onCloseRequested"],
-		});
-
-		await initApp(deps);
-
-		// Add a terminal with a session
-		terminalsStore.add({ sessionId: "sess-1", fontSize: 14, name: "T1", cwd: "/tmp", awaitingInput: null });
-
-		const preventDefaultSpy = vi.fn();
-		capturedCallback!({ preventDefault: preventDefaultSpy });
-		expect(preventDefaultSpy).toHaveBeenCalled();
-		expect(deps.setQuitDialogVisible).toHaveBeenCalledWith(true);
+	// Catches: the desktop rendering its own policy instead of Rust's close decision.
+	it("renders the Rust close request without recomputing terminal counts", async () => {
+		let handler: ((event: { payload: { kind: "ask"; sessions: number } }) => void) | undefined;
+		vi.mocked(listen).mockImplementation(((event: string, callback: typeof handler) => {
+			if (event === "close-dialog") handler = callback;
+			return Promise.resolve(vi.fn());
+		}) as unknown as typeof listen);
+		await initApp(createMockDeps());
+		handler!({ payload: { kind: "ask", sessions: 17 } });
+		expect(closeDialogStore.state.request).toEqual({ kind: "ask", sessions: 17 });
 	});
 
-	it("onCloseRequested allows close when no active terminals", async () => {
-		let capturedCallback: ((event: { preventDefault: () => void }) => void) | null = null;
-		const deps = createMockDeps({
-			onCloseRequested: vi.fn((cb: (event: { preventDefault: () => void }) => void) => {
-				capturedCallback = cb;
-				return Promise.resolve(undefined);
-			}) as AppInitDeps["onCloseRequested"],
-		});
-
-		await initApp(deps);
-
-		const preventDefaultSpy = vi.fn();
-		capturedCallback!({ preventDefault: preventDefaultSpy });
-		expect(preventDefaultSpy).not.toHaveBeenCalled();
-		expect(deps.setQuitDialogVisible).not.toHaveBeenCalled();
+	// Catches: browser/PWA events opening a dialog that can quit the desktop host.
+	it("does not present host close dialogs in browser mode", async () => {
+		const present = vi.spyOn(closeDialogStore, "present");
+		const internals = (globalThis as Record<string, unknown>).__TAURI_INTERNALS__;
+		delete (globalThis as Record<string, unknown>).__TAURI_INTERNALS__;
+		try {
+			await initApp(createMockDeps());
+			expect(present).not.toHaveBeenCalled();
+		} finally {
+			(globalThis as Record<string, unknown>).__TAURI_INTERNALS__ = internals;
+			present.mockRestore();
+		}
 	});
 
 	it("beforeunload closes browser-created PTY sessions", async () => {
