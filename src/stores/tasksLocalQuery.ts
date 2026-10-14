@@ -3,7 +3,7 @@ import type { WorkItemProvider } from "../plugins/workItemProvider";
 import type { WorkItem, WorkItemGroupedPage, WorkItemQuery } from "../types/work-items.gen";
 
 export const LOCAL_TASK_LIMIT = 1000;
-export type LocalSource = Pick<WorkItemProvider, "list" | "fields">;
+export type LocalSource = Pick<WorkItemProvider, "list" | "fields"> & Partial<Pick<WorkItemProvider, "providerId">>;
 
 /** Collection is transport orchestration only. Rust owns every query projection. */
 export async function collectLocalTasks(
@@ -11,7 +11,12 @@ export async function collectLocalTasks(
 	query: WorkItemQuery,
 	signal: AbortSignal,
 ): Promise<WorkItem[] | null> {
-	const scope = { ...query, filters: [], sort: null, groupBy: null, cursor: null, limit: 100 };
+	// GitLab type/state select the endpoint and its scope, not just a local predicate.
+	const filters =
+		provider.providerId === "gitlab"
+			? query.filters.filter((filter) => ["type", "state"].includes(filter.fieldId))
+			: [];
+	const scope = { ...query, filters, sort: null, groupBy: null, cursor: null, limit: 100 };
 	let page = await provider.list(scope, signal);
 	const total = page.total;
 	if (total == null || !Number.isInteger(total) || total < 0 || total > LOCAL_TASK_LIMIT) return null;
@@ -38,7 +43,14 @@ export async function projectLocalTasks(
 	query: WorkItemQuery,
 ): Promise<WorkItemGroupedPage> {
 	const result = await invoke<WorkItemGroupedPage>("project_work_items", {
-		input: { items, fields: provider.fields, query },
+		input: {
+			items,
+			fields: provider.fields,
+			query:
+				provider.providerId === "gitlab"
+					? { ...query, filters: query.filters.filter((filter) => !["type", "state"].includes(filter.fieldId)) }
+					: query,
+		},
 	});
 	if (!result || !Array.isArray(result.groups)) throw new Error("Invalid local Tasks projection response");
 	return result;

@@ -84,3 +84,36 @@ it("local_collection_preserves_gitlab_merge_request_scope", async () => {
 	);
 	expect(rows?.map((item) => item.itemType)).toEqual(["merge_request"]);
 });
+
+// Catches: state=all becomes the default opened scope, or an MR preset loses its endpoint.
+it("gitlab_collection_preserves_state_and_preset_scope", async () => {
+	const { createGitLabProvider } = await import("../../plugins/gitlab/provider.js");
+	const { default: recorded } = await import("../../plugins/gitlab/fixtures/recorded.json");
+	const paths: URL[] = [];
+	const provider = createGitLabProvider({
+		account: { id: "local", host: "https://gitlab.example.invalid:8443", login: "root" },
+		fetch: async (request: { url: string }) => {
+			paths.push(new URL(request.url));
+			return { status: 200, headers: { "x-total": "1" }, json: [recorded.mr] };
+		},
+	});
+	const selected = provider.savedFilters.find((preset) => preset.id === "assigned-mrs");
+	expect(selected).toBeDefined();
+	await collectLocalTasks(provider, selected!.query, new AbortController().signal);
+	expect(paths[0].pathname).toMatch(/merge_requests$/);
+	expect(paths[0].searchParams.get("scope")).toBe("assigned_to_me");
+	expect(paths[0].searchParams.get("state")).toBe("opened");
+	await collectLocalTasks(
+		provider,
+		{
+			...selected!.query,
+			savedFilterId: null,
+			filters: [
+				{ fieldId: "type", values: [{ kind: "enum", value: "merge_request" }] },
+				{ fieldId: "state", values: [{ kind: "enum", value: "all" }] },
+			],
+		},
+		new AbortController().signal,
+	);
+	expect(paths[1].searchParams.has("state")).toBe(false);
+});

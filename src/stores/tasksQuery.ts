@@ -34,7 +34,7 @@ const empty = (): QueryState => ({
 });
 
 /** View state and transport: providers own server queries; Rust projects certified complete scopes. */
-export function createTasksQuery(options: { maxCachedPages?: number } = {}) {
+export function createTasksQuery(options: { maxCachedPages?: number; local?: boolean } = {}) {
 	const requestedCapacity = options.maxCachedPages ?? 32;
 	const capacity = Number.isFinite(requestedCapacity) ? Math.max(1, Math.floor(requestedCapacity)) : 32;
 	const cache = new Map<string, WorkItemPage | WorkItemGroupedPage>();
@@ -65,8 +65,16 @@ export function createTasksQuery(options: { maxCachedPages?: number } = {}) {
 		try {
 			let local = false;
 			let page: WorkItemPage | WorkItemGroupedPage | undefined;
-			if (!append && provider.fields) {
-				const localSource = { list: provider.list.bind(provider), fields: provider.fields };
+			// GitLab controls submit usernames, while REST rows carry numeric user IDs.
+			const usernameFilter =
+				provider.providerId === "gitlab" &&
+				pageQuery.filters.some((filter) => ["assignee", "author"].includes(filter.fieldId));
+			if (!append && options.local !== false && provider.fields && !usernameFilter) {
+				const localSource = {
+					providerId: provider.providerId,
+					list: provider.list.bind(provider),
+					fields: provider.fields,
+				};
 				const items = await collectLocalTasks(localSource, pageQuery, abort.signal);
 				if (token !== generation || abort.signal.aborted) return;
 				if (items) {

@@ -2,16 +2,30 @@
 use super::{model::*, protocol::*};
 use std::{cmp::Ordering, collections::BTreeMap};
 
-fn value(item: &WorkItem, id: &str) -> Option<WorkItemFieldValue> {
+fn value(item: &WorkItem, field: &WorkItemFieldSchema) -> Option<WorkItemFieldValue> {
+    let id = field.id.as_str();
     if let Some(value) = item.fields.get(id) {
-        return value.clone();
+        return match (value, &field.kind) {
+            (Some(WorkItemFieldValue::Enum(id)), WorkItemFieldKind::Text) => {
+                Some(WorkItemFieldValue::Text(id.clone()))
+            }
+            _ => value.clone(),
+        };
     }
     match id {
         "key" => Some(WorkItemFieldValue::Text(item.key.clone())),
         "title" | "summary" => Some(WorkItemFieldValue::Text(item.title.clone())),
         "updatedAt" | "updated" => Some(WorkItemFieldValue::Date(item.updated_at.clone())),
-        "state" | "status" => Some(WorkItemFieldValue::Enum(item.state.id.clone())),
-        "itemType" | "issuetype" => Some(WorkItemFieldValue::Text(item.item_type.clone())),
+        "state" | "status" => Some(if field.kind == WorkItemFieldKind::Text {
+            WorkItemFieldValue::Text(item.state.id.clone())
+        } else {
+            WorkItemFieldValue::Enum(item.state.id.clone())
+        }),
+        "itemType" | "issuetype" | "type" => Some(if field.kind == WorkItemFieldKind::Enum {
+            WorkItemFieldValue::Enum(item.item_type.clone())
+        } else {
+            WorkItemFieldValue::Text(item.item_type.clone())
+        }),
         "assignees" | "assignee" => Some(WorkItemFieldValue::User(item.assignees.clone())),
         "labels" => Some(WorkItemFieldValue::Labels(item.labels.clone())),
         "url" => Some(WorkItemFieldValue::Link(item.url.clone())),
@@ -68,7 +82,7 @@ pub(crate) fn project(mut input: WorkItemLocalQuery) -> Result<WorkItemGroupedPa
     }
     input.items.retain(|item| {
         input.query.filters.iter().all(|filter| {
-            let actual = value(item, &filter.field_id);
+            let actual = value(item, schema(&filter.field_id).expect("validated field"));
             if filter.values.is_empty() {
                 actual.is_none()
             } else {
@@ -82,8 +96,8 @@ pub(crate) fn project(mut input: WorkItemLocalQuery) -> Result<WorkItemGroupedPa
     if let Some(sort) = &input.query.sort {
         let field = schema(&sort.field_id)?;
         input.items.sort_by(|a, b| {
-            let left = value(a, &sort.field_id);
-            let right = value(b, &sort.field_id);
+            let left = value(a, field);
+            let right = value(b, field);
             let order = match (&left, &right) {
                 (Some(WorkItemFieldValue::Number(a)), Some(WorkItemFieldValue::Number(b))) => {
                     a.total_cmp(b)
@@ -114,7 +128,7 @@ pub(crate) fn project(mut input: WorkItemLocalQuery) -> Result<WorkItemGroupedPa
     if let Some(id) = &input.query.group_by {
         let field = schema(id)?;
         for item in input.items {
-            let mut keys = value(&item, id)
+            let mut keys = value(&item, field)
                 .map(|v| names(&v, field))
                 .unwrap_or_default();
             if keys.is_empty() {
@@ -363,32 +377,38 @@ mod tests {
         assert_eq!(project(data).unwrap().total, Some(1));
     }
 
-    // Catches: GitLab's username text control compares against numeric REST user IDs locally.
+    // Catches: GitHub's enum Type or Jira's text Priority/Issue type cannot match stored enum identities.
     #[test]
-    fn local_query_gitlab_assignee_username_keeps_matching_rows() {
-        let mut data = input();
-        data.items.truncate(1);
-        data.items[0].fields.remove("assignee");
-        data.items[0].assignees = vec![WorkItemUser {
-            id: "1".into(),
-            name: "Administrator".into(),
-            avatar_url: None,
-            bot: false,
-        }];
-        let mut field = data.fields[0].clone();
-        field.id = "assignee".into();
-        field.kind = WorkItemFieldKind::User;
-        field.options.clear();
-        data.fields = vec![field];
-        data.query.filters = vec![WorkItemFilter {
-            field_id: "assignee".into(),
-            values: vec![WorkItemFieldValue::User(vec![WorkItemUser {
-                id: "root".into(),
-                name: "root".into(),
-                avatar_url: None,
-                bot: false,
-            }])],
-        }];
-        assert_eq!(project(data).unwrap().total, Some(1));
+    fn local_query_scalar_kinds_follow_list_schema_without_changing_identity() {
+        for id in ["itemType", "priority", "issuetype"] {
+            let mut data = input();
+            data.items.truncate(1);
+            let mut field = data.fields[0].clone();
+            field.id = id.into();
+            field.kind = if id == "itemType" {
+                WorkItemFieldKind::Enum
+            } else {
+                WorkItemFieldKind::Text
+            };
+            data.fields = vec![field];
+            if id == "itemType" {
+                data.items[0].fields.remove(id);
+                data.items[0].item_type = "pull".into();
+            } else {
+                data.items[0]
+                    .fields
+                    .insert(id.into(), Some(WorkItemFieldValue::Enum("10001".into())));
+            }
+            let wanted = if id == "itemType" {
+                WorkItemFieldValue::Enum("pull".into())
+            } else {
+                WorkItemFieldValue::Text("10001".into())
+            };
+            data.query.filters = vec![WorkItemFilter {
+                field_id: id.into(),
+                values: vec![wanted],
+            }];
+            assert_eq!(project(data).unwrap().total, Some(1));
+        }
     }
 }
