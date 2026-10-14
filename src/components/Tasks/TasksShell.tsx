@@ -2,6 +2,7 @@ import { createMemo, createSignal, For, Match, Show, Switch } from "solid-js";
 import { workItemProviderRegistry } from "../../plugins/workItemProviderRegistry";
 import { setupForProvider } from "../../plugins/workItemSetup";
 import { repositoriesStore } from "../../stores/repositories";
+import { uiStore } from "../../stores/ui";
 import type { WorkItemRef } from "../../types/work-items.gen";
 import { SegmentedControl } from "../ui/SegmentedControl";
 import { Select } from "../ui/Select";
@@ -23,8 +24,14 @@ const sourceKey = (providerId: string, accountId: string) => JSON.stringify([pro
 
 /** Core Tasks tab: mounts the host-owned work-item views over the registered providers. */
 export function TasksShell(props: { visible?: () => boolean }) {
-	const [source, setSource] = createSignal("");
-	const [view, setView] = createSignal<View>("list");
+	const [localSource, setLocalSource] = createSignal("");
+	const [localView, setLocalView] = createSignal<View>("list");
+	const source = () =>
+		!repoPath() ? localSource() : (uiStore.state.tasksViewPreferences[JSON.stringify([repoPath()])]?.source ?? "");
+	const viewKey = () => JSON.stringify([repoPath(), provider()?.providerId, provider()?.accountId]);
+	const view = () => (!repoPath() ? localView() : (uiStore.state.tasksViewPreferences[viewKey()]?.view ?? "list"));
+	const setView = (next: View) =>
+		repoPath() ? uiStore.setTaskViewPreference(viewKey(), { view: next }) : setLocalView(next);
 	const [creating, setCreating] = createSignal(false);
 	const [configuring, setConfiguring] = createSignal(false);
 	const [reference, setReference] = createSignal<WorkItemRef | null>(null);
@@ -36,7 +43,8 @@ export function TasksShell(props: { visible?: () => boolean }) {
 	// A roadmap needs a start or target date; a provider without a date field has nothing to lay out.
 	const views = (hasDates: boolean) => (hasDates ? VIEWS : VIEWS.filter((entry) => entry.id !== "roadmap"));
 	function chooseSource(key: string) {
-		setSource(key);
+		if (repoPath()) uiStore.setTaskViewPreference(JSON.stringify([repoPath()]), { source: key });
+		else setLocalSource(key);
 		setReference(null);
 		setCreating(false);
 		setConfiguring(false);
@@ -130,6 +138,7 @@ export function TasksShell(props: { visible?: () => boolean }) {
 										<Match when={activeView() === "list"}>
 											<TasksList
 												providers={[current()]}
+												repoPath={repoPath()}
 												onOpen={open}
 												selected={reference()}
 												visible={props.visible?.()}

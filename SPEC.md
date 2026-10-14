@@ -660,6 +660,7 @@ Some frontend-only stores persist to localStorage:
 - [x] Density modes for readability
 - [x] Terminal Find routes to the visible CLI buffer or Chat transcript; Chat supports next/previous selected matches and switching views closes search and clears highlights (#1633-f2cc).
 - [x] Terminal Chat groups answer blocks into one reading-width card per turn, copies the whole card, compresses terminal pastes and system notices, and keeps the collapsed tool row with Claude Bash descriptions. Turn separators are omitted until transcript timestamps reach the frontend (#1832-b19a).
+- [x] Terminal Compose accepts ordered image drops and an image-only multi-file picker through the existing paste save path. Drop inserts at the pointer; unsupported images and failed saves show an error.
 - [x] Terminal Chat uses focused, docked Compose input with existing send/queue semantics; CLI open/pin preferences and shared unsent drafts survive view switches. Permission prompts remain in CLI.
 - [x] Terminal selection copy unwraps soft-wrapped rows, removes coherent Claude visual gutters and composer margins, and preserves literal block characters, pasted prompt glyphs, and short typed line breaks
 - [x] Status bar with branch and PR info
@@ -1015,3 +1016,7 @@ owner API. These are explicit limits rather than raw-file fallback paths.
 Tasks field schemas accept optional `queryable`; false excludes display-only fields from list filters and grouping while roadmap dates remain available. Setup edits preserve account keys outside the form and clear blank optional form fields. Create-form filter choices require exact field IDs.
 
 Tasks board paging (#1844-858d): lane headers show loaded counts, with More controls for the provider’s shared board cursor. Appended pages deduplicate cards by provider/account/item identity. Cards show assignees and labels; a Move button opens legal destination actions with keyboard navigation and rollback on failure. Refresh after a move merges page one into loaded cards; later pages remain cached until reload. Scrolling inside the move menu keeps it open.
+
+## Tasks view memory
+
+Tasks remembers the selected source per repository and List, Board or Roadmap plus list grouping, sort, preset, search and filters per repository/provider/account. The existing `uiStore` saves these preferences through `load_ui_prefs` and `save_ui_prefs` in `ui-prefs.json`. Results and page cursors remain transient. A rejected saved sort retries the last accepted order, then the provider default. Other query failures keep their error and Retry control. An unsaved scope keeps the normal defaults.

@@ -1,3 +1,7 @@
+## One-time beta channel migration (1817-beab) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build` with a beta version, an old config with `update_channel=stable` and no `beta_channel_migrated` marker switches to Beta once. Selecting Stable afterwards survives restarts. Use a throwaway isolated instance; stable builds must preserve the saved channel. Targeted Rust tests cover the load/save migration; the running desktop needs a rebuild/restart to load it.
+
 ## Continuous answer regions (1872-1870)
 
 - [x] Recorded Codex paragraphs form one CLI and Chat tint with no visible answer glyphs. _(verified: worktree CanvasTerminal and Transcript screenshots in ~/Gits/.tmp/results/1872/before-grid-chat.png and after-grid-chat.png; real Codex VT replayed with the Rust grid.)_
@@ -5296,6 +5300,13 @@ Visual evidence: worktree Vite fixture mounted the real NotificationsTab and Toa
 
 - [ ] After a manual `make dev` restart or release rebuild, verify GitLab planning dates still render in Roadmap and have no list filter/group control (`queryable` schema support requires the rebuilt Rust backend).
 
+- [ ] After restarting `make dev` or installing a rebuilt app, confirm Tasks restores the source, view and list query for each repository/account. Confirm the settings catalogue also remains available. Rust `UIPrefsConfig` stores JSON-encoded `tasks_view_preferences`; the running desktop backend needs a restart to load this field (#1852-35a8).
 - [ ] Tasks board (#1844-858d): on a configured provider with multiple pages, More retains prior cards and updates loaded lane counts; cards show assignees/labels and Move… offers legal destinations.
 
 - [ ] #1873-bbc2: After a manual `make dev` restart, verify Claude/Codex suggest chips appear after the agent turn ends while a background child runs; completed remains gated and chips do not repeat when the child exits.
+- [ ] After Boss rebuilds/restarts, verify Tasks Start work in a repository with `.tuic-start-work.md`: key/title/URL substitutions appear in the draft inside the untrusted wrapper; remove the file and confirm the original key/title/body brief. Rust does not hot-reload. (#1855-8ee0)
+- [ ] #1874-1758: After restarting `make dev`, remove a scratch worktree whose tip is contained only in another remote branch with Delete branch on remove enabled; verify it succeeds. For unique local commits, verify the refusal offers “Remove worktree, keep branch” and preserves the branch.
+- [ ] #1874-1758: After the Rust restart, remove a scratch worktree whose cleanup runs `git fetch --prune` after its sole containing remote branch was deleted. Verify the checkout is removed, the local branch remains, and the branch-deletion warning is shown. Automated backend regression: `removal_keeps_local_branch_when_cleanup_prunes_its_remote_proof`.
+- [ ] #1874-1758 F3: After a manual Rust restart, verify a scratch worktree removal warns and keeps the local branch when a concurrent force-fetch conflicts with its remote proof. Automated backend regression: `removal_keeps_local_branch_when_fetch_replaces_proof_during_ref_deletion`.
+
+- [ ] Compose image attachments (#1758-1613): after loading the frontend, drop PNG/JPEG/WebP/GIF files from Finder onto the editor and confirm ordered image tags at the pointer; confirm no file tab opens and no path is written to the terminal. Verify the image-only multi-file picker and unchanged paste. Native Finder drag requires multi-app interaction.

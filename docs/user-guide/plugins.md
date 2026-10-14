@@ -123,3 +123,25 @@ MDKB and RTK dashboard lifetime handling needs v1.7.6. SQLite’s panel bundle k
 its ES2022 JavaScript target.
 
 In the Tasks board, lane counts say how many cards are loaded. Select **More** in any lane to load the next board page across all lanes. Cards show assignees and labels. Select **Move…** for a destination menu; unavailable transitions are disabled. Use the arrow keys to navigate, Enter to move, or Escape to close. Scroll inside the menu to reach more destinations. After a move, page one refreshes while other loaded cards remain visible; reload to refresh later pages.
+
+### Remembered Tasks views
+
+Tasks restores your selected source for each repository. Each provider account keeps its own List, Board or Roadmap choice and list group, sort, preset, search and filters. These choices survive closing Tasks and restarting the app. If a provider stops accepting a saved sort, Tasks retries the last accepted sort, then the provider default.
+
+### Tasks start-work template
+
+Add `.tuic-start-work.md` beside `.tuic.json` in your repository root to customize
+the brief sent by Tasks **Start work**. For example:
+
+```markdown
+Work on {{key}}: {{title}}
+Source: {{url}}
+Read the repository instructions before making changes.
+```
+
+The file is read on each action. The three placeholders are replaced once;
+unknown placeholders remain literal. Without a template, Start work uses the
+item key, title and body as before. A template replaces that entire brief.
+Item control characters are removed before substitution. The delivered result
+retains the 12,000-character cap and untrusted-content wrapper. Read errors are
+shown before a worktree is created.

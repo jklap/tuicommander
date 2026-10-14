@@ -1218,7 +1218,8 @@ re-derived later.
 - Triggered when GitHub polling detects PR merged or closed transition
 - If branch has a linked worktree, removes worktree first then deletes branch
 - Safety: never deletes default/main branch; dirty worktrees always escalate to ask mode
-- Uses safe `git branch -d` (refuses unmerged branches)
+- Removes the checkout and local branch when the shared backend verdict proves integration or finds its tip on any remote-tracking ref; the containing ref is named as proof.
+- When removal would delete an unmerged branch, the error card offers **Remove worktree, keep branch**. The action reruns lifecycle checks and confirmation with branch deletion disabled for that removal only; the repository setting stays unchanged.
 - Deduplication prevents double-firing on the same PR
 
 ### 8.9 GitHub Issues Panel
@@ -1555,7 +1556,7 @@ The navigation groups the global pages by task. Each group is a static label row
 - Show agent context bar
 - Confirmations: quit, close tab (only when a process is running — agents or busy shell; idle shells close immediately)
 - Power management: prevent sleep when busy, auto-standby timeout, content indexing strategy
-- Updates: auto-check, update channel, check now
+- Updates: auto-check, update channel, check now. Beta builds migrate old saved Stable preferences to Beta once; later explicit channel choices are preserved
 - TUIC CLI install/uninstall (see **21**), Code Intelligence (MDKB, see **14.8**)
 - ego executable (**ego** section, after Code Intelligence): the ego binary the AI Chat panel talks to over ACP. Desktop: status line with Select…/Clear; browser: a text field. Always shown, also while Experimental Features is off
 - Default IDE, custom launchers (see **4.5**)
@@ -2936,3 +2937,19 @@ by this adapter. Model changes from the existing Providers UI now use the same
 configured profile and workspace as perimeter changes.
 
 Tasks setup preserves saved account keys outside the form, including Enterprise hosts and login. Label choices use matching provider field IDs; assignee username filters stay text when create-form IDs differ. Display-only roadmap dates do not appear in list filters or grouping.
+
+## Tasks view memory
+
+Tasks remembers the selected source per repository and List, Board or Roadmap plus list grouping, sort, preset, search and filters per repository/provider/account. The existing `uiStore` saves these preferences through `load_ui_prefs` and `save_ui_prefs` in `ui-prefs.json`. Results and page cursors remain transient. A rejected saved sort retries the last accepted order, then the provider default. Other query failures keep their error and Retry control. An unsaved scope keeps the normal defaults.
+
+### Tasks start-work briefs
+
+Tasks Start work reads `.tuic-start-work.md` in the active repository root,
+next to `.tuic.json`, with `{{key}}`, `{{url}}` and `{{title}}` placeholders.
+Without the file, the existing key/title/body brief remains. Item control
+characters are stripped before substitution; delivery keeps its 12,000-character
+cap and untrusted-content wrapper. Desktop and browser use the same Rust builder.
+
+### Terminal Compose image attachments
+
+Paste an image, drop PNG/JPEG/WebP/GIF files on Compose, or select several with **Attach images** beside Send. Each image is saved through the shared paste helper and inserted as `[image: <path>]` in gesture order. Drops use the pointer position; the picker replaces the selection. Unsupported files and save failures show a visible error. Native desktop drops are claimed by the mounted Compose editor before terminal and tab routing.

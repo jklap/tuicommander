@@ -769,3 +769,12 @@ outside it dismisses it. The view does not infer workflow transitions.
 Terminal marker layout uses `viewportProjection.ts`: suggest anchors and hard-wrapped tails consume no display row; answer marker cells and their trailing space consume no display columns. Intent stays visible. Grid painting, cursor/IME, selection, search and link hit testing use the same reversible projection, including cache-driven smooth scrolling; PTY cells and absolute scrollback/copy coordinates remain unchanged.
 
 Submitting a new prompt clears old choices and reopens follow-up delivery. A `user-input` event can arrive after `shell-state: busy`, so it must not dismiss the choices for the new turn.
+Tasks `useStartWork` obtains the brief from `build_start_work_prompt` before the
+provider action, with a pending state covering that read. The Rust builder reads
+`.tuic-start-work.md` in the repository root; absent files use the legacy brief.
+Read failures use the existing error/Retry state. Host delivery retains the
+untrusted-content wrapper and 12,000-character cap.
+
+### Terminal Compose attachments
+
+`ComposePanel` uses `useComposeImages` for paste, file drops and its image-only multi-file input. All three reuse `saveImageFile` in `pastedImage.ts`. Drop/picker insertion ranges track document edits during saving. Native file drops route to a registered mounted editor before the existing global terminal/tab dispatcher; closing or unmounting unregisters that target. Rejected files and save failures appear in an accessible alert.

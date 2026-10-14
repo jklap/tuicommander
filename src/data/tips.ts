@@ -10,6 +10,18 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "Compose images",
+		description:
+			"Drop images on Compose or use Attach images beside Send to choose several. Paste still works; image paths appear in your draft.",
+		shortcut: null,
+	},
+	{
+		feature: "Tasks view memory",
+		description:
+			"Tasks remembers your source, view, grouping, sort and filters separately for each repository and provider account.",
+		shortcut: null,
+	},
+	{
 		feature: "Tasks board",
 		description:
 			"Use More in any lane to load the next board page. Select Move… on a card to change its lane without dragging.",

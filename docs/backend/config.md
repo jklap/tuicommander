@@ -321,7 +321,7 @@ cleartext copy does not survive on disk.
 | `issue_filter` | `Option<String>` | `"assigned"` | GitHub Issues filter: "assigned", "created", "mentioned", "all", "disabled" |
 | `experimental_features_enabled` | `bool` | `false` | Opts in to the AI Chat panel shell and SSH Tunnels. It has no sub-flags: `ai_chat_enabled`, `ai_triage_enabled` and `ai_watchers_enabled` went with the embedded AI engine (#784-0aec). A `config.json` written before that upgrade still carries them and still loads — `AppConfig` has no `deny_unknown_fields`, and `a_config_written_before_the_ai_engine_was_deleted_still_loads` holds that open |
 | `auto_show_pr_popover` | `bool` | `false` | Auto-show PR popover when switching to a branch with a PR |
-| `update_channel` | `String` | `"stable"` (`"beta"` in beta builds) | Update channel: "stable", "beta" or "nightly"; saved choices are preserved |
+| `update_channel` | `String` | `"stable"` (`"beta"` in beta builds) | Update channel: "stable", "beta" or "nightly"; legacy stable choices migrate once on beta builds |
 | `inline_blame_enabled` | `bool` | `true` | Show GitLens-style inline git blame on the code editor's active line |
 | `show_block_timestamps` | `bool` | `true` | Label each command block with its elapsed time while Ctrl+Cmd is held. Frontend-gated (painted by the renderer); stored here for persistence |
 | `show_scrollbar_marks` | `bool` | `true` | Draw command-block marks on the terminal scrollbar. Frontend-gated, toggled from Settings > Terminal |
@@ -565,6 +565,7 @@ neither of which involves a model. Nothing reads them back yet.
 | `settings_expert_mode` | `bool` | `false` | Settings "expert mode": off hides an expert control that is still at its default; on shows every control |
 | `diff_view_mode` | `String` | `"split"` | Diff viewer: `split` or `unified` |
 | `detached_panels` | `HashMap<String, String>` | `{}` | Panel id to detached window label |
+| `tasks_view_preferences` | `HashMap<String, String>` | `{}` | JSON-encoded Tasks source per repository and view/query intent per repository/provider/account; saved sort fallback, no result pages |
 | `github_section_collapsed` | `HashMap<String, bool>` | `{}` | Collapsed GitHub sections (`my-prs`, `prs`, `issues`); absent key means the section's own default |
 
 The eight `*_panel_visible` flags for markdown, file browser, git, outline,
@@ -1449,3 +1450,27 @@ See [GitHub settings owner adapter](github.md#github-settings-owner-adapter).
 by `AppSettingsStore`; no separate launch adapter exists. Changes apply to later
 ACP or PTY launches. Ego-owned defaults use the separate `ego` profile store and
 the configured CLI; no Ego configuration files are edited.
+
+### Repository start-work brief
+
+Place `.tuic-start-work.md` in the repository root, next to `.tuic.json`. This
+keeps the shared brief with the existing team configuration without embedding
+Markdown in JSON. Tasks reads it for each Start work action through the backend's
+repo-contained, size-limited UTF-8 file reader.
+
+Use `{{key}}`, `{{url}}` and `{{title}}`. Substitution runs once; unknown tokens
+remain literal and a missing URL becomes empty text. Item controls are stripped
+before substitution (TAB and LF remain). Without the file, the brief remains
+`key: title`, a blank line and the item body. Invalid or inaccessible templates
+fail the action. Delivery still caps the brief at 12,000 characters and encloses
+it in the untrusted-content wrapper.
+
+### One-time beta update-channel enrollment
+
+On beta builds, loading an older `config.json` without the internal
+`beta_channel_migrated` marker changes a saved `stable` channel to `beta`.
+The existing locked load/save path persists the marker in that same file,
+including when the saved channel is already `beta` or `nightly`. Later explicit
+choices, including `stable`, survive restarts. Stable and nightly builds do not
+run this migration. Fresh configs already carry the marker. It is not a setting
+and cannot be edited through the settings catalogue.
