@@ -1,3 +1,7 @@
+## Design Mode shorthand tokens (1888-14a3) — backend rebuild required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, confirm a native Design Mode grab includes `--gap` for `padding: var(--gap)`, including an open shadow root with an adopted sheet. Real Chromium extraction and the Rust payload consumer passed; the embedded `include_str!` asset needs a backend rebuild to load. No desktop instance was launched by this peer.
+
 ## Scoped plugin settings (1785-c7a1) — Rust restart required
 
 ## AI Chat retry countdown (1536-1c9c)
