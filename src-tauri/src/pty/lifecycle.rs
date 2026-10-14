@@ -2115,6 +2115,15 @@ impl SilenceState {
         self.completion_declared && self.completion_turn_epoch == turn_epoch
     }
 
+    /// A final marker can arrive while the same redraw still contains a spinner.
+    /// Only settled/delivered completion is a boundary that new work can reopen.
+    pub(super) fn completion_settled_for_epoch(&self, turn_epoch: u64) -> bool {
+        self.completion_declared_for_epoch(turn_epoch)
+            && (self.pending_suggest_items.is_none()
+                || self.pending_suggest_emitted
+                || self.idle_confirmed())
+    }
+
     /// Returns true if the session has been silent long enough and the spinner
     /// is not active. Used by the timer thread before reading the screen.
     pub(crate) fn is_silent(&self) -> bool {
@@ -2551,7 +2560,7 @@ pub(super) fn apply_working_evidence(
             .session_maps
             .session_states
             .get(session_id)
-            .is_some_and(|session| sl.completion_declared_for_epoch(session.turn_epoch));
+            .is_some_and(|session| sl.completion_settled_for_epoch(session.turn_epoch));
         if turn_completed && !can_reopen_completed {
             return;
         }
