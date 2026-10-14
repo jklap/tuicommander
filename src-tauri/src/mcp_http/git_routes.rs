@@ -592,6 +592,10 @@ pub(super) async fn delete_local_branch_http(
         keep_worktree,
     } = body;
     let res = tokio::task::spawn_blocking(move || {
+        crate::worktree::guard_suspended_workspace(
+            std::path::Path::new(&repo_path),
+            &workspace_id,
+        )?;
         crate::worktree::delete_local_branch_impl(
             &repo_path,
             &branch_name,

@@ -16,6 +16,8 @@ pub struct WorkItemUser {
     pub id: String,
     pub name: String,
     pub avatar_url: Option<String>,
+    /// The provider marks this account as a bot or app, not a person.
+    pub bot: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -82,9 +84,10 @@ pub struct WorkItemFieldSchema {
     pub kind: WorkItemFieldKind,
     pub required: bool,
     pub editable: bool,
-    /// False hides display-only fields from list filter, sort and group controls.
-    #[serde(default)]
-    pub queryable: Option<bool>,
+    /// Query capabilities apply to the list endpoint, not create or detail editing.
+    pub sortable: bool,
+    pub groupable: bool,
+    pub filterable: bool,
     /// Enum options, user choices or labels; IDs are provider IDs, never display names.
     pub options: Vec<WorkItemOption>,
 }
@@ -120,10 +123,63 @@ pub struct WorkItemComment {
 pub struct WorkItemReviewThread {
     pub id: String,
     pub resolved: bool,
+    /// The code under the thread changed since it was opened.
+    pub outdated: bool,
     pub path: String,
+    /// Null when outdated: the commented line is not in the current diff.
     pub line: Option<u32>,
+    pub original_line: Option<u32>,
     pub commit_id: String,
     pub comments: Vec<WorkItemComment>,
+    /// Parsed from the first comment; null for a human comment without a suggestion.
+    pub finding: Option<WorkItemReviewFinding>,
+}
+
+/// A recognised review tool; `generic` is any other bot account.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkItemReviewTool {
+    CodeRabbit,
+    Codex,
+    Copilot,
+    Gemini,
+    Cursor,
+    Sourcery,
+    Greptile,
+    Qodo,
+    CodeAnt,
+    Graphite,
+    CodeScanning,
+    Generic,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkItemReviewSeverity {
+    Critical,
+    High,
+    Medium,
+    Low,
+    Info,
+}
+
+/// An index over bot Markdown. Every text field is untrusted data: show it as
+/// text, never render, apply or execute it.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkItemReviewFinding {
+    /// Null for a human author.
+    pub tool: Option<WorkItemReviewTool>,
+    pub title: Option<String>,
+    pub severity: Option<WorkItemReviewSeverity>,
+    /// The vendor's own label, e.g. "🟡 Minor" or "P1".
+    pub severity_label: Option<String>,
+    pub category: Option<String>,
+    pub suggestion: Option<String>,
+    pub agent_prompt: Option<String>,
+    /// Commit the tool reported as addressing the finding.
+    pub addressed_in: Option<String>,
+    pub external_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]

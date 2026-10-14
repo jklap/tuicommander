@@ -92,6 +92,7 @@ pub(crate) mod github_pr_action_commands;
 pub(crate) mod github_pr_actions;
 pub(crate) mod github_pr_api;
 pub(crate) mod github_review_threads;
+pub(crate) mod pr_open_threads;
 pub(crate) use tuic_git::github_debug;
 pub(crate) mod github_poller;
 #[cfg(feature = "desktop")]
@@ -2231,6 +2232,7 @@ pub fn run() {
             github_pr_action_commands::merge_or_enqueue_pr,
             github_pr_action_commands::rerun_failed_pr_jobs,
             github_review_threads::get_pr_line_threads,
+            pr_open_threads::get_pr_open_threads,
             github_review_threads::get_pr_thread_comments,
             github_review_threads::set_pr_thread_resolved,
             github_review_threads::reply_pr_thread,
@@ -2459,6 +2461,7 @@ pub fn run() {
             fs::search_content_all,
             fs::fs_read_file,
             work_items::start_work_prompt::build_start_work_prompt,
+            work_items::local_query::project_work_items,
             fs::write_file,
             fs::write_file_if_unchanged,
             fs::create_directory,

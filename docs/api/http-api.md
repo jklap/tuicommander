@@ -1257,7 +1257,7 @@ Returns detailed CI check list.
 GET /repo/pr-review-threads?path=/path/to/repo&pr_number=42
 ```
 
-Returns `{"bot": N, "human": M}`: unresolved review threads of one PR (first 50), split by the author of the first comment. One GraphQL point per call.
+Returns `{"bot": N, "human": M, "ego": E}`: unresolved review threads of one PR, split by the first comment. A first comment that holds `<!-- tuic:ego-review -->` (appended to every finding posted from the PR review) counts as ego, not human. One GraphQL point per page of 100 threads.
 
 ### PR Diff
 
@@ -3072,12 +3072,13 @@ Desktop command arguments and HTTP bodies use the same camelCase fields.
 | Method | Route | Arguments |
 |---|---|---|
 | GET | `/repo/pr-line-threads` | `repoPath`, `prNumber`, optional `after` |
+| GET | `/repo/pr-open-threads` | `repoPath`, `prNumber` — returns the `get_pr_open_threads` string |
 | GET | `/repo/pr-thread-comments` | `repoPath`, `threadId`, optional `after` |
 | POST | `/repo/pr-thread-resolved` | `{repoPath, threadId, resolved}` |
 | POST | `/repo/pr-thread-reply` | `{repoPath, threadId, body}` |
 | POST | `/repo/pr-draft-review` | `{repoPath, prNumber, draft:{headSha, body, event, comments}}` |
 
-Draft submission rejects a moved reviewed head and pins REST `commit_id`. Thread and comment connections expose pagination; outdated threads retain null current lines.
+Draft submission rejects a moved reviewed head and pins REST `commit_id`. Thread and comment connections expose pagination; outdated threads retain null current lines. Thread shapes match `get_pr_line_threads`: comment authors carry `bot`, and each thread carries a nullable parsed `finding` (untrusted bot text).
 
 ### PR actions
 
@@ -3135,6 +3136,8 @@ at delivery.
 ### Tasks provider bridge
 
 `POST /work-items/provider-bridge` is the HTTP twin of `work_item_provider_bridge({input})`. Body: `{action:"claim", requestId}` returns the typed provider request or null when already claimed/expired; `{action:"complete", requestId, value}` completes a claimed request and returns null. The route requires local or authenticated access. Clients subscribe to `work-item-provider-request` on `/events`, whose payload contains `request_id` and `request`; only a client with the target provider loaded should claim it. Rust alone creates pending requests after MCP validation and write opt-in. Replies are validated as Tasks DTOs before entering model output.
+
+`project_work_items` / `POST /tasks/project`: accepts `{items, fields, query}` using the work-item DTOs. Returns `WorkItemGroupedPage` with the filtered unique count, no cursor and one unnamed group when no grouping is selected. Pure Rust projection, maximum 1,000 collected items, no provider access or persisted state.
 
 Settings policy foundation (#1786-9cbd): the existing
 `POST /mcp/confirm-response` also answers backend-built settings proposals shown

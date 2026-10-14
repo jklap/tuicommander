@@ -1,6 +1,6 @@
-import { createEffect, createSignal, For, onCleanup, Show } from "solid-js";
+import { createEffect, createSignal, For, onCleanup, Show, untrack } from "solid-js";
 import type { WorkItemProvider } from "../../plugins/workItemProvider";
-import type { WorkItemRef } from "../../types/work-items.gen";
+import type { WorkItemBoard, WorkItemRef } from "../../types/work-items.gen";
 import { Select } from "../ui/Select";
 import { createBoardPages } from "./board/createBoardPages";
 import { TasksBoard } from "./board/TasksBoard";
@@ -17,7 +17,34 @@ export function TasksBoardView(props: {
 }) {
 	const [boardId, setBoardId] = createSignal("");
 	const pages = createBoardPages();
-	const selected = () => props.provider.boards.find((board) => board.id === boardId()) ?? props.provider.boards[0];
+	const [boards, setBoards] = createSignal<readonly WorkItemBoard[]>([]);
+	const [discoveryError, setDiscoveryError] = createSignal<string | null>(null);
+	const [discovering, setDiscovering] = createSignal(false);
+	let discovery: AbortController | undefined;
+	createEffect(() => {
+		const provider = props.provider;
+		if (props.visible === false) return;
+		discovery?.abort();
+		const controller = new AbortController();
+		discovery = controller;
+		setBoards(provider.boards);
+		setDiscoveryError(null);
+		setDiscovering(!!provider.listBoards);
+		if (provider.listBoards)
+			void provider
+				.listBoards(controller.signal)
+				.then((next) => {
+					if (!controller.signal.aborted) setBoards(next);
+				})
+				.catch((error) => {
+					if (!controller.signal.aborted) setDiscoveryError(error instanceof Error ? error.message : String(error));
+				})
+				.finally(() => {
+					if (!controller.signal.aborted) setDiscovering(false);
+				});
+	});
+	onCleanup(() => discovery?.abort());
+	const selected = () => boards().find((board) => board.id === boardId()) ?? boards()[0];
 	createEffect(() => {
 		const provider = props.provider;
 		const id = selected()?.id ?? "";
@@ -25,25 +52,33 @@ export function TasksBoardView(props: {
 			pages.cancel();
 			return;
 		}
-		pages.select(provider, id);
+		untrack(() => pages.select(provider, id));
 	});
 	onCleanup(pages.cancel);
 	return (
 		<section class={s.view} aria-label="Tasks board">
-			<Show when={props.provider.boards.length > 1}>
+			<Show when={boards().length > 1}>
 				<label class={s.boardPicker}>
 					Board
 					<Select value={selected()?.id} onChange={(event) => setBoardId(event.currentTarget.value)}>
-						<For each={props.provider.boards}>{(board) => <option value={board.id}>{board.name}</option>}</For>
+						<For each={boards()}>{(board) => <option value={board.id}>{board.name}</option>}</For>
 					</Select>
 				</label>
+			</Show>
+			<Show when={discovering()}>
+				<p role="status">Loading boards…</p>
+			</Show>
+			<Show when={discoveryError()}>
+				<p class={s.error} role="alert">
+					{discoveryError()}
+				</p>
 			</Show>
 			<Show when={pages.error()}>
 				<p class={s.error} role="alert">
 					{pages.error()}
 				</p>
 			</Show>
-			<Show when={!selected()}>
+			<Show when={!selected() && !discovering() && !discoveryError()}>
 				<p class={s.empty}>This provider has no boards.</p>
 			</Show>
 			<Show when={pages.page()}>

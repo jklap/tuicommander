@@ -183,3 +183,34 @@ describe("Tasks query consumer", () => {
 		expect(model.state().groups[0].items.map((row) => row.key)).toEqual(["one", "two"]);
 	});
 });
+
+// Catches: GitLab username controls are compared against unrelated numeric REST identities locally.
+it("gitlab_username_filters_remain_in_server_mode", async () => {
+	// @ts-expect-error The GitLab plugin is plain JavaScript without declarations.
+	const { createGitLabProvider } = await import("../../../../plugins/gitlab/provider.js");
+	const { default: recorded } = await import("../../../../plugins/gitlab/fixtures/recorded.json");
+	for (const fieldId of ["assignee", "author"]) {
+		const provider = createGitLabProvider({
+			account: { id: "local", host: "https://gitlab.example.invalid:8443", login: "root" },
+			project: "review/demo",
+			fetch: async (request: { url: string }) => {
+				const params = new URL(request.url).searchParams;
+				expect(params.get(`${fieldId}_username`)).toBe("dev");
+				return { status: 200, headers: { "x-total": "1" }, json: [recorded.mr] };
+			},
+		});
+		const model = createTasksQuery();
+		await model.select(provider, {
+			...query,
+			filters: [
+				{ fieldId: "type", values: [{ kind: "enum", value: "merge_request" }] },
+				{ fieldId, values: [{ kind: "user", value: [{ id: "dev", name: "dev", avatarUrl: null, bot: false }] }] },
+			],
+		});
+		expect(model.state().error).toBeNull();
+		expect(model.state().local).toBe(false);
+		expect(model.state().items.map((row) => row.itemType)).toEqual(["merge_request"]);
+		expect(model.state().items[0].assignees[0].id).toBe("2");
+		model.dispose();
+	}
+});

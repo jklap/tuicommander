@@ -45,6 +45,7 @@ mod telegram_routes;
 pub(crate) mod types;
 mod watcher_routes;
 mod work_item_bridge_routes;
+mod work_item_query_routes;
 mod workitem_link_routes;
 mod worktree_routes;
 mod ws_compression;
@@ -1362,6 +1363,7 @@ fn shared_routes() -> Router<Arc<AppState>> {
             "/work-items/provider-bridge",
             post(work_item_bridge_routes::bridge),
         )
+        .route("/tasks/project", post(work_item_query_routes::project))
         .route(
             "/tasks/start-work-prompt",
             post(fs_routes::start_work_prompt_http),
@@ -1663,6 +1665,10 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             post(github_pr_action_routes::rerun),
         )
         .route("/repo/pr-line-threads", get(github_review_routes::threads))
+        .route(
+            "/repo/pr-open-threads",
+            get(github_review_routes::open_threads),
+        )
         .route(
             "/repo/pr-thread-comments",
             get(github_review_routes::comments),

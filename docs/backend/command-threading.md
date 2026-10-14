@@ -167,6 +167,19 @@ so timeout cleanup includes descendants of a launcher script. A timeout is
 cached as unsupported for that binary's path, size and modification time;
 quick inconclusive exits remain retryable after a short cooldown.
 
+### Orphan removal (1638-c94c)
+
+`remove_orphan_worktree` now uses `async fn` and `spawn_blocking` for its entire
+shared removal helper, including path validation, live-session safety checks,
+git subprocesses, recursive deletion and cache invalidation. Its HTTP route
+already used the blocking pool. Arguments, safety rules and result shapes are
+unchanged. The module-boundary regression checks the desktop command placement.
+
+Retained macOS logs show a heartbeat gap on 2026-10-13 while sequential worktree
+removals ran on `ThreadId(01)`. This is correlation, not a captured replay or
+proof that this command caused that historical gap. Live desktop confirmation
+requires Boss to restart the build; no second desktop instance was launched.
+
 ### Known gaps, with reasons
 
 | Command | Why it is still where it is |
