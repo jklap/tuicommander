@@ -8,6 +8,7 @@ import { resolve } from "node:path";
 import { cleanup, render } from "@solidjs/testing-library";
 import { createRoot, createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import recordedProviderRetry from "../fixtures/ego-provider-retry.json";
 import { cleanupToasts } from "../helpers/toasts";
 
 const { mockDetachPanel, mockReattachPanel, mockClosePanel } = vi.hoisted(() => ({
@@ -3512,6 +3513,44 @@ describe("AIChatPanel: provider retry status", () => {
 		await settle();
 		return view;
 	}
+
+	// Catches: the prompt's pre-wrap leaking into Copy and wrapping its letters vertically.
+	it("keeps the user Copy action on one line", async () => {
+		const style = document.createElement("style");
+		style.textContent = readFileSync(
+			resolve(process.cwd(), "src/components/AIChatPanel/AIChatPanel.module.css"),
+			"utf8",
+		);
+		document.head.append(style);
+		try {
+			const { container } = await retryingPanel();
+			feed({ kind: "promptSent", text: "A real user prompt" });
+			const copy = container.querySelector<HTMLElement>('[aria-label="Copy user message"]');
+			expect(copy).not.toBeNull();
+			expect(getComputedStyle(copy!).whiteSpace).toBe("nowrap");
+		} finally {
+			style.remove();
+		}
+	});
+
+	// Catches: retaining the provider's initial text instead of counting down from update arrival.
+	it("counts a recorded 12s provider retry down to 4s after 8s", async () => {
+		const { container } = await retryingPanel();
+		vi.useFakeTimers();
+		try {
+			feed({ kind: "sessionUpdate", update: recordedProviderRetry as never });
+			expect(statusLines(container)[0].textContent).toContain("retrying in 12s");
+			await vi.advanceTimersByTimeAsync(8000);
+			expect(statusLines(container)[0].textContent).toContain("retrying in 4s");
+			await vi.advanceTimersByTimeAsync(4000);
+			expect(statusLines(container)[0].textContent).toContain("retrying now (attempt 1/6)");
+			await vi.advanceTimersByTimeAsync(5000);
+			expect(statusLines(container)[0].textContent).toContain("retrying now");
+		} finally {
+			cleanup();
+			vi.useRealTimers();
+		}
+	});
 
 	// Catches: one line per retry, or a retry that never shows its n/6 counter.
 	it("shows one status line that a later attempt updates in place", async () => {

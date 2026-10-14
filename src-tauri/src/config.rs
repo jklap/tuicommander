@@ -4029,6 +4029,49 @@ pub(crate) fn save_repositories_request(
     }
 }
 
+/// Retract durable restore records before publishing workspace removal.
+/// The locked update preserves unrelated clients' repository edits.
+pub(crate) fn retract_removed_workspace(
+    repo_path: &str,
+    workspace_id: &str,
+) -> Result<bool, String> {
+    ConfigFile::<serde_json::Value>::at_path(repository_file()).update_with_strict(|doc| {
+        let Some(repo) = doc["repos"][repo_path].as_object_mut() else {
+            return Ok((false, false));
+        };
+        // Deleting a branch in the main checkout does not remove that checkout.
+        if ["workspaces", "branches"].iter().any(|key| {
+            repo.get(*key)
+                .and_then(|rows| rows[workspace_id]["worktreePath"].as_str())
+                == Some(repo_path)
+        }) {
+            return Ok((false, false));
+        }
+        let mut changed = false;
+        for key in ["workspaces", "branches"] {
+            if let Some(workspaces) = repo.get_mut(key).and_then(serde_json::Value::as_object_mut) {
+                changed |= workspaces.remove(workspace_id).is_some();
+            }
+        }
+        if let Some(placements) = repo
+            .get_mut("declaredWorktrees")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            let before = placements.len();
+            placements
+                .retain(|_, placement| placement["workspaceId"].as_str() != Some(workspace_id));
+            changed |= before != placements.len();
+        }
+        for key in ["activeWorkspaceId", "activeBranch"] {
+            if repo.get(key).and_then(serde_json::Value::as_str) == Some(workspace_id) {
+                repo.insert(key.into(), serde_json::Value::Null);
+                changed = true;
+            }
+        }
+        Ok((changed, changed))
+    })
+}
+
 /// Desktop IPC twin of `PUT /config/repositories`.
 ///
 /// Takes `AppState` only to announce the write: one backend serves the desktop
@@ -6901,6 +6944,87 @@ mod tests {
             ..RepoSettingsEntry::default()
         };
         assert!(entry.has_custom_settings());
+    }
+
+    // Catches: recycling with no connected frontend leaves a persisted checkout and peer declaration restorable at the obsolete path.
+    #[test]
+    #[serial_test::serial]
+    fn removed_worktree_retracts_persisted_workspace_and_declarations() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let document = serde_json::json!({"repos": {"/repo": {
+            "workspaces": {
+                "old": {"worktreePath": "/repo__wt/old", "savedTerminals": [{"cwd": "/repo__wt/old"}]},
+                "other": {"worktreePath": "/repo__wt/other"}
+            },
+            "activeWorkspaceId": "old",
+            "declaredWorktrees": {
+                "peer": {"workspaceId": "old", "worktreePath": "/repo__wt/old"},
+                "sibling": {"workspaceId": "other", "worktreePath": "/repo__wt/other"}
+            }
+        }}});
+        ConfigFile::<serde_json::Value>::at_path(repository_file())
+            .save(&document)
+            .unwrap();
+        let state = crate::state::tests_support::make_test_app_state();
+        state.notify_worktree_removed(crate::state::WorktreeRemovedPayload {
+            repo_path: "/repo".into(),
+            workspace_id: "old".into(),
+            branch: "old".into(),
+        });
+        let saved = load_repositories();
+        assert!(saved["repos"]["/repo"]["workspaces"].get("old").is_none());
+        assert!(
+            saved["repos"]["/repo"]["declaredWorktrees"]
+                .get("peer")
+                .is_none()
+        );
+        assert_eq!(
+            saved["repos"]["/repo"]["declaredWorktrees"]["sibling"]["worktreePath"],
+            "/repo__wt/other"
+        );
+        assert_ne!(saved["repos"]["/repo"]["activeWorkspaceId"], "old");
+        state.notify_worktree_removed(crate::state::WorktreeRemovedPayload {
+            repo_path: "/repo".into(),
+            workspace_id: "old".into(),
+            branch: "old".into(),
+        });
+        assert_eq!(load_repositories(), saved);
+    }
+
+    // Catches: a branch-only deletion retracts the main checkout restore row.
+    #[test]
+    #[serial_test::serial]
+    fn removed_worktree_keeps_main_checkout_restore_records() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let document = serde_json::json!({"repos": {"/repo": {
+            "branches": {"main": {"worktreePath": "/repo"}}, "activeBranch": "main"
+        }}});
+        replace_repositories_for_test(document.clone()).unwrap();
+        assert!(!retract_removed_workspace("/repo", "main").unwrap());
+        assert_eq!(load_repositories(), document);
+    }
+
+    // Catches: legacy branch restore records survive the same lifecycle event.
+    #[test]
+    #[serial_test::serial]
+    fn removed_worktree_retracts_legacy_branch_restore_records() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        replace_repositories_for_test(serde_json::json!({"repos": {"/repo": {
+            "branches": {"old": {"worktreePath": "/old"}, "other": {"worktreePath": "/other"}},
+            "activeBranch": "old"
+        }}}))
+        .unwrap();
+        assert!(retract_removed_workspace("/repo", "old").unwrap());
+        let saved = load_repositories();
+        assert!(saved["repos"]["/repo"]["branches"].get("old").is_none());
+        assert_eq!(
+            saved["repos"]["/repo"]["branches"]["other"]["worktreePath"],
+            "/other"
+        );
+        assert!(saved["repos"]["/repo"]["activeBranch"].is_null());
     }
 
     // -- Note image tests --

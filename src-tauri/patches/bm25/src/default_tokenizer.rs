@@ -417,7 +417,7 @@ impl DefaultTokenizerBuilder {
 
 #[cfg(test)]
 mod tests {
-    use crate::test_data_loader::tests::{Recipe, read_recipes};
+    use crate::test_data_loader::tests::{read_recipes, Recipe};
 
     use super::*;
 
@@ -553,9 +553,7 @@ mod tests {
 
         assert_eq!(
             tokens,
-            vec![
-                "connect", "connect", "connect", "connect", "connect", "connect"
-            ]
+            vec!["connect", "connect", "connect", "connect", "connect", "connect"]
         );
     }
 

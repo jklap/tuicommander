@@ -582,7 +582,14 @@ async fn post_workflow_definition_action(
             .await
             .map_err(|error| format!("workflow definition task failed: {error}"))
             .and_then(|result| result);
-    json_result(result)
+    match result {
+        Err(error) if error.starts_with(crate::workflows::WORKFLOW_VALIDATION_ERROR_PREFIX) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({"error": error})),
+        )
+            .into_response(),
+        result => json_result(result),
+    }
 }
 async fn post_workflow_run_action(
     State(state): State<Arc<AppState>>,
@@ -3021,6 +3028,75 @@ mod tests {
     use axum::extract::connect_info::ConnectInfo;
     use axum::http::{Request, StatusCode};
     use tower::ServiceExt;
+
+    // Catches: seeded Pause targets missing from otherwise publishable story drafts.
+    #[tokio::test]
+    async fn seeded_story_draft_publishes() {
+        workflow_pause_publish_case(false).await;
+    }
+
+    // Catches: a user validation failure being returned as HTTP 500.
+    #[tokio::test]
+    async fn invalid_pause_publish_is_a_client_error() {
+        workflow_pause_publish_case(true).await;
+    }
+
+    async fn workflow_pause_publish_case(invalid: bool) {
+        use crate::workflows::{NodeKind, WorkflowKind, WorkflowStore};
+        let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let project = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let project = project.path().to_str().unwrap();
+        let store = WorkflowStore::open().unwrap();
+        let draft = store
+            .seed_templates(project)
+            .unwrap()
+            .into_iter()
+            .find(|draft| draft.kind == WorkflowKind::Story)
+            .unwrap();
+        let mut graph = draft.graph;
+        if invalid {
+            for node in &mut graph.nodes {
+                if let NodeKind::Pause { resume_to } = &mut node.kind {
+                    *resume_to = None;
+                }
+            }
+        }
+        let edited = store
+            .update_draft(&draft.id, draft.draft_revision, graph)
+            .unwrap();
+        let response = post_workflow_definition_action(
+            None,
+            None,
+            Query(types::PathQuery {
+                path: project.into(),
+            }),
+            Json(crate::workflows::WorkflowAction::Publish {
+                id: draft.id.clone(),
+                expected_revision: edited.draft_revision,
+            }),
+        )
+        .await;
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body = String::from_utf8(body.to_vec()).unwrap();
+        if invalid {
+            assert!(status.is_client_error(), "{status}: {body}");
+            assert!(body.contains("resume_to"), "{body}");
+            assert_eq!(
+                store
+                    .get_draft(&draft.id)
+                    .unwrap()
+                    .latest_published_revision,
+                1
+            );
+        } else {
+            assert_eq!(status, StatusCode::OK, "{body}");
+            assert_eq!(store.get_published(&draft.id, 2).unwrap().revision, 2);
+        }
+    }
 
     /// Build a POST request with ConnectInfo from the given address.
     fn mcp_post_from(

@@ -28,6 +28,11 @@
   min-height: 26px;
 }
 
+/* The absolute CLI/Chat switch occupies the header's right-hand gutter. */
+:global([aria-label="Terminal view"]) ~ .bar .header {
+  padding-right: 116px;
+}
+
 .label {
   flex-shrink: 0;
   font-size: 10px;

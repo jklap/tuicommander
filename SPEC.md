@@ -1051,3 +1051,7 @@ owns reviewed-tab and host-permission checks. Eval needs explicit optional-origi
 consent, including all-sites consent. The legacy heartbeat restart identity and
 navigation sequences remain unchanged. Browser screenshot/client-refresh reality
 verification is still required before story 1724-fe7e can close.
+
+## Plugin settings pages
+
+Loaded plugins with registered settings appear under Settings > Integrations. Search includes their catalogue field labels. Unloading removes the page and search entries. Reads, revision-checked edits, resets and secret set/unset status use the scoped Rust settings service; the UI owns no second configuration store.

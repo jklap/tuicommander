@@ -114,6 +114,8 @@ vi.mock("../../stores/userActivity", () => ({
 }));
 
 import { StatusBar } from "../../components/StatusBar/StatusBar";
+import { getTickerPriority } from "../../features/claudeUsage";
+import { getCodexTickerPriority } from "../../features/codexUsage";
 import { acpStore } from "../../stores/acp";
 import { settingsStore } from "../../stores/settings";
 import { statusBarTicker } from "../../stores/statusBarTicker";
@@ -314,6 +316,67 @@ describe("StatusBar", () => {
 			fireEvent.click(trigger);
 			expect(container.querySelector(".infoBalloon")).toBeNull();
 			vi.restoreAllMocks();
+		});
+	});
+
+	describe("usage blink boundary", () => {
+		// Catches: the badge blinks early, or a priority producer never reaches its critical class.
+		it.each(["claude", "codex", "pty"] as const)("%s blinks only from 96 percent", (source) => {
+			for (const percentage of [69, 70, 90, 95, 95.9, 96, 100]) {
+				mockTerminalGetActive.mockReturnValue({
+					agentType: source === "pty" ? "grok" : source,
+					usageLimit: source === "pty" ? { percentage, limitType: "weekly" } : null,
+				});
+				if (source !== "pty") {
+					const priority =
+						source === "claude"
+							? getTickerPriority({
+									five_hour: { utilization: percentage, resets_at: null },
+									seven_day: null,
+									seven_day_opus: null,
+									seven_day_sonnet: null,
+									seven_day_oauth_apps: null,
+									seven_day_cowork: null,
+									extra_usage: null,
+									plan: null,
+									meta: null,
+								})
+							: getCodexTickerPriority({
+									plan_type: null,
+									rate_limit: {
+										allowed: true,
+										limit_reached: false,
+										primary_window: {
+											used_percent: percentage,
+											limit_window_seconds: 18000,
+											reset_after_seconds: null,
+											reset_at: null,
+										},
+										secondary_window: null,
+									},
+									additional_rate_limits: [],
+									credits: null,
+									model_usage: {},
+								});
+					statusBarTicker.addMessage({
+						id: "claude-usage:rate",
+						pluginId: "claude-usage",
+						label: source === "claude" ? "Claude" : "Codex",
+						text: `5h: ${percentage}%`,
+						priority,
+						ttlMs: 0,
+					});
+				}
+				const { container, unmount } = render(() => <StatusBar {...defaultProps} />);
+				const usage = container.querySelector(".agentUsage");
+				expect(usage).not.toBeNull();
+				expect(usage!.classList.contains("agentUsageCritical"), `${source} at ${percentage}%`).toBe(percentage >= 96);
+				expect(usage!.classList.contains("agentUsageWarning"), `${source} at ${percentage}%`).toBe(
+					percentage >= 70 && percentage < 96,
+				);
+				unmount();
+				statusBarTicker.clear();
+			}
 		});
 	});
 
