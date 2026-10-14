@@ -472,3 +472,38 @@ async fn standby_session_wakes_through_the_same_entry_point() {
     assert!(!parked);
     assert_eq!(count, 1);
 }
+
+// Catches: mail addressed by a retained terminal alias being rejected instead of waking its peer.
+#[tokio::test]
+async fn mail_to_hibernated_peer_by_terminal_alias_resumes_it() {
+    let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let _config = crate::config::set_config_dir_override(root.path().into());
+    let state = test_state();
+    let sid = suspend_shell(&state, root.path().to_str().unwrap());
+    state
+        .session_maps
+        .term_aliases
+        .insert(sid.clone(), "sleeping-tab".into());
+    register_peer(&state, &sid, "sleeping-peer", "sleeping-mcp");
+    register_peer(&state, TEST_UUID_A, "sender", "sender-mcp");
+    suspend(&state, &sid).await;
+    let response = handle_messaging(
+        &state,
+        &serde_json::json!({"action":"send", "to":"sleeping-tab", "message":"wake through the listed alias"}),
+        Some("sender-mcp"),
+    );
+    let live = state.live_pty_for_peer(&sid);
+    let inbox_count = state.agent_inbox.get(&sid).map(|inbox| inbox.len());
+    if let Some(id) = &live {
+        crate::pty::close_pty_core_with_reason(&state, id, false, "test_cleanup");
+    }
+    assert!(
+        response.get("error").is_none(),
+        "alias mail rejected: {response}"
+    );
+    assert!(
+        live.is_some(),
+        "alias mail did not wake recipient: {response}"
+    );
+    assert_eq!(inbox_count, Some(1));
+}
