@@ -150,7 +150,7 @@ mod tests {
             .iter()
             .find(|draft| draft.kind == WorkflowKind::Plan)
             .expect("plan template");
-        assert!(plan.required_checks.is_empty());
+        assert!(!plan.required_checks.is_empty());
     }
 
     #[test]

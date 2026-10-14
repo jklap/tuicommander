@@ -26,17 +26,6 @@ pub(in super::super) fn plan_definition(
     let draft = definitions
         .update_draft(&draft.id, draft.draft_revision, graph)
         .unwrap();
-    let draft = definitions
-        .update_checks(
-            &draft.id,
-            draft.draft_revision,
-            vec![CheckDefinition {
-                id: "status".into(),
-                argv: vec!["git".into(), "status".into(), "--porcelain".into()],
-                timeout_secs: 30,
-            }],
-        )
-        .unwrap();
     let crate::workflows::WorkflowReply::Published(published) =
         crate::workflows::definition_action(
             project,
@@ -206,7 +195,7 @@ fn finish_child(store: &RunStore, run_id: &str, story_id: &str, worktree: &str, 
 
 #[test]
 fn resolve_plan_reaches_verified_fixed_point_after_explicit_dependency_integration() {
-    // catches: proposal duplication, Done releasing dependents, automatic merge or an unchecked empty-ready-queue completion.
+    // catches: seeded plan checks missing at final verification, proposal duplication, Done releasing dependents or automatic merge.
     let (config, project, plan_id, first, template, _guard) = fixture();
     let project_path = project.path().to_str().unwrap();
     let first_tree = init_worktree(project.path(), config.path());
