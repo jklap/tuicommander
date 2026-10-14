@@ -222,3 +222,61 @@ it("a failed settings read leaves the panel usable — catches a rejected resour
 	await waitFor(() => expect(view.container.textContent).toContain("Could not read plugin settings."));
 	expect(view.container.textContent).not.toContain("Settings crashed");
 });
+
+it("string-list draft includes completed additions and removals — catches validating an empty added row or saving a partial edit", async () => {
+	const listField = {
+		...field,
+		schema: { type: "array", title: "Allowed projects", items: { type: "string", minLength: 1 } },
+	};
+	mockInvoke.mockImplementation(async (command, args) => {
+		if (command !== "plugin_settings_action") return undefined;
+		if (args.action.action === "describe") return { fields: { list: listField } };
+		if (args.action.action === "get") return { revision: "r1", values: { "/endpoint": { effective: ["old"] } } };
+		return { effects: [], restart: [] };
+	});
+	const view = render(() => <SettingsPanel visible onClose={() => {}} initialTab="plugin:fixture" />);
+	await waitFor(() => expect(view.getByDisplayValue("old")).toBeTruthy());
+	const add = view.getByRole("button", { name: "Add row" });
+	add.focus();
+	fireEvent.click(add);
+	const input = view.getAllByRole("textbox", { name: "Value" })[1] as HTMLInputElement;
+	input.focus();
+	fireEvent.input(input, { target: { value: "new-" } });
+	fireEvent.input(input, { target: { value: "new-project" } });
+	const remove = view.getByRole("button", { name: "Remove row 0" });
+	remove.focus();
+	fireEvent.click(remove);
+	expect(mockInvoke.mock.calls.some(([, args]) => args?.action?.action === "set")).toBe(false);
+	fireEvent.focusOut(add, { relatedTarget: null });
+	await waitFor(() =>
+		expect(mockInvoke).toHaveBeenCalledWith("plugin_settings_action", {
+			pluginId: "fixture",
+			action: { action: "set", path: "/endpoint", value: ["new-project"], expectedRevision: "r1" },
+		}),
+	);
+});
+
+it("a failed post-write reload stays local — catches an unhandled refetch rejection replacing Settings", async () => {
+	let reads = 0;
+	mockInvoke.mockImplementation(async (command, args) => {
+		if (command !== "plugin_settings_action") return undefined;
+		if (args.action.action === "describe") return catalogue;
+		if (args.action.action === "get") {
+			if (++reads > 1) throw new Error("private read failure");
+			return { revision: "r1", values: { "/endpoint": { effective: "https://example.test" } } };
+		}
+		return { effects: [], restart: [] };
+	});
+	const view = render(() => (
+		<ErrorBoundary fallback={<p>Settings crashed</p>}>
+			<SettingsPanel visible onClose={() => {}} initialTab="plugin:fixture" />
+		</ErrorBoundary>
+	));
+	await waitFor(() => expect(view.getByDisplayValue("https://example.test")).toBeTruthy());
+	const input = view.getByDisplayValue("https://example.test");
+	fireEvent.input(input, { target: { value: "https://changed.test" } });
+	fireEvent.blur(input);
+	await waitFor(() => expect(view.container.textContent).toContain("Could not read plugin settings."));
+	expect(view.container.textContent).not.toContain("Settings crashed");
+	expect(view.container.textContent).not.toContain("private read failure");
+});

@@ -496,3 +496,5 @@ In General > Confirmations, Tray and menu-bar icon selects Always, Only in backg
 ## Plugin integration pages
 
 Loaded plugins with registered settings appear under Settings > Integrations. Search includes their catalogue field labels. Unloading removes the page and search entries. Reads, revision-checked edits, resets and secret set/unset status use the scoped Rust settings service; the UI owns no second configuration store.
+
+String-list edits, added rows, and removed rows stay in a draft until focus leaves the list. Read failures show an alert on the plugin page and do not close Settings.

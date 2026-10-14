@@ -49,6 +49,8 @@ export const PluginSettingsTab: Component<{ page: PluginSettingsPage }> = (props
 			if (!disposed) {
 				try {
 					await refetch();
+				} catch {
+					// The resource error renders the local read-error alert.
 				} finally {
 					setBusy(false);
 				}
@@ -69,7 +71,7 @@ export const PluginSettingsTab: Component<{ page: PluginSettingsPage }> = (props
 					{message()}
 				</p>
 			</Show>
-			<Show when={snapshot()}>
+			<Show when={!snapshot.error && snapshot()}>
 				{(current) => (
 					<For each={props.page.fields}>
 						{(field) => (
@@ -228,15 +230,27 @@ const PluginField: Component<{
 				<Show
 					when={arrayChoices()?.every((value) => typeof value === "string") && arrayChoices()}
 					fallback={
-						<SettingList
-							label={label()}
-							hint={hint()}
-							disabled={disabled()}
-							rows={((props.value ?? []) as string[]).map((value, index) => ({ id: String(index), values: { value } }))}
-							columns={[{ id: "value", label: "Value" }]}
-							onChange={(rows) => props.onWrite(rows.map((row) => row.values.value))}
-							onAdd={() => ({ id: String(((props.value ?? []) as string[]).length), values: { value: "" } })}
-						/>
+						<div
+							onFocusOut={(event) => {
+								if (!event.currentTarget.contains(event.relatedTarget as Node | null)) commit();
+							}}
+						>
+							<SettingList
+								label={label()}
+								hint={hint()}
+								disabled={disabled()}
+								rows={(JSON.parse(draft() || "[]") as string[]).map((value, index) => ({
+									id: String(index),
+									values: { value },
+								}))}
+								columns={[{ id: "value", label: "Value" }]}
+								onChange={(rows) => {
+									setDraft(JSON.stringify(rows.map((row) => row.values.value)));
+									setDirty(true);
+								}}
+								onAdd={() => ({ id: String((JSON.parse(draft() || "[]") as string[]).length), values: { value: "" } })}
+							/>
+						</div>
 					}
 				>
 					{(values) => (
