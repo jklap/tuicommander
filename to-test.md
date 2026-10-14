@@ -1,3 +1,7 @@
+## Orphan removal threading (1638-c94c) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, remove a throwaway orphan worktree through the desktop cleanup UI. Record desktop heartbeat continuity and independent backend-request timings during removal. The module-boundary regression covers async/blocking-pool placement, not a live heartbeat replay. No second desktop instance was launched.
+
 ## Design Mode shorthand tokens (1888-14a3) — backend rebuild required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, confirm a native Design Mode grab includes `--gap` for `padding: var(--gap)`, including an open shadow root with an adopted sheet. Real Chromium extraction and the Rust payload consumer passed; the embedded `include_str!` asset needs a backend rebuild to load. No desktop instance was launched by this peer.
