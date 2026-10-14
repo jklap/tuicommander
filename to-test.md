@@ -1,3 +1,7 @@
+## Mobile keyboard correction (1878-3a3c)
+
+- [ ] [HUMAN] On iPhone Safari or the installed PWA, check autocorrect suggestions, spellcheck and sentence capitalization in the terminal prompt with Settings → Input → Autocorrect and spellcheck on and off. Reload and confirm the choice persists. Native keyboard behavior requires the real phone; rendered attributes and persistence are covered by Vitest.
+
 ## Tasks MCP access (1854-4960) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, use an isolated instance with a loaded local test provider: `repo work_item` reads its worktree-linked item and comments, including when another worktree has an earlier link-store entry; `work_item_act` refuses writes by default. Enable `mcp_work_item_writes` through config save and verify one synthetic comment/transition, then disable it. Do not use a real tracker for automated writes. Targeted transport/provider tests cover the mechanics; the running desktop must be rebuilt to load the Rust bridge.
