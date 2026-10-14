@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+- Keep detached checkouts with a local feature branch at HEAD out of orphan cleanup, and stop reporting fresh in-sync branches as integrated (#1894-7683).
+
 ### Added
 - Background desktop WebViews unload after a configurable awake delay (default 10 minutes, 0 disables) and reconnect tabs on Show. Rust sessions keep running; frontend plugins pause while unloaded.
 

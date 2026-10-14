@@ -261,6 +261,11 @@ pagination read is unknown and is not cached; monitoring reuses definitive
 answers for 300 seconds, while removal always asks again.
 MCP `branch_integrations` and `branch_integration`, the branch panel's merged
 set, and workspace lifecycle share `classify_branch_merge` in `tuic-git`.
+The integration query does not treat `in_sync` as merged and supplies no proof
+for it. Explicitly finished empty checkouts can still be recycled; that marker
+is allocation consent, not merge evidence. Orphan discovery excludes detached
+checkouts whose HEAD is the tip of a non-default local branch. Detection fails
+closed if Git cannot inspect that tip or the branch refs.
 The classifier also recognises clean virtual merges whose tree equals the
 default target, and exact same-subject twin patches with unchanged added and
 removed lines. A squash message is corroborating evidence only. The

@@ -1386,8 +1386,9 @@ panel and safe deletion. `ancestry`, `integration_ancestry`, `patch_equivalence`
 `noop_merge`, and `squash_message` are structural evidence. A squash message
 must list every branch subject, either directly or as GitHub `* subject`
 bullets, and a clean virtual merge must also leave the target tree unchanged.
-`github_pr` retains the verified fetched-head proof. `in_sync` means no own
-commits need integrating; the UI still excludes same-tip branches from its
+`github_pr` retains the verified fetched-head proof. The `in_sync` status means
+no own commits need integrating; it returns `integrated: false` and `proof: null`,
+not a positive merge proof. The UI still excludes same-tip branches from its
 merged list.
 
 `content_superset` is a heuristic: exact same-subject twin patches ignoring
