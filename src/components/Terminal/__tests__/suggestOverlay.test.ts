@@ -343,6 +343,8 @@ describe("paintOverlayBlocks", () => {
 		expect(answer.style.top).toBe("40px");
 		expect(answer.style.background).toBe("transparent");
 		expect(answer.style.boxShadow).toContain("inset 3px");
+		// Catches: a hard-coded rule bypasses the Paper contrast override.
+		expect(answer.style.boxShadow).toContain("var(--answer-rule)");
 	});
 
 	it("replaces the previous strips instead of stacking them", () => {

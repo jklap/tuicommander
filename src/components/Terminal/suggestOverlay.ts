@@ -298,7 +298,7 @@ export function paintOverlayBlocks(container: HTMLElement, blocks: readonly Over
 	for (const block of blocks) {
 		if (block.kind !== "answer" || block.row < 0) continue;
 		const div = overlayDiv(block.row * cellHeight, cellHeight, "transparent");
-		div.style.boxShadow = "inset 3px 0 0 rgba(94,190,140,0.9)";
+		div.style.boxShadow = "inset 3px 0 0 var(--answer-rule)";
 		container.appendChild(div);
 	}
 }

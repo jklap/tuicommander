@@ -368,7 +368,7 @@
   z-index: 1;
   width: 3px;
   pointer-events: none;
-  background: rgba(94,190,140,0.9);
+  background: var(--answer-rule);
 }
 
 .assistantMsg :global(#markdown-content [data-tuic-answer]:not([data-tuic-answer-region-start])) {
