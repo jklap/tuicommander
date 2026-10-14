@@ -22,6 +22,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Preserve attached Goose session names and legacy paths without injecting a duplicate or conflicting `--name`.
 - Keep the Context preview clear of the terminal CLI/Chat switch (#1893-a053).
 
 - Apply scrollbar history-mark visibility changes immediately on idle terminals (#1891-a933).
