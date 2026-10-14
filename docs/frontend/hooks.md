@@ -4,7 +4,7 @@ Hooks contain business logic and side effects, bridging stores and Tauri command
 
 ## useOpenMarkdownPublication
 
-`src/hooks/useOpenMarkdownPublication.ts` observes desktop file tabs and sends
+`src/hooks/useOpenMarkdownPublication.ts` observes main-window desktop file tabs and sends
 metadata to `sync_open_markdown_tabs`. It serializes writes, coalesces rapid
 changes and retries failures. Browser and mobile documents do not publish.
 The Rust snapshot is temporary and contains no file contents.

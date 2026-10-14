@@ -47,7 +47,7 @@ export function OpenMarkdownMenu(props: { cwd: string | null; onOpen: (tab: Open
 		}
 	});
 	onMount(() => {
-		// Subscribe before reading so no desktop change falls between the snapshot and listener.
+		// Start listening before reading; onResync rereads when SSE first becomes live.
 		const subscription = subscribeEvents(
 			{ "open-markdown-tabs-changed": () => void refresh(), "repositories-changed": () => void refresh() },
 			{ onResync: () => void refresh() },

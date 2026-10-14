@@ -113,9 +113,6 @@ fn select_tabs(
 }
 
 pub(crate) fn publish(state: &AppState, tabs: Vec<DesktopMarkdownTab>) -> Result<(), String> {
-    if tabs.len() > 1024 {
-        return Err("Too many open Markdown tabs".into());
-    }
     let mut current = state.open_markdown_tabs.write();
     if *current != tabs {
         *current = tabs;

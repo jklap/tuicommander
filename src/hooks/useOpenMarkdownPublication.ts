@@ -1,3 +1,4 @@
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { createEffect, onCleanup } from "solid-js";
 import { appLogger } from "../stores/appLogger";
 import { mdTabsStore } from "../stores/mdTabs";
@@ -5,7 +6,7 @@ import { isTauri, rpc } from "../transport";
 
 /** The main desktop document owns the snapshot; mobile and browser viewers never publish. */
 export function useOpenMarkdownPublication(): void {
-	if (!isTauri()) return;
+	if (!isTauri() || getCurrentWindow().label !== "main") return;
 	type Tab = { id: string; repoPath: string; filePath: string; fsRoot?: string };
 	let pending: Tab[] | undefined;
 	let sending = false;
