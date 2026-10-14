@@ -1,20 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
-import { type CellMetrics, type DecodedRow, decodeBinaryFrame, rowText } from "../canvasTerminalUtils";
-import { createGridRenderer, type GridContext2D } from "../gridRenderer";
+import { describe, expect, it } from "vitest";
+import { type DecodedRow, decodeBinaryFrame, rowText } from "../canvasTerminalUtils";
 import { hiddenMarkerRows, planSuggestOverlay } from "../suggestOverlay";
 import claude from "./fixtures/claude-markers-1873.json";
 import paragraphs from "./fixtures/codex-answer-paragraphs-1872.json";
 import codex from "./fixtures/codex-markers-1873.json";
+import { metrics, painter } from "./gridPaintTestUtils";
 
-const metrics: CellMetrics = {
-	cellWidth: 10,
-	cellHeight: 20,
-	baseline: 15,
-	fontSize: 14,
-	dpr: 1,
-	scaledCellWidth: 10,
-	scaledCellHeight: 20,
-};
 function decode(frames: string[]) {
 	const rows = new Map<number, DecodedRow>();
 	for (const base64 of frames) {
@@ -24,23 +15,6 @@ function decode(frames: string[]) {
 		for (const row of frame.rows) rows.set(row.index, row);
 	}
 	return rows;
-}
-function painter() {
-	const fillText = vi.fn();
-	const ctx = {
-		canvas: { width: 1400, height: 900 },
-		fillRect: vi.fn(),
-		fillText,
-		beginPath: vi.fn(),
-		moveTo: vi.fn(),
-		lineTo: vi.fn(),
-		stroke: vi.fn(),
-		measureText: () => ({ width: 10 }),
-	} as unknown as GridContext2D;
-	return {
-		fillText,
-		renderer: createGridRenderer(ctx, { fontWeight: () => "normal", getFontFamily: () => "monospace" }),
-	};
 }
 
 describe("recorded terminal marker layout", () => {
@@ -52,8 +26,14 @@ describe("recorded terminal marker layout", () => {
 				const row = rows.get(i);
 				return row ? { text: rowText(row), isWrapped: rows.get(i - 1)?.wrapped ?? false } : null;
 			});
-			const intent = [...rows.values()].find((r) => /^[⏺•] intent:/.test(rowText(r)))!;
-			expect(hiddenMarkerRows(plan.blocks).has(intent.index)).toBe(false);
+			const { renderer, textAt } = painter();
+			renderer.paintGrid(rows, metrics, {
+				fullRepaint: true,
+				hiddenRows: hiddenMarkerRows(plan.blocks),
+				hiddenAnswerMarkers: plan.answerMarkers,
+			});
+			const baseline = capture.source.agent === "claude" ? 195 : 375;
+			expect(textAt(baseline, 2)).toBe("intent: Verifying terminal display (Display check)");
 		});
 		it(`${capture.source.agent}: removes the suggest and hard-wrap rows`, () => {
 			// Catches: blanking the marker leaves layout holes or hides intent.

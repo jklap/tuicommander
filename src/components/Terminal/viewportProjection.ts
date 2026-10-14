@@ -10,7 +10,7 @@ export class ViewportProjection {
 		readonly hidden: ReadonlySet<number> = new Set(),
 		answerMarkers: ReadonlySet<number> = new Set(),
 	) {
-		this.removed = [...hidden].sort((a, b) => a - b);
+		this.removed = Array.from(hidden).sort((a, b) => a - b);
 		for (const index of answerMarkers) {
 			const row = rows.get(index);
 			const span = row && answerMarkerSpan(row);

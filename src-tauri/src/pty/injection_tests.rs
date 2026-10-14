@@ -3798,7 +3798,7 @@ mod injection_fairness {
 
 // Catches: the live Claude redraw contains choices but the chunk pipeline loses them.
 #[test]
-fn recorded_claude_turn_retains_suggest_candidate() {
+fn recorded_claude_turn_publishes_retained_choices_once() {
     let capture = crate::pty_capture::decode_capture(include_bytes!(
         "../../../src/components/Terminal/__tests__/fixtures/claude-choices-1873.tcap"
     ))
@@ -3819,6 +3819,8 @@ fn recorded_claude_turn_retains_suggest_candidate() {
         .lock()
         .resize(29, 73);
     silence.lock().startup_settled = true;
+    let mut events = state.event_bus.subscribe();
+    let mut choices = Vec::new();
     let mut processor = ChunkProcessor::new(None, None);
     let mut utf8 = Utf8ReadBuffer::new();
     let mut escape = EscapeAwareBuffer::new();
@@ -3830,16 +3832,33 @@ fn recorded_claude_turn_retains_suggest_candidate() {
         let data = escape.push(&data);
         let (clean, _) = crate::state::strip_kitty_sequences(&data);
         processor.process_chunk(&clean, &silence, sid, &state);
+        while let Ok(event) = events.try_recv() {
+            if let crate::state::AppEvent::PtyParsed { parsed, .. } = event
+                && parsed["type"] == "suggest"
+            {
+                choices.push(parsed["items"].clone());
+            }
+        }
+    }
+    assert!(try_shell_transition(
+        &state, sid, SHELL_BUSY, SHELL_IDLE, true
+    ));
+    emit_pending_suggest_if_idle(&state, &silence, sid);
+    emit_pending_suggest_if_idle(&state, &silence, sid);
+    while let Ok(event) = events.try_recv() {
+        if let crate::state::AppEvent::PtyParsed { parsed, .. } = event
+            && parsed["type"] == "suggest"
+        {
+            choices.push(parsed["items"].clone());
+        }
     }
     assert_eq!(
-        silence.lock().pending_suggest_items.as_deref(),
-        Some(
-            &[
-                "Inspect mapping".to_string(),
-                "Verify chips".to_string(),
-                "Finish capture".to_string()
-            ][..]
-        ),
-        "real Claude choices must reach the lifecycle producer"
+        choices,
+        vec![serde_json::json!([
+            "Inspect mapping",
+            "Verify chips",
+            "Finish capture"
+        ])],
+        "recorded Claude choices must publish once after settlement"
     );
 }

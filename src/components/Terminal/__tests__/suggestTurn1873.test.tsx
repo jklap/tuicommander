@@ -1,4 +1,4 @@
-import { cleanup, render, waitFor } from "@solidjs/testing-library";
+import { cleanup, render, screen, waitFor } from "@solidjs/testing-library";
 import { afterEach, expect, it, vi } from "vitest";
 
 const bridge = vi.hoisted(() => ({ onParsed: undefined as undefined | ((frame: Record<string, unknown>) => void) }));
@@ -21,7 +21,7 @@ vi.mock("../../../transport", () => ({
 vi.mock("../CanvasTerminal", () => ({ default: () => null }));
 
 import { terminalsStore } from "../../../stores/terminals";
-import { Terminal } from "../Terminal";
+import { TerminalArea } from "../../TerminalArea";
 import capture from "./fixtures/codex-choice-events-1873.json";
 
 let terminalId: string;
@@ -42,8 +42,13 @@ it("shows recorded next-turn choices when the submitted-input event follows busy
 		awaitingInput: null,
 	});
 	terminalId = id;
-	render(() => <Terminal id={id} alwaysVisible />);
+	terminalsStore.setActive(id);
+	render(() => (
+		<TerminalArea onTerminalFocus={() => {}} onCloseTab={() => {}} onOpenFilePath={() => {}} onContextMenu={() => {}} />
+	));
 	await waitFor(() => expect(bridge.onParsed).toBeTypeOf("function"));
 	for (const frame of capture.events) bridge.onParsed!(frame);
-	expect(terminalsStore.get(id)?.suggestedActions).toEqual(["Inspect mapping", "Verify chips", "Finish capture"]);
+	for (const text of ["Inspect mapping", "Verify chips", "Finish capture"]) {
+		expect(screen.getByRole("button", { name: new RegExp(text) })).toBeVisible();
+	}
 });

@@ -898,4 +898,4 @@ keep Codex Chat unavailable. TUIC never bypasses native hook trust.
 
 Suggest choices are published once when the agent is ready, including while background descendants keep the shell busy. The completion lifecycle event still waits for an idle shell and settled background work; publishing choices does not release that gate.
 
-Pending follow-up choices survive a working spinner until the turn has settled. A final `suggest:` marker may share a Claude redraw with its spinner; this is not a new turn. Working evidence can still reopen an idle or delivered completion (including a blocking Stop hook or a Codex internal continuation).
+Pending follow-up choices survive a working spinner until the turn has settled. While the shell is busy, public Claude session snapshots use that same settled-completion predicate, so a retained final marker does not report completed/idle during active Claude Stop hooks. A final `suggest:` marker may share a Claude redraw with its spinner; this is not a new turn. Working evidence can still reopen an idle or delivered completion (including a blocking Stop hook or a Codex internal continuation).

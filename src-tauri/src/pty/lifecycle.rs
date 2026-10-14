@@ -2117,7 +2117,7 @@ impl SilenceState {
 
     /// A final marker can arrive while the same redraw still contains a spinner.
     /// Only settled/delivered completion is a boundary that new work can reopen.
-    pub(super) fn completion_settled_for_epoch(&self, turn_epoch: u64) -> bool {
+    pub(crate) fn completion_settled_for_epoch(&self, turn_epoch: u64) -> bool {
         self.completion_declared_for_epoch(turn_epoch)
             && (self.pending_suggest_items.is_none()
                 || self.pending_suggest_emitted

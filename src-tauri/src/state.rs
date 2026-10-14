@@ -4410,22 +4410,28 @@ impl AppState {
                 crate::pty::shell_state_wire(atom.load(std::sync::atomic::Ordering::Relaxed))
                     .map(str::to_string)
             });
-        let completion_declared = state.suggested_actions.is_some()
+        let completion_settled = state.suggested_actions.is_some()
             || self
                 .session_maps
                 .silence_states
                 .get(session_id)
                 .is_some_and(|silence| {
-                    silence
-                        .lock()
-                        .completion_declared_for_epoch(state.turn_epoch)
+                    let silence = silence.lock();
+                    if state.agent_type.as_deref() == Some("claude")
+                        && state.shell_state.as_deref() != Some("idle")
+                    {
+                        silence.completion_settled_for_epoch(state.turn_epoch)
+                    } else {
+                        silence.completion_declared_for_epoch(state.turn_epoch)
+                    }
                 });
         let background_work = state.has_pending_background_probe() || state.background_work;
         // A current-turn completion marker is stronger than a stale BUSY atom
         // (for example a completed Codex screen that still contains its last
         // Working row). Keep real background work authoritative, but normalize
-        // the terminal state once the agent has explicitly ended the turn.
-        if completion_declared && !background_work {
+        // the terminal state once the agent has settled its explicit end-of-turn marker.
+        // Claude can retain that marker while blocking Stop hooks still run.
+        if completion_settled && !background_work {
             state.shell_state = Some("idle".to_string());
         }
         state.agent_state = if state.agent_type.is_none() {
@@ -4438,7 +4444,7 @@ impl AppState {
             Some("awaiting_input".to_string())
         } else if background_work {
             Some("working".to_string())
-        } else if completion_declared {
+        } else if completion_settled {
             Some("completed".to_string())
         } else if state.shell_state.as_deref() == Some("busy") {
             Some("working".to_string())
