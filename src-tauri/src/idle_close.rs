@@ -236,8 +236,12 @@ fn sweep_with_snapshot(
 /// Share the idle-close observation and ready-state refusal contract, but never
 /// apply child teardown to a top-level tab. A scan/storage error fails closed.
 fn hibernate_observation(state: &AppState, id: &str) -> Option<Observation> {
+    let identity = crate::mcp_http::session::live_tuic_sessions_by_pty(state)
+        .remove(id)
+        .unwrap_or_else(|| id.into());
     if state.session_maps.session_parent.contains_key(id)
         || state.keep_open_sessions.contains(id)
+        || state.keep_open_sessions.contains(&identity)
         || state.background_visibility.lock().watched(state, id)
     {
         return None;
@@ -263,9 +267,6 @@ fn hibernate_observation(state: &AppState, id: &str) -> Option<Observation> {
     {
         return None;
     }
-    let identity = crate::mcp_http::session::live_tuic_sessions_by_pty(state)
-        .remove(id)
-        .unwrap_or_else(|| id.into());
     let cursor = state
         .agent_read_cursor
         .get(&identity)
@@ -511,20 +512,14 @@ mod tests {
             .insert("parent".into(), vec!["parent-mcp".into()]);
     }
 
-    // Catches: idle top-level agents never entering the durable hibernation path.
     #[cfg(unix)]
-    #[tokio::test]
-    async fn hibernates_resumable_idle_agent_after_threshold_in_background_only() {
-        let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
-        let _config = crate::config::set_config_dir_override(root.path().join("config"));
-        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    fn verified_hibernation_agent(state: &Arc<AppState>, sid: &str, root: &std::path::Path) {
         // Own the PTY and idle state without a reader that can overwrite the fixture.
-        let sid = "hibernate-agent".to_string();
-        live_child(&state, &sid, root.path().to_path_buf());
-        state.session_maps.sessions.get(&sid).unwrap().lock().cwd =
-            Some(root.path().to_string_lossy().into_owned());
-        let profile = root.path().join("claude");
-        let cwd = root.path().to_string_lossy().into_owned();
+        live_child(state, sid, root.to_path_buf());
+        state.session_maps.sessions.get(sid).unwrap().lock().cwd =
+            Some(root.to_string_lossy().into_owned());
+        let profile = root.join("claude");
+        let cwd = root.to_string_lossy().into_owned();
         let slug: String = cwd
             .trim_end_matches('/')
             .chars()
@@ -536,7 +531,7 @@ mod tests {
         // The owned verifier's contract is existence of the exact profile/session file.
         std::fs::write(project.join(format!("{agent_id}.jsonl")), "").unwrap();
         state.session_maps.session_states.insert(
-            sid.clone(),
+            sid.into(),
             crate::state::SessionState {
                 agent_type: Some("claude".into()),
                 agent_state: Some("idle".into()),
@@ -544,10 +539,45 @@ mod tests {
                 ..Default::default()
             },
         );
-        state.suspend_metadata.insert(sid.clone(), serde_json::json!({
+        state.suspend_metadata.insert(sid.into(), serde_json::json!({
             "agentSessionId": agent_id,
             "agentLaunchCommand": format!("CLAUDE_CONFIG_DIR={} claude", crate::prompt::shell_quote(&profile.to_string_lossy()))
         }));
+    }
+
+    #[cfg(unix)]
+    fn always_hibernate() {
+        let base = crate::config::load_agents_config();
+        let mut desired = base.clone();
+        desired.hibernate_scope = crate::config::HibernateScope::Always;
+        desired.hibernate_idle_minutes = 1;
+        crate::config::save_agents_config(base, desired).unwrap();
+    }
+
+    #[cfg(unix)]
+    fn assert_due_sweep_preserves(state: &Arc<AppState>, sid: &str) {
+        let mut tracker = IdleCloseTracker::default();
+        sweep_with_commands(state, &mut tracker, 0, &[]);
+        sweep_with_commands(state, &mut tracker, 60_000, &[]);
+        assert!(
+            state.session_maps.sessions.contains_key(sid),
+            "excluded PTY must stay live"
+        );
+        assert!(
+            crate::suspended_sessions::list().unwrap().is_empty(),
+            "excluded PTY must not publish a retained record"
+        );
+    }
+
+    // Catches: idle top-level agents never entering the durable hibernation path.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn hibernates_resumable_idle_agent_after_threshold_in_background_only() {
+        let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _config = crate::config::set_config_dir_override(root.path().join("config"));
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let sid = "hibernate-agent".to_string();
+        verified_hibernation_agent(&state, &sid, root.path());
         let mut tracker = IdleCloseTracker::default();
         // Existing visibility controller's authoritative state; no desktop is launched.
         struct HiddenWindows;
@@ -598,24 +628,7 @@ mod tests {
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
         let sid = "rebound-pty";
         let identity = "durable-peer";
-        live_child(&state, sid, root.path().to_path_buf());
-        state.session_maps.sessions.get(sid).unwrap().lock().cwd =
-            Some(root.path().to_string_lossy().into_owned());
-        let profile = root.path().join("profile");
-        let cwd = root.path().to_string_lossy().into_owned();
-        let slug: String = cwd
-            .trim_end_matches('/')
-            .chars()
-            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-            .collect();
-        let project = profile.join("projects").join(slug);
-        std::fs::create_dir_all(&project).unwrap();
-        let agent_id = "22222222-2222-4222-8222-222222222222";
-        std::fs::write(project.join(format!("{agent_id}.jsonl")), "").unwrap();
-        state.suspend_metadata.insert(sid.into(), serde_json::json!({
-            "agentSessionId": agent_id,
-            "agentLaunchCommand": format!("CLAUDE_CONFIG_DIR={} claude", crate::prompt::shell_quote(&profile.to_string_lossy()))
-        }));
+        verified_hibernation_agent(&state, sid, root.path());
         state
             .session_maps
             .live_pty_by_tuic_session
@@ -646,15 +659,37 @@ mod tests {
         );
     }
 
-    // Catches: a night asleep counting toward the idle hibernation threshold.
-    #[test]
-    fn sleep_time_does_not_count_as_idle() {
-        let awake = add_awake_time(59_000, std::time::Duration::from_secs(5));
-        assert_eq!(awake, 64_000);
-        assert_eq!(
-            add_awake_time(awake, std::time::Duration::from_secs(8 * 3600)),
-            awake
-        );
+    // Catches: a night asleep expiring the actual hibernation deadline.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn sleep_time_does_not_count_as_idle() {
+        let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _config = crate::config::set_config_dir_override(root.path().join("config"));
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let sid = "sleep-agent";
+        verified_hibernation_agent(&state, sid, root.path());
+        always_hibernate();
+        let mut tracker = IdleCloseTracker::default();
+        sweep_with_commands(&state, &mut tracker, 0, &[]);
+        for gap in [30, 29, 8 * 3600] {
+            tracker.awake_ms =
+                add_awake_time(tracker.awake_ms, std::time::Duration::from_secs(gap));
+            let now_ms = tracker.awake_ms;
+            sweep_with_commands(&state, &mut tracker, now_ms, &[]);
+            assert!(
+                state.session_maps.sessions.contains_key(sid),
+                "sleep must not expire the deadline"
+            );
+            assert!(crate::suspended_sessions::list().unwrap().is_empty());
+        }
+        tracker.awake_ms = add_awake_time(tracker.awake_ms, std::time::Duration::from_secs(1));
+        let now_ms = tracker.awake_ms;
+        sweep_with_commands(&state, &mut tracker, now_ms, &[]);
+        let live = state.session_maps.sessions.contains_key(sid);
+        let records = crate::suspended_sessions::list().unwrap();
+        crate::pty::close_pty_core_with_reason(&state, sid, false, "test_cleanup");
+        assert!(!live, "one final awake second must expire the deadline");
+        assert_eq!(records[sid].reason, "idle_hibernate");
     }
 
     // Catches: unattended classification overlooking mail, work or an active reader.
@@ -664,26 +699,14 @@ mod tests {
         let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
         let _config = crate::config::set_config_dir_override(root.path().join("config"));
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
-        let sid = crate::mcp_http::session::spawn_pty_session(
-            state.clone(),
-            "/bin/sh".into(),
-            Some(root.path().to_string_lossy().into_owned()),
-            24,
-            80,
-            None,
-            Default::default(),
-        )
-        .unwrap();
-        let idle = crate::state::SessionState {
-            agent_type: Some("amp".into()),
-            agent_state: Some("idle".into()),
-            suggested_actions: Some(vec![]),
-            ..Default::default()
-        };
-        state
-            .session_maps
-            .session_states
-            .insert(sid.clone(), idle.clone());
+        let sid = "excluded-agent";
+        verified_hibernation_agent(&state, sid, root.path());
+        always_hibernate();
+        let idle = state.session_maps.session_states.get(sid).unwrap().clone();
+        assert!(
+            hibernate_allowed(&state, sid),
+            "verified baseline must qualify"
+        );
         for candidate in [
             crate::state::SessionState {
                 background_work: true,
@@ -697,16 +720,19 @@ mod tests {
             state
                 .session_maps
                 .session_states
-                .insert(sid.clone(), candidate);
-            assert!(hibernate_observation(&state, &sid).is_none());
+                .insert(sid.into(), candidate);
+            assert_due_sweep_preserves(&state, sid);
         }
-        state.session_maps.session_states.insert(sid.clone(), idle);
+        state.session_maps.session_states.insert(sid.into(), idle);
         let (tx, _rx) = tokio::sync::mpsc::channel(8);
-        state.ws_clients.insert(sid.clone(), vec![tx]);
-        assert!(hibernate_observation(&state, &sid).is_none());
-        state.ws_clients.remove(&sid);
+        state.ws_clients.insert(sid.into(), vec![tx]);
+        assert_due_sweep_preserves(&state, sid);
+        state.ws_clients.remove(sid);
+        state.keep_open_sessions.insert(sid.into());
+        assert_due_sweep_preserves(&state, sid);
+        state.keep_open_sessions.remove(sid);
         state.push_agent_inbox(
-            &sid,
+            sid,
             crate::state::AgentMessage {
                 id: "mail".into(),
                 from_tuic_session: "sender".into(),
@@ -716,26 +742,36 @@ mod tests {
                 delivered_via_channel: false,
             },
         );
-        assert!(hibernate_observation(&state, &sid).is_none());
-        crate::pty::close_pty_core_with_reason(&state, &sid, false, "test_cleanup");
+        assert_due_sweep_preserves(&state, sid);
+        crate::pty::close_pty_core_with_reason(&state, sid, false, "test_cleanup");
     }
 
-    // Catches: preserving neither plain-shell state nor unsupported agent sessions.
-    #[test]
-    fn never_hibernates_non_resumable_agent_or_plain_shell() {
-        let state = crate::state::tests_support::make_test_app_state();
-        for agent in [None, Some("droid"), Some("unknown")] {
+    // Catches: plain shells, unsupported and fallback-only agents losing their live PTY.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn never_hibernates_non_resumable_agent_or_plain_shell() {
+        let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _config = crate::config::set_config_dir_override(root.path().join("config"));
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let sid = "non-resumable-agent";
+        verified_hibernation_agent(&state, sid, root.path());
+        always_hibernate();
+        let idle = state.session_maps.session_states.get(sid).unwrap().clone();
+        assert!(
+            hibernate_allowed(&state, sid),
+            "verified baseline must qualify"
+        );
+        for agent in [None, Some("droid"), Some("unknown"), Some("amp")] {
             state.session_maps.session_states.insert(
-                "candidate".into(),
+                sid.into(),
                 crate::state::SessionState {
                     agent_type: agent.map(str::to_owned),
-                    agent_state: Some("idle".into()),
-                    suggested_actions: Some(vec![]),
-                    ..Default::default()
+                    ..idle.clone()
                 },
             );
-            assert!(hibernate_observation(&state, "candidate").is_none());
+            assert_due_sweep_preserves(&state, sid);
         }
+        crate::pty::close_pty_core_with_reason(&state, sid, false, "test_cleanup");
     }
 
     // Catches: an idle agent being ended while its Automation run still owns it.
@@ -745,24 +781,12 @@ mod tests {
         let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
         let _config = crate::config::set_config_dir_override(root.path().join("config"));
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
-        let sid = crate::mcp_http::session::spawn_pty_session(
-            state.clone(),
-            "/bin/sh".into(),
-            Some(root.path().to_string_lossy().into_owned()),
-            24,
-            80,
-            None,
-            Default::default(),
-        )
-        .unwrap();
-        state.session_maps.session_states.insert(
-            sid.clone(),
-            crate::state::SessionState {
-                agent_type: Some("amp".into()),
-                agent_state: Some("idle".into()),
-                suggested_actions: Some(vec![]),
-                ..Default::default()
-            },
+        let sid = "automation-agent".to_string();
+        verified_hibernation_agent(&state, &sid, root.path());
+        always_hibernate();
+        assert!(
+            hibernate_allowed(&state, &sid),
+            "verified baseline must qualify"
         );
         let owner = crate::automations::store::RunOwner::acquire(0).unwrap();
         let definition = serde_json::from_value(serde_json::json!({
@@ -787,9 +811,8 @@ mod tests {
                 1,
             )
             .unwrap();
-        let allowed = hibernate_allowed(&state, &sid);
+        assert_due_sweep_preserves(&state, &sid);
         crate::pty::close_pty_core_with_reason(&state, &sid, false, "test_cleanup");
-        assert!(!allowed);
     }
 
     fn idle() -> Observation {
