@@ -27,12 +27,15 @@ export function useTasksListQuery(
 	let generation = 0;
 	let lastValidSort: WorkItemQuery["sort"] = null;
 	let restoredQuery: WorkItemQuery | undefined;
+	let queryScope = "";
 	const scope = () => JSON.stringify([props.repoPath, provider()?.providerId, provider()?.accountId]);
 	createEffect(() => {
 		scope();
 		uiStore.state.tasksPreferencesRevision;
 		untrack(() => {
 			generation++;
+			queryScope = scope();
+			restoredQuery = undefined;
 			clearTimeout(debounce);
 			const saved = props.repoPath ? uiStore.state.tasksViewPreferences[scope()] : undefined;
 			const next = saved?.query
@@ -48,7 +51,7 @@ export function useTasksListQuery(
 		const current = provider();
 		const request = query();
 		const key = scope();
-		if (props.visible === false) return;
+		if (props.visible === false || key !== queryScope) return;
 		untrack(() => {
 			if (request === restoredQuery) {
 				restoredQuery = undefined;

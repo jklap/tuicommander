@@ -353,6 +353,7 @@
 /system/local-ips
 /system/notification-sound
 /system/relay-status
+/tasks/project
 /tasks/start-work-prompt
 /terminal/theme-colors
 /tunnels/active

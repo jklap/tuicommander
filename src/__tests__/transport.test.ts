@@ -4140,3 +4140,13 @@ describe("default-app host boundary", () => {
 		expect(() => mapCommandToHttp("open_default_app", { target: "https://example.com", kind: "url" })).toThrow();
 	});
 });
+
+// Catches: browser projection receives a different input shape from desktop IPC.
+it("maps_local_tasks_projection_without_reshaping", () => {
+	const input = { items: [], fields: [], query: { filters: [] } };
+	expect(mapCommandToHttp("project_work_items", { input })).toEqual({
+		method: "POST",
+		path: "/tasks/project",
+		body: input,
+	});
+});

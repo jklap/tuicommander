@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Tasks loads complete lists of at most 1,000 items for Rust-backed all-field queries; unknown or larger lists keep server controls (#1851-7ade).
+- Discover GitHub Projects v2 in Tasks Board with visible read:project scope errors (#1846-55d7).
+
 - Tasks offers only provider-supported sort, group and filter fields, and restores the last valid selection after a rejection.
 
 ### Added

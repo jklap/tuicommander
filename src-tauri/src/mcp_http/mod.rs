@@ -40,6 +40,7 @@ mod telegram_routes;
 pub(crate) mod types;
 mod watcher_routes;
 mod work_item_bridge_routes;
+mod work_item_query_routes;
 mod workitem_link_routes;
 mod worktree_routes;
 mod ws_compression;
@@ -1340,6 +1341,7 @@ fn shared_routes() -> Router<Arc<AppState>> {
             "/work-items/provider-bridge",
             post(work_item_bridge_routes::bridge),
         )
+        .route("/tasks/project", post(work_item_query_routes::project))
         .route(
             "/tasks/start-work-prompt",
             post(fs_routes::start_work_prompt_http),

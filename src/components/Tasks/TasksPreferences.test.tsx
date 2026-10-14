@@ -54,6 +54,11 @@ afterEach(() => {
 function register() {
 	const a = listDemo(4, "a");
 	const b = listDemo(4, "b");
+	// These tests cover saved server-query preferences, not the Rust local-projection boundary.
+	for (const provider of [a, b]) {
+		const list = provider.list.bind(provider);
+		provider.list = async (query, signal) => ({ ...(await list(query, signal)), total: 1001 });
+	}
 	registrations = [workItemProviderRegistry.register(a), workItemProviderRegistry.register(b)];
 	return { a, b };
 }

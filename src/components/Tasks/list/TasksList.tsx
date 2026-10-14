@@ -179,7 +179,7 @@ export function TasksList(props: TasksListProps) {
 			<Show when={filtersOpen() ? provider() : undefined}>
 				{(current) => (
 					<div class={s.filters}>
-						<For each={current().fields.filter((field) => field.filterable)}>
+						<For each={current().fields.filter((field) => model.state().local || field.filterable)}>
 							{(field) => (
 								<label>
 									{field.name}
@@ -223,7 +223,7 @@ export function TasksList(props: TasksListProps) {
 								}}
 							>
 								<option value="">Provider default</option>
-								<For each={current().fields.filter((field) => field.sortable)}>
+								<For each={current().fields.filter((field) => model.state().local || field.sortable)}>
 									{(field) => <option value={field.id}>{field.name}</option>}
 								</For>
 							</Select>
@@ -253,7 +253,7 @@ export function TasksList(props: TasksListProps) {
 								}}
 							>
 								<option value="">No grouping</option>
-								<For each={current().fields.filter((field) => field.groupable)}>
+								<For each={current().fields.filter((field) => model.state().local || field.groupable)}>
 									{(field) => <option value={field.id}>{field.name}</option>}
 								</For>
 							</Select>
@@ -271,6 +271,13 @@ export function TasksList(props: TasksListProps) {
 			</Show>
 			<div class={s.status} role="status" aria-live="polite">
 				{model.state().loading ? "Loading tasks…" : itemsLabel()}
+				<Show when={!model.state().loading && provider()}>
+					<span>
+						{model.state().local
+							? "All items loaded · local queries"
+							: "Server queries · provider-supported fields only"}
+					</span>
+				</Show>
 				<Show when={model.state().stale}>
 					<span class={s.stale}>Stale results</span>
 				</Show>

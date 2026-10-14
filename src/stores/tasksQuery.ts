@@ -7,14 +7,17 @@ import type {
 	WorkItemPage,
 	WorkItemQuery,
 } from "../types/work-items.gen";
+import { collectLocalTasks, projectLocalTasks } from "./tasksLocalQuery";
 
-type Source = Pick<WorkItemProvider, "providerId" | "accountId" | "list" | "grouped">;
+type Source = Pick<WorkItemProvider, "providerId" | "accountId" | "list" | "grouped"> &
+	Partial<Pick<WorkItemProvider, "fields">>;
 interface QueryState {
 	items: WorkItem[];
 	groups: WorkItemGroup[];
 	nextCursor: string | null;
 	/** Count of every match across all pages, when the provider reports it. */
 	total: number | null;
+	local: boolean;
 	loading: boolean;
 	stale: boolean;
 	error: string | null;
@@ -24,12 +27,13 @@ const empty = (): QueryState => ({
 	groups: [],
 	nextCursor: null,
 	total: null,
+	local: false,
 	loading: false,
 	stale: false,
 	error: null,
 });
 
-/** View state only: provider-side filtering, sorting and pagination remain authoritative. */
+/** View state and transport: providers own server queries; Rust projects certified complete scopes. */
 export function createTasksQuery(options: { maxCachedPages?: number } = {}) {
 	const requestedCapacity = options.maxCachedPages ?? 32;
 	const capacity = Number.isFinite(requestedCapacity) ? Math.max(1, Math.floor(requestedCapacity)) : 32;
@@ -59,14 +63,25 @@ export function createTasksQuery(options: { maxCachedPages?: number } = {}) {
 		controller = abort;
 		setState((previous) => ({ ...previous, loading: true, error: null }));
 		try {
-			let page = force ? undefined : cache.get(pageKey);
+			let local = false;
+			let page: WorkItemPage | WorkItemGroupedPage | undefined;
+			if (!append && provider.fields) {
+				const localSource = { list: provider.list.bind(provider), fields: provider.fields };
+				const items = await collectLocalTasks(localSource, pageQuery, abort.signal);
+				if (token !== generation || abort.signal.aborted) return;
+				if (items) {
+					page = await projectLocalTasks(localSource, items, pageQuery);
+					local = true;
+				}
+			}
+			page ??= force ? undefined : cache.get(pageKey);
 			if (!page)
 				page = pageQuery.groupBy
 					? await provider.grouped(pageQuery, abort.signal)
 					: await provider.list(pageQuery, abort.signal);
 			if (token !== generation || abort.signal.aborted) return;
 			cache.delete(pageKey);
-			cache.set(pageKey, page);
+			if (!local) cache.set(pageKey, page);
 			while (cache.size > capacity) {
 				const oldest = cache.keys().next().value;
 				if (oldest === undefined) break;
@@ -90,7 +105,8 @@ export function createTasksQuery(options: { maxCachedPages?: number } = {}) {
 			} else for (const item of page.items) rows.set(identity(item), item);
 			setState({
 				items: [...rows.values()],
-				groups: [...groups.values()],
+				groups: pageQuery.groupBy ? [...groups.values()] : [],
+				local,
 				nextCursor: page.nextCursor && !consumedCursors.has(page.nextCursor) ? page.nextCursor : null,
 				total: page.total ?? null,
 				loading: false,

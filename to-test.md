@@ -5354,3 +5354,5 @@ Visual evidence: worktree Vite fixture mounted the real NotificationsTab and Toa
 - [x] Explicit text, key lookup, valid JQL, saved-filter predicates and board query scoping retain their meanings. _(verified: `plugins/jira/jql-errors.test.js`, 31 Jira tests pass; 11 Tasks consumer tests pass.)_
 
 - [ ] Tasks/plugins batch 1013: after Boss restarts `make dev` (or rebuilds release), verify review-bot findings in Tasks and PR review threads. The merged Rust changes require a backend restart to load.
+
+- [ ] Tasks small-list mode (#1851-7ade): after Boss restarts the Rust backend, check a GitHub small scope shows local queries and title sorting, while unknown-total Jira stays server mode. New project_work_items IPC/HTTP requires rebuild; never reload the desktop during agent work.
