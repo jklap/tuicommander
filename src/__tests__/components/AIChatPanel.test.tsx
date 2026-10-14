@@ -3533,6 +3533,48 @@ describe("AIChatPanel: provider retry status", () => {
 		}
 	});
 
+	// Catches: the absolutely positioned user Copy collapsing to 7.9px and wrapping at a 500px panel.
+	// jsdom has no layout engine. Chromium measured the one-line label at 27.109375x16.5px;
+	// verify the production CSS preserves that intrinsic line and budgets enough transcript gutter.
+	it("keeps Copy within the transcript gutter at a 500px AI Chat panel", async () => {
+		const style = document.createElement("style");
+		style.textContent = readFileSync(
+			resolve(process.cwd(), "src/components/AIChatPanel/AIChatPanel.module.css"),
+			"utf8",
+		);
+		document.head.append(style);
+		try {
+			const { container } = await retryingPanel();
+			const panel = container.querySelector<HTMLElement>("#ai-chat-panel")!;
+			panel.style.width = "500px";
+			feed({ kind: "promptSent", text: "Question for geometry verification" });
+			feed({
+				kind: "sessionUpdate",
+				update: {
+					sessionUpdate: "agent_message_chunk",
+					content: { type: "text", text: "Assistant answer for geometry verification." },
+				},
+			});
+			await settle();
+			const transcript = container.querySelector<HTMLElement>('[aria-label="Chat transcript"]')!;
+			const userCopy = container.querySelector<HTMLElement>('[aria-label="Copy user message"]')!;
+			const assistantCopy = container.querySelector<HTMLElement>('[aria-label="Copy assistant message"]')!;
+			expect(userCopy.textContent).toBe("Copy");
+			expect(assistantCopy.textContent).toBe("Copy");
+			const copy = getComputedStyle(userCopy);
+			const bubble = getComputedStyle(userCopy.parentElement!);
+			const list = getComputedStyle(transcript);
+			expect(copy.whiteSpace).toBe("nowrap");
+			expect(copy.position).toBe("absolute");
+			expect(copy.right).toBe("100%");
+			const rowWidth = 500 - parseFloat(list.paddingLeft) - parseFloat(list.paddingRight);
+			const gutter = rowWidth * (1 - parseFloat(bubble.maxWidth) / 100);
+			expect(gutter).toBeGreaterThanOrEqual(27.109375 + parseFloat(copy.marginRight));
+		} finally {
+			style.remove();
+		}
+	});
+
 	// Catches: retaining the provider's initial text instead of counting down from update arrival.
 	it("counts a recorded 12s provider retry down to 4s after 8s", async () => {
 		const { container } = await retryingPanel();
