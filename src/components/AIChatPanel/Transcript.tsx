@@ -459,6 +459,10 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 			lastScrollTop = container.scrollTop;
 		}
 	};
+	const onTouchEnd = () => {
+		touchActive = false;
+		if (stickToBottom) scrollToBottom();
+	};
 	const onScroll = () => {
 		if (!container) return;
 		const atBottom = container.scrollHeight - container.clientHeight - container.scrollTop <= 1;
@@ -625,12 +629,8 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 				onTouchStart={() => {
 					touchActive = true;
 				}}
-				onTouchEnd={() => {
-					touchActive = false;
-				}}
-				onTouchCancel={() => {
-					touchActive = false;
-				}}
+				onTouchEnd={onTouchEnd}
+				onTouchCancel={onTouchEnd}
 			>
 				<Show when={finding()}>
 					<div class={s.findBar}>
