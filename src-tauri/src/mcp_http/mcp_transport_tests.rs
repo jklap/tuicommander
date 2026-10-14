@@ -14,5 +14,7 @@ include!("mcp_transport_peer_tests.rs");
 #[cfg(unix)]
 include!("mcp_transport_peer_identity_tests.rs");
 include!("mcp_transport_session_agent_tests.rs");
+#[cfg(unix)]
+include!("suspended_sessions_tests.rs");
 include!("mcp_transport_ancillary_tests.rs");
 include!("mcp_transport_registration_tests.rs");

@@ -43,7 +43,11 @@ describe("suspendTerminal (critic 1358)", () => {
 			const id = addTab();
 			const [a, b] = await Promise.all([suspendTerminal(id), suspendTerminal(id)]);
 			expect([a.ok, b.ok].sort()).toEqual([false, true]);
-			expect(mockRpc.mock.calls.filter(([cmd]) => cmd === "close_pty")).toHaveLength(1);
+			expect(
+				mockRpc.mock.calls.filter(
+					([cmd, args]) => cmd === "suspended_session_action" && args.request.action === "suspend",
+				),
+			).toHaveLength(1);
 		}));
 
 	// Catches: a failed close wipes the pending commands or the live session id, leaving a tab that
@@ -98,26 +102,17 @@ describe("suspendRefusal boundaries (critic 1358)", () => {
 });
 
 describe("resumeTerminal (critic 1358)", () => {
-	beforeEach(() => {
-		mockRpc.mockReset().mockResolvedValue(undefined);
-		mockVerifyResume.mockReset().mockResolvedValue("claude --resume agent-uuid");
-	});
-
-	// Catches: resume builds the command from different inputs than the restart restore (no cwd,
-	// no launch command), so a CLAUDE_CONFIG_DIR alias resumes in the wrong store.
-	it("builds the resume command from the saved record the restart uses", () =>
+	// Catches: resume addressing an agent id rather than the durable TUIC identity.
+	it("resumes the Rust record under its stable identity", () =>
 		testInScope(async () => {
+			mockRpc.mockReset().mockResolvedValue({ session_id: "new-pty" });
 			const id = addTab();
 			await suspendTerminal(id);
-			mockVerifyResume.mockClear();
 			await resumeTerminal(id);
-			expect(mockVerifyResume).toHaveBeenCalledWith(
-				"claude",
-				"/Gits/wt/feature",
-				"tab-uuid",
-				"agent-uuid",
-				"claude --dangerously-skip-permissions",
-			);
+			expect(mockRpc).toHaveBeenCalledWith("suspended_session_action", {
+				request: { action: "resume", tuicSession: "tab-uuid" },
+			});
+			expect(terminalsStore.get(id)?.sessionId).toBe("new-pty");
 		}));
 });
 

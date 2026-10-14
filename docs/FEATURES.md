@@ -331,11 +331,11 @@ Idle, unfocused terminals are suspended to stop them consuming CPU and battery. 
 A terminal tab can be suspended from its context menu (**Suspend Tab**) or with MCP `session action=suspend`. The PTY and its agent end, so memory and CPU are released, while the tab stays restorable exactly like a tab after a TUICommander restart.
 
 - **Kept on the tab** — cwd, worktree, alias, `tuic_session`, agent type, agent session id and launch command. The tab shows a `zz` badge and a **Suspended** notice with a **Resume** button.
-- **Resume** — the **Resume** button or **Resume Tab** menu entry opens a new PTY with the same cwd and, for an agent tab, types the command `verifyAndBuildResumeCommand` builds, the function the restart-restore path uses. A plain shell tab reopens a shell. The command is typed automatically at the first idle prompt, with no restart banner: clicking Resume is the confirmation, and the banner would ask for a second click.
-- **Persistence** — `suspended` is stored in the tab's `savedTerminals` record, so a restart restores the tab suspended (a plain shell tab too) and never resumes it by itself.
-- **Refusals** — the tab is not suspended while the agent is working (`working`/`starting` or background work), a question awaits input, compose commands are queued, or a plain shell is busy. An agent tab whose session cannot be resumed is refused. MCP returns `Cannot suspend: <reason>` before any event is emitted, and also for a session that already exited.
-- **MCP verdict** — `session action=suspend` waits (up to 20 s) for the tab's answer and returns `{ok:true}` or `Cannot suspend: <reason>` when the tab refuses. With no UI attached (a headless `tuic-remote` with no open client) it returns an error instead of reporting success.
-- **Event** — `session-suspend-requested` (`{ session_id, request_id }`) from MCP `session action=suspend`; the UI owns the tab and performs the suspend
+- **Resume** — the button and menu ask Rust to verify the saved agent session against its launch profile and open a replacement PTY in the same folder. A shell tab reopens its shell; the frontend attaches the returned PTY without sending another command.
+- **Persistence** — Rust writes `suspended-sessions.json` in the config directory before ending the PTY. Records keyed by `tuic_session` retain cwd, worktree, alias, agent type, agent session id, launch command, pane slot and reason (`user`, reserved `idle_hibernate`). A recreated frontend lists these records and renders suspended tabs without starting processes.
+- **Refusals** — working/starting agents, background work, unanswered questions, queued commands, busy shells, exited sessions and non-resumable agents remain protected by Rust checks.
+- **MCP verdict** — `session action=suspend` returns `{ok:true}` after Rust persists and ends the PTY, including when no UI is attached. Refusals return `Cannot suspend: <reason>`.
+- **Event** — `session-suspended` carries `{record}` over desktop events and SSE before the PTY closes. The IPC/HTTP `suspended_session_action` endpoint supports listing, suspending, resuming, forgetting and metadata synchronization.
 
 ---
 

@@ -83,7 +83,7 @@ describe("Terminal under Suspend (critic 1358)", () => {
 
 	// Catches: suspend leaves the Terminal's own sessionInitialized/sessionId so the PTY is
 	// respawned immediately, or resume forgets to re-run initSession and the tab stays blank.
-	it("opens exactly one new PTY on resume and none while suspended", async () => {
+	it("attaches exactly one Rust PTY on resume and none while suspended", async () => {
 		const { id } = openLiveTab();
 		await waitFor(() => expect(resize).toHaveBeenCalled());
 
@@ -91,9 +91,10 @@ describe("Terminal under Suspend (critic 1358)", () => {
 		await new Promise((r) => setTimeout(r, 20));
 		expect(createSession).not.toHaveBeenCalled();
 
+		mockRpc.mockResolvedValue({ session_id: "fresh-session" });
 		expect((await resumeTerminal(id)).ok).toBe(true);
-		await waitFor(() => expect(createSession).toHaveBeenCalledTimes(1));
-		expect(createSession).toHaveBeenCalledWith(expect.objectContaining({ cwd: "/Gits/alpha" }));
+		await waitFor(() => expect(resize).toHaveBeenCalledWith("fresh-session", expect.any(Number), expect.any(Number)));
+		expect(createSession).not.toHaveBeenCalled();
 		await waitFor(() => expect(terminalsStore.get(id)?.sessionId).toBe("fresh-session"));
 	});
 });

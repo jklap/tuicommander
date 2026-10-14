@@ -34,7 +34,8 @@ import { navigateToTerminal } from "../utils/navigateToTerminal";
 import { assignTabToActiveGroup } from "../utils/paneTabAssign";
 import { isAbsolutePath, pathStripPrefix } from "../utils/pathUtils";
 import { sameDir, unregisteredRepoRootFor } from "../utils/repoOwnership";
-import { isSuspendingOrSuspended, suspendTerminal } from "../utils/suspendTerminal";
+import { adoptSuspendedSession, type SuspendedSession } from "../utils/suspendedSessions";
+import { isSuspendingOrSuspended } from "../utils/suspendTerminal";
 import { createRevisionCoalescer } from "./revisionCoalescer";
 
 /** Track PTY sessions created by the browser client so we only close our own on unload */
@@ -177,6 +178,19 @@ function collectTerminalSnapshots(): Map<string, Map<string, SavedTerminal[]>> {
 			for (const termId of branch.terminals) {
 				const t = terminalsStore.get(termId);
 				if (!t) continue;
+				if (t.sessionId && !t.suspended)
+					void rpc("suspended_session_action", {
+						request: {
+							action: "sync",
+							sessionId: t.sessionId,
+							metadata: {
+								name: t.name,
+								agentSessionId: t.agentSessionId,
+								agentLaunchCommand: t.agentLaunchCommand,
+								paneSlot: paneLayoutStore.getGroupForTab(termId),
+							},
+						},
+					}).catch((error) => appLogger.warn("terminal", "Failed to sync suspend metadata", { error: String(error) }));
 				saved.push({
 					name: t.name,
 					cwd: t.cwd,
@@ -655,6 +669,15 @@ export async function initApp(deps: AppInitDeps) {
 		if (browserCreatedSessions.has(session_id)) return;
 		const existing = terminalsStore.getIds().find((id) => terminalsStore.get(id)?.sessionId === session_id);
 		if (existing) return;
+		const suspended = terminalsStore.getIds().find((id) => {
+			const tab = terminalsStore.get(id);
+			return tab?.suspended && tab.tuicSession === session_id;
+		});
+		if (suspended) {
+			terminalsStore.setSessionId(suspended, session_id);
+			terminalsStore.update(suspended, { suspended: false });
+			return;
+		}
 
 		appLogger.info("app", `Remote session created: ${session_id}`);
 		// `activeId` is null whenever the user is looking at a non-terminal tab, not
@@ -729,25 +752,18 @@ export async function initApp(deps: AppInitDeps) {
 		if (termId) terminalsStore.update(termId, { name: event.payload.name, nameIsCustom: event.payload.is_custom });
 	}).catch((err) => appLogger.error("app", "Failed to register session-renamed listener", err));
 
-	// `session action=suspend` waits for this tab's verdict. A client without the tab stays
-	// silent: another attached client may own it, and the backend times out if none does.
-	listen<{ session_id: string; request_id: string; __tuic_origin?: unknown }>("session-suspend-requested", (event) => {
+	listen<{ record: SuspendedSession; __tuic_origin?: unknown }>("session-suspended", (event) => {
 		if (event.payload.__tuic_origin !== undefined) return;
-		const termId = terminalsStore.getTerminalForSession(event.payload.session_id);
-		if (!termId) return;
-		const requestId = event.payload.request_id;
-		suspendTerminal(termId)
-			.then((outcome) => {
-				if (!outcome.ok)
-					appLogger.warn("terminal", "MCP suspend refused by the tab", { termId, reason: outcome.reason });
-				return rpc("session_suspend_response", {
-					requestId,
-					ok: outcome.ok,
-					reason: outcome.ok ? null : outcome.reason,
-				});
-			})
-			.catch((err) => appLogger.error("terminal", "Failed to answer the MCP suspend request", err));
-	}).catch((err) => appLogger.error("app", "Failed to register session-suspend-requested listener", err));
+		const record = event.payload.record;
+		const id = adoptSuspendedSession(record, deps.getDefaultFontSize());
+		assignSessionToRepoBranch(
+			record.session_id,
+			id,
+			record.worktree?.path ?? record.cwd,
+			deps.registerRepo,
+			deps.refreshAllBranchStats,
+		);
+	}).catch((err) => appLogger.error("app", "Failed to register session-suspended listener", err));
 
 	listen<{ session_id: string; alias: string; __tuic_origin?: unknown }>("term-alias-assigned", (event) => {
 		// A mirrored alias names a session on another machine: no tab here ever
@@ -877,6 +893,11 @@ export async function initApp(deps: AppInitDeps) {
 	// Keep remoteSessionTabs consistent if the user closes a remote tab manually
 	// before the backend session-closed event arrives.
 	terminalsStore.onRemove((termId) => {
+		const term = terminalsStore.get(termId);
+		if (term?.suspended)
+			void rpc("suspended_session_action", { request: { action: "forget", tuicSession: term.tuicSession } }).catch(
+				(error) => appLogger.warn("terminal", "Failed to remove suspended record", { error: String(error) }),
+			);
 		for (const [sid, tid] of remoteSessionTabs) {
 			if (tid === termId) remoteSessionTabs.delete(sid);
 		}
@@ -1051,6 +1072,24 @@ export async function initApp(deps: AppInitDeps) {
 			);
 		}
 		terminalsStore.setActive(terminalsStore.getIds()[0]);
+	}
+
+	try {
+		const records = await rpc<Record<string, SuspendedSession>>("suspended_session_action", {
+			request: { action: "list" },
+		});
+		for (const record of Object.values(records ?? {})) {
+			const id = adoptSuspendedSession(record, deps.getDefaultFontSize());
+			assignSessionToRepoBranch(
+				record.session_id,
+				id,
+				record.worktree?.path ?? record.cwd,
+				deps.registerRepo,
+				deps.refreshAllBranchStats,
+			);
+		}
+	} catch (error) {
+		appLogger.error("app", "Failed to restore suspended sessions", error);
 	}
 
 	// Ensure non-git repos have a shell branch (migration for repos persisted

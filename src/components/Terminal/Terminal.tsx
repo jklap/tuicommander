@@ -852,6 +852,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 				try {
 					await pty.resize(sessionId, grid.rows, grid.cols);
 					reconnected = true;
+					await attachSessionListeners(sessionId);
 					appLogger.info("terminal", `initSession(${props.id}) — reconnected to ${sessionId}`);
 					detectAgentForTerminal(props.id, "idle").catch(() => {});
 				} catch {
@@ -989,7 +990,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 		}),
 	);
 
-	// Suspend ends the PTY and keeps the tab; resume opens a new PTY through initSession.
+	// Suspend detaches the PTY; resume attaches the replacement already opened by Rust.
 	createEffect(
 		on(
 			() => terminalsStore.get(props.id)?.suspended ?? false,
@@ -1001,10 +1002,13 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					sessionId = null;
 					setCurrentSessionId(null);
 					sessionInitialized = false;
-				} else if (isVisible()) {
-					initSession().catch((e) =>
-						appLogger.error("terminal", "initSession failed after resume", { error: String(e) }),
-					);
+				} else {
+					sessionId = terminalsStore.get(props.id)?.sessionId ?? null;
+					setCurrentSessionId(sessionId);
+					if (isVisible())
+						initSession().catch((e) =>
+							appLogger.error("terminal", "initSession failed after resume", { error: String(e) }),
+						);
 				}
 			},
 			{ defer: true },

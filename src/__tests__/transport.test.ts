@@ -620,16 +620,12 @@ describe("transport", () => {
 			expect(result.path).toBe("/sessions/abc/resume");
 		});
 
-		it("maps session_suspend_response to POST /mcp/suspend-response", () => {
-			const result = mapCommandToHttp("session_suspend_response", {
-				requestId: "r1",
-				ok: false,
-				reason: "agent working",
-			});
-			expect(result).toMatchObject({
+		it("maps durable session actions to POST /sessions/suspended", () => {
+			const request = { action: "suspend", sessionId: "pty" };
+			expect(mapCommandToHttp("suspended_session_action", { request })).toMatchObject({
 				method: "POST",
-				path: "/mcp/suspend-response",
-				body: { request_id: "r1", ok: false, reason: "agent working" },
+				path: "/sessions/suspended",
+				body: request,
 			});
 		});
 

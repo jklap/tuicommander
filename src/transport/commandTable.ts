@@ -25,6 +25,7 @@ type CommandTableEntry = { map: (args: Record<string, unknown>, p: ArgEncoder) =
  * The `p` helper encodes a required argument for URL usage (throws if missing).
  */
 export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
+	suspended_session_action: { map: (args) => ({ method: "POST", path: "/sessions/suspended", body: args.request }) },
 	work_item_provider_bridge: {
 		map: (args) => ({ method: "POST", path: "/work-items/provider-bridge", body: args.input }),
 	},
@@ -467,14 +468,6 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			method: "POST",
 			path: "/mcp/confirm-response",
 			body: { request_id: args.requestId, confirmed: args.confirmed },
-		}),
-	},
-	// The tab's verdict on `session action=suspend`; the MCP call waits for it.
-	session_suspend_response: {
-		map: (args) => ({
-			method: "POST",
-			path: "/mcp/suspend-response",
-			body: { request_id: args.requestId, ok: args.ok, reason: args.reason ?? null },
 		}),
 	},
 	get_session_foreground_process: {

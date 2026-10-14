@@ -742,6 +742,7 @@ pub(super) fn register_pty_session(
 pub(super) struct RequestedIdentity {
     pub session_id: Option<String>,
     pub alias: Option<String>,
+    pub startup_command: Option<String>,
 }
 
 pub(super) fn spawn_pty_session(
@@ -799,6 +800,31 @@ pub(super) fn spawn_pty_session(
             crate::shell_integration::inject(&state.data_dir, &shell, &mut cmd);
             crate::pty::bind_pty_identity(&state, &mut cmd, &session_id, None);
             crate::pty::apply_agent_screen_env(&mut cmd, &std::collections::HashMap::new());
+            if let Some(command) = &requested.startup_command {
+                let (env, command) = crate::session_resume::shell_launch(command);
+                for (key, value) in env {
+                    cmd.env(key, value);
+                }
+                #[cfg(not(windows))]
+                {
+                    cmd.arg("-i");
+                    cmd.arg("-c");
+                    cmd.arg(&command);
+                }
+                #[cfg(windows)]
+                {
+                    let name = shell.to_ascii_lowercase();
+                    if name.contains("powershell") || name.contains("pwsh") {
+                        cmd.arg("-NoExit");
+                        cmd.arg("-Command");
+                    } else if name.contains("cmd.exe") {
+                        cmd.arg("/K");
+                    } else {
+                        cmd.arg("-c");
+                    }
+                    cmd.arg(&command);
+                }
+            }
             cmd
         },
     )
@@ -906,6 +932,7 @@ pub(super) async fn create_session(
             RequestedIdentity {
                 session_id: body.session_id,
                 alias: body.alias,
+                ..Default::default()
             },
         )
     })
@@ -1185,6 +1212,7 @@ pub(super) async fn create_session_with_worktree(
             RequestedIdentity {
                 session_id: body.config.session_id,
                 alias: body.config.alias,
+                ..Default::default()
             },
         )
     })
@@ -4436,6 +4464,7 @@ mod tests {
             super::RequestedIdentity {
                 session_id: Some("client-provided-id".to_string()),
                 alias: None,
+                ..Default::default()
             },
         );
         // PTY unavailable in CI — skip gracefully
@@ -4464,6 +4493,7 @@ mod tests {
             super::RequestedIdentity {
                 session_id: Some("dup-id".to_string()),
                 alias: None,
+                ..Default::default()
             },
         ) {
             Ok(id) => id,
@@ -4480,6 +4510,7 @@ mod tests {
             super::RequestedIdentity {
                 session_id: Some("dup-id".to_string()),
                 alias: None,
+                ..Default::default()
             },
         )
         .expect("second spawn should succeed with a fresh id");
@@ -4506,6 +4537,7 @@ mod tests {
             super::RequestedIdentity {
                 session_id: Some("aliased-row".to_string()),
                 alias: Some("tu-7".to_string()),
+                ..Default::default()
             },
         ) {
             Ok(id) => id,
