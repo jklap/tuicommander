@@ -546,9 +546,19 @@ fn executable_contract_requires_checks_and_explicit_pause_target() {
             .unwrap_err()
             .contains("deterministic final checks")
     );
-    let legacy = definitions
+    let mut legacy = definitions
         .get_published(&run.story_definition_id, 1)
         .unwrap();
+    let resume_to = legacy
+        .graph
+        .nodes
+        .iter_mut()
+        .find_map(|node| match &mut node.kind {
+            NodeKind::Pause { resume_to } => Some(resume_to),
+            _ => None,
+        })
+        .unwrap();
+    *resume_to = None;
     assert!(
         validate_executable_graph(&legacy.graph, WorkflowKind::Story, true)
             .unwrap_err()

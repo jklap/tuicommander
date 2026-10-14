@@ -744,7 +744,7 @@ Tabbed side panel with four tabs: Changes, Log, Stashes, Branches. Replaces the 
   2. Matching Claude or Codex Usage API ticker: live utilization from the active provider (click opens that provider's dashboard)
   3. PTY usage limit: weekly/session percentage from terminal output detection
   4. Agent name (lowest): icon + name of detected agent
-  - Color coding: blue < 70%, yellow 70-89%, red pulsing >= 90%
+  - Color coding: blue < 70%, yellow 70–95%, red pulsing >= 96%
   - The shared usage ticker is absorbed into the badge only when its provider label matches the active Claude or Codex agent; stale results from the previous provider stay hidden during an asynchronous tab switch
   - The usage poll has no default provider: it stays silent until a Claude or Codex tab is focused, then follows that provider and stays on it while the active tab is a shell. A Codex-only install is therefore never shown a Claude reading (or a Claude "no token") it did not ask for
   - Codex windows are named by duration (`5h`, `7d`) because the API does not label them, and only the account limit is rendered. A plan whose account limit reports a single window shows a single reading; per-model limits stay in the dashboard, where their model name is visible
@@ -851,7 +851,7 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 
 ### 6.5 Usage Limit Detection
 - Claude Code weekly and session usage percentage (from PTY output patterns)
-- Color-coded badge in status bar (blue < 70%, yellow 70-89%, red pulsing >= 90%)
+- Color-coded badge in status bar (blue < 70%, yellow 70–95%, red pulsing >= 96%)
 - Integrated into unified agent badge (see section 5.1)
 
 ### 6.6 Provider Usage Dashboards
@@ -979,7 +979,10 @@ one configured ego binary and speaks ACP to it, per
   within one panel. Open tabs and the selected tab survive hide/show and detach;
   closing a tab leaves its durable ego conversation available in the picker.
   Selecting a saved tab attaches or replays it without sending a message, with
-  connecting status or a failure reason and Retry. Tabs use conversation titles
+  connecting status or a failure reason and Retry. Provider retries show one live
+  countdown from the received delay, with cause and attempt number; zero reads
+  “retrying now”. Recovery or final failure clears the retry status.
+  Tabs use conversation titles
   or prompts; model/mode controls show pending values until options arrive.
   The focused panel uses `Cmd/Ctrl+T` for a new tab (`Cmd/Ctrl+Alt+T` in browser
   mode) and `Cmd/Ctrl+W` to close one (`Cmd/Ctrl+Alt+W` in browser mode)
@@ -3006,3 +3009,7 @@ The existing MCP `repo` tool reads linked work items or explicit references, URL
 ### Background tray and menu-bar icon
 
 Tray and menu-bar icon: Settings > General offers Always, Only in background (default), or Never. The native menu shows live working/awaiting agent counts, Show TUICommander and Quit. An attention mark appears for awaiting agents while hidden and clears on Show. Left-click shows the app on macOS and Windows; Linux uses the menu. Never, a failed tray build, or a Linux desktop without a StatusNotifier host falls back to minimizing without clearing terminal visibility. A native notice appears on the first background entry of each app run.
+
+## Plugin settings pages
+
+Loaded plugins with registered settings appear under Settings > Integrations. Search includes their catalogue field labels. Unloading removes the page and search entries. Reads, revision-checked edits, resets and secret set/unset status use the scoped Rust settings service; the UI owns no second configuration store.

@@ -675,6 +675,11 @@ configuration survive repeated calls. Corrupt configuration aborts registration
 and is moved to the existing `repositories.corrupt-<uuid>` recovery backup. Successful changes emit
 `repositories-changed` to both transports.
 
+Workspace removal also uses a strict locked update. It removes the old workspace
+restore row, its saved terminals and peer placement declarations, and clears a
+selection of that workspace. Sibling records and the main checkout remain intact.
+A changed file emits `repositories-changed` before the removal lifecycle event,
+so disconnected clients do not depend on a frontend save to retract stale paths.
 
 **Type:** `serde_json::Value` (flexible persisted JSON, shape defined by frontend)
 
@@ -1547,7 +1552,10 @@ visible; it does not resume every inactive tab.
 
 `background.tray_icon` accepts `always`, `background_only` (default), and `never`. It applies live. Never restores a hidden desktop before removing the tray. Close configured as background minimizes when the tray is disabled, fails to build, or Linux has no registered StatusNotifier host. This keeps desktop session visibility intact. The Ask dialog omits Background when unavailable. Tray state and the first-entry notice are process-local, not persisted.
 
-
 ### Rust-owned suspended tabs
 
 `suspended-sessions.json` stores an object keyed by stable `tuic_session`, with agent type, cwd/worktree, agent session id, launch command, alias, pane slot, reason, name and shell. It uses the config directory (including instance isolation), strict loading, cross-process locking and atomic updates. A failed/corrupt write leaves the live PTY intact. Frontends restore these records independently of their tab snapshot; resume removes a record after PTY creation.
+
+## Plugin settings UI
+
+Loaded plugins with registered settings appear under Settings > Integrations. Search includes their catalogue field labels. Unloading removes the page and search entries. Reads, revision-checked edits, resets and secret set/unset status use the scoped Rust settings service; the UI owns no second configuration store.
