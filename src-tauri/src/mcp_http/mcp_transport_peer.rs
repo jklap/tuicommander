@@ -1494,7 +1494,13 @@ fn handle_messaging_with_message_id(
             // Mail is filed under the peer key, so an address that names the
             // terminal has to be walked back to the peer that owns it — otherwise
             // "notify tu-1" is a dead letter with a valid-looking address.
-            let resolved_to = match state.resolve_peer_ref_checked(requested_to) {
+            let retained_to = match crate::session_wake::retained(requested_to) {
+                Ok(record) => record.map(|record| record.tuic_session),
+                Err(error) => return serde_json::json!({"error": error}),
+            };
+            let resolved_to = match state
+                .resolve_peer_ref_checked(retained_to.as_deref().unwrap_or(requested_to))
+            {
                 Ok(resolved) => resolved,
                 Err(error) => return serde_json::json!({"error": error}),
             };
@@ -1609,7 +1615,18 @@ fn handle_messaging_with_message_id(
             // `$TUIC_SESSION`, which is not the key its PTY was filed under, so the
             // old `sessions.contains_key(to)` answered "no terminal" for every peer
             // that had not been spawned by the server itself.
-            let live_pty = state.live_pty_for_peer(to);
+            let live_pty = match crate::session_wake::retained(to) {
+                Ok(Some(_)) => match crate::session_wake::ensure_live(state, to) {
+                    Ok(live) => Some(live),
+                    Err(error) => {
+                        return serde_json::json!({"message_id": msg_id, "delivered": false, "delivery_path": "inbox_only", "resume_error": error});
+                    }
+                },
+                Ok(None) => state.live_pty_for_peer(to),
+                Err(error) => {
+                    return serde_json::json!({"message_id": msg_id, "delivered": false, "resume_error": error});
+                }
+            };
             let managed_recipient = live_pty.is_some();
             let acp_inbox_subscriber = !managed_recipient && state.acp.has_acp_inbox_subscriber(to);
             if urgent {
@@ -1916,7 +1933,7 @@ fn handle_messaging_with_message_id(
 
             #[cfg(unix)]
             if let Some(pty_session) = live_pty.as_deref()
-                && let Err(e) = crate::pty::wake_session(state, pty_session)
+                && let Err(e) = crate::session_wake::ensure_live(state, pty_session)
             {
                 tracing::debug!(session = %pty_session, error = %e, "Wake on message delivery failed");
             }

@@ -2,6 +2,7 @@ import { createEffect, createSignal, onCleanup, Show } from "solid-js";
 import { AGENT_DISPLAY, type AgentType } from "../../agents";
 import { AgentIcon } from "../../components/ui/AgentIcon";
 import { appLogger } from "../../stores/appLogger";
+import type { ChatViewWake } from "../../stores/chatView";
 import { toastsStore } from "../../stores/toasts";
 import { rpc } from "../../transport";
 import { CommandInput } from "../components/CommandInput";
@@ -13,6 +14,7 @@ import { SessionHeaderOverlay, type SessionHeaderPanel } from "../components/Ses
 import { SuggestChips } from "../components/SuggestChips";
 import type { ComposerInputKey } from "../components/syncGuards";
 import { TerminalKeybar } from "../components/TerminalKeybar";
+import { useSessionChatView } from "../components/useSessionChatView";
 
 import { getAgentCommands } from "../config/agentCommands";
 import { useMobileVoice } from "../useMobileVoice";
@@ -24,6 +26,7 @@ import styles from "./SessionDetailScreen.module.css";
 
 interface SessionDetailScreenProps {
 	session: SessionInfo;
+	subscribeChatWake: ChatViewWake;
 	sessionExists: boolean;
 	onBack: () => void;
 	onOpenFiles: () => void;
@@ -59,6 +62,12 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 	const [moreOpen, setMoreOpen] = createSignal(false);
 	const [headerPanel, setHeaderPanel] = createSignal<SessionHeaderPanel | null>(null);
 	const agentType = () => sessionState()?.agent_type;
+	const chat = useSessionChatView({
+		sessionId: () => props.session.session_id,
+		agentType,
+		sessionExists: () => props.sessionExists,
+		subscribeWake: props.subscribeChatWake,
+	});
 	const [browserDictating, setBrowserDictating] = createSignal(false);
 	const voice = useMobileVoice(
 		() => props.session.session_id,
@@ -255,6 +264,7 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 						<Show when={voice.phase()}> · Voice {voice.phase()}</Show>
 					</span>
 				</button>
+				<chat.Toggle />
 				<Show when={voice.available()}>
 					<button
 						type="button"
@@ -443,7 +453,9 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 			</Show>
 
 			<div class={styles.outputArea}>
+				<chat.View />
 				<OutputView
+					visible={!chat.active()}
 					sessionId={props.session.session_id}
 					onOpenFileLink={props.onOpenFileLink}
 					onStateChange={setWsState}

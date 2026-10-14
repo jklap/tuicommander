@@ -3176,3 +3176,10 @@ heartbeat sequence contract. Immediate commands do not change those sequences.
 ### Tasks comment comparison
 
 `compare_work_item_comments` / `POST /tasks/compare-comments` accepts `{detail, previous, enabled, followed}` and returns `{snapshot, notify}`. `detail` is the unchanged WorkItemDetail; `previous` is null or `{latest, ids, count}` (latest is a UTC timestamp in milliseconds). The pure Rust comparison has no provider IO or persistence. First observations, disabled/unfollowed inputs, older comments and edits are silent. GitHub full comment counts cover normal comments outside the first page. Desktop and HTTP use the same implementation.
+
+
+### Shared session wake
+
+`POST /sessions/wake` accepts `{tuicSession}` and returns `{ok:true,session_id}`. It has the same local-or-authenticated guard as suspended-session actions and maps to IPC `resume_session`. An already-live target returns its current PTY. A failure returns HTTP 400 with `{error}` and retains the record. MCP session list/status expose retained sessions with `state:"hibernated"`; submit resumes and returns `status:"resuming"` after accepting input into the existing ready-window queue. Mail wake failure reports `resume_error` without deleting inbox mail.
+
+`session-created` carries optional `tuic_session` on IPC and SSE so a backend wake reattaches the existing suspended tab. Hibernated terminal aliases remain valid peer-mail addresses.

@@ -19,12 +19,10 @@ const CLIENT_ID: &str = "Ov23liN95BHKQDboVFRl";
 
 /// Scopes requested during Device Flow authentication.
 ///
-/// Only `repo` is needed: it covers all REST/GraphQL endpoints TUIC calls
-/// (`/repos/...`, `viewer`, PRs, issues, checks) including org-owned private
-/// repos. Access to repos in a SAML-SSO org comes from `repo` + the user's
-/// per-org SSO token authorization — NOT from `read:org`, which only grants
-/// org/team/membership reads that TUIC never performs.
-const OAUTH_SCOPES: &str = "repo";
+/// `repo` covers repository REST/GraphQL operations; `read:project` permits
+/// Projects v2 reads. Existing logins must authorize again to gain that scope.
+/// SAML-SSO access still requires the user's per-org token authorization.
+const OAUTH_SCOPES: &str = "repo read:project";
 
 // ---------------------------------------------------------------------------
 // Device Flow types
@@ -53,21 +51,24 @@ struct GithubTokenResponse {
 // Device Flow API calls
 // ---------------------------------------------------------------------------
 
+/// Construct the device-code wire request shared by every authentication entry point.
+fn device_flow_request(client: &reqwest::Client) -> reqwest::RequestBuilder {
+    client
+        .post("https://github.com/login/device/code")
+        .header("Accept", "application/json")
+        .form(&[("client_id", CLIENT_ID), ("scope", OAUTH_SCOPES)])
+}
+
 /// Start the Device Flow by requesting a device code from GitHub.
 pub(crate) async fn start_device_flow(
     client: &reqwest::Client,
 ) -> Result<DeviceCodeResponse, String> {
-    let params = [("client_id", CLIENT_ID), ("scope", OAUTH_SCOPES)];
-
     crate::github_debug::log_api(
         "POST",
         "https://github.com/login/device/code",
         "start_device_flow",
     );
-    let response = client
-        .post("https://github.com/login/device/code")
-        .header("Accept", "application/json")
-        .form(&params)
+    let response = device_flow_request(client)
         .send()
         .await
         .map_err(|e| format!("Failed to start Device Flow: {e}"))?;
@@ -1221,5 +1222,35 @@ mod tests {
         let _ = crate::credentials::delete(Credential::GithubToken(&acc.id));
 
         assert_eq!(resolve_token_for_account(&acc), (None, TokenSource::None));
+    }
+}
+
+#[cfg(test)]
+mod device_scope_tests {
+    /// Catches: a newly authorized TUIC account cannot read Projects v2 because consent omits read:project.
+    #[test]
+    fn device_flow_requests_projects_read_scope() {
+        let request = super::device_flow_request(&reqwest::Client::new())
+            .build()
+            .expect("valid device-code request");
+        assert_eq!(request.method(), reqwest::Method::POST);
+        assert_eq!(
+            request.url().as_str(),
+            "https://github.com/login/device/code"
+        );
+        let bytes = request
+            .body()
+            .and_then(reqwest::Body::as_bytes)
+            .expect("form body");
+        let form: std::collections::HashMap<_, _> = url::form_urlencoded::parse(bytes).collect();
+        let scopes: std::collections::HashSet<_> = form["scope"].split_whitespace().collect();
+        assert!(
+            scopes.contains("repo"),
+            "repository access must be retained"
+        );
+        assert!(
+            scopes.contains("read:project"),
+            "Projects v2 reads require read:project consent"
+        );
     }
 }

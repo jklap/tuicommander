@@ -148,6 +148,7 @@ Right-click an HTTP(S) terminal link (including localhost) and choose **Start in
 
 - **Remote replay health** — Stream failure, unreadable frames and initial replay stalls show a persistent error toast. Reconnect success requires a delivered frame; healthy idle terminals have no output-silence deadline.
 
+- **Mobile Claude CLI / Chat** — Switch in the existing session header; the composer and terminal stream stay mounted. Both desktop and mobile let the backend decide Claude transcript binding and show a notice when unavailable. Returning to CLI follows the latest output.
 - **CLI / Chat view** — Claude and Grok terminals switch between the grid and a conversation view with docked Compose input, built from the agent's session file (Grok: its `chat_history.jsonl`, bound only through the exact `active_sessions.json` registry entry; including older prompts, human text/image follow-ups queued while Claude is busy, replies, folded tool cards, image/PDF markers and model-change cards). The grid is hidden, never unmounted.
 - **Deferred update restart** — After an in-app update installs, TUICommander restarts only when no session is busy or awaiting input; the APP UPDATE notification shows how many are busy and offers **Restart now** (with confirmation). Turn off in **Settings → General → Updates → Wait for agents before restarting** (`defer_update_relaunch`, default on).
 - **Eager resume after an update** — When the app restarts to apply an update, every agent tab with a confirmed session id resumes by itself on every branch, without selecting the branch first. Tabs without a confirmed id keep the click-to-resume banner. Turn off in **Settings → General → Updates → Resume all agents after an update** (`eager_resume_after_update`, default on).
@@ -2958,6 +2959,10 @@ moves cannot be repeated; rejected actions restore the card and show the error.
 This component is available to the Tasks host; provider registration and the
 Tasks navigation surface determine where it is shown.
 
+### GitHub Work adapter — runtime integration pending
+
+The `github-work` provider adapter supports account-scoped qualifier search, issue/PR identity, detail, paged comments and review summaries, create metadata, duplicate candidates, close reasons and host start-work intents. It is tested against recorded GitHub reads. Authenticated host wiring, lifecycle, manifest and catalog registration are present. The duplicate-picker UI and core PR-action binding remain pending. Projects v2 success-path verification needs a GitHub credential with `read:project`.
+
 ## Tasks create component
 
 Core provides a generic work-item create form. The provider declares the item
@@ -2983,6 +2988,8 @@ permissions. Recurring cadence previews retain the existing runtime limitations.
 ### History-anchored viewport scrolling
 
 Terminal gestures hold the requested history row even when output arrives before the backend applies the scroll. If capped scrollback evicts that row, the viewport clamps to the oldest retained row.
+
+GitHub OAuth now requests `repo read:project`; existing logins need reauthorization before Projects v2 reads.
 
 ### Internal repository settings owners
 
@@ -3058,3 +3065,6 @@ Settings → Notifications → Tasks has **OS notifications for Tasks**, off by 
 Use **Follow task** in an item detail to follow comments locally; use **Unfollow task** to stop. Follow state and the policy are saved in the existing Tasks UI preferences. A first observation establishes a silent baseline. Existing visible detail refreshes (including its 60-second refresh) and provider-bridge detail reads compare authoritative comments; there is no extra background poller. Your own comment action advances the baseline silently. Native notices recheck the Tasks policy after permission is granted and retain the existing background-window policy; browser clients do not send native OS notices.
 
 GitHub provides a full normal-comment count, so an increase is detected even beyond the first page. Jira and GitLab provide paged comment entries: newly observed comments notify when their creation time is newer than the prior baseline, or when a previously unseen comment ID shares its latest timestamp. Unloaded pages, unseen review sources and items that are not refreshed cannot produce a notice. Editing a comment or loading older history does not notify. No Linear provider is shipped, so it is not covered.
+
+
+Suspended tabs wake on open, submit or peer mail through the same Rust transition. Concurrent wakes share one replacement PTY and retain the TUIC peer identity. A failed wake leaves the suspended tab available for retry.

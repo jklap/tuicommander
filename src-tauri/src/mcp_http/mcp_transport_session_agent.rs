@@ -443,6 +443,28 @@ fn begin_session_submit(
             }));
         }
     };
+    let retained = match crate::session_wake::retained(&session_id) {
+        Ok(record) => record,
+        Err(error) => return BeginSubmission::Response(serde_json::json!({"error": error})),
+    };
+    if retained.is_some() {
+        return BeginSubmission::Response(
+            match crate::session_wake::ensure_live(state, &session_id).and_then(|live| {
+                crate::pty::enqueue_user_command(state, &live, text, None)
+                    .map(|queued| (live, queued))
+            }) {
+                Ok((live, queued)) => {
+                    serde_json::json!({"status": "resuming", "session_id": live, "accepted": queued.accepted})
+                }
+                Err(error) => serde_json::json!({"status": "resume_failed", "error": error}),
+            },
+        );
+    }
+    if state.session_maps.sessions.contains_key(&session_id)
+        && let Err(error) = crate::session_wake::ensure_live(state, &session_id)
+    {
+        return BeginSubmission::Response(serde_json::json!({"error": error}));
+    }
     let submission_id = Uuid::new_v4().to_string();
     let turn_epoch = submission_turn_epoch(state, &session_id);
     if !state.session_maps.sessions.contains_key(&session_id) {
@@ -947,6 +969,16 @@ pub(super) fn handle_session(
                     session
                 })
                 .collect();
+            match crate::suspended_sessions::list() {
+                Ok(records) => sessions.extend(records.into_values().map(|record| {
+                    serde_json::json!({
+                        "session_id": record.session_id, "tuic_session": record.tuic_session,
+                        "alias": record.alias, "name": record.name, "cwd": record.cwd,
+                        "agent_type": record.agent_type, "state": "hibernated", "is_caller": false,
+                    })
+                })),
+                Err(error) => return serde_json::json!({"error": error}),
+            }
             for row in crate::remote_mirror::mirrored_rows(state) {
                 let mut value = to_json_or_error(&row);
                 value["is_caller"] = serde_json::json!(false);
@@ -1470,6 +1502,15 @@ pub(super) fn handle_session(
             serde_json::json!({"ok": true})
         }
         "status" => {
+            if let Some(reference) = args["session_id"].as_str() {
+                match crate::session_wake::retained(reference) {
+                    Ok(Some(record)) => {
+                        return serde_json::json!({"state": "hibernated", "tuic_session": record.tuic_session, "agent_type": record.agent_type});
+                    }
+                    Err(error) => return serde_json::json!({"error": error}),
+                    Ok(None) => {}
+                }
+            }
             let resolved = match require_session_id(state, args, "status") {
                 Ok(id) => id,
                 Err(e) => return e,

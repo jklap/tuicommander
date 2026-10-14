@@ -577,7 +577,12 @@ describe("useSessions — SSE subscription", () => {
 		// receiving and parsing every event kind the backend publishes.
 		expect(mockSubscribeEvents).toHaveBeenCalledTimes(1);
 		const handlers = mockSubscribeEvents.mock.calls[0][0];
-		expect(Object.keys(handlers).sort()).toEqual(["pty-parsed", "session-closed", "session-created"]);
+		expect(Object.keys(handlers).sort()).toEqual([
+			"chat-view-changed",
+			"pty-parsed",
+			"session-closed",
+			"session-created",
+		]);
 
 		dispose();
 	});
@@ -822,5 +827,29 @@ describe("offline polling", () => {
 		expect(isAuthError(Object.assign(new Error("x"), { status: 403 }))).toBe(true);
 		expect(isAuthError(Object.assign(new Error("x"), { status: 500 }))).toBe(false);
 		expect(isAuthError(new Error("offline"))).toBe(false);
+	});
+});
+
+// Catches: mobile Chat opens another EventSource or refreshes unrelated PTYs.
+describe("shared mobile chat wake", () => {
+	it("routes only the watched session through the existing SSE subscription and releases it", async () => {
+		mockRpc.mockResolvedValue([] as never);
+		mockSubscribeEvents.mockClear();
+		let hook!: ReturnType<typeof useSessions>;
+		const dispose = createRoot((dispose) => {
+			hook = useSessions();
+			return dispose;
+		});
+		const wake = vi.fn();
+		const unwatch = await hook.subscribeChatWake("watched", wake);
+		expect(mockSubscribeEvents).toHaveBeenCalledTimes(1);
+		sseHandlers.get("chat-view-changed")?.({ session_id: "other" });
+		expect(wake).not.toHaveBeenCalled();
+		sseHandlers.get("chat-view-changed")?.({ session_id: "watched" });
+		expect(wake).toHaveBeenCalledTimes(1);
+		unwatch();
+		sseHandlers.get("chat-view-changed")?.({ session_id: "watched" });
+		expect(wake).toHaveBeenCalledTimes(1);
+		dispose();
 	});
 });

@@ -98,7 +98,7 @@ describe("Rust-owned suspend and resume", () => {
 			expect(terminalsStore.get(id)).toMatchObject({ suspended: false, sessionId: "pty-1" });
 		}));
 	// Catches: frontend spawning a second PTY or typing an additional resume command.
-	it("attaches the PTY that Rust resumed", () =>
+	it("opening_suspended_tab_calls_resume_session", () =>
 		testInScope(async () => {
 			const id = addAgentTab();
 			terminalsStore.update(id, { suspended: true, sessionId: null });
@@ -108,10 +108,10 @@ describe("Rust-owned suspend and resume", () => {
 				sessionId: "resumed-pty",
 				pendingInitCommand: null,
 			});
-			expect(mockRpc).toHaveBeenCalledWith("suspended_session_action", {
+			expect(mockRpc).toHaveBeenCalledWith("resume_session", {
 				repoPath: null,
 				cwd: "/Gits/alpha",
-				request: { action: "resume", tuicSession: "tab-uuid" },
+				tuicSession: "tab-uuid",
 			});
 		}));
 	// Catches: failed resume discarding the only restoreable tab.

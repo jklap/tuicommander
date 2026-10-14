@@ -273,3 +273,237 @@ async fn resumed_idle_shell_can_suspend_again_without_inheriting_the_old_exit() 
     assert_ne!(resumed_id, id, "a replacement must have its own PTY key");
     assert_eq!(second.unwrap().tuic_session, record.tuic_session);
 }
+
+// Catches: simultaneous tab/mail wakes spawning two PTYs or rejecting the second caller.
+#[tokio::test]
+async fn concurrent_wakes_spawn_one_pty() {
+    let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let _config = crate::config::set_config_dir_override(root.path().into());
+    let state = test_state();
+    let sid = suspend_shell(&state, root.path().to_str().unwrap());
+    assert_eq!(suspend(&state, &sid).await, serde_json::json!({"ok": true}));
+    let request = serde_json::json!({"action": "resume", "tuicSession": sid});
+    let (first, second) = tokio::join!(
+        crate::mcp_http::suspended_routes::dispatch(state.clone(), request.clone()),
+        crate::mcp_http::suspended_routes::dispatch(state.clone(), request),
+    );
+    let live: Vec<_> = state
+        .session_maps
+        .sessions
+        .iter()
+        .map(|entry| entry.key().clone())
+        .collect();
+    for id in &live {
+        crate::pty::close_pty_core_with_reason(&state, id, false, "test_cleanup");
+    }
+    assert_eq!(live.len(), 1);
+    assert!(first.is_ok(), "first wake failed: {first:?}");
+    assert!(second.is_ok(), "second wake failed: {second:?}");
+    assert_eq!(first.unwrap()["session_id"], second.unwrap()["session_id"]);
+}
+
+// Catches: failed wake deleting the only durable tab or hiding the failure reason.
+#[tokio::test]
+async fn resume_failure_reports_reason_and_keeps_record() {
+    let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let _config = crate::config::set_config_dir_override(root.path().into());
+    let state = test_state();
+    let cwd = root.path().join("removed");
+    std::fs::create_dir(&cwd).unwrap();
+    let sid = suspend_shell(&state, cwd.to_str().unwrap());
+    suspend(&state, &sid).await;
+    std::fs::remove_dir(&cwd).unwrap();
+    let error = crate::session_wake::ensure_live(&state, &sid).unwrap_err();
+    assert!(
+        error.contains("working directory is unavailable"),
+        "{error}"
+    );
+    assert!(
+        crate::suspended_sessions::list()
+            .unwrap()
+            .contains_key(&sid)
+    );
+    assert!(state.session_maps.sessions.is_empty());
+}
+
+// Catches: mail remaining inbox-only without restoring the addressed durable peer.
+#[tokio::test]
+async fn mail_to_hibernated_peer_resumes_it() {
+    let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let _config = crate::config::set_config_dir_override(root.path().into());
+    let state = test_state();
+    let sid = suspend_shell(&state, root.path().to_str().unwrap());
+    register_peer(&state, &sid, "sleeping", "sleeping-mcp");
+    register_peer(&state, TEST_UUID_A, "sender", "sender-mcp");
+    suspend(&state, &sid).await;
+    let response = handle_messaging(
+        &state,
+        &serde_json::json!({"action":"send", "to":sid, "message":"retained payload"}),
+        Some("sender-mcp"),
+    );
+    let live = state.live_pty_for_peer(&sid);
+    let inbox_count = state.agent_inbox.get(&sid).map(|inbox| inbox.len());
+    if let Some(id) = &live {
+        crate::pty::close_pty_core_with_reason(&state, id, false, "test_cleanup");
+    }
+    assert!(response.get("error").is_none(), "{response}");
+    assert!(live.is_some(), "{response}");
+    assert_eq!(inbox_count, Some(1));
+}
+
+// Catches: a resumed PTY no longer resolving through the peer's stable identity.
+#[tokio::test]
+async fn resumed_pty_keeps_tuic_session_and_peer_resolves() {
+    let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let _config = crate::config::set_config_dir_override(root.path().into());
+    let state = test_state();
+    let sid = suspend_shell(&state, root.path().to_str().unwrap());
+    register_peer(&state, &sid, "retained-peer", "peer-mcp");
+    suspend(&state, &sid).await;
+    let live = crate::session_wake::ensure_live(&state, &sid).unwrap();
+    let resolved = state.live_pty_for_peer(&sid);
+    crate::pty::close_pty_core_with_reason(&state, &live, false, "test_cleanup");
+    assert_eq!(resolved.as_deref(), Some(live.as_str()));
+    assert_ne!(live, sid);
+}
+
+// Catches: list/status overlooking retained sessions while the WebView is absent.
+#[tokio::test]
+async fn hibernated_session_is_visible_in_mcp_list_and_status() {
+    let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let _config = crate::config::set_config_dir_override(root.path().into());
+    let state = test_state();
+    let sid = suspend_shell(&state, root.path().to_str().unwrap());
+    suspend(&state, &sid).await;
+    let status = handle_session(
+        &state,
+        &serde_json::json!({"action":"status", "session_id":sid}),
+        None,
+    );
+    assert_eq!(status["state"], "hibernated");
+    let list = handle_session(&state, &serde_json::json!({"action":"list"}), None);
+    assert!(
+        list.as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["tuic_session"] == sid && row["state"] == "hibernated")
+    );
+}
+
+// Catches: resumed startup dropping or duplicating the queued submission.
+#[tokio::test]
+async fn submit_to_hibernated_session_resumes_then_delivers_once() {
+    let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let _config = crate::config::set_config_dir_override(root.path().into());
+    let state = test_state();
+    AppState::spawn_session_state_accumulator(state.clone());
+    let identity = uuid::Uuid::new_v4().to_string();
+    let script = root.path().join("owned-composer.sh");
+    let receipt = root.path().join("receipt");
+    // Owned protocol fixture, not a claim about any vendor CLI: the reader publishes
+    // readiness, accepts one complete input line, and records the observable effect.
+    std::fs::write(&script, "#!/bin/sh\nprintf '\\033]7770;state=idle\\007'\nwhile IFS= read -r line; do printf '%s\\n' \"$line\" >> receipt; done\n").unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let record = crate::suspended_sessions::SuspendedSession {
+        tuic_session: identity.clone(),
+        session_id: "old-pty".into(),
+        cwd: root.path().to_string_lossy().into_owned(),
+        shell: "/bin/sh".into(),
+        agent_type: Some("amp".into()),
+        launch_command: Some(crate::prompt::shell_quote(script.to_str().unwrap())),
+        ..Default::default()
+    };
+    std::fs::write(
+        root.path().join("suspended-sessions.json"),
+        serde_json::to_vec(&std::collections::BTreeMap::from([(
+            identity.clone(),
+            record,
+        )]))
+        .unwrap(),
+    )
+    .unwrap();
+    let response = crate::mcp_http::mcp_transport_session_agent::handle_session_submit(
+        &state,
+        &serde_json::json!({"session_id":identity, "input":"deliver-once"}),
+        false,
+    )
+    .await;
+    let live = state.live_pty_for_peer(&identity).unwrap();
+    let observed = tokio::time::timeout(std::time::Duration::from_secs(120), async {
+        loop {
+            if let Ok(bytes) = std::fs::read_to_string(&receipt) {
+                break bytes;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    crate::pty::close_pty_core_with_reason(&state, &live, false, "test_cleanup");
+    assert_eq!(response["status"], "resuming", "{response}");
+    assert_eq!(observed.unwrap(), "deliver-once\n");
+    assert_eq!(std::fs::read_to_string(receipt).unwrap(), "deliver-once\n");
+}
+
+// Catches: shared wake spawning a replacement rather than continuing the stopped PTY.
+#[tokio::test]
+async fn standby_session_wakes_through_the_same_entry_point() {
+    let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let _config = crate::config::set_config_dir_override(root.path().into());
+    let state = test_state();
+    let sid = suspend_shell(&state, root.path().to_str().unwrap());
+    let pgid = state
+        .session_maps
+        .sessions
+        .get(&sid)
+        .unwrap()
+        .lock()
+        .master
+        .process_group_leader()
+        .unwrap();
+    // SAFETY: the process group belongs exclusively to this test's shell fixture.
+    assert_eq!(unsafe { libc::kill(-pgid, libc::SIGSTOP) }, 0);
+    state.session_maps.standby_sessions.insert(sid.clone(), 1);
+    let result = crate::session_wake::ensure_live(&state, &sid);
+    let parked = state.session_maps.standby_sessions.contains_key(&sid);
+    let count = state.session_maps.sessions.len();
+    crate::pty::close_pty_core_with_reason(&state, &sid, false, "test_cleanup");
+    assert_eq!(result.unwrap(), sid);
+    assert!(!parked);
+    assert_eq!(count, 1);
+}
+
+// Catches: mail addressed by a retained terminal alias being rejected instead of waking its peer.
+#[tokio::test]
+async fn mail_to_hibernated_peer_by_terminal_alias_resumes_it() {
+    let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let _config = crate::config::set_config_dir_override(root.path().into());
+    let state = test_state();
+    let sid = suspend_shell(&state, root.path().to_str().unwrap());
+    state
+        .session_maps
+        .term_aliases
+        .insert(sid.clone(), "sleeping-tab".into());
+    register_peer(&state, &sid, "sleeping-peer", "sleeping-mcp");
+    register_peer(&state, TEST_UUID_A, "sender", "sender-mcp");
+    suspend(&state, &sid).await;
+    let response = handle_messaging(
+        &state,
+        &serde_json::json!({"action":"send", "to":"sleeping-tab", "message":"wake through the listed alias"}),
+        Some("sender-mcp"),
+    );
+    let live = state.live_pty_for_peer(&sid);
+    let inbox_count = state.agent_inbox.get(&sid).map(|inbox| inbox.len());
+    if let Some(id) = &live {
+        crate::pty::close_pty_core_with_reason(&state, id, false, "test_cleanup");
+    }
+    assert!(
+        response.get("error").is_none(),
+        "alias mail rejected: {response}"
+    );
+    assert!(
+        live.is_some(),
+        "alias mail did not wake recipient: {response}"
+    );
+    assert_eq!(inbox_count, Some(1));
+}

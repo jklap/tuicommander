@@ -781,3 +781,11 @@ Remote desktop terminal tabs consume the daemon's detected agent identity and
 OSC title updates, with the same custom-name and spawn-name protection as local
 tabs. Grid output streams over WebSocket; the text/log view batches rows at
 200 ms. Loopback timings do not establish latency on an SSH or Tailscale link.
+
+### Claude session CLI / Chat
+
+On a Claude session, select **Chat** in the session header to read the conversation.
+Use the same input below to reply. Select **CLI** for permission prompts or questions
+that are not in the transcript. If the backend cannot bind the transcript, the view
+returns to CLI and shows the reason. CLI returns to the latest output; its stream
+stays connected while Chat is open. Chat reads pause while the page is hidden.

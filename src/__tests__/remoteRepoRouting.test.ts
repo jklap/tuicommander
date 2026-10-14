@@ -189,7 +189,7 @@ describe("a repo registered on a remote machine runs its work there", () => {
 			expect(terminalsStore.get(id)?.sessionId).toBe("remote-replacement");
 			expect(fetchedUrls()).toEqual([
 				`${BASE_URL}/sessions/suspended?token=${TOKEN}`,
-				`${BASE_URL}/sessions/suspended?token=${TOKEN}`,
+				`${BASE_URL}/sessions/wake?token=${TOKEN}`,
 			]);
 			expect(mockInvoke).not.toHaveBeenCalled();
 		});

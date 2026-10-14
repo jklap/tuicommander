@@ -148,7 +148,7 @@ cell's full text span, since native search points have no subcell index.
 | Overlay canvas (cursor+selection+search) | OK | Separate canvas cleared+redrawn every frame; base canvas only repaints dirty rows |
 | DPI/Retina scaling | OK | `dpr * logical` sizing + `ctx.scale()` |
 | DPR change listener | OK | `matchMedia(resolution)` re-register on change |
-| Theme colors (ANSI 16) | OK | Colors come from Rust/Alacritty in frame data |
+| Theme colors (ANSI 16) | OK | Colors come from Rust/Alacritty in frame data. In light themes, an explicit neutral SGR background with default foreground and contrast below 4.5:1 maps to `--bg-tertiary`. Explicit foreground pairs, colored backgrounds, inverse cells, and dark themes keep their wire colors. |
 | Default fg/bg from terminal theme | OK | `getTerminalTheme(settingsStore.state.theme)` |
 | Scrollbar themed | OK | Uses `var(--fg-primary)` CSS custom property with configurable opacity |
 
