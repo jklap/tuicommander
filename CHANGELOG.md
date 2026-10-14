@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Fix seeded workflow Pause resume targets, expose their target in the Designer, and report invalid publication fields as HTTP 422.
+
 ### Added
 - Render searchable Integrations settings pages from live plugin catalogue entries, with scoped revision-checked edits and unload removal (#1683-c04b).
 - List the desktop repository’s open Markdown files in the mobile session menu, with live updates and the existing mobile viewer (#1879-05ad).
@@ -19,6 +21,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Read linked Tasks items and comments through MCP repo actions; allow provider comments and transitions only after enabling `mcp_work_item_writes` (#1854-4960).
 
 ### Fixed
+
+- Start status-bar agent usage blinking at 96% instead of 90%; dashboard critical colours remain at 90% (#1887-86a5).
+
+- Retract saved agent placement declarations when a linked worktree is removed or recycled (#1705-67b3).
+- AI Chat provider-retry waits now count down live to “retrying now”; user-message Copy buttons no longer wrap vertically.
 
 - Hide Markdown review Agent and Send controls after a successful send until a new change (#1881-f84a).
 

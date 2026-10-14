@@ -1,5 +1,10 @@
 ## Scoped plugin settings (1785-c7a1) — Rust restart required
 
+## AI Chat retry countdown (1536-1c9c)
+
+- [x] Provider retries count down to “retrying now”, clear on recovery/error, and user-message Copy stays on one line. _(verified: 195 targeted Vitest tests and isolated full-shell actual-ego/local-503 screenshots in ~/Gits/.tmp/results/fix-1536cd/live/countdown-{0,6,11}s.png; copy-before/after.json show four text lines becoming one; final-recovery.png has no retry status.)_
+
+
 - [ ] After Boss manually restarts `make dev` or installs `make build`, use an isolated instance with a configurable plugin. Describe its settings, patch a non-secret field using its revision, and verify its existing unload/load callback consumes the new value. A token reads as set/unset through settings; unloading removes its catalogue entries. Automated isolated owner/HTTP tests cover persistence, dispatch, zero limits, and refusal of linked settings paths; the current desktop needs a rebuild/restart to load this Rust change.
 ## Mobile keyboard correction (1878-3a3c)
 
@@ -5290,7 +5295,7 @@ Visual evidence: worktree Vite fixture mounted the real NotificationsTab and Toa
 
 ## Worktree recycling benchmark (1705-67b3) — Rust restart required
 
-- [ ] After Boss rebuilds/restarts the Rust backend, create 15 worktrees in a row with recycling and compare the time and the Defender/fseventsd CPU with the 2026-10-10 benchmark. Rust does not hot-reload. _(Moved from the story by Boss's rule 2026-10-13.)_
+- [x] Native isolated headless API measurement completed on 2026-10-14: 15 recycled creations, 10.802 s total; Defender peak 284.4%, fseventsd peak 19.1%. See `docs/evidence/worktree-recycling-1705-native.md` for raw data and baseline comparison. The small serial fixture does not prove production speedup or Defender reduction. No desktop restart needed for this isolated check.
 
 ## Launch marker instructions (1810-c28c) — Rust restart required
 
@@ -5349,4 +5354,9 @@ Visual evidence: worktree Vite fixture mounted the real NotificationsTab and Toa
 - [ ] After Boss restarts `make dev` or builds release: verify the template icon on light/dark macOS menu bars, Windows overflow area and KDE. Check Always/background-only/Never, Show via click/menu, Quit confirmation, one first-entry native notice, live working/awaiting counts and attention clearing on Show. The current Rust process does not hot-reload.
 - [ ] On stock GNOME without a StatusNotifier host, close configured as Background must minimize with the main window reachable; Ask must omit Background. Native Linux packaging requires the appindicator dependency.
 
+- [ ] Workflow Pause fix (#1882-bc88): after Boss restarts `make dev` or rebuilds release, edit a seeded story, publish it, and use Pause → Resume to → Save draft to repair an existing draft. Rust seed/API changes require restart.
 - [ ] Mobile composer + menu (#1880-d7ff): on iPhone, check both modes at 390px, native camera/file pickers, browser mic, Chat Park/Restore and busy Queue/Stop, terminal Queue and long-press Send. Confirm keyboard and safe-area positioning.
+
+## Worktree rename restore records (1705-67b3) — Rust restart required
+
+- [ ] After Boss restarts the backend, recycle a finished linked checkout and confirm the old workspace and declared agent placements are absent from repositories.json and the sidebar; sibling workspaces stay intact. Automated persisted-state and frontend regression tests cover the change; the live app does not load Rust edits through HMR.
