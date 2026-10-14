@@ -893,10 +893,6 @@ reading the reply needs raw-mode `stty` juggling inside the PTY, and that harnes
 returned a single truncated `ESC` byte — a harness artefact, not an app result.
 What is left genuinely needs eyes on a real agent:
 
-- [ ] Switch to a light theme, then repeat the query: the reported colour _(NOT VERIFIED 2026-09-29: blocked — No theme picker in web Settings (checked previous batch) and theme cannot be switched without editing config; OSC 10/11 colour reply after theme change not testable.)_ _(audit 2026-10-13: HUMAN — Requires interaction with Boss-owned active app/repository or vendor/provider process; no ownership of that state. Contract test/source search performed…)_ _(triage 2026-10-14: DO — Runnable through scoped source/tests, isolated browser or throwaway API fixtures.)_
-  follows the theme (the frontend republishes on remeasure).
-- [ ] Only one publish per real theme change — `GET /logs` shows no burst of _(NOT VERIFIED 2026-09-29: partial — Patched window.fetch to log '/theme-colors' and resized the viewport 4 times (1200x700, 900x800, 1100x850, 1440x900) with ~30 tabs: 0 theme-colors requests and 0 new /logs entries. The web client may not publish at all, so a real 'one publish per change' was not observed.)_ _(audit 2026-10-13: HUMAN — Requires hardware, authentication/provider state, or credential mutation; prohibited by audit brief. Source: to-test.md:1927)_ _(triage 2026-10-14: DO — Runnable through scoped source/tests, isolated browser or throwaway API fixtures.)_
-  palette traffic when resizing the window with several tabs open.
 ### Upstream MCP OAuth — concurrent flows, expiry, late redirect
 
 **Requires a `make dev` restart** — all of this is Rust (`mcp_oauth/`,
