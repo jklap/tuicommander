@@ -1,6 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import "../mocks/tauri";
 import { fireEvent, render } from "@solidjs/testing-library";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { mockInvoke } from "../mocks/tauri";
 
 vi.mock("../../stores/settings", () => ({
 	settingsStore: {
@@ -247,10 +247,11 @@ describe("SettingsPanel", () => {
 		expect(headingTexts).toContain("IDE");
 	});
 
-	it("opens the successor page for the tab keys this reorganization retired", () => {
+	it("opens the successor page for the tab keys this reorganization retired", async () => {
 		// services split into MCP / Remote Access / Remote Machines, and providers
 		// became AI Chat; an old tuic://settings?tab=… link must land on a page.
 		vi.mocked(settingsStore.isAiChatEnabled).mockReturnValue(true);
+		mockInvoke.mockImplementation((command: string) => Promise.resolve(command === "load_config" ? {} : undefined));
 		try {
 			for (const [retired, label] of [
 				["services", "MCP"],
@@ -260,6 +261,8 @@ describe("SettingsPanel", () => {
 					<SettingsPanel visible={true} onClose={() => {}} initialTab={retired} />
 				));
 				expect(container.querySelector(".navItem.active")?.textContent, retired).toBe(label);
+				// Catches: unmounting the MCP page while its load_config continuation is pending.
+				if (retired === "services") await vi.waitFor(() => expect(container.textContent).toContain("Native tools"));
 				unmount();
 			}
 		} finally {

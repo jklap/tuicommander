@@ -332,7 +332,7 @@ Three sections: left (zoom, status info, CWD, agent badge, ticker), center (PR +
 **Agent badge** (`.agentBadge`): `--font-mono`, `--font-sm`, weight 500, `1px 6px` padding, `--radius-sm`, `--bg-tertiary` bg. Usage-dependent color classes:
 - `.agentUsage` — `--fg-secondary` text (normal usage)
 - `.agentUsageWarning` — `#dcdcaa` text (usage >=70%)
-- `.agentUsageCritical` — `#f48771` text + `pulse-opacity` animation (usage >=90%)
+- `.agentUsageCritical` — `#f48771` text + `pulse-opacity` animation (usage >=96%)
 - `.agentRateLimited` — `#f44747` text + `pulse-opacity` animation
 
 **Ticker message** (`.tickerMessage`): `--font-mono`, `--font-sm`, `--fg-muted`, max-width 300px, `--radius-sm`. Warning priority (>=80): `#ffd700` text, gold bg at 0.1 alpha. `.tickerClickable` adds cursor pointer and hover effect.
@@ -486,7 +486,7 @@ All badges: `font-size: --font-xs`, `font-family: --font-mono`, `font-weight: 60
 | Agent running | Tab colored agent prefix | Tab has colored agent prefix badge |
 | Usage normal | `.agentUsage` | `--fg-secondary` text |
 | Usage ≥70% | `.agentUsageWarning` | `#dcdcaa` text (warning yellow) |
-| Usage ≥90% | `.agentUsageCritical` | `#f48771` text + pulse-opacity 2s |
+| Usage ≥96% | `.agentUsageCritical` | `#f48771` text + pulse-opacity 2s |
 | Rate limited | `.agentRateLimited` | `#f44747` text + pulse-opacity 2s |
 | Ticker warning (≥80 priority) | `.tickerWarning` | `#ffd700` text, gold bg at 0.1 alpha |
 | Update available | `.updateBadge` | `#4ec9b0` text, teal bg at 0.15 alpha |
