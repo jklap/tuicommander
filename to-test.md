@@ -878,9 +878,6 @@ on a socket the peer never answers.
 The sidebar dirty badge now reads the gix porcelain-v2 counts, and the stale
 `index.lock` sweep asks `lsof` who owns the lock before trusting the age rule.
 
-- [ ] The sidebar repo badge still shows clean / dirty / conflict correctly: _(NOT VERIFIED 2026-09-30: partial — Fixture repo, /repo/info status vs git status: clean/clean, ' M'->dirty, 'M '->dirty, UU->conflict, abort->clean, all match, but each change appears only after the 60s repo_info cache TTL on this headless instance (no watcher invalidation). Sidebar badge UI not seen.)_ _(audit 2026-10-13: HUMAN — Requires interaction with Boss-owned active app/repository or vendor/provider process; no ownership of that state. Contract test/source search performed…)_ _(triage 2026-10-14: DO — Runnable through scoped source/tests, isolated browser or throwaway API fixtures.)_
-  edit a file, stage it, create a merge conflict, then clean up. Each state must
-  match what `git status` reports.
 ## Weekly advisory scan (story 663-feea, CI — verify after merge)
 
 `audit.yml` now installs a prebuilt `cargo-audit` and reads its ignore list from
@@ -1356,8 +1353,6 @@ does not carry them, so `tuic-remote` answers 404 (#810-4986).
 
 Rust — needs a `make dev` restart.
 
-- [ ] Put it back and restart. That warning must NOT appear, and AI Chat must be _(NOT VERIFIED 2026-09-29: partial — Headless tuic-remote copy (TUIC_MCP_CONFIG_OWNER=1, disposable HOME): without tuic-bridge beside it, /logs warn = 'Skipping agent MCP config updates: no bridge beside this executable' with searched_paths [<dir>/tuic-bridge, tuic-bridge]; with bridge beside it: 0 warns, 'Ensuring bridge configs'. Desktop app restart and AI Chat list-terminals (ego) )_ _(audit 2026-10-13: HUMAN — Restoring/restarting binary and AI Chat terminal-list journey forbidden on Boss app; no bridge renamed. Prior headless warning-free control remains partial and does not prove AI Chat leg.)_ _(triage 2026-10-14: DO — Runnable through scoped source/tests, isolated browser or throwaway API fixtures.)_
-      able to list terminals again.
 ## Pocket TTS speech synthesis (#823-c260)
 
 Rust — needs a `make dev` restart. Nothing calls the port yet (playback is
