@@ -83,9 +83,11 @@ export const PluginSettingsTab: Component<{ page: PluginSettingsPage }> = (props
 									onWrite={(value) => void write(field, value)}
 								/>
 								<Show when={field.operations.includes("reset")}>
-									<button disabled={busy() || snapshot.loading} onClick={() => void write(field, undefined, true)}>
-										Reset {pluginFieldLabel(field)}
-									</button>
+									<div class={s.actions}>
+										<button disabled={busy() || snapshot.loading} onClick={() => void write(field, undefined, true)}>
+											Reset {pluginFieldLabel(field)}
+										</button>
+									</div>
 								</Show>
 							</>
 						)}
