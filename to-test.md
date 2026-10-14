@@ -1,5 +1,10 @@
 ## Scoped plugin settings (1785-c7a1) — Rust restart required
 
+## AI Chat retry countdown (1536-1c9c)
+
+- [x] Provider retries count down to “retrying now”, clear on recovery/error, and user-message Copy stays on one line. _(verified: 195 targeted Vitest tests and isolated full-shell actual-ego/local-503 screenshots in ~/Gits/.tmp/results/fix-1536cd/live/countdown-{0,6,11}s.png; copy-before/after.json show four text lines becoming one; final-recovery.png has no retry status.)_
+
+
 - [ ] After Boss manually restarts `make dev` or installs `make build`, use an isolated instance with a configurable plugin. Describe its settings, patch a non-secret field using its revision, and verify its existing unload/load callback consumes the new value. A token reads as set/unset through settings; unloading removes its catalogue entries. Automated isolated owner/HTTP tests cover persistence, dispatch, zero limits, and refusal of linked settings paths; the current desktop needs a rebuild/restart to load this Rust change.
 ## Mobile keyboard correction (1878-3a3c)
 

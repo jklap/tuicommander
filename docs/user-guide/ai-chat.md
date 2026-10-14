@@ -31,6 +31,11 @@ Desktop composer actions use the same pin and blue play icons as the terminal Co
 
 Pasting an image starts ego when needed before checking image support. Finder image copies attach the image rather than its filename; mixed clipboard data with substantive text pastes as text, as in Ideas and terminal Compose.
 
+While ego waits to retry a provider request, AI Chat shows the cause, attempt
+number and a live countdown. The countdown starts when the update arrives and
+ends at **retrying now**. Recovery removes the line; a final failure replaces it
+with the error. The Copy action beside a user message stays on one line.
+
 ## Opening it
 
 `Cmd+Alt+A` (macOS) / `Ctrl+Alt+A` toggles the panel; so do the status-bar

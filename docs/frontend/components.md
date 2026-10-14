@@ -167,6 +167,10 @@ Untitled sessions use their first prompt or latest activity time in tabs and the
 with the session ID in the tooltip. Small single-choice elicitation
 forms use direct answer buttons and Cancel. Prompt failures and empty completed
 turns appear in the transcript.
+`Transcript` displays one provider-retry status line. `useAcpChat` supplies its
+live countdown, clamped at “retrying now”, through a panel-owned timer. User-message
+Copy buttons use a single unwrapped line, including in the full app shell.
+
 `Transcript` interprets complete ACP answer text as it streams: it hides the
 connection acknowledgement, shows a declared intent as status, and offers
 bracketed `suggest:` items as prompt buttons. Markdown examples stay literal.
