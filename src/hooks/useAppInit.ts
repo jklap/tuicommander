@@ -2,6 +2,7 @@ import { AGENT_TYPES, type AgentType } from "../agents";
 import { handleAgentExitCompletion } from "../components/Terminal/agentExitCompletion";
 import { invoke, listen } from "../invoke";
 import { isNotificationSound } from "../notifications";
+import { listenForWorkItemMcpRequests } from "../plugins/workItemMcpBridge";
 import { presentAutomationNotice } from "../services/automationNotifications";
 import { listenForNativeNoticeClicks } from "../services/nativeNotificationNavigation";
 import { activityStore } from "../stores/activityStore";
@@ -306,6 +307,7 @@ function assignSessionToRepoBranch(
 
 /** App initialization: hydrate stores, reconnect PTY sessions, restore state */
 export async function initApp(deps: AppInitDeps) {
+	listenForWorkItemMcpRequests();
 	const navigation = performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming | undefined;
 	appLogger.info(
 		"app",

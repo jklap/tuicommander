@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Read linked Tasks items and comments through MCP repo actions; allow provider comments and transitions only after enabling `mcp_work_item_writes` (#1854-4960).
+
 ### Fixed
 
 - Preserve live attachment uploads when another TUIC instance starts; keep Claude attachment access with disabled instructions and preserve custom wrapper arguments (#1833-aa60).
