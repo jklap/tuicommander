@@ -580,19 +580,6 @@
   min-width: 0;
 }
 
-.attachBtn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 44px;
-  width: 44px;
-  height: 44px;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--fg-muted);
-  cursor: pointer;
-}
 
 .filePreviews {
   display: flex;
@@ -686,27 +673,8 @@
   opacity: 0.5;
 }
 
-.parkBtn {
-  height: 32px;
-  padding: 0 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-tertiary);
-  color: var(--fg-secondary);
-  font: inherit;
-  cursor: pointer;
-  flex-shrink: 0;
-}
 
-.parkBtn:hover:not(:disabled) {
-  color: var(--fg-primary);
-  border-color: var(--accent);
-}
 
-.parkBtn:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
 
 .stopBtn {
   min-width: 44px;
@@ -1445,7 +1413,6 @@
 }
 /* Keep Park and Stop beside the input instead of reserving another row. */
 .mobileComposerActions { display: contents; }
-.mobileComposerActions button { width: 32px; min-width: 32px; padding: 0; }
 .mobileComposer .filePreview { max-width: 100%; overflow-wrap: anywhere; }
 
 /* A flex item's automatic minimum must never widen the phone transcript. */
@@ -1458,7 +1425,6 @@
 .mobileTranscript .toolCallDuration { white-space: normal; }
 .mobileTranscript :global(#markdown-content table) { display: block; max-width: 100%; overflow-x: auto; }
 
-.mobileComposerActions .parkedDraft { color: var(--accent); border-color: var(--accent); }
 
 /* Terminal Chat owns its reading layout; AI Chat retains the live conversation layout. */
 .messageList[data-terminal-chat] .userMsg {

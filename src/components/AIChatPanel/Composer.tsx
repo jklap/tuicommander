@@ -11,6 +11,7 @@ import mobileInput from "../../mobile/components/CommandInput.module.css";
 import { MobileComposerMenu } from "../../mobile/components/MobileComposerMenu";
 import { MobileDictationButton } from "../../mobile/components/MobileDictationButton";
 import { useBrowserDictation } from "../../mobile/useBrowserDictation";
+import { useKeyboardCorrection } from "../../mobile/useKeyboardCorrection";
 import { uploadAttachment } from "../../services/uploadAttachment";
 import { pastedImageFiles } from "../../utils/pastedImage";
 import { ComposePinIcon, ComposeSendIcon } from "../shared/ComposeActionIcons";
@@ -30,6 +31,7 @@ export const Composer: Component<{
 	sharedFile?: File | null;
 	onSharedFileConsumed?: () => void;
 }> = (props) => {
+	const keyboardCorrection = useKeyboardCorrection();
 	const [pasteError, setPasteError] = createSignal<string | null>(null);
 	const [uploading, setUploading] = createSignal(false);
 	let textarea: HTMLTextAreaElement | undefined;
@@ -266,6 +268,9 @@ export const Composer: Component<{
 					<textarea
 						ref={textarea}
 						class={props.mobileAttachments ? mobileInput.input : s.textarea}
+						autocorrect={props.mobileAttachments ? (keyboardCorrection.enabled() ? "on" : "off") : undefined}
+						spellcheck={props.mobileAttachments ? keyboardCorrection.enabled() : undefined}
+						autocapitalize={props.mobileAttachments ? (keyboardCorrection.enabled() ? "sentences" : "off") : undefined}
 						placeholder={props.mobileAttachments ? "Message ego..." : "Ask ego about this repository"}
 						value={aiChatDraft.text()}
 						onInput={(event) => {
@@ -284,20 +289,8 @@ export const Composer: Component<{
 			</div>
 			<div class={props.mobileAttachments ? s.mobileComposerActions : s.composerActions}>
 				<Show when={props.chat.busy() && !props.mobileAttachments}>
-					<button
-						type="button"
-						class={s.stopBtn}
-						aria-label={props.mobileAttachments ? "Stop" : undefined}
-						title="Stop"
-						onClick={() => void props.chat.cancel()}
-					>
-						{props.mobileAttachments ? (
-							<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-								<path d="M6 6h12v12H6z" />
-							</svg>
-						) : (
-							"Stop"
-						)}
+					<button type="button" class={s.stopBtn} title="Stop" onClick={() => void props.chat.cancel()}>
+						Stop
 					</button>
 				</Show>
 				<Show when={!props.mobileAttachments}>

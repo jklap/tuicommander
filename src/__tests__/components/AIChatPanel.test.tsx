@@ -122,6 +122,7 @@ import { Composer } from "../../components/AIChatPanel/Composer";
 import { aiChatDraft } from "../../components/AIChatPanel/draft";
 import { elicitationFields } from "../../components/AIChatPanel/Interactions";
 import { createAcpChat, resetAcpChatBindings } from "../../components/AIChatPanel/useAcpChat";
+import { useKeyboardCorrection } from "../../mobile/useKeyboardCorrection";
 import { aiChatPanelAdapter } from "../../panelAdapters/aiChat";
 import { acpStore } from "../../stores/acp";
 import { acpTranscript } from "../../stores/acpTranscript";
@@ -4131,4 +4132,37 @@ it("mobile plus Chat dictates into the visible draft and ignores speech after an
 	} finally {
 		vi.unstubAllGlobals();
 	}
+});
+
+// Catches: the mounted mobile Chat textarea ignores the shared keyboard correction setting.
+it("mobile Chat updates keyboard correction without changing desktop attributes", () => {
+	const view = render(() => {
+		const chat = createAcpChat(
+			() => ROOT,
+			() => true,
+			client,
+		);
+		const correction = useKeyboardCorrection();
+		return (
+			<>
+				<button onClick={correction.toggle}>Toggle correction</button>
+				<Composer chat={chat} mobileAttachments />
+				<Composer chat={chat} />
+			</>
+		);
+	});
+	const [mobile, desktop] = view.container.querySelectorAll("textarea");
+	const expectAttributes = (enabled: boolean) => {
+		expect(mobile.getAttribute("autocorrect")).toBe(enabled ? "on" : "off");
+		expect(mobile.getAttribute("spellcheck")).toBe(String(enabled));
+		expect(mobile.getAttribute("autocapitalize")).toBe(enabled ? "sentences" : "off");
+		for (const attribute of ["autocorrect", "spellcheck", "autocapitalize"]) {
+			expect(desktop.hasAttribute(attribute)).toBe(false);
+		}
+	};
+	expectAttributes(true);
+	view.getByRole("button", { name: "Toggle correction" }).click();
+	expectAttributes(false);
+	view.getByRole("button", { name: "Toggle correction" }).click();
+	expectAttributes(true);
 });
