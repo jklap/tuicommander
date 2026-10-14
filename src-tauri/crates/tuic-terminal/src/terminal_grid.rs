@@ -3694,7 +3694,7 @@ mod tests {
             };
             assert_eq!(
                 texts.len(),
-                history - (from - base),
+                history.saturating_sub(from - base),
                 "{name}: history read short"
             );
             for (i, text) in texts.into_iter().enumerate() {
