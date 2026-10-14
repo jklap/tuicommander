@@ -765,3 +765,7 @@ and scope changes clean up drag state. Consumers refresh the projection after a
 successful move by merging page one into the loaded cards. Other loaded pages are
 retained until reload. The move menu stays open when its own list scrolls; scrolling
 outside it dismisses it. The view does not infer workflow transitions.
+
+### Terminal Compose attachments
+
+`ComposePanel` uses `useComposeImages` for paste, file drops and its image-only multi-file input. All three reuse `saveImageFile` in `pastedImage.ts`. Drop/picker insertion ranges track document edits during saving. Native file drops route to a registered mounted editor before the existing global terminal/tab dispatcher; closing or unmounting unregisters that target. Rejected files and save failures appear in an accessible alert.
