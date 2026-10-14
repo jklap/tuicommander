@@ -5311,4 +5311,5 @@ Visual evidence: worktree Vite fixture mounted the real NotificationsTab and Toa
 
 - [ ] Compose image attachments (#1758-1613): after loading the frontend, drop PNG/JPEG/WebP/GIF files from Finder onto the editor and confirm ordered image tags at the pointer; confirm no file tab opens and no path is written to the terminal. Verify the image-only multi-file picker and unchanged paste. Native Finder drag requires multi-app interaction.
 
+- [ ] After a manual backend restart, verify an unknown `/tasks/no-such-endpoint` returns JSON 404 rather than the SPA shell (tasks API prefix fix).
 - [ ] #1873-bbc2 revision: After a manual Rust restart/rebuild, verify Claude stays working/busy while blocking Stop hooks run after final choices; chips publish once when ready. Automated recorded Stop-hook regression and replay oracle cover the backend.
