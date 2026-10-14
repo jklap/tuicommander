@@ -5350,3 +5350,7 @@ Visual evidence: worktree Vite fixture mounted the real NotificationsTab and Toa
 - [ ] On stock GNOME without a StatusNotifier host, close configured as Background must minimize with the main window reachable; Ask must omit Background. Native Linux packaging requires the appindicator dependency.
 
 - [ ] Mobile composer + menu (#1880-d7ff): on iPhone, check both modes at 390px, native camera/file pickers, browser mic, Chat Park/Restore and busy Queue/Stop, terminal Queue and long-press Send. Confirm keyboard and safe-area positioning.
+
+## Worktree rename restore records (1705-67b3) — Rust restart required
+
+- [ ] After Boss restarts the backend, recycle a finished linked checkout and confirm the old workspace and declared agent placements are absent from repositories.json and the sidebar; sibling workspaces stay intact. Automated persisted-state and frontend regression tests cover the change; the live app does not load Rust edits through HMR.
