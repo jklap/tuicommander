@@ -8,6 +8,7 @@ document.getElementById("root")!.style.cssText = "height:100dvh;display:flex;fle
 render(
 	() => (
 		<SessionDetailScreen
+			subscribeChatWake={() => () => {}}
 			session={{
 				session_id: "visual-fixture",
 				cwd: "/repo/tuicommander",

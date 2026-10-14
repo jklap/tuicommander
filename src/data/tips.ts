@@ -16,6 +16,12 @@ export const TIPS: Tip[] = [
 		shortcut: null,
 	},
 	{
+		feature: "Claude Chat on mobile",
+		description:
+			"Select Chat in a Claude session header to read the conversation. Use the same input to reply, and switch to CLI for prompts missing from Chat.",
+		shortcut: null,
+	},
+	{
 		feature: "Plugin settings",
 		description:
 			"Find loaded plugin settings under Integrations, or search for a field in Settings. Plugin pages disappear when the plugin unloads.",

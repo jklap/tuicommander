@@ -1,15 +1,11 @@
-import { type Component, createEffect, onCleanup, onMount, Show } from "solid-js";
-import { acpTranscript } from "../../stores/acpTranscript";
+import { type Component, createEffect, Show } from "solid-js";
 import { appLogger } from "../../stores/appLogger";
-import { chatViewAvailability, chatViewKey, chatViewStore } from "../../stores/chatView";
-import { settingsStore } from "../../stores/settings";
+import { chatViewAvailability, chatViewStore } from "../../stores/chatView";
 import { terminalsStore } from "../../stores/terminals";
 import { openFileLinkHere, resolveFileLink } from "../../utils/openFileLink";
-import { Transcript, type TranscriptSearchRef } from "../AIChatPanel/Transcript";
+import type { TranscriptSearchRef } from "../AIChatPanel/Transcript";
+import { TerminalChatTranscript } from "./TerminalChatTranscript";
 import s from "./TerminalChatView.module.css";
-
-/** A read keeps the backend tail alive; events alone would let it lapse while the agent is idle. */
-const KEEPALIVE_MS = 5_000;
 
 /**
  * Read-only transcript of a Claude terminal, shown in place of the grid.
@@ -31,14 +27,6 @@ export const TerminalChatView: Component<{
 		terminalsStore.setViewMode(props.terminalId, "cli");
 	});
 
-	let disposed = false;
-	let unwatch: (() => void) | undefined;
-	let keepalive: ReturnType<typeof setInterval> | undefined;
-	const refresh = () =>
-		chatViewStore
-			.refresh(props.sessionId)
-			.catch((error) => appLogger.error("terminal", "Chat view refresh failed", { sessionId: props.sessionId, error }));
-
 	/** False when the path resolves to nothing, so the caller can drop the dead link. */
 	const openFile = async (href: string) => {
 		const cwd = terminalsStore.get(props.terminalId)?.cwd;
@@ -52,37 +40,15 @@ export const TerminalChatView: Component<{
 		}
 	};
 
-	onMount(() => {
-		void chatViewStore.watch(props.sessionId).then((dispose) => {
-			if (disposed) {
-				dispose();
-				return;
-			}
-			unwatch = dispose;
-			void refresh();
-			keepalive = setInterval(() => void refresh(), KEEPALIVE_MS);
-		});
-	});
-	onCleanup(() => {
-		disposed = true;
-		clearInterval(keepalive);
-		unwatch?.();
-	});
-
 	return (
-		<div class={s.chatView} data-testid="terminal-chat-view">
-			<Transcript
-				terminalAgent={terminalsStore.get(props.terminalId)?.agentType ?? undefined}
-				onSearchRef={props.onSearchRef}
-				onOpenFile={openFile}
-				entries={() => acpTranscript.entries(chatViewKey(props.sessionId))}
-				busy={() => false}
-				observeToolDuration={false}
-				muteIntermediate={settingsStore.state.chatMuteIntermediateText}
-				emptyMessage="No messages in this conversation yet."
-			/>
-			<div class={s.hint}>Reply below with Compose. Switch to CLI to answer permission prompts.</div>
-		</div>
+		<TerminalChatTranscript
+			sessionId={props.sessionId}
+			terminalAgent={terminalsStore.get(props.terminalId)?.agentType ?? undefined}
+			onSearchRef={props.onSearchRef}
+			onOpenFile={openFile}
+			onUnavailable={() => terminalsStore.setViewMode(props.terminalId, "cli")}
+			hint="Reply below with Compose. Switch to CLI to answer permission prompts."
+		/>
 	);
 };
 

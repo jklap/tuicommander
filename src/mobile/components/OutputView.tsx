@@ -1,4 +1,4 @@
-import { createMemo, createSignal, For, type JSX, onCleanup, onMount, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, type JSX, onCleanup, onMount, Show } from "solid-js";
 import { appLogger } from "../../stores/appLogger";
 import { type PtySubscription, subscribePty } from "../../transport";
 import {
@@ -24,6 +24,8 @@ const SCROLL_UP_THRESHOLD = 300;
 
 interface OutputViewProps {
 	sessionId: string;
+	/** Hidden Chat output keeps its stream, and follows bottom on CLI re-entry. */
+	visible?: boolean;
 	/** Real-time session state pushed via WebSocket (bypasses 3s polling). */
 	onStateChange?: (state: Record<string, unknown>) => void;
 	/** Receive current PTY input line text from the prompt row. */
@@ -159,10 +161,10 @@ export function OutputView(props: OutputViewProps) {
 	};
 
 	function scrollToBottom(force = false) {
-		if (!force && (userScrolledUp || touchActive)) return;
+		if (props.visible === false || (!force && (userScrolledUp || touchActive))) return;
 		requestAnimationFrame(() => {
 			// Output can queue this frame before the user starts scrolling.
-			if (containerEl && (force || (!userScrolledUp && !touchActive))) {
+			if (containerEl && props.visible !== false && (force || (!userScrolledUp && !touchActive))) {
 				containerEl.scrollTop = containerEl.scrollHeight;
 			}
 		});
@@ -183,6 +185,14 @@ export function OutputView(props: OutputViewProps) {
 			fetchOlderLines();
 		}
 	}
+
+	createEffect(() => {
+		if (props.visible !== false) {
+			userScrolledUp = false;
+			touchActive = false;
+			scrollToBottom(true);
+		}
+	});
 
 	// A backgrounded PWA renders nothing, so every frame a busy agent pushes is
 	// pure battery and radio cost. Registered in the component body, not in the
@@ -341,7 +351,7 @@ export function OutputView(props: OutputViewProps) {
 	}
 
 	return (
-		<div ref={containerEl} class={styles.output}>
+		<div ref={containerEl} class={styles.output} style={{ display: props.visible === false ? "none" : undefined }}>
 			<Show when={subscribeError()}>
 				{(errMsg) => <div class={styles.error}>Failed to connect to terminal: {errMsg()}</div>}
 			</Show>

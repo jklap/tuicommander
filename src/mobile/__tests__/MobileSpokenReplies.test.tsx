@@ -66,6 +66,7 @@ it("persists the mobile Settings mute checkbox without ending the armed conversa
 	);
 	render(() => (
 		<SessionDetailScreen
+			subscribeChatWake={() => () => {}}
 			session={{
 				session_id: "s1",
 				cwd: "/repo",

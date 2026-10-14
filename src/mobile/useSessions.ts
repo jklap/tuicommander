@@ -1,5 +1,6 @@
 import { createSignal, onCleanup } from "solid-js";
 import { appLogger } from "../stores/appLogger";
+import type { ChatViewWake } from "../stores/chatView";
 import { rpc, subscribeEvents } from "../transport";
 import { createVisibilityInterval } from "./utils/visibilityInterval";
 
@@ -128,6 +129,16 @@ export function useSessions() {
 	const [error, setError] = createSignal<string | null>(null);
 	const [authError, setAuthError] = createSignal(false);
 	const seenCompletions = new Set<string>();
+	const chatWakes = new Map<string, Set<() => void>>();
+	const subscribeChatWake: ChatViewWake = (id, wake) => {
+		const handlers = chatWakes.get(id) ?? new Set<() => void>();
+		handlers.add(wake);
+		chatWakes.set(id, handlers);
+		return () => {
+			handlers.delete(wake);
+			if (!handlers.size) chatWakes.delete(id);
+		};
+	};
 
 	let refreshToken = 0;
 	let failures = 0;
@@ -179,6 +190,10 @@ export function useSessions() {
 	// JSON-parse — every event kind the backend publishes, the large majority of
 	// which the mobile UI has no handler for.
 	const unsubscribe = subscribeEvents({
+		"chat-view-changed": (payload) => {
+			const { session_id } = payload as { session_id: string };
+			for (const wake of chatWakes.get(session_id) ?? []) wake();
+		},
 		"session-created": () => void fetchSessions(),
 		"session-closed": () => void fetchSessions(),
 		"pty-parsed": (payload) => {
@@ -222,5 +237,5 @@ export function useSessions() {
 		return sessions().filter((s) => s.state?.awaiting_input).length;
 	}
 
-	return { sessions, loading, refreshing, error, authError, refresh, questionCount, markSeen };
+	return { sessions, loading, refreshing, error, authError, refresh, questionCount, markSeen, subscribeChatWake };
 }

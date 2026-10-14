@@ -654,3 +654,11 @@ Remote upstream health (#1444-95a4): remote_mirror forwards upstream-status-chan
 Remote ACP notices wake a separate daemon-scoped interaction queue in AI Chat. Pending questions and responses use the existing ACP HTTP routes with an explicit remote owner; settlement/disconnection remove only that daemon’s questions. Local ACP connections are not attached or changed.
 
 GitHub pollers now cold-start without a desktop AppHandle. Remote PR/issue snapshots and transitions share the notice forwarding path; repository ownership gates desktop consumers, daemon-owned URLs are fetched explicitly, and remote transitions never invoke local automation. Bell identity includes daemon ownership.
+
+### Terminal Chat view (desktop and mobile)
+
+Update desktop `TerminalChatView.tsx` and mobile `useSessionChatView.tsx` through
+`TerminalChatTranscript.tsx`. Keep their shared contract suite aligned. Mobile
+wakes must use the existing `useSessions` SSE subscription, not another stream.
+Host hints, file navigation and desktop search may differ; binding, cursor resets,
+visibility lifecycle and transcript scrolling must remain shared.
