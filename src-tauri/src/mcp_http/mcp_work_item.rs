@@ -57,8 +57,8 @@ fn linked_reference(path: String) -> Result<WorkItemRef, String> {
         .map_err(|_| "Cannot read work-item links")?;
     links
         .into_iter()
-        .find(|(key, _)| crate::git::canonical_repo_root(std::path::Path::new(key)) == root)
-        .and_then(|(_, branches)| branches.get(&branch).cloned())
+        .filter(|(key, _)| crate::git::canonical_repo_root(std::path::Path::new(key)) == root)
+        .find_map(|(_, branches)| branches.get(&branch).cloned())
         .map(|link| link.reference)
         .ok_or_else(|| "No work item is linked to the caller's worktree".into())
 }

@@ -2247,7 +2247,7 @@ passes the result to the provider; host delivery still wraps and caps it.
 
 ## Tasks items through the repo tool
 
-`repo action=work_item` reads the item linked to the caller's current Git worktree branch in `workitem_links.json`. Explicit targets are `reference: {providerId, accountId, id}`, `url`, or `key` with `provider_id` and `account_id`. URL lookup uses registered plugin resolvers. Key lookup uses the selected provider's search and requires an exact key match; repeated cursors and ambiguous matches fail. Use a reference or URL when the provider cannot find a key through search.
+`repo action=work_item` reads the item linked to the caller's current Git worktree branch in `workitem_links.json`, searching all registered paths sharing its canonical repository root. Explicit targets are `reference: {providerId, accountId, id}`, `url`, or `key` with `provider_id` and `account_id`. URL lookup uses registered plugin resolvers. Key lookup uses the selected provider's search and requires an exact key match; repeated cursors and ambiguous matches fail. Use a reference or URL when the provider cannot find a key through search.
 
 The response has `content`, with a JSON detail inside `<untrusted-content source="work item">` and its closing tag. Detail includes the first comments page. Pass `cursor` from `comments.nextCursor` to read the next comments page, with `limit` (1–100, default 50). All provider text, including metadata, stays inside the block. JSON escapes angle brackets so item text cannot forge a closing tag.
 
