@@ -250,7 +250,16 @@ pub(crate) fn launch_args(
         "gemini" => Some("--include-directories"),
         _ => None,
     };
-    if let Some(flag) = flag {
+    // A custom binary may be a shell or opaque wrapper, not the harness.
+    // Never pass harness grant options to it. Name-based harness hops inherit
+    // TUIC_ATTACHMENTS_DIR and use the PATH shim; absolute hops bypass that shim
+    // and must arrange their own read access (documented custom-launch limit).
+    let binary_name = binary_path
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(binary_path);
+    let direct_harness = binary_name.strip_suffix(".exe").unwrap_or(binary_name) == agent_type;
+    if let Some(flag) = flag.filter(|_| direct_harness) {
         // Prepend before any prompt separator or variadic positional argument.
         result.splice(0..0, [format!("{flag}={}", attachment_dir.display())]);
     }

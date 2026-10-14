@@ -900,8 +900,9 @@ Session attachments live in the app data directory, keyed by the runtime PTY id.
 `bind_pty_identity` provisions the directory and shell grant environment; structured
 launches pass the same directory through `agent_hook_launch::launch_args`.
 `cleanup_session` and `tombstone_transient_cleanup` remove it at the existing close,
-kill and exit boundaries. `AppState::new` sweeps old session directories before
-new PTYs can launch. No cleanup visits a repository directory. Resumed tabs use
+kill and exit boundaries. `AppState::new` sweeps session directories only when their recorded
+owner PID is provably dead. Live, reused and unknown PIDs are preserved across
+concurrent instances. The owner marker sits outside the granted directory. No cleanup visits a repository directory. Resumed tabs use
 new runtime PTY ids, so their read grants point to fresh storage.
 
 Suggest choices are published once when the agent is ready, including while background descendants keep the shell busy. The completion lifecycle event still waits for an idle shell and settled background work; publishing choices does not release that gate.

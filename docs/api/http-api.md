@@ -1677,7 +1677,9 @@ The default per-file cap is 25 MiB (`attachment_max_bytes`), including uploads
 without `Content-Length`; partial and empty files are removed on failure.
 Uploads never touch the cwd or Git excludes. PTY close, kill and exit, ACP
 conversation detach and connection settlement remove their uploads; startup
-removes orphan directories. Symlinked attachment roots/sessions are rejected.
+removes only directories whose recorded owner process is provably dead. Live or
+unknown ownership is preserved, including concurrent instances sharing the data
+directory. Symlinked attachment roots/sessions are rejected.
 Legacy agents without a launch grant receive HTTP 409 with a new-session notice.
 Ego PTY and ACP receipts carry a notice because ego currently cannot accept extra
 read roots through invocation flags or ACP. Authentication matches the other shared HTTP routes.

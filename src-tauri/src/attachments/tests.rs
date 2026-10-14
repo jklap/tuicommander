@@ -14,8 +14,26 @@ fn attachment_cleanup_removes_only_ended_session_and_startup_orphans() {
     cleanup_session(data.path(), "pty", "ended");
     assert!(!ended.exists());
     assert_eq!(std::fs::read(live.join("fresh.txt")).unwrap(), b"live");
-    // At startup there are no live PTYs: saved tabs will get fresh PTY ids.
+    // Record a real process that has exited: startup must reclaim a crashed owner,
+    // while the critic regression below protects a still-live owner.
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+        .arg("--list")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let dead_pid = child.id();
+    assert!(child.wait().unwrap().success());
+    std::fs::write(live.with_file_name(".owner-pty-live"), dead_pid.to_string()).unwrap();
+    let unknown = data.path().join("attachments/pty-unknown");
+    std::fs::create_dir(&unknown).unwrap();
+    std::fs::write(unknown.join("keep.txt"), b"unknown owner").unwrap();
+    let invalid = data.path().join("attachments/pty-invalid");
+    std::fs::create_dir(&invalid).unwrap();
+    std::fs::write(invalid.with_file_name(".owner-pty-invalid"), "0").unwrap();
     cleanup_orphans(data.path());
+    assert!(unknown.join("keep.txt").exists());
+    assert!(invalid.exists());
     assert!(!live.exists());
     assert_eq!(std::fs::read(foreign.join("keep.txt")).unwrap(), b"user");
     let resumed = prepare_session_directory(data.path(), "pty", "resumed").unwrap();

@@ -288,6 +288,8 @@ needs an app restart is what that costs.
 | `collapse_tools` | `bool` | `false` | Replace the full MCP tool list with 3 lazy-discovery meta-tools (`search_tools`, `get_tool_schema`, `call_tool`). Discovered native schemas are unchanged: managed commands still use one `call_tool` invocation of `session action=submit` and receive the bounded receipt in that response. Grok sessions use this surface automatically without changing the stored value — see [`mcp-http.md`](mcp-http.md#lazy-tool-discovery-collapse_tools). Size figures for both surfaces, and how to reproduce them, are in [Measuring the surfaces](mcp-http.md#measuring-the-surfaces) — the reduction is measured, never estimated |
 | `services` | `ServicesConfig` | `{}` | Nested remote-access config: `server`, `auth`, `tls`, `relay`, `push` (replaces the former flat `remote_access_*`/`push_enabled`/`relay_enabled` fields) |
 
+Session attachment directories record their owner PID outside the granted directory. Startup cleanup preserves live or unknown owners and removes only provably dead owners; multiple processes may share the data directory safely.
+
 Remote-access secrets under `services` are not persisted in plaintext
 `config.json`: `auth.session_token`, `relay.token`, and
 `push.vapid_private_key` live in the OS keyring-backed credential vault. The

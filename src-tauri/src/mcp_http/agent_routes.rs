@@ -691,8 +691,9 @@ mod tests {
     async fn http_agent_spawn_accepts_model_and_env_with_ipc_field_names() {
         let script = crate::test_support::fake_ssh_script(
             "http-agent-model-env",
-            "printf 'ARGS=%s\nSPAWN_VALUE=%s\nTUIC_SESSION=%s\n' \"$*\" \"$SPAWN_VALUE\" \"$TUIC_SESSION\"; read unused",
-            "echo ARGS=%* & echo SPAWN_VALUE=%SPAWN_VALUE% & echo TUIC_SESSION=%TUIC_SESSION% & set /p HOLD=",
+            "printf 'ARG=%s\n' \"$@\"; printf 'SPAWN_VALUE=%s\nTUIC_SESSION=%s\n' \"$SPAWN_VALUE\" \"$TUIC_SESSION\"; read unused",
+            "for %%a in (%*) do @echo ARG=%%~a
+ echo SPAWN_VALUE=%SPAWN_VALUE% & echo TUIC_SESSION=%TUIC_SESSION% & set /p HOLD=",
         );
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
         let body: SpawnAgentRequest = serde_json::from_value(serde_json::json!({
@@ -728,7 +729,9 @@ mod tests {
         })
         .await
         .expect("fake agent output");
-        assert!(output.contains("ARGS=--model sonnet task"), "{output}");
+        assert!(output.contains("ARG=--model"), "{output}");
+        assert!(output.contains("ARG=sonnet"), "{output}");
+        assert!(output.contains("ARG=task"), "{output}");
         assert!(output.contains("SPAWN_VALUE=caller"), "{output}");
         assert!(
             output.contains(&format!("TUIC_SESSION={session_id}")),

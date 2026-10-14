@@ -1,5 +1,13 @@
 //! The only attachment filesystem boundary; repository paths never enter here.
+use std::io::Write;
 use std::path::{Path, PathBuf};
+
+fn owner_file(path: &Path) -> PathBuf {
+    path.with_file_name(format!(
+        ".owner-{}",
+        path.file_name().unwrap_or_default().to_string_lossy()
+    ))
+}
 
 fn leaf(kind: &str, id: &str) -> Result<String, String> {
     if !["pty", "acp"].contains(&kind)
@@ -46,6 +54,18 @@ pub(crate) fn prepare(data_dir: &Path, kind: &str, id: &str) -> Result<PathBuf, 
     let name = leaf(kind, id)?;
     let path = root(data_dir, true)?.join(name);
     checked_directory(&path, true)?;
+    let owner = owner_file(&path);
+    match std::fs::File::create_new(&owner) {
+        Ok(mut file) => file
+            .write_all(std::process::id().to_string().as_bytes())
+            .map_err(|e| format!("write attachment owner: {e}"))?,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            if owner_pid(&path) != Some(std::process::id()) {
+                return Err("attachment directory belongs to another process".into());
+            }
+        }
+        Err(error) => return Err(format!("create attachment owner: {error}")),
+    }
     Ok(path)
 }
 
@@ -60,12 +80,69 @@ pub(crate) fn remove(data_dir: &Path, kind: &str, id: &str) {
     if checked_directory(&path, false).is_err() {
         return;
     }
-    if let Err(error) = std::fs::remove_dir_all(&path) {
-        tracing::warn!(path = %path.display(), %error, "Could not remove session attachments");
+    match std::fs::remove_dir_all(&path) {
+        Ok(()) => {
+            if let Err(error) = std::fs::remove_file(owner_file(&path))
+                && error.kind() != std::io::ErrorKind::NotFound
+            {
+                tracing::warn!(path = %path.display(), %error, "Could not remove attachment owner");
+            }
+        }
+        Err(error) => {
+            tracing::warn!(path = %path.display(), %error, "Could not remove session attachments")
+        }
     }
 }
 
-/// Called before any sessions exist. Only our names beneath our root qualify.
+fn owner_pid(path: &Path) -> Option<u32> {
+    let owner = owner_file(path);
+    if !owner.symlink_metadata().ok()?.file_type().is_file() {
+        return None;
+    }
+    std::fs::read_to_string(owner).ok()?.parse().ok()
+}
+
+#[cfg(unix)]
+fn owner_is_dead(pid: u32) -> bool {
+    let Ok(pid) = i32::try_from(pid) else {
+        return false;
+    };
+    if pid <= 0 {
+        return false;
+    }
+    // Same conservative existence check as Design Mode's profile owner:
+    // permission errors and PID reuse preserve files rather than risk deletion.
+    // SAFETY: signal zero only checks existence and sends no signal.
+    (unsafe { libc::kill(pid, 0) }) == -1
+        && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+}
+
+#[cfg(windows)]
+fn owner_is_dead(pid: u32) -> bool {
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, ERROR_INVALID_PARAMETER, GetLastError, STILL_ACTIVE,
+    };
+    use windows_sys::Win32::System::Threading::{
+        GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    if pid == 0 {
+        return false;
+    }
+    // SAFETY: query-only handle, valid output pointer, and exactly one close.
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if handle.is_null() {
+            return GetLastError() == ERROR_INVALID_PARAMETER;
+        }
+        let mut code = STILL_ACTIVE as u32;
+        let queried = GetExitCodeProcess(handle, &mut code) != 0;
+        CloseHandle(handle);
+        queried && code != STILL_ACTIVE as u32
+    }
+}
+
+/// Reclaim only directories with evidence that their owning process ended.
+/// Missing/invalid ownership (including an interrupted first write) is preserved.
 pub(crate) fn cleanup_orphans(data_dir: &Path) {
     let Ok(root) = root(data_dir, false) else {
         return;
@@ -79,6 +156,10 @@ pub(crate) fn cleanup_orphans(data_dir: &Path) {
         let Some((kind, id)) = name.split_once('-') else {
             continue;
         };
-        remove(data_dir, kind, id);
+        if checked_directory(&entry.path(), false).is_ok()
+            && owner_pid(&entry.path()).is_some_and(owner_is_dead)
+        {
+            remove(data_dir, kind, id);
+        }
     }
 }

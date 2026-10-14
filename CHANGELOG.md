@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Preserve live attachment uploads when another TUIC instance starts; keep Claude attachment access with disabled instructions and preserve custom wrapper arguments (#1833-aa60).
+
 - Allow worktree removal when its branch tip is contained in any remote-tracking branch, naming that ref as proof. Offer a one-click action to keep branches with local-only commits (#1874-1758).
 - Preserve the local branch and report a warning if a concurrent fetch conflicts with the remote proof during worktree removal (#1874-1758).
 

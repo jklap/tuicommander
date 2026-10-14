@@ -5314,3 +5314,5 @@ Visual evidence: worktree Vite fixture mounted the real NotificationsTab and Toa
 
 - [ ] After a manual backend restart, verify an unknown `/tasks/no-such-endpoint` returns JSON 404 rather than the SPA shell (tasks API prefix fix).
 - [ ] #1873-bbc2 revision: After a manual Rust restart/rebuild, verify Claude stays working/busy while blocking Stop hooks run after final choices; chips publish once when ready. Automated recorded Stop-hook regression and replay oracle cover the backend.
+
+- [ ] #1833-aa60 round 1: after Boss restarts `make dev` or runs `make build`, confirm shared-data instances preserve live uploads, disabled Claude instructions retain attachment access, and custom wrappers launch normally. Rust changes require restart; no desktop was launched or reloaded by the peer.
