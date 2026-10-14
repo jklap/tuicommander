@@ -597,7 +597,6 @@ that checkout merely to run this check.
 
 ## Branch icon toggles agents (2026-09-22) — frontend, live via HMR
 
-- [ ] [VISUAL] Hover the icon of a branch with terminals: it swaps to a chevron (pointing down when expanded) in the same box; the row does not shift. _(NOT VERIFIED 2026-09-29: partial — Hover over branch icon (mouse move): chevron opacity 0->1, icon opacity 1->0, toggle box identical [17,68,14,12], row height 26 unchanged; chevron pointing-down not judged (transform none, no screenshot).)_ _(audit 2026-10-13: VISUAL-OWED — Pure rendering check; image access unavailable by assignment, no screenshot attempts.)_ _(triage 2026-10-14: DO — Runnable through scoped source/tests, isolated browser or throwaway API fixtures.)_
 - [ ] [VISUAL] Repo header: GitHub badge sits right next to the repo chevron; on hover ⋯ and + appear to its left, nothing shifts. _(NOT VERIFIED 2026-09-29: partial — Repo header hover (mouse move): repoActions (⋯ and +) opacity 0->1, repoName x=10 and chevron x=277 unchanged (no shift). No GitHub badge in fx/repo (no GitHub remote) so badge placement not verifiable; no screenshot.)_ _(audit 2026-10-13: VISUAL-OWED — Pure rendering check; image access unavailable by assignment, no screenshot attempts.)_ _(triage 2026-10-14: DO — Runnable through scoped source/tests, isolated browser or throwaway API fixtures.)_
 ## Theme review applied (2026-09-23) — **Rust, needs a `make dev` restart**
 
