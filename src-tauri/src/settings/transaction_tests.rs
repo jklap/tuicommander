@@ -7,6 +7,108 @@ use crate::{
 use serde_json::{Value, json};
 use std::sync::Arc;
 
+// Catches: a disconnected MCP connection still writes an approved exposure change
+// after its commit waited for the owner, because approval was consumed too early.
+#[tokio::test]
+#[serial_test::serial]
+async fn disconnect_while_approved_commit_waits_must_leave_config_unchanged() {
+    use super::policy::Caller;
+    use super::service::Store;
+    use super::transaction::Prepared;
+    use std::sync::{Mutex, mpsc};
+
+    struct QueuedOwner {
+        inner: AppSettingsStore,
+        entered: tokio::sync::Notify,
+        release: Mutex<mpsc::Receiver<()>>,
+    }
+    impl Store for QueuedOwner {
+        fn id(&self) -> &'static str {
+            "app"
+        }
+        fn target(&self) -> Target {
+            Target::Machine
+        }
+        fn read(&self) -> Result<Value, Failure> {
+            self.inner.read()
+        }
+        fn validate_proposal(&self, latest: &Value, value: &Value) -> Result<(), Failure> {
+            self.inner.validate_proposal(latest, value)
+        }
+        fn commit(
+            &self,
+            prepare: &mut dyn FnMut(&Value) -> Result<Prepared, Failure>,
+        ) -> Result<CommitReply, Failure> {
+            self.entered.notify_one();
+            self.release.lock().unwrap().recv().unwrap();
+            self.inner.commit(prepare)
+        }
+        async fn apply(&self, reply: &CommitReply) -> Result<bool, Failure> {
+            self.inner.apply(reply).await
+        }
+    }
+
+    crate::credentials::reset_test_faults();
+    let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let _guard = config::set_config_dir_override(dir.path().to_path_buf());
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    let (release, waiting) = mpsc::channel();
+    let owner = Arc::new(QueuedOwner {
+        inner: AppSettingsStore::new(state.clone()),
+        entered: tokio::sync::Notify::new(),
+        release: Mutex::new(waiting),
+    });
+    let policy = state.settings_policy.clone();
+    let service = Arc::new(
+        Service::new(Arc::new(native_catalogue().unwrap()), owner.clone())
+            .with_policy(policy.clone()),
+    );
+    let path = "/services/auth/username";
+    let revision = service
+        .get(Target::Machine, "app".into(), vec![path.into()])
+        .await
+        .unwrap()
+        .revision;
+    let caller = Caller::mcp(
+        "127.0.0.1:12345".parse().unwrap(),
+        "queued-connection".into(),
+        true,
+    );
+    let request = Request::Set {
+        target: Target::Machine,
+        store: "app".into(),
+        path: path.into(),
+        value: json!("approved-user"),
+        expected_revision: revision,
+    };
+    let proposal = service
+        .execute_as(request.clone(), &caller, None)
+        .await
+        .unwrap_err()
+        .proposal_id
+        .unwrap();
+    assert_eq!(
+        super::policy_tests::answer(state.clone(), caller.clone(), proposal.clone(), true).await["confirmed"],
+        json!(true)
+    );
+    let task =
+        tokio::spawn(async move { service.execute_as(request, &caller, Some(&proposal)).await });
+    owner.entered.notified().await;
+    policy.disconnect_mcp("queued-connection");
+    release.send(()).unwrap();
+    let outcome = task.await.unwrap();
+    assert_eq!(
+        state.config.read().services.auth.username,
+        "",
+        "a disconnected connection committed an exposure change: {outcome:?}"
+    );
+    assert!(
+        !dir.path().join("config.json").exists(),
+        "disconnect must prevent persistence"
+    );
+    assert_eq!(outcome.unwrap_err().code, "confirmation_denied");
+}
+
 fn set(path: &str, value: Value) -> Edit {
     Edit::Set {
         path: path.into(),
