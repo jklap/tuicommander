@@ -367,6 +367,7 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
         }
         AppEvent::SessionCreated {
             session_id,
+            tuic_session,
             cwd,
             agent_type,
             display_name,
@@ -374,6 +375,7 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
         } => {
             serde_json::json!({
                 "session_id": session_id,
+                "tuic_session": tuic_session,
                 "cwd": cwd,
                 "agent_type": agent_type,
                 "display_name": display_name,
@@ -772,6 +774,7 @@ mod tests {
     fn session_created_preserves_stable_display_name() {
         let event = AppEvent::SessionCreated {
             session_id: "session-1".into(),
+            tuic_session: Some("stable-identity".into()),
             cwd: Some("/repo".into()),
             agent_type: Some("codex".into()),
             display_name: Some("linux-primary".into()),

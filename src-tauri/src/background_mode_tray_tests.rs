@@ -63,6 +63,7 @@ fn session(state: &Arc<AppState>, id: &str, awaiting: bool) {
     tests_support::apply_replay_event(
         state,
         &AppEvent::SessionCreated {
+            tuic_session: None,
             session_id: id.into(),
             cwd: None,
             agent_type: Some("codex".into()),

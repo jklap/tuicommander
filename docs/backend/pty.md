@@ -932,3 +932,5 @@ Each Resume allocates a fresh PTY key and binds the saved TUIC identity before s
 ### Shared session wake
 
 `session_wake::ensure_live` checks the live identity map under the suspend lock. Live standby sessions receive SIGCONT; retained sessions resume from the durable record with the same TUIC identity. Concurrent callers receive the same PTY. Creation or storage failure returns a reason and retains the record. Submit uses the existing pending-injection ready gate; mail remains in the inbox and queues only a payload-free wake notice.
+
+Backend wake creation events include `tuic_session` alongside the fresh PTY id. Clients reattach the existing suspended tab by that identity; cwd never identifies a tab. Retained aliases resolve to the saved peer identity before mail validation.

@@ -718,6 +718,7 @@ pub(super) fn register_pty_session(
     // Broadcast to SSE/WebSocket consumers before the reader thread starts.
     state.emit_pty_event(crate::state::AppEvent::SessionCreated {
         session_id: session_id.to_string(),
+        tuic_session: live_tuic_sessions_by_pty(state).remove(session_id),
         cwd,
         agent_type,
         display_name,
@@ -905,6 +906,7 @@ pub(crate) fn spawn_pty_session(
             "session-created",
             serde_json::json!({
                 "session_id": session_id,
+                "tuic_session": requested.tuic_session,
                 "cwd": cwd,
                 "display_name": null,
             }),

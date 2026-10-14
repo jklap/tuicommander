@@ -1494,7 +1494,13 @@ fn handle_messaging_with_message_id(
             // Mail is filed under the peer key, so an address that names the
             // terminal has to be walked back to the peer that owns it — otherwise
             // "notify tu-1" is a dead letter with a valid-looking address.
-            let resolved_to = match state.resolve_peer_ref_checked(requested_to) {
+            let retained_to = match crate::session_wake::retained(requested_to) {
+                Ok(record) => record.map(|record| record.tuic_session),
+                Err(error) => return serde_json::json!({"error": error}),
+            };
+            let resolved_to = match state
+                .resolve_peer_ref_checked(retained_to.as_deref().unwrap_or(requested_to))
+            {
                 Ok(resolved) => resolved,
                 Err(error) => return serde_json::json!({"error": error}),
             };

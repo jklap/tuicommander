@@ -195,6 +195,7 @@ pub enum AppEvent {
     #[serde(rename = "session-created")]
     SessionCreated {
         session_id: String,
+        tuic_session: Option<String>,
         cwd: Option<String>,
         agent_type: Option<String>,
         display_name: Option<String>,
@@ -8672,6 +8673,7 @@ mod tests {
     fn session_created(session_id: &str, agent_type: &str) -> AppEvent {
         AppEvent::SessionCreated {
             session_id: session_id.to_string(),
+            tuic_session: None,
             cwd: None,
             agent_type: Some(agent_type.to_string()),
             display_name: None,
