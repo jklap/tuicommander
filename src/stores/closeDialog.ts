@@ -7,6 +7,7 @@ import { settingsStore } from "./settings";
 export interface CloseRequest {
 	kind: "ask" | "confirm_quit";
 	sessions: number;
+	background_available?: boolean;
 }
 export type CloseChoice = "background" | "quit" | "cancel";
 const [state, setState] = createStore({

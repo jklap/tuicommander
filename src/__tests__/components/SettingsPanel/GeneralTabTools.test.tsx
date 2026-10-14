@@ -56,6 +56,24 @@ describe("GeneralTab developer tools sections", () => {
 
 	afterEach(() => cleanup());
 
+	// Catches: the tray selector changes no preference or Never still offers Background.
+	it("applies the tray preference and removes Background when Never is selected", () => {
+		settingsStore.setTrayIcon("background_only");
+		const view = render(() => <GeneralTab />);
+		const label = Array.from(view.container.querySelectorAll("label")).find(
+			(item) => item.textContent === "Tray and menu-bar icon",
+		);
+		const select = label?.parentElement?.querySelector("select");
+		expect(select).toBeTruthy();
+		try {
+			fireEvent.change(select!, { target: { value: "never" } });
+			expect(settingsStore.state.trayIcon).toBe("never");
+			expect(view.container.querySelector('option[value="background"]')).toBeNull();
+		} finally {
+			settingsStore.setTrayIcon("background_only");
+		}
+	});
+
 	// Catches: the close preference being visible but not wired to persistence, or exposed in browser mode.
 	it("offers a working close-policy select only on desktop", () => {
 		const save = vi.spyOn(settingsStore, "setCloseBehavior").mockImplementation(() => {});

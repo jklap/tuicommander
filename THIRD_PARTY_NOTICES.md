@@ -130,6 +130,7 @@ authors and communities behind each project.
 | Crate | Version | License | Platform |
 |-------|---------|---------|----------|
 | block2 | 0.6.2 | MIT | macOS |
+| gio | 0.18.4 | MIT | Linux |
 | mac-notification-sys | 0.6.15 | MIT OR Apache-2.0 | macOS |
 | miow | 0.6.1 | MIT OR Apache-2.0 | Windows |
 | objc2 | 0.6.4 | MIT | macOS |
@@ -233,7 +234,7 @@ Counts below collapse equivalent SPDX expressions (`MIT OR Apache-2.0` ≡ `Apac
 | License | Count |
 |---------|-------|
 | MIT OR Apache-2.0 | 80 |
-| MIT | 68 |
+| MIT | 69 |
 | Apache-2.0 | 8 |
 | Unlicense OR MIT | 7 |
 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | 4 |

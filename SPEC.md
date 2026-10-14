@@ -1028,3 +1028,7 @@ Tasks remembers the selected source per repository and List, Board or Roadmap pl
 ## Tasks MCP access (#1854-4960)
 
 The MCP repo tool adds `work_item` and `work_item_act`. Rust resolves the caller's worktree link or an explicit reference, URL or account-scoped key, validates DTOs and gates comment/transition writes with `mcp_work_item_writes` (default false). A typed event/claim/reply bridge dispatches to existing frontend provider ports. Claims prevent duplicate actions across frontend clients. Detail and paged comments return as JSON inside the start-work untrusted-content block; forged tags are escaped. Account credentials remain in the existing Rust HTTP injection/redaction boundary. Raw provider errors do not reach MCP. Providers require a connected frontend; a bare headless daemon reports timeout. A timed-out write must be read back before retrying.
+
+### Background tray and menu-bar icon
+
+Background tray (B3): implemented. Native tray/menu-bar status reads current backend SessionState on transitions, with Show and explicit Quit using the shared background lifecycle. Tray preference defaults to background_only; never prevents hiding. Missing native tray support minimizes instead. Native template appearance and desktop-host integration require verification after a rebuild; WebView unload and hibernation remain separate work.
