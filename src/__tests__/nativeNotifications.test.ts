@@ -135,11 +135,14 @@ describe("native notification delivery", () => {
 		let allowPermission: (value: string) => void = () => {};
 		request.mockImplementation(() => new Promise<string>((resolve) => (allowPermission = resolve)));
 		try {
-			const { uiStore } = await import("../stores/ui");
-			const { notificationsStore } = await import("../stores/notifications");
+			const policy = { notificationsEnabled: true };
+			vi.doMock("../stores/ui", () => ({
+				uiStore: { state: { tasksViewPreferences: { "tasks:notification-policy": policy } } },
+			}));
+			vi.doMock("../stores/notifications", () => ({
+				notificationsStore: { state: { config: { pr_native_notifications: false } } },
+			}));
 			const { notifyPrTransition } = await import("../services/prNativeNotifications");
-			notificationsStore.setPrNativeNotifications(false);
-			uiStore.setTaskViewPreference("tasks:notification-policy", { notificationsEnabled: true });
 			notifyPrTransition({
 				repoName: "acme/api",
 				prNumber: 12,
@@ -154,7 +157,7 @@ describe("native notification delivery", () => {
 					state: null,
 				},
 			});
-			uiStore.setTaskViewPreference("tasks:notification-policy", { notificationsEnabled: false });
+			policy.notificationsEnabled = false;
 			allowPermission("granted");
 			await Promise.resolve();
 			await Promise.resolve();
@@ -162,6 +165,8 @@ describe("native notification delivery", () => {
 			expect(send).not.toHaveBeenCalled();
 			expect(nativeInvoke.mock.calls.filter(([command]) => command === "show_native_notification")).toHaveLength(0);
 		} finally {
+			vi.doUnmock("../stores/ui");
+			vi.doUnmock("../stores/notifications");
 			focus.mockRestore();
 		}
 	});
