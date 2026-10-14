@@ -6,22 +6,17 @@ use serde::{Deserialize, Serialize};
 #[serde(default, deny_unknown_fields, rename_all = "camelCase")]
 pub(super) struct Capacity {
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"service_restart","effect":"Reloads the plugin after its settings commit.","operations":["get","set"],"confirmationClass":"ordinary"}))]
-    #[schemars(range(min = 1, max = 604800000))]
     pub retry_delay_ms: u64,
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"service_restart","effect":"Reloads the plugin after its settings commit.","operations":["get","set"],"confirmationClass":"ordinary"}))]
-    #[schemars(range(min = 1, max = 604800000))]
     pub max_retries_per_window: u64,
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"service_restart","effect":"Reloads the plugin after its settings commit.","operations":["get","set"],"confirmationClass":"ordinary"}))]
-    #[schemars(range(min = 1, max = 604800000))]
     pub window_ms: u64,
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"service_restart","effect":"Reloads the plugin after its settings commit.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     #[schemars(length(min = 1, max = 4096))]
     pub retry_text: String,
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"service_restart","effect":"Reloads the plugin after its settings commit.","operations":["get","set"],"confirmationClass":"ordinary"}))]
-    #[schemars(range(min = 1, max = 604800000))]
     pub detect_debounce_ms: u64,
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"service_restart","effect":"Reloads the plugin after its settings commit.","operations":["get","set"],"confirmationClass":"ordinary"}))]
-    #[schemars(range(min = 1, max = 604800000))]
     pub ticker_interval_ms: u64,
 }
 impl Default for Capacity {
@@ -41,25 +36,19 @@ impl Default for Capacity {
 #[serde(default, deny_unknown_fields, rename_all = "camelCase")]
 pub(super) struct Keepalive {
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"service_restart","effect":"Reloads the plugin after its settings commit.","operations":["get","set"],"confirmationClass":"ordinary"}))]
-    #[schemars(range(min = 1, max = 604800000))]
     pub ttl_ms: u64,
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"service_restart","effect":"Reloads the plugin after its settings commit.","operations":["get","set"],"confirmationClass":"ordinary"}))]
-    #[schemars(range(min = 1, max = 604800000))]
     pub margin_ms: u64,
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"service_restart","effect":"Reloads the plugin after its settings commit.","operations":["get","set"],"confirmationClass":"ordinary"}))]
-    #[schemars(range(min = 1, max = 604800000))]
     pub max_keepalives: u64,
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"service_restart","effect":"Reloads the plugin after its settings commit.","operations":["get","set"],"confirmationClass":"ordinary"}))]
-    #[schemars(range(min = 1, max = 604800000))]
     pub check_interval_ms: u64,
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"service_restart","effect":"Reloads the plugin after its settings commit.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     #[schemars(length(min = 1, max = 4096))]
     pub message: String,
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"service_restart","effect":"Reloads the plugin after its settings commit.","operations":["get","set"],"confirmationClass":"ordinary"}))]
-    #[schemars(range(min = 1, max = 604800000))]
     pub max_consecutive_misses: u64,
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"service_restart","effect":"Reloads the plugin after its settings commit.","operations":["get","set"],"confirmationClass":"ordinary"}))]
-    #[schemars(range(min = 1, max = 604800000))]
     pub max_total_keepalives: u64,
 }
 impl Default for Keepalive {
@@ -80,31 +69,22 @@ impl Default for Keepalive {
 #[serde(default, deny_unknown_fields, rename_all = "camelCase")]
 pub(super) struct Wakeup {
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"service_restart","effect":"Reloads the plugin after its settings commit.","operations":["get","set"],"confirmationClass":"ordinary"}))]
-    #[schemars(range(min = 1, max = 604800000))]
     pub idle_threshold_ms: u64,
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"service_restart","effect":"Reloads the plugin after its settings commit.","operations":["get","set"],"confirmationClass":"ordinary"}))]
-    #[schemars(range(min = 1, max = 604800000))]
     pub max_wakes: u64,
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"service_restart","effect":"Reloads the plugin after its settings commit.","operations":["get","set"],"confirmationClass":"ordinary"}))]
-    #[schemars(range(min = 1, max = 604800000))]
     pub max_wakes_ever: u64,
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"service_restart","effect":"Reloads the plugin after its settings commit.","operations":["get","set"],"confirmationClass":"ordinary"}))]
-    #[schemars(range(min = 1, max = 604800000))]
     pub check_interval_ms: u64,
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"service_restart","effect":"Reloads the plugin after its settings commit.","operations":["get","set"],"confirmationClass":"ordinary"}))]
-    #[schemars(range(min = 1, max = 604800000))]
     pub min_busy_duration_ms: u64,
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"service_restart","effect":"Reloads the plugin after its settings commit.","operations":["get","set"],"confirmationClass":"ordinary"}))]
-    #[schemars(range(min = 1, max = 604800000))]
     pub question_stale_ms: u64,
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"service_restart","effect":"Reloads the plugin after its settings commit.","operations":["get","set"],"confirmationClass":"ordinary"}))]
-    #[schemars(range(min = 1, max = 604800000))]
     pub pending_timeout_ms: u64,
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"service_restart","effect":"Reloads the plugin after its settings commit.","operations":["get","set"],"confirmationClass":"ordinary"}))]
-    #[schemars(range(min = 1, max = 604800000))]
     pub done_max_busy_ms: u64,
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"service_restart","effect":"Reloads the plugin after its settings commit.","operations":["get","set"],"confirmationClass":"ordinary"}))]
-    #[schemars(range(min = 1, max = 604800000))]
     pub error_loop_threshold: u64,
 }
 impl Default for Wakeup {

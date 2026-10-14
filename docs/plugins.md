@@ -19,7 +19,10 @@ that config. Other plugin data, including statistics, remains separate.
 Core supplies typed migrations for build-cleaner, at-capacity-retry,
 cache-keepalive, claude-wakeup and the Telegram notifier example. Registration
 fills missing defaults without discarding saved values, validates the result and
-atomically writes an owner-only config file (0600 on Unix). Existing bot tokens
+atomically writes an owner-only config file (0600 on Unix). Numeric settings retain
+their typed domains without adding new policy limits to legacy values. Data, config
+and lock paths must stay inside the canonical plugin root and cannot be symlinks;
+links of the whole plugin directory remain supported. Existing bot tokens
 remain available to the notifier's private config reader; the settings service
 returns only set/unset. Catalogue definitions, errors and reload events contain no
 stored credentials. Plugin enablement stays in `app.disabled_plugin_ids`; native

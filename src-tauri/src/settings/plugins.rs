@@ -16,7 +16,7 @@ type Notify = Arc<dyn Fn() + Send + Sync>;
 pub struct PluginStore {
     id: String,
     plugin: String,
-    file: ConfigFile<Value>,
+    root: PathBuf,
     definition: Definition,
     catalogue: Arc<Catalogue>,
     active: RwLock<bool>,
@@ -27,14 +27,14 @@ impl PluginStore {
     pub(crate) fn new(
         plugin: &str,
         definition: Definition,
-        path: PathBuf,
+        root: PathBuf,
         notify: Notify,
     ) -> Result<Self, Failure> {
         let catalogue = Arc::new(definition.catalogue(plugin)?);
         Ok(Self {
             id: format!("plugins.{plugin}"),
             plugin: plugin.into(),
-            file: ConfigFile::at_path(path),
+            root,
             definition,
             catalogue,
             active: RwLock::new(true),
@@ -52,7 +52,9 @@ impl PluginStore {
             return Err(Error::new(&self.id, "not_found"));
         }
         let mut failure = None;
-        self.file
+        let path = crate::plugin_settings::checked_config_path(&self.root)
+            .map_err(|_| Error::new(&self.id, "store_failed"))?;
+        ConfigFile::at_path(path)
             .update_with_strict(|value| {
                 let result = self
                     .definition

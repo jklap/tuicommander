@@ -15,10 +15,12 @@ pub(crate) fn prepare_settings(
 ) -> Result<Option<PluginStore>, String> {
     let definition = crate::settings::plugin_migrations::for_plugin(&manifest.id)
         .or_else(|| manifest.settings.clone());
-    let path = crate::config::config_dir()
+    let root = crate::config::config_dir()
         .join("plugins")
         .join(&manifest.id)
-        .join("data/config.json");
+        .canonicalize()
+        .map_err(|_| "Plugin settings root is unavailable")?;
+    let path = checked_config_path(&root)?;
     let Some(definition) = definition else {
         if path.exists() {
             return Err("Configurable plugin requires a settings schema".into());
@@ -40,9 +42,33 @@ pub(crate) fn prepare_settings(
             let _ = bus.send(crate::state::AppEvent::PluginChanged { plugin_ids });
         }
     });
-    PluginStore::new(&manifest.id, definition, path, notify)
+    PluginStore::new(&manifest.id, definition, root, notify)
         .map(Some)
         .map_err(|_| "Plugin settings schema is invalid".into())
+}
+
+/// Resolve from the canonical plugin root so links of the whole plugin remain supported.
+/// Data and file links cannot redirect settings reads, migration, or lock-file writes.
+pub(crate) fn checked_config_path(root: &std::path::Path) -> Result<std::path::PathBuf, String> {
+    for relative in ["data", "data/config.json", "data/config.json.lock"] {
+        let path = root.join(relative);
+        match std::fs::symlink_metadata(&path) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() {
+                    return Err("Plugin settings paths must not be symlinks".into());
+                }
+                let canonical = path
+                    .canonicalize()
+                    .map_err(|_| "Plugin settings path is unavailable")?;
+                if !canonical.starts_with(root) {
+                    return Err("Plugin settings path escapes its root".into());
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return Err("Plugin settings path is unavailable".into()),
+        }
+    }
+    Ok(root.join("data/config.json"))
 }
 
 /// Raw plugin consumption retains credentials; settings reads use the redacting service instead.

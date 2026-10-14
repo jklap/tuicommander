@@ -164,7 +164,7 @@ async fn plugin_patch_persists_and_notifies_without_partial_or_stale_writes() {
     )
     .unwrap();
     let (status, _) = action(router, "at-capacity-retry", json!({"action":"patch","expectedRevision":reply["revision"],"operations":[
-        {"op":"set","path":"/retryText","value":"partial"}, {"op":"set","path":"/retryDelayMs","value":0}]})).await;
+        {"op":"set","path":"/retryText","value":"partial"}, {"op":"set","path":"/retryDelayMs","value":"invalid"}]})).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(
         std::fs::read(
@@ -357,68 +357,5 @@ async fn plugin_declared_schema_is_scoped_and_unload_revokes_standard_service() 
             .is_err()
     );
 }
-// Catches: newly imposed numeric minima prevent loading existing zero-limit configs.
-#[test]
-fn migration_preserves_zero_automation_limits_in_existing_configs() {
-    let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
-    let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
-    let state = crate::state::tests_support::make_test_app_state();
-    for (id, key) in [
-        ("at-capacity-retry", "maxRetriesPerWindow"),
-        ("cache-keepalive", "maxKeepalives"),
-        ("claude-wakeup", "maxWakes"),
-    ] {
-        let plugin_dir = dir.path().join("plugins").join(id);
-        std::fs::create_dir_all(plugin_dir.join("data")).unwrap();
-        std::fs::write(plugin_dir.join("manifest.json"), serde_json::json!({
-            "id": id, "name": id, "version": "1.0.0", "minAppVersion": "0.3.0", "main": "main.js", "capabilities": []
-        }).to_string()).unwrap();
-        let original = serde_json::json!({key: 0});
-        std::fs::write(plugin_dir.join("data/config.json"), original.to_string()).unwrap();
-        let registration = crate::plugins::register_loaded_plugin_impl(&state, id.into(), vec![]);
-        assert!(
-            registration.is_ok(),
-            "{id} must retain its existing zero automation limit: {registration:?}"
-        );
-        let value: serde_json::Value = serde_json::from_str(
-            &crate::plugins::read_plugin_data(id.into(), "config.json".into())
-                .unwrap()
-                .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(
-            value[key], 0,
-            "migration must not reenable automation for {id}"
-        );
-    }
-}
-
-// Catches: migration follows a linked data directory and writes outside the plugin's scope.
-#[cfg(unix)]
-#[test]
-fn registration_rejects_linked_data_directory_without_touching_host_file() {
-    let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
-    let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
-    let state = crate::state::tests_support::make_test_app_state();
-    let plugin_dir = dir.path().join("plugins/at-capacity-retry");
-    let outside = dir.path().join("host-config");
-    std::fs::create_dir_all(&plugin_dir).unwrap();
-    std::fs::create_dir_all(&outside).unwrap();
-    std::fs::write(plugin_dir.join("manifest.json"), serde_json::json!({
-        "id": "at-capacity-retry", "name": "Retry", "version": "1.0.0", "minAppVersion": "0.3.0", "main": "main.js", "capabilities": []
-    }).to_string()).unwrap();
-    let original = b"{\"retryDelayMs\":1234}";
-    std::fs::write(outside.join("config.json"), original).unwrap();
-    std::os::unix::fs::symlink(&outside, plugin_dir.join("data")).unwrap();
-    let registration =
-        crate::plugins::register_loaded_plugin_impl(&state, "at-capacity-retry".into(), vec![]);
-    assert_eq!(
-        std::fs::read(outside.join("config.json")).unwrap(),
-        original,
-        "registration changed a host file through a linked plugin data directory"
-    );
-    assert!(
-        registration.is_err(),
-        "a linked data directory must not grant host-file write authority"
-    );
-}
+#[path = "plugin_registration_tests.rs"]
+mod registration;

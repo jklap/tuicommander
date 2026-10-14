@@ -6,19 +6,14 @@ use serde::{Deserialize, Serialize};
 #[serde(default, deny_unknown_fields, rename_all = "camelCase")]
 pub(super) struct BuildCleaner {
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"service_restart","effect":"Reloads the plugin after its settings commit.","operations":["get","set"],"confirmationClass":"ordinary"}))]
-    #[schemars(range(min = 1))]
     pub per_artifact_warn_bytes: u64,
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"service_restart","effect":"Reloads the plugin after its settings commit.","operations":["get","set"],"confirmationClass":"ordinary"}))]
-    #[schemars(range(min = 1))]
     pub total_warn_bytes: u64,
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"service_restart","effect":"Reloads the plugin after its settings commit.","operations":["get","set"],"confirmationClass":"ordinary"}))]
-    #[schemars(range(min = 1))]
     pub total_critical_bytes: u64,
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"service_restart","effect":"Reloads the plugin after its settings commit.","operations":["get","set"],"confirmationClass":"ordinary"}))]
-    #[schemars(range(min = 1))]
     pub hot_window_secs: u64,
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"service_restart","effect":"Reloads the plugin after its settings commit.","operations":["get","set"],"confirmationClass":"ordinary"}))]
-    #[schemars(range(min = 1))]
     pub poll_interval_ms: u64,
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"service_restart","effect":"Reloads the plugin after its settings commit.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     #[schemars(length(min = 1, max = 128))]
