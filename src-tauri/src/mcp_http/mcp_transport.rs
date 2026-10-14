@@ -1433,6 +1433,7 @@ pub(super) async fn mcp_delete(
 /// last transport for. Shared by DELETE `/mcp` and an MCP-over-ACP disconnect,
 /// which end the same kind of session over different transports.
 pub(super) fn end_mcp_session(state: &AppState, sid: &str) {
+    state.settings_policy.disconnect_mcp(sid);
     state.mcp.sessions.remove(sid);
     // Now that an identity can have co-owners, teardown has to read the
     // survivor list and act on it as one step: a bridge joining in the middle

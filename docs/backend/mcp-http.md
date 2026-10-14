@@ -61,7 +61,7 @@ HTTP's access marker does not prove human identity, because loopback requests al
 
 Workflow definitions use the shared `/workflows/definition/action` HTTP route and `workflow_definition_action` desktop command. They are project-scoped and published by immutable revision; execution has its own API.
 
-`workflow_launch` takes `{input:{runId,attemptId,worktreePath,agentType,skills?,feedback?}}` from a bound local managed PTY. The worktree must be known to the project and cannot be the main checkout. Plan attempts use the caller's isolated worktree; story attempts require that run's active coordinator and bind a distinct registered worktree to the story before worker spawn. It renders the pinned prompt in Rust, reserves the spawn effect, launches through the existing managed-agent path, and binds the returned session and task handle to the durable attempt. A story worker requires the caller to own the run's active coordinator attempt. `workflow_report` takes `{input:AttemptReport}` with `contractVersion`, `runId`, `storyId`, `storyRevision`, `attemptId`, `generation`, `outcome`, `summary`, `criterionResults`, and `evidence`. The server derives the reporting PTY and project from the MCP connection, validates attempt ownership and revision, and records an idempotent run event. Plan-agent reports use `storyId=planId`, `storyRevision=0`, and no criterion results. Generic `agent send` and process exit are observations, never semantic completion reports.
+`workflow_launch` takes `{input:{runId,attemptId,worktreePath,agentType,skills?,feedback?}}` from a bound local managed PTY. The worktree must be a registered branch checkout of the project, outside the archive pool, and cannot be the main checkout or have a Git operation in progress. Launch validation is separate from detached-orphan removal, which still refuses attached branch checkouts. Plan attempts use the caller's isolated worktree; story attempts require that run's active coordinator and bind a distinct registered worktree to the story before worker spawn. It renders the pinned prompt in Rust, reserves the spawn effect, launches through the existing managed-agent path, and binds the returned session and task handle to the durable attempt. A story worker requires the caller to own the run's active coordinator attempt. `workflow_report` takes `{input:AttemptReport}` with `contractVersion`, `runId`, `storyId`, `storyRevision`, `attemptId`, `generation`, `outcome`, `summary`, `criterionResults`, and `evidence`. The server derives the reporting PTY and project from the MCP connection, validates attempt ownership and revision, and records an idempotent run event. Plan-agent reports use `storyId=planId`, `storyRevision=0`, and no criterion results. Generic `agent send` and process exit are observations, never semantic completion reports.
 
 For `workflow_report`, a `needs_input` outcome requires `inputRequest {question,options}`. A completed reviewer report requires `review {decision,artifactDigest,findings}` with criterion-indexed findings. These fields are durable evidence; they do not promote a story to Done. After a committed story report, the active coordinator's inbox receives a `workflow_event` cursor with `runId`, `storyId` and `sequence`; the coordinator replays the run log rather than treating mail as an outcome.
 
@@ -2277,3 +2277,21 @@ Credentials stay in Rust's existing account-authenticated HTTP path, which redac
 ### Background tray and menu-bar icon
 
 The desktop `close-dialog` event and its SSE copy include `background_available: boolean`. The desktop Ask dialog uses it to omit Background when the tray is disabled or unavailable. Browser clients continue to ignore native close prompts; tray actions add no public request surface.
+
+### Settings proposal confirmation (#1786-9cbd)
+
+`ui(action=confirm, proposalId=...)` accepts an opaque proposal from the shared
+settings service. The host supplies the title and redacted diff; supplied
+`title`, `message` and `confirmed` cannot approve or replace it. The existing
+`mcp-confirm` event reaches desktop and SSE clients, and the existing human
+response endpoint/IPC command settles the first answer. A pending dialog uses the
+remaining portion of the proposal's absolute 300-second lifetime. Cancelling its
+handler dismisses the question and revokes the proposal. Ending an MCP protocol
+session revokes its proposals and grants. Headerless confirmation requires a
+server-issued connection identity.
+
+The service boundary rejects remote MCP writes regardless of peer registration.
+Local MCP enablement, HTTP local-or-authenticated access and native OS-user trust
+remain distinct host-issued contexts. The replacement settings tool and HTTP/IPC
+routes are not published by the policy foundation; cutover wires those contexts
+into the same service rather than duplicating policy.

@@ -24,6 +24,7 @@ struct Fixture {
     dir: tempfile::TempDir,
     removed: Arc<Mutex<Vec<String>>>,
     registry: Registry,
+    state: Arc<crate::AppState>,
 }
 
 fn fixture() -> Fixture {
@@ -34,7 +35,8 @@ fn fixture() -> Fixture {
     let sink = removed.clone();
     let on_removed: OnRemoved = Arc::new(move |id| sink.lock().push(id.to_owned()));
     let catalogue = Arc::new(native_catalogue().unwrap());
-    let mut registry = Registry::default();
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    let mut registry = Registry::with_policy(state.settings_policy.clone());
     registry
         .register(Service::new(
             catalogue.clone(),
@@ -58,6 +60,7 @@ fn fixture() -> Fixture {
         dir,
         removed,
         registry,
+        state,
     }
 }
 
@@ -90,16 +93,25 @@ async fn patch(
     revision: String,
     operations: Vec<Edit>,
 ) -> Result<CommitReply, Failure> {
-    match f
-        .registry
-        .execute(Request::Patch {
-            target: Target::Machine,
-            store: store.into(),
-            expected_revision: revision,
-            operations,
-        })
-        .await?
+    let request = Request::Patch {
+        target: Target::Machine,
+        store: store.into(),
+        expected_revision: revision,
+        operations,
+    };
+    let mut result = f.registry.execute(request.clone()).await;
+    if let Err(error) = &result
+        && error.code == "confirmation_required"
     {
+        let id = error.proposal_id.clone().unwrap();
+        let caller = super::policy::Caller::native();
+        assert_eq!(
+            super::policy_tests::answer(f.state.clone(), caller.clone(), id.clone(), true).await["confirmed"],
+            json!(true)
+        );
+        result = f.registry.execute_as(request, &caller, Some(&id)).await;
+    }
+    match result? {
         Reply::Commit(c) => Ok(c),
         Reply::Snapshot(_) => panic!("patch returned a snapshot"),
     }

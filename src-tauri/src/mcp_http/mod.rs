@@ -19,6 +19,9 @@ mod log_routes;
 pub(crate) mod managed_launch;
 pub(crate) mod mcp_transport;
 mod mcp_transport_ancillary;
+#[cfg(test)]
+mod settings_policy_confirm_tests;
+pub(crate) use mcp_transport_ancillary::confirm_settings;
 mod mcp_transport_catalogue;
 mod mcp_transport_peer;
 pub(crate) mod mcp_transport_session_agent;
@@ -3011,17 +3014,33 @@ mod tests {
     // Catches: seeded Pause targets missing from otherwise publishable story drafts.
     #[tokio::test]
     async fn seeded_story_draft_publishes() {
-        workflow_pause_publish_case(false).await;
+        workflow_pause_publish_case(crate::workflows::WorkflowKind::Story, false, false).await;
     }
 
     // Catches: a user validation failure being returned as HTTP 500.
     #[tokio::test]
     async fn invalid_pause_publish_is_a_client_error() {
-        workflow_pause_publish_case(true).await;
+        workflow_pause_publish_case(crate::workflows::WorkflowKind::Story, true, false).await;
     }
 
-    async fn workflow_pause_publish_case(invalid: bool) {
-        use crate::workflows::{NodeKind, WorkflowKind, WorkflowStore};
+    // Catches: Resolve plan seeds lacking checks and therefore refusing HTTP publication.
+    #[tokio::test]
+    async fn seeded_plan_draft_publishes() {
+        workflow_pause_publish_case(crate::workflows::WorkflowKind::Plan, false, false).await;
+    }
+
+    // Catches: adding seed checks accidentally allowing edited plans with no final check.
+    #[tokio::test]
+    async fn plan_without_final_checks_publish_is_a_client_error() {
+        workflow_pause_publish_case(crate::workflows::WorkflowKind::Plan, false, true).await;
+    }
+
+    async fn workflow_pause_publish_case(
+        kind: crate::workflows::WorkflowKind,
+        invalid: bool,
+        missing_checks: bool,
+    ) {
+        use crate::workflows::{NodeKind, WorkflowStore};
         let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
         let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
         let project = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
@@ -3031,7 +3050,7 @@ mod tests {
             .seed_templates(project)
             .unwrap()
             .into_iter()
-            .find(|draft| draft.kind == WorkflowKind::Story)
+            .find(|draft| draft.kind == kind)
             .unwrap();
         let mut graph = draft.graph;
         if invalid {
@@ -3044,6 +3063,13 @@ mod tests {
         let edited = store
             .update_draft(&draft.id, draft.draft_revision, graph)
             .unwrap();
+        let edited = if missing_checks {
+            store
+                .update_checks(&draft.id, edited.draft_revision, vec![])
+                .unwrap()
+        } else {
+            edited
+        };
         let response = post_workflow_definition_action(
             None,
             None,
@@ -3061,9 +3087,16 @@ mod tests {
             .await
             .unwrap();
         let body = String::from_utf8(body.to_vec()).unwrap();
-        if invalid {
+        if invalid || missing_checks {
             assert!(status.is_client_error(), "{status}: {body}");
-            assert!(body.contains("resume_to"), "{body}");
+            assert!(
+                body.contains(if missing_checks {
+                    "deterministic final checks"
+                } else {
+                    "resume_to"
+                }),
+                "{body}"
+            );
             assert_eq!(
                 store
                     .get_draft(&draft.id)

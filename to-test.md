@@ -1,6 +1,9 @@
 ## Suspend replacement identity (1806-ed18) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, suspend and resume a throwaway idle shell twice. The TUIC identity stays stable, each Resume has a fresh PTY id, and the second Suspend succeeds. On a remote repository, Resume and closing a suspended tab must act on that daemon. Automated targeted tests cover the lifecycle and routing; the running desktop requires a restart to load the Rust change.
+## Shell wrapper argument guards — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, open a new shell. With OpenCode native scrollback enabled, verify `opencode mcp list` receives no `--mini`; a bare interactive launch still does. Verify Goose `run`/`session` with `--name=work`, `-nwork`, `--path f.jsonl`, `--path=f.jsonl`, and `run --no-session` receive no TUIC `--name`. Existing shells keep their sourced wrappers until reopened. Automated argv tests cover bash, zsh and fish.
 
 ## Scoped plugin settings (1785-c7a1) — Rust restart required
 
@@ -2133,6 +2136,8 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 
 ## Background hidden state (#1803-00d9)
 
+- [ ] Workflow branch launch (#1883-eba0): after Boss restarts `make dev` or rebuilds release, launch a workflow coordinator in its registered branch worktree and confirm the attempt binds its session and prompt. Rust changes require restart; the peer did not restart the desktop.
+
 - [ ] After Boss restarts `make dev` or rebuilds release, hide then Show an idle terminal around the standby timeout; confirm the restored active terminal remains responsive. The B1 visibility recheck requires a Rust restart to load.
 - [ ] After Boss restarts `make dev` or rebuilds release, close to Background with a main window, floating window and open panel. Verify all hide and Show restores only those previously open. The Rust change does not hot-reload.
 - [ ] After restart on macOS, verify Dock icon disappears with `background.hide_dock_icon=true`, remains with false, and returns on Show. Verify Dock Reopen (when icon retained), second app launch, a deep link and a native notification click restore the window and active terminal.
@@ -2149,9 +2154,15 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] On stock GNOME without a StatusNotifier host, close configured as Background must minimize with the main window reachable; Ask must omit Background. Native Linux packaging requires the appindicator dependency.
 
 - [ ] #1806-ed18: after a manual `make dev` restart (or `make build` for release), destroy/unload the main WebView, suspend an idle shell and a resumable agent through MCP, then Show/recreate the window. Confirm suspended notices and pane placement, one replacement PTY per Resume, and refusal for busy/question/queued sessions. Restart while unloaded and confirm durable tabs remain. Automated rb PTY/storage and frontend DOM tests cover the backend and render boundaries; native unload/recreate integration requires the coordinator restart.
+## Settings policy foundation (#1786-9cbd)
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, queued approved writes must honor disconnect and expiry before owner preparation. Automated owner-boundary regressions cover both; settings transport publication remains a separate step.
+
+- [ ] After Boss's manual Rust restart and the separate settings-transport cutover, request a protected remote/auth/TLS/relay/executable edit: verify the desktop/phone dialog uses the backend diff, refusal writes nothing, acceptance commits once, and replay is refused. The policy foundation is covered through isolated owner files and the existing human-response channel; settings transport publication is still separate. Do not restart a live desktop session solely for this check.
 - [ ] Workflow Pause fix (#1882-bc88): after Boss restarts `make dev` or rebuilds release, edit a seeded story, publish it, and use Pause → Resume to → Save draft to repair an existing draft. Rust seed/API changes require restart.
 - [ ] Mobile composer + menu (#1880-d7ff): on iPhone, check both modes at 390px, native camera/file pickers, browser mic, Chat Park/Restore and busy Queue/Stop, terminal Queue and long-press Send. Confirm keyboard and safe-area positioning.
 
+- [ ] #1885-0352 After Boss restarts `make dev` or rebuilds release, use an isolated fresh project in Workflow Designer: publish Resolve plan as revision 2 with its repository-integrity check; clearing all final checks must reject publication.
 ## Worktree rename restore records (1705-67b3) — Rust restart required
 
 - [ ] After Boss restarts the backend, recycle a finished linked checkout and confirm the old workspace and declared agent placements are absent from repositories.json and the sidebar; sibling workspaces stay intact. Automated persisted-state and frontend regression tests cover the change; the live app does not load Rust edits through HMR.
