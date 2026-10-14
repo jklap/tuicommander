@@ -968,9 +968,6 @@ needed. Canvas painting is not observable over HTTP, so these need eyes.
   Check it reads well at the narrowest (140 px) and widest (280 px) nav widths —
   the box shares the nav's resize handle area, and only the DOM is covered by
   tests, not the rendering.
-- [ ] Type `relay`. The tab body is replaced by a result list; each row shows the _(NOT VERIFIED 2026-09-29: partial — Dark theme only (no theme picker in web UI): search 'relay' rows have label + trail 'Remote Access > Cloud Relay'; trail color rgb(115,115,115) on bg rgb(30,30,30) = ~3.5:1 contrast. Light theme not checked; no screenshot.)_ _(audit 2026-10-13: VISUAL-OWED — Rendering/timing requires images or real pointer interaction; image viewing and MacControl unavailable. No screenshots attempted. Source: to-test.md:1998)_ _(triage 2026-10-14: DO — Runnable through scoped source/tests, isolated browser or throwaway API fixtures.)_
-  setting on top and a `Tab › Section` trail underneath. Confirm the trail is
-  legible against the panel background in both light and dark themes.
 ## GitHub poller survives a dropped connection (story 648-051b, Rust — needs `make dev` restart)
 
 The shared HTTP client had no timeout at all, so a dropped VPN wedged the poller
