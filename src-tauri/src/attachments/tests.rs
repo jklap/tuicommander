@@ -70,3 +70,37 @@ fn attachment_symlinks_never_reach_external_files() {
         b"outside"
     );
 }
+// Catches: starting a second TUIC instance deletes an active first instance's upload.
+#[cfg(unix)]
+#[tokio::test]
+async fn second_instance_startup_preserves_live_session_uploads() {
+    let first = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
+    crate::state::tests_support::insert_dummy_session(&first, "live-first-instance");
+    let receipt = super::upload(
+        first.clone(),
+        super::UploadQuery {
+            kind: "pty".into(),
+            id: "live-first-instance".into(),
+            session: None,
+            name: "image.png".into(),
+        },
+        axum::http::HeaderMap::new(),
+        axum::body::Body::from("live attachment bytes"),
+    )
+    .await
+    .unwrap();
+
+    let second = crate::AppState::new(
+        first.data_dir.clone(),
+        first.worktrees_dir.clone(),
+        crate::config::AppConfig::default(),
+        first.log_buffer.clone(),
+    );
+    let bytes = std::fs::read(&receipt.path);
+    crate::pty::cleanup_session("live-first-instance", &first);
+    drop(second);
+    assert_eq!(
+        bytes.expect("second instance startup deleted a live session's attachment"),
+        b"live attachment bytes"
+    );
+}

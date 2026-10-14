@@ -1257,6 +1257,37 @@ mod tests {
                 .to_string()
         }
 
+        // Catches: disabling marker instructions also drops Claude's attachment grant.
+        #[test]
+        fn claude_attachment_grant_survives_disabled_launch_instructions() {
+            let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+            let agents = crate::config::AgentsConfig {
+                launch_instructions: Some(String::new()),
+                ..Default::default()
+            };
+            crate::launch_instructions::write_files_with(
+                root.path(),
+                &crate::config::AppConfig::default(),
+                &agents,
+            )
+            .unwrap();
+            let instructions = root.path().join("agent-hooks").display().to_string();
+            let lines = wrapper_command_lines(
+                "bash",
+                &[
+                    ("TUIC_AGENT_INSTRUCTIONS_DIR", instructions.as_str()),
+                    ("TUIC_ATTACHMENTS_DIR", "/tuic/attachments/pty-settings-off"),
+                ],
+                "claude --model opus",
+            );
+            assert!(
+                lines[0]
+                    .split_whitespace()
+                    .any(|arg| arg == "--add-dir=/tuic/attachments/pty-settings-off"),
+                "disabling marker instructions removed attachment access: {lines:?}"
+            );
+        }
+
         /// Catches: a typed agent launched without the marker flag (fresh or
         /// resume), the flag on a headless or verb launch, or a second flag
         /// when the user already passed one.
