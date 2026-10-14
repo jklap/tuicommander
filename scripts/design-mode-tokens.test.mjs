@@ -5,9 +5,10 @@ import { createServer } from "node:http";
 import { test } from "node:test";
 import { promisify } from "node:util";
 
-// Run with scripts/with-test-tmp.sh node --test scripts/design-mode-tokens.test.mjs.
-// TUIC_DESIGN_BROWSER points to the browser-stealth wrapper: this regression
-// needs real CSSOM shorthand serialization, not a DOM emulator.
+// Run with scripts/with-test-tmp.sh pnpm test:design-mode-browser.
+// TUIC_DESIGN_BROWSER must point to the browser-stealth wrapper for real Chromium.
+// This test is not in CI; run it whenever design_mode/extract.js changes.
+// It needs real CSSOM shorthand serialization, not a DOM emulator.
 const exec = promisify(execFile);
 
 test("Design Mode retains shorthand tokens in real Chromium CSSOM", async (t) => {
