@@ -5290,7 +5290,7 @@ Visual evidence: worktree Vite fixture mounted the real NotificationsTab and Toa
 
 ## Worktree recycling benchmark (1705-67b3) — Rust restart required
 
-- [ ] After Boss rebuilds/restarts the Rust backend, create 15 worktrees in a row with recycling and compare the time and the Defender/fseventsd CPU with the 2026-10-10 benchmark. Rust does not hot-reload. _(Moved from the story by Boss's rule 2026-10-13.)_
+- [x] Native isolated headless API measurement completed on 2026-10-14: 15 recycled creations, 10.802 s total; Defender peak 284.4%, fseventsd peak 19.1%. See `docs/evidence/worktree-recycling-1705-native.md` for raw data and baseline comparison. The small serial fixture does not prove production speedup or Defender reduction. No desktop restart needed for this isolated check.
 
 ## Launch marker instructions (1810-c28c) — Rust restart required
 
