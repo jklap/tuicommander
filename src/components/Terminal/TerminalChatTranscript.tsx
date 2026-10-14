@@ -54,6 +54,8 @@ export const TerminalChatTranscript: Component<{
 		disposed = true;
 		unwatch?.();
 	});
+	// DEFERRED (2026-10-14) — 2000-entry mobile-viewport resets took 10.9–12.8s on
+	// a loaded Mac. Measure on iPhone before choosing virtualization or a render cap.
 	return (
 		<div class={s.chatView} data-testid="terminal-chat-view">
 			<Transcript
