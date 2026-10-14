@@ -309,6 +309,7 @@
 /sessions
 /sessions/agent
 /sessions/suspended
+/sessions/wake
 /sessions/worktree
 /sessions/x
 /sessions/x/chat-view

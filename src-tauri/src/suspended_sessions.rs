@@ -141,6 +141,7 @@ pub(crate) fn suspend(
         Ok(((), true))
     })?;
     // Publish before EOF: clients must preserve the tab when the reader reports exit.
+    state.hibernated_peers.insert(record.tuic_session.clone());
     state.notify_session_suspended(&record);
     crate::pty::close_pty_core_with_reason(state, session_id, false, "suspended");
     Ok(record)

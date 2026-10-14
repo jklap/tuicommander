@@ -400,3 +400,8 @@ Scrolling into history keeps the requested lines in view while an agent writes m
 Dictation inserts into Compose when focus is on the Chat transcript or page background. It replaces the selection that existed when you pressed the hotkey and keeps the rest of the draft. A focused search or form editor still receives dictation. In CLI, dictation keeps the usual terminal and auto-send behavior.
 
 Changing focus or tabs while transcription finishes does not change the destination. If the original editor or session closes, or its draft changes, recover the text from the sticky error message or Messages bell. The app does not send it to another terminal.
+
+
+### Waking a suspended tab
+
+Open a suspended tab to resume it. A submitted command or peer message can also wake it without the desktop UI. Commands wait until the agent is ready; messages stay in its inbox. The stable peer address does not change. If resume fails, the tab stays suspended and the caller receives the reason.
