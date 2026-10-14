@@ -83,6 +83,20 @@ impl Fixture {
     fn path(&self) -> &Path {
         Path::new(self.run.workspace.as_deref().unwrap())
     }
+    fn integrate(&self) {
+        std::fs::write(self.path().join("completed.txt"), "completed work\n").unwrap();
+        git(self.path(), &["add", "completed.txt"]);
+        git(self.path(), &["commit", "-m", "completed work"]);
+        git(
+            &self.repo,
+            &[
+                "merge",
+                "--ff-only",
+                self.run.workspace_id.as_deref().unwrap(),
+            ],
+        );
+    }
+
     async fn call(&self, remove: bool) -> Result<Value, String> {
         let state = Arc::clone(&self.state);
         let id = self.run.id.clone();
@@ -96,6 +110,7 @@ impl Fixture {
 #[tokio::test]
 async fn final_run_cleanup_retains_provenance_after_definition_deletion_and_reopen() {
     let (_guard, f) = Fixture::new().await;
+    f.integrate();
     let reader = RunStore::open().unwrap();
     let preview = crate::automations::api::execute(
         json!({"action":"worktree_preview","id":f.run.id}),
@@ -127,6 +142,7 @@ async fn final_run_cleanup_retains_provenance_after_definition_deletion_and_reop
 #[tokio::test]
 async fn cleanup_rechecks_dirty_unmerged_and_locked_worktrees_without_discarding_work() {
     let (_guard, f) = Fixture::new().await;
+    f.integrate();
     assert_eq!(f.call(false).await.unwrap()["can_remove"], true);
     std::fs::write(f.path().join("keep.txt"), "valuable work").unwrap();
     assert!(f.call(true).await.is_err());
@@ -203,4 +219,13 @@ async fn cleanup_requires_archive_for_content_superset_integration() {
     assert_eq!(f.call(false).await.unwrap()["can_remove"], true);
     assert_eq!(f.call(true).await.unwrap()["removed"], true);
     assert!(!f.path().exists());
+}
+
+// Catches: completed run status being mistaken for positive proof of branch integration.
+#[tokio::test]
+async fn cleanup_keeps_a_fresh_branch_without_merge_proof() {
+    let (_guard, f) = Fixture::new().await;
+    assert_eq!(f.call(false).await.unwrap()["can_remove"], false);
+    assert!(f.call(true).await.is_err());
+    assert!(f.path().exists());
 }

@@ -110,7 +110,15 @@ Global defaults apply to all repos. Per-repo overrides take precedence when set.
 | **PR merge strategy** | Merge / Squash / Rebase | Merge |
 | **After merge** | Archive / Delete / Ask | Archive |
 
-In Ask mode, a dialog containing only clean orphaned worktrees removes them after the countdown; **Keep** or Escape cancels it. Dirty or untracked files, commits unreachable from every branch, and live sessions inside the checkout disable the countdown and appear with a reason (a live session is named). Auto-remove skips these unsafe worktrees, except that a worktree with a live session is held for the same review dialog. An agent can answer the open dialog through MCP `repo action=orphan_cleanup_answer path=<repo> decision=remove|keep`; removal is checked again by the backend before it proceeds. Orphan cleanup reports the number of worktrees actually removed. If a removal fails, the worktree remains for a later cleanup attempt.
+A detached HEAD does not mean that a branch was deleted. Cleanup excludes a
+checkout when a non-default local branch still points at its HEAD. A missing
+checkout directory remains eligible for registration cleanup. Detached checkouts
+without that branch protection retain the dirty-file, operation and live-session
+checks. Clean, reachable checkouts without live sessions are removed silently;
+other candidates require review in Ask mode. Choosing **Keep** holds until the
+checkout fingerprint changes. An agent can answer an open review through MCP
+`repo action=orphan_cleanup_answer path=<repo> decision=remove|keep`; the backend
+checks removal again. Failed removals remain available for a later attempt.
 
 ### Per-Repository Overrides (Settings → Repository → Worktree)
 
@@ -138,7 +146,8 @@ A branch can be integrated even when its original commits are absent from
 main: squash merges and rebased copies change commit IDs. TUICommander checks
 patches, the result of a virtual merge, and revised copies with matching
 subjects. MCP exposes the reason with `repo branch_integration` or
-`repo branch_integrations`. A content-based result still needs a recovery ref
+`repo branch_integrations`. A branch that only follows its base is `in_sync`,
+not integrated: its query returns `integrated: false` and no merge proof. A content-based result still needs a recovery ref
 at `refs/archive/<branch>` pointing to the current tip before safe branch
 deletion; incomplete or uncertain changes remain protected.
 

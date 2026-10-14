@@ -2547,6 +2547,46 @@ mod tests {
             )
         }
 
+        // Catches: automatic cleanup deleting a checkout rescued by a branch after discovery.
+        #[test]
+        fn automatic_orphan_removal_rechecks_a_branch_restored_after_discovery() {
+            let repo = setup_test_repo();
+            let linked = detached(repo.path(), "rescued-checkout");
+            let state = crate::state::tests_support::make_test_app_state();
+            let before =
+                assess_orphan_cleanup_with_sessions(&state, &repo.path().to_string_lossy())
+                    .unwrap();
+            assert!(
+                before.iter().any(|row| {
+                    Path::new(&row.assessment.path) == linked && row.assessment.safe
+                })
+            );
+            let rescue = std::process::Command::new("git")
+                .current_dir(&linked)
+                .args(["branch", "rescued-active", "HEAD"])
+                .output()
+                .unwrap();
+            assert!(rescue.status.success(), "{rescue:?}");
+            assert!(
+                assess_orphan_cleanup_with_sessions(&state, &repo.path().to_string_lossy(),)
+                    .unwrap()
+                    .is_empty()
+            );
+
+            let result = remove_orphan_checkout(
+                &state,
+                &repo.path().to_string_lossy(),
+                &linked.to_string_lossy(),
+                true,
+                &[],
+            );
+            assert!(
+                result.is_err(),
+                "rescued active checkout was removed: {result:?}"
+            );
+            assert!(linked.exists(), "rescued active checkout must survive");
+        }
+
         // Catches: an equality or exact-match cwd test, so an agent whose shell sits
         // in a subdirectory of the checkout is not seen and its checkout is removed.
         #[test]

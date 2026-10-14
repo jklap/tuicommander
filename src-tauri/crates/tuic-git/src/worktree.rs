@@ -1737,8 +1737,12 @@ pub fn create_workspace_recycling(
             let clean = dirty_files_at(&old_path).ok() == Some(0);
             let submodules_safe =
                 dirty_fingerprint_at(&old_path).is_ok_and(|(_, modules)| modules.is_empty());
+            // The explicit finished marker permits recycling an empty checkout;
+            // that is allocation consent, not evidence of branch integration.
             let integrated = branch_integration_with_pr(repo, &old_branch, |_, _, _| false)
-                .is_ok_and(|proof| proof.integrated);
+                .is_ok_and(|proof| {
+                    proof.integrated || proof.commit_status == WorkspaceCommitStatus::InSync
+                });
             if !clean
                 || !submodules_safe
                 || !integrated
@@ -3133,14 +3137,10 @@ pub fn branch_integration_with_pr(
         archive_ref: archive_ref.unwrap_or_else(|| archive_ref_name(branch)),
         tip,
         default_branch,
-        integrated: matches!(
-            commit_status,
-            WorkspaceCommitStatus::Merged | WorkspaceCommitStatus::InSync
-        ),
+        integrated: commit_status == WorkspaceCommitStatus::Merged,
         commit_status,
         archive_required: proof.as_deref() == Some("content_superset"),
-        proof: proof
-            .or_else(|| (commit_status == WorkspaceCommitStatus::InSync).then(|| "in_sync".into())),
+        proof,
         worktree_paths: parse_worktree_entries(&listed.stdout)
             .into_iter()
             .filter(|entry| entry.branch.as_deref() == Some(branch))
@@ -10951,13 +10951,79 @@ branch refs/heads/feat
         assert!(path.exists());
     }
 
-    // Catches: a Keep that cannot tell "still the same edits" from "edited again
-    // or cleaned", because the assessment carries no fingerprint (orphan-dialog-repeats).
+    // Catches: a detached HEAD being mistaken for a deleted active branch.
+    #[test]
+    fn active_detached_checkout_is_not_an_orphan() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let path = add_worktree(&repo, "active-detached");
+        commit_file(&path, "active.txt", "recent branch work\n");
+        git_cmd(&path).args(["checkout", "--detach"]).run().unwrap();
+        assert_eq!(
+            rev_at(&path, "HEAD").unwrap(),
+            rev_at(&repo, "active-detached").unwrap()
+        );
+        assert!(
+            detect_orphan_worktrees_blocking(repo.to_string_lossy().into_owned())
+                .unwrap()
+                .is_empty()
+        );
+        assert!(path.exists());
+        fs::write(path.join("unsaved.txt"), "work in progress\n").unwrap();
+        assert!(
+            assess_orphan_worktrees(&repo.to_string_lossy())
+                .unwrap()
+                .is_empty()
+        );
+        git_cmd(&repo)
+            .args(["branch", "-D", "active-detached"])
+            .run()
+            .unwrap();
+        let orphan = assess_orphan_worktrees(&repo.to_string_lossy()).unwrap();
+        assert_eq!(
+            orphan.len(),
+            1,
+            "deleted branch remains an orphan candidate"
+        );
+        assert!(!orphan[0].safe, "uncommitted work still prevents removal");
+    }
+
+    // Catches: equality with the default tip masquerading as positive merge proof.
+    #[test]
+    fn fresh_branch_without_commits_is_not_integrated() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        // Resolve the actual branch through Git, independent of the host default.
+        let main = git_cmd(&repo)
+            .args(["symbolic-ref", "--short", "HEAD"])
+            .run()
+            .unwrap()
+            .stdout
+            .trim()
+            .to_string();
+        git_cmd(&repo)
+            .args([
+                "symbolic-ref",
+                "refs/remotes/origin/HEAD",
+                &format!("refs/remotes/origin/{main}"),
+            ])
+            .run()
+            .unwrap();
+        let path = add_worktree(&repo, "fresh-active");
+        let verdict = branch_integration_with_pr(&repo, "fresh-active", |_, _, _| false).unwrap();
+        assert!(!verdict.integrated, "{verdict:?}");
+        assert!(verdict.proof.is_none());
+        assert!(path.exists());
+    }
+
+    // Catches: Keep cannot distinguish unchanged edits from new checkout state.
     #[test]
     fn orphan_assessment_fingerprint_follows_the_checkout_state() {
         let (_temp, repo, _workspaces) = workspace_fixture();
         let path = add_worktree(&repo, "orphan-fingerprint");
         git_cmd(&path).args(["checkout", "--detach"]).run().unwrap();
+        git_cmd(&repo)
+            .args(["branch", "-D", "orphan-fingerprint"])
+            .run()
+            .unwrap();
         let fingerprint = |repo: &Path| {
             assess_orphan_worktrees(&repo.to_string_lossy())
                 .unwrap()
@@ -10991,6 +11057,10 @@ branch refs/heads/feat
         let (_temp, repo, _workspaces) = workspace_fixture();
         let path = add_worktree(&repo, "orphan-moved-away");
         git_cmd(&path).args(["checkout", "--detach"]).run().unwrap();
+        git_cmd(&repo)
+            .args(["branch", "-D", "orphan-moved-away"])
+            .run()
+            .unwrap();
         fs::remove_dir_all(&path).unwrap();
 
         let assessments = assess_orphan_worktrees(&repo.to_string_lossy()).unwrap();
@@ -11598,6 +11668,7 @@ branch refs/heads/feat
     fn detached_orphan(repo: &Path, name: &str) -> PathBuf {
         let path = add_worktree(repo, name);
         git_cmd(&path).args(["checkout", "--detach"]).run().unwrap();
+        git_cmd(repo).args(["branch", "-D", name]).run().unwrap();
         path
     }
 
@@ -11695,7 +11766,15 @@ branch refs/heads/feat
             .args(["branch", "rescue", &head])
             .run()
             .unwrap();
-        assert!(orphan_entry(&repo, "orphan-unreachable").safe);
+        assert!(
+            assess_orphan_worktrees(&repo.to_string_lossy())
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            path.exists(),
+            "a new rescue branch keeps the checkout out of cleanup"
+        );
     }
 
     // Catches (critic-1367): uncommitted edits inside a submodule being invisible to the
@@ -11733,7 +11812,21 @@ pub fn detect_orphan_worktrees_blocking(repo_path: String) -> Result<Vec<String>
         .args(["worktree", "list", "--porcelain"])
         .run()
         .map_err(|e| format!("git worktree list failed: {e}"))?;
-    Ok(parse_orphan_worktrees(&out.stdout))
+    let default_branch = get_remote_default_branch(&repo_path)?;
+    let mut orphans = Vec::new();
+    for path in parse_orphan_worktrees(&out.stdout) {
+        // Detached describes HEAD, not branch lifetime. A non-default branch
+        // at this tip is evidence that the checkout still holds active work.
+        // Missing directories can only have their stale registration removed.
+        if Path::new(&path).exists() {
+            let head = rev_at(Path::new(&path), "HEAD")?;
+            if non_default_local_branch_at_head(&repo_path, &head, &default_branch)? {
+                continue;
+            }
+        }
+        orphans.push(path);
+    }
+    Ok(orphans)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -11778,6 +11871,24 @@ pub fn assess_orphan_worktrees(repo_path: &str) -> Result<Vec<OrphanCleanupAsses
     })
 }
 
+fn non_default_local_branch_at_head(
+    repo_path: &str,
+    head: &str,
+    default_branch: &str,
+) -> Result<bool, String> {
+    let branches = git_cmd(Path::new(repo_path))
+        .args([
+            "for-each-ref",
+            &format!("--points-at={head}"),
+            "--format=%(refname)",
+            "refs/heads/",
+        ])
+        .run()
+        .map_err(|error| format!("Cannot inspect detached checkout branches: {error}"))?;
+    let default_ref = format!("refs/heads/{default_branch}");
+    Ok(branches.stdout.lines().any(|branch| branch != default_ref))
+}
+
 const DIRECTORY_GONE: &str = "directory is already gone; removal only drops the tracking entry";
 
 pub fn orphan_cleanup_safety(repo_path: &str, worktree_path: &str) -> Result<(), String> {
@@ -11805,6 +11916,10 @@ pub fn orphan_cleanup_safety(repo_path: &str, worktree_path: &str) -> Result<(),
     }
 
     let head = rev_at(worktree, "HEAD")?;
+    let default_branch = get_remote_default_branch(repo_path)?;
+    if non_default_local_branch_at_head(repo_path, &head, &default_branch)? {
+        return Err("HEAD is the tip of a non-default local branch".into());
+    }
     let containing = git_cmd(Path::new(repo_path))
         .args([
             "for-each-ref",
