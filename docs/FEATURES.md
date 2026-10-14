@@ -3016,6 +3016,14 @@ The existing MCP `repo` tool reads linked work items or explicit references, URL
 
 Tray and menu-bar icon: Settings > General offers Always, Only in background (default), or Never. The native menu shows live working/awaiting agent counts, Show TUICommander and Quit. An attention mark appears for awaiting agents while hidden and clears on Show. Left-click shows the app on macOS and Windows; Linux uses the menu. Never, a failed tray build, or a Linux desktop without a StatusNotifier host falls back to minimizing without clearing terminal visibility. A native notice appears on the first background entry of each app run.
 
+### Background WebView unload
+
+`background.webview_unload_minutes` defaults to 10 awake minutes; 0 keeps the hidden WebViews loaded. Changing it takes effect while hidden. Unload waits for a saved snapshot and defers during dictation or a close dialog. Rust PTYs, HTTP/MCP, Automations and remote terminal subscriptions continue. JavaScript plugins (including cache-keepalive, claude-wakeup and at-capacity-retry), sounds and updater checks pause until Show.
+
+Show recreates the main window from Tauri configuration, restores window geometry through the window-state plugin and reconnects the saved tabs, split layout and live sessions created while unloaded. Suspended tabs remain suspended. The updater checks again when the frontend starts. Quit confirmation uses a native dialog while unloaded. `ui` MCP actions return `{"error":"webview_unloaded"}` immediately in that state. `background-mode-changed` is dual-emitted to desktop and SSE with `{state:"hidden"|"unloaded"|"visible"}`.
+
+B0 measured WebContent exiting and about 1,090 MB released from a synthetic 1 GiB allocation on macOS. Actual TUIC workload savings, Windows and Linux are unmeasured. GPU and Networking processes may remain.
+
 Design Mode agent control: immediate native-port navigate, reload, screenshot,
 page-error read and explicitly host-granted MAIN-world eval. The extension sidebar
 shows the last fifty agent actions. Screenshots require the reviewed tab to be visible.

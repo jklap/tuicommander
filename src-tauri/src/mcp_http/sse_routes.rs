@@ -282,6 +282,7 @@ fn event_type_name(event: &AppEvent) -> &str {
     match event {
         AppEvent::WorkItemProviderRequest { .. } => "work-item-provider-request",
         AppEvent::CloseDialog { .. } => "close-dialog",
+        AppEvent::BackgroundModeChanged { .. } => "background-mode-changed",
         AppEvent::HeadChanged { .. } => "head-changed",
         AppEvent::RepoChanged { .. } => "repo-changed",
         AppEvent::SessionCreated { .. } => "session-created",
@@ -562,9 +563,9 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
         AppEvent::RemoteConnectionStatusChanged { payload } => payload.clone(),
         // The daemon's own body, untouched.
         AppEvent::RemoteMirrored { payload, .. } => payload.clone(),
-        AppEvent::AutomationRunChanged { payload } | AppEvent::CloseDialog { payload } => {
-            payload.clone()
-        }
+        AppEvent::AutomationRunChanged { payload }
+        | AppEvent::CloseDialog { payload }
+        | AppEvent::BackgroundModeChanged { payload } => payload.clone(),
         // Built once by the producer and handed to both transports, for the
         // same reason as `SessionStateChanged` above: the frontend applies one
         // shape, and a pair built from separate code in separate files drifts.

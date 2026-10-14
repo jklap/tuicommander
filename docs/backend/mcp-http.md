@@ -2278,6 +2278,8 @@ Credentials stay in Rust's existing account-authenticated HTTP path, which redac
 
 The desktop `close-dialog` event and its SSE copy include `background_available: boolean`. The desktop Ask dialog uses it to omit Background when the tray is disabled or unavailable. Browser clients continue to ignore native close prompts; tray actions add no public request surface.
 
+When the desktop WebViews are deliberately unloaded in background mode, `ui` actions return `{"error":"webview_unloaded"}` immediately. This does not affect PTYs or remote terminal streams. SSE emits `background-mode-changed` with `state` equal to `hidden`, `unloaded` or `visible`.
+
 Design Mode browser commands (`navigate`, `reload`, `screenshot`, `errors`, `eval`)
 return correlated native-port results with a ten-second timeout. Direct MCP tool
 lists, meta search and schema lookup filter Design Mode by the armed terminal
