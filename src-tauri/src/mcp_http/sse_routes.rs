@@ -186,6 +186,7 @@ pub(super) async fn sse_events(
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let mut rx = state.event_bus.subscribe();
     let client_guard = SseClientGuard::new(state.clone());
+    let watch = crate::background_mode::hidden::RemoteWatch::new(state.clone(), None);
     let initial_types: Option<Vec<String>> = query.types.map(|t| {
         t.split(',')
             .map(|s| s.trim().to_string())
@@ -206,6 +207,7 @@ pub(super) async fn sse_events(
 
     let stream = async_stream::stream! {
         let _client_guard = client_guard;
+        let _watch = watch;
         // Moved in so it lives exactly as long as the stream does.
         let _filter_guard = filter_guard;
         // Send retry directive as first event
@@ -278,6 +280,7 @@ pub(crate) fn event_type_name_for_test(event: &AppEvent) -> &str {
 
 fn event_type_name(event: &AppEvent) -> &str {
     match event {
+        AppEvent::WorkItemProviderRequest { .. } => "work-item-provider-request",
         AppEvent::CloseDialog { .. } => "close-dialog",
         AppEvent::HeadChanged { .. } => "head-changed",
         AppEvent::RepoChanged { .. } => "repo-changed",
@@ -349,6 +352,10 @@ pub(crate) fn event_payload_for_test(event: &AppEvent) -> serde_json::Value {
 
 fn event_payload(event: &AppEvent) -> serde_json::Value {
     match event {
+        AppEvent::WorkItemProviderRequest {
+            request_id,
+            request,
+        } => serde_json::json!({"request_id":request_id,"request":request}),
         AppEvent::HeadChanged { repo_path, branch } => {
             serde_json::json!({ "repo_path": repo_path, "branch": branch })
         }

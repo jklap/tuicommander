@@ -80,6 +80,30 @@ describe("independent settings windows", () => {
 		);
 	});
 
+	// Catches: a stale IDE window reverts a peer's new Dock preference, or an
+	// unchanged Dock value is sent as dirty on that window's next save.
+	it("preserves the Dock preference across stale and repeated window saves", async () => {
+		const dockWindow = await openWindow();
+		const ideWindow = await openWindow();
+		dockWindow.setHideDockIcon(false);
+		await flushSave();
+		ideWindow.setIde("zed");
+		await flushSave();
+		ideWindow.setDefaultFontSize(18);
+		await flushSave();
+
+		const reopened = await openWindow();
+		expect(reopened.state.hideDockIcon).toBe(false);
+		expect(reopened.state.ide).toBe("zed");
+		expect(reopened.state.defaultFontSize).toBe(18);
+		expect(packets[0].config.background).toEqual({ hide_dock_icon: false });
+		expect(
+			packets
+				.slice(1)
+				.every(({ base, config }) => JSON.stringify(config.background) === JSON.stringify(base.background)),
+		).toBe(true);
+	});
+
 	// Catches: advancing the local baseline to a merged disk snapshot reintroduces
 	// stale IDE values on the same window's second save.
 	it("keeps a peer's IDE through repeated local saves", async () => {

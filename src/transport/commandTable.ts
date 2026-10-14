@@ -25,6 +25,9 @@ type CommandTableEntry = { map: (args: Record<string, unknown>, p: ArgEncoder) =
  * The `p` helper encodes a required argument for URL usage (throws if missing).
  */
 export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
+	work_item_provider_bridge: {
+		map: (args) => ({ method: "POST", path: "/work-items/provider-bridge", body: args.input }),
+	},
 	account_secret_form: { map: (args) => ({ method: "POST", path: "/accounts/secret-form", body: args.request }) },
 	account_action: { map: (args) => ({ method: "POST", path: "/accounts/action", body: args.request }) },
 	telegram_settings: { map: () => ({ method: "GET", path: "/config/telegram" }) },
@@ -2356,6 +2359,7 @@ export const INTENTIONALLY_UNMAPPED: ReadonlySet<string> = new Set<string>([
 	// Native desktop lifecycle; remote clients must not hide or quit the host.
 	"request_quit",
 	"resolve_close",
+	"ack_background_snapshot",
 	// Browser clients use their own navigator.clipboard, never the host pasteboard.
 	"write_clipboard_text",
 	"read_clipboard_text",

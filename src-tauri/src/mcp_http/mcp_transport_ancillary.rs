@@ -2184,6 +2184,9 @@ pub(super) async fn handle_repo_with_caller(
         Err(e) => return e,
     };
     match action {
+        "work_item" | "work_item_act" => {
+            super::mcp_work_item::handle(state, args, mcp_session_id).await
+        }
         "list" | "active" => handle_repo_listing(state, args),
         "add" => {
             let path = match require_path(args, action) {

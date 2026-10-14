@@ -2244,3 +2244,15 @@ Tasks brief preparation uses `POST /tasks/start-work-prompt`, the HTTP twin of
 URL, title and body. The shared Rust implementation reads the repo-contained
 `.tuic-start-work.md` and sanitizes item fields before substitution. The frontend
 passes the result to the provider; host delivery still wraps and caps it.
+
+## Tasks items through the repo tool
+
+`repo action=work_item` reads the item linked to the caller's current Git worktree branch in `workitem_links.json`, searching all registered paths sharing its canonical repository root. Explicit targets are `reference: {providerId, accountId, id}`, `url`, or `key` with `provider_id` and `account_id`. URL lookup uses registered plugin resolvers. Key lookup uses the selected provider's search and requires an exact key match; repeated cursors and ambiguous matches fail. Use a reference or URL when the provider cannot find a key through search.
+
+The response has `content`, with a JSON detail inside `<untrusted-content source="work item">` and its closing tag. Detail includes the first comments page. Pass `cursor` from `comments.nextCursor` to read the next comments page, with `limit` (1–100, default 50). All provider text, including metadata, stays inside the block. JSON escapes angle brackets so item text cannot forge a closing tag.
+
+`repo action=work_item_act` accepts the same target and `operation: {kind: "comment" | "transition", value: string}`. Transitions use provider action IDs. Writes fail before provider dispatch unless `mcp_work_item_writes` is true; it defaults to false. The setting is checked again before a frontend claims the write. An action result contains the updated detail in the same block.
+
+Rust owns target selection, input/reply validation and opt-in. A typed `work-item-provider-request` event reaches the existing frontend registry through desktop events and SSE. The frontend atomically claims a request with `work_item_provider_bridge`, calls the existing provider port and completes the reply. Multiple clients cannot dispatch the same request twice. Claims and completions have matching IPC and HTTP transports (`POST /work-items/provider-bridge`). A running frontend with the provider loaded is required; a headless daemon alone has no JS providers. Requests time out after 30 seconds. A dispatched write may have completed when the reply times out: read before retrying.
+
+Credentials stay in Rust's existing account-authenticated HTTP path, which redacts raw tokens and Basic encodings before provider JavaScript receives a response. MCP accepts only the Tasks DTOs and suppresses raw provider errors; it never serializes account objects or configuration.

@@ -958,6 +958,7 @@ an explicit create action. These actions match across HTTP, IPC, MCP and CLI.
 ### Desktop close policy
 
 - `request_quit()` requests real quit regardless of `app.close_behavior`, with confirmation if enabled and terminal sessions exist.
+- `ack_background_snapshot(request_id: string)` acknowledges a completed persisted terminal snapshot requested by `snapshot-now { request_id }`. Native lifecycle only; intentionally unmapped over HTTP. The desktop waits at most two seconds before hiding.
 - `resolve_close(choice: "background" | "quit" | "cancel", remember: bool)` answers the pending Rust-owned close dialog. Background and Remember apply only to Ask. A failed save leaves the dialog pending.
 - These native lifecycle commands are deliberately in `INTENTIONALLY_UNMAPPED`; remote clients cannot hide or quit the host. `close-dialog` carries `{kind: "ask" | "confirm_quit", sessions: number}` on desktop events and `/events` SSE.
 
@@ -966,3 +967,7 @@ an explicit create action. These actions match across HTTP, IPC, MCP and CLI.
 | Command | Arguments | Returns | Description |
 |---------|-----------|---------|-------------|
 | `build_start_work_prompt` | `repoPath, input: {key, url: string or null, title, body}` | `String` | Read `.tuic-start-work.md`, substitute sanitized fields once, or preserve the default brief when absent. HTTP: `POST /tasks/start-work-prompt`. Delivery applies the existing untrusted wrapper and 12,000-character cap. |
+
+### Tasks provider bridge
+
+`work_item_provider_bridge(input)` claims or completes one Rust-issued Tasks provider request. It uses the same input and reply as `POST /work-items/provider-bridge`; see the HTTP API reference. The command only moves requests and replies; the existing provider port owns tracker calls.

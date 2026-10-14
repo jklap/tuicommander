@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Read linked Tasks items and comments through MCP repo actions; allow provider comments and transitions only after enabling `mcp_work_item_writes` (#1854-4960).
+
 ### Fixed
 
 - Preserve independent settings windows' edits when one changes agent visibility and another changes the IDE or other preferences (#1876-ceee).

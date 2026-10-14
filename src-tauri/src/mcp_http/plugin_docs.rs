@@ -693,6 +693,10 @@ GET /worktrees/dir?repo_path=/path/to/repo
 Returns the directory where worktrees for this repo will be created (based on user config).
 Useful for informational purposes — do not use this to construct paths yourself.
 
+## Tasks MCP access
+
+The existing MCP `repo` tool exposes `work_item` (linked caller-worktree item, reference, URL or account-scoped key; detail and paged comments) and `work_item_act` (comment/transition via provider `act`). Writes require `mcp_work_item_writes=true`; default false. Item text is JSON inside the start-work untrusted-content block. Rust validates replies and suppresses provider errors; credentials remain in the existing account HTTP injection/redaction path. The typed frontend bridge dispatches to the registered provider and atomically claims each request so multiple clients cannot duplicate writes. Plugins need no new methods. A frontend with the provider loaded is required. A timed-out write may have completed: read before retrying.
+
 ## Tasks data contract (Phase A4)
 
 Register via `host.registerWorkItemProvider(provider)`; its Disposable is automatically

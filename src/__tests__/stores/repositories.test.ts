@@ -2028,4 +2028,29 @@ describe("repositoriesStore", () => {
 			});
 		});
 	});
+	// Catches: a snapshot ack observes only the first save while a newer terminal snapshot is queued.
+	it("flushSave waits for both the in-flight save and the queued snapshot", async () => {
+		const completions: Array<() => void> = [];
+		mockInvoke.mockImplementation((command: string) =>
+			command === "save_repositories"
+				? new Promise<void>((resolve) => completions.push(resolve))
+				: Promise.resolve(undefined),
+		);
+		store.add({ path: "/first", displayName: "first" });
+		store.snapshotTerminals(new Map());
+		store.add({ path: "/second", displayName: "second" });
+		store.snapshotTerminals(new Map());
+		let settled = false;
+		const flushed = store.flushSave().then(() => {
+			settled = true;
+		});
+		expect(completions).toHaveLength(1);
+		completions[0]();
+		for (let i = 0; i < 10; i++) await Promise.resolve();
+		expect(completions).toHaveLength(2);
+		expect(settled).toBe(false);
+		completions[1]();
+		await flushed;
+		expect(settled).toBe(true);
+	});
 });
