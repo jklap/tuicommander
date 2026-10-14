@@ -105,6 +105,13 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{
 		tab: "general",
 		section: "Confirmations",
+		label: "When closing the main window",
+		labelKey: "general.label.closeBehavior",
+		platform: "desktop",
+	},
+	{
+		tab: "general",
+		section: "Confirmations",
 		label: "Confirm before quitting",
 		labelKey: "general.toggle.confirmBeforeQuit",
 	},

@@ -10,6 +10,12 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "Close to background",
+		description:
+			"In desktop Settings > General, choose Ask, Background or Quit for main-window close. Background keeps sessions running; the application menu still offers Quit.",
+		shortcut: null,
+	},
+	{
 		feature: "Compose images",
 		description:
 			"Drop images on Compose or use Attach images beside Send to choose several. Paste still works; image paths appear in your draft.",

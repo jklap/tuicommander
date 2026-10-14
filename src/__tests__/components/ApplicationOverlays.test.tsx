@@ -7,6 +7,7 @@ vi.mock("../../transport", async (original) => ({
 	...(await original<typeof import("../../transport")>()),
 	rpc: mockRpc,
 }));
+vi.mock("../../stores/closeDialog", () => ({ closeDialogStore: { state: { request: null }, answer: vi.fn() } }));
 vi.mock("../../components/McpConfirmHost/McpConfirmHost", () => ({ McpConfirmHost: () => null }));
 
 vi.mock("../../components/ConfirmDialog", () => ({ ConfirmDialog: () => null }));
@@ -33,11 +34,8 @@ vi.mock("../../stores/terminals", () => ({
 	terminalsStore: { getIds: vi.fn(() => []), get: vi.fn(), update: vi.fn() },
 }));
 
-import {
-	ApplicationOverlays,
-	folderDropMessage,
-	useQuitDialogKeyCapture,
-} from "../../components/ApplicationOverlays/ApplicationOverlays";
+import { ApplicationOverlays, folderDropMessage } from "../../components/ApplicationOverlays/ApplicationOverlays";
+import { useCloseDialogKeyCapture } from "../../components/QuitDialog/CloseDialog";
 
 describe("ApplicationOverlays", () => {
 	// Catches: browser Add Repository still mounts the text prompt instead of a browsable server picker.
@@ -98,7 +96,10 @@ describe("ApplicationOverlays", () => {
 	it("captures Enter and Escape while quit confirmation is visible", () => {
 		const setQuitDialogVisible = vi.fn();
 		const dispose = createRoot((rootDispose) => {
-			useQuitDialogKeyCapture(() => true, setQuitDialogVisible);
+			useCloseDialogKeyCapture(
+				() => true,
+				() => setQuitDialogVisible(false),
+			);
 			return rootDispose;
 		});
 
@@ -115,7 +116,10 @@ describe("ApplicationOverlays", () => {
 	it("removes the quit key capture listener on unmount", () => {
 		const setQuitDialogVisible = vi.fn();
 		const dispose = createRoot((rootDispose) => {
-			useQuitDialogKeyCapture(() => true, setQuitDialogVisible);
+			useCloseDialogKeyCapture(
+				() => true,
+				() => setQuitDialogVisible(false),
+			);
 			return rootDispose;
 		});
 		dispose();

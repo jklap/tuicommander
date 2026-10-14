@@ -3105,6 +3105,10 @@ exactness; clients must not substitute a heuristic discovery ID. The existing
 `GET /sessions/:id/chat-view` route repeats validation on every Codex read and
 returns `not_bound` when evidence is missing or stale.
 
+### Desktop close notification
+
+`close-dialog` SSE carries `{kind: "ask" | "confirm_quit", sessions: number}`, identical to the desktop event. Browser clients do not render host close prompts. Native lifecycle commands `request_quit` and `resolve_close` are deliberately desktop-only and have no HTTP route.
+
 ### Tasks start-work brief
 
 `POST /tasks/start-work-prompt` accepts `{ "repoPath": "/repo", "input": {

@@ -5311,5 +5311,10 @@ Visual evidence: worktree Vite fixture mounted the real NotificationsTab and Toa
 
 - [ ] Compose image attachments (#1758-1613): after loading the frontend, drop PNG/JPEG/WebP/GIF files from Finder onto the editor and confirm ordered image tags at the pointer; confirm no file tab opens and no path is written to the terminal. Verify the image-only multi-file picker and unchanged paste. Native Finder drag requires multi-app interaction.
 
+## Rust close policy (#1802-e6b8) — after manual restart
+
+- [ ] [to-test] After Boss restarts `make dev` or rebuilds release, close the main window with Ask: verify Background, Quit, Cancel and Remember; a cancelled dialog changes nothing.
+- [ ] [to-test] With Background, close main and confirm PTYs remain reachable; Cmd/Ctrl+Q still confirms and quits, and a detached panel X closes only its panel. macOS Dock click shows main again.
+- [ ] [to-test] With Quit, verify confirmation with live sessions, immediate quit without sessions or with confirmation disabled, and persistence of the remembered policy after restart.
 - [ ] After a manual backend restart, verify an unknown `/tasks/no-such-endpoint` returns JSON 404 rather than the SPA shell (tasks API prefix fix).
 - [ ] #1873-bbc2 revision: After a manual Rust restart/rebuild, verify Claude stays working/busy while blocking Stop hooks run after final choices; chips publish once when ready. Automated recorded Stop-hook regression and replay oracle cover the backend.

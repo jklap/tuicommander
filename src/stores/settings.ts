@@ -26,6 +26,8 @@ export interface CustomLauncher {
 	platform?: "macos" | "windows" | "linux";
 }
 
+export type CloseBehavior = "ask" | "background" | "quit";
+
 interface RustAppConfig {
 	shell: string | null;
 	font_family: string;
@@ -35,6 +37,7 @@ interface RustAppConfig {
 	mcp_server_enabled: boolean;
 	ide: string;
 	default_font_size: number;
+	close_behavior: CloseBehavior;
 	confirm_before_quit: boolean;
 	confirm_before_closing_tab: boolean;
 	max_tab_name_length: number;
@@ -284,6 +287,7 @@ interface SettingsStoreState {
 	defaultFontSize: number;
 	shell: string | null;
 	theme: string;
+	closeBehavior: CloseBehavior;
 	confirmBeforeQuit: boolean;
 	confirmBeforeClosingTab: boolean;
 	maxTabNameLength: number;
@@ -349,6 +353,7 @@ function createSettingsStore() {
 		defaultFontSize: DEFAULTS.fontSize,
 		shell: null,
 		theme: DEFAULT_THEME,
+		closeBehavior: "ask",
 		confirmBeforeQuit: true,
 		confirmBeforeClosingTab: true,
 		maxTabNameLength: 25,
@@ -422,6 +427,7 @@ function createSettingsStore() {
 		config.theme = state.theme;
 		config.ide = state.ide;
 		config.default_font_size = state.defaultFontSize;
+		config.close_behavior = state.closeBehavior;
 		config.confirm_before_quit = state.confirmBeforeQuit;
 		config.confirm_before_closing_tab = state.confirmBeforeClosingTab;
 		config.max_tab_name_length = state.maxTabNameLength;
@@ -526,6 +532,7 @@ function createSettingsStore() {
 				setState("defaultFontSize", config.default_font_size || DEFAULTS.fontSize);
 				setState("shell", config.shell || null);
 				setState("theme", config.theme || DEFAULT_THEME);
+				setState("closeBehavior", config.close_behavior ?? "ask");
 				setState("confirmBeforeQuit", config.confirm_before_quit ?? true);
 				setState("confirmBeforeClosingTab", config.confirm_before_closing_tab ?? true);
 				setState("maxTabNameLength", config.max_tab_name_length || 25);
@@ -623,7 +630,12 @@ function createSettingsStore() {
 			save();
 		},
 
-		/** Set confirm-before-quit preference */
+		/** Set the main-window close preference. */
+		setCloseBehavior(behavior: CloseBehavior) {
+			setState("closeBehavior", behavior);
+			save();
+		},
+
 		setConfirmBeforeQuit(enabled: boolean): void {
 			setState("confirmBeforeQuit", enabled);
 			save();
