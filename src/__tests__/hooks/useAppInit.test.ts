@@ -1452,6 +1452,72 @@ describe("initApp", () => {
 		expect(terminalsStore.get(declared)?.tuicSession).toBe("stable-caller");
 	});
 
+	// Catches: re-adoption losing split IDs/suspended tabs or colliding with sessions created while unloaded.
+	it("reinit_after_recreate_restores_tabs_layout_and_suspended_tabs", async () => {
+		repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+		repositoriesStore.setWorkspace("/repo", "main", {
+			worktreePath: "/repo",
+			lastActiveTerminal: "term-800",
+			savedTerminals: [
+				{
+					frontendId: "term-800",
+					sessionId: "live",
+					tuicSession: "stable-live",
+					name: "Live",
+					cwd: "/repo",
+					fontSize: 16,
+					agentType: "codex",
+				},
+				{
+					frontendId: "term-801",
+					tuicSession: "stable-suspended",
+					name: "Suspended",
+					cwd: "/repo",
+					fontSize: 14,
+					agentType: "codex",
+					suspended: true,
+				},
+			],
+		});
+		repositoriesStore.setActiveWorkspace("/repo", "main");
+		paneLayoutStore.reset();
+		const left = paneLayoutStore.createGroup();
+		const right = paneLayoutStore.createGroup();
+		paneLayoutStore.addTab(left, { type: "terminal", id: "term-800" });
+		paneLayoutStore.addTab(right, { type: "terminal", id: "term-801" });
+		paneLayoutStore.setRoot({
+			type: "branch",
+			direction: "horizontal",
+			children: [
+				{ type: "leaf", id: left },
+				{ type: "leaf", id: right },
+			],
+			ratios: [0.5, 0.5],
+		});
+		const layout = paneLayoutStore.serialize();
+		const deps = createMockDeps({
+			pty: {
+				listActiveSessions: vi.fn().mockResolvedValue([
+					{ session_id: "created-while-unloaded", cwd: "/repo", tuic_session: "new" },
+					{ session_id: "live", cwd: "/repo", tuic_session: "stable-live", state: { agent_type: "codex" } },
+				]),
+				close: vi.fn().mockResolvedValue(undefined),
+			},
+		});
+		await initApp(deps);
+		expect(terminalsStore.get("term-800")?.sessionId).toBe("live");
+		expect(terminalsStore.get("term-801")).toMatchObject({
+			sessionId: null,
+			suspended: true,
+			tuicSession: "stable-suspended",
+		});
+		expect(terminalsStore.getCount()).toBe(3);
+		expect(terminalsStore.getTerminalForSession("created-while-unloaded")).not.toBe("term-800");
+		expect(terminalsStore.state.activeId).toBe("term-800");
+		expect(paneLayoutStore.serialize()).toEqual(layout);
+		expect(deps.pty.close).not.toHaveBeenCalled();
+	});
+
 	it("restores active branch with surviving sessions", async () => {
 		repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 		repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });

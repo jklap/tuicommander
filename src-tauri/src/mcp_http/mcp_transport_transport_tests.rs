@@ -5174,3 +5174,23 @@ async fn crit1358_a_working_agent_is_refused_even_with_a_ui_attached() {
     assert_eq!(result["error"], "Cannot suspend: waiting for input");
     assert!(state.suspend_responses.is_empty());
 }
+
+// Catches: requests waiting on a renderer that was deliberately destroyed.
+#[tokio::test]
+async fn background_mode_ui_requests_fail_immediately_when_webview_unloaded() {
+    let state = test_state();
+    state
+        .webview_unloaded
+        .store(true, std::sync::atomic::Ordering::Release);
+    for action in ["toast", "tab", "screenshot", "confirm"] {
+        let reply = handle_mcp_tool_call(
+            &state,
+            loopback_addr(),
+            "ui",
+            &serde_json::json!({"action":action}),
+            None,
+        )
+        .await;
+        assert_eq!(reply, serde_json::json!({"error":"webview_unloaded"}));
+    }
+}

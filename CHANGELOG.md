@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- Background desktop WebViews unload after a configurable awake delay (default 10 minutes, 0 disables) and reconnect tabs on Show. Rust sessions keep running; frontend plugins pause while unloaded.
+
+
 - Fix seeded workflow Pause resume targets, expose their target in the Designer, and report invalid publication fields as HTTP 422.
 
 ### Added

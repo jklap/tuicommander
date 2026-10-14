@@ -170,6 +170,8 @@ pub enum AppEvent {
     },
     #[serde(rename = "close-dialog")]
     CloseDialog { payload: serde_json::Value },
+    #[serde(rename = "background-mode-changed")]
+    BackgroundModeChanged { payload: serde_json::Value },
     #[serde(rename = "automation-run-changed")]
     AutomationRunChanged { payload: serde_json::Value },
     #[serde(rename = "head-changed")]
@@ -2083,6 +2085,7 @@ pub struct AppState {
     pub mcp: McpState,
     /// WebSocket clients per PTY session for streaming output
     pub ws_clients: DashMap<String, Vec<WsClientTx>>,
+    pub(crate) webview_unloaded: AtomicBool,
     pub(crate) background_visibility: Mutex<crate::background_mode::hidden::Visibility>,
     /// Cached AppConfig to avoid re-reading from disk on every request
     pub(crate) config: parking_lot::RwLock<crate::config::AppConfig>,
@@ -3539,6 +3542,7 @@ impl AppState {
             metrics: SessionMetrics::new(),
             mcp: McpState::default(),
             ws_clients: DashMap::new(),
+            webview_unloaded: AtomicBool::new(false),
             background_visibility: Mutex::new(Default::default()),
             config: parking_lot::RwLock::new(config),
             git_cache: GitCacheState::new(),
@@ -5293,6 +5297,7 @@ impl AppState {
             | AppEvent::WorkflowRunChanged { .. }
             | AppEvent::AutomationRunChanged { .. }
             | AppEvent::CloseDialog { .. }
+            | AppEvent::BackgroundModeChanged { .. }
             | AppEvent::ReviewProgress { .. }
             | AppEvent::ProposalsReady { .. }
             // This accumulator's own output. Feeding it back in would make the

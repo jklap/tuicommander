@@ -188,6 +188,10 @@ export interface SessionState {
 
 /** Saved terminal for session restore */
 export interface SavedTerminal {
+	/** Presentation identity for reconnecting pane layouts after WebView recreation. */
+	frontendId?: string;
+	/** Live backend PTY at snapshot time, used only for same-process reconnect. */
+	sessionId?: string | null;
 	name: string;
 	cwd: string | null;
 	fontSize: number;

@@ -5356,3 +5356,8 @@ Visual evidence: worktree Vite fixture mounted the real NotificationsTab and Toa
 
 - [ ] Workflow Pause fix (#1882-bc88): after Boss restarts `make dev` or rebuilds release, edit a seeded story, publish it, and use Pause → Resume to → Save draft to repair an existing draft. Rust seed/API changes require restart.
 - [ ] Mobile composer + menu (#1880-d7ff): on iPhone, check both modes at 390px, native camera/file pickers, browser mic, Chat Park/Restore and busy Queue/Stop, terminal Queue and long-press Send. Confirm keyboard and safe-area positioning.
+
+### Background WebView unload (#1805-decc)
+
+- [ ] [VISUAL] After Boss rebuilds/restarts desktop TUIC, set unload to one minute, hide with live and suspended tabs plus split panes and detached panels: all WebViews disappear; backend sessions/remote streams continue; Show recreates main and restores tabs/layout and native focus. Check Dock Reopen, tray Show, second launch, deep link and notification entry points.
+- [ ] [VISUAL] On the rebuilt desktop, zero disables unload; sleeping does not consume the timer; dictation and close dialogs defer it; Quit while unloaded uses a native confirmation, Cancel keeps sessions, Confirm quits. Verify geometry and updater check after Show. Windows/Linux native unload behavior and memory savings remain unmeasured. No desktop instance was launched by this peer.
