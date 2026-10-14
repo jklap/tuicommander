@@ -199,7 +199,7 @@ receive it on `/events`.
 |---------|------|---------|-------------|
 | `get_github_status` | `path` | `GitHubStatus` | PR + CI for current branch |
 | `get_ci_checks` | `path` | `Vec<JSON>` | CI check details |
-| `get_pr_review_threads` | `path, pr_number` | `{bot, human}` | Unresolved review threads of one PR, split bot vs human |
+| `get_pr_review_threads` | `path, pr_number` | `{bot, human, ego}` | Unresolved review threads of one PR, split bot vs human vs ego (first comment carries `<!-- tuic:ego-review -->`) |
 | `get_repo_pr_statuses` | `path, include_merged` | `Vec<BranchPrStatus>` | Batch PR status (all branches) |
 | `approve_pr` | `repo_path, pr_number` | `String` | Submit approving review via GitHub API |
 | `update_pr_branch` | `repo_path, pr_number, expected_head_sha` | `()` | Update a BEHIND PR branch from its base, pinned to the shown head |
@@ -914,7 +914,8 @@ the prepared launch prompt, counting escaped stdout bytes before framing/marker.
 
 ### PR line review commands
 
-- `get_pr_line_threads(repoPath, prNumber, after?)`: `{headSha, threads, hasNextPage, endCursor}`. Threads retain GitHub `line`, `originalLine`, `diffSide`, `isOutdated`, `isResolved`, and `comments` connection.
+- `get_pr_line_threads(repoPath, prNumber, after?)`: `{headSha, threads, hasNextPage, endCursor}`. Threads retain GitHub `line`, `originalLine`, `diffSide`, `isOutdated`, `isResolved`, and `comments` connection; every comment author carries `bot` (from the GraphQL actor type), and each thread carries a nullable `finding` parsed from its first comment by `tuic_git::review_bots` (`tool`, `title`, `severity`, `severityLabel`, `category`, `suggestion`, `agentPrompt`, `addressedIn`, `externalId`; untrusted text).
+- `get_pr_open_threads(repoPath, prNumber)`: the `{pr_open_threads}` smart-prompt variable. A string: a preface, then a fenced untrusted block with one line per unresolved, non-outdated thread (`- path:line · tool · severity · title · url`, most severe first, at most 30 plus `+N more open threads not listed`). Each value is flattened to one line without control characters, and the fence is longer than any backtick run in the data.
 - `get_pr_thread_comments(repoPath, threadId, after?)`: GitHub comments connection.
 - `set_pr_thread_resolved(repoPath, threadId, resolved)`: confirmed thread.
 - `reply_pr_thread(repoPath, threadId, body)`: posted comment.
@@ -975,6 +976,8 @@ an explicit create action. These actions match across HTTP, IPC, MCP and CLI.
 ### Tasks provider bridge
 
 `work_item_provider_bridge(input)` claims or completes one Rust-issued Tasks provider request. It uses the same input and reply as `POST /work-items/provider-bridge`; see the HTTP API reference. The command only moves requests and replies; the existing provider port owns tracker calls.
+
+`project_work_items` / `POST /tasks/project`: accepts `{items, fields, query}` using the work-item DTOs. Returns `WorkItemGroupedPage` with the filtered unique count, no cursor and one unnamed group when no grouping is selected. Pure Rust projection, maximum 1,000 collected items, no provider access or persisted state.
 
 Settings policy foundation (#1786-9cbd): `mcp_confirm_response` also settles the
 existing desktop/mobile dialog for a backend-built settings proposal. It grants

@@ -24,6 +24,8 @@ interface PrTransitionNotice {
 	url: string;
 }
 
+// DEFERRED (2026-10-14) — Tasks item notices must reuse this path, but followed-item semantics,
+// a default-off policy and provider check/comment snapshots need a design decision (#1856-1d20).
 /** OS notification for a PR transition; clicking it opens the PR on GitHub. */
 export function notifyPrTransition(n: PrTransitionNotice): void {
 	const heading = TITLES[n.type];

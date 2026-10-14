@@ -247,11 +247,13 @@ describe("PrDetailContent — readiness and unresolved threads", () => {
 			unresolved_threads: 3,
 			unresolved_threads_truncated: false,
 		});
-		mockRpc.mockImplementation(async (cmd: string) => (cmd === "get_pr_review_threads" ? { bot: 2, human: 1 } : null));
+		mockRpc.mockImplementation(async (cmd: string) =>
+			cmd === "get_pr_review_threads" ? { bot: 2, human: 1, ego: 1 } : null,
+		);
 		const repo = nextRepo();
 		const { container, findByText } = render(() => <PrDetailContent repoPath={repo} branch="feature" />);
 		expect(container.querySelector("[data-readiness]")?.getAttribute("data-readiness")).toBe("unresolved-comments");
-		expect(await findByText("1 human, 2 bot unresolved threads")).toBeTruthy();
+		expect(await findByText("1 human, 2 bot, 1 ego unresolved threads")).toBeTruthy();
 		expect(mockRpc).toHaveBeenCalledWith("get_pr_review_threads", { path: repo, prNumber: 42 });
 	});
 

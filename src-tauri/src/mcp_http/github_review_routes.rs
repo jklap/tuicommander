@@ -18,6 +18,12 @@ pub(super) struct ThreadQuery {
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub(super) struct OpenThreadsQuery {
+    repo_path: String,
+    pr_number: i64,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(super) struct CommentsQuery {
     repo_path: String,
     thread_id: String,
@@ -53,6 +59,18 @@ pub(super) async fn threads(
         return e.into_response();
     }
     json_result(reviews::get_pr_line_threads_impl(&q.repo_path, q.pr_number, q.after, &state).await)
+}
+/// The `{pr_open_threads}` prompt variable (IPC `get_pr_open_threads`).
+pub(super) async fn open_threads(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<OpenThreadsQuery>,
+) -> Response {
+    if let Err(e) = validate_repo_path(&q.repo_path) {
+        return e.into_response();
+    }
+    json_result(
+        crate::pr_open_threads::get_pr_open_threads_impl(&q.repo_path, q.pr_number, &state).await,
+    )
 }
 pub(super) async fn comments(
     State(state): State<Arc<AppState>>,

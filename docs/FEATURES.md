@@ -35,6 +35,13 @@ Git and chat forms also share Input and Textarea controls. Desktop fields are 36
 mobile fields retain 44px touch targets. The Tasks List, Board and Roadmap switch
 supports arrow keys, Home and End.
 
+## Tasks create
+
+Tasks forms show provider-required fields with inline errors that preserve typing
+focus. User fields can search provider accounts; labels without static choices
+accept comma-separated text. Jira supplies configured Project and selected Type,
+and encodes sub-task Parent keys for creation.
+
 ## Tasks roadmap component
 
 The host-rendered roadmap shows provider date fields on a month or quarter timeline.
@@ -45,6 +52,10 @@ and target field IDs; the fallback uses the first two date descriptors in order.
 The component is ready for Tasks shell integration and does not add a tab by itself.
 
 ## Tasks list component
+
+Jira searches accept `jql:` and `text:` prefixes. Intended JQL failures keep the
+server parse message and typed query in Lists and Boards; plain text and issue-key
+lookups retain their fallback behavior.
 
 The generic Tasks list renders data-only work-item providers with account-scoped
 sources, saved presets, field filters, debounced search, sorting, virtual rows,
@@ -1503,6 +1514,7 @@ Variables are resolved from the Rust backend (`resolve_context_variables`) and f
 | `{pr_additions}` | GitHub store | Lines added in PR |
 | `{pr_deletions}` | GitHub store | Lines deleted in PR |
 | `{pr_checks}` | GitHub store | CI check summary (passed/failed/pending) |
+| `{pr_open_threads}` | `get_pr_open_threads` | Open, current review threads as a fenced untrusted list (max 30, most severe first) |
 | `{merge_status}` | GitHub store | PR mergeable status |
 | `{review_decision}` | GitHub store | PR review decision |
 | `{agent_type}` | terminal store | Active agent type (claude, gemini, etc.) |
@@ -3015,6 +3027,13 @@ The existing MCP `repo` tool reads linked work items or explicit references, URL
 ### Background tray and menu-bar icon
 
 Tray and menu-bar icon: Settings > General offers Always, Only in background (default), or Never. The native menu shows live working/awaiting agent counts, Show TUICommander and Quit. An attention mark appears for awaiting agents while hidden and clears on Show. Left-click shows the app on macOS and Windows; Linux uses the menu. Never, a failed tray build, or a Linux desktop without a StatusNotifier host falls back to minimizing without clearing terminal visibility. A native notice appears on the first background entry of each app run.
+
+Tasks list controls use provider-declared field sort, group and filter capabilities.
+A rejected selection restores the last successful sort, group and filter controls, keeps attempted search text for Retry, and shows the provider reason.
+
+Tasks small-list mode (#1851-7ade): when the provider reports at most 1,000 matches, Tasks collects the complete search/preset scope and uses the Rust projection for all-field sort, group and filter. A changed total, missing rows or a nonterminal cursor cannot establish completeness. Unknown totals and larger lists keep provider-supported server controls. No extra cache or persisted state is added.
+
+GitHub Tasks boards (#1846-55d7): the optional provider `listBoards(signal)` port discovers the current user Projects v2 when Board opens. The existing picker selects a project; paging preserves project identities. Missing `read:project` stays visible instead of claiming there are no boards. Providers without discovery retain their configured boards. Discovery does not persist selections or write to GitHub.
 
 ### Background WebView unload
 

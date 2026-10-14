@@ -28,7 +28,8 @@ const allItems: WorkItemQuery = {
 
 /** Host-owned roadmap. Providers supply typed dates; this component only lays out their pages. */
 export function TasksRoadmap(props: TasksRoadmapProps) {
-	const model = createTasksQuery();
+	// Roadmap consumes provider pages; complete-scope projection belongs to list controls.
+	const model = createTasksQuery({ local: false });
 	const [zoom, setZoom] = createSignal<RoadmapZoom>("month");
 	const [anchor, setAnchor] = createSignal(props.initialDate ?? new Date());
 	const window = createMemo(() => roadmapWindow(anchor(), zoom()));

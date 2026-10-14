@@ -27,6 +27,9 @@ export function detail(): WorkItemDetail {
 				kind: "enum",
 				required: true,
 				editable: true,
+				sortable: false,
+				groupable: false,
+				filterable: false,
 				options: [
 					{ id: "high", name: "High" },
 					{ id: "low", name: "Low" },
@@ -44,7 +47,7 @@ export function detail(): WorkItemDetail {
 					kind: "normal",
 					value: {
 						id: "bot-1",
-						author: { id: "bot", name: "CodeRabbit", avatarUrl: null },
+						author: { id: "bot", name: "CodeRabbit", avatarUrl: null, bot: true },
 						body: recordedComment,
 						createdAt: "2026-10-10T12:01:00Z",
 						url: null,

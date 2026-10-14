@@ -1022,7 +1022,7 @@ Unsupported auth overrides and exec_paths stay in the owner-gap ledger. Multi-ke
 changes are refused before writing; cross-process conditional writes await an Ego
 owner API. These are explicit limits rather than raw-file fallback paths.
 
-Tasks field schemas accept optional `queryable`; false excludes display-only fields from list filters and grouping while roadmap dates remain available. Setup edits preserve account keys outside the form and clear blank optional form fields. Create-form filter choices require exact field IDs.
+Tasks field schemas declare sort, filter and group capabilities; display-only fields disable all three while roadmap dates remain available. Setup edits preserve account keys outside the form and clear blank optional form fields. Create-form filter choices require exact field IDs.
 
 Tasks board paging (#1844-858d): lane headers show loaded counts, with More controls for the provider’s shared board cursor. Appended pages deduplicate cards by provider/account/item identity. Cards show assignees and labels; a Move button opens legal destination actions with keyboard navigation and rollback on failure. Refresh after a move merges page one into loaded cards; later pages remain cached until reload. Scrolling inside the move menu keeps it open.
 
@@ -1046,6 +1046,13 @@ panels and document contents are excluded. The iPhone visual check remains manua
 ### Background tray and menu-bar icon
 
 Background tray (B3): implemented. Native tray/menu-bar status reads current backend SessionState on transitions, with Show and explicit Quit using the shared background lifecycle. Tray preference defaults to background_only; never prevents hiding. Missing native tray support minimizes instead. Native template appearance and desktop-host integration require verification after a rebuild; WebView unload and hibernation remain separate work.
+
+Tasks list controls use provider-declared field sort, group and filter capabilities.
+A rejected selection restores the last successful sort, group and filter controls, keeps attempted search text for Retry, and shows the provider reason.
+
+Tasks small-list mode (#1851-7ade): when the provider reports at most 1,000 matches, Tasks collects the complete search/preset scope and uses the Rust projection for all-field sort, group and filter. A changed total, missing rows or a nonterminal cursor cannot establish completeness. Unknown totals and larger lists keep provider-supported server controls. No extra cache or persisted state is added.
+
+GitHub Tasks boards (#1846-55d7): the optional provider `listBoards(signal)` port discovers the current user Projects v2 when Board opens. The existing picker selects a project; paging preserves project identities. Missing `read:project` stays visible instead of claiming there are no boards. Providers without discovery retain their configured boards. Discovery does not persist selections or write to GitHub.
 
 Design Mode agent browser commands use bounded per-repository native-port requests
 and UUID replies, with ten-second timeouts and Stop cancellation. The extension
