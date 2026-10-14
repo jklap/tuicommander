@@ -479,8 +479,9 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					// Record the prompt row for the green scrollbar marker. line < 0 (the
 					// keystroke-reconstructed path) is ignored by the store.
 					terminalsStore.addUserPromptLine(props.id, parsed.line);
-					// Clear suggest bar, pending buffer, and mark dismissed
-					terminalsStore.update(props.id, { suggestDismissed: true, suggestedActions: null, activeSubTasks: 0 });
+					// A submitted prompt starts a new turn. Clear old choices and allow
+					// new ones even when busy was emitted before this input echo.
+					terminalsStore.update(props.id, { suggestDismissed: false, suggestedActions: null, activeSubTasks: 0 });
 					// User resumed typing — clear any stale error/question badge. See comment
 					// in stores/terminals.ts handleShellStateChange: error state should be
 					// cleared on explicit agent activity, user-input, or process exit.
@@ -578,10 +579,9 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					break;
 				}
 				case "suggest":
-					// Backend guarantees `suggest` events only arrive once the shell has
-					// transitioned to IDLE (see `drain_pending_suggest` in pty.rs, gated
-					// on `SHELL_IDLE`). No frontend buffering needed: if the user hasn't
-					// dismissed the previous cycle's chips, show the new set directly.
+					// The backend publishes choices once the agent is ready, even
+					// while background descendants keep the shell busy. Completion
+					// remains separately gated; show this turn's choices directly.
 					if (settingsStore.state.suggestFollowups && parsed.items?.length) {
 						const t = terminalsStore.get(props.id);
 						if (t && !t.suggestDismissed) {

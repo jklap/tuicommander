@@ -11,22 +11,27 @@ import {
 } from "./canvasTerminalUtils";
 import type { GridRenderer } from "./gridRenderer";
 import { scrollbarThumb } from "./scrollbarThumb";
+import type { ViewportProjection } from "./viewportProjection";
 
 export function paintSearchHighlights(
 	search: CanvasSearchController,
 	absRowToViewport: (absRow: number) => number | null,
 	octx: CanvasRenderingContext2D,
 	m: CellMetrics,
+	projection?: ViewportProjection,
 ) {
 	if (search.matches.length === 0) return;
 	for (let i = 0; i < search.matches.length; i++) {
 		const match = search.matches[i];
-		const vpRow = absRowToViewport(match.row);
-		if (vpRow === null) continue;
+		const backendRow = absRowToViewport(match.row);
+		const vpRow = backendRow === null ? null : projection ? projection.displayRow(backendRow) : backendRow;
+		if (vpRow === null || backendRow === null) continue;
 		const isActive = i === search.activeIndex;
-		const x = match.col_start * m.cellWidth;
+		const colStart = projection?.displayCol(backendRow, match.col_start) ?? match.col_start;
+		const colEnd = projection?.displayCol(backendRow, match.col_end) ?? match.col_end;
+		const x = colStart * m.cellWidth;
 		const y = vpRow * m.cellHeight;
-		const w = (match.col_end - match.col_start) * m.cellWidth;
+		const w = (colEnd - colStart) * m.cellWidth;
 		octx.fillStyle = "rgba(255, 180, 50, 0.2)";
 		octx.fillRect(x, y, w, m.cellHeight);
 		if (isActive) {
@@ -44,6 +49,7 @@ export function paintSelection(
 	rowMap: Map<number, DecodedRow>,
 	octx: CanvasRenderingContext2D,
 	m: CellMetrics,
+	projection?: ViewportProjection,
 ) {
 	if (!selection.start || !selection.end) return;
 	const absStartRow = Math.min(selection.start.row, selection.end.row);
@@ -58,22 +64,30 @@ export function paintSelection(
 		// eviction-stable all-time row index. At rest rowMap is viewport-relative.
 		const row = overlayScrollOffset != null ? rowCache.get(absRi) : rowMap.get(vpRow);
 		if (!row) continue;
-		const y = vpRow * m.cellHeight;
+		const displayRow = projection ? projection.displayRow(vpRow) : vpRow;
+		if (displayRow === null) continue;
+		const y = displayRow * m.cellHeight;
+		const column = (col: number) => projection?.displayCol(vpRow, col) ?? col;
 
 		if (absStartRow === absEndRow) {
 			const c0 = Math.min(selection.start.col, selection.end.col);
 			const c1 = Math.max(selection.start.col, selection.end.col);
-			octx.fillRect(c0 * m.cellWidth, y, (c1 - c0 + 1) * m.cellWidth, m.cellHeight);
+			octx.fillRect(column(c0) * m.cellWidth, y, (column(c1 + 1) - column(c0)) * m.cellWidth, m.cellHeight);
 		} else if (absRi === absStartRow) {
 			const isStartFirst = selection.start.row <= selection.end.row;
 			const startCol = isStartFirst ? selection.start.col : selection.end.col;
-			octx.fillRect(startCol * m.cellWidth, y, (row.count - startCol) * m.cellWidth, m.cellHeight);
+			octx.fillRect(
+				column(startCol) * m.cellWidth,
+				y,
+				(column(row.count) - column(startCol)) * m.cellWidth,
+				m.cellHeight,
+			);
 		} else if (absRi === absEndRow) {
 			const isStartFirst = selection.start.row <= selection.end.row;
 			const endCol = isStartFirst ? selection.end.col : selection.start.col;
-			octx.fillRect(0, y, (endCol + 1) * m.cellWidth, m.cellHeight);
+			octx.fillRect(0, y, column(endCol + 1) * m.cellWidth, m.cellHeight);
 		} else {
-			octx.fillRect(0, y, row.count * m.cellWidth, m.cellHeight);
+			octx.fillRect(0, y, column(row.count) * m.cellWidth, m.cellHeight);
 		}
 	}
 }
@@ -89,6 +103,7 @@ export function paintCursor(
 	keyInputRef: HTMLInputElement,
 	frame: DecodedFrame,
 	m: CellMetrics,
+	projection?: ViewportProjection,
 ) {
 	if (frame.displayOffset > 0) return;
 	if (!frame.cursorVisible) return;
@@ -102,7 +117,11 @@ export function paintCursor(
 				? "underline"
 				: "beam";
 	const shape: CursorShape = frame.cursorShape !== "block" ? frame.cursorShape : settingShape;
-	const rect = computeCursorRect(shape, frame.cursorRow, frame.cursorCol, m);
+	const point = projection
+		? projection.toDisplay(frame.cursorRow, frame.cursorCol)
+		: { row: frame.cursorRow, col: frame.cursorCol };
+	if (!point) return;
+	const rect = computeCursorRect(shape, point.row, point.col, m);
 
 	octx.fillStyle = cachedFgDefault;
 	octx.fillRect(rect.x, rect.y, rect.w, rect.h);
@@ -117,12 +136,12 @@ export function paintCursor(
 				const fontFamily = settingsStore.getFontFamily();
 				octx.font = gridRenderer.buildFontStyle(row.attrs[col], m.fontSize, fontFamily);
 				octx.fillStyle = cachedBgDefault;
-				octx.fillText(glyph, rect.x, frame.cursorRow * m.cellHeight + m.baseline);
+				octx.fillText(glyph, rect.x, point.row * m.cellHeight + m.baseline);
 			}
 		}
 	}
 
-	syncImePosition(keyInputRef, frame.cursorRow, frame.cursorCol, m);
+	syncImePosition(keyInputRef, point.row, point.col, m);
 }
 
 export function syncImePosition(keyInputRef: HTMLInputElement, row: number, col: number, m: CellMetrics) {
