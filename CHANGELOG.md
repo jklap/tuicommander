@@ -8,7 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 - List the desktop repository’s open Markdown files in the mobile session menu, with live updates and the existing mobile viewer (#1879-05ad).
+- Add scoped plugin settings schemas, locked revision patches, secret redaction, typed migrations for the five existing configurable plugins, and unload-safe catalogue registration (#1785-c7a1).
 
+- Unify mobile terminal and AI Chat composers with a shared + menu for files, camera capture and supported draft, queue and command actions (#1880-d7ff).
+
+- Add a device-local mobile Settings toggle for prompt autocorrect and spellcheck, enabled by default (#1878-3a3c).
+
+- Native tray and menu-bar icon with live agent counts, attention indicator, Show and Quit. Choose Always, Only in background or Never in General settings. Missing tray support safely minimizes the window (#1804-d44b).
 - Read linked Tasks items and comments through MCP repo actions; allow provider comments and transitions only after enabling `mcp_work_item_writes` (#1854-4960).
 
 ### Fixed

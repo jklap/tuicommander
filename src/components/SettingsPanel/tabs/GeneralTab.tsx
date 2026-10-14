@@ -3,7 +3,13 @@ import { AVAILABLE_LOCALES, localeName, t } from "../../../i18n";
 import { invoke } from "../../../invoke";
 import { isMacOS } from "../../../platform";
 import { appLogger } from "../../../stores/appLogger";
-import type { CloseBehavior, CustomLauncher, IdeType, UpdateChannel } from "../../../stores/settings";
+import type {
+	CloseBehavior,
+	CustomLauncher,
+	IdeType,
+	TrayIconPreference,
+	UpdateChannel,
+} from "../../../stores/settings";
 import { IDE_NAMES, settingsStore } from "../../../stores/settings";
 import { updaterStore } from "../../../stores/updater";
 import { isTauri } from "../../../transport";
@@ -183,12 +189,31 @@ export const GeneralTab: Component = () => {
 					onChange={(value) => settingsStore.setCloseBehavior(value as CloseBehavior)}
 					options={[
 						{ value: "ask", label: t("general.closeBehavior.ask", "Ask") },
-						{ value: "background", label: t("general.closeBehavior.background", "Background") },
+						...(settingsStore.state.trayIcon === "never"
+							? []
+							: [{ value: "background", label: t("general.closeBehavior.background", "Background") }]),
 						{ value: "quit", label: t("general.closeBehavior.quit", "Quit") },
 					]}
 					hint={t(
 						"general.hint.closeBehavior",
 						"Background hides visible windows and keeps sessions running. Quit still confirms when enabled.",
+					)}
+				/>
+			</Show>
+
+			<Show when={isTauri()}>
+				<SettingSelect
+					label={t("general.label.trayIcon", "Tray and menu-bar icon")}
+					value={settingsStore.state.trayIcon}
+					onChange={(value) => settingsStore.setTrayIcon(value as TrayIconPreference)}
+					options={[
+						{ value: "always", label: t("general.trayIcon.always", "Always") },
+						{ value: "background_only", label: t("general.trayIcon.backgroundOnly", "Only in background") },
+						{ value: "never", label: t("general.trayIcon.never", "Never") },
+					]}
+					hint={t(
+						"general.hint.trayIcon",
+						"Never disables Background. Without a tray host, including stock GNOME, closing minimizes the window so it remains reachable.",
 					)}
 				/>
 			</Show>

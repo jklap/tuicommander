@@ -16,9 +16,21 @@ export const TIPS: Tip[] = [
 		shortcut: null,
 	},
 	{
+		feature: "Mobile composer actions",
+		description:
+			"Tap + beside a mobile draft to attach a file, take a photo, or use the draft and queue actions supported by that conversation.",
+		shortcut: null,
+	},
+	{
+		feature: "Mobile keyboard correction",
+		description:
+			"In the mobile Settings tab, use the Input section to disable autocorrect and spellcheck for literal terminal command entry. The choice stays on your device.",
+		shortcut: null,
+	},
+	{
 		feature: "Close to background",
 		description:
-			"In desktop Settings > General, choose Ask, Background or Quit for main-window close. Background keeps sessions running; the application menu still offers Quit.",
+			"In desktop Settings > General, choose Ask, Background or Quit for main-window close. Background keeps sessions running. The tray or menu-bar icon shows working and awaiting agents and offers Show and Quit.",
 		shortcut: null,
 	},
 	{

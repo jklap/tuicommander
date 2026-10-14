@@ -1,5 +1,9 @@
 # Tauri Commands Reference
 
+## Scoped plugin settings
+
+`plugin_settings_action(plugin_id: String, action: PluginAction)` returns catalogue descriptors, a redacted snapshot, or a commit reply. Actions: describe, get with paths, set/reset with path and expectedRevision, patch with operations and expectedRevision. The backend binds the plugin owner and config file; unloaded or schema-less plugins are unavailable. HTTP twin: `POST /api/plugins/{id}/settings`.
+
 Slice F exposes `start_graph {target:{type:story|plan,id},expected_revision?,definition_id,definition_revision,request_id,limits?}` through the existing owning-daemon service. Story starts require the current native revision and pin the selected publication; the request ID is bound to its payload. Omitted limits use Rust defaults. Plan dispatch remains unavailable in this build and its start control says so. The `workflow_run` MCP tool uses an inline schema generated from `RunAction` and the public `RunCommand` variants; it returns the same scoped snapshots and cursor-ordered events as IPC/HTTP. Run history shows pinned activations, decisions/evidence, repair counters, pause targets and complete event payloads across pages. Graph recovery uses `resume_graph {execution_id,activation_id,resolution}` after answering pending input; pause and cancel use the existing sequence-fenced commands. Legacy runs offer inspection and cancellation in the UI. No new persistence or client scheduler is added.
 
 ## Workflow runs
@@ -960,7 +964,7 @@ an explicit create action. These actions match across HTTP, IPC, MCP and CLI.
 - `request_quit()` requests real quit regardless of `app.close_behavior`, with confirmation if enabled and terminal sessions exist.
 - `ack_background_snapshot(request_id: string)` acknowledges a completed persisted terminal snapshot requested by `snapshot-now { request_id }`. Native lifecycle only; intentionally unmapped over HTTP. The desktop waits at most two seconds before hiding.
 - `resolve_close(choice: "background" | "quit" | "cancel", remember: bool)` answers the pending Rust-owned close dialog. Background and Remember apply only to Ask. A failed save leaves the dialog pending.
-- These native lifecycle commands are deliberately in `INTENTIONALLY_UNMAPPED`; remote clients cannot hide or quit the host. `close-dialog` carries `{kind: "ask" | "confirm_quit", sessions: number}` on desktop events and `/events` SSE.
+- These native lifecycle commands are deliberately in `INTENTIONALLY_UNMAPPED`; remote clients cannot hide or quit the host. `close-dialog` carries `{kind: "ask" | "confirm_quit", sessions: number, background_available: boolean}` on desktop events and `/events` SSE.
 
 ### Tasks start-work brief
 

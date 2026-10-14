@@ -135,6 +135,7 @@ pub(crate) mod plugin_exec;
 pub(crate) mod plugin_fs;
 pub(crate) mod plugin_http;
 pub(crate) mod plugin_pty;
+pub(crate) mod plugin_settings;
 pub(crate) mod plugins;
 pub(crate) mod pr_review;
 #[cfg(feature = "desktop")]
@@ -1831,6 +1832,7 @@ pub fn run() {
                 .build(),
         )
         .manage(background_mode::desktop::BackgroundMode::default())
+        .manage(background_mode::tray::desktop::NativeTray::default())
         .manage(state)
         .manage(crate::fs::ContentSearchCancel(std::sync::Mutex::new(None)))
         .on_window_event(|window, event| {
@@ -1895,6 +1897,7 @@ pub fn run() {
             // Store AppHandle so HTTP handlers can emit Tauri events
             let app_state: &Arc<AppState> = app.state::<Arc<AppState>>().inner();
             *app_state.app_handle.write() = Some(app.handle().clone());
+            background_mode::tray::desktop::sync(app.handle());
 
             // Ensure main window exists — if tauri.conf.json windows[] is
             // empty (accidental edit, merge conflict), create it programmatically
@@ -2493,6 +2496,7 @@ pub fn run() {
             plugins::install_plugin_from_url,
             plugins::uninstall_plugin,
             plugins::register_loaded_plugin,
+            plugin_settings::plugin_settings_action,
             plugins::unregister_loaded_plugin,
             plugins::set_plugin_output_watchers,
             plugin_fs::plugin_read_file,

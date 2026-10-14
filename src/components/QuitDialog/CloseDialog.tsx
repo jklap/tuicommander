@@ -63,7 +63,7 @@ export function CloseDialog() {
 						<button class={qd.cancel} disabled={state.saving} onClick={cancel}>
 							{t("closeDialog.cancel", "Cancel")}
 						</button>
-						<Show when={ask()}>
+						<Show when={ask() && state.request?.background_available !== false}>
 							<button
 								class={qd.cancel}
 								disabled={state.saving}

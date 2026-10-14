@@ -216,3 +216,6 @@ fn background_mode_remote_watchers_survive_hide_and_release_independently() {
 
 #[path = "background_mode_stream_tests.rs"]
 mod streams;
+
+#[path = "background_mode_tray_tests.rs"]
+mod tray_tests;

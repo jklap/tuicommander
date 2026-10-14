@@ -1,5 +1,9 @@
 # Command threading
 
+## Plugin settings
+
+`plugin_settings_action` is async. Service reads and locked transactions run through spawn_blocking; apply only publishes the existing plugin reload event. Existing synchronous plugin registration performs its small private-file migration before granting capabilities.
+
 Where a `#[tauri::command]` runs, and how to decide for a new one.
 
 ## The rule

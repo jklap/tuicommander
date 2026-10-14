@@ -1,3 +1,10 @@
+## Scoped plugin settings (1785-c7a1) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, use an isolated instance with a configurable plugin. Describe its settings, patch a non-secret field using its revision, and verify its existing unload/load callback consumes the new value. A token reads as set/unset through settings; unloading removes its catalogue entries. Automated isolated owner/HTTP tests cover persistence, dispatch, zero limits, and refusal of linked settings paths; the current desktop needs a rebuild/restart to load this Rust change.
+## Mobile keyboard correction (1878-3a3c)
+
+- [ ] [HUMAN] On iPhone Safari or the installed PWA, check autocorrect suggestions, spellcheck and sentence capitalization in the terminal prompt with Settings → Input → Autocorrect and spellcheck on and off. Reload and confirm the choice persists. Native keyboard behavior requires the real phone; rendered attributes and persistence are covered by Vitest.
+
 ## Tasks MCP access (1854-4960) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, use an isolated instance with a loaded local test provider: `repo work_item` reads its worktree-linked item and comments, including when another worktree has an earlier link-store entry; `work_item_act` refuses writes by default. Enable `mcp_work_item_writes` through config save and verify one synthetic comment/transition, then disable it. Do not use a real tracker for automated writes. Targeted transport/provider tests cover the mechanics; the running desktop must be rebuilt to load the Rust bridge.
@@ -5337,3 +5344,9 @@ Visual evidence: worktree Vite fixture mounted the real NotificationsTab and Toa
   repository Markdown tab on desktop and inspect the session overflow Markdown
   section on iPhone. Confirm title/path, tap to view, and live open/close updates.
   The backend metadata publication and routes need the rebuilt Rust process.
+## Background tray and menu-bar icon (#1804-d44b)
+
+- [ ] After Boss restarts `make dev` or builds release: verify the template icon on light/dark macOS menu bars, Windows overflow area and KDE. Check Always/background-only/Never, Show via click/menu, Quit confirmation, one first-entry native notice, live working/awaiting counts and attention clearing on Show. The current Rust process does not hot-reload.
+- [ ] On stock GNOME without a StatusNotifier host, close configured as Background must minimize with the main window reachable; Ask must omit Background. Native Linux packaging requires the appindicator dependency.
+
+- [ ] Mobile composer + menu (#1880-d7ff): on iPhone, check both modes at 390px, native camera/file pickers, browser mic, Chat Park/Restore and busy Queue/Stop, terminal Queue and long-press Send. Confirm keyboard and safe-area positioning.

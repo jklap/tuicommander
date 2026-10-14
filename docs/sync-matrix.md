@@ -79,7 +79,7 @@ When adding a new `app.emit(event_name, payload)` call, document it here and lis
 | Event | Payload | Emitted from | Frontend listener |
 |-------|---------|-------------|-------------------|
 | `open-markdown-tabs-changed` | `{}` | `open_markdown_tabs::publish`: desktop IPC and `/events` SSE after a changed metadata snapshot | `OpenMarkdownMenu` refetches the registered repository list |
-| `close-dialog` | `{ kind: "ask" \| "confirm_quit", sessions: number }` | Rust background close policy; dual-emit to desktop and `/events` SSE | `useAppInit.ts` presents it on desktop only |
+| `close-dialog` | `{ kind: "ask" \| "confirm_quit", sessions: number, background_available: boolean }` | Rust background close policy; dual-emit to desktop and `/events` SSE | `useAppInit.ts` presents it on desktop only |
 | `native-notification-click` | `{ kind: "terminal", id }`, `{ kind: "progress", project, ptyId? }`, `{ kind: "aichat", id }`, `{ kind: "automation", id }` or `{ kind: "pr", url }` | `native_notification.rs` when a macOS Notification Center alert is clicked; desktop window only | `useAppInit.ts` → `navigateFromNativeNotice` → terminal, Progress dialog, AI Chat, saved automation run or the PR in the browser |
 | `session-standby` | `{ session_id: string, standby: bool }` | `pty.rs emit_standby_event()` | `useAppInit.ts` → `terminalsStore.update(termId, { standby })` |
 | `design-mode-changed` | `{ repo_path: string, session_id: string, status: "armed" \| "stopped" }` | `design_mode` lifecycle, dual-emitted to the desktop window and `event_bus` → `/events` SSE when inspection starts, rebinds or stops | Design Mode status listener → bound agent tab indicator; reads the repository and session from the event, not the currently focused tab |

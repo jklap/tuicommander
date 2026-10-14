@@ -6,6 +6,10 @@
  * at runtime from {config_dir}/plugins/ via the plugin:// URI protocol.
  */
 
+import type { PluginSettingsAction } from "./pluginSettings";
+
+export type { PluginSettingsAction, PluginSettingsDefinition } from "./pluginSettings";
+
 // ---------------------------------------------------------------------------
 // Disposable
 // ---------------------------------------------------------------------------
@@ -489,6 +493,8 @@ export const INVOKE_WHITELIST: readonly string[] = [
  * - Tier 4: Scoped Tauri invoke (whitelisted commands only)
  */
 export interface PluginHost {
+	/** Describe/read/patch this plugin's registered settings. Secrets read as set/unset. */
+	settings(action: PluginSettingsAction): Promise<unknown>;
 	/** Register a data-only Tasks provider; auto-disposed on unload. */
 	registerWorkItemProvider(provider: import("./workItemProvider").WorkItemProvider): Disposable;
 

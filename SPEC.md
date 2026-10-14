@@ -1,5 +1,7 @@
 # TUICommander Specification
 
+Plugin settings (Step 5, #1785-c7a1): loaded plugins register complete scoped schemas and typed private-file owners; patches preserve siblings, redact secrets and schedule reload. Core migrations cover build-cleaner, at-capacity-retry, cache-keepalive, claude-wakeup and the Telegram notifier example. Unload revokes catalogue entries and write authority. General settings MCP cutover remains separate.
+
 Desktop close policy (B1, #1802-e6b8): Rust owns `app.close_behavior` (`ask` default, `background`, `quit`). Ask offers Remember; Background hides main only. Explicit Quit uses `confirm_before_quit` and closes live PTYs in Rust. Detached panels close independently. Tray and WebView unload belong to later stages.
 
 Agent capture tooling: `scripts/agent_capture/run.py` records real installed CLIs through isolated headless sessions, promotes reviewed captures with ordered expected states, and integrates with the 1342 replay oracle. Missing or unauthenticated CLIs remain unverified.
@@ -702,9 +704,11 @@ Some frontend-only stores persist to localStorage:
 - [x] Connected daemon MCP toasts reach the desktop Messages bell with host attribution, original level/sound and safe remote-terminal navigation; no disconnected replay
 - [x] Remote access / HTTP server
 - [x] SSH-managed remote daemon deployment, idle lifetime, pairing-token vaulting, and systemd/launchd installation
+- [x] Mobile terminal prompt keyboard correction defaults on, with a device-local Settings toggle for autocorrect, spellcheck and sentence capitalization (#1878-3a3c).
 - [x] Mobile terminal Ctrl menu (Ctrl+C, Ctrl+B, Ctrl+D, agent-aware Ctrl+Enter)
 - [x] Mobile Send long-press Queue transfers the live draft to the shared server ready-window queue; taps still submit immediately.
 - [x] Session uploads live under TUIC data, with launch grants and session-end cleanup; startup reclaims only provably dead owners, preserving concurrent instances; ego invocation-scoped binary-file read roots remain unsupported (#1833-aa60).
+- [x] Shared mobile composer + menu: attach file, camera capture, supported queue/commands and Chat draft parking; browser mic inside the text box (#1880-d7ff).
 - [x] Mobile Companion PWA (searchable sessions, live output, question reply including Codex interactive choices, activity feed)
   - [x] Compact bare attachment icon left of the session composer; smaller mic and Send sit inside its right border (#1719-ff5d)
   - [x] Files tree search, hidden-folder ordering, long-path preview, and full-height wrapped editing
@@ -1036,3 +1040,7 @@ open the existing mobile viewer from their original workspace. A temporary Rust
 snapshot receives desktop metadata; the read-only HTTP list shares remote auth,
 and SSE invalidation updates open menus without a page reload. Virtual/plugin
 panels and document contents are excluded. The iPhone visual check remains manual.
+
+### Background tray and menu-bar icon
+
+Background tray (B3): implemented. Native tray/menu-bar status reads current backend SessionState on transitions, with Show and explicit Quit using the shared background lifecycle. Tray preference defaults to background_only; never prevents hiding. Missing native tray support minimizes instead. Native template appearance and desktop-host integration require verification after a rebuild; WebView unload and hibernation remain separate work.

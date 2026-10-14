@@ -176,7 +176,7 @@ agent-client-protocol = { version = "=2.0.0", features = [
     "unstable_mcp_over_acp",
     "unstable_session_fork",
 ] }
-tauri = { version = "2", features = ["protocol-asset"], optional = true }
+tauri = { version = "2", features = ["protocol-asset", "tray-icon", "image-png"], optional = true }
 tauri-plugin-opener = { version = "2", optional = true }
 # `rc` (Serialize for Arc<T>) is required by AppEvent::PtyParsed, which carries its
 # payload behind an Arc so the three broadcast lanes share it instead of deep-cloning
@@ -300,6 +300,7 @@ ssh2-config = "0.7"
 [features]
 default = ["desktop"]
 desktop = [
+    "dep:gio",
     "tuic-core/audio-output",
     "dep:chromey",
     "dep:sourcemap",
@@ -336,6 +337,9 @@ dictation = ["desktop", "dep:tuic-dictation"]
 cuda = ["dictation", "tuic-dictation/cuda"]
 vulkan = ["dictation", "tuic-dictation/vulkan"]
 tokio-console = ["console-subscriber"]
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gio = { version = "0.18", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { version = "0.6", optional = true }

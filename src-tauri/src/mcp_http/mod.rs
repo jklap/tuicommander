@@ -2099,6 +2099,10 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             post(plugin_routes::plugin_register),
         )
         .route(
+            "/api/plugins/{plugin_id}/settings",
+            post(plugin_routes::plugin_settings),
+        )
+        .route(
             "/api/plugins/{plugin_id}/unregister",
             post(plugin_routes::plugin_unregister),
         )

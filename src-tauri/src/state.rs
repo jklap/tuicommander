@@ -2220,6 +2220,7 @@ pub struct AppState {
     /// Populated by the frontend via `register_loaded_plugin` on plugin load.
     /// Used by Rust plugin commands to enforce capability checks server-side.
     pub(crate) loaded_plugins: DashMap<String, Vec<String>>,
+    pub(crate) plugin_settings: crate::settings::plugins::PluginSettings,
     /// Compiled plugin OutputWatcher patterns, one set per connected frontend,
     /// pushed via `set_plugin_output_watchers`. The PTY reader assembles lines
     /// and matches them here, so the WebView main thread only hears about the
@@ -3581,6 +3582,7 @@ impl AppState {
             index_build_sem: Arc::new(tokio::sync::Semaphore::new(1)),
             monitoring_git_sem: Arc::new(tokio::sync::Semaphore::new(MONITORING_GIT_CONCURRENCY)),
             loaded_plugins: DashMap::new(),
+            plugin_settings: Default::default(),
             plugin_output_watchers: parking_lot::RwLock::new(Default::default()),
             relay: RelayState::new(),
             peer_agents: DashMap::new(),
@@ -4694,6 +4696,10 @@ impl AppState {
         let Some(session_id) = event.pty_session_id() else {
             return;
         };
+        #[cfg(feature = "desktop")]
+        if let Some(app) = state.app_handle.read().as_ref() {
+            crate::background_mode::tray::desktop::schedule_sync(app);
+        }
         let Some(current) = state.session_state_with_shell(session_id) else {
             // The row is gone (`SessionClosed`). Drop the baseline too: a reused
             // id must not be deduped against the state of a dead session.

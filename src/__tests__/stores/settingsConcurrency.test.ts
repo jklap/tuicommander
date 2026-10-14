@@ -96,7 +96,36 @@ describe("independent settings windows", () => {
 		expect(reopened.state.hideDockIcon).toBe(false);
 		expect(reopened.state.ide).toBe("zed");
 		expect(reopened.state.defaultFontSize).toBe(18);
-		expect(packets[0].config.background).toEqual({ hide_dock_icon: false });
+		expect(packets[0].config.background).toEqual({ hide_dock_icon: false, tray_icon: "background_only" });
+		expect(
+			packets
+				.slice(1)
+				.every(({ base, config }) => JSON.stringify(config.background) === JSON.stringify(base.background)),
+		).toBe(true);
+	});
+
+	// Catches: a stale second window resets a peer's tray preference on an
+	// unrelated save, or a tray edit drops sibling background configuration.
+	it("does not revert the tray preference from a stale second window", async () => {
+		disk.background = { hide_dock_icon: false, future_setting: "preserved" };
+		const trayWindow = await openWindow();
+		const staleWindow = await openWindow();
+		trayWindow.setTrayIcon("always");
+		await flushSave();
+		staleWindow.setIde("zed");
+		await flushSave();
+		staleWindow.setDefaultFontSize(18);
+		await flushSave();
+
+		const reopened = await openWindow();
+		expect(reopened.state.trayIcon).toBe("always");
+		expect(reopened.state.ide).toBe("zed");
+		expect(disk.background).toEqual({
+			hide_dock_icon: false,
+			future_setting: "preserved",
+			tray_icon: "always",
+		});
+		expect(packets).toHaveLength(3);
 		expect(
 			packets
 				.slice(1)
