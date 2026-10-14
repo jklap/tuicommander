@@ -252,3 +252,7 @@ pub(crate) async fn submit_pr_draft_review(
 #[cfg(test)]
 #[path = "github_review_threads_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "github_review_threads_live_tests.rs"]
+mod live_tests;
