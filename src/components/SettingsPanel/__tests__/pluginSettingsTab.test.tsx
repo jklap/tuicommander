@@ -280,3 +280,33 @@ it("a failed post-write reload stays local — catches an unhandled refetch reje
 	expect(view.container.textContent).not.toContain("Settings crashed");
 	expect(view.container.textContent).not.toContain("private read failure");
 });
+
+// Catches: Reset rendered outside the shared styled, vertically spaced Settings actions row.
+it.each(["string", "integer", "boolean"])(
+	"plugin Reset (%s) uses the shared Settings action row — catches browser-default buttons touching the next label",
+	async (type) => {
+		mockInvoke.mockImplementation(async (command, args) => {
+			if (command !== "plugin_settings_action") return undefined;
+			if (args.action.action === "describe")
+				return { fields: { endpoint: { ...field, schema: { ...field.schema, type } } } };
+			if (args.action.action === "get")
+				return {
+					revision: "r1",
+					values: {
+						"/endpoint": { effective: type === "boolean" ? true : type === "integer" ? 30 : "https://example.test" },
+					},
+				};
+			return { effects: [], restart: [] };
+		});
+		const view = render(() => <SettingsPanel visible onClose={() => {}} initialTab="plugin:fixture" />);
+		const reset = await view.findByRole("button", { name: "Reset Server endpoint" });
+		expect(reset.parentElement).toHaveClass("actions");
+		fireEvent.click(reset);
+		await waitFor(() =>
+			expect(mockInvoke).toHaveBeenCalledWith("plugin_settings_action", {
+				pluginId: "fixture",
+				action: { action: "reset", path: "/endpoint", expectedRevision: "r1" },
+			}),
+		);
+	},
+);
