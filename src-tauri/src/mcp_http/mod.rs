@@ -19,6 +19,7 @@ mod log_routes;
 pub(crate) mod managed_launch;
 pub(crate) mod mcp_transport;
 mod mcp_transport_ancillary;
+pub(crate) use mcp_transport_ancillary::confirm_settings;
 mod mcp_transport_catalogue;
 mod mcp_transport_peer;
 mod mcp_transport_session_agent;

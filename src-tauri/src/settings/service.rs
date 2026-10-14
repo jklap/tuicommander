@@ -34,11 +34,32 @@ pub trait Store: Send + Sync + 'static {
 pub struct Service<S> {
     catalogue: Arc<Catalogue>,
     owner: Arc<S>,
+    policy: Arc<super::policy::Policy>,
 }
 
 impl<S: Store> Service<S> {
     pub fn new(catalogue: Arc<Catalogue>, owner: Arc<S>) -> Self {
-        Self { catalogue, owner }
+        Self {
+            catalogue,
+            owner,
+            policy: Arc::new(super::policy::Policy::default()),
+        }
+    }
+
+    /// Share the host proposal pool with the real all-client confirmation path.
+    pub fn with_policy(mut self, policy: Arc<super::policy::Policy>) -> Self {
+        self.policy = policy;
+        self
+    }
+
+    /// Host-issued caller context is separate from the model's request payload.
+    pub async fn execute_as(
+        &self,
+        request: Request,
+        _caller: &super::policy::Caller,
+        _approval: Option<&str>,
+    ) -> Result<Reply, Failure> {
+        self.execute(request).await
     }
 
     pub fn store_id(&self) -> &str {

@@ -2340,6 +2340,7 @@ pub struct AppState {
     /// the same request and the first answer wins, because a remote human must be
     /// able to unblock an agent that a native desktop dialog would have pinned to
     /// whoever is sitting at the machine.
+    pub(crate) settings_policy: Arc<crate::settings::policy::Policy>,
     pub(crate) confirm_responses: DashMap<String, tokio::sync::oneshot::Sender<bool>>,
     /// App-wide process-tree snapshot shared by agent lifecycle polling.
     pub(crate) process_snapshot_cache: crate::pty::ProcessSnapshotCache,
@@ -3613,6 +3614,7 @@ impl AppState {
             work_item_requests: DashMap::new(),
             screenshot_responses: DashMap::new(),
             suspend_responses: DashMap::new(),
+            settings_policy: Arc::new(crate::settings::policy::Policy::default()),
             confirm_responses: DashMap::new(),
             process_snapshot_cache: crate::pty::ProcessSnapshotCache::default(),
             hot_repo_paths: parking_lot::RwLock::new(std::collections::HashSet::new()),

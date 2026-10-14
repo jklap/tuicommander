@@ -5,6 +5,7 @@ pub mod catalogue;
 pub mod ego;
 mod ego_schema;
 pub mod model;
+pub mod policy;
 
 pub mod native;
 pub mod notifications;
@@ -83,3 +84,9 @@ mod accounts_safety_tests;
 mod ego_fixture;
 #[cfg(all(test, unix))]
 mod ego_tests;
+
+#[cfg(test)]
+mod policy_baseline_tests;
+
+#[cfg(test)]
+mod policy_tests;
