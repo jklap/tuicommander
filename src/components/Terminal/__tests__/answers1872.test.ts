@@ -173,7 +173,7 @@ describe("continuous answer regions (#1872-1870)", () => {
 			hiddenAnswerMarkers: plan.answerMarkers,
 		});
 		expect(fillText.mock.calls.filter(([glyph]) => glyph === "💬").map(([, , y]) => y)).toEqual([76, 124]);
-		expect(fillText.mock.calls.some(([glyph, x, y]) => glyph === "F" && x === 40 && y === 12)).toBe(true);
+		expect(fillText.mock.calls.some(([glyph, x, y]) => glyph === "F" && x === 16 && y === 12)).toBe(true);
 		expect(rowCopyText(rowMap.get(0)!)).toBe("• 💬 First.");
 		expect(rowText(rowMap.get(2)!)).toContain("💬");
 	});

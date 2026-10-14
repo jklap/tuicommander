@@ -13,6 +13,7 @@ import {
 	type RowSnapshot,
 } from "../suggestOverlay";
 import recordedCodex from "./fixtures/codex-answer-marker-1720.json";
+import { metrics, painter } from "./gridPaintTestUtils";
 
 /** Build a `getRow` lookup from a compact string/bool list, with null past end. */
 function rows(snapshots: Array<[string, boolean]>): (i: number) => RowSnapshot | null {
@@ -476,53 +477,54 @@ describe("hiddenMarkerRows — wrapped markers leave no visible fragment (#1761-
 		expect([...hidden]).toEqual([-1, 0]);
 	});
 
-	// catches: a wrapped intent hides only its first row, so the tail of the line shows
-	it("hides every row an intent line wraps onto", () => {
-		const hidden = screen(
-			[
-				["intent: Investigating why the terminal keeps repainting marker", false],
-				["rows after a resize (Marker rows)", true],
-				["normal output", false],
-			],
-			0,
+	function paint(snapshots: Array<[string, boolean]>) {
+		const decoded = new Map<number, DecodedRow>(
+			snapshots.map(([text, wrapped], index) => {
+				const codepoints = Uint32Array.from(text, (char) => char.codePointAt(0)!);
+				return [
+					index,
+					{
+						index,
+						count: codepoints.length,
+						wrapped,
+						codepoints,
+						fg: new Uint32Array(codepoints.length),
+						bg: new Uint32Array(codepoints.length),
+						attrs: new Uint8Array(codepoints.length),
+					},
+				];
+			}),
 		);
-		expect([...hidden]).toEqual([0, 1]);
+		const { renderer, textAt } = painter();
+		renderer.paintGrid(decoded, metrics, { fullRepaint: true, hiddenRows: screen(snapshots, 0) });
+		return (row: number) => textAt(row * 20 + 15);
+	}
+
+	// catches: intent rows hidden again, so the user cannot read what the agent is doing (D3, 2026-10-13)
+	it("never hides an intent row, wrapped or not", () => {
+		const painted = paint([
+			["intent: Investigating why the terminal keeps repainting marker", false],
+			["rows after a resize (Marker rows)", true],
+			["normal output", false],
+		]);
+		expect(painted(0)).toBe("intent: Investigating why the terminal keeps repainting marker");
+		expect(painted(1)).toBe("rows after a resize (Marker rows)");
 	});
 
 	// catches: only soft-wrapped (isWrapped) intent tails are hidden; Codex/Ink hard-wrap with
 	// cursor moves and a two-space indent, so the tail row keeps painting (recorded in
 	// codex-narrow-progress-intent-20260925.tcap: `intent: ...con` then `  righe di continuazione ...`)
-	it("hides the indented tail of a hard-wrapped intent line", () => {
-		const hidden = screen(
-			[
-				["• intent: Controllo la cattura a 80 colonne e preparo la prova del journal con", false],
-				["  righe di continuazione e titolo finale (Verifica stretta)", false],
-				["", false],
-				["  La registrazione riguarda solo", false],
-			],
-			0,
-		);
-		expect(hidden.has(1)).toBe(true);
-		expect(hidden.has(3)).toBe(false);
+	it("keeps the indented tail of a hard-wrapped intent line painted", () => {
+		const painted = paint([
+			["• intent: Controllo la cattura a 80 colonne e preparo la prova del journal con", false],
+			["  righe di continuazione e titolo finale (Verifica stretta)", false],
+			["", false],
+			["  La registrazione riguarda solo", false],
+		]);
+		expect(painted(0)).toBe("• intent: Controllo la cattura a 80 colonne e preparo la prova del journal con");
+		expect(painted(1)).toBe("  righe di continuazione e titolo finale (Verifica stretta)");
+		expect(painted(3)).toBe("  La registrazione riguarda solo");
 	});
-
-	// catches: the hard-wrap walk swallows a new answer, tool output or prompt
-	// (and its following indented content) as part of the preceding intent.
-	it.each(["  ● tool output", "  ⏺ tool output", "• tool output", "  💬 answer", "  ❯ prompt"])(
-		"ends a hard-wrapped intent before %s",
-		(boundary) => {
-			const hidden = screen(
-				[
-					["intent: Investigating marker rows", false],
-					["  continued (Marker rows)", false],
-					[boundary, false],
-					["  independent content", false],
-				],
-				0,
-			);
-			expect([...hidden]).toEqual([0, 1]);
-		},
-	);
 
 	// catches: the answer tint is hidden like a marker, removing the 💬 text
 	it("never hides an answer row", () => {

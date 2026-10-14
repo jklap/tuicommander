@@ -3196,7 +3196,7 @@ impl ChunkProcessor {
                     .session_maps
                     .session_states
                     .get(session_id)
-                    .is_some_and(|session| sl.completion_declared_for_epoch(session.turn_epoch));
+                    .is_some_and(|session| sl.completion_settled_for_epoch(session.turn_epoch));
                 let blocked = (turn_completed || sl.explicit_idle()) && !can_reopen_completed;
                 if !blocked {
                     let reopen = can_reopen_completed && (turn_completed || sl.explicit_idle());

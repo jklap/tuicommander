@@ -29,6 +29,7 @@ import {
 	type DecodedRow,
 	GUTTER_PX,
 } from "./canvasTerminalUtils";
+import { omitAnswerMarker, ViewportProjection } from "./viewportProjection";
 
 /**
  * Codepoints that mobile browsers (and some WebViews) render as color emoji
@@ -56,9 +57,10 @@ export interface PaintGridOptions {
 	fullRepaint: boolean;
 	/** When set (and not fullRepaint), only these row indices are repainted. */
 	dirtyIndices?: Set<number>;
-	/** Row indices that are cleared but never drawn (agent marker rows). */
+	/** Backend row indices omitted from the viewport layout. */
 	hiddenRows?: ReadonlySet<number>;
-	/** Answer marker glyphs to leave blank, without changing the stored cells. */
+	projection?: ViewportProjection;
+	/** Answer markers omitted from layout, without changing stored cells. */
 	hiddenAnswerMarkers?: ReadonlySet<number>;
 }
 
@@ -1217,8 +1219,7 @@ export function createGridRenderer(ctx: GridContext2D, deps: GridRendererDeps): 
 		fontFamily?: string,
 		hideAnswerMarker = false,
 	) {
-		const markerCol = hideAnswerMarker ? row.codepoints.indexOf(0x1f4ac) : -1;
-		const spacerCol = markerCol >= 0 && row.codepoints[markerCol + 1] === 0 ? markerCol + 1 : -1;
+		if (hideAnswerMarker) row = omitAnswerMarker(row);
 		fontFamily ??= deps.getFontFamily();
 
 		let lastVisibleCol = -1;
@@ -1232,7 +1233,6 @@ export function createGridRenderer(ctx: GridContext2D, deps: GridRendererDeps): 
 
 		// Pass 1: backgrounds
 		for (let c = 0; c < row.count; c++) {
-			if (c === markerCol || c === spacerCol) continue;
 			const cp = row.codepoints[c];
 			const a = row.attrs[c];
 			const hasExplicitBg = !(a & ATTR_DEFAULT_BG) || (a & ATTR_INVERSE) !== 0;
@@ -1257,7 +1257,6 @@ export function createGridRenderer(ctx: GridContext2D, deps: GridRendererDeps): 
 		let lastDim = false;
 
 		for (let c = 0; c < row.count; c++) {
-			if (c === markerCol || c === spacerCol) continue;
 			const cp = row.codepoints[c];
 			const extras = row.cellExtras?.get(c) ?? "";
 			if ((cp === 0 || cp === 0x20) && extras === "") continue;
@@ -1330,7 +1329,6 @@ export function createGridRenderer(ctx: GridContext2D, deps: GridRendererDeps): 
 
 		// Pass 3: decorations
 		for (let c = 0; c < row.count; c++) {
-			if (c === markerCol || c === spacerCol) continue;
 			const a = row.attrs[c];
 			if (!(a & (ATTR_UNDERLINE | ATTR_STRIKEOUT))) continue;
 			const x = c * m.cellWidth;
@@ -1347,16 +1345,17 @@ export function createGridRenderer(ctx: GridContext2D, deps: GridRendererDeps): 
 	}
 
 	function paintGrid(rowMap: Map<number, DecodedRow>, m: CellMetrics, opts: PaintGridOptions): void {
+		const projection = opts.projection ?? new ViewportProjection(rowMap, opts.hiddenRows, opts.hiddenAnswerMarkers);
 		const fontFamily = deps.getFontFamily();
 		const w = ctx.canvas.width / m.dpr;
-		if (opts.fullRepaint || !opts.dirtyIndices) {
+		if (opts.fullRepaint || !opts.dirtyIndices || projection.hidden.size > 0) {
 			// Full repaint: clear canvas + paint all rows (include gutter area)
 			const h = ctx.canvas.height / m.dpr;
 			ctx.fillStyle = cachedBgDefault;
 			ctx.fillRect(-GUTTER_PX, 0, w, h);
 			for (const [, row] of rowMap) {
-				if (!opts.hiddenRows?.has(row.index))
-					paintRow(row, row.index * m.cellHeight, m, fontFamily, opts.hiddenAnswerMarkers?.has(row.index));
+				const display = projection.projectRow(row);
+				if (display) paintRow(display, display.index * m.cellHeight, m, fontFamily);
 			}
 		} else {
 			// Incremental: repaint only dirty text rows (overlay handles cursor/selection/search)
@@ -1365,7 +1364,8 @@ export function createGridRenderer(ctx: GridContext2D, deps: GridRendererDeps): 
 				ctx.fillStyle = cachedBgDefault;
 				ctx.fillRect(-GUTTER_PX, y, w, m.cellHeight);
 				const row = rowMap.get(idx);
-				if (row && !opts.hiddenRows?.has(idx)) paintRow(row, y, m, fontFamily, opts.hiddenAnswerMarkers?.has(idx));
+				const display = row && projection.projectRow(row);
+				if (display) paintRow(display, display.index * m.cellHeight, m, fontFamily);
 			}
 		}
 	}
