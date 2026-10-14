@@ -2277,3 +2277,21 @@ Credentials stay in Rust's existing account-authenticated HTTP path, which redac
 ### Background tray and menu-bar icon
 
 The desktop `close-dialog` event and its SSE copy include `background_available: boolean`. The desktop Ask dialog uses it to omit Background when the tray is disabled or unavailable. Browser clients continue to ignore native close prompts; tray actions add no public request surface.
+
+### Settings proposal confirmation (#1786-9cbd)
+
+`ui(action=confirm, proposalId=...)` accepts an opaque proposal from the shared
+settings service. The host supplies the title and redacted diff; supplied
+`title`, `message` and `confirmed` cannot approve or replace it. The existing
+`mcp-confirm` event reaches desktop and SSE clients, and the existing human
+response endpoint/IPC command settles the first answer. A pending dialog uses the
+remaining portion of the proposal's absolute 300-second lifetime. Cancelling its
+handler dismisses the question and revokes the proposal. Ending an MCP protocol
+session revokes its proposals and grants. Headerless confirmation requires a
+server-issued connection identity.
+
+The service boundary rejects remote MCP writes regardless of peer registration.
+Local MCP enablement, HTTP local-or-authenticated access and native OS-user trust
+remain distinct host-issued contexts. The replacement settings tool and HTTP/IPC
+routes are not published by the policy foundation; cutover wires those contexts
+into the same service rather than duplicating policy.

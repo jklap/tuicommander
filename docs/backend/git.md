@@ -479,3 +479,12 @@ concurrent creates wait, and a process exit releases the lock. A failed recycle 
 the old checkout path, registration, branch and finished allocation state before returning
 the error. Live sessions prevent recycling; fingerprint-confirmed forced deletion keeps
 the existing deletion contract.
+
+The existing removal/creation events are the frontend rename boundary; clients do not
+need a separate `worktree_rename` response listener. The shared backend removal
+notification retracts restore rows and declarations in the locked repository file,
+even with no connected frontend. It announces the changed repository snapshot.
+Frontend removal retracts saved peer placement declarations together with the old
+sidebar workspace. Live PTY working
+directories do not move with sidebar placement. The allocation guard excludes live
+sessions rooted in the candidate checkout or its descendants.

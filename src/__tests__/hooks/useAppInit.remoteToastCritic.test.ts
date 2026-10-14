@@ -9,6 +9,9 @@ const { mockRpc, mockNavigate } = vi.hoisted(() => ({
 vi.mock("../../transport", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../../transport")>()),
 	rpc: mockRpc,
+	// Progress/workflow subscriptions are outside this toast listener fixture.
+	// Keep their async registration from outliving the test's Tauri mocks.
+	subscribeEvents: vi.fn().mockResolvedValue(() => {}),
 }));
 vi.mock("../../utils/navigateToTerminal", () => ({ navigateToTerminal: mockNavigate }));
 

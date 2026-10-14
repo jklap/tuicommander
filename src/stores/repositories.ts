@@ -1253,6 +1253,10 @@ function createRepositoriesStore() {
 					const r = s.repositories[repoPath];
 					if (!r) return;
 
+					// A removed checkout must not remain a saved peer placement.
+					for (const [peer, placement] of Object.entries(r.declaredWorktrees ?? {})) {
+						if (placement.workspaceId === workspaceId) delete r.declaredWorktrees![peer];
+					}
 					// Delete the branch
 					delete r.workspaces[workspaceId];
 
