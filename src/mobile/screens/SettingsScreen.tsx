@@ -7,8 +7,8 @@ import { transcriptPreferences } from "../../stores/transcriptPreferences";
 import { KEEP_AWAKE_KEY } from "../../utils/screenWakeLock";
 import { setDesktopUI } from "../../utils/tabletRouting";
 import { loadMobileTheme, mobileTheme, setMobileTheme } from "../mobileTheme";
-import { useMobileVoice } from "../useMobileVoice";
 import { useKeyboardCorrection } from "../useKeyboardCorrection";
+import { useMobileVoice } from "../useMobileVoice";
 import styles from "./SettingsScreen.module.css";
 
 const SOUND_KEY = "tuic-mobile-sounds";
