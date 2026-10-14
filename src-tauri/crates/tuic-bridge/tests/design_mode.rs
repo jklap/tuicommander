@@ -176,6 +176,8 @@ fn ipc_reply(stream: &mut impl Write, result: Value) {
 fn design_mode_real_native_port_preserves_command_reply_correlation_and_disconnect() {
     let dir = scratch();
     let profile = install(dir.path());
+    // The installer listener has closed, but Unix socket names persist until unlinked.
+    std::fs::remove_file(dir.path().join("s")).unwrap();
     let listener = UnixListener::bind(dir.path().join("s")).unwrap();
     let repo = dir.path().join("repo").canonicalize().unwrap();
     let expected_repo = repo.clone();
@@ -243,6 +245,8 @@ fn design_mode_real_native_port_preserves_command_reply_correlation_and_disconne
 fn design_mode_real_native_port_times_out_a_mute_ipc_reply() {
     let dir = scratch();
     let profile = install(dir.path());
+    // The installer listener has closed, but Unix socket names persist until unlinked.
+    std::fs::remove_file(dir.path().join("s")).unwrap();
     let listener = UnixListener::bind(dir.path().join("s")).unwrap();
     let repo = dir.path().join("repo").canonicalize().unwrap();
     let (stop_tx, stop_rx) = std::sync::mpsc::channel();
