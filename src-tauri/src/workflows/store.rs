@@ -490,8 +490,20 @@ fn migrate_unchecked_story_seed(conn: &Connection, project: &str) -> Result<(), 
                 && published.required_checks == checks,
         )
     };
-    if !is_original(&story_id, &story_template_graph(), &[])?
-        || !is_original(&plan_id, &resolve_plan_graph(&story_id, 1), &[])?
+    let legacy_graph = |mut graph: WorkflowGraph| {
+        for node in &mut graph.nodes {
+            if let NodeKind::Pause { resume_to } = &mut node.kind {
+                *resume_to = None;
+            }
+        }
+        graph
+    };
+    if !is_original(&story_id, &legacy_graph(story_template_graph()), &[])?
+        || !is_original(
+            &plan_id,
+            &legacy_graph(resolve_plan_graph(&story_id, 1)),
+            &[],
+        )?
     {
         return Ok(());
     }
@@ -691,7 +703,12 @@ fn story_template_graph() -> WorkflowGraph {
             ),
             node("judge", NodeKind::Judge),
             node("repair", NodeKind::Loop { max_iterations: 3 }),
-            node("pause", NodeKind::Pause { resume_to: None }),
+            node(
+                "pause",
+                NodeKind::Pause {
+                    resume_to: Some("implement".into()),
+                },
+            ),
             node("end", NodeKind::End),
         ],
         edges: vec![
@@ -728,7 +745,12 @@ fn resolve_plan_graph(story_template_id: &str, story_revision: i64) -> WorkflowG
             ),
             node("judge", NodeKind::Judge),
             node("replan", NodeKind::Loop { max_iterations: 8 }),
-            node("pause", NodeKind::Pause { resume_to: None }),
+            node(
+                "pause",
+                NodeKind::Pause {
+                    resume_to: Some("create".into()),
+                },
+            ),
             node("end", NodeKind::End),
         ],
         edges: vec![
