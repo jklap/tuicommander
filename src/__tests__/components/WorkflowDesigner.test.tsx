@@ -36,11 +36,14 @@ const draft = {
 
 beforeEach(() => {
 	vi.mocked(invoke).mockReset();
+	let stored = draft;
 	vi.mocked(invoke).mockImplementation(async (_command, args) => {
 		const action = (args as { action: { action: string; graph?: typeof draft.graph } }).action;
-		if (action.action === "list_drafts") return { type: "drafts", value: [draft] };
-		if (action.action === "update_draft")
-			return { type: "draft", value: { ...draft, draftRevision: 2, graph: action.graph } };
+		if (action.action === "list_drafts") return { type: "drafts", value: [stored] };
+		if (action.action === "update_draft" && action.graph) {
+			stored = { ...draft, draftRevision: 2, graph: action.graph };
+			return { type: "draft", value: stored };
+		}
 		if (action.action === "publish") return { type: "published", value: { ...draft, revision: 2 } };
 		throw new Error(`unexpected action ${action.action}`);
 	});
@@ -87,6 +90,30 @@ describe("WorkflowDesigner", () => {
 			}),
 		);
 	});
+	// Catches: a Pause whose resume target cannot be edited and persisted by the Designer.
+	it("edits and saves a Pause resume target", async () => {
+		render(() => <WorkflowDesigner project="/repo" />);
+		await screen.findByRole("button", { name: "Node work" });
+		fireEvent.click(screen.getByRole("button", { name: "Add Pause" }));
+		const resume = screen.getByRole("combobox", { name: "Resume to" });
+		fireEvent.change(resume, { target: { value: "work" } });
+		fireEvent.click(screen.getByRole("button", { name: "Save draft" }));
+		await screen.findByText("Draft saved.");
+		expect(invoke).toHaveBeenCalledWith("workflow_definition_action", {
+			project: "/repo",
+			action: expect.objectContaining({
+				action: "update_draft",
+				graph: expect.objectContaining({
+					nodes: expect.arrayContaining([{ id: "pause_1", kind: { type: "pause", resume_to: "work" } }]),
+				}),
+			}),
+		});
+		fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+		await waitFor(() => expect(invoke).toHaveBeenCalledTimes(3));
+		fireEvent.click(await screen.findByRole("button", { name: "Node pause_1" }));
+		expect((screen.getByRole("combobox", { name: "Resume to" }) as HTMLSelectElement).value).toBe("work");
+	});
+
 	it("keeps unsaved changes when a different draft is selected", async () => {
 		vi.mocked(invoke).mockImplementation(async (_command, args) => {
 			const action = (args as { action: { action: string } }).action;

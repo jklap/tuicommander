@@ -75,6 +75,12 @@ fn check_draft_size(graph: &WorkflowGraph) -> Result<(), String> {
     Ok(())
 }
 
+pub const WORKFLOW_VALIDATION_ERROR_PREFIX: &str = "invalid workflow definition: ";
+
+fn validation_error(error: String) -> String {
+    format!("{WORKFLOW_VALIDATION_ERROR_PREFIX}{error}")
+}
+
 /// Project-scoped definition operations shared by desktop and HTTP transports.
 pub fn definition_action(project: &str, action: WorkflowAction) -> Result<WorkflowReply, String> {
     if !crate::fs::is_absolute_on_any_platform(project) {
@@ -141,12 +147,14 @@ pub fn definition_action(project: &str, action: WorkflowAction) -> Result<Workfl
             expected_revision,
         } => {
             let draft = draft_in_project(&store, &id, &project)?;
-            super::definition::validate_runtime_nodes(&draft.graph, draft.kind)?;
+            super::definition::validate_runtime_nodes(&draft.graph, draft.kind)
+                .map_err(validation_error)?;
             super::validate_executable_graph(
                 &draft.graph,
                 draft.kind,
                 !draft.required_checks.is_empty(),
-            )?;
+            )
+            .map_err(validation_error)?;
             Ok(WorkflowReply::Published(
                 store.publish(&id, expected_revision)?,
             ))
