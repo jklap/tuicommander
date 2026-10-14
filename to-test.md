@@ -1657,8 +1657,6 @@ changes** (on by default).
 - [ ] Hold the push-to-talk hotkey and dictate a sentence. No notice of either _(NOT VERIFIED 2026-09-30: blocked — audio hardware: push-to-talk hotkey hold + dictated sentence (Fn/hotkey and mic); no hotkey/mic path on headless build.)_ _(audit 2026-10-13: HUMAN — Armed microphone/speaker/model conversation required. Read commands.rs:2514-2570 and dictation_routes.rs:361-401; safe read-only speech status proven unarmed…)_ _(triage 2026-10-14: WAITS — Needs real microphone/speaker/hotkey observation; do not disturb Boss’s voice session.)_
       kind may appear, the hands-free badge must stay off, and `voice
       action=status` must still report `available: false`.
-- [ ] **[VISUAL]** Settings > Dictation: the new toggle must sit with the other _(NOT VERIFIED 2026-09-30: blocked — VISUAL-owned by tuic-live-checks)_ _(audit 2026-10-13: VISUAL-OWED — Pure visual requirement; screenshot/image inspection unavailable per brief; not attempted.)_ _(triage 2026-10-14: DO — Runnable through scoped source/tests, isolated browser or throwaway API fixtures.)_
-      dictation toggles and its hint must read clearly at the panel's width.
 ## Voice conversation controls in the Dictation panel (story `818-2a29`, 2026-09-22) — **Rust, needs a `make dev` restart**
 
 Settings > Dictation now carries two new sections below Voice tuning: **Spoken
@@ -1691,9 +1689,6 @@ sessions.
       hotkey. It must record — a stale armed flag must not eat the keypress.
 - [ ] Set an activation phrase, then speak a sentence without it: nothing may be _(NOT VERIFIED 2026-09-30: blocked — audio hardware: real spoken sentences (mic) against the activation phrase; no synthetic STT path in headless build.)_ _(audit 2026-10-13: HUMAN — Armed microphone/speaker/model conversation required. Read commands.rs:2514-2570 and dictation_routes.rs:361-401; safe read-only speech status proven unarmed…)_ _(triage 2026-10-14: WAITS — Needs real microphone/speaker/hotkey observation; do not disturb Boss’s voice session.)_
       sent. Speak one with it: the phrase itself must not reach the terminal.
-- [ ] **[VISUAL]** Both new sections at the panel's width: the asset rows must _(NOT VERIFIED 2026-09-30: blocked — VISUAL-owned by tuic-live-checks)_ _(audit 2026-10-13: VISUAL-OWED — Pure visual requirement; screenshot/image inspection unavailable per brief; not attempted.)_ _(triage 2026-10-14: DO — Runnable through scoped source/tests, isolated browser or throwaway API fixtures.)_
-      line up with the Whisper model rows above them, and the phase line must
-      stay readable while it changes.
 ## Barge-in over a real speaker (story `816-cbbf`, 2026-09-22) — **[HUMAN]**
 
 Criterion 3 of the story asks for a real audio probe, and this is the half of it
