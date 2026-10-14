@@ -962,6 +962,10 @@ GitHub line review backend supports paginated thread/comment reads, reply, resol
 
 GitHub PR action backend supports failed-job reruns, head-pinned auto-merge and queue entry, queue removal/state and active-rule-aware merge. Legacy review submission validates REQUEST_CHANGES bodies. Frontend action integration remains separate.
 
+## GitHub Work adapter — integration pending (#1693-a816)
+
+The data-only GitHub adapter uses an injected account-scoped fetch port and the A4 contract. REST fixtures cover search, issue/PR identity, details, comments and repository create metadata. Authenticated host fetch wiring, lifecycle, manifest and catalog registration are present. Duplicate-picker integration and B6/B7 binding remain pending. Projects v2 success-path evidence requires `read:project`; no successful Projects response has been recorded.
+
 ## Tasks create — Component implemented (#1688-518d)
 
 The generic Tasks create form reads item types from the `itemType` enum field of

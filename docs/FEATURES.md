@@ -2959,6 +2959,10 @@ moves cannot be repeated; rejected actions restore the card and show the error.
 This component is available to the Tasks host; provider registration and the
 Tasks navigation surface determine where it is shown.
 
+### GitHub Work adapter — runtime integration pending
+
+The `github-work` provider adapter supports account-scoped qualifier search, issue/PR identity, detail, paged comments and review summaries, create metadata, duplicate candidates, close reasons and host start-work intents. It is tested against recorded GitHub reads. Authenticated host wiring, lifecycle, manifest and catalog registration are present. The duplicate-picker UI and core PR-action binding remain pending. Projects v2 success-path verification needs a GitHub credential with `read:project`.
+
 ## Tasks create component
 
 Core provides a generic work-item create form. The provider declares the item
@@ -2984,6 +2988,8 @@ permissions. Recurring cadence previews retain the existing runtime limitations.
 ### History-anchored viewport scrolling
 
 Terminal gestures hold the requested history row even when output arrives before the backend applies the scroll. If capped scrollback evicts that row, the viewport clamps to the oldest retained row.
+
+GitHub OAuth now requests `repo read:project`; existing logins need reauthorization before Projects v2 reads.
 
 ### Internal repository settings owners
 

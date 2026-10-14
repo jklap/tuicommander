@@ -7,6 +7,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Fixed
+
+- GitHub OAuth now requests `read:project` for Projects v2 reads. Existing logins need reauthorization.
+
+- Add the GitHub Work adapter, account-authenticated runtime, catalog entry and recorded-fixture tests; core PR-action binding and Projects v2 success-path verification remain pending (#1693-a816).
+
+### Fixed
 - Protect suspended tabs from worktree recycling and cleanup, and remove obsolete worktree bell actions (#1705-67b3).
 - Keep detached checkouts with a local feature branch at HEAD out of orphan cleanup, and stop reporting fresh in-sync branches as integrated (#1894-7683).
 ### Changed
