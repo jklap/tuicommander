@@ -197,6 +197,33 @@ describe("MarkdownTab agent review actions", () => {
 		expect(container.querySelector(".header")?.contains(send)).toBe(false);
 	});
 
+	// Catches: completing an earlier send consumes a checkbox edit saved while enqueue was pending.
+	it("keeps a checkbox edit made during an in-flight send available for another send", async () => {
+		fileContent += "\n\n- [ ] Answer";
+		addAgent("Reviewer", "session-one", "/repo");
+		let finishSend!: (outcome: { typed: boolean; queued: number }) => void;
+		mockRpc.mockImplementation((command: string) =>
+			command === "enqueue_agent_command"
+				? new Promise((resolve) => {
+						finishSend = resolve;
+					})
+				: Promise.resolve(undefined),
+		);
+		mockInvoke.mockImplementation((command: string, args?: { content?: string }) => {
+			if (command === "write_file" && args?.content !== undefined) fileContent = args.content;
+			return Promise.resolve(command === "read_file" ? fileContent : undefined);
+		});
+		const tabId = mdTabsStore.add("/repo", "docs/review.md");
+		const { container } = render(() => <MarkdownTab tab={mdTabsStore.get(tabId) as FileTab} />);
+		fireEvent.click(await screen.findByRole("button", { name: "Send changes to agent" }));
+		await waitFor(() => expect(finishSend).toBeTypeOf("function"));
+		fireEvent.click(container.querySelector<HTMLInputElement>('input[type="checkbox"]')!);
+		await waitFor(() => expect(fileContent).toContain("- [x] Answer"));
+		finishSend({ typed: true, queued: 0 });
+		await waitFor(() => expect(toastsStore.toasts.some((toast) => toast.title === "Sent to agent")).toBe(true));
+		expect(screen.queryByRole("button", { name: "Send changes to agent" })).not.toBeNull();
+	});
+
 	// Catches: retained tweak markers leave Agent/Send rendered after delivery.
 	it("MarkdownTab send hides controls", async () => {
 		addAgent("Reviewer", "session-one", "/repo");
