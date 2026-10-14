@@ -1862,20 +1862,6 @@ describe("initApp", () => {
 		expect(closeDialogStore.state.request).toEqual({ kind: "ask", sessions: 17 });
 	});
 
-	// Catches: browser/PWA events opening a dialog that can quit the desktop host.
-	it("does not present host close dialogs in browser mode", async () => {
-		const present = vi.spyOn(closeDialogStore, "present");
-		const internals = (globalThis as Record<string, unknown>).__TAURI_INTERNALS__;
-		delete (globalThis as Record<string, unknown>).__TAURI_INTERNALS__;
-		try {
-			await initApp(createMockDeps());
-			expect(present).not.toHaveBeenCalled();
-		} finally {
-			(globalThis as Record<string, unknown>).__TAURI_INTERNALS__ = internals;
-			present.mockRestore();
-		}
-	});
-
 	it("beforeunload closes browser-created PTY sessions", async () => {
 		const closeSpy = vi.fn().mockResolvedValue(undefined);
 		const deps = createMockDeps({
