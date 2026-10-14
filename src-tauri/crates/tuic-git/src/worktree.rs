@@ -11820,20 +11820,7 @@ pub fn detect_orphan_worktrees_blocking(repo_path: String) -> Result<Vec<String>
         // Missing directories can only have their stale registration removed.
         if Path::new(&path).exists() {
             let head = rev_at(Path::new(&path), "HEAD")?;
-            let branches = git_cmd(&base_repo)
-                .args([
-                    "for-each-ref",
-                    &format!("--points-at={head}"),
-                    "--format=%(refname)",
-                    "refs/heads/",
-                ])
-                .run()
-                .map_err(|error| format!("Cannot inspect detached checkout branches: {error}"))?;
-            if branches
-                .stdout
-                .lines()
-                .any(|branch| branch != format!("refs/heads/{default_branch}"))
-            {
+            if non_default_local_branch_at_head(&repo_path, &head, &default_branch)? {
                 continue;
             }
         }
@@ -11884,6 +11871,24 @@ pub fn assess_orphan_worktrees(repo_path: &str) -> Result<Vec<OrphanCleanupAsses
     })
 }
 
+fn non_default_local_branch_at_head(
+    repo_path: &str,
+    head: &str,
+    default_branch: &str,
+) -> Result<bool, String> {
+    let branches = git_cmd(Path::new(repo_path))
+        .args([
+            "for-each-ref",
+            &format!("--points-at={head}"),
+            "--format=%(refname)",
+            "refs/heads/",
+        ])
+        .run()
+        .map_err(|error| format!("Cannot inspect detached checkout branches: {error}"))?;
+    let default_ref = format!("refs/heads/{default_branch}");
+    Ok(branches.stdout.lines().any(|branch| branch != default_ref))
+}
+
 const DIRECTORY_GONE: &str = "directory is already gone; removal only drops the tracking entry";
 
 pub fn orphan_cleanup_safety(repo_path: &str, worktree_path: &str) -> Result<(), String> {
@@ -11911,6 +11916,10 @@ pub fn orphan_cleanup_safety(repo_path: &str, worktree_path: &str) -> Result<(),
     }
 
     let head = rev_at(worktree, "HEAD")?;
+    let default_branch = get_remote_default_branch(repo_path)?;
+    if non_default_local_branch_at_head(repo_path, &head, &default_branch)? {
+        return Err("HEAD is the tip of a non-default local branch".into());
+    }
     let containing = git_cmd(Path::new(repo_path))
         .args([
             "for-each-ref",
