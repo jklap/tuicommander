@@ -171,6 +171,30 @@ pub async fn pick_path(
     }))
 }
 
+/// Confirmation remains available when no WebView exists. rfd owns the native dialog.
+pub(crate) fn confirm_background_quit(app: AppHandle, answer: impl FnOnce(bool) + Send + 'static) {
+    let _ = app.run_on_main_thread(move || {
+        let dialog = catch_unwind(AssertUnwindSafe(|| {
+            rfd::AsyncMessageDialog::new()
+                .set_title("Quit TUICommander?")
+                .set_description("Quit and close all terminal sessions?")
+                .set_buttons(rfd::MessageButtons::OkCancel)
+                .show()
+        }));
+        match dialog {
+            Ok(dialog) => {
+                tauri::async_runtime::spawn(async move {
+                    answer(dialog.await == rfd::MessageDialogResult::Ok);
+                });
+            }
+            Err(_) => {
+                tracing::warn!("Native quit dialog unavailable");
+                answer(false);
+            }
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -223,28 +247,4 @@ mod tests {
         assert!(UNAVAILABLE.contains("standby"));
         assert!(UNAVAILABLE.contains("try again"));
     }
-}
-
-/// Confirmation remains available when no WebView exists. rfd owns the native dialog.
-pub(crate) fn confirm_background_quit(app: AppHandle, answer: impl FnOnce(bool) + Send + 'static) {
-    let _ = app.run_on_main_thread(move || {
-        let dialog = catch_unwind(AssertUnwindSafe(|| {
-            rfd::AsyncMessageDialog::new()
-                .set_title("Quit TUICommander?")
-                .set_description("Quit and close all terminal sessions?")
-                .set_buttons(rfd::MessageButtons::OkCancel)
-                .show()
-        }));
-        match dialog {
-            Ok(dialog) => {
-                tauri::async_runtime::spawn(async move {
-                    answer(dialog.await == rfd::MessageDialogResult::Ok);
-                });
-            }
-            Err(_) => {
-                tracing::warn!("Native quit dialog unavailable");
-                answer(false);
-            }
-        }
-    });
 }
