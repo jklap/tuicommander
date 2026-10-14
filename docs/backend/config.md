@@ -1451,6 +1451,20 @@ by `AppSettingsStore`; no separate launch adapter exists. Changes apply to later
 ACP or PTY launches. Ego-owned defaults use the separate `ego` profile store and
 the configured CLI; no Ego configuration files are edited.
 
+### Repository start-work brief
+
+Place `.tuic-start-work.md` in the repository root, next to `.tuic.json`. This
+keeps the shared brief with the existing team configuration without embedding
+Markdown in JSON. Tasks reads it for each Start work action through the backend's
+repo-contained, size-limited UTF-8 file reader.
+
+Use `{{key}}`, `{{url}}` and `{{title}}`. Substitution runs once; unknown tokens
+remain literal and a missing URL becomes empty text. Item controls are stripped
+before substitution (TAB and LF remain). Without the file, the brief remains
+`key: title`, a blank line and the item body. Invalid or inaccessible templates
+fail the action. Delivery still caps the brief at 12,000 characters and encloses
+it in the untrusted-content wrapper.
+
 ### One-time beta update-channel enrollment
 
 On beta builds, loading an older `config.json` without the internal

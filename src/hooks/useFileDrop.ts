@@ -15,6 +15,7 @@ import { toastsStore } from "../stores/toasts";
 import { isTauri, rpc } from "../transport";
 import { classifyFile, openFileAction } from "../utils/filePreview";
 import { pathStartsWith, pathStripPrefix } from "../utils/pathUtils";
+import { dispatchNativeFileDropTarget } from "./nativeFileDropTargets";
 
 // Re-export for existing callsites that import from useFileDrop
 export { isInternalDrag, markInternalDragEnd, markInternalDragStart };
@@ -173,6 +174,7 @@ export async function dispatchTauriDrop(paths: string[], x: number, y: number): 
 	if (!paths.length) return;
 
 	const el = elementAtDropPoint(x, y);
+	if (dispatchNativeFileDropTarget(el, paths, tauriPhysicalToCss(x, y))) return;
 	const target = findDropTarget(el);
 	if (target?.kind === "folder") {
 		const mode: "move" | "copy" = target.connectionId || dragDropStore.copyModifierHeld() ? "copy" : "move";

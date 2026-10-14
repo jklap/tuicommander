@@ -351,6 +351,7 @@
 /system/local-ips
 /system/notification-sound
 /system/relay-status
+/tasks/start-work-prompt
 /terminal/theme-colors
 /tunnels/active
 /tunnels/agent-keys
