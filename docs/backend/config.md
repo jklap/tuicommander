@@ -675,6 +675,11 @@ configuration survive repeated calls. Corrupt configuration aborts registration
 and is moved to the existing `repositories.corrupt-<uuid>` recovery backup. Successful changes emit
 `repositories-changed` to both transports.
 
+Workspace removal also uses a strict locked update. It removes the old workspace
+restore row, its saved terminals and peer placement declarations, and clears a
+selection of that workspace. Sibling records and the main checkout remain intact.
+A changed file emits `repositories-changed` before the removal lifecycle event,
+so disconnected clients do not depend on a frontend save to retract stale paths.
 
 **Type:** `serde_json::Value` (flexible persisted JSON, shape defined by frontend)
 
