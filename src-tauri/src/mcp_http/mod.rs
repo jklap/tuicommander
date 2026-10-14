@@ -22,6 +22,7 @@ mod mcp_transport_ancillary;
 mod mcp_transport_catalogue;
 mod mcp_transport_peer;
 pub(crate) mod mcp_transport_session_agent;
+mod open_markdown_routes;
 
 mod mcp_work_item;
 mod plugin_docs;
@@ -1020,6 +1021,14 @@ fn shared_routes() -> Router<Arc<AppState>> {
             get(session::list_sessions).post(session::create_session),
         )
         .route("/sessions/suspended", post(suspended_routes::action_http))
+        .route(
+            "/repo/open-markdown-tabs",
+            get(open_markdown_routes::get_tabs),
+        )
+        .route(
+            "/config/open-markdown-tabs",
+            put(open_markdown_routes::put_tabs),
+        )
         .route("/sessions/{id}/write", post(session::write_to_session))
         .route("/sessions/{id}/submit", post(submit_agent_reply))
         // The N-ary sibling: one round trip, but the per-input bookkeeping still
@@ -2071,6 +2080,10 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         .route(
             "/api/plugins/{plugin_id}/register",
             post(plugin_routes::plugin_register),
+        )
+        .route(
+            "/api/plugins/{plugin_id}/settings",
+            post(plugin_routes::plugin_settings),
         )
         .route(
             "/api/plugins/{plugin_id}/unregister",

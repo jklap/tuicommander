@@ -4,6 +4,16 @@ import * as ts from "@typescript/typescript6";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Catches: browser clients losing the provider bridge while desktop IPC works.
+it("maps scoped plugin settings actions without adding host authority", () => {
+	const action = { action: "get", paths: ["/retryDelayMs"] };
+	expect(mapCommandToHttp("plugin_settings_action", { pluginId: "retry-plugin", action })).toEqual({
+		method: "POST",
+		path: "/api/plugins/retry-plugin/settings",
+		body: action,
+	});
+});
+
+// Catches: browser clients losing the provider bridge while desktop IPC works.
 it("maps the work-item provider bridge to its HTTP twin", () => {
 	const input = { action: "claim", requestId: "request-1" };
 	expect(mapCommandToHttp("work_item_provider_bridge", { input })).toEqual({
@@ -4124,5 +4134,19 @@ describe("default-app host boundary", () => {
 	it("does not map default-app opens to a remote host launcher", () => {
 		expect(INTENTIONALLY_UNMAPPED.has("open_default_app")).toBe(true);
 		expect(() => mapCommandToHttp("open_default_app", { target: "https://example.com", kind: "url" })).toThrow();
+	});
+});
+
+// Catches: the mobile metadata read or desktop publication having no equivalent HTTP shape.
+it("maps open Markdown metadata reads and loopback publication without document content", () => {
+	expect(mapCommandToHttp("list_open_markdown_tabs", { cwd: "/repo/src" })).toEqual({
+		method: "GET",
+		path: "/repo/open-markdown-tabs?cwd=%2Frepo%2Fsrc",
+	});
+	const tabs = [{ id: "md-1", repoPath: "/repo", filePath: "guide.md", fsRoot: "/repo" }];
+	expect(mapCommandToHttp("sync_open_markdown_tabs", { tabs })).toEqual({
+		method: "PUT",
+		path: "/config/open-markdown-tabs",
+		body: { tabs },
 	});
 });

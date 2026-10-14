@@ -8,6 +8,9 @@ pub mod model;
 
 pub mod native;
 pub mod notifications;
+pub(crate) mod plugin_migrations;
+pub mod plugin_schema;
+pub mod plugins;
 pub mod preferences;
 pub mod registry;
 pub mod remote;

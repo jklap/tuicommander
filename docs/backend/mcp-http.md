@@ -1,5 +1,9 @@
 # MCP & HTTP Server
 
+## Scoped plugin settings
+
+The plugin settings IPC command and `POST /api/plugins/{id}/settings` dispatch to the same scoped Rust owner. Catalogue descriptors contain no stored values; secrets read as set/unset. `plugin-changed` carries only plugin IDs over desktop and SSE after a durable commit, scheduling existing reload callbacks. This adapter does not publish the general settings MCP tool.
+
 Slice F exposes `start_graph {target:{type:story|plan,id},expected_revision?,definition_id,definition_revision,request_id,limits?}` through the existing owning-daemon service. Story starts require the current native revision and pin the selected publication; the request ID is bound to its payload. Omitted limits use Rust defaults. Plan dispatch remains unavailable in this build and its start control says so. The `workflow_run` MCP tool uses an inline schema generated from `RunAction` and the public `RunCommand` variants; it returns the same scoped snapshots and cursor-ordered events as IPC/HTTP. Run history shows pinned activations, decisions/evidence, repair counters, pause targets and complete event payloads across pages. Graph recovery uses `resume_graph {execution_id,activation_id,resolution}` after answering pending input; pause and cancel use the existing sequence-fenced commands. Legacy runs offer inspection and cancellation in the UI. No new persistence or client scheduler is added.
 
 ## Explicit repository registration
@@ -25,6 +29,19 @@ Unauthenticated HTML navigation to `/` and `/mobile` redirects to the existing `
 ## Remote file copies
 
 The shared filesystem router exposes streamed `/fs/upload-copy` on the daemon through existing authentication. Sender-side `fs_transfer_remote_paths` coordination is desktop IPC only and intentionally unmapped: data leaves the machine, Finder source paths cannot be gated to registered roots, and HTTP token holders must not trigger exfiltration. There is no `/fs/transfer-remote` HTTP route. The receiver resolves registered repository roots through `cap-std` directory handles, validates archive paths, rejects links, bounds bytes/entries/concurrency, and publishes the staged top-level source with an atomic no-replace rename. Uploads use the existing session-cookie header, a 30-second chunk idle deadline (exempt from the global response deadline), and hold their concurrency permit through blocking extraction. Daemon startup sweeps abandoned upload staging inside registered roots without following symlink directories. Cleanup restores owner directory access only inside disposable staging when restrictive tar modes would prevent removal; published permissions remain unchanged. This path uses neither SSH nor shell commands. See the filesystem HTTP API for the wire contract.
+
+## Open desktop Markdown tabs
+
+`GET /repo/open-markdown-tabs?cwd=<session-directory>` returns file-tab metadata
+for the deepest registered repository or workspace containing the directory.
+It uses the existing remote authentication middleware and returns 403 for an
+unregistered directory. No file contents are returned.
+
+The desktop publishes through `sync_open_markdown_tabs`; its HTTP twin is
+`PUT /config/open-markdown-tabs`, restricted to loopback. Rust stores a temporary
+snapshot and emits `open-markdown-tabs-changed` on desktop IPC and SSE whenever
+it changes. Mobile clients refetch after invalidation or reconnect. Saved pane
+layouts contain only tab IDs/types and cannot supply these file paths.
 
 ## CI logs
 

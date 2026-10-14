@@ -1,5 +1,9 @@
 # Command threading
 
+## Plugin settings
+
+`plugin_settings_action` is async. Service reads and locked transactions run through spawn_blocking; apply only publishes the existing plugin reload event. Existing synchronous plugin registration performs its small private-file migration before granting capabilities.
+
 Where a `#[tauri::command]` runs, and how to decide for a new one.
 
 ## The rule
@@ -296,6 +300,10 @@ exit on the command caller.
 `work_item_provider_bridge` is synchronous: it atomically claims/completes an in-memory request and checks the cached write opt-in. Provider/network work is asynchronous in the frontend adapter; no filesystem or network work runs in this IPC handler.
 
 Desktop close policy: `request_quit` selects a policy action on the main thread without disk I/O. `resolve_close` saves Remember through `spawn_blocking`; real quit closes PTYs through `spawn_blocking` before calling `AppHandle::exit(0)`.
+
+`list_open_markdown_tabs` is async and reads repository configuration through
+`spawn_blocking`. `sync_open_markdown_tabs` only updates an in-memory metadata
+snapshot and emits invalidation; it does no file I/O.
 
 ### Suspended tabs (2026-10-14)
 

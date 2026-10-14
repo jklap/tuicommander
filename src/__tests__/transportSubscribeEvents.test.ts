@@ -49,24 +49,23 @@ describe("subscribeEvents onResync", () => {
 		vi.stubGlobal("__TAURI_SHIM__", true);
 	}
 
-	it("fires on reconnect but not on the first connection", async () => {
+	it("resyncs on initial connection and reconnect to close snapshot gaps", async () => {
 		browserMode();
 		const onResync = vi.fn();
 		await subscribeEvents({ "session-state-changed": vi.fn() }, { onResync });
 		const es = MockEventSource.instances[0];
 
-		// The consumer has just subscribed and does its own initial read, so the
-		// first open is not a gap. Calling back here would double every mount.
+		// An initial snapshot can predate the server subscription.
 		es.onopen?.();
-		expect(onResync).not.toHaveBeenCalled();
+		expect(onResync).toHaveBeenCalledExactlyOnceWith("connect");
 
 		es.onerror?.();
 		es.onopen?.();
-		expect(onResync).toHaveBeenCalledExactlyOnceWith("reconnect");
+		expect(onResync).toHaveBeenLastCalledWith("reconnect");
 
 		es.onerror?.();
 		es.onopen?.();
-		expect(onResync).toHaveBeenCalledTimes(2);
+		expect(onResync).toHaveBeenCalledTimes(3);
 	});
 
 	// Distinct reasons, not one "something happened" flag: a lagged frame means
@@ -80,6 +79,7 @@ describe("subscribeEvents onResync", () => {
 		const es = MockEventSource.instances[0];
 
 		es.onopen?.();
+		onResync.mockClear();
 		es.emit("lagged", JSON.stringify({ skipped: 12 }));
 
 		expect(onResync).toHaveBeenCalledExactlyOnceWith("lagged");
@@ -96,7 +96,7 @@ describe("subscribeEvents onResync", () => {
 		es.onerror?.();
 		es.onopen?.();
 
-		expect(onResync.mock.calls.map(([reason]) => reason)).toEqual(["lagged", "reconnect"]);
+		expect(onResync.mock.calls.map(([reason]) => reason)).toEqual(["connect", "lagged", "reconnect"]);
 	});
 
 	it("delivers normal events without ever calling onResync", async () => {
@@ -107,6 +107,7 @@ describe("subscribeEvents onResync", () => {
 		const es = MockEventSource.instances[0];
 
 		es.onopen?.();
+		onResync.mockClear();
 		es.emit("session-state-changed", JSON.stringify({ session_id: "s1" }));
 
 		expect(handler).toHaveBeenCalledExactlyOnceWith({ session_id: "s1" });

@@ -15,6 +15,7 @@ import { isTauri } from "../transport";
 import { compareAppVersion } from "../utils/semver";
 import { updateAppConfig } from "../utils/updateAppConfig";
 import { pluginRegistry } from "./pluginRegistry";
+import type { PluginSettingsDefinition } from "./pluginSettings";
 import type { TuiPlugin } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -40,6 +41,8 @@ export function registerBuiltInPlugin(plugin: TuiPlugin): void {
 // ---------------------------------------------------------------------------
 
 export interface PluginManifest {
+	/** Complete private-setting schema; legacy first-party plugins are migrated by Rust. */
+	settings?: PluginSettingsDefinition;
 	id: string;
 	name: string;
 	version: string;
@@ -164,11 +167,11 @@ export async function setPluginEnabled(id: string, enabled: boolean): Promise<vo
 	} else {
 		// Unload the plugin
 		if (builtIn) {
-			pluginRegistry.unregister(id);
+			await pluginRegistry.unregister(id);
 			pluginStore.updatePlugin(id, { loaded: false });
 		} else if (loadedPluginIds.has(id)) {
 			// pluginRegistry.unregister() already issues the Rust-side unregister.
-			pluginRegistry.unregister(id);
+			await pluginRegistry.unregister(id);
 			loadedPluginIds.delete(id);
 		}
 	}
@@ -290,7 +293,7 @@ async function handlePluginChanged(event: { payload: string[] }): Promise<void> 
 		// Unregister if previously loaded
 		if (loadedPluginIds.has(pluginId)) {
 			// pluginRegistry.unregister() already issues the Rust-side unregister.
-			pluginRegistry.unregister(pluginId);
+			await pluginRegistry.unregister(pluginId);
 			loadedPluginIds.delete(pluginId);
 		}
 

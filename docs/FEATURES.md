@@ -459,7 +459,7 @@ Replaced by the Git Panel's Changes tab (section 3.8). `Cmd+Shift+D` now opens t
   - **Create**: select text in the rendered markdown → a floating **Comment** button appears next to the selection → click it to open an inline popover and type the note (`Ctrl+Enter` to save)
   - **Block comments**: move through the gutter left of a heading, paragraph, individual list item (including task and nested items), quote, table, or code block to highlight its exact Markdown source and reveal its comment button. List-item markers sit on an indented continuation line below the chosen item's own content, preserving the list. Block anchors use the renderer's raw-source ranges, so links and inline HTML do not depend on matching rendered text back to Markdown
   - After each save, block ranges and highlights are refreshed from the updated source even when the visible Markdown is unchanged by the invisible comment markers. Consecutive comments remain attached to the items that were selected.
-  - **Send to agent**: the Markdown topbar lists live agents belonging to the same repository. Sending queues one file-scoped instruction through the existing agent idle gate; an idle agent receives it immediately, while a busy agent receives it at its next idle window
+  - **Send to agent**: the Markdown topbar lists live agents belonging to the same repository. Sending queues one file-scoped instruction through the existing agent idle gate; an idle agent receives it immediately, while a busy agent receives it at its next idle window. After a successful send, Agent and Send hide until a new tweak comment, checkbox change or saved text edit. Edits saved while a send is pending keep the controls available for another send. Failed sends keep the controls available for retry
   - **View / edit / delete**: commented passages and blocks are highlighted; hovering one shows the comment in a tooltip, clicking it reopens the popover to edit or delete
   - **Storage**: comments live *inside* the `.md` source as HTML-comment markers. Inline comments wrap their source text with `tweak:begin` / `tweak:end`; block comments use a `tweak:block` marker immediately before the target block, while list-item comments use a `tweak:item` marker within that item. Both forms are invisible to standard Markdown renderers, survive round-trips, and are committed with the file. The only escaped sequence is `-->` (→ `--&gt;`)
   - **Save failures**: Markdown files opened by absolute path use the external file writer. A failed comment save shows an error toast and keeps the comment popover and draft open for retry.
@@ -1962,6 +1962,7 @@ shortcuts and the Global Hotkey. Keys macOS itself claims before the process
 ## 17. Plugin System
 
 ### 17.1 Architecture
+- Rust-owned scoped plugin settings: typed schemas, revision-checked atomic patches, write-only secret readback, five legacy migrations, reload callbacks and unload cleanup.
 - Obsidian-style plugin API with 4 capability tiers
 - Built-in plugins (TypeScript, compiled with app) and external plugins (JS, loaded at runtime)
 - Hot-reload: file changes in plugin directories trigger automatic re-import
@@ -2064,9 +2065,22 @@ Agent-scoped plugin (`agentTypes: ["claude"]`) that wakes Claude Code when it st
 
 ## 18. Mobile Companion UI
 
+The session overflow menu has a **Markdown** section with the file tabs open on
+the desktop for the session repository. Each entry shows its title and relative
+path and opens the existing mobile Markdown viewer. Desktop opens and closes
+update the list through SSE; worktree files retain their original checkout.
+
+
 Waiting terminal ego questions show **Input**. Tap the question icon in the session header to open or close the full question and its wrapping options. The card overlays the terminal without reserving rows. Prior suggested actions are hidden while a human answer is pending.
 
 Phone-optimized progressive web app for monitoring AI agents remotely. Separate SolidJS entry point (`src/mobile/`) served by the existing HTTP server at `/mobile`.
+
+Both mobile composers share the + menu, text box with browser dictation, and
+Send layout. Attach file and Take photo use separate pickers. Terminal Queue
+keeps its long-press shortcut; Commands (/) inserts a slash in agent terminals.
+AI Chat offers Park/Restore/Swap draft, plus Queue and Stop while busy.
+Unsupported actions are hidden. Menus close on outside tap or Escape and use
+44 px action targets. Desktop Chat controls and Ctrl+S are unchanged.
 
 ### 18.1 Architecture
 - Separate Vite entry point (`mobile.html` + `src/mobile/index.tsx`)
@@ -2235,7 +2249,7 @@ Phone-optimized progressive web app for monitoring AI agents remotely. Separate 
 
 ### 18.11 Standalone CSS
 - The mobile composer offers browser dictation directly next to Send (44 px touch targets) when `SpeechRecognition` or `webkitSpeechRecognition` is available. Interim and final speech append to the draft without focusing the textarea or sending; tap again to stop. Editing the draft cancels recognition and keeps the edit exactly; the mic becomes available again when the browser confirms the previous session has ended. Errors also retain the microphone claim until that confirmation, so repeated taps cannot overlap recognition sessions. Late results from the cancelled recording are ignored. Errors keep the draft and show a toast. It uses the configured dictation language, falling back to the browser language for automatic detection. Browser dictation and server hands-free conversation cannot record together.
-- Mobile Settings → Input → Autocorrect and spellcheck enables keyboard correction and sentence capitalization for the terminal prompt composer by default. Disable it for literal command entry. The preference stays on this device across reloads; file and code editors keep spellcheck off.
+- Mobile Settings → Input → Autocorrect and spellcheck enables keyboard correction and sentence capitalization for the terminal prompt and mobile Chat composers by default. Disable it for literal command entry. The preference stays on this device across reloads; file and code editors keep spellcheck off.
 - Dictated mobile drafts survive reload without automatic terminal input. Send or the first edit reconciles the restored draft with the current terminal line, preserving cleared text without duplicating text still present.
 - iPhone Home Screen availability remains device-dependent: [WebKit bug 225298](https://bugs.webkit.org/show_bug.cgi?id=225298#c3) documents the historical standalone restriction; Safari's [14.1 release notes](https://webkit.org/blog/11648/new-webkit-features-in-safari-14-1/) require Siri enabled. Feature detection and error handling apply; Safari tab support does not prove PWA support.
 - Mobile PWA uses its own standalone stylesheet (`src/mobile/mobile.css`), independent from the desktop `global.css`

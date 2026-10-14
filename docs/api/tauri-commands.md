@@ -1,5 +1,9 @@
 # Tauri Commands Reference
 
+## Scoped plugin settings
+
+`plugin_settings_action(plugin_id: String, action: PluginAction)` returns catalogue descriptors, a redacted snapshot, or a commit reply. Actions: describe, get with paths, set/reset with path and expectedRevision, patch with operations and expectedRevision. The backend binds the plugin owner and config file; unloaded or schema-less plugins are unavailable. HTTP twin: `POST /api/plugins/{id}/settings`.
+
 Slice F exposes `start_graph {target:{type:story|plan,id},expected_revision?,definition_id,definition_revision,request_id,limits?}` through the existing owning-daemon service. Story starts require the current native revision and pin the selected publication; the request ID is bound to its payload. Omitted limits use Rust defaults. Plan dispatch remains unavailable in this build and its start control says so. The `workflow_run` MCP tool uses an inline schema generated from `RunAction` and the public `RunCommand` variants; it returns the same scoped snapshots and cursor-ordered events as IPC/HTTP. Run history shows pinned activations, decisions/evidence, repair counters, pause targets and complete event payloads across pages. Graph recovery uses `resume_graph {execution_id,activation_id,resolution}` after answering pending input; pause and cancel use the existing sequence-fenced commands. Legacy runs offer inspection and cancellation in the UI. No new persistence or client scheduler is added.
 
 ## Workflow runs
@@ -971,3 +975,14 @@ an explicit create action. These actions match across HTTP, IPC, MCP and CLI.
 ### Tasks provider bridge
 
 `work_item_provider_bridge(input)` claims or completes one Rust-issued Tasks provider request. It uses the same input and reply as `POST /work-items/provider-bridge`; see the HTTP API reference. The command only moves requests and replies; the existing provider port owns tracker calls.
+
+## Open desktop Markdown metadata
+
+| Command | Arguments | Result | HTTP twin |
+| --- | --- | --- | --- |
+| `sync_open_markdown_tabs` | `tabs: {id,repoPath,filePath,fsRoot?}[]` | `void` | `PUT /config/open-markdown-tabs` (loopback only) |
+| `list_open_markdown_tabs` | `cwd: string` | `{id,title,relative_path,absolute_path,fs_root}[]` | `GET /repo/open-markdown-tabs?cwd=...` |
+
+The read command runs configuration I/O on the blocking pool. Publication stores
+only metadata in memory and invalidates consumers with `open-markdown-tabs-changed`.
+The list is scoped to registered repository/workspace ownership.

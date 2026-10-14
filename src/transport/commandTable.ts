@@ -759,6 +759,13 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		map: (args) => ({ method: "POST", path: "/config/repositories/stale-temp", body: { paths: args.paths } }),
 	},
 
+	// --- Desktop Markdown metadata (mobile reads; publication stays loopback-only) ---
+	list_open_markdown_tabs: {
+		map: (args) => ({ method: "GET", path: `/repo/open-markdown-tabs?cwd=${encodeURIComponent(String(args.cwd))}` }),
+	},
+	sync_open_markdown_tabs: {
+		map: (args) => ({ method: "PUT", path: "/config/open-markdown-tabs", body: { tabs: args.tabs } }),
+	},
 	// --- Config: pane layout ---
 	load_pane_layout: { map: () => ({ method: "GET", path: "/config/pane-layout" }) },
 	save_pane_layout: {
@@ -2313,6 +2320,13 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			method: "POST",
 			path: `/api/plugins/${p("pluginId")}/register`,
 			body: { capabilities: args.capabilities },
+		}),
+	},
+	plugin_settings_action: {
+		map: (args, p) => ({
+			method: "POST",
+			path: `/api/plugins/${p("pluginId")}/settings`,
+			body: args.action,
 		}),
 	},
 	unregister_loaded_plugin: {

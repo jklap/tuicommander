@@ -84,6 +84,10 @@ Connects to the Rust HTTP server via WebSocket/REST.
 
 ## Build
 
+When using mbx, `src-tauri/.mbx.toml` disables shared read-only build output
+directories because Tauri's `generate_context!` writes assets into `OUT_DIR`
+during macro expansion. Keep this workspace setting enabled when upgrading mbx.
+
 ```bash
 pnpm tauri build
 ```

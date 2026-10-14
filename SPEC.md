@@ -1,5 +1,7 @@
 # TUICommander Specification
 
+Plugin settings (Step 5, #1785-c7a1): loaded plugins register complete scoped schemas and typed private-file owners; patches preserve siblings, redact secrets and schedule reload. Core migrations cover build-cleaner, at-capacity-retry, cache-keepalive, claude-wakeup and the Telegram notifier example. Unload revokes catalogue entries and write authority. General settings MCP cutover remains separate.
+
 Desktop close policy (B1, #1802-e6b8): Rust owns `app.close_behavior` (`ask` default, `background`, `quit`). Ask offers Remember; Background hides main only. Explicit Quit uses `confirm_before_quit` and closes live PTYs in Rust. Detached panels close independently. Tray and WebView unload belong to later stages.
 
 Agent capture tooling: `scripts/agent_capture/run.py` records real installed CLIs through isolated headless sessions, promotes reviewed captures with ordered expected states, and integrates with the 1342 replay oracle. Missing or unauthenticated CLIs remain unverified.
@@ -706,6 +708,7 @@ Some frontend-only stores persist to localStorage:
 - [x] Mobile terminal Ctrl menu (Ctrl+C, Ctrl+B, Ctrl+D, agent-aware Ctrl+Enter)
 - [x] Mobile Send long-press Queue transfers the live draft to the shared server ready-window queue; taps still submit immediately.
 - [x] Session uploads live under TUIC data, with launch grants and session-end cleanup; startup reclaims only provably dead owners, preserving concurrent instances; ego invocation-scoped binary-file read roots remain unsupported (#1833-aa60).
+- [x] Shared mobile composer + menu: attach file, camera capture, supported queue/commands and Chat draft parking; browser mic inside the text box (#1880-d7ff).
 - [x] Mobile Companion PWA (searchable sessions, live output, question reply including Codex interactive choices, activity feed)
   - [x] Compact bare attachment icon left of the session composer; smaller mic and Send sit inside its right border (#1719-ff5d)
   - [x] Files tree search, hidden-folder ordering, long-path preview, and full-height wrapped editing
@@ -1028,6 +1031,15 @@ Tasks remembers the selected source per repository and List, Board or Roadmap pl
 ## Tasks MCP access (#1854-4960)
 
 The MCP repo tool adds `work_item` and `work_item_act`. Rust resolves the caller's worktree link or an explicit reference, URL or account-scoped key, validates DTOs and gates comment/transition writes with `mcp_work_item_writes` (default false). A typed event/claim/reply bridge dispatches to existing frontend provider ports. Claims prevent duplicate actions across frontend clients. Detail and paged comments return as JSON inside the start-work untrusted-content block; forged tags are escaped. Account credentials remain in the existing Rust HTTP injection/redaction boundary. Raw provider errors do not reach MCP. Providers require a connected frontend; a bare headless daemon reports timeout. A timed-out write must be read back before retrying.
+
+### Mobile desktop Markdown tabs (#1879-05ad)
+
+Implemented: session overflow lists the desktop’s open file-based Markdown tabs
+for the registered session repository, with titles and relative paths. Entries
+open the existing mobile viewer from their original workspace. A temporary Rust
+snapshot receives desktop metadata; the read-only HTTP list shares remote auth,
+and SSE invalidation updates open menus without a page reload. Virtual/plugin
+panels and document contents are excluded. The iPhone visual check remains manual.
 
 ### Background tray and menu-bar icon
 

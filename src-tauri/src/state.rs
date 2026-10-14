@@ -357,6 +357,8 @@ pub enum AppEvent {
     /// every save — including the client that just wrote it.
     #[serde(rename = "repositories-changed")]
     RepositoriesChanged,
+    #[serde(rename = "open-markdown-tabs-changed")]
+    OpenMarkdownTabsChanged,
     /// Directory contents changed (non-git filesystem watcher)
     #[serde(rename = "dir-changed")]
     DirChanged { dir_path: String },
@@ -2067,6 +2069,8 @@ pub struct AppState {
     pub(crate) secrets: crate::secrets::SecretStore,
     /// Every per-session side table, keyed by session id.
     pub(crate) session_maps: SessionMaps,
+    pub(crate) open_markdown_tabs:
+        parking_lot::RwLock<Vec<crate::open_markdown_tabs::DesktopMarkdownTab>>,
     pub(crate) data_dir: PathBuf,
     pub(crate) worktrees_dir: PathBuf,
     pub(crate) metrics: SessionMetrics,
@@ -2212,6 +2216,7 @@ pub struct AppState {
     /// Populated by the frontend via `register_loaded_plugin` on plugin load.
     /// Used by Rust plugin commands to enforce capability checks server-side.
     pub(crate) loaded_plugins: DashMap<String, Vec<String>>,
+    pub(crate) plugin_settings: crate::settings::plugins::PluginSettings,
     /// Compiled plugin OutputWatcher patterns, one set per connected frontend,
     /// pushed via `set_plugin_output_watchers`. The PTY reader assembles lines
     /// and matches them here, so the WebView main thread only hears about the
@@ -3519,6 +3524,7 @@ impl AppState {
             automation_runtime: Default::default(),
             secrets: crate::secrets::SecretStore::default(),
             session_maps: SessionMaps::default(),
+            open_markdown_tabs: Default::default(),
             data_dir,
             worktrees_dir,
             metrics: SessionMetrics::new(),
@@ -3567,6 +3573,7 @@ impl AppState {
             index_build_sem: Arc::new(tokio::sync::Semaphore::new(1)),
             monitoring_git_sem: Arc::new(tokio::sync::Semaphore::new(MONITORING_GIT_CONCURRENCY)),
             loaded_plugins: DashMap::new(),
+            plugin_settings: Default::default(),
             plugin_output_watchers: parking_lot::RwLock::new(Default::default()),
             relay: RelayState::new(),
             peer_agents: DashMap::new(),
@@ -5259,6 +5266,7 @@ impl AppState {
             | AppEvent::McpToast { .. }
             | AppEvent::McpConfirm { .. }
             | AppEvent::McpConfirmResolved { .. }
+            | AppEvent::OpenMarkdownTabsChanged
             | AppEvent::RepositoriesChanged
             | AppEvent::DirChanged { .. }
             | AppEvent::SessionWorktreeDeclared { .. }
