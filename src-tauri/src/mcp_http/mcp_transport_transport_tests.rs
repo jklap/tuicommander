@@ -876,56 +876,6 @@ async fn session_suspend_refuses_an_exited_session_that_keeps_its_state_entry() 
     assert!(events.try_recv().is_err());
 }
 
-// Catches: reporting `ok` when nothing can perform the suspend (headless daemon with no client).
-#[tokio::test]
-async fn session_suspend_errors_when_no_ui_is_attached() {
-    let state = test_state();
-    let idle = "550e8400-e29b-41d4-a716-446655440c02";
-    idle_suspend_candidate(&state, idle);
-    let mut events = state.event_bus.subscribe();
-
-    let result = suspend(&state, idle).await;
-
-    assert!(
-        result["error"]
-            .as_str()
-            .is_some_and(|e| e.contains("no UI is attached")),
-        "got {result}"
-    );
-    assert!(
-        events.try_recv().is_err(),
-        "nobody is listening: nothing to emit"
-    );
-    assert!(state.suspend_responses.is_empty());
-}
-
-// Catches: answering `ok` as soon as the request is emitted, before the tab has acted.
-#[tokio::test]
-async fn session_suspend_returns_ok_once_the_tab_suspended() {
-    assert_eq!(
-        suspend_answered_with(Some((true, None))).await,
-        serde_json::json!({"ok": true})
-    );
-}
-
-// Catches: the old `{"ok":true,"requested":true}` that hid a frontend refusal.
-#[tokio::test]
-async fn session_suspend_returns_the_tabs_refusal() {
-    let result = suspend_answered_with(Some((false, Some("waiting for input".to_string())))).await;
-    assert_eq!(result["error"], "Cannot suspend: waiting for input");
-    assert!(result.get("ok").is_none());
-}
-
-// Catches: a request nobody answers hanging the MCP call for ever.
-#[tokio::test(start_paused = true)]
-async fn session_suspend_gives_up_when_no_tab_answers() {
-    let result = suspend_answered_with(None).await;
-    assert_eq!(
-        result["error"],
-        "Cannot suspend: no tab answered the request"
-    );
-}
-
 #[tokio::test]
 async fn session_suspend_reports_an_unknown_session() {
     let state = test_state();
@@ -5101,20 +5051,6 @@ async fn session_list_drops_process_internals_and_quiet_flags() {
 
 // ---- critic 1358 round 2: the suspend request/verdict handshake ----
 
-async fn crit1358_next_request(
-    events: &mut tokio::sync::broadcast::Receiver<crate::state::AppEvent>,
-) -> (String, String) {
-    loop {
-        if let Ok(crate::state::AppEvent::SessionSuspendRequested {
-            session_id,
-            request_id,
-        }) = events.recv().await
-        {
-            return (session_id, request_id);
-        }
-    }
-}
-
 fn crit1358_attached_state(sessions: &[&str]) -> Arc<AppState> {
     let state = test_state();
     for sid in sessions {
@@ -5150,33 +5086,6 @@ async fn crit1358_suspend_is_rejected_before_any_request_for_non_loopback_caller
         "got {response}"
     );
     assert!(events.try_recv().is_err(), "no request may reach the UI");
-    assert!(state.suspend_responses.is_empty());
-}
-
-// Catches: loopback dispatch not reaching the waiting handler (old sync arm answering
-// `requested`): the tool call must return the tab's verdict.
-#[tokio::test]
-async fn crit1358_loopback_tool_call_returns_the_tabs_verdict() {
-    let sid = "550e8400-e29b-41d4-a716-446655440d02";
-    let state = crit1358_attached_state(&[sid]);
-    let mut events = state.event_bus.subscribe();
-    let call = tokio::spawn({
-        let state = state.clone();
-        async move {
-            handle_mcp_tool_call(
-                &state,
-                "127.0.0.1:1".parse().unwrap(),
-                "session",
-                &serde_json::json!({"action": "suspend", "session_id": sid}),
-                None,
-            )
-            .await
-        }
-    });
-    let (_, request_id) = crit1358_next_request(&mut events).await;
-    resolve_session_suspend(&state, &request_id, false, Some("no live session".into()));
-    let result = call.await.unwrap();
-    assert_eq!(result["error"], "Cannot suspend: no live session");
 }
 
 // Catches: the exited check running after the UI request, or only for the PTY id (an
@@ -5192,7 +5101,6 @@ async fn crit1358_an_exited_session_is_refused_before_the_ui_is_asked() {
 
     assert_eq!(result["error"], "Cannot suspend: session has exited");
     assert!(events.try_recv().is_err());
-    assert!(state.suspend_responses.is_empty());
 }
 
 // Catches: the busy rule skipped for an attached UI (refusal reported only by the tab).
@@ -5208,7 +5116,6 @@ async fn crit1358_a_working_agent_is_refused_even_with_a_ui_attached() {
         .insert(sid.to_string(), working);
     let result = suspend(&state, sid).await;
     assert_eq!(result["error"], "Cannot suspend: waiting for input");
-    assert!(state.suspend_responses.is_empty());
 }
 
 // Catches: shared meta discovery leaking an armed browser tool to unrelated MCP sessions.

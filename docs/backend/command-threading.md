@@ -304,3 +304,7 @@ Desktop close policy: `request_quit` selects a policy action on the main thread 
 `list_open_markdown_tabs` is async and reads repository configuration through
 `spawn_blocking`. `sync_open_markdown_tabs` only updates an in-memory metadata
 snapshot and emits invalidation; it does no file I/O.
+
+### Suspended tabs (2026-10-14)
+
+The async `suspended_session_action` command and its HTTP route both call `suspended_routes::dispatch`, which owns `spawn_blocking`. Config locking, agent-store verification, process discovery and PTY creation run on the blocking pool. MCP suspend uses the same blocking Rust owner and never waits for a frontend verdict.

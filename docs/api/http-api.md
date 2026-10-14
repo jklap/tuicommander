@@ -853,7 +853,7 @@ the server is back to the filter the connection was opened with.
 | `pty-description-changed` | `{session_id, description}` | Orchestrator updates the short task description shown above a PTY |
 | `chat-view-changed` | `{session_id, seq}` | The chat view of a Claude, Grok or exactly bound Codex terminal has entries past `seq`; read them with `GET /sessions/:id/chat-view` |
 | `session-renamed` | `{session_id, name, is_custom}` | An MCP `session action=rename` changed a tab's display name |
-| `session-suspend-requested` | `{session_id, request_id}` | An MCP `session action=suspend` asked the UI to suspend that tab |
+| `session-suspended` | `{record}` | Rust persisted a suspended tab before ending its PTY; record fields use snake_case |
 | `term-alias-assigned` | `{session_id, alias}` | A session received its terminal alias (e.g. `tu-3`); published once, after `session-created` |
 | `session-closed` | `{session_id}` | Session ended |
 | `design-mode-changed` | `{repo_path, session_id, status}` | Design Mode for the repository changed to `armed` or `stopped`; the bound agent tab follows this status |
@@ -1612,16 +1612,18 @@ GET /mcp/status
 
 Returns MCP server status (enabled, running, active sessions, connected MCP clients, maximum sessions). `native_tools` contains the unfiltered native MCP registry as `{name, summary, description}` entries, including disabled tools. `summary` is the first line of the full registry description. This Settings inventory is independent of upstream tools, collapse mode and progress tracking; MCP client discovery still applies all configured filters.
 
-### MCP Suspend Response
+### Suspended Sessions
 
-```
-POST /mcp/suspend-response
-Content-Type: application/json
+`POST /sessions/suspended` accepts the same request as IPC `suspended_session_action`, from loopback or an authenticated client.
 
-{"request_id": "...", "ok": false, "reason": "agent working"}
-```
+- `{"action":"list"}` returns an object keyed by stable `tuic_session`. Each record contains `session_id`, `agent_type`, `cwd`, `worktree`, `agent_session_id`, `launch_command`, `alias`, `pane_slot`, `reason`, `name` and `shell`.
+- `{"action":"suspend","sessionId":"...","metadata":{...}}` persists before ending an idle PTY and returns `{ok:true}`. Optional camelCase metadata contains `name`, `agentSessionId`, `agentLaunchCommand` and `paneSlot`; live backend state controls refusal and identity.
+- `{"action":"resume","tuicSession":"..."}` verifies and spawns the replacement PTY, removes its durable record after successful creation and returns `{ok:true,session_id:"..."}`.
+- `{"action":"forget","tuicSession":"..."}` removes a closed suspended tab.
+- `{"action":"sync","sessionId":"...","metadata":{...}}` retains live frontend metadata for later headless suspension.
+- `{"action":"resolve_resume","agentType":"...","cwd":"...","tuicSession":"...","agentSessionId":"...","launchCommand":"..."}` returns `{cmd,verified}` for existing restart restoration consumers. Verification checks the saved launch profile's store; an unavailable session returns `cmd:null`.
 
-The tab's verdict on a `session action=suspend` request announced by the `session-suspend-requested` event. The waiting MCP call returns it. Unknown or already-answered ids are ignored.
+Errors return HTTP 400 with `{error}`. MCP `session action=suspend` uses the same Rust operation without requiring a WebView or a frontend verdict. `session-suspended` precedes the close event so connected clients retain the tab.
 
 ### MCP Upstream Credentials
 

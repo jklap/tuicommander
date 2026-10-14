@@ -64,148 +64,63 @@ describe("suspendRefusal", () => {
 	});
 });
 
-describe("suspendTerminal", () => {
-	beforeEach(() => {
-		mockRpc.mockReset().mockResolvedValue(undefined);
-		mockVerifyResume.mockReset().mockResolvedValue("claude --resume agent-uuid");
+describe("Rust-owned suspend and resume", () => {
+	afterEach(() => {
+		for (const id of terminalsStore.getIds()) terminalsStore.remove(id);
 	});
-
-	// A suspend that dropped agentType/agentSessionId/tuicSession/alias would leave a
-	// tab that cannot resume the conversation or reclaim its address.
-	it("closes the PTY and keeps what the restart path needs to restore the tab", async () => {
-		await testInScope(async () => {
+	beforeEach(() => {
+		mockRpc.mockReset().mockResolvedValue({ ok: true, session_id: "resumed-pty" });
+	});
+	// Catches: dropping identity and placement when the backend confirms suspension.
+	it("keeps the tab and its resume identity after Rust closes the session", () =>
+		testInScope(async () => {
 			const id = addAgentTab();
-
-			const outcome = await suspendTerminal(id);
-
-			expect(outcome).toEqual({ ok: true });
-			expect(mockRpc).toHaveBeenCalledWith("close_pty", { sessionId: "pty-1", cleanupWorktree: false });
-			const term = terminalsStore.get(id)!;
-			expect(term.suspended).toBe(true);
-			expect(term.sessionId).toBeNull();
-			expect(term).toMatchObject({
-				agentType: "claude",
-				agentSessionId: "agent-uuid",
+			expect(await suspendTerminal(id)).toEqual({ ok: true });
+			expect(terminalsStore.get(id)).toMatchObject({
+				suspended: true,
+				sessionId: null,
 				tuicSession: "tab-uuid",
+				agentSessionId: "agent-uuid",
 				alias: "al-3",
 				cwd: "/Gits/alpha",
 			});
-			// No resume banner: the suspended notice owns the resume action.
-			expect(term.pendingResumeCommand).toBeNull();
-		});
-	});
-
-	// Cutting a working agent's turn silently is the case the story forbids.
-	it("does not close the PTY of a busy agent", async () => {
-		await testInScope(async () => {
-			const id = addAgentTab({ agentState: "working" });
-
-			const outcome = await suspendTerminal(id);
-
-			expect(outcome).toEqual({ ok: false, reason: "agent working" });
-			expect(mockRpc).not.toHaveBeenCalled();
-			expect(terminalsStore.get(id)?.suspended).toBe(false);
-		});
-	});
-
-	// The state can change while the resume command is being verified.
-	it("re-checks the tab after verifying the resume command", async () => {
-		await testInScope(async () => {
+			expect(mockRpc).toHaveBeenCalledWith(
+				"suspended_session_action",
+				expect.objectContaining({ request: expect.objectContaining({ action: "suspend", sessionId: "pty-1" }) }),
+			);
+		}));
+	// Catches: a rejected backend suspend leaving the visible tab suspended.
+	it("keeps the live tab when Rust refuses", () =>
+		testInScope(async () => {
 			const id = addAgentTab();
-			mockVerifyResume.mockImplementation(async () => {
-				terminalsStore.update(id, { agentState: "working" });
-				return "claude --resume agent-uuid";
-			});
-
-			const outcome = await suspendTerminal(id);
-
-			expect(outcome).toEqual({ ok: false, reason: "agent working" });
-			expect(mockRpc).not.toHaveBeenCalled();
-		});
-	});
-
-	// Ending the PTY of an agent that cannot be resumed loses the conversation for good.
-	it("refuses an agent tab with no resumable session", async () => {
-		await testInScope(async () => {
+			mockRpc.mockRejectedValueOnce(new Error("no resumable agent session"));
+			expect((await suspendTerminal(id)).ok).toBe(false);
+			expect(terminalsStore.get(id)).toMatchObject({ suspended: false, sessionId: "pty-1" });
+		}));
+	// Catches: frontend spawning a second PTY or typing an additional resume command.
+	it("attaches the PTY that Rust resumed", () =>
+		testInScope(async () => {
 			const id = addAgentTab();
-			mockVerifyResume.mockResolvedValue(null);
-
-			const outcome = await suspendTerminal(id);
-
-			expect(outcome).toEqual({ ok: false, reason: "no resumable agent session" });
-			expect(mockRpc).not.toHaveBeenCalled();
-			expect(terminalsStore.get(id)?.sessionId).toBe("pty-1");
-		});
-	});
-
-	// A failed close must not leave a tab marked suspended while its process still runs.
-	it("never marks the tab suspended when closing the session fails", async () => {
-		await testInScope(async () => {
-			const id = addAgentTab();
-			mockRpc.mockRejectedValue(new Error("boom"));
-
-			const outcome = await suspendTerminal(id);
-
-			expect(outcome).toEqual({ ok: false, reason: "closing the session failed" });
-			expect(terminalsStore.get(id)?.suspended).toBe(false);
-			expect(terminalsStore.get(id)?.sessionId).toBe("pty-1");
-		});
-	});
-
-	it("suspends a plain shell without asking for a resume command", async () => {
-		await testInScope(async () => {
-			const id = terminalsStore.add(makeTerminal({ sessionId: "pty-sh", cwd: "/Gits/alpha" }));
-			terminalsStore.update(id, { shellState: "idle" });
-
-			expect(await suspendTerminal(id)).toEqual({ ok: true });
-			expect(mockVerifyResume).not.toHaveBeenCalled();
-			expect(terminalsStore.get(id)).toMatchObject({ sessionId: null, suspended: true });
-		});
-	});
-});
-
-describe("resumeTerminal", () => {
-	beforeEach(() => {
-		mockVerifyResume.mockReset().mockResolvedValue("claude --resume agent-uuid");
-	});
-
-	// The command comes from verifyAndBuildResumeCommand, the function the restore path uses.
-	// Resume queues it as pendingInitCommand (typed at the new shell's first idle, no banner)
-	// where a restart shows a banner (pendingResumeCommand): clicking Resume is the confirmation.
-	// That it is typed exactly once is asserted in Terminal-suspend-resume.test.tsx.
-	it("clears the flag and queues the resume command for the new shell", async () => {
-		await testInScope(async () => {
-			const id = addAgentTab({ suspended: true, sessionId: null });
-
+			terminalsStore.update(id, { suspended: true, sessionId: null });
 			expect(await resumeTerminal(id)).toEqual({ ok: true });
-
-			expect(mockVerifyResume).toHaveBeenCalledWith("claude", "/Gits/alpha", "tab-uuid", "agent-uuid", null);
 			expect(terminalsStore.get(id)).toMatchObject({
 				suspended: false,
-				pendingInitCommand: "claude --resume agent-uuid",
+				sessionId: "resumed-pty",
+				pendingInitCommand: null,
 			});
-		});
-	});
-
-	it("reopens a plain shell with no command", async () => {
-		await testInScope(async () => {
-			const id = terminalsStore.add(makeTerminal({ cwd: "/Gits/alpha" }));
-			terminalsStore.update(id, { suspended: true });
-
-			expect(await resumeTerminal(id)).toEqual({ ok: true });
-			expect(terminalsStore.get(id)).toMatchObject({ suspended: false, pendingInitCommand: null });
-		});
-	});
-
-	it("does nothing for a tab that is not suspended", async () => {
-		await testInScope(async () => {
+			expect(mockRpc).toHaveBeenCalledWith("suspended_session_action", {
+				repoPath: null,
+				cwd: "/Gits/alpha",
+				request: { action: "resume", tuicSession: "tab-uuid" },
+			});
+		}));
+	// Catches: failed resume discarding the only restoreable tab.
+	it("retains the suspended tab when resume fails", () =>
+		testInScope(async () => {
 			const id = addAgentTab();
-			expect(await resumeTerminal(id)).toEqual({ ok: false, reason: "not suspended" });
-			expect(terminalsStore.get(id)?.pendingInitCommand).toBeNull();
-		});
-	});
-});
-
-afterEach(() => {
-	terminalsStore._testCancelPendingTimers();
+			terminalsStore.update(id, { suspended: true, sessionId: null });
+			mockRpc.mockRejectedValueOnce(new Error("cwd gone"));
+			expect((await resumeTerminal(id)).ok).toBe(false);
+			expect(terminalsStore.get(id)).toMatchObject({ suspended: true, sessionId: null });
+		}));
 });

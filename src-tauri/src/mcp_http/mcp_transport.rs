@@ -196,7 +196,6 @@ use super::mcp_transport_session_agent::parse_pty_description;
 use super::mcp_transport_session_agent::resolve_effective_spawn_cwd;
 #[cfg(test)]
 use super::mcp_transport_session_agent::resolve_run_config;
-pub(crate) use super::mcp_transport_session_agent::resolve_session_suspend;
 #[cfg(test)]
 use super::mcp_transport_session_agent::resolve_spawn_agent_type;
 #[cfg(test)]

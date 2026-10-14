@@ -188,7 +188,6 @@
 /logs
 /mcp/confirm-response
 /mcp/status
-/mcp/suspend-response
 /mcp/upstream-status
 /mcp/upstreams
 /mcp/upstreams/credential
@@ -308,6 +307,7 @@
 /secrets/forms/submit
 /sessions
 /sessions/agent
+/sessions/suspended
 /sessions/worktree
 /sessions/x
 /sessions/x/chat-view

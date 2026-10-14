@@ -1054,6 +1054,10 @@ consent, including all-sites consent. The legacy heartbeat restart identity and
 navigation sequences remain unchanged. Browser screenshot/client-refresh reality
 verification is still required before story 1724-fe7e can close.
 
+### Rust-owned suspended tabs
+
+Tab suspension is owned by Rust and remains available with no UI attached. Durable config records keyed by `tuic_session` survive document recreation and process restart, retaining agent/profile, cwd/worktree, alias and pane placement. Rust verifies resume commands and opens the replacement PTY; the frontend renders records and attaches the returned session. Lifecycle events are available over IPC and SSE.
+
 ## Plugin settings pages
 
 Loaded plugins with registered settings appear under Settings > Integrations. Search includes their catalogue field labels. Unloading removes the page and search entries. Reads, revision-checked edits, resets and secret set/unset status use the scoped Rust settings service; the UI owns no second configuration store.

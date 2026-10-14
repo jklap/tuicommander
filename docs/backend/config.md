@@ -1585,6 +1585,10 @@ visible; it does not resume every inactive tab.
 
 `background.tray_icon` accepts `always`, `background_only` (default), and `never`. It applies live. Never restores a hidden desktop before removing the tray. Close configured as background minimizes when the tray is disabled, fails to build, or Linux has no registered StatusNotifier host. This keeps desktop session visibility intact. The Ask dialog omits Background when unavailable. Tray state and the first-entry notice are process-local, not persisted.
 
+### Rust-owned suspended tabs
+
+`suspended-sessions.json` stores an object keyed by stable `tuic_session`, with agent type, cwd/worktree, agent session id, launch command, alias, pane slot, reason, name and shell. It uses the config directory (including instance isolation), strict loading, cross-process locking and atomic updates. A failed/corrupt write leaves the live PTY intact. Frontends restore these records independently of their tab snapshot; resume removes a record after PTY creation.
+
 ## Plugin settings UI
 
 Loaded plugins with registered settings appear under Settings > Integrations. Search includes their catalogue field labels. Unloading removes the page and search entries. Reads, revision-checked edits, resets and secret set/unset status use the scoped Rust settings service; the UI owns no second configuration store.

@@ -259,13 +259,10 @@ pub enum AppEvent {
         name: String,
         is_custom: bool,
     },
-    /// An MCP client asked for a tab to be suspended (`session action=suspend`).
-    /// The tab, its agent identity and its resume path live in the frontend, so it
-    /// performs the suspend; the backend has already refused a busy session.
-    #[serde(rename = "session-suspend-requested")]
-    SessionSuspendRequested {
-        session_id: String,
-        request_id: String,
+    /// A durable Rust suspend record was saved; clients preserve the tab before EOF.
+    #[serde(rename = "session-suspended")]
+    SessionSuspended {
+        record: Box<crate::suspended_sessions::SuspendedSession>,
     },
     /// Orchestrator-supplied description of the work currently assigned to a PTY.
     /// The chat view of a Claude terminal has new entries. Wake only: the entries
@@ -563,7 +560,6 @@ impl AppEvent {
             | AppEvent::PtyCwd { session_id, .. }
             | AppEvent::PtyDescriptionChanged { session_id, .. }
             | AppEvent::SessionRenamed { session_id, .. }
-            | AppEvent::SessionSuspendRequested { session_id, .. }
             | AppEvent::TermAliasAssigned { session_id, .. }
             | AppEvent::SessionClosed { session_id, .. } => Some(session_id),
             _ => None,
@@ -2333,10 +2329,9 @@ pub struct AppState {
     pub(crate) work_item_requests:
         DashMap<String, crate::work_items::provider_bridge::PendingProviderRequest>,
     pub(crate) screenshot_responses: DashMap<String, tokio::sync::oneshot::Sender<Option<String>>>,
-    /// Pending suspend requests: request_id → oneshot sender for the tab's verdict
-    /// (`Ok(())` suspended, `Err(reason)` refused). Populated by MCP `session action=suspend`,
-    /// consumed by `session_suspend_response`.
-    pub(crate) suspend_responses: DashMap<String, tokio::sync::oneshot::Sender<Result<(), String>>>,
+    /// Serialize durable suspend/resume transitions and retain frontend-discovered metadata.
+    pub(crate) suspend_metadata: DashMap<String, serde_json::Value>,
+    pub(crate) suspend_lock: Mutex<()>,
     /// Pending confirmation requests: request_id → oneshot sender for the human's answer.
     /// Populated by MCP `ui(action=confirm)`, consumed by `mcp_confirm_response`.
     ///
@@ -2474,20 +2469,16 @@ impl AppState {
         true
     }
 
-    /// Ask the UI to suspend the tab that owns this session. Dual-emitted like a
-    /// rename: Tauri listeners on desktop, the event bus for browser/SSE clients.
-    /// The tab answers through `resolve_session_suspend` with `request_id`.
-    pub(crate) fn request_session_suspend(&self, session_id: &str, request_id: &str) {
-        self.emit_pty_event(AppEvent::SessionSuspendRequested {
-            session_id: session_id.to_string(),
-            request_id: request_id.to_string(),
+    pub(crate) fn notify_session_suspended(
+        &self,
+        record: &crate::suspended_sessions::SuspendedSession,
+    ) {
+        self.emit_pty_event(AppEvent::SessionSuspended {
+            record: Box::new(record.clone()),
         });
         #[cfg(feature = "desktop")]
         if let Some(app) = self.app_handle.read().as_ref() {
-            let _ = app.emit(
-                "session-suspend-requested",
-                serde_json::json!({ "session_id": session_id, "request_id": request_id }),
-            );
+            let _ = app.emit("session-suspended", serde_json::json!({"record": record}));
         }
     }
 
@@ -3618,7 +3609,8 @@ impl AppState {
             connections_lock: tokio::sync::Mutex::new(()),
             work_item_requests: DashMap::new(),
             screenshot_responses: DashMap::new(),
-            suspend_responses: DashMap::new(),
+            suspend_metadata: DashMap::new(),
+            suspend_lock: Mutex::new(()),
             settings_policy: Arc::new(crate::settings::policy::Policy::default()),
             confirm_responses: DashMap::new(),
             process_snapshot_cache: crate::pty::ProcessSnapshotCache::default(),
@@ -4807,7 +4799,7 @@ impl AppState {
             AppEvent::PtyDescriptionChanged { .. } => {}
             AppEvent::ChatViewChanged { .. } => {}
             AppEvent::SessionRenamed { .. } => {}
-            AppEvent::SessionSuspendRequested { .. } => {}
+            AppEvent::SessionSuspended { .. } => {}
             AppEvent::TermAliasAssigned { .. } => {}
             // A watcher hit says nothing about the session's own state — it is a
             // plugin-facing signal that rides the bus for browser clients only.
