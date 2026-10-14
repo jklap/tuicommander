@@ -40,6 +40,42 @@ Constraints:
 - `providers`: optional account providers this plugin may use with `httpFetch({account})`; requires `net:http`. An entry is either a core provider id (only `"github"`) or a token-only descriptor that core registers when the plugin loads and removes when it unloads (accounts and credentials stay): `{ "id": "jira", "label": "Jira", "kinds": ["basic", "bearer"], "verify": { "path": "/rest/api/3/myself", "loginPointer": "/displayName" } }`. `kinds` accepts `bearer` and `basic`; `verify.path` is a path under the site URL that the account Test calls, and `loginPointer` is the JSON Pointer of the viewer name in its response. An id may appear once; a declared descriptor must not use a core id.
 - Module default export must have `id`, `onload(host)`, `onunload()`
 
+## Scoped plugin settings (#1785-c7a1)
+
+Loaded plugins expose `plugins.<id>` descriptors through the Rust settings owner.
+`plugin_settings_action(pluginId, action)` and `POST /api/plugins/{id}/settings`
+share describe/get/set/reset/patch semantics. The backend fixes both the owner and
+`plugins/<id>/data/config.json`; requests cannot choose a store, target or file.
+Get requires explicit paths; writes require the last `expectedRevision`.
+
+A configurable manifest declares `settings: { schema, defaults }`. The schema is
+closed (`additionalProperties: false`), bounded to 128 annotated leaves, and uses
+only the supported object, scalar and scalar-array constraints. Every leaf needs
+`x-setting` sensitivity, apply mode, effect, operations and `confirmationClass`.
+Opaque objects, unsupported constraints, missing metadata and secret defaults are
+rejected. A plugin with an existing config file and no schema cannot load or write
+that config. Other plugin data, including statistics, remains separate.
+
+Core supplies typed migrations for build-cleaner, at-capacity-retry,
+cache-keepalive, claude-wakeup and the Telegram notifier example. Registration
+fills missing defaults without discarding saved values, validates the result and
+atomically writes an owner-only config file (0600 on Unix). Existing bot tokens
+remain available to the notifier's private config reader; the settings service
+returns only set/unset. Catalogue definitions, errors and reload events contain no
+stored credentials. Plugin enablement stays in `app.disabled_plugin_ids`; native
+agent usage has no private plugin store.
+
+Patches validate the entire batch against current state under the shared config
+and cross-process file locks. Stale revisions conflict, failed writes emit no
+reload event, and unload removes descriptors and revokes retained owner handles.
+After persistence, `plugin-changed` is dual-emitted to desktop and SSE so existing
+unload/load callbacks reread config. `applied: false` reports scheduled reload,
+not completed callback acknowledgement. Backend unregistration is awaited before
+reload registration. General MCP settings publication remains a separate cutover.
+
+Plugins can call `host.settings({ action: "get", paths: ["/enabled"] })` and pass
+the resulting revision to set/reset/patch. The host supplies its plugin ID.
+
 ## Complete main.js Template
 
 ```javascript
@@ -160,7 +196,7 @@ These inventories are checked against the capability validator, the host object 
 `credentials:read`, `exec:cli`, `fs:delete`, `fs:list`, `fs:read`, `fs:rename`, `fs:scan`, `fs:watch`, `fs:write`, `git:read`, `invoke:list_markdown_files`, `invoke:read_file`, `net:http`, `pty:read`, `pty:write`, `ui:context-menu`, `ui:file-icons`, `ui:file-preview`, `ui:markdown`, `ui:panel`, `ui:sidebar`, `ui:sound`, `ui:ticker`.
 
 ### Host method inventory
-`addItem`, `clearTicker`, `deleteBuildArtifact`, `execCli`, `getActiveRepo`, `getActiveRepoPath`, `getActiveTerminalSessionId`, `getClaudeProjectDir`, `getGitBranches`, `getGitDiff`, `getPrNotifications`, `getRecentCommits`, `getRemotes`, `getRepoPathForSession`, `getRepos`, `getSessionCwd`, `getSettings`, `getTerminalState`, `httpFetch`, `invoke`, `linkItem`, `listDirectory`, `log`, `onStateChange`, `openEditorTab`, `openMarkdownFile`, `openMarkdownFileBackground`, `openMarkdownPanel`, `openPanel`, `playNotificationSound`, `readCredential`, `readFile`, `readFileBase64`, `readFileTail`, `readFiles`, `readSessionOutput`, `registerCommand`, `registerContextMenuAction`, `registerDashboard`, `registerFileIconProvider`, `registerFilePreview`, `registerMarkdownProvider`, `registerOutputWatcher`, `registerSection`, `registerSidebarPanel`, `registerStructuredEventHandler`, `registerTerminalAction`, `registerUrlResolver`, `registerWorkItemProvider`, `removeItem`, `renamePath`, `scanBuildArtifacts`, `sendAgentInput`, `setTicker`, `startWork`, `trimBuildArtifact`, `unlinkItem`, `updateItem`, `watchPath`, `writeFile`, `writeFileBase64`, `writePty`.
+`addItem`, `clearTicker`, `deleteBuildArtifact`, `execCli`, `getActiveRepo`, `getActiveRepoPath`, `getActiveTerminalSessionId`, `getClaudeProjectDir`, `getGitBranches`, `getGitDiff`, `getPrNotifications`, `getRecentCommits`, `getRemotes`, `getRepoPathForSession`, `getRepos`, `getSessionCwd`, `getSettings`, `getTerminalState`, `httpFetch`, `invoke`, `linkItem`, `listDirectory`, `log`, `onStateChange`, `openEditorTab`, `openMarkdownFile`, `openMarkdownFileBackground`, `openMarkdownPanel`, `openPanel`, `playNotificationSound`, `readCredential`, `readFile`, `readFileBase64`, `readFileTail`, `readFiles`, `readSessionOutput`, `registerCommand`, `registerContextMenuAction`, `registerDashboard`, `registerFileIconProvider`, `registerFilePreview`, `registerMarkdownProvider`, `registerOutputWatcher`, `registerSection`, `registerSidebarPanel`, `registerStructuredEventHandler`, `registerTerminalAction`, `registerUrlResolver`, `registerWorkItemProvider`, `removeItem`, `renamePath`, `scanBuildArtifacts`, `sendAgentInput`, `setTicker`, `settings`, `startWork`, `trimBuildArtifact`, `unlinkItem`, `updateItem`, `watchPath`, `writeFile`, `writeFileBase64`, `writePty`.
 
 ### Base CSS class inventory
 `badge`, `badge-accent`, `badge-error`, `badge-muted`, `badge-p1`, `badge-p2`, `badge-p3`, `badge-success`, `badge-warning`, `btn`, `btn-danger`, `btn-primary`, `card`, `critical`, `danger`, `dash-header`, `dash-meter`, `dash-meter-fill`, `dash-section`, `dash-section-hint`, `dash-section-title`, `dash-stat`, `dash-stat-grid`, `dash-stat-label`, `dash-stat-sub`, `dash-stat-value`, `dash-subtitle`, `dash-title`, `dashboard`, `empty-state`, `error`, `filter-bar`, `hint`, `num`, `ok`, `primary`, `show`, `success`, `toast`, `warn`.
@@ -397,7 +433,7 @@ await host.invoke("delete_plugin_data", {
 Core renders the following Solid components. Plugins supply manifest metadata and host registrations; they do not import or mount these components.
 
 ### Manifest UX field inventory
-`agentTypes`, `allowedUrls`, `author`, `binaries`, `capabilities`, `description`, `id`, `main`, `minAppVersion`, `name`, `providers`, `version`.
+`agentTypes`, `allowedUrls`, `author`, `binaries`, `capabilities`, `description`, `id`, `main`, `minAppVersion`, `name`, `providers`, `settings`, `version`.
 
 ### Core UX component inventory
 `BrowseRow`, `PluginLogViewer`, `PluginRow`, `PluginsTab`.
@@ -420,7 +456,12 @@ The Browse row shows registry name, version, description, author, tags and minim
 
 ### Settings schema and Tasks views
 
-PluginManifest has no plugin settings schema or settings field-kind union. Core does not yet render schema-driven plugin settings. Do not invent manifest fields or import core Settings components. Plugins can open their own UI with `host.openPanel` or `host.openMarkdownPanel`. Core does render the generic Tasks views described below; plugins register data-only WorkItemProvider ports with `host.registerWorkItemProvider(provider)`, not manifest view declarations. The source-derived UX drift check covers the real Tasks components, work-item DTO fields and roadmap date roles. Extend it to the real plugin settings schema when that API lands.
+PluginManifest declares optional `settings: { schema, defaults }`. Loaded plugin catalogue entries render searchable Integrations pages in Settings; unloading removes the page. Core reads descriptors and values and writes revision-checked edits through `plugin_settings_action`, the same scoped Rust service as `host.settings`. Schema titles and descriptions label the controls. Secrets show only set/unset and accept a replacement without displaying the stored value. Core Tasks views use data-only WorkItemProvider ports, not manifest view declarations.
+
+### Plugin settings schema type inventory
+`object`, `array`, `string`, `boolean`, `integer`, `number`.
+
+Objects group leaf fields and require closed properties. Arrays contain bounded non-object items: string enums use SettingMultiSelect, string lists use SettingList, other arrays accept JSON. Strings use text inputs or enum selects, booleans use toggles, integers and numbers use numeric inputs. Read-only fields use SettingStatus. Reset and edit operations come from the live catalogue, not a second persistence path.
 
 ### Settings field kinds
 
@@ -693,6 +734,10 @@ GET /worktrees/dir?repo_path=/path/to/repo
 Returns the directory where worktrees for this repo will be created (based on user config).
 Useful for informational purposes — do not use this to construct paths yourself.
 
+## Tasks MCP access
+
+The existing MCP `repo` tool exposes `work_item` (linked caller-worktree item, reference, URL or account-scoped key; detail and paged comments) and `work_item_act` (comment/transition via provider `act`). Writes require `mcp_work_item_writes=true`; default false. Item text is JSON inside the start-work untrusted-content block. Rust validates replies and suppresses provider errors; credentials remain in the existing account HTTP injection/redaction path. The typed frontend bridge dispatches to the registered provider and atomically claims each request so multiple clients cannot duplicate writes. Plugins need no new methods. A frontend with the provider loaded is required. A timed-out write may have completed: read before retrying.
+
 ## Tasks data contract (Phase A4)
 
 Register via `host.registerWorkItemProvider(provider)`; its Disposable is automatically
@@ -772,13 +817,17 @@ It touches no network, credentials, filesystem or subprocesses. It is a developm
 provider, not a fixture proving GitHub/Jira/GitLab API compatibility. Its search is
 literal text; sort supports key/title/updatedAt. Its cursor expires on mutation.
 
+Optional provider listBoards(signal) discovers read-only boards on view opening; GitHub needs read:project.
+
 ## Tasks core UX contracts
+
+Complete lists with a stable total <=1000 use project_work_items (/tasks/project) for Rust all-field projection. Unknown or large totals retain server capabilities; no fabricated counts.
 
 ### Tasks component inventory
 `BoardLane`, `CardMoveMenu`, `CreateField`, `InstallWorkItemPlugin`, `RoadmapTimeline`, `StartWorkMenu`, `TaskComment`, `TaskCreateField`, `TaskCreateOptional`, `TaskCreateUser`, `TaskField`, `TaskMarkdown`, `TaskRows`, `TasksBoard`, `TasksBoardView`, `TasksCreate`, `TasksDetail`, `TasksList`, `TasksRoadmap`, `TasksSetup`, `TasksShell`.
 
 ### Tasks DTO field inventory
-`WorkItem.assignees`, `WorkItem.fields`, `WorkItem.itemType`, `WorkItem.key`, `WorkItem.labels`, `WorkItem.reference`, `WorkItem.state`, `WorkItem.title`, `WorkItem.updatedAt`, `WorkItem.url`, `WorkItemActionDescriptor.disabledReason`, `WorkItemActionDescriptor.enabled`, `WorkItemActionDescriptor.id`, `WorkItemActionDescriptor.kind`, `WorkItemActionDescriptor.name`, `WorkItemBoard.columns`, `WorkItemBoard.fieldId`, `WorkItemBoard.id`, `WorkItemBoard.name`, `WorkItemBoardCard.item`, `WorkItemBoardCard.moves`, `WorkItemBoardColumn.action`, `WorkItemBoardColumn.id`, `WorkItemBoardColumn.name`, `WorkItemBoardLane.cards`, `WorkItemBoardLane.columnId`, `WorkItemBoardMove.action`, `WorkItemBoardMove.columnId`, `WorkItemBoardPage.board`, `WorkItemBoardPage.lanes`, `WorkItemBoardPage.nextCursor`, `WorkItemComment.author`, `WorkItemComment.body`, `WorkItemComment.createdAt`, `WorkItemComment.id`, `WorkItemComment.url`, `WorkItemCommentPage.entries`, `WorkItemCommentPage.nextCursor`, `WorkItemCreate.body`, `WorkItemCreate.fields`, `WorkItemCreate.itemType`, `WorkItemCreate.title`, `WorkItemDetail.actions`, `WorkItemDetail.body`, `WorkItemDetail.comments`, `WorkItemDetail.fields`, `WorkItemDetail.item`, `WorkItemEdit.fieldId`, `WorkItemEdit.value`, `WorkItemFieldSchema.editable`, `WorkItemFieldSchema.filterable`, `WorkItemFieldSchema.groupable`, `WorkItemFieldSchema.id`, `WorkItemFieldSchema.kind`, `WorkItemFieldSchema.name`, `WorkItemFieldSchema.options`, `WorkItemFieldSchema.required`, `WorkItemFieldSchema.sortable`, `WorkItemFilter.fieldId`, `WorkItemFilter.values`, `WorkItemGroup.id`, `WorkItemGroup.items`, `WorkItemGroup.name`, `WorkItemGroupedPage.groups`, `WorkItemGroupedPage.nextCursor`, `WorkItemGroupedPage.total`, `WorkItemOption.id`, `WorkItemOption.name`, `WorkItemPage.items`, `WorkItemPage.nextCursor`, `WorkItemPage.total`, `WorkItemProviderSnapshot.accountId`, `WorkItemProviderSnapshot.boards`, `WorkItemProviderSnapshot.fields`, `WorkItemProviderSnapshot.items`, `WorkItemProviderSnapshot.name`, `WorkItemProviderSnapshot.providerId`, `WorkItemProviderSnapshot.savedFilters`, `WorkItemQuery.cursor`, `WorkItemQuery.filters`, `WorkItemQuery.groupBy`, `WorkItemQuery.limit`, `WorkItemQuery.savedFilterId`, `WorkItemQuery.search`, `WorkItemQuery.sort`, `WorkItemRef.accountId`, `WorkItemRef.id`, `WorkItemRef.providerId`, `WorkItemReviewFinding.addressedIn`, `WorkItemReviewFinding.agentPrompt`, `WorkItemReviewFinding.category`, `WorkItemReviewFinding.externalId`, `WorkItemReviewFinding.severity`, `WorkItemReviewFinding.severityLabel`, `WorkItemReviewFinding.suggestion`, `WorkItemReviewFinding.title`, `WorkItemReviewFinding.tool`, `WorkItemReviewSummary.comment`, `WorkItemReviewSummary.commitId`, `WorkItemReviewSummary.state`, `WorkItemReviewThread.comments`, `WorkItemReviewThread.commitId`, `WorkItemReviewThread.finding`, `WorkItemReviewThread.id`, `WorkItemReviewThread.line`, `WorkItemReviewThread.originalLine`, `WorkItemReviewThread.outdated`, `WorkItemReviewThread.path`, `WorkItemReviewThread.resolved`, `WorkItemSavedFilter.id`, `WorkItemSavedFilter.name`, `WorkItemSavedFilter.query`, `WorkItemSort.descending`, `WorkItemSort.fieldId`, `WorkItemStartWork.agentType`, `WorkItemStartWork.baseRef`, `WorkItemStartWork.branch`, `WorkItemStartWork.delivery`, `WorkItemStartWork.prompt`, `WorkItemStartWork.repoPath`, `WorkItemState.id`, `WorkItemState.name`, `WorkItemState.tone`, `WorkItemUser.avatarUrl`, `WorkItemUser.bot`, `WorkItemUser.id`, `WorkItemUser.name`.
+`WorkItem.assignees`, `WorkItem.fields`, `WorkItem.itemType`, `WorkItem.key`, `WorkItem.labels`, `WorkItem.reference`, `WorkItem.state`, `WorkItem.title`, `WorkItem.updatedAt`, `WorkItem.url`, `WorkItemActionDescriptor.disabledReason`, `WorkItemActionDescriptor.enabled`, `WorkItemActionDescriptor.id`, `WorkItemActionDescriptor.kind`, `WorkItemActionDescriptor.name`, `WorkItemBoard.columns`, `WorkItemBoard.fieldId`, `WorkItemBoard.id`, `WorkItemBoard.name`, `WorkItemBoardCard.item`, `WorkItemBoardCard.moves`, `WorkItemBoardColumn.action`, `WorkItemBoardColumn.id`, `WorkItemBoardColumn.name`, `WorkItemBoardLane.cards`, `WorkItemBoardLane.columnId`, `WorkItemBoardMove.action`, `WorkItemBoardMove.columnId`, `WorkItemBoardPage.board`, `WorkItemBoardPage.lanes`, `WorkItemBoardPage.nextCursor`, `WorkItemComment.author`, `WorkItemComment.body`, `WorkItemComment.createdAt`, `WorkItemComment.id`, `WorkItemComment.url`, `WorkItemCommentPage.entries`, `WorkItemCommentPage.nextCursor`, `WorkItemCreate.body`, `WorkItemCreate.fields`, `WorkItemCreate.itemType`, `WorkItemCreate.title`, `WorkItemDetail.actions`, `WorkItemDetail.body`, `WorkItemDetail.comments`, `WorkItemDetail.fields`, `WorkItemDetail.item`, `WorkItemEdit.fieldId`, `WorkItemEdit.value`, `WorkItemFieldSchema.editable`, `WorkItemFieldSchema.filterable`, `WorkItemFieldSchema.groupable`, `WorkItemFieldSchema.id`, `WorkItemFieldSchema.kind`, `WorkItemFieldSchema.name`, `WorkItemFieldSchema.options`, `WorkItemFieldSchema.required`, `WorkItemFieldSchema.sortable`, `WorkItemFilter.fieldId`, `WorkItemFilter.values`, `WorkItemGroup.id`, `WorkItemGroup.items`, `WorkItemGroup.name`, `WorkItemGroupedPage.groups`, `WorkItemGroupedPage.nextCursor`, `WorkItemGroupedPage.total`, `WorkItemLocalQuery.fields`, `WorkItemLocalQuery.items`, `WorkItemLocalQuery.query`, `WorkItemOption.id`, `WorkItemOption.name`, `WorkItemPage.items`, `WorkItemPage.nextCursor`, `WorkItemPage.total`, `WorkItemProviderSnapshot.accountId`, `WorkItemProviderSnapshot.boards`, `WorkItemProviderSnapshot.fields`, `WorkItemProviderSnapshot.items`, `WorkItemProviderSnapshot.name`, `WorkItemProviderSnapshot.providerId`, `WorkItemProviderSnapshot.savedFilters`, `WorkItemQuery.cursor`, `WorkItemQuery.filters`, `WorkItemQuery.groupBy`, `WorkItemQuery.limit`, `WorkItemQuery.savedFilterId`, `WorkItemQuery.search`, `WorkItemQuery.sort`, `WorkItemRef.accountId`, `WorkItemRef.id`, `WorkItemRef.providerId`, `WorkItemReviewFinding.addressedIn`, `WorkItemReviewFinding.agentPrompt`, `WorkItemReviewFinding.category`, `WorkItemReviewFinding.externalId`, `WorkItemReviewFinding.severity`, `WorkItemReviewFinding.severityLabel`, `WorkItemReviewFinding.suggestion`, `WorkItemReviewFinding.title`, `WorkItemReviewFinding.tool`, `WorkItemReviewSummary.comment`, `WorkItemReviewSummary.commitId`, `WorkItemReviewSummary.state`, `WorkItemReviewThread.comments`, `WorkItemReviewThread.commitId`, `WorkItemReviewThread.finding`, `WorkItemReviewThread.id`, `WorkItemReviewThread.line`, `WorkItemReviewThread.originalLine`, `WorkItemReviewThread.outdated`, `WorkItemReviewThread.path`, `WorkItemReviewThread.resolved`, `WorkItemSavedFilter.id`, `WorkItemSavedFilter.name`, `WorkItemSavedFilter.query`, `WorkItemSort.descending`, `WorkItemSort.fieldId`, `WorkItemStartWork.agentType`, `WorkItemStartWork.baseRef`, `WorkItemStartWork.branch`, `WorkItemStartWork.delivery`, `WorkItemStartWork.prompt`, `WorkItemStartWork.repoPath`, `WorkItemState.id`, `WorkItemState.name`, `WorkItemState.tone`, `WorkItemUser.avatarUrl`, `WorkItemUser.bot`, `WorkItemUser.id`, `WorkItemUser.name`.
 
 ### Tasks shell view inventory
 `board`, `list`, `roadmap`.
@@ -860,6 +909,10 @@ Load more for a board page's `nextCursor`.
 Renders a column's `id`, `name` and virtualized `cards`. Cards display item `key`,
 `title` and state `name`/`tone`. The move selector enables only destinations allowed
 by that card's `moves`; pending cards show pending state instead of duplicate moves.
+
+#### CardMoveMenu
+
+A portalled, keyboard-accessible card move menu lists other columns and enables only destinations allowed by the card's moves.
 
 #### StartWorkMenu
 
@@ -1131,6 +1184,28 @@ mod tests {
             PLUGIN_DOCS,
             "### Work-item field kind inventory\n",
             expected,
+        );
+    }
+
+    // Catches: plugin schema types change without corresponding authoring documentation.
+    #[test]
+    fn plugin_docs_matches_plugin_settings_schema_types() {
+        let source = include_str!("../settings/plugin_schema.rs");
+        let accepted = section(
+            source,
+            r#"match schema["type"].as_str() {"#,
+            "_ => return Err(fail()),",
+        );
+        assert_inventory(
+            PLUGIN_DOCS,
+            "### Plugin settings schema type inventory\n",
+            captures(
+                &captures(accepted, r"(?m)^        Some\(([^)]+)\) =>")
+                    .into_iter()
+                    .collect::<Vec<_>>()
+                    .join(" "),
+                r#""([a-z]+)""#,
+            ),
         );
     }
 

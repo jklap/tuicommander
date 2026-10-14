@@ -152,12 +152,12 @@ describe("buildAnswersTurn", () => {
 			row("⏺ 💬 First line that wraps onto"),
 			{ text: " the next row.", isWrapped: true },
 			row(""),
-			row("  Second paragraph."),
+			row("  💬 Second paragraph."),
 			row("⏺ Bash(make test)"),
 			row("  ⎿  ok"),
 		];
 		expect(buildAnswersTurn(rows, true).answers).toEqual([
-			"💬 First line that wraps onto the next row.\n\nSecond paragraph.",
+			"💬 First line that wraps onto the next row.\n\n💬 Second paragraph.",
 		]);
 	});
 
@@ -315,8 +315,11 @@ describe("readAnswersHistory", () => {
 			newTurnCache(),
 		);
 		expect(turns?.[0].prompt).toBeNull();
-		// catches: the answers-only view keeping only the 💬 row, or running an answer past its end into the next one
-		const answers = turns?.[0].answers ?? [];
+		// Catches: retained adjacent marked paragraphs being split or losing continuation content.
+		// Blank-separated box tables and the unmarked smartmem paragraph end regions (#1872-1870 D1).
+		const merged = turns?.[0].answers ?? [];
+		expect(merged).toHaveLength(3);
+		const answers = merged.flatMap((region) => region.split(/\n\n(?=💬)/));
 		expect(answers.map((a) => a.split("\n")[0])).toEqual([
 			"💬 Green bar in the terminal scrollbar: green is the colour TUIC uses to mark the",
 			'💬 Project by project: the full status is in the tab "Stato progetti 03/10"',
@@ -335,8 +338,8 @@ describe("readAnswersHistory", () => {
 				"fixing it.",
 			].join("\n"),
 		);
-		expect(answers[1]).toMatch(/gate status per repo\.$/);
-		expect(answers[2]).toMatch(/so TUIC sees them as unmerged\.$/);
+		expect(answers[1]).toMatch(/here is the short version\.$/);
+		expect(answers[2]).toMatch(/smartmem: critic-011-015, critic-021$/);
 	});
 
 	it("reads only retained prefix rows and caches them while the tracked turn grows", async () => {

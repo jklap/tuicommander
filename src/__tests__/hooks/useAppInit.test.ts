@@ -13,6 +13,7 @@ import { handleIntentEvent, shouldApplyIntentTitle } from "../../components/Term
 import { type AppInitDeps, browserCreatedSessions, initApp } from "../../hooks/useAppInit";
 import { activityStore } from "../../stores/activityStore";
 import { appLogger } from "../../stores/appLogger";
+import { closeDialogStore } from "../../stores/closeDialog";
 import { editorTabsStore } from "../../stores/editorTabs";
 import { globalWorkspaceStore, MANUAL_SCOPE } from "../../stores/globalWorkspace";
 import { mdTabsStore } from "../../stores/mdTabs";
@@ -52,7 +53,6 @@ function createMockDeps(overrides: Partial<AppInitDeps> = {}): AppInitDeps {
 			listActiveSessions: vi.fn().mockResolvedValue([]),
 			close: vi.fn().mockResolvedValue(undefined),
 		},
-		setQuitDialogVisible: vi.fn(),
 		setStatusInfo: vi.fn(),
 		handleBranchSelect: vi.fn().mockResolvedValue(undefined),
 		refreshAllBranchStats: vi.fn(),
@@ -68,13 +68,41 @@ function createMockDeps(overrides: Partial<AppInitDeps> = {}): AppInitDeps {
 			startUserActivityListening: vi.fn(),
 		},
 		applyPlatformClass: vi.fn().mockReturnValue("macos"),
-		onCloseRequested: vi.fn().mockResolvedValue(undefined),
 		registerRepo: vi.fn().mockResolvedValue(undefined),
 		...overrides,
 	};
 }
 
 describe("initApp", () => {
+	// Catches: a backend mail/submit wake creates a duplicate tab and leaves the original suspended.
+	it("reattaches a mail-woken replacement PTY to the suspended tab instead of adding a duplicate", async () => {
+		let created: ((event: { payload: unknown }) => void) | undefined;
+		vi.mocked(listen).mockImplementation(((event: string, handler: (event: { payload: unknown }) => void) => {
+			if (event === "session-created") created = handler;
+			return Promise.resolve(vi.fn());
+		}) as unknown as typeof listen);
+		await initApp(createMockDeps());
+		const id = terminalsStore.add(makeTerminal({ sessionId: null, tuicSession: "retained-identity", cwd: "/repo" }));
+		terminalsStore.update(id, { suspended: true });
+		// The wake producer includes the retained stable identity with the new PTY key.
+		created!({
+			payload: {
+				session_id: "replacement-pty",
+				tuic_session: "retained-identity",
+				cwd: "/repo",
+				agent_type: null,
+				display_name: null,
+				parent_session: null,
+			},
+		});
+		expect(terminalsStore.getIds()).toEqual([id]);
+		expect(terminalsStore.get(id)).toMatchObject({
+			suspended: false,
+			sessionId: "replacement-pty",
+			tuicSession: "retained-identity",
+		});
+	});
+
 	it("explains the browser fallback when desktop navigation blocks an external iframe link", async () => {
 		let onBlocked: ((event: { payload: string }) => void) | undefined;
 		vi.mocked(listen).mockImplementation(((event: string, handler: (event: { payload: string }) => void) => {
@@ -1289,55 +1317,6 @@ describe("initApp", () => {
 			expect(terminalsStore.get(id)).toMatchObject({ name: "Foo", nameIsCustom: true });
 		});
 
-		describe("session-suspend-requested", () => {
-			async function initWithSuspendListener() {
-				let cb: ((event: { payload: { session_id: string; request_id: string } }) => void) | null = null;
-				vi.mocked(listen).mockImplementation(((event: string, handler: (event: { payload: unknown }) => void) => {
-					if (event === "session-suspend-requested") cb = handler as typeof cb;
-					return Promise.resolve(vi.fn());
-				}) as unknown as typeof listen);
-				await initApp(createMockDeps());
-				mockRpc.mockClear();
-				return cb!;
-			}
-			const verdicts = () => mockRpc.mock.calls.filter(([cmd]) => cmd === "session_suspend_response");
-
-			// The MCP call waits for this answer; without it a refusal read as success.
-			it("answers ok after suspending the tab that owns the session", async () => {
-				const fire = await initWithSuspendListener();
-				const id = terminalsStore.add(makeTerminal({ name: "Idle shell" }));
-				terminalsStore.setSessionId(id, "sess-susp-ok");
-
-				fire({ payload: { session_id: "sess-susp-ok", request_id: "req-ok" } });
-
-				await vi.waitFor(() => expect(verdicts()).toHaveLength(1));
-				expect(verdicts()[0][1]).toEqual({ requestId: "req-ok", ok: true, reason: null });
-				expect(terminalsStore.get(id)?.suspended).toBe(true);
-			});
-
-			it("answers with the refusal reason when the tab is busy and leaves the tab alone", async () => {
-				const fire = await initWithSuspendListener();
-				const id = terminalsStore.add(makeTerminal({ name: "Busy shell" }));
-				terminalsStore.setSessionId(id, "sess-susp-busy");
-				terminalsStore.update(id, { shellState: "busy" });
-
-				fire({ payload: { session_id: "sess-susp-busy", request_id: "req-busy" } });
-
-				await vi.waitFor(() => expect(verdicts()).toHaveLength(1));
-				expect(verdicts()[0][1]).toEqual({ requestId: "req-busy", ok: false, reason: "command running" });
-				expect(terminalsStore.get(id)?.suspended).toBeFalsy();
-			});
-
-			it("stays silent for a session no tab here owns", async () => {
-				const fire = await initWithSuspendListener();
-
-				fire({ payload: { session_id: "sess-elsewhere", request_id: "req-none" } });
-				await Promise.resolve();
-
-				expect(verdicts()).toHaveLength(0);
-			});
-		});
-
 		it("retains an alias event that arrives before the session is bound to a terminal", async () => {
 			const getCb = captureAliasAssigned();
 			const deps = createMockDeps();
@@ -1451,6 +1430,169 @@ describe("initApp", () => {
 		expect(repositoriesStore.findOwnerForTerminal(sibling)?.workspaceId).toBe("main");
 		expect(terminalsStore.get(declared)?.cwd).toBe("/repo");
 		expect(terminalsStore.get(declared)?.tuicSession).toBe("stable-caller");
+	});
+
+	// Catches: re-adoption losing split IDs/suspended tabs or colliding with sessions created while unloaded.
+	it("reinit_after_recreate_restores_tabs_layout_and_suspended_tabs", async () => {
+		repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+		repositoriesStore.setWorkspace("/repo", "main", {
+			worktreePath: "/repo",
+			lastActiveTerminal: "term-800",
+			savedTerminals: [
+				{
+					frontendId: "term-800",
+					sessionId: "live",
+					tuicSession: "stable-live",
+					name: "Live",
+					cwd: "/repo",
+					fontSize: 16,
+					agentType: "codex",
+				},
+				{
+					frontendId: "term-801",
+					tuicSession: "stable-suspended",
+					name: "Suspended",
+					cwd: "/repo",
+					fontSize: 14,
+					agentType: "codex",
+					suspended: true,
+				},
+			],
+		});
+		repositoriesStore.setActiveWorkspace("/repo", "main");
+		paneLayoutStore.reset();
+		const left = paneLayoutStore.createGroup();
+		const right = paneLayoutStore.createGroup();
+		paneLayoutStore.addTab(left, { type: "terminal", id: "term-800" });
+		paneLayoutStore.addTab(right, { type: "terminal", id: "term-801" });
+		paneLayoutStore.setRoot({
+			type: "branch",
+			direction: "horizontal",
+			children: [
+				{ type: "leaf", id: left },
+				{ type: "leaf", id: right },
+			],
+			ratios: [0.5, 0.5],
+		});
+		const layout = paneLayoutStore.serialize();
+		const deps = createMockDeps({
+			pty: {
+				listActiveSessions: vi.fn().mockResolvedValue([
+					{ session_id: "created-while-unloaded", cwd: "/repo", tuic_session: "new" },
+					{ session_id: "live", cwd: "/repo", tuic_session: "stable-live", state: { agent_type: "codex" } },
+				]),
+				close: vi.fn().mockResolvedValue(undefined),
+			},
+		});
+		await initApp(deps);
+		expect(terminalsStore.get("term-800")?.sessionId).toBe("live");
+		expect(terminalsStore.get("term-801")).toMatchObject({
+			sessionId: null,
+			suspended: true,
+			tuicSession: "stable-suspended",
+		});
+		expect(terminalsStore.getCount()).toBe(3);
+		expect(terminalsStore.getTerminalForSession("created-while-unloaded")).not.toBe("term-800");
+		expect(terminalsStore.state.activeId).toBe("term-800");
+		expect(paneLayoutStore.serialize()).toEqual(layout);
+		expect(deps.pty.close).not.toHaveBeenCalled();
+	});
+
+	// Catches: an early session-created event replaces a saved pane's terminal identity.
+	it("keeps the saved pane binding when session-created races re-adoption", async () => {
+		repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+		repositoriesStore.setWorkspace("/repo", "main", {
+			worktreePath: "/repo",
+			lastActiveTerminal: "term-880",
+			savedTerminals: [
+				{ frontendId: "term-880", agentType: null, sessionId: "race-live", name: "Live", cwd: "/repo", fontSize: 18 },
+			],
+		});
+		repositoriesStore.setActiveWorkspace("/repo", "main");
+		paneLayoutStore.reset();
+		const group = paneLayoutStore.createGroup();
+		paneLayoutStore.addTab(group, { type: "terminal", id: "term-880" });
+		paneLayoutStore.setRoot({ type: "leaf", id: group });
+		let created: ((event: { payload: unknown }) => void) | undefined;
+		vi.mocked(listen).mockImplementation(((event: string, handler: (event: { payload: unknown }) => void) => {
+			if (event === "session-created") created = handler;
+			return Promise.resolve(vi.fn());
+		}) as unknown as typeof listen);
+		await initApp(
+			createMockDeps({
+				pty: {
+					listActiveSessions: vi.fn().mockImplementation(async () => {
+						created!({ payload: { session_id: "race-live", cwd: "/repo" } });
+						terminalsStore.update(terminalsStore.getTerminalForSession("race-live")!, { shellState: "busy" });
+						return [{ session_id: "race-live", cwd: "/repo", state: { shell_state: "idle" } }];
+					}),
+					close: vi.fn().mockResolvedValue(undefined),
+				},
+			}),
+		);
+		expect(terminalsStore.get("term-880")).toMatchObject({ sessionId: "race-live", fontSize: 18, shellState: "busy" });
+		expect(terminalsStore.state.activeId).toBe("term-880");
+		expect(terminalsStore.getCount()).toBe(1);
+	});
+
+	// Catches: an inactive split pane loses a suspended tab when its branch has no live sibling.
+	it("restores a suspended pane without requiring a live sibling in its workspace", async () => {
+		repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+		repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+		repositoriesStore.setWorkspace("/repo", "paused", {
+			worktreePath: "/repo-paused",
+			savedTerminals: [
+				{
+					frontendId: "term-890",
+					agentType: null,
+					tuicSession: "paused-peer",
+					name: "Paused",
+					cwd: "/repo-paused",
+					fontSize: 14,
+					suspended: true,
+				},
+			],
+		});
+		repositoriesStore.setActiveWorkspace("/repo", "main");
+		paneLayoutStore.reset();
+		const group = paneLayoutStore.createGroup();
+		paneLayoutStore.addTab(group, { type: "terminal", id: "term-890" });
+		paneLayoutStore.setRoot({ type: "leaf", id: group });
+		await initApp(
+			createMockDeps({
+				pty: {
+					listActiveSessions: vi.fn().mockResolvedValue([{ session_id: "other-live", cwd: "/repo" }]),
+					close: vi.fn().mockResolvedValue(undefined),
+				},
+			}),
+		);
+		expect(terminalsStore.get("term-890")).toMatchObject({
+			suspended: true,
+			sessionId: null,
+			tuicSession: "paused-peer",
+		});
+	});
+
+	// Catches: restoring an all-suspended workspace twice when lazy branch selection follows init.
+	it("consumes suspended snapshots without stable session IDs before lazy branch restore", async () => {
+		repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+		repositoriesStore.setWorkspace("/repo", "main", {
+			worktreePath: "/repo",
+			savedTerminals: [
+				{ frontendId: "term-891", agentType: null, name: "Paused", cwd: "/repo", fontSize: 14, suspended: true },
+			],
+		});
+		repositoriesStore.setActiveWorkspace("/repo", "main");
+		const deps = createMockDeps({
+			handleBranchSelect: vi.fn().mockImplementation(async () => {
+				expect(repositoriesStore.get("/repo")?.workspaces.main.savedTerminals).toEqual([]);
+				expect(repositoriesStore.get("/repo")?.workspaces.main.terminals).toContain("term-891");
+			}),
+		});
+		await initApp(deps);
+		expect(deps.handleBranchSelect).toHaveBeenCalledWith("/repo", "main");
+		expect(terminalsStore.get("term-891")).toMatchObject({ suspended: true, sessionId: null });
+		expect(terminalsStore.getCount()).toBe(1);
 	});
 
 	it("restores active branch with surviving sessions", async () => {
@@ -1851,41 +1993,16 @@ describe("initApp", () => {
 		expect(deps.stores.refreshDictationConfig).toHaveBeenCalled();
 	});
 
-	it("onCloseRequested prevents close when active terminals exist", async () => {
-		let capturedCallback: ((event: { preventDefault: () => void }) => void) | null = null;
-		const deps = createMockDeps({
-			onCloseRequested: vi.fn((cb: (event: { preventDefault: () => void }) => void) => {
-				capturedCallback = cb;
-				return Promise.resolve(undefined);
-			}) as AppInitDeps["onCloseRequested"],
-		});
-
-		await initApp(deps);
-
-		// Add a terminal with a session
-		terminalsStore.add({ sessionId: "sess-1", fontSize: 14, name: "T1", cwd: "/tmp", awaitingInput: null });
-
-		const preventDefaultSpy = vi.fn();
-		capturedCallback!({ preventDefault: preventDefaultSpy });
-		expect(preventDefaultSpy).toHaveBeenCalled();
-		expect(deps.setQuitDialogVisible).toHaveBeenCalledWith(true);
-	});
-
-	it("onCloseRequested allows close when no active terminals", async () => {
-		let capturedCallback: ((event: { preventDefault: () => void }) => void) | null = null;
-		const deps = createMockDeps({
-			onCloseRequested: vi.fn((cb: (event: { preventDefault: () => void }) => void) => {
-				capturedCallback = cb;
-				return Promise.resolve(undefined);
-			}) as AppInitDeps["onCloseRequested"],
-		});
-
-		await initApp(deps);
-
-		const preventDefaultSpy = vi.fn();
-		capturedCallback!({ preventDefault: preventDefaultSpy });
-		expect(preventDefaultSpy).not.toHaveBeenCalled();
-		expect(deps.setQuitDialogVisible).not.toHaveBeenCalled();
+	// Catches: the desktop rendering its own policy instead of Rust's close decision.
+	it("renders the Rust close request without recomputing terminal counts", async () => {
+		let handler: ((event: { payload: { kind: "ask"; sessions: number } }) => void) | undefined;
+		vi.mocked(listen).mockImplementation(((event: string, callback: typeof handler) => {
+			if (event === "close-dialog") handler = callback;
+			return Promise.resolve(vi.fn());
+		}) as unknown as typeof listen);
+		await initApp(createMockDeps());
+		handler!({ payload: { kind: "ask", sessions: 17 } });
+		expect(closeDialogStore.state.request).toEqual({ kind: "ask", sessions: 17 });
 	});
 
 	it("beforeunload closes browser-created PTY sessions", async () => {

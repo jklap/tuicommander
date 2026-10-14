@@ -1,3 +1,5 @@
+import { AGENT_USAGE_BLINK_THRESHOLD } from "./usageThresholds";
+
 /**
  * Codex usage — types and ticker formatting.
  *
@@ -81,7 +83,7 @@ export function buildCodexTickerText(api: CodexUsageApiResponse): string {
 /** Ticker priority from the hottest window across account and per-model limits. */
 export function getCodexTickerPriority(api: CodexUsageApiResponse): number {
 	const maxUsed = Math.max(0, ...allWindows(api).map((w) => w.used_percent));
-	if (maxUsed >= 90) return 90;
+	if (maxUsed >= AGENT_USAGE_BLINK_THRESHOLD) return AGENT_USAGE_BLINK_THRESHOLD;
 	if (maxUsed >= 70) return 50;
 	return 10;
 }

@@ -50,6 +50,15 @@ pub struct WorkItemPage {
     pub total: Option<u32>,
 }
 
+/// A complete provider scope collected before local query projection.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkItemLocalQuery {
+    pub items: Vec<WorkItem>,
+    pub fields: Vec<WorkItemFieldSchema>,
+    pub query: WorkItemQuery,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WorkItemCommentPage {

@@ -154,6 +154,12 @@ export interface WorkItemPage {
 	total?: number | null;
 }
 
+export interface WorkItemLocalQuery {
+	items: Array<WorkItem>;
+	fields: Array<WorkItemFieldSchema>;
+	query: WorkItemQuery;
+}
+
 export interface WorkItemCommentPage {
 	entries: Array<WorkItemCommentEntry>;
 	nextCursor: string | null;

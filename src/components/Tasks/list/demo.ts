@@ -19,7 +19,14 @@ export function listDemo(count: number, accountId = "local"): WorkItemProvider {
 		detail.item.fields.priority = { kind: "enum", value: index % 2 ? "low" : "high" };
 		return detail;
 	});
-	return createInMemoryWorkItemProvider(seed);
+	const provider = createInMemoryWorkItemProvider(seed);
+	const list = provider.list.bind(provider);
+	// The list harness models an unknown provider total; tests that need counts supply them explicitly.
+	provider.list = async (query, signal) => {
+		const { total: _total, ...page } = await list(query, signal);
+		return page;
+	};
+	return provider;
 }
 
 export async function allDemoRows(provider: WorkItemProvider): Promise<WorkItem[]> {

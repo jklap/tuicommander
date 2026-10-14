@@ -859,7 +859,7 @@ pub(crate) struct ServicesConfig {
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates auth for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) auth: AuthConfig,
     #[serde(default)]
-    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates tls for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"service_restart","effect":"Reconfigures TLS protection after persistence.","operations":["get","set"],"confirmationClass":"execution_authority"}))]
     pub(crate) tls: TlsConfig,
     #[serde(default)]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates relay for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
@@ -895,6 +895,10 @@ pub(crate) struct AppConfig {
     #[serde(default)]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates mcp server enabled for the current owner.","operations":["get","set"],"confirmationClass":"execution_authority"}))]
     pub(crate) mcp_server_enabled: bool,
+    /// Allow MCP agents to comment or transition Tasks items. Reads need no opt-in.
+    #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Allows MCP agents to write work items.","operations":["get","set"],"confirmationClass":"execution_authority"}))]
+    pub(crate) mcp_work_item_writes: bool,
     /// Fixed port for MCP server (0 = OS-assigned)
     #[serde(default = "default_mcp_port")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates mcp port for the current owner.","operations":["get","set"],"confirmationClass":"execution_authority"}))]
@@ -950,7 +954,7 @@ pub(crate) struct AppConfig {
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates attachment max bytes for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     #[schemars(range(min = 1))]
     pub(crate) attachment_max_bytes: u64,
-    /// Remove uploaded files older than this many days when their session closes.
+    /// Legacy stored value; uploads now have session lifetime regardless of this value.
     #[serde(default = "default_attachment_retention_days")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates attachment retention days for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) attachment_retention_days: u32,
@@ -961,6 +965,12 @@ pub(crate) struct AppConfig {
     #[serde(default = "default_true")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates confirm before quit for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) confirm_before_quit: bool,
+    /// Main window close policy: ask, background (hide), or quit.
+    #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Selects whether main window close asks, hides or quits.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    pub(crate) close_behavior: crate::background_mode::CloseBehavior,
+    #[serde(default)]
+    pub(crate) background: crate::background_mode::BackgroundConfig,
     /// Show confirmation dialog when closing a terminal tab
     #[serde(default = "default_true")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates confirm before closing tab for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
@@ -1027,6 +1037,10 @@ pub(crate) struct AppConfig {
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates update channel for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     #[schemars(extend("enum" = ["stable","beta","nightly"]))]
     pub(crate) update_channel: String,
+    /// Internal one-shot beta-channel migration state; never a user setting.
+    #[serde(default)]
+    #[schemars(extend("x-not-setting" = "Internal one-time beta update-channel migration marker"))]
+    pub(crate) beta_channel_migrated: bool,
     /// Agent types disabled by the user (won't appear in sidebar "Add Agent" menu)
     #[serde(default)]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates disabled agents for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
@@ -1293,6 +1307,7 @@ impl Default for AppConfig {
             font_weight: default_font_weight(),
             theme: "commander".to_string(),
             mcp_server_enabled: true,
+            mcp_work_item_writes: false,
             mcp_port: default_mcp_port(),
             mcp_config_installed: false,
             ide: String::new(),
@@ -1307,6 +1322,8 @@ impl Default for AppConfig {
             attachment_retention_days: default_attachment_retention_days(),
             services: ServicesConfig::default(),
             confirm_before_quit: true,
+            close_behavior: Default::default(),
+            background: Default::default(),
             confirm_before_closing_tab: true,
             max_tab_name_length: default_max_tab_name_length(),
             split_tab_mode: SplitTabMode::default(),
@@ -1323,6 +1340,7 @@ impl Default for AppConfig {
             language: default_language(),
             disabled_plugin_ids: Vec::new(),
             update_channel: default_update_channel(),
+            beta_channel_migrated: true,
             disabled_agents: Vec::new(),
             disabled_mcp_agents: Vec::new(),
             disabled_native_tools: default_disabled_native_tools(),
@@ -1540,6 +1558,11 @@ pub(crate) struct UIPrefsConfig {
     #[serde(default)]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates github section collapsed for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) github_section_collapsed: std::collections::HashMap<String, bool>,
+    /// JSON-encoded Tasks view intent keyed by repository/provider/account; no result pages.
+    /// String leaves keep provider-specific query values compatible with the settings catalogue.
+    #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Remembers Tasks source, view and query per repository and account.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    pub(crate) tasks_view_preferences: std::collections::HashMap<String, String>,
 }
 
 fn default_diff_view_mode() -> String {
@@ -1585,6 +1608,7 @@ impl Default for UIPrefsConfig {
             diff_view_mode: default_diff_view_mode(),
             detached_panels: std::collections::HashMap::new(),
             github_section_collapsed: std::collections::HashMap::new(),
+            tasks_view_preferences: std::collections::HashMap::new(),
         }
     }
 }
@@ -2759,6 +2783,19 @@ where
         Ok(result)
     }
 
+    /// Read authoritative safety state without quarantining malformed input. Repeated
+    /// ownership checks must not turn the first read error into an empty default.
+    pub(crate) fn read_preserving_invalid(&self) -> Result<T, String> {
+        let _guard = CONFIG_WRITE_LOCK.lock();
+        let _file_lock = self.acquire_file_lock()?;
+        match std::fs::read_to_string(&self.path) {
+            Ok(content) => serde_json::from_str(&content)
+                .map_err(|error| format!("Invalid {}: {error}", self.path.display())),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(T::default()),
+            Err(error) => Err(format!("Could not read {}: {error}", self.path.display())),
+        }
+    }
+
     /// Apply only the fields changed by this caller to the latest locked file.
     /// Arrays are replaced as values; a null delta removes an object key.
     pub(crate) fn save_delta(&self, base: &T, desired: &T) -> Result<(), String> {
@@ -2919,6 +2956,10 @@ fn commit_config_change_locked(
     // remember to — and the relay toggle silently needing an app restart is
     // exactly what that costs.
     crate::relay_client::notify_config_changed(state);
+    #[cfg(feature = "desktop")]
+    if let Some(app) = state.app_handle.read().as_ref() {
+        crate::background_mode::tray::desktop::schedule_sync(app);
+    }
     Ok(effects)
 }
 
@@ -3055,10 +3096,17 @@ pub(crate) fn persist_session_token(token: &str) -> Result<(), String> {
 /// The caller decides the locking span because both `load_app_config` and the
 /// delta commit path must keep the cross-process lock from this read through a
 /// possible rewrite. The boolean reports that plaintext credentials were moved
-/// to the vault, or the legacy session duration was migrated, and the document
+/// to the vault, or a legacy default was migrated, and the document
 /// must be persisted before releasing that lock.
 fn read_app_config_unlocked(
     path: &std::path::Path,
+) -> Result<(AppConfig, bool), AppConfigReadError> {
+    read_app_config_unlocked_for_version(path, env!("CARGO_PKG_VERSION"))
+}
+
+fn read_app_config_unlocked_for_version(
+    path: &std::path::Path,
+    version: &str,
 ) -> Result<(AppConfig, bool), AppConfigReadError> {
     if !path.exists() {
         return Ok((AppConfig::default(), false));
@@ -3090,7 +3138,11 @@ fn read_app_config_unlocked(
         Ok(mut config) => {
             let migrated_secret = hydrate_app_config_secrets(&mut config);
             let migrated_duration = migrate_legacy_session_token_duration(&mut config);
-            Ok((config, migrated_secret || migrated_duration))
+            let migrated_channel = migrate_legacy_beta_channel(&mut config, version);
+            Ok((
+                config,
+                migrated_secret || migrated_duration || migrated_channel,
+            ))
         }
         Err(e) => {
             tracing::error!(path = %path.display(), "Config deserialization failed after migration: {e}");
@@ -3100,6 +3152,18 @@ fn read_app_config_unlocked(
             )))
         }
     }
+}
+
+/// Enroll old beta installs once; later explicit channel choices remain authoritative.
+fn migrate_legacy_beta_channel(config: &mut AppConfig, version: &str) -> bool {
+    if config.beta_channel_migrated || default_update_channel_for_version(version) != "beta" {
+        return false;
+    }
+    if config.update_channel == "stable" {
+        config.update_channel = "beta".to_string();
+    }
+    config.beta_channel_migrated = true;
+    true
 }
 
 /// Migrate legacy files once, persisting completion even for non-legacy durations.
@@ -3139,6 +3203,10 @@ impl From<AppConfigReadError> for String {
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn load_app_config() -> AppConfig {
+    load_app_config_for_version(env!("CARGO_PKG_VERSION"))
+}
+
+fn load_app_config_for_version(version: &str) -> AppConfig {
     // CONFIG_WRITE_LOCK is held across the read AND the conditional migration write
     // below, so a concurrent writer *in this process* can never land between the two.
     // That alone is not enough: a second TUICommander process (e.g. a `make dev` debug
@@ -3164,7 +3232,7 @@ pub(crate) fn load_app_config() -> AppConfig {
     };
 
     let path = config_dir().join(APP_CONFIG_FILE);
-    let (config, migrated_secret) = match read_app_config_unlocked(&path) {
+    let (config, migrated) = match read_app_config_unlocked_for_version(&path, version) {
         Ok(loaded) => loaded,
         Err(error) => {
             // Defaults are the only value that can be returned here, and the very next
@@ -3192,9 +3260,9 @@ pub(crate) fn load_app_config() -> AppConfig {
             (AppConfig::default(), false)
         }
     };
-    if migrated_secret {
-        // A plaintext secret was just moved into the vault, or the legacy session
-        // duration was migrated. Rewrite immediately —
+    if migrated {
+        // A plaintext secret was moved into the vault, or a legacy default
+        // was migrated. Rewrite immediately —
         // config_for_disk strips the cleartext — otherwise it stays readable in
         // config.json until some unrelated setting happens to be saved.
         //
@@ -3207,7 +3275,7 @@ pub(crate) fn load_app_config() -> AppConfig {
         {
             tracing::warn!(
                 source = "config",
-                "Migrated a secret to the vault but could not rewrite config.json: {e}"
+                "Applied a config migration but could not rewrite config.json: {e}"
             );
         }
     }
@@ -3972,6 +4040,49 @@ pub(crate) fn save_repositories_request(
         (Err(_), Some(error)) => Err(error),
         (Err(error), None) => Err(RepositorySaveError::Io(error)),
     }
+}
+
+/// Retract durable restore records before publishing workspace removal.
+/// The locked update preserves unrelated clients' repository edits.
+pub(crate) fn retract_removed_workspace(
+    repo_path: &str,
+    workspace_id: &str,
+) -> Result<bool, String> {
+    ConfigFile::<serde_json::Value>::at_path(repository_file()).update_with_strict(|doc| {
+        let Some(repo) = doc["repos"][repo_path].as_object_mut() else {
+            return Ok((false, false));
+        };
+        // Deleting a branch in the main checkout does not remove that checkout.
+        if ["workspaces", "branches"].iter().any(|key| {
+            repo.get(*key)
+                .and_then(|rows| rows[workspace_id]["worktreePath"].as_str())
+                == Some(repo_path)
+        }) {
+            return Ok((false, false));
+        }
+        let mut changed = false;
+        for key in ["workspaces", "branches"] {
+            if let Some(workspaces) = repo.get_mut(key).and_then(serde_json::Value::as_object_mut) {
+                changed |= workspaces.remove(workspace_id).is_some();
+            }
+        }
+        if let Some(placements) = repo
+            .get_mut("declaredWorktrees")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            let before = placements.len();
+            placements
+                .retain(|_, placement| placement["workspaceId"].as_str() != Some(workspace_id));
+            changed |= before != placements.len();
+        }
+        for key in ["activeWorkspaceId", "activeBranch"] {
+            if repo.get(key).and_then(serde_json::Value::as_str) == Some(workspace_id) {
+                repo.insert(key.into(), serde_json::Value::Null);
+                changed = true;
+            }
+        }
+        Ok((changed, changed))
+    })
 }
 
 /// Desktop IPC twin of `PUT /config/repositories`.
@@ -5257,6 +5368,7 @@ mod tests {
             font_weight: 200,
             theme: "dark".to_string(),
             mcp_server_enabled: true,
+            mcp_work_item_writes: false,
             mcp_port: 4000,
             mcp_config_installed: false,
             ide: "cursor".to_string(),
@@ -5305,6 +5417,8 @@ mod tests {
                 },
             },
             confirm_before_quit: false,
+            close_behavior: Default::default(),
+            background: Default::default(),
             confirm_before_closing_tab: true,
             max_tab_name_length: 40,
             split_tab_mode: SplitTabMode::Unified,
@@ -5318,6 +5432,7 @@ mod tests {
             language: "it".to_string(),
             disabled_plugin_ids: vec!["test-disabled".to_string()],
             update_channel: "nightly".to_string(),
+            beta_channel_migrated: true,
             disabled_agents: vec!["codex".to_string()],
             disabled_mcp_agents: vec!["windsurf".to_string()],
             disabled_native_tools: vec!["plugin_dev_guide".to_string()],
@@ -5428,6 +5543,89 @@ mod tests {
             default_update_channel_for_version("2.0.0-beta.1-nightly.20261012.t1000"),
             "stable"
         );
+    }
+
+    // Catches: an old saved stable default strands beta users on the stable feed.
+    #[test]
+    #[serial_test::serial]
+    fn beta_channel_migration_persists_once_and_preserves_later_stable() {
+        crate::credentials::reset_test_faults();
+        let dir = TempDir::new().expect("temp dir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let path = write_config_with_duration(dir.path(), None);
+        let mut doc: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        doc["update_channel"] = serde_json::json!("stable");
+        fs::write(&path, doc.to_string()).unwrap();
+
+        let mut migrated = load_app_config_for_version("2.0.0-beta.1");
+        assert_eq!(
+            migrated.update_channel, "beta",
+            "legacy stable must migrate"
+        );
+        let persisted: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(persisted["update_channel"], "beta");
+        assert_eq!(persisted["beta_channel_migrated"], true);
+
+        // Catches: every restart overrides the user's later explicit stable choice.
+        migrated.update_channel = "stable".into();
+        save_app_config(migrated).unwrap();
+        let saved = fs::read(&path).unwrap();
+        for version in ["2.0.0-beta.1", "2.0.0-beta.2"] {
+            assert_eq!(
+                load_app_config_for_version(version).update_channel,
+                "stable"
+            );
+            assert_eq!(fs::read(&path).unwrap(), saved);
+        }
+    }
+
+    // Catches: beta enrollment also changes stable/nightly builds or non-stable choices.
+    #[test]
+    #[serial_test::serial]
+    fn beta_channel_migration_respects_build_and_saved_channel() {
+        crate::credentials::reset_test_faults();
+        for version in [
+            "2.0.0",
+            "2.0.0-beta.1-nightly.20261012.t1000",
+            "2.0.0-beta.1",
+        ] {
+            for channel in ["stable", "beta", "nightly"] {
+                let dir = TempDir::new().expect("temp dir");
+                let _guard = set_config_dir_override(dir.path().to_path_buf());
+                let path = write_config_with_duration(dir.path(), None);
+                let mut doc: serde_json::Value =
+                    serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+                doc["session_duration_migrated"] = serde_json::json!(true);
+                doc["update_channel"] = serde_json::json!(channel);
+                fs::write(&path, doc.to_string()).unwrap();
+                let before = fs::read(&path).unwrap();
+                let loaded = load_app_config_for_version(version);
+                let is_beta = version == "2.0.0-beta.1";
+                let expected = if is_beta && channel == "stable" {
+                    "beta"
+                } else {
+                    channel
+                };
+                assert_eq!(loaded.update_channel, expected, "{version}, {channel}");
+                if is_beta {
+                    let persisted: serde_json::Value =
+                        serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+                    assert_eq!(persisted["beta_channel_migrated"], true);
+                    assert_eq!(persisted["update_channel"], expected);
+                    let after = fs::read(&path).unwrap();
+                    load_app_config_for_version(version);
+                    assert_eq!(fs::read(&path).unwrap(), after);
+                } else {
+                    assert_eq!(
+                        fs::read(&path).unwrap(),
+                        before,
+                        "non-beta load rewrote config"
+                    );
+                }
+            }
+        }
     }
 
     // Catches: loading settings loses a saved beta choice or overwrites stable opt-out.
@@ -5853,6 +6051,26 @@ mod tests {
         assert!(!opted_out.silence_remote_completions);
     }
 
+    /// Catches: serde silently drops Tasks preferences, so a restart loses view intent.
+    #[test]
+    fn ui_prefs_keep_tasks_preferences_and_default_empty() {
+        let saved = serde_json::json!({
+            "tasks_view_preferences": {
+                "[\"/repo-a\",\"demo\",\"work\"]": serde_json::json!({"view": "board", "query": {"sort": {"fieldId": "updatedAt", "descending": true}, "savedFilterId": null, "groupBy": null}}).to_string(),
+                "[\"/repo-b\",\"demo\",\"work\"]": serde_json::json!({"view": "list"}).to_string()
+            }
+        });
+        let prefs: UIPrefsConfig = serde_json::from_value(saved.clone()).unwrap();
+        let dir = TempDir::new().unwrap();
+        let loaded: UIPrefsConfig = round_trip_in_dir(dir.path(), "ui-prefs.json", &prefs);
+        assert_eq!(
+            serde_json::to_value(loaded).unwrap()["tasks_view_preferences"],
+            saved["tasks_view_preferences"]
+        );
+        let old: UIPrefsConfig = serde_json::from_str("{}").unwrap();
+        assert!(old.tasks_view_preferences.is_empty());
+    }
+
     #[test]
     fn ui_prefs_round_trip() {
         let dir = TempDir::new().unwrap();
@@ -5887,6 +6105,7 @@ mod tests {
                 ("issues".to_string(), true),
                 ("prs".to_string(), false),
             ]),
+            tasks_view_preferences: std::collections::HashMap::new(),
         };
         let loaded: UIPrefsConfig = round_trip_in_dir(dir.path(), "ui-prefs.json", &cfg);
         assert!(!loaded.sidebar_visible);
@@ -6738,6 +6957,87 @@ mod tests {
             ..RepoSettingsEntry::default()
         };
         assert!(entry.has_custom_settings());
+    }
+
+    // Catches: recycling with no connected frontend leaves a persisted checkout and peer declaration restorable at the obsolete path.
+    #[test]
+    #[serial_test::serial]
+    fn removed_worktree_retracts_persisted_workspace_and_declarations() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let document = serde_json::json!({"repos": {"/repo": {
+            "workspaces": {
+                "old": {"worktreePath": "/repo__wt/old", "savedTerminals": [{"cwd": "/repo__wt/old"}]},
+                "other": {"worktreePath": "/repo__wt/other"}
+            },
+            "activeWorkspaceId": "old",
+            "declaredWorktrees": {
+                "peer": {"workspaceId": "old", "worktreePath": "/repo__wt/old"},
+                "sibling": {"workspaceId": "other", "worktreePath": "/repo__wt/other"}
+            }
+        }}});
+        ConfigFile::<serde_json::Value>::at_path(repository_file())
+            .save(&document)
+            .unwrap();
+        let state = crate::state::tests_support::make_test_app_state();
+        state.notify_worktree_removed(crate::state::WorktreeRemovedPayload {
+            repo_path: "/repo".into(),
+            workspace_id: "old".into(),
+            branch: "old".into(),
+        });
+        let saved = load_repositories();
+        assert!(saved["repos"]["/repo"]["workspaces"].get("old").is_none());
+        assert!(
+            saved["repos"]["/repo"]["declaredWorktrees"]
+                .get("peer")
+                .is_none()
+        );
+        assert_eq!(
+            saved["repos"]["/repo"]["declaredWorktrees"]["sibling"]["worktreePath"],
+            "/repo__wt/other"
+        );
+        assert_ne!(saved["repos"]["/repo"]["activeWorkspaceId"], "old");
+        state.notify_worktree_removed(crate::state::WorktreeRemovedPayload {
+            repo_path: "/repo".into(),
+            workspace_id: "old".into(),
+            branch: "old".into(),
+        });
+        assert_eq!(load_repositories(), saved);
+    }
+
+    // Catches: a branch-only deletion retracts the main checkout restore row.
+    #[test]
+    #[serial_test::serial]
+    fn removed_worktree_keeps_main_checkout_restore_records() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let document = serde_json::json!({"repos": {"/repo": {
+            "branches": {"main": {"worktreePath": "/repo"}}, "activeBranch": "main"
+        }}});
+        replace_repositories_for_test(document.clone()).unwrap();
+        assert!(!retract_removed_workspace("/repo", "main").unwrap());
+        assert_eq!(load_repositories(), document);
+    }
+
+    // Catches: legacy branch restore records survive the same lifecycle event.
+    #[test]
+    #[serial_test::serial]
+    fn removed_worktree_retracts_legacy_branch_restore_records() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        replace_repositories_for_test(serde_json::json!({"repos": {"/repo": {
+            "branches": {"old": {"worktreePath": "/old"}, "other": {"worktreePath": "/other"}},
+            "activeBranch": "old"
+        }}}))
+        .unwrap();
+        assert!(retract_removed_workspace("/repo", "old").unwrap());
+        let saved = load_repositories();
+        assert!(saved["repos"]["/repo"]["branches"].get("old").is_none());
+        assert_eq!(
+            saved["repos"]["/repo"]["branches"]["other"]["worktreePath"],
+            "/other"
+        );
+        assert!(saved["repos"]["/repo"]["activeBranch"].is_null());
     }
 
     // -- Note image tests --
@@ -9155,13 +9455,26 @@ mod tests {
         let base = load_ui_prefs();
         let mut first = base.clone();
         first.sidebar_visible = false;
+        first.tasks_view_preferences.insert(
+            "repo-a".into(),
+            serde_json::json!({"view": "board"}).to_string(),
+        );
         let mut second = base.clone();
         second.settings_expert_mode = true;
+        second.tasks_view_preferences.insert(
+            "repo-b".into(),
+            serde_json::json!({"view": "list"}).to_string(),
+        );
         save_ui_prefs(base.clone(), first).unwrap();
         save_ui_prefs(base, second).unwrap();
         let saved = load_ui_prefs();
         assert!(!saved.sidebar_visible);
         assert!(saved.settings_expert_mode);
+        assert_eq!(
+            saved.tasks_view_preferences["repo-a"],
+            r#"{"view":"board"}"#
+        );
+        assert_eq!(saved.tasks_view_preferences["repo-b"], r#"{"view":"list"}"#);
     }
 
     #[test]
@@ -9539,6 +9852,8 @@ mod tests {
                 // A missing marker means a legacy file that still needs the
                 // one-shot duration migration; a fresh config has nothing to migrate.
                 "session_duration_migrated",
+                // Old files must enroll once; fresh files already express current intent.
+                "beta_channel_migrated",
             ],
         );
     }

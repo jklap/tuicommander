@@ -5,7 +5,11 @@ import { toastsStore } from "../stores/toasts";
  * error card that stays until dismissed. Background and programmatic failures
  * call `setStatusInfo` alone — nobody is waiting on them.
  */
-export function reportActionError(setStatusInfo: (message: string) => void, message: string): void {
+export function reportActionError(
+	setStatusInfo: (message: string) => void,
+	message: string,
+	action?: { label: string; onClick: () => void },
+): void {
 	setStatusInfo(message);
-	toastsStore.add("Action failed", message, "error");
+	toastsStore.add("Action failed", message, "error", false, action);
 }

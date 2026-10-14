@@ -146,7 +146,7 @@ async fn deploy_ephemeral_inner(
     Ok(())
 }
 
-async fn stop_ephemeral_with_binary(
+pub(crate) async fn stop_ephemeral_with_binary(
     profile: &TunnelProfile,
     ssh_binary: &Path,
 ) -> Result<(), ExitReason> {

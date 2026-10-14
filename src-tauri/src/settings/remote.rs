@@ -37,7 +37,10 @@ pub(crate) struct TunnelProfiles {
     pub(crate) profiles: Vec<TunnelProfile>,
 }
 
-/// Called with the id of a removed record so the runtime stops what it holds for it.
+/// Receives the saved record after removal, when disk can no longer supply teardown authority.
+pub(crate) type OnConnectionRemoved = Arc<dyn Fn(&RemoteConnection) + Send + Sync>;
+
+/// Tunnel runtime teardown remains keyed by profile id.
 pub type OnRemoved = Arc<dyn Fn(&str) + Send + Sync>;
 
 /// Records of one list, as the catalogue sees them.
@@ -93,17 +96,17 @@ fn removed_ids<T>(latest: &[T], next: &[T], id_of: impl Fn(&T) -> &str) -> Vec<S
 
 pub struct ConnectionsSettingsStore {
     path: PathBuf,
-    on_removed: OnRemoved,
-    /// Removed ids of each commit, keyed by the revision it produced, until `apply` runs.
-    pending: Mutex<HashMap<String, Vec<String>>>,
+    on_removed: OnConnectionRemoved,
+    /// Removed records of each commit, keyed by the revision it produced, until `apply` runs.
+    pending: Mutex<HashMap<String, Vec<RemoteConnection>>>,
 }
 
 impl ConnectionsSettingsStore {
-    pub fn new(data_dir: PathBuf, on_removed: OnRemoved) -> Self {
+    pub(crate) fn new(data_dir: PathBuf, on_removed: OnConnectionRemoved) -> Self {
         Self::at_path(data_dir.join(CONNECTIONS_FILE), on_removed)
     }
 
-    pub(crate) fn at_path(path: PathBuf, on_removed: OnRemoved) -> Self {
+    pub(crate) fn at_path(path: PathBuf, on_removed: OnConnectionRemoved) -> Self {
         Self {
             path,
             on_removed,
@@ -152,7 +155,11 @@ impl Store for ConnectionsSettingsStore {
                 changed,
             } = settled;
             if changed {
-                let removed = removed_ids(records, &next, |c| c.id.as_str());
+                let removed = records
+                    .iter()
+                    .filter(|record| !next.iter().any(|next| next.id == record.id))
+                    .cloned()
+                    .collect();
                 self.pending.lock().insert(reply.revision.clone(), removed);
                 *records = next;
             }
@@ -167,10 +174,10 @@ impl Store for ConnectionsSettingsStore {
     ) -> impl std::future::Future<Output = Result<bool, Failure>> + Send {
         let removed = self.pending.lock().remove(&reply.revision);
         let mut complete = true;
-        for id in removed.into_iter().flatten() {
-            (self.on_removed)(&id);
+        for connection in removed.into_iter().flatten() {
+            (self.on_removed)(&connection);
             // The vault key is the connection id: a secret left behind names nothing reachable.
-            complete &= delete_connection_credentials(&id).is_ok();
+            complete &= delete_connection_credentials(&connection.id).is_ok();
         }
         std::future::ready(Ok(complete))
     }
@@ -212,6 +219,14 @@ impl Store for TunnelsSettingsStore {
 
     fn read(&self) -> Result<Value, Failure> {
         document("profiles", &self.load()?, TUNNELS_ID)
+    }
+
+    fn validate_proposal(&self, _latest: &Value, value: &Value) -> Result<(), Failure> {
+        let mut next: Vec<TunnelProfile> = serde_json::from_value(value["profiles"].clone())
+            .map_err(|_| Error::new(TUNNELS_ID, "invalid_type"))?;
+        next.iter_mut()
+            .try_for_each(TunnelProfile::validate)
+            .map_err(|_| Error::new(TUNNELS_ID, "out_of_range"))
     }
 
     fn commit(

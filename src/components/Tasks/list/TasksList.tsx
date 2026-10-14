@@ -1,12 +1,10 @@
-import { createEffect, createMemo, createSignal, For, onCleanup, Show, untrack } from "solid-js";
+import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
 import type { WorkItemProvider } from "../../../plugins/workItemProvider";
-import { createTasksQuery } from "../../../stores/tasksQuery";
 import { workItemLinksStore } from "../../../stores/workItemLinks";
 import type {
 	WorkItemFieldSchema,
 	WorkItemFieldValue,
 	WorkItemOption,
-	WorkItemQuery,
 	WorkItemRef,
 } from "../../../types/work-items.gen";
 import { Input } from "../../ui/Input";
@@ -14,22 +12,15 @@ import { Select } from "../../ui/Select";
 import { filterOptions, loadFilterChoices } from "./filterChoices";
 import { TaskRows } from "./TaskRows";
 import s from "./tasksList.module.css";
+import { initialTaskQuery, useTasksListQuery } from "./useTasksListQuery";
 
 export interface TasksListProps {
 	providers: readonly WorkItemProvider[];
 	onOpen: (reference: WorkItemRef) => void;
 	selected?: WorkItemRef | null;
 	visible?: boolean;
+	repoPath?: string;
 }
-const initialQuery = (): WorkItemQuery => ({
-	filters: [],
-	savedFilterId: null,
-	search: "",
-	sort: null,
-	groupBy: null,
-	cursor: null,
-	limit: 100,
-});
 const sourceKey = (provider: WorkItemProvider) => JSON.stringify([provider.providerId, provider.accountId]);
 
 function filterValue(
@@ -68,7 +59,6 @@ function filterValue(
 
 /** Generic host-owned list; provider descriptors and query results supply all item data. */
 export function TasksList(props: TasksListProps) {
-	const model = createTasksQuery();
 	const [selectedSource, setSelectedSource] = createSignal("");
 	const provider = createMemo(
 		() => props.providers.find((entry) => sourceKey(entry) === selectedSource()) ?? props.providers[0],
@@ -77,10 +67,9 @@ export function TasksList(props: TasksListProps) {
 		const current = provider();
 		return current ? sourceKey(current) : "";
 	};
-	const [query, setQuery] = createSignal(initialQuery());
-	const [search, setSearch] = createSignal("");
+	const { model, query, setQuery, search, setSearch, linkedOnly, setLinkedOnly, cancelSearch, updateSearch } =
+		useTasksListQuery(props, provider);
 	const [filtersOpen, setFiltersOpen] = createSignal(false);
-	const [linkedOnly, setLinkedOnly] = createSignal(false);
 	const activeFilters = () =>
 		query().filters.length + (query().sort ? 1 : 0) + (query().groupBy ? 1 : 0) + (linkedOnly() ? 1 : 0);
 	const linkedBranch = (reference: WorkItemRef) => workItemLinksStore.findByItem(reference)?.branch;
@@ -112,50 +101,10 @@ export function TasksList(props: TasksListProps) {
 			if (provider() === current) setChoices(fields);
 		});
 	});
-	let debounce: ReturnType<typeof setTimeout> | undefined;
-	let restoredQuery: WorkItemQuery | undefined;
-	let previousSource: WorkItemProvider | undefined;
-	createEffect(() => {
-		const current = provider();
-		if (current !== previousSource) {
-			previousSource = current;
-			clearTimeout(debounce);
-			setSearch("");
-			setQuery(initialQuery());
-		}
-	});
-	createEffect(() => {
-		const current = provider();
-		const request = query();
-		if (props.visible === false) return;
-		untrack(() => {
-			if (request === restoredQuery) {
-				restoredQuery = undefined;
-				return;
-			}
-			if (current)
-				void model.select(current, request).then(() => {
-					if (current !== provider() || request !== query() || !model.state().error) return;
-					restoredQuery = structuredClone(model.acceptedQuery() ?? initialQuery());
-					setSearch(restoredQuery.search);
-					setQuery(restoredQuery);
-				});
-			else model.clear();
-		});
-	});
-	onCleanup(() => {
-		clearTimeout(debounce);
-		model.dispose();
-	});
-	function updateSearch(value: string) {
-		setSearch(value);
-		clearTimeout(debounce);
-		debounce = setTimeout(() => setQuery((previous) => ({ ...previous, savedFilterId: null, search: value })), 250);
-	}
 	function applyPreset(id: string) {
-		clearTimeout(debounce);
+		cancelSearch();
 		const preset = provider()?.savedFilters.find((entry) => entry.id === id);
-		const next = preset ? structuredClone({ ...preset.query, savedFilterId: id, cursor: null }) : initialQuery();
+		const next = preset ? structuredClone({ ...preset.query, savedFilterId: id, cursor: null }) : initialTaskQuery();
 		setSearch(next.search);
 		setQuery(next);
 	}
@@ -230,7 +179,7 @@ export function TasksList(props: TasksListProps) {
 			<Show when={filtersOpen() ? provider() : undefined}>
 				{(current) => (
 					<div class={s.filters}>
-						<For each={current().fields.filter((field) => field.filterable)}>
+						<For each={current().fields.filter((field) => model.state().local || field.filterable)}>
 							{(field) => (
 								<label>
 									{field.name}
@@ -274,7 +223,7 @@ export function TasksList(props: TasksListProps) {
 								}}
 							>
 								<option value="">Provider default</option>
-								<For each={current().fields.filter((field) => field.sortable)}>
+								<For each={current().fields.filter((field) => model.state().local || field.sortable)}>
 									{(field) => <option value={field.id}>{field.name}</option>}
 								</For>
 							</Select>
@@ -304,7 +253,7 @@ export function TasksList(props: TasksListProps) {
 								}}
 							>
 								<option value="">No grouping</option>
-								<For each={current().fields.filter((field) => field.groupable)}>
+								<For each={current().fields.filter((field) => model.state().local || field.groupable)}>
 									{(field) => <option value={field.id}>{field.name}</option>}
 								</For>
 							</Select>
@@ -322,6 +271,13 @@ export function TasksList(props: TasksListProps) {
 			</Show>
 			<div class={s.status} role="status" aria-live="polite">
 				{model.state().loading ? "Loading tasks…" : itemsLabel()}
+				<Show when={!model.state().loading && provider()}>
+					<span>
+						{model.state().local
+							? "All items loaded · local queries"
+							: "Server queries · provider-supported fields only"}
+					</span>
+				</Show>
 				<Show when={model.state().stale}>
 					<span class={s.stale}>Stale results</span>
 				</Show>

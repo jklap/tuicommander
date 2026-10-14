@@ -3,7 +3,7 @@
 use super::{
     native::native_catalogue,
     registry::Registry,
-    remote::{ConnectionsSettingsStore, OnRemoved, TunnelsSettingsStore},
+    remote::{ConnectionsSettingsStore, OnConnectionRemoved, OnRemoved, TunnelsSettingsStore},
     request::*,
     service::Service,
 };
@@ -24,6 +24,7 @@ struct Fixture {
     dir: tempfile::TempDir,
     removed: Arc<Mutex<Vec<String>>>,
     registry: Registry,
+    state: Arc<crate::AppState>,
 }
 
 fn fixture() -> Fixture {
@@ -32,9 +33,13 @@ fn fixture() -> Fixture {
     let guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
     let removed = Arc::new(Mutex::new(Vec::new()));
     let sink = removed.clone();
-    let on_removed: OnRemoved = Arc::new(move |id| sink.lock().push(id.to_owned()));
+    let on_removed: OnConnectionRemoved =
+        Arc::new(move |record| sink.lock().push(record.id.clone()));
+    let sink = removed.clone();
+    let on_tunnel_removed: OnRemoved = Arc::new(move |id| sink.lock().push(id.to_owned()));
     let catalogue = Arc::new(native_catalogue().unwrap());
-    let mut registry = Registry::default();
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    let mut registry = Registry::with_policy(state.settings_policy.clone());
     registry
         .register(Service::new(
             catalogue.clone(),
@@ -49,7 +54,7 @@ fn fixture() -> Fixture {
             catalogue,
             Arc::new(TunnelsSettingsStore::new(
                 dir.path().to_path_buf(),
-                on_removed,
+                on_tunnel_removed,
             )),
         ))
         .unwrap();
@@ -58,6 +63,7 @@ fn fixture() -> Fixture {
         dir,
         removed,
         registry,
+        state,
     }
 }
 
@@ -90,16 +96,25 @@ async fn patch(
     revision: String,
     operations: Vec<Edit>,
 ) -> Result<CommitReply, Failure> {
-    match f
-        .registry
-        .execute(Request::Patch {
-            target: Target::Machine,
-            store: store.into(),
-            expected_revision: revision,
-            operations,
-        })
-        .await?
+    let request = Request::Patch {
+        target: Target::Machine,
+        store: store.into(),
+        expected_revision: revision,
+        operations,
+    };
+    let mut result = f.registry.execute(request.clone()).await;
+    if let Err(error) = &result
+        && error.code == "confirmation_required"
     {
+        let id = error.proposal_id.clone().unwrap();
+        let caller = super::policy::Caller::native();
+        assert_eq!(
+            super::policy_tests::answer(f.state.clone(), caller.clone(), id.clone(), true).await["confirmed"],
+            json!(true)
+        );
+        result = f.registry.execute_as(request, &caller, Some(&id)).await;
+    }
+    match result? {
         Reply::Commit(c) => Ok(c),
         Reply::Snapshot(_) => panic!("patch returned a snapshot"),
     }
@@ -456,4 +471,54 @@ async fn corrupt_file_is_an_error_not_defaults() {
     std::fs::write(f.dir.path().join("connections.json"), "{not json").unwrap();
     let error = get(&f, "connections", &["/connections"]).await.unwrap_err();
     assert_eq!(error.code, "store_failed");
+}
+
+// Catches: post-persistence teardown loses the removed connection's daemon authority.
+#[tokio::test]
+async fn removed_connection_retains_daemon_authority() {
+    let f = fixture();
+    let mut connection = ssh("ephemeral");
+    connection.deploy = crate::remote_connection::DeployMode::OnConnect;
+    let path = f.dir.path().to_path_buf();
+    let received = Arc::new(Mutex::new(None));
+    let sink = received.clone();
+    let store = Arc::new(ConnectionsSettingsStore::new(
+        path.clone(),
+        Arc::new(move |record| {
+            assert!(
+                crate::remote_connection::RemoteConnectionStore::load(&path)
+                    .unwrap()
+                    .is_empty()
+            );
+            *sink.lock() = Some(record.clone());
+        }),
+    ));
+    let service = Service::new(Arc::new(native_catalogue().unwrap()), store);
+    seed_connections(&f, std::slice::from_ref(&connection));
+    let snapshot = service
+        .get(
+            Target::Machine,
+            "connections".into(),
+            vec![format!("/connections/{}/name", connection.id)],
+        )
+        .await
+        .unwrap();
+    service
+        .patch(
+            Target::Machine,
+            "connections".into(),
+            snapshot.revision,
+            vec![Edit::Remove {
+                path: "/connections".into(),
+                id: connection.id.clone(),
+            }],
+        )
+        .await
+        .unwrap();
+    assert_eq!(connections_on_disk(&f), json!([]));
+    assert_eq!(
+        serde_json::to_value(received.lock().as_ref()).unwrap(),
+        serde_json::to_value(Some(&connection)).unwrap(),
+        "teardown must receive the removed record even after persistence"
+    );
 }

@@ -46,6 +46,28 @@ describe("settingsStore", () => {
 		return mockInvoke.mock.calls.filter((c: unknown[]) => c[0] === "save_config");
 	}
 
+	// Catches: saving the tray preference overwrites another background setting.
+	it("persists the tray preference while retaining background fields", async () => {
+		mockInvoke.mockResolvedValueOnce({ background: { tray_icon: "always", hide_dock_icon: false } });
+		await store.hydrate();
+		expect(store.state.trayIcon).toBe("always");
+		mockInvoke.mockImplementation(async (command) =>
+			command === "load_config"
+				? { background: { tray_icon: "always", hide_dock_icon: false, webview_unload_minutes: 25 } }
+				: undefined,
+		);
+		store.setTrayIcon("never");
+		await vi.runAllTimersAsync();
+		expect(mockInvoke).toHaveBeenCalledWith(
+			"save_config",
+			expect.objectContaining({
+				config: expect.objectContaining({
+					background: { tray_icon: "never", hide_dock_icon: false, webview_unload_minutes: 25 },
+				}),
+			}),
+		);
+	});
+
 	// Catches: hydration silently turns a persisted beta channel back into stable.
 	it.each(["beta", "stable", "nightly"])("keeps the saved %s update channel", async (channel) => {
 		mockInvoke.mockResolvedValueOnce({ update_channel: channel });
@@ -223,6 +245,24 @@ describe("settingsStore", () => {
 				await vi.runAllTimersAsync();
 				expect(saveConfigCalls()).toHaveLength(0);
 			});
+		});
+	});
+
+	// Catches: the UI dropping the close choice when saving or hydrating config.
+	it("persists and hydrates the main-window close preference", async () => {
+		await testInScopeAsync(async () => {
+			await hydrateStore();
+			expect(store.state.closeBehavior).toBe("ask");
+			store.setCloseBehavior("background");
+			vi.advanceTimersByTime(600);
+			await vi.runAllTimersAsync();
+			expect(mockInvoke).toHaveBeenCalledWith("save_config", {
+				base: expect.anything(),
+				config: expect.objectContaining({ close_behavior: "background" }),
+			});
+			mockInvoke.mockResolvedValueOnce({ close_behavior: "quit" });
+			await store.hydrate();
+			expect(store.state.closeBehavior).toBe("quit");
 		});
 	});
 
@@ -799,6 +839,25 @@ describe("settingsStore", () => {
 				await store.hydrate();
 				expect(store.state.customLaunchers).toEqual([launcher]);
 			});
+		});
+	});
+	// Catches: saving General settings drops a future background key or ignores the Dock preference.
+	it("hydrates and persists the Dock preference while preserving other background settings", async () => {
+		mockInvoke.mockResolvedValueOnce({ background: { hide_dock_icon: false } });
+		await store.hydrate();
+		expect(store.state.hideDockIcon).toBe(false);
+		mockInvoke.mockImplementation((command: string) =>
+			Promise.resolve(
+				command === "load_config" ? { background: { hide_dock_icon: false, webview_unload_minutes: 25 } } : undefined,
+			),
+		);
+		store.setHideDockIcon(true);
+		await vi.runAllTimersAsync();
+		expect(mockInvoke).toHaveBeenCalledWith("save_config", {
+			base: { background: { hide_dock_icon: false, webview_unload_minutes: 25 } },
+			config: expect.objectContaining({
+				background: { hide_dock_icon: true, tray_icon: "background_only", webview_unload_minutes: 25 },
+			}),
 		});
 	});
 });

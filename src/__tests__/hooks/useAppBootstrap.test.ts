@@ -26,9 +26,6 @@ const {
 }));
 
 vi.mock("@tauri-apps/api/app", () => ({ getVersion: mockGetVersion }));
-vi.mock("@tauri-apps/api/window", () => ({
-	getCurrentWindow: () => ({ onCloseRequested: vi.fn().mockResolvedValue(undefined) }),
-}));
 vi.mock("../../deep-link-handler", () => ({ initDeepLinkHandler: mockDeepLink }));
 vi.mock("../../invoke", () => ({ invoke: mockInvoke }));
 vi.mock("../../platform", () => ({ applyPlatformClass: vi.fn(() => "macos") }));
@@ -57,7 +54,6 @@ import { type AppBootstrapOptions, runAppBootstrap } from "../../hooks/useAppBoo
 function makeOptions(overrides: Partial<AppBootstrapOptions> = {}): AppBootstrapOptions {
 	return {
 		pty: { listActiveSessions: vi.fn().mockResolvedValue([]), close: vi.fn().mockResolvedValue(undefined) },
-		setQuitDialogVisible: vi.fn(),
 		setStatusInfo: vi.fn(),
 		handleBranchSelect: vi.fn().mockResolvedValue(undefined),
 		refreshAllBranchStats: vi.fn(),

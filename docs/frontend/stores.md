@@ -230,6 +230,13 @@ checkout changes under the user's feet — resolve it late through
 
 Application settings: font, shell, IDE, theme, confirmations.
 
+Each hydrated window tracks its own normalized settings baseline. Debounced saves
+apply only preferences changed since that window's last successful save to a fresh
+config load, then submit the existing `base`/`config` pair through `updateAppConfig`.
+Unchanged preferences stay as loaded, including fields another settings window
+edited. Failed saves retain pending edits; edits made during a save remain pending
+for the next save. Hydration itself does not persist normalized defaults.
+
 ### State Fields
 
 | Field | Type | Default | Description |
@@ -438,6 +445,10 @@ re-render cannot send a duplicate. Settlement closes the matching notification.
 
 `acpTranscript` also projects ACP session titles and usage by session ID. The
 AI Chat header, conversation picker and usage footer read that projection.
+Provider-retry patches retain the provider text and an arrival-based presentation
+deadline. `createRetryCountdown` owns one timer for the selected conversation;
+recovery, final failure, settlement or panel disposal stops it. Missing or invalid
+delays keep the provider text without starting a timer.
 `aiChatTabs` is the single per-root store for open chat session IDs and the
 selected tab. It mirrors its state to localStorage so a detached WebView can
 restore the same tabs; `useAcpChat` replays their ACP histories after connecting.
@@ -761,3 +772,8 @@ MCP toast notices show a transient card only while their origin terminal tab is 
 ### Transcript view preference
 
 `transcriptPreferences` stores the shared terminal Chat and AI Chat new-text indicator toggle in client localStorage (`tui-commander-new-text-indicator`, default on). Desktop Appearance → Chat and mobile Settings edit the same client preference. It does not write backend configuration. The Transcript compares entry identities and text lengths to detect arrivals while detached, clears unread state when content is replaced, and follows in-place streamed text while attached.
+
+Background entry uses `repositoriesStore.snapshotTerminals()` followed by
+`flushSave()` to await both the in-flight save and the newest queued snapshot.
+Only then does the main WebView acknowledge `snapshot-now`. A persistence error
+is logged and leaves the acknowledgement pending for the backend timeout.

@@ -1408,6 +1408,9 @@ pub(crate) async fn spawn_agent(
 
     let session_id = Uuid::new_v4().to_string();
 
+    let attachment_dir =
+        crate::attachments::prepare_session_directory(&state.data_dir, "pty", &session_id)?;
+
     let spawn_binary_path = binary_path.clone();
     let spawn_agent_config = agent_config.clone();
     let spawn_pty_config = pty_config.clone();
@@ -1456,6 +1459,7 @@ pub(crate) async fn spawn_agent(
                 &spawn_binary_path,
                 &launch_args,
                 &crate::config::config_dir(),
+                &attachment_dir,
             );
             crate::launch_instructions::apply_env(
                 &mut cmd,

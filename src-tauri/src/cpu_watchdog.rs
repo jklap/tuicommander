@@ -36,7 +36,7 @@ const DIAGNOSTIC_POLL_INTERVAL: Duration = Duration::from_secs(10);
 /// If the wall-clock gap between two consecutive watchdog polls exceeds this,
 /// the machine was likely asleep (lid closed). Must stay well above
 /// `DIAGNOSTIC_POLL_INTERVAL` (10s) so a normal slow tick never reads as sleep.
-const SLEEP_WAKE_GAP: Duration = Duration::from_secs(30);
+pub(crate) const SLEEP_WAKE_GAP: Duration = Duration::from_secs(30);
 const CPU_THRESHOLD_PCT: f64 = 80.0;
 const CONSECUTIVE_THRESHOLD: u32 = 2;
 const STARTUP_DELAY: Duration = Duration::from_secs(30);
@@ -479,7 +479,9 @@ fn run(state: Arc<AppState>) {
             continue;
         }
 
-        report_frontend_liveness(&state);
+        if !state.webview_unloaded.load(Ordering::Acquire) {
+            report_frontend_liveness(&state);
+        }
 
         let current = match CpuSample::now() {
             Some(s) => s,

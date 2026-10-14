@@ -68,8 +68,12 @@ function tuicExtract() {
   // resolved on the element. A theme declares hundreds; only these matter here.
   const tokens = {};
   const referenced = (style) => {
-    for (let index = 0; index < style.length; index += 1) {
-      for (const [, name] of style.getPropertyValue(style[index]).matchAll(/var\(\s*(--[\w-]+)/g)) {
+    const values = Array.from({ length: style.length }, (_, index) => style.getPropertyValue(style[index]));
+    // CSSOM exposes shorthand var() declarations as empty longhands. The
+    // serialized declaration retains their references; scan it only once.
+    if (values.some((value) => !value)) values.push(style.cssText);
+    for (const value of values) {
+      for (const [, name] of value.matchAll(/var\(\s*(--[\w-]+)/g)) {
         if (Object.keys(tokens).length >= 32) return;
         const resolved = computed?.getPropertyValue(name).trim() ?? "";
         if (resolved && !(name in tokens)) tokens[name] = resolved.slice(0, 128);

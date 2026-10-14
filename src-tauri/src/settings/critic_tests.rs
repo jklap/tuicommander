@@ -18,23 +18,35 @@ async fn committed_24h_session_duration_reads_back_unchanged() {
     let state = Arc::new(crate::state::tests_support::make_test_app_state());
     let service = Service::new(
         Arc::new(native_catalogue().unwrap()),
-        Arc::new(AppSettingsStore::new(state)),
-    );
+        Arc::new(AppSettingsStore::new(state.clone())),
+    )
+    .with_policy(state.settings_policy.clone());
     let get = || service.get(Target::Machine, "app".into(), vec![DURATION.into()]);
     let before = get().await.unwrap();
-    let result = service
-        .patch(
-            Target::Machine,
-            "app".into(),
-            before.revision,
-            vec![Edit::Set {
-                path: DURATION.into(),
-                value: json!(86_400),
-            }],
-        )
-        .await;
+    let request = Request::Patch {
+        target: Target::Machine,
+        store: "app".into(),
+        expected_revision: before.revision,
+        operations: vec![Edit::Set {
+            path: DURATION.into(),
+            value: json!(86_400),
+        }],
+    };
+    let id = service
+        .execute(request.clone())
+        .await
+        .unwrap_err()
+        .proposal_id
+        .unwrap();
+    let caller = super::policy::Caller::native();
+    assert_eq!(
+        super::policy_tests::answer(state, caller.clone(), id.clone(), true).await["confirmed"],
+        json!(true)
+    );
+    let result = service.execute_as(request, &caller, Some(&id)).await;
     let revision = match result {
-        Ok(reply) => reply.revision,
+        Ok(Reply::Commit(reply)) => reply.revision,
+        Ok(Reply::Snapshot(_)) => panic!("patch returned a snapshot"),
         Err(error) if error.persisted => error.revision.unwrap(),
         Err(error) => panic!("explicit 24h lifetime must be accepted: {error}"),
     };

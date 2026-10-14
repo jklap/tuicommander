@@ -250,7 +250,7 @@ export interface TranscriptProps {
 	/** ego's provider-retry line ("… retrying in 2s (attempt 2/6)"), shown instead of the pulse. */
 	retry?: () => string | null;
 	emptyMessage: string;
-	onOpenFile?: (href: string) => void | Promise<boolean | void>;
+	onOpenFile?: (href: string) => void | Promise<boolean | undefined> | Promise<void>;
 	onClear?: () => void;
 	canForkAtMessage?: () => boolean;
 	onFork?: (messageId: string) => void;
@@ -365,9 +365,9 @@ const UserText: Component<{ text: string; onOpenFile?: (href: string) => void }>
 	);
 };
 
-/** Reuse the terminal's answer marker and tint, after Markdown has rendered.
+/** Reuse the terminal's answer marker and left rule, after Markdown has rendered.
  * An answer spans the blocks the grid highlights (`answerBlockRanges`); the 💬 glyph is
- * dropped from its first paragraph, which keeps `data-tuic-answer-start` so a later pass
+ * dropped from each marked paragraph, which keeps `data-tuic-answer-start` so a later pass
  * still finds it. Code examples and quotations keep their literal marker; stored/copy text stays intact. */
 function highlightAnswers(container: HTMLDivElement | undefined): void {
 	const elements = Array.from(container?.querySelectorAll<HTMLElement>(":scope > div > *") ?? []);
@@ -380,14 +380,21 @@ function highlightAnswers(container: HTMLDivElement | undefined): void {
 			marker: paragraph && (element.hasAttribute("data-tuic-answer-start") || ANSWER_MARKER_RE.test(text)),
 		};
 	});
-	for (const element of elements) element.removeAttribute("data-tuic-answer");
+	for (const element of elements) {
+		element.removeAttribute("data-tuic-answer");
+		element.removeAttribute("data-tuic-answer-region-start");
+	}
 	for (const [first, last] of answerBlockRanges(blocks)) {
+		elements[first].setAttribute("data-tuic-answer-region-start", "");
 		for (let index = first; index <= last; index++)
 			elements[index].setAttribute("data-tuic-answer", index === last ? "end" : "");
-		const head = elements[first];
+	}
+	for (const [index, block] of blocks.entries()) {
+		if (!block.marker) continue;
+		const head = elements[index];
 		if (head.hasAttribute("data-tuic-answer-start")) continue;
 		head.setAttribute("data-tuic-answer-start", "");
-		let remaining = /^[\s●⏺]*💬[\t ]*/.exec(head.textContent ?? "")?.[0].length ?? 0;
+		let remaining = /^[\s●⏺•]*💬[\t ]*/.exec(head.textContent ?? "")?.[0].length ?? 0;
 		const walker = document.createTreeWalker(head, NodeFilter.SHOW_TEXT);
 		while (remaining > 0 && walker.nextNode()) {
 			const node = walker.currentNode;

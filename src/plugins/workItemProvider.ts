@@ -22,6 +22,8 @@ export interface WorkItemProvider {
 	readonly fields: readonly WorkItemFieldSchema[];
 	readonly savedFilters: readonly WorkItemSavedFilter[];
 	readonly boards: readonly WorkItemBoard[];
+	/** Optional read-only discovery when the Board view opens. */
+	listBoards?(signal?: AbortSignal): Promise<WorkItemBoard[]>;
 	/** Optional account-scoped user search for create fields; results contain provider user IDs. */
 	lookupUsers?(fieldId: string, query: string, signal?: AbortSignal): Promise<WorkItemOption[]>;
 	/** Optional: true when a user field holds exactly one user, so a new pick replaces the old one. */

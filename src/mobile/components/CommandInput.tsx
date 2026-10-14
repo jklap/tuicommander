@@ -1,16 +1,18 @@
 import { createEffect, createMemo, createSignal, onCleanup, onMount, Show } from "solid-js";
-import { t } from "../../i18n";
 import { uploadAttachment } from "../../services/uploadAttachment";
 import { appLogger } from "../../stores/appLogger";
 import { toastsStore } from "../../stores/toasts";
 import { HttpRpcError, rpc } from "../../transport";
 import { sendPtyKey, waitForAgentEnterGap } from "../../utils/sendCommand";
 import { useBrowserDictation } from "../useBrowserDictation";
+import { useKeyboardCorrection } from "../useKeyboardCorrection";
 import type { ChoicePrompt, SlashMenuItem } from "../useSessions";
 import { clearDictationPartial, loadDictationPartial, saveDictationPartial } from "../utils/dictationPartial";
 import { retryWrite } from "../utils/retryWrite";
 import { ChoicePromptOverlay } from "./ChoicePromptOverlay";
 import styles from "./CommandInput.module.css";
+import { MobileComposerMenu } from "./MobileComposerMenu";
+import { MobileDictationButton } from "./MobileDictationButton";
 import { SlashMenuOverlay } from "./SlashMenuOverlay";
 import { type ComposerInputKey, computeInputDelta, isPostSendGuardActive, isSupersetEcho } from "./syncGuards";
 
@@ -41,6 +43,7 @@ interface CommandInputProps {
 }
 
 export function CommandInput(props: CommandInputProps) {
+	const keyboardCorrection = useKeyboardCorrection();
 	// Offer a restored dictated draft without writing on mount. The PTY may have
 	// changed while this client was away; reconcile it on the first explicit edit/send.
 	const restoredPartial = loadDictationPartial(props.sessionId);
@@ -123,7 +126,6 @@ export function CommandInput(props: CommandInputProps) {
 		setChoiceSending(false);
 	});
 	let textareaEl: HTMLTextAreaElement | undefined;
-	let fileInput: HTMLInputElement | undefined;
 	// The local draft baseline, including explicitly requested PTY completions
 	// and history replacements. Every edit computes its delta from this text.
 	let syncedText: string | null = restoredPartial ? null : "";
@@ -187,6 +189,8 @@ export function CommandInput(props: CommandInputProps) {
 	function autoResize() {
 		if (!textareaEl) return;
 		textareaEl.style.height = "auto";
+		// Native field sizing follows wrapping without pinning the first paint's height.
+		if (globalThis.CSS?.supports?.("field-sizing", "content")) return;
 		textareaEl.style.height = Math.min(textareaEl.scrollHeight, 120) + "px";
 	}
 
@@ -245,6 +249,7 @@ export function CommandInput(props: CommandInputProps) {
 		setUploading(file.name);
 		try {
 			const receipt = await uploadAttachment(file, { kind: "pty", id: props.sessionId });
+			if (receipt.notice) toastsStore.add("Attachment access", receipt.notice, "warn", true);
 			const current = textareaEl?.value ?? value();
 			const next = `${current}${current && !/\s$/.test(current) ? " " : ""}@${receipt.path}`;
 			setValue(next);
@@ -259,7 +264,6 @@ export function CommandInput(props: CommandInputProps) {
 			toastsStore.add("Attachment failed", message, "error", true);
 		} finally {
 			setUploading(null);
-			if (fileInput) fileInput.value = "";
 		}
 	}
 
@@ -483,36 +487,18 @@ export function CommandInput(props: CommandInputProps) {
 					onClose={closeSlashMenu}
 				/>
 			</Show>
-			<input
-				ref={fileInput}
-				type="file"
-				accept="image/*,application/pdf,text/*"
-				aria-label="Choose attachment"
-				hidden
-				onChange={(event) => {
-					const file = event.currentTarget.files?.[0];
-					if (file) void attachFile(file);
-				}}
+			<MobileComposerMenu
+				disabled={submitting() || props.sessionExists === false}
+				uploading={!!uploading()}
+				onAttach={atomicReply() ? undefined : (file) => void attachFile(file)}
+				onQueue={() => void queueDraft()}
+				queueDisabled={!value().trim()}
+				queueOnly={queueMenu()}
+				onClose={() => setQueueMenu(false)}
+				onCommands={!atomicReply() && (props.agentType || slashItems().length > 0) ? () => insertText("/") : undefined}
 			/>
-			<button
-				class={styles.attach}
-				type="button"
-				aria-label="Attach file"
-				disabled={submitting() || !!uploading() || props.sessionExists === false || atomicReply()}
-				onClick={() => fileInput?.click()}
-			>
-				<svg
-					width="18"
-					height="18"
-					viewBox="0 0 24 24"
-					fill="none"
-					stroke="currentColor"
-					stroke-width="2"
-					aria-hidden="true"
-				>
-					<path d="M20 11.5l-8.6 8.6a5 5 0 0 1-7.1-7.1L13 4.3a3.5 3.5 0 0 1 5 5l-8.7 8.7a2 2 0 0 1-2.8-2.8l8-8" />
-				</svg>
-			</button>
+			{/* DEFERRED (2026-10-14) — aiChatDraft parking is an ACP singleton, not an independent PTY draft store. */}
+
 			<div class={styles.composer}>
 				<textarea
 					ref={textareaEl}
@@ -521,51 +507,18 @@ export function CommandInput(props: CommandInputProps) {
 					onInput={handleInput}
 					onKeyDown={handleKeyDown}
 					autocomplete="off"
-					autocorrect="off"
-					spellcheck={false}
-					autocapitalize="off"
+					autocorrect={keyboardCorrection.enabled() ? "on" : "off"}
+					spellcheck={keyboardCorrection.enabled()}
+					autocapitalize={keyboardCorrection.enabled() ? "sentences" : "off"}
 					inputmode="text"
 					rows={1}
 					disabled={props.sessionExists === false || submitting()}
 				/>
-				<Show when={browserDictation.available}>
-					<button
-						class={styles.dictate}
-						type="button"
-						aria-label={
-							browserDictation.recording()
-								? t("mobile.dictation.stop", "Stop dictation")
-								: t("mobile.dictation.start", "Dictate into draft")
-						}
-						aria-pressed={browserDictation.recording()}
-						disabled={submitting() || !!props.serverVoiceRecording || props.sessionExists === false}
-						onPointerDown={(event) => event.preventDefault()}
-						onClick={browserDictation.toggle}
-					>
-						<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-							<path d="M12 15a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v7a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.93V22h2v-3.07A7 7 0 0 0 19 12Z" />
-						</svg>
-					</button>
-				</Show>
+				<MobileDictationButton
+					dictation={browserDictation}
+					disabled={submitting() || !!props.serverVoiceRecording || props.sessionExists === false}
+				/>
 			</div>
-			<Show when={queueMenu()}>
-				<div
-					class={styles.queueMenu}
-					role="menu"
-					onKeyDown={(event) => {
-						if (event.key === "Escape") setQueueMenu(false);
-					}}
-				>
-					<button
-						type="button"
-						role="menuitem"
-						disabled={submitting() || !!uploading() || !value().trim()}
-						onClick={queueDraft}
-					>
-						Queue
-					</button>
-				</div>
-			</Show>
 			<button
 				class={styles.send}
 				type="button"

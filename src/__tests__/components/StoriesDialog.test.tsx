@@ -330,7 +330,7 @@ describe("StoriesDialog", () => {
 	});
 
 	it("shows cancelled dependencies and waives only the direct cancelled edge", async () => {
-		const cancelled = { ...story, id: "s2", title: "Cancelled API", status: "wontfix", abandoned: true };
+		const cancelled = { ...story, id: "s2", title: "Cancelled API", status: "wont_fix", abandoned: true };
 		const intermediate = {
 			...story,
 			id: "s3",

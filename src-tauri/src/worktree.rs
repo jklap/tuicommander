@@ -151,7 +151,55 @@ pub(crate) struct WorktreeLiveSession {
     pub name: String,
 }
 
-/// Sessions of the registry whose cwd is inside `checkout`. The one source of
+/// Durable tabs still own their checkout even though their PTY has ended.
+fn suspended_users_in(checkout: &Path) -> Result<Vec<WorktreeLiveSession>, String> {
+    let root = checkout
+        .canonicalize()
+        .unwrap_or_else(|_| checkout.to_path_buf());
+    Ok(crate::suspended_sessions::list()?
+        .into_values()
+        .filter(|record| {
+            std::iter::once(Path::new(&record.cwd))
+                .chain(
+                    record
+                        .worktree
+                        .as_ref()
+                        .map(|worktree| worktree.path.as_path()),
+                )
+                .any(|path| {
+                    path.canonicalize()
+                        .unwrap_or_else(|_| path.to_path_buf())
+                        .starts_with(&root)
+                })
+        })
+        .map(|record| WorktreeLiveSession {
+            session_id: record.tuic_session.clone(),
+            name: format!(
+                "Suspended tab: {}",
+                record.name.as_deref().unwrap_or(&record.tuic_session)
+            ),
+        })
+        .collect())
+}
+
+/// Suspended tabs cannot be terminated by a live-session confirmation.
+fn guard_suspended_users(checkout: &Path) -> Result<(), String> {
+    let users = suspended_users_in(checkout)?;
+    if users.is_empty() {
+        Ok(())
+    } else {
+        Err(live_session_reason(&users))
+    }
+}
+
+pub(crate) fn guard_suspended_workspace(repo: &Path, workspace_id: &str) -> Result<(), String> {
+    if let Ok(workspace) = resolve_any_workspace(repo, workspace_id) {
+        guard_suspended_users(Path::new(&workspace.path))?;
+    }
+    Ok(())
+}
+
+/// Live sessions and durable suspended tabs inside `checkout`. The one source of
 /// "who is working in this checkout" for every removal guard.
 pub(crate) fn live_sessions_in(state: &AppState, checkout: &Path) -> Vec<WorktreeLiveSession> {
     let root = checkout
@@ -173,6 +221,17 @@ pub(crate) fn live_sessions_in(state: &AppState, checkout: &Path) -> Vec<Worktre
                     .display_name
                     .clone()
                     .unwrap_or_else(|| entry.key().clone()),
+            });
+        }
+    }
+    match suspended_users_in(checkout) {
+        Ok(users) => live_sessions.extend(users),
+        Err(error) => {
+            // Unknown durable ownership must veto allocation and automatic cleanup.
+            tracing::error!(%error, "Cannot inspect suspended checkout users");
+            live_sessions.push(WorktreeLiveSession {
+                session_id: "suspended-storage-unavailable".into(),
+                name: format!("Suspended tabs unavailable: {error}"),
             });
         }
     }
@@ -274,8 +333,9 @@ fn retain_finished_checkout(
     let Ok(workspace) = resolve_any_workspace(repo, workspace_id) else {
         return Ok(None);
     };
-    if !live_sessions_in(state, Path::new(&workspace.path)).is_empty() {
-        return Err("Cannot recycle a checkout with a live session".into());
+    let users = live_sessions_in(state, Path::new(&workspace.path));
+    if !users.is_empty() {
+        return Err(live_session_reason(&users));
     }
     if operation_head_branch(&workspace.path).is_some() {
         return Err("Cannot recycle a checkout during a Git operation".into());
@@ -302,6 +362,7 @@ pub(crate) fn remove_worktree_by_workspace_id_with_confirmation(
     override_lock: bool,
     expected_fingerprint: Option<&str>,
 ) -> Result<RemoveWorktreeOutcome, String> {
+    guard_suspended_workspace(Path::new(repo_path), workspace_id)?;
     if expected_fingerprint.is_none()
         && let Some(outcome) = retain_finished_checkout(
             state,
@@ -342,6 +403,7 @@ pub(crate) fn remove_worktree_with_presence_confirmation(
     expected_fingerprint: Option<&str>,
     confirm_missing_checkout: bool,
 ) -> Result<RemoveWorktreeOutcome, String> {
+    guard_suspended_workspace(Path::new(repo_path), workspace_id)?;
     if expected_fingerprint.is_none()
         && !confirm_missing_checkout
         && let Some(outcome) = retain_finished_checkout(
@@ -677,6 +739,7 @@ pub(crate) async fn delete_local_branch(
         let branch_name = branch_name.clone();
         let workspace_id = workspace_id.clone();
         tokio::task::spawn_blocking(move || {
+            guard_suspended_workspace(Path::new(&repo_path), &workspace_id)?;
             delete_local_branch_impl(&repo_path, &branch_name, &workspace_id, keep_worktree)
         })
         .await
@@ -752,23 +815,29 @@ pub(crate) fn remove_orphan_checkout(
 /// Remove an orphan worktree by its filesystem path (detached HEAD — no branch to look up).
 ///
 /// Safety: `worktree_path` is validated against the repo's actual worktree list to prevent
-/// arbitrary directory deletion via a crafted path.
+/// arbitrary directory deletion via a crafted path. Safety checks, git subprocesses,
+/// and recursive deletion run on the blocking pool, not the desktop IPC thread.
 #[cfg(feature = "desktop")]
 #[tauri::command]
-pub(crate) fn remove_orphan_worktree(
+pub(crate) async fn remove_orphan_worktree(
     state: State<'_, Arc<AppState>>,
     repo_path: String,
     worktree_path: String,
     safe_only: Option<bool>,
     confirmed_sessions: Option<Vec<String>>,
 ) -> Result<(), String> {
-    remove_orphan_checkout(
-        &state,
-        &repo_path,
-        &worktree_path,
-        safe_only.unwrap_or(false),
-        &confirmed_sessions.unwrap_or_default(),
-    )
+    let state = state.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        remove_orphan_checkout(
+            &state,
+            &repo_path,
+            &worktree_path,
+            safe_only.unwrap_or(false),
+            &confirmed_sessions.unwrap_or_default(),
+        )
+    })
+    .await
+    .map_err(|e| format!("Task panic: {e}"))?
 }
 
 /// Result of switching the main worktree to a different branch.
@@ -976,6 +1045,7 @@ pub(crate) fn finalize_merged_worktree_impl_with_confirmation(
 ) -> Result<MergeArchiveResult, String> {
     let script = resolve_archive_script(&repo_path);
     let base_repo = std::path::PathBuf::from(&repo_path);
+    guard_suspended_workspace(&base_repo, &workspace_id)?;
 
     if let Some(expected) = expected_fingerprint {
         let workspace = resolve_any_workspace(&base_repo, &workspace_id)?;
@@ -1147,6 +1217,9 @@ pub(crate) fn merge_and_archive_worktree_impl_with_confirmation(
 ) -> Result<MergeArchiveResult, String> {
     let script = resolve_archive_script(&repo_path);
     let base_repo = PathBuf::from(&repo_path);
+    if after_merge == "archive" || after_merge == "delete" {
+        guard_suspended_workspace(&base_repo, &workspace_id)?;
+    }
     if let Some(expected) = expected_fingerprint {
         let workspace = resolve_any_workspace(&base_repo, &workspace_id)?;
         if dirty_fingerprint_at(Path::new(&workspace.path))?.0 != expected {
@@ -1408,6 +1481,7 @@ pub(crate) fn orphan_removal_guard(
     safe_only: bool,
     confirmed_sessions: &[String],
 ) -> Result<(), String> {
+    guard_suspended_users(Path::new(worktree_path))?;
     if safe_only {
         return orphan_cleanup_safety_with_sessions(state, repo_path, worktree_path);
     }
@@ -1844,6 +1918,8 @@ mod tests {
     /// Execute froze the WebView for the length of every step. Their HTTP twins
     /// in `mcp_http/worktree_routes.rs` were already on the blocking pool, which
     /// is exactly the transport drift `docs/backend/command-threading.md` names.
+    /// Orphan removal has the same boundary: its safety checks and recursive
+    /// deletion must not block heartbeats while the desktop handles cleanup.
     #[test]
     fn post_merge_cleanup_commands_never_run_on_the_ipc_thread() {
         let source = include_str!("worktree.rs");
@@ -1851,6 +1927,7 @@ mod tests {
             "switch_branch",
             "delete_local_branch",
             "finalize_merged_worktree",
+            "remove_orphan_worktree",
         ] {
             let signature = format!("pub(crate) async fn {command}(");
             let at = source.find(&signature).unwrap_or_else(|| {
@@ -1917,6 +1994,190 @@ mod tests {
         let guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
         (dir, guard)
     }
+
+    // Catches: durable suspended cwd/placement bypassing destructive checkout consumers.
+    fn suspended_checkout_consumer(consumer: &str) {
+        let (_cfg, _guard) = isolated_config();
+        let repo = setup_test_repo();
+        let checkout = worktree_with(repo.path(), "suspended-work", true);
+        fs::create_dir(checkout.join("nested")).unwrap();
+        git_cmd(repo.path())
+            .args(["merge", "suspended-work", "--no-edit"])
+            .run()
+            .unwrap();
+        let record = crate::suspended_sessions::SuspendedSession {
+            tuic_session: "sleeping-tab".into(),
+            session_id: "old-pty".into(),
+            cwd: checkout.join("nested").to_string_lossy().into_owned(),
+            name: Some("Sleeping agent".into()),
+            ..Default::default()
+        };
+        crate::config::ConfigFile::new("suspended-sessions.json")
+            .save(&std::collections::BTreeMap::from([(
+                "sleeping-tab".to_string(),
+                record,
+            )]))
+            .unwrap();
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let repo_path = repo.path().to_string_lossy().into_owned();
+        match consumer {
+            "preview" => {
+                let preview = inspect_worktree_removal(&state, repo.path(), "suspended-work");
+                assert!(
+                    preview
+                        .live_sessions
+                        .iter()
+                        .any(|user| user.name.contains("Sleeping agent"))
+                );
+            }
+            "finish" | "forced-remove" => {
+                let result = remove_worktree_by_workspace_id_with_confirmation(
+                    &state,
+                    &repo_path,
+                    "suspended-work",
+                    true,
+                    None,
+                    consumer == "forced-remove",
+                    false,
+                    None,
+                );
+                assert!(
+                    result
+                        .err()
+                        .expect("suspended user must veto cleanup")
+                        .contains("Sleeping agent")
+                );
+            }
+            "allocate" => {
+                tuic_git::worktree::finish_worktree(repo.path(), &checkout).unwrap();
+                let config = WorktreeConfig {
+                    task_name: "replacement".into(),
+                    base_repo: repo_path.clone(),
+                    branch: Some("replacement".into()),
+                    create_branch: true,
+                };
+                let (_, renamed) =
+                    allocate_workspace(&state, checkout.parent().unwrap(), &config, None).unwrap();
+                assert!(renamed.is_none(), "suspended checkout was recycled");
+            }
+            "finalize" => {
+                let result = finalize_merged_worktree_impl(
+                    &state,
+                    repo_path,
+                    "suspended-work".into(),
+                    "archive".into(),
+                    true,
+                );
+                assert!(
+                    result
+                        .err()
+                        .expect("suspended user must veto cleanup")
+                        .contains("Sleeping agent")
+                );
+            }
+            "merge" => {
+                let result = merge_and_archive_worktree_impl(
+                    &state,
+                    repo_path,
+                    "suspended-work".into(),
+                    "suspended-work".into(),
+                    base_branch_of(repo.path()),
+                    "archive".into(),
+                    true,
+                );
+                assert!(
+                    result
+                        .err()
+                        .expect("suspended user must veto cleanup")
+                        .contains("Sleeping agent")
+                );
+            }
+            "orphan" => {
+                let error = orphan_removal_guard(
+                    &state,
+                    &repo_path,
+                    &checkout.to_string_lossy(),
+                    false,
+                    &["sleeping-tab".into()],
+                )
+                .unwrap_err();
+                assert!(error.contains("Sleeping agent"));
+            }
+            _ => unreachable!(),
+        }
+        assert!(
+            checkout.exists(),
+            "{consumer} removed the suspended checkout"
+        );
+        assert!(
+            crate::suspended_sessions::list()
+                .unwrap()
+                .contains_key("sleeping-tab")
+        );
+    }
+
+    // Catches: placement-only suspended ownership missed when the shell cwd is elsewhere,
+    // prefix siblings overmatched, or unreadable durable state treated as no users.
+    #[test]
+    fn suspended_checkout_placement_boundaries_and_unreadable_state() {
+        let (cfg, _guard) = isolated_config();
+        let repo = setup_test_repo();
+        let checkout = worktree_with(repo.path(), "placement", false);
+        let sibling = worktree_with(repo.path(), "placement-sibling", false);
+        let record = crate::suspended_sessions::SuspendedSession {
+            tuic_session: "placed-tab".into(),
+            cwd: repo.path().to_string_lossy().into_owned(),
+            worktree: Some(WorktreeInfo {
+                name: "placement".into(),
+                path: checkout.clone(),
+                branch: Some("placement".into()),
+                base_repo: repo.path().into(),
+            }),
+            ..Default::default()
+        };
+        crate::config::ConfigFile::new("suspended-sessions.json")
+            .save(&std::collections::BTreeMap::from([(
+                "placed-tab".to_string(),
+                record,
+            )]))
+            .unwrap();
+        let state = crate::state::tests_support::make_test_app_state();
+        assert_eq!(
+            live_sessions_in(&state, &checkout)[0].session_id,
+            "placed-tab"
+        );
+        assert!(live_sessions_in(&state, &sibling).is_empty());
+        assert!(guard_suspended_workspace(repo.path(), "placement-sibling").is_ok());
+        fs::write(cfg.path().join("suspended-sessions.json"), "not json").unwrap();
+        assert!(guard_suspended_workspace(repo.path(), "placement").is_err());
+        assert!(!live_sessions_in(&state, &checkout).is_empty());
+        assert_eq!(
+            fs::read_to_string(cfg.path().join("suspended-sessions.json")).unwrap(),
+            "not json"
+        );
+    }
+
+    macro_rules! suspended_checkout_test {
+        ($name:ident, $consumer:literal) => {
+            #[test]
+            fn $name() {
+                suspended_checkout_consumer($consumer);
+            }
+        };
+    }
+    suspended_checkout_test!(suspended_checkout_preview_names_the_tab, "preview");
+    suspended_checkout_test!(suspended_checkout_finish_refuses_the_tab, "finish");
+    suspended_checkout_test!(
+        suspended_checkout_forced_removal_refuses_the_tab,
+        "forced-remove"
+    );
+    suspended_checkout_test!(suspended_checkout_allocation_skips_the_tab, "allocate");
+    suspended_checkout_test!(suspended_checkout_finalize_refuses_the_tab, "finalize");
+    suspended_checkout_test!(suspended_checkout_merge_refuses_the_tab, "merge");
+    suspended_checkout_test!(
+        suspended_checkout_orphan_confirmation_cannot_forget_the_tab,
+        "orphan"
+    );
 
     #[test]
     fn merge_and_archive_asks_before_destroying_a_dirty_worktree_with_commits() {
@@ -2536,6 +2797,46 @@ mod tests {
                 &repo.to_string_lossy(),
                 &checkout.to_string_lossy(),
             )
+        }
+
+        // Catches: automatic cleanup deleting a checkout rescued by a branch after discovery.
+        #[test]
+        fn automatic_orphan_removal_rechecks_a_branch_restored_after_discovery() {
+            let repo = setup_test_repo();
+            let linked = detached(repo.path(), "rescued-checkout");
+            let state = crate::state::tests_support::make_test_app_state();
+            let before =
+                assess_orphan_cleanup_with_sessions(&state, &repo.path().to_string_lossy())
+                    .unwrap();
+            assert!(
+                before.iter().any(|row| {
+                    Path::new(&row.assessment.path) == linked && row.assessment.safe
+                })
+            );
+            let rescue = std::process::Command::new("git")
+                .current_dir(&linked)
+                .args(["branch", "rescued-active", "HEAD"])
+                .output()
+                .unwrap();
+            assert!(rescue.status.success(), "{rescue:?}");
+            assert!(
+                assess_orphan_cleanup_with_sessions(&state, &repo.path().to_string_lossy(),)
+                    .unwrap()
+                    .is_empty()
+            );
+
+            let result = remove_orphan_checkout(
+                &state,
+                &repo.path().to_string_lossy(),
+                &linked.to_string_lossy(),
+                true,
+                &[],
+            );
+            assert!(
+                result.is_err(),
+                "rescued active checkout was removed: {result:?}"
+            );
+            assert!(linked.exists(), "rescued active checkout must survive");
         }
 
         // Catches: an equality or exact-match cwd test, so an agent whose shell sits

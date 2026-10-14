@@ -32,7 +32,7 @@ When the user clicks the window X, TUIC can keep running in the background: the 
 | Option | Memory freed | Keeps working | Restart risk | Platforms |
 |---|---|---|---|---|
 | (a) hide only | ~0 MB: wry `hide()` is `setHidden` (wry `wkwebview/mod.rs:1052`). Rendering stops (inference). Windows `MemoryUsageLevel::Low` via `with_webview` (wry `lib.rs:2368`) is not measured | everything, including JS plugins | none | all |
-| (b) hide, then destroy the WebView | up to ~1.9-2.2 GB (WebContent + GPU), **only if the WebKit processes exit — not verified** (tauri #5397 reports memory not freed; wry #1822 reports process recycling) | Rust core; JS plugins, sounds and the updater stop | low: the reload/re-adopt path is used daily. Re-open cost: 9 paint stalls of 223-857 ms in 274 s after a reload with 20 terminals (measured) | macOS WKWebView, Windows WebView2 (browser process exits with its last controller — inference), Linux WebKitGTK |
+| (b) hide, then destroy the WebView | macOS spike: at least 1,090 MB freed with a 1 GiB page allocation; WebContent exits, GPU and Networking remain (Step 0 results below). TUIC workload and other platforms are unmeasured | Rust core; JS plugins, sounds and the updater stop | low: the reload/re-adopt path is used daily. Re-open cost: 9 paint stalls of 223-857 ms in 274 s after a reload with 20 terminals (measured) | macOS WKWebView measured; Windows WebView2 and Linux WebKitGTK unmeasured |
 | (c) hand over to `tuic-remote` | ~2.4 GB (the whole desktop process) | the daemon set only | high: no PTY hand-over exists, so every PTY is lost or needs fd passing | Windows ConPTY hand-over is harder |
 
 - **Prior art** (one existing desktop app, source read 2026-10-08):
@@ -66,7 +66,7 @@ Source: `~/Gits/personal/orchestrator/reports/tuicommander/2026-10-12-background
 
 - [x] **D1.** `close_behavior` default `ask` the first time, with "remember".
 - [x] **D2.** Keep `confirm_before_quit`, only on the real quit path (tray Quit, Cmd+Q, `close_behavior=quit`).
-- [x] **D3.** Hide at once; destroy the WebView after `background.webview_unload_minutes` (default 10, 0 = never), only if Step 0 shows the memory is freed.
+- [x] **D3.** Hide at once; destroy the WebView after `background.webview_unload_minutes` (default 10, 0 = never). Step 0 passes on macOS: at least 1,090 MB freed in each of two runs. D3 stands; option (a) is not selected. This does not establish savings on Windows or Linux.
 - [x] **D4.** Accept that `cache-keepalive`, `claude-wakeup` and `at-capacity-retry` stop while the WebView is unloaded; say so in the setting help.
 - [x] **D5.** `agents.hibernate_idle_minutes` default 60, scope `background_only`.
   - Boss addition: the Automations scheduler must be able to wake a hibernated agent; a hook channel triggers a routine; routine and scheduler are one feature under Automations. See "Shared wake path" and `plans/automations-scheduler.md` → "Revision 2026-10-12".
@@ -126,7 +126,7 @@ Callers (each replaces its own resume code, none adds one):
 ## Steps
 
 ### Step 0: Spike — does destroying the WebView free memory? (no repository code)
-- **Test:** a 30-line Tauri 2.12.1 app under `~/Gits/.tmp/bgmode-spike/` loads a page that allocates about 1 GB (JS arrays plus 4 big canvases). Not TUIC, so no dictation or hotkey conflict.
+- **Test:** a throwaway Tauri 2.12.1 app under `~/Gits/.tmp/bgmode-spike/` loads a page that allocates 1 GiB in touched typed arrays. Not TUIC, so no dictation or hotkey conflict.
 - **Measure:** `footprint` of the WebContent, GPU and main pids in 4 states: visible, `hide()`, `destroy()` + `prevent_exit`, recreated. Also check whether the WebContent pid exits.
 - **Windows:** the same app with `set_memory_usage_level(Low)` on hide, then destroy (manual or a CI runner).
 - **Code:**
@@ -135,6 +135,28 @@ Callers (each replaces its own resume code, none adds one):
 .run(|app, e| if let RunEvent::ExitRequested { code: None, api, .. } = e { api.prevent_exit(); })
 ```
 - **Acceptance:** a table of the numbers in this plan. If destroy frees less than 500 MB on macOS, D3 falls back to (a).
+
+#### Step 0 results — 2026-10-14 (story 1801-3689)
+
+**Result:** destroy frees more than 500 MB on macOS. D3 stands. The conservative reduction from hidden to destroyed is **1,090.013 MB in run 1** and **1,090.160 MB in run 2** (minimum hidden total minus maximum destroyed total within each run).
+
+Native environment: macOS 27.0.1 (26A434), arm64; Tauri and tauri-runtime-wry 2.12.1, wry 0.57.0. The app uses the default persistent WKWebsiteDataStore. `CFFIXED_USER_HOME` redirects its native home under the spike directory; a Foundation `NSHomeDirectory()` probe verifies that path. The page retains sixteen 64 MiB `Uint8Array`s, filled with random bytes through `crypto.getRandomValues` to touch every page and resist compression. Its readiness response reports exactly 1,073,741,824 allocated bytes on initial load and recreation. This is a synthetic allocation, not a measurement of TUIC terminals or canvases.
+
+Two independent app launches each run visible → `hide()` → `destroy()` → recreated. Each state has two samples (four samples per row), after a three-second settling interval, with two seconds between samples. `footprint -f bytes <main-pid> <associated-WebKit-pids...>` measures physical footprint; MB below means 1,000,000 bytes. Process attribution uses before/after process inventories and requires exactly one new WebContent PID at initial readiness. Totals use footprint's combined-process summary; column extrema need not occur in the same sample.
+
+| State | Main MB | WebContent MB | GPU MB | Networking MB | Total MB | Original WebContent |
+|---|---:|---:|---:|---:|---:|---|
+| Visible | 33.244–33.736 | 1,089.816–1,090.095 | 15.336–15.910 | 8.700–8.864 | 1,147.474–1,147.670 | Alive |
+| Hidden | 33.195–33.605 | 1,088.997–1,089.341 | 12.174–12.780 | 8.569–8.651 | 1,143.148–1,143.607 | Alive |
+| Destroyed | 32.900–33.244 | 0 (exited) | 11.699–12.371 | 8.324–8.422 | 52.988–53.430 | Exited |
+| Recreated | 34.719–34.948 | 1,088.817–1,088.931 | 14.894–15.451 | 8.274–8.356 | 1,146.458–1,147.392 | Replaced by new PID |
+
+Run 1: main PID 74242 survives throughout; WebContent 74375 exits after destroy, and recreation starts 79616. Run 2: main PID 13163 survives throughout; WebContent 13250 exits, and recreation starts 18229. Both app logs record `EXIT_REQUESTED_NONE prevented`. GPU and Networking survive destruction in both runs: unload must not promise that every WebKit process exits. Hide alone retains the 1 GiB allocation.
+
+Raw evidence: `~/Gits/.tmp/results/1801/run{1,2}-{visible,hidden,destroyed,recreated}-{1,2}-footprint.txt`, matching `-processes.json` files, `run{1,2}-process-identification.json`, `run{1,2}-app.log`, `measure-persistent.log`, `measurements.json`, `summary.json`, `platform.txt` and `native-home.txt`. Source and runner remain under `~/Gits/.tmp/bgmode-spike/`; the build-output link is removed after measurement. Earlier nonpersistent-store control runs are retained separately under `~/Gits/.tmp/results/1801/nonpersistent/` and are not used for this table. Only the spike's own processes are stopped; TUIC is untouched.
+
+- **[MANUAL] Windows:** no Windows machine is available. `set_memory_usage_level(Low)` and destroy savings remain unmeasured. Do not promise measured Windows memory savings.
+- **Limit:** Linux, long-lived process-pool behavior and actual TUIC document teardown are unmeasured. Step 4 must verify its integration separately.
 
 ### Step 1: Rust owns close and quit (`close_behavior`)
 - **Test:** `src-tauri/src/background_mode.rs` with a pure transition table.
@@ -287,14 +309,14 @@ Automations stories A1-A5 are in `plans/automations-scheduler.md`; A4 depends on
   - [ ] Automations fire;
   - [ ] MCP `agent send/wait` works;
   - [ ] push reaches the phone.
-- [ ] After the unload delay, the WebView processes exit (Step 0 numbers measured on the target OS), and Show restores tabs, layout and live sessions.
+- [ ] After the unload delay, the WebContent process exits on measured macOS configurations (GPU and Networking may remain), and Show restores tabs, layout and live sessions. Other platforms require their own measurements.
 - [ ] Idle managed sub-agents still close with `idle_timeout` mail to the parent; idle agent tabs hibernate per setting and resume on open, submit, mail, a scheduled run or a hook-triggered run — all through `ensure_live`.
 - [ ] Every new automatic behavior has a setting with a catalogue entry, i18n and a Settings control: `close_behavior`, `background.hide_dock_icon`, `background.tray_icon`, `background.webview_unload_minutes`, `agents.hibernate_idle_minutes`, `agents.hibernate_scope`.
 - [ ] All tests pass; `cargo build --bin tuic-remote --no-default-features` stays green (the tray code is `#[cfg(feature = "desktop")]`).
 
 ## Risks
 
-- WebKit may keep the WebContent process (shared process pool), so Step 0 decides D3. Do not build Step 4 before Step 0.
+- Step 0 passes D3 on macOS for the synthetic allocation. A long-lived TUIC process pool or a different platform may behave differently; Step 4 must verify actual document teardown and restoration.
 - macOS Accessory policy removes the app from Cmd+Tab and can block native permission prompts (microphone): show the window before any permission request.
 - Quit, OS logout or an update while unloaded: there is no WebView to snapshot. Steps 1 and 5 make Rust the owner of the quit path and the suspended records; the snapshot taken before hide is the last tab layout.
 - A crash in background loses the PTYs, as today. A watchdog or LaunchAgent is out of scope.

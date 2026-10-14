@@ -19,10 +19,15 @@ mod log_routes;
 pub(crate) mod managed_launch;
 pub(crate) mod mcp_transport;
 mod mcp_transport_ancillary;
+#[cfg(test)]
+mod settings_policy_confirm_tests;
+pub(crate) use mcp_transport_ancillary::confirm_settings;
 mod mcp_transport_catalogue;
 mod mcp_transport_peer;
-mod mcp_transport_session_agent;
+pub(crate) mod mcp_transport_session_agent;
+mod open_markdown_routes;
 
+mod mcp_work_item;
 mod plugin_docs;
 mod plugin_routes;
 mod remote_mcp_sessions;
@@ -33,11 +38,14 @@ pub(crate) mod session;
 mod session_placement;
 pub(crate) mod sse_routes;
 pub(crate) mod static_files;
+pub(crate) mod suspended_routes;
 #[cfg(feature = "desktop")]
 mod system_routes;
 mod telegram_routes;
 pub(crate) mod types;
 mod watcher_routes;
+mod work_item_bridge_routes;
+mod work_item_query_routes;
 mod workitem_link_routes;
 mod worktree_routes;
 mod ws_compression;
@@ -579,7 +587,14 @@ async fn post_workflow_definition_action(
             .await
             .map_err(|error| format!("workflow definition task failed: {error}"))
             .and_then(|result| result);
-    json_result(result)
+    match result {
+        Err(error) if error.starts_with(crate::workflows::WORKFLOW_VALIDATION_ERROR_PREFIX) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({"error": error})),
+        )
+            .into_response(),
+        result => json_result(result),
+    }
 }
 async fn post_workflow_run_action(
     State(state): State<Arc<AppState>>,
@@ -880,10 +895,12 @@ const API_PREFIXES: &[&str] = &[
     "stats",
     "stories",
     "system",
+    "tasks",
     "terminal",
     "tunnels",
     "watchers",
     "workflows",
+    "work-items",
     "workitem-links",
     "worktrees",
 ];
@@ -1014,6 +1031,15 @@ fn shared_routes() -> Router<Arc<AppState>> {
             "/sessions",
             get(session::list_sessions).post(session::create_session),
         )
+        .route("/sessions/suspended", post(suspended_routes::action_http))
+        .route(
+            "/repo/open-markdown-tabs",
+            get(open_markdown_routes::get_tabs),
+        )
+        .route(
+            "/config/open-markdown-tabs",
+            put(open_markdown_routes::put_tabs),
+        )
         .route("/sessions/{id}/write", post(session::write_to_session))
         .route("/sessions/{id}/submit", post(submit_agent_reply))
         // The N-ary sibling: one round trip, but the per-input bookkeeping still
@@ -1040,6 +1066,7 @@ fn shared_routes() -> Router<Arc<AppState>> {
         .route("/sessions/{id}/raw-ring", get(session::get_raw_ring))
         .route("/sessions/{id}/pause", post(session::pause_session))
         .route("/sessions/{id}/resume", post(session::resume_session))
+        .route("/sessions/wake", post(suspended_routes::resume_http))
         .route("/sessions/{id}/kitty-flags", get(session::get_kitty_flags))
         .route(
             "/sessions/{id}/foreground",
@@ -1332,6 +1359,15 @@ fn shared_routes() -> Router<Arc<AppState>> {
             get(fs_routes::search_content_all_http),
         )
         .route("/fs/read", get(fs_routes::fs_read_file_http))
+        .route(
+            "/work-items/provider-bridge",
+            post(work_item_bridge_routes::bridge),
+        )
+        .route("/tasks/project", post(work_item_query_routes::project))
+        .route(
+            "/tasks/start-work-prompt",
+            post(fs_routes::start_work_prompt_http),
+        )
         .route("/fs/markdown-image", get(fs_routes::markdown_image_http))
         .route("/fs/read-external", get(fs_routes::read_external_file_http))
         .route("/fs/write", post(fs_routes::write_file_http))
@@ -1467,9 +1503,6 @@ fn shared_routes() -> Router<Arc<AppState>> {
         // Answer a pending MCP confirmation (the browser/PWA half of the desktop
         // `mcp_confirm_response` command).
         .route("/mcp/confirm-response", post(mcp_confirm_response_http))
-        // The tab's verdict on a `session action=suspend` request (browser/PWA half
-        // of the desktop `session_suspend_response` command).
-        .route("/mcp/suspend-response", post(session_suspend_response_http))
         // ACP (ego). Shared, not desktop-only: driving ego from a phone is the
         // whole point of the client, and the binary it may launch comes from
         // this host's configuration rather than from any request.
@@ -1494,22 +1527,6 @@ async fn mcp_confirm_response_http(
     Json(body): Json<McpConfirmResponseBody>,
 ) -> Json<serde_json::Value> {
     resolve_mcp_confirm(&state, &body.request_id, body.confirmed);
-    Json(serde_json::json!({ "ok": true }))
-}
-
-/// Body of `POST /mcp/suspend-response`.
-#[derive(serde::Deserialize)]
-struct SessionSuspendResponseBody {
-    request_id: String,
-    ok: bool,
-    reason: Option<String>,
-}
-
-async fn session_suspend_response_http(
-    State(state): State<Arc<AppState>>,
-    Json(body): Json<SessionSuspendResponseBody>,
-) -> Json<serde_json::Value> {
-    mcp_transport::resolve_session_suspend(&state, &body.request_id, body.ok, body.reason);
     Json(serde_json::json!({ "ok": true }))
 }
 
@@ -2082,6 +2099,10 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             post(plugin_routes::plugin_register),
         )
         .route(
+            "/api/plugins/{plugin_id}/settings",
+            post(plugin_routes::plugin_settings),
+        )
+        .route(
             "/api/plugins/{plugin_id}/unregister",
             post(plugin_routes::plugin_unregister),
         )
@@ -2126,6 +2147,10 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             .route(
                 "/design-mode/navigate",
                 post(crate::design_mode::commands::navigate),
+            )
+            .route(
+                "/design-mode/command",
+                post(crate::design_mode::commands::browser_command),
             )
             .route("/design-mode", get(crate::design_mode::commands::statuses));
     }
@@ -2996,6 +3021,105 @@ mod tests {
     use axum::extract::connect_info::ConnectInfo;
     use axum::http::{Request, StatusCode};
     use tower::ServiceExt;
+
+    // Catches: seeded Pause targets missing from otherwise publishable story drafts.
+    #[tokio::test]
+    async fn seeded_story_draft_publishes() {
+        workflow_pause_publish_case(crate::workflows::WorkflowKind::Story, false, false).await;
+    }
+
+    // Catches: a user validation failure being returned as HTTP 500.
+    #[tokio::test]
+    async fn invalid_pause_publish_is_a_client_error() {
+        workflow_pause_publish_case(crate::workflows::WorkflowKind::Story, true, false).await;
+    }
+
+    // Catches: Resolve plan seeds lacking checks and therefore refusing HTTP publication.
+    #[tokio::test]
+    async fn seeded_plan_draft_publishes() {
+        workflow_pause_publish_case(crate::workflows::WorkflowKind::Plan, false, false).await;
+    }
+
+    // Catches: adding seed checks accidentally allowing edited plans with no final check.
+    #[tokio::test]
+    async fn plan_without_final_checks_publish_is_a_client_error() {
+        workflow_pause_publish_case(crate::workflows::WorkflowKind::Plan, false, true).await;
+    }
+
+    async fn workflow_pause_publish_case(
+        kind: crate::workflows::WorkflowKind,
+        invalid: bool,
+        missing_checks: bool,
+    ) {
+        use crate::workflows::{NodeKind, WorkflowStore};
+        let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let project = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let project = project.path().to_str().unwrap();
+        let store = WorkflowStore::open().unwrap();
+        let draft = store
+            .seed_templates(project)
+            .unwrap()
+            .into_iter()
+            .find(|draft| draft.kind == kind)
+            .unwrap();
+        let mut graph = draft.graph;
+        if invalid {
+            for node in &mut graph.nodes {
+                if let NodeKind::Pause { resume_to } = &mut node.kind {
+                    *resume_to = None;
+                }
+            }
+        }
+        let edited = store
+            .update_draft(&draft.id, draft.draft_revision, graph)
+            .unwrap();
+        let edited = if missing_checks {
+            store
+                .update_checks(&draft.id, edited.draft_revision, vec![])
+                .unwrap()
+        } else {
+            edited
+        };
+        let response = post_workflow_definition_action(
+            None,
+            None,
+            Query(types::PathQuery {
+                path: project.into(),
+            }),
+            Json(crate::workflows::WorkflowAction::Publish {
+                id: draft.id.clone(),
+                expected_revision: edited.draft_revision,
+            }),
+        )
+        .await;
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body = String::from_utf8(body.to_vec()).unwrap();
+        if invalid || missing_checks {
+            assert!(status.is_client_error(), "{status}: {body}");
+            assert!(
+                body.contains(if missing_checks {
+                    "deterministic final checks"
+                } else {
+                    "resume_to"
+                }),
+                "{body}"
+            );
+            assert_eq!(
+                store
+                    .get_draft(&draft.id)
+                    .unwrap()
+                    .latest_published_revision,
+                1
+            );
+        } else {
+            assert_eq!(status, StatusCode::OK, "{body}");
+            assert_eq!(store.get_published(&draft.id, 2).unwrap().revision, 2);
+        }
+    }
 
     /// Build a POST request with ConnectInfo from the given address.
     fn mcp_post_from(
@@ -6169,7 +6293,19 @@ mod tests {
                 .unwrap();
             let listing: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
             let listed = listing["result"]["tools"].as_array().unwrap();
-            assert_eq!(listed.len(), catalog.len() - 1, "disabled {name}");
+            let expected: Vec<_> = catalog
+                .iter()
+                .filter(|entry| entry["name"] != name && entry["name"] != "design_mode")
+                .map(|entry| entry["name"].as_str().unwrap())
+                .collect();
+            let actual: Vec<_> = listed
+                .iter()
+                .map(|entry| entry["name"].as_str().unwrap())
+                .collect();
+            assert_eq!(
+                actual, expected,
+                "disabled {name}; unbound Design Mode stays hidden"
+            );
             assert!(
                 listed.iter().all(|entry| entry["name"] != name),
                 "disabled {name} remains discoverable"
@@ -6254,8 +6390,8 @@ mod tests {
             .as_array()
             .unwrap()
             .len();
-        // total native − 1 disabled
-        assert_eq!(tools.len(), total - 1);
+        // One disabled tool and owner-scoped Design Mode are absent for this caller.
+        assert_eq!(tools.len(), total - 2);
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         assert!(
             !names.contains(&"debug"),
@@ -8671,13 +8807,14 @@ mod tests {
             .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         let tools = json["result"]["tools"].as_array().unwrap();
-        // No upstream → all native tools only
+        // No upstream → native tools visible to an unbound caller only
         let expected = mcp_transport::test_mcp_tool_definitions()
             .as_array()
             .unwrap()
             .len();
-        assert_eq!(tools.len(), expected);
+        assert_eq!(tools.len(), expected - 1);
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
+        assert!(!names.contains(&"design_mode"));
         assert!(names.contains(&"session"));
         assert!(names.contains(&"agent"));
         assert!(names.contains(&"repo"));
@@ -10098,10 +10235,13 @@ mod tests {
         );
     }
 
+    // Catches: uploads still create .tuic and modify info/exclude in the user's repo.
     #[cfg(unix)]
     #[tokio::test]
-    async fn attachment_upload_streams_into_session_cwd_and_stays_out_of_git() {
+    async fn attachment_upload_does_not_write_into_repository() {
         let repo = create_temp_git_repo();
+        let exclude = repo.path().join(".git/info/exclude");
+        let before = std::fs::read(&exclude).unwrap();
         let state = test_state();
         crate::state::tests_support::insert_dummy_session(&state, "upload-session");
         crate::state::tests_support::set_session_cwd(
@@ -10109,73 +10249,59 @@ mod tests {
             "upload-session",
             repo.path().to_str().unwrap(),
         );
-        let route = build_router(state.clone(), false, true);
-        let response = route
-            .clone()
+        let response = build_router(state.clone(), false, true)
             .oneshot(
                 Request::post("/attachments/upload?kind=pty&id=upload-session&name=notes.txt")
-                    .header(CONTENT_TYPE, "application/octet-stream")
                     .body(Body::from("attachment bytes"))
                     .unwrap(),
             )
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(
-            response.headers().get(CONTENT_TYPE).unwrap(),
-            "application/json",
-            "the upload endpoint must answer with attachment metadata, not the SPA fallback"
+        assert!(
+            !repo.path().join(".tuic").exists(),
+            "uploads must not create repository files"
         );
+        assert_eq!(std::fs::read(&exclude).unwrap(), before);
         let bytes = axum::body::to_bytes(response.into_body(), 4096)
             .await
             .unwrap();
         let reply: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         let path = std::path::Path::new(reply["path"].as_str().unwrap());
-        assert!(path.starts_with(repo.path().join(".tuic/attachments")));
+        assert!(path.starts_with(state.data_dir.join("attachments/pty-upload-session")));
         assert_eq!(std::fs::read(path).unwrap(), b"attachment bytes");
-        let ignored = std::process::Command::new("git")
-            .args(["check-ignore", "-q"])
-            .arg(path)
-            .current_dir(repo.path())
-            .status()
-            .unwrap();
-        assert!(
-            ignored.success(),
-            "an uploaded file must stay out of commits"
-        );
+    }
 
-        let oversized = route
+    // Catches: session close retains fresh uploads under the obsolete day-count policy.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn attachment_session_end_removes_fresh_uploads() {
+        let repo = create_temp_git_repo();
+        let state = test_state();
+        crate::state::tests_support::insert_dummy_session(&state, "ended-upload");
+        crate::state::tests_support::set_session_cwd(
+            &state,
+            "ended-upload",
+            repo.path().to_str().unwrap(),
+        );
+        let response = build_router(state.clone(), false, true)
             .oneshot(
-                Request::post("/attachments/upload?kind=pty&id=upload-session&name=too-big.bin")
-                    .header(CONTENT_TYPE, "application/octet-stream")
-                    .body(Body::from(vec![0u8; 26 * 1024 * 1024]))
+                Request::post("/attachments/upload?kind=pty&id=ended-upload&name=notes.txt")
+                    .body(Body::from("fresh bytes"))
                     .unwrap(),
             )
             .await
             .unwrap();
-        assert_eq!(oversized.status(), StatusCode::PAYLOAD_TOO_LARGE);
-        assert_eq!(
-            std::fs::read_dir(repo.path().join(".tuic/attachments"))
-                .unwrap()
-                .count(),
-            1
-        );
-        let fresh = repo.path().join(".tuic/attachments/2-fresh.txt");
-        std::fs::write(&fresh, b"keep me").unwrap();
-        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(8 * 24 * 60 * 60);
-        std::fs::File::open(path)
-            .unwrap()
-            .set_times(std::fs::FileTimes::new().set_modified(old))
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), 4096)
+            .await
             .unwrap();
-        crate::pty::cleanup_session("upload-session", &state);
+        let reply: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let path = std::path::Path::new(reply["path"].as_str().unwrap());
+        crate::pty::cleanup_session("ended-upload", &state);
         assert!(
             !path.exists(),
-            "closing the session removes attachments older than seven days"
-        );
-        assert_eq!(
-            std::fs::read(&fresh).unwrap(),
-            b"keep me",
-            "recent attachments survive cleanup"
+            "ending the session removes fresh attachments too"
         );
     }
 
@@ -10206,12 +10332,116 @@ mod tests {
         assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
     }
 
+    // Catches: an old Claude/Gemini agent gets an inaccessible upload with no useful notice.
+    #[tokio::test]
+    async fn attachment_legacy_agent_gets_restart_notice() {
+        let state = test_state();
+        crate::state::tests_support::insert_dummy_session(&state, "legacy-agent");
+        let mut row = crate::state::SessionState::default();
+        row.seed_configured_agent(Some("claude".into()));
+        state
+            .session_maps
+            .session_states
+            .insert("legacy-agent".into(), row);
+        let response = build_router(state.clone(), false, true)
+            .oneshot(
+                Request::post("/attachments/upload?kind=pty&id=legacy-agent&name=notes.txt")
+                    .body(Body::from("bytes"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let bytes = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let reply: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(
+            reply["error"]
+                .as_str()
+                .unwrap()
+                .contains("Start a new session")
+        );
+        assert!(!state.data_dir.join("attachments").exists());
+    }
+
+    // Catches: ego uploads imply an unsupported invocation-scoped read grant.
+    #[tokio::test]
+    async fn attachment_ego_upload_explains_confined_read_root_requirement() {
+        let state = test_state();
+        crate::state::tests_support::insert_dummy_session(&state, "ego-upload");
+        let mut row = crate::state::SessionState::default();
+        row.seed_configured_agent(Some("ego".into()));
+        state
+            .session_maps
+            .session_states
+            .insert("ego-upload".into(), row);
+        let response = build_router(state.clone(), false, true)
+            .oneshot(
+                Request::post("/attachments/upload?kind=pty&id=ego-upload&name=notes.txt")
+                    .body(Body::from("bytes"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let receipt: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(
+            receipt["notice"]
+                .as_str()
+                .unwrap()
+                .contains("existing user/profile read root")
+        );
+        assert_eq!(
+            std::fs::read(receipt["path"].as_str().unwrap()).unwrap(),
+            b"bytes"
+        );
+    }
+
+    // Catches: a failed streamed/empty upload leaves partial bytes in session storage.
+    #[tokio::test]
+    async fn attachment_empty_or_oversized_stream_leaves_no_file() {
+        let state = test_state();
+        state.config.write().attachment_max_bytes = 1;
+        crate::state::tests_support::insert_dummy_session(&state, "failed-upload");
+        let route = build_router(state.clone(), false, true);
+        for (body, status) in [
+            ("", StatusCode::BAD_REQUEST),
+            ("xx", StatusCode::PAYLOAD_TOO_LARGE),
+        ] {
+            let response = route
+                .clone()
+                .oneshot(
+                    Request::post("/attachments/upload?kind=pty&id=failed-upload&name=notes.txt")
+                        .body(Body::from(body))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), status);
+            assert_eq!(
+                std::fs::read_dir(state.data_dir.join("attachments/pty-failed-upload"))
+                    .unwrap()
+                    .count(),
+                0
+            );
+        }
+    }
+
     #[cfg(unix)]
     #[tokio::test]
-    async fn attachment_upload_excludes_nested_session_directory_from_git() {
+    async fn attachment_upload_leaves_nested_repository_and_legacy_files_untouched() {
         let repo = create_temp_git_repo();
         let nested = repo.path().join("project/subdir");
         std::fs::create_dir_all(&nested).unwrap();
+        let legacy = nested.join(".tuic/attachments/user.txt");
+        std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+        std::fs::write(&legacy, b"user bytes").unwrap();
+        let exclude = repo.path().join(".git/info/exclude");
+        let before = std::fs::read(&exclude).unwrap();
         let state = test_state();
         crate::state::tests_support::insert_dummy_session(&state, "nested-upload");
         crate::state::tests_support::set_session_cwd(
@@ -10219,7 +10449,7 @@ mod tests {
             "nested-upload",
             nested.to_str().unwrap(),
         );
-        let response = build_router(state, false, true)
+        let response = build_router(state.clone(), false, true)
             .oneshot(
                 Request::post("/attachments/upload?kind=pty&id=nested-upload&name=notes.txt")
                     .body(Body::from("nested bytes"))
@@ -10234,15 +10464,10 @@ mod tests {
         let reply: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         let path = std::path::Path::new(reply["path"].as_str().unwrap());
         assert_eq!(std::fs::read(path).unwrap(), b"nested bytes");
-        assert!(
-            std::process::Command::new("git")
-                .args(["check-ignore", "-q"])
-                .arg(path)
-                .current_dir(repo.path())
-                .status()
-                .unwrap()
-                .success()
-        );
+        crate::pty::cleanup_session("nested-upload", &state);
+        assert_eq!(std::fs::read(legacy).unwrap(), b"user bytes");
+        assert_eq!(std::fs::read(exclude).unwrap(), before);
+        assert!(!path.exists());
     }
 
     #[tokio::test]
@@ -10250,7 +10475,7 @@ mod tests {
         let response = build_router(test_state(), false, true)
             .oneshot(
                 Request::post(format!(
-                    "/attachments/upload?kind=acp&id={}&name=notes.txt",
+                    "/attachments/upload?kind=acp&id={}&session=missing&name=notes.txt",
                     crate::acp::AcpConnectionId::new()
                 ))
                 .body(Body::from("bytes"))
@@ -10378,55 +10603,6 @@ mod tests {
             saved["agents"]["claude"]["run_configs"][0]["name"],
             "remote"
         );
-    }
-
-    // Catches: /mcp/suspend-response missing from the router the app serves (the browser/PWA
-    // half of session_suspend_response), so a web tab's verdict never reaches the MCP caller.
-    #[tokio::test]
-    async fn crit1358_suspend_response_route_delivers_the_verdict_and_ignores_unknown_ids() {
-        let state = test_state();
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        state.suspend_responses.insert("req-1".to_string(), tx);
-
-        let unknown = build_router(state.clone(), false, true)
-            .oneshot(mcp_post(
-                "/mcp/suspend-response",
-                &serde_json::json!({"request_id": "other", "ok": true, "reason": null}),
-            ))
-            .await
-            .expect("unknown id response");
-        assert_eq!(unknown.status(), StatusCode::OK);
-        assert!(state.suspend_responses.contains_key("req-1"));
-
-        let known = build_router(state.clone(), false, true)
-            .oneshot(mcp_post(
-                "/mcp/suspend-response",
-                &serde_json::json!({"request_id": "req-1", "ok": false, "reason": "agent working"}),
-            ))
-            .await
-            .expect("known id response");
-        assert_eq!(known.status(), StatusCode::OK);
-        assert_eq!(rx.await.unwrap(), Err("agent working".to_string()));
-    }
-
-    // Catches: a body without `reason` (the web client sends null, other clients may omit it)
-    // being rejected, so a refusal never arrives and the caller waits 20 s.
-    #[tokio::test]
-    async fn crit1358_suspend_response_route_accepts_a_missing_reason() {
-        let state = test_state();
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        state.suspend_responses.insert("req-2".to_string(), tx);
-
-        let response = build_router(state, false, true)
-            .oneshot(mcp_post(
-                "/mcp/suspend-response",
-                &serde_json::json!({"request_id": "req-2", "ok": false}),
-            ))
-            .await
-            .expect("response");
-
-        assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(rx.await.unwrap(), Err("refused".to_string()));
     }
 }
 

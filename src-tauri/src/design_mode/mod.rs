@@ -1,6 +1,8 @@
 #[cfg(feature = "desktop")]
 mod browser;
 #[cfg(feature = "desktop")]
+mod command_channel;
+#[cfg(feature = "desktop")]
 pub(crate) mod commands;
 pub(crate) mod extension;
 #[cfg(feature = "desktop")]

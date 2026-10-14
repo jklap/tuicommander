@@ -9,7 +9,9 @@ const mockGithubStore = vi.hoisted(() => ({
 	getCheckDetails: vi.fn((): CheckDetail[] => []),
 	loadCheckDetails: vi.fn(() => Promise.resolve()),
 }));
-const mockRpc = vi.hoisted(() => vi.fn());
+const mockRpc = vi.hoisted(() =>
+	vi.fn<(command: string, args?: Record<string, unknown>) => Promise<unknown>>(async () => undefined),
+);
 const mockOpenUrl = vi.hoisted(() => vi.fn());
 
 vi.mock("../../stores/github", () => ({ githubStore: mockGithubStore }));
@@ -47,6 +49,12 @@ const cleanFile = (path: string) => ({ path, summary: "changed stuff", findings:
 // inside the JSX would hand the component a different repo on every read.
 let repoSeq = 0;
 const nextRepo = () => `/repo-${++repoSeq}`;
+
+beforeEach(() => {
+	// Catches: isolated error tests logging through an undefined RPC return,
+	// or inheriting a previous test's command-specific response.
+	mockRpc.mockReset();
+});
 
 describe("PrDetailContent — ego review result metadata", () => {
 	beforeEach(() => {

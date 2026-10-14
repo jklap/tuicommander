@@ -2,6 +2,12 @@
 
 Remote terminals replay their current viewport when attached or reconnected. A stream failure or stalled initial replay shows a persistent error toast; the client retries without requiring new terminal output. See [Remote Access](remote-access.md).
 
+Adjacent `💬` answer paragraphs share one continuous green left bar without a background tint (Paper uses its darker success green for contrast), including blank rows between them. An unmarked prose paragraph after a blank row ends the answer; an uninterrupted indented continuation stays inside. Lists, tables, quotations and fenced code remain attached to the answer. A non-answer output row, prompt or Codex `Worked for` duration footer ends the region. The CLI blanks only the marker glyph cells; copy, selection and search keep the original text. Chat uses the same answer extent and strips every paragraph marker.
+
+Turning **Show scrollbar marks** off or on updates history ticks immediately, even when the terminal is idle. Search-match ticks remain visible when history marks are off.
+
+The Context preview truncates before the CLI/Chat switch. Terminals without that switch use the full header width.
+
 ## Tablet Keyboard
 
 Tap the terminal to focus its keyboard input. Touch and mouse input use the same field, including soft-keyboard text entry and repeated deletion. Primary mouse presses keep focus on that input without a temporary canvas focus change.
@@ -9,6 +15,8 @@ Tap the terminal to focus its keyboard input. Touch and mouse input use the same
 ## Terminal Sessions
 
 Each terminal tab runs an independent PTY (pseudo-terminal) session with your shell. Up to 50 concurrent sessions.
+
+Files uploaded through the mobile picker live in a session directory under TUICommander’s data directory. New Claude and Gemini sessions receive read access at launch. Closing the terminal or ending its process removes these uploads; resumed sessions need files uploaded again. Uploads leave your repository and Git excludes untouched. Old `.tuic/attachments/` directories can be removed by hand. Confined ego sessions need an existing user/profile read root; the picker shows an access notice.
 
 Accents sent separately from their base letters remain part of terminal text
 when you scroll, select, copy or search. Search matches the exact characters
@@ -57,7 +65,7 @@ Terminals are **never unmounted** from the DOM. When you switch branches or tabs
 
 A terminal that runs Claude Code shows a **CLI | Chat** switch in its top-right corner. **Chat** replaces the grid with the conversation read from Claude's own session file: your prompts as bubbles (including follow-ups typed while Claude is busy), Claude's replies as text, and tool calls folded into one compact card each. Plumbing (hook output, system reminders) and empty thinking blocks are left out. Compose opens and receives focus below the conversation. Reply with **Ctrl+Enter**, or queue follow-up work with **Shift+Ctrl+Enter**. Switch back to **CLI** to answer a permission prompt. The grid keeps running while hidden, so scrollback and selection are unchanged. Prompts have a theme-coloured background in Chat and a reading width of up to 80 characters; the CLI grid does not tint submitted prompts.
 
-Harness inbox and interruption notices appear as compact chips; inbox wakes show **Message from an agent**, with the original notice in the tooltip. Images without retained image data appear as attachment chips. Consecutive thinking blocks share one disclosure. Answer blocks in the same turn share one lightly tinted card, limited to about 96 characters wide; **Copy** in its top-right corner appears on hover or keyboard focus and copies the whole answer. Intermediate status text remains separate. Tool calls keep their single collapsed activity row; Claude Bash uses the agent-written description when available, while other tools and agents retain the backend title. Pasted CLI calls followed by a terminal output marker appear in a monospace block showing two lines; **+ N lines** expands the rest. Ordinary multiline prose stays as prose. Historical tool rows show status without a duration. Turn timestamps do not reach the frontend, so time separators are omitted. The Compose handle is available in CLI view.
+Harness inbox and interruption notices appear as compact chips; inbox wakes show **Message from an agent**, with the original notice in the tooltip. Images without retained image data appear as attachment chips. Consecutive thinking blocks share one disclosure. Answer blocks in the same turn share one rule-only card, limited to about 96 characters wide; **Copy** in its top-right corner appears on hover or keyboard focus and copies the whole answer. Intermediate status text remains separate. Tool calls keep their single collapsed activity row; Claude Bash uses the agent-written description when available, while other tools and agents retain the backend title. Pasted CLI calls followed by a terminal output marker appear in a monospace block showing two lines; **+ N lines** expands the rest. Ordinary multiline prose stays as prose. Historical tool rows show status without a duration. Turn timestamps do not reach the frontend, so time separators are omitted. The Compose handle is available in CLI view.
 
 In Chat, Compose stays docked and open after sending or queueing, clears the submitted text, and keeps focus for the next message. It cannot be closed or unpinned while Chat is active. **Esc** returns to CLI for terminal interaction; the Compose shortcut focuses the Chat input. Switching back to CLI restores that tab's previous Compose open and pin state. Unsent drafts survive switching in either direction, including text entered while a send or queue is still pending.
 
@@ -72,7 +80,7 @@ Older recorded prompts with a prompt ID also appear when Claude did not record a
 **Right-click → Suspend Tab** ends the tab's process and its agent, freeing the memory and CPU they used, and keeps the tab in the tab bar marked `zz`. It is not auto-standby: auto-standby only pauses an idle process, which keeps its memory, and wakes it when you focus the tab. A suspended tab holds no process at all.
 
 - **Resume** — click **Resume** in the tab, or right-click → **Resume Tab**. A new session opens in the same folder. An agent tab runs the same resume command a tab gets after a TUICommander restart, so the agent continues its conversation. A plain shell tab opens a fresh shell.
-- **Restart** — a suspended tab stays suspended after TUICommander restarts; it is never resumed automatically.
+- **Restart** — Rust saves suspended tabs before ending their processes. They stay suspended after a restart or frontend recreation, even when suspension happened with no UI open; they are never resumed automatically.
 - **Refused while busy** — Suspend is disabled while the agent is working, a question waits for your answer, commands are queued, or a command runs in a plain shell, so no turn is cut. An agent tab with no resumable session is refused too.
 - **MCP** — `session action=suspend session_id=<id>` does the same for a tab another agent wants to park, under the same refusals.
 
@@ -330,6 +338,8 @@ Canceling a Codex approval with Esc clears its question indicator when Codex ret
 
 ### Queueing Follow-up Commands
 
+In Compose, paste an image, drop PNG, JPEG, WebP or GIF files on the editor, or use **Attach images** beside Send to choose several. Drops insert at the pointer; picked files replace the current selection in their chosen order. Each saved image appears as `[image: <path>]`. Other file types and failed saves show an error without inserting a tag.
+
 The Compose panel can leave work for an agent without steering its current turn:
 
 - **Ctrl+Enter** sends immediately.
@@ -390,3 +400,8 @@ Scrolling into history keeps the requested lines in view while an agent writes m
 Dictation inserts into Compose when focus is on the Chat transcript or page background. It replaces the selection that existed when you pressed the hotkey and keeps the rest of the draft. A focused search or form editor still receives dictation. In CLI, dictation keeps the usual terminal and auto-send behavior.
 
 Changing focus or tabs while transcription finishes does not change the destination. If the original editor or session closes, or its draft changes, recover the text from the sticky error message or Messages bell. The app does not send it to another terminal.
+
+
+### Waking a suspended tab
+
+Open a suspended tab to resume it. A submitted command or peer message can also wake it without the desktop UI. Commands wait until the agent is ready; messages stay in its inbox. The stable peer address does not change. If resume fails, the tab stays suspended and the caller receives the reason.

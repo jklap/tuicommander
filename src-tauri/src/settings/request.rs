@@ -102,6 +102,8 @@ pub struct Error {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub revision: Option<String>,
     pub persisted: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proposal_id: Option<String>,
 }
 
 pub type Failure = Box<Error>;
@@ -127,6 +129,7 @@ impl Error {
             next_action: "describe".into(),
             revision: None,
             persisted: false,
+            proposal_id: None,
         })
     }
 }
