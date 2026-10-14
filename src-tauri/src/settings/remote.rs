@@ -214,6 +214,14 @@ impl Store for TunnelsSettingsStore {
         document("profiles", &self.load()?, TUNNELS_ID)
     }
 
+    fn validate_proposal(&self, _latest: &Value, value: &Value) -> Result<(), Failure> {
+        let mut next: Vec<TunnelProfile> = serde_json::from_value(value["profiles"].clone())
+            .map_err(|_| Error::new(TUNNELS_ID, "invalid_type"))?;
+        next.iter_mut()
+            .try_for_each(TunnelProfile::validate)
+            .map_err(|_| Error::new(TUNNELS_ID, "out_of_range"))
+    }
+
     fn commit(
         &self,
         prepare: &mut dyn FnMut(&Value) -> Result<Prepared, Failure>,

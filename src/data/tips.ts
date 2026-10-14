@@ -10,6 +10,12 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "Plugin settings",
+		description:
+			"Find loaded plugin settings under Integrations, or search for a field in Settings. Plugin pages disappear when the plugin unloads.",
+		shortcut: null,
+	},
+	{
 		feature: "Desktop Markdown on mobile",
 		description:
 			"Open a session’s More actions menu on your phone to read the Markdown files open on desktop for that repository.",

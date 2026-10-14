@@ -1,6 +1,7 @@
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createBackgroundGitRunner } from "../../hooks/git/createBackgroundGitRunner";
+import { activityStore } from "../../stores/activityStore";
 import { toastsStore } from "../../stores/toasts";
 import { mockInvoke } from "../mocks/tauri";
 
@@ -20,6 +21,8 @@ describe("createBackgroundGitRunner", () => {
 	});
 
 	afterEach(() => {
+		// Catches: background git notifications leave a debounced save after this file ends.
+		activityStore.clearAll();
 		clearToasts();
 		mockInvoke.mockReset();
 	});

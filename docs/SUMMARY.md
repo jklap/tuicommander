@@ -79,6 +79,7 @@
 - [Output Parser](./backend/output-parser.md)
 - [Error Classification](./backend/error-classification.md)
 - [Git Operations](./backend/git.md)
+  - [Native Worktree Recycling Measurement](./evidence/worktree-recycling-1705-native.md)
 - [GitHub Integration](./backend/github.md)
 - [MCP & HTTP Server](./backend/mcp-http.md)
 - [ACP Client for ego](./backend/acp.md)

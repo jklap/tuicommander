@@ -918,6 +918,13 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	let scrollbarMarksContainer: HTMLDivElement | null = null;
 	let lastScrollbarMarksKey = "";
 
+	createEffect(() => {
+		settingsStore.state.showScrollbarMarks;
+		untrack(() => {
+			if (currentFrame) updateScrollbar(currentFrame);
+		});
+	});
+
 	function paintScrollbarMarks(totalRows: number) {
 		if (!scrollbarRef) return;
 		if (!scrollbarMarksContainer) {

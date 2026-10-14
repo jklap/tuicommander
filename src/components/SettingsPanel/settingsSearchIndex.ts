@@ -754,10 +754,11 @@ export function searchSettings(
 	query: string,
 	availableTabs: ReadonlySet<string>,
 	client: "desktop" | "browser",
+	pluginEntries: readonly SettingsSearchEntry[] = [],
 ): SettingsSearchEntry[] {
 	const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
 	if (terms.length === 0) return [];
-	return SETTINGS_SEARCH_INDEX.filter(
+	return [...SETTINGS_SEARCH_INDEX, ...pluginEntries].filter(
 		(entry) => availableTabs.has(entry.tab) && (!entry.platform || entry.platform === client) && matches(entry, terms),
 	);
 }
