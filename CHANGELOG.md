@@ -19,6 +19,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- AI Chat provider-retry waits now count down live to “retrying now”; user-message Copy buttons no longer wrap vertically.
+
 - Hide Markdown review Agent and Send controls after a successful send until a new change (#1881-f84a).
 
 - Preserve independent settings windows' edits when one changes agent visibility and another changes the IDE or other preferences (#1876-ceee).
