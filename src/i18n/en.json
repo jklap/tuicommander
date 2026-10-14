@@ -1,4 +1,7 @@
 {
+	"notifications.heading.tasks": "Tasks",
+	"notifications.toggle.tasks": "OS notifications for Tasks",
+	"notifications.hint.tasks": "Off by default. Notify for failed checks on linked GitHub PRs and new comments on followed tasks during existing detail refreshes. No background item polling. Saved with Tasks preferences.",
 	"closeDialog.sessions": "Active terminal sessions: {count}",
 	"settings.catalogue.app.close_behavior.label": "When closing the main window",
 	"settings.catalogue.app.close_behavior.help": "Ask, hide the main window, or quit. Explicit Quit still uses quit confirmation.",

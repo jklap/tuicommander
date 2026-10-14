@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Opt-in Tasks OS notices for linked GitHub check failures and comments on locally followed items, using existing detail refreshes and native notice delivery.
+
 ### Fixed
 
 - GitHub OAuth now requests `read:project` for Projects v2 reads. Existing logins need reauthorization.

@@ -1,5 +1,6 @@
 import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
 import type { WorkItemProvider } from "../../../plugins/workItemProvider";
+import { tasksNotifications } from "../../../services/tasksNotifications";
 import { appLogger } from "../../../stores/appLogger";
 import type { WorkItemDetail, WorkItemRef } from "../../../types/work-items.gen";
 import { writeClipboard } from "../../../utils/clipboard";
@@ -65,6 +66,19 @@ export function TasksDetail(props: TasksDetailProps) {
 								<span>{detail().item.itemType}</span>
 							</div>
 							<div class={styles.toolbar}>
+								<button
+									type="button"
+									aria-pressed={tasksNotifications.followed(detail().item.reference)}
+									onClick={() => {
+										tasksNotifications.setFollowed(
+											detail().item.reference,
+											!tasksNotifications.followed(detail().item.reference),
+										);
+										void tasksNotifications.observe(detail(), true);
+									}}
+								>
+									{tasksNotifications.followed(detail().item.reference) ? "Unfollow task" : "Follow task"}
+								</button>
 								<button type="button" onClick={() => handleOpenUrl(detail().item.url)}>
 									Open in provider
 								</button>

@@ -2462,6 +2462,7 @@ pub fn run() {
             fs::fs_read_file,
             work_items::start_work_prompt::build_start_work_prompt,
             work_items::local_query::project_work_items,
+            work_items::notices::compare_work_item_comments,
             fs::write_file,
             fs::write_file_if_unchanged,
             fs::create_directory,

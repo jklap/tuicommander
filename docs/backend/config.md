@@ -1622,3 +1622,5 @@ GitHub account removal saves the removal of its repository bindings before delet
 its credential and registry record. A bindings-save failure keeps the account and
 credential available for retry. A later account-removal failure can leave a valid,
 unbound account, but never a binding to an account that this operation deleted.
+
+Tasks notice policy and per-item follow/comment baselines are JSON values in `ui-prefs.json`'s existing `tasks_view_preferences` map. Reserved keys are `tasks:notification-policy` and `tasks:follow:<provider/account/item identity>`. No new configuration file or provider polling is used. Missing policy means disabled. These are host UI preferences, not provider subscriptions.

@@ -2,6 +2,7 @@ import { type Component, createSignal, For, Show } from "solid-js";
 import { t } from "../../../i18n";
 import { invoke } from "../../../invoke";
 import type { NotificationSound } from "../../../notifications";
+import { tasksNotifications } from "../../../services/tasksNotifications";
 import { appLogger } from "../../../stores/appLogger";
 import { notificationsStore } from "../../../stores/notifications";
 import { isTauri } from "../../../transport";
@@ -319,6 +320,16 @@ export const NotificationsTab: Component = () => {
 					)}
 				</p>
 			</div>
+			<h3>{t("notifications.heading.tasks", "Tasks")}</h3>
+			<SettingToggle
+				checked={tasksNotifications.enabled()}
+				onChange={(enabled) => tasksNotifications.setEnabled(enabled)}
+				label={t("notifications.toggle.tasks", "OS notifications for Tasks")}
+				hint={t(
+					"notifications.hint.tasks",
+					"Off by default. Notify for failed checks on linked GitHub PRs and new comments on followed tasks during existing detail refreshes. No background item polling. Saved with Tasks preferences.",
+				)}
+			/>
 		</div>
 	);
 };

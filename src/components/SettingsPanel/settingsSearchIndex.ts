@@ -310,6 +310,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	},
 	// tabs/NotificationsTab.tsx
 	{ tab: "notifications", section: "Notification Settings", sectionKey: "notifications.heading.notificationSettings" },
+	{ tab: "notifications", section: "Tasks", sectionKey: "notifications.heading.tasks" },
 	{
 		tab: "notifications",
 		section: "Notification Settings",
@@ -362,6 +363,12 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		section: "Notification Settings",
 		label: "Pull Requests",
 		labelKey: "notifications.label.prNotifications",
+	},
+	{
+		tab: "notifications",
+		section: "Tasks",
+		label: "OS notifications for Tasks",
+		labelKey: "notifications.toggle.tasks",
 	},
 	// DictationSettings.tsx — `SpeechRecognition`, `HandsFreeControls` and
 	// `SpeechSetup` each open with their own heading, so `extractSettings`, which
