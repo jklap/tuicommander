@@ -2335,6 +2335,8 @@ pub struct AppState {
     /// Serialize durable suspend/resume transitions and retain frontend-discovered metadata.
     pub(crate) suspend_metadata: DashMap<String, serde_json::Value>,
     pub(crate) suspend_lock: Mutex<()>,
+    /// Identities retained while a durable tab has no live PTY.
+    pub(crate) hibernated_peers: dashmap::DashSet<String>,
     /// Pending confirmation requests: request_id → oneshot sender for the human's answer.
     /// Populated by MCP `ui(action=confirm)`, consumed by `mcp_confirm_response`.
     ///
@@ -3376,7 +3378,7 @@ impl AppState {
     /// agent that spends a long turn thinking, without calling a TUIC tool, had
     /// its address deleted out from under it while it was still running.
     ///
-    /// Two things keep an identity addressable:
+    /// Three things keep an identity addressable:
     ///
     /// - it owns a live PTY. The agent is sitting right there mid-turn and will
     ///   call `agent action=send` when the turn ends.
@@ -3384,10 +3386,12 @@ impl AppState {
     ///   child's handoff permanently: re-registering a headerless caller mints a
     ///   fresh UUID, and nothing tells the child what the new one is.
     ///
-    /// Both conditions are bounded by live sessions, so retention cannot grow
-    /// without bound — a reaped identity with neither is genuinely unreachable.
+    /// - a durable suspended tab retains it until resume or explicit forget.
+    ///
+    /// Retention is bounded by live sessions and retained tabs.
     pub(crate) fn peer_identity_is_reapable(&self, peer_id: &str) -> bool {
-        self.live_pty_for_peer(peer_id).is_none()
+        !self.hibernated_peers.contains(peer_id)
+            && self.live_pty_for_peer(peer_id).is_none()
             && !self
                 .session_maps
                 .session_parent
@@ -3615,6 +3619,7 @@ impl AppState {
             screenshot_responses: DashMap::new(),
             suspend_metadata: DashMap::new(),
             suspend_lock: Mutex::new(()),
+            hibernated_peers: dashmap::DashSet::new(),
             settings_policy: Arc::new(crate::settings::policy::Policy::default()),
             confirm_responses: DashMap::new(),
             process_snapshot_cache: crate::pty::ProcessSnapshotCache::default(),

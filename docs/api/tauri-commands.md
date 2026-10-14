@@ -996,3 +996,6 @@ The list is scoped to registered repository/workspace ownership.
 `design_mode_browser_command(repo_path, action, args)` executes an immediate
 Design Mode native-port browser command. HTTP parity: `POST /design-mode/command`.
 See the HTTP reference for action arguments and typed error prefixes.
+
+
+`resume_session(tuic_session)` returns `{ok:true,session_id}` through the shared Rust wake path. HTTP parity: `POST /sessions/wake` with `{tuicSession}`. Live targets are idempotent; failed resume retains the suspended record.

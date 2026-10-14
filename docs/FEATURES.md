@@ -3031,3 +3031,6 @@ shows the last fifty agent actions. Screenshots require the reviewed tab to be v
 ## Plugin settings pages
 
 Loaded plugins with registered settings appear under Settings > Integrations. Search includes their catalogue field labels. Unloading removes the page and search entries. Reads, revision-checked edits, resets and secret set/unset status use the scoped Rust settings service; the UI owns no second configuration store.
+
+
+Suspended tabs wake on open, submit or peer mail through the same Rust transition. Concurrent wakes share one replacement PTY and retain the TUIC peer identity. A failed wake leaves the suspended tab available for retry.

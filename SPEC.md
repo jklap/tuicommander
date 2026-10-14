@@ -1061,3 +1061,6 @@ Tab suspension is owned by Rust and remains available with no UI attached. Durab
 ## Plugin settings pages
 
 Loaded plugins with registered settings appear under Settings > Integrations. Search includes their catalogue field labels. Unloading removes the page and search entries. Reads, revision-checked edits, resets and secret set/unset status use the scoped Rust settings service; the UI owns no second configuration store.
+
+
+Shared wake (B6, #1807-4f1f): `session_wake::ensure_live` serializes durable resume with suspension. Tab open, submit and peer mail use this path; input waits in the existing ready-window queue. Failed creation retains the durable tab. IPC `resume_session` maps to `POST /sessions/wake`; MCP list/status expose retained sessions as `hibernated`.

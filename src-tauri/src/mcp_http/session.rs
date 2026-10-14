@@ -206,6 +206,7 @@ pub(super) async fn enqueue_command(
         if let Some(draft) = body.expected_draft.as_deref() {
             return crate::pty::enqueue_owned_draft(&state, &session_id, &body.text, draft);
         }
+        let session_id = crate::session_wake::ensure_live(&state, &session_id)?;
         crate::pty::enqueue_user_command(
             &state,
             &session_id,
@@ -739,14 +740,15 @@ pub(super) fn register_pty_session(
 /// Resume preserves the TUIC identity while minting a fresh PTY key. A requested
 /// PTY key or alias is honoured only when nothing live holds it.
 #[derive(Default)]
-pub(super) struct RequestedIdentity {
+pub(crate) struct RequestedIdentity {
     pub session_id: Option<String>,
     pub tuic_session: Option<String>,
     pub alias: Option<String>,
     pub startup_command: Option<String>,
+    pub agent_type: Option<String>,
 }
 
-pub(super) fn spawn_pty_session(
+pub(crate) fn spawn_pty_session(
     state: Arc<AppState>,
     shell: String,
     cwd: Option<String>,
@@ -861,6 +863,12 @@ pub(super) fn spawn_pty_session(
         .entry(session_id.clone())
         .or_default()
         .spawn_root_role = crate::state::SpawnRootRole::Shell;
+    if let Some(mut snapshot) = state.session_maps.session_states.get_mut(&session_id) {
+        snapshot.agent_type = requested.agent_type.clone();
+        if requested.agent_type.is_some() {
+            snapshot.agent_state = Some("starting".into());
+        }
+    }
     let paused = Arc::new(AtomicBool::new(false));
     register_pty_session(
         &state,
@@ -983,6 +991,13 @@ pub(super) async fn resume_session(
         None => return session_not_found(),
     };
     entry.lock().paused.store(false, Ordering::Relaxed);
+    drop(entry);
+    if let Err(error) = crate::session_wake::ensure_live(&state, &session_id) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": error})),
+        );
+    }
     (StatusCode::OK, Json(serde_json::json!({"ok": true})))
 }
 

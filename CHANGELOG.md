@@ -3222,3 +3222,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Add Telegram setup in desktop and mobile Settings: token check/replacement, expiring one-use pairing or explicit chat IDs, live agent selection and safe daemon status.
 
 - Reuse explicitly finished, clean, integrated worktrees while preserving ignored build artifacts. Reserve new allocations before returning them.
+
+
+- Wake suspended sessions through one Rust path for tab open, submit and peer mail; concurrent wakes reuse one PTY and keep its TUIC identity (#1807-4f1f).

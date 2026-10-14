@@ -3169,3 +3169,8 @@ replies match UUIDs and expire after ten seconds. Errors include `not_armed`,
 `command_timeout`, `host_denied`, `eval_not_granted` and `tab_not_visible`.
 Legacy `/design-mode/navigate` and `/design-mode/reload` keep the restart-safe
 heartbeat sequence contract. Immediate commands do not change those sequences.
+
+
+### Shared session wake
+
+`POST /sessions/wake` accepts `{tuicSession}` and returns `{ok:true,session_id}`. It has the same local-or-authenticated guard as suspended-session actions and maps to IPC `resume_session`. An already-live target returns its current PTY. A failure returns HTTP 400 with `{error}` and retains the record. MCP session list/status expose retained sessions with `state:"hibernated"`; submit resumes and returns `status:"resuming"` after accepting input into the existing ready-window queue. Mail wake failure reports `resume_error` without deleting inbox mail.

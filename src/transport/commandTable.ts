@@ -25,6 +25,9 @@ type CommandTableEntry = { map: (args: Record<string, unknown>, p: ArgEncoder) =
  * The `p` helper encodes a required argument for URL usage (throws if missing).
  */
 export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
+	resume_session: {
+		map: (args) => ({ method: "POST", path: "/sessions/wake", body: { tuicSession: args.tuicSession } }),
+	},
 	suspended_session_action: { map: (args) => ({ method: "POST", path: "/sessions/suspended", body: args.request }) },
 	work_item_provider_bridge: {
 		map: (args) => ({ method: "POST", path: "/work-items/provider-bridge", body: args.input }),

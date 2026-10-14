@@ -2175,3 +2175,5 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 
 - [ ] After Boss restarts the backend, recycle a finished linked checkout and confirm the old workspace and declared agent placements are absent from repositories.json and the sidebar; sibling workspaces stay intact. Automated persisted-state and frontend regression tests cover the change; the live app does not load Rust edits through HMR.
 - [ ] After a manual `make dev` restart or release rebuild, verify GitLab planning dates still render in Roadmap and have no list filter/group control (`queryable` schema support requires the rebuilt Rust backend). _(triage 2026-10-14: WAITS — Three Tasks date/list tests passed in tasks-date-contracts.log; actual GitLab provider integration needs its planning-date update and an account. Read-only main plugin checkout 4150e41 model.js:32-33 currently exposes milestone text and due date, with no planning-date fields/queryable schema.)_
+
+- [ ] After a manual backend restart, open a suspended agent tab and send it input/mail; confirm one replacement PTY and retained peer identity (#1807-4f1f). Rust changes do not hot-reload.

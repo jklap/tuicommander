@@ -637,6 +637,14 @@ describe("transport", () => {
 			expect(result.path).toBe("/sessions/abc/resume");
 		});
 
+		it("maps resume_session to the shared wake route", () => {
+			expect(mapCommandToHttp("resume_session", { tuicSession: "identity" })).toMatchObject({
+				method: "POST",
+				path: "/sessions/wake",
+				body: { tuicSession: "identity" },
+			});
+		});
+
 		it("maps durable session actions to POST /sessions/suspended", () => {
 			const request = { action: "suspend", sessionId: "pty" };
 			expect(mapCommandToHttp("suspended_session_action", { request })).toMatchObject({
