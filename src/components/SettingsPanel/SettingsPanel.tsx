@@ -1,4 +1,4 @@
-import { type Component, createEffect, createSignal, onCleanup, Show } from "solid-js";
+import { type Component, createEffect, createSignal, For, onCleanup, Show } from "solid-js";
 import { t } from "../../i18n";
 import { invoke } from "../../invoke";
 import { shortenHomePath } from "../../platform";
@@ -14,6 +14,8 @@ import { pathBasename } from "../../utils/pathUtils";
 import { getRepoColor } from "../../utils/repoColor";
 import { DictationSettings } from "./DictationSettings";
 import { ExpertModeSwitch } from "./ExpertSetting";
+import { PluginSettingsTab } from "./PluginSettingsTab";
+import { createPluginSettingsCatalogue, pluginFieldLabel } from "./pluginSettingsCatalogue";
 import s from "./Settings.module.css";
 import { SettingsSearchBox, SettingsSearchResults, scrollToSetting } from "./SettingsSearch";
 import type { SettingsShellTab } from "./SettingsShell";
@@ -137,7 +139,7 @@ function initialTabFor(requested: string | undefined, ctx: SettingsContext): str
 }
 
 /** Build the full nav from global sections + configured repos */
-function buildNavItems(): SettingsShellTab[] {
+function buildNavItems(pluginTabs: SettingsShellTab[] = []): SettingsShellTab[] {
 	// All repos, including those nested in groups — grouped repos live in
 	// group.repoOrder, not state.repoOrder, so iterating repoOrder alone would
 	// hide them from the Settings nav. (#64)
@@ -147,6 +149,7 @@ function buildNavItems(): SettingsShellTab[] {
 	const items: SettingsShellTab[] = GLOBAL_TAB_GROUPS.flatMap((group) => [
 		{ key: `__label__:${group.key}`, label: group.label },
 		...group.tabs.filter((tab) => !hidden.has(tab.key)),
+		...(group.key === "integrations" ? pluginTabs : []),
 	]);
 
 	if (repos.length > 0) {
@@ -166,6 +169,13 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 	const [activeTab, setActiveTab] = createSignal(initialTabFor(props.initialTab, ctx()));
 
 	const [query, setQuery] = createSignal("");
+	const pluginPages = createPluginSettingsCatalogue();
+	const pluginTabs = () => pluginPages().map((page) => ({ key: `plugin:${page.id}`, label: page.label }));
+	const navItems = () => buildNavItems(pluginTabs());
+	const pluginEntries = () =>
+		pluginPages().flatMap((page) =>
+			page.fields.map((field) => ({ tab: `plugin:${page.id}`, section: page.label, label: pluginFieldLabel(field) })),
+		);
 
 	// Reset active tab when context changes or panel opens
 	createEffect(() => {
@@ -225,7 +235,12 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 	// controls this client renders: a desktop-only control would open a tab
 	// without it, so a browser is not offered it.
 	const results = () =>
-		searchSettings(query(), new Set(getGlobalTabs().map((tab) => tab.key)), isTauri() ? "desktop" : "browser");
+		searchSettings(
+			query(),
+			new Set([...getGlobalTabs(), ...pluginTabs()].map((tab) => tab.key)),
+			isTauri() ? "desktop" : "browser",
+			pluginEntries(),
+		);
 
 	const repoSettings = (path: string) => repoSettingsStore.getOrCreate(path, shortenHomePath(path));
 
@@ -275,7 +290,7 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 			visible={props.visible}
 			onClose={props.onClose}
 			title={t("settings.title", "Settings")}
-			tabs={buildNavItems()}
+			tabs={navItems()}
 			activeTab={activeTab()}
 			onTabChange={setActiveTab}
 			navWidth={uiStore.state.settingsNavWidth}
@@ -287,7 +302,7 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 		>
 			<Show
 				when={!query()}
-				fallback={<SettingsSearchResults results={results()} tabs={buildNavItems()} onSelect={openResult} />}
+				fallback={<SettingsSearchResults results={results()} tabs={navItems()} onSelect={openResult} />}
 			>
 				{/* Repo settings (shown when a repo nav item is active) */}
 				<Show when={activeRepoPath()} keyed>
@@ -318,6 +333,11 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 						);
 					}}
 				</Show>
+
+				{/* Live scoped plugin pages disappear with the loaded catalogue. */}
+				<For each={pluginPages().filter((page) => activeTab() === `plugin:${page.id}`)}>
+					{(page) => <PluginSettingsTab page={page} />}
+				</For>
 
 				{/* Global sections */}
 				<Show when={activeTab() === "general"}>

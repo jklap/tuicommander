@@ -3285,14 +3285,14 @@ export const settingsCatalogue = {
         ]
       },
       "sensitivity": "public",
-      "apply": "live",
-      "effect": "Updates tls for the current owner.",
+      "apply": "service_restart",
+      "effect": "Reconfigures TLS protection after persistence.",
       "operations": [
         "get",
         "set",
         "reset"
       ],
-      "confirmationClass": "ordinary"
+      "confirmationClass": "execution_authority"
     },
     "app.shell": {
       "id": "app.shell",

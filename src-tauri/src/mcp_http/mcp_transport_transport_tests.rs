@@ -4337,6 +4337,46 @@ async fn mcp_codex_spawn_carries_launch_instructions() {
 }
 
 #[cfg(unix)]
+const MOCK_CODEX_ARGV_SCRIPT: &str = "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$ARGV_OUTPUT.tmp\" && mv \"$ARGV_OUTPUT.tmp\" \"$ARGV_OUTPUT\"\n";
+
+// Catches: a paused mock writer publishes a partial argv prefix before finishing.
+#[cfg(unix)]
+#[tokio::test]
+async fn codex_mock_argv_is_published_only_after_writer_finishes() {
+    use std::io::Write;
+    let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let output = root.path().join("argv");
+    let ready = root.path().join("ready");
+    // Override printf to stop after the first argument. stdin releases the writer,
+    // so the partial-write window stays open until the test has observed it.
+    let script = format!(
+        "printf() {{\n shift\n command printf '%s\\n' \"$1\"\n shift\n command printf ready > \"$ARGV_READY\"\n read -r release\n command printf '%s\\n' \"$@\"\n}}\n{MOCK_CODEX_ARGV_SCRIPT}"
+    );
+    let mut writer = std::process::Command::new("/bin/sh")
+        .args(["-c", &script, "mock-codex", "--search", "exec", "task"])
+        .env("ARGV_OUTPUT", &output)
+        .env("ARGV_READY", &ready)
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let ready_content =
+        wait_for_file_content_async(&ready, std::time::Duration::from_secs(60)).await;
+    let partial = std::fs::read_to_string(&output).ok();
+    writer
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"release\n")
+        .unwrap();
+    let status = writer.wait().unwrap();
+    assert_eq!(ready_content, "ready", "writer must reach the paused state");
+    assert!(status.success());
+    assert_eq!(partial, None, "incomplete argv must not be published");
+    let actual = wait_for_file_content_async(&output, std::time::Duration::from_secs(60)).await;
+    assert_eq!(actual, "--search\nexec\ntask\n");
+}
+
+#[cfg(unix)]
 async fn capture_codex_spawn_with(
     args: &[&str],
     prompt: &str,
@@ -4348,11 +4388,7 @@ async fn capture_codex_spawn_with(
     let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
     let output = root.path().join("argv");
     let binary = root.path().join(command_name);
-    std::fs::write(
-        &binary,
-        "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$ARGV_OUTPUT\"\n",
-    )
-    .unwrap();
+    std::fs::write(&binary, MOCK_CODEX_ARGV_SCRIPT).unwrap();
     std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
     let _config = crate::config::set_config_dir_override(root.path().join("config"));
     let cfg = serde_json::from_value(serde_json::json!({

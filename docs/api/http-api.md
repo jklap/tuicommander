@@ -3134,6 +3134,14 @@ at delivery.
 
 `POST /work-items/provider-bridge` is the HTTP twin of `work_item_provider_bridge({input})`. Body: `{action:"claim", requestId}` returns the typed provider request or null when already claimed/expired; `{action:"complete", requestId, value}` completes a claimed request and returns null. The route requires local or authenticated access. Clients subscribe to `work-item-provider-request` on `/events`, whose payload contains `request_id` and `request`; only a client with the target provider loaded should claim it. Rust alone creates pending requests after MCP validation and write opt-in. Replies are validated as Tasks DTOs before entering model output.
 
+Settings policy foundation (#1786-9cbd): the existing
+`POST /mcp/confirm-response` also answers backend-built settings proposals shown
+by `mcp-confirm`. Only the first answer settles a question. A settings grant is
+bound to its origin connection and original target/revision/content, lasts at
+most 300 seconds from proposal creation, and cannot be replayed. There is no new
+settings HTTP endpoint in this step; replacement settings transport publication
+remains separate.
+
 ## Open desktop Markdown files
 
 | Method | Path | Request | Response |

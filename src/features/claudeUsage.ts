@@ -1,3 +1,5 @@
+import { AGENT_USAGE_BLINK_THRESHOLD } from "./usageThresholds";
+
 /**
  * Claude Usage — types and ticker formatting.
  *
@@ -66,7 +68,7 @@ export function getTickerPriority(api: UsageApiResponse): number {
 		.filter((b): b is RateBucket => b !== null)
 		.map((b) => b.utilization);
 	const maxUtil = Math.max(0, ...utils);
-	if (maxUtil >= 90) return 90;
+	if (maxUtil >= AGENT_USAGE_BLINK_THRESHOLD) return AGENT_USAGE_BLINK_THRESHOLD;
 	if (maxUtil >= 70) return 50;
 	return 10;
 }

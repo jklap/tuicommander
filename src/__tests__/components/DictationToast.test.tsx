@@ -1,4 +1,4 @@
-import { render } from "@solidjs/testing-library";
+import { cleanup, render } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testInScopeAsync } from "../helpers/store";
 // Must import mocks before store/component
@@ -18,6 +18,20 @@ describe("DictationToast", () => {
 		easeMeterLevel = storeModule.easeMeterLevel;
 		const component = await import("../../components/DictationToast/DictationToast");
 		DictationToast = component.DictationToast;
+	});
+
+	// Catches: a test leaves app-lifetime microphone polling alive after its scope ends.
+	afterEach(async () => {
+		mockInvoke.mockImplementation((command: string) => {
+			if (command === "disarm_hands_free_dictation") return Promise.resolve({ status: { armed: false } });
+			if (command === "stop_dictation_and_transcribe") return Promise.resolve({ text: "", skip_reason: null });
+			return Promise.resolve(undefined);
+		});
+		await dictationStore.stopRecording();
+		await dictationStore.disarmHandsFree();
+		cleanup();
+		if (vi.isFakeTimers()) expect(vi.getTimerCount()).toBe(0);
+		vi.useRealTimers();
 	});
 
 	it("is hidden by default", () => {
@@ -103,6 +117,7 @@ describe("DictationToast", () => {
 		it("flips the persisted setting from the toast while a hands-free conversation is armed", async () => {
 			let stored = { ...SAVED_CONFIG };
 			mockInvoke.mockImplementation((cmd: string, args?: { config?: typeof stored }) => {
+				if (cmd === "disarm_hands_free_dictation") return Promise.resolve({ status: { ...armedStatus, armed: false } });
 				if (cmd === "arm_hands_free_dictation" || cmd === "get_hands_free_status") return Promise.resolve(armedStatus);
 				if (cmd === "get_dictation_config") return Promise.resolve({ ...stored });
 				if (cmd === "set_dictation_config" && args?.config) {
@@ -165,7 +180,6 @@ describe("DictationToast", () => {
 				expect(container.querySelector('button[aria-label="Spoken replies"]')).not.toBeNull();
 				expect(container.textContent).toContain("Listening");
 			});
-			vi.useRealTimers();
 		});
 	});
 
@@ -194,10 +208,6 @@ describe("DictationToast", () => {
 				if (cmd === "get_speech_status") return Promise.resolve({ speaking, paused });
 				return Promise.resolve(undefined);
 			});
-
-		afterEach(() => {
-			vi.useRealTimers();
-		});
 
 		it("shows the phase and the live microphone level without push-to-talk", async () => {
 			vi.useFakeTimers();
@@ -295,7 +305,13 @@ describe("DictationToast", () => {
 				};
 				const answer = (command: string, speech: object) =>
 					mockInvoke.mockImplementation((cmd: string) =>
-						cmd === command ? Promise.resolve(speech) : Promise.resolve(undefined),
+						Promise.resolve(
+							cmd === command
+								? speech
+								: cmd === "disarm_hands_free_dictation"
+									? { status: status(false, "disarmed") }
+									: undefined,
+						),
 					);
 
 				answer("pause_speech", { speaking: false, paused: true });
