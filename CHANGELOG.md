@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Fix seeded workflow Pause resume targets, expose their target in the Designer, and report invalid publication fields as HTTP 422.
 
 ### Added
+- Add the internal settings-policy foundation: host-issued origin checks, write-only secret reads and backend-built one-use confirmation proposals for exposure/execution settings. Replacement settings transport publication remains separate (#1786-9cbd).
 - Render searchable Integrations settings pages from live plugin catalogue entries, with scoped revision-checked edits and unload removal (#1683-c04b).
 - List the desktop repository’s open Markdown files in the mobile session menu, with live updates and the existing mobile viewer (#1879-05ad).
 - Add scoped plugin settings schemas, locked revision patches, secret redaction, typed migrations for the five existing configurable plugins, and unload-safe catalogue registration (#1785-c7a1).
@@ -22,6 +23,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Read linked Tasks items and comments through MCP repo actions; allow provider comments and transitions only after enabling `mcp_work_item_writes` (#1854-4960).
 
 ### Fixed
+
+- Allow workflow agents to launch in registered branch worktrees while preserving detached-orphan removal guards (#1883-eba0).
 
 - Preserve attached Goose session names and legacy paths without injecting a duplicate or conflicting `--name`.
 - Keep the Context preview clear of the terminal CLI/Chat switch (#1893-a053).

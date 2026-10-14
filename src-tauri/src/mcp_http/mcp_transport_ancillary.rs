@@ -1388,7 +1388,7 @@ fn launch_workflow_effect(
     if worktree == owner {
         return Err("workflow agents require an isolated worktree".into());
     }
-    crate::worktree::validate_worktree_path(owner, &worktree)?;
+    crate::worktree::validate_branch_worktree_path(owner, &worktree)?;
     let store = crate::workflows::RunStore::open()?;
     let run = store.snapshot(&input.run_id)?;
     if run.project != owner {
@@ -2083,6 +2083,91 @@ pub(super) async fn handle_confirm(
     if !addr.ip().is_loopback() {
         return serde_json::json!({"error": "Action 'confirm' is restricted to localhost connections"});
     }
+    if let Some(id) = args["proposalId"].as_str() {
+        let Some(connection) = mcp_session_id else {
+            return serde_json::json!({"error": "settings confirmation requires a server-issued connection"});
+        };
+        let enabled = !state
+            .config
+            .read()
+            .disabled_native_tools
+            .iter()
+            .any(|tool| tool == "settings");
+        let caller = crate::settings::policy::Caller::mcp(addr, connection.to_owned(), enabled);
+        return super::confirm_settings(state, &caller, id, mcp_session_id).await;
+    }
+    ask_confirm(state, args, mcp_session_id, CONFIRM_TIMEOUT).await
+}
+
+pub(crate) async fn confirm_settings(
+    state: &Arc<AppState>,
+    caller: &crate::settings::policy::Caller,
+    proposal_id: &str,
+    mcp_session_id: Option<&str>,
+) -> serde_json::Value {
+    let preview = match state
+        .settings_policy
+        .begin_confirmation(caller, proposal_id)
+    {
+        Ok(preview) => preview,
+        Err(error) => return serde_json::json!({"error": error}),
+    };
+    let mut lease = SettingsConfirmationLease {
+        policy: state.settings_policy.clone(),
+        caller: caller.clone(),
+        id: proposal_id.to_owned(),
+        armed: true,
+    };
+    let result = ask_confirm(
+        state,
+        &serde_json::json!({"title": preview.title, "message": preview.message}),
+        mcp_session_id,
+        preview.remaining,
+    )
+    .await;
+    let approved = result["confirmed"].as_bool() == Some(true);
+    match state
+        .settings_policy
+        .finish_confirmation(caller, proposal_id, approved)
+    {
+        Ok(()) => {
+            lease.armed = false;
+            serde_json::json!({"confirmed":true,"proposalId":proposal_id})
+        }
+        Err(error) => serde_json::json!({"error":error,"confirmed":false}),
+    }
+}
+
+struct SettingsConfirmationLease {
+    policy: Arc<crate::settings::policy::Policy>,
+    caller: crate::settings::policy::Caller,
+    id: String,
+    armed: bool,
+}
+impl Drop for SettingsConfirmationLease {
+    fn drop(&mut self) {
+        if self.armed {
+            self.policy.cancel_confirmation(&self.caller, &self.id);
+        }
+    }
+}
+
+struct ConfirmRequestLease {
+    state: Arc<AppState>,
+    id: String,
+}
+impl Drop for ConfirmRequestLease {
+    fn drop(&mut self) {
+        super::resolve_mcp_confirm(&self.state, &self.id, false);
+    }
+}
+
+async fn ask_confirm(
+    state: &Arc<AppState>,
+    args: &serde_json::Value,
+    mcp_session_id: Option<&str>,
+    timeout: std::time::Duration,
+) -> serde_json::Value {
     let title = match args["title"].as_str() {
         Some(t) => t.to_string(),
         None => return serde_json::json!({"error": "Action 'confirm' requires 'title'"}),
@@ -2094,6 +2179,10 @@ pub(super) async fn handle_confirm(
     let request_id = uuid::Uuid::new_v4().to_string();
     let (tx, rx) = tokio::sync::oneshot::channel();
     state.confirm_responses.insert(request_id.clone(), tx);
+    let _pending = ConfirmRequestLease {
+        state: state.clone(),
+        id: request_id.clone(),
+    };
 
     // Dual-emit, same reason as the toast above: the bus only reaches SSE
     // clients, and there is no bus→window forwarder for the desktop WebView.
@@ -2132,7 +2221,7 @@ pub(super) async fn handle_confirm(
     };
     crate::state::AppState::send_mobile_push_url(state, url, &body);
 
-    let confirmed = match tokio::time::timeout(CONFIRM_TIMEOUT, rx).await {
+    let confirmed = match tokio::time::timeout(timeout, rx).await {
         Ok(Ok(answer)) => answer,
         // Sender dropped without answering, or nobody answered in time. Both are
         // "no human said yes", which is the safe reading for a destructive op.
@@ -2154,7 +2243,7 @@ pub(super) async fn handle_confirm(
             }
             return serde_json::json!({
                 "confirmed": false,
-                "reason": format!("no answer within {}s", CONFIRM_TIMEOUT.as_secs()),
+                "reason": format!("no answer within {}s", timeout.as_secs()),
             });
         }
     };

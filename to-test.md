@@ -2133,6 +2133,8 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 
 ## Background hidden state (#1803-00d9)
 
+- [ ] Workflow branch launch (#1883-eba0): after Boss restarts `make dev` or rebuilds release, launch a workflow coordinator in its registered branch worktree and confirm the attempt binds its session and prompt. Rust changes require restart; the peer did not restart the desktop.
+
 - [ ] After Boss restarts `make dev` or rebuilds release, hide then Show an idle terminal around the standby timeout; confirm the restored active terminal remains responsive. The B1 visibility recheck requires a Rust restart to load.
 - [ ] After Boss restarts `make dev` or rebuilds release, close to Background with a main window, floating window and open panel. Verify all hide and Show restores only those previously open. The Rust change does not hot-reload.
 - [ ] After restart on macOS, verify Dock icon disappears with `background.hide_dock_icon=true`, remains with false, and returns on Show. Verify Dock Reopen (when icon retained), second app launch, a deep link and a native notification click restore the window and active terminal.
@@ -2148,10 +2150,16 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] After Boss restarts `make dev` or builds release: verify the template icon on light/dark macOS menu bars, Windows overflow area and KDE. Check Always/background-only/Never, Show via click/menu, Quit confirmation, one first-entry native notice, live working/awaiting counts and attention clearing on Show. The current Rust process does not hot-reload.
 - [ ] On stock GNOME without a StatusNotifier host, close configured as Background must minimize with the main window reachable; Ask must omit Background. Native Linux packaging requires the appindicator dependency.
 
+## Settings policy foundation (#1786-9cbd)
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, queued approved writes must honor disconnect and expiry before owner preparation. Automated owner-boundary regressions cover both; settings transport publication remains a separate step.
+
+- [ ] After Boss's manual Rust restart and the separate settings-transport cutover, request a protected remote/auth/TLS/relay/executable edit: verify the desktop/phone dialog uses the backend diff, refusal writes nothing, acceptance commits once, and replay is refused. The policy foundation is covered through isolated owner files and the existing human-response channel; settings transport publication is still separate. Do not restart a live desktop session solely for this check.
 - [ ] Workflow Pause fix (#1882-bc88): after Boss restarts `make dev` or rebuilds release, edit a seeded story, publish it, and use Pause → Resume to → Save draft to repair an existing draft. Rust seed/API changes require restart.
 - [ ] Mobile composer + menu (#1880-d7ff): on iPhone, check both modes at 390px, native camera/file pickers, browser mic, Chat Park/Restore and busy Queue/Stop, terminal Queue and long-press Send. Confirm keyboard and safe-area positioning.
 
 - [ ] #1724-fe7e: After Boss rebuilds/restarts TUIC and reinstalls the Design Mode extension, navigate an armed worktree page, get a matching visible-tab PNG, read captured errors, grant/revoke host eval, and verify the sidebar action history. Rust is not hot-reloaded. Verify Claude Code, Codex and ego tool-list refresh on Arm/Stop; cached calls must refuse unarmed sessions.
+- [ ] #1885-0352 After Boss restarts `make dev` or rebuilds release, use an isolated fresh project in Workflow Designer: publish Resolve plan as revision 2 with its repository-integrity check; clearing all final checks must reject publication.
 ## Worktree rename restore records (1705-67b3) — Rust restart required
 
 - [ ] After Boss restarts the backend, recycle a finished linked checkout and confirm the old workspace and declared agent placements are absent from repositories.json and the sidebar; sibling workspaces stay intact. Automated persisted-state and frontend regression tests cover the change; the live app does not load Rust edits through HMR.

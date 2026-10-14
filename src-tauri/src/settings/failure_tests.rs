@@ -111,13 +111,25 @@ async fn headless_listener_rebind_cannot_report_applied() {
     let _guard = config::set_config_dir_override(dir.path().to_path_buf());
     let (state, service) = service();
     let revision = read(&service).await.revision;
+    let request = Request::Patch {
+        target: Target::Machine,
+        store: "app".into(),
+        expected_revision: revision,
+        operations: vec![set("/services/server/port", json!(9981))],
+    };
+    let id = service
+        .execute(request.clone())
+        .await
+        .unwrap_err()
+        .proposal_id
+        .unwrap();
+    let caller = super::policy::Caller::native();
+    assert_eq!(
+        super::policy_tests::answer(state.clone(), caller.clone(), id.clone(), true).await["confirmed"],
+        json!(true)
+    );
     let error = service
-        .patch(
-            Target::Machine,
-            "app".into(),
-            revision,
-            vec![set("/services/server/port", json!(9981))],
-        )
+        .execute_as(request, &caller, Some(&id))
         .await
         .unwrap_err();
     assert_eq!(error.code, "apply_failed");
