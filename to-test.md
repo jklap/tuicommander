@@ -596,7 +596,6 @@ that checkout merely to run this check.
 
 ## Branch icon toggles agents (2026-09-22) — frontend, live via HMR
 
-- [ ] [VISUAL] Repo header: GitHub badge sits right next to the repo chevron; on hover ⋯ and + appear to its left, nothing shifts. _(NOT VERIFIED 2026-09-29: partial — Repo header hover (mouse move): repoActions (⋯ and +) opacity 0->1, repoName x=10 and chevron x=277 unchanged (no shift). No GitHub badge in fx/repo (no GitHub remote) so badge placement not verifiable; no screenshot.)_ _(audit 2026-10-13: VISUAL-OWED — Pure rendering check; image access unavailable by assignment, no screenshot attempts.)_ _(triage 2026-10-14: DO — Runnable through scoped source/tests, isolated browser or throwaway API fixtures.)_
 ## Theme review applied (2026-09-23) — **Rust, needs a `make dev` restart**
 
 Bundled JSONs updated (VS Code Dark now follows VS Code Dark 2026), Deep Black / Delicate One removed, "Clean"
@@ -606,9 +605,6 @@ reference: `docs/design/theme-gallery-2026-09-22/`. `seed_builtin_themes` is a
 no-op once `<config>/themes` exists, so an existing install sees none of the
 new colors or names until the JSONs are copied into that folder.
 
-- [ ] [VISUAL] On Paper: the toolbar wordmark is a clean grey with no dark _(NOT VERIFIED 2026-09-30: blocked — VISUAL-owned by tuic-live-checks)_ _(audit 2026-10-13: VISUAL-OWED — Pure rendering check; image access unavailable by assignment, no screenshot attempts.)_ _(triage 2026-10-14: DO — Runnable through scoped source/tests, isolated browser or throwaway API fixtures.)_
-      smear, a colored repo name is readable, and the active tab row in the
-      sidebar is visible.
 ## DL and SU stop manufacturing scrollback (story `834-1878`, 2026-09-22) — **Rust, needs a `make dev` restart**
 
 `delete_lines` and `scroll_up` used to push the rows they removed into history.
