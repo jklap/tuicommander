@@ -18,6 +18,16 @@ import {
 	setTransportLogger,
 } from "../transportRuntime";
 
+// Catches: browser/remote start work using a different input shape or an absent endpoint.
+it("maps_start_work_prompt_input_without_reshaping", () => {
+	const input = { key: "TASK-1", url: null, title: "Title", body: "Body" };
+	expect(mapCommandToHttp("build_start_work_prompt", { repoPath: "/repo", input })).toEqual({
+		method: "POST",
+		path: "/tasks/start-work-prompt",
+		body: { repoPath: "/repo", input },
+	});
+});
+
 function readRepoFile(relativePath: string): string {
 	return readFileSync(join(process.cwd(), relativePath), "utf8");
 }

@@ -88,6 +88,8 @@ unnoticed.
 `fs.rs`: `write_file`, `write_file_if_unchanged`, `create_directory`, `delete_path`, `rename_path`,
 `copy_path`, `copy_path_abs`, `move_path_abs`, `add_to_gitignore`,
 `fs_read_file`, `list_directory`, `search_files`.
+`work_items/start_work_prompt.rs`: `build_start_work_prompt` uses the same
+`spawn_blocking_fs` lane to read and expand repository brief templates.
 `lib.rs`: `read_file`, `read_editor_file`, `read_external_file`,
 `read_editor_file_external`, `write_external_file`.
 `ai_agent/tools.rs`: `read_file`, `write_file`, `edit_file`, `list_files`,

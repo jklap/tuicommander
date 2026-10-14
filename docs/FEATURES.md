@@ -2942,6 +2942,14 @@ Tasks setup preserves saved account keys outside the form, including Enterprise 
 
 Tasks remembers the selected source per repository and List, Board or Roadmap plus list grouping, sort, preset, search and filters per repository/provider/account. The existing `uiStore` saves these preferences through `load_ui_prefs` and `save_ui_prefs` in `ui-prefs.json`. Results and page cursors remain transient. A rejected saved sort retries the last accepted order, then the provider default. Other query failures keep their error and Retry control. An unsaved scope keeps the normal defaults.
 
+### Tasks start-work briefs
+
+Tasks Start work reads `.tuic-start-work.md` in the active repository root,
+next to `.tuic.json`, with `{{key}}`, `{{url}}` and `{{title}}` placeholders.
+Without the file, the existing key/title/body brief remains. Item control
+characters are stripped before substitution; delivery keeps its 12,000-character
+cap and untrusted-content wrapper. Desktop and browser use the same Rust builder.
+
 ### Terminal Compose image attachments
 
 Paste an image, drop PNG/JPEG/WebP/GIF files on Compose, or select several with **Attach images** beside Send. Each image is saved through the shared paste helper and inserted as `[image: <path>]` in gesture order. Drops use the pointer position; the picker replaces the selection. Unsupported files and save failures show a visible error. Native desktop drops are claimed by the mounted Compose editor before terminal and tab routing.

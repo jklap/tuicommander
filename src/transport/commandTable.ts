@@ -1918,6 +1918,13 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			return { method: "GET", path };
 		},
 	},
+	build_start_work_prompt: {
+		map: (args) => ({
+			method: "POST",
+			path: "/tasks/start-work-prompt",
+			body: { repoPath: args.repoPath, input: args.input },
+		}),
+	},
 	fs_read_file: {
 		map: (_args, p) => ({ method: "GET", path: `/fs/read?repoPath=${p("repoPath")}&file=${p("file")}` }),
 	},

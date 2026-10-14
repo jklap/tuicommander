@@ -5,6 +5,9 @@ import type { WorkItemAction, WorkItemDetail } from "../../../../types/work-item
 import { TasksDetail } from "../TasksDetail";
 import { detail, provider, reference } from "./detailFixture";
 
+vi.mock("../../../../transport", () => ({
+	rpc: vi.fn().mockResolvedValue("DEMO-1: Inspect the work item\n\nA **clear** description."),
+}));
 const hostStartWork = vi.hoisted(() => vi.fn());
 const writeClipboard = vi.hoisted(() => vi.fn());
 vi.mock("../../../../hooks/git/startWork", () => ({ startWork: hostStartWork }));
