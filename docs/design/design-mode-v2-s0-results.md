@@ -143,6 +143,46 @@ undefined. No desktop TUIC was built or launched.
 Decision: proceed with X-A and native messaging. S2 must prove the real socket
 relay and explicit-instance handshake; the spike echo is not that proof.
 
+## Round 4 prerequisite audit (2026-10-14)
+
+The managed `design-mode` peer tried to recheck the capture prerequisite through
+TUIC's discovered `maccontrol__capture_screen` tool. Schema retrieval failed
+before the capture call:
+
+```text
+invalid MCP candidate: invalid collapsed tool schema: unknown field `annotations`, expected one of `name`, `description`, `inputSchema`
+```
+
+This establishes a tool-schema discovery failure, **not** a current Screen
+Recording refusal or a browser capability failure. No capture, browser launch,
+profile change, desktop restart, or permission change was performed. Items (a),
+(b), (e), and (f) retain their earlier evidence and limits; no new S0 pass is
+claimed.
+
+The source audit found the product autoload and agent browser command work
+already integrated on main at `15e04143b4`. Automatic cold-launch extension
+loading replaces manual product onboarding, but does not prove the spike's
+historical no-flag GUI-install persistence check. Keep that distinction in the
+final test evidence.
+
+For the coordinated live test, use the throwaway profile and the spike README:
+
+1. Recheck capture through a working MacControl schema, then record its actual
+   response. Do not infer permission status from this discovery error.
+2. Load unpacked in that profile, close its browser, and restart without the load
+   flag. Record whether the extension remains enabled: item (a).
+3. Open the sidebar through the native extension action, switch tabs, and return:
+   item (b).
+4. Make trusted top-level and cross-origin frame picks, and verify the picker
+   stops after one pick and Escape cancels it: item (e).
+5. After the extension action grants activeTab, capture the top-level target and
+   retain the successful PNG crop with its rectangle: item (f).
+
+Separately, product checks for stories 1834-f6c4 and 1724-fe7e still need Boss's
+entry-point/pick delivery, visible-tab screenshot and sidebar history, and
+Claude Code/Codex/ego tool-list refresh on Arm/Stop. Source and isolated protocol
+tests are not evidence that these installed-browser checks passed.
+
 ### Product-pilot continuation (2026-10-10)
 
 After the S2 host install, the product sidebar completed a real native `hello`

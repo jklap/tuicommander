@@ -405,3 +405,11 @@ Changing focus or tabs while transcription finishes does not change the destinat
 ### Waking a suspended tab
 
 Open a suspended tab to resume it. A submitted command or peer message can also wake it without the desktop UI. Commands wait until the agent is ready; messages stay in its inbox. The stable peer address does not change. If resume fails, the tab stays suspended and the caller receives the reason.
+
+### Mobile Claude Chat
+
+Select **Chat** in the session header to read the shared conversation view.
+The backend decides whether the Claude transcript is available, including when
+the desktop has not discovered a session id yet. An unavailable transcript returns
+the view to CLI with a notice. The mobile composer stays available in both modes.
+Switch to CLI for questions missing from Chat; CLI returns to the latest output.

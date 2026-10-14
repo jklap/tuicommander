@@ -110,7 +110,8 @@ export default function MobileApp() {
 		line?: number;
 		root?: string;
 	} | null>(null);
-	const { sessions, loading, refreshing, error, authError, refresh, questionCount, markSeen } = useSessions();
+	const { sessions, loading, refreshing, error, authError, refresh, questionCount, markSeen, subscribeChatWake } =
+		useSessions();
 	const { updateAvailable, serverDown, applyUpdate } = useVersionCheck();
 	ideasStore.hydrate();
 
@@ -245,6 +246,7 @@ export default function MobileApp() {
 			>
 				<div class={styles.sessionPane} classList={{ [styles.sessionPaneHidden]: sessionFilesOpen() }}>
 					<SessionDetailScreen
+						subscribeChatWake={subscribeChatWake}
 						session={lastKnownSession()!}
 						sessionExists={sessionExists()}
 						onBack={handleBack}

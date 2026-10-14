@@ -962,6 +962,10 @@ GitHub line review backend supports paginated thread/comment reads, reply, resol
 
 GitHub PR action backend supports failed-job reruns, head-pinned auto-merge and queue entry, queue removal/state and active-rule-aware merge. Legacy review submission validates REQUEST_CHANGES bodies. Frontend action integration remains separate.
 
+## GitHub Work adapter — integration pending (#1693-a816)
+
+The data-only GitHub adapter uses an injected account-scoped fetch port and the A4 contract. REST fixtures cover search, issue/PR identity, details, comments and repository create metadata. Authenticated host fetch wiring, lifecycle, manifest and catalog registration are present. Duplicate-picker integration and B6/B7 binding remain pending. Projects v2 success-path evidence requires `read:project`; no successful Projects response has been recorded.
+
 ## Tasks create — Component implemented (#1688-518d)
 
 The generic Tasks create form reads item types from the `itemType` enum field of
@@ -1072,3 +1076,12 @@ Loaded plugins with registered settings appear under Settings > Integrations. Se
 
 
 Shared wake (B6, #1807-4f1f): `session_wake::ensure_live` serializes durable resume with suspension. Tab open, submit and peer mail use this path; input waits in the existing ready-window queue. Failed creation retains the durable tab. IPC `resume_session` maps to `POST /sessions/wake`; MCP list/status expose retained sessions as `hibernated`.
+
+## Mobile Claude terminal Chat view
+
+Claude PTY sessions offer CLI / Chat in the existing mobile header. The shared
+`TerminalChatTranscript` owns rendering, visibility-paused keepalive and backend
+unavailability. Mobile injects wakes from `useSessions`; it opens no additional
+EventSource. Both hosts defer Claude binding to the backend. Mobile retains the
+existing composer and mounted hidden output, returning CLI to the bottom.
+Transcript follow pauses during touch and detaches on upward movement.
