@@ -23,7 +23,7 @@ pub(crate) struct SuspendedSession {
 type Records = BTreeMap<String, SuspendedSession>;
 
 pub(crate) fn list() -> Result<Records, String> {
-    ConfigFile::<Records>::new(FILE).update_with_strict(|records| Ok((records.clone(), false)))
+    ConfigFile::<Records>::new(FILE).read_preserving_invalid()
 }
 
 pub(crate) fn remove(identity: &str) -> Result<(), String> {

@@ -488,3 +488,9 @@ Frontend removal retracts saved peer placement declarations together with the ol
 sidebar workspace. Live PTY working
 directories do not move with sidebar placement. The allocation guard excludes live
 sessions rooted in the candidate checkout or its descendants.
+
+Suspended checkout ownership uses the durable `suspended-sessions.json` records,
+not just live PTYs. Both cwd descendants and worktree placement hold the checkout.
+Shared allocation skips these users; removal, archive, branch deletion and orphan
+cleanup refuse them even after force or session confirmation. Storage read errors
+fail closed. Lifecycle removal retires matching core worktree bell offers.

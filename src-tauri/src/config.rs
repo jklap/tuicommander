@@ -2783,6 +2783,19 @@ where
         Ok(result)
     }
 
+    /// Read authoritative safety state without quarantining malformed input. Repeated
+    /// ownership checks must not turn the first read error into an empty default.
+    pub(crate) fn read_preserving_invalid(&self) -> Result<T, String> {
+        let _guard = CONFIG_WRITE_LOCK.lock();
+        let _file_lock = self.acquire_file_lock()?;
+        match std::fs::read_to_string(&self.path) {
+            Ok(content) => serde_json::from_str(&content)
+                .map_err(|error| format!("Invalid {}: {error}", self.path.display())),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(T::default()),
+            Err(error) => Err(format!("Could not read {}: {error}", self.path.display())),
+        }
+    }
+
     /// Apply only the fields changed by this caller to the latest locked file.
     /// Arrays are replaced as values; a null delta removes an object key.
     pub(crate) fn save_delta(&self, base: &T, desired: &T) -> Result<(), String> {
