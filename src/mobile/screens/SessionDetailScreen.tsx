@@ -7,6 +7,7 @@ import { rpc } from "../../transport";
 import { CommandInput } from "../components/CommandInput";
 import { CommandWidget } from "../components/CommandWidget";
 import { IdeasOverlay } from "../components/IdeasOverlay";
+import { OpenMarkdownMenu } from "../components/OpenMarkdownMenu";
 import { OutputView } from "../components/OutputView";
 import { SessionHeaderOverlay, type SessionHeaderPanel } from "../components/SessionHeaderOverlay";
 import { SuggestChips } from "../components/SuggestChips";
@@ -26,7 +27,7 @@ interface SessionDetailScreenProps {
 	sessionExists: boolean;
 	onBack: () => void;
 	onOpenFiles: () => void;
-	onOpenFileLink?: (candidate: string, line?: number) => void;
+	onOpenFileLink?: (candidate: string, line?: number, root?: string) => void;
 }
 
 function projectName(cwd: string | null): string {
@@ -377,6 +378,13 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 					>
 						Ideas
 					</button>
+					<OpenMarkdownMenu
+						cwd={props.session.worktree_path || props.session.cwd}
+						onOpen={(tab) => {
+							setMoreOpen(false);
+							props.onOpenFileLink?.(tab.absolute_path, undefined, tab.fs_root);
+						}}
+					/>
 					<Show when={hasCommands()}>
 						<button
 							type="button"

@@ -97,12 +97,18 @@ The app launches in standalone mode (no browser chrome) for a native-like experi
 
 **The title can look faded on an iPhone.** In the installed PWA the "TUICommander" title in the top bar may look soft or faded, strongest at the top edge. We attribute this to the iOS status-bar edge effect, not to the app. Evidence: in a 390x844 mobile emulation with a 62 px top safe-area inset, the computed styles of the title and every ancestor up to `html` have `opacity: 1`, and `filter`, `backdrop-filter`, `text-shadow`, `mask-image` and `mix-blend-mode` all `none`, so nothing in our CSS fades it. Limit: this is an inference from the absence of a CSS cause; no iPhone layer inspection was possible, so it is not confirmed on a device.
 
-In a mobile terminal, tap the paperclip to choose a photo or file. The upload
+Both mobile composers use **+**, a text box with a microphone when browser speech is available, and **Send**. Tap **+ → Attach file** to choose a file or **Take photo** to open the camera capture picker. In a terminal, the upload
 inserts its `@path` into the draft; review the draft and tap Send when ready.
 In mobile AI Chat, images join the image draft and other files appear as file
 chips until Send. Android Chrome can also share a file into the installed PWA;
 the shared file opens as an AI Chat draft. iOS Safari currently requires the
-paperclip because it does not support Web Share Target.
+**+ → Attach file** because it does not support Web Share Target.
+The + menu also offers **Queue** in terminals, **Commands (/)** in agent terminals, and **Park draft / Restore parked draft / Swap parked
+draft** in AI Chat. Chat shows **Queue** and **Stop** while a turn is running.
+Terminal long-press on Send still opens Queue. Terminal parking is not offered:
+the existing parked-draft store belongs to AI Chat. Tap outside the menu or
+press Escape to close it. Desktop AI Chat and Ctrl+S retain their controls.
+
 See [Chrome's Share Target guide](https://developer.chrome.com/docs/capabilities/web-apis/web-share-target)
 and [WebKit's open support issue](https://bugs.webkit.org/show_bug.cgi?id=194593).
 

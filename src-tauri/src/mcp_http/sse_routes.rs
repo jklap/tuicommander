@@ -307,6 +307,7 @@ fn event_type_name(event: &AppEvent) -> &str {
         AppEvent::McpConfirmResolved { .. } => "mcp-confirm-resolved",
         AppEvent::AcpNotice(_) => "acp-notice",
         AppEvent::RepositoriesChanged => "repositories-changed",
+        AppEvent::OpenMarkdownTabsChanged => "open-markdown-tabs-changed",
         AppEvent::DirChanged { .. } => "dir-changed",
         AppEvent::SessionWorktreeDeclared { .. } => "session-worktree-declared",
         AppEvent::WorktreeCreated { .. } => "worktree-created",
@@ -352,6 +353,7 @@ pub(crate) fn event_payload_for_test(event: &AppEvent) -> serde_json::Value {
 
 fn event_payload(event: &AppEvent) -> serde_json::Value {
     match event {
+        AppEvent::OpenMarkdownTabsChanged => serde_json::json!({}),
         AppEvent::WorkItemProviderRequest {
             request_id,
             request,

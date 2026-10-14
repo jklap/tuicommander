@@ -83,11 +83,13 @@ describe("mobile ego chat", () => {
 		const send = screen.getByRole("button", { name: "Send" });
 		expect(send.textContent?.trim()).toBe("");
 		expect(send.querySelector("svg path")?.getAttribute("d")).toBe("M2.01 21L23 12 2.01 3 2 10l15 2-15 2z");
-		const attach = screen.getByRole("button", { name: "Attach file" });
-		expect((textarea?.compareDocumentPosition(attach) ?? 0) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-		const park = screen.getByRole("button", { name: "Park draft" });
-		expect(park.textContent?.trim()).toBe("");
-		expect(park.querySelector("svg")).toBeTruthy();
+
+		const plus = screen.getByRole("button", { name: "More composer actions" });
+		expect((plus.compareDocumentPosition(textarea!) ?? 0) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+		expect(screen.queryByRole("button", { name: "Park draft" })).toBeNull();
+		fireEvent.click(plus);
+		expect(screen.getByRole("menuitem", { name: "Attach file" })).toBeTruthy();
+		expect(screen.getByRole("menuitem", { name: "Park draft" })).toBeDisabled();
 	});
 	it("sends once on Enter and leaves Shift+Enter for a newline on mobile", () => {
 		const current = chat();
@@ -179,10 +181,11 @@ describe("mobile ego chat", () => {
 		expect(container.querySelector("textarea")).toBeTruthy();
 	});
 
-	it("offers one picker for photos and files without forcing camera capture", () => {
+	it("offers a regular picker and a separate camera capture picker", () => {
 		const { container } = render(() => <MobileChatScreen />);
 		const pickers = container.querySelectorAll('input[type="file"]');
-		expect(pickers).toHaveLength(1);
+		expect(pickers).toHaveLength(2);
+		expect(pickers[1].getAttribute("capture")).toBe("environment");
 		expect(pickers[0]).toBeInstanceOf(HTMLInputElement);
 		expect(pickers[0].hasAttribute("capture")).toBe(false);
 		expect(pickers[0].getAttribute("accept")).toContain("image/*");
@@ -200,6 +203,10 @@ describe("mobile ego chat", () => {
 		);
 		const { container } = render(() => <MobileChatScreen />);
 		const picker = container.querySelector('input[type="file"]') as HTMLInputElement;
+		fireEvent.click(screen.getByRole("button", { name: "More composer actions" }));
+		const openPicker = vi.spyOn(picker, "click");
+		fireEvent.click(screen.getByRole("menuitem", { name: "Attach file" }));
+		expect(openPicker).toHaveBeenCalledOnce();
 		fireEvent.change(picker, { target: { files: [new File(["report"], "report.pdf", { type: "application/pdf" })] } });
 		await waitFor(() => expect(screen.getByText("report.pdf")).toBeTruthy());
 		expect(current.send).not.toHaveBeenCalled();
@@ -258,8 +265,10 @@ describe("mobile ego chat", () => {
 		createAcpChat.mockReturnValue(shared);
 		render(() => <MobileChatScreen />);
 
-		expect(screen.getByRole("button", { name: "Stop" })).toBeTruthy();
-		expect(screen.getByRole("button", { name: "Queue" })).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: "More composer actions" }));
+		expect(screen.getByRole("menuitem", { name: "Queue" })).toBeDisabled();
+		fireEvent.click(screen.getByRole("menuitem", { name: "Stop" }));
+		expect(shared.cancel).toHaveBeenCalledOnce();
 		fireEvent.click(screen.getByRole("button", { name: "Cancel queued prompt Follow up from desktop" }));
 		expect(shared.cancelQueued).toHaveBeenCalledWith("phone-turn");
 	});
@@ -268,10 +277,12 @@ describe("mobile ego chat", () => {
 		const { container } = render(() => <MobileChatScreen />);
 		const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
 		fireEvent.input(textarea, { target: { value: "Phone draft" } });
-		fireEvent.click(screen.getByRole("button", { name: "Park draft" }));
+		fireEvent.click(screen.getByRole("button", { name: "More composer actions" }));
+		fireEvent.click(screen.getByRole("menuitem", { name: "Park draft" }));
 		expect(textarea.value).toBe("");
-		expect(screen.getByRole("button", { name: "Restore parked draft" })).toBeTruthy();
-		fireEvent.click(screen.getByRole("button", { name: "Restore parked draft" }));
+		expect(screen.queryByRole("menu")).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: "More composer actions" }));
+		fireEvent.click(screen.getByRole("menuitem", { name: "Restore parked draft" }));
 		expect(textarea.value).toBe("Phone draft");
 	});
 
@@ -289,10 +300,12 @@ describe("mobile ego chat", () => {
 		const picker = container.querySelector('input[type="file"]') as HTMLInputElement;
 		fireEvent.change(picker, { target: { files: [new File(["report"], "report.pdf", { type: "application/pdf" })] } });
 		await waitFor(() => expect(screen.getByText("report.pdf")).toBeTruthy());
-		fireEvent.click(screen.getByRole("button", { name: "Park draft" }));
+		fireEvent.click(screen.getByRole("button", { name: "More composer actions" }));
+		fireEvent.click(screen.getByRole("menuitem", { name: "Park draft" }));
 		expect(screen.queryByText("report.pdf")).toBeNull();
 		expect(current.send).not.toHaveBeenCalled();
-		fireEvent.click(screen.getByRole("button", { name: "Restore parked draft" }));
+		fireEvent.click(screen.getByRole("button", { name: "More composer actions" }));
+		fireEvent.click(screen.getByRole("menuitem", { name: "Restore parked draft" }));
 		expect(screen.getByText("report.pdf")).toBeTruthy();
 		fireEvent.click(screen.getByRole("button", { name: "Send" }));
 		expect(current.send).toHaveBeenCalledWith(

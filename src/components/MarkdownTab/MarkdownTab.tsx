@@ -100,6 +100,7 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 	const [sendingChanges, setSendingChanges] = createSignal(false);
 	// True once this tab wrote the file (checkbox, tweak, live edit) and no agent has been told yet.
 	const [editedSinceSend, setEditedSinceSend] = createSignal(false);
+	const [sentCommentIds, setSentCommentIds] = createSignal<ReadonlySet<string>>(new Set());
 	const [scrollEl, setScrollEl] = createSignal<HTMLElement>();
 	const repo = useRepository();
 	const pty = usePty();
@@ -523,7 +524,8 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 
 	const reviewComments = createMemo(() => parseTweakComments(content()));
 	const canSend = () => !!selectedAgentSession() && !sendingChanges();
-	const hasReviewChanges = () => reviewComments().length > 0 || editedSinceSend();
+	const hasReviewChanges = () =>
+		editedSinceSend() || reviewComments().some((comment) => !sentCommentIds().has(comment.id));
 	const reviewAgents = createMemo(() => {
 		const tab = props.tab;
 		if (tab.type !== "file") return [];
@@ -542,8 +544,10 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 	const handleSendChanges = async () => {
 		const sessionId = selectedAgentSession();
 		const path = fullPath()?.replace(/[\r\n\0]/g, "");
-		const count = reviewComments().length;
+		const comments = reviewComments();
+		const count = comments.length;
 		if (!sessionId || !path || !hasReviewChanges() || sendingChanges()) return;
+		const sentContent = content();
 		setSendingChanges(true);
 		try {
 			const noun = count === 1 ? "comment" : "comments";
@@ -553,7 +557,8 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 				sessionId,
 				`Open ${path}, re-read the whole file: ${tweaks}treat every other change since your last write (checkbox toggles, edited text) as the user's answer, ${cleanup} unrelated files unchanged.`,
 			);
-			setEditedSinceSend(false);
+			setSentCommentIds(new Set(comments.map((comment) => comment.id)));
+			if (content() === sentContent) setEditedSinceSend(false);
 			const terminalId = terminalsStore.findBySessionId(sessionId);
 			if (terminalId) terminalsStore.update(terminalId, { queuedCommands: outcome.queued });
 			toastsStore.add(
