@@ -1,4 +1,5 @@
 import { fireEvent, render, waitFor } from "@solidjs/testing-library";
+import { ErrorBoundary } from "solid-js";
 import { beforeEach, expect, it, vi } from "vitest";
 import { mockInvoke } from "../../../__tests__/mocks/tauri";
 import { pluginStore } from "../../../stores/pluginStore";
@@ -173,4 +174,51 @@ it("rejected writes reload the revision without echoing backend errors — catch
 			action: { action: "set", path: "/endpoint", value: "https://retry.test", expectedRevision: "r2" },
 		}),
 	);
+});
+
+// Catches: saving each list keystroke disables the focused row before typing can finish.
+it("string-list typing stays enabled until the edit is committed — catches a save disabling the row after its first character", async () => {
+	let finishSave = () => {};
+	const pendingSave = new Promise<{ effects: string[]; restart: string[] }>((resolve) => {
+		finishSave = () => resolve({ effects: [], restart: [] });
+	});
+	const listField = {
+		...field,
+		schema: { type: "array", title: "Allowed projects", maxItems: 128, items: { type: "string" } },
+	};
+	mockInvoke.mockImplementation(async (command, args) => {
+		if (command !== "plugin_settings_action") return undefined;
+		if (args.action.action === "describe") return { fields: { list: listField } };
+		if (args.action.action === "get") return { revision: "r1", values: { "/endpoint": { effective: ["project"] } } };
+		return pendingSave;
+	});
+	const view = render(() => <SettingsPanel visible onClose={() => {}} initialTab="plugin:fixture" />);
+	await waitFor(() => expect(view.getByDisplayValue("project")).toBeTruthy());
+	const input = view.getByDisplayValue("project") as HTMLInputElement;
+	input.focus();
+	try {
+		fireEvent.input(input, { target: { value: "project-" } });
+		expect(input.disabled).toBe(false);
+	} finally {
+		finishSave();
+		await waitFor(() =>
+			expect((view.getByRole("textbox", { name: "Value" }) as HTMLInputElement).disabled).toBe(false),
+		);
+	}
+});
+
+// Catches: the resource getter throws past the panel's own read-error UI.
+it("a failed settings read leaves the panel usable — catches a rejected resource escaping the local read-error alert", async () => {
+	mockInvoke.mockImplementation(async (command, args) => {
+		if (command !== "plugin_settings_action") return undefined;
+		if (args.action.action === "describe") return catalogue;
+		throw new Error("settings unavailable");
+	});
+	const view = render(() => (
+		<ErrorBoundary fallback={<p>Settings crashed</p>}>
+			<SettingsPanel visible onClose={() => {}} initialTab="plugin:fixture" />
+		</ErrorBoundary>
+	));
+	await waitFor(() => expect(view.container.textContent).toContain("Could not read plugin settings."));
+	expect(view.container.textContent).not.toContain("Settings crashed");
 });
