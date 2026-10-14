@@ -643,6 +643,21 @@ export async function initApp(deps: AppInitDeps) {
 		if (noticeId !== -1 && isNotificationSound(sound)) void notificationsStore.play(sound);
 	});
 
+	const savedTabs = repositoriesStore
+		.getPaths()
+		.flatMap((repoPath) =>
+			Object.entries(repositoriesStore.get(repoPath)?.workspaces ?? {}).flatMap(([workspaceId, branch]) =>
+				(branch.savedTerminals ?? []).map((tab) => ({ repoPath, workspaceId, tab })),
+			),
+		);
+	terminalsStore.reserveSnapshotIds(savedTabs.map(({ tab }) => tab.frontendId));
+	const savedBySession = new Map(
+		savedTabs.filter(({ tab }) => tab.sessionId).map((entry) => [entry.tab.sessionId, entry.tab]),
+	);
+	const savedByTuic = new Map(
+		savedTabs.filter(({ tab }) => tab.tuicSession).map((entry) => [entry.tab.tuicSession, entry.tab]),
+	);
+
 	// Listen for sessions created/closed by remote clients (browser UI or other Tauri windows)
 	listen<SessionCreatedPayload>("session-created", (event) => {
 		const { session_id, cwd, agent_type, display_name, parent_session } = event.payload;
@@ -665,25 +680,29 @@ export async function initApp(deps: AppInitDeps) {
 		// clears it. Read the count instead, before the add — reading `activeId` below
 		// would pull the user off the panel they opened and onto a worker tab.
 		const hadNoTerminals = terminalsStore.getCount() === 0;
-		const id = terminalsStore.add({
-			sessionId: session_id,
-			fontSize: deps.getDefaultFontSize(),
-			name:
-				display_name ||
-				(parsedAgentType
-					? `Session ${terminalsStore.getCount() + 1}`
-					: `PTY: Session ${terminalsStore.getCount() + 1}`),
-			// A spawn-assigned display name is pinned like a manual rename: neither
-			// an intent title nor the agent's OSC title may replace it.
-			nameIsCustom: Boolean(display_name),
-			nameFromSpawn: Boolean(display_name),
-			cwd: cwd ?? null,
-			awaitingInput: null,
-			isRemote: true,
-			agentType: parsedAgentType,
-			ptyDescription: null,
-			parentSession: parent_session ?? null,
-		});
+		const saved = savedBySession.get(session_id);
+		const id = terminalsStore.add(
+			{
+				sessionId: session_id,
+				fontSize: saved?.fontSize ?? deps.getDefaultFontSize(),
+				name:
+					display_name ||
+					(parsedAgentType
+						? `Session ${terminalsStore.getCount() + 1}`
+						: `PTY: Session ${terminalsStore.getCount() + 1}`),
+				// A spawn-assigned display name is pinned like a manual rename: neither
+				// an intent title nor the agent's OSC title may replace it.
+				nameIsCustom: Boolean(display_name),
+				nameFromSpawn: Boolean(display_name),
+				cwd: cwd ?? null,
+				awaitingInput: null,
+				isRemote: true,
+				agentType: parsedAgentType,
+				ptyDescription: null,
+				parentSession: parent_session ?? null,
+			},
+			saved?.frontendId,
+		);
 		remoteSessionTabs.set(session_id, id);
 
 		assignSessionToRepoBranch(session_id, id, cwd, deps.registerRepo, deps.refreshAllBranchStats);
@@ -972,20 +991,6 @@ export async function initApp(deps: AppInitDeps) {
 		}
 	}).catch((err) => appLogger.error("app", "Failed to register screenshot-request listener", err));
 
-	const savedTabs = repositoriesStore
-		.getPaths()
-		.flatMap((repoPath) =>
-			Object.entries(repositoriesStore.get(repoPath)?.workspaces ?? {}).flatMap(([workspaceId, branch]) =>
-				(branch.savedTerminals ?? []).map((tab) => ({ repoPath, workspaceId, tab })),
-			),
-		);
-	terminalsStore.reserveSnapshotIds(savedTabs.map(({ tab }) => tab.frontendId));
-	const savedBySession = new Map(
-		savedTabs.filter(({ tab }) => tab.sessionId).map((entry) => [entry.tab.sessionId, entry.tab]),
-	);
-	const savedByTuic = new Map(
-		savedTabs.filter(({ tab }) => tab.tuicSession).map((entry) => [entry.tab.tuicSession, entry.tab]),
-	);
 	// Check for surviving PTY sessions (persists across Vite HMR reloads)
 	const survivingSessionBaseline = new Map<string, { terminalId: string; shellStateRevision: number }>();
 	for (const terminalId of terminalsStore.getIds()) {
@@ -1080,28 +1085,32 @@ export async function initApp(deps: AppInitDeps) {
 		terminalsStore.setActive(terminalsStore.getIds()[0]);
 	}
 
-	// A suspended tab has no live PTY to discover, even while its siblings survive.
+	// A suspended tab has no live PTY to discover, even without live siblings.
 	for (const { repoPath, workspaceId, tab } of savedTabs) {
-		const liveSiblings = repositoriesStore
-			.get(repoPath)
-			?.workspaces[workspaceId]?.terminals.some((id) => terminalsStore.get(id)?.sessionId);
-		if (
-			!liveSiblings ||
-			!tab.suspended ||
-			(tab.tuicSession && terminalsStore.getIds().some((id) => terminalsStore.get(id)?.tuicSession === tab.tuicSession))
-		)
-			continue;
-		const id = terminalsStore.add(
-			{
-				...tab,
-				sessionId: null,
-				suspended: true,
-				awaitingInput: null,
-			},
-			tab.frontendId,
-		);
-		terminalsStore.setRepoPath(id, repoPath);
-		repositoriesStore.addTerminalToWorkspace(repoPath, workspaceId, id);
+		if (!tab.suspended) continue;
+		const alreadyRestored = terminalsStore
+			.getIds()
+			.some(
+				(id) => id === tab.frontendId || (tab.tuicSession && terminalsStore.get(id)?.tuicSession === tab.tuicSession),
+			);
+		if (!alreadyRestored) {
+			const id = terminalsStore.add(
+				{
+					...tab,
+					sessionId: null,
+					suspended: true,
+					awaitingInput: null,
+				},
+				tab.frontendId,
+			);
+			terminalsStore.setRepoPath(id, repoPath);
+			repositoriesStore.addTerminalToWorkspace(repoPath, workspaceId, id);
+		}
+		// Consume this snapshot so a later lazy branch restore cannot duplicate it.
+		const workspace = repositoriesStore.get(repoPath)?.workspaces[workspaceId];
+		repositoriesStore.setWorkspace(repoPath, workspaceId, {
+			savedTerminals: workspace?.savedTerminals?.filter((saved) => saved !== tab),
+		});
 	}
 
 	// Ensure non-git repos have a shell branch (migration for repos persisted

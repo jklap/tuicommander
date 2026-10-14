@@ -1523,7 +1523,10 @@ describe("initApp", () => {
 		repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 		repositoriesStore.setWorkspace("/repo", "main", {
 			worktreePath: "/repo",
-			savedTerminals: [{ frontendId: "term-880", sessionId: "race-live", name: "Live", cwd: "/repo", fontSize: 18 }],
+			lastActiveTerminal: "term-880",
+			savedTerminals: [
+				{ frontendId: "term-880", agentType: null, sessionId: "race-live", name: "Live", cwd: "/repo", fontSize: 18 },
+			],
 		});
 		repositoriesStore.setActiveWorkspace("/repo", "main");
 		paneLayoutStore.reset();
@@ -1540,13 +1543,15 @@ describe("initApp", () => {
 				pty: {
 					listActiveSessions: vi.fn().mockImplementation(async () => {
 						created!({ payload: { session_id: "race-live", cwd: "/repo" } });
-						return [{ session_id: "race-live", cwd: "/repo" }];
+						terminalsStore.update(terminalsStore.getTerminalForSession("race-live")!, { shellState: "busy" });
+						return [{ session_id: "race-live", cwd: "/repo", state: { shell_state: "idle" } }];
 					}),
 					close: vi.fn().mockResolvedValue(undefined),
 				},
 			}),
 		);
-		expect(terminalsStore.get("term-880")?.sessionId).toBe("race-live");
+		expect(terminalsStore.get("term-880")).toMatchObject({ sessionId: "race-live", fontSize: 18, shellState: "busy" });
+		expect(terminalsStore.state.activeId).toBe("term-880");
 		expect(terminalsStore.getCount()).toBe(1);
 	});
 
@@ -1559,6 +1564,7 @@ describe("initApp", () => {
 			savedTerminals: [
 				{
 					frontendId: "term-890",
+					agentType: null,
 					tuicSession: "paused-peer",
 					name: "Paused",
 					cwd: "/repo-paused",
@@ -1585,6 +1591,28 @@ describe("initApp", () => {
 			sessionId: null,
 			tuicSession: "paused-peer",
 		});
+	});
+
+	// Catches: restoring an all-suspended workspace twice when lazy branch selection follows init.
+	it("consumes suspended snapshots without stable session IDs before lazy branch restore", async () => {
+		repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+		repositoriesStore.setWorkspace("/repo", "main", {
+			worktreePath: "/repo",
+			savedTerminals: [
+				{ frontendId: "term-891", agentType: null, name: "Paused", cwd: "/repo", fontSize: 14, suspended: true },
+			],
+		});
+		repositoriesStore.setActiveWorkspace("/repo", "main");
+		const deps = createMockDeps({
+			handleBranchSelect: vi.fn().mockImplementation(async () => {
+				expect(repositoriesStore.get("/repo")?.workspaces.main.savedTerminals).toEqual([]);
+				expect(repositoriesStore.get("/repo")?.workspaces.main.terminals).toContain("term-891");
+			}),
+		});
+		await initApp(deps);
+		expect(deps.handleBranchSelect).toHaveBeenCalledWith("/repo", "main");
+		expect(terminalsStore.get("term-891")).toMatchObject({ suspended: true, sessionId: null });
+		expect(terminalsStore.getCount()).toBe(1);
 	});
 
 	it("restores active branch with surviving sessions", async () => {
