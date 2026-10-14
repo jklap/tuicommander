@@ -589,6 +589,63 @@ mod tests {
         assert_eq!(records[&sid].reason, "idle_hibernate");
     }
 
+    // Catches: keep-open addressed by durable peer identity being ignored after PTY rebinding.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn hibernation_preserves_keep_open_peer_after_pty_identity_rebinding() {
+        let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _config = crate::config::set_config_dir_override(root.path().join("config"));
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let sid = "rebound-pty";
+        let identity = "durable-peer";
+        live_child(&state, sid, root.path().to_path_buf());
+        state.session_maps.sessions.get(sid).unwrap().lock().cwd =
+            Some(root.path().to_string_lossy().into_owned());
+        let profile = root.path().join("profile");
+        let cwd = root.path().to_string_lossy().into_owned();
+        let slug: String = cwd
+            .trim_end_matches('/')
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+            .collect();
+        let project = profile.join("projects").join(slug);
+        std::fs::create_dir_all(&project).unwrap();
+        let agent_id = "22222222-2222-4222-8222-222222222222";
+        std::fs::write(project.join(format!("{agent_id}.jsonl")), "").unwrap();
+        state.suspend_metadata.insert(sid.into(), serde_json::json!({
+            "agentSessionId": agent_id,
+            "agentLaunchCommand": format!("CLAUDE_CONFIG_DIR={} claude", crate::prompt::shell_quote(&profile.to_string_lossy()))
+        }));
+        state
+            .session_maps
+            .live_pty_by_tuic_session
+            .insert(identity.into(), sid.into());
+        assert!(
+            hibernate_allowed(&state, sid),
+            "fixture must otherwise qualify"
+        );
+        // agent send keep_open stores the resolved peer identity, not its current PTY key.
+        state.keep_open_sessions.insert(identity.into());
+        let result = crate::suspended_sessions::suspend_with_reason(
+            &state,
+            sid,
+            &serde_json::Value::Null,
+            "idle_hibernate",
+        );
+        let still_live = state.session_maps.sessions.contains_key(sid);
+        let retained = crate::suspended_sessions::list().unwrap();
+        crate::pty::close_pty_core_with_reason(&state, sid, false, "test_cleanup");
+        assert!(
+            result.is_err(),
+            "keep-open peer must refuse automatic hibernation"
+        );
+        assert!(still_live, "keep-open peer must retain its live PTY");
+        assert!(
+            !retained.contains_key(identity),
+            "refused hibernation must not publish a retained tab"
+        );
+    }
+
     // Catches: a night asleep counting toward the idle hibernation threshold.
     #[test]
     fn sleep_time_does_not_count_as_idle() {
