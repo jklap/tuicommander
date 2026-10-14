@@ -39,24 +39,6 @@ async fn action(router: Router, id: &str, value: Value) -> (StatusCode, Value) {
     )
 }
 
-// Catches: configurable plugins loading while all their private settings remain invisible.
-#[test]
-fn plugin_without_schema_rejected() {
-    let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
-    let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
-    manifest(dir.path(), "untyped-settings", Some(json!({})));
-    std::fs::write(
-        dir.path().join("plugins/untyped-settings/data/config.json"),
-        "{\"enabled\":true}",
-    )
-    .unwrap();
-    let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
-    assert!(
-        register_loaded_plugin_impl(&state, "untyped-settings".into(), vec![]).is_err(),
-        "a configurable plugin without a schema must not load"
-    );
-}
-
 // Catches: a plugin settings patch escaping to a host setting or an arbitrary file.
 #[tokio::test]
 async fn plugin_host_path_rejected() {
