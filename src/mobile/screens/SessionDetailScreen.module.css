@@ -40,7 +40,7 @@
 
 .headerInfo {
   flex: 1;
-  min-width: 120px;
+  min-width: 0;
   height: 44px;
   display: flex;
   flex-direction: column;

@@ -422,6 +422,8 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 	let searchInput: HTMLInputElement | undefined;
 	let matchIndex = -1;
 	let stickToBottom = true;
+	let touchActive = false;
+	let lastScrollTop = 0;
 	const [newTextBelow, setNewTextBelow] = createSignal(false);
 	let previousContent = new Map<string, number>();
 	createEffect(() => {
@@ -443,17 +445,26 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 		else if (grew && !stickToBottom) setNewTextBelow(true);
 		previousContent = content;
 		queueMicrotask(() => {
-			if (container && stickToBottom) container.scrollTop = container.scrollHeight;
+			if (container && stickToBottom && !touchActive) {
+				container.scrollTop = container.scrollHeight;
+				lastScrollTop = container.scrollTop;
+			}
 		});
 	});
 	const scrollToBottom = () => {
 		stickToBottom = true;
 		setNewTextBelow(false);
-		if (container) container.scrollTop = container.scrollHeight;
+		if (container) {
+			container.scrollTop = container.scrollHeight;
+			lastScrollTop = container.scrollTop;
+		}
 	};
 	const onScroll = () => {
 		if (!container) return;
-		stickToBottom = container.scrollHeight - container.clientHeight - container.scrollTop <= 24;
+		const atBottom = container.scrollHeight - container.clientHeight - container.scrollTop <= 1;
+		if (atBottom) stickToBottom = true;
+		else if (container.scrollTop < lastScrollTop) stickToBottom = false;
+		lastScrollTop = container.scrollTop;
 		if (stickToBottom) setNewTextBelow(false);
 	};
 
@@ -611,6 +622,15 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 				tabIndex={0}
 				onKeyDown={onKeyDown}
 				onScroll={onScroll}
+				onTouchStart={() => {
+					touchActive = true;
+				}}
+				onTouchEnd={() => {
+					touchActive = false;
+				}}
+				onTouchCancel={() => {
+					touchActive = false;
+				}}
 			>
 				<Show when={finding()}>
 					<div class={s.findBar}>

@@ -36,6 +36,8 @@ async function setup(mobile = false) {
 		transcript.scrollTop = top;
 		fireEvent.scroll(transcript);
 	};
+	// Establish the initial followed position after installing jsdom layout metrics.
+	scroll(700);
 	return { ...view, transcript, scroll, setBusy };
 }
 

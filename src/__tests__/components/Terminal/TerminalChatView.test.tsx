@@ -104,12 +104,11 @@ describe("ViewModeToggle", () => {
 		expect(queryByRole("group", { name: "Terminal view" })).toBeNull();
 	});
 
-	it("disables Chat with the reason when the agent is not bound", () => {
+	it("lets the backend decide Claude binding when the discovered id is missing", () => {
 		const id = addTerminal("claude", null);
 		const { getByText } = render(() => <ViewModeToggle terminalId={id} />);
 		const chat = getByText("Chat") as HTMLButtonElement;
-		expect(chat.disabled).toBe(true);
-		expect(chat.title).toContain("not bound");
+		expect(chat.disabled).toBe(false);
 	});
 
 	it("switches the terminal to chat when bound", () => {

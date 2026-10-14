@@ -400,3 +400,12 @@ Scrolling into history keeps the requested lines in view while an agent writes m
 Dictation inserts into Compose when focus is on the Chat transcript or page background. It replaces the selection that existed when you pressed the hotkey and keeps the rest of the draft. A focused search or form editor still receives dictation. In CLI, dictation keeps the usual terminal and auto-send behavior.
 
 Changing focus or tabs while transcription finishes does not change the destination. If the original editor or session closes, or its draft changes, recover the text from the sticky error message or Messages bell. The app does not send it to another terminal.
+
+
+### Mobile Claude Chat
+
+Select **Chat** in the session header to read the shared conversation view.
+The backend decides whether the Claude transcript is available, including when
+the desktop has not discovered a session id yet. An unavailable transcript returns
+the view to CLI with a notice. The mobile composer stays available in both modes.
+Switch to CLI for questions missing from Chat; CLI returns to the latest output.

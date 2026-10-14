@@ -1061,3 +1061,12 @@ Tab suspension is owned by Rust and remains available with no UI attached. Durab
 ## Plugin settings pages
 
 Loaded plugins with registered settings appear under Settings > Integrations. Search includes their catalogue field labels. Unloading removes the page and search entries. Reads, revision-checked edits, resets and secret set/unset status use the scoped Rust settings service; the UI owns no second configuration store.
+
+## Mobile Claude terminal Chat view
+
+Claude PTY sessions offer CLI / Chat in the existing mobile header. The shared
+`TerminalChatTranscript` owns rendering, visibility-paused keepalive and backend
+unavailability. Mobile injects wakes from `useSessions`; it opens no additional
+EventSource. Both hosts defer Claude binding to the backend. Mobile retains the
+existing composer and mounted hidden output, returning CLI to the bottom.
+Transcript follow pauses during touch and detaches on upward movement.

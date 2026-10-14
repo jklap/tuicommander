@@ -7,6 +7,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- Add a mobile Claude CLI / Chat switch with shared transcript rendering, the existing composer and SSE stream, visibility-paused reads and touch-safe scrolling (#1770-3e28).
+
+### Added
 - Background desktop WebViews unload after a configurable awake delay (default 10 minutes, 0 disables) and reconnect tabs on Show. Rust sessions keep running; frontend plugins pause while unloaded.
 
 

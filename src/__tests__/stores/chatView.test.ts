@@ -50,10 +50,10 @@ describe("chatViewAvailability", () => {
 		expect(chatViewAvailability({ ...codex, exactAgentSessionId: null }).available).toBe(false);
 	});
 
-	// Catches: another tab's conversation shown for an agent TUIC has not bound (issue #119 class).
-	it("toggle_disabled_when_agent_unbound_with_reason", () => {
+	// Catches: a second frontend binding rule blocking a Claude transcript the backend can read.
+	it("Claude availability defers missing binding to the backend", () => {
 		const result = chatViewAvailability({ ...bound, agentSessionId: null });
-		expect(result).toEqual({ available: false, reason: expect.stringContaining("not bound") });
+		expect(result).toEqual({ available: true });
 	});
 
 	it("names a reason for a shell tab, an agent without an adapter and a remote terminal", () => {

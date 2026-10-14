@@ -2179,3 +2179,7 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 
 - [ ] After Boss restarts the backend, recycle a finished linked checkout and confirm the old workspace and declared agent placements are absent from repositories.json and the sidebar; sibling workspaces stay intact. Automated persisted-state and frontend regression tests cover the change; the live app does not load Rust edits through HMR.
 - [ ] After a manual `make dev` restart or release rebuild, verify GitLab planning dates still render in Roadmap and have no list filter/group control (`queryable` schema support requires the rebuilt Rust backend). _(triage 2026-10-14: WAITS — Three Tasks date/list tests passed in tasks-date-contracts.log; actual GitLab provider integration needs its planning-date update and an account. Read-only main plugin checkout 4150e41 model.js:32-33 currently exposes milestone text and due date, with no planning-date fields/queryable schema.)_
+
+
+## Mobile Claude CLI / Chat (#1770-3e28)
+- [ ] [HUMAN] On a real iPhone, measure first Chat open and resume after more than 20 seconds hidden at 2000 entries; verify gentle touch detaches during streaming and CLI returns to latest output. Browser timings are recorded separately and do not prove phone performance.

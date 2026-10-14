@@ -44,15 +44,14 @@ export function chatViewKey(sessionId: string): string {
 	return `pty:${sessionId}`;
 }
 
-/**
- * Whether a terminal can show a chat view, and if not, why.
- *
- * Claude, Grok and Codex have transcript adapters, and only an agent TUIC has
- * bound to a session file is read: a tab with no `agentSessionId` is one the
- * pid registry has not answered for, and showing it would risk another tab's
- * conversation (issue #119). The backend repeats that check for Grok on the
- * exact registry entry and answers `not_bound` for a heuristic binding.
- */
+/** Claude binding is decided by the backend; other adapters retain their exact-binding gates. */
+export type ChatViewWake = (sessionId: string, wake: () => void) => Promise<() => void> | (() => void);
+
+const defaultWake: ChatViewWake = (sessionId, wake) =>
+	listen<{ session_id: string }>("chat-view-changed", (event) => {
+		if (event.payload.session_id === sessionId) wake();
+	});
+
 export function chatViewAvailability(
 	term:
 		| Pick<TerminalData, "agentType" | "agentSessionId" | "exactAgentSessionId" | "sessionId" | "isRemote">
@@ -64,7 +63,8 @@ export function chatViewAvailability(
 	if (term.isRemote) return { available: false, reason: "The chat view is not available for remote terminals" };
 	if (!term.sessionId) return { available: false, reason: "The terminal has no session yet" };
 	const boundId = term.agentType === "codex" ? term.exactAgentSessionId : term.agentSessionId;
-	if (!boundId) return { available: false, reason: "The agent session is not bound to a transcript yet" };
+	if (term.agentType !== "claude" && !boundId)
+		return { available: false, reason: "The agent session is not bound to a transcript yet" };
 	return { available: true };
 }
 
@@ -169,12 +169,12 @@ export const chatViewStore = {
 	},
 
 	/** Refresh on every wake for one terminal. Returns the disposer. */
-	async watch(sessionId: string): Promise<() => void> {
+	async watch(sessionId: string, subscribeWake: ChatViewWake = defaultWake): Promise<() => void> {
 		const owner = Symbol();
 		watchOwners.set(sessionId, owner);
 		setState("cursors", sessionId, { epoch: null, nextSeq: 0 });
-		const unlisten = await listen<{ session_id: string }>("chat-view-changed", (event) => {
-			if (event.payload.session_id === sessionId && watchOwners.get(sessionId) === owner) {
+		const unlisten = await subscribeWake(sessionId, () => {
+			if (watchOwners.get(sessionId) === owner) {
 				// refresh logs the failure; a later wake/keepalive retries it.
 				void chatViewStore.refresh(sessionId).catch(() => {});
 			}

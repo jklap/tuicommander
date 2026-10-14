@@ -53,7 +53,13 @@ describe("mobile terminal controls", () => {
 			},
 		};
 		render(() => (
-			<SessionDetailScreen session={session} sessionExists={true} onBack={() => {}} onOpenFiles={() => {}} />
+			<SessionDetailScreen
+				subscribeChatWake={() => () => {}}
+				session={session}
+				sessionExists={true}
+				onBack={() => {}}
+				onOpenFiles={() => {}}
+			/>
 		));
 		expect(screen.getByRole("button", { name: /2\s*Green/ })).toBeTruthy();
 		expect(screen.queryByRole("button", { name: "Yes" })).toBeNull();
@@ -73,6 +79,7 @@ describe("mobile terminal controls", () => {
 		for (const path of ["typed", "keybar"]) {
 			render(() => (
 				<SessionDetailScreen
+					subscribeChatWake={() => () => {}}
 					session={{
 						session_id: "session-1",
 						cwd: "/repo",
@@ -219,7 +226,13 @@ describe("mobile terminal controls", () => {
 			},
 		};
 		render(() => (
-			<SessionDetailScreen session={session} sessionExists={false} onBack={() => {}} onOpenFiles={() => {}} />
+			<SessionDetailScreen
+				subscribeChatWake={() => () => {}}
+				session={session}
+				sessionExists={false}
+				onBack={() => {}}
+				onOpenFiles={() => {}}
+			/>
 		));
 		expect(screen.getByText("Session ended")).toBeTruthy();
 		expect((screen.getByPlaceholderText("Type a command...") as HTMLTextAreaElement).disabled).toBe(true);
