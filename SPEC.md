@@ -1047,6 +1047,13 @@ panels and document contents are excluded. The iPhone visual check remains manua
 
 Background tray (B3): implemented. Native tray/menu-bar status reads current backend SessionState on transitions, with Show and explicit Quit using the shared background lifecycle. Tray preference defaults to background_only; never prevents hiding. Missing native tray support minimizes instead. Native template appearance and desktop-host integration require verification after a rebuild; WebView unload and hibernation remain separate work.
 
+Design Mode agent browser commands use bounded per-repository native-port requests
+and UUID replies, with ten-second timeouts and Stop cancellation. The extension
+owns reviewed-tab and host-permission checks. Eval needs explicit optional-origin
+consent, including all-sites consent. The legacy heartbeat restart identity and
+navigation sequences remain unchanged. Browser screenshot/client-refresh reality
+verification is still required before story 1724-fe7e can close.
+
 ### Rust-owned suspended tabs
 
 Tab suspension is owned by Rust and remains available with no UI attached. Durable config records keyed by `tuic_session` survive document recreation and process restart, retaining agent/profile, cwd/worktree, alias and pane placement. Rust verifies resume commands and opens the replacement PTY; the frontend renders records and attaches the returned session. Lifecycle events are available over IPC and SSE.

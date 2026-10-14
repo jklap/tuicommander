@@ -104,6 +104,7 @@
 /config/themes
 /config/ui-prefs
 /design-mode
+/design-mode/command
 /design-mode/navigate
 /design-mode/reload
 /design-mode/start

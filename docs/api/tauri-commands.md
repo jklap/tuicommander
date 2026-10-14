@@ -992,3 +992,7 @@ step; the replacement settings transport is a separate cutover.
 The read command runs configuration I/O on the blocking pool. Publication stores
 only metadata in memory and invalidates consumers with `open-markdown-tabs-changed`.
 The list is scoped to registered repository/workspace ownership.
+
+`design_mode_browser_command(repo_path, action, args)` executes an immediate
+Design Mode native-port browser command. HTTP parity: `POST /design-mode/command`.
+See the HTTP reference for action arguments and typed error prefixes.

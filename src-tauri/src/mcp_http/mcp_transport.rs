@@ -85,8 +85,8 @@ use super::mcp_transport_catalogue::build_mcp_instructions_for_session;
 #[cfg(test)]
 use super::mcp_transport_catalogue::filtered_native_tools;
 use super::mcp_transport_catalogue::handle_call_tool;
-use super::mcp_transport_catalogue::handle_get_tool_schema;
-use super::mcp_transport_catalogue::handle_search_tools;
+use super::mcp_transport_catalogue::handle_get_tool_schema_for_session;
+use super::mcp_transport_catalogue::handle_search_tools_for_session;
 use super::mcp_transport_catalogue::merged_tool_definitions;
 #[cfg(test)]
 use super::mcp_transport_catalogue::merged_tool_definitions_for_mode;
@@ -110,6 +110,8 @@ use super::mcp_transport_catalogue::summarize_repos;
 use super::mcp_transport_catalogue::tag_repo_connection;
 #[cfg(test)]
 use super::mcp_transport_catalogue::validate_mcp_repo_path;
+#[cfg(test)]
+use super::mcp_transport_catalogue::{handle_get_tool_schema, handle_search_tools};
 #[cfg(test)]
 pub(super) use super::mcp_transport_peer::CLIENT_PID_HEADER;
 use super::mcp_transport_peer::InitializeKind;
@@ -547,7 +549,23 @@ async fn dispatch_mcp_tool_call_with_context(
         .map(|meta| meta.is_claude_code)
         .unwrap_or(false);
     match name {
-        "design_mode" => crate::design_mode::mcp::handle(state, args).await,
+        "design_mode" => {
+            let origin =
+                super::mcp_transport_ancillary::resolve_mcp_origin_pty(state, mcp_session_id);
+            if args["action"] != "start"
+                && !(crate::design_mode::mcp::visible_to(state, origin.as_deref())
+                    && (args["action"] == "status"
+                        || crate::design_mode::mcp::owns_repo(
+                            state,
+                            origin.as_deref(),
+                            args["repo_path"].as_str().unwrap_or(""),
+                        )))
+            {
+                serde_json::json!({"error":"Design Mode not armed for this session"})
+            } else {
+                crate::design_mode::mcp::handle(state, args).await
+            }
+        }
         "automations" => {
             crate::automations::mcp::handle(
                 args,
@@ -733,8 +751,8 @@ async fn dispatch_mcp_tool_call_with_context(
             let sid = mcp_session_id.map(str::to_owned);
             run_blocking_handler(move || handle_voice(&state, &args, sid.as_deref())).await
         }
-        "search_tools" => handle_search_tools(state, args),
-        "get_tool_schema" => handle_get_tool_schema(state, args),
+        "search_tools" => handle_search_tools_for_session(state, args, mcp_session_id),
+        "get_tool_schema" => handle_get_tool_schema_for_session(state, args, mcp_session_id),
         "call_tool" => {
             handle_call_tool(state, addr, args, mcp_session_id, managed_parent_cwd).await
         }

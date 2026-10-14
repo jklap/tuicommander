@@ -33,6 +33,7 @@ function renderErrors(draft, errors, selection) {
 function render(draft) {
   if (!draft) return;
   current = draft;
+  $('action-history').replaceChildren(...(draft.actionHistory ?? []).map((entry) => node('p', `${new Date(entry.when).toLocaleTimeString()} · ${entry.who} · ${entry.action} · ${entry.ok ? 'done' : 'failed'}`)));
   $('repo').textContent = draft.repoPath ?? 'Open Design Mode from TUICommander to select a repository.';
   $('connection').textContent = draft.connection;
   $('servers-title').textContent=`Dev servers (${draft.servers?.servers?.length ?? 0})`;
@@ -94,3 +95,18 @@ $('stop').onclick=() => call({kind:'stop'}).then(()=>status('Picking stopped.'))
 chrome.runtime.onMessage.addListener((message) => { if(message.kind==='changed') refresh(); });
 refresh();
 setInterval(refresh,5000);
+
+$('grant-host').onclick = async () => {
+  try {
+    const [tab] = await chrome.tabs.query({active:true,lastFocusedWindow:true});
+    const url = new URL(tab.url);
+    if (!['http:','https:'].includes(url.protocol)) throw new Error('Select an HTTP(S) page first.');
+    // A wildcard scheme distinguishes explicit localhost consent from static access.
+    const allowed = await chrome.permissions.request({origins:[`*://${url.hostname}/*`]});
+    $('grants').textContent = allowed ? 'Host granted for agent commands and eval.' : 'Host permission declined.';
+  } catch (error) { $('grants').textContent = error.message; }
+};
+$('grant-all').onclick = async () => {
+  const allowed = await chrome.permissions.request({origins:['http://*/*','https://*/*']});
+  $('grants').textContent = allowed ? 'All sites granted for agent commands and eval.' : 'Host permission declined.';
+};
