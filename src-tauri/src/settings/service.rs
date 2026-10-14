@@ -84,20 +84,21 @@ impl<S: Store> Service<S> {
             let (target, _, _, _) = super::policy::patch(&request)?;
             let owner = owner.resolve(target)?;
             let latest = owner.read()?;
-            policy.authorize(
-                &cat,
-                &context,
-                &request,
-                &latest,
-                grant.as_deref(),
-                |value| owner.validate_proposal(&latest, value),
-            )?;
+            if grant.is_none() {
+                policy.authorize(
+                    &cat,
+                    &context,
+                    &request,
+                    &latest,
+                    grant.as_deref(),
+                    |value| owner.validate_proposal(&latest, value),
+                )?;
+            }
             Ok::<_, Failure>(request)
         })
         .await
         .map_err(|_| Error::new(&safe_store, "store_failed"))??;
-        let (target, store, revision, edits) = super::policy::patch(&request)?;
-        self.commit_patch(target.clone(), store.into(), revision.into(), edits)
+        self.commit_patch(request, caller.clone(), approval.map(str::to_owned))
             .await
             .map(Reply::Commit)
     }
@@ -227,20 +228,32 @@ impl<S: Store> Service<S> {
 
     async fn commit_patch(
         &self,
-        target: Target,
-        store: String,
-        expected_revision: String,
-        operations: Vec<Edit>,
+        request: Request,
+        caller: super::policy::Caller,
+        approval: Option<String>,
     ) -> Result<CommitReply, Failure> {
+        let store = request.store().to_owned();
         self.check_owner(&store)?;
         let owner = self.owner.clone();
         let cat = self.catalogue.clone();
         let safe_store = store.clone();
+        let policy = self.policy.clone();
         let (mut reply, owner) = tokio::task::spawn_blocking(move || {
-            let owner = owner.resolve(&target)?;
+            let (target, _, expected_revision, operations) = super::policy::patch(&request)?;
+            let owner = owner.resolve(target)?;
             owner
                 .commit(&mut |latest| {
-                    transaction::prepare(&cat, &store, latest, &expected_revision, &operations)
+                    // Retain revocable grants while queued; consume and revalidate only
+                    // after the owner lock is acquired, immediately before preparation.
+                    policy.authorize(
+                        &cat,
+                        &caller,
+                        &request,
+                        latest,
+                        approval.as_deref(),
+                        |value| owner.validate_proposal(latest, value),
+                    )?;
+                    transaction::prepare(&cat, &store, latest, expected_revision, &operations)
                 })
                 .map(|reply| (reply, owner))
         })

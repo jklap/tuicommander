@@ -5347,4 +5347,6 @@ Visual evidence: worktree Vite fixture mounted the real NotificationsTab and Toa
 
 ## Settings policy foundation (#1786-9cbd)
 
+- [ ] After Boss manually restarts `make dev` or installs `make build`, queued approved writes must honor disconnect and expiry before owner preparation. Automated owner-boundary regressions cover both; settings transport publication remains a separate step.
+
 - [ ] After Boss's manual Rust restart and the separate settings-transport cutover, request a protected remote/auth/TLS/relay/executable edit: verify the desktop/phone dialog uses the backend diff, refusal writes nothing, acceptance commits once, and replay is refused. The policy foundation is covered through isolated owner files and the existing human-response channel; settings transport publication is still separate. Do not restart a live desktop session solely for this check.

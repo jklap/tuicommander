@@ -12,6 +12,17 @@ use std::sync::Arc;
 #[tokio::test]
 #[serial_test::serial]
 async fn disconnect_while_approved_commit_waits_must_leave_config_unchanged() {
+    queued_approval_revoked_before_commit(false).await;
+}
+
+// Catches: an approved grant expires while queued but still persists a change.
+#[tokio::test(start_paused = true)]
+#[serial_test::serial]
+async fn expiry_while_approved_commit_waits_must_leave_config_unchanged() {
+    queued_approval_revoked_before_commit(true).await;
+}
+
+async fn queued_approval_revoked_before_commit(expire: bool) {
     use super::policy::Caller;
     use super::service::Store;
     use super::transaction::Prepared;
@@ -94,17 +105,21 @@ async fn disconnect_while_approved_commit_waits_must_leave_config_unchanged() {
     let task =
         tokio::spawn(async move { service.execute_as(request, &caller, Some(&proposal)).await });
     owner.entered.notified().await;
-    policy.disconnect_mcp("queued-connection");
+    if expire {
+        tokio::time::advance(std::time::Duration::from_secs(300)).await;
+    } else {
+        policy.disconnect_mcp("queued-connection");
+    }
     release.send(()).unwrap();
     let outcome = task.await.unwrap();
     assert_eq!(
         state.config.read().services.auth.username,
         "",
-        "a disconnected connection committed an exposure change: {outcome:?}"
+        "a revoked approval committed an exposure change: {outcome:?}"
     );
     assert!(
         !dir.path().join("config.json").exists(),
-        "disconnect must prevent persistence"
+        "revocation must prevent persistence"
     );
     assert_eq!(outcome.unwrap_err().code, "confirmation_denied");
 }

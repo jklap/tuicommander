@@ -1442,7 +1442,8 @@ After the human approves, the caller resubmits the identical request with the
 proposal ID through the service's approval parameter. The grant is bound to the
 instance, transport/connection, target, revision and request content, and is
 consumed once. Refusal, cancellation, disconnect and the proposal's absolute
-300-second deadline revoke it. Commit rechecks the latest revision under the
+300-second deadline revoke it, including while an approved write is queued for
+the owner. Commit consumes and revalidates the grant and latest revision under the
 owner lock; no owner or proposal lock spans the human wait. Audit retains at most
 256 identifier/outcome records; at most 128 proposals may be pending.
 
