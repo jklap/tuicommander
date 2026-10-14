@@ -383,7 +383,6 @@
 - [ ] [HUMAN] After restarting `make dev` when ready to end the current sessions, dictate a long phrase into a Codex tab with Auto-send enabled. Confirm it submits once rather than inserting a newline. Real microphone input and the Codex TUI are required for this final check. _(NOT VERIFIED 2026-09-30: blocked — HUMAN: real microphone dictation plus Codex TUI (audio hardware blocked).)_ _(audit 2026-10-13: HUMAN — microphone + Codex TUI)_ _(triage 2026-10-14: WAITS — Needs real microphone/speaker/hotkey observation; do not disturb Boss’s voice session.)_
 ## File browser default (2026-09-25) — Rust, needs `make dev` restart
 
-- [ ] After restarting an isolated `TUIC_APP_INSTANCE=<id>` build with no saved `file_browser_view_mode`, open the file browser and confirm tree view is selected. Switch to flat list, restart, and confirm that choice remains selected. _(NOT VERIFIED 2026-09-30: needs the desktop frontend; deferred until after Boss restart. Backend: File browser view mode is UI.)_ _(audit 2026-10-13: PARTIAL — ui.ts:148 default fileBrowserViewMode "tree"; live `load_ui_prefs` IPC returns file_browser_view_mode:"tree" (persisted key exists). Flat-list + restart half not done (Boss's live UI/prefs).)_ _(triage 2026-10-14: DO — Runnable through scoped source/tests, isolated browser or throwaway API fixtures.)_
 ## Editor line wrapping (2026-09-25) — Vite hot reload
 
 ## Native WontFix dependency recovery (2026-09-25) — Rust, needs `make dev` restart
