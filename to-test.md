@@ -1,3 +1,7 @@
+## GitLab provider plugin (1695-9f3a) — needs 1697-4cdc and a desktop restart
+
+- [ ] After story 1697-4cdc lands (`host.httpFetch({account})` and manifest provider declarations) and Boss restarts the desktop app, install the `gitlab` plugin and add two GitLab accounts, one on a non-default port. In Tasks, confirm each account lists its own issues, merge requests and to-do items; paste an item URL of each instance and confirm only its own account resolves it. On a merge request, confirm merge/squash choices, readable blockers, approve, pipeline jobs and job retry; on a board, move a card and confirm the list label changes in GitLab. The plugin tests run on fixtures recorded from GitLab CE (`plugins/gitlab/fixtures/recorded.json`); no desktop instance was launched by this peer.
+## Plugin hot reload re-reads sub-modules (1809-010d) — Rust restart required
 ## Settings owner prerequisites (1787-4778) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, verify isolated owner requests follow an Ego launch profile change and first configuration without recreating the registry. Verify removal of an on-connect SSH connection stops its ephemeral daemon after settings persistence. General MCP cutover remains blocked by owner inventory gaps; the existing config tool stays available. Targeted owner regressions cover the saved-record callback, profile resolution and bindings-save failure. Do not restart the running app for this check.
