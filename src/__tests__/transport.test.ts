@@ -4167,3 +4167,13 @@ it("maps open Markdown metadata reads and loopback publication without document 
 		body: { tabs },
 	});
 });
+
+// Catches: comment comparison loses desktop/browser parity or reshapes provider details.
+it("maps_tasks_comment_comparison_without_reshaping", () => {
+	const input = { detail: {}, previous: null, enabled: false, followed: false };
+	expect(mapCommandToHttp("compare_work_item_comments", { input })).toEqual({
+		method: "POST",
+		path: "/tasks/compare-comments",
+		body: input,
+	});
+});

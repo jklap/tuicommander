@@ -496,3 +496,5 @@ This step adds no MCP, HTTP or IPC endpoint. Transport publication and settings
 change events remain the shared cutover and refresh work. Real provider login and
 Enterprise identity checks need an authenticated manual verification after that
 wiring; the isolated adapter tests do not access production credentials.
+
+Linked Tasks check failures reuse `ci_failed` PR transitions and the existing native notice service. A separate default-off Tasks UI preference selects a single task-labelled notice, independent of the default-on PR preference. No extra GitHub poller is introduced.

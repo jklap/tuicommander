@@ -2196,3 +2196,7 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] After a manual `make dev` restart or release rebuild, verify GitLab planning dates still render in Roadmap and have no list filter/group control (`queryable` schema support requires the rebuilt Rust backend). _(triage 2026-10-14: WAITS — Three Tasks date/list tests passed in tasks-date-contracts.log; actual GitLab provider integration needs its planning-date update and an account. Read-only main plugin checkout 4150e41 model.js:32-33 currently exposes milestone text and due date, with no planning-date fields/queryable schema.)_
 
 - [ ] After a manual restart/rebuild, verify that a detached worktree whose non-default branch still points at HEAD does not trigger orphan cleanup. Restore a non-default branch at HEAD after orphan discovery; automatic removal must refuse the stale candidate and preserve its checkout. Fresh in-sync branches must report no integration proof (#1894-7683). Rust changes require restart; do not restart live sessions for this check.
+
+## Tasks notifications (#1856-1d20)
+
+- [ ] After Boss restarts `make dev` or installs a rebuilt release, enable Settings → Notifications → Tasks, follow an item, and refresh after a new provider comment while the window is in the background. Check the item-labelled OS notice and its provider URL. Confirm a linked GitHub PR failure names the Tasks item without a second notice. Rust comparison changes require the restart; they do not hot-reload.

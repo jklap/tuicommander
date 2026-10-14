@@ -1,5 +1,7 @@
 import { notificationsStore } from "../stores/notifications";
 import type { PrNotificationType } from "../stores/prNotifications";
+import { uiStore } from "../stores/ui";
+import type { WorkItemLink } from "../types/workItemLinks";
 import { showNativeNotice } from "./nativeNotifications";
 
 /** Transitions that justify pulling Boss out of another app. */
@@ -22,14 +24,19 @@ interface PrTransitionNotice {
 	title: string;
 	type: PrNotificationType;
 	url: string;
+	linkedItem?: WorkItemLink;
 }
 
-// DEFERRED (2026-10-14) — Tasks item notices must reuse this path, but followed-item semantics,
-// a default-off policy and provider check/comment snapshots need a design decision (#1856-1d20).
 /** OS notification for a PR transition; clicking it opens the PR on GitHub. */
 export function notifyPrTransition(n: PrTransitionNotice): void {
 	const heading = TITLES[n.type];
-	if (!heading || !notificationsStore.state.config.pr_native_notifications) return;
+	const linked =
+		n.type === "ci_failed" &&
+		n.linkedItem &&
+		uiStore.state.tasksViewPreferences["tasks:notification-policy"]?.notificationsEnabled === true
+			? n.linkedItem
+			: undefined;
+	if (!heading || (!linked && !notificationsStore.state.config.pr_native_notifications)) return;
 
 	// The URL names owner, repo and number; repoName alone collides across repos with the same folder name.
 	const key = `pr:${n.url}:${n.type}`;
@@ -39,9 +46,22 @@ export function notifyPrTransition(n: PrTransitionNotice): void {
 	lastSent.set(key, now);
 
 	void showNativeNotice({
-		title: heading,
-		body: `${n.repoName} #${n.prNumber}: ${n.title}`,
+		title: linked ? "Linked task checks failed" : heading,
+		body: linked
+			? `${linked.key}: ${linked.title} — ${n.repoName} #${n.prNumber}`
+			: `${n.repoName} #${n.prNumber}: ${n.title}`,
 		key,
 		target: { kind: "pr", url: n.url },
 	});
+}
+
+/** Followed comments share the native notice delivery and URL click target used by PRs. */
+export function notifyTasksItem(notice: {
+	title: string;
+	body: string;
+	url: string;
+	key: string;
+	isCurrent?: () => boolean;
+}): void {
+	void showNativeNotice({ ...notice, target: { kind: "pr", url: notice.url } });
 }

@@ -9,6 +9,7 @@ import { appLogger } from "./appLogger";
 import { isNotificationType, prNotificationsStore } from "./prNotifications";
 import { repositoriesStore } from "./repositories";
 import { settingsStore } from "./settings";
+import { workItemLinksStore } from "./workItemLinks";
 
 /** Per-repo remote tracking data (ahead/behind from local git) */
 interface RepoRemoteStatus {
@@ -352,6 +353,7 @@ function createGitHubStore() {
 				prNumber: t.pr_number,
 				title: t.title,
 				type: t.type,
+				linkedItem: origin ? undefined : workItemLinksStore.get(t.repo_path, t.branch),
 				url: pr.url.replace(/\/pull\/\d+$/, `/pull/${t.pr_number}`),
 			});
 		}

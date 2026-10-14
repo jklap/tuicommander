@@ -10,6 +10,12 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "Follow Tasks comments",
+		description:
+			"Follow an item in Tasks detail, then enable OS notifications for Tasks in Settings → Notifications. Existing detail refreshes notify for new comments; no extra background polling is added.",
+		shortcut: null,
+	},
+	{
 		feature: "Tasks local queries",
 		description:
 			"Tasks loads complete scopes of at most 1,000 items for all-field sorting, grouping and filtering. Unknown or larger totals use the provider-supported server controls.",

@@ -318,3 +318,11 @@ Merged-PR evidence for worktree and local-branch cleanup uses the GitHub account
 and host selected for that repository. It no longer depends on the GitHub CLI
 login. If the complete PR history cannot be read, cleanup does not treat that
 lookup as proof that a branch was merged.
+
+### Tasks notifications
+
+Settings → Notifications → Tasks has **OS notifications for Tasks**, off by default and independent of the existing PR notification preference. Failed checks on a linked GitHub PR use the existing PR notice once and name the linked Tasks item. Click the notice to open the PR.
+
+Use **Follow task** in an item detail to follow comments locally; use **Unfollow task** to stop. Follow state and the policy are saved in the existing Tasks UI preferences. A first observation establishes a silent baseline. Existing visible detail refreshes (including its 60-second refresh) and provider-bridge detail reads compare authoritative comments; there is no extra background poller. Your own comment action advances the baseline silently. Native notices retain the existing permission and background-window policy; browser clients do not send native OS notices.
+
+GitHub provides a full normal-comment count, so an increase is detected even beyond the first page. Jira and GitLab provide paged comment entries: only newly observed comments with a creation time newer than the prior baseline notify. Unloaded pages, unseen review sources and items that are not refreshed cannot produce a notice. Editing a comment or loading older history does not notify. No Linear provider is shipped, so it is not covered.

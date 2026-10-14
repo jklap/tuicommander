@@ -1927,6 +1927,9 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			return { method: "GET", path };
 		},
 	},
+	compare_work_item_comments: {
+		map: (args) => ({ method: "POST", path: "/tasks/compare-comments", body: args.input }),
+	},
 	project_work_items: {
 		map: (args) => ({ method: "POST", path: "/tasks/project", body: args.input }),
 	},

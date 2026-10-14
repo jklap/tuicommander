@@ -999,3 +999,7 @@ The list is scoped to registered repository/workspace ownership.
 `design_mode_browser_command(repo_path, action, args)` executes an immediate
 Design Mode native-port browser command. HTTP parity: `POST /design-mode/command`.
 See the HTTP reference for action arguments and typed error prefixes.
+
+### Tasks comment comparison
+
+`compare_work_item_comments` / `POST /tasks/compare-comments` accepts `{detail, previous, enabled, followed}` and returns `{snapshot, notify}`. `detail` is the unchanged WorkItemDetail; `previous` is null or `{latest, ids, count}` (latest is a UTC timestamp in milliseconds). The pure Rust comparison has no provider IO or persistence. First observations, disabled/unfollowed inputs, older comments and edits are silent. GitHub full comment counts cover normal comments outside the first page. Desktop and HTTP use the same implementation.

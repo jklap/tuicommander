@@ -8,6 +8,7 @@ mod finding_tests;
 mod listing;
 pub(crate) mod local_query;
 pub mod model;
+pub(crate) mod notices;
 mod projections;
 pub mod protocol;
 #[cfg(test)]

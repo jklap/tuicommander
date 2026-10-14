@@ -1364,6 +1364,10 @@ fn shared_routes() -> Router<Arc<AppState>> {
         )
         .route("/tasks/project", post(work_item_query_routes::project))
         .route(
+            "/tasks/compare-comments",
+            post(work_item_query_routes::compare_comments),
+        )
+        .route(
             "/tasks/start-work-prompt",
             post(fs_routes::start_work_prompt_http),
         )

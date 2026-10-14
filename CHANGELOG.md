@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Opt-in Tasks OS notices for linked GitHub check failures and comments on locally followed items, using existing detail refreshes and native notice delivery.
+
 ### Fixed
 - Keep detached checkouts with a local feature branch at HEAD out of orphan cleanup, and stop reporting fresh in-sync branches as integrated (#1894-7683).
 ### Changed
