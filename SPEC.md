@@ -701,6 +701,7 @@ Some frontend-only stores persist to localStorage:
 - [x] SSH-managed remote daemon deployment, idle lifetime, pairing-token vaulting, and systemd/launchd installation
 - [x] Mobile terminal Ctrl menu (Ctrl+C, Ctrl+B, Ctrl+D, agent-aware Ctrl+Enter)
 - [x] Mobile Send long-press Queue transfers the live draft to the shared server ready-window queue; taps still submit immediately.
+- [x] Session uploads live under TUIC data, with launch grants and session-end/startup cleanup; ego invocation-scoped binary-file read roots remain unsupported (#1833-aa60).
 - [x] Mobile Companion PWA (searchable sessions, live output, question reply including Codex interactive choices, activity feed)
   - [x] Compact bare attachment icon left of the session composer; smaller mic and Send sit inside its right border (#1719-ff5d)
   - [x] Files tree search, hidden-folder ordering, long-path preview, and full-height wrapped editing

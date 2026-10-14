@@ -238,12 +238,23 @@ pub(crate) fn launch_args(
     binary_path: &str,
     args: &[String],
     config_dir: &Path,
+    attachment_dir: &Path,
 ) -> Vec<String> {
     if is_claude_subcommand(agent_type, binary_path, args) {
         return args.to_vec();
     }
     let result = augment_launch(agent_type, binary_path, args, config_dir);
-    crate::launch_instructions::args(agent_type, result, config_dir)
+    let mut result = crate::launch_instructions::args(agent_type, result, config_dir);
+    let flag = match agent_type {
+        "claude" => Some("--add-dir"),
+        "gemini" => Some("--include-directories"),
+        _ => None,
+    };
+    if let Some(flag) = flag {
+        // Prepend before any prompt separator or variadic positional argument.
+        result.splice(0..0, [format!("{flag}={}", attachment_dir.display())]);
+    }
+    result
 }
 
 /// A Claude verb (`mcp list`, `auth status`) takes no launch flags. Probes the
@@ -1070,3 +1081,41 @@ mod critic_1302_tests {
 #[cfg(test)]
 #[path = "agent_hook_launch_critic1400_tests.rs"]
 mod critic1400_tests;
+
+#[cfg(test)]
+mod attachment_grant_tests {
+    // Catches: Claude/Gemini launch without the directory grant, or codex/grok get an unknown flag.
+    #[test]
+    fn attachment_launch_grants_only_harnesses_that_need_them() {
+        let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        for (agent, flag) in [
+            ("claude", Some("--add-dir")),
+            ("gemini", Some("--include-directories")),
+            ("codex", None),
+            ("grok", None),
+            ("ego", None),
+        ] {
+            let args = super::launch_args(
+                agent,
+                agent,
+                &[],
+                root.path(),
+                &root.path().join("attachments/pty-granted"),
+            );
+            if let Some(flag) = flag {
+                assert!(
+                    args.iter().any(|arg| arg
+                        == &format!(
+                            "{flag}={}",
+                            root.path().join("attachments/pty-granted").display()
+                        )),
+                    "missing grant for {agent}"
+                );
+            } else {
+                assert!(!args.iter().any(|arg| arg.starts_with("--add-dir")
+                    || arg.starts_with("--include-directories")
+                    || arg.starts_with("--set=roots=")));
+            }
+        }
+    }
+}

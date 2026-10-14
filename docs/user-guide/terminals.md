@@ -12,6 +12,8 @@ Tap the terminal to focus its keyboard input. Touch and mouse input use the same
 
 Each terminal tab runs an independent PTY (pseudo-terminal) session with your shell. Up to 50 concurrent sessions.
 
+Files uploaded through the mobile picker live in a session directory under TUICommander’s data directory. New Claude and Gemini sessions receive read access at launch. Closing the terminal or ending its process removes these uploads; resumed sessions need files uploaded again. Uploads leave your repository and Git excludes untouched. Old `.tuic/attachments/` directories can be removed by hand. Confined ego sessions need an existing user/profile read root; the picker shows an access notice.
+
 Accents sent separately from their base letters remain part of terminal text
 when you scroll, select, copy or search. Search matches the exact characters
 printed by the program: precomposed and decomposed spellings are not automatically

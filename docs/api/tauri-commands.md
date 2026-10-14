@@ -550,8 +550,8 @@ are unaffected (they build `NSAlert`) and stay as they are.
 ## Filesystem (`fs.rs`)
 
 `upload_attachment` is the desktop IPC twin of `POST /attachments/upload`.
-It accepts `kind`, `id`, `name`, and binary `bytes`, returns the same `{ path,
-size }` receipt, and uses the same destination, cap, and cleanup rules.
+It accepts `kind`, `id`, optional `session` (required for ACP), `name`, and
+binary `bytes`, returns the same `{ path, size, notice? }` receipt, and uses the same destination, cap, and cleanup rules.
 
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|

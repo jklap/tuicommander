@@ -950,7 +950,7 @@ pub(crate) struct AppConfig {
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates attachment max bytes for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     #[schemars(range(min = 1))]
     pub(crate) attachment_max_bytes: u64,
-    /// Remove uploaded files older than this many days when their session closes.
+    /// Legacy stored value; uploads now have session lifetime regardless of this value.
     #[serde(default = "default_attachment_retention_days")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates attachment retention days for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) attachment_retention_days: u32,

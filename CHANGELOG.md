@@ -17,6 +17,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Terminal Chat view for Grok terminals, read from the session's `chat_history.jsonl` and offered only when `~/.grok/active_sessions.json` names the exact session of that terminal's process; the newest-session fallback never feeds Chat (#1791-b8be).
 
 ### Changed
+- Store uploads in TUIC-owned session directories, grant supported agents access at launch, and remove files at session end without touching repositories (#1833-aa60).
 - Run saved command moves from `Cmd+R` to `Cmd+Shift+R`. `Cmd+R` now reloads the active web/preview tab (new `reload-tab` action). `edit-command` has no default shortcut because `Cmd+Alt+R` belongs to answers-only; an existing `keybindings.json` override keeps working (#1871-4cfd).
 
 ### Removed

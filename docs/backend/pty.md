@@ -895,3 +895,11 @@ hook installer, enabled and trusted by Codex. Launch-scoped turn-complete notify
 alone does not establish identity. Unsupported versions, missing/untrusted hooks,
 Windows (the existing tty hook transport is Unix-only), and remote terminals
 keep Codex Chat unavailable. TUIC never bypasses native hook trust.
+
+Session attachments live in the app data directory, keyed by the runtime PTY id.
+`bind_pty_identity` provisions the directory and shell grant environment; structured
+launches pass the same directory through `agent_hook_launch::launch_args`.
+`cleanup_session` and `tombstone_transient_cleanup` remove it at the existing close,
+kill and exit boundaries. `AppState::new` sweeps old session directories before
+new PTYs can launch. No cleanup visits a repository directory. Resumed tabs use
+new runtime PTY ids, so their read grants point to fresh storage.

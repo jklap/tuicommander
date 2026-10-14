@@ -302,6 +302,18 @@ pub(super) async fn spawn_agent_session(
     }
     let session_id = Uuid::new_v4().to_string();
 
+    let attachment_dir =
+        match crate::attachments::prepare_session_directory(&state.data_dir, "pty", &session_id) {
+            Ok(directory) => directory,
+            Err(error) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": error})),
+                )
+                    .into_response();
+            }
+        };
+
     let spawn_binary_path = binary_path.clone();
     let spawn_args = body.args.clone();
     let spawn_prompt = body.prompt.clone();
@@ -352,6 +364,7 @@ pub(super) async fn spawn_agent_session(
                 &spawn_binary_path,
                 &launch_args,
                 &crate::config::config_dir(),
+                &attachment_dir,
             );
             crate::launch_instructions::apply_env(
                 &mut cmd,

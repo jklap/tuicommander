@@ -182,6 +182,12 @@ fn compose_launch_command(
     let mut argv = without_seed_brief(argv).iter().peekable();
     parts.push(quote_if_needed(argv.next()?));
     while let Some(token) = argv.next() {
+        if let Some((flag, directory)) = token.split_once('=')
+            && ["--add-dir", "--include-directories"].contains(&flag)
+            && is_tuic_attachment_grant(directory)
+        {
+            continue;
+        }
         if session_flags.contains(&token.as_str()) {
             // Drop the value too, when the next token is one rather than a flag.
             if argv.peek().is_some_and(|next| !next.starts_with('-')) {
@@ -192,6 +198,18 @@ fn compose_launch_command(
         parts.push(quote_if_needed(token));
     }
     Some(parts.join(" "))
+}
+
+fn is_tuic_attachment_grant(directory: &str) -> bool {
+    let path = std::path::Path::new(directory);
+    path.parent().is_some_and(|parent| {
+        parent
+            == std::fs::canonicalize(crate::config::config_dir())
+                .unwrap_or_else(|_| crate::config::config_dir())
+                .join("attachments")
+    }) && path
+        .file_name()
+        .is_some_and(|name| name.to_string_lossy().starts_with("pty-"))
 }
 
 /// First line of the brief Start Work passes as a launch argument (`SEED_BRIEF_OPEN`
@@ -2395,5 +2413,25 @@ mod tests {
             HashMap::new(),
         );
         assert_eq!(found, None, "goose has no filesystem discovery");
+    }
+}
+
+#[cfg(test)]
+mod attachment_resume_tests {
+    // Catches: resume reuses a removed TUIC directory or discards a user's directory grant.
+    #[test]
+    fn attachment_resume_drops_only_generated_directory_grants() {
+        let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(root.path().into());
+        let old = root.path().join("attachments/pty-old");
+        let argv = vec![
+            "claude".into(),
+            format!("--add-dir={}", old.display()),
+            "--add-dir=/user/docs".into(),
+            "--resume".into(),
+            "old-session".into(),
+        ];
+        let rebuilt = super::compose_launch_command("claude", &argv, Default::default()).unwrap();
+        assert_eq!(rebuilt, "claude --add-dir=/user/docs");
     }
 }

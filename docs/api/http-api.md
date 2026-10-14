@@ -1669,13 +1669,18 @@ The sender-side `fs_transfer_remote_paths` coordinator is desktop IPC only (`INT
 
 `POST /fs/upload-copy?destDir=<absolute-directory>&name=<leaf-name>&directory=true|false` accepts a streamed, uncompressed tar body under the existing daemon authentication. All archive paths must start with `name`; only files and directories are accepted. Limits: 256 MiB of archive and extracted file data, 10,000 entries, two concurrent uploads. Destination resolution uses registered repository directory capabilities, rejects traversal and escapes through symlinks, and never follows a target symlink. Staging is removed on failure/disconnect; the completed top-level file or directory is published with a no-replace atomic rename. A concurrently created target is skipped; existing targets drain the bounded body before returning `skipped`. The upload is exempt from the global response timeout and aborts after 30 s without a body chunk. Its total receive budget is 17 minutes. A connection below roughly 2 Mbit/s cannot finish a 256 MiB drop within that budget. The concurrency permit lasts through extraction even if the handler is cancelled. Filenames use the receiver platform rules (POSIX permits colon and backslash); Windows rejects colon and backslash. Unix tar permissions are masked to `0755` for executable files/directories and `0644` for ordinary files, with the receiving umask applied and no privilege bits. Normal request-drop cleanup consumes the staging directory handle before removing its tree, including on Windows. Abrupt process termination (for example, kill -9) can leave a `.tuic-upload-<uuid>` directory in the destination; there is no startup sweep, and the leftover can be removed manually once no upload is running. Final directory permissions are applied after publication; a permission failure is logged and the already published copy remains successful. The sender uses the existing `tui-session` cookie header; tokens are absent from upload URLs and reqwest error text. No new listener or credential is created.
 
-`POST /attachments/upload?kind=pty|acp&id=<session-or-connection-id>&name=<filename>`
-streams a binary request body into the target's working directory at
-`.tuic/attachments/<timestamp>-<safe-name>`. It returns `{ "path": "/absolute/path", "size": N }`.
+`POST /attachments/upload?kind=pty|acp&id=<pty-or-connection-id>&session=<acp-session-id>&name=<filename>`
+streams a binary request body into `attachments/<session>/<timestamp>-<safe-name>`
+under TUIC's data directory. `session` is required for ACP and omitted for PTY.
+It returns `{ "path": "/absolute/path", "size": N, "notice"?: "..." }`.
 The default per-file cap is 25 MiB (`attachment_max_bytes`), including uploads
-without `Content-Length`; partial and empty files are removed on failure. Git
-repositories receive a local `.git/info/exclude` entry for that directory.
-Authentication matches the other shared HTTP routes.
+without `Content-Length`; partial and empty files are removed on failure.
+Uploads never touch the cwd or Git excludes. PTY close, kill and exit, ACP
+conversation detach and connection settlement remove their uploads; startup
+removes orphan directories. Symlinked attachment roots/sessions are rejected.
+Legacy agents without a launch grant receive HTTP 409 with a new-session notice.
+Ego PTY and ACP receipts carry a notice because ego currently cannot accept extra
+read roots through invocation flags or ACP. Authentication matches the other shared HTTP routes.
 
 ```
 GET  /fs/list?repoPath=/path/to/repo&subdir=src

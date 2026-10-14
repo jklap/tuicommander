@@ -60,3 +60,28 @@ it("does not queue an incomplete prompt while its selected attachment is still u
 	expect(queuedBeforeUpload).toEqual([]);
 	expect(input.value).toBe("Review this file @/repo/.tuic/attachments/notes.txt");
 });
+
+// Catches: an ego attachment is staged silently despite the backend's read-root limitation.
+it("shows the access notice while retaining the uploaded attachment in the draft", async () => {
+	const { toastsStore } = await import("../../stores/toasts");
+	const toast = vi.spyOn(toastsStore, "add").mockReturnValue(1);
+	vi.mocked(uploadAttachment).mockResolvedValue({
+		path: "/tuic/attachments/pty-ego/file.txt",
+		size: 4,
+		notice: "Confined ego needs an existing user/profile read root",
+	});
+	const { container } = render(() => <CommandInput sessionId="ego-upload" />);
+	fireEvent.change(container.querySelector<HTMLInputElement>('input[type="file"]')!, {
+		target: { files: [new File(["file"], "file.txt")] },
+	});
+	await Promise.resolve();
+	await Promise.resolve();
+	expect(toast).toHaveBeenCalledWith(
+		"Attachment access",
+		"Confined ego needs an existing user/profile read root",
+		"warn",
+		true,
+	);
+	expect(container.querySelector("textarea")!.value).toBe("@/tuic/attachments/pty-ego/file.txt");
+	toast.mockRestore();
+});
