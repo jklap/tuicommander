@@ -387,7 +387,9 @@ describe("Tasks list", () => {
 it("failed_jql_search_keeps_the_typed_query_after_a_successful_load", async () => {
 	const provider = listDemo(2);
 	const list = provider.list.bind(provider);
+	const attempts: string[] = [];
 	provider.list = async (query, signal) => {
+		attempts.push(query.search);
 		if (query.search === "jql: project =") throw new Error("Jira request failed (400): expecting a value");
 		return list(query, signal);
 	};
@@ -395,5 +397,8 @@ it("failed_jql_search_keeps_the_typed_query_after_a_successful_load", async () =
 	await screen.findByRole("button", { name: /Task 00002/ });
 	fireEvent.input(screen.getByLabelText("Search tasks"), { target: { value: "jql: project =" } });
 	await screen.findByText(/expecting a value/);
+	await new Promise((resolve) => setTimeout(resolve, 0));
 	expect(screen.getByLabelText("Search tasks")).toHaveValue("jql: project =");
+	fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+	await waitFor(() => expect(attempts.filter((search) => search === "jql: project =")).toHaveLength(2));
 });

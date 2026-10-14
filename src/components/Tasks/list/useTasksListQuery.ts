@@ -70,8 +70,12 @@ export function useTasksListQuery(
 				if (error) {
 					const accepted = model.acceptedQuery();
 					if (accepted) {
-						restoredQuery = structuredClone(accepted);
-						setSearch(restoredQuery.search);
+						restoredQuery = structuredClone({
+							...request,
+							sort: accepted.sort,
+							groupBy: accepted.groupBy,
+							filters: accepted.filters,
+						});
 						setQuery(restoredQuery);
 					} else if (request.sort && /sort|order.?by/i.test(error)) {
 						const fallback = JSON.stringify(lastValidSort) === JSON.stringify(request.sort) ? null : lastValidSort;

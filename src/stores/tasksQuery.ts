@@ -123,7 +123,9 @@ export function createTasksQuery(options: { maxCachedPages?: number; local?: boo
 			});
 		} catch (error) {
 			if (token !== generation || abort.signal.aborted) return;
-			query = acceptedQuery ?? query;
+			// Restore rejected controls, not the attempted search or its retry target.
+			if (acceptedQuery)
+				query = { ...query, sort: acceptedQuery.sort, groupBy: acceptedQuery.groupBy, filters: acceptedQuery.filters };
 			setState((previous) => ({
 				...previous,
 				loading: false,
