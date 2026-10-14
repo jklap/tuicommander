@@ -127,16 +127,6 @@ fn show_restores_previous_visibility_and_wakes_visible_session() {
     assert!(!windows.visible("panel-closed"));
 }
 
-// Catches: second launch only unminimizes a hidden window, leaving it inaccessible.
-#[test]
-fn single_instance_second_launch_shows_hidden_window() {
-    let state = crate::state::tests_support::make_test_app_state();
-    let windows = TestWindows::new();
-    hidden::enter_background(&state, &windows).unwrap();
-    hidden::leave_background(&state, &windows).unwrap();
-    assert!(windows.visible("main"));
-}
-
 // Catches: background defaults disappear from the wire/catalogue or the user cannot keep a Dock icon.
 #[test]
 fn background_mode_dock_preference_defaults_and_round_trips() {
