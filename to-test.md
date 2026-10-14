@@ -1726,11 +1726,6 @@ headed test browser window.
       local ports and delayed health independently.
 ## Config defaults and expert-mode UI pref (story `863-03c1`, 2026-09-24) — **Rust, needs a `make dev` restart**
 
-- [ ] Toggle `settingsExpertMode` (via `ui.ts`'s `setSettingsExpertMode`, once a _(NOT VERIFIED 2026-09-30: needs the desktop frontend; deferred until after Boss restart. Backend: settings_expert_mode is set by frontend ui.ts (writes ui-prefs.json per 29/09 note, item path config.json is wrong); headless instance has no frontend; full restart not allowed.)_ _(audit 2026-10-13: HUMAN — Restart forbidden; target file is ui-prefs.json not config.json (config.rs:2137; ui.ts:204,277). Full persistence/restart untested.)_ _(triage 2026-10-14: DO — Runnable through scoped source/tests, isolated browser or throwaway API fixtures.)_
-      caller wires it in — this story only persists the pref, no UI control
-      yet) and confirm `settings_expert_mode` round-trips through
-      `~/Library/Application Support/tuicommander/config.json` (or platform
-      equivalent) and survives a full `make dev` restart.
 ## Error messages name the reorganized Settings pages (story `861-977b`, 2026-09-24) — **Rust, needs a `make dev` restart**
 
 - [ ] [VISUAL] Settings → General with Experimental Features **off**: an **ego** _(NOT VERIFIED 2026-09-30: blocked — VISUAL-owned by tuic-live-checks)_ _(audit 2026-10-13: VISUAL-OWED — Pure visual requirement; screenshot/image inspection unavailable per brief; not attempted.)_ _(triage 2026-10-14: DO — Runnable through scoped source/tests, isolated browser or throwaway API fixtures.)_
