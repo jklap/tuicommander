@@ -1556,7 +1556,7 @@ The navigation groups the global pages by task. Each group is a static label row
 - Show agent context bar
 - Confirmations: quit, close tab (only when a process is running — agents or busy shell; idle shells close immediately)
 - Power management: prevent sleep when busy, auto-standby timeout, content indexing strategy
-- Updates: auto-check, update channel, check now
+- Updates: auto-check, update channel, check now. Beta builds migrate old saved Stable preferences to Beta once; later explicit channel choices are preserved
 - TUIC CLI install/uninstall (see **21**), Code Intelligence (MDKB, see **14.8**)
 - ego executable (**ego** section, after Code Intelligence): the ego binary the AI Chat panel talks to over ACP. Desktop: status line with Select…/Clear; browser: a text field. Always shown, also while Experimental Features is off
 - Default IDE, custom launchers (see **4.5**)
