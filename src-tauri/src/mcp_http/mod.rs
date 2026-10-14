@@ -22,6 +22,7 @@ mod mcp_transport_ancillary;
 mod mcp_transport_catalogue;
 mod mcp_transport_peer;
 mod mcp_transport_session_agent;
+mod open_markdown_routes;
 
 mod mcp_work_item;
 mod plugin_docs;
@@ -1024,6 +1025,14 @@ fn shared_routes() -> Router<Arc<AppState>> {
         .route(
             "/sessions",
             get(session::list_sessions).post(session::create_session),
+        )
+        .route(
+            "/repo/open-markdown-tabs",
+            get(open_markdown_routes::get_tabs),
+        )
+        .route(
+            "/config/open-markdown-tabs",
+            put(open_markdown_routes::put_tabs),
         )
         .route("/sessions/{id}/write", post(session::write_to_session))
         .route("/sessions/{id}/submit", post(submit_agent_reply))

@@ -137,6 +137,8 @@
   right: 8px;
   width: min(240px, calc(100% - 16px));
   padding: 4px;
+  max-height: calc(100dvh - 80px);
+  overflow-y: auto;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--bg-secondary);
@@ -279,3 +281,10 @@
   -webkit-tap-highlight-color: transparent;
   padding: 0;
 }
+
+.markdownSection { border-block: 1px solid var(--border); }
+.markdownHeading, .markdownStatus { padding: 8px 12px; color: var(--fg-muted); font-size: 12px; }
+.markdownHeading { font-weight: 600; }
+.overflow .markdownEntry { flex-direction: column; align-items: stretch; justify-content: center; gap: 4px; padding-block: 8px; }
+.markdownEntry span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.markdownPath { color: var(--fg-muted); font-size: 11px; }

@@ -16,6 +16,7 @@ import { StatusBar } from "./components/StatusBar";
 import { TabBar } from "./components/TabBar";
 import { TerminalArea } from "./components/TerminalArea";
 import { Toolbar } from "./components/Toolbar";
+import { useOpenMarkdownPublication } from "./hooks/useOpenMarkdownPublication";
 import { executeCleanup } from "./hooks/usePostMergeCleanup";
 import { editorTabsStore } from "./stores/editorTabs";
 import { getAppTheme } from "./themes";
@@ -480,6 +481,7 @@ const App: Component = () => {
 	useAppearanceSync();
 
 	useActiveTerminalSync();
+	useOpenMarkdownPublication();
 
 	useTerminalShellExit(terminalLifecycle.closeTerminal);
 

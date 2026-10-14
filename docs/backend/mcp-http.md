@@ -30,6 +30,19 @@ Unauthenticated HTML navigation to `/` and `/mobile` redirects to the existing `
 
 The shared filesystem router exposes streamed `/fs/upload-copy` on the daemon through existing authentication. Sender-side `fs_transfer_remote_paths` coordination is desktop IPC only and intentionally unmapped: data leaves the machine, Finder source paths cannot be gated to registered roots, and HTTP token holders must not trigger exfiltration. There is no `/fs/transfer-remote` HTTP route. The receiver resolves registered repository roots through `cap-std` directory handles, validates archive paths, rejects links, bounds bytes/entries/concurrency, and publishes the staged top-level source with an atomic no-replace rename. Uploads use the existing session-cookie header, a 30-second chunk idle deadline (exempt from the global response deadline), and hold their concurrency permit through blocking extraction. Daemon startup sweeps abandoned upload staging inside registered roots without following symlink directories. Cleanup restores owner directory access only inside disposable staging when restrictive tar modes would prevent removal; published permissions remain unchanged. This path uses neither SSH nor shell commands. See the filesystem HTTP API for the wire contract.
 
+## Open desktop Markdown tabs
+
+`GET /repo/open-markdown-tabs?cwd=<session-directory>` returns file-tab metadata
+for the deepest registered repository or workspace containing the directory.
+It uses the existing remote authentication middleware and returns 403 for an
+unregistered directory. No file contents are returned.
+
+The desktop publishes through `sync_open_markdown_tabs`; its HTTP twin is
+`PUT /config/open-markdown-tabs`, restricted to loopback. Rust stores a temporary
+snapshot and emits `open-markdown-tabs-changed` on desktop IPC and SSE whenever
+it changes. Mobile clients refetch after invalidation or reconnect. Saved pane
+layouts contain only tab IDs/types and cannot supply these file paths.
+
 ## CI logs
 
 Use HTTP `GET /repo/ci-failure-logs` with `repoPath` and `branch` to fetch logs

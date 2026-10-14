@@ -193,6 +193,11 @@ events, so another window or a phone sees the same order and cancellations.
 
 ## Mobile Screens (`src/mobile/`)
 
+`OpenMarkdownMenu` adds a scrollable Markdown section to session overflow.
+It reads repository-scoped desktop file metadata and refetches on tab changes,
+repository changes and SSE resynchronization. Selecting an entry keeps the
+session mounted and opens `FilesScreen` with the entry’s original checkout root.
+
 `OutputView` keeps a 500-line live tail while following. While the reader is
 scrolled up or touching the output, it retains the loaded rows instead of
 evicting the content being read. Older-history pages extend that reading window.
@@ -782,3 +787,5 @@ untrusted-content wrapper and 12,000-character cap.
 The desktop macOS General page includes **Hide Dock icon in background** under
 Confirmations. It uses the shared setting toggle and persists
 `background.hide_dock_icon`; browser settings omit this native control.
+
+The mobile AI Chat composer uses the same device-local keyboard correction preference as the terminal composer; toggling it updates autocorrect, spellcheck and sentence capitalization on the open textarea. Desktop Chat retains its existing input attributes.

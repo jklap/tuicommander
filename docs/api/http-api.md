@@ -873,7 +873,7 @@ the server is back to the filter the connection was opened with.
 | `speech-download-progress` | `{asset, downloaded, total, percent}`, then `{asset, done: true}` | A speech asset is downloading; the `done` event ends it, success or failure. `asset` is the only difference from the line above, and it is what a client joins the bar against |
 | `speech-utterance` | `{utteranceId, state, error?, turn}` — the `SpokenReply` shape `POST /dictation/speech/speak` returns | A reply moved between `queued`, `rendering`, `speaking` and one of `finished` / `interrupted` / `failed`. Pushed by the render thread that performed the transition, so a client no longer polls `speech/status` |
 | *(any of the above, mirrored)* | the daemon's own payload plus `__tuic_origin: {connection}` | An event this machine repeated from a connected remote daemon (`remote_mirror.rs`). It arrives under the daemon's own event name, so a client needs no new subscription; `__tuic_origin` says which connection it came from. A frame that already carries the key is dropped rather than repeated, so a mirrored event never crosses a second hop |
-| `lagged` | `{missed}` | Client fell behind; N events were dropped. Dropped events are never resent, so a client that derives state from the stream must re-read it — `subscribeEvents`' `onResync("lagged")` callback exists for that. It also fires with `"reconnect"` on any EventSource re-open after the first, because a drop loses the same way silently. Both are SSE-only: Tauri `listen()` is in-process and cannot drop |
+| `lagged` | `{missed}` | Client fell behind; N events were dropped. Dropped events are never resent, so a client that derives state from the stream must re-read it — `subscribeEvents`' `onResync("lagged")` callback exists for that. It fires with `"connect"` once the initial subscription is live, closing any gap after the initial snapshot read, and with `"reconnect"` on any EventSource re-open after the first, because a drop loses the same way silently. Both are SSE-only: Tauri `listen()` is in-process and cannot drop |
 
 ### MCP Streamable HTTP
 
@@ -3133,3 +3133,18 @@ at delivery.
 ### Tasks provider bridge
 
 `POST /work-items/provider-bridge` is the HTTP twin of `work_item_provider_bridge({input})`. Body: `{action:"claim", requestId}` returns the typed provider request or null when already claimed/expired; `{action:"complete", requestId, value}` completes a claimed request and returns null. The route requires local or authenticated access. Clients subscribe to `work-item-provider-request` on `/events`, whose payload contains `request_id` and `request`; only a client with the target provider loaded should claim it. Rust alone creates pending requests after MCP validation and write opt-in. Replies are validated as Tasks DTOs before entering model output.
+
+## Open desktop Markdown files
+
+| Method | Path | Request | Response |
+| --- | --- | --- | --- |
+| GET | `/repo/open-markdown-tabs` | `cwd` query: session directory | Array of `{id,title,relative_path,absolute_path,fs_root}` |
+| PUT | `/config/open-markdown-tabs` | `{tabs:[{id,repoPath,filePath,fsRoot?}]}` | `null` |
+
+GET uses the existing remote authentication and returns 403 for unregistered
+directories. Repository/workspace ownership is computed by Rust. Only file tabs
+inside registered roots with a `.md` suffix are listed; no contents are included.
+PUT is the desktop publication twin and refuses non-loopback clients, including
+authenticated remote clients. The in-memory list resets with the backend.
+`open-markdown-tabs-changed` has an empty payload and is emitted on IPC and SSE;
+consumers reread after this event or SSE resynchronization.
