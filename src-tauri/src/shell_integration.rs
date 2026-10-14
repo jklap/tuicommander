@@ -67,12 +67,24 @@ if [[ -n "$TUIC_SESSION" ]]; then
     command grok ${screen:+"$screen"} "$@"
   }
   opencode() {
+    # Only the default project command starts the interactive TUI.
+    local a takes_value=0
+    for a in "$@"; do
+      if [[ "$takes_value" == 1 ]]; then takes_value=0; continue; fi
+      case "$a" in
+        --) break;;
+        __TUIC_OPENCODE_VALUE_OPTIONS__) takes_value=1;;
+        -*) ;;
+        __TUIC_OPENCODE_COMMANDS__) command opencode "$@"; return;;
+        *) break;;
+      esac
+    done
     local screen=$(__tuic_screen_arg "$TUIC_OPENCODE_SCREEN_FLAG" "$TUIC_OPENCODE_SCREEN_SKIP" "$@")
     command opencode ${screen:+"$screen"} "$@"
   }
   goose() {
     local a; for a in "$@"; do
-      case "$a" in --name|-n|--resume|-r) command goose "$@"; return;; esac
+      case "$a" in --name|-n|--resume|-r|--no-session) command goose "$@"; return;; esac
     done
     case "$1" in
       session|run) command goose "$1" --name "$TUIC_SESSION" "${@:2}";;
@@ -143,12 +155,24 @@ if [[ -n "$TUIC_SESSION" ]]; then
     command grok ${screen:+"$screen"} "$@"
   }
   opencode() {
+    # Only the default project command starts the interactive TUI.
+    local a takes_value=0
+    for a in "$@"; do
+      if [[ "$takes_value" == 1 ]]; then takes_value=0; continue; fi
+      case "$a" in
+        --) break;;
+        __TUIC_OPENCODE_VALUE_OPTIONS__) takes_value=1;;
+        -*) ;;
+        __TUIC_OPENCODE_COMMANDS__) command opencode "$@"; return;;
+        *) break;;
+      esac
+    done
     local screen=$(__tuic_screen_arg "$TUIC_OPENCODE_SCREEN_FLAG" "$TUIC_OPENCODE_SCREEN_SKIP" "$@")
     command opencode ${screen:+"$screen"} "$@"
   }
   goose() {
     local a; for a in "$@"; do
-      case "$a" in --name|-n|--resume|-r) command goose "$@"; return;; esac
+      case "$a" in --name|-n|--resume|-r|--no-session) command goose "$@"; return;; esac
     done
     case "$1" in
       session|run) command goose "$1" --name "$TUIC_SESSION" "${@:2}";;
@@ -254,6 +278,25 @@ if set -q TUIC_SESSION
     command grok $screen $argv
   end
   function opencode --wraps opencode
+    # Only the default project command starts the interactive TUI.
+    set -l takes_value 0
+    for a in $argv
+      if test "$takes_value" = 1
+        set takes_value 0
+        continue
+      end
+      switch $a
+        case --
+          break
+        case __TUIC_OPENCODE_VALUE_OPTIONS_FISH__
+          set takes_value 1
+        case '-*'
+        case __TUIC_OPENCODE_COMMANDS_FISH__
+          command opencode $argv; return
+        case '*'
+          break
+      end
+    end
     set -l flag ''
     set -l skip ''
     if set -q TUIC_OPENCODE_SCREEN_FLAG; set flag $TUIC_OPENCODE_SCREEN_FLAG; end
@@ -264,7 +307,7 @@ if set -q TUIC_SESSION
   function goose --wraps goose
     for a in $argv
       switch $a
-        case --name -n --resume -r
+        case --name -n --resume -r --no-session
           command goose $argv
           return
       end
@@ -566,10 +609,21 @@ fn write_if_changed(path: &Path, content: &str) -> bool {
     }
 }
 
+/// Subcommands and aliases advertised by the recorded OpenCode 2026-10-14 help.
+/// Shared by the three shell wrappers; paths such as `./mcp` remain interactive.
+const OPENCODE_COMMANDS: &str = "completion|acp|mcp|attach|run|debug|providers|auth|agent|upgrade|uninstall|serve|web|models|stats|export|import|github|pr|session|plugin|plug|db";
+
+/// Root options that consume a value in the same recorded OpenCode help.
+const OPENCODE_VALUE_OPTIONS: &str = "--log-level|--port|--hostname|--mdns-domain|--cors|-m|--model|-s|--session|--prompt|--agent|--replay-limit";
+
 /// Embed the recorded help as one shell-quoted value, shared by all wrappers.
 fn render_integration(template: &str) -> String {
     let help = crate::agent_hook_launch::RECORDED_CLAUDE_HELP.replace('\'', "'\\''");
     template
+        .replace("__TUIC_OPENCODE_COMMANDS__", OPENCODE_COMMANDS)
+        .replace("__TUIC_OPENCODE_COMMANDS_FISH__", &OPENCODE_COMMANDS.replace('|', " "))
+        .replace("__TUIC_OPENCODE_VALUE_OPTIONS__", OPENCODE_VALUE_OPTIONS)
+        .replace("__TUIC_OPENCODE_VALUE_OPTIONS_FISH__", &OPENCODE_VALUE_OPTIONS.replace('|', " "))
         .replace("__TUIC_RECORDED_CLAUDE_HELP__", &format!("'{help}'"))
         .replace(
             "__TUIC_CLAUDE_HELP_USABLE__",
@@ -1465,6 +1519,101 @@ mod tests {
                 ],
             );
         }
+
+        // Catches: --no-session is combined with TUIC's conflicting --name.
+        fn goose_no_session_preserves_stateless_argv(shell: &str) {
+            assert_in_shell(
+                shell,
+                "stateless Goose must not receive a session name",
+                &[],
+                "goose session --no-session\ngoose run --no-session -t task",
+                &["session --no-session", "run --no-session -t task"],
+            );
+        }
+
+        // Catches: suppressing stateless naming also removes normal tab/session binding.
+        fn goose_session_keeps_naming_and_explicit_resume(shell: &str) {
+            assert_in_shell(
+                shell,
+                "normal Goose naming and user choices remain authoritative",
+                &[],
+                "goose session\ngoose run -t task\ngoose session --name user\ngoose session --resume",
+                &[
+                    "session --name wrapper-launch-test",
+                    "run --name wrapper-launch-test -t task",
+                    "session --name user",
+                    "session --resume",
+                ],
+            );
+        }
+
+        // Catches: OpenCode admin verbs receive a TUI-only flag, including after root options.
+        fn opencode_admin_verbs_skip_screen_flag(shell: &str) {
+            require_shell(shell);
+            let help = include_str!("../tests/fixtures/agent-help/opencode-2026-10-14.txt");
+            let mut verbs: Vec<&str> = help
+                .lines()
+                .filter_map(|line| {
+                    let verb = line
+                        .strip_prefix("  opencode ")?
+                        .split_whitespace()
+                        .next()?;
+                    (verb != "[project]").then_some(verb)
+                })
+                .collect();
+            verbs.extend(["auth", "plug"]);
+            assert!(
+                !verbs.is_empty(),
+                "recorded OpenCode help must contain commands"
+            );
+            for verb in verbs {
+                let invocation = format!("opencode {verb}\nopencode --print-logs {verb}");
+                let expected = [verb.to_owned(), format!("--print-logs {verb}")];
+                assert_in_shell(
+                    shell,
+                    "admin commands bypass screen injection",
+                    &[
+                        ("TUIC_OPENCODE_SCREEN_FLAG", "--mini"),
+                        ("TUIC_OPENCODE_SCREEN_SKIP", "run"),
+                    ],
+                    &invocation,
+                    &[&expected[0], &expected[1]],
+                );
+            }
+            assert_in_shell(
+                shell,
+                "MCP arguments and run arguments stay intact",
+                &[("TUIC_OPENCODE_SCREEN_FLAG", "--mini")],
+                "opencode mcp list\nopencode run task",
+                &["mcp list", "run task"],
+            );
+        }
+
+        // Catches: filtering verbs mistakes a project path or option value for an admin command.
+        fn opencode_interactive_launch_keeps_screen_flag(shell: &str) {
+            assert_in_shell(
+                shell,
+                "only interactive launches gain the screen flag",
+                &[("TUIC_OPENCODE_SCREEN_FLAG", "--mini")],
+                "opencode\nopencode ./mcp\nopencode project\nopencode --model mcp\nopencode --model=mcp\nopencode --mini\nopencode -- ./mcp",
+                &[
+                    "--mini",
+                    "--mini ./mcp",
+                    "--mini project",
+                    "--mini --model mcp",
+                    "--mini --model=mcp",
+                    "--mini",
+                    "--mini -- ./mcp",
+                ],
+            );
+        }
+
+        launch_matrix!(
+            goose_no_session_preserves_stateless_argv,
+            goose_session_keeps_naming_and_explicit_resume,
+            opencode_admin_verbs_skip_screen_flag,
+            opencode_interactive_launch_keeps_screen_flag,
+        );
 
         const CLAUDE_SETTINGS: &str = "/tuic/agent-hooks/claude.json";
         const CODEX_NOTIFY: &str = "/tuic/agent-hooks/codex-notify.sh";
