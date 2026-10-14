@@ -12,6 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Preserve the local branch and report a warning if a concurrent fetch conflicts with the remote proof during worktree removal (#1874-1758).
 
 ### Added
+- Attach PNG, JPEG, WebP and GIF images in terminal Compose by dropping them on the editor or choosing multiple images with the file button; paste keeps its existing behavior (#1758-1613).
 - Remember Tasks source, view, grouping, sort and filters per repository and provider account; recover rejected saved sorts with the last accepted order (#1852-35a8).
 - Keep the Tasks move menu open while scrolling its destinations; simplify board refresh to merge page one into loaded cards (#1844-858d).
 - Terminal Chat view for Grok terminals, read from the session's `chat_history.jsonl` and offered only when `~/.grok/active_sessions.json` names the exact session of that terminal's process; the newest-session fallback never feeds Chat (#1791-b8be).

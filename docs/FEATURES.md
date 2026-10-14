@@ -2941,3 +2941,7 @@ Tasks setup preserves saved account keys outside the form, including Enterprise 
 ## Tasks view memory
 
 Tasks remembers the selected source per repository and List, Board or Roadmap plus list grouping, sort, preset, search and filters per repository/provider/account. The existing `uiStore` saves these preferences through `load_ui_prefs` and `save_ui_prefs` in `ui-prefs.json`. Results and page cursors remain transient. A rejected saved sort retries the last accepted order, then the provider default. Other query failures keep their error and Retry control. An unsaved scope keeps the normal defaults.
+
+### Terminal Compose image attachments
+
+Paste an image, drop PNG/JPEG/WebP/GIF files on Compose, or select several with **Attach images** beside Send. Each image is saved through the shared paste helper and inserted as `[image: <path>]` in gesture order. Drops use the pointer position; the picker replaces the selection. Unsupported files and save failures show a visible error. Native desktop drops are claimed by the mounted Compose editor before terminal and tab routing.
