@@ -4689,6 +4689,10 @@ impl AppState {
         let Some(session_id) = event.pty_session_id() else {
             return;
         };
+        #[cfg(feature = "desktop")]
+        if let Some(app) = state.app_handle.read().as_ref() {
+            crate::background_mode::tray::desktop::schedule_sync(app);
+        }
         let Some(current) = state.session_state_with_shell(session_id) else {
             // The row is gone (`SessionClosed`). Drop the baseline too: a reused
             // id must not be deduped against the state of a dead session.

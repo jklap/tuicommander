@@ -26,6 +26,7 @@ export interface CustomLauncher {
 	platform?: "macos" | "windows" | "linux";
 }
 
+export type TrayIconPreference = "always" | "background_only" | "never";
 export type CloseBehavior = "ask" | "background" | "quit";
 
 interface RustAppConfig {
@@ -38,7 +39,7 @@ interface RustAppConfig {
 	ide: string;
 	default_font_size: number;
 	close_behavior: CloseBehavior;
-	background?: { hide_dock_icon?: boolean };
+	background?: { hide_dock_icon?: boolean; tray_icon?: TrayIconPreference };
 	confirm_before_quit: boolean;
 	confirm_before_closing_tab: boolean;
 	max_tab_name_length: number;
@@ -290,6 +291,7 @@ interface SettingsStoreState {
 	theme: string;
 	closeBehavior: CloseBehavior;
 	hideDockIcon: boolean;
+	trayIcon: TrayIconPreference;
 	confirmBeforeQuit: boolean;
 	confirmBeforeClosingTab: boolean;
 	maxTabNameLength: number;
@@ -357,6 +359,7 @@ function createSettingsStore() {
 		theme: DEFAULT_THEME,
 		closeBehavior: "ask",
 		hideDockIcon: true,
+		trayIcon: "background_only",
 		confirmBeforeQuit: true,
 		confirmBeforeClosingTab: true,
 		maxTabNameLength: 25,
@@ -431,7 +434,7 @@ function createSettingsStore() {
 		config.ide = state.ide;
 		config.default_font_size = state.defaultFontSize;
 		config.close_behavior = state.closeBehavior;
-		config.background = { ...config.background, hide_dock_icon: state.hideDockIcon };
+		config.background = { ...config.background, hide_dock_icon: state.hideDockIcon, tray_icon: state.trayIcon };
 		config.confirm_before_quit = state.confirmBeforeQuit;
 		config.confirm_before_closing_tab = state.confirmBeforeClosingTab;
 		config.max_tab_name_length = state.maxTabNameLength;
@@ -538,6 +541,7 @@ function createSettingsStore() {
 				setState("theme", config.theme || DEFAULT_THEME);
 				setState("closeBehavior", config.close_behavior ?? "ask");
 				setState("hideDockIcon", config.background?.hide_dock_icon ?? true);
+				setState("trayIcon", config.background?.tray_icon ?? "background_only");
 				setState("confirmBeforeQuit", config.confirm_before_quit ?? true);
 				setState("confirmBeforeClosingTab", config.confirm_before_closing_tab ?? true);
 				setState("maxTabNameLength", config.max_tab_name_length || 25);
@@ -638,6 +642,11 @@ function createSettingsStore() {
 		/** Set the main-window close preference. */
 		setCloseBehavior(behavior: CloseBehavior) {
 			setState("closeBehavior", behavior);
+			save();
+		},
+
+		setTrayIcon(value: TrayIconPreference) {
+			setState("trayIcon", value);
 			save();
 		},
 

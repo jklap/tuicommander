@@ -4,7 +4,7 @@ use std::sync::Arc;
 use tauri::{Emitter, Manager};
 
 #[path = "background_mode_windows.rs"]
-mod windows;
+pub(crate) mod windows;
 use windows::DesktopWindows;
 
 #[derive(Default)]
@@ -12,6 +12,7 @@ pub(crate) struct BackgroundMode {
     close: parking_lot::Mutex<CloseState>,
     snapshot: parking_lot::Mutex<Option<(String, tokio::sync::oneshot::Sender<()>)>>,
     generation: std::sync::atomic::AtomicU64,
+    notified: std::sync::atomic::AtomicBool,
 }
 
 pub(crate) fn close_window(window: &tauri::Window, api: &tauri::CloseRequestApi) {
@@ -104,6 +105,14 @@ fn apply_locked(app: &tauri::AppHandle, action: CloseAction, close: &mut CloseSt
                         close.hidden = false;
                         tracing::warn!(%error, "Cannot enter background");
                     }
+                    close.hidden = super::hidden::is_hidden(&handle.state::<Arc<AppState>>());
+                    if close.hidden
+                        && !mode
+                            .notified
+                            .swap(true, std::sync::atomic::Ordering::Relaxed)
+                    {
+                        super::tray::desktop::notify_background(&handle);
+                    }
                 }) {
                     tracing::warn!(%error, "Cannot schedule background transition");
                 }
@@ -117,6 +126,7 @@ fn apply_locked(app: &tauri::AppHandle, action: CloseAction, close: &mut CloseSt
             let payload = serde_json::json!({
                 "kind": action,
                 "sessions": state.session_maps.sessions.len(),
+                "background_available": super::tray::desktop::available(app),
             });
             let _ = app.emit("close-dialog", &payload);
             let _ = state.event_bus.send(AppEvent::CloseDialog { payload });
@@ -164,6 +174,9 @@ pub(crate) async fn resolve_close(
             quitting: close.quitting,
             pending: close.pending,
         };
+        if matches!(choice, CloseChoice::Background) && !super::tray::desktop::available(&handle) {
+            return Err("Background is unavailable: enable the tray icon and use a desktop with a tray host".into());
+        }
         let (action, remembered) = next.resolve(choice, remember)?;
         if let Some(behavior) = remembered {
             let state = handle.state::<Arc<AppState>>();

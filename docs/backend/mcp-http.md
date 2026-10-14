@@ -2256,3 +2256,7 @@ The response has `content`, with a JSON detail inside `<untrusted-content source
 Rust owns target selection, input/reply validation and opt-in. A typed `work-item-provider-request` event reaches the existing frontend registry through desktop events and SSE. The frontend atomically claims a request with `work_item_provider_bridge`, calls the existing provider port and completes the reply. Multiple clients cannot dispatch the same request twice. Claims and completions have matching IPC and HTTP transports (`POST /work-items/provider-bridge`). A running frontend with the provider loaded is required; a headless daemon alone has no JS providers. Requests time out after 30 seconds. A dispatched write may have completed when the reply times out: read before retrying.
 
 Credentials stay in Rust's existing account-authenticated HTTP path, which redacts raw tokens and Basic encodings before provider JavaScript receives a response. MCP accepts only the Tasks DTOs and suppresses raw provider errors; it never serializes account objects or configuration.
+
+### Background tray and menu-bar icon
+
+The desktop `close-dialog` event and its SSE copy include `background_available: boolean`. The desktop Ask dialog uses it to omit Background when the tray is disabled or unavailable. Browser clients continue to ignore native close prompts; tray actions add no public request surface.

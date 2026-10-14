@@ -12,7 +12,7 @@ export const TIPS: Tip[] = [
 	{
 		feature: "Close to background",
 		description:
-			"In desktop Settings > General, choose Ask, Background or Quit for main-window close. Background keeps sessions running; the application menu still offers Quit.",
+			"In desktop Settings > General, choose Ask, Background or Quit for main-window close. Background keeps sessions running. The tray or menu-bar icon shows working and awaiting agents and offers Show and Quit.",
 		shortcut: null,
 	},
 	{
