@@ -1829,6 +1829,18 @@ pub fn run() {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 background_mode::desktop::close_window(window, api);
             }
+            if window.label() == "main"
+                && let tauri::WindowEvent::Focused(focused) = event
+            {
+                window
+                    .state::<Arc<AppState>>()
+                    .desktop_window_focused
+                    .store(*focused, std::sync::atomic::Ordering::Relaxed);
+                #[cfg(all(target_os = "macos", feature = "dictation"))]
+                if !focused {
+                    dictation::fn_key_monitor::release_on_focus_loss(window.app_handle());
+                }
+            }
             if matches!(event, tauri::WindowEvent::Focused(true)) && window.label() == "main" {
                 background_mode::desktop::shown(window.app_handle());
             }
@@ -1910,25 +1922,6 @@ pub fn run() {
                     .hidden_title(true)
                     .title_bar_style(tauri::TitleBarStyle::Overlay);
                 themes::window_background::configure(builder, startup_background).build()?;
-            }
-
-            // Track desktop window focus so push notifications can be
-            // suppressed while the user is at their machine.
-            if let Some(window) = app.get_webview_window("main") {
-                let push_flag = Arc::clone(app_state);
-                #[cfg(all(target_os = "macos", feature = "dictation"))]
-                let focus_app = app.handle().clone();
-                window.on_window_event(move |event| {
-                    if let tauri::WindowEvent::Focused(focused) = event {
-                        push_flag
-                            .desktop_window_focused
-                            .store(*focused, std::sync::atomic::Ordering::Relaxed);
-                        #[cfg(all(target_os = "macos", feature = "dictation"))]
-                        if !focused {
-                            dictation::fn_key_monitor::release_on_focus_loss(&focus_app);
-                        }
-                    }
-                });
             }
 
             #[cfg(feature = "desktop")]

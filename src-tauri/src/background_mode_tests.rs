@@ -128,3 +128,17 @@ fn background_mode_close_dialog_has_sse_parity() {
 
 #[path = "background_mode_hidden_tests.rs"]
 mod hidden_tests;
+
+// Catches: legacy config disabling unload or an explicit zero being replaced by default.
+#[test]
+fn background_mode_unload_config_defaults_and_zero_round_trip() {
+    let legacy: BackgroundConfig = serde_json::from_str("{}").unwrap();
+    assert_eq!(legacy.webview_unload_minutes, 10);
+    let disabled: BackgroundConfig =
+        serde_json::from_str(r#"{"webview_unload_minutes":0}"#).unwrap();
+    assert_eq!(
+        serde_json::to_value(disabled).unwrap()["webview_unload_minutes"],
+        0
+    );
+    assert!(serde_json::from_str::<BackgroundConfig>(r#"{"webview_unload_minutes":-1}"#).is_err());
+}

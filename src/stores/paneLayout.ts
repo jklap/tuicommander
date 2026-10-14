@@ -300,7 +300,7 @@ function createPaneLayoutStore() {
 	// Debounced persistence — serializes tree+groups directly (no `this` needed)
 	let saveTimer: ReturnType<typeof setTimeout> | null = null;
 
-	function writeLayout(): void {
+	function writeLayout(): Promise<void> {
 		const groups: Record<string, PaneGroup> = {};
 		for (const key of Object.keys(state.groups)) {
 			const g = state.groups[key];
@@ -315,14 +315,14 @@ function createPaneLayoutStore() {
 			groups,
 			activeGroupId: state.activeGroupId,
 		};
-		layoutWriter.save(snapshot).catch((err: unknown) => appLogger.warn("app", "Failed to save pane layout", err));
+		return layoutWriter.save(snapshot);
 	}
 
 	function scheduleSave(): void {
 		if (saveTimer) clearTimeout(saveTimer);
 		saveTimer = setTimeout(() => {
 			saveTimer = null;
-			writeLayout();
+			writeLayout().catch((err: unknown) => appLogger.warn("app", "Failed to save pane layout", err));
 		}, 500);
 	}
 
@@ -659,12 +659,18 @@ function createPaneLayoutStore() {
 
 	return {
 		...result,
+		/** Snapshot acknowledgement must wait for the latest layout write, including queued saves. */
+		async saveForBackground(): Promise<void> {
+			if (saveTimer) clearTimeout(saveTimer);
+			saveTimer = null;
+			await writeLayout();
+		},
 		/** Write a pending debounced save now — the app is going away. */
 		flushSave(): void {
 			if (!saveTimer) return;
 			clearTimeout(saveTimer);
 			saveTimer = null;
-			writeLayout();
+			writeLayout().catch((err: unknown) => appLogger.warn("app", "Failed to save pane layout", err));
 		},
 		_testCancelPendingSave(): void {
 			if (saveTimer) {

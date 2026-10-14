@@ -2357,6 +2357,12 @@ pub(super) async fn handle_ui_unified(
         Ok(a) => a,
         Err(e) => return e,
     };
+    if state
+        .webview_unloaded
+        .load(std::sync::atomic::Ordering::Acquire)
+    {
+        return serde_json::json!({"error":"webview_unloaded"});
+    }
     match action {
         "tab" => handle_ui(state, args, mcp_session_id),
         "toast" => handle_ui_toast(state, args, mcp_session_id),

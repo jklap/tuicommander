@@ -100,9 +100,15 @@ pub(crate) struct BackgroundConfig {
     #[serde(default = "default_hide_dock_icon")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Hides the macOS Dock icon while the desktop runs in background.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub hide_dock_icon: bool,
+    #[serde(default = "default_webview_unload_minutes")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Unloads desktop WebViews after awake minutes in background; zero disables. JavaScript plugins, sounds and updater checks pause until Show. Memory release measured only on macOS.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    pub webview_unload_minutes: u32,
     #[serde(default)]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Controls tray visibility. Never prevents hiding and uses minimize instead.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub tray_icon: TrayPreference,
+}
+fn default_webview_unload_minutes() -> u32 {
+    10
 }
 fn default_hide_dock_icon() -> bool {
     true
@@ -111,6 +117,7 @@ impl Default for BackgroundConfig {
     fn default() -> Self {
         Self {
             hide_dock_icon: true,
+            webview_unload_minutes: 10,
             tray_icon: TrayPreference::default(),
         }
     }
@@ -128,3 +135,7 @@ pub(crate) enum TrayPreference {
 #[cfg(any(feature = "desktop", test))]
 #[path = "background_mode_tray.rs"]
 pub(crate) mod tray;
+
+#[cfg(any(feature = "desktop", test))]
+#[path = "background_mode_unload.rs"]
+pub(crate) mod unload;
