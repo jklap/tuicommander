@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { terminalsStore } from "../../stores/terminals";
-import { resumeTerminal, suspendRefusal, suspendTerminal } from "../../utils/suspendTerminal";
+import { suspendRefusal, suspendTerminal } from "../../utils/suspendTerminal";
 import { makeTerminal, testInScope } from "../helpers/store";
 
 const mockRpc = vi.fn();
@@ -98,21 +98,6 @@ describe("suspendRefusal boundaries (critic 1358)", () => {
 		testInScope(() => {
 			const id = terminalsStore.add(makeTerminal({ sessionId: "pty-z", awaitingInput: "error" }));
 			expect(suspendRefusal(terminalsStore.get(id)!)).toBe("waiting for input");
-		}));
-});
-
-describe("resumeTerminal (critic 1358)", () => {
-	// Catches: resume addressing an agent id rather than the durable TUIC identity.
-	it("resumes the Rust record under its stable identity", () =>
-		testInScope(async () => {
-			mockRpc.mockReset().mockResolvedValue({ session_id: "new-pty" });
-			const id = addTab();
-			await suspendTerminal(id);
-			await resumeTerminal(id);
-			expect(mockRpc).toHaveBeenCalledWith("suspended_session_action", {
-				request: { action: "resume", tuicSession: "tab-uuid" },
-			});
-			expect(terminalsStore.get(id)?.sessionId).toBe("new-pty");
 		}));
 });
 

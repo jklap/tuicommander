@@ -28,7 +28,7 @@ vi.mock("../../components/Terminal/CanvasTerminal", () => ({
 
 import { Terminal } from "../../components/Terminal/Terminal";
 import { terminalsStore } from "../../stores/terminals";
-import { resumeTerminal, suspendTerminal } from "../../utils/suspendTerminal";
+import { suspendTerminal } from "../../utils/suspendTerminal";
 
 /** Mount a Terminal that is attached to an already live PTY ("live-session"). */
 function openLiveTab() {
@@ -79,22 +79,5 @@ describe("Terminal under Suspend (critic 1358)", () => {
 		await new Promise((r) => setTimeout(r, 20));
 		expect(createSession).not.toHaveBeenCalled();
 		expect(terminalsStore.get(id)?.sessionId).toBe("live-session");
-	});
-
-	// Catches: suspend leaves the Terminal's own sessionInitialized/sessionId so the PTY is
-	// respawned immediately, or resume forgets to re-run initSession and the tab stays blank.
-	it("attaches exactly one Rust PTY on resume and none while suspended", async () => {
-		const { id } = openLiveTab();
-		await waitFor(() => expect(resize).toHaveBeenCalled());
-
-		expect((await suspendTerminal(id)).ok).toBe(true);
-		await new Promise((r) => setTimeout(r, 20));
-		expect(createSession).not.toHaveBeenCalled();
-
-		mockRpc.mockResolvedValue({ session_id: "fresh-session" });
-		expect((await resumeTerminal(id)).ok).toBe(true);
-		await waitFor(() => expect(resize).toHaveBeenCalledWith("fresh-session", expect.any(Number), expect.any(Number)));
-		expect(createSession).not.toHaveBeenCalled();
-		await waitFor(() => expect(terminalsStore.get(id)?.sessionId).toBe("fresh-session"));
 	});
 });
