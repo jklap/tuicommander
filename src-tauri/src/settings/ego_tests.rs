@@ -322,3 +322,57 @@ async fn providers_accept_a_workspace_not_yet_created() {
     assert_eq!(providers.default_model, Some("ollama/qwen3".into()));
     assert!(workspace.is_dir());
 }
+
+// Catches: construction-time profile binding rejects a valid launch profile change.
+#[tokio::test]
+async fn ego_settings_follow_launch_profile_changes() {
+    let f = fixture();
+    get(&f, &["/model"]).await.unwrap();
+    f.state.config.write().ego_profile = "beta".into();
+    let reply = f
+        .registry
+        .execute(Request::Get {
+            target: Target::Profile { id: "beta".into() },
+            store: "ego".into(),
+            paths: vec!["/model".into()],
+        })
+        .await
+        .expect("current launch profile must resolve without rebuilding registry");
+    assert!(matches!(reply, Reply::Snapshot(_)));
+    assert_eq!(get(&f, &["/model"]).await.unwrap_err().code, "not_found");
+}
+
+// Catches: initial unconfigured Ego prevents registration and remains absent after setup.
+#[tokio::test]
+async fn ego_settings_register_before_first_configuration() {
+    let f = fixture();
+    let executable = f.state.config.read().ego_executable.clone();
+    f.state.config.write().ego_executable.clear();
+    let owner = super::ego::EgoSettingsStore::new(f.state.clone())
+        .expect("registration must perform no configuration I/O");
+    let service = super::service::Service::new(
+        std::sync::Arc::new(super::native::native_catalogue().unwrap()),
+        std::sync::Arc::new(owner),
+    );
+    assert_eq!(
+        service
+            .get(
+                Target::Profile { id: "alpha".into() },
+                "ego".into(),
+                vec!["/model".into()]
+            )
+            .await
+            .unwrap_err()
+            .code,
+        "unavailable"
+    );
+    f.state.config.write().ego_executable = executable;
+    service
+        .get(
+            Target::Profile { id: "alpha".into() },
+            "ego".into(),
+            vec!["/model".into()],
+        )
+        .await
+        .unwrap();
+}

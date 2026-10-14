@@ -98,6 +98,9 @@ export function createInMemoryWorkItemProvider(seed: WorkItemProviderSnapshot = 
 						kind: "enum",
 						required: true,
 						editable: true,
+						sortable: false,
+						groupable: false,
+						filterable: false,
 						options: itemTypes().map((id) => ({ id, name: id.charAt(0).toUpperCase() + id.slice(1) })),
 					},
 				];
@@ -284,7 +287,7 @@ export function createInMemoryWorkItemProvider(seed: WorkItemProviderSnapshot = 
 					kind: "normal",
 					value: {
 						id: `local-${revision}`,
-						author: { id: "demo-user", name: "Demo User", avatarUrl: null },
+						author: { id: "demo-user", name: "Demo User", avatarUrl: null, bot: false },
 						body: action.value,
 						createdAt: "2026-10-10T00:00:00Z",
 						url: null,

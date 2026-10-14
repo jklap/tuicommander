@@ -782,7 +782,7 @@ the badge refreshes the state through your provider's `detail(reference)`.
 - `labels`: multiple labels with stable IDs; `date`: ISO-8601 date input.
 - `number`: finite numeric input; `link`: URL/link control.
 
-A field schema can set `queryable: false` to hide a display-only field from list filters and grouping. The roadmap still reads date fields. Omitted or null means queryable.
+Display-only fields set `sortable`, `filterable` and `groupable` to false. The roadmap still reads date fields.
 
 The canonical DTOs are `work_items::model` and `work_items::protocol` in Rust.
 Generate their TypeScript declarations with
@@ -790,6 +790,11 @@ Generate their TypeScript declarations with
 `src/types/work-items.gen.ts`. Fields use camelCase; discriminated unions use
 `{kind, value}` with snake_case kinds. `WorkItemRef` scopes opaque item IDs by
 `providerId` and `accountId`. Missing field keys mean not loaded; null means unset.
+
+Each field schema declares `sortable`, `groupable` and `filterable` booleans for
+the provider list endpoint. Tasks offers only those declared query controls.
+Create and detail schemas set these to false when they are not list fields.
+A rejected query restores the last successful controls and shows the reason.
 
 `WorkItemQuery` carries ANDed filters (values are ORed), saved filter ID, native
 search, sort, bounded page size and opaque cursor. Providers must bind cursors to
@@ -812,13 +817,17 @@ It touches no network, credentials, filesystem or subprocesses. It is a developm
 provider, not a fixture proving GitHub/Jira/GitLab API compatibility. Its search is
 literal text; sort supports key/title/updatedAt. Its cursor expires on mutation.
 
+Optional provider listBoards(signal) discovers read-only boards on view opening; GitHub needs read:project.
+
 ## Tasks core UX contracts
 
+Complete lists with a stable total <=1000 use project_work_items (/tasks/project) for Rust all-field projection. Unknown or large totals retain server capabilities; no fabricated counts.
+
 ### Tasks component inventory
-`BoardLane`, `CardMoveMenu`, `InstallWorkItemPlugin`, `RoadmapTimeline`, `StartWorkMenu`, `TaskComment`, `TaskCreateField`, `TaskField`, `TaskMarkdown`, `TaskRows`, `TasksBoard`, `TasksBoardView`, `TasksCreate`, `TasksDetail`, `TasksList`, `TasksRoadmap`, `TasksSetup`, `TasksShell`.
+`BoardLane`, `CardMoveMenu`, `CreateField`, `InstallWorkItemPlugin`, `RoadmapTimeline`, `StartWorkMenu`, `TaskComment`, `TaskCreateField`, `TaskCreateOptional`, `TaskCreateUser`, `TaskField`, `TaskMarkdown`, `TaskRows`, `TasksBoard`, `TasksBoardView`, `TasksCreate`, `TasksDetail`, `TasksList`, `TasksRoadmap`, `TasksSetup`, `TasksShell`.
 
 ### Tasks DTO field inventory
-`WorkItem.assignees`, `WorkItem.fields`, `WorkItem.itemType`, `WorkItem.key`, `WorkItem.labels`, `WorkItem.reference`, `WorkItem.state`, `WorkItem.title`, `WorkItem.updatedAt`, `WorkItem.url`, `WorkItemActionDescriptor.disabledReason`, `WorkItemActionDescriptor.enabled`, `WorkItemActionDescriptor.id`, `WorkItemActionDescriptor.kind`, `WorkItemActionDescriptor.name`, `WorkItemBoard.columns`, `WorkItemBoard.fieldId`, `WorkItemBoard.id`, `WorkItemBoard.name`, `WorkItemBoardCard.item`, `WorkItemBoardCard.moves`, `WorkItemBoardColumn.action`, `WorkItemBoardColumn.id`, `WorkItemBoardColumn.name`, `WorkItemBoardLane.cards`, `WorkItemBoardLane.columnId`, `WorkItemBoardMove.action`, `WorkItemBoardMove.columnId`, `WorkItemBoardPage.board`, `WorkItemBoardPage.lanes`, `WorkItemBoardPage.nextCursor`, `WorkItemComment.author`, `WorkItemComment.body`, `WorkItemComment.createdAt`, `WorkItemComment.id`, `WorkItemComment.url`, `WorkItemCommentPage.entries`, `WorkItemCommentPage.nextCursor`, `WorkItemCreate.body`, `WorkItemCreate.fields`, `WorkItemCreate.itemType`, `WorkItemCreate.title`, `WorkItemDetail.actions`, `WorkItemDetail.body`, `WorkItemDetail.comments`, `WorkItemDetail.fields`, `WorkItemDetail.item`, `WorkItemEdit.fieldId`, `WorkItemEdit.value`, `WorkItemFieldSchema.editable`, `WorkItemFieldSchema.id`, `WorkItemFieldSchema.kind`, `WorkItemFieldSchema.name`, `WorkItemFieldSchema.options`, `WorkItemFieldSchema.queryable`, `WorkItemFieldSchema.required`, `WorkItemFilter.fieldId`, `WorkItemFilter.values`, `WorkItemGroup.id`, `WorkItemGroup.items`, `WorkItemGroup.name`, `WorkItemGroupedPage.groups`, `WorkItemGroupedPage.nextCursor`, `WorkItemGroupedPage.total`, `WorkItemOption.id`, `WorkItemOption.name`, `WorkItemPage.items`, `WorkItemPage.nextCursor`, `WorkItemPage.total`, `WorkItemProviderSnapshot.accountId`, `WorkItemProviderSnapshot.boards`, `WorkItemProviderSnapshot.fields`, `WorkItemProviderSnapshot.items`, `WorkItemProviderSnapshot.name`, `WorkItemProviderSnapshot.providerId`, `WorkItemProviderSnapshot.savedFilters`, `WorkItemQuery.cursor`, `WorkItemQuery.filters`, `WorkItemQuery.groupBy`, `WorkItemQuery.limit`, `WorkItemQuery.savedFilterId`, `WorkItemQuery.search`, `WorkItemQuery.sort`, `WorkItemRef.accountId`, `WorkItemRef.id`, `WorkItemRef.providerId`, `WorkItemReviewSummary.comment`, `WorkItemReviewSummary.commitId`, `WorkItemReviewSummary.state`, `WorkItemReviewThread.comments`, `WorkItemReviewThread.commitId`, `WorkItemReviewThread.id`, `WorkItemReviewThread.line`, `WorkItemReviewThread.path`, `WorkItemReviewThread.resolved`, `WorkItemSavedFilter.id`, `WorkItemSavedFilter.name`, `WorkItemSavedFilter.query`, `WorkItemSort.descending`, `WorkItemSort.fieldId`, `WorkItemStartWork.agentType`, `WorkItemStartWork.baseRef`, `WorkItemStartWork.branch`, `WorkItemStartWork.delivery`, `WorkItemStartWork.prompt`, `WorkItemStartWork.repoPath`, `WorkItemState.id`, `WorkItemState.name`, `WorkItemState.tone`, `WorkItemUser.avatarUrl`, `WorkItemUser.id`, `WorkItemUser.name`.
+`WorkItem.assignees`, `WorkItem.fields`, `WorkItem.itemType`, `WorkItem.key`, `WorkItem.labels`, `WorkItem.reference`, `WorkItem.state`, `WorkItem.title`, `WorkItem.updatedAt`, `WorkItem.url`, `WorkItemActionDescriptor.disabledReason`, `WorkItemActionDescriptor.enabled`, `WorkItemActionDescriptor.id`, `WorkItemActionDescriptor.kind`, `WorkItemActionDescriptor.name`, `WorkItemBoard.columns`, `WorkItemBoard.fieldId`, `WorkItemBoard.id`, `WorkItemBoard.name`, `WorkItemBoardCard.item`, `WorkItemBoardCard.moves`, `WorkItemBoardColumn.action`, `WorkItemBoardColumn.id`, `WorkItemBoardColumn.name`, `WorkItemBoardLane.cards`, `WorkItemBoardLane.columnId`, `WorkItemBoardMove.action`, `WorkItemBoardMove.columnId`, `WorkItemBoardPage.board`, `WorkItemBoardPage.lanes`, `WorkItemBoardPage.nextCursor`, `WorkItemComment.author`, `WorkItemComment.body`, `WorkItemComment.createdAt`, `WorkItemComment.id`, `WorkItemComment.url`, `WorkItemCommentPage.entries`, `WorkItemCommentPage.nextCursor`, `WorkItemCreate.body`, `WorkItemCreate.fields`, `WorkItemCreate.itemType`, `WorkItemCreate.title`, `WorkItemDetail.actions`, `WorkItemDetail.body`, `WorkItemDetail.comments`, `WorkItemDetail.fields`, `WorkItemDetail.item`, `WorkItemEdit.fieldId`, `WorkItemEdit.value`, `WorkItemFieldSchema.editable`, `WorkItemFieldSchema.filterable`, `WorkItemFieldSchema.groupable`, `WorkItemFieldSchema.id`, `WorkItemFieldSchema.kind`, `WorkItemFieldSchema.name`, `WorkItemFieldSchema.options`, `WorkItemFieldSchema.required`, `WorkItemFieldSchema.sortable`, `WorkItemFilter.fieldId`, `WorkItemFilter.values`, `WorkItemGroup.id`, `WorkItemGroup.items`, `WorkItemGroup.name`, `WorkItemGroupedPage.groups`, `WorkItemGroupedPage.nextCursor`, `WorkItemGroupedPage.total`, `WorkItemLocalQuery.fields`, `WorkItemLocalQuery.items`, `WorkItemLocalQuery.query`, `WorkItemOption.id`, `WorkItemOption.name`, `WorkItemPage.items`, `WorkItemPage.nextCursor`, `WorkItemPage.total`, `WorkItemProviderSnapshot.accountId`, `WorkItemProviderSnapshot.boards`, `WorkItemProviderSnapshot.fields`, `WorkItemProviderSnapshot.items`, `WorkItemProviderSnapshot.name`, `WorkItemProviderSnapshot.providerId`, `WorkItemProviderSnapshot.savedFilters`, `WorkItemQuery.cursor`, `WorkItemQuery.filters`, `WorkItemQuery.groupBy`, `WorkItemQuery.limit`, `WorkItemQuery.savedFilterId`, `WorkItemQuery.search`, `WorkItemQuery.sort`, `WorkItemRef.accountId`, `WorkItemRef.id`, `WorkItemRef.providerId`, `WorkItemReviewFinding.addressedIn`, `WorkItemReviewFinding.agentPrompt`, `WorkItemReviewFinding.category`, `WorkItemReviewFinding.externalId`, `WorkItemReviewFinding.severity`, `WorkItemReviewFinding.severityLabel`, `WorkItemReviewFinding.suggestion`, `WorkItemReviewFinding.title`, `WorkItemReviewFinding.tool`, `WorkItemReviewSummary.comment`, `WorkItemReviewSummary.commitId`, `WorkItemReviewSummary.state`, `WorkItemReviewThread.comments`, `WorkItemReviewThread.commitId`, `WorkItemReviewThread.finding`, `WorkItemReviewThread.id`, `WorkItemReviewThread.line`, `WorkItemReviewThread.originalLine`, `WorkItemReviewThread.outdated`, `WorkItemReviewThread.path`, `WorkItemReviewThread.resolved`, `WorkItemSavedFilter.id`, `WorkItemSavedFilter.name`, `WorkItemSavedFilter.query`, `WorkItemSort.descending`, `WorkItemSort.fieldId`, `WorkItemStartWork.agentType`, `WorkItemStartWork.baseRef`, `WorkItemStartWork.branch`, `WorkItemStartWork.delivery`, `WorkItemStartWork.prompt`, `WorkItemStartWork.repoPath`, `WorkItemState.id`, `WorkItemState.name`, `WorkItemState.tone`, `WorkItemUser.avatarUrl`, `WorkItemUser.bot`, `WorkItemUser.id`, `WorkItemUser.name`.
 
 ### Tasks shell view inventory
 `board`, `list`, `roadmap`.
@@ -829,9 +838,10 @@ literal text; sort supports key/title/updatedAt. Its cursor expires on mutation.
 All DTO fields above use the runtime provider contract, not PluginManifest settings.
 The list, create, detail and board descriptions below explain their controls and actions.
 `WorkItemRef` uses `providerId`, `accountId` and opaque `id` for identity.
-`WorkItemUser` supplies `id`, `name`, `avatarUrl`; `WorkItemOption` supplies `id`, `name`.
+`WorkItemUser` supplies `id`, `name`, `avatarUrl`, `bot`; `WorkItemOption` supplies `id`, `name`.
 `WorkItemState` supplies authoritative `id`, visible `name` and semantic `tone`.
-`WorkItemFieldSchema` supplies `id`, `name`, `kind`, `required`, `editable`, `options`.
+`WorkItemFieldSchema` supplies `id`, `name`, `kind`, `required`, `editable`, `options`,
+`sortable`, `groupable`, `filterable`.
 `WorkItem` supplies `reference`, `key`, `title`, `itemType`, `state`, `assignees`,
 `labels`, `updatedAt`, `url` and typed `fields` (missing means unloaded, null means unset).
 `WorkItemQuery` supplies `filters`, `savedFilterId`, `search`, `sort`, `groupBy`, `cursor`,
@@ -847,8 +857,11 @@ pages; omit it when the provider cannot know it, and the list shows the loaded c
 `baseRef`, `prompt`, `agentType`, explicit `delivery` for host-owned execution.
 `WorkItemCommentPage` supplies `entries`, `nextCursor`; `WorkItemComment` supplies
 `id`, `author`, Markdown `body`, `createdAt`, optional `url`.
-`WorkItemReviewThread` supplies `id`, `resolved`, `path`, optional `line`, `commitId`,
-`comments`; `WorkItemReviewSummary` supplies `comment`, review `state`, `commitId`.
+`WorkItemReviewThread` supplies `id`, `resolved`, `outdated`, `path`, optional `line`
+(null when outdated), `originalLine`, `commitId`, `comments`, nullable `finding`;
+`WorkItemReviewFinding` supplies nullable `tool`, `title`, normalised `severity`, vendor
+`severityLabel`, `category`, `suggestion`, `agentPrompt`, `addressedIn`, `externalId`,
+all untrusted text shown as text; `WorkItemReviewSummary` supplies `comment`, review `state`, `commitId`.
 `WorkItemBoard` supplies `id`, `name`, `fieldId`, `columns`; `WorkItemBoardColumn`
 supplies `id`, `name`, nullable default `action`. `WorkItemBoardPage` supplies `board`,
 `lanes`, `nextCursor`; `WorkItemBoardLane` supplies `columnId`, `cards`;
@@ -917,6 +930,23 @@ Virtualized dated rows show item `key`, `title` and local start/target calendar 
 They use the host projection's spans and window, month/quarter zoom and `onOpen(reference)`.
 The provider's typed date values and the explicit `startFieldId`/`targetFieldId` roles
 (or the first two date descriptors) drive placement, not display names.
+
+#### CardMoveMenu
+Portalled board move menu. It lists other columns, disables forbidden moves and
+calls the supplied move handler. Arrow keys move focus; Escape closes the menu
+and restores focus. Outside pointer presses and scrolling dismiss it.
+
+#### CreateField
+Shared create-field label, hint and error wrapper. It gives the control stable
+IDs and connects its label and accessible descriptions.
+
+#### TaskCreateOptional
+Collapsible optional-field section with a name filter. Hidden fields stay mounted
+so filtering preserves drafts. Invalid fields remain visible.
+
+#### TaskCreateUser
+Provider-backed user search and selection. It keeps selected names, supports
+removal, exposes loading and search errors, and respects single-user metadata.
 
 #### TaskCreateField
 

@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 - Remove answer background tints from the terminal grid, Answers view, AI Chat and terminal Chat cards. Keep green left rules and spacing; use the darker success green for Paper answer rules; user-question styling is unchanged (#1896-f355).
+- Tasks loads complete lists of at most 1,000 items for Rust-backed all-field queries; unknown or larger lists keep server controls (#1851-7ade).
+- Discover GitHub Projects v2 in Tasks Board with visible read:project scope errors (#1846-55d7).
+
+- Tasks offers only provider-supported sort, group and filter fields, and restores the last valid selection after a rejection.
 
 ### Added
 - Background desktop WebViews unload after a configurable awake delay (default 10 minutes, 0 disables) and reconnect tabs on Show. Rust sessions keep running; frontend plugins pause while unloaded.
@@ -34,6 +38,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 - Repaint answer-rule strips when terminal cell metrics or projected row positions change, so font loading and theme remeasurement keep the rule aligned (#1896-f355).
 
+- Preserve GitLab endpoint and username-filter scope in small Tasks lists; align Jira and GitHub local field values, and keep Roadmap provider paging (#1851-7ade).
 - Run desktop orphan-worktree safety checks and removal on the blocking pool instead of the IPC main thread. Live heartbeat confirmation remains pending (#1638-c94c).
 - Include CSS tokens referenced by shorthand declarations in Design Mode grabs, including inline styles and adopted shadow-root sheets (#1888-14a3).
 - Allow workflow agents to launch in registered branch worktrees while preserving detached-orphan removal guards (#1883-eba0).
@@ -80,6 +85,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Tasks board lanes show loaded counts and More controls; cards show assignees and labels with a compact keyboard-accessible Move menu (#1844-858d).
 - Preserve account metadata when saving Tasks setup, keep assignee username filters as text, and hide unsupported GitLab roadmap date filters and grouping (#1841-bbac, #1843-9b0f, #1845-66f6).
 - Hide Codex/Ink hard-wrapped intent tails with their marker rows, stopping at blank rows and new output (#1761-7249).
+
+- Tasks details display provider enum labels while retaining IDs for edits (#1839-dcbf).
+- Jira create forms support searchable Reporter and Assignee, free labels, inline required errors, and configured Project/Type values (#1859-c01f).
+
+- Keep Jira JQL parse errors visible in Tasks lists and boards, with explicit `jql:` and `text:` search prefixes (#1861-8a4c).
 - Trackpad and wheel scrolling no longer stalls while the pointer is over the CLI/Chat switch, in either view (#1847-feb9).
 - Design Mode automatically loads its own extension on cold Edge launches and opens the discovered dev server. Running profiles and unsupported branded Chrome return clear errors (#1834-f6c4).
 - Make Terminal Chat easier to read with one lightly tinted answer card per turn, whole-answer Copy, reading-width limits, collapsible terminal pastes and compact inbox notices. Keep the collapsed tool row and show Claude Bash descriptions when available (#1832-b19a).

@@ -1600,3 +1600,25 @@ B0 measured WebContent exiting and about 1,090 MB released from a synthetic 1 Gi
 ## Plugin settings UI
 
 Loaded plugins with registered settings appear under Settings > Integrations. Search includes their catalogue field labels. Unloading removes the page and search entries. Reads, revision-checked edits, resets and secret set/unset status use the scoped Rust settings service; the UI owns no second configuration store.
+
+## Settings owner cutover prerequisites (#1787-4778)
+
+The general MCP cutover remains blocked by the owner gaps in
+`src-tauri/src/settings/inventory-gaps.json`. The existing `config` tool remains
+available until those prerequisites are resolved.
+
+The connections settings owner retains each removed record until its apply phase.
+Its removal callback receives that record, not only an id. Runtime teardown can
+therefore stop an on-connect SSH daemon after `connections.json` no longer contains
+its connection. Tunnel profile removal callbacks still receive profile ids.
+
+The Ego owner registers without a configured executable. Each request resolves the
+current launch profile and pins its executable, workspace and profile for that
+operation. An unconfigured request is unavailable; changing launch configuration
+allows subsequent requests without rebuilding the registry. The managed adapter
+still excludes `sandbox`, `mode`, `permissions.judge` and `exec.env`.
+
+GitHub account removal saves the removal of its repository bindings before deleting
+its credential and registry record. A bindings-save failure keeps the account and
+credential available for retry. A later account-removal failure can leave a valid,
+unbound account, but never a binding to an account that this operation deleted.

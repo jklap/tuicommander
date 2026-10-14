@@ -9,6 +9,7 @@
 .badgeOpen { color: var(--accent); }
 .badgeResolved { color: var(--success); }
 .badgeOutdated { color: var(--warning); }
+.badgeBot { color: var(--fg-muted); }
 .comment { margin-bottom: 8px; overflow-wrap: anywhere; }
 .commentHeader { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
 .commentHeader time { color: var(--fg-muted); font-size: var(--font-xs); }

@@ -1,3 +1,6 @@
+## Settings owner prerequisites (1787-4778) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, verify isolated owner requests follow an Ego launch profile change and first configuration without recreating the registry. Verify removal of an on-connect SSH connection stops its ephemeral daemon after settings persistence. General MCP cutover remains blocked by owner inventory gaps; the existing config tool stays available. Targeted owner regressions cover the saved-record callback, profile resolution and bindings-save failure. Do not restart the running app for this check.
 ## Orphan removal threading (1638-c94c) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, remove a throwaway orphan worktree through the desktop cleanup UI. Record desktop heartbeat continuity and independent backend-request timings during removal. The module-boundary regression covers async/blocking-pool placement, not a live heartbeat replay. No second desktop instance was launched.
@@ -2168,6 +2171,18 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] After Boss's manual Rust restart and the separate settings-transport cutover, request a protected remote/auth/TLS/relay/executable edit: verify the desktop/phone dialog uses the backend diff, refusal writes nothing, acceptance commits once, and replay is refused. The policy foundation is covered through isolated owner files and the existing human-response channel; settings transport publication is still separate. Do not restart a live desktop session solely for this check.
 - [ ] Workflow Pause fix (#1882-bc88): after Boss restarts `make dev` or rebuilds release, edit a seeded story, publish it, and use Pause → Resume to → Save draft to repair an existing draft. Rust seed/API changes require restart.
 - [ ] Mobile composer + menu (#1880-d7ff): on iPhone, check both modes at 390px, native camera/file pickers, browser mic, Chat Park/Restore and busy Queue/Stop, terminal Queue and long-press Send. Confirm keyboard and safe-area positioning.
+- [ ] Tasks capability schema: restart the Rust build, then verify GitHub, GitLab and Jira list selectors offer only declared fields; a rejected selection restores the previous value and shows its reason.
+- [ ] Jira create: choose Reporter and Assignee by search, enter new comma-separated Labels, fill required Parent for sub-tasks, and verify Project/Type do not require duplicate entry (#1859-c01f).
+## Jira JQL errors (#1861-8a4c)
+
+- [x] `jql: project =` shows the recorded Jira parse failure and a correction hint; the typed query remains intact and previous rows are marked stale. _(verified: real TasksShell and Jira provider in the read-only Vite harness, screenshot and UI request trace in `~/Gits/.tmp/fix-1861/`; no text fallback request.)_
+- [x] Explicit text, key lookup, valid JQL, saved-filter predicates and board query scoping retain their meanings. _(verified: `plugins/jira/jql-errors.test.js`, 31 Jira tests pass; 11 Tasks consumer tests pass.)_
+
+- [ ] Tasks/plugins batch 1013: after Boss restarts `make dev` (or rebuilds release), verify review-bot findings in Tasks and PR review threads. The merged Rust changes require a backend restart to load.
+
+- [ ] Tasks small-list mode (#1851-7ade): after Boss restarts the Rust backend, check a GitHub small scope shows local queries and title sorting, while unknown-total Jira stays server mode. New project_work_items IPC/HTTP requires rebuild; never reload the desktop during agent work.
+
+- [ ] After a manual backend restart, verify small Tasks lists filter Jira Status and GitHub Type correctly. Rust projection changes do not hot-reload.
 
 ### Background WebView unload (#1805-decc)
 
