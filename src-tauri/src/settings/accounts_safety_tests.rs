@@ -108,3 +108,48 @@ async fn owner_refusals_keep_their_cause() {
         assert_eq!((error.code.as_str(), error.persisted), (code, false));
     }
 }
+
+// Catches: bindings-save failure deletes the account, making its dangling binding irreparable by retry.
+#[tokio::test]
+async fn bindings_save_failure_keeps_account_retriable() {
+    let (dir, _guard, state) = isolated();
+    let account = GitHubAccount::ghe_pat(GitHubHost::new("save-failure.example").unwrap(), None);
+    add_account_record(account.clone(), Some("failure-token-canary")).unwrap();
+    let bindings = serde_json::json!({"bindings":{"/test/repo":{"account_id":account.id,"owner":"owner","repo":"repo","remote_name":"origin"}}});
+    std::fs::write(
+        dir.path().join("github_bindings.json"),
+        bindings.to_string(),
+    )
+    .unwrap();
+    // A directory at the lock path makes bindings persistence fail after a successful read.
+    let lock = dir.path().join("github_bindings.json.lock");
+    std::fs::create_dir(&lock).unwrap();
+    let settings = GithubSettings::new(state);
+    assert!(
+        settings
+            .perform(GithubAction::RemoveAccount {
+                id: account.id.clone()
+            })
+            .await
+            .is_err()
+    );
+    assert!(
+        GitHubAccountRegistry::load().get(&account.id).is_some(),
+        "failed bindings save must not delete the account"
+    );
+    assert_eq!(
+        crate::credentials::get(Credential::AccountToken(&account.id))
+            .unwrap()
+            .as_deref(),
+        Some("failure-token-canary")
+    );
+    std::fs::remove_dir(lock).unwrap();
+    settings
+        .perform(GithubAction::RemoveAccount {
+            id: account.id.clone(),
+        })
+        .await
+        .unwrap();
+    assert!(GitHubAccountRegistry::load().get(&account.id).is_none());
+    assert!(RepoBindingStore::load().entries().is_empty());
+}
