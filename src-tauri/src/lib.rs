@@ -23,6 +23,9 @@ pub(crate) mod ai_agent;
 pub(crate) mod attachments;
 #[cfg(feature = "desktop")]
 pub(crate) mod audio_enumeration;
+pub(crate) mod background_mode;
+#[cfg(test)]
+mod background_mode_tests;
 pub(crate) mod launch_instructions;
 pub(crate) mod prompt_receipt;
 pub mod work_items;
@@ -1826,9 +1829,16 @@ pub fn run() {
                 )
                 .build(),
         )
+        .manage(background_mode::desktop::BackgroundMode::default())
         .manage(state)
         .manage(crate::fs::ContentSearchCancel(std::sync::Mutex::new(None)))
         .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                background_mode::desktop::close_window(window, api);
+            }
+            if matches!(event, tauri::WindowEvent::Focused(true)) && window.label() == "main" {
+                background_mode::desktop::shown(window.app_handle());
+            }
             if matches!(event, tauri::WindowEvent::Destroyed)
                 && let Some(state) = window.try_state::<Arc<AppState>>()
             {
@@ -1865,6 +1875,10 @@ pub fn run() {
                 let m = menu::build_menu(app)?;
                 app.set_menu(m)?;
                 app.on_menu_event(|app_handle, event| {
+                    if event.id().0 == "quit-app" {
+                        background_mode::desktop::request_quit(app_handle.clone());
+                        return;
+                    }
                     let _ = app_handle.emit("menu-action", event.id().0.as_str());
                 });
             }
@@ -2034,6 +2048,8 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            background_mode::desktop::request_quit,
+            background_mode::desktop::resolve_close,
             telegram::settings::telegram_settings,
             telegram::settings::telegram_setup,
             generators::generate_value,
@@ -2564,6 +2580,11 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|app_handle, event| {
             match &event {
+                tauri::RunEvent::ExitRequested { code, api, .. } => {
+                    if background_mode::prevent_exit(*code, background_mode::desktop::is_hidden(app_handle)) {
+                        api.prevent_exit();
+                    }
+                }
                 // Guard against corrupted window-state applied by tauri-plugin-window-state.
                 // Must run at Ready (after plugins have restored persisted position/size),
                 // not in setup() which fires before the plugin applies its state.

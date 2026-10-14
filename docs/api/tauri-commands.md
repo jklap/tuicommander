@@ -550,8 +550,8 @@ are unaffected (they build `NSAlert`) and stay as they are.
 ## Filesystem (`fs.rs`)
 
 `upload_attachment` is the desktop IPC twin of `POST /attachments/upload`.
-It accepts `kind`, `id`, `name`, and binary `bytes`, returns the same `{ path,
-size }` receipt, and uses the same destination, cap, and cleanup rules.
+It accepts `kind`, `id`, optional `session` (required for ACP), `name`, and
+binary `bytes`, returns the same `{ path, size, notice? }` receipt, and uses the same destination, cap, and cleanup rules.
 
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
@@ -954,6 +954,12 @@ an explicit create action. These actions match across HTTP, IPC, MCP and CLI.
 ### History-anchored viewport scrolling
 
 `terminal_scroll_to_anchor` accepts `{ sessionId: string, anchor: number | null }` and returns `()`. The all-time row includes evicted rows, matching `historyBase + historySize - displayOffset`. Null follows output; a trimmed anchor clamps to the oldest retained row. HTTP uses `POST /sessions/:id/terminal/scroll-to-anchor` with the same anchor value.
+
+### Desktop close policy
+
+- `request_quit()` requests real quit regardless of `app.close_behavior`, with confirmation if enabled and terminal sessions exist.
+- `resolve_close(choice: "background" | "quit" | "cancel", remember: bool)` answers the pending Rust-owned close dialog. Background and Remember apply only to Ask. A failed save leaves the dialog pending.
+- These native lifecycle commands are deliberately in `INTENTIONALLY_UNMAPPED`; remote clients cannot hide or quit the host. `close-dialog` carries `{kind: "ask" | "confirm_quit", sessions: number}` on desktop events and `/events` SSE.
 
 ### Tasks start-work brief
 

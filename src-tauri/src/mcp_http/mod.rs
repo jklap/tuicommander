@@ -10106,10 +10106,13 @@ mod tests {
         );
     }
 
+    // Catches: uploads still create .tuic and modify info/exclude in the user's repo.
     #[cfg(unix)]
     #[tokio::test]
-    async fn attachment_upload_streams_into_session_cwd_and_stays_out_of_git() {
+    async fn attachment_upload_does_not_write_into_repository() {
         let repo = create_temp_git_repo();
+        let exclude = repo.path().join(".git/info/exclude");
+        let before = std::fs::read(&exclude).unwrap();
         let state = test_state();
         crate::state::tests_support::insert_dummy_session(&state, "upload-session");
         crate::state::tests_support::set_session_cwd(
@@ -10117,73 +10120,59 @@ mod tests {
             "upload-session",
             repo.path().to_str().unwrap(),
         );
-        let route = build_router(state.clone(), false, true);
-        let response = route
-            .clone()
+        let response = build_router(state.clone(), false, true)
             .oneshot(
                 Request::post("/attachments/upload?kind=pty&id=upload-session&name=notes.txt")
-                    .header(CONTENT_TYPE, "application/octet-stream")
                     .body(Body::from("attachment bytes"))
                     .unwrap(),
             )
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(
-            response.headers().get(CONTENT_TYPE).unwrap(),
-            "application/json",
-            "the upload endpoint must answer with attachment metadata, not the SPA fallback"
+        assert!(
+            !repo.path().join(".tuic").exists(),
+            "uploads must not create repository files"
         );
+        assert_eq!(std::fs::read(&exclude).unwrap(), before);
         let bytes = axum::body::to_bytes(response.into_body(), 4096)
             .await
             .unwrap();
         let reply: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         let path = std::path::Path::new(reply["path"].as_str().unwrap());
-        assert!(path.starts_with(repo.path().join(".tuic/attachments")));
+        assert!(path.starts_with(state.data_dir.join("attachments/pty-upload-session")));
         assert_eq!(std::fs::read(path).unwrap(), b"attachment bytes");
-        let ignored = std::process::Command::new("git")
-            .args(["check-ignore", "-q"])
-            .arg(path)
-            .current_dir(repo.path())
-            .status()
-            .unwrap();
-        assert!(
-            ignored.success(),
-            "an uploaded file must stay out of commits"
-        );
+    }
 
-        let oversized = route
+    // Catches: session close retains fresh uploads under the obsolete day-count policy.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn attachment_session_end_removes_fresh_uploads() {
+        let repo = create_temp_git_repo();
+        let state = test_state();
+        crate::state::tests_support::insert_dummy_session(&state, "ended-upload");
+        crate::state::tests_support::set_session_cwd(
+            &state,
+            "ended-upload",
+            repo.path().to_str().unwrap(),
+        );
+        let response = build_router(state.clone(), false, true)
             .oneshot(
-                Request::post("/attachments/upload?kind=pty&id=upload-session&name=too-big.bin")
-                    .header(CONTENT_TYPE, "application/octet-stream")
-                    .body(Body::from(vec![0u8; 26 * 1024 * 1024]))
+                Request::post("/attachments/upload?kind=pty&id=ended-upload&name=notes.txt")
+                    .body(Body::from("fresh bytes"))
                     .unwrap(),
             )
             .await
             .unwrap();
-        assert_eq!(oversized.status(), StatusCode::PAYLOAD_TOO_LARGE);
-        assert_eq!(
-            std::fs::read_dir(repo.path().join(".tuic/attachments"))
-                .unwrap()
-                .count(),
-            1
-        );
-        let fresh = repo.path().join(".tuic/attachments/2-fresh.txt");
-        std::fs::write(&fresh, b"keep me").unwrap();
-        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(8 * 24 * 60 * 60);
-        std::fs::File::open(path)
-            .unwrap()
-            .set_times(std::fs::FileTimes::new().set_modified(old))
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), 4096)
+            .await
             .unwrap();
-        crate::pty::cleanup_session("upload-session", &state);
+        let reply: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let path = std::path::Path::new(reply["path"].as_str().unwrap());
+        crate::pty::cleanup_session("ended-upload", &state);
         assert!(
             !path.exists(),
-            "closing the session removes attachments older than seven days"
-        );
-        assert_eq!(
-            std::fs::read(&fresh).unwrap(),
-            b"keep me",
-            "recent attachments survive cleanup"
+            "ending the session removes fresh attachments too"
         );
     }
 
@@ -10214,12 +10203,116 @@ mod tests {
         assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
     }
 
+    // Catches: an old Claude/Gemini agent gets an inaccessible upload with no useful notice.
+    #[tokio::test]
+    async fn attachment_legacy_agent_gets_restart_notice() {
+        let state = test_state();
+        crate::state::tests_support::insert_dummy_session(&state, "legacy-agent");
+        let mut row = crate::state::SessionState::default();
+        row.seed_configured_agent(Some("claude".into()));
+        state
+            .session_maps
+            .session_states
+            .insert("legacy-agent".into(), row);
+        let response = build_router(state.clone(), false, true)
+            .oneshot(
+                Request::post("/attachments/upload?kind=pty&id=legacy-agent&name=notes.txt")
+                    .body(Body::from("bytes"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let bytes = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let reply: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(
+            reply["error"]
+                .as_str()
+                .unwrap()
+                .contains("Start a new session")
+        );
+        assert!(!state.data_dir.join("attachments").exists());
+    }
+
+    // Catches: ego uploads imply an unsupported invocation-scoped read grant.
+    #[tokio::test]
+    async fn attachment_ego_upload_explains_confined_read_root_requirement() {
+        let state = test_state();
+        crate::state::tests_support::insert_dummy_session(&state, "ego-upload");
+        let mut row = crate::state::SessionState::default();
+        row.seed_configured_agent(Some("ego".into()));
+        state
+            .session_maps
+            .session_states
+            .insert("ego-upload".into(), row);
+        let response = build_router(state.clone(), false, true)
+            .oneshot(
+                Request::post("/attachments/upload?kind=pty&id=ego-upload&name=notes.txt")
+                    .body(Body::from("bytes"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let receipt: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(
+            receipt["notice"]
+                .as_str()
+                .unwrap()
+                .contains("existing user/profile read root")
+        );
+        assert_eq!(
+            std::fs::read(receipt["path"].as_str().unwrap()).unwrap(),
+            b"bytes"
+        );
+    }
+
+    // Catches: a failed streamed/empty upload leaves partial bytes in session storage.
+    #[tokio::test]
+    async fn attachment_empty_or_oversized_stream_leaves_no_file() {
+        let state = test_state();
+        state.config.write().attachment_max_bytes = 1;
+        crate::state::tests_support::insert_dummy_session(&state, "failed-upload");
+        let route = build_router(state.clone(), false, true);
+        for (body, status) in [
+            ("", StatusCode::BAD_REQUEST),
+            ("xx", StatusCode::PAYLOAD_TOO_LARGE),
+        ] {
+            let response = route
+                .clone()
+                .oneshot(
+                    Request::post("/attachments/upload?kind=pty&id=failed-upload&name=notes.txt")
+                        .body(Body::from(body))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), status);
+            assert_eq!(
+                std::fs::read_dir(state.data_dir.join("attachments/pty-failed-upload"))
+                    .unwrap()
+                    .count(),
+                0
+            );
+        }
+    }
+
     #[cfg(unix)]
     #[tokio::test]
-    async fn attachment_upload_excludes_nested_session_directory_from_git() {
+    async fn attachment_upload_leaves_nested_repository_and_legacy_files_untouched() {
         let repo = create_temp_git_repo();
         let nested = repo.path().join("project/subdir");
         std::fs::create_dir_all(&nested).unwrap();
+        let legacy = nested.join(".tuic/attachments/user.txt");
+        std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+        std::fs::write(&legacy, b"user bytes").unwrap();
+        let exclude = repo.path().join(".git/info/exclude");
+        let before = std::fs::read(&exclude).unwrap();
         let state = test_state();
         crate::state::tests_support::insert_dummy_session(&state, "nested-upload");
         crate::state::tests_support::set_session_cwd(
@@ -10227,7 +10320,7 @@ mod tests {
             "nested-upload",
             nested.to_str().unwrap(),
         );
-        let response = build_router(state, false, true)
+        let response = build_router(state.clone(), false, true)
             .oneshot(
                 Request::post("/attachments/upload?kind=pty&id=nested-upload&name=notes.txt")
                     .body(Body::from("nested bytes"))
@@ -10242,15 +10335,10 @@ mod tests {
         let reply: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         let path = std::path::Path::new(reply["path"].as_str().unwrap());
         assert_eq!(std::fs::read(path).unwrap(), b"nested bytes");
-        assert!(
-            std::process::Command::new("git")
-                .args(["check-ignore", "-q"])
-                .arg(path)
-                .current_dir(repo.path())
-                .status()
-                .unwrap()
-                .success()
-        );
+        crate::pty::cleanup_session("nested-upload", &state);
+        assert_eq!(std::fs::read(legacy).unwrap(), b"user bytes");
+        assert_eq!(std::fs::read(exclude).unwrap(), before);
+        assert!(!path.exists());
     }
 
     #[tokio::test]
@@ -10258,7 +10346,7 @@ mod tests {
         let response = build_router(test_state(), false, true)
             .oneshot(
                 Request::post(format!(
-                    "/attachments/upload?kind=acp&id={}&name=notes.txt",
+                    "/attachments/upload?kind=acp&id={}&session=missing&name=notes.txt",
                     crate::acp::AcpConnectionId::new()
                 ))
                 .body(Body::from("bytes"))

@@ -1,5 +1,4 @@
 import { getVersion } from "@tauri-apps/api/app";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { onMount } from "solid-js";
 import { initDeepLinkHandler } from "../deep-link-handler";
 import { invoke } from "../invoke";
@@ -29,7 +28,7 @@ import { startAutoFetch } from "./useAutoFetch";
 // `registerRepo` is omitted too: it is supplied below from `openRepoPath`, so the
 // caller passes one repo-registration function and both consumers (the deep link
 // and the parked-tab toast) share it.
-type InitOptions = Omit<AppInitDeps, "stores" | "applyPlatformClass" | "onCloseRequested" | "registerRepo">;
+type InitOptions = Omit<AppInitDeps, "stores" | "applyPlatformClass" | "registerRepo">;
 
 export type AppBootstrapOptions = InitOptions & {
 	detectAgents: () => Promise<unknown>;
@@ -154,10 +153,6 @@ export async function runAppBootstrap(options: AppBootstrapOptions): Promise<voi
 			startUserActivityListening: userActivityStore.startListening,
 		},
 		applyPlatformClass,
-		onCloseRequested: (handler) => {
-			if (!isTauri()) return;
-			void getCurrentWindow().onCloseRequested(async (event) => handler(event));
-		},
 	}).catch((error) => {
 		appLogger.error("app", "Fatal initialization error", error);
 		options.setStatusInfo("Error: App failed to initialize — check error log");

@@ -282,11 +282,13 @@ needs an app restart is what that costs.
 | `ai_chat_peer_ids` | `Map<String, String>` | `{}` | Host-issued ACP orchestration peer UUID per canonical repository root. The backend persists it before launching ego and reuses it across reconnect and restart. It is not a PTY tab ID. |
 | `default_font_size` | `u16` | `13` | Default font size for reset |
 | `attachment_max_bytes` | `u64` | `26214400` (25 MiB) | Binary upload cap per file; must be positive. |
-| `attachment_retention_days` | `u32` | `7` | Uploaded files older than this are removed when their PTY or ACP session closes. |
+| `attachment_retention_days` | `u32` | `7` | Obsolete for uploads: attachment lifetime is now the session. This stored value has no effect on attachment cleanup. |
 | `mcp_server_enabled` | `bool` | `true` | Enable MCP HTTP server |
 | `mcp_port` | `u16` | `9876` | Fixed port for MCP server (0 = OS-assigned) |
 | `collapse_tools` | `bool` | `false` | Replace the full MCP tool list with 3 lazy-discovery meta-tools (`search_tools`, `get_tool_schema`, `call_tool`). Discovered native schemas are unchanged: managed commands still use one `call_tool` invocation of `session action=submit` and receive the bounded receipt in that response. Grok sessions use this surface automatically without changing the stored value — see [`mcp-http.md`](mcp-http.md#lazy-tool-discovery-collapse_tools). Size figures for both surfaces, and how to reproduce them, are in [Measuring the surfaces](mcp-http.md#measuring-the-surfaces) — the reduction is measured, never estimated |
 | `services` | `ServicesConfig` | `{}` | Nested remote-access config: `server`, `auth`, `tls`, `relay`, `push` (replaces the former flat `remote_access_*`/`push_enabled`/`relay_enabled` fields) |
+
+Session attachment directories record their owner PID outside the granted directory. Startup cleanup preserves live or unknown owners and removes only provably dead owners; multiple processes may share the data directory safely.
 
 Remote-access secrets under `services` are not persisted in plaintext
 `config.json`: `auth.session_token`, `relay.token`, and
@@ -301,7 +303,8 @@ save delete a live credential. Plaintext still found in `config.json` is moved
 into the vault at load time and the file is rewritten immediately, so the
 cleartext copy does not survive on disk.
 
-| `confirm_before_quit` | `bool` | `true` | Show quit confirmation |
+| `close_behavior` | `ask \| background \| quit` | `ask` | Main-window close asks, hides only main, or quits. Ask offers Remember. Explicit Quit ignores this policy. |
+| `confirm_before_quit` | `bool` | `true` | Confirm real quit when live terminal sessions exist; does not block Background |
 | `confirm_before_closing_tab` | `bool` | `true` | Show tab close confirmation |
 | `copy_on_select` | `bool` | `true` | Auto-copy terminal selection to clipboard |
 | `osc52_clipboard` | `bool` | `true` | Honor OSC 52 clipboard-write sequences from terminal output (a notice shows on each write; disable to ignore them) |

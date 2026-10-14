@@ -921,7 +921,7 @@ export const settingsCatalogue = {
       "helpKey": "settings.catalogue.app.attachment_retention_days.help",
       "label": "attachment retention days",
       "schema": {
-        "description": "Remove uploaded files older than this many days when their session closes.",
+        "description": "Legacy stored value; uploads now have session lifetime regardless of this value.",
         "type": "integer",
         "format": "uint32",
         "minimum": 0,
@@ -1142,6 +1142,50 @@ export const settingsCatalogue = {
       "sensitivity": "public",
       "apply": "live",
       "effect": "Updates chat mute intermediate text for the current owner.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "app.close_behavior": {
+      "id": "app.close_behavior",
+      "store": "app",
+      "owner": "machine",
+      "area": "app",
+      "group": "close_behavior",
+      "order": 38,
+      "path": "/close_behavior",
+      "labelKey": "settings.catalogue.app.close_behavior.label",
+      "helpKey": "settings.catalogue.app.close_behavior.help",
+      "label": "close behavior",
+      "schema": {
+        "description": "Main window close policy: ask, background (hide), or quit.",
+        "type": "string",
+        "enum": [
+          "ask",
+          "background",
+          "quit"
+        ],
+        "default": "ask"
+      },
+      "nullable": false,
+      "default": "ask",
+      "availability": {
+        "status": "available"
+      },
+      "choices": {
+        "kind": "static",
+        "values": [
+          "ask",
+          "background",
+          "quit"
+        ]
+      },
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Selects whether main window close asks, hides or quits.",
       "operations": [
         "get",
         "set",

@@ -314,6 +314,21 @@ fi
 ext=md
 [ "$name" = codex ] && ext=toml
 file=${TUIC_AGENT_INSTRUCTIONS_DIR:+$TUIC_AGENT_INSTRUCTIONS_DIR/instructions-$name.$ext}
+if [ "$name" = gemini ]; then
+  [ -z "$TUIC_ATTACHMENTS_DIR" ] || set -- "--include-directories=$TUIC_ATTACHMENTS_DIR" "$@"
+  exec "$real" "$@"
+fi
+if [ "$name" = claude ]; then
+  case $1 in
+    ""|-*) ;;
+    remote-control) exec "$real" "$@";;
+    *)
+      help=$TUIC_CLAUDE_HELP
+      printf '%s\n' "$help" | awk '__TUIC_CLAUDE_HELP_USABLE__' || help=__TUIC_RECORDED_CLAUDE_HELP__
+      if printf '%s\n' "$help" | awk -v verb="$1" '/^Commands:/ {commands=1; next} commands && /^  [^ ]/ {split($1, names, "|"); for (i in names) if (names[i] == verb) found=1} END {exit !found}'; then exec "$real" "$@"; fi;;
+  esac
+  [ -z "$TUIC_ATTACHMENTS_DIR" ] || set -- "--add-dir=$TUIC_ATTACHMENTS_DIR" "$@"
+fi
 [ -n "$file" ] && [ -s "$file" ] || exec "$real" "$@"
 # True when an argument before a bare -- is one of $flags, alone or as flag=value.
 has_flag() {
@@ -327,14 +342,6 @@ has_flag() {
 }
 case $name in
   claude)
-    case $1 in
-      ""|-*) ;;
-      remote-control) exec "$real" "$@";;
-      *)
-        help=$TUIC_CLAUDE_HELP
-        printf '%s\n' "$help" | awk '__TUIC_CLAUDE_HELP_USABLE__' || help=__TUIC_RECORDED_CLAUDE_HELP__
-        if printf '%s\n' "$help" | awk -v verb="$1" '/^Commands:/ {commands=1; next} commands && /^  [^ ]/ {split($1, names, "|"); for (i in names) if (names[i] == verb) found=1} END {exit !found}'; then exec "$real" "$@"; fi;;
-    esac
     flags="-p --print --system-prompt --system-prompt-file --append-system-prompt --append-system-prompt-file"
     has_flag "$@" || exec "$real" --append-system-prompt-file "$file" "$@";;
   codex)
@@ -373,7 +380,7 @@ exec "$real" "$@"
 
 /// Agents the shim serves. OpenCode is absent: TUIC shells export its native
 /// `OPENCODE_CONFIG_CONTENT`, which reaches absolute-path launches too.
-const SHIM_AGENTS: [&str; 6] = ["claude", "codex", "grok", "goose", "pi", "ego"];
+const SHIM_AGENTS: [&str; 7] = ["claude", "codex", "grok", "goose", "pi", "ego", "gemini"];
 
 /// The marker file the shim looks for to skip a TUIC shim dir on `PATH`.
 const SHIM_FILE: &str = "tuic-agent-shim";
@@ -1250,6 +1257,37 @@ mod tests {
                 .join(format!("instructions-{agent}.{ext}"))
                 .display()
                 .to_string()
+        }
+
+        // Catches: disabling marker instructions also drops Claude's attachment grant.
+        #[test]
+        fn claude_attachment_grant_survives_disabled_launch_instructions() {
+            let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+            let agents = crate::config::AgentsConfig {
+                launch_instructions: Some(String::new()),
+                ..Default::default()
+            };
+            crate::launch_instructions::write_files_with(
+                root.path(),
+                &crate::config::AppConfig::default(),
+                &agents,
+            )
+            .unwrap();
+            let instructions = root.path().join("agent-hooks").display().to_string();
+            let lines = wrapper_command_lines(
+                "bash",
+                &[
+                    ("TUIC_AGENT_INSTRUCTIONS_DIR", instructions.as_str()),
+                    ("TUIC_ATTACHMENTS_DIR", "/tuic/attachments/pty-settings-off"),
+                ],
+                "claude --model opus",
+            );
+            assert!(
+                lines[0]
+                    .split_whitespace()
+                    .any(|arg| arg == "--add-dir=/tuic/attachments/pty-settings-off"),
+                "disabling marker instructions removed attachment access: {lines:?}"
+            );
         }
 
         /// Catches: a typed agent launched without the marker flag (fresh or

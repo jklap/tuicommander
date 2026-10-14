@@ -83,7 +83,8 @@ never all expert: in basic mode it would show an empty page.
 |---------|-------------|
 | **Language** | UI language. The list offers the locales that ship with a message catalog, each named in its own language, and the pick applies immediately — no reload. A locale without a catalog is never offered, because it would render English while claiming to be translated. The picker is hidden while only one catalog ships — today that is English alone — because a list of one is not a choice. |
 | **Show agent context bar** | Show the model's current intent, its orchestrator-assigned task, and the last prompt sent to an agent. |
-| **Confirm before quitting** | Show dialog when closing app with active terminals |
+| **When closing the main window** | Desktop: Ask (default), Background, or Quit. Ask offers Remember. Background hides the main window and keeps sessions running. Use the application menu to quit; on macOS, click the Dock icon to show the window again. |
+| **Confirm before quitting** | Confirm real quit with active terminals, including Cmd/Ctrl+Q. Background does not prompt. Detached-panel close closes only that panel. |
 | **Confirm before closing a tab** | Ask before closing terminal tab |
 | **Prevent sleep when busy** | Keep the machine awake while agents are working (**Power Management** section) |
 | **Auto-Standby Timeout** | Pause idle background sessions after this duration to save resources. Default 5 min; `0` disables it. |

@@ -108,6 +108,7 @@ struct ConnectionHandle {
     snapshot: AcpConnectionSnapshot,
     peer_id: Option<String>,
     root: PathBuf,
+    attachment_directories: HashMap<String, (PathBuf, String)>,
     commands: mpsc::Sender<Command>,
     journal: Arc<AcpEventJournal>,
     shutdown: Option<oneshot::Sender<()>>,
@@ -353,6 +354,7 @@ impl AcpClientManager {
                 snapshot: snapshot.clone(),
                 peer_id,
                 root,
+                attachment_directories: HashMap::new(),
                 commands: commands_tx,
                 journal,
                 shutdown: Some(shutdown_tx),
@@ -527,23 +529,18 @@ impl AcpClientManager {
         kind: AcpDetachKind,
         session_id: v1::SessionId,
     ) -> Result<(), AcpClientError> {
-        let cwd = self
-            .snapshot(connection_id)?
-            .attachments
-            .into_iter()
-            .find(|attachment| attachment.session_id == session_id)
-            .map(|attachment| attachment.cwd);
+        let attachment_id = session_id.to_string();
         self.dispatch(connection_id, |reply| Command::Detach {
             kind,
             session_id,
             reply,
         })
         .await?;
-        if let Some(cwd) = cwd {
-            crate::attachments::cleanup_old(
-                Path::new(&cwd),
-                crate::config::load_app_config().attachment_retention_days,
-            );
+        let mut connections = self.connections.lock();
+        if let Some(connection) = connections.get_mut(&connection_id)
+            && let Some((data_dir, key)) = connection.attachment_directories.remove(&attachment_id)
+        {
+            crate::attachments::cleanup_session(&data_dir, "acp", &key);
         }
         Ok(())
     }
@@ -903,6 +900,38 @@ impl AcpClientManager {
             .map(|connection| connection.root.clone())
     }
 
+    /// Bind binary uploads to one attached conversation, including EOF cleanup.
+    pub(crate) fn attachment_directory(
+        &self,
+        connection_id: AcpConnectionId,
+        session_id: &str,
+        data_dir: &Path,
+    ) -> Result<PathBuf, String> {
+        use sha2::{Digest, Sha256};
+        let mut connections = self.connections.lock();
+        let connection = connections
+            .get_mut(&connection_id)
+            .filter(|connection| connection.snapshot.settlement.is_none())
+            .ok_or("ACP connection not found")?;
+        if !connection
+            .snapshot
+            .attachments
+            .iter()
+            .any(|attachment| attachment.session_id.to_string() == session_id)
+        {
+            return Err("ACP session is not attached".into());
+        }
+        let key = format!(
+            "{connection_id}-{}",
+            hex::encode(Sha256::digest(session_id.as_bytes()))
+        );
+        let directory = crate::attachments::prepare_session_directory(data_dir, "acp", &key)?;
+        connection
+            .attachment_directories
+            .insert(session_id.into(), (data_dir.into(), key));
+        Ok(directory)
+    }
+
     pub fn connection_root(&self, connection_id: AcpConnectionId) -> Option<PathBuf> {
         self.connections
             .lock()
@@ -931,12 +960,6 @@ impl AcpClientManager {
         &self,
         connection_id: AcpConnectionId,
     ) -> Result<AcpConnectionSettlement, AcpClientError> {
-        let attachment_cwds: Vec<PathBuf> = self
-            .snapshot(connection_id)?
-            .attachments
-            .into_iter()
-            .map(|attachment| attachment.cwd)
-            .collect();
         let (shutdown, supervisor, settled) = {
             let mut connections = self.connections.lock();
             let connection = connections
@@ -964,11 +987,6 @@ impl AcpClientManager {
             let _ = supervisor.await;
         }
 
-        let retention = crate::config::load_app_config().attachment_retention_days;
-        for cwd in attachment_cwds {
-            crate::attachments::cleanup_old(Path::new(&cwd), retention);
-        }
-
         self.snapshot(connection_id)?.settlement.ok_or_else(|| {
             AcpClientError::initialization_failed(
                 connection_id,
@@ -981,12 +999,6 @@ impl AcpClientManager {
         &self,
         connection_id: AcpConnectionId,
     ) -> Result<AcpConnectionSettlement, AcpClientError> {
-        let attachment_cwds: Vec<PathBuf> = self
-            .snapshot(connection_id)?
-            .attachments
-            .into_iter()
-            .map(|attachment| attachment.cwd)
-            .collect();
         let (shutdown, supervisor, generation, settled) = {
             let mut connections = self.connections.lock();
             let connection = connections
@@ -1007,10 +1019,7 @@ impl AcpClientManager {
             supervisor.abort();
             let _ = supervisor.await;
         }
-        let retention = crate::config::load_app_config().attachment_retention_days;
-        for cwd in attachment_cwds {
-            crate::attachments::cleanup_old(Path::new(&cwd), retention);
-        }
+
         drop(shutdown);
         settle_connection(
             &self.connections,
@@ -1380,6 +1389,10 @@ fn settle_connection(
     };
     if connection.snapshot.settlement.is_some() {
         return;
+    }
+
+    for (_, (data_dir, key)) in connection.attachment_directories.drain() {
+        crate::attachments::cleanup_session(&data_dir, "acp", &key);
     }
 
     connection.snapshot.state = match reason {

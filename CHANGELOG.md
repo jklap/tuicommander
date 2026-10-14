@@ -12,16 +12,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Preserve live attachment uploads when another TUIC instance starts; keep Claude attachment access with disabled instructions and preserve custom wrapper arguments (#1833-aa60).
+
 - Allow worktree removal when its branch tip is contained in any remote-tracking branch, naming that ref as proof. Offer a one-click action to keep branches with local-only commits (#1874-1758).
 - Preserve the local branch and report a warning if a concurrent fetch conflicts with the remote proof during worktree removal (#1874-1758).
 
 ### Added
+- Let Rust own desktop close and quit. Choose Ask, Background or Quit for the main window; Ask can remember the choice, and explicit Quit keeps its own confirmation (#1802-e6b8).
 - Attach PNG, JPEG, WebP and GIF images in terminal Compose by dropping them on the editor or choosing multiple images with the file button; paste keeps its existing behavior (#1758-1613).
 - Remember Tasks source, view, grouping, sort and filters per repository and provider account; recover rejected saved sorts with the last accepted order (#1852-35a8).
 - Keep the Tasks move menu open while scrolling its destinations; simplify board refresh to merge page one into loaded cards (#1844-858d).
 - Terminal Chat view for Grok terminals, read from the session's `chat_history.jsonl` and offered only when `~/.grok/active_sessions.json` names the exact session of that terminal's process; the newest-session fallback never feeds Chat (#1791-b8be).
 
 ### Changed
+- Store uploads in TUIC-owned session directories, grant supported agents access at launch, and remove files at session end without touching repositories (#1833-aa60).
 - Run saved command moves from `Cmd+R` to `Cmd+Shift+R`. `Cmd+R` now reloads the active web/preview tab (new `reload-tab` action). `edit-command` has no default shortcut because `Cmd+Alt+R` belongs to answers-only; an existing `keybindings.json` override keeps working (#1871-4cfd).
 
 ### Removed

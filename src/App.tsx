@@ -27,7 +27,6 @@ const ActivityDashboard = lazy(() =>
 const TunnelsPanel = lazy(() => import("./components/TunnelsPanel").then((m) => ({ default: m.TunnelsPanel })));
 
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { DictationToast } from "./components/DictationToast/DictationToast";
 import { ErrorLogPanel } from "./components/ErrorLogPanel";
 import { McpPopup } from "./components/McpPopup/McpPopup";
@@ -208,7 +207,6 @@ const App: Component = () => {
 	const [helpPanelVisible, setHelpPanelVisible] = createSignal(false);
 
 	// Quit confirmation state (Story 057)
-	const [quitDialogVisible, setQuitDialogVisible] = createSignal(false);
 
 	// Quick switcher state
 	const [quickSwitcherVisible, setQuickSwitcherVisible] = createSignal(false);
@@ -466,7 +464,6 @@ const App: Component = () => {
 
 	useAppBootstrap({
 		pty,
-		setQuitDialogVisible,
 		setStatusInfo,
 		handleBranchSelect: gitOps.handleBranchSelect,
 		refreshAllBranchStats: gitOps.refreshAllBranchStats,
@@ -487,31 +484,6 @@ const App: Component = () => {
 	useTerminalShellExit(terminalLifecycle.closeTerminal);
 
 	useTerminalCompletionNotifications({ navigateToTerminal });
-
-	// Force quit - close all sessions and exit (Story 057)
-	const forceQuit = async () => {
-		setQuitDialogVisible(false);
-
-		// Destroy window after a short timeout regardless of PTY cleanup
-		const destroyTimer = isTauri() ? setTimeout(() => getCurrentWindow().destroy(), 500) : null;
-
-		try {
-			const sessionIds = terminalsStore
-				.getIds()
-				.map((id) => terminalsStore.get(id)?.sessionId)
-				.filter((sid): sid is string => sid != null);
-			await Promise.all(
-				sessionIds.map((sid) =>
-					pty.close(sid).catch((err) => appLogger.warn("app", `Failed to close PTY ${sid} on quit`, err)),
-				),
-			);
-		} catch (e) {
-			appLogger.warn("app", "forceQuit: unexpected error", { error: String(e) });
-		}
-
-		if (destroyTimer !== null) clearTimeout(destroyTimer);
-		if (isTauri()) getCurrentWindow().destroy();
-	};
 
 	const [promptInspectorSessionId, setPromptInspectorSessionId] = createSignal<string | null>(null);
 	const terminalContextMenus = useTerminalContextMenus({
@@ -719,9 +691,7 @@ const App: Component = () => {
 		gitOps,
 		splitPanes,
 		closeActiveTabOrPane,
-		forceQuit,
 		setSettingsPanelVisible,
-		setQuitDialogVisible,
 		setRunCommandDialogVisible,
 		setTaskQueueVisible,
 		setShowProcessManager,
@@ -1074,9 +1044,6 @@ const App: Component = () => {
 					onExecute: handleWorktreeCleanupExecute,
 					onSkip: handleWorktreeCleanupSkip,
 				}}
-				quitVisible={quitDialogVisible}
-				setQuitVisible={setQuitDialogVisible}
-				forceQuit={forceQuit}
 			/>
 		</div>
 	);

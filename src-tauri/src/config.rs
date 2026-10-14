@@ -954,7 +954,7 @@ pub(crate) struct AppConfig {
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates attachment max bytes for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     #[schemars(range(min = 1))]
     pub(crate) attachment_max_bytes: u64,
-    /// Remove uploaded files older than this many days when their session closes.
+    /// Legacy stored value; uploads now have session lifetime regardless of this value.
     #[serde(default = "default_attachment_retention_days")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates attachment retention days for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) attachment_retention_days: u32,
@@ -965,6 +965,10 @@ pub(crate) struct AppConfig {
     #[serde(default = "default_true")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates confirm before quit for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) confirm_before_quit: bool,
+    /// Main window close policy: ask, background (hide), or quit.
+    #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Selects whether main window close asks, hides or quits.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    pub(crate) close_behavior: crate::background_mode::CloseBehavior,
     /// Show confirmation dialog when closing a terminal tab
     #[serde(default = "default_true")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates confirm before closing tab for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
@@ -1316,6 +1320,7 @@ impl Default for AppConfig {
             attachment_retention_days: default_attachment_retention_days(),
             services: ServicesConfig::default(),
             confirm_before_quit: true,
+            close_behavior: Default::default(),
             confirm_before_closing_tab: true,
             max_tab_name_length: default_max_tab_name_length(),
             split_tab_mode: SplitTabMode::default(),
@@ -5349,6 +5354,7 @@ mod tests {
                 },
             },
             confirm_before_quit: false,
+            close_behavior: Default::default(),
             confirm_before_closing_tab: true,
             max_tab_name_length: 40,
             split_tab_mode: SplitTabMode::Unified,

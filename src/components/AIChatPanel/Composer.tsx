@@ -95,9 +95,11 @@ export const Composer: Component<{
 		try {
 			await props.chat.ensureStarted();
 			const connectionId = props.chat.connectionId();
-			if (!connectionId) throw new Error("AI Chat is not connected");
-			const receipt = await uploadAttachment(file, { kind: "acp", id: connectionId });
+			const session = props.chat.sessionId();
+			if (!connectionId || !session) throw new Error("AI Chat is not connected");
+			const receipt = await uploadAttachment(file, { kind: "acp", id: connectionId, session });
 			aiChatDraft.stageFile({ name: file.name, path: receipt.path });
+			if (receipt.notice) setPasteError(receipt.notice);
 		} catch (error) {
 			setPasteError(error instanceof Error ? error.message : String(error));
 		} finally {

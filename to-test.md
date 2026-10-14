@@ -5313,7 +5313,15 @@ Visual evidence: worktree Vite fixture mounted the real NotificationsTab and Toa
 - [ ] #1874-1758: After the Rust restart, remove a scratch worktree whose cleanup runs `git fetch --prune` after its sole containing remote branch was deleted. Verify the checkout is removed, the local branch remains, and the branch-deletion warning is shown. Automated backend regression: `removal_keeps_local_branch_when_cleanup_prunes_its_remote_proof`.
 - [ ] #1874-1758 F3: After a manual Rust restart, verify a scratch worktree removal warns and keeps the local branch when a concurrent force-fetch conflicts with its remote proof. Automated backend regression: `removal_keeps_local_branch_when_fetch_replaces_proof_during_ref_deletion`.
 
+- [ ] After Boss restarts `make dev` or rebuilds the release, attach a file to a new Claude/Gemini terminal: the path is under TUIC data, the repository and `.git/info/exclude` stay unchanged, and closing the terminal removes its uploads (#1833-aa60). Rust does not hot-reload. Ego ACP binary uploads show the unsupported read-root notice; inline images use ACP content blocks.
 - [ ] Compose image attachments (#1758-1613): after loading the frontend, drop PNG/JPEG/WebP/GIF files from Finder onto the editor and confirm ordered image tags at the pointer; confirm no file tab opens and no path is written to the terminal. Verify the image-only multi-file picker and unchanged paste. Native Finder drag requires multi-app interaction.
 
+## Rust close policy (#1802-e6b8) — after manual restart
+
+- [ ] [to-test] After Boss restarts `make dev` or rebuilds release, close the main window with Ask: verify Background, Quit, Cancel and Remember; a cancelled dialog changes nothing.
+- [ ] [to-test] With Background, close main and confirm PTYs remain reachable; Cmd/Ctrl+Q still confirms and quits, and a detached panel X closes only its panel. macOS Dock click shows main again.
+- [ ] [to-test] With Quit, verify confirmation with live sessions, immediate quit without sessions or with confirmation disabled, and persistence of the remembered policy after restart.
 - [ ] After a manual backend restart, verify an unknown `/tasks/no-such-endpoint` returns JSON 404 rather than the SPA shell (tasks API prefix fix).
 - [ ] #1873-bbc2 revision: After a manual Rust restart/rebuild, verify Claude stays working/busy while blocking Stop hooks run after final choices; chips publish once when ready. Automated recorded Stop-hook regression and replay oracle cover the backend.
+
+- [ ] #1833-aa60 round 1: after Boss restarts `make dev` or runs `make build`, confirm shared-data instances preserve live uploads, disabled Claude instructions retain attachment access, and custom wrappers launch normally. Rust changes require restart; no desktop was launched or reloaded by the peer.

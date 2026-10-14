@@ -294,3 +294,5 @@ the platform launcher, and hands spawn/wait ownership to the shared
 exit on the command caller.
 
 `work_item_provider_bridge` is synchronous: it atomically claims/completes an in-memory request and checks the cached write opt-in. Provider/network work is asynchronous in the frontend adapter; no filesystem or network work runs in this IPC handler.
+
+Desktop close policy: `request_quit` selects a policy action on the main thread without disk I/O. `resolve_close` saves Remember through `spawn_blocking`; real quit closes PTYs through `spawn_blocking` before calling `AppHandle::exit(0)`.
