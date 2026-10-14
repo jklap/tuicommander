@@ -3,6 +3,7 @@
 import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { onMount } from "solid-js";
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { subscribeEvents } from "../../transport";
 import { OpenMarkdownMenu } from "../components/OpenMarkdownMenu";
 import MobileApp from "../MobileApp";
 import type { SessionInfo } from "../useSessions";
@@ -94,7 +95,34 @@ beforeEach(() => {
 });
 afterEach(() => {
 	cleanup();
+	vi.unstubAllGlobals();
 	history.replaceState(null, "", "/mobile");
+});
+
+// Catches: a desktop close between the initial read and the first SSE connection leaving a stale entry.
+it("refreshes tabs closed before the first SSE connection opens", async () => {
+	vi.stubGlobal("__TAURI_SHIM__", true);
+	const streams: Array<{ onopen: (() => void) | null }> = [];
+	vi.stubGlobal(
+		"EventSource",
+		class {
+			onopen: (() => void) | null = null;
+			onerror: (() => void) | null = null;
+			constructor() {
+				streams.push(this);
+			}
+			addEventListener() {}
+			close() {}
+		},
+	);
+	const transport = await vi.importActual<typeof import("../../transport/ipc")>("../../transport/ipc");
+	vi.mocked(subscribeEvents).mockImplementationOnce(transport.subscribeEvents);
+	const view = render(() => <OpenMarkdownMenu cwd="/repo" onOpen={() => {}} />);
+	await waitFor(() => expect(view.getByRole("button", { name: "guide.md docs/guide.md" })).toBeTruthy());
+	// No SSE subscriber existed when the desktop closed this tab.
+	tabs = [];
+	streams[0].onopen?.();
+	await waitFor(() => expect(view.getByText("No open Markdown tabs")).toBeTruthy());
 });
 async function openMenu(view: ReturnType<typeof render>) {
 	await fireEvent.click(await waitFor(() => view.getByRole("button", { name: "More session actions" })));

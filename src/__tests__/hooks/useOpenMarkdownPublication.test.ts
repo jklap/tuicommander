@@ -6,7 +6,11 @@ import { repositoriesStore } from "../../stores/repositories";
 
 const { rpc, environment } = vi.hoisted(() => ({
 	rpc: vi.fn(async (_command: string, _args?: Record<string, unknown>) => {}),
-	environment: { desktop: true },
+	environment: { desktop: true, windowLabel: "main" },
+}));
+vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ label: environment.windowLabel }) }));
+vi.mock("@tauri-apps/api/webviewWindow", () => ({
+	getCurrentWebviewWindow: () => ({ label: environment.windowLabel }),
 }));
 vi.mock("../../transport", async (original) => ({
 	...(await original<typeof import("../../transport")>()),
@@ -23,6 +27,7 @@ function mount() {
 beforeEach(() => {
 	vi.useFakeTimers();
 	environment.desktop = true;
+	environment.windowLabel = "main";
 	mdTabsStore.clearAll();
 	rpc.mockClear();
 });
@@ -74,5 +79,13 @@ it("does not publish from browser or mobile documents", async () => {
 	mount();
 	mdTabsStore.add("/repo", "guide.md");
 	await vi.advanceTimersByTimeAsync(1000);
+	expect(rpc).not.toHaveBeenCalled();
+});
+
+// Catches: opening the secondary desktop window replacing the main window's list with its empty store.
+it("does not overwrite the main desktop snapshot from a secondary window", async () => {
+	environment.windowLabel = "secondary";
+	mount();
+	await vi.advanceTimersByTimeAsync(50);
 	expect(rpc).not.toHaveBeenCalled();
 });
