@@ -402,7 +402,9 @@ async fn submit_to_hibernated_session_resumes_then_delivers_once() {
     let receipt = root.path().join("receipt");
     // Owned protocol fixture, not a claim about any vendor CLI: the reader publishes
     // readiness, accepts one complete input line, and records the observable effect.
-    std::fs::write(&script, "#!/bin/sh\nprintf '\\033]7770;state=idle\\007'\nwhile IFS= read -r line; do printf '%s\\n' \"$line\" >> receipt; done\n").unwrap();
+    // Hold the redirection open until the observer has read the empty file. This
+    // replays the open-before-write race without depending on scheduler timing.
+    std::fs::write(&script, "#!/bin/sh\nprintf '\\033]7770;state=idle\\007'\nwhile IFS= read -r line; do\n  exec 3>> receipt\n  while [ ! -f release-receipt ]; do sleep 0.01; done\n  printf '%s\\n' \"$line\" >&3\n  exec 3>&-\ndone\n").unwrap();
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
     let record = crate::suspended_sessions::SuspendedSession {
@@ -433,7 +435,12 @@ async fn submit_to_hibernated_session_resumes_then_delivers_once() {
     let observed = tokio::time::timeout(std::time::Duration::from_secs(120), async {
         loop {
             if let Ok(bytes) = std::fs::read_to_string(&receipt) {
-                break bytes;
+                std::fs::write(root.path().join("release-receipt"), "").unwrap();
+                // A readable file only proves that the shell opened its
+                // redirection, not that printf has finished writing the line.
+                if bytes == "deliver-once\n" {
+                    break bytes;
+                }
             }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
