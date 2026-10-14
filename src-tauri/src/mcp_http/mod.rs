@@ -880,6 +880,7 @@ const API_PREFIXES: &[&str] = &[
     "stats",
     "stories",
     "system",
+    "tasks",
     "terminal",
     "tunnels",
     "watchers",
