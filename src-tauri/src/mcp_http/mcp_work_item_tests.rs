@@ -232,3 +232,69 @@ async fn work_item_rejects_unsupported_writes_and_unsafe_targets_before_dispatch
     }
     assert!(events.try_recv().is_err());
 }
+// Catches: the first canonical-root match hides a caller branch linked under another worktree path.
+#[tokio::test]
+async fn work_item_finds_caller_link_after_other_registered_worktree() {
+    let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let _guard = crate::config::set_config_dir_override(dir.path().join("config"));
+    let repo = dir.path().join("a-main");
+    let worktree = dir.path().join("z-worktree");
+    std::fs::create_dir(&repo).unwrap();
+    for args in [
+        vec!["init", "-b", "main"],
+        vec![
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.test",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "base",
+        ],
+        vec![
+            "worktree",
+            "add",
+            "-b",
+            "feature",
+            worktree.to_str().unwrap(),
+        ],
+    ] {
+        crate::git_cli::git_cmd(&repo).args(args).run().unwrap();
+    }
+    for (path, branch, id) in [(&repo, "main", "2"), (&worktree, "feature", "1")] {
+        crate::workitem_links::LinkStore::new()
+            .link(
+                path.to_str().unwrap(),
+                branch,
+                crate::workitem_links::WorkItemLink {
+                    reference: WorkItemRef {
+                        id: id.into(),
+                        ..reference()
+                    },
+                    key: format!("DEMO-{id}"),
+                    title: "Demo".into(),
+                    url: "https://example.test/1".into(),
+                    state: None,
+                },
+            )
+            .unwrap();
+    }
+    let state = state();
+    let registered = super::super::mcp_transport_peer::handle_messaging(
+        &state,
+        &json!({"action":"register","tuic_session":"550e8400-e29b-41d4-a716-446655440002","path":worktree}),
+        Some("linked-reader"),
+    );
+    assert!(registered.get("error").is_none(), "{registered}");
+    let result = run(
+        &state,
+        json!({"action":"work_item"}),
+        Some("linked-reader"),
+        &mut demo_provider(),
+    )
+    .await;
+    assert_eq!(content(&result)["item"]["key"], "DEMO-1");
+}
