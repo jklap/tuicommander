@@ -47,6 +47,8 @@
 	"mobile.dictation.error.noSpeech": "No speech detected",
 	"mobile.dictation.error.notAllowed": "Microphone or speech recognition permission denied",
 	"mobile.dictation.error.serviceNotAllowed": "Speech recognition is not allowed on this device",
+	"mobile.settings.input": "INPUT",
+	"mobile.settings.keyboardCorrection": "Autocorrect and spellcheck",
 	"mobile.dictation.start": "Dictate into draft",
 	"mobile.dictation.stop": "Stop dictation",
 	"perimeter.heading": "Perimeter",

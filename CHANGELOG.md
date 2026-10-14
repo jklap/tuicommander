@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Add a device-local mobile Settings toggle for prompt autocorrect and spellcheck, enabled by default (#1878-3a3c).
+
 - Native tray and menu-bar icon with live agent counts, attention indicator, Show and Quit. Choose Always, Only in background or Never in General settings. Missing tray support safely minimizes the window (#1804-d44b).
 - Read linked Tasks items and comments through MCP repo actions; allow provider comments and transitions only after enabling `mcp_work_item_writes` (#1854-4960).
 

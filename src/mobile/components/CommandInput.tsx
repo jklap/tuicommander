@@ -6,6 +6,7 @@ import { toastsStore } from "../../stores/toasts";
 import { HttpRpcError, rpc } from "../../transport";
 import { sendPtyKey, waitForAgentEnterGap } from "../../utils/sendCommand";
 import { useBrowserDictation } from "../useBrowserDictation";
+import { useKeyboardCorrection } from "../useKeyboardCorrection";
 import type { ChoicePrompt, SlashMenuItem } from "../useSessions";
 import { clearDictationPartial, loadDictationPartial, saveDictationPartial } from "../utils/dictationPartial";
 import { retryWrite } from "../utils/retryWrite";
@@ -41,6 +42,7 @@ interface CommandInputProps {
 }
 
 export function CommandInput(props: CommandInputProps) {
+	const keyboardCorrection = useKeyboardCorrection();
 	// Offer a restored dictated draft without writing on mount. The PTY may have
 	// changed while this client was away; reconcile it on the first explicit edit/send.
 	const restoredPartial = loadDictationPartial(props.sessionId);
@@ -522,9 +524,9 @@ export function CommandInput(props: CommandInputProps) {
 					onInput={handleInput}
 					onKeyDown={handleKeyDown}
 					autocomplete="off"
-					autocorrect="off"
-					spellcheck={false}
-					autocapitalize="off"
+					autocorrect={keyboardCorrection.enabled() ? "on" : "off"}
+					spellcheck={keyboardCorrection.enabled()}
+					autocapitalize={keyboardCorrection.enabled() ? "sentences" : "off"}
 					inputmode="text"
 					rows={1}
 					disabled={props.sessionExists === false || submitting()}

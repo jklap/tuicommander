@@ -135,6 +135,10 @@ Notifications from different sessions remain separate. A newer notification
 for one session can replace its earlier one; tapping either remaining session
 notification opens that session.
 
+### Keyboard correction
+
+Mobile **Settings → Input → Autocorrect and spellcheck** is on by default. It enables autocorrect, spellcheck and sentence capitalization in the terminal prompt composer. Turn it off for literal command entry. The choice stays in this browser or installed PWA across reloads. File and code editors keep spellcheck off. Keyboard suggestions still depend on your phone keyboard settings.
+
 ### Mobile Features
 Tap the attachment icon to the left of the session input to choose a photo or file. The
 file name appears while uploading, then its path is added to the draft. Queue
