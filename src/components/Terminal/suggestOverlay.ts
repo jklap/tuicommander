@@ -291,15 +291,19 @@ function overlayDiv(top: number, height: number, background: string): HTMLDivEle
 
 /**
  * Replace the contents of `container` with one absolutely positioned strip per
- * answer row: a translucent tint, so the row's text stays readable underneath,
- * plus a solid gutter bar. Marker rows get no strip — they are not painted.
+ * answer row: a transparent strip with a solid gutter bar. Marker rows get no strip — they are not painted.
  */
 export function paintOverlayBlocks(container: HTMLElement, blocks: readonly OverlayBlock[], cellHeight: number): void {
 	container.textContent = "";
 	for (const block of blocks) {
 		if (block.kind !== "answer" || block.row < 0) continue;
-		const div = overlayDiv(block.row * cellHeight, cellHeight, "rgba(94,190,140,0.14)");
-		div.style.boxShadow = "inset 3px 0 0 rgba(94,190,140,0.9)";
+		const div = overlayDiv(block.row * cellHeight, cellHeight, "transparent");
+		div.style.boxShadow = "inset 3px 0 0 var(--answer-rule)";
 		container.appendChild(div);
 	}
+}
+
+/** Cache identity for the answer overlay geometry. */
+export function answerOverlayKey(markerKey: string, cellHeight: number, rows: readonly number[]): string {
+	return JSON.stringify([markerKey, cellHeight, rows]);
 }

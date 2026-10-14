@@ -147,3 +147,14 @@ item key, title and body as before. A template replaces that entire brief.
 Item control characters are removed before substitution. The delivered result
 retains the 12,000-character cap and untrusted-content wrapper. Read errors are
 shown before a worktree is created.
+
+### Jira query errors
+
+In Tasks search, prefix a query with `jql:` to require JQL, or `text:` for
+literal text. Jira parse errors stay visible with the input unchanged. A previous
+result page remains marked as stale until a corrected query succeeds. Issue keys
+and saved-filter predicates such as `filter = 28712` keep their usual meaning.
+
+Tasks small-list mode (#1851-7ade): when the provider reports at most 1,000 matches, Tasks collects the complete search/preset scope and uses the Rust projection for all-field sort, group and filter. A changed total, missing rows or a nonterminal cursor cannot establish completeness. Unknown totals and larger lists keep provider-supported server controls. No extra cache or persisted state is added.
+
+GitHub Tasks boards (#1846-55d7): the optional provider `listBoards(signal)` port discovers the current user Projects v2 when Board opens. The existing picker selects a project; paging preserves project identities. Missing `read:project` stays visible instead of claiming there are no boards. Providers without discovery retain their configured boards. Discovery does not persist selections or write to GitHub.

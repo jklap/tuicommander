@@ -540,6 +540,7 @@ const CONTEXT_VARIABLES: VarDef[] = [
 	{ name: "merge_status", description: "Mergeable status", group: "GitHub" },
 	{ name: "review_decision", description: "Review decision", group: "GitHub" },
 	{ name: "pr_checks", description: "CI check summary", group: "GitHub" },
+	{ name: "pr_open_threads", description: "Open review threads (untrusted list)", group: "GitHub" },
 	// Terminal
 	{ name: "agent_type", description: "Detected agent (claude, codex...)", group: "Terminal" },
 	{ name: "cwd", description: "Terminal working directory", group: "Terminal" },

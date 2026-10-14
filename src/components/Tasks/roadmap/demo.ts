@@ -24,6 +24,9 @@ export function roadmapSeed(count = scenarios.length) {
 			kind: "date",
 			required: false,
 			editable: true,
+			sortable: false,
+			groupable: false,
+			filterable: false,
 			options: [],
 		}),
 	);

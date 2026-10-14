@@ -84,6 +84,7 @@ import { filePathRegex, fileUrlRegex, matchWebUrls } from "./linkProvider";
 import { buildScrollbarMarksHtml } from "./scrollbarMarks";
 import {
 	ANSWER_MARKER_RE,
+	answerOverlayKey,
 	hiddenMarkerRows,
 	INTENT_HIGHLIGHT_RE,
 	type OverlayBlock,
@@ -1044,16 +1045,19 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	const rowToText = rowText;
 
 	function updateSuggestOverlay(m: CellMetrics, plan: MarkerPlan) {
-		if (!overlayRef || plan.key === lastSuggestOverlayKey) return;
-		lastSuggestOverlayKey = plan.key;
-		paintOverlayBlocks(
-			overlayRef,
-			plan.blocks.flatMap((block) => {
-				const row = viewportProjection.displayRow(block.row);
-				return row === null ? [] : [{ ...block, row }];
-			}),
+		if (!overlayRef) return;
+		const blocks = plan.blocks.flatMap((block) => {
+			const row = viewportProjection.displayRow(block.row);
+			return row === null ? [] : [{ ...block, row }];
+		});
+		const key = answerOverlayKey(
+			plan.key,
 			m.cellHeight,
+			blocks.map((block) => block.row),
 		);
+		if (key === lastSuggestOverlayKey) return;
+		lastSuggestOverlayKey = key;
+		paintOverlayBlocks(overlayRef, blocks, m.cellHeight);
 	}
 
 	function startBlink() {

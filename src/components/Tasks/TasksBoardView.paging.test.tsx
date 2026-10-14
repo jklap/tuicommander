@@ -20,7 +20,7 @@ const card = (id: string) => ({
 		...detail().item,
 		key: `TASK-${id}`,
 		reference: { ...detail().item.reference, id },
-		assignees: [{ id: "dev", name: "Dev User", avatarUrl: null }],
+		assignees: [{ bot: false, id: "dev", name: "Dev User", avatarUrl: null }],
 		labels: [{ id: "bug", name: "Bug" }],
 	},
 	moves: [{ columnId: "done", action: { kind: "transition" as const, value: "close" } }],

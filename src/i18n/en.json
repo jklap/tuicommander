@@ -735,7 +735,7 @@
 	"prDetail.pending": "pending",
 	"prDetail.postReview": "Post review",
 	"prDetail.unresolved": "{count} unresolved threads",
-	"prDetail.unresolvedSplit": "{human} human, {bot} bot unresolved threads",
+	"prDetail.unresolvedSplit": "{human} human, {bot} bot, {ego} ego unresolved threads",
 	"prDetail.postReviewConfirm": "Post selected AI review findings to GitHub?",
 	"prDetail.posting": "Posting",
 	"prDetail.push": "Push",
@@ -764,6 +764,7 @@
 	"prDetail.requestChangesBody": "Review summary",
 	"prDetail.submitRequestChanges": "Submit",
 	"prDiff.addToReview": "Add to review",
+	"prDiff.bot": "bot",
 	"prDiff.cancel": "Cancel",
 	"prDiff.collapsed": "collapsed",
 	"prDiff.collapsedHint": "Lockfiles, generated and test files; click a file to expand",
@@ -1326,13 +1327,16 @@
 	"automations.viewRun": "View run",
 	"automations.previousRuns": "Previous runs",
 	"automations.nextRuns": "Next runs",
-	"automations.recordedWorkspace": "Workspace"
-,
+	"automations.recordedWorkspace": "Workspace",
 	"general.label.trayIcon": "Tray and menu-bar icon",
 	"general.trayIcon.always": "Always",
 	"general.trayIcon.backgroundOnly": "Only in background",
 	"general.trayIcon.never": "Never",
 	"general.hint.trayIcon": "Never disables Background. Without a tray host, including stock GNOME, closing minimizes the window so it remains reachable.",
 	"settings.catalogue.app.background.tray_icon.label": "Tray and menu-bar icon",
-	"settings.catalogue.app.background.tray_icon.help": "Always, only in background, or never. Without a tray, closing minimizes the window."
+	"settings.catalogue.app.background.tray_icon.help": "Always, only in background, or never. Without a tray, closing minimizes the window.",
+	"reviewFinding.suggestion": "Suggested change",
+	"reviewFinding.agentPrompt": "Prompt for agents (untrusted)",
+	"reviewFinding.addressedIn": "Addressed in commit {sha}",
+	"reviewFinding.showOriginal": "Show original"
 }

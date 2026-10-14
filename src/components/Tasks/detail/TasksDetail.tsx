@@ -22,6 +22,9 @@ export interface TasksDetailProps {
 	onItemChange?: (detail: WorkItemDetail) => void;
 }
 
+/** Up to this many fields stay open; a wider schema folds so Description and Comments come first. */
+const INLINE_FIELD_LIMIT = 8;
+
 /** Core-owned detail surface. Providers supply data and declared actions, never markup. */
 export function TasksDetail(props: TasksDetailProps) {
 	const model = useTasksDetail(props);
@@ -156,35 +159,38 @@ export function TasksDetail(props: TasksDetailProps) {
 							</Show>
 						</header>
 						<div class={styles.content}>
-							<section class={styles.fields} aria-label="Task fields">
-								<For each={detail().fields.map((field) => field.id)}>
-									{(id) => {
-										const schema = () => detail().fields.find((field) => field.id === id);
-										return (
-											<Show when={schema()}>
-												{(field) => (
-													<TaskField
-														schema={field()}
-														value={detail().item.fields[id] ?? null}
-														disabled={busy()}
-														canEdit={editAction()?.enabled === true}
-														onSave={(value) =>
-															model.act(
-																{ kind: "edit_field", value: { fieldId: id, value } },
-																`Saving ${field().name}…`,
-															)
-														}
-													/>
-												)}
-											</Show>
-										);
-									}}
-								</For>
-							</section>
 							<section class={styles.description} aria-label="Description">
 								<h3>Description</h3>
 								<TaskMarkdown content={detail().body} />
 							</section>
+							<details class={styles.fieldGroup} open={detail().fields.length <= INLINE_FIELD_LIMIT}>
+								<summary>Fields ({detail().fields.length})</summary>
+								<section class={styles.fields} aria-label="Task fields">
+									<For each={detail().fields.map((field) => field.id)}>
+										{(id) => {
+											const schema = () => detail().fields.find((field) => field.id === id);
+											return (
+												<Show when={schema()}>
+													{(field) => (
+														<TaskField
+															schema={field()}
+															value={detail().item.fields[id] ?? null}
+															disabled={busy()}
+															canEdit={editAction()?.enabled === true}
+															onSave={(value) =>
+																model.act(
+																	{ kind: "edit_field", value: { fieldId: id, value } },
+																	`Saving ${field().name}…`,
+																)
+															}
+														/>
+													)}
+												</Show>
+											);
+										}}
+									</For>
+								</section>
+							</details>
 							<section aria-label="Comments">
 								<h3>Comments</h3>
 								<Show when={commentEntries().size > 0} fallback={<p class={styles.muted}>No comments yet</p>}>

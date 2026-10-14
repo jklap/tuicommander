@@ -315,10 +315,16 @@ pub(crate) fn remove_account_everywhere(account_id: &str) -> Result<(), String> 
     let _guard = store_guard();
     // Refuse corrupt/unreadable bindings before deleting the account or its credential.
     let mut bindings = RepoBindingStore::read_strict()?;
-    crate::accounts::remove(account_id)?;
+    if account_id == GitHubAccount::GITHUB_COM_ID {
+        return Err("The github.com default cannot be removed; use clear_secret to log out".into());
+    }
     let bindings_base = bindings.clone();
     bindings.remove_account_bindings(account_id);
-    bindings.save(&bindings_base)
+    // Persist the references first: a failed save must leave the account and credential
+    // available to retry. A later account-removal failure leaves an unbound, valid account.
+    bindings.save(&bindings_base)?;
+    crate::accounts::remove(account_id)?;
+    Ok(())
 }
 
 /// Persist a repo→account binding derived from the chosen remote (its owner/repo

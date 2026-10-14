@@ -752,23 +752,29 @@ pub(crate) fn remove_orphan_checkout(
 /// Remove an orphan worktree by its filesystem path (detached HEAD — no branch to look up).
 ///
 /// Safety: `worktree_path` is validated against the repo's actual worktree list to prevent
-/// arbitrary directory deletion via a crafted path.
+/// arbitrary directory deletion via a crafted path. Safety checks, git subprocesses,
+/// and recursive deletion run on the blocking pool, not the desktop IPC thread.
 #[cfg(feature = "desktop")]
 #[tauri::command]
-pub(crate) fn remove_orphan_worktree(
+pub(crate) async fn remove_orphan_worktree(
     state: State<'_, Arc<AppState>>,
     repo_path: String,
     worktree_path: String,
     safe_only: Option<bool>,
     confirmed_sessions: Option<Vec<String>>,
 ) -> Result<(), String> {
-    remove_orphan_checkout(
-        &state,
-        &repo_path,
-        &worktree_path,
-        safe_only.unwrap_or(false),
-        &confirmed_sessions.unwrap_or_default(),
-    )
+    let state = state.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        remove_orphan_checkout(
+            &state,
+            &repo_path,
+            &worktree_path,
+            safe_only.unwrap_or(false),
+            &confirmed_sessions.unwrap_or_default(),
+        )
+    })
+    .await
+    .map_err(|e| format!("Task panic: {e}"))?
 }
 
 /// Result of switching the main worktree to a different branch.
@@ -1844,6 +1850,8 @@ mod tests {
     /// Execute froze the WebView for the length of every step. Their HTTP twins
     /// in `mcp_http/worktree_routes.rs` were already on the blocking pool, which
     /// is exactly the transport drift `docs/backend/command-threading.md` names.
+    /// Orphan removal has the same boundary: its safety checks and recursive
+    /// deletion must not block heartbeats while the desktop handles cleanup.
     #[test]
     fn post_merge_cleanup_commands_never_run_on_the_ipc_thread() {
         let source = include_str!("worktree.rs");
@@ -1851,6 +1859,7 @@ mod tests {
             "switch_branch",
             "delete_local_branch",
             "finalize_merged_worktree",
+            "remove_orphan_worktree",
         ] {
             let signature = format!("pub(crate) async fn {command}(");
             let at = source.find(&signature).unwrap_or_else(|| {

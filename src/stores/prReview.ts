@@ -67,6 +67,10 @@ interface PrReviewStoreState {
 	entries: Record<string, ReviewEntry>;
 }
 
+/** Appended to every finding posted for ego, so the thread split counts it as
+ *  ego's rather than a human's. Must equal `review_bots::EGO_MARKER` in Rust. */
+export const EGO_MARKER = "<!-- tuic:ego-review -->";
+
 const reviewKey = (repoPath: string, prNumber: number): string => `${repoPath}#${prNumber}`;
 
 /**
@@ -129,7 +133,7 @@ function createPrReviewStore() {
 					path: finding.path,
 					line: finding.line,
 					side: "RIGHT",
-					body: finding.message,
+					body: `${finding.message}\n\n${EGO_MARKER}`,
 				})),
 			});
 		} catch (e) {
