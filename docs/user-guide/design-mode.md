@@ -55,8 +55,10 @@ not permit eval. Grants are Chrome extension permissions and can be revoked in
 Chrome's extension settings. Eval runs in the page MAIN world without a debugger port.
 The sidebar retains the last fifty agent actions with session, action, time and outcome.
 
-The MCP direct tool list exposes Design Mode only for an armed terminal session.
-Start remains callable through tool discovery so an agent can arm its own browser.
+Direct tools/list, meta search and schema lookup expose Design Mode only for the
+armed terminal session. Start remains callable by its known tool name; otherwise
+arm Design Mode from the UI first. Remote error capture starts on the next page
+load after a host grant and is removed for future loads when the grant is revoked.
 Lifecycle changes emit `notifications/tools/list_changed`. Clients that cache tool
 schemas may still display an old tool; dispatch refuses it with
 `Design Mode not armed for this session`. Live refresh by Claude Code, Codex and ego

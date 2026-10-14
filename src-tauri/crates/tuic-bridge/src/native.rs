@@ -180,7 +180,12 @@ pub(crate) async fn run(origin: &str, config_path: &Path) -> Result<(), String> 
         }
         tokio::select! {
             message = rx.recv(), if input_open => {
-                let Some(message) = message else { input_open = false; continue; };
+                let Some(message) = message else {
+                    input_open = false;
+                    let disconnected = json!({"version":"2.0.0", "repoPath":config["repoPath"], "action":"command_disconnect"});
+                    let _ = tokio::time::timeout(std::time::Duration::from_secs(1), dispatch(&config, &disconnected)).await;
+                    continue;
+                };
                 let message = message?;
                 if tasks.len() >= 32 {
                     write_frame(&mut std::io::stdout().lock(), &json!({"id":message["id"],"ok":false,"error":"Too many native requests"}))?;
@@ -201,7 +206,6 @@ pub(crate) async fn run(origin: &str, config_path: &Path) -> Result<(), String> 
             Some(_) = tasks.join_next(), if !tasks.is_empty() => {}
         }
     }
-    // DEFERRED (2026-10-14) — native EOF does not notify the backend yet; outstanding agent requests use the bounded timeout.
     tasks.abort_all();
     Ok(())
 }

@@ -17,7 +17,6 @@ export async function browserCommand(command, chrome, tabId, errors) {
   }
   await allowed(tab.url);
   if (action === 'reload') { await chrome.tabs.reload(tabId); return {reloaded:true}; }
-  // DEFERRED (2026-10-14) — granted remote hosts need dynamic error-script registration; static capture covers local pages only.
   if (action === 'errors') return {errors:await errors(tabId)};
   if (action === 'screenshot') {
     if (!tab.active) throw new Error('tab_not_visible: The reviewed tab must be visible.');

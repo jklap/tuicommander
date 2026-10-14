@@ -5174,3 +5174,60 @@ async fn crit1358_a_working_agent_is_refused_even_with_a_ui_attached() {
     assert_eq!(result["error"], "Cannot suspend: waiting for input");
     assert!(state.suspend_responses.is_empty());
 }
+
+// Catches: shared meta discovery leaking an armed browser tool to unrelated MCP sessions.
+#[cfg(all(unix, feature = "desktop"))]
+#[tokio::test]
+async fn design_mode_meta_discovery_is_scoped_to_the_armed_session() {
+    let state = test_state();
+    insert_managed_test_session(&state, "owner", "/repo");
+    insert_managed_test_session(&state, "other", "/repo");
+    state
+        .mcp
+        .to_session
+        .insert("owner-mcp".into(), "owner".into());
+    state
+        .mcp
+        .to_session
+        .insert("other-mcp".into(), "other".into());
+    crate::mcp_http::mcp_transport_catalogue::rebuild_tool_search_index(&state);
+    let manager = crate::design_mode::manager(&state).await;
+    manager.arm_extension("/repo".into(), "owner".into()).await;
+    for (sid, expected) in [("owner-mcp", true), ("other-mcp", false)] {
+        let result = handle_mcp_tool_call(
+            &state,
+            loopback_addr(),
+            "search_tools",
+            &serde_json::json!({"query":"design_mode browser", "limit":100}),
+            Some(sid),
+        )
+        .await;
+        assert_eq!(
+            result["results"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|r| r["name"] == "design_mode"),
+            expected
+        );
+        let schema = handle_mcp_tool_call(
+            &state,
+            loopback_addr(),
+            "get_tool_schema",
+            &serde_json::json!({"tool_name":"design_mode"}),
+            Some(sid),
+        )
+        .await;
+        assert_eq!(schema["name"] == "design_mode", expected);
+    }
+    manager.stop("/repo").await.unwrap();
+    let schema = handle_mcp_tool_call(
+        &state,
+        loopback_addr(),
+        "get_tool_schema",
+        &serde_json::json!({"tool_name":"design_mode"}),
+        Some("owner-mcp"),
+    )
+    .await;
+    assert_eq!(schema["error"], "Design Mode not armed for this session");
+}

@@ -1,3 +1,4 @@
+import {syncHostErrors} from './hostErrors.js';
 import {browserCommand} from './browserCommands.js';
 import {addPick, editPick, deletePick, addError, clearErrors, draftForTab, recipient, deliverDraft, serverSession} from './cards.js';
 import {reviewAgents} from './reviewAgents.js';
@@ -201,3 +202,12 @@ chrome.tabs.onUpdated.addListener((tabId,change) => {
 chrome.tabs.onRemoved.addListener((tabId) => {
   serial = serial.then(async () => { const all=await drafts(); delete all[String(tabId)]; await chrome.storage.local.set({drafts:all}); }).catch(() => {});
 });
+
+let permissionSync = Promise.resolve();
+const syncErrors = () => {
+  permissionSync = permissionSync.catch(() => {}).then(() => syncHostErrors(chrome));
+  permissionSync.catch((error) => { connection = `Host error capture unavailable: ${error.message}`; notify(); });
+};
+chrome.permissions.onAdded.addListener(syncErrors);
+chrome.permissions.onRemoved.addListener(syncErrors);
+syncErrors();

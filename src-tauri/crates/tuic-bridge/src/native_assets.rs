@@ -1,5 +1,9 @@
 pub(crate) const ASSETS: &[(&str, &str)] = &[
     (
+        "hostErrors.js",
+        include_str!("../../../../browser-extension/design-mode/hostErrors.js"),
+    ),
+    (
         "browserCommands.js",
         include_str!("../../../../browser-extension/design-mode/browserCommands.js"),
     ),
