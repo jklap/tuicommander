@@ -971,3 +971,14 @@ an explicit create action. These actions match across HTTP, IPC, MCP and CLI.
 ### Tasks provider bridge
 
 `work_item_provider_bridge(input)` claims or completes one Rust-issued Tasks provider request. It uses the same input and reply as `POST /work-items/provider-bridge`; see the HTTP API reference. The command only moves requests and replies; the existing provider port owns tracker calls.
+
+## Open desktop Markdown metadata
+
+| Command | Arguments | Result | HTTP twin |
+| --- | --- | --- | --- |
+| `sync_open_markdown_tabs` | `tabs: {id,repoPath,filePath,fsRoot?}[]` | `void` | `PUT /config/open-markdown-tabs` (loopback only) |
+| `list_open_markdown_tabs` | `cwd: string` | `{id,title,relative_path,absolute_path,fs_root}[]` | `GET /repo/open-markdown-tabs?cwd=...` |
+
+The read command runs configuration I/O on the blocking pool. Publication stores
+only metadata in memory and invalidates consumers with `open-markdown-tabs-changed`.
+The list is scoped to registered repository/workspace ownership.

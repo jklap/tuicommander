@@ -360,6 +360,8 @@ pub enum AppEvent {
     /// every save — including the client that just wrote it.
     #[serde(rename = "repositories-changed")]
     RepositoriesChanged,
+    #[serde(rename = "open-markdown-tabs-changed")]
+    OpenMarkdownTabsChanged,
     /// Directory contents changed (non-git filesystem watcher)
     #[serde(rename = "dir-changed")]
     DirChanged { dir_path: String },
@@ -2071,6 +2073,8 @@ pub struct AppState {
     pub(crate) secrets: crate::secrets::SecretStore,
     /// Every per-session side table, keyed by session id.
     pub(crate) session_maps: SessionMaps,
+    pub(crate) open_markdown_tabs:
+        parking_lot::RwLock<Vec<crate::open_markdown_tabs::DesktopMarkdownTab>>,
     pub(crate) data_dir: PathBuf,
     pub(crate) worktrees_dir: PathBuf,
     pub(crate) metrics: SessionMetrics,
@@ -3528,6 +3532,7 @@ impl AppState {
             automation_runtime: Default::default(),
             secrets: crate::secrets::SecretStore::default(),
             session_maps: SessionMaps::default(),
+            open_markdown_tabs: Default::default(),
             data_dir,
             worktrees_dir,
             metrics: SessionMetrics::new(),
@@ -5263,6 +5268,7 @@ impl AppState {
             | AppEvent::McpToast { .. }
             | AppEvent::McpConfirm { .. }
             | AppEvent::McpConfirmResolved { .. }
+            | AppEvent::OpenMarkdownTabsChanged
             | AppEvent::RepositoriesChanged
             | AppEvent::DirChanged { .. }
             | AppEvent::SessionWorktreeDeclared { .. }

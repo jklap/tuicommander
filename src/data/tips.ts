@@ -10,6 +10,12 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "Desktop Markdown on mobile",
+		description:
+			"Open a session’s More actions menu on your phone to read the Markdown files open on desktop for that repository.",
+		shortcut: null,
+	},
+	{
 		feature: "Close to background",
 		description:
 			"In desktop Settings > General, choose Ask, Background or Quit for main-window close. Background keeps sessions running; the application menu still offers Quit.",

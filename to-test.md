@@ -5332,3 +5332,8 @@ Visual evidence: worktree Vite fixture mounted the real NotificationsTab and Toa
 - [ ] After restart on macOS, verify Dock icon disappears with `background.hide_dock_icon=true`, remains with false, and returns on Show. Verify Dock Reopen (when icon retained), second app launch, a deep link and a native notification click restore the window and active terminal.
 - [ ] On Windows after rebuild, verify close/Show applies Low/Normal WebView memory target without losing terminal output. On Linux verify panel restore. Native tray Show is wired by the following tray story to `background_mode::desktop::leave_background`.
 - [ ] #1833-aa60 round 1: after Boss restarts `make dev` or runs `make build`, confirm shared-data instances preserve live uploads, disabled Claude instructions retain attachment access, and custom wrappers launch normally. Rust changes require restart; no desktop was launched or reloaded by the peer.
+
+- [ ] #1879-05ad — After Boss restarts `make dev` or rebuilds the release, open a
+  repository Markdown tab on desktop and inspect the session overflow Markdown
+  section on iPhone. Confirm title/path, tap to view, and live open/close updates.
+  The backend metadata publication and routes need the rebuilt Rust process.

@@ -46,6 +46,7 @@ pub(crate) mod codex_usage;
 pub(crate) mod config;
 pub(crate) mod conflict_assist;
 pub(crate) mod content_index;
+mod open_markdown_tabs;
 pub mod settings;
 pub(crate) use tuic_git::cow;
 pub(crate) mod cpu_watchdog;
@@ -2158,6 +2159,8 @@ pub fn run() {
             pty::terminal_hyperlink_span,
             pty::set_session_visible,
             pty::set_session_name,
+            open_markdown_tabs::sync_open_markdown_tabs,
+            open_markdown_tabs::list_open_markdown_tabs,
             pty::get_session_foreground_process,
             pty::get_session_leaf_pid,
             pty::has_foreground_process,

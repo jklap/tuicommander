@@ -4130,3 +4130,17 @@ describe("default-app host boundary", () => {
 		expect(() => mapCommandToHttp("open_default_app", { target: "https://example.com", kind: "url" })).toThrow();
 	});
 });
+
+// Catches: the mobile metadata read or desktop publication having no equivalent HTTP shape.
+it("maps open Markdown metadata reads and loopback publication without document content", () => {
+	expect(mapCommandToHttp("list_open_markdown_tabs", { cwd: "/repo/src" })).toEqual({
+		method: "GET",
+		path: "/repo/open-markdown-tabs?cwd=%2Frepo%2Fsrc",
+	});
+	const tabs = [{ id: "md-1", repoPath: "/repo", filePath: "guide.md", fsRoot: "/repo" }];
+	expect(mapCommandToHttp("sync_open_markdown_tabs", { tabs })).toEqual({
+		method: "PUT",
+		path: "/config/open-markdown-tabs",
+		body: { tabs },
+	});
+});
