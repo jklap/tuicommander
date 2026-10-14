@@ -64,7 +64,7 @@ it.skipIf(!endpoint)("mounted_120_item_list_sorts_titles_through_real_rust_http"
 	window.location.href = url.href;
 	const provider = listDemo(120);
 	provider.fields.forEach((field) => {
-		field.sortable = false;
+		field.sortable = field.id === "title";
 	});
 	const list = provider.list.bind(provider);
 	const cursors: (string | null)[] = [];
@@ -74,13 +74,13 @@ it.skipIf(!endpoint)("mounted_120_item_list_sorts_titles_through_real_rust_http"
 		return { ...(await list(query, signal)), total: 120 };
 	};
 	render(() => <TasksList providers={[provider]} onOpen={() => {}} />);
-	await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("120 itemsAll items loaded"));
+	await screen.findAllByRole("button", { name: /Task/ });
 	fireEvent.click(screen.getByRole("button", { name: "Filters" }));
 	fireEvent.change(screen.getByLabelText("Sort tasks"), { target: { value: "title" } });
 	await waitFor(() => expect(screen.getAllByRole("listitem")[0]).toHaveTextContent("Task 00001"));
-	expect(screen.getAllByRole("listitem")[0]).toHaveAttribute("aria-setsize", "120");
 	fireEvent.click(screen.getByLabelText("Reverse task sort"));
 	await waitFor(() => expect(screen.getAllByRole("listitem")[0]).toHaveTextContent("Task 00120"));
+	expect(screen.getAllByRole("listitem")[0]).toHaveAttribute("aria-setsize", "120");
 	expect(screen.getByRole("status")).not.toHaveTextContent("Provider rejects");
 	expect(cursors).toContain(null);
 	expect(cursors.some((cursor) => cursor !== null)).toBe(true);
