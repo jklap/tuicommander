@@ -3590,8 +3590,9 @@ mod tests {
     /// Replays `.tcap` output records into a grid whose viewport is held `k` rows
     /// above the bottom (0 = pinned to the tail) and checks the contract the scroll
     /// row cache relies on (#1264-89c8): a row that entered history never changes,
-    /// every history row is present and contiguous in all-time order, and the
-    /// viewport at offset `k` shows exactly the rows the absolute-index read returns
+    /// every history row is present and contiguous in all-time order (a resize
+    /// repaint may replace history only after ordered content survival is proven),
+    /// and the viewport at offset `k` shows exactly the rows the absolute-index read returns
     /// for that window. `resize_at` = (output record index, rows, cols).
     fn replay_history_contract(
         name: &str,
@@ -3651,6 +3652,8 @@ mod tests {
                 next_index = 0;
                 screen.clear();
             }
+            let origin_before = grid.screen_origin();
+            let history_before = grid.read_scrollback_lines(0, grid.scrollback_count());
             grid.process(&rec.data);
             if grid.is_alternate_screen() {
                 stats.alt_records += 1;
@@ -3661,6 +3664,31 @@ mod tests {
             }
             let history = grid.scrollback_count();
             let base = grid.screen_origin().saturating_sub(history);
+            let retained = grid.read_scrollback_lines(0, history);
+            let coordinates_changed = grid.screen_origin() < origin_before
+                || retained
+                    .iter()
+                    .enumerate()
+                    .any(|(row, text)| committed.get(&(base + row)).is_some_and(|old| old != text));
+            if resize_at.is_some() && coordinates_changed && history != 0 {
+                // Resize repaint reconciliation removes only proven duplicates and
+                // rewinds the coordinates of newer rows. Prove content survival
+                // independently before rebuilding the coordinate-based oracle:
+                // every old retained row must still occur in order, with its
+                // multiplicity, in history plus the replacement screen.
+                let old_base = origin_before.saturating_sub(history_before.len());
+                let evicted = base.saturating_sub(old_base).min(history_before.len());
+                let all = grid.read_rows_in_range(0, grid.total_lines() - 1);
+                let mut remaining = all.iter();
+                for old in &history_before[evicted..] {
+                    assert!(
+                        remaining.any(|row| row == old),
+                        "{name} k={k} step {step}: reconciliation lost or reordered history row {old:?}; before={history_before:?}, after={all:?}"
+                    );
+                }
+                committed.clear();
+                next_index = base;
+            }
 
             // Viewport at the held offset == the same window read by absolute index.
             let offset = grid.display_offset();
@@ -3803,6 +3831,45 @@ mod tests {
                     replay_history_contract(&name, &capture, 10_000, 4, Some((at, new_rows, cols)));
                 }
             }
+        }
+    }
+
+    /// Catches an oracle treating the startup banner's proven on-screen
+    /// replacement as lost history after a synchronized resize repaint.
+    #[test]
+    fn startup_resize_repaint_moves_history_banner_to_screen_without_loss() {
+        let capture = crate::pty_capture::decode_capture(include_bytes!(
+            "../../../src/fixtures/agent_prompts/claude-2.1.294-remote-startup-idle-20261013.tcap"
+        ))
+        .unwrap();
+        let (rows, cols) = capture.geometry.unwrap();
+        let mut grid = TerminalGrid::new(rows, cols, 10_000);
+        let outputs: Vec<_> = capture
+            .records
+            .iter()
+            .filter(|record| record.direction == crate::pty_capture::CaptureDirection::Output)
+            .collect();
+        for (step, record) in outputs[..7].iter().enumerate() {
+            if step == 5 {
+                grid.resize_with_mode(rows - 9, cols, ReflowMode::All);
+            }
+            grid.process(&record.data);
+        }
+        let before = grid.read_scrollback_lines(0, grid.scrollback_count());
+        assert_eq!(before.len(), 9);
+        grid.process(&outputs[7].data);
+        let after = grid.read_scrollback_lines(0, grid.scrollback_count());
+        assert_eq!(after.len(), 5);
+        assert_eq!(after[..3], before[..3]);
+        assert!(after[3..].iter().all(String::is_empty));
+        assert_eq!(grid.screen_text_rows()[..3], before[3..6]);
+        assert!(before[3].contains("Claude Code"));
+        assert!(before[4].contains("Opus 5.5"));
+        assert!(before[5].contains("~/Gits/personal"));
+        let all = grid.read_rows_in_range(0, grid.total_lines() - 1);
+        let mut remaining = all.iter();
+        for row in &before {
+            assert!(remaining.any(|current| current == row));
         }
     }
 
