@@ -21,6 +21,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Unify mobile terminal and AI Chat composers with a shared + menu for files, camera capture and supported draft, queue and command actions (#1880-d7ff).
 
+- Persist suspended tabs in Rust and allow suspension without an attached UI; verify and restore agent sessions through the backend (#1806-ed18).
+
 - Add a device-local mobile Settings toggle for prompt autocorrect and spellcheck, enabled by default (#1878-3a3c).
 
 - Native tray and menu-bar icon with live agent counts, attention indicator, Show and Quit. Choose Always, Only in background or Never in General settings. Missing tray support safely minimizes the window (#1804-d44b).

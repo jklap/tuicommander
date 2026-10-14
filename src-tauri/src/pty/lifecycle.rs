@@ -3274,6 +3274,7 @@ fn remove_live_session_state(session_id: &str, state: &AppState) {
     if let Err(error) = crate::stories::StoryStore::release_closed_session(session_id) {
         tracing::warn!(session_id = %session_id, error = %error, "Could not release story claim for closed session");
     }
+    state.suspend_metadata.remove(session_id);
     state.session_maps.attachment_launch_dirs.remove(session_id);
     state.ws_clients.remove(session_id);
     // Drop the per-session PTY event channel alongside ws_clients. Any final

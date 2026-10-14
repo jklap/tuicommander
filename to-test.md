@@ -1,3 +1,6 @@
+## Suspend replacement identity (1806-ed18) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, suspend and resume a throwaway idle shell twice. The TUIC identity stays stable, each Resume has a fresh PTY id, and the second Suspend succeeds. On a remote repository, Resume and closing a suspended tab must act on that daemon. Automated targeted tests cover the lifecycle and routing; the running desktop requires a restart to load the Rust change.
 ## Shell wrapper argument guards — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, open a new shell. With OpenCode native scrollback enabled, verify `opencode mcp list` receives no `--mini`; a bare interactive launch still does. Verify Goose `run`/`session` with `--name=work`, `-nwork`, `--path f.jsonl`, `--path=f.jsonl`, and `run --no-session` receive no TUIC `--name`. Existing shells keep their sourced wrappers until reopened. Automated argv tests cover bash, zsh and fish.
@@ -2150,6 +2153,7 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] After Boss restarts `make dev` or builds release: verify the template icon on light/dark macOS menu bars, Windows overflow area and KDE. Check Always/background-only/Never, Show via click/menu, Quit confirmation, one first-entry native notice, live working/awaiting counts and attention clearing on Show. The current Rust process does not hot-reload.
 - [ ] On stock GNOME without a StatusNotifier host, close configured as Background must minimize with the main window reachable; Ask must omit Background. Native Linux packaging requires the appindicator dependency.
 
+- [ ] #1806-ed18: after a manual `make dev` restart (or `make build` for release), destroy/unload the main WebView, suspend an idle shell and a resumable agent through MCP, then Show/recreate the window. Confirm suspended notices and pane placement, one replacement PTY per Resume, and refusal for busy/question/queued sessions. Restart while unloaded and confirm durable tabs remain. Automated rb PTY/storage and frontend DOM tests cover the backend and render boundaries; native unload/recreate integration requires the coordinator restart.
 ## Settings policy foundation (#1786-9cbd)
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, queued approved writes must honor disconnect and expiry before owner preparation. Automated owner-boundary regressions cover both; settings transport publication remains a separate step.

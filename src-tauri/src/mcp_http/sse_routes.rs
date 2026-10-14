@@ -298,7 +298,7 @@ fn event_type_name(event: &AppEvent) -> &str {
         AppEvent::PtyDescriptionChanged { .. } => "pty-description-changed",
         AppEvent::ChatViewChanged { .. } => "chat-view-changed",
         AppEvent::SessionRenamed { .. } => "session-renamed",
-        AppEvent::SessionSuspendRequested { .. } => "session-suspend-requested",
+        AppEvent::SessionSuspended { .. } => "session-suspended",
         AppEvent::TermAliasAssigned { .. } => "term-alias-assigned",
         AppEvent::PluginChanged { .. } => "plugin-changed",
         AppEvent::UpstreamStatusChanged { .. } => "upstream-status-changed",
@@ -437,12 +437,7 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
         } => {
             serde_json::json!({ "session_id": session_id, "name": name, "is_custom": is_custom })
         }
-        AppEvent::SessionSuspendRequested {
-            session_id,
-            request_id,
-        } => {
-            serde_json::json!({ "session_id": session_id, "request_id": request_id })
-        }
+        AppEvent::SessionSuspended { record } => serde_json::json!({"record": record}),
         AppEvent::TermAliasAssigned { session_id, alias } => {
             serde_json::json!({ "session_id": session_id, "alias": alias })
         }

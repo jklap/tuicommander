@@ -80,7 +80,7 @@ Older recorded prompts with a prompt ID also appear when Claude did not record a
 **Right-click → Suspend Tab** ends the tab's process and its agent, freeing the memory and CPU they used, and keeps the tab in the tab bar marked `zz`. It is not auto-standby: auto-standby only pauses an idle process, which keeps its memory, and wakes it when you focus the tab. A suspended tab holds no process at all.
 
 - **Resume** — click **Resume** in the tab, or right-click → **Resume Tab**. A new session opens in the same folder. An agent tab runs the same resume command a tab gets after a TUICommander restart, so the agent continues its conversation. A plain shell tab opens a fresh shell.
-- **Restart** — a suspended tab stays suspended after TUICommander restarts; it is never resumed automatically.
+- **Restart** — Rust saves suspended tabs before ending their processes. They stay suspended after a restart or frontend recreation, even when suspension happened with no UI open; they are never resumed automatically.
 - **Refused while busy** — Suspend is disabled while the agent is working, a question waits for your answer, commands are queued, or a command runs in a plain shell, so no turn is cut. An agent tab with no resumable session is refused too.
 - **MCP** — `session action=suspend session_id=<id>` does the same for a tab another agent wants to park, under the same refusals.
 
