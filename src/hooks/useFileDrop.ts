@@ -112,6 +112,14 @@ export interface FolderDropRequest {
 	connectionId?: string;
 }
 
+const folderDropListeners = new Set<(request: FolderDropRequest) => void>();
+
+/** Observe completed transfers; panels reuse their normal mutation refresh path. */
+export function onFolderDropComplete(listener: (request: FolderDropRequest) => void): () => void {
+	folderDropListeners.add(listener);
+	return () => folderDropListeners.delete(listener);
+}
+
 interface FolderDropOpts {
 	/** Called when the transfer requires user confirmation (directory, not yet authorized). */
 	onNeedsConfirm: (req: FolderDropRequest) => void;
@@ -140,6 +148,10 @@ async function executeFolderDrop(req: FolderDropRequest, opts: FolderDropOpts): 
 		if (result.needs_confirm) {
 			opts.onNeedsConfirm(req);
 			return false;
+		}
+
+		if (result.moved > 0) {
+			for (const listener of folderDropListeners) listener(req);
 		}
 
 		const verb = req.mode === "move" ? "Moved" : "Copied";
