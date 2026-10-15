@@ -2247,7 +2247,8 @@ limited to the selected Ego user document, never other settings stores. Owners
 without advertised atomic batch and compare-and-swap support fail closed.
 Base-only provider headers and credential commands have typed write-only auth
 actions (`EgoAuthAction`) and presence-only catalogue fields. Auth actions always
-select the base owner, independent of the launch profile. No read executes a
+select the base owner, independent of the launch profile. Profile-target reads
+of these machine-owned auth paths return `not_found`, not a false unset status. No read executes a
 credential command or attempts to recover an owner-redacted value. Failed
 readback after a successful write reports `persisted: true` and `nextAction: get`.
 
@@ -2257,10 +2258,6 @@ transport registration and executable confirmation belong to later plan steps.
 The Providers tab shows the base model when the configured profile has none, as
 Ego resolves it, and creates a missing AI Chat workspace like ACP does. Existing Ego IPC/HTTP commands retain
 identical shapes; model reads/writes now honor configured profile/workspace.
-
-`exec_paths`, `auth.PROVIDER.headers` and `credential_command` remain owner gaps:
-isolated installed-Ego probes returned exit 2 (`unknown config key`). No editor or
-raw-file fallback is used. Credentials are never read from `auth.json`.
 
 Tasks brief preparation uses `POST /tasks/start-work-prompt`, the HTTP twin of
 `build_start_work_prompt`. Both accept `repoPath` and `input` with key, nullable

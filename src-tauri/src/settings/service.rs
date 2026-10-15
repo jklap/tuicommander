@@ -23,6 +23,10 @@ pub trait Store: Send + Sync + 'static {
         Ok(self)
     }
     fn read(&self) -> Result<Value, Failure>;
+    /// Refuse paths that are not owned by the resolved target before reading state.
+    fn validate_read_paths(&self, _paths: &[String]) -> Result<(), Failure> {
+        Ok(())
+    }
     /// Pure owner validation before an exposure proposal is offered to the human.
     /// `commit` must still repeat domain validation on the locked latest state.
     fn validate_proposal(&self, _latest: &Value, _value: &Value) -> Result<(), Failure> {
@@ -141,6 +145,7 @@ impl<S: Store> Service<S> {
         let safe_store = store.clone();
         tokio::task::spawn_blocking(move || {
             let owner = owner.resolve(&target)?;
+            owner.validate_read_paths(&paths)?;
             let mut latest = owner.read()?;
             let revision = transaction::revision(&latest)?;
             let mut values = BTreeMap::new();

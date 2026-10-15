@@ -282,6 +282,13 @@ impl Store for EgoSettingsStore {
             sequence: self.sequence.clone(),
         }))
     }
+    fn validate_read_paths(&self, paths: &[String]) -> Result<(), Failure> {
+        if self.context()?.profile.is_some() && paths.iter().any(|path| path.starts_with("/auth/"))
+        {
+            return Err(Error::new(ID, "not_found"));
+        }
+        Ok(())
+    }
     fn read(&self) -> Result<Value, Failure> {
         let _sequence = self.sequence.lock();
         self.snapshot(self.context()?.as_ref())
