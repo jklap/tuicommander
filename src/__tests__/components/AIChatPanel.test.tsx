@@ -4294,3 +4294,48 @@ it("mobile Chat updates keyboard correction without changing desktop attributes"
 	view.getByRole("button", { name: "Toggle correction" }).click();
 	expectAttributes(true);
 });
+
+// Catches: a delayed async-offer snapshot rolls back the model after a successful settings change.
+it("does not let a delayed async offer snapshot revert a confirmed model selection", async () => {
+	const { createAcpClient } =
+		await vi.importActual<typeof import("../../services/acpClient")>("../../services/acpClient");
+	let deliver: ((frame: import("../../types/acp").AcpStreamFrame) => void) | undefined;
+	const realClient = createAcpClient(async ({ onFrame }) => {
+		deliver = onFrame;
+		return { close() {} };
+	});
+	const offered = snapshot({ attachments: [attachment()] });
+	const selected = snapshot({
+		attachments: [attachment({ configOptions: [{ ...MODEL_OPTION, currentValue: "sonnet" }] })],
+	});
+	let releaseOffer!: (value: AcpConnectionSnapshot) => void;
+	const delayedOffer = new Promise<AcpConnectionSnapshot>((resolve) => {
+		releaseOffer = resolve;
+	});
+	let reads = 0;
+	vi.mocked(invoke).mockImplementation(async (command) => {
+		if (command === "acp_connect") return offered;
+		if (command === "acp_pending_interactions") return [];
+		if (command === "acp_connection_snapshot") return ++reads === 1 ? delayedOffer : selected;
+		if (command === "acp_session_set_config_option") return selected.attachments[0].configOptions;
+		return undefined;
+	});
+	await realClient.connect(ROOT);
+	deliver?.({
+		kind: "event",
+		connectionId: CONNECTION,
+		generation: 1,
+		sequence: 2,
+		sessionId: SESSION,
+		turnId: null,
+		event: {
+			kind: "sessionUpdate",
+			update: { sessionUpdate: "config_option_update", configOptions: [MODEL_OPTION] },
+		},
+	});
+	await realClient.setConfigOption(CONNECTION, SESSION, "model", { value: "sonnet" });
+	expect(acpStore.attachment(CONNECTION, SESSION)?.configOptions[0].currentValue).toBe("sonnet");
+	releaseOffer(offered);
+	await settle();
+	expect(acpStore.attachment(CONNECTION, SESSION)?.configOptions[0].currentValue).toBe("sonnet");
+});
