@@ -477,3 +477,24 @@ fn ego_captured_owner_auth_is_redacted_and_capabilities_are_conditional() {
     assert_eq!(capabilities["atomic_batch"], true);
     assert_eq!(capabilities["compare_and_swap"], true);
 }
+
+// Catches: a profile snapshot reports base-only provider authentication as unset.
+#[tokio::test]
+async fn ego_profile_read_must_not_report_base_auth_unset() {
+    let f = fixture();
+    let mut base = disk(&f, "base");
+    base["values"]["auth.openai.headers"] = json!("<redacted>");
+    std::fs::write(f.dir.path().join("base.json"), base.to_string()).unwrap();
+    let result = get(&f, &["/auth/openai/headers"]).await;
+    match result {
+        Ok(snapshot) => assert_eq!(
+            snapshot.values["/auth/openai/headers"].stored,
+            json!({"status":"set"}),
+            "base-only headers exist, but the profile read reports them unset"
+        ),
+        Err(error) => assert!(
+            matches!(error.code.as_str(), "not_found" | "unavailable"),
+            "an owner read failure does not prove profile scope rejection: {error}"
+        ),
+    }
+}
