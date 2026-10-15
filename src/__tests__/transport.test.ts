@@ -1373,6 +1373,12 @@ describe("transport", () => {
 			expect(result.transform?.({ prompt: null })).toBeNull();
 		});
 
+		it("maps guarded agent input to the atomic backend submission route", () => {
+			// Catches: browser keepalive falling back to unguarded raw writes.
+			const result = mapCommandToHttp("send_agent_input_if_empty", { sessionId: "s1", text: "[noop]" });
+			expect(result).toMatchObject({ method: "POST", path: "/sessions/s1/input-if-empty", body: { text: "[noop]" } });
+		});
+
 		it("maps get_input_buffer_content to GET with {content} unwrap transform", () => {
 			const result = mapCommandToHttp("get_input_buffer_content", { sessionId: "s1" });
 			expect(result.method).toBe("GET");

@@ -735,6 +735,42 @@ pub(super) fn agent_submission_rejection(
     None
 }
 
+/// Atomically submit automated idle input without discarding a user draft.
+pub(crate) fn send_agent_input_if_empty_blocking(
+    state: &Arc<AppState>,
+    session_id: &str,
+    text: &str,
+) -> Result<bool, String> {
+    let transaction = state.input_transaction(session_id);
+    let _input = transaction.lock();
+    if text.is_empty()
+        || state
+            .session_maps
+            .session_states
+            .get(session_id)
+            .is_some_and(|session| session.awaiting_input)
+    {
+        return Ok(false);
+    }
+    // Do not drain somebody else's queue as a side effect of a keepalive.
+    if state
+        .pending_injections
+        .get(session_id)
+        .is_some_and(|queue| !queue.is_empty())
+    {
+        return Ok(false);
+    }
+    match write_agent_submission_to_pty(state, session_id, text) {
+        AgentSubmissionWrite::Complete { .. } => {
+            crate::mcp_http::session::apply_input_bookkeeping(state, session_id, text);
+            crate::mcp_http::session::apply_input_bookkeeping(state, session_id, "\r");
+            Ok(true)
+        }
+        AgentSubmissionWrite::Rejected { .. } => Ok(false),
+        AgentSubmissionWrite::Failed(error) | AgentSubmissionWrite::Uncertain(error) => Err(error),
+    }
+}
+
 /// Claim and write one MCP-managed agent command without queueing it.
 ///
 /// This is the ordering half of `session action=submit`. The caller owns the
@@ -2415,6 +2451,8 @@ fn write_pty_parts_blocking(
     session_id: &str,
     parts: &[String],
 ) -> Result<(), String> {
+    let transaction = state.input_transaction(session_id);
+    let _input = transaction.lock();
     // Keystroke delivery to the PTY: run on the high QoS band so the write (and
     // thus the echo round-trip) isn't starved by a saturating build. Scoped, not
     // a bare raise: this thread comes from the shared blocking pool and goes back

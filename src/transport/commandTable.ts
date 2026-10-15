@@ -513,6 +513,9 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			transform: (data) => (data as { prompt: string | null }).prompt ?? null,
 		}),
 	},
+	send_agent_input_if_empty: {
+		map: (args) => ({ method: "POST", path: `/sessions/${args.sessionId}/input-if-empty`, body: { text: args.text } }),
+	},
 	get_input_buffer_content: {
 		map: (args) => ({
 			method: "GET",

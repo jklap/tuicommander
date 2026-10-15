@@ -2334,3 +2334,17 @@ it("unregisters work-item providers when their plugin unloads", async () => {
 	pluginRegistry.unregister("tasks-provider");
 	expect(workItemProviderRegistry.get("demo", "local")).toBeUndefined();
 });
+
+// Catches: a guarded keepalive still uses a stale read followed by destructive split writes.
+it("guarded agent input delegates the draft boundary to one backend transaction", async () => {
+	let host: PluginHost | undefined;
+	await pluginRegistry.register(
+		makePlugin("guarded-keepalive", (value) => {
+			host = value;
+		}),
+	);
+	vi.mocked(invoke).mockClear();
+	vi.mocked(invoke).mockResolvedValueOnce(false);
+	expect(await host!.sendAgentInputIfEmpty("s1", "[noop]")).toBe(false);
+	expect(invoke).toHaveBeenCalledExactlyOnceWith("send_agent_input_if_empty", { sessionId: "s1", text: "[noop]" });
+});

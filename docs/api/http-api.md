@@ -3183,3 +3183,7 @@ heartbeat sequence contract. Immediate commands do not change those sequences.
 `POST /sessions/wake` accepts `{tuicSession}` and returns `{ok:true,session_id}`. It has the same local-or-authenticated guard as suspended-session actions and maps to IPC `resume_session`. An already-live target returns its current PTY. A failure returns HTTP 400 with `{error}` and retains the record. MCP session list/status expose retained sessions with `state:"hibernated"`; submit resumes and returns `status:"resuming"` after accepting input into the existing ready-window queue. Mail wake failure reports `resume_error` without deleting inbox mail.
 
 `session-created` carries optional `tuic_session` on IPC and SSE so a backend wake reattaches the existing suspended tab. Hibernated terminal aliases remain valid peer-mail addresses.
+
+### Guarded automated agent input
+
+`POST /sessions/{id}/input-if-empty` accepts `{ "text": "[noop]" }` and returns a boolean. `false` means no input was sent because the agent is not ready, awaits input, has a tracked draft, or has queued commands. The backend serializes checks, split writes, and bookkeeping against raw user input. IPC equivalent: `send_agent_input_if_empty`.
