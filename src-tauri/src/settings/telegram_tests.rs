@@ -326,3 +326,24 @@ async fn telegram_owner_secret_errors_and_reads_are_redacted() {
         .unwrap();
     assert_eq!(settings.read().unwrap()["chats"], json!([]));
 }
+
+#[tokio::test]
+async fn clear_token_readback_failure_reports_committed_deletion() {
+    // Catches: a failed allowlist readback hides a completed token deletion.
+    use super::telegram::{TelegramAction, TelegramOwnerSettings};
+    let f = fixture(None, true);
+    private_write(&f.paths, "allowed_chat_ids", "not-a-chat-id\n");
+    let settings = TelegramOwnerSettings::at_paths(f.paths.clone());
+    let error = settings
+        .perform(TelegramAction::ClearToken)
+        .await
+        .unwrap_err();
+    assert!(
+        !f.paths.file("bot.token").exists(),
+        "token deletion committed"
+    );
+    assert!(
+        error.persisted,
+        "completed token deletion must not be reported as uncommitted: {error:?}"
+    );
+}
