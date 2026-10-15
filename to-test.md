@@ -1,3 +1,7 @@
+## Urgent ego mail (1901-9b6b) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, send urgent mail to a busy managed ego child. Verify the inbox notice is queued without cancelling its tool, the body stays in the inbox, and a draft or question blocks injection. The targeted backend tests cover notice bytes, coalescing, drafts and confident dialogs; no live app was restarted for this change.
+
 ## GitHub Work B6/B7 bridge (1693-a816) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, reload the updated GitHub Work plugin. Verify a PR detail loads enriched review threads under the selected account and that the plugin host ports reach core action state. Do not perform merge/review/rerun writes without separate authorization. Verify cross-account rejection and desktop plugin loading; no managed peer launched a second desktop instance.

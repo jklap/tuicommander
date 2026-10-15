@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Fix urgent managed ego mail falling back as an unknown agent type; queue only an inbox notice without interrupting active tools (#1901-9b6b).
+
 - Fix cache keepalive draft preservation with guarded backend submissions and complete question-state replay on plugin load.
 
 ### Added
