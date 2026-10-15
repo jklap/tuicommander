@@ -2231,3 +2231,5 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] After Boss restarts the Rust backend, verify a followed task notifies for a distinct comment ID at the latest baseline timestamp, while repeated IDs and edits remain silent. The current live backend does not load this comparator fix through HMR.
 
 - [ ] After a manual Rust rebuild/restart, reload cache-keepalive with a question open, then type a draft near its keepalive deadline. No dialog answer or draft clearing must occur. Guarded input requires the rebuilt backend; Rust does not hot-reload (#1742-13a4).
+
+- [ ] After installing the Tasks provider data update and moving the existing GitHub Work `data/config.json` to `data/work-items.json`, confirm GitHub Work loads and Tasks setup saves/reloads its repository. Repeat setup with Jira and GitLab. Backend code is unchanged; the Rust edit adds a regression test only.

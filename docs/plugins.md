@@ -15,6 +15,9 @@ only the supported object, scalar and scalar-array constraints. Every leaf needs
 Opaque objects, unsupported constraints, missing metadata and secret defaults are
 rejected. A plugin with an existing config file and no schema cannot load or write
 that config. Other plugin data, including statistics, remains separate.
+Tasks setup stores GitHub Work, Jira and GitLab provider account selections in
+`data/work-items.json` through the plugin data API, not the Settings catalogue.
+Configure these providers in Tasks setup; credential accounts stay in Settings > Accounts.
 
 Core supplies typed migrations for build-cleaner, at-capacity-retry,
 cache-keepalive, claude-wakeup and the Telegram notifier example. Registration
