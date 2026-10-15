@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Grant Gemini session attachment trust without a folder prompt or global settings changes. Grant ego PTY attachments read-only access in confined sandbox modes (#1833-aa60).
+
+
 - Refresh expanded file-browser folders after Finder moves, copies, confirmed directory transfers and remote uploads (#1905-c1ed).
 
 - Recognize `💬` answers at the start of Markdown list items in the CLI grid, Answers view and Chat view, without including unmarked sibling items (#1904-9eef).

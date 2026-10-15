@@ -359,6 +359,12 @@ if [ "$name" = gemini ]; then
   [ -z "$TUIC_ATTACHMENTS_DIR" ] || set -- "--include-directories=$TUIC_ATTACHMENTS_DIR" "$@"
   exec "$real" "$@"
 fi
+if [ "$name" = ego ] && [ -n "$TUIC_ATTACHMENTS_DIR" ]; then
+  case $1 in
+    run|resume) first=$1; shift; set -- "$first" "--read-only-dir=$TUIC_ATTACHMENTS_DIR" "$@";;
+    ""|-*) set -- "--read-only-dir=$TUIC_ATTACHMENTS_DIR" "$@";;
+  esac
+fi
 if [ "$name" = claude ]; then
   case $1 in
     ""|-*) ;;
@@ -1180,6 +1186,8 @@ mod tests {
                 .env_remove("TUIC_GROK_SCREEN_FLAG")
                 .env_remove("TUIC_OPENCODE_SCREEN_FLAG")
                 .env_remove("TUIC_AGENT_INSTRUCTIONS_DIR")
+                .env_remove("TUIC_ATTACHMENTS_DIR")
+                .env_remove("GEMINI_CLI_TRUSTED_FOLDERS_PATH")
                 .env_remove("TUIC_AGENT_SHIM_DIR");
             for (key, value) in tuic_env {
                 cmd.env(key, value);
@@ -1339,6 +1347,28 @@ mod tests {
                     .any(|arg| arg == "--add-dir=/tuic/attachments/pty-settings-off"),
                 "disabling marker instructions removed attachment access: {lines:?}"
             );
+        }
+
+        // Catches: typed ego launches lose the independent read-only attachment grant.
+        #[test]
+        fn ego_attachment_grant_survives_disabled_launch_instructions() {
+            for invocation in [
+                "ego --sandbox workspace",
+                "ego run task",
+                "ego resume session",
+            ] {
+                let lines = wrapper_command_lines(
+                    "bash",
+                    &[("TUIC_ATTACHMENTS_DIR", "/tuic/attachments/pty-ego")],
+                    invocation,
+                );
+                assert!(
+                    lines[0]
+                        .split_whitespace()
+                        .any(|arg| arg == "--read-only-dir=/tuic/attachments/pty-ego"),
+                    "{lines:?}"
+                );
+            }
         }
 
         /// Catches: a typed agent launched without the marker flag (fresh or
