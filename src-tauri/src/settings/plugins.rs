@@ -163,13 +163,31 @@ impl PluginSettings {
 
     /// Cutover can route the standard request directly to its registered scoped owner.
     pub async fn execute(&self, request: Request) -> Result<Reply, Failure> {
+        self.execute_as(
+            request,
+            &super::policy::Caller::native(),
+            Arc::new(super::policy::Policy::default()),
+            None,
+        )
+        .await
+    }
+
+    pub async fn execute_as(
+        &self,
+        request: Request,
+        caller: &super::policy::Caller,
+        policy: Arc<super::policy::Policy>,
+        approval: Option<&str>,
+    ) -> Result<Reply, Failure> {
+        caller.check(!matches!(request, Request::Get { .. }))?;
         let id = request
             .store()
             .strip_prefix("plugins.")
             .ok_or_else(|| Error::new("plugins", "not_found"))?;
         let owner = self.owner(id)?;
         Service::new(owner.catalogue.clone(), owner)
-            .execute(request)
+            .with_policy(policy)
+            .execute_as(request, caller, approval)
             .await
     }
 

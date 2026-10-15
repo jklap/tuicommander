@@ -1898,13 +1898,13 @@ export const settingsCatalogue = {
           "type": "string"
         },
         "default": [
-          "config",
+          "settings",
           "debug"
         ]
       },
       "nullable": false,
       "default": [
-        "config",
+        "settings",
         "debug"
       ],
       "availability": {
@@ -9668,6 +9668,11 @@ export const settingsCatalogue = {
       "store": "app",
       "path": "/beta_channel_migrated",
       "reason": "Internal one-time beta update-channel migration marker"
+    },
+    {
+      "store": "app",
+      "path": "/settings_mcp_enabled",
+      "reason": "Host-issued MCP settings access policy; only trusted UI can enable it."
     },
     {
       "store": "agents",

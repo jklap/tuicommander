@@ -1632,3 +1632,7 @@ Hibernation requires an idle agent and a verified resume session in its saved pr
 The normal Rust suspension path persists `reason: "idle_hibernate"` before ending the PTY. Opening the tab, submitting input or sending peer mail uses the shared wake path. Storage or resume-verification failures leave the live session intact.
 
 Tasks notice policy and per-item follow/comment baselines are JSON values in `ui-prefs.json`'s existing `tasks_view_preferences` map. Reserved keys are `tasks:notification-policy` and `tasks:follow:<provider/account/item identity>`. No new configuration file or provider polling is used. Missing policy means disabled. These are host UI preferences, not provider subscriptions.
+
+## MCP settings authority (#1787-4778)
+
+`settings_mcp_enabled` defaults to false, independent of the legacy config tool state. Only trusted Settings UI enables it; it is excluded from the writable settings catalogue. Native tool defaults disable settings and debug. App/owner adapters keep weak host references so the persistent facade cannot retain its AppState after shutdown.

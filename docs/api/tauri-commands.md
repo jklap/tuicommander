@@ -1011,3 +1011,7 @@ See the HTTP reference for action arguments and typed error prefixes.
 ### Guarded automated agent input
 
 `send_agent_input_if_empty { sessionId, text } -> boolean` submits only to a confirmed-idle agent with no awaiting question, tracked draft, or queued command. Checks, split writes, and input bookkeeping share the per-session input transaction with raw UI and HTTP input. HTTP: `POST /sessions/{id}/input-if-empty { text }`.
+
+## Shared settings action (#1787-4778)
+
+`settings_action(request: JSON) -> JSON` uses the same Rust-generated envelope as POST `/settings/action` and MCP settings. Native caller authority is host-issued, never deserialized from the request. Owner transactions remain inventory-gated.

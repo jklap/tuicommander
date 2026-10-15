@@ -2487,6 +2487,7 @@ pub fn run() {
             plugins::uninstall_plugin,
             plugins::register_loaded_plugin,
             plugin_settings::plugin_settings_action,
+            settings::api::settings_action,
             plugins::unregister_loaded_plugin,
             plugins::set_plugin_output_watchers,
             plugin_fs::plugin_read_file,

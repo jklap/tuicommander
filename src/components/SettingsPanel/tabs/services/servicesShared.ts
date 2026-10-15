@@ -41,6 +41,7 @@ export interface AppConfig {
 	mcp_server_enabled: boolean;
 	services: ServicesConfig;
 	disabled_native_tools: string[];
+	settings_mcp_enabled: boolean;
 	collapse_tools: boolean;
 }
 

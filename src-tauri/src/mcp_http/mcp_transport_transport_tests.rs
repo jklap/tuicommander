@@ -5195,3 +5195,92 @@ async fn design_mode_meta_discovery_is_scoped_to_the_armed_session() {
     .await;
     assert_eq!(schema["error"], "Design Mode not armed for this session");
 }
+
+// Catches: generated settings requests cannot reach the published dispatcher.
+#[tokio::test]
+async fn published_request_executes() {
+    let state = test_state();
+    state.config.write().settings_mcp_enabled = true;
+    state.config.write().disabled_native_tools.clear();
+    let reply = handle_mcp_tool_call(
+        &state,
+        "127.0.0.1:12345".parse().unwrap(),
+        "settings",
+        &serde_json::json!({"action":"describe","limit":1}),
+        None,
+    )
+    .await;
+    assert!(reply["fields"].is_array(), "{reply}");
+}
+
+// Catches: the collapsed call_tool path bypasses disabled settings access.
+#[tokio::test]
+async fn disabled_meta_call_denied() {
+    let state = test_state();
+    state.config.write().disabled_native_tools = vec!["settings".into()];
+    let reply = handle_mcp_tool_call(
+        &state,
+        "127.0.0.1:12345".parse().unwrap(),
+        "call_tool",
+        &serde_json::json!({"tool_name":"settings","arguments":{"action":"describe"}}),
+        None,
+    )
+    .await;
+    assert!(reply.to_string().contains("disabled"), "{reply}");
+}
+
+// Catches: the removed config action survives as a compatibility path.
+#[tokio::test]
+async fn old_config_unknown() {
+    let state = test_state();
+    state.config.write().disabled_native_tools.clear();
+    let reply = handle_mcp_tool_call(
+        &state,
+        "127.0.0.1:12345".parse().unwrap(),
+        "config",
+        &serde_json::json!({"action":"get"}),
+        None,
+    )
+    .await;
+    assert!(
+        reply["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("Unknown tool")),
+        "{reply}"
+    );
+}
+
+// Catches: authenticated HTTP and IPC describe using different request wrappers or catalogues.
+#[tokio::test]
+async fn settings_http_and_native_describe_agree() {
+    use axum::{body::Body, http::Request};
+    use tower::ServiceExt;
+    let state = test_state();
+    let request = serde_json::json!({"action":"describe","store":"prompts","limit":1});
+    let expected = crate::settings::api::execute(
+        &state,
+        request.clone(),
+        crate::settings::policy::Caller::native(),
+    )
+    .await;
+    let app = crate::mcp_http::build_router(state, false, true);
+    let response = app
+        .oneshot(
+            Request::post("/settings/action")
+                .header("content-type", "application/json")
+                .extension(axum::extract::ConnectInfo(
+                    "127.0.0.1:12345".parse::<std::net::SocketAddr>().unwrap(),
+                ))
+                .body(Body::from(request.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), 1_000_000)
+        .await
+        .unwrap();
+    let actual: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(actual, expected);
+    assert!(actual["fields"].is_array());
+}

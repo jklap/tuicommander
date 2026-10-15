@@ -1103,3 +1103,7 @@ Hibernation requires an idle agent and a verified resume session in its saved pr
 The normal Rust suspension path persists `reason: "idle_hibernate"` before ending the PTY. Opening the tab, submitting input or sending peer mail uses the shared wake path. Storage or resume-verification failures leave the live session intact.
 
 GitHub Work B8: registered accounts bind core B6 review threads and B7 actions through account-scoped PluginHost methods. The Rust adapter enforces net:http, on-disk GitHub provider consent and matching account/PR identity, then uses existing core policy. Projects move/clear coverage uses recorded public reads and documented mutation contracts; live writes and desktop verification remain pending.
+
+## Settings cutover preparation (#1787-4778)
+
+MCP settings, POST /settings/action and IPC settings_action share generated Rust requests and owner dispatch. Config has no MCP compatibility alias. Transactions remain blocked by incomplete owner inventory. Live refresh and complete dynamic choice integration remain separate dependent work.

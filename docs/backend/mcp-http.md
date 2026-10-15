@@ -333,12 +333,12 @@ is a count (at most 32 distinct names per subagent, the rest counted as
 | `PUT` | `/config` | Save app config |
 | `POST` | `/auth/hash-password` | Hash password for remote access |
 
-`GET /config` and MCP `config action=get` redact remote-access secrets:
+`GET /config` redact remote-access secrets:
 `services.auth.password_hash`, `services.auth.session_token`,
 `services.relay.token`, and `services.push.vapid_private_key`. The config shape
 exposes only the corresponding `*_exists` booleans for secret presence.
 
-`PUT /config` and MCP `config action=save` require `{ base, config }`, where
+`PUT /config` require `{ base, config }`, where
 `base` is the caller's loaded snapshot and `config` is its edited document.
 The backend applies only the base-to-config changes to the latest locked file;
 unchanged fields keep concurrent edits. Both also share `server_settings_changed` with
@@ -866,10 +866,10 @@ say what was measured, not what the list costs today.
 | `ui` | tab, toast, confirm, screenshot | Enabled |
 | `plugin_dev_guide` | *(no actions — returns guide text)* | Enabled |
 | `voice` | speak, stop, status | Enabled |
-| `config` | get, save, list_ai_prompts, load_ai_prompt, save_ai_prompt, list_prompts, load_prompt, save_prompt | Disabled |
+| `settings` | describe, get, set, reset, patch, perform, refresh | Disabled; trusted UI opt-in required |
 | `debug` | agent_detection, logs, sessions, invoke_js, help | Disabled |
 
-The `disabled_native_tools` config key accepts an array of tool names to hide from `tools/list`. Default: `["config", "debug"]`.
+The `disabled_native_tools` config key accepts an array of tool names to hide from `tools/list`. Default: `["settings", "debug"]`.
 
 Settings reads `native_tools` from `get_mcp_status` / `GET /mcp/status`. Both transports use `native_tool_catalog`, projected from the same unfiltered definitions used by MCP. Entries contain `name`, a dedicated user-facing English `summary` (at most 70 characters) declared alongside the registry, and the complete `description`. The `workflow_run` entry summarizes graph starts and execution history. Summaries are app metadata only and are not added to MCP `tools/list`; full MCP descriptions stay unchanged. Disabled tools remain in this app inventory so users can re-enable them. No native tool is always on: even `progress` can be disabled and is also gated by global `progress_tracking`. Upstream tools and meta-tools do not belong to this inventory.
 
@@ -2329,3 +2329,9 @@ merge queue policy and shared request budgets apply unchanged. The desktop comma
 `{account, reference, request}` payloads (IPC also supplies `pluginId`).
 The GitHub Work runtime binds both ports when it registers each configured account.
 No live write or desktop-load verification is implied by recorded-fixture tests.
+
+### Settings cutover (#1787-4778)
+
+`settings` replaces the removed MCP `config` tool without an alias. Its schema is generated from Rust action DTOs. `settings_action(request)` and `POST /settings/action` use the same envelope and owner services. Describe has optional area/store/id filters and cursor pagination (1–128 fields). Reads and edits use an explicit target; edits require expectedRevision. Prompts remain available through the stable-ID `prompts` store. GitHub typed workflows use perform with store github_accounts. Explicit refresh for ego refreshes the configured owner's provider catalogue; describe never performs a network refresh.
+
+MCP access requires settings_mcp_enabled, enabled only by trusted UI; legacy config enablement grants no settings authority. MCP mutations remain loopback-only. HTTP retains local-or-authenticated access and IPC retains native host trust. Exposure proposals use ui confirm proposalId and an exact replay with approval. Secrets remain write-only. Owner transactions and perform remain unavailable while the native inventory gap ledger is nonempty; describe reports inventoryComplete.

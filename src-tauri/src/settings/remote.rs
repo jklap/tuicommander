@@ -18,7 +18,6 @@ use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 const CONNECTIONS_ID: &str = "connections";
 const TUNNELS_ID: &str = "tunnels";
-#[cfg(test)]
 const CONNECTIONS_FILE: &str = "connections.json";
 
 /// Schema of the `connections` store: the records of `connections.json`.
@@ -103,13 +102,10 @@ pub struct ConnectionsSettingsStore {
 }
 
 impl ConnectionsSettingsStore {
-    // DEFERRED (2026-10-14) — production construction awaits the inventory-gated Step 7 cutover.
-    #[cfg(test)]
     pub(crate) fn new(data_dir: PathBuf, on_removed: OnConnectionRemoved) -> Self {
         Self::at_path(data_dir.join(CONNECTIONS_FILE), on_removed)
     }
 
-    #[cfg(test)]
     fn at_path(path: PathBuf, on_removed: OnConnectionRemoved) -> Self {
         Self {
             path,

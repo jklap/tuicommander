@@ -1789,6 +1789,8 @@ pub(crate) const MONITORING_GIT_CONCURRENCY: usize = 8;
 /// Every field is constructible without arguments, so the group carries its own
 /// `Default` and `AppState::new` names it once instead of seven times.
 pub(crate) struct GitHubState {
+    pub(crate) login_epoch: std::sync::atomic::AtomicU64,
+    pub(crate) login_commit: tokio::sync::Mutex<()>,
     /// GitHub API token — updated on fallback when a 401 triggers candidate rotation
     pub(crate) token: parking_lot::RwLock<Option<String>>,
     /// Where the current GitHub token came from (env, OAuth keyring, gh CLI)
@@ -1815,6 +1817,8 @@ pub(crate) struct GitHubState {
 impl Default for GitHubState {
     fn default() -> Self {
         Self {
+            login_epoch: std::sync::atomic::AtomicU64::new(0),
+            login_commit: tokio::sync::Mutex::new(()),
             token: parking_lot::RwLock::new(None),
             token_source: parking_lot::RwLock::new(Default::default()),
             disconnected: std::sync::atomic::AtomicBool::new(false),
@@ -2348,6 +2352,7 @@ pub struct AppState {
     /// able to unblock an agent that a native desktop dialog would have pinned to
     /// whoever is sitting at the machine.
     pub(crate) settings_policy: Arc<crate::settings::policy::Policy>,
+    pub(crate) settings_api: tokio::sync::OnceCell<crate::settings::api::Settings>,
     pub(crate) confirm_responses: DashMap<String, tokio::sync::oneshot::Sender<bool>>,
     /// App-wide process-tree snapshot shared by agent lifecycle polling.
     pub(crate) process_snapshot_cache: crate::pty::ProcessSnapshotCache,
@@ -3524,7 +3529,7 @@ impl AppState {
             .expect("monitoring_git_sem is never closed")
     }
 
-    pub fn new(
+    pub(crate) fn new(
         data_dir: PathBuf,
         worktrees_dir: PathBuf,
         config: crate::config::AppConfig,
@@ -3635,6 +3640,7 @@ impl AppState {
             suspend_lock: Mutex::new(()),
             hibernated_peers: dashmap::DashSet::new(),
             settings_policy: Arc::new(crate::settings::policy::Policy::default()),
+            settings_api: tokio::sync::OnceCell::new(),
             confirm_responses: DashMap::new(),
             process_snapshot_cache: crate::pty::ProcessSnapshotCache::default(),
             hot_repo_paths: parking_lot::RwLock::new(std::collections::HashSet::new()),

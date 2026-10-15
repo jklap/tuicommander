@@ -66,21 +66,14 @@ pub enum GithubAction {
 }
 
 pub struct GithubSettings {
-    state: Arc<AppState>,
+    state: std::sync::Weak<AppState>,
     login: login::Logins,
 }
 
 impl GithubSettings {
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "constructed by the settings transport wiring step"
-        )
-    )]
     pub(crate) fn new(state: Arc<AppState>) -> Self {
         Self {
-            state,
+            state: Arc::downgrade(&state),
             login: login::Logins::default(),
         }
     }
@@ -93,7 +86,10 @@ impl GithubSettings {
     /// No network refresh and no ambient token resolution: show the runtime owner's provenance.
     pub async fn read(&self) -> Result<Value, Failure> {
         let accounts = crate::accounts::execute(
-            &self.state,
+            &self
+                .state
+                .upgrade()
+                .ok_or_else(|| Error::new(ID, "unavailable"))?,
             AccountAction::List {
                 provider: Some("github".into()),
             },
@@ -108,8 +104,8 @@ impl GithubSettings {
             "bindings": bindings.0,
             "bindingsRevision": bindings.1,
             "auth": {
-                "source": *self.state.github.token_source.read(),
-                "secret": {"status": if self.state.github.token.read().is_some() { "set" } else { "unset" }},
+                "source": *self.state.upgrade().ok_or_else(|| Error::new(ID, "unavailable"))?.github.token_source.read(),
+                "secret": {"status": if self.state.upgrade().ok_or_else(|| Error::new(ID, "unavailable"))?.github.token.read().is_some() { "set" } else { "unset" }},
             },
         });
         let revision = super::transaction::revision(&snapshot)?;
@@ -119,7 +115,10 @@ impl GithubSettings {
 
     async fn require_github(&self, id: &str) -> Result<(), Failure> {
         let rows = crate::accounts::execute(
-            &self.state,
+            &self
+                .state
+                .upgrade()
+                .ok_or_else(|| Error::new(ID, "unavailable"))?,
             AccountAction::List {
                 provider: Some("github".into()),
             },
@@ -139,11 +138,29 @@ impl GithubSettings {
     pub async fn perform(&self, action: GithubAction) -> Result<Value, Failure> {
         let owner_action = match action {
             GithubAction::BeginCloudLogin { additional } => {
-                return self.login.begin(&self.state, additional).await;
+                return self
+                    .login
+                    .begin(
+                        &self
+                            .state
+                            .upgrade()
+                            .ok_or_else(|| Error::new(ID, "unavailable"))?,
+                        additional,
+                    )
+                    .await;
             }
             GithubAction::CloudLoginStatus { flow_id } => return self.login.status(&flow_id),
             GithubAction::CompleteCloudLogin { flow_id } => {
-                let status = self.login.complete(&self.state, &flow_id).await?;
+                let status = self
+                    .login
+                    .complete(
+                        &self
+                            .state
+                            .upgrade()
+                            .ok_or_else(|| Error::new(ID, "unavailable"))?,
+                        &flow_id,
+                    )
+                    .await?;
                 return if status["status"] == "success" && status["persisted"] == true {
                     self.committed(status, true).await
                 } else {
@@ -226,9 +243,15 @@ impl GithubSettings {
             owner_action,
             AccountAction::SetSecret { .. } | AccountAction::ClearSecret { .. }
         );
-        let result = crate::accounts::execute(&self.state, owner_action)
-            .await
-            .map_err(|message| Error::new(ID, owner_code(&message)));
+        let result = crate::accounts::execute(
+            &self
+                .state
+                .upgrade()
+                .ok_or_else(|| Error::new(ID, "unavailable"))?,
+            owner_action,
+        )
+        .await
+        .map_err(|message| Error::new(ID, owner_code(&message)));
         let snapshot = self.read().await.map_err(|mut error| {
             // An owner action may already have committed a file/vault phase.
             error.persisted = true;

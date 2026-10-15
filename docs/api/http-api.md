@@ -3207,3 +3207,7 @@ No live write or desktop-load verification is implied by recorded-fixture tests.
 ### Guarded automated agent input
 
 `POST /sessions/{id}/input-if-empty` accepts `{ "text": "[noop]" }` and returns a boolean. `false` means no input was sent because the agent is not ready, awaits input, has a tracked draft, or has queued commands. The backend serializes checks, split writes, and bookkeeping against raw user input. IPC equivalent: `send_agent_input_if_empty`.
+
+## Shared settings action (#1787-4778)
+
+POST `/settings/action` accepts the Rust-generated settings envelope directly, identical to IPC `settings_action` request and MCP settings arguments. It requires local or authenticated access. Describe is bounded to 128 fields per page. Owner edits require explicit target and expectedRevision; structured errors contain no input values. The owner inventory must be complete before transactions or perform are enabled.
