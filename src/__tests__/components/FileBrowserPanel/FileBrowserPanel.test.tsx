@@ -155,6 +155,73 @@ const clickRow = (container: HTMLElement, name: string) => {
 	fireEvent.click(label.parentElement as HTMLElement);
 };
 
+describe("FileBrowserPanel external transfer refresh", () => {
+	it.each([
+		{ name: "external folder drop into an expanded tree folder", confirm: false, copy: false, remote: false },
+		{ name: "confirmed recursive drop", confirm: true, copy: false, remote: false },
+		{ name: "move source in another expanded folder of the same tree", confirm: false, copy: false, remote: false },
+		{ name: "copy leaves the source visible and reloads the destination", confirm: false, copy: true, remote: false },
+		{ name: "remote copy reloads the owning destination", confirm: true, copy: true, remote: true },
+	])("$name — catches stale transfer children", async ({ name, confirm, copy, remote }) => {
+		const { dispatchTauriDrop, confirmFolderDrop, setFolderDropConfirmHandler } = await import(
+			"../../../hooks/useFileDrop"
+		);
+		const { dragDropStore } = await import("../../../stores/dragDrop");
+		const owner = vi.spyOn(repositoriesStore, "getConnectionId").mockReturnValue(remote ? "mint" : undefined);
+		const { toastsStore } = await import("../../../stores/toasts");
+		const toast = vi.spyOn(toastsStore, "add").mockReturnValue(0);
+		const modifier = vi.spyOn(dragDropStore, "copyModifierHeld").mockReturnValue(copy);
+		listings.set("/repo|.", [dir("dest"), dir("source")]);
+		listings.set("/repo|dest", [file("existing.txt", "dest/existing.txt")]);
+		listings.set("/repo|source", [dir("incoming", "source/incoming")]);
+		const originalHitTest = Object.getOwnPropertyDescriptor(document, "elementFromPoint");
+		const pending = vi.fn();
+		setFolderDropConfirmHandler(pending);
+		mockInvoke.mockImplementation((cmd, args) => {
+			if (cmd === "fs_transfer_paths" || cmd === "fs_transfer_remote_paths") {
+				if (confirm && !args?.allowRecursive) {
+					return Promise.resolve({ moved: 0, skipped: 0, errors: [], needs_confirm: true });
+				}
+				listings.set("/repo|dest", [file("existing.txt", "dest/existing.txt"), dir("incoming", "dest/incoming")]);
+				if (!copy) listings.set("/repo|source", []);
+				return Promise.resolve({ moved: 1, skipped: 0, errors: [], needs_confirm: false });
+			}
+			return defaultInvoke(cmd, args);
+		});
+		try {
+			const { container } = render(() => (
+				<FileBrowserPanel visible={true} repoPath="/repo" onClose={() => {}} onFileOpen={() => {}} />
+			));
+			clickTreeViewButton(container);
+			await waitFor(() => expect(container.textContent).toContain("dest"));
+			clickRow(container, "dest");
+			clickRow(container, "source");
+			await waitFor(() => expect(container.querySelector('[data-abs-path="/repo/source/incoming"]')).not.toBeNull());
+			await waitFor(() => expect(container.textContent).toContain("existing.txt"));
+			const dest = container.querySelector('[data-abs-path="/repo/dest"]');
+			Object.defineProperty(document, "elementFromPoint", { configurable: true, writable: true, value: () => dest });
+			await dispatchTauriDrop(["/repo/source/incoming"], 10, 10);
+			if (confirm) {
+				expect(pending).toHaveBeenCalledOnce();
+				expect(countListCalls("/repo", "dest")).toBe(1);
+				await confirmFolderDrop(pending.mock.calls[0][0]);
+			}
+			if (name.startsWith("move source")) {
+				await waitFor(() => expect(container.querySelector('[data-abs-path="/repo/source/incoming"]')).toBeNull());
+			}
+			await waitFor(() => expect(container.querySelector('[data-abs-path="/repo/dest/incoming"]')).not.toBeNull());
+			expect(container.querySelector('[data-abs-path="/repo/source/incoming"]') !== null).toBe(copy);
+		} finally {
+			if (originalHitTest) Object.defineProperty(document, "elementFromPoint", originalHitTest);
+			else Reflect.deleteProperty(document, "elementFromPoint");
+			toast.mockRestore();
+			owner.mockRestore();
+			modifier.mockRestore();
+			setFolderDropConfirmHandler(null);
+		}
+	});
+});
+
 describe("FileBrowserPanel tree cache", () => {
 	// Catches: remote folder descendants losing the panel's actual repository owner.
 	it("exposes the repository connection on the native file-drop surface", () => {

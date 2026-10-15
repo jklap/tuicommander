@@ -495,6 +495,7 @@ Replaced by the Git Panel's Changes tab (section 3.8). `Cmd+Shift+D` now opens t
 - Context menu (right-click): Copy (`Cmd+C`), Cut (`Cmd+X`), Paste (`Cmd+V`), Rename, Delete, Add to .gitignore
 - Keyboard shortcuts work when panel is focused (copy/cut/paste)
 - Sort dropdown: Name (alphabetical, directories first) or Date (newest first, directories first)
+- **Drop refresh**: successful local moves, copies and remote uploads refresh expanded destination and source folders, including transfers that require confirmation.
 - **View modes**: tree view (default) and flat list — toggle via toolbar buttons. Tree view shows a collapsible hierarchy with lazy-loaded subdirectories on expand. Switching to tree resets to repo root. Search always uses flat results
 - Click file to open in code editor tab
 

@@ -123,16 +123,22 @@ async fn live_open_prompt_has_an_eligible_finding() {
     let _config = crate::config::set_config_dir_override(scratch.path().join("config"));
     let state = crate::state::tests_support::make_test_app_state();
     *state.github.token.write() = Some(token);
-    let path = scratch.path().join("vscode");
+    let owner = std::env::var("TUIC_LIVE_REVIEW_OWNER").unwrap_or_else(|_| "microsoft".into());
+    let repo = std::env::var("TUIC_LIVE_REVIEW_REPO").unwrap_or_else(|_| "vscode".into());
+    let remote = format!("https://github.com/{owner}/{repo}.git");
+    let numbers = match std::env::var("TUIC_LIVE_REVIEW_PR") {
+        Ok(number) => vec![
+            number
+                .parse::<i64>()
+                .expect("TUIC_LIVE_REVIEW_PR must be an integer"),
+        ],
+        Err(_) => vec![341585, 341455],
+    };
+    let path = scratch.path().join("repository");
     std::fs::create_dir_all(&path).unwrap();
     for args in [
         vec!["init", "--quiet"],
-        vec![
-            "remote",
-            "add",
-            "origin",
-            "https://github.com/microsoft/vscode.git",
-        ],
+        vec!["remote", "add", "origin", remote.as_str()],
     ] {
         let output = std::process::Command::new("git")
             .current_dir(&path)
@@ -144,7 +150,7 @@ async fn live_open_prompt_has_an_eligible_finding() {
     }
     let mut evidence = Vec::new();
     let mut eligible = false;
-    for number in [341585, 341455] {
+    for number in numbers {
         let page = get_pr_line_threads_impl(path.to_str().unwrap(), number, None, &state)
             .await
             .expect("read-only live review threads request failed");
@@ -161,11 +167,9 @@ async fn live_open_prompt_has_an_eligible_finding() {
             .iter()
             .any(|thread| thread["isResolved"] == false && thread["isOutdated"] == false)
             && !prompt.contains("(no open review threads)");
-        evidence.push(
-            json!({"repository":"https://github.com/microsoft/vscode.git",
+        evidence.push(json!({"repository":remote,
             "pr":number,"headSha":page.head_sha,"page":page,"openThreadsPrompt":prompt,
-            "eligible":eligible}),
-        );
+            "eligible":eligible}));
         std::fs::write(
             std::env::var("TUIC_LIVE_REVIEW_EVIDENCE").unwrap(),
             serde_json::to_vec_pretty(&evidence).unwrap(),
@@ -175,8 +179,5 @@ async fn live_open_prompt_has_an_eligible_finding() {
             break;
         }
     }
-    assert!(
-        eligible,
-        "both authorized public PR candidates have drifted"
-    );
+    assert!(eligible, "all authorized public PR candidates have drifted");
 }

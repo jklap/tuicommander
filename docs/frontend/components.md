@@ -815,3 +815,5 @@ Tasks small-list mode (#1851-7ade): when the provider reports at most 1,000 matc
 GitHub Tasks boards (#1846-55d7): the optional provider `listBoards(signal)` port discovers the current user Projects v2 when Board opens. The existing picker selects a project; paging preserves project identities. Missing `read:project` stays visible instead of claiming there are no boards. Providers without discovery retain their configured boards. Discovery does not persist selections or write to GitHub.
 
 TasksDetail provides Follow task / Unfollow task in its toolbar. Settings → Notifications has a Tasks section with an independent default-off OS notice preference.
+
+FileBrowserPanel subscribes to successful folder-drop completion and routes it through its existing mutation refresh. The subscription is scoped to the filesystem root and owning connection, and is removed when the panel unmounts.
