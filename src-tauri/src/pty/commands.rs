@@ -1227,3 +1227,18 @@ pub(crate) async fn set_session_visible(
     crate::background_mode::hidden::set_visible(&state, &session_id, visible, true);
     Ok(())
 }
+
+/// Guarded automated input: serialize readiness and draft checks with all raw input.
+#[tauri::command]
+pub(crate) async fn send_agent_input_if_empty(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    text: String,
+) -> Result<bool, String> {
+    let state = Arc::clone(&state);
+    tauri::async_runtime::spawn_blocking(move || {
+        send_agent_input_if_empty_blocking(&state, &session_id, &text)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}

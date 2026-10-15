@@ -3203,3 +3203,7 @@ merge queue policy and shared request budgets apply unchanged. The desktop comma
 `{account, reference, request}` payloads (IPC also supplies `pluginId`).
 The GitHub Work runtime binds both ports when it registers each configured account.
 No live write or desktop-load verification is implied by recorded-fixture tests.
+
+### Guarded automated agent input
+
+`POST /sessions/{id}/input-if-empty` accepts `{ "text": "[noop]" }` and returns a boolean. `false` means no input was sent because the agent is not ready, awaits input, has a tracked draft, or has queued commands. The backend serializes checks, split writes, and bookkeeping against raw user input. IPC equivalent: `send_agent_input_if_empty`.

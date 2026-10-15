@@ -1007,3 +1007,7 @@ See the HTTP reference for action arguments and typed error prefixes.
 
 
 `resume_session(tuic_session)` returns `{ok:true,session_id}` through the shared Rust wake path. HTTP parity: `POST /sessions/wake` with `{tuicSession}`. Live targets are idempotent; failed resume retains the suspended record.
+
+### Guarded automated agent input
+
+`send_agent_input_if_empty { sessionId, text } -> boolean` submits only to a confirmed-idle agent with no awaiting question, tracked draft, or queued command. Checks, split writes, and input bookkeeping share the per-session input transaction with raw UI and HTTP input. HTTP: `POST /sessions/{id}/input-if-empty { text }`.

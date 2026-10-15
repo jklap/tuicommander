@@ -3862,3 +3862,87 @@ fn recorded_claude_turn_publishes_retained_choices_once() {
         "recorded Claude choices must publish once after settlement"
     );
 }
+
+/// Catches: a draft typed after the plugin's empty read gets cleared by Ctrl-U.
+#[cfg(unix)]
+#[test]
+fn guarded_keepalive_preserves_a_draft_that_arrives_before_submission() {
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    let sid = "guarded-draft";
+    let written = insert_recording_session(&state, sid);
+    agent_session(&state, sid, SHELL_IDLE);
+    assert!(!has_partial_user_input(&state, sid));
+    crate::mcp_http::session::write_pty_input(&state, sid, "  unsent draft  ").unwrap();
+    assert!(!send_agent_input_if_empty_blocking(&state, sid, "[noop]").unwrap());
+    assert_eq!(*written.lock().unwrap(), b"  unsent draft  ");
+    assert_eq!(
+        state
+            .session_maps
+            .input_buffers
+            .get(sid)
+            .unwrap()
+            .lock()
+            .content(),
+        "  unsent draft  "
+    );
+}
+
+/// Catches: a non-confident awaiting question bypasses the automated submission gate.
+#[cfg(unix)]
+#[test]
+fn guarded_keepalive_refuses_awaiting_and_busy_sessions() {
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    let sid = "guarded-awaiting";
+    let written = insert_recording_session(&state, sid);
+    agent_session(&state, sid, SHELL_IDLE);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .awaiting_input = true;
+    assert!(!send_agent_input_if_empty_blocking(&state, sid, "[noop]").unwrap());
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .awaiting_input = false;
+    state
+        .session_maps
+        .shell_states
+        .get(sid)
+        .unwrap()
+        .store(SHELL_BUSY, Ordering::Relaxed);
+    assert!(!send_agent_input_if_empty_blocking(&state, sid, "[noop]").unwrap());
+    assert!(written.lock().unwrap().is_empty());
+}
+
+/// Catches: raw user input splices into either scheduling gap and gets submitted as keepalive.
+#[cfg(unix)]
+#[test]
+fn guarded_keepalive_serializes_user_input_through_bookkeeping() {
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    let sid = "guarded-interleave";
+    let written = insert_recording_session(&state, sid);
+    agent_session(&state, sid, SHELL_IDLE);
+    let transaction = state.input_transaction(sid);
+    let guard = transaction.lock();
+    let other = Arc::clone(&state);
+    let worker =
+        std::thread::spawn(move || crate::mcp_http::session::write_pty_input(&other, sid, "draft"));
+    assert!(send_agent_input_if_empty_blocking(&state, sid, "[noop]").unwrap());
+    drop(guard);
+    worker.join().unwrap().unwrap();
+    assert_eq!(*written.lock().unwrap(), b"\x15[noop]\rdraft");
+    assert_eq!(
+        state
+            .session_maps
+            .input_buffers
+            .get(sid)
+            .unwrap()
+            .lock()
+            .content(),
+        "draft"
+    );
+}

@@ -3291,6 +3291,7 @@ fn remove_live_session_state(session_id: &str, state: &AppState) {
     state.grid.pending_scroll.remove(session_id);
     state.session_maps.kitty_states.remove(session_id);
     state.session_maps.input_buffers.remove(session_id);
+    state.session_maps.input_transactions.remove(session_id);
     state.session_maps.silence_states.remove(session_id);
     state.session_maps.shell_states.remove(session_id);
     state.session_maps.last_prompts.remove(session_id);

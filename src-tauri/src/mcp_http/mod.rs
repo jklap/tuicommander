@@ -1074,6 +1074,10 @@ fn shared_routes() -> Router<Arc<AppState>> {
         )
         .route("/sessions/{id}/shell-state", get(session::get_shell_state))
         .route(
+            "/sessions/{id}/input-if-empty",
+            post(session::send_agent_input_if_empty),
+        )
+        .route(
             "/sessions/{id}/shell-family",
             get(session::get_session_shell_family),
         )

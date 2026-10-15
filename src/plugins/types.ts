@@ -677,6 +677,9 @@ export interface PluginHost {
 	 */
 	sendAgentInput(sessionId: string, text: string): Promise<void>;
 
+	/** Atomically submit only to an idle agent without an awaiting question or tracked draft. */
+	sendAgentInputIfEmpty(sessionId: string, text: string): Promise<boolean>;
+
 	/**
 	 * Read the VT100-decoded contents of a PTY session: the last N scrollback
 	 * lines concatenated with the current visible screen rows, joined by

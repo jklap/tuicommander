@@ -565,6 +565,12 @@ function createPluginRegistry() {
 				await invoke("write_pty", { sessionId, data });
 			},
 
+			async sendAgentInputIfEmpty(sessionId: string, text: string): Promise<boolean> {
+				if (isPluginPaused(pluginId)) return false;
+				requireCapability(pluginId, capabilities, "pty:write");
+				return invoke<boolean>("send_agent_input_if_empty", { sessionId, text });
+			},
+
 			async sendAgentInput(sessionId: string, text: string): Promise<void> {
 				if (isPluginPaused(pluginId)) return;
 				requireCapability(pluginId, capabilities, "pty:write");

@@ -196,7 +196,7 @@ These inventories are checked against the capability validator, the host object 
 `credentials:read`, `exec:cli`, `fs:delete`, `fs:list`, `fs:read`, `fs:rename`, `fs:scan`, `fs:watch`, `fs:write`, `git:read`, `invoke:list_markdown_files`, `invoke:read_file`, `net:http`, `pty:read`, `pty:write`, `ui:context-menu`, `ui:file-icons`, `ui:file-preview`, `ui:markdown`, `ui:panel`, `ui:sidebar`, `ui:sound`, `ui:ticker`.
 
 ### Host method inventory
-`addItem`, `clearTicker`, `deleteBuildArtifact`, `execCli`, `getActiveRepo`, `getActiveRepoPath`, `getActiveTerminalSessionId`, `getClaudeProjectDir`, `getGitBranches`, `getGitDiff`, `getPrNotifications`, `getRecentCommits`, `getRemotes`, `getRepoPathForSession`, `getRepos`, `getSessionCwd`, `getSettings`, `getTerminalState`, `githubPrAction`, `githubReviewThreads`, `httpFetch`, `invoke`, `linkItem`, `listDirectory`, `log`, `onStateChange`, `openEditorTab`, `openMarkdownFile`, `openMarkdownFileBackground`, `openMarkdownPanel`, `openPanel`, `playNotificationSound`, `readCredential`, `readFile`, `readFileBase64`, `readFileTail`, `readFiles`, `readSessionOutput`, `registerCommand`, `registerContextMenuAction`, `registerDashboard`, `registerFileIconProvider`, `registerFilePreview`, `registerMarkdownProvider`, `registerOutputWatcher`, `registerSection`, `registerSidebarPanel`, `registerStructuredEventHandler`, `registerTerminalAction`, `registerUrlResolver`, `registerWorkItemProvider`, `removeItem`, `renamePath`, `scanBuildArtifacts`, `sendAgentInput`, `setTicker`, `settings`, `startWork`, `trimBuildArtifact`, `unlinkItem`, `updateItem`, `watchPath`, `writeFile`, `writeFileBase64`, `writePty`.
+`addItem`, `clearTicker`, `deleteBuildArtifact`, `execCli`, `getActiveRepo`, `getActiveRepoPath`, `getActiveTerminalSessionId`, `getClaudeProjectDir`, `getGitBranches`, `getGitDiff`, `getPrNotifications`, `getRecentCommits`, `getRemotes`, `getRepoPathForSession`, `getRepos`, `getSessionCwd`, `getSettings`, `getTerminalState`, `githubPrAction`, `githubReviewThreads`, `httpFetch`, `invoke`, `linkItem`, `listDirectory`, `log`, `onStateChange`, `openEditorTab`, `openMarkdownFile`, `openMarkdownFileBackground`, `openMarkdownPanel`, `openPanel`, `playNotificationSound`, `readCredential`, `readFile`, `readFileBase64`, `readFileTail`, `readFiles`, `readSessionOutput`, `registerCommand`, `registerContextMenuAction`, `registerDashboard`, `registerFileIconProvider`, `registerFilePreview`, `registerMarkdownProvider`, `registerOutputWatcher`, `registerSection`, `registerSidebarPanel`, `registerStructuredEventHandler`, `registerTerminalAction`, `registerUrlResolver`, `registerWorkItemProvider`, `removeItem`, `renamePath`, `scanBuildArtifacts`, `sendAgentInput`, `sendAgentInputIfEmpty`, `setTicker`, `settings`, `startWork`, `trimBuildArtifact`, `unlinkItem`, `updateItem`, `watchPath`, `writeFile`, `writeFileBase64`, `writePty`.
 
 ### Base CSS class inventory
 `badge`, `badge-accent`, `badge-error`, `badge-muted`, `badge-p1`, `badge-p2`, `badge-p3`, `badge-success`, `badge-warning`, `btn`, `btn-danger`, `btn-primary`, `card`, `critical`, `danger`, `dash-header`, `dash-meter`, `dash-meter-fill`, `dash-section`, `dash-section-hint`, `dash-section-title`, `dash-stat`, `dash-stat-grid`, `dash-stat-label`, `dash-stat-sub`, `dash-stat-value`, `dash-subtitle`, `dash-title`, `dashboard`, `empty-state`, `error`, `filter-bar`, `hint`, `num`, `ok`, `primary`, `show`, `success`, `toast`, `warn`.
@@ -287,6 +287,7 @@ host.getRemotes(repoPath)               // [{ name, url }] — every remote; cre
 |--------|------------|
 | `await host.writePty(sessionId: string, data: string): Promise<void>` | `pty:write` |
 | `await host.sendAgentInput(sessionId: string, text: string): Promise<void>` | `pty:write` |
+| `await host.sendAgentInputIfEmpty(sessionId: string, text: string): Promise<boolean>` | `pty:write` |
 | `await host.readSessionOutput(sessionId: string, maxLines?: number): Promise<string>` | `pty:read` |
 | `host.openMarkdownPanel(title: string, contentUri: string): void` | `ui:markdown` |
 | `host.openMarkdownFile(absolutePath: string): void` | `ui:markdown` |
@@ -414,6 +415,9 @@ Only binaries listed in `manifest.json` `binaries` array are allowed. Working di
 const raw = await host.execCli("mdkb", ["--format", "json", "status"], repoPath);
 const status = JSON.parse(raw);
 ```
+
+`sendAgentInputIfEmpty` uses a backend transaction: current idle, awaiting, and tracked draft checks plus split writes are serialized with raw input and bookkeeping. It returns false without writing when blocked, true after submission; it never answers dialogs or drains queued commands. Do not authorize a send with a separate composer read. Load/reload replay includes awaiting and shell-state agent_type.
+
 
 ### Tier 4: Tauri Invoke (whitelisted only)
 

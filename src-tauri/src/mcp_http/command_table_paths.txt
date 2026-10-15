@@ -317,6 +317,7 @@
 /sessions/x/foreground
 /sessions/x/has-foreground
 /sessions/x/input-buffer
+/sessions/x/input-if-empty
 /sessions/x/kitty-flags
 /sessions/x/last-prompt
 /sessions/x/leaf-pid
