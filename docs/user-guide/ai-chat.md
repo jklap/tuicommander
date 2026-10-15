@@ -1,6 +1,6 @@
 # AI Chat
 
-Use **Conversations** beside the conversation picker to delete saved conversations. Each row has a trash button. Confirm the conversation name before deletion; this permanently removes its history and closes its open tab. If ego refuses deletion (for example, while the conversation is running), the conversation stays and the error is shown. The list offers deletion only when ego advertises the ACP delete capability.
+Use **Conversations** beside the conversation picker to delete saved conversations. Each row has a trash button. Confirm the conversation name before deletion; this permanently removes its history and closes its open tab. If ego refuses deletion (for example, while the conversation is running), the conversation stays and the error is shown. The list offers deletion only when ego advertises the ACP delete capability. If you select another conversation while deletion cleanup is pending, that selection stays active.
 
 AI Chat is a conversation with **ego**, which TUICommander launches and speaks to
 over ACP. TUICommander is the environment — terminals, repositories, the MCP

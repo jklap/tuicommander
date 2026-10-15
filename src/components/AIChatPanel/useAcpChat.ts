@@ -581,6 +581,7 @@ export function createAcpChat(
 				failedSession = null;
 				setSessionId(null);
 			}
+			const request = selection;
 			await guard("forgetting the deleted conversation", () =>
 				updateAppConfig<{
 					ai_chat_sessions?: Record<string, string>;
@@ -592,7 +593,7 @@ export function createAcpChat(
 					if (config.ai_chat_launches) delete config.ai_chat_launches[session];
 				}),
 			);
-			if (wasSelected && next) await selectSession(next);
+			if (wasSelected && next && request === selection) await selectSession(next);
 			return true;
 		},
 

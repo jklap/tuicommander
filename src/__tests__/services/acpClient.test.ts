@@ -759,11 +759,26 @@ it("retains live response chunks when custom conversation reopen is refused", as
 
 // Catches: the delete UI accidentally issuing session/close, which retains durable history.
 it("deletes durable history through the ACP delete command and refreshes attachments", async () => {
-	mockInvoke.mockImplementation(answering());
-	const client = createAcpClient();
+	const deletedAttachment = {
+		sessionId: SESSION,
+		state: "idle" as const,
+		cwd: ROOT,
+		additionalDirectories: [],
+		configOptions: [],
+		usage: null,
+		activeTurn: null,
+		queuedPrompts: [],
+		pendingPermissionIds: [],
+		pendingElicitationIds: [],
+	};
+	const survivor = { ...deletedAttachment, sessionId: "01932d5e-0000-7000-8000-0000000000bb" };
+	acpStore.applySnapshot(snapshot({ attachments: [deletedAttachment, survivor] }));
+	mockInvoke.mockImplementation(answering({ acp_connection_snapshot: snapshot({ attachments: [survivor] }) }));
 	await client.deleteSession(CONNECTION, SESSION);
 	expect(mockInvoke).toHaveBeenCalledWith("acp_session_delete", { connectionId: CONNECTION, sessionId: SESSION });
 	expect(mockInvoke).toHaveBeenCalledWith("acp_connection_snapshot", { connectionId: CONNECTION });
+	expect(acpStore.attachments(CONNECTION)).toEqual([survivor]);
+	expect(acpStore.attachment(CONNECTION, SESSION)).toBeNull();
 });
 
 // Catches: a failed snapshot after accepted deletion leaves the deleted session open.
