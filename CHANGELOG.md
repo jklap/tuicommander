@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 - Validate keybinding records and bounded pane geometry through shared Rust owners before saving; preserve runtime tab membership and focus (#1914-cdf6).
+- Add explicit owner-backed settings choice refresh; notification output enumeration reports unavailable separately from an empty device list (#1908-c327).
 
 - Refresh expanded file-browser folders after Finder moves, copies, confirmed directory transfers and remote uploads (#1905-c1ed).
 

@@ -76,6 +76,7 @@ pub(super) fn register(cat: &mut Catalogue) -> Result<(), CatalogueError> {
         .expect("action descriptor")
         .choices = Some(Choices::Dynamic {
         resolver: "keybinding_actions".into(),
+        values: None,
         availability: Availability::Unavailable {
             reason: "frontend-registered plugin actions; bound in Step 9 UI parity".into(),
         },

@@ -1638,3 +1638,9 @@ Hibernation requires an idle agent and a verified resume session in its saved pr
 The normal Rust suspension path persists `reason: "idle_hibernate"` before ending the PTY. Opening the tab, submitting input or sending peer mail uses the shared wake path. Storage or resume-verification failures leave the live session intact.
 
 Tasks notice policy and per-item follow/comment baselines are JSON values in `ui-prefs.json`'s existing `tasks_view_preferences` map. Reserved keys are `tasks:notification-policy` and `tasks:follow:<provider/account/item identity>`. No new configuration file or provider polling is used. Missing policy means disabled. These are host UI preferences, not provider subscriptions.
+
+## Explicit settings choice discovery (#1908-c327)
+
+The internal settings owner service accepts `describe` and `refresh` with an explicit target, store and 1–128 dynamic field paths. Describe reads cached choices only; it never enumerates hardware or refreshes a network catalogue. Refresh calls the registered owner. Each choice result includes its resolver, availability and values: `null` means unavailable, while `[]` means successful discovery with no options. Cache entries are scoped to the owner target and configuration revision. A failed refresh replaces stale success with unavailable status.
+
+Notification output choices use the same bounded enumeration and `{name, is_default}` objects as the existing UI command. Discovery never saves notification configuration. This internal contract does not publish the later settings MCP/HTTP cutover.

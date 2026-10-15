@@ -105,3 +105,6 @@ mod policy_domain_tests;
 
 #[cfg(test)]
 mod policy_lifecycle_tests;
+
+#[cfg(test)]
+mod choice_tests;

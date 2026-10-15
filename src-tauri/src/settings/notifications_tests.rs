@@ -245,3 +245,39 @@ async fn registry_rejects_unknown_store_and_duplicate_owner() {
     ));
     assert_eq!(duplicate.unwrap_err().code, "duplicate");
 }
+
+/// Catches: unavailable discovery represented as a supported empty choice list.
+#[tokio::test]
+async fn notification_device_unavailable_is_not_empty() {
+    let f = fixture(None);
+    let request = serde_json::from_value::<Request>(json!({
+        "action": "describe", "target": {"kind":"machine"},
+        "store":"notifications", "paths":["/audio_device"]
+    }))
+    .expect("the owner must publish cached choices without probing hardware");
+    let reply = serde_json::to_value(f.registry.execute(request).await.unwrap()).unwrap();
+    assert_eq!(
+        reply["choices"]["/audio_device"]["availability"]["status"],
+        "unavailable"
+    );
+    assert!(reply["choices"]["/audio_device"]["values"].is_null());
+}
+
+/// Catches: describing unavailable choices or editing a sibling drops the saved device.
+#[tokio::test]
+async fn notification_device_unavailable_is_not_empty_preserves_other_owner_state() {
+    let f = fixture(Some(json!({"volume":0.4,"audio_device":"saved-device"})));
+    let before = std::fs::read(&f.file).unwrap();
+    let request: Request = serde_json::from_value(json!({
+        "action":"describe", "target":{"kind":"machine"}, "store":"notifications",
+        "paths":["/audio_device"]
+    }))
+    .unwrap();
+    f.registry.execute(request).await.unwrap();
+    assert_eq!(std::fs::read(&f.file).unwrap(), before);
+    let snapshot = get(&f, &["/volume"]).await;
+    set(&f, snapshot.revision, "/volume", json!(0.2))
+        .await
+        .unwrap();
+    assert_eq!(on_disk(&f)["audio_device"], "saved-device");
+}

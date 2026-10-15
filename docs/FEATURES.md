@@ -3079,3 +3079,6 @@ Hibernation requires an idle agent and a verified resume session in its saved pr
 The normal Rust suspension path persists `reason: "idle_hibernate"` before ending the PTY. Opening the tab, submitting input or sending peer mail uses the shared wake path. Storage or resume-verification failures leave the live session intact.
 
 Settings owner validation covers typed shortcut records and bounded pane geometry. Geometry references existing groups; runtime tab membership and focus are not configurable settings (#1914-cdf6).
+### Internal settings choice discovery
+
+Owner-backed dynamic choices support cache-only describe and explicit refresh. Notification output devices retain their UI option objects and distinguish unavailable discovery from successful empty results (#1908-c327).
