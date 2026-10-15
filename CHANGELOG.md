@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Validate keybinding records and bounded pane geometry through shared Rust owners before saving; preserve runtime tab membership and focus (#1914-cdf6).
+
 - Refresh expanded file-browser folders after Finder moves, copies, confirmed directory transfers and remote uploads (#1905-c1ed).
 
 - Recognize `💬` answers at the start of Markdown list items in the CLI grid, Answers view and Chat view, without including unmarked sibling items (#1904-9eef).

@@ -4639,6 +4639,74 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
+    "keybindings.bindings.{action}.action": {
+      "id": "keybindings.bindings.{action}.action",
+      "store": "keybindings",
+      "owner": "instance",
+      "area": "keybindings",
+      "group": "bindings",
+      "order": 0,
+      "path": "/bindings/{action}/action",
+      "labelKey": "settings.catalogue.keybindings.bindings.{action}.action.label",
+      "helpKey": "settings.catalogue.keybindings.bindings.{action}.action.help",
+      "label": "action",
+      "schema": {
+        "type": "string"
+      },
+      "nullable": false,
+      "availability": {
+        "status": "available"
+      },
+      "choices": {
+        "kind": "dynamic",
+        "resolver": "keybinding_actions",
+        "availability": {
+          "status": "unavailable",
+          "reason": "frontend-registered plugin actions; bound in Step 9 UI parity"
+        }
+      },
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Identifies a built-in or plugin shortcut action.",
+      "operations": [
+        "get"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "keybindings.bindings.{action}.key": {
+      "id": "keybindings.bindings.{action}.key",
+      "store": "keybindings",
+      "owner": "instance",
+      "area": "keybindings",
+      "group": "bindings",
+      "order": 1,
+      "path": "/bindings/{action}/key",
+      "labelKey": "settings.catalogue.keybindings.bindings.{action}.key.label",
+      "helpKey": "settings.catalogue.keybindings.bindings.{action}.key.help",
+      "label": "key",
+      "schema": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "maxLength": 128
+      },
+      "nullable": true,
+      "default": null,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Updates the shortcut override; null disables the action.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
     "notifications.audio_device": {
       "id": "notifications.audio_device",
       "store": "notifications",
@@ -5024,6 +5092,231 @@ export const settingsCatalogue = {
         "get",
         "set",
         "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "pane_layout.root": {
+      "id": "pane_layout.root",
+      "store": "pane_layout",
+      "owner": "instance",
+      "area": "pane_layout",
+      "group": "geometry",
+      "order": 0,
+      "path": "/root",
+      "labelKey": "settings.catalogue.pane_layout.root.label",
+      "helpKey": "settings.catalogue.pane_layout.root.help",
+      "label": "Pane geometry",
+      "schema": {
+        "anyOf": [
+          {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "type",
+                  "id"
+                ],
+                "properties": {
+                  "type": {
+                    "const": "leaf"
+                  },
+                  "id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "type",
+                  "direction",
+                  "children",
+                  "ratios"
+                ],
+                "properties": {
+                  "type": {
+                    "const": "branch"
+                  },
+                  "direction": {
+                    "enum": [
+                      "horizontal",
+                      "vertical"
+                    ]
+                  },
+                  "children": {
+                    "type": "array",
+                    "minItems": 2,
+                    "maxItems": 20,
+                    "items": {
+                      "oneOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "type",
+                            "id"
+                          ],
+                          "properties": {
+                            "type": {
+                              "const": "leaf"
+                            },
+                            "id": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 256
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "type",
+                            "direction",
+                            "children",
+                            "ratios"
+                          ],
+                          "properties": {
+                            "type": {
+                              "const": "branch"
+                            },
+                            "direction": {
+                              "enum": [
+                                "horizontal",
+                                "vertical"
+                              ]
+                            },
+                            "children": {
+                              "type": "array",
+                              "minItems": 2,
+                              "maxItems": 20,
+                              "items": {
+                                "oneOf": [
+                                  {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "required": [
+                                      "type",
+                                      "id"
+                                    ],
+                                    "properties": {
+                                      "type": {
+                                        "const": "leaf"
+                                      },
+                                      "id": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 256
+                                      }
+                                    }
+                                  },
+                                  {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "required": [
+                                      "type",
+                                      "direction",
+                                      "children",
+                                      "ratios"
+                                    ],
+                                    "properties": {
+                                      "type": {
+                                        "const": "branch"
+                                      },
+                                      "direction": {
+                                        "enum": [
+                                          "horizontal",
+                                          "vertical"
+                                        ]
+                                      },
+                                      "children": {
+                                        "type": "array",
+                                        "minItems": 2,
+                                        "maxItems": 20,
+                                        "items": {
+                                          "type": "object",
+                                          "additionalProperties": false,
+                                          "required": [
+                                            "type",
+                                            "id"
+                                          ],
+                                          "properties": {
+                                            "type": {
+                                              "const": "leaf"
+                                            },
+                                            "id": {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 256
+                                            }
+                                          }
+                                        }
+                                      },
+                                      "ratios": {
+                                        "type": "array",
+                                        "minItems": 2,
+                                        "maxItems": 20,
+                                        "items": {
+                                          "type": "number",
+                                          "minimum": 0.05,
+                                          "maximum": 1
+                                        }
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            },
+                            "ratios": {
+                              "type": "array",
+                              "minItems": 2,
+                              "maxItems": 20,
+                              "items": {
+                                "type": "number",
+                                "minimum": 0.05,
+                                "maximum": 1
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  "ratios": {
+                    "type": "array",
+                    "minItems": 2,
+                    "maxItems": 20,
+                    "items": {
+                      "type": "number",
+                      "minimum": 0.05,
+                      "maximum": 1
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "nullable": true,
+      "default": null,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Updates pane geometry without changing tab membership or focus.",
+      "operations": [
+        "get",
+        "set"
       ],
       "confirmationClass": "ordinary"
     },
@@ -9683,6 +9976,26 @@ export const settingsCatalogue = {
       "store": "voice",
       "path": "/recovered_from_corruption",
       "reason": "Read-response corruption diagnostic; cleared before persistence."
+    },
+    {
+      "store": "pane_layout",
+      "path": "/groups/{id}/id",
+      "reason": "Session restoration identity referenced by geometry; not a user preference."
+    },
+    {
+      "store": "pane_layout",
+      "path": "/groups/{id}/tabs",
+      "reason": "Runtime terminal/editor/diff/markdown tab identities; remapped when sessions restore."
+    },
+    {
+      "store": "pane_layout",
+      "path": "/groups/{id}/activeTabId",
+      "reason": "Runtime selected tab, restored with session membership."
+    },
+    {
+      "store": "pane_layout",
+      "path": "/activeGroupId",
+      "reason": "Runtime focused group, updated by focus and navigation, not a user preference."
     }
   ],
   "gaps": [
@@ -9709,30 +10022,6 @@ export const settingsCatalogue = {
       "path": "/groups/{id}",
       "ownerStep": "Step 4d",
       "reason": "Accepted gap for story 1825-4566: repositories.json registration and group records remain untyped; converting the owner requires classification of runtime tab/worktree identities and delta-save contracts. A raw JSON settings adapter would bypass those owner invariants. Keep Step 4d ownership and block cutover until a typed owner schema is delivered."
-    },
-    {
-      "store": "keybindings",
-      "path": "/{action}",
-      "ownerStep": "Step 4g",
-      "reason": "Keybindings are untyped serde_json::Value; move the action/key record and dynamic-action choices into the owner schema."
-    },
-    {
-      "store": "pane_layout",
-      "path": "/root",
-      "ownerStep": "Step 4g",
-      "reason": "Recursive geometry is currently frontend-owned JSON; define a bounded Rust schema with stable node IDs."
-    },
-    {
-      "store": "pane_layout",
-      "path": "/groups/{id}",
-      "ownerStep": "Step 4g",
-      "reason": "Tab/group layout references and active group are currently frontend-owned JSON; separate settings from runtime tab identities."
-    },
-    {
-      "store": "pane_layout",
-      "path": "/activeGroupId",
-      "ownerStep": "Step 4g",
-      "reason": "Review whether active pane selection is a setting or runtime selection, then describe or individually exclude it."
     },
     {
       "store": "connections",
@@ -10537,6 +10826,35 @@ export const settingsCatalogue = {
           "user",
           "forwards",
           "options"
+        ]
+      },
+      "operations": [
+        "get",
+        "create",
+        "remove"
+      ]
+    },
+    {
+      "store": "keybindings",
+      "path": "/bindings",
+      "key": "action",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 128
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "action"
         ]
       },
       "operations": [

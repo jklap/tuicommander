@@ -7,6 +7,11 @@ mod ego_schema;
 pub mod model;
 pub mod policy;
 
+#[cfg(test)]
+mod layout_owner_tests;
+
+pub mod keybindings;
+pub mod layout;
 pub mod native;
 pub mod notifications;
 pub(crate) mod plugin_migrations;
@@ -22,6 +27,7 @@ pub mod request;
 pub mod service;
 pub mod telegram;
 pub mod transaction;
+pub mod ui_owners;
 pub mod upstreams;
 #[cfg(feature = "dictation")]
 pub mod voice;

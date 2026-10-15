@@ -1,3 +1,7 @@
+## Typed UI settings owners (1914-cdf6) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, use an isolated instance: set and disable a keyboard shortcut, reload, and confirm both persist. Split panes, switch focused panes and restore the layout; verify geometry and tab membership remain intact. The settings owner exposes only geometry, not runtime tab/focus identities. No running app was restarted.
+
 ## Urgent ego mail (1901-9b6b) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, send urgent mail to a busy managed ego child. Verify the inbox notice is queued without cancelling its tool, the body stays in the inbox, and a draft or question blocks injection. The targeted backend tests cover notice bytes, coalescing, drafts and confident dialogs; no live app was restarted for this change.

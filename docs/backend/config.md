@@ -891,9 +891,15 @@ struct PromptEntry {
 
 ### Keybindings (`keybindings.json`)
 
-**Type:** `serde_json::Value` (flexible JSON, shape defined by frontend)
+**Wire type:** array of typed `{action: string, key: string | null}` records. Null or an empty key disables an action. Rust validates unique bounded action IDs, bounded keys and modifier syntax. Any stable action string can round-trip, including unloaded plugin actions. Built-in action inventory is checked against `keybindingDefaults.ts`; dynamic choices explicitly report unavailable because plugin actions are frontend-registered and will bind in Step 9 UI parity.
 
-Custom keyboard shortcut overrides.
+The settings owner projects this array as `/bindings/{action}/key`, with stable-action create/remove operations. It preserves the file format. Both UI delta saves and settings transactions validate under the same `ConfigFile` lock before persistence.
+
+### Pane layout (`pane-layout.json`)
+
+Rust validates the existing `{root, groups, activeGroupId}` document after merging each UI delta. Geometry uses leaf group IDs and horizontal/vertical branches. Maximum branch depth is 3; each branch has 2–20 children, matching positive ratios of at least 0.05 summing to 1. Duplicate or missing group references are rejected without writing.
+
+The settings owner exposes `/root` as a structured bounded geometry value. Group IDs, tab membership, active tabs and active group are individually classified as runtime restoration state. They are not settings mutation paths; geometry edits preserve them and must reference the existing groups. No sidebar-click or drag/drop behavior changes.
 
 **Commands:** `load_keybindings()`, `save_keybindings(base, config)`
 
