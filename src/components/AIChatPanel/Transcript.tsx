@@ -232,7 +232,8 @@ function activityRows(
 
 export interface TranscriptSearchRef {
 	open: () => void;
-	close: () => void;
+	/** Close Find and report whether it was open. */
+	close: () => boolean;
 }
 
 export interface TranscriptProps {
@@ -512,9 +513,12 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 		});
 	};
 	const closeSearch = () => {
+		const wasOpen = finding();
+		if (!wasOpen) return false;
 		clearSearchSelection();
 		setFinding(false);
 		matchIndex = -1;
+		return wasOpen;
 	};
 	props.onSearchRef?.({ open: openSearch, close: closeSearch });
 	onCleanup(() => {

@@ -20,7 +20,7 @@ import { Interactions } from "./Interactions";
 import { NewConversationDialog } from "./NewConversationDialog";
 import { RemoteInteractions } from "./RemoteInteractions";
 import { conversationLabel, SessionControls } from "./SessionControls";
-import { Transcript } from "./Transcript";
+import { Transcript, type TranscriptSearchRef } from "./Transcript";
 import { trackPanelWidth } from "./trackPanelWidth";
 import { createAcpChat } from "./useAcpChat";
 
@@ -67,18 +67,14 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 	let panelEl!: HTMLDivElement;
 	onMount(() => onCleanup(trackPanelWidth(panelEl, (width) => uiStore.setAiChatPanelMeasuredWidth(width))));
 	createEffect(() => aiChatDraft.activate(chat.sessionId() ?? ""));
+	let transcriptSearch: TranscriptSearchRef | undefined;
 	const keyDown = (event: KeyboardEvent) => {
-		if (
-			event.key === "Escape" &&
-			!event.defaultPrevented &&
-			!event.metaKey &&
-			!event.ctrlKey &&
-			!event.altKey &&
-			chat.busy()
-		) {
+		if (event.key === "Escape" && !event.defaultPrevented && !event.metaKey && !event.ctrlKey && !event.altKey) {
+			const searchClosed = transcriptSearch?.close();
+			if (!searchClosed && !chat.busy()) return;
 			event.preventDefault();
 			event.stopPropagation();
-			void chat.cancel();
+			if (!searchClosed) void chat.cancel();
 			return;
 		}
 		if (!(event.metaKey || event.ctrlKey) || event.shiftKey) return;
@@ -301,6 +297,9 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 			</Show>
 
 			<Transcript
+				onSearchRef={(ref) => {
+					transcriptSearch = ref;
+				}}
 				canForkAtMessage={() => chat.capabilities()?.forkAtMessage === true}
 				onFork={(messageId) => void chat.fork(messageId)}
 				entries={chat.entries}
