@@ -75,6 +75,7 @@ function createPluginRegistry() {
 			disposable: Disposable;
 			agentTypes: readonly string[];
 			controller: AbortController;
+			started: boolean;
 			backendReady?: Promise<unknown>;
 		}
 	>();
@@ -981,6 +982,7 @@ function createPluginRegistry() {
 		const entry = {
 			plugin,
 			controller,
+			started: false,
 			agentTypes: agentTypes ?? [],
 			backendReady: undefined as Promise<unknown> | undefined,
 			disposable: {
@@ -1008,7 +1010,7 @@ function createPluginRegistry() {
 				if (typeof method !== "function") return method;
 				return (...args: unknown[]) => {
 					controller.signal.throwIfAborted();
-					return (method as (...values: unknown[]) => unknown)(...args);
+					return Reflect.apply(method, target, args);
 				};
 			},
 		});
@@ -1028,6 +1030,7 @@ function createPluginRegistry() {
 				if (!current()) return false;
 			}
 			phase = "onload";
+			entry.started = true;
 			const startup = plugin.onload(host, controller.signal);
 			if (startup) {
 				if (!current()) {
@@ -1067,7 +1070,7 @@ function createPluginRegistry() {
 		if (!entry) return teardowns.get(id) ?? Promise.resolve();
 		plugins.delete(id);
 		try {
-			entry.plugin.onunload();
+			if (entry.started) entry.plugin.onunload();
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
 			appLogger.error("plugin", `Plugin "${id}" onunload failed: ${msg}`, err);

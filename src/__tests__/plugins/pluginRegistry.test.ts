@@ -148,6 +148,57 @@ describe("async startup lifetime", () => {
 		return { promise, resolve };
 	}
 
+	it("does not unload a replacement whose startup never began during a reload storm", async () => {
+		const gate = deferred();
+		const firstUnload = vi.fn();
+		await pluginRegistry.register(makePlugin("storm", undefined, firstUnload));
+		vi.mocked(invoke).mockImplementationOnce(() => gate.promise);
+		const skippedLoad = vi.fn();
+		const skippedUnload = vi.fn();
+		const second = pluginRegistry.register(makePlugin("storm", skippedLoad, skippedUnload));
+		const lastLoad = vi.fn();
+		const lastUnload = vi.fn();
+		const third = pluginRegistry.register(makePlugin("storm", lastLoad, lastUnload));
+		gate.resolve();
+		expect(await second).toBe(false);
+		expect(await third).toBe(true);
+		expect(firstUnload).toHaveBeenCalledOnce();
+		expect(skippedLoad).not.toHaveBeenCalled();
+		expect(skippedUnload).not.toHaveBeenCalled();
+		expect(lastLoad).toHaveBeenCalledOnce();
+		await pluginRegistry.unregister("storm");
+		expect(lastUnload).toHaveBeenCalledOnce();
+	});
+
+	it("preserves the host receiver when reading an active terminal snapshot", async () => {
+		const terminalId = terminalsStore.add({
+			sessionId: "receiver-session",
+			fontSize: 14,
+			name: "Receiver test",
+			cwd: "/receiver",
+			awaitingInput: null,
+		});
+		terminalsStore.setActive(terminalId);
+		try {
+			let host!: PluginHost;
+			await pluginRegistry.register(
+				makePlugin("receiver", (value) => {
+					host = value;
+				}),
+			);
+			expect(host.getTerminalState()).toEqual({
+				sessionId: "receiver-session",
+				shellState: null,
+				agentType: null,
+				agentActive: false,
+				awaitingInput: null,
+				repoPath: null,
+			});
+		} finally {
+			terminalsStore.remove(terminalId);
+		}
+	});
+
 	it("does not report loaded before async onload finishes", async () => {
 		pluginStore.registerPlugin("async", { loaded: false });
 		const gate = deferred();

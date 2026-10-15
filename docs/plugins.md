@@ -149,9 +149,9 @@ Tauri OutputParser --> pluginRegistry.dispatchStructuredEvent(type, payload, ses
 5. **Register** — `pluginRegistry.register(plugin, capabilities)` awaits `plugin.onload(host, signal)`
 6. **Active** — Plugin receives PTY lines, structured events, and can use the PluginHost API
 7. **Hot reload** — File changes emit `plugin-changed` events; the plugin is unregistered and re-imported. Creating a new top-level plugin directory or symlink after startup also emits the event (the watcher does not descend into symlink targets, so the create of the link itself is the trigger), and the new plugin is discovered and loaded without a restart
-8. **Unload** — `plugin.onunload()` is called, then tracked registrations are disposed and `openPanel` tabs close. Timers, DOM listeners and other resources created directly by the plugin remain its responsibility.
+8. **Unload** — `plugin.onunload()` is called only if its `onload` started, then tracked registrations are disposed and `openPanel` tabs close. Timers, DOM listeners and other resources created directly by the plugin remain its responsibility.
 
-Async startup receives an `AbortSignal`. Unload or reload aborts it and stops waiting for obsolete startup work. Pass the signal to cancellable operations. After unload, calls through the old host throw an abort error before they can register providers or change host state. The host cannot stop arbitrary plugin code or cancel requests that ignore the signal. A replacement waits for backend teardown, not for obsolete startup to finish.
+Async startup receives an `AbortSignal`. Unload or reload aborts it and stops waiting for obsolete startup work. Pass the signal to cancellable operations. After unload, calls through the old host throw an abort error before they can register providers or change host state. The host cannot stop arbitrary plugin code or cancel requests that ignore the signal. A replacement waits for backend teardown, not for obsolete startup to finish. Startup must settle (resolve or reject); the host sets no startup or backend teardown timeout. An active startup that never settles remains loading, and a pending backend teardown blocks replacements for that plugin ID. A replacement removed before its startup begins receives neither `onload` nor `onunload`.
 
 ### Crash Safety
 

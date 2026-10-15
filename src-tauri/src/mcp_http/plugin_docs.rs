@@ -698,7 +698,7 @@ esbuild src/main.ts --bundle --format=esm --outfile=main.js --external:nothing
 7. Hot reload: file changes trigger unregister + re-import (cache-busted); a newly added plugin directory/symlink is discovered and loaded live
 8. Unload: plugin.onunload() called, tracked registrations disposed, openPanel tabs and bridges closed; plugin-owned timers/listeners need explicit cleanup
 
-Async onload may return a Promise. The optional AbortSignal is aborted on unload/reload. Old host calls then throw before changing registrations or state. Pass the signal to cancellable operations; the host cannot stop arbitrary plugin code or requests that ignore it. Replacement waits for backend teardown, not obsolete startup.
+Async onload may return a Promise. The optional AbortSignal is aborted on unload/reload. Old host calls then throw before changing registrations or state. Pass the signal to cancellable operations; the host cannot stop arbitrary plugin code or requests that ignore it. Replacement waits for backend teardown, not obsolete startup. Startup must settle (resolve or reject); there is no startup or backend teardown timeout. An active startup that never settles remains loading, and pending backend teardown blocks replacements for that plugin ID. A replacement removed before startup begins receives neither onload nor onunload.
 
 Crash safety: all boundaries are try/catch wrapped. A broken plugin produces a console error and is skipped. The app always continues.
 
