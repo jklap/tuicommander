@@ -194,9 +194,9 @@ impl Catalogue {
                 .and_then(Value::as_str)
                 .map(|resolver| Choices::Dynamic {
                     resolver: resolver.into(),
+                    values: None,
                     availability: Availability::Unavailable {
-                        reason: "Owner choice resolver is not yet registered; see inventory gap"
-                            .into(),
+                        reason: "Explicit owner refresh required".into(),
                     },
                 })
                 .or_else(|| {

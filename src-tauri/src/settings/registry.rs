@@ -65,7 +65,10 @@ impl Registry {
         caller: &Caller,
         approval: Option<&str>,
     ) -> Outcome {
-        caller.check(!matches!(request, Request::Get { .. }))?;
+        caller.check(!matches!(
+            request,
+            Request::Get { .. } | Request::Describe { .. }
+        ))?;
         // The caller's string is never echoed: an unknown store reports under "settings".
         let owner = self
             .owners

@@ -582,8 +582,9 @@ export const settingsCatalogue = {
         "resolver": "agent_models",
         "availability": {
           "status": "unavailable",
-          "reason": "Owner choice resolver is not yet registered; see inventory gap"
-        }
+          "reason": "Explicit owner refresh required"
+        },
+        "values": null
       },
       "sensitivity": "public",
       "apply": "live",
@@ -2108,8 +2109,9 @@ export const settingsCatalogue = {
         "resolver": "system_fonts",
         "availability": {
           "status": "unavailable",
-          "reason": "Owner choice resolver is not yet registered; see inventory gap"
-        }
+          "reason": "Explicit owner refresh required"
+        },
+        "values": null
       },
       "sensitivity": "public",
       "apply": "next_session",
@@ -2250,8 +2252,9 @@ export const settingsCatalogue = {
         "resolver": "installed_ides",
         "availability": {
           "status": "unavailable",
-          "reason": "Owner choice resolver is not yet registered; see inventory gap"
-        }
+          "reason": "Explicit owner refresh required"
+        },
+        "values": null
       },
       "sensitivity": "public",
       "apply": "live",
@@ -3782,8 +3785,9 @@ export const settingsCatalogue = {
         "resolver": "themes",
         "availability": {
           "status": "unavailable",
-          "reason": "Owner choice resolver is not yet registered; see inventory gap"
-        }
+          "reason": "Explicit owner refresh required"
+        },
+        "values": null
       },
       "sensitivity": "public",
       "apply": "live",
@@ -4666,8 +4670,9 @@ export const settingsCatalogue = {
         "resolver": "audio_outputs",
         "availability": {
           "status": "unavailable",
-          "reason": "Owner choice resolver is not yet registered; see inventory gap"
-        }
+          "reason": "Explicit owner refresh required"
+        },
+        "values": null
       },
       "sensitivity": "private",
       "apply": "live",
@@ -8895,8 +8900,9 @@ export const settingsCatalogue = {
         "resolver": "audio_inputs",
         "availability": {
           "status": "unavailable",
-          "reason": "Owner choice resolver is not yet registered; see inventory gap"
-        }
+          "reason": "Explicit owner refresh required"
+        },
+        "values": null
       },
       "sensitivity": "private",
       "apply": "live",
@@ -9287,8 +9293,9 @@ export const settingsCatalogue = {
         "resolver": "voice_models",
         "availability": {
           "status": "unavailable",
-          "reason": "Owner choice resolver is not yet registered; see inventory gap"
-        }
+          "reason": "Explicit owner refresh required"
+        },
+        "values": null
       },
       "sensitivity": "public",
       "apply": "live",
@@ -9463,8 +9470,9 @@ export const settingsCatalogue = {
         "resolver": "edge_voices",
         "availability": {
           "status": "unavailable",
-          "reason": "Owner choice resolver is not yet registered; see inventory gap"
-        }
+          "reason": "Explicit owner refresh required"
+        },
+        "values": null
       },
       "sensitivity": "public",
       "apply": "live",
@@ -9569,8 +9577,9 @@ export const settingsCatalogue = {
         "resolver": "installed_voices",
         "availability": {
           "status": "unavailable",
-          "reason": "Owner choice resolver is not yet registered; see inventory gap"
-        }
+          "reason": "Explicit owner refresh required"
+        },
+        "values": null
       },
       "sensitivity": "public",
       "apply": "live",
