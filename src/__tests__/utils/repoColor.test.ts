@@ -5,7 +5,9 @@ vi.mock("../../stores/repoSettings", () => ({
 	repoSettingsStore: { get: (path: string) => (colors[path] ? { color: colors[path] } : undefined) },
 }));
 vi.mock("../../stores/repositories", () => ({
-	repositoriesStore: { getGroupForRepo: () => undefined },
+	resolveRepoPathFor: (path: string) =>
+		(({ "/wt/red": "/r/red", "/wt/group": "/r/group" }) as Record<string, string>)[path],
+	repositoriesStore: { getGroupForRepo: (path: string) => (path === "/r/group" ? { color: "#123456" } : undefined) },
 }));
 
 const { getRepoColor, getRepoTextColor } = await import("../../utils/repoColor");
@@ -24,4 +26,13 @@ describe("getRepoTextColor", () => {
 	it("returns undefined for a repo without a color, so the name keeps the theme foreground", () => {
 		expect(getRepoTextColor("/r/none")).toBeUndefined();
 	});
+});
+
+// Catches: passing a linked filesystem root loses its parent repository color.
+it.each([
+	["/wt/red", "#ff6b6b"],
+	["/wt/group", "#123456"],
+	["/r/red", "#ff6b6b"],
+])("resolves the registered repository color for %s", (path, color) => {
+	expect(getRepoTextColor(path)).toBe(`color-mix(in oklab, ${color}, #000 var(--repo-text-shade, 0%))`);
 });
