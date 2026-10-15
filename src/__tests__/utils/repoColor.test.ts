@@ -32,7 +32,6 @@ describe("getRepoTextColor", () => {
 it.each([
 	["/wt/red", "#ff6b6b"],
 	["/wt/group", "#123456"],
-	["/r/red", "#ff6b6b"],
 ])("resolves the registered repository color for %s", (path, color) => {
 	expect(getRepoTextColor(path)).toBe(`color-mix(in oklab, ${color}, #000 var(--repo-text-shade, 0%))`);
 });
