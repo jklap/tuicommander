@@ -19,7 +19,7 @@ struct Owner {
 }
 
 impl Store for Owner {
-    fn id(&self) -> &str {
+    fn id(&self) -> &'static str {
         "notifications"
     }
     fn target(&self) -> Target {
@@ -28,17 +28,23 @@ impl Store for Owner {
     fn read(&self) -> Result<Value, Failure> {
         Ok(self.state.lock().clone())
     }
-    async fn refresh_choices(&self, resolver: &str, path: &str) -> Result<Vec<Value>, Failure> {
+    fn refresh_choices(
+        &self,
+        resolver: &str,
+        path: &str,
+    ) -> impl std::future::Future<Output = Result<Vec<Value>, Failure>> + Send {
         assert_eq!(resolver, "audio_outputs");
         assert_eq!(
             path, "/audio_device",
             "discovery receives the concrete requested path"
         );
         self.calls.fetch_add(1, Ordering::SeqCst);
-        self.result
-            .lock()
-            .clone()
-            .ok_or_else(|| Error::new(self.id(), "unavailable"))
+        std::future::ready(
+            self.result
+                .lock()
+                .clone()
+                .ok_or_else(|| Error::new(self.id(), "unavailable")),
+        )
     }
     fn commit(
         &self,
@@ -46,8 +52,11 @@ impl Store for Owner {
     ) -> Result<CommitReply, Failure> {
         panic!("choice discovery must never commit")
     }
-    async fn apply(&self, _: &CommitReply) -> Result<bool, Failure> {
-        panic!("choice discovery must never apply")
+    fn apply(
+        &self,
+        _: &CommitReply,
+    ) -> impl std::future::Future<Output = Result<bool, Failure>> + Send {
+        std::future::poll_fn(|_| panic!("choice discovery must never apply"))
     }
 }
 

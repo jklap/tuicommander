@@ -281,3 +281,27 @@ async fn notification_device_unavailable_is_not_empty_preserves_other_owner_stat
         .unwrap();
     assert_eq!(on_disk(&f)["audio_device"], "saved-device");
 }
+
+/// Catches: headless refresh requires desktop audio or advertises unavailable hardware as empty.
+#[cfg(not(feature = "desktop"))]
+#[tokio::test]
+async fn headless_notification_refresh_is_unavailable_and_preserves_saved_device() {
+    let f = fixture(Some(json!({"volume":0.4,"audio_device":"saved-device"})));
+    let before = std::fs::read(&f.file).unwrap();
+    let reply = f
+        .registry
+        .execute(Request::Refresh {
+            target: Target::Machine,
+            store: "notifications".into(),
+            paths: vec!["/audio_device".into()],
+        })
+        .await
+        .unwrap();
+    let reply = serde_json::to_value(reply).unwrap();
+    assert_eq!(
+        reply["choices"]["/audio_device"]["availability"]["status"],
+        "unavailable"
+    );
+    assert!(reply["choices"]["/audio_device"]["values"].is_null());
+    assert_eq!(std::fs::read(&f.file).unwrap(), before);
+}
