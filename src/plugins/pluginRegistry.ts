@@ -291,7 +291,7 @@ function createPluginRegistry() {
 
 		const httpCancels = new Set<() => void>();
 		track({
-			dispose() {
+			dispose: () => {
 				for (const cancel of httpCancels) cancel();
 				httpCancels.clear();
 			},
