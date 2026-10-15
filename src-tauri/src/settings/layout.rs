@@ -74,7 +74,9 @@ impl PaneLayout {
                 } => {
                     if !(2..=20).contains(&children.len())
                         || children.len() != ratios.len()
-                        || ratios.iter().any(|r| !r.is_finite() || *r < MIN_PANE_RATIO)
+                        || ratios
+                            .iter()
+                            .any(|r| !r.is_finite() || *r < MIN_PANE_RATIO - f64::EPSILON)
                         || (ratios.iter().sum::<f64>() - 1.0).abs() > 0.000001
                     {
                         return Err(fail());

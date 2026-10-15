@@ -77,7 +77,11 @@ impl Store for AppSettingsStore {
         serde_json::to_value(self.latest(&file)?).map_err(|_| Error::new("app", "store_failed"))
     }
 
-    async fn refresh_choices(&self, resolver: &str) -> Result<Vec<serde_json::Value>, Failure> {
+    async fn refresh_choices(
+        &self,
+        resolver: &str,
+        _path: &str,
+    ) -> Result<Vec<serde_json::Value>, Failure> {
         crate::settings::app_choices::refresh(resolver).await
     }
 

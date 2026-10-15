@@ -21,10 +21,12 @@ fn pane_layout_rejects_unbounded_or_dangling_nodes() {
         "dangling leaf persisted"
     );
     let mut root = valid["root"].clone();
-    for _ in 0..4 {
-        root = json!({"type":"branch","direction":"horizontal","children":[root, {"type":"leaf","id":"g1"}],"ratios":[0.5,0.5]});
-    }
     let mut invalid = valid.clone();
+    for n in 2..=5 {
+        let id = format!("g{n}");
+        invalid["groups"][&id] = json!({"id":id,"tabs":[],"activeTabId":null});
+        root = json!({"type":"branch","direction":"horizontal","children":[root, {"type":"leaf","id":id}],"ratios":[0.5,0.5]});
+    }
     invalid["root"] = root;
     assert!(
         save_pane_layout(valid, invalid).is_err(),
@@ -142,7 +144,7 @@ fn keybinding_records_reject_invalid_ids_and_duplicate_actions() {
     use super::keybindings::{Keybinding, validate};
     for rows in [
         vec![Keybinding {
-            action: "".into(),
+            action: String::new(),
             key: Some("Cmd+A".into()),
         }],
         vec![Keybinding {

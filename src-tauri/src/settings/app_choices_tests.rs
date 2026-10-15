@@ -18,7 +18,7 @@ struct Owner {
     dir: std::path::PathBuf,
 }
 impl Store for Owner {
-    fn id(&self) -> &str {
+    fn id(&self) -> &'static str {
         "app"
     }
     fn target(&self) -> Target {
@@ -27,10 +27,15 @@ impl Store for Owner {
     fn read(&self) -> Result<Value, Failure> {
         Ok(self.state.lock().clone())
     }
-    async fn refresh_choices(&self, resolver: &str) -> Result<Vec<Value>, Failure> {
+    fn refresh_choices(
+        &self,
+        resolver: &str,
+        path: &str,
+    ) -> impl std::future::Future<Output = Result<Vec<Value>, Failure>> + Send {
         self.probes.fetch_add(1, Ordering::SeqCst);
         assert_eq!(resolver, "themes");
-        super::app_choices::theme_choices(&self.dir)
+        assert_eq!(path, "/theme");
+        std::future::ready(super::app_choices::theme_choices(&self.dir))
     }
     fn validate_proposal(&self, _: &Value, value: &Value) -> Result<(), Failure> {
         super::app_choices::validate(value)
@@ -45,8 +50,11 @@ impl Store for Owner {
         reply.persisted = !reply.changed_ids.is_empty();
         Ok(reply)
     }
-    async fn apply(&self, _: &CommitReply) -> Result<bool, Failure> {
-        Ok(true)
+    fn apply(
+        &self,
+        _: &CommitReply,
+    ) -> impl std::future::Future<Output = Result<bool, Failure>> + Send {
+        std::future::ready(Ok(true))
     }
 }
 fn fixture(dir: &std::path::Path) -> (Arc<Owner>, Service<Owner>) {

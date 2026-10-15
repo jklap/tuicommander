@@ -126,7 +126,11 @@ pub(crate) fn save_delta(
     let file = ConfigFile::<Value>::new(path);
     let delta = crate::config::json_merge_delta(&base, &desired);
     file.update_with_strict(|latest| {
-        let mut next = latest.clone();
+        let mut next = if keybindings && latest.is_null() {
+            json!([])
+        } else {
+            latest.clone()
+        };
         if let Some(delta) = &delta {
             crate::config::apply_typed_json_merge_delta(&mut next, delta)?;
         }
