@@ -916,9 +916,10 @@ export interface TuiPlugin {
 	id: string;
 	/**
 	 * Called once when the plugin is registered.
-	 * Register sections, watchers, providers here.
+	 * Register sections, watchers, providers here. Async work is awaited.
+	 * The signal is aborted on unload/replacement; old host calls then throw.
 	 */
-	onload(host: PluginHost): void;
+	onload(host: PluginHost, signal?: AbortSignal): void | Promise<void>;
 	/**
 	 * Called when the plugin is unregistered.
 	 * Must dispose all Disposables obtained in onload().
