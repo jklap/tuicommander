@@ -81,3 +81,30 @@ describe("chat answer shapes follow the CLI grid extent", () => {
 		expect(container.textContent).not.toContain("💬");
 	});
 });
+
+// Catches: only paragraphs opening answers, or a marked list tinting unmarked siblings.
+it.each(["-", "*", "1."])("rules only the marked %s list item including nested content", async (bullet) => {
+	const { container } = await show(
+		`${bullet} 💬 **Answer.**\n   continued\n   - nested detail\n${bullet} Unmarked sibling.`,
+	);
+	const items = Array.from(
+		container.querySelectorAll<HTMLElement>("#markdown-content > div > ul > li, #markdown-content > div > ol > li"),
+	);
+	expect(items).toHaveLength(2);
+	expect(items.map((item) => item.getAttribute("data-tuic-answer"))).toEqual(["end", null]);
+	expect(items[0].textContent).toContain("nested detail");
+	expect(items[0].textContent).not.toContain("💬");
+});
+
+// Catches: a literal nested marker making its unmarked parent an answer.
+it("rules a nested marked item without ruling its parent or sibling", async () => {
+	const { container } = await show(
+		"- Unmarked parent\n  - 💬 Nested answer\n  - Unmarked nested sibling\n\n> 💬 quotation\n>\n> - 💬 quoted item\n\n```text\n- 💬 literal\n```",
+	);
+	const items = Array.from(container.querySelectorAll<HTMLElement>("#markdown-content > div > ul li"));
+	expect(items.map((item) => item.getAttribute("data-tuic-answer"))).toEqual([null, "end", null]);
+	expect(container.querySelector("blockquote")?.textContent).toContain("💬 quotation");
+	expect(container.querySelector("blockquote li")?.hasAttribute("data-tuic-answer")).toBe(false);
+	expect(container.querySelector("blockquote li")?.textContent).toContain("💬 quoted item");
+	expect(container.querySelector("pre")?.textContent).toContain("💬 literal");
+});

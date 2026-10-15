@@ -3592,9 +3592,11 @@ fn urgent_mail_reaches_busy_claude_without_typing_the_payload() {
     );
 }
 
+/// A working peer must see urgent mail at its next tool boundary. The
+/// terminal receives only an inbox pointer; the payload remains there.
 #[cfg(unix)]
 #[test]
-fn urgent_mail_notifies_busy_codex_once_until_the_inbox_is_read() {
+fn urgent_mail_busy_ego_does_not_fall_back_to_unknown_agent_type() {
     let state = test_state();
     register_peer(&state, TEST_UUID_A, "sender", "mcp-sender");
     register_peer(&state, TEST_UUID_B, "recipient", "mcp-recipient");
@@ -3604,44 +3606,86 @@ fn urgent_mail_notifies_busy_codex_once_until_the_inbox_is_read() {
         .session_states
         .get_mut(TEST_UUID_B)
         .unwrap()
-        .agent_type = Some("codex".into());
+        .agent_type = Some("ego".into());
     let bytes = crate::test_support::insert_recording_session(&state, TEST_UUID_B);
-    let send = |message| {
-        handle_messaging(
-            &state,
-            &serde_json::json!({"action":"send","to":TEST_UUID_B,"message":message,"urgency":"urgent"}),
-            Some("mcp-sender"),
-        )
-    };
 
-    let first = send("first instruction");
-    assert_eq!(first["urgent_delivered"], true, "{first}");
-    let first_bytes = bytes.lock().unwrap().clone();
-    assert!(first_bytes.ends_with(b"\r"), "{first_bytes:?}");
+    let sent = handle_messaging(
+        &state,
+        &serde_json::json!({"action":"send","to":TEST_UUID_B,"message":"change the plan now","urgency":"urgent"}),
+        Some("mcp-sender"),
+    );
+
+    assert_eq!(sent["urgent_delivered"], true, "{sent}");
+    let typed = String::from_utf8(bytes.lock().unwrap().clone()).unwrap();
     assert!(
-        !first_bytes.contains(&0x1b),
+        typed.contains(&format!("URGENT mail from {TEST_UUID_A}")),
+        "{typed:?}"
+    );
+    assert!(typed.contains("agent action=inbox"), "{typed:?}");
+    assert!(typed.ends_with('\r'), "{typed:?}");
+    assert!(
+        !typed.contains("\x1b[13;5u"),
         "urgent must not interrupt the current tool"
     );
-
-    let second = send("second instruction");
-    assert_eq!(second["urgent_delivered"], true, "{second}");
+    assert!(!typed.contains("change the plan now"), "{typed:?}");
     assert_eq!(
-        *bytes.lock().unwrap(),
-        first_bytes,
-        "one unread notice covers both messages"
+        state.agent_inbox.get(TEST_UUID_B).unwrap()[0].content,
+        "change the plan now"
     );
-    let read = handle_messaging(
-        &state,
-        &serde_json::json!({"action":"inbox"}),
-        Some("mcp-recipient"),
-    );
-    assert_eq!(read["count"], 2);
-    let third = send("third instruction");
-    assert_eq!(third["urgent_delivered"], true, "{third}");
-    assert!(
-        bytes.lock().unwrap().len() > first_bytes.len(),
-        "a read re-arms urgent delivery"
-    );
+}
+
+#[cfg(unix)]
+#[test]
+fn urgent_mail_notifies_busy_codex_once_until_the_inbox_is_read() {
+    for agent_type in ["codex", "ego"] {
+        let state = test_state();
+        register_peer(&state, TEST_UUID_A, "sender", "mcp-sender");
+        register_peer(&state, TEST_UUID_B, "recipient", "mcp-recipient");
+        crate::test_support::agent_session(&state, TEST_UUID_B, crate::pty::SHELL_BUSY);
+        state
+            .session_maps
+            .session_states
+            .get_mut(TEST_UUID_B)
+            .unwrap()
+            .agent_type = Some(agent_type.into());
+        let bytes = crate::test_support::insert_recording_session(&state, TEST_UUID_B);
+        let send = |message| {
+            handle_messaging(
+                &state,
+                &serde_json::json!({"action":"send","to":TEST_UUID_B,"message":message,"urgency":"urgent"}),
+                Some("mcp-sender"),
+            )
+        };
+
+        let first = send("first instruction");
+        assert_eq!(first["urgent_delivered"], true, "{first}");
+        let first_bytes = bytes.lock().unwrap().clone();
+        assert!(first_bytes.ends_with(b"\r"), "{first_bytes:?}");
+        assert!(
+            !first_bytes.contains(&0x1b),
+            "urgent must not interrupt the current tool"
+        );
+
+        let second = send("second instruction");
+        assert_eq!(second["urgent_delivered"], true, "{second}");
+        assert_eq!(
+            *bytes.lock().unwrap(),
+            first_bytes,
+            "one unread notice covers both messages"
+        );
+        let read = handle_messaging(
+            &state,
+            &serde_json::json!({"action":"inbox"}),
+            Some("mcp-recipient"),
+        );
+        assert_eq!(read["count"], 2);
+        let third = send("third instruction");
+        assert_eq!(third["urgent_delivered"], true, "{third}");
+        assert!(
+            bytes.lock().unwrap().len() > first_bytes.len(),
+            "a read re-arms urgent delivery"
+        );
+    }
 }
 
 #[cfg(unix)]
@@ -3682,40 +3726,42 @@ fn urgent_mail_limits_notices_per_sender_recipient_pair() {
 #[cfg(unix)]
 #[test]
 fn urgent_mail_preserves_a_draft_and_reports_a_queued_fallback() {
-    let state = test_state();
-    register_peer(&state, TEST_UUID_A, "sender", "mcp-sender");
-    register_peer(&state, TEST_UUID_B, "recipient", "mcp-recipient");
-    crate::test_support::agent_session(&state, TEST_UUID_B, crate::pty::SHELL_BUSY);
-    state
-        .session_maps
-        .session_states
-        .get_mut(TEST_UUID_B)
-        .unwrap()
-        .agent_type = Some("codex".into());
-    let bytes = crate::test_support::insert_recording_session(&state, TEST_UUID_B);
-    let mut composer = crate::input_line_buffer::InputLineBuffer::new();
-    composer.feed("Boss's draft");
-    state
-        .session_maps
-        .input_buffers
-        .insert(TEST_UUID_B.to_string(), Mutex::new(composer));
+    for agent_type in ["codex", "ego"] {
+        let state = test_state();
+        register_peer(&state, TEST_UUID_A, "sender", "mcp-sender");
+        register_peer(&state, TEST_UUID_B, "recipient", "mcp-recipient");
+        crate::test_support::agent_session(&state, TEST_UUID_B, crate::pty::SHELL_BUSY);
+        state
+            .session_maps
+            .session_states
+            .get_mut(TEST_UUID_B)
+            .unwrap()
+            .agent_type = Some(agent_type.into());
+        let bytes = crate::test_support::insert_recording_session(&state, TEST_UUID_B);
+        let mut composer = crate::input_line_buffer::InputLineBuffer::new();
+        composer.feed("Boss's draft");
+        state
+            .session_maps
+            .input_buffers
+            .insert(TEST_UUID_B.to_string(), Mutex::new(composer));
 
-    let sent = handle_messaging(
-        &state,
-        &serde_json::json!({"action":"send","to":TEST_UUID_B,"message":"urgent private text","urgency":"urgent"}),
-        Some("mcp-sender"),
-    );
+        let sent = handle_messaging(
+            &state,
+            &serde_json::json!({"action":"send","to":TEST_UUID_B,"message":"urgent private text","urgency":"urgent"}),
+            Some("mcp-sender"),
+        );
 
-    assert_eq!(sent["urgent_delivered"], false, "{sent}");
-    assert_eq!(
-        sent["urgent_fallback_reason"], "composer_has_user_text",
-        "{sent}"
-    );
-    assert!(bytes.lock().unwrap().is_empty());
-    assert_eq!(
-        state.agent_inbox.get(TEST_UUID_B).unwrap()[0].content,
-        "urgent private text"
-    );
+        assert_eq!(sent["urgent_delivered"], false, "{sent}");
+        assert_eq!(
+            sent["urgent_fallback_reason"], "composer_has_user_text",
+            "{sent}"
+        );
+        assert!(bytes.lock().unwrap().is_empty());
+        assert_eq!(
+            state.agent_inbox.get(TEST_UUID_B).unwrap()[0].content,
+            "urgent private text"
+        );
+    }
 }
 
 /// A peer controls its display name. Even an urgent notice must not let
@@ -3761,6 +3807,7 @@ fn urgent_mail_notice_uses_sender_identity_instead_of_untrusted_display_name() {
 fn urgent_mail_reports_why_busy_delivery_is_unsafe() {
     for (agent_type, question, expected_reason) in [
         ("codex", true, "dialog_open"),
+        ("ego", true, "dialog_open"),
         ("gemini", false, "unknown_agent_type"),
     ] {
         let state = test_state();

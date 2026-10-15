@@ -390,18 +390,37 @@ function highlightAnswers(container: HTMLDivElement | undefined): void {
 			elements[index].setAttribute("data-tuic-answer", index === last ? "end" : "");
 	}
 	for (const [index, block] of blocks.entries()) {
-		if (!block.marker) continue;
-		const head = elements[index];
-		if (head.hasAttribute("data-tuic-answer-start")) continue;
-		head.setAttribute("data-tuic-answer-start", "");
-		let remaining = /^[\s●⏺•]*💬[\t ]*/.exec(head.textContent ?? "")?.[0].length ?? 0;
-		const walker = document.createTreeWalker(head, NodeFilter.SHOW_TEXT);
-		while (remaining > 0 && walker.nextNode()) {
-			const node = walker.currentNode;
-			const text = node.textContent ?? "";
-			node.textContent = text.slice(remaining);
-			remaining -= Math.min(remaining, text.length);
+		if (block.marker) stripAnswerMarker(elements[index]);
+	}
+	// A list answer belongs to the item, not its entire UL/OL (which may also
+	// contain unmarked siblings). A paragraph answer above a list still owns it.
+	for (const item of container?.querySelectorAll<HTMLElement>("li") ?? []) {
+		if (item.closest("blockquote, pre")) continue;
+		let text = "";
+		for (const node of item.childNodes) {
+			if (node instanceof HTMLElement && /^(UL|OL|PRE|BLOCKQUOTE)$/.test(node.tagName)) break;
+			text += node.textContent ?? "";
 		}
+		if (!item.hasAttribute("data-tuic-answer-start") && !ANSWER_MARKER_RE.test(text)) continue;
+		if (!item.parentElement?.closest("[data-tuic-answer]")) {
+			item.setAttribute("data-tuic-answer-region-start", "");
+			item.setAttribute("data-tuic-answer", "end");
+		}
+		stripAnswerMarker(item);
+	}
+}
+
+/** Strip only the opening marker, including when Markdown splits it across text nodes. */
+function stripAnswerMarker(head: HTMLElement): void {
+	if (head.hasAttribute("data-tuic-answer-start")) return;
+	head.setAttribute("data-tuic-answer-start", "");
+	let remaining = /^[\s●⏺•]*💬[\t ]*/.exec(head.textContent ?? "")?.[0].length ?? 0;
+	const walker = document.createTreeWalker(head, NodeFilter.SHOW_TEXT);
+	while (remaining > 0 && walker.nextNode()) {
+		const node = walker.currentNode;
+		const text = node.textContent ?? "";
+		node.textContent = text.slice(remaining);
+		remaining -= Math.min(remaining, text.length);
 	}
 }
 
