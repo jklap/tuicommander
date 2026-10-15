@@ -47,6 +47,20 @@ impl ConfigContext {
         run_at(&self.program, args, Some(&self.workspace)).await
     }
 
+    /// Transaction options are flags, not positional assignments after `--`.
+    pub(crate) async fn managed(
+        &self,
+        operation: &str,
+        tail: &[String],
+    ) -> Result<String, EgoCliError> {
+        let mut args = vec!["config".into(), operation.into()];
+        if let Some(profile) = &self.profile {
+            args.push(format!("--profile={profile}"));
+        }
+        args.extend_from_slice(tail);
+        self.run(&args).await
+    }
+
     pub(crate) async fn command(
         &self,
         operation: &str,

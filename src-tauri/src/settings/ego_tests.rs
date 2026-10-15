@@ -142,9 +142,9 @@ async fn adapter_secret_fields_presence_only() {
     );
 }
 
-// Catches: stale revisions and multi-key patches publish a partial edit.
+// Catches: stale revisions write, or valid multi-key batches fail to publish together.
 #[tokio::test]
-async fn stale_or_multi_key_patch_writes_nothing() {
+async fn stale_revision_rejects_and_multi_key_batch_publishes() {
     let f = fixture();
     let snapshot = get(&f, &["/model"]).await.unwrap();
     let before = disk(&f, "alpha");
@@ -152,7 +152,7 @@ async fn stale_or_multi_key_patch_writes_nothing() {
         .await
         .unwrap_err();
     assert_eq!(error.code, "conflict");
-    let error = f
+    let reply = f
         .registry
         .execute(Request::Patch {
             target: Target::Profile { id: "alpha".into() },
@@ -170,10 +170,10 @@ async fn stale_or_multi_key_patch_writes_nothing() {
             ],
         })
         .await
-        .unwrap_err();
-    assert_eq!(error.code, "unavailable");
-    assert_eq!(disk(&f, "alpha"), before);
-    assert!(!calls(&f).iter().any(|c| c["args"][1] == "set"));
+        .unwrap();
+    assert!(matches!(reply, Reply::Commit(_)));
+    assert_ne!(disk(&f, "alpha"), before);
+    assert_eq!(disk(&f, "alpha")["values"]["network"], json!("on"));
 }
 
 // Catches: unset is stored as a literal null, or explicit [] becomes absent/inherited roots.
@@ -375,4 +375,105 @@ async fn ego_settings_register_before_first_configuration() {
         )
         .await
         .unwrap();
+}
+
+// Catches: new managed keys are missing or sent to another owner/profile.
+#[tokio::test]
+async fn ego_gap_keys_use_owner_target() {
+    let f = fixture();
+    let before = get(&f, &["/model"]).await.unwrap();
+    let reply = set(&f, before.revision, "/exec_paths", json!(["/fixture/bin"]))
+        .await
+        .unwrap();
+    assert!(reply.persisted);
+    assert_eq!(
+        disk(&f, "alpha")["values"]["exec_paths"],
+        json!(["/fixture/bin"])
+    );
+    assert!(disk(&f, "base")["values"].get("exec_paths").is_none());
+}
+
+// Catches: an external owner write between snapshot and batch is overwritten.
+#[tokio::test]
+async fn ego_external_revision_conflict_writes_nothing() {
+    let f = fixture();
+    let before = get(&f, &["/model"]).await.unwrap();
+    std::fs::write(f.dir.path().join("race-before-batch"), "").unwrap();
+    let error = set(&f, before.revision, "/model", expected_model())
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "conflict");
+    assert_eq!(
+        disk(&f, "alpha")["values"]["model"],
+        json!("ollama/external")
+    );
+}
+
+// Catches: auth secrets leak in reads or profile selection redirects base-only edits.
+#[tokio::test]
+async fn ego_auth_actions_are_base_only_and_write_only() {
+    let f = fixture();
+    let owner = super::ego::EgoSettingsStore::new(f.state.clone()).unwrap();
+    let snapshot = f
+        .registry
+        .execute(Request::Get {
+            target: Target::Machine,
+            store: "ego".into(),
+            paths: vec!["/model".into()],
+        })
+        .await
+        .unwrap();
+    let Reply::Snapshot(snapshot) = snapshot else {
+        panic!("snapshot")
+    };
+    let alpha = disk(&f, "alpha");
+    let reply = tokio::task::spawn_blocking(move || {
+        owner.auth_edit(
+            &snapshot.revision,
+            super::ego::EgoAuthAction::SetHeaders {
+                provider: "openrouter".into(),
+                headers: [("X-Identity".into(), "fixture-canary".into())].into(),
+            },
+        )
+    })
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(reply.persisted);
+    assert_eq!(disk(&f, "alpha"), alpha);
+    assert_eq!(
+        disk(&f, "base")["values"]["auth.openrouter.headers"],
+        "<redacted>"
+    );
+    let reply = f
+        .registry
+        .execute(Request::Get {
+            target: Target::Machine,
+            store: "ego".into(),
+            paths: vec!["/auth/openrouter/headers".into()],
+        })
+        .await
+        .unwrap();
+    let wire = serde_json::to_string(&reply).unwrap();
+    assert!(!wire.contains("fixture-canary"));
+    assert!(wire.contains("set"));
+}
+
+// Catches: captured owner redaction is mistaken for a writable secret value.
+#[test]
+fn ego_captured_owner_auth_is_redacted_and_capabilities_are_conditional() {
+    let snapshot: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/ego/snapshot-base-auth.json")).unwrap();
+    assert_eq!(snapshot["values"]["auth.openai.headers"], "<redacted>");
+    assert_eq!(
+        snapshot["values"]["auth.openai.credential_command"],
+        "<redacted>"
+    );
+    let schema = super::ego::EgoSettingsStore::auth_action_schema();
+    let wire = schema.to_string();
+    assert!(wire.contains("writeOnly"));
+    let capabilities: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/ego/capabilities.json")).unwrap();
+    assert_eq!(capabilities["atomic_batch"], true);
+    assert_eq!(capabilities["compare_and_swap"], true);
 }

@@ -2234,17 +2234,21 @@ HTTP route or IPC command. Its reads and results contain credential presence onl
 `settings::ego::EgoSettingsStore` targets `profile` with the configured profile ID,
 or `machine` for the user base. It captures trusted executable, workspace and
 profile together per operation, clears ambient `EGO_PROFILE`, and invokes only
-`config ls/set/unset`, `models --json` without refresh, and `auth status`.
+`config capabilities/snapshot/batch`, `models --json` without refresh, and `auth status`.
 The model slug selects the provider. Managed DTOs discard unknown owner fields;
 credential type/expiry and process diagnostics never enter settings replies,
 effects or audit data. Credentials are read-only set/unset markers.
 
-Each managed key is one atomic leaf. Null/reset invokes owner `unset`; explicit
-`roots: []` invokes `set roots=[]`. The managed keys are `model`, `roots` and
-`network`; Ego itself enforces its scope rules. A patch changing multiple keys is rejected before any write because
-Ego's CLI has no atomic batch operation. The adapter checks latest revisions and
-serializes its own mutations, but an external CLI writer can race the read/write
-boundary; the owner-gap ledger records the missing conditional-write API. Failed
+Managed keys (`model`, `roots`, `network`, `exec_paths`) are atomic leaves.
+Null/reset sends an owner unset; explicit empty arrays stay explicit. A patch is
+one `config batch --if-revision` against the opaque revision from `config snapshot`.
+This protects against external CLI writers as well as host requests. Atomicity is
+limited to the selected Ego user document, never other settings stores. Owners
+without advertised atomic batch and compare-and-swap support fail closed.
+Base-only provider headers and credential commands have typed write-only auth
+actions (`EgoAuthAction`) and presence-only catalogue fields. Auth actions always
+select the base owner, independent of the launch profile. No read executes a
+credential command or attempts to recover an owner-redacted value. Failed
 readback after a successful write reports `persisted: true` and `nextAction: get`.
 
 Launch defaults (`ego_executable`, `ego_profile`, `ai_chat_workspace`) stay in the
