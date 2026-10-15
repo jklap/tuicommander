@@ -2243,3 +2243,7 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 
 - [ ] After planned settings cutover/rebuild, set and clear credentials on an isolated saved connection; verify presence-only replies, teardown/reconnect, and that remote-target requests do not mutate local credentials. Automated tests use the in-memory vault, not a real account or Keychain.
 - [ ] After Boss restarts the Rust backend, start a direct Gemini session in a trusted workspace, upload a PNG and ask it to read the image. There must be no trust prompt for the session attachment directory. Repeat with ego in ro, workspace and adaptive sandbox modes; the read must succeed without approval. Check a resumed and a typed-by-name launch. ACP extra-directory grants remain unsupported. (#1833-aa60)
+
+## #1917 — AI Chat conversation deletion
+
+- [ ] Open AI Chat with installed ego; expand Conversations, capture the trash controls and named confirmation, then cancel. Delete a throwaway inactive conversation and confirm only its tab closes. Delete the selected last conversation, reload, and confirm it does not return. While a throwaway conversation is running, attempt deletion and confirm ego's refusal is shown without removing it. Repeat on browser/mobile Chat. No application restart is required for this frontend-only change.

@@ -1459,3 +1459,33 @@
 .messageList[data-terminal-chat] .assistantMsg :global(#markdown-content > div:last-child > [data-tuic-answer]:last-child) {
   margin-bottom: 0;
 }
+
+.conversationList { position: relative; }
+.conversationRows {
+	position: absolute;
+	right: 0;
+	top: 100%;
+	z-index: 10;
+	width: min(360px, 80vw);
+	max-height: 300px;
+	overflow-y: auto;
+	background: var(--bg-secondary);
+	border: 1px solid var(--border);
+	border-radius: 4px;
+	padding: 4px;
+}
+.conversationRow { display: flex; align-items: center; gap: 4px; }
+.conversationName {
+	flex: 1;
+	min-width: 0;
+	text-align: left;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	background: transparent;
+	border: none;
+	color: var(--fg-primary);
+	padding: 6px;
+	cursor: pointer;
+}
+.conversationName:hover { background: var(--bg-highlight); }

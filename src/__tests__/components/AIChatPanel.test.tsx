@@ -112,6 +112,7 @@ const client = vi.hoisted(() => ({
 	resumeTurn: vi.fn(),
 	compact: vi.fn(),
 	forkSession: vi.fn(),
+	deleteSession: vi.fn(),
 }));
 
 vi.mock("../../services/acpClient", () => ({ acpClient: client }));
@@ -147,6 +148,7 @@ const SECOND_SESSION = "01932d5e-0000-7000-8000-0000000000bb";
 const PNG_1X1 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 let supportsImages = false;
 let supportsFork = false;
+let supportsDelete = false;
 const CHILD_SESSION = "01932d5e-0000-7000-8000-0000000000dd";
 
 function pasteFile(textarea: HTMLTextAreaElement, file: File): Event {
@@ -197,7 +199,7 @@ function snapshot(overrides: Partial<AcpConnectionSnapshot> = {}): AcpConnection
 			list: true,
 			resume: true,
 			fork: supportsFork,
-			delete: false,
+			delete: supportsDelete,
 			close: true,
 			additionalDirectories: true,
 			promptImage: supportsImages,
@@ -283,6 +285,7 @@ beforeEach(() => {
 	sequence = 0;
 	supportsImages = false;
 	supportsFork = false;
+	supportsDelete = false;
 	settings.egoExecutable = "/usr/local/bin/ego";
 	acpStore.reset();
 	acpTranscript.reset();
@@ -4246,4 +4249,80 @@ it("mobile Chat updates keyboard correction without changing desktop attributes"
 	expectAttributes(false);
 	view.getByRole("button", { name: "Toggle correction" }).click();
 	expectAttributes(true);
+});
+
+describe("AIChatPanel: delete conversation", () => {
+	async function listedPanel() {
+		supportsDelete = true;
+		client.listSessions.mockResolvedValue({
+			sessions: [{ sessionId: SESSION, cwd: CHAT_ROOT, title: "Delete this chat" }],
+			nextCursor: null,
+		});
+		client.deleteSession.mockResolvedValue(undefined);
+		return renderPanel();
+	}
+
+	// Catches: deleting the selected last conversation leaves a tab pointing at a missing session.
+	it("deletes the selected last conversation and removes its tab and list entry", async () => {
+		const { container } = await listedPanel();
+		const button = container.querySelector<HTMLButtonElement>('button[aria-label="Delete Delete this chat"]');
+		expect(button).not.toBeNull();
+		button?.click();
+		expect(container.textContent).toContain("Delete “Delete this chat”?");
+		expect(client.deleteSession).not.toHaveBeenCalled();
+		[...container.querySelectorAll<HTMLButtonElement>("button")]
+			.find((button) => button.textContent === "Delete")
+			?.click();
+		await settle();
+		expect(client.deleteSession).toHaveBeenCalledWith(CONNECTION, SESSION);
+		expect(aiChatTabs.ids("global")).toEqual([]);
+		expect(container.querySelector('button[aria-label="Delete Delete this chat"]')).toBeNull();
+	});
+
+	// Catches: deletion of an inactive tab closes the selected live neighbor.
+	it("deletes an inactive conversation without changing the selected tab", async () => {
+		supportsDelete = true;
+		let dispose = () => {};
+		const chat = createRoot((cleanup) => {
+			dispose = cleanup;
+			return createAcpChat(
+				() => ROOT,
+				() => true,
+				client,
+			);
+		});
+		await chat.ensureStarted();
+		aiChatTabs.add("global", SECOND_SESSION);
+		aiChatTabs.add("global", SESSION);
+		client.deleteSession.mockResolvedValue(undefined);
+		await chat.deleteSession(SECOND_SESSION);
+		expect(client.deleteSession).toHaveBeenCalledWith(CONNECTION, SECOND_SESSION);
+		expect(chat.sessionId()).toBe(SESSION);
+		expect(aiChatTabs.ids("global")).toEqual([SESSION]);
+		dispose();
+	});
+
+	// Catches: an ego refusal silently removes a still-running conversation.
+	it("keeps the conversation and tab and shows a refused delete", async () => {
+		const { container } = await listedPanel();
+		client.deleteSession.mockRejectedValueOnce(new Error("conversation is running"));
+		container.querySelector<HTMLButtonElement>('button[aria-label="Delete Delete this chat"]')?.click();
+		[...container.querySelectorAll<HTMLButtonElement>("button")]
+			.find((button) => button.textContent === "Delete")
+			?.click();
+		await settle();
+		expect(container.textContent).toContain("conversation is running");
+		expect(aiChatTabs.ids("global")).toEqual([SESSION]);
+		expect(container.querySelector('button[aria-label="Delete Delete this chat"]')).not.toBeNull();
+	});
+
+	// Catches: a destructive control offered without the advertised ACP capability.
+	it("hides deletion when the agent does not advertise it", async () => {
+		const { container } = await listedPanel();
+		acpStore.applySnapshot(
+			snapshot({ capabilities: { ...snapshot().capabilities!, delete: false }, attachments: [attachment()] }),
+		);
+		await settle();
+		expect(container.querySelector('button[aria-label="Delete Delete this chat"]')).toBeNull();
+	});
 });
