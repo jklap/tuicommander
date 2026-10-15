@@ -494,12 +494,18 @@ await host.writePty(sessionId, "\x03"); // Send Ctrl-C
 
 Sends user input to an agent session with correct Enter handling. **Requires `"pty:write"` capability.**
 
+
+
 Ink-based agents (Claude Code, Codex, etc.) run in raw mode and need Ctrl-U, the text, and `\r` as three writes with a real time gap between them, so each arrives in its own read (Claude Code strips a Ctrl-U that arrives inside a long text and then refuses the Enter). Shell sessions receive Ctrl-U + text in one write, then `\r`. This method handles both cases automatically based on the detected agent type.
 
 ```typescript
 await host.sendAgentInput(sessionId, "y");       // confirm a prompt
 await host.sendAgentInput(sessionId, "explain this code"); // send a message
 ```
+
+#### `host.sendAgentInputIfEmpty(sessionId, text) -> Promise<boolean>`
+
+Requires `"pty:write"`. For automated idle messages, use `host.sendAgentInputIfEmpty(sessionId, text)`. The backend checks the current idle, awaiting, and tracked composer state and serializes the complete submission with raw user input and its bookkeeping. It returns `false` without writing when blocked; it returns `true` after submission. This mode never answers a dialog or drains queued commands. Do not use a separate composer read to authorize a later send. Plugin load and reload replay the current `awaiting` state and shell state with `agent_type`. Older hosts do not expose this method, so plugins fail closed instead of falling back to destructive input.
 
 #### host.openMarkdownPanel(title, contentUri) -> void
 
@@ -1335,7 +1341,7 @@ Capabilities gate access to Tier 3 and Tier 4 methods. Declare them in `manifest
 
 | Capability | Unlocks | Risk |
 |------------|---------|------|
-| `pty:write` | `host.writePty()`, `host.sendAgentInput()` | Can send input to terminals |
+| `pty:write` | `host.writePty()`, `host.sendAgentInput()`, `host.sendAgentInputIfEmpty()` | Can send input to terminals |
 | `pty:read` | `host.invoke("get_input_buffer_content", …)` | Can read the terminal input line buffer |
 | `ui:markdown` | `host.openMarkdownPanel()`, `host.openMarkdownFile()`, `host.openMarkdownFileBackground()` | Can open panels and files in the UI |
 | `ui:sound` | `host.playNotificationSound(sound?)` | Can play sounds (question, error, completion, warning, info) |
@@ -2072,3 +2078,23 @@ the work-item plugins that are missing. Open Tasks is always offered.
 A provider page with `total <= 1000` can enable complete local Tasks queries after every page is collected and its unique item count matches the stable total. Omit `total` when unknown; never infer a count from a cursor or loaded rows. Local query projection is the host Rust command `project_work_items`, shared with `/tasks/project`. Collection preserves GitLab type, state and preset scope. GitLab username filters remain server-side because list rows hold numeric user identities, not usernames. Roadmap keeps provider paging and does not collect complete scopes automatically.
 
 GitHub Tasks boards (#1846-55d7): the optional provider `listBoards(signal)` port discovers the current user Projects v2 when Board opens. The existing picker selects a project; paging preserves project identities. Missing `read:project` stays visible instead of claiming there are no boards. Providers without discovery retain their configured boards. Discovery does not persist selections or write to GitHub.
+
+### Account-scoped GitHub review and action ports
+
+`host.githubReviewThreads(account, reference, after)` returns the core B6 review
+thread page, including head SHA, bot authors and parsed findings.
+`host.githubPrAction(account, reference, request)` calls core B7 policy.
+Both require `net:http` and an on-disk manifest declaring `providers: ["github"]`.
+The reference must identify a GitHub pull request in the selected account. Core
+loads that exact account credential, never a local repository default. Cross-account
+references fail before credential lookup. No token is returned to the plugin.
+
+Requests use `action`: `state`, `auto_merge` (`enabled`, optional `mergeMethod`,
+`expectedHeadSha`), `queue` (`enqueued`, optional `expectedHeadSha`), `merge`
+(`mergeMethod`, `expectedHeadSha`), `rerun` (`runId`), or `review` (`draft` with
+`headSha`, `body`, `event`, `comments`). Existing core reviewed-head validation,
+merge queue policy and shared request budgets apply unchanged. The desktop command
+`plugin_github_action` and `POST /api/plugins/{plugin_id}/github` accept identical
+`{account, reference, request}` payloads (IPC also supplies `pluginId`).
+The GitHub Work runtime binds both ports when it registers each configured account.
+No live write or desktop-load verification is implied by recorded-fixture tests.

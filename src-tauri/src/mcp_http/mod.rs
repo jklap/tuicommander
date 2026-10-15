@@ -1074,6 +1074,10 @@ fn shared_routes() -> Router<Arc<AppState>> {
         )
         .route("/sessions/{id}/shell-state", get(session::get_shell_state))
         .route(
+            "/sessions/{id}/input-if-empty",
+            post(session::send_agent_input_if_empty),
+        )
+        .route(
             "/sessions/{id}/shell-family",
             get(session::get_session_shell_family),
         )
@@ -2089,6 +2093,10 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         .route(
             "/api/plugins/{plugin_id}/exec",
             post(plugin_routes::plugin_exec),
+        )
+        .route(
+            "/api/plugins/{plugin_id}/github",
+            post(plugin_routes::plugin_github_action),
         )
         .route(
             "/api/plugins/{plugin_id}/http",

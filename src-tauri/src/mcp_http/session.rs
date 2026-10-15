@@ -271,6 +271,8 @@ pub(crate) fn write_pty_input_parts(
     session_id: &str,
     parts: &[&str],
 ) -> Result<(), String> {
+    let transaction = state.input_transaction(session_id);
+    let _input = transaction.lock();
     let byte_parts: Vec<&[u8]> = parts.iter().map(|part| part.as_bytes()).collect();
     state.write_pty_parts(session_id, &byte_parts)?;
 
@@ -298,6 +300,8 @@ pub(crate) fn write_pty_input_pair(
     key: &str,
     agent_type: Option<&str>,
 ) -> Result<(), String> {
+    let transaction = state.input_transaction(session_id);
+    let _input = transaction.lock();
     if key != "\r" || agent_type.is_none() {
         return write_pty_input_parts(state, session_id, &[text, key]);
     }
@@ -333,6 +337,8 @@ fn write_pty_input_bytes(
     session_id: &str,
     data: &[u8],
 ) -> Result<(), String> {
+    let transaction = state.input_transaction(session_id);
+    let _input = transaction.lock();
     state.write_pty_parts(session_id, &[data])?;
     crate::pty_capture::record_input(session_id, data);
     if let Ok(text) = std::str::from_utf8(data) {
@@ -1058,6 +1064,26 @@ pub(super) async fn get_last_prompt(
         .get(&session_id)
         .map(|v| v.clone());
     Json(serde_json::json!({ "prompt": value }))
+}
+
+#[derive(serde::Deserialize)]
+pub(super) struct GuardedAgentInput {
+    text: String,
+}
+
+pub(super) async fn send_agent_input_if_empty(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+    Json(body): Json<GuardedAgentInput>,
+) -> impl IntoResponse {
+    super::json_result(
+        tokio::task::spawn_blocking(move || {
+            crate::pty::send_agent_input_if_empty_blocking(&state, &session_id, &body.text)
+        })
+        .await
+        .map_err(|error| error.to_string())
+        .and_then(|result| result),
+    )
 }
 
 /// Current input-line buffer content for a session (empty string if not typing).

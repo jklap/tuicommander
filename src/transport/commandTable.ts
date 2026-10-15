@@ -513,6 +513,9 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			transform: (data) => (data as { prompt: string | null }).prompt ?? null,
 		}),
 	},
+	send_agent_input_if_empty: {
+		map: (args) => ({ method: "POST", path: `/sessions/${args.sessionId}/input-if-empty`, body: { text: args.text } }),
+	},
 	get_input_buffer_content: {
 		map: (args) => ({
 			method: "GET",
@@ -2315,6 +2318,13 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			method: "POST",
 			path: `/api/plugins/${p("pluginId")}/exec`,
 			body: { binary: args.binary, args: args.args, cwd: args.cwd },
+		}),
+	},
+	plugin_github_action: {
+		map: (args, p) => ({
+			method: "POST",
+			path: `/api/plugins/${p("pluginId")}/github`,
+			body: { account: args.account, reference: args.reference, request: args.request },
 		}),
 	},
 	plugin_http_fetch: {

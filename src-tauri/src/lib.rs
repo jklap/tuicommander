@@ -137,6 +137,7 @@ mod panel_window;
 pub(crate) mod plugin_credentials;
 pub(crate) mod plugin_exec;
 pub(crate) mod plugin_fs;
+pub(crate) mod plugin_github;
 pub(crate) mod plugin_http;
 pub(crate) mod plugin_pty;
 pub(crate) mod plugin_settings;
@@ -2082,6 +2083,7 @@ pub fn run() {
             pty::write_pty_parts,
             attachments::upload_attachment,
             pty::get_input_buffer_content,
+            pty::send_agent_input_if_empty,
             pty::resize_pty,
             pty::set_ansi_colors,
             pty::pause_pty,
@@ -2501,6 +2503,7 @@ pub fn run() {
             plugin_fs::delete_build_artifact,
             plugin_fs::trim_build_artifact,
             plugin_http::plugin_http_fetch,
+            plugin_github::plugin_github_action,
             plugin_pty::plugin_read_session_output,
             plugin_exec::plugin_exec_cli,
             plugin_credentials::plugin_read_credential,

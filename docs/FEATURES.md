@@ -2961,7 +2961,7 @@ Tasks navigation surface determine where it is shown.
 
 ### GitHub Work adapter — runtime integration pending
 
-The `github-work` provider adapter supports account-scoped qualifier search, issue/PR identity, detail, paged comments and review summaries, create metadata, duplicate candidates, close reasons and host start-work intents. It is tested against recorded GitHub reads. Authenticated host wiring, lifecycle, manifest and catalog registration are present. The duplicate-picker UI and core PR-action binding remain pending. Projects v2 success-path verification needs a GitHub credential with `read:project`.
+The `github-work` provider adapter supports account-scoped qualifier search, issue/PR identity, detail, paged comments and review summaries, create metadata, duplicate candidates, close reasons and host start-work intents. It is tested against recorded GitHub reads. Authenticated host wiring, lifecycle, manifest and catalog registration are present. The runtime binds account-scoped core review threads and PR actions; core retains reviewed-head and merge-queue policy. Recorded public Projects reads cover move and clear request contracts without live writes. Desktop load and live mutation verification remain pending.
 
 ## Tasks create component
 

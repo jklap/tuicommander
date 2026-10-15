@@ -1962,6 +1962,8 @@ pub struct SessionMaps {
     /// Per-session input line buffers for reconstructing user input from PTY writes.
     /// Separate DashMap (like kitty_states) to avoid writer lock contention.
     pub(crate) input_buffers: DashMap<String, Mutex<crate::input_line_buffer::InputLineBuffer>>,
+    /// Serializes guarded automated submissions with raw input and its bookkeeping.
+    pub(crate) input_transactions: DashMap<String, Arc<parking_lot::ReentrantMutex<()>>>,
     /// Last relevant user prompt per session (>= 10 words).
     /// Updated on each qualifying user input line, read by the Activity Dashboard.
     pub(crate) last_prompts: DashMap<String, String>,
@@ -2357,6 +2359,17 @@ pub struct AppState {
 }
 
 impl AppState {
+    pub(crate) fn input_transaction(
+        &self,
+        session_id: &str,
+    ) -> Arc<parking_lot::ReentrantMutex<()>> {
+        self.session_maps
+            .input_transactions
+            .entry(session_id.to_string())
+            .or_insert_with(|| Arc::new(parking_lot::ReentrantMutex::new(())))
+            .clone()
+    }
+
     /// Clone a session's independently serialized PTY writer.
     ///
     /// The session mutex is held only long enough to clone the handle. Callers

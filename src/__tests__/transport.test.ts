@@ -1373,6 +1373,12 @@ describe("transport", () => {
 			expect(result.transform?.({ prompt: null })).toBeNull();
 		});
 
+		it("maps guarded agent input to the atomic backend submission route", () => {
+			// Catches: browser keepalive falling back to unguarded raw writes.
+			const result = mapCommandToHttp("send_agent_input_if_empty", { sessionId: "s1", text: "[noop]" });
+			expect(result).toMatchObject({ method: "POST", path: "/sessions/s1/input-if-empty", body: { text: "[noop]" } });
+		});
+
 		it("maps get_input_buffer_content to GET with {content} unwrap transform", () => {
 			const result = mapCommandToHttp("get_input_buffer_content", { sessionId: "s1" });
 			expect(result.method).toBe("GET");
@@ -2114,6 +2120,22 @@ describe("transport", () => {
 			expect(ex.method).toBe("POST");
 			expect(ex.path).toBe("/api/plugins/my-plugin/exec");
 			expect(ex.body).toEqual({ binary: "mdkb", args: ["--version"], cwd: "/home/user" });
+
+			// Catches: browser-mode B6/B7 requests lose account or reference identity.
+			const githubReference = { providerId: "github", accountId: "selected", id: "owner/repo/pull/12" };
+			const githubRequest = { action: "threads", after: null };
+			expect(
+				mapCommandToHttp("plugin_github_action", {
+					pluginId: "my-plugin",
+					account: "selected",
+					reference: githubReference,
+					request: githubRequest,
+				}),
+			).toEqual({
+				method: "POST",
+				path: "/api/plugins/my-plugin/github",
+				body: { account: "selected", reference: githubReference, request: githubRequest },
+			});
 
 			// plugin_http_fetch
 			const hf = mapCommandToHttp("plugin_http_fetch", {

@@ -5,6 +5,7 @@ import {
 	loadUserPlugins,
 	pluginModuleBaseUrl,
 	pluginModuleUrl,
+	replayActiveAgents,
 	validateManifest,
 	validateModule,
 } from "../../plugins/pluginLoader";
@@ -20,6 +21,8 @@ vi.mock("../../plugins/pluginRegistry", () => ({
 	pluginRegistry: {
 		register: vi.fn(),
 		unregister: vi.fn(),
+		notifyStateChange: vi.fn(),
+		dispatchStructuredEvent: vi.fn(),
 	},
 }));
 
@@ -260,4 +263,30 @@ describe("loadUserPlugins", () => {
 			}),
 		);
 	});
+});
+
+// Catches: hot reload loses an already open question and agent identity.
+it("replays awaiting and agent type when reloading into an open question", async () => {
+	const { terminalsStore } = await import("../../stores/terminals");
+	const id = terminalsStore.add({
+		sessionId: "reload-question",
+		agentType: "claude",
+		fontSize: 14,
+		name: "Reload",
+		cwd: "/repo",
+		awaitingInput: null,
+	});
+	terminalsStore.update(id, { shellState: "idle", awaitingInput: "question", awaitingInputConfident: true });
+	replayActiveAgents(terminalsStore);
+	expect(pluginRegistry.dispatchStructuredEvent).toHaveBeenCalledWith(
+		"shell-state",
+		{ state: "idle", agent_type: "claude" },
+		"reload-question",
+	);
+	expect(pluginRegistry.dispatchStructuredEvent).toHaveBeenCalledWith(
+		"awaiting",
+		{ awaiting: true, confident: true },
+		"reload-question",
+	);
+	terminalsStore.remove(id);
 });
