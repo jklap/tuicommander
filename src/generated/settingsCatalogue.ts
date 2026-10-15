@@ -4431,6 +4431,47 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
+    "github_accounts.accounts.{id}.credential": {
+      "id": "github_accounts.accounts.{id}.credential",
+      "store": "github_accounts",
+      "owner": "machine",
+      "area": "github_accounts",
+      "group": "accounts",
+      "order": 3,
+      "path": "/accounts/{id}/credential",
+      "labelKey": "settings.catalogue.github_accounts.accounts.{id}.credential.label",
+      "helpKey": "settings.catalogue.github_accounts.accounts.{id}.credential.help",
+      "label": "credential",
+      "schema": {
+        "type": "string",
+        "enum": [
+          "set",
+          "unset",
+          "unavailable"
+        ]
+      },
+      "nullable": false,
+      "availability": {
+        "status": "available"
+      },
+      "choices": {
+        "kind": "static",
+        "values": [
+          "set",
+          "unset",
+          "unavailable"
+        ]
+      },
+      "sensitivity": "secret",
+      "apply": "live",
+      "effect": "Reads credential presence. Use typed account actions for cloud device login, enterprise verification, token rotation and removal.",
+      "operations": [
+        "get",
+        "set_secret",
+        "clear_secret"
+      ],
+      "confirmationClass": "ordinary"
+    },
     "github_accounts.accounts.{id}.host.host": {
       "id": "github_accounts.accounts.{id}.host.host",
       "store": "github_accounts",
@@ -9693,12 +9734,6 @@ export const settingsCatalogue = {
       "reason": "ForwardSpec records have no stable IDs; owner must define stable record edits."
     },
     {
-      "store": "github_accounts",
-      "path": "/accounts/{id}/credential",
-      "ownerStep": "Step 3a",
-      "reason": "Recoverable credential presence and typed login/rotation actions need the account owner schema; registry metadata alone is not coverage."
-    },
-    {
       "store": "repositories_registration",
       "path": "/repos/{path}",
       "ownerStep": "Step 4d",
@@ -10263,6 +10298,14 @@ export const settingsCatalogue = {
                 "type": "string",
                 "const": "ghe_pat"
               }
+            ]
+          },
+          "credential": {
+            "type": "string",
+            "enum": [
+              "set",
+              "unset",
+              "unavailable"
             ]
           }
         },

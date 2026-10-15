@@ -1632,3 +1632,10 @@ Hibernation requires an idle agent and a verified resume session in its saved pr
 The normal Rust suspension path persists `reason: "idle_hibernate"` before ending the PTY. Opening the tab, submitting input or sending peer mail uses the shared wake path. Storage or resume-verification failures leave the live session intact.
 
 Tasks notice policy and per-item follow/comment baselines are JSON values in `ui-prefs.json`'s existing `tasks_view_preferences` map. Reserved keys are `tasks:notification-policy` and `tasks:follow:<provider/account/item identity>`. No new configuration file or provider polling is used. Missing policy means disabled. These are host UI preferences, not provider subscriptions.
+
+The GitHub owner catalogue describes `/accounts/{id}/credential` as presence only
+(`set`, `unset`, or `unavailable`). The snapshot retains `secret.status` for existing
+consumers and adds the matching `credential` presence. Credential values are never
+returned. Use the typed GitHub owner actions for cloud device login, enterprise
+verification, rotation, clearing, and account removal; generic field writes do not
+replace those owner operations.

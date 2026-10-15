@@ -1,11 +1,5 @@
 [
   {
-    "store": "github_accounts",
-    "path": "/accounts/{id}/credential",
-    "ownerStep": "Step 3a",
-    "reason": "Recoverable credential presence and typed login/rotation actions need the account owner schema; registry metadata alone is not coverage."
-  },
-  {
     "store": "repositories_registration",
     "path": "/repos/{path}",
     "ownerStep": "Step 4d",

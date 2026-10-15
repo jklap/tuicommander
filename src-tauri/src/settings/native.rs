@@ -65,10 +65,11 @@ pub(super) fn native_catalogue_for(dictation: bool) -> Result<Catalogue, Catalog
         Some(&crate::mcp_upstream_config::UpstreamMcpConfig::default()),
         available.clone(),
     )?;
-    catalogue.register(
+    catalogue.register_schema(
         "github_accounts",
         "machine",
-        Some(&crate::github_account::GitHubAccountRegistry::default()),
+        &super::accounts::GithubSettings::catalogue_schema(),
+        None,
         available.clone(),
     )?;
     catalogue.register(
