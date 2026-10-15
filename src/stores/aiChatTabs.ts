@@ -3,6 +3,7 @@ import { createSignal } from "solid-js";
 interface ChatTabs {
 	ids: string[];
 	active: string;
+	pinnedRepos?: Record<string, string>;
 }
 
 const STORAGE_KEY = "tuic-ai-chat-tabs";
@@ -19,7 +20,12 @@ function read(): Record<string, ChatTabs> {
 			if (!Array.isArray(candidate.ids) || !candidate.ids.every((id) => typeof id === "string")) continue;
 			const ids = [...new Set(candidate.ids)];
 			if (ids.length && typeof candidate.active === "string" && ids.includes(candidate.active)) {
-				valid[root] = { ids, active: candidate.active };
+				const pinnedRepos = Object.fromEntries(
+					Object.entries(candidate.pinnedRepos ?? {}).filter(
+						([session, path]) => ids.includes(session) && typeof path === "string" && path.length > 0,
+					),
+				);
+				valid[root] = { ids, active: candidate.active, pinnedRepos };
 			}
 		}
 		return valid;
@@ -29,7 +35,12 @@ function read(): Record<string, ChatTabs> {
 }
 
 function save(root: string, tabs: ChatTabs): void {
-	const next = { ...byRoot(), ...read(), [root]: tabs };
+	const pinnedRepos = Object.fromEntries(
+		Object.entries(tabs.pinnedRepos ?? byRoot()[root]?.pinnedRepos ?? {}).filter(([session]) =>
+			tabs.ids.includes(session),
+		),
+	);
+	const next = { ...byRoot(), ...read(), [root]: { ...tabs, pinnedRepos } };
 	setByRoot(next);
 	try {
 		localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
@@ -40,6 +51,15 @@ function save(root: string, tabs: ChatTabs): void {
 
 export const aiChatTabs = {
 	ids: (root: string) => byRoot()[root]?.ids ?? [],
+	pinnedRepo: (root: string, session: string) => byRoot()[root]?.pinnedRepos?.[session] ?? null,
+	pinRepo(root: string, session: string, repo: string | null): void {
+		const current = byRoot()[root];
+		if (!current) return;
+		const pinnedRepos = { ...current.pinnedRepos };
+		if (repo) pinnedRepos[session] = repo;
+		else delete pinnedRepos[session];
+		save(root, { ...current, pinnedRepos });
+	},
 	active: (root: string) => byRoot()[root]?.active ?? null,
 	refresh(): void {
 		setByRoot(read());
