@@ -131,7 +131,7 @@ export const TerminalTabView: Component<TerminalTabViewProps> = (props) => {
 					isDetached() && s.detached,
 					awaitingInput() && s.awaitingInput,
 					awaitingInput() && AWAITING_CLASSES[awaitingInput()!],
-					!awaitingInput() && isBusy() && s.shellBusy,
+					!awaitingInput() && !terminal()?.providerRecovery && isBusy() && s.shellBusy,
 					!awaitingInput() && !isBusy() && isUnseen() && s.shellUnseen,
 					!awaitingInput() && isIdle() && !isUnseen() && s.shellIdle,
 					isExited() && s.shellExited,
@@ -177,6 +177,9 @@ export const TerminalTabView: Component<TerminalTabViewProps> = (props) => {
 								<span class={s.ptyPrefix}>PTY · </span>
 							</Show>
 							{terminal()?.name}
+							<Show when={terminal()?.providerRecovery}>
+								<span> · recovering</span>
+							</Show>
 							<Show when={terminal()?.standby}>
 								<span class={s.standbyBadge} title="Standby (paused)">
 									<svg viewBox="0 0 8 10" width="8" height="10" fill="currentColor">

@@ -35,6 +35,13 @@ pub(super) fn describe_lifecycle_payload(
             ),
         };
     }
+    if payload["state"] == "recovering" {
+        let recovery = &payload["provider_recovery"];
+        return format!(
+            "child agent {child} is waiting for provider recovery (phase {}, attempt {}, next_attempt_ms {}) — force retry with session action=force_retry",
+            recovery["phase"], recovery["attempt"], recovery["next_attempt_ms"]
+        );
+    }
     let state_desc = payload
         .get("state")
         .and_then(|s| s.as_str())

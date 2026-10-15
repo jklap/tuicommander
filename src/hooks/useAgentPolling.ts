@@ -3,7 +3,7 @@ import { AGENT_TYPES, AGENTS, type AgentType } from "../agents";
 import { invoke } from "../invoke";
 import { pluginRegistry } from "../plugins/pluginRegistry";
 import { appLogger } from "../stores/appLogger";
-import { type AgentLifecycleState, type ShellState, terminalsStore } from "../stores/terminals";
+import { type AgentLifecycleState, type ProviderRecovery, type ShellState, terminalsStore } from "../stores/terminals";
 import { isTauri, rpc, subscribeEvents, type Unsubscribe } from "../transport";
 
 /** Fallback polling interval — only catches cold starts and edge cases (ms) */
@@ -11,6 +11,7 @@ const POLL_INTERVAL_MS = 30_000;
 const NATIVE_LIFECYCLE_TIMEOUT_MS = 5_000;
 
 type BackendSessionState = {
+	provider_recovery?: ProviderRecovery | null;
 	codex_binding?: { session_id: string } | null;
 	agent_type?: string | null;
 	shell_state?: string;
@@ -79,6 +80,7 @@ function applySessionState(termId: string, sessionId: string, state: BackendSess
 	const isAwaiting = state?.awaiting_input === true;
 	terminalsStore.update(termId, {
 		agentState: toAgentLifecycleState(state?.agent_state),
+		providerRecovery: state?.provider_recovery ?? null,
 		// SessionState snapshots are complete. Rust omits Option::None fields,
 		// therefore absence retracts context instead of meaning "unchanged".
 		agentIntent: state?.agent_intent ?? null,

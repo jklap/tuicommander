@@ -421,3 +421,14 @@ The backend checks unattended top-level agent tabs every five seconds. `agents.h
 Hibernation requires an idle agent and a verified resume session in its saved profile. Plain shells and agents without a verifiable resume session stay live. Unread peer mail, pending commands or background work, awaiting input, attached readers, keep-open tabs and open automation runs prevent hibernation. Managed children retain their separate idle-close policy. Sleep gaps longer than 30 seconds do not advance the idle clock.
 
 The normal Rust suspension path persists `reason: "idle_hibernate"` before ending the PTY. Opening the tab, submitting input or sending peer mail uses the shared wake path. Storage or resume-verification failures leave the live session intact.
+
+### ego provider recovery
+
+When terminal ego reports a provider outage, its tab shows **recovering** rather
+than a working animation. The status bar shows the recovery phase, attempt,
+next attempt time and seconds remaining. Zero seconds means the scheduled time
+has arrived, not that the provider has recovered. **Force retry** submits
+`/retry` once to that terminal. Managed parents receive recovery entry and exit
+notices; MCP callers can use `session action=force_retry session_id=<id>`.
+Recovery clears when ego explicitly clears it, resumes busy/idle state, or
+returns to the shell prompt. This terminal protocol is separate from ACP retry.

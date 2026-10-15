@@ -3115,3 +3115,10 @@ AI Chat can pin repository context per conversation. A separate composer control
 ### Settings layout foundation
 
 Settings shares a responsive shell (1136px maximum, 80vh height) and reusable theme-aware cards, rows, status summaries and scoped action presentation. Existing settings behavior is unchanged; page-by-page adoption follows separately.
+
+### Terminal ego provider recovery
+
+Native terminal ego can report provider recovery with phase, attempt and next
+attempt time. Tabs show recovering; the status bar includes a countdown and
+Force retry. Managed parents receive recovery entry/exit notices. MCP session
+`force_retry` submits `/retry` once to the recovering ego terminal.

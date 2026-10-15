@@ -14770,3 +14770,145 @@ fn recorded_claude_stop_hooks_keep_public_session_working_with_pending_choices()
     );
     assert_eq!(snapshot.shell_state.as_deref(), Some("busy"));
 }
+
+/// Catches: a native ego recovery frame being ignored and leaving hours of false working state.
+#[test]
+fn ego_recovery_frame_reaches_session_stream() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let sid = "ego-recovery";
+    agent_session(&state, sid, SHELL_BUSY);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("ego".into());
+    state
+        .grid
+        .vt_log_buffers
+        .insert(sid.into(), Mutex::new(VtLogBuffer::new(24, 80, 1000)));
+    let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
+    let mut processor = ChunkProcessor::new(None, None);
+    let mut events = state.event_bus.subscribe();
+    processor.process_chunk("\x1b]7770;ego-recovery={\"phase\":\"waiting\",\"next_attempt_ms\":1792100000000,\"attempt\":3}\x07", &silence, sid, &state);
+    let recovery = std::iter::from_fn(|| events.try_recv().ok()).find_map(|event| match event {
+        crate::state::AppEvent::PtyParsed { parsed, .. }
+            if parsed["type"] == "provider-recovery" =>
+        {
+            Some(parsed)
+        }
+        _ => None,
+    });
+    assert_eq!(recovery.unwrap()["recovery"]["attempt"], 3);
+}
+
+/// Catches: recovery bypassing agent ownership or surviving explicit lifecycle clears.
+#[test]
+fn ego_recovery_rejects_foreign_agents_and_preserves_wire_order() {
+    for (agent, frame, expected) in [
+        ("codex", "", 0),
+        ("ego", "\x1b]7770;ego-recovery=clear\x07", 2),
+        ("ego", "\x1b]7770;state=busy\x07", 2),
+        ("ego", "\x1b]7770;state=idle\x07", 2),
+        ("ego", "\x1b]133;A\x07", 2),
+    ] {
+        let state = crate::state::tests_support::make_test_app_state();
+        let sid = "recovery-order";
+        agent_session(&state, sid, SHELL_BUSY);
+        state
+            .session_maps
+            .session_states
+            .get_mut(sid)
+            .unwrap()
+            .agent_type = Some(agent.into());
+        state
+            .grid
+            .vt_log_buffers
+            .insert(sid.into(), Mutex::new(VtLogBuffer::new(24, 80, 1000)));
+        let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
+        let mut processor = ChunkProcessor::new(None, None);
+        let mut events = state.event_bus.subscribe();
+        let input = format!(
+            "\x1b]7770;ego-recovery={{\"phase\":\"retrying\",\"next_attempt_ms\":null,\"attempt\":1}}\x07{frame}"
+        );
+        processor.process_chunk(&input, &silence, sid, &state);
+        let recovery: Vec<_> = std::iter::from_fn(|| events.try_recv().ok())
+            .filter_map(|event| match event {
+                crate::state::AppEvent::PtyParsed { parsed, .. }
+                    if parsed["type"] == "provider-recovery" =>
+                {
+                    Some(parsed)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(recovery.len(), expected, "{agent} {frame:?}");
+        if expected == 2 {
+            assert!(recovery[1]["recovery"].is_null());
+        }
+    }
+}
+
+/// Catches: real ego output framing or interleaved input losing recovery transitions.
+#[test]
+fn ego_recovery_recorded_producer_replays_wait_retry_clear() {
+    let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(
+        "ego-provider-recovery-1902.tcap",
+    ))
+    .expect("real producer capture");
+    let (rows, cols) = capture.geometry.expect("recorded geometry");
+    let state = crate::state::tests_support::make_test_app_state();
+    let sid = "recorded-ego-recovery";
+    agent_session(&state, sid, SHELL_BUSY);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("ego".into());
+    state
+        .grid
+        .vt_log_buffers
+        .insert(sid.into(), Mutex::new(VtLogBuffer::new(rows, cols, 2000)));
+    let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
+    let mut processor = ChunkProcessor::new(None, None);
+    let mut events = state.event_bus.subscribe();
+    for record in capture.records {
+        if record.direction == crate::pty_capture::CaptureDirection::Output {
+            processor.process_chunk(
+                &String::from_utf8_lossy(&record.data),
+                &silence,
+                sid,
+                &state,
+            );
+        }
+    }
+    let phases: Vec<_> = std::iter::from_fn(|| events.try_recv().ok())
+        .filter_map(|event| match event {
+            crate::state::AppEvent::PtyParsed { parsed, .. }
+                if parsed["type"] == "provider-recovery" =>
+            {
+                Some(
+                    parsed["recovery"]["phase"]
+                        .as_str()
+                        .unwrap_or("clear")
+                        .to_string(),
+                )
+            }
+            _ => None,
+        })
+        .collect();
+    let waiting = phases
+        .iter()
+        .position(|phase| phase == "waiting")
+        .expect("waiting snapshot");
+    let retrying = phases
+        .iter()
+        .position(|phase| phase == "retrying")
+        .expect("retrying snapshot");
+    assert!(waiting < retrying, "{phases:?}");
+    assert!(
+        phases[retrying + 1..].iter().any(|phase| phase == "clear"),
+        "{phases:?}"
+    );
+}

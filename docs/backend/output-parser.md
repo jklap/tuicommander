@@ -651,3 +651,9 @@ above 32 KiB and foreign TUIC UUIDs are rejected. `codex_binding.rs` validates
 live foreground ownership and the rollout header before Chat or lifecycle
 snapshots expose exactness. Ordinary text and heuristic discovery cannot bind
 Codex Chat. Shell OSC 133 A revokes the binding.
+
+The recovery event is `provider-recovery` with a `recovery` object or null.
+It is delivered in original OSC order, including clears in the same chunk.
+`SessionState.provider_recovery` is the durable per-session presentation value;
+repeat snapshots do not generate additional parent entry notices. The existing
+session-state stream carries updates to desktop and browser consumers.

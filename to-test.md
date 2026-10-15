@@ -2295,3 +2295,14 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 ## #1917 — AI Chat conversation deletion
 
 - [ ] Open AI Chat with installed ego; expand Conversations, capture the trash controls and named confirmation, then cancel. Delete a throwaway inactive conversation and confirm only its tab closes. Delete the selected last conversation, reload, and confirm it does not return. While a throwaway conversation is running, attempt deletion and confirm ego's refusal is shown without removing it. Repeat on browser/mobile Chat. No application restart is required for this frontend-only change.
+
+## 1902-7010 — ego terminal provider recovery (requires Boss restart)
+
+- [ ] After Boss restarts `make dev` (Rust does not hot-reload), run a managed
+  terminal ego against a provider double that fails then recovers. Check the tab
+  says recovering, the status bar shows phase/attempt/next-time/countdown, and
+  the parent gets recovery entry and exit notices. Click Force retry once and
+  verify `/retry` reaches only that tab. Repeat via MCP `session force_retry`.
+  Verify explicit clear, busy/idle and shell OSC 133 A remove the recovery display.
+  Check the visual layout at narrow and normal window widths. No desktop instance
+  was launched by the implementation agent.

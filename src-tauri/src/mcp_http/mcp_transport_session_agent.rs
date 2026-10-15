@@ -813,6 +813,37 @@ pub(super) fn handle_session(
         Err(e) => return e,
     };
     match action {
+        "force_retry" => {
+            let session_id = match require_session_id(state, args, "force_retry") {
+                Ok(id) => id,
+                Err(error) => return error,
+            };
+            let transaction = state.input_transaction(&session_id);
+            let _input = transaction.lock();
+            let recovering = state
+                .session_maps
+                .session_states
+                .get(&session_id)
+                .is_some_and(|session| {
+                    session.agent_type.as_deref() == Some("ego")
+                        && session.provider_recovery.is_some()
+                });
+            if !recovering {
+                return serde_json::json!({"error": "Session is not an ego terminal in provider recovery"});
+            }
+            if state
+                .session_maps
+                .input_buffers
+                .get(&session_id)
+                .is_some_and(|buffer| !buffer.lock().content().is_empty())
+            {
+                return serde_json::json!({"error": "Session composer is not empty"});
+            }
+            match crate::pty::write_agent_command_to_pty(state, &session_id, "/retry") {
+                Ok(()) => serde_json::json!({"submitted": true, "session_id": session_id}),
+                Err(error) => serde_json::json!({"error": error}),
+            }
+        }
         "declare_worktree" => {
             let Some(peer) = resolve_mcp_origin_session(state, mcp_session_id) else {
                 return serde_json::json!({"error": "declare_worktree requires an authenticated managed caller"});
@@ -910,6 +941,14 @@ pub(super) fn handle_session(
                         object,
                         "standby",
                         standby.then_some(serde_json::Value::Bool(true)),
+                    );
+                    insert_optional_value(
+                        object,
+                        "provider_recovery",
+                        session_state
+                            .as_ref()
+                            .and_then(|snapshot| snapshot.provider_recovery.as_ref())
+                            .and_then(|recovery| serde_json::to_value(recovery).ok()),
                     );
                     insert_optional_value(object, "alias", alias.map(serde_json::Value::String));
                     insert_optional_value(
@@ -1553,6 +1592,7 @@ pub(super) fn handle_session(
                     let mut response = serde_json::json!({
                         "session_id": session_id,
                         "background_work": ss.background_work,
+                        "provider_recovery": ss.provider_recovery,
                         "awaiting_input": ss.awaiting_input,
                         "rate_limited": ss.rate_limited,
                         "delivery_uncertain": delivery_uncertain,
