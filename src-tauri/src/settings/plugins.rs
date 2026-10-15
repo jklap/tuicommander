@@ -182,7 +182,9 @@ impl PluginSettings {
         let request = action.request(owner.target(), owner.id.clone())?;
         // Validate scope before revision comparison: an unknown path never becomes a host write.
         let paths: Vec<&str> = match &request {
-            Request::Get { paths, .. } => paths.iter().map(String::as_str).collect(),
+            Request::Get { paths, .. }
+            | Request::Describe { paths, .. }
+            | Request::Refresh { paths, .. } => paths.iter().map(String::as_str).collect(),
             Request::Set { path, .. } | Request::Reset { path, .. } => vec![path],
             Request::Patch { operations, .. } => operations.iter().map(Edit::path).collect(),
         };

@@ -289,7 +289,7 @@ pub(crate) struct AudioOutputDevice {
     pub is_default: bool,
 }
 
-pub(crate) fn list_output_devices() -> Vec<AudioOutputDevice> {
+pub(crate) fn list_output_devices() -> Result<Vec<AudioOutputDevice>, String> {
     let host = rodio::cpal::default_host();
     let default_name: Option<String> = host
         .default_output_device()
@@ -307,7 +307,7 @@ pub(crate) fn list_output_devices() -> Vec<AudioOutputDevice> {
                 })
                 .collect()
         })
-        .unwrap_or_default()
+        .map_err(|_| "Audio output device enumeration unavailable".to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -385,7 +385,7 @@ pub(crate) async fn list_audio_output_devices() -> Result<Vec<AudioOutputDevice>
         crate::audio_enumeration::ENUMERATION_TIMEOUT,
         list_output_devices,
     )
-    .await
+    .await?
 }
 
 #[cfg(test)]
