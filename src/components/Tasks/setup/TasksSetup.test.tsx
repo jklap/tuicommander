@@ -77,7 +77,7 @@ describe("Tasks setup", () => {
 		await waitFor(() => expect(reloadPlugin).toHaveBeenCalledWith("github-work"));
 		expect(invoke).toHaveBeenCalledWith(
 			"write_plugin_data",
-			expect.objectContaining({ pluginId: "github-work", path: "config.json" }),
+			expect.objectContaining({ pluginId: "github-work", path: "work-items.json" }),
 		);
 	});
 

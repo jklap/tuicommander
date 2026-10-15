@@ -188,3 +188,37 @@ async fn loaded_owner_refuses_relinked_data_before_settings_patch() {
         original
     );
 }
+
+// Catches: Tasks provider data is mistaken for schema-backed settings and blocks shipped plugins.
+#[test]
+fn shipped_work_item_plugins_register_and_round_trip_tasks_data_without_schema() {
+    let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+    let state = crate::state::tests_support::make_test_app_state();
+    for (id, shipped) in [
+        (
+            "github-work",
+            include_str!("../../../plugins/github-work/manifest.json"),
+        ),
+        ("jira", include_str!("../../../plugins/jira/manifest.json")),
+        (
+            "gitlab",
+            include_str!("../../../plugins/gitlab/manifest.json"),
+        ),
+    ] {
+        let plugin_dir = dir.path().join("plugins").join(id);
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        std::fs::write(plugin_dir.join("manifest.json"), shipped).unwrap();
+        let data =
+            json!({"accounts":[{"id":"test-account","repository":"owner/repo"}]}).to_string();
+        crate::plugins::write_plugin_data(id.into(), "work-items.json".into(), data.clone())
+            .unwrap();
+        register_loaded_plugin_impl(&state, id.into(), vec![]).unwrap();
+        assert!(state.loaded_plugins.contains_key(id));
+        assert_eq!(
+            crate::plugins::read_plugin_data(id.into(), "work-items.json".into()).unwrap(),
+            Some(data)
+        );
+        assert!(!plugin_dir.join("data/config.json").exists());
+    }
+}

@@ -4274,6 +4274,36 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "execution_authority"
     },
+    "connections.{id}.credential": {
+      "id": "connections.{id}.credential",
+      "store": "connections",
+      "owner": "machine",
+      "area": "connections",
+      "group": "credential",
+      "order": 0,
+      "path": "/{id}/credential",
+      "labelKey": "settings.catalogue.connections.credential.label",
+      "helpKey": "settings.catalogue.connections.credential.help",
+      "label": "credential",
+      "schema": {
+        "type": "string",
+        "writeOnly": true
+      },
+      "nullable": false,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "secret",
+      "apply": "live",
+      "effect": "Updates the immutable connection credential slot and reconciles its runtime.",
+      "operations": [
+        "get",
+        "set_secret",
+        "clear_secret"
+      ],
+      "confirmationClass": "ordinary"
+    },
     "ego.auth.{provider}.credential_command": {
       "id": "ego.auth.{provider}.credential_command",
       "store": "ego",
@@ -7867,6 +7897,65 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
+    "telegram.allowed_chat_ids.{chatId}": {
+      "id": "telegram.allowed_chat_ids.{chatId}",
+      "store": "telegram",
+      "owner": "machine",
+      "area": "telegram",
+      "group": "allowed_chat_ids",
+      "order": 3,
+      "path": "/allowed_chat_ids/{chatId}",
+      "labelKey": "settings.catalogue.telegram.allowed_chat_ids.{key}.label",
+      "helpKey": "settings.catalogue.telegram.allowed_chat_ids.{key}.help",
+      "label": "{key}",
+      "schema": {
+        "type": "boolean"
+      },
+      "nullable": false,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "private",
+      "apply": "live",
+      "effect": "Updates the Telegram chat allowlist through setup.",
+      "operations": [
+        "get",
+        "create",
+        "remove"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "telegram.bot.token": {
+      "id": "telegram.bot.token",
+      "store": "telegram",
+      "owner": "machine",
+      "area": "telegram",
+      "group": "bot.token",
+      "order": 2,
+      "path": "/bot.token",
+      "labelKey": "settings.catalogue.telegram.bot.token.label",
+      "helpKey": "settings.catalogue.telegram.bot.token.help",
+      "label": "bot.token",
+      "schema": {
+        "type": "string",
+        "writeOnly": true
+      },
+      "nullable": false,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "secret",
+      "apply": "live",
+      "effect": "Wakes the existing Telegram owner.",
+      "operations": [
+        "get",
+        "set_secret",
+        "clear_secret"
+      ],
+      "confirmationClass": "ordinary"
+    },
     "telegram.bot_alias": {
       "id": "telegram.bot_alias",
       "store": "telegram",
@@ -9832,28 +9921,10 @@ export const settingsCatalogue = {
       "reason": "Review whether active pane selection is a setting or runtime selection, then describe or individually exclude it."
     },
     {
-      "store": "connections",
-      "path": "/{id}/credential",
-      "ownerStep": "Step 4f",
-      "reason": "Connection credentials live outside the RemoteConnection record and require the credential-reference owner schema."
-    },
-    {
       "store": "upstreams",
       "path": "/servers/{id}/credentials",
       "ownerStep": "Step 4e",
       "reason": "Vault-backed bearer/OAuth/header operations need the upstream owner schema; persisted credential references do not cover credential actions."
-    },
-    {
-      "store": "telegram",
-      "path": "/bot.token",
-      "ownerStep": "Step 4h",
-      "reason": "Private bot token is stored separately from Config and requires the setup owner's secret-action DTO."
-    },
-    {
-      "store": "telegram",
-      "path": "/allowed_chat_ids/{chatId}",
-      "ownerStep": "Step 4h",
-      "reason": "Chat allowlist is a separate private text file; use the existing setup owner, not raw file editing."
     },
     {
       "store": "app",

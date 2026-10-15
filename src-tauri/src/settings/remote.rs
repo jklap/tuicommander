@@ -284,3 +284,117 @@ impl Store for TunnelsSettingsStore {
         std::future::ready(Ok(true))
     }
 }
+
+// Credentials are input-only; never implement Debug or Serialize on this action.
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ConnectionCredentialAction {
+    SetPassword {
+        id: String,
+        #[schemars(extend("writeOnly" = true, "x-sensitivity" = "secret"))]
+        password: String,
+    },
+    ClearPassword {
+        id: String,
+    },
+    SetPairingToken {
+        id: String,
+        #[schemars(extend("writeOnly" = true, "x-sensitivity" = "secret"))]
+        token: String,
+    },
+    ClearPairingToken {
+        id: String,
+    },
+}
+
+/// One vault slot per immutable connection id, not a caller-selected vault reference.
+/// The callback retires the old authenticated runtime and schedules owner reconciliation.
+pub struct ConnectionCredentialSettings {
+    path: PathBuf,
+    on_changed: OnRemoved,
+}
+impl ConnectionCredentialSettings {
+    pub fn new(data_dir: PathBuf, on_changed: OnRemoved) -> Self {
+        Self {
+            path: data_dir.join("connections.json"),
+            on_changed,
+        }
+    }
+    pub fn action_schema() -> Value {
+        super::catalogue::schema::<ConnectionCredentialAction>()
+    }
+    pub fn read(&self, id: &str) -> Result<Value, Failure> {
+        self.with_connection(id, || {
+            let password = crate::remote_connection::connection_password_exists(id)
+                .map_err(|_| Error::new(CONNECTIONS_ID, "secret_unreadable"))?;
+            let pairing = crate::remote_connection::pairing_token(id)
+                .map_err(|_| Error::new(CONNECTIONS_ID, "secret_unreadable"))?
+                .is_some();
+            Ok(
+                json!({"password":{"status":if password {"set"} else {"unset"}},
+                "pairingToken":{"status":if pairing {"set"} else {"unset"}}}),
+            )
+        })
+    }
+    fn with_connection<R>(
+        &self,
+        id: &str,
+        action: impl FnOnce() -> Result<R, Failure>,
+    ) -> Result<R, Failure> {
+        let mut failure = None;
+        ConfigFile::<Vec<RemoteConnection>>::at_path(self.path.clone())
+            .update_with_strict(|records| {
+                let result = if records.iter().any(|record| record.id == id) {
+                    action()
+                } else {
+                    Err(Error::new(CONNECTIONS_ID, "not_found"))
+                };
+                result.map(|result| (result, false)).map_err(|error| {
+                    failure = Some(error);
+                    "rejected".to_owned()
+                })
+            })
+            .map_err(|_| failure.unwrap_or_else(|| Error::new(CONNECTIONS_ID, "store_failed")))
+    }
+    pub fn perform(&self, action: ConnectionCredentialAction) -> Result<Value, Failure> {
+        let (id, secret, pairing, clear) = match action {
+            ConnectionCredentialAction::SetPassword { id, password } => {
+                (id, password, false, false)
+            }
+            ConnectionCredentialAction::ClearPassword { id } => (id, String::new(), false, true),
+            ConnectionCredentialAction::SetPairingToken { id, token } => (id, token, true, false),
+            ConnectionCredentialAction::ClearPairingToken { id } => (id, String::new(), true, true),
+        };
+        let secret = zeroize::Zeroizing::new(secret);
+        if !clear && (secret.is_empty() || secret.len() > 16384) {
+            return Err(Error::new(CONNECTIONS_ID, "out_of_range"));
+        }
+        self.with_connection(&id, || {
+            let result = if pairing {
+                crate::remote_connection::set_pairing_token(&id, &secret)
+            } else {
+                crate::remote_connection::set_connection_password(&id, &secret)
+            };
+            result.map_err(|_| {
+                let mut error = Error::new(CONNECTIONS_ID, "store_failed");
+                error.retryable = true;
+                error.next_action =
+                    "read credential presence and retry the same owner action".into();
+                error
+            })
+        })?;
+        (self.on_changed)(&id);
+        self.read(&id).map_err(|mut error| {
+            error.persisted = true;
+            error.next_action =
+                "read credential presence; runtime reconciliation was requested".into();
+            error
+        })
+    }
+}
+
+pub(super) fn credential_schema() -> Value {
+    // The schema names an owner capability, not an extra field in connections.json.
+    json!({"type":"object","properties":{"credential":{"type":"string","writeOnly":true,
+        "x-setting":{"sensitivity":"secret","apply":"live","effect":"Updates the immutable connection credential slot and reconciles its runtime.","operations":["get","set_secret","clear_secret"],"confirmationClass":"ordinary"}}}})
+}

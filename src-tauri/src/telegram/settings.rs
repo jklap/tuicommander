@@ -67,6 +67,7 @@ pub(super) fn now_ms() -> u64 {
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum Change {
     Token { token: String },
+    ClearToken,
     Pair,
     AddChat { chat_id: String },
     RemoveChat { chat_id: String },
@@ -231,9 +232,18 @@ fn snapshot(paths: &Paths, _state: &AppState) -> Result<Snapshot, Error> {
 }
 
 pub(crate) async fn change(state: &Arc<AppState>, change: Change) -> Result<Value, Error> {
-    change_at(state, paths()?, change).await
+    let _ = state;
+    change_owner(paths()?, change).await
 }
-async fn change_at(_state: &Arc<AppState>, paths: Paths, change: Change) -> Result<Value, Error> {
+pub(crate) async fn change_owner(paths: Paths, change: Change) -> Result<Value, Error> {
+    change_owner_with_phase(paths, change, &mut false).await
+}
+
+pub(crate) async fn change_owner_with_phase(
+    paths: Paths,
+    change: Change,
+    persisted: &mut bool,
+) -> Result<Value, Error> {
     // Cross-process serialization prevents a desktop save racing daemon pairing.
     ensure_directory(&paths)?;
     let lock = super::config::private_open(&paths.file("setup.lock"), true)?;
@@ -251,6 +261,7 @@ async fn change_at(_state: &Arc<AppState>, paths: Paths, change: Change) -> Resu
         {
             let _guard = STATE.lock().map_err(|_| Error::State)?;
             write(&paths, "bot.token", token.as_bytes())?;
+            *persisted = true;
         }
         let bot = match super::BotApi::new(paths.clone())?
             .request("getMe", json!({}))
@@ -277,6 +288,18 @@ async fn change_at(_state: &Arc<AppState>, paths: Paths, change: Change) -> Resu
     }
     let setup = STATE.lock().map_err(|_| Error::State)?;
     match change {
+        Change::ClearToken => {
+            // Validate the private file before unlinking; never follow a symlink.
+            match std::fs::symlink_metadata(paths.file("bot.token")) {
+                Ok(_) => {
+                    super::config::private_open(&paths.file("bot.token"), false)?;
+                    std::fs::remove_file(paths.file("bot.token"))
+                        .map_err(|_| Error::PrivateFile)?;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(_) => return Err(Error::PrivateFile),
+            }
+        }
         Change::Pair => {
             let code: String = uuid::Uuid::new_v4().simple().to_string()[..6].to_ascii_uppercase();
             let pairing = Pairing {
@@ -420,3 +443,24 @@ pub(crate) fn read(state: &AppState) -> Result<Snapshot, Error> {
 #[cfg(test)]
 #[path = "settings_tests.rs"]
 mod tests;
+
+/// Settings readback uses the same private-file readers as setup, without exposing credentials.
+pub(crate) fn owner_read(paths: &Paths) -> Result<Value, Error> {
+    let token_set = match std::fs::symlink_metadata(paths.file("bot.token")) {
+        Ok(_) => {
+            super::config::private_open(&paths.file("bot.token"), false)?;
+            true
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(_) => return Err(Error::PrivateFile),
+    };
+    Ok(
+        json!({"token":{"status":if token_set {"set"} else {"unset"}},
+        "chats":chats(paths)?.iter().map(ToString::to_string).collect::<Vec<_>>()}),
+    )
+}
+
+#[cfg(test)]
+async fn change_at(_state: &Arc<AppState>, paths: Paths, change: Change) -> Result<Value, Error> {
+    change_owner(paths, change).await
+}
