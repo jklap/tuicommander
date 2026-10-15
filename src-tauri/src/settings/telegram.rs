@@ -34,6 +34,25 @@ fn to_value(config: &Config) -> Result<Value, Failure> {
     serde_json::to_value(config).map_err(|_| Error::new(ID, "store_failed"))
 }
 
+fn document(paths: &Paths, config: &Config) -> Result<Value, Failure> {
+    let mut value = to_value(config)?;
+    let owner = setup::owner_read(paths).map_err(|_| Error::new(ID, "store_failed"))?;
+    value["bot.token"] = if owner["token"]["status"] == "set" {
+        Value::Bool(true)
+    } else {
+        Value::Null
+    };
+    value["allowed_chat_ids"] = owner["chats"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(|id| (id.to_owned(), Value::Bool(true)))
+        .collect::<serde_json::Map<String, Value>>()
+        .into();
+    Ok(value)
+}
+
 /// Same shape `Config::load` accepts; the alias normally comes from the bot itself.
 fn valid_alias(alias: &str) -> bool {
     alias.len() <= 64
@@ -51,7 +70,11 @@ impl Store for TelegramSettingsStore {
     }
 
     fn read(&self) -> Result<Value, Failure> {
-        to_value(&setup::read_config(&self.paths()?).map_err(|_| Error::new(ID, "store_failed"))?)
+        let paths = self.paths()?;
+        document(
+            &paths,
+            &setup::read_config(&paths).map_err(|_| Error::new(ID, "store_failed"))?,
+        )
     }
 
     fn commit(
@@ -60,11 +83,22 @@ impl Store for TelegramSettingsStore {
     ) -> Result<CommitReply, Failure> {
         let paths = self.paths()?;
         setup::update_config(&paths, |config, token_set| {
-            let latest = to_value(config)?;
-            let Prepared { value, mut reply } = prepare(&latest)?;
+            let latest = document(&paths, config)?;
+            let Prepared {
+                mut value,
+                mut reply,
+            } = prepare(&latest)?;
+            value
+                .as_object_mut()
+                .expect("config object")
+                .remove("bot.token");
+            value
+                .as_object_mut()
+                .expect("config object")
+                .remove("allowed_chat_ids");
             let next: Config =
                 serde_json::from_value(value).map_err(|_| Error::new(ID, "invalid_type"))?;
-            let canonical = to_value(&next)?;
+            let canonical = document(&paths, &next)?;
             // Enabling needs a bot the owner can actually poll with: a token file and its alias.
             if !valid_alias(&next.bot_alias)
                 || (next.enabled && (next.bot_alias.is_empty() || !token_set))
@@ -87,4 +121,84 @@ impl Store for TelegramSettingsStore {
         setup::notify_changed();
         std::future::ready(Ok(true))
     }
+}
+
+// Input-only: no Debug/Serialize implementation for token-bearing actions.
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+pub enum TelegramAction {
+    SetToken {
+        #[schemars(extend("writeOnly" = true, "x-sensitivity" = "secret"))]
+        token: String,
+    },
+    ClearToken,
+    AddChat {
+        chat_id: String,
+    },
+    RemoveChat {
+        chat_id: String,
+    },
+}
+
+/// Owner actions complement the config transaction store, like GitHub login actions.
+#[derive(Default)]
+pub struct TelegramOwnerSettings {
+    paths: Option<Paths>,
+}
+impl TelegramOwnerSettings {
+    #[cfg(test)]
+    pub(crate) fn at_paths(paths: Paths) -> Self {
+        Self { paths: Some(paths) }
+    }
+
+    pub fn action_schema() -> Value {
+        super::catalogue::schema::<TelegramAction>()
+    }
+
+    fn paths(&self) -> Result<Paths, Failure> {
+        match &self.paths {
+            Some(paths) => Ok(paths.clone()),
+            None => setup::paths().map_err(|_| Error::new(ID, "store_failed")),
+        }
+    }
+
+    pub fn read(&self) -> Result<Value, Failure> {
+        setup::owner_read(&self.paths()?).map_err(|_| Error::new(ID, "store_failed"))
+    }
+
+    pub async fn perform(&self, action: TelegramAction) -> Result<Value, Failure> {
+        let change = match action {
+            TelegramAction::SetToken { token } => setup::Change::Token { token },
+            TelegramAction::ClearToken => setup::Change::ClearToken,
+            TelegramAction::AddChat { chat_id } => setup::Change::AddChat { chat_id },
+            TelegramAction::RemoveChat { chat_id } => setup::Change::RemoveChat { chat_id },
+        };
+        let mut persisted = false;
+        setup::change_owner_with_phase(self.paths()?, change, &mut persisted)
+            .await
+            .map_err(|_| {
+                // Token setup can persist before getMe fails. Read before retrying; never replay blind.
+                let mut error = Error::new(
+                    ID,
+                    if persisted {
+                        "apply_failed"
+                    } else {
+                        "store_failed"
+                    },
+                );
+                error.persisted = persisted;
+                error.next_action = "read Telegram owner state before retrying".into();
+                error
+            })?;
+        self.read()
+    }
+}
+
+pub(super) fn owner_schema() -> Value {
+    let mut schema = super::catalogue::schema::<Config>();
+    schema["properties"]["bot.token"] = serde_json::json!({"type":"string","writeOnly":true,
+        "x-setting":{"sensitivity":"secret","apply":"live","effect":"Wakes the existing Telegram owner.","operations":["get","set_secret","clear_secret"],"confirmationClass":"ordinary"}});
+    schema["properties"]["allowed_chat_ids"] = serde_json::json!({"type":"object","additionalProperties":{"type":"boolean",
+        "x-setting":{"sensitivity":"private","apply":"live","effect":"Updates the Telegram chat allowlist through setup.","operations":["get","create","remove"],"confirmationClass":"ordinary"}}});
+    schema
 }

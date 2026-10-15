@@ -89,7 +89,18 @@ pub(super) fn native_catalogue_for(dictation: bool) -> Result<Catalogue, Catalog
         None,
         available.clone(),
     )?;
-    catalogue.register::<crate::telegram::Config>("telegram", "machine", None, available)?;
+    catalogue.register_schema(
+        "telegram",
+        "machine",
+        &super::telegram::owner_schema(),
+        None,
+        available,
+    )?;
+    if let Some(mut field) = catalogue.fields.remove("telegram.allowed_chat_ids.{key}") {
+        field.id = "telegram.allowed_chat_ids.{chatId}".into();
+        field.path = "/allowed_chat_ids/{chatId}".into();
+        catalogue.fields.insert(field.id.clone(), field);
+    }
     let voice = if dictation {
         Availability::Available
     } else {
