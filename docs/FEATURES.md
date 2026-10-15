@@ -2217,7 +2217,9 @@ Unsupported actions are hidden. Menus close on outside tap or Escape and use
   A wrapper that calls Claude/Gemini/ego by name uses the inherited shell shim; an
   absolute harness hop must arrange its own read access. Disabling launch marker
   instructions does not disable the Claude directory grant.
-  Typed ego commands receive the same read-only directory grant.
+  Typed ego commands receive the same read-only directory grant. Structured ego
+  `run` and `resume` launches receive the grant after the subcommand so the CLI
+  does not interpret the subcommand as a prompt.
 - ACP binary uploads are scoped to the attached conversation and removed on
   detach or connection settlement (including EOF). Ego over ACP currently rejects
   extra read directories: the composer displays a notice that the stored path

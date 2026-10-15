@@ -261,8 +261,18 @@ pub(crate) fn launch_args(
         .unwrap_or(binary_path);
     let direct_harness = binary_name.strip_suffix(".exe").unwrap_or(binary_name) == agent_type;
     if let Some(flag) = flag.filter(|_| direct_harness) {
-        // Prepend before any prompt separator or variadic positional argument.
-        result.splice(0..0, [format!("{flag}={}", attachment_dir.display())]);
+        // Ego's run/resume options belong after the subcommand; a root option
+        // before it makes the CLI parse the verb as its positional prompt.
+        let insertion = usize::from(
+            agent_type == "ego"
+                && result
+                    .first()
+                    .is_some_and(|arg| ["run", "resume"].contains(&arg.as_str())),
+        );
+        result.splice(
+            insertion..insertion,
+            [format!("{flag}={}", attachment_dir.display())],
+        );
     }
     result
 }
@@ -1108,6 +1118,24 @@ mod attachment_grant_tests {
         );
         assert!(args.contains(&format!("--read-only-dir={}", directory.display())));
         assert!(args.contains(&"--sandbox=workspace".into()));
+    }
+
+    // Catches: a prepended grant makes ego parse run/resume as the root prompt, rejecting the real prompt.
+    #[test]
+    fn attachment_ego_grant_stays_after_subcommand() {
+        let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let directory = root.path().join("attachments/pty-ego");
+        for verb in ["run", "resume"] {
+            let args = super::launch_args(
+                "ego",
+                "ego",
+                &[verb.into(), "--sandbox=ro".into(), "task".into()],
+                root.path(),
+                &directory,
+            );
+            assert_eq!(args[0], verb, "the ego subcommand must precede its options");
+            assert_eq!(args[1], format!("--read-only-dir={}", directory.display()));
+        }
     }
 
     // Catches: Claude/Gemini launch without the directory grant, or codex/grok get an unknown flag.
