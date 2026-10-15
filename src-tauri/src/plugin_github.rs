@@ -254,7 +254,9 @@ mod tests {
                 _endpoint: &str,
                 _body: Value,
             ) -> impl std::future::Future<Output = Result<Value, String>> + Send {
-                std::future::ready(Err("queue-required PR must never use direct REST merge".into()))
+                std::future::ready(Err(
+                    "queue-required PR must never use direct REST merge".into()
+                ))
             }
         }
         let api = Recorded {
