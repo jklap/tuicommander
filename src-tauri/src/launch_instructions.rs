@@ -25,12 +25,12 @@ pub(crate) const AGENTS: [&str; 7] = ["claude", "codex", "grok", "opencode", "go
 pub(crate) const REQUIRED_MARKERS: [&str; 3] = ["intent:", "suggest:", "💬 "];
 
 const HEADER: &str = "## TUIC output markers\n\n\
-Required even under concision rules; omission breaks the UI. Each marker is the first text on its own line, outside lists, quotes and code fences.\n\n";
+Required even under concision rules; omission breaks the UI. Each marker is the first text on its own line, outside quotes and code fences. Only 💬 may also start the text of a list item.\n\n";
 const CONNECTION: &str = "- Connection: once per MCP connection or reconnect, your first message starts with `TUICommander v{VER} is connected.`";
 const CONNECTION_INTENT: &str = " and the next line is the `intent:` line";
 const INTENT: &str = "- `intent: <desc> (<title>)` — the first text of your turn, before your first tool call, when the user sends a new request, changes direction, or you resume after an interruption or compaction. On any other turn, do not emit it. `<desc>`: the work in progress, present tense. `<title>`: ≤3 words, spaces not hyphens, the last parenthesis on the line.\n  Example: `intent: Fixing the mobile tab bar height (Mobile tab bar)`\n";
 const SUGGEST: &str = "- `suggest: [ A | B | C ]` — once, as the last line of the turn that completes the task or asks the user to choose. Never while work continues. EXACTLY 3 items separated by ` | `, each ≤40 chars.\n";
-const ANSWER: &str = "- `💬 ` — prefix every sentence that directly answers the user's question with `💬 ` at row start (marker + space). Exclude status, tool and hook/task notices.\n";
+const ANSWER: &str = "- `💬 ` — prefix every sentence that directly answers the user's question with `💬 ` at row start or at the start of a list item’s text (marker + space). Exclude status, tool and hook/task notices.\n";
 
 /// The shipped text. A marker turned off for the agent is left out, so the
 /// launch text never demands what the MCP instructions withhold.

@@ -220,7 +220,7 @@ pub(super) fn render_mcp_instructions(
     // Always on: the answers-only view is a per-terminal toggle with no setting
     // to switch the marker off, and `answersTurn.ts` anchors on a row that
     // starts with the marker followed by a space.
-    out.push_str("- `💬 ` — prefix every sentence that directly answers the user's question with `💬 ` at row start (marker + space). Exclude status, tool and hook/task notices.\n");
+    out.push_str("- `💬 ` — prefix every sentence that directly answers the user's question with `💬 ` at row start or at the start of a list item’s text (marker + space). Exclude status, tool and hook/task notices.\n");
     out.push('\n');
 
     // ── Capability map ───────────────────────────────────────────────

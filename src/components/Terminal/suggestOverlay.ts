@@ -25,7 +25,9 @@ export const INTENT_HIGHLIGHT_RE = new RegExp(`^[\\s${AGENT_BULLETS}]*intent:\\s
  * colour and the like live in cell attributes — so styling cannot hide it.
  * Like `intent:`, it may sit behind the agent's own bullet: an agent bullet (see [`AGENT_BULLETS`]).
  */
-export const ANSWER_MARKER_RE = new RegExp(`^[\\s${AGENT_BULLETS}]*💬`);
+export const ANSWER_MARKER_RE = new RegExp(`^[\\s${AGENT_BULLETS}]*(?:[-*+]\\s+|\\d+[.)]\\s+)?💬`);
+/** The indentation of a marked list item bounds its answer, unlike a paragraph. */
+const ANSWER_LIST_RE = new RegExp(`^([\\t ${AGENT_BULLETS}]*)(?:[-*+]\\s+|\\d+[.)]\\s+)💬`);
 /** An agent output row: a bullet glyph at the start of the line. Codex's `•` also
  *  marks ordinary list items, so it counts only at column 0; an indented one is content. */
 export const OUTPUT_ROW_RE = /^(?:\s*[●⏺]|•)/;
@@ -61,6 +63,7 @@ export function answerExtent(
 	let last = start;
 	let inFence = false;
 	let afterBlank = false;
+	const listIndent = ANSWER_LIST_RE.exec(getRow(start)?.text ?? "")?.[1].length;
 	for (let i = start + 1; i < totalRows; i++) {
 		const row = getRow(i);
 		if (!row) break;
@@ -72,14 +75,26 @@ export function answerExtent(
 			afterBlank = true;
 			continue;
 		}
+		// A sibling item or dedented prose is outside this list answer, even
+		// when another marked sibling starts a separate answer immediately.
+		if (listIndent !== undefined && (row.text.match(/^[\t ]*/)?.[0].length ?? 0) <= listIndent) break;
 		if (!inFence && ANSWER_MARKER_RE.test(row.text)) {
+			// A marked list item owns its own scope, even after a paragraph answer.
+			if (listIndent === undefined && ANSWER_LIST_RE.test(row.text)) break;
 			onMarker?.(i);
 			last = i;
 			afterBlank = false;
 			continue;
 		}
-		if (!ANSWER_CONTINUATION_RE.test(row.text)) break;
-		if (afterBlank && !inFence && !ANSWER_STRUCTURE_RE.test(row.text) && !FENCE_RE.test(row.text)) break;
+		if (listIndent === undefined && !ANSWER_CONTINUATION_RE.test(row.text)) break;
+		if (
+			listIndent === undefined &&
+			afterBlank &&
+			!inFence &&
+			!ANSWER_STRUCTURE_RE.test(row.text) &&
+			!FENCE_RE.test(row.text)
+		)
+			break;
 		afterBlank = false;
 		if (inFence) {
 			inFence = !FENCE_RE.test(row.text);
