@@ -42,12 +42,6 @@
     "reason": "Review whether active pane selection is a setting or runtime selection, then describe or individually exclude it."
   },
   {
-    "store": "connections",
-    "path": "/{id}/credential",
-    "ownerStep": "Step 4f",
-    "reason": "Connection credentials live outside the RemoteConnection record and require the credential-reference owner schema."
-  },
-  {
     "store": "upstreams",
     "path": "/servers/{id}/credentials",
     "ownerStep": "Step 4e",

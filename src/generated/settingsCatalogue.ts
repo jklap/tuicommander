@@ -4274,6 +4274,36 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "execution_authority"
     },
+    "connections.{id}.credential": {
+      "id": "connections.{id}.credential",
+      "store": "connections",
+      "owner": "machine",
+      "area": "connections",
+      "group": "credential",
+      "order": 0,
+      "path": "/{id}/credential",
+      "labelKey": "settings.catalogue.connections.credential.label",
+      "helpKey": "settings.catalogue.connections.credential.help",
+      "label": "credential",
+      "schema": {
+        "type": "string",
+        "writeOnly": true
+      },
+      "nullable": false,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "secret",
+      "apply": "live",
+      "effect": "Updates the immutable connection credential slot and reconciles its runtime.",
+      "operations": [
+        "get",
+        "set_secret",
+        "clear_secret"
+      ],
+      "confirmationClass": "ordinary"
+    },
     "ego.credentials.{key}": {
       "id": "ego.credentials.{key}",
       "store": "ego",
@@ -9792,12 +9822,6 @@ export const settingsCatalogue = {
       "path": "/activeGroupId",
       "ownerStep": "Step 4g",
       "reason": "Review whether active pane selection is a setting or runtime selection, then describe or individually exclude it."
-    },
-    {
-      "store": "connections",
-      "path": "/{id}/credential",
-      "ownerStep": "Step 4f",
-      "reason": "Connection credentials live outside the RemoteConnection record and require the credential-reference owner schema."
     },
     {
       "store": "upstreams",

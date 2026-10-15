@@ -83,6 +83,19 @@ pub(super) fn native_catalogue_for(dictation: bool) -> Result<Catalogue, Catalog
         None,
         available.clone(),
     )?;
+    let mut credential = Catalogue::default();
+    credential.register_schema(
+        "connections",
+        "machine",
+        &super::remote::credential_schema(),
+        None,
+        available.clone(),
+    )?;
+    for (_, mut field) in credential.fields {
+        field.id = "connections.{id}.credential".into();
+        field.path = "/{id}/credential".into();
+        catalogue.fields.insert(field.id.clone(), field);
+    }
     catalogue.register::<super::remote::TunnelProfiles>(
         "tunnels",
         "machine",
