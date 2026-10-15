@@ -365,7 +365,7 @@ const UserText: Component<{ text: string; onOpenFile?: (href: string) => void }>
 	);
 };
 
-/** Reuse the terminal's answer marker and left rule, after Markdown has rendered.
+/** Reuse the terminal's answer marker ranges after Markdown has rendered.
  * An answer spans the blocks the grid highlights (`answerBlockRanges`); the 💬 glyph is
  * dropped from each marked paragraph, which keeps `data-tuic-answer-start` so a later pass
  * still finds it. Code examples and quotations keep their literal marker; stored/copy text stays intact. */

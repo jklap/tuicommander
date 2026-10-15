@@ -349,48 +349,6 @@
   white-space: normal;
 }
 
-/* Same green left rule as Terminal/suggestOverlay and AnswersPanel, without a background tint.
-   Blocks keep their own backgrounds and 8px paragraph spacing; the rule bridges that gap. */
-.assistantMsg :global(#markdown-content [data-tuic-answer]) {
-  position: relative;
-  isolation: isolate;
-  color: var(--fg-primary);
-}
-
-.assistantMsg :global(#markdown-content [data-tuic-answer]:not([data-tuic-answer="end"])) {
-  margin-bottom: 0;
-}
-
-/* The rule sits over the block so opaque table cells keep an unbroken left edge. */
-.assistantMsg :global(#markdown-content [data-tuic-answer]::after) {
-  content: "";
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-  width: 3px;
-  pointer-events: none;
-  background: var(--answer-rule);
-}
-
-.assistantMsg :global(#markdown-content [data-tuic-answer]:not([data-tuic-answer-region-start])) {
-  margin-top: 8px;
-}
-
-.assistantMsg :global(#markdown-content [data-tuic-answer]:not([data-tuic-answer-region-start])::after) {
-  top: -8px;
-}
-
-/* Text blocks sit clear of the rule; lists, code, tables and quotes bring their own inset. */
-.assistantMsg :global(#markdown-content [data-tuic-answer]:not(ul):not(ol):not(pre):not(table):not(blockquote):not(hr)) {
-  padding: 2px 0 2px 8px;
-}
-
-/* A clipped block would cut off the rule across the gap above it. */
-.assistantMsg :global(#markdown-content pre[data-tuic-answer]),
-.assistantMsg :global(#markdown-content hr[data-tuic-answer]) {
-  overflow: visible;
-}
-
 .agentIntent {
   color: var(--fg-secondary);
   font-size: var(--font-sm);
@@ -1393,10 +1351,11 @@
 .mobileComposer textarea { min-width: 0; }
 .composerActions { display: contents; }
 
-/* Centre 20px actions against the bottom 36px textarea line. */
+/* Match all desktop actions to the bottom 36px textarea line. */
 .inputArea:not(.mobileComposer) > button,
 .inputArea:not(.mobileComposer) > .composerActions > button {
-  margin-bottom: 8px;
+  height: 36px;
+  margin-bottom: 0;
 }
 /* Keep Park and Stop beside the input instead of reserving another row. */
 .mobileComposerActions { display: contents; }
@@ -1445,10 +1404,6 @@
   color: var(--fg-secondary);
 }
 
-.messageList[data-terminal-chat] .assistantMsg :global(#markdown-content [data-tuic-answer]::after) {
-  content: none;
-}
-
 .messageList[data-terminal-chat] .assistantMsg :global(#markdown-content [data-tuic-answer]) {
   padding: 0;
   margin-top: 0;
@@ -1459,3 +1414,15 @@
 .messageList[data-terminal-chat] .assistantMsg :global(#markdown-content > div:last-child > [data-tuic-answer]:last-child) {
   margin-bottom: 0;
 }
+
+.repoContext {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 16px;
+  border-top: 1px solid var(--border);
+  font-size: var(--font-xs);
+}
+.repoContext span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.repoContext button { margin-left: auto; color: var(--fg-secondary); background: transparent; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 2px 6px; white-space: nowrap; cursor: pointer; }
+.repoContext button[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
