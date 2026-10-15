@@ -118,6 +118,9 @@ async fn bearer_action_rejects_authorization_header_without_mutating_owner() {
     ConfigFile::<UpstreamMcpConfig>::new(UPSTREAMS_FILE)
         .save(&original)
         .unwrap();
+    let header_key = original.servers[0].headers[0].credential_key("authorization-conflict");
+    vault::save_credential_for_url(&header_key, "existing-header", "https://example.com/mcp")
+        .unwrap();
     let owner = super::upstream_credentials::UpstreamCredentials::new(std::sync::Arc::new(
         crate::state::tests_support::make_test_app_state(),
     ));
@@ -130,6 +133,13 @@ async fn bearer_action_rejects_authorization_header_without_mutating_owner() {
     assert!(
         result.is_err(),
         "bearer/Authorization collision must be rejected before committing"
+    );
+    assert!(!result.unwrap_err().persisted);
+    assert_eq!(
+        vault::read_credential_for_url(&header_key, "https://example.com/mcp")
+            .unwrap()
+            .as_deref(),
+        Some("existing-header")
     );
     let after: UpstreamMcpConfig = crate::config::load_json_config(UPSTREAMS_FILE);
     assert_eq!(

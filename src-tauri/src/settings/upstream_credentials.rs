@@ -4,6 +4,7 @@ use crate::{
     config::ConfigFile,
     mcp_upstream_config::{
         UPSTREAM_SAVE_SEQUENCE, UPSTREAMS_FILE, UpstreamAuth, UpstreamMcpConfig, UpstreamTransport,
+        validate_upstream_config,
     },
     state::AppState,
 };
@@ -82,6 +83,7 @@ impl UpstreamCredentials {
         }
         let _sequence = UPSTREAM_SAVE_SEQUENCE.lock().await;
         let mut committed = false;
+        let self_port = self.state.config.read().services.server.port;
         let result =
             ConfigFile::<UpstreamMcpConfig>::new(UPSTREAMS_FILE).update_with_strict(|config| {
                 let old = config.clone();
@@ -91,6 +93,20 @@ impl UpstreamCredentials {
                     CredentialAction::Clear { id, header } => (id, header.as_deref()),
                     CredentialAction::BeginLogin { .. } => unreachable!(),
                 };
+                if matches!(&action, CredentialAction::SetBearer { .. }) {
+                    let mut proposed = config.clone();
+                    let server = proposed
+                        .servers
+                        .iter_mut()
+                        .find(|server| &server.id == id)
+                        .ok_or("not found")?;
+                    server.auth = Some(UpstreamAuth::Bearer {
+                        token: String::new(),
+                    });
+                    if !validate_upstream_config(&proposed, self_port).is_empty() {
+                        return Err("invalid upstream config".into());
+                    }
+                }
                 let server = config
                     .servers
                     .iter_mut()
@@ -146,7 +162,6 @@ impl UpstreamCredentials {
             error.next_action = "get".into();
             error
         })?;
-        let self_port = self.state.config.read().services.server.port;
         // A credential rotation may leave metadata identical; explicitly reconnect that owner.
         let id = match &action {
             CredentialAction::SetBearer { id, .. }

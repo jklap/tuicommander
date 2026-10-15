@@ -1652,4 +1652,7 @@ references. Its input-only typed actions rotate bearer/header credentials, clear
 or start the existing OAuth flow. Rotation replaces old OAuth material and cancels
 pending flows for that upstream. Config and vault changes share the config owner lock;
 a vault change followed by config/apply failure reports `persisted: true` with `get`
-recovery. Only the changed enabled upstream reconnects. No credential value is returned.
+recovery. Bearer rotation validates the proposed config through the upstream owner
+before writing the vault. An existing custom `Authorization` header conflicts with bearer
+auth; rejection preserves the saved config and credentials. Only the changed enabled
+upstream reconnects. No credential value is returned.
