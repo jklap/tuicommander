@@ -1341,5 +1341,15 @@
 	"reviewFinding.suggestion": "Suggested change",
 	"reviewFinding.agentPrompt": "Prompt for agents (untrusted)",
 	"reviewFinding.addressedIn": "Addressed in commit {sha}",
-	"reviewFinding.showOriginal": "Show original"
+	"reviewFinding.showOriginal": "Show original",
+	"settings.agents.hibernateHeading": "Idle agent hibernation",
+	"settings.agents.hibernateMinutes": "Hibernate idle agents after",
+	"settings.agents.hibernateScope": "Hibernate scope",
+	"settings.agents.hibernateBackground": "Only in background",
+	"settings.agents.hibernateAlways": "Always",
+	"settings.agents.hibernateHint": "Minutes of awake idle time. Set to 0 to disable. Only unattended resumable agents hibernate; managed children keep their idle-close policy.",
+	"settings.catalogue.agents.hibernate_idle_minutes.label": "Hibernate idle agents after",
+	"settings.catalogue.agents.hibernate_idle_minutes.help": "Minutes of awake idle time; zero disables automatic hibernation.",
+	"settings.catalogue.agents.hibernate_scope.label": "Hibernate scope",
+	"settings.catalogue.agents.hibernate_scope.help": "Only in background or always; watched and working agents remain live."
 }

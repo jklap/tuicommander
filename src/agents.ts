@@ -417,6 +417,8 @@ export type AgentHookState = "installed" | "outdated" | "notInstalled" | "unsupp
 
 /** Full agents config (matches Rust AgentsConfig) */
 export interface AgentsConfig {
+	hibernate_idle_minutes?: number;
+	hibernate_scope?: "background_only" | "always";
 	agents: Record<string, AgentSettingsConfig>;
 	/** Which agent CLI to use for headless prompt execution when no agent is in the active terminal */
 	headless_agent?: HeadlessAgentChoice;
