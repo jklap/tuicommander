@@ -613,6 +613,35 @@ Viewport scroll requests do not alter parsed output. History-anchored scrolling 
 
 The terminal ego CLI reports human-question waits with OSC 7770 awaiting and resumes busy after settlement. TUIC also recognizes its single-choice selector only for ego sessions, anchored to `Up/Down or number selects; Enter answers; Esc cancels.` and a highlighted numbered option. Wrapped question and option rows are joined in Rust into `choice-prompt`, using `navigate-enter` selection. This creates authoritative awaiting state even for older ego builds without the native signal. Multiple-choice and free-text questions keep the native awaiting signal and terminal/composer controls; they are not misrepresented as single-choice dialogs.
 
+### ego terminal provider recovery (1902)
+
+The existing OSC 7770 consumer accepts the following UTF-8 byte frames (the
+notation `ESC` means byte `0x1b`, `BEL` means `0x07`):
+
+```text
+ESC ]7770;ego-recovery={"phase":"waiting","next_attempt_ms":1792100000000,"attempt":3} BEL
+ESC ]7770;ego-recovery={"phase":"retrying","next_attempt_ms":null,"attempt":4} BEL
+ESC ]7770;ego-recovery=clear BEL
+```
+
+`ESC \` is also a valid terminator. The value is compact JSON, not base64.
+Only detected ego PTY sessions accept this status. The value is at most 256
+UTF-8 bytes. The object has exactly these fields: `phase` is `waiting` or
+`retrying`; `attempt` is an integer in `1..=4294967295`; `next_attempt_ms` is
+an integer Unix epoch millisecond timestamp in `0..=8640000000000000` for
+`waiting`, and must be null for `retrying`. Unknown fields, invalid values,
+and oversized payloads are ignored without changing the previous snapshot.
+The producer sends a complete snapshot whenever its recovery phase, attempt,
+or next attempt changes. `clear` explicitly removes recovery. Busy/idle
+OSC 7770 state markers and shell OSC 133 A also remove recovery, so a stale
+provider outage cannot survive resumed work or return to the shell.
+
+Recovery is a presentation overlay on the running turn, not an idle/awaiting
+signal. Consumers show the phase, attempt, next attempt time and a countdown;
+a countdown reaching zero does not invent a successful recovery. Force retry
+submits `/retry` once to that same PTY through the normal agent-aware command
+submission path. It does not attach ACP or launch another ego process.
+
 ## Codex native session identity
 
 The existing OSC 7770 consumer accepts `codex-session=<TUIC_SESSION>:<base64>`
