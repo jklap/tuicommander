@@ -2252,3 +2252,5 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] Install an incompatible plugin in an isolated verification environment and check its refusal message. Catalogue/provider boundary checks passed 38/38 and loader minimum-version checks passed 3/3 (25 filtered) through build-slot on 2026-10-15; these are not native install E2E evidence.
 - [ ] Once GitHub Work loads with an authorized test account, invoke a read-only review action through core and verify it reaches the account-bound provider. No vendor writes are authorized.
 - [ ] Same-version stale-copy detection requires an approved source-content identity contract before its E2E check: the audited catalogue update decision compares versions only.
+
+- [ ] #1756-4d42: after Boss restarts `make dev` (Rust does not hot-reload), resolve a Jira URL and cancel while headers/body are pending; confirm no late result and active requests stop. No live restart was performed by w-1756.

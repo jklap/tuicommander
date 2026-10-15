@@ -1112,3 +1112,5 @@ that directory, without changing global settings or bypassing workspace trust.
 Ego PTY launches use `--read-only-dir` for the same canonical directory. Shell
 shims apply the grants to typed launches; resumed ego sessions receive fresh
 read roots because discovery does not persist ego argv. ACP uploads still require an existing profile read root.
+
+Plugin HTTP cancellation: a host-local AbortSignal maps to a generated request UUID scoped to the plugin. Shared IPC/HTTP helpers cancel the full Rust request future, including headers and body. Jira URL resolver cancellation reaches all detail requests.

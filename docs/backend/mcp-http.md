@@ -2329,3 +2329,5 @@ merge queue policy and shared request budgets apply unchanged. The desktop comma
 `{account, reference, request}` payloads (IPC also supplies `pluginId`).
 The GitHub Work runtime binds both ports when it registers each configured account.
 No live write or desktop-load verification is implied by recorded-fixture tests.
+
+Plugin HTTP fetch and cancel routes use the shared `plugin_http` implementation. The optional `requestId` is scoped to the plugin; cancellation drops the entire request future, including authentication preparation, headers and streamed response body.

@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Cancel Jira URL resolution end to end, including shared plugin HTTP header and body reads (#1756-4d42).
+
 - Grant Gemini session attachment trust without a folder prompt or global settings changes. Grant ego PTY attachments read-only access in confined sandbox modes (#1833-aa60).
 
 
@@ -20,6 +22,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Fix cache keepalive draft preservation with guarded backend submissions and complete question-state replay on plugin load.
 
 ### Added
+- Configure Jira and GitLab default projects in schema-driven plugin settings; explicit account projects retain precedence (#1756-4d42).
 - Diagnose empty or off-screen mobile resume shells through the backend log ring without reloading the page (#1900-5ff6).
 - Bind GitHub Work review threads and PR actions to the selected account through core policy, with desktop and HTTP parity (#1693-a816).
 - Hibernate unattended resumable agent tabs after configurable awake idle time, with background-only scope by default and shared wake on open, input or mail (#1808-389f).

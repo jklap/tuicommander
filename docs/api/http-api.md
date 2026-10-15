@@ -3207,3 +3207,5 @@ No live write or desktop-load verification is implied by recorded-fixture tests.
 ### Guarded automated agent input
 
 `POST /sessions/{id}/input-if-empty` accepts `{ "text": "[noop]" }` and returns a boolean. `false` means no input was sent because the agent is not ready, awaits input, has a tracked draft, or has queued commands. The backend serializes checks, split writes, and bookkeeping against raw user input. IPC equivalent: `send_agent_input_if_empty`.
+
+POST `/api/plugins/{plugin_id}/http` accepts optional `requestId` (UUID). POST `/api/plugins/{plugin_id}/http/cancel` accepts `{ "requestId": "<UUID>" }`; both use the shared IPC backend. Cancellation covers headers and body. Early cancellation markers expire after 60 seconds and the shared registry is capped at 4096 entries.

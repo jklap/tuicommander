@@ -12,6 +12,141 @@ mod account;
 #[path = "plugin_http_account_tests.rs"]
 mod account_tests;
 
+/// Plugin-scoped requests and bounded, short-lived cancellation-before-start markers.
+#[derive(Default)]
+pub(crate) struct HttpRequests(std::sync::Mutex<HashMap<(String, String), HttpRequest>>);
+
+struct HttpRequest {
+    cancel: tokio::sync::watch::Sender<bool>,
+    started: bool,
+    created: std::time::Instant,
+}
+
+impl HttpRequests {
+    fn access(&self) -> std::sync::MutexGuard<'_, HashMap<(String, String), HttpRequest>> {
+        let mut requests = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        requests.retain(|_, request| request.started || request.created.elapsed().as_secs() < 60);
+        requests
+    }
+
+    fn start(&self, key: &(String, String)) -> Result<tokio::sync::watch::Receiver<bool>, String> {
+        let mut requests = self.access();
+        if let Some(request) = requests.get_mut(key) {
+            if request.started {
+                return Err("Duplicate HTTP request ID".into());
+            }
+            request.started = true;
+            return Ok(request.cancel.subscribe());
+        }
+        if requests.len() >= 4096 {
+            return Err("Too many plugin HTTP requests".into());
+        }
+        let (cancel, receiver) = tokio::sync::watch::channel(false);
+        requests.insert(
+            key.clone(),
+            HttpRequest {
+                cancel,
+                started: true,
+                created: std::time::Instant::now(),
+            },
+        );
+        Ok(receiver)
+    }
+
+    pub(crate) fn cancel_plugin(&self, plugin_id: &str) {
+        let mut requests = self.access();
+        requests.retain(|(plugin, _), request| {
+            if plugin != plugin_id {
+                return true;
+            }
+            request.cancel.send_replace(true);
+            request.started
+        });
+    }
+
+    fn cancel(&self, key: (String, String)) -> Result<(), String> {
+        let mut requests = self.access();
+        if let Some(request) = requests.get(&key) {
+            request.cancel.send_replace(true);
+        } else {
+            if requests.len() >= 4096 {
+                return Err("Too many plugin HTTP requests".into());
+            }
+            let (cancel, _) = tokio::sync::watch::channel(true);
+            requests.insert(
+                key,
+                HttpRequest {
+                    cancel,
+                    started: false,
+                    created: std::time::Instant::now(),
+                },
+            );
+        }
+        Ok(())
+    }
+}
+
+struct RequestGuard<'a>(&'a HttpRequests, (String, String));
+impl Drop for RequestGuard<'_> {
+    fn drop(&mut self) {
+        self.0.access().remove(&self.1);
+    }
+}
+
+fn request_key(plugin_id: String, request_id: String) -> Result<(String, String), String> {
+    uuid::Uuid::parse_str(&request_id).map_err(|_| "Invalid HTTP request ID")?;
+    Ok((plugin_id, request_id))
+}
+
+pub(crate) fn plugin_http_cancel_impl(
+    state: &crate::AppState,
+    plugin_id: String,
+    request_id: String,
+) -> Result<(), String> {
+    crate::plugins::check_plugin_capability(state, &plugin_id, "net:http")?;
+    state
+        .plugin_http_requests
+        .cancel(request_key(plugin_id, request_id)?)
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub async fn plugin_http_cancel(
+    state: tauri::State<'_, std::sync::Arc<crate::AppState>>,
+    plugin_id: String,
+    request_id: String,
+) -> Result<(), String> {
+    plugin_http_cancel_impl(&state, plugin_id, request_id)
+}
+
+#[allow(clippy::too_many_arguments)] // Mirrors the IPC request fields plus its optional cancellation identity.
+pub(crate) async fn plugin_http_fetch_cancellable_impl(
+    state: &std::sync::Arc<crate::AppState>,
+    url: String,
+    method: Option<String>,
+    headers: Option<HashMap<String, String>>,
+    body: Option<String>,
+    account: Option<String>,
+    plugin_id: String,
+    request_id: Option<String>,
+) -> Result<HttpResponse, String> {
+    let Some(request_id) = request_id else {
+        return plugin_http_fetch_impl(state, url, method, headers, body, account, plugin_id).await;
+    };
+    crate::plugins::check_plugin_capability(state, &plugin_id, "net:http")?;
+    let key = request_key(plugin_id.clone(), request_id)?;
+    let mut cancelled = state.plugin_http_requests.start(&key)?;
+    let _guard = RequestGuard(&state.plugin_http_requests, key);
+    if *cancelled.borrow() {
+        return Err("HTTP request cancelled".into());
+    }
+    tokio::select! {
+        biased;
+        _ = cancelled.changed() => Err("HTTP request cancelled".into()),
+        response = plugin_http_fetch_impl(state, url, method, headers, body, account, plugin_id) => response,
+    }
+}
+
 /// Maximum response body size (10 MB).
 const MAX_RESPONSE_BYTES: usize = 10 * 1024 * 1024;
 
@@ -205,9 +340,13 @@ pub async fn plugin_http_fetch(
     body: Option<String>,
     account: Option<String>,
     plugin_id: String,
+    request_id: Option<String>,
     state: tauri::State<'_, std::sync::Arc<crate::AppState>>,
 ) -> Result<HttpResponse, String> {
-    plugin_http_fetch_impl(&state, url, method, headers, body, account, plugin_id).await
+    plugin_http_fetch_cancellable_impl(
+        &state, url, method, headers, body, account, plugin_id, request_id,
+    )
+    .await
 }
 
 pub(crate) async fn plugin_http_fetch_impl(
@@ -322,6 +461,121 @@ pub(crate) async fn plugin_http_fetch_impl(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Catches: cancelling only the JS promise while Rust keeps waiting for headers/body.
+    #[tokio::test]
+    async fn cancellation_drops_headers_and_body_requests() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _override = crate::config::set_config_dir_override(dir.path().to_path_buf());
+        let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
+        state
+            .loaded_plugins
+            .insert("cancel-test".into(), vec!["net:http".into()]);
+        for body_phase in [false, true] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let plugin_dir = dir.path().join("plugins/cancel-test");
+            std::fs::create_dir_all(&plugin_dir).unwrap();
+            std::fs::write(plugin_dir.join("manifest.json"), serde_json::to_vec(&serde_json::json!({
+                "id": "cancel-test", "name": "Cancellation", "version": "1.0.0", "minAppVersion": "0.0.0", "main": "main.js", "capabilities": ["net:http"], "allowedUrls": [format!("http://{address}/*")]
+            })).unwrap()).unwrap();
+            let (ready, started) = tokio::sync::oneshot::channel();
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut buf = [0; 4096];
+                socket.read(&mut buf).await.unwrap();
+                if body_phase {
+                    socket
+                        .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\nx")
+                        .await
+                        .unwrap();
+                }
+                ready.send(()).unwrap();
+                // A dropped reqwest request closes the socket without a server response.
+                socket.read(&mut buf).await.unwrap()
+            });
+            let id = uuid::Uuid::new_v4().to_string();
+            let fetch_state = state.clone();
+            let fetch_id = id.clone();
+            let fetch = tokio::spawn(async move {
+                plugin_http_fetch_cancellable_impl(
+                    &fetch_state,
+                    format!("http://{address}/wait"),
+                    None,
+                    None,
+                    None,
+                    None,
+                    "cancel-test".into(),
+                    Some(fetch_id),
+                )
+                .await
+            });
+            started.await.unwrap();
+            plugin_http_cancel_impl(&state, "cancel-test".into(), id).unwrap();
+            let result = tokio::time::timeout(std::time::Duration::from_secs(5), fetch)
+                .await
+                .expect("cancel did not settle an established HTTP request")
+                .unwrap();
+            assert_eq!(result.unwrap_err(), "HTTP request cancelled");
+            assert_eq!(
+                tokio::time::timeout(std::time::Duration::from_secs(5), server)
+                    .await
+                    .expect("cancel did not close the HTTP connection")
+                    .unwrap(),
+                0
+            );
+            assert!(state.plugin_http_requests.access().is_empty());
+        }
+    }
+
+    // Catches: cancel arriving before fetch registration is lost, or crosses plugin scope.
+    #[tokio::test]
+    async fn cancellation_before_registration_is_scoped_and_cleaned() {
+        let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
+        state
+            .loaded_plugins
+            .insert("one".into(), vec!["net:http".into()]);
+        let id = uuid::Uuid::new_v4().to_string();
+        plugin_http_cancel_impl(&state, "one".into(), id.clone()).unwrap();
+        let other = state
+            .plugin_http_requests
+            .start(&("two".into(), id.clone()))
+            .unwrap();
+        assert!(!*other.borrow());
+        let error = plugin_http_fetch_cancellable_impl(
+            &state,
+            "https://example.invalid".into(),
+            None,
+            None,
+            None,
+            None,
+            "one".into(),
+            Some(id.clone()),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error, "HTTP request cancelled");
+        assert!(
+            !state
+                .plugin_http_requests
+                .access()
+                .contains_key(&("one".into(), id))
+        );
+    }
+
+    // Catches: backend plugin unload leaving active requests running after host teardown.
+    #[test]
+    fn unloading_plugin_cancels_only_its_requests() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let one = ("one".into(), uuid::Uuid::new_v4().to_string());
+        let two = ("two".into(), uuid::Uuid::new_v4().to_string());
+        let own = state.plugin_http_requests.start(&one).unwrap();
+        let other = state.plugin_http_requests.start(&two).unwrap();
+        crate::plugins::unregister_loaded_plugin_impl(&state, "one");
+        assert!(*own.borrow());
+        assert!(!*other.borrow());
+    }
 
     // -- URL validation --
 

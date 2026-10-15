@@ -2327,6 +2327,13 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			body: { account: args.account, reference: args.reference, request: args.request },
 		}),
 	},
+	plugin_http_cancel: {
+		map: (args, p) => ({
+			method: "POST",
+			path: `/api/plugins/${p("pluginId")}/http/cancel`,
+			body: { requestId: args.requestId },
+		}),
+	},
 	plugin_http_fetch: {
 		map: (args, p) => ({
 			method: "POST",
@@ -2337,6 +2344,7 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 				headers: args.headers,
 				body: args.body,
 				account: args.account,
+				requestId: args.requestId,
 			},
 		}),
 	},
