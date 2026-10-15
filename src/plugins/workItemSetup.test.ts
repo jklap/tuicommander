@@ -1,3 +1,6 @@
+import { execFileSync } from "node:child_process";
+import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const invoke = vi.fn();
@@ -96,16 +99,16 @@ describe("work-item plugin setup", () => {
 
 	// Catches: a hand-edited config with a syntax error being silently overwritten by the form.
 	it("refuses to overwrite a config file that is not valid JSON", () => {
-		expect(() => upsertAccount("{ not json", { id: "a" })).toThrow(/config\.json/);
+		expect(() => upsertAccount("{ not json", { id: "a" })).toThrow(/work-items\.json/);
 	});
 
 	// Catches: the saved file never reaching the plugin, because data/ writes do not trigger the plugin watcher.
-	it("writes config.json and reloads the plugin", async () => {
+	it("writes work-items.json and reloads the plugin", async () => {
 		invoke.mockImplementation(async (command: string) => (command === "read_plugin_data" ? null : undefined));
 		await saveWorkItemSetup(github(), { id: "github.com", repository: "owner/repo" });
 		expect(invoke).toHaveBeenCalledWith("write_plugin_data", {
 			pluginId: "github-work",
-			path: "config.json",
+			path: "work-items.json",
 			content: JSON.stringify({ accounts: [{ id: "github.com", repository: "owner/repo" }] }, null, 2),
 		});
 		expect(reloadPlugin).toHaveBeenCalledWith("github-work");
@@ -167,4 +170,35 @@ describe("work-item plugin setup", () => {
 			{ id: "work", host: "https://jira.example", kind: "bearer" },
 		]);
 	});
+});
+
+// Catches: Tasks writes reserved settings storage or a different file from the shipped provider reader.
+it.each(["github-work", "jira", "gitlab"])("Tasks accounts round-trip through %s plugin data", async (pluginId) => {
+	const setup = setupFor(pluginId)!;
+	const values: Record<string, string> =
+		pluginId === "github-work"
+			? { id: "test-account", repository: "owner/repo" }
+			: { id: "test-account", host: "https://example.test" };
+	const files = new Map<string, string>();
+	invoke.mockImplementation(async (command: string, args: { path: string; content?: string }) => {
+		// The real host reserves this name for schema-backed settings, not Tasks data.
+		if (args.path === "config.json") throw new Error("Configurable plugin requires a settings schema");
+		if (command === "write_plugin_data") files.set(args.path, args.content!);
+		return command === "read_plugin_data" ? (files.get(args.path) ?? null) : undefined;
+	});
+	await saveWorkItemSetup(setup, values);
+	expect(await loadWorkItemSetup(setup)).toMatchObject(values);
+	const runtime = pathToFileURL(resolve(process.env.WORK_ITEM_PLUGIN_ROOT ?? "plugins", pluginId, "runtime.js")).href;
+	const script = `import { readConfig } from ${JSON.stringify(runtime)};
+const files = new Map(${JSON.stringify([...files])});
+const result = await readConfig({invoke: async (command, args) => {
+ if (command !== "read_plugin_data" || args.pluginId !== ${JSON.stringify(pluginId)}) throw new Error("wrong storage owner");
+ if (args.path === "config.json") throw new Error("reserved settings file");
+ return files.get(args.path) ?? null;
+}}, ${JSON.stringify(pluginId)});
+process.stdout.write(JSON.stringify(result));`;
+	const result = JSON.parse(
+		execFileSync(process.execPath, ["--input-type=module", "-e", script], { encoding: "utf8" }),
+	);
+	expect(result.accounts).toEqual([accountFromValues(setup, values)]);
 });
