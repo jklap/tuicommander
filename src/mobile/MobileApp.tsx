@@ -168,7 +168,7 @@ export default function MobileApp() {
 	);
 
 	return (
-		<div class={styles.shell}>
+		<div class={styles.shell} data-mobile-shell>
 			<ConnectionBanner offline={serverDown() || error() !== null} authError={authError()} onRetry={refresh} />
 			<Show
 				when={showDetail()}

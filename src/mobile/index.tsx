@@ -3,7 +3,10 @@ import { ErrorBoundary, render } from "solid-js/web";
 import { CrashScreen } from "../components/CrashScreen/CrashScreen";
 import { appLogger } from "../stores/appLogger";
 import MobileApp from "./MobileApp";
+import { installResumeDiagnostics } from "./resumeDiagnostics";
 import "./mobile.css";
+
+installResumeDiagnostics();
 
 // Global error handlers
 window.addEventListener("error", (event) => {

@@ -196,3 +196,13 @@ The backend uses `open::commands` for platform selection and option-safe
 arguments, then `tuic_core::child_reaping::spawn_reaped` for each launch. It does
 not use the dependency's detached fork. It returns after spawning, preserves
 the application, and waits off the caller thread to reap the launcher.
+
+### Mobile resume diagnostics
+
+The mobile entry checks the document after one animation frame on `pageshow` and
+on a change to visible. An empty root or a shell wholly outside the visible
+viewport produces an `app` warning with the URL, root child count, shell bounds,
+visual viewport height and top offset, visibility state, and the last window
+error since hide. Normal resumes are silent. The diagnostic does not reload or
+change the page. Read it promptly through MCP debug logs: frontend warnings reach
+the backend memory ring, not the daily log file (#1900-5ff6).
