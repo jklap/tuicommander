@@ -42,28 +42,10 @@
     "reason": "Review whether active pane selection is a setting or runtime selection, then describe or individually exclude it."
   },
   {
-    "store": "connections",
-    "path": "/{id}/credential",
-    "ownerStep": "Step 4f",
-    "reason": "Connection credentials live outside the RemoteConnection record and require the credential-reference owner schema."
-  },
-  {
     "store": "upstreams",
     "path": "/servers/{id}/credentials",
     "ownerStep": "Step 4e",
     "reason": "Vault-backed bearer/OAuth/header operations need the upstream owner schema; persisted credential references do not cover credential actions."
-  },
-  {
-    "store": "telegram",
-    "path": "/bot.token",
-    "ownerStep": "Step 4h",
-    "reason": "Private bot token is stored separately from Config and requires the setup owner's secret-action DTO."
-  },
-  {
-    "store": "telegram",
-    "path": "/allowed_chat_ids/{chatId}",
-    "ownerStep": "Step 4h",
-    "reason": "Chat allowlist is a separate private text file; use the existing setup owner, not raw file editing."
   },
   {
     "store": "app",
