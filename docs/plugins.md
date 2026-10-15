@@ -149,17 +149,19 @@ Tauri OutputParser --> pluginRegistry.dispatchStructuredEvent(type, payload, ses
 2. **Validation** — Frontend validates manifest fields and `minAppVersion`
 3. **Import** — `import("plugin://my-plugin/main.js")` loads the module via the custom URI protocol (on Windows the loader rewrites this to `http://plugin.localhost/my-plugin/main.js`, since WebView2 only serves custom schemes under `http://{scheme}.localhost/...`)
 4. **Module check** — Default export must have `id`, `onload`, `onunload`
-5. **Register** — `pluginRegistry.register(plugin, capabilities)` calls `plugin.onload(host)`
+5. **Register** — `pluginRegistry.register(plugin, capabilities)` awaits `plugin.onload(host, signal)`
 6. **Active** — Plugin receives PTY lines, structured events, and can use the PluginHost API
 7. **Hot reload** — File changes emit `plugin-changed` events; the plugin is unregistered and re-imported. Creating a new top-level plugin directory or symlink after startup also emits the event (the watcher does not descend into symlink targets, so the create of the link itself is the trigger), and the new plugin is discovered and loaded without a restart
-8. **Unload** — `plugin.onunload()` is called, then tracked registrations are disposed and `openPanel` tabs close. Timers, DOM listeners and other resources created directly by the plugin remain its responsibility.
+8. **Unload** — `plugin.onunload()` is called only if its `onload` started, then tracked registrations are disposed and `openPanel` tabs close. Timers, DOM listeners and other resources created directly by the plugin remain its responsibility.
+
+Async startup receives an `AbortSignal`. Unload or reload aborts it and stops waiting for obsolete startup work. Pass the signal to cancellable operations. After unload, calls through the old host throw an abort error before they can register providers or change host state. The host cannot stop arbitrary plugin code or cancel requests that ignore the signal. A replacement waits for backend teardown, not for obsolete startup to finish. Startup must settle (resolve or reject); the host sets no startup or backend teardown timeout. An active startup that never settles remains loading, and a pending backend teardown blocks replacements for that plugin ID. A replacement removed before its startup begins receives neither `onload` nor `onunload`.
 
 ### Crash Safety
 
 Every boundary is wrapped in try/catch:
 - `import()` — syntax errors or missing exports are caught
 - Module validation — missing `id`, `onload`, or `onunload` logs an error and skips the plugin
-- `plugin.onload()` — if it throws, partial registrations are cleaned up automatically
+- `plugin.onload()` — synchronous throws and rejected promises are logged and partial registrations are cleaned up automatically
 - Watcher/handler dispatch — exceptions are caught and logged, other plugins continue
 - UI callbacks registered through `PluginHost` (file icons/previews, activity
   items, context menu actions, ticker messages, dashboards, commands) are
@@ -200,7 +202,7 @@ File: `~/.config/com.tuic.commander/plugins/{id}/manifest.json`
 ```typescript
 interface TuiPlugin {
   id: string;
-  onload(host: PluginHost): void;
+  onload(host: PluginHost, signal?: AbortSignal): void | Promise<void>;
   onunload(): void;
 }
 ```

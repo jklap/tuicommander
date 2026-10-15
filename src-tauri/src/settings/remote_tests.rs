@@ -522,3 +522,127 @@ async fn removed_connection_retains_daemon_authority() {
         "teardown must receive the removed record even after persistence"
     );
 }
+
+/// Catches: a failed credential action destroying the saved connection or losing retry authority.
+#[tokio::test]
+async fn connection_credential_failure_remains_recoverable() {
+    use super::remote::{ConnectionCredentialAction, ConnectionCredentialSettings};
+    let f = fixture();
+    let connection = ssh("credential owner");
+    seed_connections(&f, std::slice::from_ref(&connection));
+    let settings = ConnectionCredentialSettings::new(f.dir.path().to_path_buf(), Arc::new(|_| {}));
+    let error = settings
+        .perform(ConnectionCredentialAction::SetPassword {
+            id: connection.id.clone(),
+            password: String::new(),
+        })
+        .unwrap_err();
+    assert!(!error.persisted);
+    crate::credentials::MOCK_FAIL_WRITES.store(true, std::sync::atomic::Ordering::SeqCst);
+    let error = settings
+        .perform(ConnectionCredentialAction::SetPassword {
+            id: connection.id.clone(),
+            password: CANARY.into(),
+        })
+        .unwrap_err();
+    crate::credentials::reset_test_faults();
+    assert!(!error.persisted && error.retryable);
+    assert_eq!(
+        settings.read(&connection.id).unwrap()["password"]["status"],
+        "unset"
+    );
+    settings
+        .perform(ConnectionCredentialAction::SetPassword {
+            id: connection.id.clone(),
+            password: CANARY.into(),
+        })
+        .unwrap();
+    assert_eq!(
+        settings.read(&connection.id).unwrap()["password"]["status"],
+        "set"
+    );
+    settings
+        .perform(ConnectionCredentialAction::ClearPassword {
+            id: connection.id.clone(),
+        })
+        .unwrap();
+    assert_eq!(
+        settings.read(&connection.id).unwrap()["password"]["status"],
+        "unset"
+    );
+}
+
+/// Catches: changing one connection's credential overwriting another connection or its pairing token.
+#[tokio::test]
+async fn connection_credential_failure_remains_recoverable_preserves_other_owner_state() {
+    use super::remote::{ConnectionCredentialAction, ConnectionCredentialSettings};
+    let f = fixture();
+    let a = ssh("a");
+    let b = ssh("b");
+    seed_connections(&f, &[a.clone(), b.clone()]);
+    set_connection_password(&b.id, CANARY).unwrap();
+    set_pairing_token(&a.id, CANARY).unwrap();
+    let before = std::fs::read(f.dir.path().join("connections.json")).unwrap();
+    let settings = ConnectionCredentialSettings::new(f.dir.path().to_path_buf(), Arc::new(|_| {}));
+    settings
+        .perform(ConnectionCredentialAction::SetPassword {
+            id: a.id.clone(),
+            password: "replacement".into(),
+        })
+        .unwrap();
+    assert_eq!(pairing_token(&a.id).unwrap().as_deref(), Some(CANARY));
+    assert!(connection_password_exists(&b.id).unwrap());
+    assert_eq!(
+        std::fs::read(f.dir.path().join("connections.json")).unwrap(),
+        before
+    );
+    let error = settings
+        .perform(ConnectionCredentialAction::SetPassword {
+            id: "missing".into(),
+            password: CANARY.into(),
+        })
+        .unwrap_err();
+    assert_eq!(error.code, "not_found");
+    assert!(!serde_json::to_string(&error).unwrap().contains(CANARY));
+}
+
+/// Catches: a committed credential followed by unavailable readback being reported as unwritten.
+#[tokio::test]
+async fn connection_credential_partial_readback_reports_committed_phase() {
+    use super::remote::{ConnectionCredentialAction, ConnectionCredentialSettings};
+    let f = fixture();
+    let a = ssh("readback failure");
+    seed_connections(&f, std::slice::from_ref(&a));
+    let settings = ConnectionCredentialSettings::new(
+        f.dir.path().to_path_buf(),
+        Arc::new(|_| {
+            crate::credentials::MOCK_FAIL_READS.store(true, std::sync::atomic::Ordering::SeqCst);
+        }),
+    );
+    let error = settings
+        .perform(ConnectionCredentialAction::SetPairingToken {
+            id: a.id.clone(),
+            token: CANARY.into(),
+        })
+        .unwrap_err();
+    crate::credentials::reset_test_faults();
+    assert!(error.persisted);
+    assert_eq!(error.code, "secret_unreadable");
+    assert_eq!(
+        settings.read(&a.id).unwrap()["pairingToken"]["status"],
+        "set"
+    );
+    let healthy = ConnectionCredentialSettings::new(f.dir.path().to_path_buf(), Arc::new(|_| {}));
+    healthy
+        .perform(ConnectionCredentialAction::ClearPairingToken { id: a.id.clone() })
+        .unwrap();
+    assert_eq!(
+        healthy.read(&a.id).unwrap()["pairingToken"]["status"],
+        "unset"
+    );
+    assert!(
+        ConnectionCredentialSettings::action_schema()
+            .to_string()
+            .contains("writeOnly")
+    );
+}
