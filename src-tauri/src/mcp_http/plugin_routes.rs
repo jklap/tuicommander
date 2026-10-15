@@ -384,3 +384,28 @@ pub(super) async fn plugin_readme(AxumPath(plugin_id): AxumPath<String>) -> Resp
     let path = crate::plugins::get_plugin_readme_path(plugin_id);
     json_result(Ok::<Option<String>, String>(path))
 }
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct GithubActionBody {
+    account: String,
+    reference: crate::work_items::model::WorkItemRef,
+    request: crate::plugin_github::Request,
+}
+
+pub(super) async fn plugin_github_action(
+    State(state): State<Arc<AppState>>,
+    AxumPath(plugin_id): AxumPath<String>,
+    Json(body): Json<GithubActionBody>,
+) -> Response {
+    json_result(
+        crate::plugin_github::execute(
+            &state,
+            plugin_id,
+            body.account,
+            body.reference,
+            body.request,
+        )
+        .await,
+    )
+}

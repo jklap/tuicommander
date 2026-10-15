@@ -2334,3 +2334,59 @@ it("unregisters work-item providers when their plugin unloads", async () => {
 	pluginRegistry.unregister("tasks-provider");
 	expect(workItemProviderRegistry.get("demo", "local")).toBeUndefined();
 });
+
+// Catches: plugins cannot reach the account-scoped B6/B7 ports and fall back to repo-default auth.
+describe("PluginHost GitHub account bridge", () => {
+	const reference = { providerId: "github", accountId: "selected", id: "owner/repo/pull/12" };
+	it("forwards selected account and reference to both core ports", async () => {
+		let host: PluginHost | undefined;
+		await pluginRegistry.register(
+			makePlugin("github-bridge", (h) => {
+				host = h;
+			}),
+			["net:http"],
+		);
+		await host!.githubReviewThreads("selected", reference, null);
+		expect(invoke).toHaveBeenLastCalledWith("plugin_github_action", {
+			pluginId: "github-bridge",
+			account: "selected",
+			reference,
+			request: { action: "threads", after: null },
+		});
+		await host!.githubPrAction("selected", reference, { action: "state" });
+		expect(invoke).toHaveBeenLastCalledWith("plugin_github_action", {
+			pluginId: "github-bridge",
+			account: "selected",
+			reference,
+			request: { action: "state" },
+		});
+	});
+	// Catches: one account's provider sends another account's item to the bridge.
+	it("rejects cross-account references before invoking", async () => {
+		let host: PluginHost | undefined;
+		await pluginRegistry.register(
+			makePlugin("github-bridge", (h) => {
+				host = h;
+			}),
+			["net:http"],
+		);
+		vi.mocked(invoke).mockClear();
+		await expect(host!.githubReviewThreads("other", reference, null)).rejects.toThrow(/account/);
+		await expect(host!.githubPrAction("other", reference, { action: "state" })).rejects.toThrow(/account/);
+		expect(invoke).not.toHaveBeenCalled();
+	});
+	// Catches: the bridge bypasses the HTTP capability required for account use.
+	it("requires net:http for both ports", async () => {
+		let host: PluginHost | undefined;
+		await pluginRegistry.register(
+			makePlugin("github-bridge", (h) => {
+				host = h;
+			}),
+			[],
+		);
+		await expect(host!.githubReviewThreads("selected", reference, null)).rejects.toThrow(PluginCapabilityError);
+		await expect(host!.githubPrAction("selected", reference, { action: "state" })).rejects.toThrow(
+			PluginCapabilityError,
+		);
+	});
+});

@@ -1,4 +1,5 @@
 import { urlResolverRegistry } from "../components/CommandPalette/urlPaste";
+import type { ReviewThreadsPage } from "../components/PrDiffTab/reviewThreads";
 import { startWork } from "../hooks/git/startWork";
 import { invoke, listen } from "../invoke";
 import { activityStore } from "../stores/activityStore";
@@ -17,6 +18,7 @@ import { sidebarPluginStore } from "../stores/sidebarPluginStore";
 import { statusBarTicker } from "../stores/statusBarTicker";
 import { terminalsStore } from "../stores/terminals";
 import { workItemLinksStore } from "../stores/workItemLinks";
+import type { WorkItemRef } from "../types/work-items.gen";
 import type { GitRemote } from "../types/workItemLinks";
 import { randomId } from "../utils/randomId";
 import { sanitizeSvgIcon } from "../utils/sanitizeSvg";
@@ -32,6 +34,7 @@ import type {
 	Disposable,
 	FileIconProvider,
 	FsChangeEvent,
+	GitHubPrRequest,
 	HttpFetchOptions,
 	HttpResponse,
 	MarkdownProvider,
@@ -883,6 +886,29 @@ function createPluginRegistry() {
 					account: options?.account ?? null,
 					pluginId,
 				});
+			},
+
+			async githubReviewThreads(
+				account: string,
+				reference: WorkItemRef,
+				after: string | null,
+			): Promise<ReviewThreadsPage> {
+				requireCapability(pluginId, capabilities, "net:http");
+				if (reference.providerId !== "github" || reference.accountId !== account)
+					throw new Error("GitHub account mismatch");
+				return invoke<ReviewThreadsPage>("plugin_github_action", {
+					pluginId,
+					account,
+					reference,
+					request: { action: "threads", after },
+				});
+			},
+
+			async githubPrAction(account: string, reference: WorkItemRef, request: GitHubPrRequest): Promise<unknown> {
+				requireCapability(pluginId, capabilities, "net:http");
+				if (reference.providerId !== "github" || reference.accountId !== account)
+					throw new Error("GitHub account mismatch");
+				return invoke("plugin_github_action", { pluginId, account, reference, request });
 			},
 
 			// -- Tier 3g: CLI execution --

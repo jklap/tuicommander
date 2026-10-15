@@ -1,3 +1,7 @@
+## GitHub Work B6/B7 bridge (1693-a816) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, reload the updated GitHub Work plugin. Verify a PR detail loads enriched review threads under the selected account and that the plugin host ports reach core action state. Do not perform merge/review/rerun writes without separate authorization. Verify cross-account rejection and desktop plugin loading; no managed peer launched a second desktop instance.
+
 ## GitLab provider plugin (1695-9f3a) — needs 1697-4cdc and a desktop restart
 
 - [ ] After story 1697-4cdc lands (`host.httpFetch({account})` and manifest provider declarations) and Boss restarts the desktop app, install the `gitlab` plugin and add two GitLab accounts, one on a non-default port. In Tasks, confirm each account lists its own issues, merge requests and to-do items; paste an item URL of each instance and confirm only its own account resolves it. On a merge request, confirm merge/squash choices, readable blockers, approve, pipeline jobs and job retry; on a board, move a card and confirm the list label changes in GitLab. The plugin tests run on fixtures recorded from GitLab CE (`plugins/gitlab/fixtures/recorded.json`); no desktop instance was launched by this peer.
