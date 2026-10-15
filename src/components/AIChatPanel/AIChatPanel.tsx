@@ -8,6 +8,7 @@ import { uiStore } from "../../stores/ui";
 import { isTauri } from "../../transport";
 import { cx } from "../../utils";
 import { openFileLinkHere, resolveFileLink } from "../../utils/openFileLink";
+import { getRepoTextColor } from "../../utils/repoColor";
 import { SETTINGS_SECTION_EGO } from "../SettingsPanel/sections";
 import p from "../shared/panel.module.css";
 import { PanelResizeHandle } from "../ui/PanelResizeHandle";
@@ -67,6 +68,19 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 	onMount(() => onCleanup(trackPanelWidth(panelEl, (width) => uiStore.setAiChatPanelMeasuredWidth(width))));
 	createEffect(() => aiChatDraft.activate(chat.sessionId() ?? ""));
 	const keyDown = (event: KeyboardEvent) => {
+		if (
+			event.key === "Escape" &&
+			!event.defaultPrevented &&
+			!event.metaKey &&
+			!event.ctrlKey &&
+			!event.altKey &&
+			chat.busy()
+		) {
+			event.preventDefault();
+			event.stopPropagation();
+			void chat.cancel();
+			return;
+		}
 		if (!(event.metaKey || event.ctrlKey) || event.shiftKey) return;
 		const key = event.key.toLowerCase();
 		if (key === "t" && (isTauri() || event.altKey)) {
@@ -148,7 +162,13 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 						</svg>
 						AI Chat
 					</span>
-					<Show when={viewed()}>{(path) => <span class={s.terminalName}>{basename(path())}</span>}</Show>
+					<Show when={chat.operatingRepo()}>
+						{(path) => (
+							<span class={s.terminalName} style={{ color: getRepoTextColor(path()) }}>
+								{basename(path())}
+							</span>
+						)}
+					</Show>
 					<Show when={chat.title()}>{(title) => <span class={s.terminalName}>{title()}</span>}</Show>
 					<Show when={chat.launch()}>
 						{(launch) => (
@@ -170,7 +190,15 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 			<div class={s.chatTabs} role="tablist" aria-label="AI Chat tabs">
 				<For each={chat.tabs()}>
 					{(session) => (
-						<div class={cx(s.chatTab, chat.sessionId() === session && s.chatTabActive)}>
+						<div
+							class={cx(s.chatTab, chat.sessionId() === session && s.chatTabActive)}
+							onAuxClick={(event) => {
+								if (event.button !== 1) return;
+								event.preventDefault();
+								event.stopPropagation();
+								void chat.closeTab(session);
+							}}
+						>
 							<button
 								type="button"
 								role="tab"

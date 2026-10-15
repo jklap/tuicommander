@@ -29,7 +29,7 @@ acknowledges the ceiling. Without a repo selection, launch behavior is unchanged
 
 Desktop composer actions use the same pin and blue play icons as the terminal Compose panel. The pin parks a draft and highlights when one is parked. Its tooltip offers restore or swap. The play button sends while idle and queues while ego is busy.
 
-Pasting an image starts ego when needed before checking image support. Finder image copies attach the image rather than its filename; mixed clipboard data with substantive text pastes as text, as in Ideas and terminal Compose.
+Pasting an image starts ego when needed before checking image support. Finder image copies attach the image rather than its filename; mixed clipboard data with substantive text pastes as text, as in Ideas and terminal Compose. An empty text clipboard flavor does not suppress an available image.
 
 While ego waits to retry a provider request, AI Chat shows the cause, attempt
 number and a live countdown. The countdown starts when the update arrives and
@@ -285,3 +285,9 @@ Use **New conversation with options** beside the `+` button to override the ego 
 A custom conversation runs its own ego ACP process. Its mail identity is separate from daily chats, even when both use the same workspace.
 
 When you scroll up and more conversation content arrives, **New text below** appears above the composer. Select it to return to the bottom and resume following. Reaching the bottom by hand clears it too. Search jumps do not show the pill until later content arrives. Disable **New text indicator** in **Settings → Appearance → Chat**, or mobile Settings. This preference is saved on the current client and applies to terminal Chat too.
+
+AI Chat replies use plain chat prose without the terminal answer rail. Literal Markdown blockquotes keep their normal quote style.
+
+Use **Pin repository** beside the composer to keep that conversation's repository context while you navigate elsewhere. **Pinned repository** identifies the frozen context. Unpin to follow the repository on screen again. The name uses the repository or group color, with the normal light-theme text adjustment. This does not move or filter conversation tabs. The existing pin icon still parks your draft; it is a separate action.
+
+Middle-click a conversation tab to close it through the same path as its close button. The last conversation tab stays open. Press Escape from the composer or transcript to stop a running turn without clearing your draft. When Find is open, Escape closes Find first. Desktop Stop, Park and Send align to the input height.

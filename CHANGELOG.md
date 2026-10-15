@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Close AI Chat tabs with the middle mouse button through the normal guarded close path (#1922-8027).
+- Align AI Chat Stop, Park and Send controls with the input (#1925-9e69).
+- Stop a running AI Chat turn with Escape while preserving drafts and Find dismissal (#1926-458a).
+
+- Remove the green answer rail and its inset from AI Chat replies; retain terminal Chat cards and real blockquotes (#1920-700e).
+
+- Attach AI Chat clipboard images when an empty text flavor accompanies the PNG (#1919-f93d).
+
 - Grant Gemini session attachment trust without a folder prompt or global settings changes. Grant ego PTY attachments read-only access in confined sandbox modes (#1833-aa60).
 
 
@@ -20,6 +28,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Fix cache keepalive draft preservation with guarded backend submissions and complete question-state replay on plugin load.
 
 ### Added
+
+- Pin AI Chat repository context per conversation and show its configured name color without changing draft parking (#1924-12be).
 - Diagnose empty or off-screen mobile resume shells through the backend log ring without reloading the page (#1900-5ff6).
 - Bind GitHub Work review threads and PR actions to the selected account through core policy, with desktop and HTTP parity (#1693-a816).
 - Hibernate unattended resumable agent tabs after configurable awake idle time, with background-only scope by default and shared wake on open, input or mail (#1808-389f).

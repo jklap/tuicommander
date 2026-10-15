@@ -559,7 +559,8 @@ export function createAcpChat(
 
 		async closeTab(tab: AcpSessionId): Promise<void> {
 			const active = aiChatTabs.close(TABS, tab);
-			if (!active) return;
+			// Closing another tab is not an explicit retry of the refused conversation.
+			if (!active || active === failedSession) return;
 			await selectSession(active);
 		},
 
