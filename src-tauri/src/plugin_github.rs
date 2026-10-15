@@ -230,7 +230,7 @@ mod tests {
                 &self,
                 query: &str,
                 variables: Value,
-            ) -> std::future::Ready<Result<Value, String>> {
+            ) -> impl std::future::Future<Output = Result<Value, String>> + Send {
                 if query.contains("mutation") {
                     self.writes
                         .lock()
@@ -253,8 +253,8 @@ mod tests {
                 _method: &str,
                 _endpoint: &str,
                 _body: Value,
-            ) -> std::future::Ready<Result<Value, String>> {
-                panic!("queue-required PR must never use direct REST merge")
+            ) -> impl std::future::Future<Output = Result<Value, String>> + Send {
+                std::future::ready(Err("queue-required PR must never use direct REST merge".into()))
             }
         }
         let api = Recorded {
