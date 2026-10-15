@@ -2241,3 +2241,7 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 ## Settings choice discovery (#1908-c327)
 
 - [ ] After Boss restarts `make dev` or installs a rebuilt release, open Notifications and explicitly refresh output devices. Verify real device names/default markers and selection persistence. Disconnect or deny the audio backend and verify failure is not shown as a supported empty device list. No hardware success is claimed by the isolated owner tests.
+
+## Voice settings discovery (#1909-0d24)
+
+- [ ] After Boss manually restarts the Rust app, verify Voice input device refresh, missing-backend errors, Whisper model installed/downloadable state and per-language installed/Edge voices. Edge needs an internet connection only on explicit refresh. Exercise download/cancel/delete/import through the existing UI owners with disposable assets; verify subsequent choice refresh and runtime invalidation. No hardware, network or real download success is claimed by fixture tests.

@@ -3081,3 +3081,7 @@ The normal Rust suspension path persists `reason: "idle_hibernate"` before endin
 ### Internal settings choice discovery
 
 Owner-backed dynamic choices support cache-only describe and explicit refresh. Notification output devices retain their UI option objects and distinguish unavailable discovery from successful empty results (#1908-c327).
+
+### Voice owner discovery (#1909-0d24)
+
+Internal voice settings refresh resolves devices, model state, installed voices and language-filtered Edge voices through existing owners. Describe is cache-only; typed asset actions retain existing owner validation and runtime effects. Public settings transport cutover remains separate.

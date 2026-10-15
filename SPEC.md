@@ -1107,3 +1107,7 @@ GitHub Work B8: registered accounts bind core B6 review threads and B7 actions t
 ## Settings choice discovery (#1908-c327)
 
 Internal owner requests now support cached dynamic-choice describe and explicit refresh, scoped by target and revision. Notification output devices reuse the UI enumeration owner and preserve unavailable versus successful empty results. General settings transport publication remains separate.
+
+### Voice owner discovery (#1909-0d24)
+
+Internal voice settings refresh resolves devices, model state, installed voices and language-filtered Edge voices through existing owners. Describe is cache-only; typed asset actions retain existing owner validation and runtime effects. Public settings transport cutover remains separate.

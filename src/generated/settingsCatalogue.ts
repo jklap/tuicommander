@@ -9786,30 +9786,6 @@ export const settingsCatalogue = {
       "reason": "IDE availability choices need a host resolver; no implicit process probing during describe."
     },
     {
-      "store": "voice",
-      "path": "/device",
-      "ownerStep": "Step 4b",
-      "reason": "Audio input choices need explicit available/unavailable resolver results."
-    },
-    {
-      "store": "voice",
-      "path": "/model",
-      "ownerStep": "Step 4b",
-      "reason": "Installed/downloadable voice asset choices and actions require the voice owner."
-    },
-    {
-      "store": "voice",
-      "path": "/speech_voice",
-      "ownerStep": "Step 4b",
-      "reason": "Voice choices depend on installed engine/language capabilities and require the voice owner."
-    },
-    {
-      "store": "voice",
-      "path": "/speech_edge_voice",
-      "ownerStep": "Step 4b",
-      "reason": "Edge voice choices require the voice owner resolver without an implicit network refresh."
-    },
-    {
       "store": "agents",
       "path": "/agents/{key}/run_configs/{name}/model",
       "ownerStep": "Step 4c",
