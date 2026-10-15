@@ -1487,17 +1487,17 @@ pub(crate) async fn spawn_agent(
                 cmd.cwd(crate::cli::expand_tilde(cwd));
             }
 
+            crate::pty::apply_agent_screen_env(&mut cmd, &spawn_pty_config.env);
+            // Inject env flags (feature flags configured in Settings → Agents)
+            for (key, value) in &spawn_pty_config.env {
+                cmd.env(key, value);
+            }
             crate::pty::bind_pty_identity(
                 &state_for_env,
                 &mut cmd,
                 &session_id_for_env,
                 spawn_tuic_session.as_deref(),
             );
-            crate::pty::apply_agent_screen_env(&mut cmd, &spawn_pty_config.env);
-            // Inject env flags (feature flags configured in Settings → Agents)
-            for (key, value) in &spawn_pty_config.env {
-                cmd.env(key, value);
-            }
             cmd
         },
     )
