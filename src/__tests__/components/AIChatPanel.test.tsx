@@ -1219,6 +1219,53 @@ describe("AIChatPanel: parallel tabs", () => {
 		);
 	});
 
+	// Catches: a recorded pre-prompt offer leaves Session settings hidden.
+	it("reveals settings from the recorded async config offer before sending", async () => {
+		const { container } = await renderPanel();
+		const empty = snapshot({
+			attachments: [attachment({ configOptions: [] }), attachment({ sessionId: SECOND_SESSION })],
+		});
+		acpStore.applySnapshot(empty);
+		expect(container.querySelector('[aria-label="Session settings"]')).toBeNull();
+		const recording = readFileSync(resolve("src-tauri/tests/fixtures/acp/ego-async-config.jsonl"), "utf8")
+			.trim()
+			.split("\n")
+			.map((line) => JSON.parse(line));
+		const offer = JSON.parse(recording.at(-1).raw).params.update;
+		const actual = await vi.importActual<typeof import("../../services/acpClient")>("../../services/acpClient");
+		let receive!: (frame: import("../../types/acp").AcpStreamFrame) => void;
+		const realClient = actual.createAcpClient(async (options) => {
+			receive = options.onFrame;
+			return { close() {} };
+		});
+		vi.mocked(invoke).mockImplementation(async (command) => {
+			if (command === "acp_connect") return empty;
+			if (command === "acp_pending_interactions") return [];
+			if (command === "acp_connection_snapshot")
+				return snapshot({
+					attachments: [attachment({ configOptions: offer.configOptions }), attachment({ sessionId: SECOND_SESSION })],
+				});
+			return undefined;
+		});
+		await realClient.connect(CHAT_ROOT);
+		receive({
+			kind: "event",
+			connectionId: CONNECTION,
+			generation: 1,
+			sequence: ++sequence,
+			sessionId: SESSION,
+			turnId: null,
+			event: { kind: "sessionUpdate", update: offer },
+		});
+		await settle();
+		expect(container.querySelector('[aria-label="Session settings"]')).not.toBeNull();
+		expect(container.textContent).toContain("Mode: default");
+		expect(container.textContent).not.toContain("Model: pending");
+		expect(acpStore.attachment(CONNECTION, SECOND_SESSION)?.configOptions).toEqual([MODEL_OPTION]);
+		expect(client.prompt).not.toHaveBeenCalled();
+		await realClient.disconnect(CONNECTION);
+	});
+
 	// Catches: an attached tab with late config options loses the entire model/mode row.
 	it.each<{ configOptions: AcpSessionConfigOption[] }>([
 		{ configOptions: [] },
