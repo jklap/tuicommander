@@ -529,7 +529,7 @@ async fn connection_credential_failure_remains_recoverable() {
     use super::remote::{ConnectionCredentialAction, ConnectionCredentialSettings};
     let f = fixture();
     let connection = ssh("credential owner");
-    seed_connections(&f, &[connection.clone()]);
+    seed_connections(&f, std::slice::from_ref(&connection));
     let settings = ConnectionCredentialSettings::new(f.dir.path().to_path_buf(), Arc::new(|_| {}));
     let error = settings
         .perform(ConnectionCredentialAction::SetPassword {
@@ -612,7 +612,7 @@ async fn connection_credential_partial_readback_reports_committed_phase() {
     use super::remote::{ConnectionCredentialAction, ConnectionCredentialSettings};
     let f = fixture();
     let a = ssh("readback failure");
-    seed_connections(&f, &[a.clone()]);
+    seed_connections(&f, std::slice::from_ref(&a));
     let settings = ConnectionCredentialSettings::new(
         f.dir.path().to_path_buf(),
         Arc::new(|_| {

@@ -174,10 +174,16 @@ impl TelegramOwnerSettings {
             TelegramAction::RemoveChat { chat_id } => setup::Change::RemoveChat { chat_id },
         };
         let mut persisted = false;
-        setup::change_owner_with_phase(self.paths()?, change, &mut persisted)
+        let changed = setup::change_owner_with_phase(self.paths()?, change, &mut persisted)
             .await
+            .map_err(|_| ());
+        if changed.is_ok() {
+            persisted = true;
+        }
+        changed
+            .and_then(|_| self.read().map_err(|_| ()))
             .map_err(|_| {
-                // Token setup can persist before getMe fails. Read before retrying; never replay blind.
+                // Setup or final readback can fail after persistence. Never replay blind.
                 let mut error = Error::new(
                     ID,
                     if persisted {
@@ -189,8 +195,7 @@ impl TelegramOwnerSettings {
                 error.persisted = persisted;
                 error.next_action = "read Telegram owner state before retrying".into();
                 error
-            })?;
-        self.read()
+            })
     }
 }
 
