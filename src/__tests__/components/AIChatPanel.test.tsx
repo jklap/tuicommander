@@ -4251,6 +4251,50 @@ it("mobile Chat updates keyboard correction without changing desktop attributes"
 	expectAttributes(true);
 });
 
+// Catches: finishing delete cleanup overwrites a newer explicit conversation selection.
+it("does not replace a newer selection while deleted conversation config cleanup is pending", async () => {
+	supportsDelete = true;
+	let dispose = () => {};
+	const chat = createRoot((cleanup) => {
+		dispose = cleanup;
+		return createAcpChat(
+			() => ROOT,
+			() => true,
+			client,
+		);
+	});
+	try {
+		await chat.ensureStarted();
+		aiChatTabs.add("global", SECOND_SESSION);
+		aiChatTabs.add("global", CHILD_SESSION);
+		aiChatTabs.add("global", SESSION);
+		client.deleteSession.mockResolvedValue(undefined);
+		let releaseSave: (() => void) | undefined;
+		const originalInvoke = vi.mocked(invoke).getMockImplementation()!;
+		vi.mocked(invoke).mockImplementation(async (command, args) => {
+			if (command === "save_config" && !releaseSave) {
+				await new Promise<void>((resolve) => {
+					releaseSave = resolve;
+				});
+				return undefined;
+			}
+			return originalInvoke(command, args);
+		});
+		const deleting = chat.deleteSession(SESSION);
+		await settle();
+		expect(releaseSave).toBeDefined();
+		const selecting = chat.selectSession(CHILD_SESSION);
+		await settle();
+		expect(chat.sessionId()).toBe(CHILD_SESSION);
+		releaseSave!();
+		await Promise.all([deleting, selecting]);
+		expect(chat.sessionId()).toBe(CHILD_SESSION);
+		expect(aiChatTabs.active("global")).toBe(CHILD_SESSION);
+	} finally {
+		dispose();
+	}
+});
+
 describe("AIChatPanel: delete conversation", () => {
 	async function listedPanel() {
 		supportsDelete = true;
