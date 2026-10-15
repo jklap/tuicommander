@@ -198,3 +198,36 @@ fn keybinding_action_inventory_matches_frontend() {
     }
     assert_eq!(super::keybindings::actions(), actions);
 }
+
+#[test]
+#[serial_test::serial]
+fn unchanged_empty_shortcuts_save_succeeds_before_first_override() {
+    let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+    // Hydrate maps the missing file to [], then Reset All saves the same [].
+    assert_eq!(
+        crate::config::save_keybindings(serde_json::json!([]), serde_json::json!([])),
+        Ok(())
+    );
+}
+
+/// Catches: the UI's minimum-width resize fails persistence due to floating-point rounding.
+#[test]
+#[serial_test::serial]
+fn minimum_width_resize_roundoff_does_not_reject_layout_save() {
+    let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let _guard = set_config_dir_override(dir.path().to_path_buf());
+    // A supported three-pane branch has ratios [0.45, 0.05, 0.5].
+    // setHandleRatio at fraction 0.45 computes its second ratio as 0.5 - 0.45.
+    let layout = json!({
+        "root":{"type":"branch","direction":"horizontal",
+            "children":[{"type":"leaf","id":"g1"},{"type":"leaf","id":"g2"},{"type":"leaf","id":"g3"}],
+            "ratios":[0.45_f64, 0.5_f64 - 0.45_f64, 0.5_f64]},
+        "groups":{
+            "g1":{"id":"g1","tabs":[],"activeTabId":null},
+            "g2":{"id":"g2","tabs":[],"activeTabId":null},
+            "g3":{"id":"g3","tabs":[],"activeTabId":null}},
+        "activeGroupId":"g1"
+    });
+    assert_eq!(save_pane_layout(Value::Null, layout), Ok(()));
+}
