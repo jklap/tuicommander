@@ -226,30 +226,34 @@ mod tests {
             writes: Mutex<Vec<Value>>,
         }
         impl PrApi for Recorded {
-            async fn graphql(&self, query: &str, variables: Value) -> Result<Value, String> {
+            fn graphql(
+                &self,
+                query: &str,
+                variables: Value,
+            ) -> std::future::Ready<Result<Value, String>> {
                 if query.contains("mutation") {
                     self.writes
                         .lock()
                         .unwrap()
                         .push(json!({"query":query,"variables":variables}));
-                    return Ok(
+                    return std::future::ready(Ok(
                         json!({"data":{"enqueuePullRequest":{"mergeQueueEntry":{"id":"contract-entry","position":1,"state":"QUEUED"}}}}),
-                    );
+                    ));
                 }
                 let recording: Value = serde_json::from_str(include_str!(
                     "../fixtures/github-review/actions-pr-recorded.json"
                 ))
                 .unwrap();
-                Ok(
+                std::future::ready(Ok(
                     json!({"data":{"repository":{"pullRequest":recording["data"]["repository"]["pullRequests"]["nodes"][0]}}}),
-                )
+                ))
             }
-            async fn rest(
+            fn rest(
                 &self,
                 _method: &str,
                 _endpoint: &str,
                 _body: Value,
-            ) -> Result<Value, String> {
+            ) -> std::future::Ready<Result<Value, String>> {
                 panic!("queue-required PR must never use direct REST merge")
             }
         }
