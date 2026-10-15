@@ -290,4 +290,6 @@ AI Chat replies use plain chat prose without the terminal answer rail. Literal M
 
 Use **Pin repository** beside the composer to keep that conversation's repository context while you navigate elsewhere. **Pinned repository** identifies the frozen context. Unpin to follow the repository on screen again. The name uses the repository or group color, with the normal light-theme text adjustment. This does not move or filter conversation tabs. The existing pin icon still parks your draft; it is a separate action.
 
-Middle-click a conversation tab to close it through the same path as its close button. The last conversation tab stays open. Press Escape from the composer or transcript to stop a running turn without clearing your draft. When Find is open, Escape closes Find first. Desktop Stop, Park and Send align to the input height.
+Middle-click a conversation tab to close it through the same path as its close button. The last conversation tab stays open. Press Escape from the composer or transcript to stop a running turn without clearing your draft. When Find is open, Escape closes Find first, including when focus has moved back to the composer. Desktop Stop, Park and Send align to the input height.
+
+Repository names in linked worktree contexts use the registered parent repository color, including its inherited group color. Pinning a worktree keeps that color while you browse another repository.
