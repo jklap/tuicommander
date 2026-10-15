@@ -1113,17 +1113,22 @@ impl ConnectionActor {
             return;
         };
         let turn_id = attachment.active_turn.as_ref().map(|turn| turn.turn_id);
-        let changed = if let v1::SessionUpdate::UsageUpdate(usage) = &notification.update {
-            attachment.usage = Some(AcpUsageSnapshot {
-                context: Some(usage.clone()),
-                end_turn: attachment
-                    .usage
-                    .as_ref()
-                    .and_then(|held| held.end_turn.clone()),
-            });
-            true
-        } else {
-            false
+        let changed = match &notification.update {
+            v1::SessionUpdate::UsageUpdate(usage) => {
+                attachment.usage = Some(AcpUsageSnapshot {
+                    context: Some(usage.clone()),
+                    end_turn: attachment
+                        .usage
+                        .as_ref()
+                        .and_then(|held| held.end_turn.clone()),
+                });
+                true
+            }
+            v1::SessionUpdate::ConfigOptionUpdate(options) => {
+                attachment.config_options = options.config_options.clone();
+                true
+            }
+            _ => false,
         };
         if changed {
             self.publish();

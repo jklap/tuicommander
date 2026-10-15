@@ -134,6 +134,15 @@ export function createAcpClient(open: AcpStreamOpener = openAcpStream) {
 		acpTranscript.applyFrame(frame);
 		if (
 			frame.kind === "event" &&
+			frame.event.kind === "sessionUpdate" &&
+			frame.event.update.sessionUpdate === "config_option_update"
+		) {
+			void refresh(connectionId).catch((error) => {
+				appLogger.warn("ai-chat", "refreshing session config options failed", { connectionId, error });
+			});
+		}
+		if (
+			frame.kind === "event" &&
 			frame.sessionId &&
 			replaying.get(frame.sessionId) === connectionId &&
 			frame.event.kind === "sessionUpdate" &&
@@ -217,6 +226,11 @@ export function createAcpClient(open: AcpStreamOpener = openAcpStream) {
 		return snapshot;
 	}
 
+	/** The backend snapshot owns the complete attachment option set. */
+	async function refresh(connectionId: AcpConnectionId): Promise<void> {
+		acpStore.applySnapshot(await invoke<AcpConnectionSnapshot>("acp_connection_snapshot", { connectionId }));
+	}
+
 	return {
 		async openConversation(request: ChatOpenRequest): Promise<ChatOpened> {
 			const opened = await invoke<ChatOpened>("acp_chat_open", { request });
@@ -255,9 +269,7 @@ export function createAcpClient(open: AcpStreamOpener = openAcpStream) {
 		},
 
 		/** Read the connection's current picture without touching its stream. */
-		async refresh(connectionId: AcpConnectionId): Promise<void> {
-			acpStore.applySnapshot(await invoke<AcpConnectionSnapshot>("acp_connection_snapshot", { connectionId }));
-		},
+		refresh,
 
 		async disconnect(connectionId: AcpConnectionId): Promise<AcpConnectionSettlement> {
 			forget(connectionId);
