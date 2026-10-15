@@ -6,9 +6,20 @@
  * at runtime from {config_dir}/plugins/ via the plugin:// URI protocol.
  */
 
+import type { ReviewThreadsPage } from "../components/PrDiffTab/reviewThreads";
+import type { WorkItemRef } from "../types/work-items.gen";
 import type { PluginSettingsAction } from "./pluginSettings";
 
 export type { PluginSettingsAction, PluginSettingsDefinition } from "./pluginSettings";
+
+/** Account-scoped requests reuse the core B6/B7 policy and reviewed-head checks. */
+export type GitHubPrRequest =
+	| { action: "state" }
+	| { action: "auto_merge"; enabled: boolean; mergeMethod?: string; expectedHeadSha?: string }
+	| { action: "queue"; enqueued: boolean; expectedHeadSha?: string }
+	| { action: "merge"; mergeMethod: string; expectedHeadSha: string }
+	| { action: "rerun"; runId: number }
+	| { action: "review"; draft: { headSha: string; body: string; event: string; comments: unknown[] } };
 
 // ---------------------------------------------------------------------------
 // Disposable
@@ -866,6 +877,10 @@ export interface PluginHost {
 	 * Non-2xx status codes are returned normally (not thrown as errors).
 	 */
 	httpFetch(url: string, options?: HttpFetchOptions): Promise<HttpResponse>;
+	/** Read B6 enriched review threads using the selected GitHub account. Requires net:http. */
+	githubReviewThreads(account: string, reference: WorkItemRef, after: string | null): Promise<ReviewThreadsPage>;
+	/** Execute B7 policy through core using the selected GitHub account. Requires net:http. */
+	githubPrAction(account: string, reference: WorkItemRef, request: GitHubPrRequest): Promise<unknown>;
 
 	// -- Tier 3g: CLI execution (capability-gated) --
 

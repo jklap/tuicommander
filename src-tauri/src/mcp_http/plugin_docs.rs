@@ -196,7 +196,7 @@ These inventories are checked against the capability validator, the host object 
 `credentials:read`, `exec:cli`, `fs:delete`, `fs:list`, `fs:read`, `fs:rename`, `fs:scan`, `fs:watch`, `fs:write`, `git:read`, `invoke:list_markdown_files`, `invoke:read_file`, `net:http`, `pty:read`, `pty:write`, `ui:context-menu`, `ui:file-icons`, `ui:file-preview`, `ui:markdown`, `ui:panel`, `ui:sidebar`, `ui:sound`, `ui:ticker`.
 
 ### Host method inventory
-`addItem`, `clearTicker`, `deleteBuildArtifact`, `execCli`, `getActiveRepo`, `getActiveRepoPath`, `getActiveTerminalSessionId`, `getClaudeProjectDir`, `getGitBranches`, `getGitDiff`, `getPrNotifications`, `getRecentCommits`, `getRemotes`, `getRepoPathForSession`, `getRepos`, `getSessionCwd`, `getSettings`, `getTerminalState`, `httpFetch`, `invoke`, `linkItem`, `listDirectory`, `log`, `onStateChange`, `openEditorTab`, `openMarkdownFile`, `openMarkdownFileBackground`, `openMarkdownPanel`, `openPanel`, `playNotificationSound`, `readCredential`, `readFile`, `readFileBase64`, `readFileTail`, `readFiles`, `readSessionOutput`, `registerCommand`, `registerContextMenuAction`, `registerDashboard`, `registerFileIconProvider`, `registerFilePreview`, `registerMarkdownProvider`, `registerOutputWatcher`, `registerSection`, `registerSidebarPanel`, `registerStructuredEventHandler`, `registerTerminalAction`, `registerUrlResolver`, `registerWorkItemProvider`, `removeItem`, `renamePath`, `scanBuildArtifacts`, `sendAgentInput`, `sendAgentInputIfEmpty`, `setTicker`, `settings`, `startWork`, `trimBuildArtifact`, `unlinkItem`, `updateItem`, `watchPath`, `writeFile`, `writeFileBase64`, `writePty`.
+`addItem`, `clearTicker`, `deleteBuildArtifact`, `execCli`, `getActiveRepo`, `getActiveRepoPath`, `getActiveTerminalSessionId`, `getClaudeProjectDir`, `getGitBranches`, `getGitDiff`, `getPrNotifications`, `getRecentCommits`, `getRemotes`, `getRepoPathForSession`, `getRepos`, `getSessionCwd`, `getSettings`, `getTerminalState`, `githubPrAction`, `githubReviewThreads`, `httpFetch`, `invoke`, `linkItem`, `listDirectory`, `log`, `onStateChange`, `openEditorTab`, `openMarkdownFile`, `openMarkdownFileBackground`, `openMarkdownPanel`, `openPanel`, `playNotificationSound`, `readCredential`, `readFile`, `readFileBase64`, `readFileTail`, `readFiles`, `readSessionOutput`, `registerCommand`, `registerContextMenuAction`, `registerDashboard`, `registerFileIconProvider`, `registerFilePreview`, `registerMarkdownProvider`, `registerOutputWatcher`, `registerSection`, `registerSidebarPanel`, `registerStructuredEventHandler`, `registerTerminalAction`, `registerUrlResolver`, `registerWorkItemProvider`, `removeItem`, `renamePath`, `scanBuildArtifacts`, `sendAgentInput`, `sendAgentInputIfEmpty`, `setTicker`, `settings`, `startWork`, `trimBuildArtifact`, `unlinkItem`, `updateItem`, `watchPath`, `writeFile`, `writeFileBase64`, `writePty`.
 
 ### Base CSS class inventory
 `badge`, `badge-accent`, `badge-error`, `badge-muted`, `badge-p1`, `badge-p2`, `badge-p3`, `badge-success`, `badge-warning`, `btn`, `btn-danger`, `btn-primary`, `card`, `critical`, `danger`, `dash-header`, `dash-meter`, `dash-meter-fill`, `dash-section`, `dash-section-hint`, `dash-section-title`, `dash-stat`, `dash-stat-grid`, `dash-stat-label`, `dash-stat-sub`, `dash-stat-value`, `dash-subtitle`, `dash-title`, `dashboard`, `empty-state`, `error`, `filter-bar`, `hint`, `num`, `ok`, `primary`, `show`, `success`, `toast`, `warn`.
@@ -330,6 +330,27 @@ PanelHandle: `{ tabId, update(html), close(), send(data, transfer?) }` — HTML 
 HttpResponse: `{ status: number, headers: Record<string, string>, body: string }` — non-2xx is NOT an error.
 
 **setTicker notes:** Shared ticker area rotates messages from all plugins. Priority tiers: <10 = popover only, 10-99 = auto-rotate (5s), >=100 = urgent pin. `label` is shown as source prefix (e.g. "Usage · 5h: 42%"). Counter badge (1/3 ▸) shown when multiple tickers active. Click badge to cycle, right-click for popover. Removed aliases `postTickerMessage`/`removeTickerMessage` are not supported.
+
+
+### Account-scoped GitHub review and action ports
+
+`host.githubReviewThreads(account, reference, after)` returns the core B6 review
+thread page, including head SHA, bot authors and parsed findings.
+`host.githubPrAction(account, reference, request)` calls core B7 policy.
+Both require `net:http` and an on-disk manifest declaring `providers: ["github"]`.
+The reference must identify a GitHub pull request in the selected account. Core
+loads that exact account credential, never a local repository default. Cross-account
+references fail before credential lookup. No token is returned to the plugin.
+
+Requests use `action`: `state`, `auto_merge` (`enabled`, optional `mergeMethod`,
+`expectedHeadSha`), `queue` (`enqueued`, optional `expectedHeadSha`), `merge`
+(`mergeMethod`, `expectedHeadSha`), `rerun` (`runId`), or `review` (`draft` with
+`headSha`, `body`, `event`, `comments`). Existing core reviewed-head validation,
+merge queue policy and shared request budgets apply unchanged. The desktop command
+`plugin_github_action` and `POST /api/plugins/{plugin_id}/github` accept identical
+`{account, reference, request}` payloads (IPC also supplies `pluginId`).
+The GitHub Work runtime binds both ports when it registers each configured account.
+No live write or desktop-load verification is implied by recorded-fixture tests.
 
 **httpFetch notes:** Localhost blocked unless declared in `allowedUrls`. Max 5 redirects. 30s timeout, 10 MB limit. An empty `allowedUrls` list grants no HTTP access.
 

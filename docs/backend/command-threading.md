@@ -321,3 +321,5 @@ snapshot and emits invalidation; it does no file I/O.
 ### Suspended tabs (2026-10-14)
 
 The async `suspended_session_action` command and its HTTP route both call `suspended_routes::dispatch`, which owns `spawn_blocking`. Config locking, agent-store verification, process discovery and PTY creation run on the blocking pool. MCP suspend uses the same blocking Rust owner and never waits for a frontend verdict.
+
+`plugin_github_action` is async: it validates plugin/account identity, loads credentials off the main thread, then calls the existing async B6/B7 services. HTTP uses the same adapter.

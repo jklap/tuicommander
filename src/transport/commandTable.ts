@@ -2320,6 +2320,13 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			body: { binary: args.binary, args: args.args, cwd: args.cwd },
 		}),
 	},
+	plugin_github_action: {
+		map: (args, p) => ({
+			method: "POST",
+			path: `/api/plugins/${p("pluginId")}/github`,
+			body: { account: args.account, reference: args.reference, request: args.request },
+		}),
+	},
 	plugin_http_fetch: {
 		map: (args, p) => ({
 			method: "POST",

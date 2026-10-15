@@ -2078,3 +2078,23 @@ the work-item plugins that are missing. Open Tasks is always offered.
 A provider page with `total <= 1000` can enable complete local Tasks queries after every page is collected and its unique item count matches the stable total. Omit `total` when unknown; never infer a count from a cursor or loaded rows. Local query projection is the host Rust command `project_work_items`, shared with `/tasks/project`. Collection preserves GitLab type, state and preset scope. GitLab username filters remain server-side because list rows hold numeric user identities, not usernames. Roadmap keeps provider paging and does not collect complete scopes automatically.
 
 GitHub Tasks boards (#1846-55d7): the optional provider `listBoards(signal)` port discovers the current user Projects v2 when Board opens. The existing picker selects a project; paging preserves project identities. Missing `read:project` stays visible instead of claiming there are no boards. Providers without discovery retain their configured boards. Discovery does not persist selections or write to GitHub.
+
+### Account-scoped GitHub review and action ports
+
+`host.githubReviewThreads(account, reference, after)` returns the core B6 review
+thread page, including head SHA, bot authors and parsed findings.
+`host.githubPrAction(account, reference, request)` calls core B7 policy.
+Both require `net:http` and an on-disk manifest declaring `providers: ["github"]`.
+The reference must identify a GitHub pull request in the selected account. Core
+loads that exact account credential, never a local repository default. Cross-account
+references fail before credential lookup. No token is returned to the plugin.
+
+Requests use `action`: `state`, `auto_merge` (`enabled`, optional `mergeMethod`,
+`expectedHeadSha`), `queue` (`enqueued`, optional `expectedHeadSha`), `merge`
+(`mergeMethod`, `expectedHeadSha`), `rerun` (`runId`), or `review` (`draft` with
+`headSha`, `body`, `event`, `comments`). Existing core reviewed-head validation,
+merge queue policy and shared request budgets apply unchanged. The desktop command
+`plugin_github_action` and `POST /api/plugins/{plugin_id}/github` accept identical
+`{account, reference, request}` payloads (IPC also supplies `pluginId`).
+The GitHub Work runtime binds both ports when it registers each configured account.
+No live write or desktop-load verification is implied by recorded-fixture tests.

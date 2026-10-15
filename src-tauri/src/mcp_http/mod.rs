@@ -2095,6 +2095,10 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             post(plugin_routes::plugin_exec),
         )
         .route(
+            "/api/plugins/{plugin_id}/github",
+            post(plugin_routes::plugin_github_action),
+        )
+        .route(
             "/api/plugins/{plugin_id}/http",
             post(plugin_routes::plugin_http_fetch),
         )

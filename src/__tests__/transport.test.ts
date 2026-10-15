@@ -2121,6 +2121,22 @@ describe("transport", () => {
 			expect(ex.path).toBe("/api/plugins/my-plugin/exec");
 			expect(ex.body).toEqual({ binary: "mdkb", args: ["--version"], cwd: "/home/user" });
 
+			// Catches: browser-mode B6/B7 requests lose account or reference identity.
+			const githubReference = { providerId: "github", accountId: "selected", id: "owner/repo/pull/12" };
+			const githubRequest = { action: "threads", after: null };
+			expect(
+				mapCommandToHttp("plugin_github_action", {
+					pluginId: "my-plugin",
+					account: "selected",
+					reference: githubReference,
+					request: githubRequest,
+				}),
+			).toEqual({
+				method: "POST",
+				path: "/api/plugins/my-plugin/github",
+				body: { account: "selected", reference: githubReference, request: githubRequest },
+			});
+
 			// plugin_http_fetch
 			const hf = mapCommandToHttp("plugin_http_fetch", {
 				pluginId: "my-plugin",
