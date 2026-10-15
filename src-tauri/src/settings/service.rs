@@ -27,6 +27,7 @@ pub trait Store: Send + Sync + 'static {
     fn refresh_choices(
         &self,
         _resolver: &str,
+        _path: &str,
     ) -> impl Future<Output = Result<Vec<Value>, Failure>> + Send {
         std::future::ready(Err(Error::new(self.id(), "unavailable")))
     }
@@ -281,7 +282,7 @@ impl<S: Store> Service<S> {
                 path
             );
             let value = if refresh {
-                let (availability, values) = match owner.refresh_choices(&resolver).await {
+                let (availability, values) = match owner.refresh_choices(&resolver, &path).await {
                     Ok(values) => (Availability::Available, Some(values)),
                     Err(_) => (
                         Availability::Unavailable {

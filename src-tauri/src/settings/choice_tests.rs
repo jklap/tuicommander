@@ -28,8 +28,12 @@ impl Store for Owner {
     fn read(&self) -> Result<Value, Failure> {
         Ok(self.state.lock().clone())
     }
-    async fn refresh_choices(&self, resolver: &str) -> Result<Vec<Value>, Failure> {
+    async fn refresh_choices(&self, resolver: &str, path: &str) -> Result<Vec<Value>, Failure> {
         assert_eq!(resolver, "audio_outputs");
+        assert_eq!(
+            path, "/audio_device",
+            "discovery receives the concrete requested path"
+        );
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.result
             .lock()
