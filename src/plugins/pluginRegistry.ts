@@ -68,7 +68,19 @@ import { workItemProviderRegistry } from "./workItemProviderRegistry";
  */
 function createPluginRegistry() {
 	// Active plugin → its aggregated Disposable (wraps all sub-registrations)
-	const plugins = new Map<string, { plugin: TuiPlugin; disposable: Disposable; agentTypes: readonly string[] }>();
+	const plugins = new Map<
+		string,
+		{
+			plugin: TuiPlugin;
+			disposable: Disposable;
+			agentTypes: readonly string[];
+			controller: AbortController;
+			started: boolean;
+			backendReady?: Promise<unknown>;
+		}
+	>();
+	// A replacement cannot acquire backend ownership before prior teardown finishes.
+	const teardowns = new Map<string, Promise<void>>();
 
 	// Plugin command handlers: action name (`plugin:<id>:<cmd>`) → run callback.
 	// Populated via host.registerCommand(), consulted by the global keydown
@@ -259,6 +271,7 @@ function createPluginRegistry() {
 		pluginId: string,
 		disposables: Disposable[],
 		capabilities: ReadonlySet<string> | null = null,
+		isActive: () => boolean = () => true,
 	): PluginHost {
 		function track(d: Disposable): Disposable {
 			// Wrap in idempotent guard: plugins may manually dispose() and then the
@@ -271,7 +284,8 @@ function createPluginRegistry() {
 					d.dispose();
 				},
 			};
-			disposables.push(safe);
+			if (isActive()) disposables.push(safe);
+			else safe.dispose();
 			return safe;
 		}
 
@@ -961,92 +975,123 @@ function createPluginRegistry() {
 	 * @param agentTypes - Optional list of agent types this plugin targets.
 	 *   Empty or omit for universal plugins.
 	 */
-	async function register(plugin: TuiPlugin, capabilities?: string[], agentTypes?: string[]): Promise<void> {
-		// Replace existing registration for same id
-		if (plugins.has(plugin.id)) {
-			await unregister(plugin.id);
-		}
-
+	async function register(plugin: TuiPlugin, capabilities?: string[], agentTypes?: string[]): Promise<boolean> {
+		const previous = plugins.has(plugin.id) ? unregister(plugin.id) : teardowns.get(plugin.id);
 		const disposables: Disposable[] = [];
-		const capSet = capabilities ? new Set(capabilities) : null;
-		const host = buildHost(plugin.id, disposables, capSet);
-
-		const pluginLogger = pluginStore.getLogger(plugin.id);
-
-		// Register capabilities on the Rust side before calling onload,
-		// so Rust-gated commands (exec:cli, fs:read, etc.) work immediately.
-		if (capabilities) {
-			try {
-				await invoke("register_loaded_plugin", {
-					pluginId: plugin.id,
-					capabilities: [...capabilities],
-				});
-			} catch (err) {
-				const msg = err instanceof Error ? err.message : String(err);
-				appLogger.error("plugin", `Plugin "${plugin.id}" Rust registration failed: ${msg}`, err);
-				pluginLogger.error(`Rust registration failed: ${msg}`, err);
-				pluginStore.updatePlugin(plugin.id, { loaded: false, error: msg });
-				return;
-			}
-		}
-
-		try {
-			plugin.onload(host);
-		} catch (err) {
-			const msg = err instanceof Error ? err.message : String(err);
-			appLogger.error("plugin", `Plugin "${plugin.id}" onload failed: ${msg}`, err);
-			pluginLogger.error(`onload failed: ${msg}`, err);
-			pluginStore.updatePlugin(plugin.id, { loaded: false, error: msg });
-			if (capabilities) {
-				invoke("unregister_loaded_plugin", { pluginId: plugin.id }).catch((e) =>
-					appLogger.debug("plugin", `unregister_loaded_plugin cleanup failed for "${plugin.id}": ${e}`),
-				);
-			}
-			for (const d of disposables) {
-				try {
-					d.dispose();
-				} catch {
-					/* cleanup best-effort */
-				}
-			}
-			return;
-		}
-
-		plugins.set(plugin.id, {
+		const controller = new AbortController();
+		const entry = {
 			plugin,
+			controller,
+			started: false,
+			agentTypes: agentTypes ?? [],
+			backendReady: undefined as Promise<unknown> | undefined,
 			disposable: {
 				dispose() {
-					for (const d of disposables) {
+					for (const d of disposables.splice(0)) {
 						try {
 							d.dispose();
 						} catch {
-							/* ignore */
+							/* cleanup best-effort */
 						}
 					}
 				},
 			},
-			agentTypes: agentTypes ?? [],
+		};
+		// Install ownership before the first await, including backend registration.
+		plugins.set(plugin.id, entry);
+		pluginStore.updatePlugin(plugin.id, { loaded: false, error: null });
+		const current = () => plugins.get(plugin.id) === entry && !controller.signal.aborted;
+		const rawHost = buildHost(plugin.id, disposables, capabilities ? new Set(capabilities) : null, current);
+		// Check BEFORE calling the real host: disposing a late registration afterward
+		// could already have replaced a current panel, command or provider.
+		const host = new Proxy(rawHost, {
+			get(target, property: keyof PluginHost) {
+				const method = target[property];
+				if (typeof method !== "function") return method;
+				return (...args: unknown[]) => {
+					controller.signal.throwIfAborted();
+					return Reflect.apply(method, target, args);
+				};
+			},
 		});
+		const pluginLogger = pluginStore.getLogger(plugin.id);
+		if (previous) await previous;
+		if (!current()) return false;
 
-		pluginStore.updatePlugin(plugin.id, { loaded: true, error: null });
+		let phase = "Rust registration";
+		try {
+			if (capabilities) {
+				entry.backendReady = invoke("register_loaded_plugin", {
+					pluginId: plugin.id,
+					capabilities: [...capabilities],
+				});
+				await entry.backendReady;
+				entry.backendReady = undefined;
+				if (!current()) return false;
+			}
+			phase = "onload";
+			entry.started = true;
+			const startup = plugin.onload(host, controller.signal);
+			if (startup) {
+				if (!current()) {
+					void startup.catch(() => {});
+					return false;
+				}
+				// Stop waiting for obsolete plugin work; the guarded host rejects late
+				// calls even when the plugin ignores the cooperative abort signal.
+				let cancel!: () => void;
+				const cancelled = new Promise<void>((resolve) => {
+					cancel = resolve;
+				});
+				controller.signal.addEventListener("abort", cancel, { once: true });
+				try {
+					await Promise.race([startup, cancelled]);
+				} finally {
+					controller.signal.removeEventListener("abort", cancel);
+					cancel();
+				}
+			}
+			if (!current()) return false;
+			pluginStore.updatePlugin(plugin.id, { loaded: true, error: null });
+			return true;
+		} catch (err) {
+			if (!current()) return false;
+			const msg = err instanceof Error ? err.message : String(err);
+			appLogger.error("plugin", `Plugin "${plugin.id}" ${phase} failed: ${msg}`, err);
+			pluginLogger.error(`${phase} failed: ${msg}`, err);
+			pluginStore.updatePlugin(plugin.id, { loaded: false, error: msg });
+			await unregister(plugin.id);
+			return false;
+		}
 	}
 
 	function unregister(id: string): Promise<void> {
 		const entry = plugins.get(id);
-		if (!entry) return Promise.resolve();
+		if (!entry) return teardowns.get(id) ?? Promise.resolve();
 		plugins.delete(id);
 		try {
-			entry.plugin.onunload();
+			if (entry.started) entry.plugin.onunload();
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
 			appLogger.error("plugin", `Plugin "${id}" onunload failed: ${msg}`, err);
 			pluginStore.getLogger(id).error(`onunload failed: ${msg}`, err);
 		}
+		entry.controller.abort();
 		entry.disposable.dispose();
 		statusBarTicker.removeAllForPlugin(id);
-		const disposed = invoke<void>("unregister_loaded_plugin", { pluginId: id }).catch((e) =>
-			appLogger.debug("plugin", `unregister_loaded_plugin cleanup failed for "${id}": ${e}`),
-		);
+		const previous = teardowns.get(id);
+		const removeBackend = () => invoke<void>("unregister_loaded_plugin", { pluginId: id });
+		const disposed = (
+			previous || entry.backendReady
+				? Promise.all([previous, entry.backendReady])
+						.catch(() => {})
+						.then(removeBackend)
+				: removeBackend()
+		).catch((e) => appLogger.debug("plugin", `unregister_loaded_plugin cleanup failed for "${id}": ${e}`));
+		teardowns.set(id, disposed);
+		void disposed.then(() => {
+			if (teardowns.get(id) === disposed) teardowns.delete(id);
+		});
 		pluginStore.updatePlugin(id, { loaded: false });
 		return disposed;
 	}
@@ -1196,16 +1241,15 @@ function createPluginRegistry() {
 	}
 
 	/** Remove all plugins and registrations (for testing). */
-	function clear(): void {
-		for (const id of [...plugins.keys()]) {
-			unregister(id);
-		}
+	async function clear(): Promise<void> {
+		const pending = [...plugins.keys()].map((id) => unregister(id));
 		stateChangeListeners.length = 0;
 		panelMessageHandlers.clear();
 		panelSendChannels.clear();
 		panelVisibility.clear();
 		panelVisibilityHandlers.clear();
 		panelCloseHandlers.clear();
+		await Promise.all([...pending, ...teardowns.values()]);
 	}
 
 	// -------------------------------------------------------------------------

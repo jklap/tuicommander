@@ -30,6 +30,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Await async plugin startup, surface rejected startup errors, and cancel obsolete host lifetimes on unload or reload (#1756-4d42).
+
 - GitHub OAuth now requests `read:project` for Projects v2 reads. Existing logins need reauthorization.
 
 - Add the GitHub Work adapter, account-authenticated runtime, catalog entry and recorded-fixture tests; core PR-action binding and Projects v2 success-path verification remain pending (#1693-a816).
