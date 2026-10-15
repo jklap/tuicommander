@@ -1647,3 +1647,6 @@ entitlement or an exhaustive model list. Other CLIs and failed probes report
 unavailable choices; typed edits remain supported. Describe never probes. Model
 edits preserve sibling configs and the default selection and apply next session
 (#1910-451e).
+Telegram settings owner actions support write-only `set_token`/`clear_token` and stable positive `add_chat`/`remove_chat` IDs. Reads return token presence only. These actions use the existing private setup files and setup lock and never acquire the polling-owner lock. Token verification or final owner readback can fail after persistence: `persisted:true` requires owner readback before retry, including after a successful token clear or allowlist action.
+
+Connection settings credential actions set/clear the password or pairing token for an existing immutable connection ID through the vault owner. Inputs are write-only; readback reports separate presence states, and vault read errors remain unavailable rather than unset. Failed writes leave the saved record and old credential reachable. A committed write followed by failed readback returns `persisted:true`; read presence before retrying. Successful writes invoke the runtime reconciliation callback without editing connection metadata.

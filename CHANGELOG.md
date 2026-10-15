@@ -9,6 +9,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Add explicit addressed Claude model-alias discovery and no-launch typed model saves through settings (#1910-451e).
 
 - Add explicit owner-backed settings choice refresh; notification output enumeration reports unavailable separately from an empty device list (#1908-c327).
+### Fixed
+
+- Grant Gemini session attachment trust without a folder prompt or global settings changes. Grant ego PTY attachments read-only access in confined sandbox modes (#1833-aa60).
+
 
 - Refresh expanded file-browser folders after Finder moves, copies, confirmed directory transfers and remote uploads (#1905-c1ed).
 
@@ -27,6 +31,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Opt-in Tasks OS notices for linked GitHub check failures and comments on locally followed items, using existing detail refreshes and native notice delivery.
 
 ### Fixed
+
+- Await async plugin startup, surface rejected startup errors, and cancel obsolete host lifetimes on unload or reload (#1756-4d42).
 
 - GitHub OAuth now requests `read:project` for Projects v2 reads. Existing logins need reauthorization.
 

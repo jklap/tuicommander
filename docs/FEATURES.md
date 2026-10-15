@@ -2200,10 +2200,11 @@ Unsupported actions are hidden. Menus close on outside tap or Escape and use
 - Mobile session and AI Chat composers accept camera photos and files from one
   picker. Binary files stream to `attachments/<session>/` under TUIC's data
   directory. Uploads never create repository files or edit `.git/info/exclude`.
-  Claude gets `--add-dir` and Gemini gets `--include-directories`. Codex and Grok
-  need no extra flag. Ego rejects invocation-scoped roots: confined PTY/ACP runs
-  need an existing user/profile read root covering the TUIC attachment directory.
-  Upload receipts explain this limitation; TUIC does not change ego configuration.
+  Claude gets `--add-dir` and Gemini gets `--include-directories`. Gemini uses a
+  session-owned trusted-folders overlay that preserves existing trust decisions
+  and trusts only this upload directory; global Gemini settings stay unchanged.
+  Codex and Grok need no extra flag. Ego PTY launches get `--read-only-dir` for
+  this directory, including confined runs; no stored ego configuration changes.
 - Close, kill and process exit delete that session's uploads. Startup removes
   session directories whose recorded owner process is provably dead. Live and
   unknown owners are preserved; resumed tabs get fresh PTY directories and grants.
@@ -2213,10 +2214,10 @@ Unsupported actions are hidden. Menus close on outside tap or Escape and use
   upload error asking for a new session. Absolute binary paths bypass shell
   shims; use TUIC's structured agent launch to receive its directory grant.
   Custom wrapper binaries keep their arguments without added harness grant flags.
-  A wrapper that calls Claude/Gemini by name uses the inherited shell shim; an
+  A wrapper that calls Claude/Gemini/ego by name uses the inherited shell shim; an
   absolute harness hop must arrange its own read access. Disabling launch marker
   instructions does not disable the Claude directory grant.
-  Typed ego commands have the same stored read-root requirement.
+  Typed ego commands receive the same read-only directory grant.
 - ACP binary uploads are scoped to the attached conversation and removed on
   detach or connection settlement (including EOF). Ego over ACP currently rejects
   extra read directories: the composer displays a notice that the stored path

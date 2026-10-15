@@ -2418,6 +2418,16 @@ mod tests {
 
 #[cfg(test)]
 mod attachment_resume_tests {
+    // Catches: ego launch discovery starts persisting a deleted session read root.
+    #[test]
+    fn attachment_resume_does_not_persist_ego_generated_root() {
+        let argv = vec![
+            "ego".into(),
+            "--read-only-dir=/tuic/attachments/pty-old".into(),
+        ];
+        assert!(super::compose_launch_command("ego", &argv, Default::default()).is_none());
+    }
+
     // Catches: resume reuses a removed TUIC directory or discards a user's directory grant.
     #[test]
     fn attachment_resume_drops_only_generated_directory_grants() {

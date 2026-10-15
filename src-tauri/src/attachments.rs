@@ -103,6 +103,55 @@ fn session_directory(state: &AppState, query: &UploadQuery) -> Result<PathBuf, U
     directory
 }
 
+/// Gemini 0.63 reads this override instead of its global trustedFolders.json.
+/// Keep existing decisions; add only the TUIC-owned session directory.
+pub(crate) fn configure_gemini_trust(
+    cmd: &mut portable_pty::CommandBuilder,
+    directory: &std::path::Path,
+) -> Result<(), String> {
+    let source = cmd
+        .get_env("GEMINI_CLI_TRUSTED_FOLDERS_PATH")
+        .map(PathBuf::from)
+        .or_else(|| {
+            cmd.get_env("GEMINI_CLI_HOME")
+                .map(PathBuf::from)
+                .or_else(|| cmd.get_env("HOME").map(PathBuf::from))
+                .or_else(dirs::home_dir)
+                .map(|home| {
+                    if cmd
+                        .get_env("SANDBOX")
+                        .is_some_and(|value| value == "sandbox-exec")
+                    {
+                        home.join(".cache/.gemini/trustedFolders.json")
+                    } else {
+                        home.join(".gemini/trustedFolders.json")
+                    }
+                })
+        });
+    let mut rules = match source.map(std::fs::read_to_string) {
+        Some(Ok(text)) => crate::jsonc_edit::parse(&text)?,
+        Some(Err(error)) if error.kind() != std::io::ErrorKind::NotFound => {
+            return Err(error.to_string());
+        }
+        _ => serde_json::json!({}),
+    };
+    let entries = rules
+        .as_object_mut()
+        .ok_or("Gemini trusted folders must be an object")?;
+    entries.insert(
+        directory.to_string_lossy().into_owned(),
+        serde_json::json!("TRUST_FOLDER"),
+    );
+    let path = directory.join(".gemini-trusted-folders.json");
+    std::fs::write(
+        &path,
+        serde_json::to_vec(&rules).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    cmd.env("GEMINI_CLI_TRUSTED_FOLDERS_PATH", path);
+    Ok(())
+}
+
 fn safe_name(name: &str) -> Result<String, UploadError> {
     let name: String = name
         .chars()
@@ -185,11 +234,15 @@ async fn upload(
         ));
     }
     let ego = query.kind == "acp"
-        || state
+        || (state
             .session_maps
             .session_states
             .get(&query.id)
-            .is_some_and(|session| session.agent_type.as_deref() == Some("ego"));
+            .is_some_and(|session| session.agent_type.as_deref() == Some("ego"))
+            && !state
+                .session_maps
+                .attachment_launch_dirs
+                .contains_key(&query.id));
     let directory_state = Arc::clone(&state);
     let directory =
         tokio::task::spawn_blocking(move || session_directory(&directory_state, &query))
@@ -258,7 +311,7 @@ async fn upload(
         Ok(size) => Ok(AttachmentReceipt {
             path: path.to_string_lossy().into_owned(),
             size,
-            notice: ego.then(|| "Ego cannot grant extra attachment read roots through invocation flags or ACP. The file is outside the workspace; confined runs require an existing user/profile read root covering this directory.".into()),
+            notice: ego.then(|| "This connection has no launch-time attachment read grant. Confined ACP runs require an existing user/profile read root covering this directory.".into()),
         }),
         Err(problem) => {
             let _ = tokio::fs::remove_file(&path).await;

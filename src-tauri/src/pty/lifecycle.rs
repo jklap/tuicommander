@@ -146,6 +146,9 @@ pub(crate) fn bind_pty_identity(
     match crate::attachments::prepare_session_directory(&state.data_dir, "pty", session_id) {
         Ok(directory) => {
             cmd.env("TUIC_ATTACHMENTS_DIR", &directory);
+            if let Err(error) = crate::attachments::configure_gemini_trust(cmd, &directory) {
+                tracing::warn!(session_id, %error, "Could not provision Gemini attachment trust");
+            }
             state
                 .session_maps
                 .attachment_launch_dirs

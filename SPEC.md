@@ -1116,3 +1116,11 @@ entitlement or an exhaustive model list. Other CLIs and failed probes report
 unavailable choices; typed edits remain supported. Describe never probes. Model
 edits preserve sibling configs and the default selection and apply next session
 (#1910-451e).
+### Session attachment launch grants (#1833-aa60)
+
+Gemini receives only the session upload directory through `--include-directories`.
+A session-owned trusted-folders overlay preserves user trust decisions and adds
+that directory, without changing global settings or bypassing workspace trust.
+Ego PTY launches use `--read-only-dir` for the same canonical directory. Shell
+shims apply the grants to typed launches; resumed ego sessions receive fresh
+read roots because discovery does not persist ego argv. ACP uploads still require an existing profile read root.
