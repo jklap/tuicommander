@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- Diagnose empty or off-screen mobile resume shells through the backend log ring without reloading the page (#1900-5ff6).
 - Hibernate unattended resumable agent tabs after configurable awake idle time, with background-only scope by default and shared wake on open, input or mail (#1808-389f).
 
 
