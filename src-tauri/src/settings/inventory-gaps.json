@@ -108,12 +108,6 @@
     "reason": "Edge voice choices require the voice owner resolver without an implicit network refresh."
   },
   {
-    "store": "notifications",
-    "path": "/audio_device",
-    "ownerStep": "Step 4a",
-    "reason": "Output-device choices need explicit available/unavailable resolver results."
-  },
-  {
     "store": "agents",
     "path": "/agents/{key}/run_configs/{name}/model",
     "ownerStep": "Step 4c",
