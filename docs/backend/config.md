@@ -1639,3 +1639,10 @@ consumers and adds the matching `credential` presence. Credential values are nev
 returned. Use the typed GitHub owner actions for cloud device login, enterprise
 verification, rotation, clearing, and account removal; generic field writes do not
 replace those owner operations.
+
+The `repositories_registration` owner projects typed registered repository and group
+settings from `repositories.json`. Locked edits preserve runtime workspace/tab restore
+records, active selections, backend worktree placement, connection identity, and
+unknown owner fields. Removing a registration never deletes a checkout or worktree.
+Runtime fields have individual catalogue exclusions; presentation and ordering remain
+settings. Reads include stored/effective values and source through the shared service.

@@ -7811,6 +7811,414 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
+    "repositories_registration.groupOrder": {
+      "id": "repositories_registration.groupOrder",
+      "store": "repositories_registration",
+      "owner": "instance",
+      "area": "repositories_registration",
+      "group": "groupOrder",
+      "order": 12,
+      "path": "/groupOrder",
+      "labelKey": "settings.catalogue.repositories_registration.groupOrder.label",
+      "helpKey": "settings.catalogue.repositories_registration.groupOrder.help",
+      "label": "groupOrder",
+      "schema": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "default": []
+      },
+      "nullable": false,
+      "default": [],
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "private",
+      "apply": "live",
+      "effect": "Updates repository group order.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "repositories_registration.groups.{id}.collapsed": {
+      "id": "repositories_registration.groups.{id}.collapsed",
+      "store": "repositories_registration",
+      "owner": "instance",
+      "area": "repositories_registration",
+      "group": "groups",
+      "order": 10,
+      "path": "/groups/{id}/collapsed",
+      "labelKey": "settings.catalogue.repositories_registration.groups.{id}.collapsed.label",
+      "helpKey": "settings.catalogue.repositories_registration.groups.{id}.collapsed.help",
+      "label": "collapsed",
+      "schema": {
+        "type": "boolean",
+        "default": false
+      },
+      "nullable": false,
+      "default": false,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "private",
+      "apply": "live",
+      "effect": "Updates group accordion state.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "repositories_registration.groups.{id}.color": {
+      "id": "repositories_registration.groups.{id}.color",
+      "store": "repositories_registration",
+      "owner": "instance",
+      "area": "repositories_registration",
+      "group": "groups",
+      "order": 8,
+      "path": "/groups/{id}/color",
+      "labelKey": "settings.catalogue.repositories_registration.groups.{id}.color.label",
+      "helpKey": "settings.catalogue.repositories_registration.groups.{id}.color.help",
+      "label": "color",
+      "schema": {
+        "type": "string",
+        "default": ""
+      },
+      "nullable": false,
+      "default": "",
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Updates group color.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "repositories_registration.groups.{id}.id": {
+      "id": "repositories_registration.groups.{id}.id",
+      "store": "repositories_registration",
+      "owner": "instance",
+      "area": "repositories_registration",
+      "group": "groups",
+      "order": 6,
+      "path": "/groups/{id}/id",
+      "labelKey": "settings.catalogue.repositories_registration.groups.{id}.id.label",
+      "helpKey": "settings.catalogue.repositories_registration.groups.{id}.id.help",
+      "label": "id",
+      "schema": {
+        "type": "string",
+        "default": ""
+      },
+      "nullable": false,
+      "default": "",
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Stable repository group identity.",
+      "operations": [
+        "get"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "repositories_registration.groups.{id}.name": {
+      "id": "repositories_registration.groups.{id}.name",
+      "store": "repositories_registration",
+      "owner": "instance",
+      "area": "repositories_registration",
+      "group": "groups",
+      "order": 7,
+      "path": "/groups/{id}/name",
+      "labelKey": "settings.catalogue.repositories_registration.groups.{id}.name.label",
+      "helpKey": "settings.catalogue.repositories_registration.groups.{id}.name.help",
+      "label": "name",
+      "schema": {
+        "type": "string",
+        "default": ""
+      },
+      "nullable": false,
+      "default": "",
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "private",
+      "apply": "live",
+      "effect": "Updates group name.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "repositories_registration.groups.{id}.repoOrder": {
+      "id": "repositories_registration.groups.{id}.repoOrder",
+      "store": "repositories_registration",
+      "owner": "instance",
+      "area": "repositories_registration",
+      "group": "groups",
+      "order": 9,
+      "path": "/groups/{id}/repoOrder",
+      "labelKey": "settings.catalogue.repositories_registration.groups.{id}.repoOrder.label",
+      "helpKey": "settings.catalogue.repositories_registration.groups.{id}.repoOrder.help",
+      "label": "repoOrder",
+      "schema": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "default": []
+      },
+      "nullable": false,
+      "default": [],
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "private",
+      "apply": "live",
+      "effect": "Updates group repository ordering.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "repositories_registration.repoOrder": {
+      "id": "repositories_registration.repoOrder",
+      "store": "repositories_registration",
+      "owner": "instance",
+      "area": "repositories_registration",
+      "group": "repoOrder",
+      "order": 11,
+      "path": "/repoOrder",
+      "labelKey": "settings.catalogue.repositories_registration.repoOrder.label",
+      "helpKey": "settings.catalogue.repositories_registration.repoOrder.help",
+      "label": "repoOrder",
+      "schema": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "default": []
+      },
+      "nullable": false,
+      "default": [],
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "private",
+      "apply": "live",
+      "effect": "Updates ungrouped repository order.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "repositories_registration.repos.{path}.collapsed": {
+      "id": "repositories_registration.repos.{path}.collapsed",
+      "store": "repositories_registration",
+      "owner": "instance",
+      "area": "repositories_registration",
+      "group": "repos",
+      "order": 5,
+      "path": "/repos/{path}/collapsed",
+      "labelKey": "settings.catalogue.repositories_registration.repos.{path}.collapsed.label",
+      "helpKey": "settings.catalogue.repositories_registration.repos.{path}.collapsed.help",
+      "label": "collapsed",
+      "schema": {
+        "type": "boolean",
+        "default": false
+      },
+      "nullable": false,
+      "default": false,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "private",
+      "apply": "live",
+      "effect": "Updates repository sidebar collapse.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "repositories_registration.repos.{path}.displayName": {
+      "id": "repositories_registration.repos.{path}.displayName",
+      "store": "repositories_registration",
+      "owner": "instance",
+      "area": "repositories_registration",
+      "group": "repos",
+      "order": 1,
+      "path": "/repos/{path}/displayName",
+      "labelKey": "settings.catalogue.repositories_registration.repos.{path}.displayName.label",
+      "helpKey": "settings.catalogue.repositories_registration.repos.{path}.displayName.help",
+      "label": "displayName",
+      "schema": {
+        "type": "string",
+        "default": ""
+      },
+      "nullable": false,
+      "default": "",
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "private",
+      "apply": "live",
+      "effect": "Updates repository display name.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "repositories_registration.repos.{path}.expanded": {
+      "id": "repositories_registration.repos.{path}.expanded",
+      "store": "repositories_registration",
+      "owner": "instance",
+      "area": "repositories_registration",
+      "group": "repos",
+      "order": 4,
+      "path": "/repos/{path}/expanded",
+      "labelKey": "settings.catalogue.repositories_registration.repos.{path}.expanded.label",
+      "helpKey": "settings.catalogue.repositories_registration.repos.{path}.expanded.help",
+      "label": "expanded",
+      "schema": {
+        "type": "boolean",
+        "default": false
+      },
+      "nullable": false,
+      "default": false,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "private",
+      "apply": "live",
+      "effect": "Updates repository workspace expansion.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "repositories_registration.repos.{path}.initials": {
+      "id": "repositories_registration.repos.{path}.initials",
+      "store": "repositories_registration",
+      "owner": "instance",
+      "area": "repositories_registration",
+      "group": "repos",
+      "order": 2,
+      "path": "/repos/{path}/initials",
+      "labelKey": "settings.catalogue.repositories_registration.repos.{path}.initials.label",
+      "helpKey": "settings.catalogue.repositories_registration.repos.{path}.initials.help",
+      "label": "initials",
+      "schema": {
+        "type": "string",
+        "default": ""
+      },
+      "nullable": false,
+      "default": "",
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Updates repository initials.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "repositories_registration.repos.{path}.parked": {
+      "id": "repositories_registration.repos.{path}.parked",
+      "store": "repositories_registration",
+      "owner": "instance",
+      "area": "repositories_registration",
+      "group": "repos",
+      "order": 3,
+      "path": "/repos/{path}/parked",
+      "labelKey": "settings.catalogue.repositories_registration.repos.{path}.parked.label",
+      "helpKey": "settings.catalogue.repositories_registration.repos.{path}.parked.help",
+      "label": "parked",
+      "schema": {
+        "type": "boolean",
+        "default": false
+      },
+      "nullable": false,
+      "default": false,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Updates repository visibility.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "repositories_registration.repos.{path}.path": {
+      "id": "repositories_registration.repos.{path}.path",
+      "store": "repositories_registration",
+      "owner": "instance",
+      "area": "repositories_registration",
+      "group": "repos",
+      "order": 0,
+      "path": "/repos/{path}/path",
+      "labelKey": "settings.catalogue.repositories_registration.repos.{path}.path.label",
+      "helpKey": "settings.catalogue.repositories_registration.repos.{path}.path.help",
+      "label": "path",
+      "schema": {
+        "type": "string",
+        "default": ""
+      },
+      "nullable": false,
+      "default": "",
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "private",
+      "apply": "live",
+      "effect": "Stable registered path; removing registration never deletes files or worktrees.",
+      "operations": [
+        "get"
+      ],
+      "confirmationClass": "ordinary"
+    },
     "telegram.bot_alias": {
       "id": "telegram.bot_alias",
       "store": "telegram",
@@ -9724,6 +10132,46 @@ export const settingsCatalogue = {
       "store": "voice",
       "path": "/recovered_from_corruption",
       "reason": "Read-response corruption diagnostic; cleared before persistence."
+    },
+    {
+      "store": "repositories_registration",
+      "path": "/repos/{path}/workspaces",
+      "reason": "Runtime workspace and terminal restore identities."
+    },
+    {
+      "store": "repositories_registration",
+      "path": "/repos/{path}/branches",
+      "reason": "Legacy workspace restore identities retained until owner migration."
+    },
+    {
+      "store": "repositories_registration",
+      "path": "/repos/{path}/activeWorkspaceId",
+      "reason": "Per-window active workspace selection."
+    },
+    {
+      "store": "repositories_registration",
+      "path": "/repos/{path}/activeBranch",
+      "reason": "Legacy active workspace selection."
+    },
+    {
+      "store": "repositories_registration",
+      "path": "/repos/{path}/declaredWorktrees",
+      "reason": "Backend-authored live agent workspace placement."
+    },
+    {
+      "store": "repositories_registration",
+      "path": "/repos/{path}/isGitRepo",
+      "reason": "Derived repository classification."
+    },
+    {
+      "store": "repositories_registration",
+      "path": "/repos/{path}/connectionId",
+      "reason": "Registration machine identity; changed only by connection owner registration."
+    },
+    {
+      "store": "repositories_registration",
+      "path": "/activeRepoPath",
+      "reason": "Per-window active repository selection."
     }
   ],
   "gaps": [
@@ -9732,18 +10180,6 @@ export const settingsCatalogue = {
       "path": "/profiles/{id}/forwards",
       "ownerStep": "Step 4f",
       "reason": "ForwardSpec records have no stable IDs; owner must define stable record edits."
-    },
-    {
-      "store": "repositories_registration",
-      "path": "/repos/{path}",
-      "ownerStep": "Step 4d",
-      "reason": "Accepted gap for story 1825-4566: repositories.json registration and group records remain untyped; converting the owner requires classification of runtime tab/worktree identities and delta-save contracts. A raw JSON settings adapter would bypass those owner invariants. Keep Step 4d ownership and block cutover until a typed owner schema is delivered."
-    },
-    {
-      "store": "repositories_registration",
-      "path": "/groups/{id}",
-      "ownerStep": "Step 4d",
-      "reason": "Accepted gap for story 1825-4566: repositories.json registration and group records remain untyped; converting the owner requires classification of runtime tab/worktree identities and delta-save contracts. A raw JSON settings adapter would bypass those owner invariants. Keep Step 4d ownership and block cutover until a typed owner schema is delivered."
     },
     {
       "store": "keybindings",
@@ -9924,6 +10360,74 @@ export const settingsCatalogue = {
           "name",
           "executable"
         ]
+      },
+      "operations": [
+        "get",
+        "create",
+        "remove"
+      ]
+    },
+    {
+      "store": "repositories_registration",
+      "path": "/repos",
+      "key": "path",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "initials": {
+            "type": "string"
+          },
+          "parked": {
+            "type": "boolean"
+          },
+          "expanded": {
+            "type": "boolean"
+          },
+          "collapsed": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "operations": [
+        "get",
+        "create",
+        "remove"
+      ]
+    },
+    {
+      "store": "repositories_registration",
+      "path": "/groups",
+      "key": "id",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "color": {
+            "type": "string"
+          },
+          "repoOrder": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "collapsed": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
       },
       "operations": [
         "get",
