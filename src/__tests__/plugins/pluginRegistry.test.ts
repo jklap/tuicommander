@@ -92,8 +92,8 @@ function makePlugin(id: string, onload?: (host: PluginHost) => void, onunload?: 
 // Setup
 // ---------------------------------------------------------------------------
 
-beforeEach(() => {
-	pluginRegistry.clear();
+beforeEach(async () => {
+	await pluginRegistry.clear();
 	activityStore.clearAll();
 	contextMenuActionsStore.clear();
 	filePreviewRegistry.clear();
@@ -136,6 +136,105 @@ describe("register / unregister", () => {
 		await pluginRegistry.register(makePlugin("p1", onload2));
 		expect(onunload1).toHaveBeenCalledOnce();
 		expect(onload2).toHaveBeenCalledOnce();
+	});
+});
+
+describe("async startup lifetime", () => {
+	function deferred() {
+		let resolve!: () => void;
+		const promise = new Promise<void>((done) => {
+			resolve = done;
+		});
+		return { promise, resolve };
+	}
+
+	it("does not report loaded before async onload finishes", async () => {
+		pluginStore.registerPlugin("async", { loaded: false });
+		const gate = deferred();
+		let settled = false;
+		const registration = pluginRegistry.register(makePlugin("async", async () => gate.promise));
+		void registration.then(() => {
+			settled = true;
+		});
+		await flushMicrotasks();
+		expect(settled).toBe(false);
+		expect(pluginStore.getPlugin("async")?.loaded).toBe(false);
+		gate.resolve();
+		await registration;
+		expect(pluginStore.getPlugin("async")?.loaded).toBe(true);
+	});
+
+	it("surfaces async onload failure and removes partial registrations", async () => {
+		pluginStore.registerPlugin("async", { loaded: false });
+		const gate = deferred();
+		const registration = pluginRegistry.register(
+			makePlugin("async", async (host) => {
+				host.registerSection({ id: "partial", label: "partial", priority: 1, canDismissAll: false });
+				await gate.promise;
+				throw new Error("startup failed");
+			}),
+		);
+		gate.resolve();
+		await registration;
+		expect(pluginStore.getPlugin("async")?.error).toBe("startup failed");
+		expect(
+			pluginStore
+				.getLogger("async")
+				.getEntries()
+				.some((entry) => entry.message === "onload failed: startup failed"),
+		).toBe(true);
+		expect(activityStore.getSections().some((s) => s.id === "partial")).toBe(false);
+	});
+
+	it("unload cancels pending startup and prevents late provider registration", async () => {
+		pluginStore.registerPlugin("async", { loaded: false });
+		const gate = deferred();
+		const provider = createInMemoryWorkItemProvider();
+		const onunload = vi.fn();
+		const registration = pluginRegistry.register(
+			makePlugin(
+				"async",
+				async (host) => {
+					await gate.promise;
+					host.registerWorkItemProvider(provider);
+				},
+				onunload,
+			),
+		);
+		await pluginRegistry.unregister("async");
+		await registration;
+		gate.resolve();
+		await flushMicrotasks();
+		expect(workItemProviderRegistry.get(provider.providerId, provider.accountId)).toBeUndefined();
+		expect(onunload).toHaveBeenCalledOnce();
+		expect(pluginStore.getPlugin("async")?.loaded).toBe(false);
+	});
+
+	it("overlapping reloads keep only the newest provider and ignore stale errors", async () => {
+		pluginStore.registerPlugin("async", { loaded: false });
+		const gate = deferred();
+		const provider = createInMemoryWorkItemProvider();
+		const first = pluginRegistry.register(
+			makePlugin("async", async (host) => {
+				await gate.promise;
+				host.registerWorkItemProvider(provider);
+			}),
+		);
+		const skipped = vi.fn();
+		const second = pluginRegistry.register(makePlugin("async", skipped));
+		const third = pluginRegistry.register(
+			makePlugin("async", (host) => {
+				host.registerWorkItemProvider(provider);
+			}),
+		);
+		await Promise.all([first, second, third]);
+		gate.resolve();
+		await flushMicrotasks();
+		expect(skipped).not.toHaveBeenCalled();
+		expect(workItemProviderRegistry.get(provider.providerId, provider.accountId)).toBe(provider);
+		expect(pluginStore.getPlugin("async")?.error).toBeNull();
+		await pluginRegistry.unregister("async");
+		expect(workItemProviderRegistry.get(provider.providerId, provider.accountId)).toBeUndefined();
 	});
 });
 

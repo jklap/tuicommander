@@ -693,10 +693,12 @@ esbuild src/main.ts --bundle --format=esm --outfile=main.js --external:nothing
 2. Validation: manifest fields + minAppVersion check
 3. Import: `import("plugin://{id}/main.js")` (custom URI protocol; on Windows rewritten to `http://plugin.localhost/{id}/main.js` for WebView2)
 4. Module check: default export must have id, onload, onunload
-5. Register: pluginRegistry.register() calls plugin.onload(host)
+5. Register: pluginRegistry.register() awaits plugin.onload(host, signal); rejected startup is logged and partial registrations are cleaned up
 6. Active: plugin receives PTY lines, structured events, uses PluginHost API
 7. Hot reload: file changes trigger unregister + re-import (cache-busted); a newly added plugin directory/symlink is discovered and loaded live
 8. Unload: plugin.onunload() called, tracked registrations disposed, openPanel tabs and bridges closed; plugin-owned timers/listeners need explicit cleanup
+
+Async onload may return a Promise. The optional AbortSignal is aborted on unload/reload. Old host calls then throw before changing registrations or state. Pass the signal to cancellable operations; the host cannot stop arbitrary plugin code or requests that ignore it. Replacement waits for backend teardown, not obsolete startup.
 
 Crash safety: all boundaries are try/catch wrapped. A broken plugin produces a console error and is skipped. The app always continues.
 
