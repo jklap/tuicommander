@@ -4312,12 +4312,15 @@ it("does not let a delayed async offer snapshot revert a confirmed model selecti
 	const delayedOffer = new Promise<AcpConnectionSnapshot>((resolve) => {
 		releaseOffer = resolve;
 	});
-	let reads = 0;
+	let selectionConfirmed = false;
 	vi.mocked(invoke).mockImplementation(async (command) => {
 		if (command === "acp_connect") return offered;
 		if (command === "acp_pending_interactions") return [];
-		if (command === "acp_connection_snapshot") return ++reads === 1 ? delayedOffer : selected;
-		if (command === "acp_session_set_config_option") return selected.attachments[0].configOptions;
+		if (command === "acp_connection_snapshot") return selectionConfirmed ? selected : delayedOffer;
+		if (command === "acp_session_set_config_option") {
+			selectionConfirmed = true;
+			return selected.attachments[0].configOptions;
+		}
 		return undefined;
 	});
 	await realClient.connect(ROOT);

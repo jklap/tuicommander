@@ -454,6 +454,10 @@ selected tab. It mirrors its state to localStorage so a detached WebView can
 restore the same tabs; `useAcpChat` replays their ACP histories after connecting.
 The existing `ai_chat_sessions` app config value remains the last selected
 conversation for older documents and clients.
+`acpStore` replaces only the matching attachment's complete option set on
+`config_option_update`, including an empty set. It applies the published options
+directly, without a snapshot request that could arrive after a confirmed settings
+change. Explicit requests still refresh the authoritative backend snapshot.
 `acpStore` takes `queuedPrompts` from the connection snapshot and replaces it
 on each `promptQueueChanged` event, so desktop and browser views share the
 same FIFO. `acpTranscript` adds a user message on `promptSent`, when the host

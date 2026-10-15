@@ -134,15 +134,6 @@ export function createAcpClient(open: AcpStreamOpener = openAcpStream) {
 		acpTranscript.applyFrame(frame);
 		if (
 			frame.kind === "event" &&
-			frame.event.kind === "sessionUpdate" &&
-			frame.event.update.sessionUpdate === "config_option_update"
-		) {
-			void refresh(connectionId).catch((error) => {
-				appLogger.warn("ai-chat", "refreshing session config options failed", { connectionId, error });
-			});
-		}
-		if (
-			frame.kind === "event" &&
 			frame.sessionId &&
 			replaying.get(frame.sessionId) === connectionId &&
 			frame.event.kind === "sessionUpdate" &&
