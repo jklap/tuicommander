@@ -1582,6 +1582,33 @@ describe("AIChatPanel: parallel tabs", () => {
 		expect(textarea.value).toBe("Keep this draft");
 	});
 
+	it("Escape in the composer dismisses open Find before cancelling work — catches sibling search bypass", async () => {
+		const { container } = await renderPanel();
+		await typeAndSend(container, "Keep working");
+		acpStore.applySnapshot(
+			snapshot({
+				attachments: [
+					attachment({
+						state: "prompting",
+						activeTurn: { turnId: "turn-1", state: "running", stopReason: null, usage: null },
+					}),
+				],
+			}),
+		);
+		const transcript = container.querySelector('[aria-label="Chat transcript"]')!;
+		transcript.dispatchEvent(new KeyboardEvent("keydown", { key: "f", ctrlKey: true, bubbles: true }));
+		await settle();
+		expect(container.querySelector('[aria-label="Find in chat"]')).not.toBeNull();
+		const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+		textarea.value = "Next question";
+		textarea.dispatchEvent(new Event("input", { bubbles: true }));
+		textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+		await settle();
+		expect(client.cancel).not.toHaveBeenCalled();
+		expect(container.querySelector('[aria-label="Find in chat"]')).toBeNull();
+		expect(textarea.value).toBe("Next question");
+	});
+
 	it("middle-click does not reopen an uncertain-effect refusal or close it on the agent", async () => {
 		restoreTabs();
 		client.loadSession.mockRejectedValueOnce(
