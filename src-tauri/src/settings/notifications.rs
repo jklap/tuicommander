@@ -39,7 +39,7 @@ impl Store for NotificationSettingsStore {
         self.file.read()
     }
 
-    async fn refresh_choices(&self, resolver: &str) -> Result<Vec<Value>, Failure> {
+    async fn refresh_choices(&self, resolver: &str, _path: &str) -> Result<Vec<Value>, Failure> {
         if resolver != "audio_outputs" {
             return Err(Error::new(ID, "unavailable"));
         }
