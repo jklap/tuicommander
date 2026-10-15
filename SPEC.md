@@ -1107,3 +1107,12 @@ GitHub Work B8: registered accounts bind core B6 review threads and B7 actions t
 ## Settings choice discovery (#1908-c327)
 
 Internal owner requests now support cached dynamic-choice describe and explicit refresh, scoped by target and revision. Notification output devices reuse the UI enumeration owner and preserve unavailable versus successful empty results. General settings transport publication remains separate.
+
+
+Agent model settings support typed model edits without starting a CLI. Explicit
+choice refresh probes only the addressed Claude run config with `--help`, using
+its command and environment. Published aliases are suggestions, not account
+entitlement or an exhaustive model list. Other CLIs and failed probes report
+unavailable choices; typed edits remain supported. Describe never probes. Model
+edits preserve sibling configs and the default selection and apply next session
+(#1910-451e).

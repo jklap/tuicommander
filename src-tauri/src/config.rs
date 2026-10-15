@@ -1953,7 +1953,7 @@ pub(crate) struct AgentRunConfig {
     #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"next_session","effect":"Used when the next session or process starts; existing sessions retain their launch configuration.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) args: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates model for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"next_session","effect":"Used when the next session or process starts; existing sessions retain their launch configuration.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     #[schemars(extend("x-choice-resolver" = "agent_models"))]
     pub(crate) model: Option<String>,
     #[serde(default)]

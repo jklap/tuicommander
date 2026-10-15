@@ -3081,3 +3081,12 @@ The normal Rust suspension path persists `reason: "idle_hibernate"` before endin
 ### Internal settings choice discovery
 
 Owner-backed dynamic choices support cache-only describe and explicit refresh. Notification output devices retain their UI option objects and distinguish unavailable discovery from successful empty results (#1908-c327).
+
+
+Agent model settings support typed model edits without starting a CLI. Explicit
+choice refresh probes only the addressed Claude run config with `--help`, using
+its command and environment. Published aliases are suggestions, not account
+entitlement or an exhaustive model list. Other CLIs and failed probes report
+unavailable choices; typed edits remain supported. Describe never probes. Model
+edits preserve sibling configs and the default selection and apply next session
+(#1910-451e).

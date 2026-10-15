@@ -2241,3 +2241,5 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 ## Settings choice discovery (#1908-c327)
 
 - [ ] After Boss restarts `make dev` or installs a rebuilt release, open Notifications and explicitly refresh output devices. Verify real device names/default markers and selection persistence. Disconnect or deny the audio backend and verify failure is not shown as a supported empty device list. No hardware success is claimed by the isolated owner tests.
+
+- [ ] After the next scheduled backend rebuild, refresh Claude run-config model choices, save a model and confirm existing sessions remain unchanged (#1910-451e). No live instance was started during implementation.

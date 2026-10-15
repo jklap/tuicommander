@@ -1638,3 +1638,12 @@ Tasks notice policy and per-item follow/comment baselines are JSON values in `ui
 The internal settings owner service accepts `describe` and `refresh` with an explicit target, store and 1–128 dynamic field paths. Describe reads cached choices only; it never enumerates hardware or refreshes a network catalogue. Refresh calls the registered owner. Each choice result includes its resolver, availability and values: `null` means unavailable, while `[]` means successful discovery with no options. Cache entries are scoped to the owner target and configuration revision. A failed refresh replaces stale success with unavailable status.
 
 Notification output choices use the same bounded enumeration and `{name, is_default}` objects as the existing UI command. Discovery never saves notification configuration. This internal contract does not publish the later settings MCP/HTTP cutover.
+
+
+Agent model settings support typed model edits without starting a CLI. Explicit
+choice refresh probes only the addressed Claude run config with `--help`, using
+its command and environment. Published aliases are suggestions, not account
+entitlement or an exhaustive model list. Other CLIs and failed probes report
+unavailable choices; typed edits remain supported. Describe never probes. Model
+edits preserve sibling configs and the default selection and apply next session
+(#1910-451e).

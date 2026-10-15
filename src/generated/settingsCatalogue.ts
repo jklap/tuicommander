@@ -587,8 +587,8 @@ export const settingsCatalogue = {
         "values": null
       },
       "sensitivity": "public",
-      "apply": "live",
-      "effect": "Updates model for the current owner.",
+      "apply": "next_session",
+      "effect": "Used when the next session or process starts; existing sessions retain their launch configuration.",
       "operations": [
         "get",
         "set",
@@ -9814,12 +9814,6 @@ export const settingsCatalogue = {
       "path": "/audio_device",
       "ownerStep": "Step 4a",
       "reason": "Output-device choices need explicit available/unavailable resolver results."
-    },
-    {
-      "store": "agents",
-      "path": "/agents/{key}/run_configs/{name}/model",
-      "ownerStep": "Step 4c",
-      "reason": "Agent model availability requires the owning CLI capability resolver, without launching on save."
     },
     {
       "store": "ego",
