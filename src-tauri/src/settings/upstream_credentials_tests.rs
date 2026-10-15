@@ -100,3 +100,44 @@ async fn upstream_credential_action_cleans_old_auth_preserves_other_owner_state(
     );
     assert!(!error.persisted);
 }
+
+// Catches: setting bearer auth beside an existing Authorization header commits
+// an owner-invalid config and replaces a vault secret before rejecting it.
+#[tokio::test]
+#[serial_test::serial]
+async fn bearer_action_rejects_authorization_header_without_mutating_owner() {
+    use crate::config::ConfigFile;
+    use crate::mcp_upstream_config::{UPSTREAMS_FILE, UpstreamMcpConfig};
+    let tmp = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let _guard = crate::config::set_config_dir_override(tmp.path().to_path_buf());
+    let original: UpstreamMcpConfig = serde_json::from_value(serde_json::json!({
+        "servers": [{"id":"authorization-conflict", "name":"authorization-conflict",
+            "enabled":false, "transport":{"type":"http","url":"https://example.com/mcp"},
+            "headers":[{"name":"Authorization", "credential_ref":"3b5a5806-388d-4611-875e-63ce554af607"}]}]
+    })).unwrap();
+    ConfigFile::<UpstreamMcpConfig>::new(UPSTREAMS_FILE)
+        .save(&original)
+        .unwrap();
+    let owner = super::upstream_credentials::UpstreamCredentials::new(std::sync::Arc::new(
+        crate::state::tests_support::make_test_app_state(),
+    ));
+    let result = owner
+        .perform(super::upstream_credentials::CredentialAction::SetBearer {
+            id: "authorization-conflict".into(),
+            token: "replacement-bearer".into(),
+        })
+        .await;
+    assert!(
+        result.is_err(),
+        "bearer/Authorization collision must be rejected before committing"
+    );
+    let after: UpstreamMcpConfig = crate::config::load_json_config(UPSTREAMS_FILE);
+    assert_eq!(
+        serde_json::to_value(after).unwrap(),
+        serde_json::to_value(original).unwrap()
+    );
+    assert!(
+        !crate::mcp_upstream_credentials::has_upstream_credential("authorization-conflict")
+            .unwrap()
+    );
+}
