@@ -175,7 +175,7 @@ describe("work-item plugin setup", () => {
 // Catches: Tasks writes reserved settings storage or a different file from the shipped provider reader.
 it.each(["github-work", "jira", "gitlab"])("Tasks accounts round-trip through %s plugin data", async (pluginId) => {
 	const setup = setupFor(pluginId)!;
-	const values =
+	const values: Record<string, string> =
 		pluginId === "github-work"
 			? { id: "test-account", repository: "owner/repo" }
 			: { id: "test-account", host: "https://example.test" };
