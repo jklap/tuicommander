@@ -42,24 +42,6 @@
     "reason": "Chat allowlist is a separate private text file; use the existing setup owner, not raw file editing."
   },
   {
-    "store": "app",
-    "path": "/font_family",
-    "ownerStep": "Step 4g",
-    "reason": "System font choices need an explicit dynamic resolver; schema string is not an authoritative choice list."
-  },
-  {
-    "store": "app",
-    "path": "/theme",
-    "ownerStep": "Step 4g",
-    "reason": "Theme choices are frontend-owned; move them to an owner resolver before UI parity."
-  },
-  {
-    "store": "app",
-    "path": "/ide",
-    "ownerStep": "Step 4g",
-    "reason": "IDE availability choices need a host resolver; no implicit process probing during describe."
-  },
-  {
     "store": "voice",
     "path": "/device",
     "ownerStep": "Step 4b",

@@ -1644,3 +1644,7 @@ Tasks notice policy and per-item follow/comment baselines are JSON values in `ui
 The internal settings owner service accepts `describe` and `refresh` with an explicit target, store and 1–128 dynamic field paths. Describe reads cached choices only; it never enumerates hardware or refreshes a network catalogue. Refresh calls the registered owner. Each choice result includes its resolver, availability and values: `null` means unavailable, while `[]` means successful discovery with no options. Cache entries are scoped to the owner target and configuration revision. A failed refresh replaces stale success with unavailable status.
 
 Notification output choices use the same bounded enumeration and `{name, is_default}` objects as the existing UI command. Discovery never saves notification configuration. This internal contract does not publish the later settings MCP/HTTP cutover.
+
+### App setting choices
+
+Font families use the Rust-owned bundled-font option file shared with the UI; these are bundled woff2 families, not arbitrary host fonts. Themes reuse the Rust theme loader and retain custom theme IDs. IDE refresh reuses cross-platform installed-IDE discovery and returns the same value/label options used by the launcher. Catalogue construction and describe never run host probes. Explicit refresh runs discovery off the async executor and caches choices; unavailable discovery is distinct from a successful empty list. Font and IDE edits validate supported choices without launching a probe.

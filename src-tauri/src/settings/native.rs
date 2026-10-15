@@ -101,6 +101,7 @@ pub(super) fn native_catalogue_for(dictation: bool) -> Result<Catalogue, Catalog
     super::ego_schema::register(&mut catalogue)?;
     super::keybindings::register(&mut catalogue)?;
     super::layout::register(&mut catalogue);
+    super::app_choices::register(&mut catalogue);
     catalogue.gaps.extend(
         serde_json::from_str::<Vec<InventoryGap>>(include_str!("inventory-gaps.json")).map_err(
             |_| CatalogueError {

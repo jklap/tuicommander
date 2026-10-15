@@ -878,7 +878,6 @@ pub(crate) struct AppConfig {
     #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"next_session","effect":"Used when the next session or process starts; existing sessions retain their launch configuration.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) shell: Option<String>,
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"next_session","effect":"Used when the next session or process starts; existing sessions retain their launch configuration.","operations":["get","set"],"confirmationClass":"ordinary"}))]
-    #[schemars(extend("x-choice-resolver" = "system_fonts"))]
     pub(crate) font_family: String,
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates font size for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     #[schemars(range(min = 1))]

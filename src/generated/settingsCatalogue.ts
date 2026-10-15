@@ -2105,13 +2105,20 @@ export const settingsCatalogue = {
         "status": "available"
       },
       "choices": {
-        "kind": "dynamic",
-        "resolver": "system_fonts",
-        "availability": {
-          "status": "unavailable",
-          "reason": "Explicit owner refresh required"
-        },
-        "values": null
+        "kind": "static",
+        "values": [
+          "JetBrains Mono",
+          "Fira Code",
+          "Hack",
+          "Cascadia Code",
+          "Iosevka",
+          "Source Code Pro",
+          "Inconsolata",
+          "IBM Plex Mono",
+          "Monaspace Neon",
+          "Commit Mono",
+          "Geist Mono"
+        ]
       },
       "sensitivity": "public",
       "apply": "next_session",
@@ -2251,8 +2258,7 @@ export const settingsCatalogue = {
         "kind": "dynamic",
         "resolver": "installed_ides",
         "availability": {
-          "status": "unavailable",
-          "reason": "Explicit owner refresh required"
+          "status": "available"
         },
         "values": null
       },
@@ -3784,8 +3790,7 @@ export const settingsCatalogue = {
         "kind": "dynamic",
         "resolver": "themes",
         "availability": {
-          "status": "unavailable",
-          "reason": "Explicit owner refresh required"
+          "status": "available"
         },
         "values": null
       },
@@ -4667,7 +4672,8 @@ export const settingsCatalogue = {
         "availability": {
           "status": "unavailable",
           "reason": "frontend-registered plugin actions; bound in Step 9 UI parity"
-        }
+        },
+        "values": null
       },
       "sensitivity": "public",
       "apply": "live",
@@ -10055,24 +10061,6 @@ export const settingsCatalogue = {
       "path": "/allowed_chat_ids/{chatId}",
       "ownerStep": "Step 4h",
       "reason": "Chat allowlist is a separate private text file; use the existing setup owner, not raw file editing."
-    },
-    {
-      "store": "app",
-      "path": "/font_family",
-      "ownerStep": "Step 4g",
-      "reason": "System font choices need an explicit dynamic resolver; schema string is not an authoritative choice list."
-    },
-    {
-      "store": "app",
-      "path": "/theme",
-      "ownerStep": "Step 4g",
-      "reason": "Theme choices are frontend-owned; move them to an owner resolver before UI parity."
-    },
-    {
-      "store": "app",
-      "path": "/ide",
-      "ownerStep": "Step 4g",
-      "reason": "IDE availability choices need a host resolver; no implicit process probing during describe."
     },
     {
       "store": "voice",

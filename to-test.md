@@ -1,3 +1,7 @@
+## App setting choices (1915-d77f) — Rust restart required
+
+- [ ] After Boss manually restarts, use an isolated instance. Check bundled font choices and a custom theme agree with Settings UI. Explicitly refresh installed IDE choices and check their labels/availability on macOS, Windows and Linux. Describe must not launch discovery. No desktop instance or real user config was used by the agent.
+
 ## Typed UI settings owners (1914-cdf6) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, use an isolated instance: set and disable a keyboard shortcut, reload, and confirm both persist. Split panes, switch focused panes and restore the layout; verify geometry and tab membership remain intact. The settings owner exposes only geometry, not runtime tab/focus identities. No running app was restarted.

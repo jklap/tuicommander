@@ -3082,3 +3082,5 @@ Settings owner validation covers typed shortcut records and bounded pane geometr
 ### Internal settings choice discovery
 
 Owner-backed dynamic choices support cache-only describe and explicit refresh. Notification output devices retain their UI option objects and distinguish unavailable discovery from successful empty results (#1908-c327).
+
+App settings share bundled font and IDE option metadata between Rust and the UI. Theme/installed-IDE discovery uses explicit owner refresh; describe never launches discovery (#1915-d77f).

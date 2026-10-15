@@ -10,8 +10,12 @@ pub mod policy;
 #[cfg(test)]
 mod layout_owner_tests;
 
+pub(crate) mod app_choices;
+#[cfg(test)]
+mod app_choices_tests;
 pub mod keybindings;
 pub mod layout;
+
 pub mod native;
 pub mod notifications;
 pub(crate) mod plugin_migrations;
