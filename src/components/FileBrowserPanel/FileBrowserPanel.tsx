@@ -2,6 +2,7 @@ import { type Component, createEffect, createMemo, createSignal, For, on, onClea
 import { createStore, produce } from "solid-js/store";
 import type { ContentSearchOptions } from "../../hooks/useFileBrowser";
 import { useFileBrowser } from "../../hooks/useFileBrowser";
+import { onFolderDropComplete } from "../../hooks/useFileDrop";
 import { initMouseDrag, isHoldPointer } from "../../hooks/useMouseDrag";
 import { useSmartPrompts } from "../../hooks/useSmartPrompts";
 import { t } from "../../i18n";
@@ -20,7 +21,7 @@ import { cx } from "../../utils";
 import { onClickKeyDown } from "../../utils/a11y";
 import { copyPathToClipboard } from "../../utils/clipboard";
 import { openLocalPath } from "../../utils/openUrl";
-import { isAbsolutePath, joinPath, replaceBasename } from "../../utils/pathUtils";
+import { isAbsolutePath, joinPath, pathStartsWith, replaceBasename } from "../../utils/pathUtils";
 import { fileContextSmartMenuItem } from "../../utils/promptContext";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { ContextMenu, type ContextMenuItem, createContextMenu } from "../ContextMenu";
@@ -609,6 +610,19 @@ export const FileBrowserPanel: Component<FileBrowserPanelProps> = (props) => {
 		setTreeCache(new Map());
 		setRefreshTrigger((n) => n + 1);
 	};
+
+	onCleanup(
+		onFolderDropComplete((request) => {
+			const fsRoot = root();
+			if (!fsRoot || request.connectionId !== repositoriesStore.getConnectionId(props.repoPath ?? "")) return;
+			if (
+				pathStartsWith(request.destDir, fsRoot) ||
+				(request.mode === "move" && request.paths.some((path) => pathStartsWith(path, fsRoot)))
+			) {
+				refresh();
+			}
+		}),
+	);
 
 	const navigateInto = (entry: DirEntry) => {
 		changeSubdir(entry.path);

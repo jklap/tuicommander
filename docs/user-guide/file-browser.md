@@ -31,6 +31,8 @@ Click the funnel icon in the toolbar to switch sort order:
 
 ### Live Refresh
 
+Successful drops refresh the listing and expanded tree folders immediately, including the source after a move and transfers accepted in the confirmation dialog.
+
 The panel watches the current directory for filesystem changes. When a file is created, deleted, or renamed outside the app, the listing refreshes automatically without a visible loading spinner.
 
 ### Git Status Indicators
