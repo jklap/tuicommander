@@ -2239,3 +2239,8 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] #1904-9eef: After Boss restarts `make dev` (or rebuilds release), verify new launch/MCP marker instructions permit 💬 at the start of list-item text. In a Claude session, emit `- 💬 **Answer.**` with an indented continuation and nested item, followed by an unmarked sibling; check the green rule and hidden marker in CLI and Chat, then Answers-only scope. Frontend behavior does not require a Rust restart; updated launch instructions do.
 
 - [ ] After Boss restarts the Rust backend, start a direct Gemini session in a trusted workspace, upload a PNG and ask it to read the image. There must be no trust prompt for the session attachment directory. Repeat with ego in ro, workspace and adaptive sandbox modes; the read must succeed without approval. Check a resumed and a typed-by-name launch. ACP extra-directory grants remain unsupported. (#1833-aa60)
+
+## Settings owner gaps (#1906-5bf8, #1911-6214, #1912-5c77)
+- [ ] After Boss restarts the Rust build, use an isolated test owner: complete GitHub cloud device login; verify credential presence only, then enterprise token rotation/removal and binding cleanup. Do not use production accounts for destructive checks.
+- [ ] After restart, use an isolated upstream: start OAuth consent, rotate to bearer, rotate/clear a custom header, and confirm only that upstream reconnects; ensure no secret appears in replies/events/errors.
+- [ ] After restart, use an isolated registration file: edit a repository label and group name while workspace/tab state changes; verify owner readback, unchanged workspace identities, and no checkout/worktree deletion.
