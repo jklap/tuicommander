@@ -29,3 +29,32 @@ describe("provider recovery", () => {
 		expect(rpc).toHaveBeenCalledWith("write_pty", { sessionId: "ego-a", data: "/retry" });
 	});
 });
+
+// Catches: clicking force retry destroys an unrelated draft already in ego's composer.
+it("preserves an existing composer draft when force retry is requested", async () => {
+	const { rpc } = await import("../../transport");
+	const { fireEvent, render, waitFor } = await import("@solidjs/testing-library");
+	const actual = await vi.importActual<typeof import("../../utils/sendCommand")>("../../utils/sendCommand");
+	send.mockImplementation(actual.sendCommand);
+	let composer = "Investigate the pending changes";
+	const submitted: string[] = [];
+	vi.mocked(rpc).mockImplementation(async (_command, args) => {
+		const data = (args as { data?: string }).data;
+		if (data === "\x15") composer = "";
+		else if (data === "\r") {
+			submitted.push(composer);
+			composer = "";
+		} else if (data) composer += data;
+		return undefined as never;
+	});
+	const view = render(() => (
+		<ProviderRecoveryStatus
+			recovery={{ phase: "waiting", next_attempt_ms: Date.now() + 60000, attempt: 2 }}
+			sessionId="draft-session"
+		/>
+	));
+	fireEvent.click(view.getByRole("button", { name: "Force retry" }));
+	await waitFor(() => expect(view.getByRole("button").hasAttribute("disabled")).toBe(false));
+	expect(composer).toBe("Investigate the pending changes");
+	expect(submitted).toEqual([]);
+});
