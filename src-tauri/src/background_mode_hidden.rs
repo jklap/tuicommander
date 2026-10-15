@@ -247,7 +247,6 @@ pub(crate) fn leave_background(state: &AppState, windows: &impl Windows) -> Resu
     Ok(())
 }
 
-#[cfg(any(feature = "desktop", test))]
 pub(crate) fn is_hidden(state: &AppState) -> bool {
     state.background_visibility.lock().saved.is_some()
 }

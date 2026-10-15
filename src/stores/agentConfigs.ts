@@ -46,6 +46,8 @@ function remoteIO(connectionId: string): AgentConfigIO {
 }
 
 interface AgentConfigsState {
+	hibernate_idle_minutes: number;
+	hibernate_scope: "background_only" | "always";
 	agents: Record<
 		string,
 		{
@@ -85,6 +87,8 @@ export function createAgentConfigsStore(io: AgentConfigIO = defaultIO) {
 	let saveTail: Promise<void> | null = null;
 	const [state, setState] = createStore<AgentConfigsState>({
 		agents: {},
+		hibernate_idle_minutes: 60,
+		hibernate_scope: "background_only",
 		headless_agent: null,
 		launch_instructions: null,
 		loaded: false,
@@ -97,6 +101,8 @@ export function createAgentConfigsStore(io: AgentConfigIO = defaultIO) {
 			if (!state.loaded || !savedBase) throw new Error("Agent config has not loaded; save refused");
 			const full: AgentsConfig = {
 				agents: clone(state.agents),
+				hibernate_idle_minutes: state.hibernate_idle_minutes,
+				hibernate_scope: state.hibernate_scope,
 				headless_agent: state.headless_agent ?? undefined,
 				launch_instructions: state.launch_instructions ?? undefined,
 			};
@@ -122,6 +128,11 @@ export function createAgentConfigsStore(io: AgentConfigIO = defaultIO) {
 	}
 
 	const actions = {
+		async setHibernate(minutes: number, scope: "background_only" | "always"): Promise<void> {
+			if (!Number.isInteger(minutes) || minutes < 0 || minutes > 1440) return;
+			setState({ hibernate_idle_minutes: minutes, hibernate_scope: scope });
+			await saveToDisk();
+		},
 		/** Hydrate store from persisted config */
 		async hydrate(): Promise<void> {
 			try {
@@ -130,6 +141,8 @@ export function createAgentConfigsStore(io: AgentConfigIO = defaultIO) {
 				setState(
 					produce((s) => {
 						s.agents = config.agents ?? {};
+						s.hibernate_idle_minutes = config.hibernate_idle_minutes ?? 60;
+						s.hibernate_scope = config.hibernate_scope ?? "background_only";
 						s.headless_agent = toHeadlessAgentChoice(config.headless_agent ?? "");
 						s.launch_instructions = config.launch_instructions ?? null;
 						s.loaded = true;

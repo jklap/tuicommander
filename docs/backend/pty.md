@@ -934,3 +934,11 @@ Each Resume allocates a fresh PTY key and binds the saved TUIC identity before s
 `session_wake::ensure_live` checks the live identity map under the suspend lock. Live standby sessions receive SIGCONT; retained sessions resume from the durable record with the same TUIC identity. Concurrent callers receive the same PTY. Creation or storage failure returns a reason and retains the record. Submit uses the existing pending-injection ready gate; mail remains in the inbox and queues only a payload-free wake notice.
 
 Backend wake creation events include `tuic_session` alongside the fresh PTY id. Clients reattach the existing suspended tab by that identity; cwd never identifies a tab. Retained aliases resolve to the saved peer identity before mail validation.
+
+### Automatic idle-agent hibernation
+
+The backend checks unattended top-level agent tabs every five seconds. `agents.hibernate_idle_minutes` defaults to 60 awake minutes; zero disables the sweep. `agents.hibernate_scope` defaults to `background_only`; `always` also permits foreground hibernation. Both machine-owned controls are in Settings → Agents (Expert Mode).
+
+Hibernation requires an idle agent and a verified resume session in its saved profile. Plain shells and agents without a verifiable resume session stay live. Unread peer mail, pending commands or background work, awaiting input, attached readers, keep-open tabs (whether addressed by their live PTY or durable peer identity) and open automation runs prevent hibernation. Managed children retain their separate idle-close policy. Sleep gaps longer than 30 seconds do not advance the idle clock.
+
+The normal Rust suspension path persists `reason: "idle_hibernate"` before ending the PTY. Opening the tab, submitting input or sending peer mail uses the shared wake path. Storage or resume-verification failures leave the live session intact.

@@ -10,6 +10,18 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "Idle agent hibernation",
+		description:
+			"Settings → Agents can hibernate unattended agent tabs after awake idle time. Open a hibernated tab or send it input to resume its saved session.",
+		shortcut: null,
+	},
+	{
+		feature: "Follow Tasks comments",
+		description:
+			"Follow an item in Tasks detail, then enable OS notifications for Tasks in Settings → Notifications. Existing detail refreshes notify for new comments; no extra background polling is added.",
+		shortcut: null,
+	},
+	{
 		feature: "Tasks local queries",
 		description:
 			"Tasks loads complete scopes of at most 1,000 items for all-field sorting, grouping and filtering. Unknown or larger totals use the provider-supported server controls.",

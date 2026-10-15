@@ -1,5 +1,6 @@
 import { createEffect, createMemo, createSignal, onCleanup, untrack } from "solid-js";
 import type { WorkItemProvider } from "../../../plugins/workItemProvider";
+import { tasksNotifications } from "../../../services/tasksNotifications";
 import type { WorkItemAction, WorkItemCommentEntry, WorkItemDetail, WorkItemRef } from "../../../types/work-items.gen";
 
 export function commentKey(entry: WorkItemCommentEntry): string {
@@ -32,7 +33,8 @@ export function useTasksDetail(props: {
 	);
 	const active = () => props.visible !== false && documentVisible() && identity() !== null;
 	const report = (cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause));
-	const accept = (value: WorkItemDetail) => {
+	const accept = (value: WorkItemDetail, silent = false) => {
+		void tasksNotifications.observe(value, silent);
 		setDetail(value);
 		props.onItemChange?.(value);
 	};
@@ -120,7 +122,7 @@ export function useTasksDetail(props: {
 				}
 			}
 			if (currentEpoch !== epoch) return false;
-			accept(value);
+			accept(value, action.kind === "comment");
 			return true;
 		} catch (cause) {
 			if (currentEpoch === epoch) report(cause);

@@ -36,6 +36,15 @@ pub(crate) fn suspend(
     session_id: &str,
     metadata: &serde_json::Value,
 ) -> Result<SuspendedSession, String> {
+    suspend_with_reason(state, session_id, metadata, "user")
+}
+
+pub(crate) fn suspend_with_reason(
+    state: &Arc<AppState>,
+    session_id: &str,
+    metadata: &serde_json::Value,
+    reason: &str,
+) -> Result<SuspendedSession, String> {
     let _guard = state.suspend_lock.lock();
     let ss = state
         .session_state_with_shell(session_id)
@@ -89,7 +98,7 @@ pub(crate) fn suspend(
             .get(session_id)
             .map(|entry| entry.value().clone()),
         pane_slot: value("paneSlot"),
-        reason: "user".into(),
+        reason: reason.into(),
         name: name.or_else(|| value("name")),
         shell,
     };
@@ -116,12 +125,13 @@ pub(crate) fn suspend(
                 record.launch_command = found.launch_command;
             }
         }
-        if crate::session_resume::resolve(&record.resume_request())
-            .cmd
-            .is_none()
-        {
+        let resolution = crate::session_resume::resolve(&record.resume_request());
+        if resolution.cmd.is_none() || (reason == "idle_hibernate" && !resolution.verified) {
             return Err("no resumable agent session".into());
         }
+    }
+    if reason == "idle_hibernate" && !crate::idle_close::hibernate_allowed(state, session_id) {
+        return Err("session is no longer eligible for hibernation".into());
     }
     // Verification can perform IO. Recheck the authoritative activity before any write/close.
     let current = state

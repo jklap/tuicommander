@@ -412,3 +412,24 @@ describe("agentConfigsStore", () => {
 		});
 	});
 });
+
+// Catches: machine-owned hibernation fields being lost when unrelated agent settings save.
+it("preserves and updates machine hibernation settings", async () => {
+	const save = vi.fn().mockResolvedValue(undefined);
+	const machine = createAgentConfigsStore({
+		load: async () => ({ ...configWithClaude(), hibernate_idle_minutes: 90, hibernate_scope: "always" }),
+		save,
+	});
+	await machine.hydrate();
+	expect(machine.state.hibernate_idle_minutes).toBe(90);
+	expect(machine.state.hibernate_scope).toBe("always");
+	await machine.setHibernate(0, "background_only");
+	expect(save).toHaveBeenLastCalledWith(
+		expect.objectContaining({ hibernate_idle_minutes: 90 }),
+		expect.objectContaining({
+			hibernate_idle_minutes: 0,
+			hibernate_scope: "background_only",
+			agents: configWithClaude().agents,
+		}),
+	);
+});
