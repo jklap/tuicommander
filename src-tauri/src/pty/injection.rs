@@ -1295,9 +1295,11 @@ fn run_claimed_injection(
 pub(crate) const PEER_MAIL_WAKE: &str =
     "[TUIC] message available — read it with: agent action=inbox";
 
-/// Submit an inbox pointer into a busy Claude Code or Codex composer. Their
-/// 2026-09-27 live probes show that Enter queues the line for the next tool
-/// boundary; Ctrl+Enter and Escape interrupt active work and are not used.
+/// Submit an inbox pointer into a busy Claude Code, Codex, or ego composer.
+/// Claude/Codex live probes (2026-09-27) show that Enter queues the line for the
+/// next tool boundary. ego's busy admission durably queues plain Enter and
+/// delivers it after the running tool batch. Ctrl+Enter and Escape interrupt
+/// active work and are not used.
 /// The peer's message body never enters this writer or the pending PTY queue.
 pub(crate) fn deliver_urgent_mail_notice(
     state: &AppState,
@@ -1312,7 +1314,7 @@ pub(crate) fn deliver_urgent_mail_notice(
         .session_states
         .get(session_id)
         .and_then(|session| session.agent_type.clone());
-    if !matches!(agent_type.as_deref(), Some("claude" | "codex")) {
+    if !matches!(agent_type.as_deref(), Some("claude" | "codex" | "ego")) {
         return Err("unknown_agent_type");
     }
     if blocked_on_confident_question(state, session_id) {

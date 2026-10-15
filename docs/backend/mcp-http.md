@@ -1829,10 +1829,11 @@ bar also keeps repo-scoped tabs visible when a repository has no active workspac
    external generated peers omit `recipient_state`.
 4. **Receive** — the following paths surface buffered mail:
    - **Urgent notice**: `agent send urgency="urgent"` retains the peer body only
-     in the inbox. A busy managed Claude Code or Codex session with a safe,
+     in the inbox. A busy managed Claude Code, Codex or ego session with a safe,
      empty composer gets a payload-free notice through the guarded PTY writer.
-     The writer sends Enter, which both probed CLIs queue until the next tool
-     boundary. It does not interrupt the current tool. A draft, confident
+     The writer sends Enter, which Claude/Codex queue until the next tool
+     boundary. ego also durably queues plain Enter while busy and delivers it
+     after the running tool batch; Ctrl+Enter and Escape are not used. It does not interrupt the current tool. A draft, confident
      dialog, unknown agent type or exited PTY prevents this submission. The
      notice names the sender by validated UUID, never by a peer-controlled
      display name. The sender receives `urgent_delivered=true` for a notice
