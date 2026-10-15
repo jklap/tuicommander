@@ -8846,6 +8846,88 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
+    "upstreams.servers.{id}.credentials.auth": {
+      "id": "upstreams.servers.{id}.credentials.auth",
+      "store": "upstreams",
+      "owner": "machine",
+      "area": "upstreams",
+      "group": "servers",
+      "order": 21,
+      "path": "/servers/{id}/credentials/auth",
+      "labelKey": "settings.catalogue.upstreams.servers.{id}.credentials.auth.label",
+      "helpKey": "settings.catalogue.upstreams.servers.{id}.credentials.auth.help",
+      "label": "auth",
+      "schema": {
+        "type": "string",
+        "enum": [
+          "set",
+          "unset",
+          "unavailable"
+        ]
+      },
+      "nullable": false,
+      "availability": {
+        "status": "available"
+      },
+      "choices": {
+        "kind": "static",
+        "values": [
+          "set",
+          "unset",
+          "unavailable"
+        ]
+      },
+      "sensitivity": "secret",
+      "apply": "live",
+      "effect": "Reads credential presence. Use typed upstream owner actions for bearer/header rotation, clearing and OAuth login; values never leave the owner.",
+      "operations": [
+        "get",
+        "set_secret",
+        "clear_secret"
+      ],
+      "confirmationClass": "execution_authority"
+    },
+    "upstreams.servers.{id}.credentials.headers.{name}.status": {
+      "id": "upstreams.servers.{id}.credentials.headers.{name}.status",
+      "store": "upstreams",
+      "owner": "machine",
+      "area": "upstreams",
+      "group": "servers",
+      "order": 22,
+      "path": "/servers/{id}/credentials/headers/{name}/status",
+      "labelKey": "settings.catalogue.upstreams.servers.{id}.credentials.headers.{name}.status.label",
+      "helpKey": "settings.catalogue.upstreams.servers.{id}.credentials.headers.{name}.status.help",
+      "label": "status",
+      "schema": {
+        "type": "string",
+        "enum": [
+          "set",
+          "unset",
+          "unavailable"
+        ]
+      },
+      "nullable": false,
+      "availability": {
+        "status": "available"
+      },
+      "choices": {
+        "kind": "static",
+        "values": [
+          "set",
+          "unset",
+          "unavailable"
+        ]
+      },
+      "sensitivity": "secret",
+      "apply": "live",
+      "effect": "Reads credential presence. Use typed upstream owner actions for bearer/header rotation, clearing and OAuth login; values never leave the owner.",
+      "operations": [
+        "get",
+        "set_secret",
+        "clear_secret"
+      ],
+      "confirmationClass": "execution_authority"
+    },
     "upstreams.servers.{id}.enabled": {
       "id": "upstreams.servers.{id}.enabled",
       "store": "upstreams",
@@ -10124,6 +10206,11 @@ export const settingsCatalogue = {
       "reason": "One-time bypass migration marker; cannot be edited to rerun migration."
     },
     {
+      "store": "upstreams",
+      "path": "/servers/{id}/credentials/headers/{name}/name",
+      "reason": "Header identity supplied by the upstream owner."
+    },
+    {
       "store": "github_accounts",
       "path": "/accounts/{id}/login",
       "reason": "Resolved GitHub viewer identity; supplied by account verification."
@@ -10210,12 +10297,6 @@ export const settingsCatalogue = {
       "path": "/{id}/credential",
       "ownerStep": "Step 4f",
       "reason": "Connection credentials live outside the RemoteConnection record and require the credential-reference owner schema."
-    },
-    {
-      "store": "upstreams",
-      "path": "/servers/{id}/credentials",
-      "ownerStep": "Step 4e",
-      "reason": "Vault-backed bearer/OAuth/header operations need the upstream owner schema; persisted credential references do not cover credential actions."
     },
     {
       "store": "telegram",
@@ -10713,6 +10794,39 @@ export const settingsCatalogue = {
                 "credential_ref"
               ]
             }
+          },
+          "credentials": {
+            "type": "object",
+            "properties": {
+              "auth": {
+                "type": "string",
+                "enum": [
+                  "set",
+                  "unset",
+                  "unavailable"
+                ]
+              },
+              "headers": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "x-not-setting": "Header identity supplied by the upstream owner."
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "set",
+                        "unset",
+                        "unavailable"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
           }
         },
         "required": [
@@ -10747,6 +10861,33 @@ export const settingsCatalogue = {
           "name",
           "credential_ref"
         ]
+      },
+      "operations": [
+        "get",
+        "create",
+        "remove"
+      ]
+    },
+    {
+      "store": "upstreams",
+      "path": "/servers/{id}/credentials/headers",
+      "key": "name",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "x-not-setting": "Header identity supplied by the upstream owner."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "set",
+              "unset",
+              "unavailable"
+            ]
+          }
+        }
       },
       "operations": [
         "get",

@@ -1646,3 +1646,10 @@ records, active selections, backend worktree placement, connection identity, and
 unknown owner fields. Removing a registration never deletes a checkout or worktree.
 Runtime fields have individual catalogue exclusions; presentation and ordering remain
 settings. Reads include stored/effective values and source through the shared service.
+
+The upstream credential owner describes auth/header presence separately from saved
+references. Its input-only typed actions rotate bearer/header credentials, clear them,
+or start the existing OAuth flow. Rotation replaces old OAuth material and cancels
+pending flows for that upstream. Config and vault changes share the config owner lock;
+a vault change followed by config/apply failure reports `persisted: true` with `get`
+recovery. Only the changed enabled upstream reconnects. No credential value is returned.

@@ -65,10 +65,11 @@ pub(super) fn native_catalogue_for(dictation: bool) -> Result<Catalogue, Catalog
         Some(&AgentsConfig::default()),
         available.clone(),
     )?;
-    catalogue.register(
+    catalogue.register_schema(
         "upstreams",
         "machine",
-        Some(&crate::mcp_upstream_config::UpstreamMcpConfig::default()),
+        &super::upstream_credentials::catalogue_schema(),
+        None,
         available.clone(),
     )?;
     catalogue.register_schema(

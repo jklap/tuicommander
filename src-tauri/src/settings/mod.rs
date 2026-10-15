@@ -103,3 +103,7 @@ mod policy_lifecycle_tests;
 pub mod registration;
 #[cfg(test)]
 mod registration_tests;
+
+pub mod upstream_credentials;
+#[cfg(test)]
+mod upstream_credentials_tests;
