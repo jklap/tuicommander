@@ -200,6 +200,9 @@
   --bg-highlight: #37373d;
   --fg-primary: #cccccc;
   --fg-secondary: #a0a0a0;
+  /* Settings copy must remain readable on elevated and highlighted surfaces. */
+  --settings-foreground: color-mix(in srgb, var(--fg-primary) 30%, var(--fg-secondary));
+  --link-foreground: color-mix(in srgb, var(--accent) 85%, var(--fg-primary));
   --fg-muted: #9aa1a9;
   --accent: #59a8dd;
   --accent-hover: #7abde5;

@@ -12,6 +12,8 @@
 }
 
 .panel {
+  --fg-secondary: var(--settings-foreground);
+  --fg-muted: var(--settings-foreground);
   width: min(1136px, calc(100vw - 48px));
   height: 80vh;
   max-height: 90vh;
@@ -1556,3 +1558,6 @@
 .settingRowValue { flex: 1; min-width: 0; }
 .settingRowValue > [data-form-control] { width: 100%; }
 .settingRowWithActions > button { flex-shrink: 0; }
+
+/* Shared link copy uses a readable accent without changing action fills. */
+.content a { color: var(--link-foreground); }
