@@ -320,7 +320,10 @@ function createRemoteConnectionsStore() {
 			try {
 				const base = state.connections[conn.id]?.connection ?? null;
 				await invoke("save_remote_connection", { base, connection: conn });
-				setState("connections", conn.id, { connection: conn, status: "disconnected" });
+				// Saving metadata does not disconnect the backend runtime. Retain its
+				// endpoint/token-backed state until the next authoritative status event.
+				if (state.connections[conn.id]) setState("connections", conn.id, "connection", conn);
+				else setState("connections", conn.id, { connection: conn, status: "disconnected" });
 			} catch (err) {
 				appLogger.error("store", "Failed to save remote connection", err);
 				throw err;

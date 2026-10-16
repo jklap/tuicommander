@@ -9,6 +9,11 @@ use tokio::sync::{mpsc, oneshot};
 
 pub(super) static HANDLE: OnceLock<mpsc::Sender<Command>> = OnceLock::new();
 pub(super) enum Command {
+    SetupReply {
+        chat: i64,
+        message: super::settings::SetupReply,
+        reply: oneshot::Sender<Result<Value, Error>>,
+    },
     Automation {
         store: crate::automations::store::RunStore,
         run: Box<crate::automations::run::AutomationRun>,
@@ -35,6 +40,7 @@ pub(super) struct Runtime {
     pub config: Config,
     pub outbound: Outbound,
     pub pending: VecDeque<(String, i64)>,
+    pub(super) requests: VecDeque<super::streaming::Request>,
     pub callbacks: super::callbacks::Callbacks,
     pub adapter_sid: String,
     pub(super) registration: Option<super::registration::Registration>,
@@ -46,11 +52,14 @@ impl Runtime {
         paths: Paths,
         adapter_sid: String,
     ) -> Result<Self, Error> {
+        let mut outbound = Outbound::new(paths.clone(), BotApi::new(paths)?);
+        outbound.recent = state.telegram_recent.clone();
         Ok(Self {
             state,
             config,
-            outbound: Outbound::new(paths.clone(), BotApi::new(paths)?),
+            outbound,
             pending: VecDeque::new(),
+            requests: VecDeque::new(),
             callbacks: Default::default(),
             adapter_sid,
             registration: None,
@@ -123,34 +132,32 @@ impl Runtime {
                     .find(|(id, _)| id == &request_id)
                     .map(|(_, chat)| *chat)
                     .ok_or(Error::State)?;
-                if self.outbound.active.is_some() {
+                if let Some(active) = &self.outbound.active {
+                    if active.request == request_id {
+                        return Ok(json!({"draft_id":active.draft}));
+                    }
                     return Err(Error::State);
                 }
-                let (pty, epoch) = self.current()?;
-                let interrupt = super::stop::arm(&self.state, caller, &pty, epoch)?;
+                let current = self.current().ok();
+                let (pty, epoch) = current.clone().unwrap_or_default();
+                let interrupt = if current.is_some() {
+                    Some(super::stop::arm(&self.state, caller, &pty, epoch)?)
+                } else {
+                    None
+                };
                 let draft = self
                     .outbound
                     .begin(request_id.clone(), caller.into(), pty, epoch, chat)
                     .await?;
-                self.outbound.active.as_mut().ok_or(Error::State)?.interrupt = Some(interrupt);
-                self.pending.retain(|(id, _)| id != &request_id);
+                self.outbound.active.as_mut().ok_or(Error::State)?.interrupt = interrupt;
                 Ok(json!({"draft_id":draft}))
             }
             Input::Activity { request_id, text } => {
-                let a = self.outbound.active.as_ref().ok_or(Error::State)?;
-                if !self.live(&a.peer, &a.pty, a.epoch) {
-                    return Err(Error::State);
-                }
                 self.outbound.activity(&request_id, &text)?;
                 Ok(json!({"accepted":true}))
             }
             Input::Finish { request_id, text } => {
-                let a = self.outbound.active.as_ref().ok_or(Error::State)?;
-                if !self.live(&a.peer, &a.pty, a.epoch) {
-                    return Err(Error::State);
-                }
-                self.callbacks.clear();
-                let ids = self.outbound.finish(&request_id, &text).await?;
+                let ids = self.finish_request(&request_id, &text).await?;
                 Ok(json!({"message_ids":ids}))
             }
             Input::Send { text, buttons } => {
@@ -159,7 +166,11 @@ impl Runtime {
             }
         }
     }
-    pub fn track(&mut self, mail: PendingMail) -> Result<Value, Error> {
+    pub fn track(
+        &mut self,
+        mail: PendingMail,
+        recipient: super::streaming::Recipient,
+    ) -> Result<Value, Error> {
         let envelope: Value = serde_json::from_str(&mail.content).map_err(|_| Error::Protocol)?;
         let chat = envelope["chat_id"]
             .as_str()
@@ -170,7 +181,43 @@ impl Runtime {
             if self.pending.len() >= crate::state::AGENT_INBOX_CAPACITY {
                 self.pending.pop_front();
             }
-            self.pending.push_back((mail.id, chat));
+            self.pending.push_back((mail.id.clone(), chat));
+            if self.requests.len() >= crate::state::AGENT_INBOX_CAPACITY {
+                self.requests.pop_front();
+            }
+            let cursor = self
+                .state
+                .agent_inbox
+                .get(&mail.recipient)
+                .and_then(|inbox| {
+                    inbox
+                        .iter()
+                        .find(|entry| entry.id == mail.id)
+                        .map(|entry| entry.timestamp)
+                })
+                .unwrap_or(u64::MAX);
+            self.requests.push_back(super::streaming::Request {
+                id: mail.id,
+                chat,
+                message: envelope["message_id"].as_i64(),
+                peer: mail.recipient.clone(),
+                recipient,
+                cursor,
+                turn: None,
+                final_error: None,
+                final_epoch: None,
+                received: tokio::time::Instant::now(),
+                read: None,
+                working: false,
+                waiting: false,
+                failed: false,
+                acknowledged: false,
+                noticed: false,
+                queued_notice: false,
+                completed: None,
+                reaction: 0,
+                reaction_sent: None,
+            });
         }
         Ok(json!({"accepted":true}))
     }
@@ -185,25 +232,104 @@ impl Runtime {
             .and_then(|s| s.parse::<i64>().ok())
             .ok_or(Error::Protocol)?;
         if !self.outbound.paths.allowlist()?.contains(&chat) {
+            self.state.telegram_recent.lock().record(
+                "in",
+                "message",
+                "rejected: not authorized",
+                None,
+            );
             return Ok(json!({"accepted":false}));
         }
+        if self.requests.iter().any(|request| request.id == mail.id) {
+            return Ok(json!({"accepted":true}));
+        }
+        let message = envelope["message_id"].as_i64().ok_or(Error::Protocol)?;
+        let received = self
+            .outbound
+            .received_reaction(chat, message)
+            .await
+            .is_ok_and(|result| result == Value::Bool(true));
+        self.stage("received");
+        let text = envelope["text"].as_str();
         let Some(peer) = self.registered_peer() else {
+            self.state
+                .telegram_recent
+                .lock()
+                .record("in", "message", "dropped: no agent", text);
             self.outbound
-                .send(chat, "Nessun agent registrato", None)
+                .send(
+                    chat,
+                    "No agent is listening. Ask an agent in TUICommander to register for Telegram.",
+                    None,
+                )
                 .await?;
             return Ok(json!({"accepted":false}));
         };
         mail.recipient = peer.into();
-        super::native::offer(&self.state, &self.adapter_sid, &mail).await?;
-        self.track(mail)
+        // Subscribe before delivery: ACP may wake as soon as the mail is stored.
+        let recipient = super::streaming::Recipient::capture(&self.state, &mail.recipient);
+        let result = super::native::offer(&self.state, &self.adapter_sid, &mail).await;
+        self.state.telegram_recent.lock().record(
+            "in",
+            "message",
+            result
+                .as_ref()
+                .map(|_| "delivered".into())
+                .unwrap_or_else(|error| format!("failed: {error}")),
+            text,
+        );
+        let delivery = result?;
+        let id = mail.id.clone();
+        let accepted = self.track(mail, recipient)?;
+        if let Some(request) = self.requests.iter_mut().find(|r| r.id == id) {
+            request.reaction_sent = received.then_some(0);
+        }
+        self.show_oldest().await;
+        if delivery["delivery_path"] == "inbox_only" {
+            self.stage("queued");
+        }
+        Ok(accepted)
     }
     pub async fn update(&mut self, value: Value) -> Result<Value, Error> {
         self.retire_registration();
         if !self.enabled() {
             return Err(Error::Config);
         }
-        self.stop(&value)?;
-        self.callback(&value).await?;
+        if let Some(message) = value.get("message") {
+            let id = message["chat"]["id"].as_i64();
+            if message["chat"]["type"] != "private"
+                || id.is_none_or(|id| {
+                    !self
+                        .outbound
+                        .paths
+                        .allowlist_entries()
+                        .is_ok_and(|ids| ids.contains(&id))
+                })
+            {
+                self.state.telegram_recent.lock().record(
+                    "in",
+                    "message",
+                    "rejected: not authorized",
+                    None,
+                );
+            }
+        }
+        if !self.stop_acp(&value).await? {
+            self.stop(&value)?;
+        }
+        let callback = self.callback(&value).await;
+        if value.get("callback_query").is_some() {
+            let outcome = match &callback {
+                Ok(true) => "delivered".into(),
+                Ok(false) => "rejected: not authorized".into(),
+                Err(error) => format!("failed: {error}"),
+            };
+            self.state
+                .telegram_recent
+                .lock()
+                .record("in", "button", outcome, None);
+        }
+        callback?;
         Ok(json!({"accepted":true}))
     }
     pub(super) fn enabled(&self) -> bool {
@@ -222,10 +348,36 @@ impl Runtime {
             .state
             .live_pty_for_peer(self.registered_peer().unwrap_or_default())
         else {
-            self.outbound.active = None;
             return;
         };
         if let Some(text) = super::notifications::notice(&event, &pty) {
+            if let Some(request) = self.requests.iter().find(|r| {
+                r.completed.is_none()
+                    && r.working
+                    && r.peer == self.registered_peer().unwrap_or_default()
+            }) && let AppEvent::ProgressRecorded { payload, .. } = &event
+            {
+                if payload["entry"]["type"] == "done" {
+                    let id = request.id.clone();
+                    if let Err(error) = self.finish_request(&id, &text).await {
+                        alert(&self.state, error);
+                    }
+                }
+                // Blocked is a status, not an answer; avoid a second final.
+                return;
+            }
+            // A completed request owns its progress outcome as well as finish.
+            let epoch = self
+                .state
+                .session_state_with_shell(&pty)
+                .map(|s| s.turn_epoch);
+            if self
+                .requests
+                .iter()
+                .any(|r| r.completed.is_some() && r.final_epoch == epoch)
+            {
+                return;
+            }
             match self.destination() {
                 Ok(chat) => {
                     self.callbacks.clear();
@@ -255,18 +407,18 @@ impl Runtime {
             self.outbound.active = None;
             return;
         }
-        if let Some(a) = &self.outbound.active
-            && !self.live(&a.peer, &a.pty, a.epoch)
-        {
-            self.outbound.active = None;
-            tracing::warn!(
-                source = "telegram",
-                "Telegram response ended without finish; draft retired"
-            );
-        }
+        self.stream_tick().await;
         if let Err(error) = self.outbound.refresh().await {
             alert(&self.state, error);
         }
+    }
+    pub(super) fn events_lagged(&mut self) {
+        // Recipient snapshots and the ACP reader retain the request. Only
+        // nonessential transient intent/progress notifications may be missed.
+        tracing::warn!(
+            source = "telegram",
+            "Telegram events lagged; open requests retained"
+        );
     }
     #[cfg(test)]
     pub async fn run(self, mut commands: mpsc::Receiver<Command>) {
@@ -288,14 +440,23 @@ impl Runtime {
                         Command::Tool { caller,sid,input,reply } => (reply,self.tool(&caller,&sid,input).await),
                         Command::Deliver { mail,reply } => (reply,self.deliver(mail).await),
                         Command::Update { value,reply } => (reply,self.update(value).await),
+                        Command::SetupReply { chat,message,reply } => {
+                            let (kind, outcome) = match message {
+                                super::settings::SetupReply::Start => ("/start", "delivered"),
+                                super::settings::SetupReply::Linked => ("pairing", "delivered"),
+                                super::settings::SetupReply::InvalidCode => ("pairing", "rejected: not authorized"),
+                            };
+                            self.state.telegram_recent.lock().record("in", kind, outcome, None);
+                            let result = if self.enabled() { self.outbound.setup_reply(chat, message).await } else { Err(Error::Config) };
+                            (reply, result)
+                        },
                     };
                     let _ = reply.send(result);
                 },
                 event = events.recv() => match event {
                     Ok(event) => self.event(event).await,
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                        self.outbound.active = None;
-                        tracing::warn!(source="telegram","Telegram events lagged; draft retired, notifications may be missing");
+                        self.events_lagged();
                     },
                     Err(_) => break,
                 },

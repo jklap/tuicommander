@@ -1,2 +1,0 @@
-# Tauri's generate_context! writes assets into OUT_DIR during macro expansion.
-share_out_dir = false

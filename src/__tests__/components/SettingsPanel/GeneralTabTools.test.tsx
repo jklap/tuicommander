@@ -63,7 +63,7 @@ describe("GeneralTab developer tools sections", () => {
 		const label = Array.from(view.container.querySelectorAll("label")).find(
 			(item) => item.textContent === "Tray and menu-bar icon",
 		);
-		const select = label?.parentElement?.querySelector("select");
+		const select = label?.htmlFor ? view.container.querySelector(`#${label.htmlFor}`) : null;
 		expect(select).toBeTruthy();
 		try {
 			fireEvent.change(select!, { target: { value: "never" } });

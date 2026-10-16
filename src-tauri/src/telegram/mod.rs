@@ -9,10 +9,12 @@ mod native;
 mod notifications;
 mod offset;
 mod outbound;
+pub(crate) mod recent;
 mod registration;
 mod runtime;
 pub(crate) mod settings;
 mod stop;
+mod streaming;
 mod tool;
 pub(crate) use native::start;
 pub(crate) use tool::{definition as tool_definition, handle as handle_tool};
@@ -82,3 +84,6 @@ mod tests;
 mod critic_setup_tests;
 
 pub(crate) use notifications::automation_notice;
+
+#[cfg(test)]
+mod streaming_tests;

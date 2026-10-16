@@ -10,6 +10,8 @@ const initial = {
 	bot_alias: "test_bot",
 	registered_agent_name: "Writer",
 	chats: ["123"],
+	pairing_pending: true,
+	recent_events: [],
 	connected: true,
 	polling_owner: "this_app",
 	last_error: null,
@@ -21,7 +23,10 @@ beforeEach(() => {
 		command === "telegram_settings" ? initial : { code: "ABC123" },
 	);
 });
-afterEach(cleanup);
+afterEach(() => {
+	cleanup();
+	vi.useRealTimers();
+});
 describe("Telegram setup", () => {
 	// Catches: password is shown as plain text or retained in the form after sending.
 	it("clears the password and sends only the replacement action", async () => {
@@ -39,11 +44,11 @@ describe("Telegram setup", () => {
 	// Catches: setup invents a UUID/chat binding instead of submitting the explicit user choice.
 	it("offers both pairing and explicit chat IDs with removal", async () => {
 		render(() => <TelegramTab />);
-		await screen.findByLabelText("Authorized chats");
+		await screen.findByLabelText("Add chat by ID");
 		fireEvent.click(screen.getByText("Link chat"));
 		await screen.findByText(/Send ABC123/);
 		await waitFor(() => expect(screen.getByText("Link chat").hasAttribute("disabled")).toBe(false));
-		fireEvent.input(screen.getByLabelText("Authorized chats"), { target: { value: "456" } });
+		fireEvent.input(screen.getByLabelText("Add chat by ID"), { target: { value: "456" } });
 		fireEvent.click(screen.getByText("Add chat ID"));
 		await waitFor(() =>
 			expect(invoke).toHaveBeenCalledWith("telegram_setup", { change: { action: "add_chat", chat_id: "456" } }),
@@ -57,9 +62,9 @@ describe("Telegram setup", () => {
 	// Catches: Settings authorizes a selected peer instead of respecting MCP registration.
 	it("shows registration read-only and toggles without writing a target", async () => {
 		render(() => <TelegramTab />);
-		await screen.findByText("registered agent: Writer");
+		await screen.findByText("Writer");
 		expect(screen.queryByRole("combobox")).toBeNull();
-		fireEvent.click(screen.getByRole("checkbox"));
+		fireEvent.click(screen.getByRole("switch", { name: "Enable Telegram" }));
 		await waitFor(() =>
 			expect(invoke).toHaveBeenCalledWith("telegram_setup", { change: { action: "configure", enabled: false } }),
 		);
@@ -79,7 +84,8 @@ describe("Telegram setup", () => {
 	] as const)("identifies owner %s and gates pairing", async (polling_owner, connected, status) => {
 		invoke.mockResolvedValue({ ...initial, polling_owner, connected });
 		render(() => <TelegramTab />);
-		expect((await screen.findByRole("status")).textContent).toBe(status);
+		const summary = await screen.findByRole("status");
+		expect(summary.querySelector('[data-testid="status-badge"]')?.textContent).toBe(status);
 		expect(screen.getByText("Link chat").hasAttribute("disabled")).toBe(!connected);
 		if (!connected) expect(screen.getByText(/Connect a poller before linking/)).toBeTruthy();
 	});
@@ -94,7 +100,8 @@ describe("Telegram setup", () => {
 	])("explains inactive setup %j", async (change, status) => {
 		invoke.mockResolvedValue({ ...initial, connected: false, polling_owner: null, ...change });
 		render(() => <TelegramTab />);
-		expect((await screen.findByRole("status")).textContent).toBe(status);
+		const summary = await screen.findByRole("status");
+		expect(summary.querySelector('[data-testid="status-badge"]')?.textContent).toBe(status);
 		expect(screen.getByText("Link chat").hasAttribute("disabled")).toBe(true);
 	});
 	// Catches: a failed getMe appears successful or drops the safe error category.
@@ -108,4 +115,51 @@ describe("Telegram setup", () => {
 		fireEvent.click(screen.getByText("Save and check bot"));
 		expect((await screen.findByRole("alert")).textContent).toContain("telegram_unauthorized");
 	});
+});
+
+// Catches: a consumed code stays visible after the existing status refresh reports linking.
+it("clears the consumed pairing hint after refresh 1955", async () => {
+	vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+	let linked = false;
+	invoke.mockImplementation(async (command: string) =>
+		command === "telegram_settings"
+			? { ...initial, chats: linked ? ["123", "456"] : ["123"], pairing_pending: !linked }
+			: { code: "ABC123" },
+	);
+	render(() => <TelegramTab />);
+	fireEvent.click(await screen.findByText("Link chat"));
+	await screen.findByText(/Send ABC123/);
+	linked = true;
+	await vi.advanceTimersByTimeAsync(3000);
+	await screen.findByText("456");
+	expect(screen.queryByText(/Send ABC123/)).toBeNull();
+});
+
+// Catches: activity is hidden or stale while Settings stays open.
+it("renders safe recent events and refreshes while open 1956", async () => {
+	vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+	let updated = false;
+	invoke.mockImplementation(async () => ({
+		...initial,
+		recent_events: updated
+			? [
+					{ id: 3, time: 1000, direction: "out", kind: "reply", outcome: "sent", preview: "Chat linked." },
+					{ id: 2, time: 999, direction: "in", kind: "pairing", outcome: "delivered", preview: "[redacted]" },
+					{ id: 1, time: 998, direction: "in", kind: "message", outcome: "dropped: no agent", preview: "Hello" },
+				]
+			: [],
+	}));
+	render(() => <TelegramTab />);
+	await screen.findByText("No recent Telegram events.");
+	updated = true;
+	await vi.advanceTimersByTimeAsync(3000);
+	const replies = await screen.findAllByRole("status");
+	expect(replies.map((node) => node.textContent).filter((text) => !text?.includes("Connected (this app)"))).toEqual([
+		"Chat linked.",
+		"[redacted]",
+		"Hello",
+	]);
+	expect(screen.getByLabelText(/out · reply · sent/)).toBeTruthy();
+	expect(screen.getByLabelText(/in · message · dropped: no agent/)).toBeTruthy();
+	expect(screen.queryByText("No recent Telegram events.")).toBeNull();
 });

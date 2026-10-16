@@ -96,9 +96,8 @@ describe("TerminalTab placement", () => {
 
 		const { container } = render(() => <TerminalTab />);
 		mockInvoke.mockClear();
-		const shellInput = Array.from(container.querySelectorAll("label"))
-			.find((el) => el.textContent === "Shell")
-			?.parentElement?.querySelector("input");
+		const shellLabel = Array.from(container.querySelectorAll("label")).find((el) => el.textContent === "Shell");
+		const shellInput = shellLabel ? container.querySelector<HTMLInputElement>(`#${shellLabel.htmlFor}`) : null;
 		if (!shellInput) throw new Error("Shell input not found");
 		fireEvent.input(shellInput, { target: { value: "/bin/zsh" } });
 

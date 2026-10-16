@@ -426,40 +426,51 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 
 		// Freeze-investigation: split the structural batch into body (our
 		// setState loop) vs reactive flush (dependent effects/memos waking).
-		timeBatch(`git.refreshBatch:${repoPath}`, (markBodyEnd) =>
-			batch(() => {
-				// Guard against race: if a branch was present before our async ops
-				// but is now gone from the live store, the user deleted it while we
-				// were in-flight. Don't resurrect it via stale worktreePaths data.
-				const liveRepo = repositoriesStore.get(repoPath);
-				// Create new worktree branches first so mergeWorkspaceState has a target
-				for (const [workspaceId, wt] of Object.entries(worktreePaths)) {
-					if (priorBranchKeys.has(workspaceId) && !liveRepo?.workspaces[workspaceId]) {
-						appLogger.info("git", `refreshAllBranchStats: RACE GUARD blocked resurrection of "${workspaceId}"`, {
-							repoPath,
+		timeBatch(
+			`git.refreshBatch:${repoPath}`,
+			(markBodyEnd) =>
+				batch(() => {
+					// Guard against race: if a branch was present before our async ops
+					// but is now gone from the live store, the user deleted it while we
+					// were in-flight. Don't resurrect it via stale worktreePaths data.
+					const liveRepo = repositoriesStore.get(repoPath);
+					// Create new worktree branches first so mergeWorkspaceState has a target
+					for (const [workspaceId, wt] of Object.entries(worktreePaths)) {
+						if (priorBranchKeys.has(workspaceId) && !liveRepo?.workspaces[workspaceId]) {
+							appLogger.info("git", `refreshAllBranchStats: RACE GUARD blocked resurrection of "${workspaceId}"`, {
+								repoPath,
+								worktreePath: wt.path,
+							});
+							continue;
+						}
+						// `mergedSet` holds BRANCH names, so it is queried with the
+						// record's branch — never the key, which is a workspace id and
+						// only equals the branch under the identity migration.
+						const update: Partial<import("../../stores/repositories").WorkspaceState> = {
 							worktreePath: wt.path,
-						});
-						continue;
+							branchName: wt.branch,
+							kind: wt.path === repoPath ? "main" : wt.kind,
+							isMerged: mergedSet.has(wt.branch),
+						};
+						repositoriesStore.setWorkspace(repoPath, workspaceId, update);
 					}
-					// `mergedSet` holds BRANCH names, so it is queried with the
-					// record's branch — never the key, which is a workspace id and
-					// only equals the branch under the identity migration.
-					const update: Partial<import("../../stores/repositories").WorkspaceState> = {
-						worktreePath: wt.path,
-						branchName: wt.branch,
-						kind: wt.path === repoPath ? "main" : wt.kind,
-						isMerged: mergedSet.has(wt.branch),
-					};
-					repositoriesStore.setWorkspace(repoPath, workspaceId, update);
-				}
-				for (const [source, target] of replacements) {
-					repositoriesStore.mergeWorkspaceState(repoPath, source, target);
-					if (source === active) repositoriesStore.setActiveWorkspace(repoPath, target);
-				}
-				for (const branchName of toRemove) {
-					repositoriesStore.removeWorkspace(repoPath, branchName);
-				}
-				markBodyEnd();
+					for (const [source, target] of replacements) {
+						repositoriesStore.mergeWorkspaceState(repoPath, source, target);
+						if (source === active) repositoriesStore.setActiveWorkspace(repoPath, target);
+					}
+					for (const branchName of toRemove) {
+						repositoriesStore.removeWorkspace(repoPath, branchName);
+					}
+					markBodyEnd();
+				}),
+			// DEFERRED (2026-10-16) — real-stall replay needs captured consumer state;
+			// counts and byte size alone cannot reconstruct the reactive graph.
+			() => ({
+				repo_count: repositoriesStore.getActivePaths().length,
+				worktree_count: Object.keys(worktreePaths).length,
+				store_worktree_count: Object.keys(currentRepo.workspaces).length,
+				// Diagnostic-only: serialize only after a slow batch, never per normal refresh.
+				response_bytes: new TextEncoder().encode(JSON.stringify(structure)).byteLength,
 			}),
 		);
 

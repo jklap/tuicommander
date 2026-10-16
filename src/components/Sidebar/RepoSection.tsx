@@ -523,7 +523,12 @@ const BranchTabList: Component<{ terminalIds: string[]; repoPath: string }> = (p
 							)}
 							onClick={() => navigateToTerminal(id)}
 							aria-label={accessibleLabel()}
-							data-tooltip={rich() ? accessibleLabel() : `${t().name} · ${agentTooltip(t())}`}
+							data-tooltip={[
+								rich() ? accessibleLabel() : `${t().name} · ${agentTooltip(t())}`,
+								t().agentType === "ego" ? t().agentProvider : null,
+							]
+								.filter(Boolean)
+								.join(" · ")}
 							data-tooltip-pos="bottom"
 						>
 							<span class={dotClass()} aria-hidden="true" />

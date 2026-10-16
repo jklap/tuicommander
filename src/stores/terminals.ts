@@ -35,6 +35,12 @@ export type ShellState = "busy" | "idle" | "exited" | null;
 /** Authoritative task lifecycle from the backend; distinct from PTY activity. */
 export type TerminalViewMode = "cli" | "chat";
 
+export interface ProviderRecovery {
+	phase: "waiting" | "retrying";
+	next_attempt_ms: number | null;
+	attempt: number;
+}
+
 export type AgentLifecycleState = "starting" | "working" | "awaiting_input" | "idle" | "completed" | null;
 
 const VALID_SHELL_STATES = new Set<string>(["busy", "idle", "exited"]);
@@ -80,6 +86,7 @@ export interface TerminalData {
 	/** Monotonic local event revision; prevents a stale session snapshot from overwriting PTY state. */
 	shellStateRevision: number;
 	agentState: AgentLifecycleState;
+	providerRecovery?: ProviderRecovery | null;
 	backgroundWork: boolean;
 	queuedCommands: number; // Compose-panel commands waiting for the agent's next idle window
 	completionNotified: boolean; // Current busy cycle already produced its completion notification
@@ -89,7 +96,7 @@ export interface TerminalData {
 	// (e.g. "CLAUDE_CONFIG_DIR=/Users/me/.claude-private claude --dangerously-skip-permissions"),
 	// because a shell alias hides both the binary and the env that locates the session.
 	agentLaunchCommand: string | null;
-	agentProvider: string | null; // Model provider the agent session runs on (ego: from its session manifest); drives the icon
+	agentProvider: string | null; // Model provider the agent session runs on (ego: from its session manifest); shown in the tooltip
 	pendingResumeCommand: string | null; // Set at restore time, consumed on first shell idle
 	pendingInitCommand: string | null; // Setup/run script to auto-execute on first shell idle
 	usageLimit: { percentage: number; limitType: string } | null; // Claude Code usage limit

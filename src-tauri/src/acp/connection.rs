@@ -96,6 +96,7 @@ pub(super) enum Command {
     },
     Cancel {
         session_id: v1::SessionId,
+        expected_turn: Option<AcpTurnId>,
         reply: Reply<()>,
     },
     CancelQueued {
@@ -550,8 +551,12 @@ impl ConnectionActor {
                     self.handle_prompt(session_id, prompt, meta, reply, connection, in_flight);
                 }
             }
-            Command::Cancel { session_id, reply } => {
-                let _ = reply.send(self.cancel(&session_id, connection));
+            Command::Cancel {
+                session_id,
+                expected_turn,
+                reply,
+            } => {
+                let _ = reply.send(self.cancel(&session_id, expected_turn, connection));
             }
             Command::CancelQueued {
                 session_id,
@@ -1113,17 +1118,22 @@ impl ConnectionActor {
             return;
         };
         let turn_id = attachment.active_turn.as_ref().map(|turn| turn.turn_id);
-        let changed = if let v1::SessionUpdate::UsageUpdate(usage) = &notification.update {
-            attachment.usage = Some(AcpUsageSnapshot {
-                context: Some(usage.clone()),
-                end_turn: attachment
-                    .usage
-                    .as_ref()
-                    .and_then(|held| held.end_turn.clone()),
-            });
-            true
-        } else {
-            false
+        let changed = match &notification.update {
+            v1::SessionUpdate::UsageUpdate(usage) => {
+                attachment.usage = Some(AcpUsageSnapshot {
+                    context: Some(usage.clone()),
+                    end_turn: attachment
+                        .usage
+                        .as_ref()
+                        .and_then(|held| held.end_turn.clone()),
+                });
+                true
+            }
+            v1::SessionUpdate::ConfigOptionUpdate(options) => {
+                attachment.config_options = options.config_options.clone();
+                true
+            }
+            _ => false,
         };
         if changed {
             self.publish();
@@ -1506,6 +1516,7 @@ impl ConnectionActor {
     fn cancel(
         &mut self,
         session_id: &v1::SessionId,
+        expected_turn: Option<AcpTurnId>,
         connection: &ConnectionTo<Agent>,
     ) -> Result<(), AcpClientError> {
         let attachment = self.attachment(session_id)?;
@@ -1515,6 +1526,12 @@ impl ConnectionActor {
                 session_id.clone(),
             ));
         };
+        if expected_turn.is_some_and(|expected| turn.turn_id != expected) {
+            return Err(AcpClientError::no_active_turn(
+                self.connection_id,
+                session_id.clone(),
+            ));
+        }
         if turn.state != AcpTurnState::Running {
             return Ok(());
         }

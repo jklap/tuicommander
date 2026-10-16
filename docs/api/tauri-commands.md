@@ -85,8 +85,8 @@ grid-cell coordinates. Both match the stored sequence without normalization.
 | `get_input_buffer_content` | `session_id` | `String` | Get the current content of the input line buffer (what the user is typing). Used by plugins with `pty:read` capability. |
 | `terminal_get_selection_text` | `session_id, start_row, start_col, end_row, end_col, history_base?` | `Result<String, String>` | Read a scrollback-aware selection, join soft-wrapped rows, and remove coherent Claude visual gutter runs. Optional frame `history_base` rebases grid-relative rows atomically against history eviction; evicted endpoints are rejected. Browser parity: `GET /sessions/:id/terminal/selection-text` (`historyBase` query parameter). |
 | `get_process_stats` | -- | `Vec<ProcessStat>` | CPU% and RSS memory for TUIC and all child process trees |
-| `subscribe_terminal_grid` | `session_id, channel: Channel<Response>` | `u64` (epoch) | Register the grid-frame channel for the calling WebView and install a fresh delivery gate (counting from zero). Navigation or destruction releases only that WebView's subscriptions. Returns the subscription epoch the client must carry on `ack_terminal_frame` and `unsubscribe_terminal_grid`. Frames are **raw bytes**, not JSON. Browser parity: `WS /sessions/:id/stream?format=grid` |
-| `ack_terminal_frame` | `session_id, epoch: u64, received: u64` | `()` | Report the total number of frames this client has received. The gate opens when the echo catches up with what was sent, which is what tells a fresh ack from a late one for an abandoned frame. An ack whose epoch is not the live subscription's is dropped. Browser parity: none — the WS path uses sequence numbers instead |
+| `subscribe_terminal_grid` | `session_id, channel: Channel<Response>, visible: bool` | `u64` (epoch) | Register the grid-frame channel and initial visibility for the calling WebView and install a fresh delivery gate (counting from zero). Navigation or destruction releases only that WebView's subscriptions. Returns the subscription epoch the client must carry on `ack_terminal_frame` and `unsubscribe_terminal_grid`. Frames are **raw bytes**, not JSON. Browser parity: `WS /sessions/:id/stream?format=grid` |
+| `ack_terminal_frame` | `session_id, epoch: u64, received: u64, visible?: bool` | `()` | Report the total number of frames this client has received and optionally update epoch-scoped desktop visibility. Hidden subscriptions receive no frames. The gate opens when the echo catches up with what was sent, which is what tells a fresh ack from a late one for an abandoned frame. An ack whose epoch is not the live subscription's is dropped. Browser parity: none — the WS path uses sequence numbers instead |
 | `unsubscribe_terminal_grid` | `session_id, epoch: u64` | `()` | Tear down the grid channel and its gate. The pending scroll target is NOT torn down — it belongs to the session, so an attached browser keeps scrolling after the desktop terminal closes. A non-matching epoch is ignored: a remount subscribes before the outgoing instance unsubscribes, and honouring the stale call would blank a mounted terminal. Browser parity: closing the WS |
 | `chat_view_snapshot` | `session_id, epoch: Option<u64>, from_seq: Option<u64>` | `ChatViewSnapshot` | Chat view of a Claude or Grok terminal: transcript entries from the bound session file as ACP updates, with a bounded log, epoch and `reset` flag. Errors `not_bound: <reason>` for a terminal with no bound Claude or Grok agent. Browser parity: `GET /sessions/:id/chat-view` |
 | `terminal_styled_rows` | `session_id, start, count` | `Result<Response, String>` (packed bytes) | A range of styled rows by absolute index, filling the client-side scroll cache. Raw bytes for the same reason as grid frames. Browser parity: `GET /sessions/:id/terminal/styled-rows` (`application/octet-stream`) |
@@ -106,6 +106,9 @@ request-scoped orchestration contract in `mcp_transport.rs`: it reuses the PTY
 injection claim, writer, input FSM, and output ring, then keeps the MCP response
 open for a bounded terminal-movement receipt. Desktop `write_pty` and
 `write_pty_parts` remain raw input primitives and make no acknowledgement claim.
+Raw input returns an uncertain-delivery error after two seconds rather than
+waiting indefinitely on a blocked writer. The write can still complete; do not
+retry automatically. Session close does not wait on the input writer.
 
 ## Design Mode (`design_mode/tauri_commands.rs`)
 
@@ -286,7 +289,7 @@ reached is an error carrying ego's own sentence, never an empty result.
 | `delete_note_assets` | `note_id` | `()` | Remove `note-images/<note_id>/` directory recursively (no-op if missing) |
 | `get_note_images_dir` | -- | `String` | Return `config_dir()/note-images/` absolute path |
 | `load_keybindings` | -- | `JSON` | Load keybinding overrides |
-| `save_keybindings` | `base, config` | `()` | Save keybinding overrides |
+| `save_keybindings` | `base, config` | `()` | Save typed action/key overrides; reject invalid records before persistence |
 | `load_agents_config` | -- | `AgentsConfig` | Load per-agent run configs, including optional model defaults, and `prevent_alt_screen` overrides |
 | `save_agents_config` | `base, config` | `()` | Save per-agent run configs, including optional model defaults, and `prevent_alt_screen` overrides |
 | `get_agent_native_status_signals` | `agent_type` | `bool` | Read the default-on Claude/Codex launch-scoped status setting |
@@ -359,7 +362,7 @@ remote daemon.
 
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
-| `discover_agent_session` | `agent_type, cwd, claimed_ids, agent_pid, env_overrides` | `Option<{ sessionId, launchCommand, provider }>` | Discover the agent's session UUID for session-aware resume. Claude and grok resolve it exactly from their pid→session registry when `agent_pid` is known; every other agent (and any Claude/grok too old to publish one) falls back to the newest unclaimed session file, which cannot tell two tabs in one folder apart. `launchCommand` is the command the live process really runs, rebuilt from its argv and env (`CLAUDE_CONFIG_DIR=… claude --dangerously-skip-permissions`) — a shell alias is expanded before `exec`, so it is the only record of which config dir holds the session. `null` for agents with no verified session-flag list, and on Windows, where argv is unreadable. `provider` is the model provider the session runs on, for ego only: the first segment of `model` in the pid-leased `<EGO_HOME>/sessions/<id>/manifest.json`; the sidebar picks the ego icon from it (`null` when unreadable, which shows the generic ego icon) |
+| `discover_agent_session` | `agent_type, cwd, claimed_ids, agent_pid, env_overrides` | `Option<{ sessionId, launchCommand, provider }>` | Discover the agent's session UUID for session-aware resume. Claude and grok resolve it exactly from their pid→session registry when `agent_pid` is known; every other agent (and any Claude/grok too old to publish one) falls back to the newest unclaimed session file, which cannot tell two tabs in one folder apart. `launchCommand` is the command the live process really runs, rebuilt from its argv and env (`CLAUDE_CONFIG_DIR=… claude --dangerously-skip-permissions`) — a shell alias is expanded before `exec`, so it is the only record of which config dir holds the session. `null` for agents with no verified session-flag list, and on Windows, where argv is unreadable. `provider` is the model provider the session runs on, for ego only: the first segment of `model` in the pid-leased `<EGO_HOME>/sessions/<id>/manifest.json`; the sidebar shows it as tooltip text (`null` when unreadable). The session always uses the ego icon, regardless of provider |
 | `verify_agent_session` | `agent_type, session_id, cwd, agent_pid, env_overrides` | `bool` | Verify that the session file exists in the agent's selected profile. A live PID can supply process environment; saved launch environment selects the profile after restart. HTTP parity: `POST /agents/verify-session` |
 
 ## Panel Windows (`panel_window.rs`)
@@ -1011,3 +1014,11 @@ See the HTTP reference for action arguments and typed error prefixes.
 ### Guarded automated agent input
 
 `send_agent_input_if_empty { sessionId, text } -> boolean` submits only to a confirmed-idle agent with no awaiting question, tracked draft, or queued command. Checks, split writes, and input bookkeeping share the per-session input transaction with raw UI and HTTP input. HTTP: `POST /sessions/{id}/input-if-empty { text }`.
+
+### Audio choice availability (#1908-c327, #1909-0d24)
+
+Existing input/output device enumeration returns the same device objects on success, including a successful empty array. Backend enumeration failure now returns an error rather than an empty array. Internal settings choice refresh reuses those owners; cache-only describe and typed voice asset actions are not new public routes in this change. The settings transport cutover remains separate.
+
+`force_retry_provider_recovery_command(sessionId)` submits `/retry` once through the
+shared ego recovery transaction. It refuses a non-empty tracked composer and returns
+the error to the caller. HTTP equivalent: `POST /sessions/{id}/force-retry`.

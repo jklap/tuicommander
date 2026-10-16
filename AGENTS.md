@@ -280,6 +280,8 @@ When enabled, emits health snapshots every 30s and alerts on FD/thread growth tr
 Frontend unresponsive: no heartbeat for 30s — the WebView main thread is blocked or gone.
 ```
 
+**Persistent stall evidence:** selected numeric slow-event metadata survives ring overflow and graceful restart in a bounded journal. See `docs/backend/stall-journal.md` for retention, replay inputs and limits; this is not proof of historical stall attribution.
+
 **Lost document (always on, desktop only):** a *second*, different white screen. The `webview-recovery` thread reads the main frame's URL every 15s (`webview_recovery.rs`); anything on the `about:` scheme means the app is no longer in the DOM, and it navigates back to the last healthy URL by itself, logging once. This is not the heartbeat's job and the heartbeat cannot see it: the app is gone rather than blocked, so it never beats from the blank document, and "never beat" is deliberately silent (`tuic-remote` has no WebView).
 
 Observed twice on 2026-09-08, both times after the Mac went to standby with the display off: the main frame came back on **`about:srcdoc`** holding `<html><body></body></html>`, while the WebContent process was alive throughout (so it is *not* the `about:blank` WebContent-crash case) — under the memory-pressure sweep macOS runs while asleep.
@@ -454,6 +456,13 @@ the open Ink footer's full-screen presence recovery. The generic OSC 777
 notification is insufficient evidence: it also arrives after normal prose at
 the ready composer. Unambiguous permission notifications remain raw-stream
 signals because the VT parser consumes escape sequences before clean-row parsing.
+
+**Uncertain ego injection recovery** uses the native empty-composer adapter, not
+silence alone. Only a post-uncertainty repaint followed by 1.5 seconds of stable
+Ready may clear the uncertainty flag. Retained or wrapped drafts and modal rows
+fail closed. The foreground probe still gates idle; recovery never requeues the
+uncertain payload, but normal idle flush can deliver the next queued BG wake.
+The adapter shapes are recorded in `ego-composer-1957*.tcap`.
 
 **Every signal that sets awaiting needs a path that clears it.** The badge is
 `SessionState.awaiting_input`, not an event, and it is sticky by construction —

@@ -248,3 +248,114 @@ async fn corrupt_file_is_an_error_not_defaults() {
     assert_eq!(error.code, "store_failed");
     assert!(!f.file.exists());
 }
+
+/// Catches: describing choices probes input hardware, fetches Edge voices or installs assets.
+#[tokio::test]
+async fn voice_describe_never_downloads_or_refreshes() {
+    let f = fixture(Some(json!({"language":"not-a-real-language"})));
+    let before = std::fs::read(&f.file).unwrap();
+    let reply = f
+        .registry
+        .execute(Request::Describe {
+            target: Target::Machine,
+            store: "voice".into(),
+            paths: vec![
+                "/device".into(),
+                "/model".into(),
+                "/speech_voice".into(),
+                "/speech_edge_voice".into(),
+            ],
+        })
+        .await
+        .unwrap();
+    let Reply::Snapshot(snapshot) = reply else {
+        panic!("describe committed")
+    };
+    assert_eq!(snapshot.choices.len(), 4);
+    for choice in snapshot.choices.values() {
+        let value = serde_json::to_value(choice).unwrap();
+        assert_eq!(value["availability"]["status"], "unavailable");
+        assert!(value["values"].is_null());
+    }
+    assert_eq!(std::fs::read(&f.file).unwrap(), before);
+    assert!(
+        f.slot.lock().is_some(),
+        "describe must not invalidate the speaker"
+    );
+}
+
+/// Catches: choice reads or a subsequent voice edit clobber sibling settings or files.
+#[tokio::test]
+async fn voice_describe_never_downloads_or_refreshes_preserves_other_owner_state() {
+    let f = fixture(Some(
+        json!({"language":"it", "hotkey":"F5", "auto_send":false}),
+    ));
+    let neighbour = f.file.with_file_name("notifications.json");
+    std::fs::write(&neighbour, b"{\"volume\":0.4}").unwrap();
+    f.registry
+        .execute(Request::Describe {
+            target: Target::Machine,
+            store: "voice".into(),
+            paths: vec!["/speech_edge_voice".into()],
+        })
+        .await
+        .unwrap();
+    set(&f, revision(&f).await, "/language", json!("en"))
+        .await
+        .unwrap();
+    let after = get(&f, &["/language", "/hotkey", "/auto_send"])
+        .await
+        .unwrap();
+    assert_eq!(after.values["/language"].stored, "en");
+    assert_eq!(after.values["/hotkey"].stored, "F5");
+    assert_eq!(after.values["/auto_send"].stored, false);
+    assert_eq!(std::fs::read(&neighbour).unwrap(), b"{\"volume\":0.4}");
+    assert!(
+        f.slot.lock().is_none(),
+        "language edit still invalidates runtime"
+    );
+}
+
+/// Catches: language-specific discovery failure is reported as a supported empty list.
+#[tokio::test]
+async fn voice_invalid_language_refresh_is_unavailable_without_editing_config() {
+    let f = fixture(Some(
+        json!({"language":"not-a-real-language", "hotkey":"F5"}),
+    ));
+    let before = std::fs::read(&f.file).unwrap();
+    let Reply::Snapshot(snapshot) = f
+        .registry
+        .execute(Request::Refresh {
+            target: Target::Machine,
+            store: "voice".into(),
+            paths: vec!["/speech_voice".into()],
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("refresh committed")
+    };
+    let value = serde_json::to_value(&snapshot.choices["/speech_voice"]).unwrap();
+    assert_eq!(value["availability"]["status"], "unavailable");
+    assert!(value["values"].is_null());
+    assert_eq!(std::fs::read(&f.file).unwrap(), before);
+    assert!(f.slot.lock().is_some());
+}
+
+/// Catches: asset actions accept arbitrary URL/path fields or untyped action names.
+#[test]
+fn voice_asset_actions_reject_unknown_fields_and_actions() {
+    use super::voice::VoiceAction;
+    assert!(
+        serde_json::from_value::<VoiceAction>(
+            json!({"action":"download_asset", "asset":"fixture", "url":"https://example.test"})
+        )
+        .is_err()
+    );
+    assert!(
+        serde_json::from_value::<VoiceAction>(json!({"action":"execute", "command":"fixture"}))
+            .is_err()
+    );
+    let schema = super::catalogue::schema::<VoiceAction>();
+    assert!(schema.to_string().contains("download_asset"));
+}

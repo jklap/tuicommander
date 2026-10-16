@@ -284,3 +284,118 @@ async fn setting_a_run_config_default_leaves_exactly_one_default() {
         .collect();
     assert_eq!(defaults, vec![json!("Beta")]);
 }
+
+/// Catches: saving a model starts the configured agent instead of just persisting it.
+#[tokio::test]
+async fn agent_model_save_never_launches_cli() {
+    let mut state = initial();
+    state["agents"]["codex"]["run_configs"][0]["command"] = json!("missing-agent-must-not-launch");
+    let f = fixture(Some(state));
+    let path = format!("{RUN}/Alpha/model");
+    let reply = set(&f, revision(&f).await, &path, json!("custom/model"))
+        .await
+        .unwrap();
+    assert!(reply.persisted && reply.applied);
+    assert_eq!(reply.restart, vec!["next_session"]);
+    assert_eq!(
+        get(&f, &[&path]).await.unwrap().values[&path].stored,
+        json!("custom/model")
+    );
+    set(&f, revision(&f).await, &path, Value::Null)
+        .await
+        .unwrap();
+    assert_eq!(
+        get(&f, &[&path]).await.unwrap().values[&path].stored,
+        Value::Null
+    );
+}
+
+/// Catches: a model-only save clobbers sibling launch fields, defaults, or another owner.
+#[tokio::test]
+async fn agent_model_save_never_launches_cli_preserves_other_owner_state() {
+    let f = fixture(Some(initial()));
+    let before: crate::config::AgentsConfig = serde_json::from_value(on_disk(&f)).unwrap();
+    let before = serde_json::to_value(before).unwrap();
+    let neighbour = f.dir.path().join("notifications.json");
+    std::fs::write(&neighbour, "sentinel").unwrap();
+    set(
+        &f,
+        revision(&f).await,
+        &format!("{RUN}/Beta/model"),
+        json!("custom-model"),
+    )
+    .await
+    .unwrap();
+    let mut expected = before;
+    expected["agents"]["codex"]["run_configs"][1]["model"] = json!("custom-model");
+    assert_eq!(on_disk(&f), expected);
+    assert_eq!(std::fs::read_to_string(neighbour).unwrap(), "sentinel");
+}
+
+/// Catches: the requested run-config is ignored, describe launches discovery, or failures
+/// are mislabeled as an authoritative empty model list.
+#[cfg(unix)]
+#[tokio::test]
+async fn agent_model_refresh_uses_addressed_cli_and_describe_never_launches() {
+    use std::os::unix::fs::PermissionsExt;
+    let f = fixture(Some(initial()));
+    let script = f.dir.path().join("claude-fixture");
+    let calls = f.dir.path().join("calls");
+    let help = f.dir.path().join("help");
+    std::fs::write(&help, include_str!("fixtures/agents/claude-help.txt")).unwrap();
+    std::fs::write(
+        &script,
+        "#!/bin/sh\n[ \"$1\" = --help ] || exit 1\nprintf x >> \"$CALLS\"\ncat \"$HELP\"\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let mut state = initial();
+    state["agents"]["claude"]["run_configs"] = json!([
+        {"name":"One", "command":script, "env":{"CALLS":calls, "HELP":help}},
+        {"name":"Two", "command":"missing-cli"}
+    ]);
+    std::fs::write(f.dir.path().join("agents.json"), state.to_string()).unwrap();
+    let one = "/agents/claude/run_configs/One/model";
+    let two = "/agents/claude/run_configs/Two/model";
+    for (refresh, path, available) in [
+        (false, one, false),
+        (true, one, true),
+        (false, one, true),
+        (true, two, false),
+        (true, "/agents/codex/run_configs/Alpha/model", false),
+    ] {
+        let paths = vec![path.to_owned()];
+        let request = if refresh {
+            Request::Refresh {
+                target: Target::Machine,
+                store: "agents".into(),
+                paths,
+            }
+        } else {
+            Request::Describe {
+                target: Target::Machine,
+                store: "agents".into(),
+                paths,
+            }
+        };
+        let Reply::Snapshot(snapshot) = f.registry.execute(request).await.unwrap() else {
+            panic!("snapshot")
+        };
+        let choice = serde_json::to_value(&snapshot.choices[path]).unwrap();
+        assert_eq!(
+            choice["availability"]["status"],
+            if available {
+                "available"
+            } else {
+                "unavailable"
+            }
+        );
+        if available {
+            assert_eq!(choice["values"], json!(["fable", "opus", "sonnet"]));
+        }
+        if !refresh && !available {
+            assert!(!calls.exists());
+        }
+    }
+    assert_eq!(std::fs::read_to_string(calls).unwrap(), "x");
+}

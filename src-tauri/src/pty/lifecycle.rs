@@ -1314,7 +1314,7 @@ pub(crate) struct SilenceState {
     /// Enter. Such sessions remain conservatively BUSY and are surfaced in
     /// status; automatic retry would risk duplicate or corrupted input.
     pub(crate) injection_delivery_uncertain: bool,
-    injection_uncertain_since: Option<std::time::Instant>,
+    pub(super) injection_uncertain_since: Option<std::time::Instant>,
     injection_uncertainty_retryable: bool,
     /// Deadline until which an in-flight API connection-retry holds the agent
     /// BUSY. Armed by `mark_api_retry` when `is_retry_line` matches a changed
@@ -1494,6 +1494,7 @@ impl SilenceState {
             self.injection_delivery_uncertain = true;
             self.injection_uncertain_since = Some(std::time::Instant::now());
             self.injection_uncertainty_retryable = retryable;
+            self.screen_ready_pending_since = None;
         }
     }
 
@@ -1502,6 +1503,34 @@ impl SilenceState {
         self.injection_delivery_uncertain = false;
         self.injection_uncertain_since = None;
         self.injection_uncertainty_retryable = false;
+    }
+
+    /// Only the ego adapter proves both Ready and an empty composer. Require
+    /// a repaint after uncertainty was recorded and the normal stable-screen
+    /// debounce; elapsed silence over a pre-write screen proves nothing.
+    pub(super) fn recover_uncertain_injection_on_empty_composer(&mut self) -> bool {
+        if !self.injection_delivery_uncertain
+            || self.is_api_retry_active()
+            || self
+                .injection_uncertain_since
+                .is_none_or(|since| self.last_chunk_at <= since)
+        {
+            self.screen_ready_pending_since = None;
+            return false;
+        }
+        let since = self
+            .screen_ready_pending_since
+            .get_or_insert_with(std::time::Instant::now);
+        if since.elapsed() < AGENT_READY_CONFIRM {
+            return false;
+        }
+        self.invalidate_injection_claim();
+        self.evidence
+            .force_idle(EvidenceRank::Screen, "injection-ready");
+        self.last_status_line_at = None;
+        self.interrupt_requested_at = None;
+        self.evidence.activity_seen = false;
+        true
     }
 
     pub(super) fn expire_orchestrator_notice_uncertainty(&mut self) -> bool {
@@ -4091,6 +4120,11 @@ fn emit_standby_event(state: &AppState, session_id: &str, standby: bool) {
 /// process group) is reaped separately by the caller's `_child.kill()`.
 #[cfg(unix)]
 fn kill_foreground_process_group(session: &PtySession, session_id: &str) {
+    signal_foreground_process_group(session, session_id, libc::SIGKILL);
+}
+
+#[cfg(unix)]
+fn signal_foreground_process_group(session: &PtySession, session_id: &str, signal: i32) {
     let Some(pgid) = session.master.process_group_leader() else {
         return;
     };
@@ -4099,16 +4133,16 @@ fn kill_foreground_process_group(session: &PtySession, session_id: &str) {
         tracing::warn!(session_id, pgid, "Refusing killpg on unsafe pgid");
         return;
     }
-    if unsafe { libc::kill(-pgid, libc::SIGKILL) } != 0 {
+    if unsafe { libc::kill(-pgid, signal) } != 0 {
         let err = std::io::Error::last_os_error();
         // ESRCH just means the group already exited — not worth a warning.
         if err.raw_os_error() != Some(libc::ESRCH) {
-            tracing::warn!(session_id, pgid, "killpg(SIGKILL) failed: {err}");
+            tracing::warn!(session_id, pgid, signal, "killpg failed: {err}");
         }
     }
 }
 
-/// Close a PTY session core: sends Ctrl-C, waits briefly for graceful exit,
+/// Close a PTY session core: signals an interrupt, waits briefly for graceful exit,
 /// captures the exit code for the tombstone, and leaves `output_buffers` +
 /// `vt_log_buffers` + `last_output_ms` + `exit_codes` alive so post-mortem
 /// MCP reads can still return final output and exit status.
@@ -4147,11 +4181,17 @@ pub(crate) fn close_pty_core_with_reason(
         "Closing session: sending Ctrl-C"
     );
 
-    // Send Ctrl-C (0x03) to give the process a chance to clean up
-    let mut writer = session.writer.lock();
-    let _ = writer.write_all(&[0x03]);
-    let _ = writer.flush();
-    drop(writer);
+    // Teardown must never enter the writer path: either the mutex or a kernel
+    // write can be stuck behind a child that no longer drains its terminal.
+    // Deliver the interrupt out of band, then retain the existing kill deadline.
+    #[cfg(unix)]
+    signal_foreground_process_group(&session, session_id, libc::SIGINT);
+    // ConPTY has no portable out-of-band Ctrl-C. Terminate the owned child
+    // rather than risk an unbounded console write before the kill fallback.
+    #[cfg(windows)]
+    if let Err(error) = session._child.kill() {
+        tracing::warn!(session_id, %error, "close_pty_core termination failed");
+    }
 
     // Wait up to 100ms for process to exit gracefully
     let deadline = std::time::Instant::now() + std::time::Duration::from_millis(100);

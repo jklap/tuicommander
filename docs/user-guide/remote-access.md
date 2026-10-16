@@ -145,6 +145,34 @@ notification opens that session.
 
 Mobile **Settings → Input → Autocorrect and spellcheck** is on by default. It enables autocorrect, spellcheck and sentence capitalization in the terminal prompt composer. Turn it off for literal command entry. The choice stays in this browser or installed PWA across reloads. File and code editors keep spellcheck off. Keyboard suggestions still depend on your phone keyboard settings.
 
+### Connection loss and recovery
+
+If the server cannot be reached, the mobile app shows one connection banner with **Retry now**. Tabs remain available, but their content stays hidden until the connection returns; mounted views and unsent drafts are retained. A successful automatic session poll or manual retry reloads failed view reads without restarting the app. Failed reads do not mean that repositories or ego are unconfigured. Files retains the repository and subdirectory you tried to open if the first read fails. After a linked file opens successfully, later recoveries do not reload it over an unsaved edit. An authentication refusal shows **Sign in** instead of repeating network retries.
+
+### Automatic mobile resume diagnostics
+
+The mobile app saves up to 30 recent lifecycle snapshots in per-tab
+`sessionStorage`. Snapshots include visibility, pagehide/pageshow and their
+`persisted` flags, freeze/resume, root child count, shell geometry, visual
+viewport, CSS app height/top, and the mobile terminal connection phase. The
+recorder does not depend on animation frames, reload the page, or change the UI.
+It does not store terminal output, WebSocket URLs, query tokens or credentials.
+
+On the next boot, a prior document without a clean pagehide, or one that ended
+hidden, sends its saved trail automatically to the backend log ring as a warning
+with source `app` and message `Mobile previous document lifecycle trail`.
+A failed upload stays pending and retries on online/resume or another boot.
+The pending report is removed after the log API acknowledges it. This is evidence
+of the prior lifecycle, not proof of a crash: a normal reload after hiding can
+also produce a report. Session storage does not survive every form of browser
+storage eviction or a closed tab. No manual copy action is needed.
+
+The existing `Mobile resume has an empty or off-screen shell` warning still
+checks the resumed shell after an animation frame. A missing warning does not
+prove that the document or compositor was healthy. The reported iPhone grey
+screen still needs evidence from the failing device; these diagnostics do not
+claim to fix it.
+
 ### Mobile Features
 Tap the attachment icon to the left of the session input to choose a photo or file. The
 file name appears while uploading, then its path is added to the draft. Queue
@@ -789,3 +817,16 @@ Use the same input below to reply. Select **CLI** for permission prompts or ques
 that are not in the transcript. If the backend cannot bind the transcript, the view
 returns to CLI and shows the reason. CLI returns to the latest output; its stream
 stays connected while Chat is open. Chat reads pause while the page is hidden.
+
+### Recovering a short Direct host name
+
+If DNS cannot resolve a short Direct host name, TUIC checks the advertised
+Tailscale peers. With exactly one matching peer, it retries once with that
+peer's full DNS name. Only the URL host changes; the scheme, port, path and TLS
+certificate checks stay unchanged. SSH aliases, IP addresses, full DNS names,
+and errors other than DNS failures do not use this fallback.
+
+A successful recovery uses the resolved endpoint for the current session.
+Remote Machines shows the effective address and **Save resolved address**.
+Select that action to update the saved connection without disconnecting it.
+Leaving the action alone keeps the original saved address.

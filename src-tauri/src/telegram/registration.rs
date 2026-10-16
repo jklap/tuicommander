@@ -58,6 +58,11 @@ impl Runtime {
         self.registration = None;
         super::settings::registration_status(&self.outbound.paths, None);
         self.pending.clear();
+        for request in &mut self.requests {
+            if request.completed.is_none() {
+                request.failed = true;
+            }
+        }
         self.outbound.active = None;
         self.callbacks.clear();
     }

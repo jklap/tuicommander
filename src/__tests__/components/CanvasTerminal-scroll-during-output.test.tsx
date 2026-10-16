@@ -1,5 +1,6 @@
 import { render, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { VisibleIntersectionObserver } from "../helpers/visibleIntersectionObserver";
 
 /**
  * A wheel gesture that is still running when output arrives (#1264-89c8).
@@ -205,13 +206,7 @@ describe("CanvasTerminal scroll gesture during output", () => {
 				disconnect() {}
 			},
 		);
-		vi.stubGlobal(
-			"IntersectionObserver",
-			class {
-				observe() {}
-				disconnect() {}
-			},
-		);
+		vi.stubGlobal("IntersectionObserver", VisibleIntersectionObserver);
 	});
 
 	afterEach(() => {

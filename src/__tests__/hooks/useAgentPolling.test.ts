@@ -1183,3 +1183,19 @@ describe("useAgentPolling", () => {
 		});
 	});
 });
+
+// Catches: recovery snapshots crossing tabs or an omitted clear leaving a stale overlay.
+it("routes and retracts provider recovery in complete backend snapshots", async () => {
+	const { terminalsStore } = await import("../../stores/terminals");
+	const a = terminalsStore.add(makeTerminal({ sessionId: "recover-a" }));
+	const b = terminalsStore.add(makeTerminal({ sessionId: "recover-b" }));
+	const { applySessionStateEvent } = await import("../../hooks/useAgentPolling");
+	applySessionStateEvent({
+		session_id: "recover-a",
+		state: { agent_type: "ego", provider_recovery: { phase: "waiting", attempt: 2, next_attempt_ms: 10000 } },
+	});
+	expect(terminalsStore.get(a)?.providerRecovery?.attempt).toBe(2);
+	expect(terminalsStore.get(b)?.providerRecovery).toBeUndefined();
+	applySessionStateEvent({ session_id: "recover-a", state: { agent_type: "ego" } });
+	expect(terminalsStore.get(a)?.providerRecovery).toBeNull();
+});

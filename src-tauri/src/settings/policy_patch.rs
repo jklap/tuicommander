@@ -98,6 +98,8 @@ pub(crate) fn patch(request: &Request) -> Result<(&Target, &str, &str, Vec<Edit>
             expected_revision,
             operations,
         } => (target, store, expected_revision, operations.clone()),
-        Request::Get { .. } => return Err(Error::new("settings", "invalid_type")),
+        Request::Get { .. } | Request::Describe { .. } | Request::Refresh { .. } => {
+            return Err(Error::new("settings", "invalid_type"));
+        }
     })
 }

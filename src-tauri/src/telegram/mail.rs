@@ -87,6 +87,14 @@ impl Update {
 /// then arbitrates safe wake. No adapter persistence or consumption receipts.
 pub(crate) trait MailPort {
     async fn offer(&mut self, mail: &PendingMail) -> Result<bool, Error>;
+    /// Setup replies share the existing outbound worker, not the agent inbox.
+    async fn setup_reply(
+        &mut self,
+        _chat: i64,
+        _reply: super::settings::SetupReply,
+    ) -> Result<(), Error> {
+        Ok(())
+    }
     /// Validated update id; concrete ports authorize non-text update payloads.
     async fn update(&mut self, _value: &Value) -> Result<(), Error> {
         Ok(())
