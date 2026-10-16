@@ -33,7 +33,7 @@ export const SettingField: Component<
 						</p>
 					</Show>
 					<Show when={props.error}>
-						<p id={`${id}-error`} class={s.fieldError}>
+						<p id={`${id}-error`} class={s.fieldError} role="alert">
 							{props.error}
 						</p>
 					</Show>
@@ -53,7 +53,7 @@ export const SettingField: Component<
 				<div class={s.settingRowControl}>
 					{props.children(id, undefined, descriptionId)}
 					<Show when={props.error}>
-						<p id={`${id}-error`} class={s.fieldError}>
+						<p id={`${id}-error`} class={s.fieldError} role="alert">
 							{props.error}
 						</p>
 					</Show>

@@ -17,9 +17,9 @@ export interface SettingListProps extends SettingFieldProps {
 }
 
 export const SettingList: Component<SettingListProps> = (props) => (
-	<SettingField label={props.label} hint={props.hint}>
-		{(id, hintId) => (
-			<div id={id} role="group" aria-label={props.label} aria-describedby={hintId} class={s.list}>
+	<SettingField label={props.label} hint={props.hint} row={props.row} error={props.error} help={props.help}>
+		{(id, _hintId, descriptionId) => (
+			<div id={id} role="group" aria-label={props.label} aria-describedby={descriptionId()} class={s.list}>
 				<For each={props.rows.map((row) => row.id)}>
 					{(rowId, index) => (
 						<div class={s.row} role="group" aria-label={`Row ${rowId}`}>

@@ -9,7 +9,9 @@ export function SettingPageHeader(props: {
 	title: string;
 	description: string;
 	scope: string;
-	source?: string;
+	source?: JSX.Element;
+	actions?: JSX.Element;
+	icon?: JSX.Element;
 	breadcrumb?: string;
 }) {
 	return (
@@ -19,19 +21,30 @@ export function SettingPageHeader(props: {
 			</Show>
 			<header class={s.pageHeader}>
 				<div>
-					<h2>{props.title}</h2>
+					<h2 class={s.pageTitle}>
+						{props.icon}
+						{props.title}
+					</h2>
 					<p>{props.description}</p>
 					<Show when={props.source}>
 						<p class={s.source}>{props.source}</p>
 					</Show>
 				</div>
-				<StatusBadge label={props.scope} />
+				<div class={s.actions}>
+					<StatusBadge label={props.scope} />
+					{props.actions}
+				</div>
 			</header>
 		</>
 	);
 }
 
-export function SectionCard(props: { title: string; description?: string; children: JSX.Element }) {
+export function SectionCard(props: {
+	title: string;
+	description?: string;
+	actions?: JSX.Element;
+	children: JSX.Element;
+}) {
 	const id = createUniqueId();
 	return (
 		<section class={s.card} aria-labelledby={id}>
@@ -40,6 +53,9 @@ export function SectionCard(props: { title: string; description?: string; childr
 				<p class={s.description}>{props.description}</p>
 			</Show>
 			{props.children}
+			<Show when={props.actions}>
+				<div class={`${s.actions} ${s.cardActions}`}>{props.actions}</div>
+			</Show>
 		</section>
 	);
 }
