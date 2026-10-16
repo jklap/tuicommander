@@ -333,6 +333,7 @@ fn url_matches_pattern(url: &str, pattern: &str) -> bool {
 /// - `plugin_id` — The requesting plugin's ID (also the manifest lookup key)
 #[cfg(feature = "desktop")]
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // IPC preserves the existing fields and adds optional request identity.
 pub async fn plugin_http_fetch(
     url: String,
     method: Option<String>,
