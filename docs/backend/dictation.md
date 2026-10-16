@@ -1873,4 +1873,4 @@ The internal voice settings owner uses cache-only `describe` and explicit `refre
 
 `VoiceAction` provides typed assets, model download/delete, speech asset download/cancel/delete and voice import/delete. It delegates to the existing command owners and their allowlisted asset IDs, size validation and runtime locks. These are internal host methods for later transport publication, not an arbitrary command executor. Existing engine/language descriptors and runtime invalidation remain authoritative. Builds without dictation still describe unavailable voice fields.
 
-Pocket voice recovery: a missing configured catalogue voice uses the ready bundle’s default voice in the same language. Unknown voice names remain errors. No voice or model from another language is substituted.
+Pocket voice recovery: a missing configured catalogue voice uses the ready bundle’s default voice in the same language. Each reply resolves the voice again before enqueueing, so a completed download takes effect on the next reply without rebuilding the language model. Unknown voice names remain errors. No voice or model from another language is substituted.

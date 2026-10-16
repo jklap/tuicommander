@@ -1309,7 +1309,14 @@ pub(crate) fn speak(
     if let Some(preview) = dictation.preview.lock().take() {
         preview.stop();
     }
-    let armed = slot.as_ref().expect("a queue was just built or kept");
+    let armed = slot.as_mut().expect("a queue was just built or kept");
+    if speech_engine(&config) == SpeechEngine::Pocket {
+        // Downloads can change the selected voice's readiness without changing
+        // the configuration or the language model held by this queue.
+        let asset = speech::assets::for_language_code(&language)
+            .ok_or_else(|| format!("No speech bundle ships for language \"{language}\""))?;
+        armed.voice = choose_voice(asset, &config.speech_voice)?;
+    }
     // The speaker's own counter, not the caller's guess: it is what `say`
     // compares against, and reading it here makes an interruption landing in
     // between refuse the reply rather than race it.
