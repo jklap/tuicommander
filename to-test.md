@@ -2317,3 +2317,5 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] Tab hints (#1951-8fac): hold Cmd alone (Ctrl on Windows/Linux) for 450 ms and check the first nine terminal-tab badges; release, another key, mouse button, or scrolling must hide them. Automated hook/TabBar coverage and worktree dark/light screenshots passed.
 
 - [ ] Hands-free default shortcut (#1953-3da5): with dictation enabled and a live active terminal, Cmd+Alt+V (Ctrl+Alt+V on Windows/Linux) starts the conversation and a second press stops it. Disabled dictation must stay silent. Dispatcher/store tests pass; microphone/audio confirmation needs real hardware.
+
+- [ ] After a manual `make dev` restart or release rebuild, verify a hands-free Italian reply uses Edge speech on the migrated endpoint with v1 GEC without HTTP 403 (#1952-bf91). The old Rust process does not hot-reload.
