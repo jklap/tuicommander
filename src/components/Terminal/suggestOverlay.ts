@@ -316,15 +316,23 @@ function overlayDiv(top: number, height: number, background: string): HTMLDivEle
 
 /**
  * Replace the contents of `container` with one absolutely positioned strip per
- * answer row: a transparent strip with a solid gutter bar. Marker rows get no strip — they are not painted.
+ * answer row: a transparent strip with a solid gutter bar. Intent rows get a
+ * theme-aware tint; omitted suggest rows get no strip.
  */
 export function paintOverlayBlocks(container: HTMLElement, blocks: readonly OverlayBlock[], cellHeight: number): void {
 	container.textContent = "";
 	for (const block of blocks) {
-		if (block.kind !== "answer" || block.row < 0) continue;
-		const div = overlayDiv(block.row * cellHeight, cellHeight, "transparent");
-		div.style.boxShadow = "inset 3px 0 0 var(--answer-rule)";
-		container.appendChild(div);
+		if (block.row < 0) continue;
+		if (block.kind === "intent") {
+			const div = overlayDiv(block.row * cellHeight, cellHeight, "var(--warning)");
+			div.dataset.terminalMarker = "intent";
+			div.style.opacity = "0.12";
+			container.appendChild(div);
+		} else if (block.kind === "answer") {
+			const div = overlayDiv(block.row * cellHeight, cellHeight, "transparent");
+			div.style.boxShadow = "inset 3px 0 0 var(--answer-rule)";
+			container.appendChild(div);
+		}
 	}
 }
 
