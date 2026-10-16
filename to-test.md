@@ -2344,3 +2344,14 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 ## Telegram streaming replies (#1959-162a)
 
 - [ ] [HUMAN] After Boss restarts `make dev` (or rebuilds release), verify the native draft and reaction rendering on iOS and Telegram Desktop for a PTY agent and AI Chat. Send allowlisted text, confirm 👀 then 👨‍💻 after Read/new turn, Italian status, live AI Chat assistant text, 🤔 on a permission wait, one final with 👍, and 👎 plus one notice on failure. Verify queued and no-agent cases, queued Stop versus working Stop, multiple phone messages, and expiration after app exit. This requires the real authorized Telegram client; automated tests use only the recorded public example and offline loopback responses, never the Bot API or bot token. Rust does not hot-reload; restart only when Boss is ready to lose live sessions.
+
+## Plugin review follow-up (#1756)
+
+- [ ] After the existing provider configuration migration, reload GitHub Work, GitLab and Jira twice. Verify one registration per account, and verify that rejected startup reports its error. The read-only live snapshot on 2026-10-15 reported GitLab/Jira loaded, but GitHub Work failed with `Configurable plugin requires a settings schema`; no reload was attempted.
+- [ ] Set and use a project ID through the approved plugin settings UI. Tasks setup contains project fields, but the audited Plugins tab does not expose a settings schema form.
+- [ ] After Jira cancellation is implemented, resolve a Jira URL and cancel its in-flight request. The resolver passes a signal, but the audited provider `detail(ref)`, client request and host-fetch adapter do not propagate it.
+- [ ] Install an incompatible plugin in an isolated verification environment and check its refusal message. Catalogue/provider boundary checks passed 38/38 and loader minimum-version checks passed 3/3 (25 filtered) through build-slot on 2026-10-15; these are not native install E2E evidence.
+- [ ] Once GitHub Work loads with an authorized test account, invoke a read-only review action through core and verify it reaches the account-bound provider. No vendor writes are authorized.
+- [ ] Same-version stale-copy detection requires an approved source-content identity contract before its E2E check: the audited catalogue update decision compares versions only.
+
+- [ ] #1756-4d42: after Boss restarts `make dev` (Rust does not hot-reload), resolve a Jira URL and cancel while headers/body are pending; confirm no late result and active requests stop. No live restart was performed by w-1756.

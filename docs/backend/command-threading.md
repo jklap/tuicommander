@@ -326,3 +326,5 @@ The async `suspended_session_action` command and its HTTP route both call `suspe
 
 `force_retry_provider_recovery_command` is async and runs the shared input-lock
 transaction and agent command writer in `spawn_blocking`, not on the main thread.
+
+`plugin_http_cancel` is an async IPC command (not macOS-main-thread work). It updates the plugin-scoped request registry; fetch observes cancellation while awaiting its full request future.
