@@ -256,6 +256,22 @@ export const RemoteMachinesPanel: Component = () => {
 		}
 	}
 
+	async function saveResolvedAddress(connState: ConnectionState) {
+		if (connState.connection.transport.type !== "Direct" || !connState.baseUrl) return;
+		setSaving(true);
+		setError("");
+		try {
+			await remoteConnectionsStore.addConnection({
+				...connState.connection,
+				transport: { type: "Direct", url: connState.baseUrl },
+			});
+		} catch (error) {
+			setError(String(error));
+		} finally {
+			setSaving(false);
+		}
+	}
+
 	async function probeHosts() {
 		setProbingHosts(true);
 		setError("");
@@ -710,6 +726,21 @@ export const RemoteMachinesPanel: Component = () => {
 									>
 										{transportSummary(conn().transport)}
 									</div>
+									<Show
+										when={
+											connState.status === "connected" &&
+											conn().transport.type === "Direct" &&
+											connState.baseUrl &&
+											connState.baseUrl !== (conn().transport as { url: string }).url.replace(/\/$/, "")
+										}
+									>
+										<div class={s.hint}>
+											Connected through {connState.baseUrl}
+											<button class={s.textBtn} disabled={saving()} onClick={() => saveResolvedAddress(connState)}>
+												Save resolved address
+											</button>
+										</div>
+									</Show>
 									<Show
 										when={(connState.status === "error" || connState.status === "unauthenticated") && connState.error}
 									>

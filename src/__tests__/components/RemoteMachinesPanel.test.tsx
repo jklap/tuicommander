@@ -111,6 +111,45 @@ describe("RemoteMachinesPanel", () => {
 		vi.unstubAllGlobals();
 	});
 
+	// Catches: a recovered Direct address has no explicit save action or saves silently.
+	it("offers to save a recovered Direct address without disconnecting", async () => {
+		const saved = sshConnection().connection;
+		connections["machine-1"] = {
+			connection: { ...saved, transport: { type: "Direct", url: "http://mac-mint:9876" } },
+			status: "connected",
+			baseUrl: "http://mac-mint.tail911da.ts.net:9876",
+		};
+		const view = render(() => <RemoteMachinesPanel />);
+		expect(actions.addConnection).not.toHaveBeenCalled();
+		fireEvent.click(view.getByRole("button", { name: "Save resolved address" }));
+		await waitFor(() =>
+			expect(actions.addConnection).toHaveBeenCalledWith(
+				expect.objectContaining({
+					transport: { type: "Direct", url: "http://mac-mint.tail911da.ts.net:9876" },
+				}),
+			),
+		);
+		expect(actions.disconnect).not.toHaveBeenCalled();
+	});
+
+	// Catches: address offers rewrite SSH aliases, unchanged URLs, or failed connections.
+	it("never offers address persistence for SSH, unchanged Direct URLs or failures", () => {
+		for (const state of [
+			{ ...sshConnection(), status: "connected", baseUrl: "http://127.0.0.1:1234" },
+			{ ...sshConnection(), status: "error", baseUrl: "http://resolved.ts.net:9876" },
+			{
+				connection: { ...sshConnection().connection, transport: { type: "Direct", url: "http://host:9876/" } },
+				status: "connected",
+				baseUrl: "http://host:9876",
+			},
+		]) {
+			connections["machine-1"] = state;
+			const view = render(() => <RemoteMachinesPanel />);
+			expect(view.queryByRole("button", { name: "Save resolved address" })).toBeNull();
+			view.unmount();
+		}
+	});
+
 	it("never renders a stale unreachable error alongside connecting progress", () => {
 		connections["machine-1"] = {
 			...sshConnection(),

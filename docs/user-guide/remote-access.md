@@ -789,3 +789,16 @@ Use the same input below to reply. Select **CLI** for permission prompts or ques
 that are not in the transcript. If the backend cannot bind the transcript, the view
 returns to CLI and shows the reason. CLI returns to the latest output; its stream
 stays connected while Chat is open. Chat reads pause while the page is hidden.
+
+### Recovering a short Direct host name
+
+If DNS cannot resolve a short Direct host name, TUIC checks the advertised
+Tailscale peers. With exactly one matching peer, it retries once with that
+peer's full DNS name. Only the URL host changes; the scheme, port, path and TLS
+certificate checks stay unchanged. SSH aliases, IP addresses, full DNS names,
+and errors other than DNS failures do not use this fallback.
+
+A successful recovery uses the resolved endpoint for the current session.
+Remote Machines shows the effective address and **Save resolved address**.
+Select that action to update the saved connection without disconnecting it.
+Leaving the action alone keeps the original saved address.
