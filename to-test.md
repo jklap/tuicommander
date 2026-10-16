@@ -2267,3 +2267,5 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] #1879-05ad (closure handoff 2026-10-15): After loading the rebuilt backend, open Markdown tabs in a desktop repository; on iPhone open its session overflow menu and a Markdown entry, verify the viewer opens, then open/close a desktop Markdown tab and confirm the phone list refreshes without reload and excludes other repositories.
 
 - [ ] #1880-d7ff (closure handoff 2026-10-15): On iPhone check terminal and Chat composers: + / text-with-mic / Send order, + menu outside the textarea, outside-tap dismissal, Attach file and Take photo pickers, Chat Park/Restore, terminal Queue/long-press Send and microphone permission/cancel.
+
+- [ ] #1928-e282: In MCP Settings, hover the long design_mode help for at least three status polls. Check keyboard focus, changed descriptions, viewport edges, scrolling, and resizing; the tip must remain beside its badge without an unpositioned frame.

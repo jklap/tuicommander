@@ -1024,7 +1024,7 @@
   pointer-events: none;
 }
 
-.infoBadge:hover .infoBadgeTip {
+.infoBadge .infoBadgeTip[data-visible="true"] {
   visibility: visible;
 }
 
