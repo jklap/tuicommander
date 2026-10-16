@@ -18,6 +18,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Restyle Workspace Settings with section cards, aligned terminal and Git fields, and action-first shortcut rows while preserving existing behavior.
 - Bound `tuic bg` completion command labels to one line and 120 characters; keep the full command before job output in the log (#1950-43b7).
 ### Fixed
+- Give Paper semantic branch and PR markers readable theme colors in Settings and the sidebar (#1968-baa4).
 - Use readable identity foregrounds on agent color tiles in Settings (#1967-404e).
 - Restore Settings text, enabled action and tooltip contrast on themed surfaces (#1966-514a).
 - Confirm Telegram chat linking, explain start and invalid codes, and clear the consumed Settings hint (#1955-2f43).

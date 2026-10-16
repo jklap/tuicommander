@@ -337,6 +337,10 @@ html {
    colors are picked against a dark UI; shade them for repo names on white
    (getRepoTextColor). */
 [data-theme="vscode-light"] {
+  /* These semantic tokens also label branch/PR markers, not just swatches. */
+  --attention: #895003;
+  --changes: #805900;
+  --merged: #7540b0;
   --answer-rule: var(--success);
   --diff-del: var(--error);
   --repo-text-shade: 40%;
