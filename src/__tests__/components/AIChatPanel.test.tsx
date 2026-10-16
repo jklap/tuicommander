@@ -3480,6 +3480,11 @@ describe("AIChatPanel: fork", () => {
 describe("AIChatPanel: pause, resume and compact", () => {
 	// Catches: text controls wrapping below a long model summary or icons losing accessible names.
 	it("keeps former icon actions labelled inside the overflow menu — catches lost or unnamed menu actions", async () => {
+		supportsDelete = true;
+		client.listSessions.mockResolvedValue({
+			sessions: [{ sessionId: SESSION, cwd: CHAT_ROOT, title: "Current chat" }],
+			nextCursor: null,
+		});
 		const { container } = await renderPanel();
 		acpStore.applySnapshot(snapshot({ attachments: [attachment({ state: "prompting" })] }));
 		await settle();
@@ -3490,9 +3495,14 @@ describe("AIChatPanel: pause, resume and compact", () => {
 		expect(container.querySelector(".conversationLabel span + svg")).not.toBeNull();
 		menu.querySelector<HTMLElement>(":scope > summary")!.click();
 		expect(menu.open).toBe(true);
+		expect(menu.querySelectorAll(".menuSeparator")).toHaveLength(3);
+		expect(menu.querySelector(".actionsMenuItems > button")?.textContent).toContain("New conversation");
+		expect(menu.querySelector(".actionsMenuItems > .conversationList > summary")?.textContent).toBe(
+			"Delete conversation…",
+		);
 		for (const label of ["Session settings", "Pause the turn", "Compact the conversation"]) {
 			const button = menu.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!;
-			expect(button.textContent).toContain(label);
+			expect(button.textContent).toContain(label === "Compact the conversation" ? "Compact context" : label);
 		}
 		acpStore.applySnapshot(snapshot({ attachments: [attachment({ state: "paused" })] }));
 		await settle();

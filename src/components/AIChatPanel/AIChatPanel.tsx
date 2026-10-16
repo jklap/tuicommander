@@ -137,6 +137,7 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 			<div class={s.tidyHeader}>
 				<SessionControls
 					chat={chat}
+					detached={isPanelMode()}
 					onNewOptions={() => {
 						chat.clearError();
 						setNewOptionsOpen(true);

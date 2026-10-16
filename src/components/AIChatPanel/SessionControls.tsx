@@ -14,9 +14,11 @@ import { Select } from "../ui/Select";
  */
 
 import { type Component, createSignal, For, Show } from "solid-js";
+import { detachPanel, reattachPanel } from "../../panelRouter";
 import type { AcpListedSession } from "../../services/acpClient";
 import { acpTranscript } from "../../stores/acpTranscript";
 import { registerModal } from "../../stores/modalStack";
+import { isTauri } from "../../transport";
 import type {
 	AcpSessionConfigOption,
 	AcpSessionConfigSelectGroup,
@@ -142,7 +144,7 @@ const SessionSettingsDialog: Component<{ chat: AcpChat; options: SelectOption[];
 	);
 };
 
-export const SessionControls: Component<{ chat: AcpChat; onNewOptions: () => void }> = (props) => {
+export const SessionControls: Component<{ chat: AcpChat; onNewOptions: () => void; detached?: boolean }> = (props) => {
 	const [settingsOpen, setSettingsOpen] = createSignal(false);
 	const [deleteTarget, setDeleteTarget] = createSignal<AcpListedSession | null>(null);
 	const [deleting, setDeleting] = createSignal(false);
@@ -229,13 +231,14 @@ export const SessionControls: Component<{ chat: AcpChat; onNewOptions: () => voi
 					</svg>
 				</summary>
 				<div class={s.actionsMenuItems}>
-					<Show when={props.chat.launch()}>
-						{(launch) => (
-							<p class={s.sessionSettingDescription}>
-								{launch().profile || "Default profile"} · {launch().workspace} · {launch().executable}
-							</p>
-						)}
-					</Show>
+					<button
+						type="button"
+						class={s.headerBtn}
+						disabled={props.chat.phase() === "unconfigured"}
+						onClick={() => void props.chat.startSession()}
+					>
+						New conversation<span class={s.menuHint}>⌘T</span>
+					</button>
 					<button
 						type="button"
 						class={s.headerBtn}
@@ -243,8 +246,66 @@ export const SessionControls: Component<{ chat: AcpChat; onNewOptions: () => voi
 						title="New conversation with options"
 						onClick={props.onNewOptions}
 					>
-						New conversation with options
+						New conversation with options…
 					</button>
+					<hr class={s.menuSeparator} />
+					<Show when={holdOffered()}>
+						<Show
+							when={props.chat.held()}
+							fallback={
+								<button
+									type="button"
+									class={s.headerBtn}
+									aria-label="Pause the turn"
+									title="Pause the turn"
+									disabled={!props.chat.busy()}
+									onClick={() => void props.chat.pause()}
+								>
+									Pause the turn
+									<Show when={!props.chat.busy()}>
+										<span class={s.menuHint}>only while running</span>
+									</Show>
+								</button>
+							}
+						>
+							<button
+								type="button"
+								class={cx(s.headerBtn, s.headerBtnActive)}
+								aria-label="Resume the turn"
+								title="Resume the turn"
+								onClick={() => void props.chat.resume()}
+							>
+								Resume the turn
+							</button>
+						</Show>
+					</Show>
+
+					<Show when={compactOffered()}>
+						<button
+							type="button"
+							class={s.headerBtn}
+							aria-label="Compact the conversation"
+							title="Compact the conversation"
+							disabled={props.chat.busy()}
+							onClick={() => void props.chat.compact()}
+						>
+							Compact context
+						</button>
+					</Show>
+
+					<Show when={forkOffered()}>
+						<button
+							type="button"
+							class={s.headerBtn}
+							aria-label="Fork the conversation"
+							title="Fork the conversation"
+							disabled={props.chat.busy()}
+							onClick={() => void props.chat.fork()}
+						>
+							Fork conversation
+						</button>
+					</Show>
+					<hr class={s.menuSeparator} />
 					<Show when={selectOptions().length > 0}>
 						<button
 							type="button"
@@ -253,13 +314,27 @@ export const SessionControls: Component<{ chat: AcpChat; onNewOptions: () => voi
 							title="Session settings"
 							onClick={() => setSettingsOpen(true)}
 						>
-							<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-								<path d="M6.8 1h2.4l.4 1.6 1.3.6 1.4-.8L14 4l-.8 1.4.6 1.3 1.6.4v2.4l-1.6.4-.6 1.3.8 1.4-1.7 1.7-1.4-.8-1.3.6-.4 1.6H6.8l-.4-1.6-1.3-.6-1.4.8L2 12.3l.8-1.4-.6-1.3L.6 9.2V6.8l1.6-.4.6-1.3L2 3.7 3.7 2l1.4.8 1.3-.6L6.8 1Zm1.2 4.4a2.6 2.6 0 1 0 0 5.2 2.6 2.6 0 0 0 0-5.2Z" />
-							</svg>
-							Session settings
+							Session settings — model, reasoning
 						</button>
 					</Show>
 
+					<button
+						type="button"
+						class={s.headerBtn}
+						disabled={!props.detached && !isTauri()}
+						title={!props.detached && !isTauri() ? "Desktop only" : undefined}
+						onClick={() => (props.detached ? reattachPanel("ai-chat") : detachPanel("ai-chat"))}
+					>
+						{props.detached ? "Bring back to main window" : "Open in separate window"}
+					</button>
+					<Show when={props.chat.launch()}>
+						{(launch) => (
+							<p class={s.sessionSettingDescription}>
+								{launch().profile || "Default profile"} · {launch().workspace} · {launch().executable}
+							</p>
+						)}
+					</Show>
+					<hr class={s.menuSeparator} />
 					<Show when={props.chat.capabilities()?.delete && sessions().length > 0}>
 						<details class={s.conversationList}>
 							<summary class={s.headerBtn}>Delete conversation…</summary>
@@ -311,72 +386,6 @@ export const SessionControls: Component<{ chat: AcpChat; onNewOptions: () => voi
 							void props.chat.deleteSession(target.sessionId).finally(() => setDeleting(false));
 						}}
 					/>
-
-					<Show when={holdOffered()}>
-						<Show
-							when={props.chat.held()}
-							fallback={
-								<button
-									type="button"
-									class={s.headerBtn}
-									aria-label="Pause the turn"
-									title="Pause the turn"
-									disabled={!props.chat.busy()}
-									onClick={() => void props.chat.pause()}
-								>
-									<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-										<path d="M3 2h3v12H3zm7 0h3v12h-3z" />
-									</svg>
-									Pause the turn
-								</button>
-							}
-						>
-							<button
-								type="button"
-								class={cx(s.headerBtn, s.headerBtnActive)}
-								aria-label="Resume the turn"
-								title="Resume the turn"
-								onClick={() => void props.chat.resume()}
-							>
-								<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-									<path d="M4 2.5v11l9-5.5z" />
-								</svg>
-								Resume the turn
-							</button>
-						</Show>
-					</Show>
-
-					<Show when={compactOffered()}>
-						<button
-							type="button"
-							class={s.headerBtn}
-							aria-label="Compact the conversation"
-							title="Compact the conversation"
-							disabled={props.chat.busy()}
-							onClick={() => void props.chat.compact()}
-						>
-							<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-								<path d="M2 6h5V1H5v2.6L1.7.3.3 1.7 3.6 5H2zm12 4H9v5h2v-2.6l3.3 3.3 1.4-1.4L12.4 11H14z" />
-							</svg>
-							Compact the conversation
-						</button>
-					</Show>
-
-					<Show when={forkOffered()}>
-						<button
-							type="button"
-							class={s.headerBtn}
-							aria-label="Fork the conversation"
-							title="Fork the conversation"
-							disabled={props.chat.busy()}
-							onClick={() => void props.chat.fork()}
-						>
-							<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-								<path d="M3 1.5a1.75 1.75 0 0 1 .75 3.33V6.5h4.5V4.83a1.75 1.75 0 1 1 1.5 0V6.5A1.5 1.5 0 0 1 8.25 8H8v3.17a1.75 1.75 0 1 1-1.5 0V8H3.75A1.5 1.5 0 0 1 2.25 6.5V4.83A1.75 1.75 0 0 1 3 1.5zm0 1.5a.25.25 0 1 0 0 .5.25.25 0 0 0 0-.5z" />
-							</svg>
-							Fork the conversation
-						</button>
-					</Show>
 				</div>
 			</details>
 
