@@ -333,7 +333,7 @@ it("plugin_switch_keeps_shell_and_identifies_source — catches whole-shell susp
 	));
 	try {
 		await waitFor(() => expect(pending.has("fixture")).toBe(true));
-		expect(view.queryByRole("heading", { name: "Settings", exact: true })).not.toBeNull();
+		expect(view.queryByRole("heading", { name: "Settings" })).not.toBeNull();
 		expect(view.getByRole("button", { name: "Done" })).toBeVisible();
 		expect(view.container.querySelector("nav")?.textContent).toContain("Plugin settings");
 		const other = view.getByRole("button", { name: "Other integration Plugin" });
@@ -343,7 +343,7 @@ it("plugin_switch_keeps_shell_and_identifies_source — catches whole-shell susp
 		other.focus();
 		fireEvent.click(other);
 		await waitFor(() => expect(pending.has("other")).toBe(true));
-		expect(view.getByRole("heading", { name: "Settings", exact: true })).toBeVisible();
+		expect(view.getByRole("heading", { name: "Settings" })).toBeVisible();
 		expect(document.activeElement).toBe(other);
 		expect(view.getByRole("status")).toHaveTextContent("Loading plugin settings");
 		expect(view.container.querySelector("[data-settings-content]")?.textContent).toContain("Plugin: other");
@@ -351,7 +351,7 @@ it("plugin_switch_keeps_shell_and_identifies_source — catches whole-shell susp
 		await view.findByDisplayValue("second");
 		fireEvent.click(view.getByRole("button", { name: "Fixture integration Plugin" }));
 		await waitFor(() => expect(view.getByRole("status")).toHaveTextContent("Loading plugin settings"));
-		expect(view.getByRole("heading", { name: "Settings", exact: true })).toBeVisible();
+		expect(view.getByRole("heading", { name: "Settings" })).toBeVisible();
 		pending.get("fixture")!({ revision: "r3", values: { "/endpoint": { effective: "latest" } } });
 		await view.findByDisplayValue("latest");
 	} finally {
@@ -374,7 +374,7 @@ it("pending catalogue keeps Settings visible — catches describe suspending hea
 		</Suspense>
 	));
 	try {
-		expect(view.queryByRole("heading", { name: "Settings", exact: true })).not.toBeNull();
+		expect(view.queryByRole("heading", { name: "Settings" })).not.toBeNull();
 	} finally {
 		finish({ fields: {} });
 	}
@@ -401,10 +401,10 @@ it("slow read failure stays inside Settings — catches error or loading replaci
 	await view.findByText("Loading plugin settings…");
 	rejectRead(new Error("private credential"));
 	await view.findByRole("alert");
-	expect(view.getByRole("heading", { name: "Settings", exact: true })).toBeVisible();
+	expect(view.getByRole("heading", { name: "Settings" })).toBeVisible();
 	expect(view.container.textContent).not.toContain("private credential");
 	expect(view.container.textContent).not.toContain("Settings crashed");
-	fireEvent.click(view.getByRole("button", { name: "General", exact: true }));
+	fireEvent.click(view.getByRole("button", { name: "General" }));
 	expect(view.getByRole("heading", { name: "General" })).toBeVisible();
 });
 
@@ -426,6 +426,6 @@ it("unload during a pending get removes the editor — catches a late value revi
 	pluginStore.updatePlugin("fixture", { loaded: false });
 	finish({ revision: "r1", values: { "/endpoint": { effective: "late" } } });
 	await waitFor(() => expect(view.queryByDisplayValue("late")).toBeNull());
-	expect(view.getByRole("heading", { name: "Settings", exact: true })).toBeVisible();
+	expect(view.getByRole("heading", { name: "Settings" })).toBeVisible();
 	expect(view.container.textContent).not.toContain("Fixture integration");
 });
