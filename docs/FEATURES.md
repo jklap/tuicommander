@@ -167,6 +167,7 @@ Right-click an HTTP(S) terminal link (including localhost) and choose **Start in
 - Close: `Cmd+W`, middle-click, context menu
 - Reopen last closed: `Cmd+Shift+T` (remembers last 10 closed tabs)
 - Switch: `Cmd+1` through `Cmd+9`, `Ctrl+Tab` / `Ctrl+Shift+Tab`
+- Hold `Cmd` alone (`Ctrl` on Windows/Linux) for 450 ms to reveal the first nine terminal-tab shortcuts; other keys, mouse buttons, scrolling, release, blur, or visibility changes dismiss the hints.
 - Rename: double-click tab name (inline editing)
 - Reorder: drag-and-drop with visual drop indicators (works for all tab types: terminal, diff, editor, markdown, plugin panels)
 - Tab status dot (left of name): grey=idle, blue-pulse=busy, green=done, purple=unseen (completed while not viewed), orange-pulse=question (needs input), red-pulse=error

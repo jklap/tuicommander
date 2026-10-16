@@ -404,6 +404,8 @@ Features:
 | Cmd+Shift+T | Reopen closed tab |
 | Cmd+P | Command palette |
 | Cmd+Shift+A | Activity dashboard |
+
+Hold the primary modifier alone for 450 ms to show the first nine terminal-tab shortcut badges. Other keys, mouse buttons, wheel events, release, blur, and visibility changes cancel these hints. The Cmd+Ctrl quick switcher remains independent.
 | Cmd+, | Settings |
 
 ### Prompt Library

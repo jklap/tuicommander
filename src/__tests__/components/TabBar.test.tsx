@@ -1,3 +1,6 @@
+import { createSignal } from "solid-js";
+import { useQuickSwitcherVisibility } from "../../hooks/useQuickSwitcherVisibility";
+import { isMacOS, resetPlatformCache } from "../../platform";
 import { fireEvent, render } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getModifierSymbol } from "../../platform";
@@ -1743,6 +1746,127 @@ describe("TabBar", () => {
 	});
 
 	describe("quick switcher badges", () => {
+		function renderLongPressHints() {
+			for (let i = 1; i <= 10; i++) addTerminal({ name: `Tab ${i}` });
+			return render(() => {
+				const [quick, setQuick] = createSignal(false);
+				const [hints, setHints] = createSignal(false);
+				useQuickSwitcherVisibility(setQuick, setHints);
+				return (
+					<TabBar
+						tabHintsActive={hints()}
+						quickSwitcherActive={quick()}
+						onTabSelect={() => {}}
+						onTabClose={() => {}}
+						onCloseOthers={() => {}}
+						onCloseToRight={() => {}}
+						onNewTab={() => {}}
+					/>
+				);
+			});
+		}
+
+		function primaryDown() {
+			fireEvent.keyDown(document, { key: isMacOS() ? "Meta" : "Control", metaKey: isMacOS(), ctrlKey: !isMacOS() });
+		}
+
+		it.each(["MacIntel", "Win32", "Linux x86_64"])(
+			"long press reveals only nine tab shortcuts and release hides them on %s",
+			(platform) => {
+				const original = navigator.platform;
+				Object.defineProperty(navigator, "platform", { configurable: true, value: platform });
+				resetPlatformCache();
+				const view = renderLongPressHints();
+				try {
+					primaryDown();
+					vi.advanceTimersByTime(449);
+					expect(view.container.querySelectorAll(".shortcutBadge")).toHaveLength(0);
+					vi.advanceTimersByTime(1);
+					const badges = view.container.querySelectorAll(".shortcutBadge");
+					expect([...badges].map((b) => b.textContent)).toEqual(
+						Array.from({ length: 9 }, (_, i) => keyFor(`switch-tab-${i + 1}`)),
+					);
+					fireEvent.keyUp(document, { key: isMacOS() ? "Meta" : "Control" });
+					expect(view.container.querySelectorAll(".shortcutBadge")).toHaveLength(0);
+				} finally {
+					view.unmount();
+					Object.defineProperty(navigator, "platform", { configurable: true, value: original });
+					resetPlatformCache();
+				}
+			},
+		);
+
+		it.each(["c", "t", "1", "mousedown", "wheel"])(
+			"%s cancels pending tab hints without consuming the event or rearming on repeat",
+			(action) => {
+				const { container } = renderLongPressHints();
+				primaryDown();
+				vi.advanceTimersByTime(200);
+				const event =
+					action === "mousedown"
+						? new MouseEvent(action, { bubbles: true, cancelable: true })
+						: action === "wheel"
+							? new WheelEvent(action, { bubbles: true, cancelable: true })
+							: new KeyboardEvent("keydown", {
+									key: action,
+									metaKey: isMacOS(),
+									ctrlKey: !isMacOS(),
+									bubbles: true,
+									cancelable: true,
+								});
+				document.dispatchEvent(event);
+				expect(event.defaultPrevented).toBe(false);
+				fireEvent.keyDown(document, {
+					key: isMacOS() ? "Meta" : "Control",
+					metaKey: isMacOS(),
+					ctrlKey: !isMacOS(),
+					repeat: true,
+				});
+				vi.advanceTimersByTime(1000);
+				expect(container.querySelectorAll(".shortcutBadge")).toHaveLength(0);
+			},
+		);
+
+		it.each(["mousedown", "wheel", "blur", "visibilitychange", "keydown"])(
+			"%s retracts visible long-press badges",
+			(action) => {
+				const { container } = renderLongPressHints();
+				primaryDown();
+				vi.advanceTimersByTime(450);
+				expect(container.querySelectorAll(".shortcutBadge")).toHaveLength(9);
+				(action === "blur" ? window : document).dispatchEvent(
+					action === "keydown" ? new KeyboardEvent(action, { key: "c" }) : new Event(action),
+				);
+				expect(container.querySelectorAll(".shortcutBadge")).toHaveLength(0);
+			},
+		);
+
+		it("quick-switcher chord stays immediate and cancels the primary hold", () => {
+			const { container } = renderLongPressHints();
+			primaryDown();
+			fireEvent.keyDown(document, {
+				key: isMacOS() ? "Control" : "Alt",
+				metaKey: isMacOS(),
+				ctrlKey: true,
+				altKey: !isMacOS(),
+			});
+			expect(container.querySelector(".shortcutBadge")?.textContent).toBe(keyFor("switch-branch-1"));
+			vi.advanceTimersByTime(1000);
+			expect(container.querySelector(".shortcutBadge")?.textContent).toBe(keyFor("switch-branch-1"));
+			fireEvent.keyUp(document, { key: isMacOS() ? "Control" : "Alt" });
+			expect(container.querySelectorAll(".shortcutBadge")).toHaveLength(0);
+		});
+
+		it("unmount cancels the pending timer and listeners", () => {
+			const { unmount } = renderLongPressHints();
+			primaryDown();
+			const clear = vi.spyOn(globalThis, "clearTimeout");
+			unmount();
+			expect(clear).toHaveBeenCalled();
+			vi.advanceTimersByTime(1000);
+			clear.mockRestore();
+		});
+
 		it("shows shortcut badges when quickSwitcherActive", () => {
 			addTerminal({ name: "Tab 1" });
 			addTerminal({ name: "Tab 2" });

@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Show tab shortcut hints after a 450 ms Cmd-only hold (Ctrl on Windows/Linux), without flashing on normal shortcuts or pointer activity (#1951-8fac).
+
 - Restyle General, Appearance and Notifications with shared Settings cards and labelled control rows, preserving existing actions and audio-device consent (#1937-c2e4).
 
 - Establish the approved wider Settings shell and reusable theme-aware presentation vocabulary (#1936-0caa).

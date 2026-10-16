@@ -90,6 +90,8 @@ without clearing your draft. When Find is open, Escape closes Find first.
 | `Ctrl+Tab` | Next tab |
 | `Ctrl+Shift+Tab` | Previous tab |
 
+Hold `Cmd` alone (`Ctrl` on Windows/Linux) for 450 ms to show shortcut badges on the first nine terminal tabs. Release the modifier to hide them. Any other key, mouse button, wheel event, window blur, or visibility change cancels the hints. Tab shortcuts work immediately, even without badges. The existing quick-switcher chord is unchanged.
+
 ## Zoom
 
 | Shortcut | Action |
@@ -260,6 +262,8 @@ While a context menu is open, pressing a menu item's shortcut chord (modifier + 
 | `split-vertical` | `Cmd+\` | Split vertically |
 | `split-horizontal` | `Cmd+Alt+\` | Split horizontally |
 | `prev-tab` | `Ctrl+Shift+Tab` | Previous tab |
+
+Hold `Cmd` alone (`Ctrl` on Windows/Linux) for 450 ms to show shortcut badges on the first nine terminal tabs. Release the modifier to hide them. Any other key, mouse button, wheel event, window blur, or visibility change cancels the hints. Tab shortcuts work immediately, even without badges. The existing quick-switcher chord is unchanged.
 | `next-tab` | `Ctrl+Tab` | Next tab |
 | `focus-last-terminal` | `Cmd+Ctrl+Backspace` | Return to last terminal (toggle, across repos) |
 | `history-back` | `Cmd+Alt+ArrowLeft` | Back to the previous terminal in the activation history (last 10, across repos) |

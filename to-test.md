@@ -2299,3 +2299,5 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] #1928-e282: In MCP Settings, hover the long design_mode help for at least three status polls. Check keyboard focus, changed descriptions, viewport edges, scrolling, and resizing; the tip must remain beside its badge without an unpositioned frame.
 
 - [ ] #1929-b1d9: After Boss restarts make dev (Rust does not hot-reload), connect to a Direct short Tailscale host whose short DNS lookup fails. Check automatic FQDN recovery and the explicit Save resolved address action. Do not change production connections for automated verification.
+
+- [ ] Tab hints (#1951-8fac): hold Cmd alone (Ctrl on Windows/Linux) for 450 ms and check the first nine terminal-tab badges; release, another key, mouse button, or scrolling must hide them. Automated hook/TabBar coverage and worktree dark/light screenshots passed.
