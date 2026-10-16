@@ -609,3 +609,55 @@ async fn recent_button_events_are_redacted_1956() {
     assert_eq!(value[1]["outcome"], "sent");
     assert!(!value.to_string().contains("private callback data"));
 }
+// Catches: a transient link-confirmation failure replays the consumed pairing
+// credential as ordinary agent mail after the chat has become authorized.
+#[tokio::test]
+async fn failed_link_confirmation_never_replays_pairing_code_into_agent_inbox() {
+    let (_dir, paths) = setup();
+    write_private(&paths.file("next_offset"), "7\n");
+    write_private(
+        &paths.file("pairing.json"),
+        &json!({"code":"A1B2C3","expires_at":super::super::settings::now_ms() + 60_000})
+            .to_string(),
+    );
+    let update = inbound::text_update(7, 1111111, "A1B2C3");
+    let server = FakeServer::start(vec![
+        inbound::updates(vec![update.clone()]),
+        (StatusCode::BAD_GATEWAY, json!({})),
+        inbound::updates(vec![update]),
+    ])
+    .await;
+    let runtime = outbound_tests::runtime(paths.clone(), server.address).await;
+    let state = runtime.state.clone();
+    let (commands, receive) = tokio::sync::mpsc::channel(10);
+    let worker = tokio::spawn(runtime.run(receive));
+    let mut poller = crate::telegram::inbound::Inbound::with_loopback(
+        paths.clone(),
+        server.address,
+        crate::telegram::native::NativeMail::new(commands.clone()),
+    )
+    .unwrap();
+    let _ = poller.poll().await;
+    // Restart the polling owner as after a connection interruption; the server
+    // returns the unacknowledged update again, as getUpdates specifies.
+    drop(poller);
+    let mut poller = crate::telegram::inbound::Inbound::with_loopback(
+        paths,
+        server.address,
+        crate::telegram::native::NativeMail::new(commands),
+    )
+    .unwrap();
+    let _ = poller.poll().await;
+    let mail = crate::mcp_http::mcp_transport::local_peer_call_with_message_id(
+        &state,
+        &json!({"action":"inbox","since":0}),
+        Some("target-mcp"),
+        None,
+    )
+    .await;
+    worker.abort();
+    assert_eq!(
+        mail["count"], 0,
+        "pairing credential became agent mail: {mail}"
+    );
+}
