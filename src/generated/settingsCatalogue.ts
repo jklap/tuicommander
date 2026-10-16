@@ -4558,6 +4558,47 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
+    "github_accounts.accounts.{id}.credential": {
+      "id": "github_accounts.accounts.{id}.credential",
+      "store": "github_accounts",
+      "owner": "machine",
+      "area": "github_accounts",
+      "group": "accounts",
+      "order": 3,
+      "path": "/accounts/{id}/credential",
+      "labelKey": "settings.catalogue.github_accounts.accounts.{id}.credential.label",
+      "helpKey": "settings.catalogue.github_accounts.accounts.{id}.credential.help",
+      "label": "credential",
+      "schema": {
+        "type": "string",
+        "enum": [
+          "set",
+          "unset",
+          "unavailable"
+        ]
+      },
+      "nullable": false,
+      "availability": {
+        "status": "available"
+      },
+      "choices": {
+        "kind": "static",
+        "values": [
+          "set",
+          "unset",
+          "unavailable"
+        ]
+      },
+      "sensitivity": "secret",
+      "apply": "live",
+      "effect": "Reads credential presence. Use typed account actions for cloud device login, enterprise verification, token rotation and removal.",
+      "operations": [
+        "get",
+        "set_secret",
+        "clear_secret"
+      ],
+      "confirmationClass": "ordinary"
+    },
     "github_accounts.accounts.{id}.host.host": {
       "id": "github_accounts.accounts.{id}.host.host",
       "store": "github_accounts",
@@ -7897,6 +7938,7 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
+<<<<<<< HEAD
     "telegram.allowed_chat_ids.{chatId}": {
       "id": "telegram.allowed_chat_ids.{chatId}",
       "store": "telegram",
@@ -7912,12 +7954,35 @@ export const settingsCatalogue = {
         "type": "boolean"
       },
       "nullable": false,
+=======
+    "repositories_registration.groupOrder": {
+      "id": "repositories_registration.groupOrder",
+      "store": "repositories_registration",
+      "owner": "instance",
+      "area": "repositories_registration",
+      "group": "groupOrder",
+      "order": 12,
+      "path": "/groupOrder",
+      "labelKey": "settings.catalogue.repositories_registration.groupOrder.label",
+      "helpKey": "settings.catalogue.repositories_registration.groupOrder.help",
+      "label": "groupOrder",
+      "schema": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "default": []
+      },
+      "nullable": false,
+      "default": [],
+>>>>>>> feat/1906-1911-1912-owners
       "availability": {
         "status": "available"
       },
       "choices": null,
       "sensitivity": "private",
       "apply": "live",
+<<<<<<< HEAD
       "effect": "Updates the Telegram chat allowlist through setup.",
       "operations": [
         "get",
@@ -7942,10 +8007,38 @@ export const settingsCatalogue = {
         "writeOnly": true
       },
       "nullable": false,
+=======
+      "effect": "Updates repository group order.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "repositories_registration.groups.{id}.collapsed": {
+      "id": "repositories_registration.groups.{id}.collapsed",
+      "store": "repositories_registration",
+      "owner": "instance",
+      "area": "repositories_registration",
+      "group": "groups",
+      "order": 10,
+      "path": "/groups/{id}/collapsed",
+      "labelKey": "settings.catalogue.repositories_registration.groups.{id}.collapsed.label",
+      "helpKey": "settings.catalogue.repositories_registration.groups.{id}.collapsed.help",
+      "label": "collapsed",
+      "schema": {
+        "type": "boolean",
+        "default": false
+      },
+      "nullable": false,
+      "default": false,
+>>>>>>> feat/1906-1911-1912-owners
       "availability": {
         "status": "available"
       },
       "choices": null,
+<<<<<<< HEAD
       "sensitivity": "secret",
       "apply": "live",
       "effect": "Wakes the existing Telegram owner.",
@@ -7953,6 +8046,358 @@ export const settingsCatalogue = {
         "get",
         "set_secret",
         "clear_secret"
+=======
+      "sensitivity": "private",
+      "apply": "live",
+      "effect": "Updates group accordion state.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "repositories_registration.groups.{id}.color": {
+      "id": "repositories_registration.groups.{id}.color",
+      "store": "repositories_registration",
+      "owner": "instance",
+      "area": "repositories_registration",
+      "group": "groups",
+      "order": 8,
+      "path": "/groups/{id}/color",
+      "labelKey": "settings.catalogue.repositories_registration.groups.{id}.color.label",
+      "helpKey": "settings.catalogue.repositories_registration.groups.{id}.color.help",
+      "label": "color",
+      "schema": {
+        "type": "string",
+        "default": ""
+      },
+      "nullable": false,
+      "default": "",
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Updates group color.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "repositories_registration.groups.{id}.id": {
+      "id": "repositories_registration.groups.{id}.id",
+      "store": "repositories_registration",
+      "owner": "instance",
+      "area": "repositories_registration",
+      "group": "groups",
+      "order": 6,
+      "path": "/groups/{id}/id",
+      "labelKey": "settings.catalogue.repositories_registration.groups.{id}.id.label",
+      "helpKey": "settings.catalogue.repositories_registration.groups.{id}.id.help",
+      "label": "id",
+      "schema": {
+        "type": "string",
+        "default": ""
+      },
+      "nullable": false,
+      "default": "",
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Stable repository group identity.",
+      "operations": [
+        "get"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "repositories_registration.groups.{id}.name": {
+      "id": "repositories_registration.groups.{id}.name",
+      "store": "repositories_registration",
+      "owner": "instance",
+      "area": "repositories_registration",
+      "group": "groups",
+      "order": 7,
+      "path": "/groups/{id}/name",
+      "labelKey": "settings.catalogue.repositories_registration.groups.{id}.name.label",
+      "helpKey": "settings.catalogue.repositories_registration.groups.{id}.name.help",
+      "label": "name",
+      "schema": {
+        "type": "string",
+        "default": ""
+      },
+      "nullable": false,
+      "default": "",
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "private",
+      "apply": "live",
+      "effect": "Updates group name.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "repositories_registration.groups.{id}.repoOrder": {
+      "id": "repositories_registration.groups.{id}.repoOrder",
+      "store": "repositories_registration",
+      "owner": "instance",
+      "area": "repositories_registration",
+      "group": "groups",
+      "order": 9,
+      "path": "/groups/{id}/repoOrder",
+      "labelKey": "settings.catalogue.repositories_registration.groups.{id}.repoOrder.label",
+      "helpKey": "settings.catalogue.repositories_registration.groups.{id}.repoOrder.help",
+      "label": "repoOrder",
+      "schema": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "default": []
+      },
+      "nullable": false,
+      "default": [],
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "private",
+      "apply": "live",
+      "effect": "Updates group repository ordering.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "repositories_registration.repoOrder": {
+      "id": "repositories_registration.repoOrder",
+      "store": "repositories_registration",
+      "owner": "instance",
+      "area": "repositories_registration",
+      "group": "repoOrder",
+      "order": 11,
+      "path": "/repoOrder",
+      "labelKey": "settings.catalogue.repositories_registration.repoOrder.label",
+      "helpKey": "settings.catalogue.repositories_registration.repoOrder.help",
+      "label": "repoOrder",
+      "schema": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "default": []
+      },
+      "nullable": false,
+      "default": [],
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "private",
+      "apply": "live",
+      "effect": "Updates ungrouped repository order.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "repositories_registration.repos.{path}.collapsed": {
+      "id": "repositories_registration.repos.{path}.collapsed",
+      "store": "repositories_registration",
+      "owner": "instance",
+      "area": "repositories_registration",
+      "group": "repos",
+      "order": 5,
+      "path": "/repos/{path}/collapsed",
+      "labelKey": "settings.catalogue.repositories_registration.repos.{path}.collapsed.label",
+      "helpKey": "settings.catalogue.repositories_registration.repos.{path}.collapsed.help",
+      "label": "collapsed",
+      "schema": {
+        "type": "boolean",
+        "default": false
+      },
+      "nullable": false,
+      "default": false,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "private",
+      "apply": "live",
+      "effect": "Updates repository sidebar collapse.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "repositories_registration.repos.{path}.displayName": {
+      "id": "repositories_registration.repos.{path}.displayName",
+      "store": "repositories_registration",
+      "owner": "instance",
+      "area": "repositories_registration",
+      "group": "repos",
+      "order": 1,
+      "path": "/repos/{path}/displayName",
+      "labelKey": "settings.catalogue.repositories_registration.repos.{path}.displayName.label",
+      "helpKey": "settings.catalogue.repositories_registration.repos.{path}.displayName.help",
+      "label": "displayName",
+      "schema": {
+        "type": "string",
+        "default": ""
+      },
+      "nullable": false,
+      "default": "",
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "private",
+      "apply": "live",
+      "effect": "Updates repository display name.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "repositories_registration.repos.{path}.expanded": {
+      "id": "repositories_registration.repos.{path}.expanded",
+      "store": "repositories_registration",
+      "owner": "instance",
+      "area": "repositories_registration",
+      "group": "repos",
+      "order": 4,
+      "path": "/repos/{path}/expanded",
+      "labelKey": "settings.catalogue.repositories_registration.repos.{path}.expanded.label",
+      "helpKey": "settings.catalogue.repositories_registration.repos.{path}.expanded.help",
+      "label": "expanded",
+      "schema": {
+        "type": "boolean",
+        "default": false
+      },
+      "nullable": false,
+      "default": false,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "private",
+      "apply": "live",
+      "effect": "Updates repository workspace expansion.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "repositories_registration.repos.{path}.initials": {
+      "id": "repositories_registration.repos.{path}.initials",
+      "store": "repositories_registration",
+      "owner": "instance",
+      "area": "repositories_registration",
+      "group": "repos",
+      "order": 2,
+      "path": "/repos/{path}/initials",
+      "labelKey": "settings.catalogue.repositories_registration.repos.{path}.initials.label",
+      "helpKey": "settings.catalogue.repositories_registration.repos.{path}.initials.help",
+      "label": "initials",
+      "schema": {
+        "type": "string",
+        "default": ""
+      },
+      "nullable": false,
+      "default": "",
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Updates repository initials.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "repositories_registration.repos.{path}.parked": {
+      "id": "repositories_registration.repos.{path}.parked",
+      "store": "repositories_registration",
+      "owner": "instance",
+      "area": "repositories_registration",
+      "group": "repos",
+      "order": 3,
+      "path": "/repos/{path}/parked",
+      "labelKey": "settings.catalogue.repositories_registration.repos.{path}.parked.label",
+      "helpKey": "settings.catalogue.repositories_registration.repos.{path}.parked.help",
+      "label": "parked",
+      "schema": {
+        "type": "boolean",
+        "default": false
+      },
+      "nullable": false,
+      "default": false,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Updates repository visibility.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "repositories_registration.repos.{path}.path": {
+      "id": "repositories_registration.repos.{path}.path",
+      "store": "repositories_registration",
+      "owner": "instance",
+      "area": "repositories_registration",
+      "group": "repos",
+      "order": 0,
+      "path": "/repos/{path}/path",
+      "labelKey": "settings.catalogue.repositories_registration.repos.{path}.path.label",
+      "helpKey": "settings.catalogue.repositories_registration.repos.{path}.path.help",
+      "label": "path",
+      "schema": {
+        "type": "string",
+        "default": ""
+      },
+      "nullable": false,
+      "default": "",
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "private",
+      "apply": "live",
+      "effect": "Stable registered path; removing registration never deletes files or worktrees.",
+      "operations": [
+        "get"
+>>>>>>> feat/1906-1911-1912-owners
       ],
       "confirmationClass": "ordinary"
     },
@@ -8582,6 +9027,88 @@ export const settingsCatalogue = {
         "set"
       ],
       "confirmationClass": "ordinary"
+    },
+    "upstreams.servers.{id}.credentials.auth": {
+      "id": "upstreams.servers.{id}.credentials.auth",
+      "store": "upstreams",
+      "owner": "machine",
+      "area": "upstreams",
+      "group": "servers",
+      "order": 21,
+      "path": "/servers/{id}/credentials/auth",
+      "labelKey": "settings.catalogue.upstreams.servers.{id}.credentials.auth.label",
+      "helpKey": "settings.catalogue.upstreams.servers.{id}.credentials.auth.help",
+      "label": "auth",
+      "schema": {
+        "type": "string",
+        "enum": [
+          "set",
+          "unset",
+          "unavailable"
+        ]
+      },
+      "nullable": false,
+      "availability": {
+        "status": "available"
+      },
+      "choices": {
+        "kind": "static",
+        "values": [
+          "set",
+          "unset",
+          "unavailable"
+        ]
+      },
+      "sensitivity": "secret",
+      "apply": "live",
+      "effect": "Reads credential presence. Use typed upstream owner actions for bearer/header rotation, clearing and OAuth login; values never leave the owner.",
+      "operations": [
+        "get",
+        "set_secret",
+        "clear_secret"
+      ],
+      "confirmationClass": "execution_authority"
+    },
+    "upstreams.servers.{id}.credentials.headers.{name}.status": {
+      "id": "upstreams.servers.{id}.credentials.headers.{name}.status",
+      "store": "upstreams",
+      "owner": "machine",
+      "area": "upstreams",
+      "group": "servers",
+      "order": 22,
+      "path": "/servers/{id}/credentials/headers/{name}/status",
+      "labelKey": "settings.catalogue.upstreams.servers.{id}.credentials.headers.{name}.status.label",
+      "helpKey": "settings.catalogue.upstreams.servers.{id}.credentials.headers.{name}.status.help",
+      "label": "status",
+      "schema": {
+        "type": "string",
+        "enum": [
+          "set",
+          "unset",
+          "unavailable"
+        ]
+      },
+      "nullable": false,
+      "availability": {
+        "status": "available"
+      },
+      "choices": {
+        "kind": "static",
+        "values": [
+          "set",
+          "unset",
+          "unavailable"
+        ]
+      },
+      "sensitivity": "secret",
+      "apply": "live",
+      "effect": "Reads credential presence. Use typed upstream owner actions for bearer/header rotation, clearing and OAuth login; values never leave the owner.",
+      "operations": [
+        "get",
+        "set_secret",
+        "clear_secret"
+      ],
+      "confirmationClass": "execution_authority"
     },
     "upstreams.servers.{id}.enabled": {
       "id": "upstreams.servers.{id}.enabled",
@@ -9861,6 +10388,11 @@ export const settingsCatalogue = {
       "reason": "One-time bypass migration marker; cannot be edited to rerun migration."
     },
     {
+      "store": "upstreams",
+      "path": "/servers/{id}/credentials/headers/{name}/name",
+      "reason": "Header identity supplied by the upstream owner."
+    },
+    {
       "store": "github_accounts",
       "path": "/accounts/{id}/login",
       "reason": "Resolved GitHub viewer identity; supplied by account verification."
@@ -9869,6 +10401,46 @@ export const settingsCatalogue = {
       "store": "voice",
       "path": "/recovered_from_corruption",
       "reason": "Read-response corruption diagnostic; cleared before persistence."
+    },
+    {
+      "store": "repositories_registration",
+      "path": "/repos/{path}/workspaces",
+      "reason": "Runtime workspace and terminal restore identities."
+    },
+    {
+      "store": "repositories_registration",
+      "path": "/repos/{path}/branches",
+      "reason": "Legacy workspace restore identities retained until owner migration."
+    },
+    {
+      "store": "repositories_registration",
+      "path": "/repos/{path}/activeWorkspaceId",
+      "reason": "Per-window active workspace selection."
+    },
+    {
+      "store": "repositories_registration",
+      "path": "/repos/{path}/activeBranch",
+      "reason": "Legacy active workspace selection."
+    },
+    {
+      "store": "repositories_registration",
+      "path": "/repos/{path}/declaredWorktrees",
+      "reason": "Backend-authored live agent workspace placement."
+    },
+    {
+      "store": "repositories_registration",
+      "path": "/repos/{path}/isGitRepo",
+      "reason": "Derived repository classification."
+    },
+    {
+      "store": "repositories_registration",
+      "path": "/repos/{path}/connectionId",
+      "reason": "Registration machine identity; changed only by connection owner registration."
+    },
+    {
+      "store": "repositories_registration",
+      "path": "/activeRepoPath",
+      "reason": "Per-window active repository selection."
     }
   ],
   "gaps": [
@@ -9877,24 +10449,6 @@ export const settingsCatalogue = {
       "path": "/profiles/{id}/forwards",
       "ownerStep": "Step 4f",
       "reason": "ForwardSpec records have no stable IDs; owner must define stable record edits."
-    },
-    {
-      "store": "github_accounts",
-      "path": "/accounts/{id}/credential",
-      "ownerStep": "Step 3a",
-      "reason": "Recoverable credential presence and typed login/rotation actions need the account owner schema; registry metadata alone is not coverage."
-    },
-    {
-      "store": "repositories_registration",
-      "path": "/repos/{path}",
-      "ownerStep": "Step 4d",
-      "reason": "Accepted gap for story 1825-4566: repositories.json registration and group records remain untyped; converting the owner requires classification of runtime tab/worktree identities and delta-save contracts. A raw JSON settings adapter would bypass those owner invariants. Keep Step 4d ownership and block cutover until a typed owner schema is delivered."
-    },
-    {
-      "store": "repositories_registration",
-      "path": "/groups/{id}",
-      "ownerStep": "Step 4d",
-      "reason": "Accepted gap for story 1825-4566: repositories.json registration and group records remain untyped; converting the owner requires classification of runtime tab/worktree identities and delta-save contracts. A raw JSON settings adapter would bypass those owner invariants. Keep Step 4d ownership and block cutover until a typed owner schema is delivered."
     },
     {
       "store": "keybindings",
@@ -9921,10 +10475,29 @@ export const settingsCatalogue = {
       "reason": "Review whether active pane selection is a setting or runtime selection, then describe or individually exclude it."
     },
     {
+<<<<<<< HEAD
       "store": "upstreams",
       "path": "/servers/{id}/credentials",
       "ownerStep": "Step 4e",
       "reason": "Vault-backed bearer/OAuth/header operations need the upstream owner schema; persisted credential references do not cover credential actions."
+=======
+      "store": "connections",
+      "path": "/{id}/credential",
+      "ownerStep": "Step 4f",
+      "reason": "Connection credentials live outside the RemoteConnection record and require the credential-reference owner schema."
+    },
+    {
+      "store": "telegram",
+      "path": "/bot.token",
+      "ownerStep": "Step 4h",
+      "reason": "Private bot token is stored separately from Config and requires the setup owner's secret-action DTO."
+    },
+    {
+      "store": "telegram",
+      "path": "/allowed_chat_ids/{chatId}",
+      "ownerStep": "Step 4h",
+      "reason": "Chat allowlist is a separate private text file; use the existing setup owner, not raw file editing."
+>>>>>>> feat/1906-1911-1912-owners
     },
     {
       "store": "app",
@@ -9997,6 +10570,74 @@ export const settingsCatalogue = {
           "name",
           "executable"
         ]
+      },
+      "operations": [
+        "get",
+        "create",
+        "remove"
+      ]
+    },
+    {
+      "store": "repositories_registration",
+      "path": "/repos",
+      "key": "path",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "initials": {
+            "type": "string"
+          },
+          "parked": {
+            "type": "boolean"
+          },
+          "expanded": {
+            "type": "boolean"
+          },
+          "collapsed": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "operations": [
+        "get",
+        "create",
+        "remove"
+      ]
+    },
+    {
+      "store": "repositories_registration",
+      "path": "/groups",
+      "key": "id",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "color": {
+            "type": "string"
+          },
+          "repoOrder": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "collapsed": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
       },
       "operations": [
         "get",
@@ -10282,6 +10923,39 @@ export const settingsCatalogue = {
                 "credential_ref"
               ]
             }
+          },
+          "credentials": {
+            "type": "object",
+            "properties": {
+              "auth": {
+                "type": "string",
+                "enum": [
+                  "set",
+                  "unset",
+                  "unavailable"
+                ]
+              },
+              "headers": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "x-not-setting": "Header identity supplied by the upstream owner."
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "set",
+                        "unset",
+                        "unavailable"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
           }
         },
         "required": [
@@ -10316,6 +10990,33 @@ export const settingsCatalogue = {
           "name",
           "credential_ref"
         ]
+      },
+      "operations": [
+        "get",
+        "create",
+        "remove"
+      ]
+    },
+    {
+      "store": "upstreams",
+      "path": "/servers/{id}/credentials/headers",
+      "key": "name",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "x-not-setting": "Header identity supplied by the upstream owner."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "set",
+              "unset",
+              "unavailable"
+            ]
+          }
+        }
       },
       "operations": [
         "get",
@@ -10371,6 +11072,14 @@ export const settingsCatalogue = {
                 "type": "string",
                 "const": "ghe_pat"
               }
+            ]
+          },
+          "credential": {
+            "type": "string",
+            "enum": [
+              "set",
+              "unset",
+              "unavailable"
             ]
           }
         },

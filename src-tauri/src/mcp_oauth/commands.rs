@@ -56,6 +56,13 @@ pub(crate) async fn start_mcp_upstream_oauth(
     state: State<'_, Arc<AppState>>,
     name: String,
 ) -> Result<StartOAuthResponse, String> {
+    start_mcp_upstream_oauth_inner(state.inner(), name).await
+}
+
+pub(crate) async fn start_mcp_upstream_oauth_inner(
+    state: &Arc<AppState>,
+    name: String,
+) -> Result<StartOAuthResponse, String> {
     let registry = state.mcp.upstream_registry.clone();
     let flow_mgr = state.mcp.oauth_flow_manager.clone();
 

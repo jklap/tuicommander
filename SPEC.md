@@ -1109,6 +1109,22 @@ GitHub Work B8: registered accounts bind core B6 review threads and B7 actions t
 Internal owner requests now support cached dynamic-choice describe and explicit refresh, scoped by target and revision. Notification output devices reuse the UI enumeration owner and preserve unavailable versus successful empty results. General settings transport publication remains separate.
 
 
+Agent model settings support typed model edits without starting a CLI. Explicit
+choice refresh probes only the addressed Claude run config with `--help`, using
+its command and environment. Published aliases are suggestions, not account
+entitlement or an exhaustive model list. Other CLIs and failed probes report
+unavailable choices; typed edits remain supported. Describe never probes. Model
+edits preserve sibling configs and the default selection and apply next session
+(#1910-451e).
+### Session attachment launch grants (#1833-aa60)
+
+Gemini receives only the session upload directory through `--include-directories`.
+A session-owned trusted-folders overlay preserves user trust decisions and adds
+that directory, without changing global settings or bypassing workspace trust.
+Ego PTY launches use `--read-only-dir` for the same canonical directory. Shell
+shims apply the grants to typed launches; resumed ego sessions receive fresh
+read roots because discovery does not persist ego argv. ACP uploads still require an existing profile read root.
+
 ### Voice owner discovery (#1909-0d24)
 
 Internal voice settings refresh resolves devices, model state, installed voices and language-filtered Edge voices through existing owners. Describe is cache-only; typed asset actions retain existing owner validation and runtime effects. Public settings transport cutover remains separate.

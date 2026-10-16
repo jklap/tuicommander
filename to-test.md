@@ -2282,3 +2282,8 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 ## Voice settings discovery (#1909-0d24)
 
 - [ ] After Boss manually restarts the Rust app, verify Voice input device refresh, missing-backend errors, Whisper model installed/downloadable state and per-language installed/Edge voices. Edge needs an internet connection only on explicit refresh. Exercise download/cancel/delete/import through the existing UI owners with disposable assets; verify subsequent choice refresh and runtime invalidation. No hardware, network or real download success is claimed by fixture tests.
+
+## Settings owner gaps (#1906-5bf8, #1911-6214, #1912-5c77)
+- [ ] After Boss restarts the Rust build, use an isolated test owner: complete GitHub cloud device login; verify credential presence only, then enterprise token rotation/removal and binding cleanup. Do not use production accounts for destructive checks.
+- [ ] After restart, use an isolated upstream: start OAuth consent, rotate to bearer, rotate/clear a custom header, and confirm only that upstream reconnects; ensure no secret appears in replies/events/errors.
+- [ ] After restart, use an isolated registration file: edit a repository label and group name while workspace/tab state changes; verify owner readback, unchanged workspace identities, and no checkout/worktree deletion.

@@ -1652,8 +1652,47 @@ The internal settings owner service accepts `describe` and `refresh` with an exp
 Notification output choices use the same bounded enumeration and `{name, is_default}` objects as the existing UI command. Discovery never saves notification configuration. This internal contract does not publish the later settings MCP/HTTP cutover.
 
 
+Agent model settings support typed model edits without starting a CLI. Explicit
+choice refresh probes only the addressed Claude run config with `--help`, using
+its command and environment. Published aliases are suggestions, not account
+entitlement or an exhaustive model list. Other CLIs and failed probes report
+unavailable choices; typed edits remain supported. Describe never probes. Model
+edits preserve sibling configs and the default selection and apply next session
+(#1910-451e).
+Telegram settings owner actions support write-only `set_token`/`clear_token` and stable positive `add_chat`/`remove_chat` IDs. Reads return token presence only. These actions use the existing private setup files and setup lock and never acquire the polling-owner lock. Token verification or final owner readback can fail after persistence: `persisted:true` requires owner readback before retry, including after a successful token clear or allowlist action.
+
+Connection settings credential actions set/clear the password or pairing token for an existing immutable connection ID through the vault owner. Inputs are write-only; readback reports separate presence states, and vault read errors remain unavailable rather than unset. Failed writes leave the saved record and old credential reachable. A committed write followed by failed readback returns `persisted:true`; read presence before retrying. Successful writes invoke the runtime reconciliation callback without editing connection metadata.
+
+### App setting choices
+
+Font families use the Rust-owned bundled-font option file shared with the UI; these are bundled woff2 families, not arbitrary host fonts. Themes reuse the Rust theme loader and retain custom theme IDs. IDE refresh reuses cross-platform installed-IDE discovery and returns the same value/label options used by the launcher. Catalogue construction and describe never run host probes. Explicit refresh runs discovery off the async executor and caches choices; unavailable discovery is distinct from a successful empty list. Font and IDE edits validate supported choices without launching a probe.
+
 ## Voice settings choice owners (#1909-0d24)
 
 The internal voice settings owner uses cache-only `describe` and explicit `refresh` for input devices, Whisper models, installed Pocket voices and Edge voices. Refresh reads the configured language through the strict voice file owner. Model options include installed/downloadable state; installed voice options retain their source. Input backend failure is unavailable, not a supported empty list. Edge refresh may fetch the service catalogue; describe never fetches or downloads.
 
 `VoiceAction` provides typed assets, model download/delete, speech asset download/cancel/delete and voice import/delete. It delegates to the existing command owners and their allowlisted asset IDs, size validation and runtime locks. These are internal host methods for later transport publication, not an arbitrary command executor. Existing engine/language descriptors and runtime invalidation remain authoritative. Builds without dictation still describe unavailable voice fields.
+
+The GitHub owner catalogue describes `/accounts/{id}/credential` as presence only
+(`set`, `unset`, or `unavailable`). The snapshot retains `secret.status` for existing
+consumers and adds the matching `credential` presence. Credential values are never
+returned. Use the typed GitHub owner actions for cloud device login, enterprise
+verification, rotation, clearing, and account removal; generic field writes do not
+replace those owner operations.
+
+The `repositories_registration` owner projects typed registered repository and group
+settings from `repositories.json`. Locked edits preserve runtime workspace/tab restore
+records, active selections, backend worktree placement, connection identity, and
+unknown owner fields. Removing a registration never deletes a checkout or worktree.
+Runtime fields have individual catalogue exclusions; presentation and ordering remain
+settings. Reads include stored/effective values and source through the shared service.
+
+The upstream credential owner describes auth/header presence separately from saved
+references. Its input-only typed actions rotate bearer/header credentials, clear them,
+or start the existing OAuth flow. Rotation replaces old OAuth material and cancels
+pending flows for that upstream. Config and vault changes share the config owner lock;
+a vault change followed by config/apply failure reports `persisted: true` with `get`
+recovery. Bearer rotation validates the proposed config through the upstream owner
+before writing the vault. An existing custom `Authorization` header conflicts with bearer
+auth; rejection preserves the saved config and credentials. Only the changed enabled
+upstream reconnects. No credential value is returned.
