@@ -8,9 +8,7 @@ import { uiStore } from "../../stores/ui";
 import { isTauri } from "../../transport";
 import { cx } from "../../utils";
 import { openFileLinkHere, resolveFileLink } from "../../utils/openFileLink";
-import { getRepoTextColor } from "../../utils/repoColor";
 import { SETTINGS_SECTION_EGO } from "../SettingsPanel/sections";
-import p from "../shared/panel.module.css";
 import { PanelResizeHandle } from "../ui/PanelResizeHandle";
 import { PanelWindowControls } from "../ui/PanelWindowControls";
 import s from "./AIChatPanel.module.css";
@@ -25,12 +23,6 @@ import { trackPanelWidth } from "./trackPanelWidth";
 import { createAcpChat } from "./useAcpChat";
 
 const isPanelMode = () => new URLSearchParams(window.location.search).get("mode") === "panel";
-
-/** The last segment of a path, for the header. */
-function basename(path: string): string {
-	const parts = path.split(/[/\\]/).filter(Boolean);
-	return parts.at(-1) ?? path;
-}
 
 export interface AIChatPanelProps {
 	visible: boolean;
@@ -141,39 +133,14 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 		<div id="ai-chat-panel" ref={panelEl} class={cx(s.panel, !props.visible && s.hidden)} onKeyDown={keyDown}>
 			<PanelResizeHandle panelId="ai-chat-panel" minWidth={300} maxWidth={700} />
 
-			<div class={p.header}>
-				<div class={p.headerLeft}>
-					<span class={p.title}>
-						<svg
-							width="14"
-							height="14"
-							viewBox="0 0 14 14"
-							fill="currentColor"
-							style={{ "vertical-align": "-2px", "margin-right": "4px" }}
-						>
-							<path
-								d="M2 2.5A1.5 1.5 0 013.5 1h7A1.5 1.5 0 0112 2.5v6A1.5 1.5 0 0110.5 10H5l-3 2.5V10A1.5 1.5 0 010.5 8.5v-6z"
-								transform="translate(1 0.5)"
-							/>
-						</svg>
-						AI Chat
-					</span>
-					<Show when={chat.operatingRepo()}>
-						{(path) => (
-							<span class={s.terminalName} style={{ color: getRepoTextColor(path()) }}>
-								{basename(path())}
-							</span>
-						)}
-					</Show>
-					<Show when={chat.title()}>{(title) => <span class={s.terminalName}>{title()}</span>}</Show>
-					<Show when={chat.launch()}>
-						{(launch) => (
-							<span class={s.terminalName} title={`Ego: ${launch().executable} · Workspace: ${launch().workspace}`}>
-								{launch().profile || "Default profile"} · {launch().workspace} · {launch().executable}
-							</span>
-						)}
-					</Show>
-				</div>
+			<div class={s.tidyHeader}>
+				<SessionControls
+					chat={chat}
+					onNewOptions={() => {
+						chat.clearError();
+						setNewOptionsOpen(true);
+					}}
+				/>
 				<div class={s.headerActions}>
 					<PanelWindowControls
 						panelId="ai-chat"
@@ -183,71 +150,47 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 				</div>
 			</div>
 			{/* Shown before ego runs too: "+" is one of the two ways a chat starts. */}
-			<div class={s.chatTabs} role="tablist" aria-label="AI Chat tabs">
-				<For each={chat.tabs()}>
-					{(session) => (
-						<div
-							class={cx(s.chatTab, chat.sessionId() === session && s.chatTabActive)}
-							onAuxClick={(event) => {
-								if (event.button !== 1) return;
-								event.preventDefault();
-								event.stopPropagation();
-								void chat.closeTab(session);
-							}}
-						>
-							<button
-								type="button"
-								role="tab"
-								data-chat-session={session}
-								title={session}
-								aria-selected={chat.sessionId() === session}
-								onClick={() => void chat.selectSession(session)}
+			<Show when={chat.tabs().length > 1}>
+				<div class={s.chatTabs} role="tablist" aria-label="AI Chat tabs">
+					<For each={chat.tabs()}>
+						{(session) => (
+							<div
+								class={cx(s.chatTab, chat.sessionId() === session && s.chatTabActive)}
+								onAuxClick={(event) => {
+									if (event.button !== 1) return;
+									event.preventDefault();
+									event.stopPropagation();
+									void chat.closeTab(session);
+								}}
 							>
-								{conversationLabel(
-									chat.sessions().find((item) => item.sessionId === session) ?? { sessionId: session },
-								)}
-							</button>
-							<Show when={chat.tabs().length > 1}>
 								<button
 									type="button"
-									aria-label={`Close chat tab ${session}`}
-									onClick={() => void chat.closeTab(session)}
+									role="tab"
+									data-chat-session={session}
+									title={session}
+									aria-selected={chat.sessionId() === session}
+									onClick={() => void chat.selectSession(session)}
 								>
-									<svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
-										<path d="M2.8 2l3.2 3.2L9.2 2l.8.8L6.8 6l3.2 3.2-.8.8L6 6.8 2.8 10l-.8-.8L5.2 6 2 2.8z" />
-									</svg>
+									{conversationLabel(
+										chat.sessions().find((item) => item.sessionId === session) ?? { sessionId: session },
+									)}
 								</button>
-							</Show>
-						</div>
-					)}
-				</For>
-				<button
-					type="button"
-					class={s.newChatTab}
-					aria-label="New chat tab"
-					title="New chat tab (⌘T)"
-					disabled={chat.phase() === "unconfigured"}
-					onClick={() => void chat.startSession()}
-				>
-					<svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor" aria-hidden="true">
-						<path d="M6.4 1h1.2v5.4H13v1.2H7.6V13H6.4V7.6H1V6.4h5.4z" />
-					</svg>
-				</button>
-				<button
-					type="button"
-					class={s.newChatTab}
-					aria-label="New conversation with options"
-					title="New conversation with options"
-					onClick={() => {
-						chat.clearError();
-						setNewOptionsOpen(true);
-					}}
-				>
-					<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-						<path d="M2 3h12v1H2zm0 4h12v1H2zm0 4h12v1H2zM5 1h2v5H5zm4 4h2v5H9zm-5 4h2v5H4z" />
-					</svg>
-				</button>
-			</div>
+								<Show when={chat.tabs().length > 1}>
+									<button
+										type="button"
+										aria-label={`Close chat tab ${session}`}
+										onClick={() => void chat.closeTab(session)}
+									>
+										<svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
+											<path d="M2.8 2l3.2 3.2L9.2 2l.8.8L6.8 6l3.2 3.2-.8.8L6 6.8 2.8 10l-.8-.8L5.2 6 2 2.8z" />
+										</svg>
+									</button>
+								</Show>
+							</div>
+						)}
+					</For>
+				</div>
+			</Show>
 			<Show when={newOptionsOpen()}>
 				<NewConversationDialog chat={chat} onClose={() => setNewOptionsOpen(false)} />
 			</Show>
@@ -292,16 +235,13 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 				</div>
 			</Show>
 
-			<Show when={chat.sessionId()}>
-				<SessionControls chat={chat} />
-			</Show>
-
 			<Transcript
 				onSearchRef={(ref) => {
 					transcriptSearch = ref;
 				}}
 				canForkAtMessage={() => chat.capabilities()?.forkAtMessage === true}
 				onFork={(messageId) => void chat.fork(messageId)}
+				observeToolDuration={false}
 				entries={chat.entries}
 				busy={chat.busy}
 				retry={chat.retry}

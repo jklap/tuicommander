@@ -1,6 +1,6 @@
 # AI Chat
 
-Use **Conversations** beside the conversation picker to delete saved conversations. Each row has a trash button. Confirm the conversation name before deletion; this permanently removes its history and closes its open tab. If ego refuses deletion (for example, while the conversation is running), the conversation stays and the error is shown. The list offers deletion only when ego advertises the ACP delete capability. If you select another conversation while deletion cleanup is pending, that selection stays active.
+Use **⋯ → Delete conversation…** to delete saved conversations. Each row has a trash button. Confirm the conversation name before deletion; this permanently removes its history and closes its open tab. If ego refuses deletion (for example, while the conversation is running), the conversation stays and the error is shown. The list offers deletion only when ego advertises the ACP delete capability. If you select another conversation while deletion cleanup is pending, that selection stays active.
 
 AI Chat is a conversation with **ego**, which TUICommander launches and speaks to
 over ACP. TUICommander is the environment — terminals, repositories, the MCP
@@ -37,6 +37,12 @@ While ego waits to retry a provider request, AI Chat shows the cause, attempt
 number and a live countdown. The countdown starts when the update arrives and
 ends at **retrying now**. Recovery removes the line; a final failure replaces it
 with the error. The Copy action beside a user message stays on one line.
+
+## Compact panel controls
+
+The header contains the conversation title picker, **New**, **⋯**, and window controls. The tab strip appears only when two or more tabs are open. **⋯** contains labelled session settings, pause/resume, compact, fork, new-conversation options, and deletion actions. Capability and busy-state restrictions still apply.
+
+The model and repository share a small line below the input. Repository pinning stays on that line. Process titles and tool disclosures share one line; failed calls expand automatically. Suggested replies appear only under the latest answer. Loaded history does not show execution durations measured from the view mount.
 
 ## Opening it
 

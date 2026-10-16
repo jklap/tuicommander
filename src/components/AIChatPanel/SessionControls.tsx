@@ -142,7 +142,7 @@ const SessionSettingsDialog: Component<{ chat: AcpChat; options: SelectOption[];
 	);
 };
 
-export const SessionControls: Component<{ chat: AcpChat }> = (props) => {
+export const SessionControls: Component<{ chat: AcpChat; onNewOptions: () => void }> = (props) => {
 	const [settingsOpen, setSettingsOpen] = createSignal(false);
 	const [deleteTarget, setDeleteTarget] = createSignal<AcpListedSession | null>(null);
 	const [deleting, setDeleting] = createSignal(false);
@@ -152,188 +152,215 @@ export const SessionControls: Component<{ chat: AcpChat }> = (props) => {
 	const sessions = () => props.chat.sessions();
 	const selectOptions = () =>
 		props.chat.configOptions().filter((option): option is SelectOption => option.type === "select");
-	const summary = () =>
-		selectOptions()
-			.filter((option) => option.id === "model" || option.id === "mode")
-			.map(
-				(option) =>
-					`${option.name}: ${option.id === "model" ? choiceName(option).split("/").at(-1) : choiceName(option)}`,
-			)
-			.join(" · ");
 
 	return (
-		<div class={s.controlBar}>
-			{/* A boolean option is deliberately absent: the client does not advertise
-			    `clientBooleanConfig`, so one cannot arrive, and drawing a control for
-			    it would offer a switch the agent never said it would read. */}
-			<Show
-				when={summary()}
-				fallback={
-					<span class={s.sessionSettingsSummary} role="status">
-						Model: pending · Mode: pending
-					</span>
-				}
-			>
-				<span class={s.sessionSettingsSummary}>{summary()}</span>
-			</Show>
-			<Show when={selectOptions().length > 0}>
-				<button
-					type="button"
-					class={s.headerBtn}
-					aria-label="Session settings"
-					title="Session settings"
-					onClick={() => setSettingsOpen(true)}
-				>
-					<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-						<path d="M6.8 1h2.4l.4 1.6 1.3.6 1.4-.8L14 4l-.8 1.4.6 1.3 1.6.4v2.4l-1.6.4-.6 1.3.8 1.4-1.7 1.7-1.4-.8-1.3.6-.4 1.6H6.8l-.4-1.6-1.3-.6-1.4.8L2 12.3l.8-1.4-.6-1.3L.6 9.2V6.8l1.6-.4.6-1.3L2 3.7 3.7 2l1.4.8 1.3-.6L6.8 1Zm1.2 4.4a2.6 2.6 0 1 0 0 5.2 2.6 2.6 0 0 0 0-5.2Z" />
-					</svg>
-				</button>
-			</Show>
-
-			<Show when={sessions().length > 1}>
-				<Select
-					compact
-					class={s.modelPicker}
-					title="Conversation"
-					value={props.chat.sessionId() ?? ""}
-					onChange={(event) => {
-						const select = event.currentTarget;
-						void props.chat.selectSession(select.value).then(() => {
-							select.value = props.chat.sessionId() ?? "";
-						});
-					}}
-				>
-					<For each={sessions()}>
-						{(session) => (
-							<option
-								value={session.sessionId}
-								title={session.sessionId}
-								disabled={session._meta?.tuicommander?.deleted === true}
-							>
-								{"  ".repeat(session._meta?.tuicommander?.lineageDepth ?? 0)}
-								{session._meta?.tuicommander?.lineageDepth ? "↳ " : ""}
-								{conversationLabel(session)}
-							</option>
-						)}
-					</For>
-				</Select>
-			</Show>
-
-			<Show when={props.chat.capabilities()?.delete && sessions().length > 0}>
-				<details class={s.conversationList}>
-					<summary class={s.headerBtn}>Conversations</summary>
-					<div class={s.conversationRows}>
-						<For each={sessions()}>
-							{(session) => (
-								<div class={s.conversationRow}>
-									<button
-										type="button"
-										class={s.conversationName}
-										disabled={session._meta?.tuicommander?.deleted === true}
-										onClick={() => void props.chat.selectSession(session.sessionId)}
-									>
-										{conversationLabel(session)}
-									</button>
-									<Show when={!session._meta?.tuicommander?.deleted}>
-										<button
-											type="button"
-											class={s.headerBtn}
-											disabled={deleting()}
-											aria-label={`Delete ${conversationLabel(session)}`}
-											title="Delete conversation"
-											onClick={() => setDeleteTarget(session)}
-										>
-											<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-												<path d="M6 1h4l1 2h3v1H2V3h3l1-2ZM3 5h10l-1 10H4L3 5Zm3 2v6h1V7H6Zm3 0v6h1V7H9Z" />
-											</svg>
-										</button>
-									</Show>
-								</div>
-							)}
-						</For>
-					</div>
-				</details>
-			</Show>
-			<ConfirmDialog
-				visible={deleteTarget() !== null}
-				title="Delete conversation"
-				message={`Delete “${deleteTarget() ? conversationLabel(deleteTarget()!) : ""}”? This cannot be undone.`}
-				confirmLabel="Delete"
-				defaultButton="cancel"
-				kind="warning"
-				onClose={() => setDeleteTarget(null)}
-				onConfirm={() => {
-					const target = deleteTarget();
-					setDeleteTarget(null);
-					if (!target || deleting()) return;
-					setDeleting(true);
-					void props.chat.deleteSession(target.sessionId).finally(() => setDeleting(false));
+		<div class={s.sessionHeader}>
+			<Select
+				compact
+				class={s.modelPicker}
+				title="Conversation"
+				aria-label="Conversation"
+				value={props.chat.sessionId() ?? ""}
+				onChange={(event) => {
+					const select = event.currentTarget;
+					void props.chat.selectSession(select.value).then(() => {
+						select.value = props.chat.sessionId() ?? "";
+					});
 				}}
-			/>
+			>
+				<Show when={!sessions().some((session) => session.sessionId === props.chat.sessionId())}>
+					<option value={props.chat.sessionId() ?? ""}>{props.chat.title() || "AI Chat"}</option>
+				</Show>
+				<For each={sessions()}>
+					{(session) => (
+						<option
+							value={session.sessionId}
+							title={session.sessionId}
+							disabled={session._meta?.tuicommander?.deleted === true}
+						>
+							{"  ".repeat(session._meta?.tuicommander?.lineageDepth ?? 0)}
+							{session._meta?.tuicommander?.lineageDepth ? "↳ " : ""}
+							{conversationLabel(session)}
+						</option>
+					)}
+				</For>
+			</Select>
 
-			<span class={s.controlSpacer} />
-
-			<Show when={holdOffered()}>
-				<Show
-					when={props.chat.held()}
-					fallback={
+			<button
+				type="button"
+				class={s.headerBtn}
+				aria-label="New chat tab"
+				title="New chat tab (⌘T)"
+				disabled={props.chat.phase() === "unconfigured"}
+				onClick={() => void props.chat.startSession()}
+			>
+				New
+			</button>
+			<details
+				class={s.actionsMenu}
+				onKeyDown={(event) => {
+					if (event.key === "Escape" && event.currentTarget.open) {
+						event.currentTarget.open = false;
+						event.preventDefault();
+						event.stopPropagation();
+						event.currentTarget.querySelector("summary")?.focus();
+					}
+				}}
+			>
+				<summary class={s.headerBtn} aria-label="Conversation actions" title="Conversation actions">
+					⋯
+				</summary>
+				<div class={s.actionsMenuItems}>
+					<Show when={props.chat.launch()}>
+						{(launch) => (
+							<p class={s.sessionSettingDescription}>
+								{launch().profile || "Default profile"} · {launch().workspace} · {launch().executable}
+							</p>
+						)}
+					</Show>
+					<button
+						type="button"
+						class={s.headerBtn}
+						aria-label="New conversation with options"
+						title="New conversation with options"
+						onClick={props.onNewOptions}
+					>
+						New conversation with options
+					</button>
+					<Show when={selectOptions().length > 0}>
 						<button
 							type="button"
 							class={s.headerBtn}
-							aria-label="Pause the turn"
-							title="Pause the turn"
-							disabled={!props.chat.busy()}
-							onClick={() => void props.chat.pause()}
+							aria-label="Session settings"
+							title="Session settings"
+							onClick={() => setSettingsOpen(true)}
 						>
 							<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-								<path d="M3 2h3v12H3zm7 0h3v12h-3z" />
+								<path d="M6.8 1h2.4l.4 1.6 1.3.6 1.4-.8L14 4l-.8 1.4.6 1.3 1.6.4v2.4l-1.6.4-.6 1.3.8 1.4-1.7 1.7-1.4-.8-1.3.6-.4 1.6H6.8l-.4-1.6-1.3-.6-1.4.8L2 12.3l.8-1.4-.6-1.3L.6 9.2V6.8l1.6-.4.6-1.3L2 3.7 3.7 2l1.4.8 1.3-.6L6.8 1Zm1.2 4.4a2.6 2.6 0 1 0 0 5.2 2.6 2.6 0 0 0 0-5.2Z" />
 							</svg>
+							Session settings
 						</button>
-					}
-				>
-					<button
-						type="button"
-						class={cx(s.headerBtn, s.headerBtnActive)}
-						aria-label="Resume the turn"
-						title="Resume the turn"
-						onClick={() => void props.chat.resume()}
-					>
-						<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-							<path d="M4 2.5v11l9-5.5z" />
-						</svg>
-					</button>
-				</Show>
-			</Show>
+					</Show>
 
-			<Show when={compactOffered()}>
-				<button
-					type="button"
-					class={s.headerBtn}
-					aria-label="Compact the conversation"
-					title="Compact the conversation"
-					disabled={props.chat.busy()}
-					onClick={() => void props.chat.compact()}
-				>
-					<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-						<path d="M2 6h5V1H5v2.6L1.7.3.3 1.7 3.6 5H2zm12 4H9v5h2v-2.6l3.3 3.3 1.4-1.4L12.4 11H14z" />
-					</svg>
-				</button>
-			</Show>
+					<Show when={props.chat.capabilities()?.delete && sessions().length > 0}>
+						<details class={s.conversationList}>
+							<summary class={s.headerBtn}>Delete conversation…</summary>
+							<div class={s.conversationRows}>
+								<For each={sessions()}>
+									{(session) => (
+										<div class={s.conversationRow}>
+											<button
+												type="button"
+												class={s.conversationName}
+												disabled={session._meta?.tuicommander?.deleted === true}
+												onClick={() => void props.chat.selectSession(session.sessionId)}
+											>
+												{conversationLabel(session)}
+											</button>
+											<Show when={!session._meta?.tuicommander?.deleted}>
+												<button
+													type="button"
+													class={s.headerBtn}
+													disabled={deleting()}
+													aria-label={`Delete ${conversationLabel(session)}`}
+													title="Delete conversation"
+													onClick={() => setDeleteTarget(session)}
+												>
+													<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+														<path d="M6 1h4l1 2h3v1H2V3h3l1-2ZM3 5h10l-1 10H4L3 5Zm3 2v6h1V7H6Zm3 0v6h1V7H9Z" />
+													</svg>
+												</button>
+											</Show>
+										</div>
+									)}
+								</For>
+							</div>
+						</details>
+					</Show>
+					<ConfirmDialog
+						visible={deleteTarget() !== null}
+						title="Delete conversation"
+						message={`Delete “${deleteTarget() ? conversationLabel(deleteTarget()!) : ""}”? This cannot be undone.`}
+						confirmLabel="Delete"
+						defaultButton="cancel"
+						kind="warning"
+						onClose={() => setDeleteTarget(null)}
+						onConfirm={() => {
+							const target = deleteTarget();
+							setDeleteTarget(null);
+							if (!target || deleting()) return;
+							setDeleting(true);
+							void props.chat.deleteSession(target.sessionId).finally(() => setDeleting(false));
+						}}
+					/>
 
-			<Show when={forkOffered()}>
-				<button
-					type="button"
-					class={s.headerBtn}
-					aria-label="Fork the conversation"
-					title="Fork the conversation"
-					disabled={props.chat.busy()}
-					onClick={() => void props.chat.fork()}
-				>
-					<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-						<path d="M3 1.5a1.75 1.75 0 0 1 .75 3.33V6.5h4.5V4.83a1.75 1.75 0 1 1 1.5 0V6.5A1.5 1.5 0 0 1 8.25 8H8v3.17a1.75 1.75 0 1 1-1.5 0V8H3.75A1.5 1.5 0 0 1 2.25 6.5V4.83A1.75 1.75 0 0 1 3 1.5zm0 1.5a.25.25 0 1 0 0 .5.25.25 0 0 0 0-.5z" />
-					</svg>
-				</button>
-			</Show>
+					<Show when={holdOffered()}>
+						<Show
+							when={props.chat.held()}
+							fallback={
+								<button
+									type="button"
+									class={s.headerBtn}
+									aria-label="Pause the turn"
+									title="Pause the turn"
+									disabled={!props.chat.busy()}
+									onClick={() => void props.chat.pause()}
+								>
+									<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+										<path d="M3 2h3v12H3zm7 0h3v12h-3z" />
+									</svg>
+									Pause the turn
+								</button>
+							}
+						>
+							<button
+								type="button"
+								class={cx(s.headerBtn, s.headerBtnActive)}
+								aria-label="Resume the turn"
+								title="Resume the turn"
+								onClick={() => void props.chat.resume()}
+							>
+								<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+									<path d="M4 2.5v11l9-5.5z" />
+								</svg>
+								Resume the turn
+							</button>
+						</Show>
+					</Show>
+
+					<Show when={compactOffered()}>
+						<button
+							type="button"
+							class={s.headerBtn}
+							aria-label="Compact the conversation"
+							title="Compact the conversation"
+							disabled={props.chat.busy()}
+							onClick={() => void props.chat.compact()}
+						>
+							<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+								<path d="M2 6h5V1H5v2.6L1.7.3.3 1.7 3.6 5H2zm12 4H9v5h2v-2.6l3.3 3.3 1.4-1.4L12.4 11H14z" />
+							</svg>
+							Compact the conversation
+						</button>
+					</Show>
+
+					<Show when={forkOffered()}>
+						<button
+							type="button"
+							class={s.headerBtn}
+							aria-label="Fork the conversation"
+							title="Fork the conversation"
+							disabled={props.chat.busy()}
+							onClick={() => void props.chat.fork()}
+						>
+							<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+								<path d="M3 1.5a1.75 1.75 0 0 1 .75 3.33V6.5h4.5V4.83a1.75 1.75 0 1 1 1.5 0V6.5A1.5 1.5 0 0 1 8.25 8H8v3.17a1.75 1.75 0 1 1-1.5 0V8H3.75A1.5 1.5 0 0 1 2.25 6.5V4.83A1.75 1.75 0 0 1 3 1.5zm0 1.5a.25.25 0 1 0 0 .5.25.25 0 0 0 0-.5z" />
+							</svg>
+							Fork the conversation
+						</button>
+					</Show>
+				</div>
+			</details>
 
 			<Show when={settingsOpen()}>
 				<SessionSettingsDialog chat={props.chat} options={selectOptions()} onClose={() => setSettingsOpen(false)} />
@@ -341,3 +368,17 @@ export const SessionControls: Component<{ chat: AcpChat }> = (props) => {
 		</div>
 	);
 };
+
+export function sessionSummary(chat: AcpChat): string {
+	return (
+		chat
+			.configOptions()
+			.filter((option): option is SelectOption => option.type === "select")
+			.filter((option) => option.id === "model" || option.id === "mode")
+			.map(
+				(option) =>
+					`${option.name}: ${option.id === "model" ? choiceName(option).split("/").at(-1) : choiceName(option)}`,
+			)
+			.join(" · ") || "Model: pending · Mode: pending"
+	);
+}

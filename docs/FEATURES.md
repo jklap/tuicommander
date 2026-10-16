@@ -1,5 +1,7 @@
 # TUICommander — Complete Feature Reference
 
+- AI Chat uses a compact title picker, labelled overflow actions and one-line process disclosures; model and repository sit below the composer (#1958-b67e).
+
 Repository Settings exposes inherited overrides, scripts, team sharing, and a scoped reset card in the shared Settings vocabulary.
 
 Agents Settings uses machine-scoped headers, section cards, and responsive named run-configuration editors, with separate terminal permissions and hibernation sections.

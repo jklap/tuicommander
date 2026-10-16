@@ -20,6 +20,7 @@ import { ComposePinIcon, ComposeSendIcon } from "../shared/ComposeActionIcons";
 import actions from "../shared/ComposeActions.module.css";
 import s from "./AIChatPanel.module.css";
 import { aiChatDraft } from "./draft";
+import { sessionSummary } from "./SessionControls";
 import type { AcpChat } from "./useAcpChat";
 
 const MIN_HEIGHT_PX = 36;
@@ -175,22 +176,6 @@ export const Composer: Component<{
 
 	return (
 		<>
-			<Show when={props.chat.operatingRepo?.()}>
-				{(repo) => (
-					<div class={s.repoContext}>
-						<span style={{ color: getRepoTextColor(repo()) }}>{pathBasename(repo())}</span>
-						<button
-							type="button"
-							aria-label={props.chat.pinnedRepo?.() ? "Unpin repository" : "Pin repository"}
-							aria-pressed={!!props.chat.pinnedRepo?.()}
-							disabled={!props.chat.sessionId()}
-							onClick={() => props.chat.toggleRepoPin()}
-						>
-							{props.chat.pinnedRepo?.() ? "Pinned repository" : "Follow repository"}
-						</button>
-					</div>
-				)}
-			</Show>
 			<div
 				ref={inputArea}
 				class={props.mobileAttachments ? `${s.inputArea} ${s.mobileComposer} ${mobileInput.form}` : s.inputArea}
@@ -355,6 +340,25 @@ export const Composer: Component<{
 						<ComposeSendIcon />
 					)}
 				</button>
+			</div>
+			<div class={s.composerMeta}>
+				<span class={s.sessionSettingsSummary}>{sessionSummary(props.chat)}</span>{" "}
+				<Show when={props.chat.operatingRepo?.()}>
+					{(repo) => (
+						<div class={s.repoContext}>
+							<span style={{ color: getRepoTextColor(repo()) }}>{pathBasename(repo())}</span>
+							<button
+								type="button"
+								aria-label={props.chat.pinnedRepo?.() ? "Unpin repository" : "Pin repository"}
+								aria-pressed={!!props.chat.pinnedRepo?.()}
+								disabled={!props.chat.sessionId()}
+								onClick={() => props.chat.toggleRepoPin()}
+							>
+								{props.chat.pinnedRepo?.() ? "Pinned repository" : "Follow repository"}
+							</button>
+						</div>
+					)}
+				</Show>
 			</div>
 		</>
 	);

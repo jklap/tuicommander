@@ -129,3 +129,48 @@ describe("transcript presentation", () => {
 		expect(grid[0]).not.toContain(blocks[4].textContent ?? "");
 	});
 });
+
+// Catches: old suggested replies remaining actionable after a newer answer.
+it("offers suggestions only beneath the latest answer", () => {
+	const { getAllByRole } = render(() => (
+		<Transcript
+			busy={() => false}
+			emptyMessage=""
+			onSuggestion={() => {}}
+			entries={() => [
+				{ id: "a", kind: "agent", text: "First answer\n\nsuggest: [ Old one | Old two | Old three ]" },
+				{ id: "u", kind: "user", text: "Next" },
+				{ id: "b", kind: "agent", text: "Latest answer\n\nsuggest: [ New one | New two | New three ]" },
+			]}
+		/>
+	));
+	expect(
+		getAllByRole("button")
+			.filter((button) => button.closest('[aria-label="Suggested replies"]'))
+			.map((button) => button.textContent),
+	).toEqual(["New one", "New two", "New three"]);
+});
+// Catches: process intent and tool disclosure occupying two separate rows; failures staying collapsed.
+it("merges intent into the activity line and opens failed output", () => {
+	const { container } = transcript([
+		{ id: "intent", kind: "agent", text: "intent: Reading the source (Source check)" },
+		{
+			id: "tool",
+			kind: "tool",
+			call: {
+				toolCallId: "read",
+				kind: "read",
+				title: "Read source",
+				status: "failed",
+				content: [{ type: "content", content: { type: "text", text: "File unavailable" } }],
+			},
+		},
+	]);
+	const activity = container.querySelector<HTMLDetailsElement>("details[class*=toolActivity]")!;
+	expect(activity.open).toBe(true);
+	expect(activity.querySelector("details")?.open).toBe(true);
+	expect(activity.querySelector("summary")?.textContent).toContain("Source check");
+	expect(activity.querySelector("summary")?.textContent).toContain("Reading the source");
+	expect(activity.querySelector("summary")?.textContent).toContain("1 read");
+	expect(container.querySelector('[aria-label="Agent intent"]')).toBeNull();
+});

@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Tidy AI Chat into one header row with labelled overflow actions, compact process disclosures, latest-answer suggestions, and no synthetic history timing (#1958-b67e).
+
 - Restyle repository Settings with inherited override rows, script cards, team sharing, and a scoped reset action.
 
 - Restyle Agents Settings and named run editors while preserving machine ownership, draft saves, terminal permissions, and hibernation policy.
