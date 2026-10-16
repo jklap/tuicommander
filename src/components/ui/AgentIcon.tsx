@@ -3,7 +3,7 @@ import type { AgentType } from "../../agents";
 
 export interface AgentIconProps {
 	agent: AgentType;
-	/** Model provider the session runs on. Only `ego` reads it: ego is a harness over many providers. */
+	/** Model provider metadata; it does not change the session identity icon. */
 	provider?: string | null;
 	size?: number;
 }
@@ -14,46 +14,14 @@ interface IconPath {
 	evenodd?: boolean;
 }
 
-/** Icons for model providers that no agent type already owns. */
-const PROVIDER_ONLY_PATHS = {
-	// Generic ego: ring around an epsilon. Also the fallback for a provider with no icon.
+/** SVG path data for agents with official brand icons */
+const AGENT_PATHS: Partial<Record<AgentType, IconPath>> = {
+	// ego: ring around an epsilon.
 	ego: {
 		viewBox: "0 0 24 24",
 		evenodd: true,
 		d: "M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 2a8 8 0 1 1 0 16 8 8 0 0 1 0-16zM15 8.5H11a2 2 0 0 0-2 2v3a2 2 0 0 0 2 2h4V14h-3.5a.5.5 0 0 1-.5-.5v-.75h3.5v-1.5H11v-.75a.5.5 0 0 1 .5-.5H15z",
 	},
-	// GitHub Copilot: simplified goggled face
-	copilot: {
-		viewBox: "0 0 24 24",
-		evenodd: true,
-		d: "M12 3C7.6 3 4 5.500 4 9v3c0 1 .6 2 1.600 2.400C6.700 17.900 9.100 20 12 20s5.300-2.100 6.400-5.600c1-.4 1.600-1.400 1.600-2.400V9c0-3.500-3.600-6-8-6zM8.500 10.500a1.500 1.500 0 1 1 0 3 1.500 1.500 0 0 1 0-3zm7 0a1.500 1.500 0 1 1 0 3 1.500 1.500 0 0 1 0-3z",
-	},
-	// xAI / Grok: ring cut by a slash
-	grok: {
-		viewBox: "0 0 24 24",
-		evenodd: true,
-		d: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zm0 2a7 7 0 1 1 0 14 7 7 0 0 1 0-14zM19 2.600L21.400 5 5 21.400 2.600 19z",
-	},
-	// OpenRouter: two routes merging into one arrow
-	openrouter: {
-		viewBox: "0 0 24 24",
-		d: "M2 7h5.200c1.300 0 2.500.6 3.300 1.600l1.500 1.800-1.200 1.500-1.700-2.100A2 2 0 0 0 7.200 9H2zM2 15h5.200c.6 0 1.200-.3 1.600-.8l5.600-7C15.600 5.700 17 5 18.600 5H19V3l4 3.500-4 3.500V8h-.4c-.9 0-1.700.4-2.200 1.100l-5.600 7c-1.100 1.300-2.700 2-4.400 2H2z",
-	},
-} satisfies Record<string, IconPath>;
-
-/** ego provider id (the first segment of its `provider/model`) → icon key. */
-const EGO_PROVIDER_ICON: Record<string, AgentType | keyof typeof PROVIDER_ONLY_PATHS> = {
-	anthropic: "claude",
-	"github-copilot": "copilot",
-	openai: "codex",
-	"openai-codex": "codex",
-	gemini: "gemini",
-	xai: "grok",
-	openrouter: "openrouter",
-};
-
-/** SVG path data for agents with official brand icons */
-const AGENT_PATHS: Partial<Record<AgentType, IconPath>> = {
 	// Claude sparkle/asterisk (source: simpleicons.org)
 	claude: {
 		viewBox: "0 0 24 24",
@@ -91,13 +59,9 @@ const AGENT_PATHS: Partial<Record<AgentType, IconPath>> = {
 	},
 };
 
-/** The icon to draw: an ego session shows its provider's, any other agent its own. */
-export function resolveAgentIcon(agent: AgentType, provider?: string | null): IconPath | undefined {
-	if (agent !== "ego") return AGENT_PATHS[agent];
-	const key = EGO_PROVIDER_ICON[provider ?? ""] ?? "ego";
-	return key in PROVIDER_ONLY_PATHS
-		? PROVIDER_ONLY_PATHS[key as keyof typeof PROVIDER_ONLY_PATHS]
-		: AGENT_PATHS[key as AgentType];
+/** Session identity determines the icon, never the model provider. */
+export function resolveAgentIcon(agent: AgentType, _provider?: string | null): IconPath | undefined {
+	return AGENT_PATHS[agent];
 }
 
 /** Returns an inline SVG string for the given agent, or null if no icon exists. */
