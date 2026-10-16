@@ -82,13 +82,19 @@ describe("initApp", () => {
 		const pending = new Promise<() => void>((resolve) => {
 			release = resolve;
 		});
-		const subscription = vi.spyOn(transport, "subscribeEvents").mockReturnValueOnce(pending);
+		const subscribe = transport.subscribeEvents;
+		const subscription = vi.spyOn(transport, "subscribeEvents").mockImplementation((handlers, options) => {
+			if ("progress-recorded" in handlers) return pending;
+			return subscribe(handlers, options);
+		});
 		let finished = false;
 		const initializing = initApp(createMockDeps()).then(() => {
 			finished = true;
 		});
 		try {
-			await vi.waitFor(() => expect(subscription).toHaveBeenCalled());
+			await vi.waitFor(() =>
+				expect(subscription.mock.calls.some(([handlers]) => "progress-recorded" in handlers)).toBe(true),
+			);
 			await new Promise((resolve) => setTimeout(resolve, 0));
 			expect(finished).toBe(false);
 		} finally {
