@@ -13,6 +13,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Restyle Workspace Settings with section cards, aligned terminal and Git fields, and action-first shortcut rows while preserving existing behavior.
 - Bound `tuic bg` completion command labels to one line and 120 characters; keep the full command before job output in the log (#1950-43b7).
 ### Fixed
+- Confirm Telegram chat linking, explain start and invalid codes, and clear the consumed Settings hint (#1955-2f43).
 - Keep missing Pocket voices visible in Settings with a download action; use the installed same-language default for spoken replies.
 
 - Bind hands-free conversation start/stop to Cmd+Alt+V (Ctrl+Alt+V on Windows/Linux), with user overrides preserved (#1953-3da5).
@@ -33,6 +34,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Add explicit owner-backed settings choice refresh; notification output enumeration reports unavailable separately from an empty device list (#1908-c327).
 ### Added
+- Show a redacted, memory-only log of the last 20 Telegram events in Settings (#1956-c325).
 
 - Show native terminal ego provider recovery with phase, attempt, next-retry countdown and a Force retry control; notify managed parents on recovery entry and exit (#1902-7010).
 

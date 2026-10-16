@@ -35,6 +35,23 @@ impl NativeMail {
     }
 }
 impl MailPort for NativeMail {
+    async fn setup_reply(
+        &mut self,
+        chat: i64,
+        message: super::settings::SetupReply,
+    ) -> Result<(), Error> {
+        let (reply, receive) = oneshot::channel();
+        self.commands
+            .send(Command::SetupReply {
+                chat,
+                message,
+                reply,
+            })
+            .await
+            .map_err(|_| Error::State)?;
+        receive.await.map_err(|_| Error::State)??;
+        Ok(())
+    }
     async fn offer(&mut self, mail: &PendingMail) -> Result<bool, Error> {
         let (reply, receive) = oneshot::channel();
         self.commands
@@ -49,6 +66,7 @@ impl MailPort for NativeMail {
     }
     async fn update(&mut self, value: &Value) -> Result<(), Error> {
         if value.get("callback_query").is_none()
+            && value.get("message").is_none()
             && value.get("stopped_message_generation").is_none()
         {
             return Ok(());
@@ -190,7 +208,7 @@ async fn wait(
                 let Some(command) = command else { return; };
                 let reply = match command {
                     Command::Automation { .. } => continue,
-                    Command::Tool { reply, .. } | Command::Deliver { reply, .. } | Command::Update { reply, .. } => reply,
+                    Command::Tool { reply, .. } | Command::Deliver { reply, .. } | Command::Update { reply, .. } | Command::SetupReply { reply, .. } => reply,
                 };
                 let _ = reply.send(Err(error));
             }

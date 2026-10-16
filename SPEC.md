@@ -841,7 +841,7 @@ excluded from this protocol and local mail survives hub loss.
 
 ## Telegram channel implementation status (#1438-79b4)
 
-The headless daemon provides native Telegram mail, correlated drafts, exact final replies, done/blocked notices and opaque callbacks. Any MCP-bound TUIC agent opts in with `telegram register`; one volatile registration replaces the previous agent with one mail notice. Registration ends on MCP session end, PTY close or agent exit while its shell remains. No configured agent UUID is required. Allowed inbound without an agent replies "Nessun agent registrato" and drops; strangers stay silent. Only the cursor persists, so restart may lose unread mail and requires registration again. Single-destination sends and private token/allowlist authorization remain. See [Telegram channel](docs/design/telegram-channel.md). Live mint deployment remains pending.
+The headless daemon provides native Telegram mail, correlated drafts, exact final replies, done/blocked notices and opaque callbacks. Any MCP-bound TUIC agent opts in with `telegram register`; one volatile registration replaces the previous agent with one mail notice. Registration ends on MCP session end, PTY close or agent exit while its shell remains. No configured agent UUID is required. Allowed inbound without an agent replies "No agent is listening. Ask an agent in TUICommander to register for Telegram." and drops; strangers stay silent. Only the cursor persists, so restart may lose unread mail and requires registration again. Single-destination sends and private token/allowlist authorization remain. See [Telegram channel](docs/design/telegram-channel.md). Live mint deployment remains pending.
 
 Workflow safety: pinned checks own process trees and stop on timeout, run cancellation, and shutdown. Operator decisions and workflow policy mutations require host Human authority (desktop IPC or credential-authenticated HTTP). Workflow plan Done requires current integration evidence for every approved story; stale canonical refs reopen its derived state until recertification.
 
@@ -1147,3 +1147,5 @@ show recovery and offer `/retry`; MCP session `force_retry` provides the same
 single-command control. Entry/exit notices reach managed parents. Explicit clear,
 busy/idle markers and shell OSC 133 A retract recovery. This is PTY-only and does
 not attach ACP to a terminal process. Wire limits are in docs/backend/output-parser.md.
+
+Telegram Settings reads a process-local in-memory ring of the last 20 events through the existing status endpoint. Time, direction, kind, safe outcome and a redacted preview of at most 60 Unicode characters are shown newest first. Pairing input and unauthorized text are never retained. The ring is not persisted and clears on process restart; it is not shared across owner/standby processes.

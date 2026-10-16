@@ -9,6 +9,7 @@ mod native;
 mod notifications;
 mod offset;
 mod outbound;
+pub(crate) mod recent;
 mod registration;
 mod runtime;
 pub(crate) mod settings;
