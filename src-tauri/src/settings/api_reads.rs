@@ -17,6 +17,49 @@ impl Settings {
             return Err(Error::new("settings", "out_of_range"));
         }
         match store {
+            "prompts" if paths.iter().any(|path| path == "/prompts") => {
+                if *target != Target::Instance {
+                    return Err(Error::new(store, "not_found"));
+                }
+                let catalogue = self.catalogue.clone();
+                let paths = paths.to_vec();
+                tokio::task::spawn_blocking(move || {
+                    // The typed prompt owner contains only id/label/text/pinned, never vault data.
+                    let document =
+                        crate::settings::prompts::PromptsSettingsStore::default().read()?;
+                    let mut snapshot = Snapshot {
+                        revision: crate::settings::transaction::revision(&document)?,
+                        values: Default::default(),
+                        choices: Default::default(),
+                    };
+                    for path in paths {
+                        if path == "/prompts" {
+                            let value = document["prompts"].clone();
+                            snapshot.values.insert(
+                                path,
+                                StoredValue {
+                                    stored: value.clone(),
+                                    effective: value,
+                                    source: "stored".into(),
+                                },
+                            );
+                        } else {
+                            snapshot.values.extend(
+                                service::snapshot(
+                                    &catalogue,
+                                    "prompts",
+                                    vec![path],
+                                    document.clone(),
+                                )?
+                                .values,
+                            );
+                        }
+                    }
+                    Ok(Some(snapshot))
+                })
+                .await
+                .map_err(|_| Error::new(store, "store_failed"))?
+            }
             "github_accounts" => {
                 if *target != Target::Machine {
                     return Err(Error::new(store, "not_found"));
