@@ -891,9 +891,15 @@ struct PromptEntry {
 
 ### Keybindings (`keybindings.json`)
 
-**Type:** `serde_json::Value` (flexible JSON, shape defined by frontend)
+**Wire type:** array of typed `{action: string, key: string | null}` records. Null or an empty key disables an action. Rust validates unique bounded action IDs, bounded keys and modifier syntax. Any stable action string can round-trip, including unloaded plugin actions. Built-in action inventory is checked against `keybindingDefaults.ts`; dynamic choices explicitly report unavailable because plugin actions are frontend-registered and will bind in Step 9 UI parity.
 
-Custom keyboard shortcut overrides.
+The settings owner projects this array as `/bindings/{action}/key`, with stable-action create/remove operations. It preserves the file format. Both UI delta saves and settings transactions validate under the same `ConfigFile` lock before persistence.
+
+### Pane layout (`pane-layout.json`)
+
+Rust validates the existing `{root, groups, activeGroupId}` document after merging each UI delta. Geometry uses leaf group IDs and horizontal/vertical branches. Maximum branch depth is 3; each branch has 2–20 children, matching positive ratios of at least 0.05 summing to 1. Duplicate or missing group references are rejected without writing.
+
+The settings owner exposes `/root` as a structured bounded geometry value. Group IDs, tab membership, active tabs and active group are individually classified as runtime restoration state. They are not settings mutation paths; geometry edits preserve them and must reference the existing groups. No sidebar-click or drag/drop behavior changes.
 
 **Commands:** `load_keybindings()`, `save_keybindings(base, config)`
 
@@ -1646,13 +1652,6 @@ The internal settings owner service accepts `describe` and `refresh` with an exp
 Notification output choices use the same bounded enumeration and `{name, is_default}` objects as the existing UI command. Discovery never saves notification configuration. This internal contract does not publish the later settings MCP/HTTP cutover.
 
 
-Agent model settings support typed model edits without starting a CLI. Explicit
-choice refresh probes only the addressed Claude run config with `--help`, using
-its command and environment. Published aliases are suggestions, not account
-entitlement or an exhaustive model list. Other CLIs and failed probes report
-unavailable choices; typed edits remain supported. Describe never probes. Model
-edits preserve sibling configs and the default selection and apply next session
-(#1910-451e).
-Telegram settings owner actions support write-only `set_token`/`clear_token` and stable positive `add_chat`/`remove_chat` IDs. Reads return token presence only. These actions use the existing private setup files and setup lock and never acquire the polling-owner lock. Token verification or final owner readback can fail after persistence: `persisted:true` requires owner readback before retry, including after a successful token clear or allowlist action.
+### App setting choices
 
-Connection settings credential actions set/clear the password or pairing token for an existing immutable connection ID through the vault owner. Inputs are write-only; readback reports separate presence states, and vault read errors remain unavailable rather than unset. Failed writes leave the saved record and old credential reachable. A committed write followed by failed readback returns `persisted:true`; read presence before retrying. Successful writes invoke the runtime reconciliation callback without editing connection metadata.
+Font families use the Rust-owned bundled-font option file shared with the UI; these are bundled woff2 families, not arbitrary host fonts. Themes reuse the Rust theme loader and retain custom theme IDs. IDE refresh reuses cross-platform installed-IDE discovery and returns the same value/label options used by the launcher. Catalogue construction and describe never run host probes. Explicit refresh runs discovery off the async executor and caches choices; unavailable discovery is distinct from a successful empty list. Font and IDE edits validate supported choices without launching a probe.

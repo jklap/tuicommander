@@ -18,52 +18,10 @@
     "reason": "Accepted gap for story 1825-4566: repositories.json registration and group records remain untyped; converting the owner requires classification of runtime tab/worktree identities and delta-save contracts. A raw JSON settings adapter would bypass those owner invariants. Keep Step 4d ownership and block cutover until a typed owner schema is delivered."
   },
   {
-    "store": "keybindings",
-    "path": "/{action}",
-    "ownerStep": "Step 4g",
-    "reason": "Keybindings are untyped serde_json::Value; move the action/key record and dynamic-action choices into the owner schema."
-  },
-  {
-    "store": "pane_layout",
-    "path": "/root",
-    "ownerStep": "Step 4g",
-    "reason": "Recursive geometry is currently frontend-owned JSON; define a bounded Rust schema with stable node IDs."
-  },
-  {
-    "store": "pane_layout",
-    "path": "/groups/{id}",
-    "ownerStep": "Step 4g",
-    "reason": "Tab/group layout references and active group are currently frontend-owned JSON; separate settings from runtime tab identities."
-  },
-  {
-    "store": "pane_layout",
-    "path": "/activeGroupId",
-    "ownerStep": "Step 4g",
-    "reason": "Review whether active pane selection is a setting or runtime selection, then describe or individually exclude it."
-  },
-  {
     "store": "upstreams",
     "path": "/servers/{id}/credentials",
     "ownerStep": "Step 4e",
     "reason": "Vault-backed bearer/OAuth/header operations need the upstream owner schema; persisted credential references do not cover credential actions."
-  },
-  {
-    "store": "app",
-    "path": "/font_family",
-    "ownerStep": "Step 4g",
-    "reason": "System font choices need an explicit dynamic resolver; schema string is not an authoritative choice list."
-  },
-  {
-    "store": "app",
-    "path": "/theme",
-    "ownerStep": "Step 4g",
-    "reason": "Theme choices are frontend-owned; move them to an owner resolver before UI parity."
-  },
-  {
-    "store": "app",
-    "path": "/ide",
-    "ownerStep": "Step 4g",
-    "reason": "IDE availability choices need a host resolver; no implicit process probing during describe."
   },
   {
     "store": "voice",

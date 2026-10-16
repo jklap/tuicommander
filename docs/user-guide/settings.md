@@ -523,10 +523,6 @@ Use **Follow task** in an item detail to follow comments locally; use **Unfollow
 GitHub provides a full normal-comment count, so an increase is detected even beyond the first page. Jira and GitLab provide paged comment entries: newly observed comments notify when their creation time is newer than the prior baseline, or when a previously unseen comment ID shares its latest timestamp. Unloaded pages, unseen review sources and items that are not refreshed cannot produce a notice. Editing a comment or loading older history does not notify. No Linear provider is shipped, so it is not covered.
 
 
-Agent model settings support typed model edits without starting a CLI. Explicit
-choice refresh probes only the addressed Claude run config with `--help`, using
-its command and environment. Published aliases are suggestions, not account
-entitlement or an exhaustive model list. Other CLIs and failed probes report
-unavailable choices; typed edits remain supported. Describe never probes. Model
-edits preserve sibling configs and the default selection and apply next session
-(#1910-451e).
+Shortcut saves reject invalid action identities, duplicate action records and invalid modifier syntax. Plugin shortcuts retain stable namespaced IDs. Pane geometry saves reject invalid ratios, excessive nesting and missing groups without changing saved layout. Runtime tab membership and current pane focus remain session restoration state.
+
+Font options come from the bundled font catalogue. Theme options include custom themes from the Rust theme owner. Settings choice discovery is explicit: describe does not probe installed applications; refresh requests host IDE discovery. Unavailable discovery is not an empty result.
