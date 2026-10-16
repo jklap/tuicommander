@@ -185,7 +185,7 @@ export const EgoPerimeterSection: Component<{ client?: EgoPerimeterClient }> = (
 									</>
 								)}
 							</SettingRow>
-							<SettingRow label={t("perimeter.execSandbox", "Exec sandbox:")}>
+							<SettingRow label="Exec sandbox">
 								{() => (
 									<>
 										<StatusBadge

@@ -57,7 +57,7 @@ describe("EgoPerimeterSection", () => {
 				/>
 			));
 			expect(await screen.findByText(text)).toBeTruthy();
-			expect(screen.getByText("Exec sandbox:")).toBeTruthy();
+			expect(screen.getByText("Exec sandbox")).toBeTruthy();
 			if (execEnforcement === "promptOnly") expect(screen.getByText(/not fully OS-enforced/)).toBeTruthy();
 		},
 	);
