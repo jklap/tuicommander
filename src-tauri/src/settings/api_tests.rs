@@ -215,3 +215,43 @@ async fn github_catalogue_paths_use_owner_projection() {
         "{result}"
     );
 }
+
+// Catches: removing the config tool also removing stable-id prompt editing/readback.
+#[tokio::test]
+async fn settings_prompt_crud_survives_config_removal() {
+    let (_dir, _guard, state) = super::accounts_tests::isolated();
+    let get =
+        json!({"action":"get","target":{"kind":"instance"},"store":"prompts","paths":["/prompts"]});
+    let initial = api::execute(&state, get.clone(), Caller::native()).await;
+    assert_eq!(
+        initial["values"]["/prompts"]["stored"],
+        json!([]),
+        "{initial}"
+    );
+    let create = json!({"action":"patch","target":{"kind":"instance"},"store":"prompts",
+        "expectedRevision":initial["revision"],"operations":[{"op":"create","path":"/prompts","id":"fixture",
+        "value":{"id":"fixture","label":"One","text":"First","pinned":false}}]});
+    let remote = Caller::mcp("192.0.2.1:1234".parse().unwrap(), "remote".into(), true);
+    let refused = api::execute(&state, create.clone(), remote).await;
+    assert_eq!(refused["error"]["code"], "forbidden_origin");
+    let created = api::execute(&state, create, Caller::native()).await;
+    assert_eq!(created["persisted"], true, "{created}");
+    let edit = json!({"action":"patch","target":{"kind":"instance"},"store":"prompts",
+        "expectedRevision":created["revision"],"operations":[{"op":"set","path":"/prompts/fixture/text","value":"Second"},
+        {"op":"set","path":"/prompts/fixture/pinned","value":true}]});
+    let edited = api::execute(&state, edit, Caller::native()).await;
+    assert_eq!(edited["persisted"], true, "{edited}");
+    let read = api::execute(&state, get.clone(), Caller::native()).await;
+    assert_eq!(
+        read["values"]["/prompts"]["stored"],
+        json!([{"id":"fixture","label":"One","text":"Second","pinned":true}])
+    );
+    let remove = json!({"action":"patch","target":{"kind":"instance"},"store":"prompts",
+        "expectedRevision":read["revision"],"operations":[{"op":"remove","path":"/prompts","id":"fixture"}]});
+    let removed = api::execute(&state, remove, Caller::native()).await;
+    assert_eq!(removed["persisted"], true, "{removed}");
+    let empty = api::execute(&state, get, Caller::native()).await;
+    assert_eq!(empty["values"]["/prompts"]["stored"], json!([]));
+    let missing = api::execute(&state, json!({"action":"get","target":{"kind":"instance"},"store":"prompts","paths":["/prompts/fixture/text"]}), Caller::native()).await;
+    assert_eq!(missing["error"]["code"], "not_found");
+}
