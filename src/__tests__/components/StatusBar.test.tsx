@@ -35,6 +35,7 @@ vi.mock("../../hooks/useGitHub", () => ({
 }));
 
 vi.mock("../../stores/repositories", () => ({
+	resolveRepoPathFor: (path: string) => path,
 	repositoriesStore: {
 		getActive: mockGetActive,
 		get: vi.fn(() => undefined),

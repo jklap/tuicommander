@@ -166,6 +166,12 @@ export const TIPS: Tip[] = [
 		shortcut: null,
 	},
 	{
+		feature: "AI Chat Repository Pin",
+		description:
+			"Use Pin repository beside the AI Chat composer to keep that conversation on one repository while you browse elsewhere. Draft parking stays separate.",
+		shortcut: null,
+	},
+	{
 		feature: "Repository Ego Profiles",
 		description:
 			"Select ego_profile in a workspace's .tuic.json. Ego restricts it to your explicit machine profile and AI Chat shows any clamp warnings.",

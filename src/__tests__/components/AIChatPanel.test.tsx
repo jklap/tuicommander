@@ -1558,6 +1558,142 @@ describe("AIChatPanel: parallel tabs", () => {
 		await settle();
 		expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SESSION, longPaste, [], ROOT);
 	});
+	it("middle-click closes the chosen tab — catches missing auxclick handling", async () => {
+		client.newSession.mockResolvedValueOnce(SESSION).mockResolvedValueOnce(SECOND_SESSION);
+		const { container } = await renderPanel();
+		(container.querySelector('button[aria-label="New chat tab"]') as HTMLButtonElement).click();
+		await settle();
+		const tab = container.querySelector(`[data-chat-session="${SECOND_SESSION}"]`)!;
+		tab.dispatchEvent(new MouseEvent("auxclick", { button: 2, bubbles: true }));
+		await settle();
+		expect(container.querySelectorAll("[data-chat-session]")).toHaveLength(2);
+		tab.dispatchEvent(new MouseEvent("auxclick", { button: 1, bubbles: true, cancelable: true }));
+		await settle();
+		expect(container.querySelector(`[data-chat-session="${SECOND_SESSION}"]`)).toBeNull();
+		expect(container.querySelector(`[data-chat-session="${SESSION}"]`)?.getAttribute("aria-selected")).toBe("true");
+		const last = container.querySelector(`[data-chat-session="${SESSION}"]`)!;
+		last.dispatchEvent(new MouseEvent("auxclick", { button: 1, bubbles: true }));
+		last.dispatchEvent(new MouseEvent("auxclick", { button: 2, bubbles: true }));
+		await settle();
+		expect(container.querySelectorAll("[data-chat-session]")).toHaveLength(1);
+	});
+
+	it("Escape stops from composer and transcript without clearing drafts — catches missing Escape stop", async () => {
+		const { container } = await renderPanel();
+		await typeAndSend(container, "Start work");
+		acpStore.applySnapshot(
+			snapshot({
+				attachments: [
+					attachment({
+						state: "prompting",
+						activeTurn: { turnId: "turn-1", state: "running", stopReason: null, usage: null },
+					}),
+				],
+			}),
+		);
+		const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+		textarea.value = "Keep this draft";
+		textarea.dispatchEvent(new Event("input", { bubbles: true }));
+		for (const target of [textarea, container.querySelector('[aria-label="Chat transcript"]')!]) {
+			target.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+			await settle();
+		}
+		expect(client.cancel).toHaveBeenCalledTimes(2);
+		expect(textarea.value).toBe("Keep this draft");
+	});
+
+	it("Escape leaves idle drafts intact and closes Find before stopping a busy turn", async () => {
+		const { container } = await renderPanel();
+		const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+		textarea.value = "Keep this draft";
+		textarea.dispatchEvent(new Event("input", { bubbles: true }));
+		textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+		await settle();
+		expect(client.cancel).not.toHaveBeenCalled();
+		acpStore.applySnapshot(
+			snapshot({
+				attachments: [
+					attachment({
+						state: "prompting",
+						activeTurn: { turnId: "turn-1", state: "running", stopReason: null, usage: null },
+					}),
+				],
+			}),
+		);
+		const transcript = container.querySelector('[aria-label="Chat transcript"]')!;
+		transcript.dispatchEvent(new KeyboardEvent("keydown", { key: "f", ctrlKey: true, bubbles: true }));
+		await settle();
+		container
+			.querySelector('[aria-label="Find in chat"]')!
+			.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+		await settle();
+		expect(container.querySelector('[aria-label="Find in chat"]')).toBeNull();
+		expect(client.cancel).not.toHaveBeenCalled();
+		expect(textarea.value).toBe("Keep this draft");
+	});
+
+	it("Escape in the composer dismisses open Find before cancelling work — catches sibling search bypass", async () => {
+		const { container } = await renderPanel();
+		await typeAndSend(container, "Keep working");
+		acpStore.applySnapshot(
+			snapshot({
+				attachments: [
+					attachment({
+						state: "prompting",
+						activeTurn: { turnId: "turn-1", state: "running", stopReason: null, usage: null },
+					}),
+				],
+			}),
+		);
+		const transcript = container.querySelector('[aria-label="Chat transcript"]')!;
+		transcript.dispatchEvent(new KeyboardEvent("keydown", { key: "f", ctrlKey: true, bubbles: true }));
+		await settle();
+		expect(container.querySelector('[aria-label="Find in chat"]')).not.toBeNull();
+		const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+		textarea.value = "Next question";
+		textarea.dispatchEvent(new Event("input", { bubbles: true }));
+		textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+		await settle();
+		expect(client.cancel).not.toHaveBeenCalled();
+		expect(container.querySelector('[aria-label="Find in chat"]')).toBeNull();
+		expect(textarea.value).toBe("Next question");
+	});
+
+	it("middle-click does not reopen an uncertain-effect refusal or close it on the agent", async () => {
+		restoreTabs();
+		client.loadSession.mockRejectedValueOnce(
+			new Error('RPC acp_session_load failed: 502 {"message":"uncertain effect; start a new chat","retryable":false}'),
+		);
+		const { container } = renderIdlePanel();
+		await settle();
+		selectTab(container, SECOND_SESSION);
+		await settle();
+		expect(container.textContent).toContain("uncertain effect");
+		container
+			.querySelector(`[data-chat-session="${SESSION}"]`)!
+			.dispatchEvent(new MouseEvent("auxclick", { button: 1, bubbles: true }));
+		await settle();
+		expect(container.textContent).toContain("uncertain effect");
+		expect(client.closeSession).not.toHaveBeenCalled();
+	});
+
+	it("pins per-conversation repository context without replacing draft parking", async () => {
+		const [repo, setRepo] = createSignal<string | null>(ROOT);
+		const { container } = render(() => <AIChatPanel visible={true} repoPath={repo()} onClose={() => {}} />);
+		await settle();
+		(container.querySelector('button[aria-label="New chat tab"]') as HTMLButtonElement).click();
+		await settle();
+		(container.querySelector('button[aria-label="Pin repository"]') as HTMLButtonElement).click();
+		expect(container.querySelector('button[aria-label="Unpin repository"]')?.getAttribute("aria-pressed")).toBe("true");
+		setRepo("/other/repo");
+		await typeAndSend(container, "Pinned context");
+		expect(client.prompt).toHaveBeenLastCalledWith(CONNECTION, SESSION, "Pinned context", [], ROOT);
+		expect(container.querySelector('button[aria-label="Park draft"]')).not.toBeNull();
+		(container.querySelector('button[aria-label="Unpin repository"]') as HTMLButtonElement).click();
+		await typeAndSend(container, "Follow context");
+		expect(client.prompt).toHaveBeenLastCalledWith(CONNECTION, SESSION, "Follow context", [], "/other/repo");
+	});
+
 	it("routes prompts to the selected session and returns to the neighbor when closing it", async () => {
 		client.newSession.mockResolvedValueOnce(SESSION).mockResolvedValueOnce(SECOND_SESSION);
 		const { container } = await renderPanel();
@@ -4095,6 +4231,23 @@ describe("AI Chat clipboard precedence", () => {
 		textarea.dispatchEvent(event);
 		return event;
 	}
+
+	it("stages a PNG with an empty text flavor — catches empty text masking an image", async () => {
+		supportsImages = true;
+		const { container } = await renderPanel();
+		const event = mixedPaste(container.querySelector("textarea") as HTMLTextAreaElement, "");
+		expect(event.defaultPrevented).toBe(true);
+		await vi.waitFor(() => expect(container.querySelector('img[alt="Pasted image"]')).not.toBeNull());
+		(container.querySelector('button[aria-label="Send"]') as HTMLButtonElement).click();
+		await settle();
+		expect(client.prompt).toHaveBeenCalledWith(
+			CONNECTION,
+			SESSION,
+			"",
+			[{ type: "image", mimeType: "image/png", data: PNG_1X1 }],
+			ROOT,
+		);
+	});
 
 	it("attaches Finder image copies instead of sending their file-name text", async () => {
 		// Catches: shared text precedence rejects a Finder file-name plus image clipboard.

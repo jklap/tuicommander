@@ -22,7 +22,8 @@ Published story workflows can start in Plans and Stories through the owning daem
 Desktop AI Chat uses the terminal composer’s pin and blue play buttons. The pin highlights a parked draft; tooltips identify Park, Restore, Swap, Send and Queue. Mobile Park and Stop share the input row with Attach and Send.
 
 
-AI Chat image paste discovers capabilities on first use and shares clipboard precedence with Ideas, terminal Compose, and terminal input: Finder image filenames allow attachments, while substantive text takes priority.
+
+AI Chat image paste discovers capabilities on first use and shares clipboard precedence with Ideas, terminal Compose, and terminal input: Finder image filenames allow attachments, while substantive text takes priority. An empty text clipboard flavor does not suppress an available image.
 
 ## Desktop close and quit
 
@@ -3104,3 +3105,7 @@ App settings share bundled font and IDE option metadata between Rust and the UI.
 ### Voice owner discovery (#1909-0d24)
 
 Internal voice settings refresh resolves devices, model state, installed voices and language-filtered Edge voices through existing owners. Describe is cache-only; typed asset actions retain existing owner validation and runtime effects. Public settings transport cutover remains separate.
+
+AI Chat replies use plain chat prose without the terminal answer rail. Literal Markdown blockquotes keep their normal quote style.
+
+AI Chat can pin repository context per conversation. A separate composer control shows Pinned repository or Follow repository and the configured repository name color; draft parking stays independent.

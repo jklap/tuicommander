@@ -458,7 +458,15 @@ export function createAcpChat(
 		return id && session ? { id, session } : null;
 	}
 
+	const pinnedRepo = () => aiChatTabs.pinnedRepo(TABS, sessionId() ?? "");
+	const operatingRepo = () => pinnedRepo() ?? viewedRepo();
 	return {
+		pinnedRepo,
+		operatingRepo,
+		toggleRepoPin(): void {
+			const session = sessionId();
+			if (session) aiChatTabs.pinRepo(TABS, session, pinnedRepo() ? null : viewedRepo());
+		},
 		/** The workspace every session runs in, once ego has been started. */
 		root,
 		/** The repository on screen, sent with each prompt as a hint. */
@@ -599,7 +607,8 @@ export function createAcpChat(
 
 		async closeTab(tab: AcpSessionId): Promise<void> {
 			const active = aiChatTabs.close(TABS, tab);
-			if (!active) return;
+			// Closing another tab is not an explicit retry of the refused conversation.
+			if (!active || active === failedSession) return;
 			await selectSession(active);
 		},
 
@@ -623,8 +632,8 @@ export function createAcpChat(
 			const { id, session } = current;
 			await guard("sending the turn", () =>
 				files.length
-					? client.prompt(id, session, text, images, viewedRepo(), files)
-					: client.prompt(id, session, text, images, viewedRepo()),
+					? client.prompt(id, session, text, images, operatingRepo(), files)
+					: client.prompt(id, session, text, images, operatingRepo()),
 			);
 		},
 

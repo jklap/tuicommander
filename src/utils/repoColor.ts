@@ -1,5 +1,5 @@
 import { repoSettingsStore } from "../stores/repoSettings";
-import { repositoriesStore } from "../stores/repositories";
+import { repositoriesStore, resolveRepoPathFor } from "../stores/repositories";
 
 /** Color inheritance: repo color > group color > undefined */
 export function getRepoColor(repoPath: string): string | undefined {
@@ -11,6 +11,6 @@ export function getRepoColor(repoPath: string): string | undefined {
  *  (global.css) to keep it readable; on other themes it is the color as picked.
  *  Swatches and fills keep using getRepoColor. */
 export function getRepoTextColor(repoPath: string): string | undefined {
-	const color = getRepoColor(repoPath);
+	const color = getRepoColor(resolveRepoPathFor(repoPath) ?? repoPath);
 	return color ? `color-mix(in oklab, ${color}, #000 var(--repo-text-shade, 0%))` : undefined;
 }
