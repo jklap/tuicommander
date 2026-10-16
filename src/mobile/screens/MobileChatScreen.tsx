@@ -4,10 +4,14 @@ import { chatErrorView } from "../../components/AIChatPanel/chatError";
 import { Interactions } from "../../components/AIChatPanel/Interactions";
 import { Transcript } from "../../components/AIChatPanel/Transcript";
 import { createAcpChat } from "../../components/AIChatPanel/useAcpChat";
+import { ContentRenderer } from "../../components/ui/ContentRenderer";
 import { Select } from "../../components/ui/Select";
 import { acpTranscript } from "../../stores/acpTranscript";
+import { appLogger } from "../../stores/appLogger";
+import { registerModal } from "../../stores/modalStack";
 import { settingsStore } from "../../stores/settings";
 import type { AcpHostRequestId } from "../../types/acp";
+import { writeClipboard } from "../../utils/clipboard";
 import styles from "./MobileChatScreen.module.css";
 
 export function MobileChatScreen(props: {
@@ -16,6 +20,7 @@ export function MobileChatScreen(props: {
 }) {
 	const linkedRepository = new URLSearchParams(location.search).get("repo");
 	const linkedSession = new URLSearchParams(location.search).get("session");
+	const [tableDocument, setTableDocument] = createSignal<string | null>(null);
 	const [sharedFileError, setSharedFileError] = createSignal<string | null>(null);
 	const [linkError, setLinkError] = createSignal<string | null>(null);
 	const [sharedFile, setSharedFile] = createSignal<File | null>(null);
@@ -169,6 +174,8 @@ export function MobileChatScreen(props: {
 				muteIntermediate={settingsStore.state.chatMuteIntermediateText}
 				busy={chat.busy}
 				onOpenFile={openFile}
+				observeToolDuration={false}
+				onOpenTable={setTableDocument}
 				onSuggestion={(text) => void chat.send(text)}
 				emptyMessage={
 					!settingsReady()
@@ -202,6 +209,28 @@ export function MobileChatScreen(props: {
 					sharedFile={sharedFile()}
 					onSharedFileConsumed={() => setSharedFile(null)}
 				/>
+			</Show>
+			<Show when={tableDocument()}>
+				{(source) => {
+					registerModal(() => setTableDocument(null));
+					return (
+						<section class={styles.tableDocument} role="dialog" aria-modal="true" aria-label="AI Chat table">
+							<header class={styles.header}>
+								<strong>AI Chat table</strong>
+								<button type="button" onClick={() => setTableDocument(null)}>
+									Back to Chat
+								</button>
+							</header>
+							<ContentRenderer
+								content={source()}
+								tableActions={{
+									copy: (text) =>
+										void writeClipboard(text).catch((error) => appLogger.error("ai-chat", "Copy failed", error)),
+								}}
+							/>
+						</section>
+					);
+				}}
 			</Show>
 		</section>
 	);

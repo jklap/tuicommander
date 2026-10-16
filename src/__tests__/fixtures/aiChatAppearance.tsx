@@ -13,6 +13,7 @@ const chat = {
 	sessionId: () => "appearance-fixture",
 	busy,
 	queuedPrompts: () => [],
+	configOptions: () => [],
 	send: async () => {},
 	cancel: async () => {},
 } as unknown as AcpChat;

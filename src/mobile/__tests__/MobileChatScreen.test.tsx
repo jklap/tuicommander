@@ -387,3 +387,16 @@ describe("mobile ego chat", () => {
 		expect(screen.queryByRole("button", { name: "Start new chat" })).toBeNull();
 	});
 });
+
+// Catches: mobile Chat omitting table actions or opening a document that cannot return to the conversation.
+it("opens a table document and returns to Chat without changing its conversation", async () => {
+	const source = "| Storia | Priorità | Cosa manca |\n| --- | --- | --- |\n| #1918 | P2 | Aggiornare la sessione |";
+	createAcpChat.mockReturnValue({ ...chat(), entries: () => [{ id: "table", kind: "agent", text: source }] });
+	const view = render(() => <MobileChatScreen />);
+	await Promise.resolve();
+	fireEvent.click(view.getByRole("button", { name: "Open as document" }));
+	expect(view.getByRole("dialog", { name: "AI Chat table" })).toBeTruthy();
+	fireEvent.click(view.getByRole("button", { name: "Back to Chat" }));
+	expect(view.queryByRole("dialog")).toBeNull();
+	expect(selectSession).not.toHaveBeenCalled();
+});
