@@ -433,4 +433,8 @@
 .installSuggestion > div > div:first-child { flex: 1; min-width: 0; }
 .installSuggestion > div > div:last-child { flex: 0 0 auto; }
 .installSuggestion > div > div:last-child > div { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
-@media (max-width: 600px) { .installSuggestion > div > div:last-child > div { align-items: flex-start; } }
+@media (max-width: 600px) {
+  .installSuggestion > div { align-items: stretch; text-align: left; }
+  .installSuggestion > div > div:last-child > div { align-items: flex-start; }
+}
+.docsLink { margin-bottom: 16px; }
