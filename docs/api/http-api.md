@@ -3222,3 +3222,18 @@ force-retry validation and the input lock: non-empty composers are never overwri
 The field is omitted when no recovery is active. MCP `session action=force_retry`
 submits `/retry` once to a recovering ego PTY and returns `{submitted:true,
 session_id}` or an error; it follows the existing localhost execution restriction.
+
+### Application log acknowledgements
+
+`POST /logs` accepts `{ level, source, message, data_json?, audience? }` and
+returns HTTP **204 No Content** after adding the entry to the backend log ring.
+`DELETE /logs` also returns 204 after clearing the ring. The matching browser
+RPCs (`push_log`, `clear_logs`) resolve without a JSON value. Data-returning RPCs
+still reject empty bodies. `GET /logs` returns the log entries as JSON.
+
+Mobile lifecycle diagnostics use the existing `POST /logs` route. A prior
+abnormal document's bounded trail uses source `app`, level `warn`, audience
+`diagnostic`, and message `Mobile previous document lifecycle trail`. The client
+keeps that report in per-tab session storage until an acknowledged upload. A
+lost acknowledgement can cause a retry; this route does not provide durable
+exactly-once delivery or persist the backend ring across an app restart.
