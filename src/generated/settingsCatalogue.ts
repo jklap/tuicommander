@@ -582,12 +582,13 @@ export const settingsCatalogue = {
         "resolver": "agent_models",
         "availability": {
           "status": "unavailable",
-          "reason": "Owner choice resolver is not yet registered; see inventory gap"
-        }
+          "reason": "Explicit owner refresh required"
+        },
+        "values": null
       },
       "sensitivity": "public",
-      "apply": "live",
-      "effect": "Updates model for the current owner.",
+      "apply": "next_session",
+      "effect": "Used when the next session or process starts; existing sessions retain their launch configuration.",
       "operations": [
         "get",
         "set",
@@ -2104,12 +2105,20 @@ export const settingsCatalogue = {
         "status": "available"
       },
       "choices": {
-        "kind": "dynamic",
-        "resolver": "system_fonts",
-        "availability": {
-          "status": "unavailable",
-          "reason": "Owner choice resolver is not yet registered; see inventory gap"
-        }
+        "kind": "static",
+        "values": [
+          "JetBrains Mono",
+          "Fira Code",
+          "Hack",
+          "Cascadia Code",
+          "Iosevka",
+          "Source Code Pro",
+          "Inconsolata",
+          "IBM Plex Mono",
+          "Monaspace Neon",
+          "Commit Mono",
+          "Geist Mono"
+        ]
       },
       "sensitivity": "public",
       "apply": "next_session",
@@ -2249,9 +2258,9 @@ export const settingsCatalogue = {
         "kind": "dynamic",
         "resolver": "installed_ides",
         "availability": {
-          "status": "unavailable",
-          "reason": "Owner choice resolver is not yet registered; see inventory gap"
-        }
+          "status": "available"
+        },
+        "values": null
       },
       "sensitivity": "public",
       "apply": "live",
@@ -3781,9 +3790,9 @@ export const settingsCatalogue = {
         "kind": "dynamic",
         "resolver": "themes",
         "availability": {
-          "status": "unavailable",
-          "reason": "Owner choice resolver is not yet registered; see inventory gap"
-        }
+          "status": "available"
+        },
+        "values": null
       },
       "sensitivity": "public",
       "apply": "live",
@@ -4807,6 +4816,75 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
+    "keybindings.bindings.{action}.action": {
+      "id": "keybindings.bindings.{action}.action",
+      "store": "keybindings",
+      "owner": "instance",
+      "area": "keybindings",
+      "group": "bindings",
+      "order": 0,
+      "path": "/bindings/{action}/action",
+      "labelKey": "settings.catalogue.keybindings.bindings.{action}.action.label",
+      "helpKey": "settings.catalogue.keybindings.bindings.{action}.action.help",
+      "label": "action",
+      "schema": {
+        "type": "string"
+      },
+      "nullable": false,
+      "availability": {
+        "status": "available"
+      },
+      "choices": {
+        "kind": "dynamic",
+        "resolver": "keybinding_actions",
+        "availability": {
+          "status": "unavailable",
+          "reason": "frontend-registered plugin actions; bound in Step 9 UI parity"
+        },
+        "values": null
+      },
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Identifies a built-in or plugin shortcut action.",
+      "operations": [
+        "get"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "keybindings.bindings.{action}.key": {
+      "id": "keybindings.bindings.{action}.key",
+      "store": "keybindings",
+      "owner": "instance",
+      "area": "keybindings",
+      "group": "bindings",
+      "order": 1,
+      "path": "/bindings/{action}/key",
+      "labelKey": "settings.catalogue.keybindings.bindings.{action}.key.label",
+      "helpKey": "settings.catalogue.keybindings.bindings.{action}.key.help",
+      "label": "key",
+      "schema": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "maxLength": 128
+      },
+      "nullable": true,
+      "default": null,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Updates the shortcut override; null disables the action.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
     "notifications.audio_device": {
       "id": "notifications.audio_device",
       "store": "notifications",
@@ -4834,8 +4912,9 @@ export const settingsCatalogue = {
         "resolver": "audio_outputs",
         "availability": {
           "status": "unavailable",
-          "reason": "Owner choice resolver is not yet registered; see inventory gap"
-        }
+          "reason": "Explicit owner refresh required"
+        },
+        "values": null
       },
       "sensitivity": "private",
       "apply": "live",
@@ -5192,6 +5271,231 @@ export const settingsCatalogue = {
         "get",
         "set",
         "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "pane_layout.root": {
+      "id": "pane_layout.root",
+      "store": "pane_layout",
+      "owner": "instance",
+      "area": "pane_layout",
+      "group": "geometry",
+      "order": 0,
+      "path": "/root",
+      "labelKey": "settings.catalogue.pane_layout.root.label",
+      "helpKey": "settings.catalogue.pane_layout.root.help",
+      "label": "Pane geometry",
+      "schema": {
+        "anyOf": [
+          {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "type",
+                  "id"
+                ],
+                "properties": {
+                  "type": {
+                    "const": "leaf"
+                  },
+                  "id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "type",
+                  "direction",
+                  "children",
+                  "ratios"
+                ],
+                "properties": {
+                  "type": {
+                    "const": "branch"
+                  },
+                  "direction": {
+                    "enum": [
+                      "horizontal",
+                      "vertical"
+                    ]
+                  },
+                  "children": {
+                    "type": "array",
+                    "minItems": 2,
+                    "maxItems": 20,
+                    "items": {
+                      "oneOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "type",
+                            "id"
+                          ],
+                          "properties": {
+                            "type": {
+                              "const": "leaf"
+                            },
+                            "id": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 256
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "type",
+                            "direction",
+                            "children",
+                            "ratios"
+                          ],
+                          "properties": {
+                            "type": {
+                              "const": "branch"
+                            },
+                            "direction": {
+                              "enum": [
+                                "horizontal",
+                                "vertical"
+                              ]
+                            },
+                            "children": {
+                              "type": "array",
+                              "minItems": 2,
+                              "maxItems": 20,
+                              "items": {
+                                "oneOf": [
+                                  {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "required": [
+                                      "type",
+                                      "id"
+                                    ],
+                                    "properties": {
+                                      "type": {
+                                        "const": "leaf"
+                                      },
+                                      "id": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 256
+                                      }
+                                    }
+                                  },
+                                  {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "required": [
+                                      "type",
+                                      "direction",
+                                      "children",
+                                      "ratios"
+                                    ],
+                                    "properties": {
+                                      "type": {
+                                        "const": "branch"
+                                      },
+                                      "direction": {
+                                        "enum": [
+                                          "horizontal",
+                                          "vertical"
+                                        ]
+                                      },
+                                      "children": {
+                                        "type": "array",
+                                        "minItems": 2,
+                                        "maxItems": 20,
+                                        "items": {
+                                          "type": "object",
+                                          "additionalProperties": false,
+                                          "required": [
+                                            "type",
+                                            "id"
+                                          ],
+                                          "properties": {
+                                            "type": {
+                                              "const": "leaf"
+                                            },
+                                            "id": {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 256
+                                            }
+                                          }
+                                        }
+                                      },
+                                      "ratios": {
+                                        "type": "array",
+                                        "minItems": 2,
+                                        "maxItems": 20,
+                                        "items": {
+                                          "type": "number",
+                                          "minimum": 0.05,
+                                          "maximum": 1
+                                        }
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            },
+                            "ratios": {
+                              "type": "array",
+                              "minItems": 2,
+                              "maxItems": 20,
+                              "items": {
+                                "type": "number",
+                                "minimum": 0.05,
+                                "maximum": 1
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  "ratios": {
+                    "type": "array",
+                    "minItems": 2,
+                    "maxItems": 20,
+                    "items": {
+                      "type": "number",
+                      "minimum": 0.05,
+                      "maximum": 1
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "nullable": true,
+      "default": null,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Updates pane geometry without changing tab membership or focus.",
+      "operations": [
+        "get",
+        "set"
       ],
       "confirmationClass": "ordinary"
     },
@@ -7938,23 +8242,6 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
-<<<<<<< HEAD
-    "telegram.allowed_chat_ids.{chatId}": {
-      "id": "telegram.allowed_chat_ids.{chatId}",
-      "store": "telegram",
-      "owner": "machine",
-      "area": "telegram",
-      "group": "allowed_chat_ids",
-      "order": 3,
-      "path": "/allowed_chat_ids/{chatId}",
-      "labelKey": "settings.catalogue.telegram.allowed_chat_ids.{key}.label",
-      "helpKey": "settings.catalogue.telegram.allowed_chat_ids.{key}.help",
-      "label": "{key}",
-      "schema": {
-        "type": "boolean"
-      },
-      "nullable": false,
-=======
     "repositories_registration.groupOrder": {
       "id": "repositories_registration.groupOrder",
       "store": "repositories_registration",
@@ -7975,39 +8262,12 @@ export const settingsCatalogue = {
       },
       "nullable": false,
       "default": [],
->>>>>>> feat/1906-1911-1912-owners
       "availability": {
         "status": "available"
       },
       "choices": null,
       "sensitivity": "private",
       "apply": "live",
-<<<<<<< HEAD
-      "effect": "Updates the Telegram chat allowlist through setup.",
-      "operations": [
-        "get",
-        "create",
-        "remove"
-      ],
-      "confirmationClass": "ordinary"
-    },
-    "telegram.bot.token": {
-      "id": "telegram.bot.token",
-      "store": "telegram",
-      "owner": "machine",
-      "area": "telegram",
-      "group": "bot.token",
-      "order": 2,
-      "path": "/bot.token",
-      "labelKey": "settings.catalogue.telegram.bot.token.label",
-      "helpKey": "settings.catalogue.telegram.bot.token.help",
-      "label": "bot.token",
-      "schema": {
-        "type": "string",
-        "writeOnly": true
-      },
-      "nullable": false,
-=======
       "effect": "Updates repository group order.",
       "operations": [
         "get",
@@ -8033,20 +8293,10 @@ export const settingsCatalogue = {
       },
       "nullable": false,
       "default": false,
->>>>>>> feat/1906-1911-1912-owners
       "availability": {
         "status": "available"
       },
       "choices": null,
-<<<<<<< HEAD
-      "sensitivity": "secret",
-      "apply": "live",
-      "effect": "Wakes the existing Telegram owner.",
-      "operations": [
-        "get",
-        "set_secret",
-        "clear_secret"
-=======
       "sensitivity": "private",
       "apply": "live",
       "effect": "Updates group accordion state.",
@@ -8397,7 +8647,65 @@ export const settingsCatalogue = {
       "effect": "Stable registered path; removing registration never deletes files or worktrees.",
       "operations": [
         "get"
->>>>>>> feat/1906-1911-1912-owners
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "telegram.allowed_chat_ids.{chatId}": {
+      "id": "telegram.allowed_chat_ids.{chatId}",
+      "store": "telegram",
+      "owner": "machine",
+      "area": "telegram",
+      "group": "allowed_chat_ids",
+      "order": 3,
+      "path": "/allowed_chat_ids/{chatId}",
+      "labelKey": "settings.catalogue.telegram.allowed_chat_ids.{key}.label",
+      "helpKey": "settings.catalogue.telegram.allowed_chat_ids.{key}.help",
+      "label": "{key}",
+      "schema": {
+        "type": "boolean"
+      },
+      "nullable": false,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "private",
+      "apply": "live",
+      "effect": "Updates the Telegram chat allowlist through setup.",
+      "operations": [
+        "get",
+        "create",
+        "remove"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "telegram.bot.token": {
+      "id": "telegram.bot.token",
+      "store": "telegram",
+      "owner": "machine",
+      "area": "telegram",
+      "group": "bot.token",
+      "order": 2,
+      "path": "/bot.token",
+      "labelKey": "settings.catalogue.telegram.bot.token.label",
+      "helpKey": "settings.catalogue.telegram.bot.token.help",
+      "label": "bot.token",
+      "schema": {
+        "type": "string",
+        "writeOnly": true
+      },
+      "nullable": false,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "secret",
+      "apply": "live",
+      "effect": "Wakes the existing Telegram owner.",
+      "operations": [
+        "get",
+        "set_secret",
+        "clear_secret"
       ],
       "confirmationClass": "ordinary"
     },
@@ -9608,8 +9916,9 @@ export const settingsCatalogue = {
         "resolver": "audio_inputs",
         "availability": {
           "status": "unavailable",
-          "reason": "Owner choice resolver is not yet registered; see inventory gap"
-        }
+          "reason": "Explicit owner refresh required"
+        },
+        "values": null
       },
       "sensitivity": "private",
       "apply": "live",
@@ -10000,8 +10309,9 @@ export const settingsCatalogue = {
         "resolver": "voice_models",
         "availability": {
           "status": "unavailable",
-          "reason": "Owner choice resolver is not yet registered; see inventory gap"
-        }
+          "reason": "Explicit owner refresh required"
+        },
+        "values": null
       },
       "sensitivity": "public",
       "apply": "live",
@@ -10176,8 +10486,9 @@ export const settingsCatalogue = {
         "resolver": "edge_voices",
         "availability": {
           "status": "unavailable",
-          "reason": "Owner choice resolver is not yet registered; see inventory gap"
-        }
+          "reason": "Explicit owner refresh required"
+        },
+        "values": null
       },
       "sensitivity": "public",
       "apply": "live",
@@ -10282,8 +10593,9 @@ export const settingsCatalogue = {
         "resolver": "installed_voices",
         "availability": {
           "status": "unavailable",
-          "reason": "Owner choice resolver is not yet registered; see inventory gap"
-        }
+          "reason": "Explicit owner refresh required"
+        },
+        "values": null
       },
       "sensitivity": "public",
       "apply": "live",
@@ -10403,6 +10715,26 @@ export const settingsCatalogue = {
       "reason": "Read-response corruption diagnostic; cleared before persistence."
     },
     {
+      "store": "pane_layout",
+      "path": "/groups/{id}/id",
+      "reason": "Session restoration identity referenced by geometry; not a user preference."
+    },
+    {
+      "store": "pane_layout",
+      "path": "/groups/{id}/tabs",
+      "reason": "Runtime terminal/editor/diff/markdown tab identities; remapped when sessions restore."
+    },
+    {
+      "store": "pane_layout",
+      "path": "/groups/{id}/activeTabId",
+      "reason": "Runtime selected tab, restored with session membership."
+    },
+    {
+      "store": "pane_layout",
+      "path": "/activeGroupId",
+      "reason": "Runtime focused group, updated by focus and navigation, not a user preference."
+    },
+    {
       "store": "repositories_registration",
       "path": "/repos/{path}/workspaces",
       "reason": "Runtime workspace and terminal restore identities."
@@ -10449,79 +10781,6 @@ export const settingsCatalogue = {
       "path": "/profiles/{id}/forwards",
       "ownerStep": "Step 4f",
       "reason": "ForwardSpec records have no stable IDs; owner must define stable record edits."
-    },
-    {
-      "store": "keybindings",
-      "path": "/{action}",
-      "ownerStep": "Step 4g",
-      "reason": "Keybindings are untyped serde_json::Value; move the action/key record and dynamic-action choices into the owner schema."
-    },
-    {
-      "store": "pane_layout",
-      "path": "/root",
-      "ownerStep": "Step 4g",
-      "reason": "Recursive geometry is currently frontend-owned JSON; define a bounded Rust schema with stable node IDs."
-    },
-    {
-      "store": "pane_layout",
-      "path": "/groups/{id}",
-      "ownerStep": "Step 4g",
-      "reason": "Tab/group layout references and active group are currently frontend-owned JSON; separate settings from runtime tab identities."
-    },
-    {
-      "store": "pane_layout",
-      "path": "/activeGroupId",
-      "ownerStep": "Step 4g",
-      "reason": "Review whether active pane selection is a setting or runtime selection, then describe or individually exclude it."
-    },
-    {
-<<<<<<< HEAD
-      "store": "upstreams",
-      "path": "/servers/{id}/credentials",
-      "ownerStep": "Step 4e",
-      "reason": "Vault-backed bearer/OAuth/header operations need the upstream owner schema; persisted credential references do not cover credential actions."
-=======
-      "store": "connections",
-      "path": "/{id}/credential",
-      "ownerStep": "Step 4f",
-      "reason": "Connection credentials live outside the RemoteConnection record and require the credential-reference owner schema."
-    },
-    {
-      "store": "telegram",
-      "path": "/bot.token",
-      "ownerStep": "Step 4h",
-      "reason": "Private bot token is stored separately from Config and requires the setup owner's secret-action DTO."
-    },
-    {
-      "store": "telegram",
-      "path": "/allowed_chat_ids/{chatId}",
-      "ownerStep": "Step 4h",
-      "reason": "Chat allowlist is a separate private text file; use the existing setup owner, not raw file editing."
->>>>>>> feat/1906-1911-1912-owners
-    },
-    {
-      "store": "app",
-      "path": "/font_family",
-      "ownerStep": "Step 4g",
-      "reason": "System font choices need an explicit dynamic resolver; schema string is not an authoritative choice list."
-    },
-    {
-      "store": "app",
-      "path": "/theme",
-      "ownerStep": "Step 4g",
-      "reason": "Theme choices are frontend-owned; move them to an owner resolver before UI parity."
-    },
-    {
-      "store": "app",
-      "path": "/ide",
-      "ownerStep": "Step 4g",
-      "reason": "IDE availability choices need a host resolver; no implicit process probing during describe."
-    },
-    {
-      "store": "agents",
-      "path": "/agents/{key}/run_configs/{name}/model",
-      "ownerStep": "Step 4c",
-      "reason": "Agent model availability requires the owning CLI capability resolver, without launching on save."
     }
   ],
   "collections": [
@@ -11354,6 +11613,35 @@ export const settingsCatalogue = {
           "user",
           "forwards",
           "options"
+        ]
+      },
+      "operations": [
+        "get",
+        "create",
+        "remove"
+      ]
+    },
+    {
+      "store": "keybindings",
+      "path": "/bindings",
+      "key": "action",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 128
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "action"
         ]
       },
       "operations": [
