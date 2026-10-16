@@ -525,20 +525,16 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		configKey: "dictation.hands_free_start_notice",
 	},
 	// tabs/KeyboardShortcutsTab.tsx
-	{ tab: "keyboard-shortcuts", section: "Keyboard Shortcuts", sectionKey: "settings.keyboardShortcuts" },
+	{ tab: "keyboard-shortcuts", section: "Global Hotkey", platform: "desktop" },
+	{ tab: "keyboard-shortcuts", section: "Actions" },
 	{
 		tab: "keyboard-shortcuts",
-		section: "Keyboard Shortcuts",
+		section: "Global Hotkey",
 		label: "Global Hotkey (Toggle Window)",
 		labelKey: "settings.globalHotkey",
 		platform: "desktop",
 	},
-	{
-		tab: "keyboard-shortcuts",
-		section: "Keyboard Shortcuts",
-		label: "Plugin Commands",
-		labelKey: "helpPanel.pluginCommands",
-	},
+	{ tab: "keyboard-shortcuts", section: "Actions", label: "Plugin Commands", labelKey: "helpPanel.pluginCommands" },
 	// tabs/GitHubTab.tsx
 	{ tab: "github", section: "GitHub Authentication" },
 	{ tab: "github", section: "Pull Requests" },

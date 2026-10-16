@@ -12,7 +12,7 @@ import { keyEventToCombo, validateGlobalHotkeyCombo } from "../../../utils/keyRe
 import { KeyComboCapture } from "../../shared/KeyComboCapture";
 import { Input } from "../../ui/Input";
 import s from "../Settings.module.css";
-import { SettingPageHeader, SettingRow } from "../SettingsPrimitives";
+import { SectionCard, SettingPageHeader, SettingRow } from "../SettingsPrimitives";
 import w from "./WorkspaceTabs.module.css";
 
 /**
@@ -574,53 +574,55 @@ export const KeyboardShortcutsTab: Component = () => {
 				scope="This client"
 				breadcrumb="Workspace / Keyboard Shortcuts"
 			/>
-			<h3 class={w.shortcutHeading}>{t("settings.keyboardShortcuts", "Keyboard Shortcuts")}</h3>
 
 			<Show when={isTauri()}>
-				<SettingRow
-					label={t("settings.globalHotkey", "Global Hotkey (Toggle Window)")}
-					hint={t(
-						"settings.globalHotkeyHint",
-						"Set an OS-level shortcut to show/hide TUICommander from any application.",
-					)}
-					error={globalHotkeyError() ?? undefined}
-				>
-					{() => (
-						<>
-							<div
-								role="group"
-								aria-label="Global Hotkey (Toggle Window)"
-								style={{ display: "flex", "align-items": "center", gap: "8px" }}
-							>
-								<KeyComboCapture
-									value={settingsStore.state.globalHotkey ? tauriToDisplay(settingsStore.state.globalHotkey) : ""}
-									onChange={handleGlobalHotkeyChange}
-									placeholder={t("settings.globalHotkeyPlaceholder", "Click to set hotkey")}
-									onCapturingChange={handleGlobalCapturingChange}
-								/>
-								<Show when={settingsStore.state.globalHotkey}>
-									<button
-										onClick={clearGlobalHotkey}
-										style={{
-											background: "none",
-											border: "1px solid var(--border)",
-											"border-radius": "var(--radius-md)",
-											padding: "4px 8px",
-											color: "var(--fg-secondary)",
-											cursor: "pointer",
-											"font-size": "var(--font-sm)",
-										}}
-									>
-										{t("settings.clear", "Clear")}
-									</button>
-								</Show>
-							</div>
-						</>
-					)}
-				</SettingRow>
+				<SectionCard title="Global Hotkey">
+					<SettingRow
+						label={t("settings.globalHotkey", "Global Hotkey (Toggle Window)")}
+						hint={t(
+							"settings.globalHotkeyHint",
+							"Set an OS-level shortcut to show/hide TUICommander from any application.",
+						)}
+						error={globalHotkeyError() ?? undefined}
+					>
+						{() => (
+							<>
+								<div
+									role="group"
+									aria-label="Global Hotkey (Toggle Window)"
+									style={{ display: "flex", "align-items": "center", gap: "8px" }}
+								>
+									<KeyComboCapture
+										value={settingsStore.state.globalHotkey ? tauriToDisplay(settingsStore.state.globalHotkey) : ""}
+										onChange={handleGlobalHotkeyChange}
+										placeholder={t("settings.globalHotkeyPlaceholder", "Click to set hotkey")}
+										onCapturingChange={handleGlobalCapturingChange}
+									/>
+									<Show when={settingsStore.state.globalHotkey}>
+										<button
+											onClick={clearGlobalHotkey}
+											style={{
+												background: "none",
+												border: "1px solid var(--border)",
+												"border-radius": "var(--radius-md)",
+												padding: "4px 8px",
+												color: "var(--fg-secondary)",
+												cursor: "pointer",
+												"font-size": "var(--font-sm)",
+											}}
+										>
+											{t("settings.clear", "Clear")}
+										</button>
+									</Show>
+								</div>
+							</>
+						)}
+					</SettingRow>
+				</SectionCard>
 			</Show>
 
-			<div class={s.group}>
+			<h3 class={w.srOnly}>Actions</h3>
+			<div class={w.shortcutSearch}>
 				<Input
 					ref={inputRef}
 					type="text"
@@ -628,12 +630,11 @@ export const KeyboardShortcutsTab: Component = () => {
 					value={filter()}
 					onInput={(e) => setFilter(e.currentTarget.value)}
 				/>
+
+				<p class={s.hint}>
+					{t("helpPanel.editableNote", "Click the pencil icon to rebind a shortcut. Press Escape to cancel.")}
+				</p>
 			</div>
-
-			<p class={s.hint} style={{ "margin-bottom": "12px" }}>
-				{t("helpPanel.editableNote", "Click the pencil icon to rebind a shortcut. Press Escape to cancel.")}
-			</p>
-
 			<For each={filteredSections()}>
 				{(section) => (
 					<div class={w.shortcutCategory}>
@@ -642,14 +643,14 @@ export const KeyboardShortcutsTab: Component = () => {
 							<For each={section.shortcuts}>
 								{(shortcut) => (
 									<tr style={{ cursor: "default" }}>
-										<td style={{ padding: "4px 8px", "font-size": "var(--font-base)", color: "var(--fg-secondary)" }}>
+										<td style={{ padding: "4px 8px", "font-size": "var(--font-base)", color: "var(--fg-primary)" }}>
 											{shortcut.description}
 										</td>
 										<td style={{ width: "140px", padding: "4px 8px", "vertical-align": "middle" }}>
 											<Show
 												when={editingAction() === shortcut.action}
 												fallback={
-													<div style={{ display: "flex", "align-items": "center", gap: "4px" }}>
+													<div class={w.binding}>
 														<kbd
 															style={{
 																display: "inline-block",
@@ -668,7 +669,7 @@ export const KeyboardShortcutsTab: Component = () => {
 																		: "var(--fg-secondary)",
 															}}
 														>
-															{shortcut.keys}
+															{shortcut.keys || "Not set"}
 														</kbd>
 														<Show when={shortcut.action}>
 															<button
@@ -722,6 +723,9 @@ export const KeyboardShortcutsTab: Component = () => {
 																</button>
 															</Show>
 														</Show>
+														<Show when={!shortcut.action}>
+															<span class={w.rebindSlot} aria-hidden="true" />
+														</Show>
 													</div>
 												}
 											>
@@ -758,7 +762,7 @@ export const KeyboardShortcutsTab: Component = () => {
 										<Show
 											when={editingAction() === cmd.action}
 											fallback={
-												<div style={{ display: "flex", "align-items": "center", gap: "4px" }}>
+												<div class={w.binding}>
 													<kbd
 														style={{
 															display: "inline-block",

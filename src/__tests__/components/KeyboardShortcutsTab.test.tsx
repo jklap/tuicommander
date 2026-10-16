@@ -7,7 +7,7 @@ import { settingsStore } from "../../stores/settings";
 describe("KeyboardShortcutsTab", () => {
 	it("renders the heading", () => {
 		const { container } = render(() => <KeyboardShortcutsTab />);
-		const heading = container.querySelector("h3");
+		const heading = container.querySelector("h2");
 		expect(heading).not.toBeNull();
 		expect(heading!.textContent).toBe("Keyboard Shortcuts");
 	});

@@ -238,6 +238,7 @@ describe("searchSettings", () => {
 
 	it("offers a desktop-only control on the desktop and not in a browser", () => {
 		expect(searchSettings("global hotkey", ALL_TABS, "desktop")).toEqual([
+			expect.objectContaining({ tab: "keyboard-shortcuts", section: "Global Hotkey", platform: "desktop" }),
 			expect.objectContaining({ tab: "keyboard-shortcuts", label: "Global Hotkey (Toggle Window)" }),
 		]);
 		expect(searchSettings("global hotkey", ALL_TABS, "browser")).toEqual([]);

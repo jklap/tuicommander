@@ -30,3 +30,11 @@
 
 .page :global(canvas) { max-width: 100%; }
 .shortcuts td:last-child > div { justify-content: flex-end; flex-wrap: wrap; }
+
+.shortcutSearch { display: flex; flex-direction: column; gap: 8px; }
+.shortcutSearch p { margin: 0; }
+.shortcuts td:first-child { color: var(--fg-primary) !important; }
+.binding { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.binding button:first-of-type, .rebindSlot { width: 72px; flex-shrink: 0; }
+.binding kbd { color: var(--fg-secondary); white-space: nowrap; }
+.srOnly { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
