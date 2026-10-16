@@ -21,6 +21,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Give Paper semantic branch and PR markers readable theme colors in Settings and the sidebar (#1968-baa4).
 - Use readable identity foregrounds on agent color tiles in Settings (#1967-404e).
 - Restore Settings text, enabled action and tooltip contrast on themed surfaces (#1966-514a).
+- Restore contextual help for repository Design Mode and automation scripts in Settings (#1946-5de3).
 - Confirm Telegram chat linking, explain start and invalid codes, and clear the consumed Settings hint (#1955-2f43).
 - Recover unconfirmed ego input only from a fresh, stable empty composer; release later queued commands without replaying the uncertain payload (#1957-38c1).
 - Bound raw PTY input waits to two seconds and keep session close independent of blocked writers (#1957-38c1).
