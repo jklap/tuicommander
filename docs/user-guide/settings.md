@@ -1,6 +1,6 @@
 # Settings
 
-Repository Settings separates identity, inherited worktree overrides, Design Mode, scripts, team sharing, and reset. Nullable controls retain their global-default choice. Reset clears override fields, including scripts, but retains repository identity and its Design Mode URL. Team exports never include scripts.
+Repository Settings separates identity, inherited worktree overrides, Design Mode, scripts, team sharing, and reset. Nullable controls retain their global-default choice. Reset clears override fields, including scripts, but retains repository identity and its Design Mode URL. Team exports never include scripts. The Dev Server URL and setup, run, and archive script fields have contextual help; hover or focus a help badge to read it, or click to keep it open.
 
 Agents Settings shows the selected machine in the header. Run configuration editors keep explicit Save and Cancel actions. Terminal-agent permissions and filesystem sandbox remain separate from AI Chat ACP settings; launch instructions still save on blur.
 

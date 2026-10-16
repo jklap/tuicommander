@@ -331,8 +331,8 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 							<>
 								<SettingsHelpScope page="repository">
 									<RepoWorktreeTab settings={settings} defaults={repoDefaultsStore.state} onUpdate={onUpdate} />
+									<RepoScriptsTab settings={settings} defaults={repoDefaultsStore.state} onUpdate={onUpdate} />
 								</SettingsHelpScope>
-								<RepoScriptsTab settings={settings} defaults={repoDefaultsStore.state} onUpdate={onUpdate} />
 								<RepositoryActions
 									path={settings.path}
 									canExport={isTauri()}
