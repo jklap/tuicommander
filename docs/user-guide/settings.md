@@ -542,3 +542,7 @@ An empty device list means enumeration succeeded with no devices. If the audio b
 ### Shared layout
 
 Settings uses one bounded, responsive shell across pages, with independently scrolling navigation and content. The panel is at most 1136px wide and retains its size when you select another page. Saved navigation width remains in use. Shared presentation components support consistent cards, label/control rows, source-aware status, empty states and scoped destructive actions as pages adopt the approved restyle. Save behavior and configuration ownership do not change.
+
+Native MCP tool help stays anchored during status refreshes. Focus a `?` badge
+with the keyboard or hover over it to read the full tool description. Help
+placement follows panel scrolling, window resizing, and description size changes.
