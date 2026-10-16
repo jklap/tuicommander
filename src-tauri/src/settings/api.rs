@@ -279,6 +279,6 @@ pub(crate) async fn execute(state: &Arc<AppState>, mut input: Value, caller: Cal
 pub(crate) async fn settings_action(
     state: tauri::State<'_, Arc<AppState>>,
     request: Value,
-) -> Value {
-    execute(state.inner(), request, Caller::native()).await
+) -> Result<Value, Failure> {
+    Ok(execute(state.inner(), request, Caller::native()).await)
 }

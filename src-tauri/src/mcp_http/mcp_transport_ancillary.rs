@@ -19,7 +19,6 @@ use super::mcp_transport_peer::PEER_IDENTITY_BIND_LOCK;
 use super::mcp_transport_session_agent::handle_session;
 use super::mcp_transport_session_agent::require_action;
 use super::mcp_transport_session_agent::require_path;
-use super::mcp_transport_session_agent::require_string;
 
 pub(super) async fn handle_remote_update(
     state: &Arc<AppState>,
