@@ -1615,7 +1615,12 @@ struct UrgentNotice {
     first_through: u64,
     through: u64,
     written: bool,
+    reserved_at: std::time::Instant,
 }
+
+// Two 6s confirmation windows and split writes fit inside this lease. A stalled
+// writer must not suppress later notices forever; the mailbox remains durable.
+const URGENT_NOTICE_LEASE: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum OrchestratorDeliveryAssignment {
@@ -2845,6 +2850,11 @@ impl AppState {
         {
             return UrgentNoticeReservation::AlreadyRead;
         }
+        if gate.urgent_notices.get(sender).is_some_and(|notice| {
+            !notice.written && notice.reserved_at.elapsed() >= URGENT_NOTICE_LEASE
+        }) {
+            gate.urgent_notices.remove(sender);
+        }
         match gate.urgent_notices.get_mut(sender) {
             Some(notice) => {
                 notice.through = notice.through.max(through);
@@ -2861,6 +2871,7 @@ impl AppState {
                         first_through: through,
                         through,
                         written: false,
+                        reserved_at: std::time::Instant::now(),
                     },
                 );
                 UrgentNoticeReservation::Reserved

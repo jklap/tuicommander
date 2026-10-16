@@ -1843,6 +1843,10 @@ bar also keeps repo-scoped tabs visible when a repository has no active workspac
      `false` includes `urgent_fallback_reason` for the queued fallback. The
      receipt cannot prove the model acted. One unread notice per sender and
      recipient covers further urgent mail until inbox observation clears it.
+     An unfinished notice reservation expires after 30 seconds so an abandoned
+     writer cannot suppress later urgent sends. Completion of the expired
+     reservation cannot settle a newer message's reservation; this lease does
+     not retry the earlier payload or claim that the model consumed it.
      The recorded CLI contract, including unused immediate-send gesture
      findings, is in `src-tauri/src/fixtures/agent_mail/urgent_cli_probe_2026_09_27.json`.
    - **Channel push**: `notifications/claude/channel` is available to external Claude Code clients with an active SSE stream and no managed PTY. It is a best-effort notification; the inbox remains authoritative.
