@@ -1,6 +1,7 @@
 import { render, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import fixture from "../../dev/fixtures/ego-intent-1948.json";
+import { VisibleIntersectionObserver } from "../helpers/visibleIntersectionObserver";
 
 const { transport } = vi.hoisted(() => ({
 	transport: {
@@ -84,13 +85,7 @@ beforeEach(() => {
 			disconnect() {}
 		},
 	);
-	vi.stubGlobal(
-		"IntersectionObserver",
-		class {
-			observe() {}
-			disconnect() {}
-		},
-	);
+	vi.stubGlobal("IntersectionObserver", VisibleIntersectionObserver);
 });
 afterEach(() => {
 	vi.useRealTimers();
