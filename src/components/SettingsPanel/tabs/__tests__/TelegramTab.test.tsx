@@ -44,11 +44,11 @@ describe("Telegram setup", () => {
 	// Catches: setup invents a UUID/chat binding instead of submitting the explicit user choice.
 	it("offers both pairing and explicit chat IDs with removal", async () => {
 		render(() => <TelegramTab />);
-		await screen.findByLabelText("Authorized chats");
+		await screen.findByLabelText("Add chat by ID");
 		fireEvent.click(screen.getByText("Link chat"));
 		await screen.findByText(/Send ABC123/);
 		await waitFor(() => expect(screen.getByText("Link chat").hasAttribute("disabled")).toBe(false));
-		fireEvent.input(screen.getByLabelText("Authorized chats"), { target: { value: "456" } });
+		fireEvent.input(screen.getByLabelText("Add chat by ID"), { target: { value: "456" } });
 		fireEvent.click(screen.getByText("Add chat ID"));
 		await waitFor(() =>
 			expect(invoke).toHaveBeenCalledWith("telegram_setup", { change: { action: "add_chat", chat_id: "456" } }),
@@ -62,7 +62,7 @@ describe("Telegram setup", () => {
 	// Catches: Settings authorizes a selected peer instead of respecting MCP registration.
 	it("shows registration read-only and toggles without writing a target", async () => {
 		render(() => <TelegramTab />);
-		await screen.findByText("registered agent: Writer");
+		await screen.findByText("Writer");
 		expect(screen.queryByRole("combobox")).toBeNull();
 		fireEvent.click(screen.getByRole("switch", { name: "Enable Telegram" }));
 		await waitFor(() =>
@@ -154,7 +154,7 @@ it("renders safe recent events and refreshes while open 1956", async () => {
 	updated = true;
 	await vi.advanceTimersByTimeAsync(3000);
 	const replies = await screen.findAllByRole("status");
-	expect(replies.map((node) => node.textContent).filter((text) => text !== "Connected (this app)")).toEqual([
+	expect(replies.map((node) => node.textContent).filter((text) => !text?.includes("Connected (this app)"))).toEqual([
 		"Chat linked.",
 		"[redacted]",
 		"Hello",

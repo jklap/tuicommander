@@ -75,7 +75,6 @@ export interface SettingsSearchEntry {
 }
 
 export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
-	{ tab: "telegram", section: "Recent messages" },
 	// tabs/GeneralTab.tsx
 	{ tab: "general", section: "General", sectionKey: "general.heading.general" },
 	{ tab: "general", section: "Confirmations", sectionKey: "general.heading.confirmations" },
@@ -533,11 +532,13 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	// tabs/AiChatTab.tsx — the inlined former ProvidersTab content, in file order.
 	{ tab: "telegram", section: "Bot setup" },
 	{ tab: "telegram", section: "Chat access" },
-	{ tab: "telegram", section: "Polling status" },
+	{ tab: "telegram", section: "Agent registration" },
+	{ tab: "telegram", section: "Recent messages" },
+	{ tab: "telegram", section: "Bot setup", label: "Enable Telegram", labelKey: "telegram.enabled" },
 	{ tab: "telegram", section: "Bot setup", label: "Bot token", labelKey: "telegram.token" },
-	{ tab: "telegram", section: "Chat access", label: "Authorized chats", labelKey: "telegram.chat" },
-	{ tab: "telegram", section: "Polling status", label: "Polling owner" },
-	{ tab: "telegram", section: "Polling status", label: "Enable Telegram", labelKey: "telegram.enabled" },
+	{ tab: "telegram", section: "Chat access", label: "Add chat by ID" },
+	{ tab: "telegram", section: "Chat access", label: "Link a chat" },
+	{ tab: "telegram", section: "Agent registration", label: "Registered agent" },
 	{ tab: "dictation", section: "Dictation", sectionKey: "dictation.heading.dictation" },
 	{ tab: "dictation", section: "Auto-Corrections", sectionKey: "dictation.heading.corrections" },
 	{ tab: "dictation", section: "Speech recognition", sectionKey: "dictation.heading.recognition" },

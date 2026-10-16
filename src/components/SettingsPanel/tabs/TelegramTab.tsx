@@ -6,6 +6,7 @@ import { Input } from "../../ui/Input";
 import { SettingStatus, SettingToggle } from "../SettingFields";
 import s from "../Settings.module.css";
 import { EmptyState, ListRow, SectionCard, SettingPageHeader, SettingRow, StatusSummary } from "../SettingsPrimitives";
+import telegram from "./TelegramTab.module.css";
 
 interface TelegramEvent {
 	id: number;
@@ -99,7 +100,7 @@ export const TelegramTab: Component = () => {
 		clearInterval(timer);
 	});
 	return (
-		<div class={s.section}>
+		<div class={`${s.section} ${telegram.panel}`}>
 			<SettingPageHeader
 				title="Telegram"
 				description="Bot setup and authorized chats on this machine."
@@ -142,7 +143,6 @@ export const TelegramTab: Component = () => {
 							/>
 							<SettingRow
 								label={t("telegram.token", "Bot token")}
-								error={error() || undefined}
 								hint={
 									data().token_set
 										? `Token set${data().bot_alias ? ` (${data().bot_alias})` : ""}. Enter a replacement to change it.`
@@ -176,6 +176,7 @@ export const TelegramTab: Component = () => {
 							</SettingRow>
 						</SectionCard>
 						<SectionCard title="Chat access">
+							<h4 class={telegram.listHeading}>{t("telegram.chat", "Authorized chats")}</h4>
 							<Show
 								when={data().chats.length > 0}
 								fallback={
@@ -202,7 +203,7 @@ export const TelegramTab: Component = () => {
 									)}
 								</For>
 							</Show>
-							<SettingRow label={t("telegram.chat", "Authorized chats")} hint="Private chat ID">
+							<SettingRow label="Add chat by ID" hint="Private chat ID">
 								{(id, descriptionId) => (
 									<div class={s.passwordRow}>
 										<Input
@@ -259,7 +260,7 @@ export const TelegramTab: Component = () => {
 								{() => (
 									<span aria-live="polite">
 										{data().registered_agent_name
-											? `registered agent: ${data().registered_agent_name}`
+											? data().registered_agent_name
 											: t("telegram.noAgent", "No agent registered")}
 									</span>
 								)}
@@ -283,7 +284,7 @@ export const TelegramTab: Component = () => {
 					</>
 				)}
 			</Show>
-			<Show when={error() && !settings()}>
+			<Show when={error()}>
 				<p role="alert" class={s.warning}>
 					{error()}
 				</p>
