@@ -1,5 +1,8 @@
 # Components
 
+Application Settings tabs opt into `SettingFields` row presentation. The default stacked layout remains available to unchanged consumers. Row controls use `SettingRow` for label and hint association; slider input and commit events remain separate.
+
+
 `ui/Select`, `ui/Input` and `ui/Textarea` forward native form attributes and events.
 `ui/SegmentedControl` provides a keyboard-accessible single-choice view switch.
 All four share `ui/FormControls.module.css`; screen CSS owns layout only.

@@ -1,5 +1,8 @@
 # Settings
 
+The Application pages use section cards and labelled rows. General keeps its existing update and local-tool actions. Appearance keeps group rename validation and client-local chat preferences. Notifications keeps visual controls available without audio; output-device discovery starts only after **Choose output device**. Changing master volume previews once on release.
+
+
 The settings-service policy foundation keeps secrets write-only. Changes that
 expose TUIC or select executable code require the existing confirmation dialog;
 ordinary preferences, push settings and outbound HTTP destinations do not. The
