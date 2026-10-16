@@ -12,6 +12,9 @@
 ## Typed UI settings owners (1914-cdf6) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, use an isolated instance: set and disable a keyboard shortcut, reload, and confirm both persist. Split panes, switch focused panes and restore the layout; verify geometry and tab membership remain intact. The settings owner exposes only geometry, not runtime tab/focus identities. No running app was restarted.
+## Persistent stall evidence (1638-c94c) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, retain the journal files after the next real desktop stall and build a metadata-derived replay input with `scripts/build-stall-replay.mjs`. Record independent backend-request timing separately. Targeted tests cover retention, rotation and numeric-only records; original real-stall RED/GREEN remain open. No managed peer restarts or stresses the live app.
 
 ## Urgent ego mail (1901-9b6b) — Rust restart required
 

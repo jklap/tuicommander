@@ -1150,3 +1150,7 @@ busy/idle markers and shell OSC 133 A retract recovery. This is PTY-only and doe
 not attach ACP to a terminal process. Wire limits are in docs/backend/output-parser.md.
 
 Telegram Settings reads a process-local in-memory ring of the last 20 events through the existing status endpoint. Time, direction, kind, safe outcome and a redacted preview of at most 60 Unicode characters are shown newest first. Pairing input and unauthorized text are never retained. The ring is not persisted and clears on process restart; it is not shared across owner/standby processes.
+
+## Persistent stall evidence (1638-c94c)
+
+The backend retains fixed-kind numeric slow-event metadata in a bounded journal independent of the log ring. Frontend slow structural batches include body/flush time, topology counts and response size while perfDebug is enabled. Backend heartbeat-gap records include receipt and observation timestamps. The count-based fixture builder emits synthetic isolated inputs; it does not satisfy the original captured-workload RED/GREEN criteria. See `docs/backend/stall-journal.md` for retention, privacy, timing semantics and replay limits.
