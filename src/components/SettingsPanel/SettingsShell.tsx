@@ -107,7 +107,7 @@ export const SettingsShell: Component<SettingsShellProps> = (props) => {
 									</For>
 								</Select>
 							</div>
-							{props.navHeader}
+							<div class={s.navSearch}>{props.navHeader}</div>
 							<For each={props.tabs}>
 								{(tab) =>
 									tab.key === "__sep__" ? (

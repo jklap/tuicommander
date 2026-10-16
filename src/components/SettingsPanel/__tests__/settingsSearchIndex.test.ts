@@ -39,7 +39,8 @@ const UNINDEXABLE: Record<string, { dynamic: number; orphans: number }> = {
 	telegram: { dynamic: 0, orphans: 0 },
 	general: { dynamic: 0, orphans: 0 },
 	appearance: { dynamic: 0, orphans: 0 },
-	notifications: { dynamic: 0, orphans: 0 },
+	// Notification sound row labels are runtime entries, not static search targets.
+	notifications: { dynamic: 1, orphans: 0 },
 	terminal: { dynamic: 0, orphans: 0 },
 	// The `<label>{section.title}</label>` over each group of the shortcut list —
 	// the groups and their bindings are built at runtime, so the page is indexed

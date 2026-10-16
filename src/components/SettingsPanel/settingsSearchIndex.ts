@@ -310,6 +310,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	},
 	// tabs/NotificationsTab.tsx
 	{ tab: "notifications", section: "Notification Settings", sectionKey: "notifications.heading.notificationSettings" },
+	{ tab: "notifications", section: "Visual notifications" },
 	{ tab: "notifications", section: "Tasks", sectionKey: "notifications.heading.tasks" },
 	{
 		tab: "notifications",
@@ -349,20 +350,38 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{
 		tab: "notifications",
 		section: "Notification Settings",
+		label: "Silence completions from MCP sessions",
+		labelKey: "notifications.label.silenceRemoteCompletions",
+	},
+	{
+		tab: "notifications",
+		section: "Visual notifications",
 		label: "Toolbar Bell",
 		labelKey: "notifications.label.toolbarBell",
 	},
 	{
 		tab: "notifications",
-		section: "Notification Settings",
+		section: "Visual notifications",
+		label: "Keep toasts in the bell",
+		labelKey: "notifications.toggle.toastsInBell",
+	},
+	{
+		tab: "notifications",
+		section: "Visual notifications",
 		label: "Show cards from the active terminal",
 		labelKey: "notifications.toggle.autoToastCards",
 	},
 	{
 		tab: "notifications",
-		section: "Notification Settings",
+		section: "Visual notifications",
 		label: "Pull Requests",
 		labelKey: "notifications.label.prNotifications",
+	},
+	{
+		tab: "notifications",
+		section: "Visual notifications",
+		label: "OS notification for PR changes",
+		labelKey: "notifications.toggle.prNative",
 	},
 	{
 		tab: "notifications",

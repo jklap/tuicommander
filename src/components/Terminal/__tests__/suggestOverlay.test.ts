@@ -326,9 +326,9 @@ describe("planSuggestOverlay — 💬 answer marker", () => {
 });
 
 describe("paintOverlayBlocks", () => {
-	it("keeps answer rows transparent with a gutter and paints nothing for marker rows", () => {
+	it("keeps answers transparent, tints intent and omits suggest strips", () => {
 		// TEST-CHANGE: rule-only answers must not restore the tint or mask terminal text.
-		// catches: an answer background returns, or a suggest/intent row gets a strip.
+		// catches: answer backgrounds return, intent loses its tint, or suggest gets a strip.
 		const container = document.createElement("div");
 		paintOverlayBlocks(
 			container,
@@ -339,8 +339,10 @@ describe("paintOverlayBlocks", () => {
 			],
 			20,
 		);
-		const [answer, ...rest] = Array.from(container.children) as HTMLElement[];
+		const [answer, intent, ...rest] = Array.from(container.children) as HTMLElement[];
 		expect(rest).toEqual([]);
+		expect(intent.style.top).toBe("60px");
+		expect(intent.style.background).toContain("var(--warning)");
 		expect(answer.style.top).toBe("40px");
 		expect(answer.style.background).toBe("transparent");
 		expect(answer.style.boxShadow).toContain("inset 3px");

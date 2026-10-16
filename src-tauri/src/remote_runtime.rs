@@ -664,15 +664,11 @@ pub(crate) struct Health {
     pub(crate) build: Option<crate::remote_deploy::assets::BuildIdentity>,
 }
 
-/// reqwest's outer message hides the resolver, TCP and TLS cause.
-async fn request_error(error: reqwest::Error, base_url: &str) -> String {
+/// Inspect the complete cause chain without exposing URLs or credentials.
+fn request_failure_kinds(error: &reqwest::Error) -> (bool, bool, bool) {
     use std::error::Error;
-    let host = reqwest::Url::parse(base_url)
-        .ok()
-        .and_then(|url| url.host_str().map(str::to_owned))
-        .unwrap_or_else(|| "remote host".into());
-    let (dns, refused, tls) = {
-        let mut cause: Option<&(dyn Error + 'static)> = Some(&error);
+    {
+        let mut cause: Option<&(dyn Error + 'static)> = Some(error);
         let mut dns = false;
         let mut refused = false;
         let mut tls = false;
@@ -708,17 +704,23 @@ async fn request_error(error: reqwest::Error, base_url: &str) -> String {
                 .or_else(|| source.source());
         }
         (dns, refused, tls)
-    };
+    }
+}
+
+/// reqwest's outer message hides the resolver, TCP and TLS cause.
+async fn request_error(error: reqwest::Error, base_url: &str) -> String {
+    let host = reqwest::Url::parse(base_url)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_owned))
+        .unwrap_or_else(|| "remote host".into());
+    let (dns, refused, tls) = request_failure_kinds(&error);
     let message = if error.is_timeout() {
         format!("Connection to {host} timed out")
     } else if dns {
         let advice = if !host.contains('.') && host.parse::<std::net::IpAddr>().is_err() {
-            match crate::tailscale::peer_fqdn(&host).await {
-                Some(fqdn) => format!("use the full Tailscale name ({fqdn}) or the IP"),
-                None => "use the full host name or the IP".into(),
-            }
+            "use the full host name or the IP"
         } else {
-            "check the host name or use the IP".into()
+            "check the host name or use the IP"
         };
         format!("Cannot resolve {host} — {advice}")
     } else if refused {
@@ -766,12 +768,29 @@ pub(crate) async fn read_health(
     client: &reqwest::Client,
     base_url: &str,
 ) -> Result<Health, String> {
-    let url = format!("{}/health", base_url.trim_end_matches('/'));
-    let response = client.get(&url).timeout(PROBE_TIMEOUT).send().await;
+    let response = health_response(client, base_url).await;
     let response = match response {
         Ok(response) => response,
         Err(error) => return Err(request_error(error, base_url).await),
     };
+    parse_health_response(response, base_url).await
+}
+
+async fn health_response(
+    client: &reqwest::Client,
+    base_url: &str,
+) -> Result<reqwest::Response, reqwest::Error> {
+    client
+        .get(format!("{}/health", base_url.trim_end_matches('/')))
+        .timeout(PROBE_TIMEOUT)
+        .send()
+        .await
+}
+
+async fn parse_health_response(
+    response: reqwest::Response,
+    base_url: &str,
+) -> Result<Health, String> {
     if !response.status().is_success() {
         return Err(response_error(response, base_url).await);
     }
@@ -795,6 +814,45 @@ pub(crate) async fn read_health(
             .get("build")
             .and_then(|value| serde_json::from_value(value.clone()).ok()),
     })
+}
+
+async fn read_direct_health_with_lookup<F, Fut>(
+    client: &reqwest::Client,
+    base_url: &str,
+    lookup: F,
+) -> Result<(String, Health), String>
+where
+    F: FnOnce(String) -> Fut,
+    Fut: std::future::Future<Output = Option<String>>,
+{
+    let mut effective = base_url.to_owned();
+    let response = match health_response(client, base_url).await {
+        Ok(response) => response,
+        Err(error) => {
+            let mut url =
+                reqwest::Url::parse(base_url).map_err(|_| "Invalid remote URL".to_owned())?;
+            let short_host = url
+                .host_str()
+                .filter(|host| !host.contains('.') && host.parse::<std::net::IpAddr>().is_err());
+            if !error.is_timeout()
+                && request_failure_kinds(&error).0
+                && let Some(host) = short_host
+                && let Some(fqdn) = lookup(host.to_owned()).await
+            {
+                url.set_host(Some(&fqdn))
+                    .map_err(|_| "Invalid advertised peer name".to_owned())?;
+                effective = url.to_string().trim_end_matches('/').to_owned();
+                match health_response(client, &effective).await {
+                    Ok(response) => response,
+                    Err(error) => return Err(request_error(error, &effective).await),
+                }
+            } else {
+                return Err(request_error(error, base_url).await);
+            }
+        }
+    };
+    let health = parse_health_response(response, &effective).await?;
+    Ok((effective, health))
 }
 
 /// Outcome of a probe against a route that requires the credential.
@@ -1073,7 +1131,7 @@ async fn handshake(
 ) -> Result<Option<String>, ConnectFailure> {
     let client = state.remote.http_client();
 
-    let base_url = resolve_base_url(state, connection)
+    let mut base_url = resolve_base_url(state, connection)
         .await
         .map_err(ConnectFailure::error)?;
     update(state, id, |e| e.base_url = Some(base_url.clone()));
@@ -1089,6 +1147,19 @@ async fn handshake(
                     ))
                 })?,
         )
+    } else if matches!(connection.transport, RemoteTransport::Direct { .. }) {
+        match read_direct_health_with_lookup(&client, &base_url, |host| async move {
+            crate::tailscale::peer_fqdn(&host).await
+        })
+        .await
+        {
+            Ok((effective, health)) => {
+                base_url = effective;
+                update(state, id, |entry| entry.base_url = Some(base_url.clone()));
+                Ok(health)
+            }
+            Err(error) => Err(error),
+        }
     } else {
         read_health(&client, &base_url).await
     };
@@ -2789,6 +2860,118 @@ mod tests {
         let json = serde_json::to_string(&status).unwrap();
         assert!(!json.contains("token"), "token leaked into {json}");
         assert!(!json.contains("base_url"), "base_url leaked into {json}");
+    }
+
+    // Catches: a DNS-failed short Direct host stays unreachable despite a known peer.
+    #[tokio::test]
+    async fn direct_dns_failure_retries_unique_tailscale_peer() {
+        let mut server = mockito::Server::new_async().await;
+        let health = server
+            .mock("GET", "/prefix/health")
+            .with_status(200)
+            .with_body(r#"{"protocol_version":1}"#)
+            .expect(1)
+            .create_async()
+            .await;
+        let address: std::net::SocketAddr = server.host_with_port().parse().unwrap();
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .resolve("mac-mint.tail911da.ts.net", address)
+            .build()
+            .unwrap();
+        let original = format!("http://mac-mint:{}/prefix", address.port());
+        let (effective, result) =
+            read_direct_health_with_lookup(&client, &original, |host| async move {
+                assert_eq!(host, "mac-mint");
+                crate::tailscale::peer_fqdn_from_status(
+                    include_bytes!("fixtures/tailscale/short-name-peer.json"),
+                    &host,
+                )
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            effective,
+            format!("http://mac-mint.tail911da.ts.net:{}/prefix", address.port())
+        );
+        assert_eq!(result.protocol_version, Some(1));
+        health.assert_async().await;
+    }
+
+    // Catches: fallback rewrites working names or retries an auth failure.
+    #[tokio::test]
+    async fn direct_recovery_never_looks_up_working_hosts_or_http_failures() {
+        let mut server = mockito::Server::new_async().await;
+        for status in [200, 401, 403] {
+            let probe = server
+                .mock("GET", "/health")
+                .with_status(status)
+                .with_body(r#"{"protocol_version":1}"#)
+                .expect(1)
+                .create_async()
+                .await;
+            let result = read_direct_health_with_lookup(&test_client(), &server.url(), |_| async {
+                panic!("reachable host must not trigger Tailscale lookup")
+            })
+            .await;
+            assert_eq!(result.is_ok(), status == 200);
+            probe.assert_async().await;
+        }
+    }
+
+    // Catches: DNS fallback loops or retries dotted names and TCP failures.
+    #[tokio::test]
+    async fn direct_recovery_excludes_fqdns_and_refusals_and_bounds_missing_peers() {
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let error = read_direct_health_with_lookup(
+            &client,
+            "http://no-such-host.invalid:9877",
+            |_| async { panic!("FQDN must not trigger Tailscale lookup") },
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            error.contains("Cannot resolve no-such-host.invalid"),
+            "{error}"
+        );
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        drop(listener);
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .resolve("short-peer", address)
+            .build()
+            .unwrap();
+        let error = read_direct_health_with_lookup(
+            &client,
+            &format!("http://short-peer:{}", address.port()),
+            |_| async { panic!("refused connection must not trigger Tailscale lookup") },
+        )
+        .await
+        .unwrap_err();
+        assert!(error.contains("Connection refused"), "{error}");
+        let error = read_direct_health_with_lookup(
+            &test_client(),
+            "http://unknown-short-peer:9877",
+            |_| async { None },
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            error.contains("Cannot resolve unknown-short-peer"),
+            "{error}"
+        );
+        let error = read_direct_health_with_lookup(
+            &test_client(),
+            "http://unknown-short-peer:9877",
+            |_| async { Some("no-such-host.invalid".to_owned()) },
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            error.contains("Cannot resolve no-such-host.invalid"),
+            "{error}"
+        );
     }
 
     #[tokio::test]

@@ -31,14 +31,14 @@ import { settingsStore } from "../../stores/settings";
  * the other selects the tab renders (IDE, update channel). */
 function languageSelect(container: HTMLElement): HTMLSelectElement {
 	const label = Array.from(container.querySelectorAll("label")).find((el) => el.textContent === "Language");
-	const select = label?.parentElement?.querySelector("select");
+	const select = label?.htmlFor ? container.querySelector(`#${label.htmlFor}`) : null;
 	if (!select) throw new Error("language select not found");
 	return select as HTMLSelectElement;
 }
 
 function egoProfileInput(container: HTMLElement): HTMLInputElement {
 	const label = Array.from(container.querySelectorAll("label")).find((el) => el.textContent === "ego profile");
-	const input = label?.parentElement?.querySelector("input");
+	const input = label?.htmlFor ? container.querySelector<HTMLInputElement>(`#${label.htmlFor}`) : null;
 	if (!input) throw new Error("ego profile input not found");
 	return input;
 }
@@ -175,7 +175,7 @@ describe("GeneralTab ego profile", () => {
 
 function aiChatWorkspaceInput(container: HTMLElement): HTMLInputElement {
 	const label = Array.from(container.querySelectorAll("label")).find((el) => el.textContent === "AI Chat workspace");
-	const input = label?.parentElement?.querySelector("input");
+	const input = label?.htmlFor ? container.querySelector<HTMLInputElement>(`#${label.htmlFor}`) : null;
 	if (!input) throw new Error("AI Chat workspace input not found");
 	return input;
 }

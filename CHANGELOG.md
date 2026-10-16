@@ -6,7 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Restyle General, Appearance and Notifications with shared Settings cards and labelled control rows, preserving existing actions and audio-device consent (#1937-c2e4).
+
 - Establish the approved wider Settings shell and reusable theme-aware presentation vocabulary (#1936-0caa).
+- Restore the theme-aware intent row highlight for ego, Claude and Codex terminals (#1948-cd16).
 
 - Add explicit addressed Claude model-alias discovery and no-launch typed model saves through settings (#1910-451e).
 
@@ -19,6 +22,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 - Recover failed mobile views after a server outage through automatic or manual retry, without false empty/setup states, raw network errors or desktop restart advice (#1930-f4c2).
+- Exclude projected suggestion rows from copied terminal selections, including scrollback selections, remove the duplicate blank separator around an omitted suggestion block, and classify the full received viewport (#1935-eedd).
 
 - Apply asynchronous AI Chat session option offers before the first prompt so model and mode settings become available, without stale offer snapshots reverting a confirmed selection (#1918-2ea3).
 - Close AI Chat tabs with the middle mouse button through the normal guarded close path (#1922-8027).

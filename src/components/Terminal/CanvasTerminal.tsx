@@ -48,6 +48,7 @@ import {
 	hoverSignature,
 	logicalCellToStringOffset,
 	logicalStringSpanToCells,
+	readProjectedSelectionText,
 	rowStringSpanToCells,
 	underlinedText,
 	underlinedTextAt,
@@ -1037,7 +1038,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		}
 		const base = frame.historyBase + frame.historySize - frame.displayOffset;
 		const wrappedAbove = (i: number) => (i > 0 ? rowMap.get(i - 1) : rowCache.get(base + i - 1))?.wrapped ?? false;
-		lastMarkerPlan = planMarkers(lastResizeRows || 24, (i) => {
+		lastMarkerPlan = planMarkers(frame.screenRows || lastResizeRows || 24, (i) => {
 			const row = i >= 0 ? rowMap.get(i) : rowCache.get(base + i);
 			return row ? { text: rowToText(row), isWrapped: wrappedAbove(i) } : null;
 		});
@@ -3548,17 +3549,48 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 						endRow !== null &&
 						historyBase !== undefined
 					) {
-						const text = (await invokeRef("terminal_get_selection_text", {
-							sessionId: props.sessionId,
-							startRow,
-							startCol: selection.start.col,
-							endRow,
-							endCol: selection.end.col,
-							historyBase,
-						})) as string;
-						// Legacy/empty response fallback; an eviction rejection throws and is
-						// deliberately handled without a local or cached copy below.
-						return text || getLocalSelectionText(selection, selectionAbsRowToViewport, rowMap);
+						// Read recorded cell rows rather than filtering copied prose: only
+						// the marker projection knows which physical rows are omitted.
+						const start = { ...selection.start };
+						const end = { ...selection.end };
+						const first = Math.min(start.row, end.row);
+						const last = Math.max(start.row, end.row);
+						const viewportTop =
+							historyBase + currentFrame!.historySize - (overlayScrollOffset ?? projectedDisplayOffset);
+						let copyRows = new Map<number, DecodedRow>();
+						for (let index = viewportTop - MARKER_LOOKBACK_ROWS; index < viewportTop; index++) {
+							const row = rowCache.get(index);
+							if (row) copyRows.set(index, row);
+						}
+						for (const [index, row] of rowMap) copyRows.set(viewportTop + index, row);
+						if (first < viewportTop || last >= viewportTop + currentFrame!.screenRows) {
+							const from = Math.max(historyBase, first - MARKER_LOOKBACK_ROWS);
+							const range = await fetchStyledRange(from, last - from + 1 + MARKER_LOOKBACK_ROWS);
+							if (
+								!range ||
+								!range.rows.some(({ abs }) => abs === first) ||
+								!range.rows.some(({ abs }) => abs === last)
+							) {
+								throw new Error("selection rows are no longer retained");
+							}
+							copyRows = new Map(range.rows.map(({ abs, row }) => [abs, row]));
+						}
+						const text = await readProjectedSelectionText(
+							start,
+							end,
+							copyRows,
+							async (start, end) =>
+								(await invokeRef!("terminal_get_selection_text", {
+									sessionId: props.sessionId,
+									startRow: start.row - historyBase,
+									startCol: start.col,
+									endRow: end.row - historyBase,
+									endCol: end.col,
+									historyBase,
+								})) as string,
+						);
+						// An all-hidden range is intentionally empty; never restore raw rows.
+						return text;
 					}
 					return selection.cachedText || getLocalSelectionText(selection, selectionAbsRowToViewport, rowMap);
 				},
