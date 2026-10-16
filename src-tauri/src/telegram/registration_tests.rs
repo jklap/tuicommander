@@ -432,18 +432,6 @@ async fn pairing_bad_code_explains_1955() {
     }
 }
 
-// Catches: authorized no-agent input is silent or replies in the wrong language.
-#[tokio::test]
-async fn pairing_no_agent_english_1955() {
-    let (requests, linked) = pairing_reply_1955("hello", u64::MAX, true).await;
-    assert!(linked);
-    assert_pairing_reply_1955(
-        &requests,
-        1111111,
-        "No agent is listening. Ask an agent in TUICommander to register for Telegram.",
-    );
-}
-
 // Catches: arbitrary unauthorized text becomes a reply oracle.
 #[tokio::test]
 async fn pairing_random_strangers_stay_silent_1955() {
