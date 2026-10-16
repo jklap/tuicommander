@@ -22,6 +22,8 @@ interface TelegramSettings {
 	bot_alias: string;
 	registered_agent_name: string | null;
 	chats: string[];
+	pairing_pending: boolean;
+	recent_events: TelegramEvent[];
 	connected: boolean;
 	polling_owner: "this_app" | "tuic_remote" | "desktop" | "another_process" | null;
 	last_error: string | null;
@@ -64,7 +66,10 @@ export const TelegramTab: Component = () => {
 	async function refresh() {
 		try {
 			const result = await invoke<TelegramSettings>("telegram_settings");
-			if (!disposed) setSettings(result);
+			if (!disposed) {
+				setSettings(result);
+				if (!result.pairing_pending) setCode("");
+			}
 		} catch {
 			if (!disposed) setError("Telegram settings unavailable");
 		}
