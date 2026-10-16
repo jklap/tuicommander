@@ -491,20 +491,20 @@ export const HOOK_SUPPORT: Record<AgentType, boolean> = {
 };
 
 /** Agent display info for UI */
-export const AGENT_DISPLAY: Record<AgentType, { icon: string; color: string }> = {
-	claude: { icon: "C", color: "#d97706" },
-	gemini: { icon: "G", color: "#4285f4" },
-	opencode: { icon: "O", color: "#10a37f" },
-	codex: { icon: "X", color: "#ffffff" },
-	amp: { icon: "A", color: "#ff5543" },
-	cursor: { icon: "C", color: "#000000" },
-	goose: { icon: "G", color: "#f59e0b" },
-	grok: { icon: "G", color: "#1a1a1a" },
-	droid: { icon: "D", color: "#f97316" },
-	pi: { icon: "π", color: "#c4a7e7" },
-	ego: { icon: "ɛ", color: "#38bdf8" },
-	git: { icon: "G", color: "#f05032" },
-	api: { icon: "⚡", color: "#06b6d4" },
+export const AGENT_DISPLAY: Record<AgentType, { icon: string; color: string; foreground: string }> = {
+	claude: { icon: "C", color: "#d97706", foreground: "var(--identity-on-light)" },
+	gemini: { icon: "G", color: "#4285f4", foreground: "var(--identity-on-light)" },
+	opencode: { icon: "O", color: "#10a37f", foreground: "var(--identity-on-light)" },
+	codex: { icon: "X", color: "#ffffff", foreground: "var(--identity-on-light)" },
+	amp: { icon: "A", color: "#ff5543", foreground: "var(--identity-on-light)" },
+	cursor: { icon: "C", color: "#000000", foreground: "var(--identity-on-dark)" },
+	goose: { icon: "G", color: "#f59e0b", foreground: "var(--identity-on-light)" },
+	grok: { icon: "G", color: "#1a1a1a", foreground: "var(--identity-on-dark)" },
+	droid: { icon: "D", color: "#f97316", foreground: "var(--identity-on-light)" },
+	pi: { icon: "π", color: "#c4a7e7", foreground: "var(--identity-on-light)" },
+	ego: { icon: "ɛ", color: "#38bdf8", foreground: "var(--identity-on-light)" },
+	git: { icon: "G", color: "#f05032", foreground: "var(--identity-on-light)" },
+	api: { icon: "⚡", color: "#06b6d4", foreground: "var(--identity-on-light)" },
 };
 
 /** Preserve the actual modified key for an unknown foreground program. Never

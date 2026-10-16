@@ -929,7 +929,7 @@ const AgentRow: Component<{
 			>
 				<div class={a.agentInfo}>
 					<div class={a.agentNameRow}>
-						<div class={a.agentIcon} style={{ background: display().color, opacity: isEnabled() ? 1 : 0.4 }}>
+						<div class={a.agentIcon} style={{ background: display().color, color: display().foreground, opacity: isEnabled() ? 1 : 0.4 }}>
 							<AgentIcon agent={props.agentType} size={16} />
 						</div>
 						<span class={a.agentName} style={{ opacity: isEnabled() ? 1 : 0.5 }}>

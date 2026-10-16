@@ -201,6 +201,8 @@
   --fg-primary: #cccccc;
   --fg-secondary: #a0a0a0;
   /* Settings copy must remain readable on elevated and highlighted surfaces. */
+  --identity-on-light: #000000;
+  --identity-on-dark: #ffffff;
   --settings-foreground: color-mix(in srgb, var(--fg-primary) 30%, var(--fg-secondary));
   --link-foreground: color-mix(in srgb, var(--accent) 85%, var(--fg-primary));
   --fg-muted: #9aa1a9;
