@@ -953,8 +953,8 @@ fn instructions_collapse_off_points_at_tool_descriptions() {
 fn instructions_scope_ack_to_the_connection() {
     let state = test_state();
     let out = build_mcp_instructions(&state, None);
-    assert!(out.contains("exactly once per MCP connection or reconnect"));
-    assert!(out.contains("Never repeat it on each conversational turn"));
+    assert!(out.contains("once per MCP connection/reconnect"));
+    assert!(out.contains("Never repeat per turn."));
     assert!(!out.contains("Aliases \"swarm\""));
 }
 

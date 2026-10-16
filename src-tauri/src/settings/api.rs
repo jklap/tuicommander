@@ -206,11 +206,10 @@ impl Settings {
                     store,
                     paths,
                 } = &request
+                    && let Some(snapshot) = self.owner_read(state, target, store, paths).await?
                 {
-                    if let Some(snapshot) = self.owner_read(state, target, store, paths).await? {
-                        return serde_json::to_value(snapshot)
-                            .map_err(|_| Error::new("settings", "store_failed"));
-                    }
+                    return serde_json::to_value(snapshot)
+                        .map_err(|_| Error::new("settings", "store_failed"));
                 }
                 let reply = if request.store().starts_with("plugins.") {
                     state

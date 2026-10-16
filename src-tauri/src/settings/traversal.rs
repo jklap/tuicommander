@@ -105,9 +105,10 @@ impl Catalogue {
                 availability,
             );
         }
-        if let Some(items) = node
-            .get("items")
-            .filter(|v| v.get("properties").is_some() || v.get("oneOf").is_some())
+        if node["x-atomic-list"] != true
+            && let Some(items) = node
+                .get("items")
+                .filter(|v| v.get("properties").is_some() || v.get("oneOf").is_some())
         {
             let key = node
                 .get("x-collection-key")
@@ -256,6 +257,7 @@ fn strip_annotations(value: &mut Value, secret: bool) {
         Value::Object(map) => {
             map.remove("x-setting");
             map.remove("x-collection-key");
+            map.remove("x-atomic-list");
             map.remove("x-choice-resolver");
             if secret {
                 map.remove("default");

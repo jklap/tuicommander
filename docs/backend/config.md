@@ -1421,7 +1421,11 @@ and typed owner services. Existing UI-specific configuration routes remain avail
 
 `src-tauri/src/settings/inventory-gaps.json` records untyped, external-owner,
 credential and dynamic-choice gaps by store, pointer and assigned implementation
-step. Inline gaps such as tunnel forward records join that ledger at registration.
+step. Inline schema gaps also join that ledger at registration. Tunnel forwards
+are one atomic list setting at `/profiles/{id}/forwards`: get reads the list and
+set replaces it completely. Each item must match `ForwardSpec` and pass the
+existing profile validator. No record IDs or numeric-index edits are exposed;
+the persisted tunnel TOML format is unchanged.
 An ownerless gap fails registration. `Catalogue::require_complete_inventory()`
 rejects every open gap before settings transactions or typed workflows.
 Owner adapters must resolve their entries rather than reclassifying settings as

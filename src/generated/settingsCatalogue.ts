@@ -8774,7 +8774,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "tunnels",
       "group": "profiles",
-      "order": 10,
+      "order": 11,
       "path": "/profiles/{id}/auto_connect",
       "labelKey": "settings.catalogue.tunnels.profiles.{id}.auto_connect.label",
       "helpKey": "settings.catalogue.tunnels.profiles.{id}.auto_connect.help",
@@ -8798,6 +8798,98 @@ export const settingsCatalogue = {
         "reset"
       ],
       "confirmationClass": "ordinary"
+    },
+    "tunnels.profiles.{id}.forwards": {
+      "id": "tunnels.profiles.{id}.forwards",
+      "store": "tunnels",
+      "owner": "machine",
+      "area": "tunnels",
+      "group": "profiles",
+      "order": 6,
+      "path": "/profiles/{id}/forwards",
+      "labelKey": "settings.catalogue.tunnels.profiles.{id}.forwards.label",
+      "helpKey": "settings.catalogue.tunnels.profiles.{id}.forwards.help",
+      "label": "forwards",
+      "schema": {
+        "type": "array",
+        "items": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "bind_port": {
+                  "type": "integer",
+                  "format": "uint16",
+                  "minimum": 0,
+                  "maximum": 65535
+                },
+                "remote_host": {
+                  "type": "string"
+                },
+                "remote_port": {
+                  "type": "integer",
+                  "format": "uint16",
+                  "minimum": 0,
+                  "maximum": 65535
+                },
+                "type": {
+                  "type": "string",
+                  "const": "Local"
+                }
+              },
+              "required": [
+                "type",
+                "bind_port",
+                "remote_host",
+                "remote_port"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "bind_port": {
+                  "type": "integer",
+                  "format": "uint16",
+                  "minimum": 0,
+                  "maximum": 65535
+                },
+                "local_host": {
+                  "type": "string"
+                },
+                "local_port": {
+                  "type": "integer",
+                  "format": "uint16",
+                  "minimum": 0,
+                  "maximum": 65535
+                },
+                "type": {
+                  "type": "string",
+                  "const": "Remote"
+                }
+              },
+              "required": [
+                "type",
+                "bind_port",
+                "local_host",
+                "local_port"
+              ]
+            }
+          ]
+        }
+      },
+      "nullable": false,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "private",
+      "apply": "live",
+      "effect": "Replaces all forwards for the current tunnel profile.",
+      "operations": [
+        "get",
+        "set"
+      ],
+      "confirmationClass": "execution_authority"
     },
     "tunnels.profiles.{id}.host": {
       "id": "tunnels.profiles.{id}.host",
@@ -8921,7 +9013,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "tunnels",
       "group": "profiles",
-      "order": 9,
+      "order": 10,
       "path": "/profiles/{id}/options/compression",
       "labelKey": "settings.catalogue.tunnels.profiles.{id}.options.compression.label",
       "helpKey": "settings.catalogue.tunnels.profiles.{id}.options.compression.help",
@@ -8953,7 +9045,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "tunnels",
       "group": "profiles",
-      "order": 7,
+      "order": 8,
       "path": "/profiles/{id}/options/server_alive_count_max",
       "labelKey": "settings.catalogue.tunnels.profiles.{id}.options.server_alive_count_max.label",
       "helpKey": "settings.catalogue.tunnels.profiles.{id}.options.server_alive_count_max.help",
@@ -8984,7 +9076,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "tunnels",
       "group": "profiles",
-      "order": 6,
+      "order": 7,
       "path": "/profiles/{id}/options/server_alive_interval",
       "labelKey": "settings.catalogue.tunnels.profiles.{id}.options.server_alive_interval.label",
       "helpKey": "settings.catalogue.tunnels.profiles.{id}.options.server_alive_interval.help",
@@ -9015,7 +9107,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "tunnels",
       "group": "profiles",
-      "order": 8,
+      "order": 9,
       "path": "/profiles/{id}/options/strict_host_key_checking",
       "labelKey": "settings.catalogue.tunnels.profiles.{id}.options.strict_host_key_checking.label",
       "helpKey": "settings.catalogue.tunnels.profiles.{id}.options.strict_host_key_checking.help",
@@ -10780,14 +10872,7 @@ export const settingsCatalogue = {
       "reason": "Per-window active repository selection."
     }
   ],
-  "gaps": [
-    {
-      "store": "tunnels",
-      "path": "/profiles/{id}/forwards",
-      "ownerStep": "Step 4f",
-      "reason": "ForwardSpec records have no stable IDs; owner must define stable record edits."
-    }
-  ],
+  "gaps": [],
   "collections": [
     {
       "store": "app",
@@ -11567,10 +11652,6 @@ export const settingsCatalogue = {
                   ]
                 }
               ]
-            },
-            "x-inventory-gap": {
-              "ownerStep": "Step 4f",
-              "reason": "ForwardSpec records have no stable IDs; owner must define stable record edits."
             }
           },
           "options": {

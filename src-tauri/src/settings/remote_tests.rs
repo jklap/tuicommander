@@ -422,8 +422,8 @@ async fn invalid_records_are_rejected_before_any_write() {
     );
 }
 
-/// Catches: a tunnel profile edit dropping the forwards (an inventory gap the adapter cannot
-/// address yet) or removing the profile file without stopping a running tunnel.
+/// Catches: an unrelated tunnel profile edit dropping its atomic forwards list, or removing
+/// the profile file without stopping a running tunnel.
 #[tokio::test]
 async fn tunnel_edit_keeps_forwards_and_removal_stops_the_tunnel() {
     let f = fixture();
@@ -645,4 +645,91 @@ async fn connection_credential_partial_readback_reports_committed_phase() {
             .to_string()
             .contains("writeOnly")
     );
+}
+
+// Catches: atomic forward-list edits appending/merging records or losing sibling profile fields.
+#[tokio::test]
+async fn tunnel_forwards_patch_replaces_atomic_list_and_reads_back() {
+    let f = fixture();
+    let mut profile = TunnelProfile::new("atomic forwards", "t.example", "bob");
+    profile.forwards = vec![crate::tunnels::profile::ForwardSpec::Local {
+        bind_port: 8080,
+        remote_host: "old.example".into(),
+        remote_port: 80,
+    }];
+    ProfileStore::save(f.dir.path(), &profile).unwrap();
+    let path = format!("/profiles/{}/forwards", profile.id);
+    let replacement = json!([
+        {"type":"Local","bind_port":9000,"remote_host":"new.example","remote_port":443},
+        {"type":"Remote","bind_port":9001,"local_host":"localhost","local_port":3000}
+    ]);
+    let rev = revision(&f, "tunnels", &path).await;
+    let reply = set(&f, "tunnels", rev, &path, replacement.clone())
+        .await
+        .unwrap();
+    assert!(reply.persisted && reply.applied);
+    let read = get(&f, "tunnels", &[&path]).await.unwrap();
+    assert_eq!(read.values[&path].stored, replacement);
+    assert_eq!(read.revision, reply.revision);
+    let saved = ProfileStore::load_all(f.dir.path(), None).unwrap();
+    assert_eq!(
+        serde_json::to_value(&saved[0].forwards).unwrap(),
+        replacement
+    );
+    assert_eq!(saved[0].name, profile.name);
+    assert_eq!(saved[0].host, profile.host);
+    let reply = set(&f, "tunnels", read.revision, &path, json!([]))
+        .await
+        .unwrap();
+    assert!(reply.persisted);
+    assert_eq!(
+        get(&f, "tunnels", &[&path]).await.unwrap().values[&path].stored,
+        json!([])
+    );
+    assert!(
+        ProfileStore::load_all(f.dir.path(), None).unwrap()[0]
+            .forwards
+            .is_empty()
+    );
+    assert!(f.removed.lock().is_empty());
+}
+
+// Catches: an atomic array admitting malformed records, unknown fields or index-based edits.
+#[tokio::test]
+async fn tunnel_forwards_rejects_invalid_records_and_numeric_descendants_without_writes() {
+    let f = fixture();
+    let profile = TunnelProfile::new("atomic validation", "t.example", "bob");
+    ProfileStore::save(f.dir.path(), &profile).unwrap();
+    let file = f
+        .dir
+        .path()
+        .join("tunnels")
+        .join(format!("{}.toml", profile.id));
+    let before = std::fs::read(&file).unwrap();
+    let path = format!("/profiles/{}/forwards", profile.id);
+    let revision = revision(&f, "tunnels", &path).await;
+    for value in [
+        json!([{"type":"Local","bind_port":8080}]),
+        json!([{"type":"Local","bind_port":0,"remote_host":"localhost","remote_port":80}]),
+        json!([{"type":"Local","bind_port":8080,"remote_host":"localhost","remote_port":80,"id":"invented"}]),
+    ] {
+        assert!(
+            set(&f, "tunnels", revision.clone(), &path, value)
+                .await
+                .is_err()
+        );
+        assert_eq!(std::fs::read(&file).unwrap(), before);
+    }
+    assert!(
+        set(
+            &f,
+            "tunnels",
+            revision,
+            &format!("{path}/0/bind_port"),
+            json!(9000)
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(std::fs::read(&file).unwrap(), before);
 }
