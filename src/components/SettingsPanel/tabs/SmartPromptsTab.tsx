@@ -12,6 +12,7 @@ import { Input } from "../../ui/Input";
 import { Select } from "../../ui/Select";
 import { Textarea } from "../../ui/Textarea";
 import s from "../Settings.module.css";
+import { SectionCard, SettingPageHeader, SettingRow } from "../SettingsPrimitives";
 import sp from "./SmartPromptsTab.module.css";
 
 // All placements for the checkbox grid
@@ -585,7 +586,7 @@ const PromptRow: Component<{ prompt: SavedPrompt; headlessAgents: AgentType[] }>
 							</span>
 						)}
 					</For>
-					<Show when={props.prompt.builtIn}>
+					<Show when={props.prompt.builtIn} fallback={<span class={sp.badge}>Custom</span>}>
 						<span class={sp.badge} data-type="builtin">
 							Built-in
 						</span>
@@ -680,56 +681,74 @@ export const SmartPromptsTab: Component = () => {
 
 	return (
 		<div class={s.section}>
-			<h3>Smart Prompts</h3>
-			<p class={s.hint} style={{ "margin-bottom": "16px" }}>
-				AI-powered actions that can be triggered from the toolbar, context menus, and command palette. Enable, disable,
-				or customize the prompt content and placement for each action.
-			</p>
+			<SettingPageHeader
+				title="Smart Prompts"
+				description="Configure reusable actions and their execution behavior."
+				scope="Application"
+				breadcrumb="Voice / Smart Prompts"
+			/>
+			<SectionCard title="Background agent">
+				<p class={s.hint} style={{ "margin-bottom": "16px" }}>
+					AI-powered actions that can be triggered from the toolbar, context menus, and command palette. Enable,
+					disable, or customize the prompt content and placement for each action.
+				</p>
 
-			<div class={s.group}>
-				<label>Headless Agent</label>
-				<Select
-					value={agentConfigsStore.getHeadlessAgent() ?? ""}
-					onChange={(e) => agentConfigsStore.setHeadlessAgent(toHeadlessAgentChoice(e.currentTarget.value))}
+				<SettingRow
+					label="Headless Agent"
+					hint="Default agent for headless prompts. Individual prompts can override this in their settings."
 				>
-					<option value="">— Not configured —</option>
-					<For each={headlessAgents()}>
-						{(type) => {
-							const configs = () => agentConfigsStore.getRunConfigs(type);
-							return (
-								<Show when={configs().length > 0} fallback={<option value={type}>{AGENTS[type]?.name ?? type}</option>}>
-									<optgroup label={AGENTS[type]?.name ?? type}>
-										<option value={type}>{AGENTS[type]?.name ?? type} (default)</option>
-										<For each={configs()}>
-											{(cfg) => (
-												<option value={`${type}:${cfg.name}`}>
-													{cfg.name}
-													{cfg.is_default ? " (default)" : ""}
-												</option>
-											)}
-										</For>
-									</optgroup>
-								</Show>
-							);
-						}}
-					</For>
-					<option value="api">API (via ego)</option>
-				</Select>
+					{(id, descriptionId) => (
+						<Select
+							id={id}
+							aria-describedby={descriptionId()}
+							value={agentConfigsStore.getHeadlessAgent() ?? ""}
+							onChange={(e) => agentConfigsStore.setHeadlessAgent(toHeadlessAgentChoice(e.currentTarget.value))}
+						>
+							<option value="">— Not configured —</option>
+							<For each={headlessAgents()}>
+								{(type) => {
+									const configs = () => agentConfigsStore.getRunConfigs(type);
+									return (
+										<Show
+											when={configs().length > 0}
+											fallback={<option value={type}>{AGENTS[type]?.name ?? type}</option>}
+										>
+											<optgroup label={AGENTS[type]?.name ?? type}>
+												<option value={type}>{AGENTS[type]?.name ?? type} (default)</option>
+												<For each={configs()}>
+													{(cfg) => (
+														<option value={`${type}:${cfg.name}`}>
+															{cfg.name}
+															{cfg.is_default ? " (default)" : ""}
+														</option>
+													)}
+												</For>
+											</optgroup>
+										</Show>
+									);
+								}}
+							</For>
+							<option value="api">API (via ego)</option>
+						</Select>
+					)}
+				</SettingRow>
 				<p class={s.hint}>
 					Default agent for headless prompts. Individual prompts can override this in their settings.
 					{detection.loading() ? " Detecting..." : ""}
 				</p>
-			</div>
+			</SectionCard>
 
-			<div class={sp.promptList}>
-				<For each={orderedCategories()}>
-					{(cat) => <CategoryGroup category={cat} prompts={groups().get(cat)!} headlessAgents={headlessAgents()} />}
-				</For>
-			</div>
+			<SectionCard title="Prompt library">
+				<div class={sp.promptList}>
+					<For each={orderedCategories()}>
+						{(cat) => <CategoryGroup category={cat} prompts={groups().get(cat)!} headlessAgents={headlessAgents()} />}
+					</For>
+				</div>
 
-			<button class={sp.addBtn} onClick={handleNewPrompt}>
-				+ New Smart Prompt
-			</button>
+				<button class={sp.addBtn} onClick={handleNewPrompt}>
+					+ New Smart Prompt
+				</button>
+			</SectionCard>
 		</div>
 	);
 };

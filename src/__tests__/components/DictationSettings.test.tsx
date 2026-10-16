@@ -530,7 +530,8 @@ describe("DictationSettings – Voice library", () => {
 	const slider = (container: HTMLElement, label: string) =>
 		Array.from(container.querySelectorAll("label"))
 			.find((el) => el.textContent === label)
-			?.parentElement?.querySelector('input[type="range"]') as HTMLInputElement;
+			?.closest(".settingRow, .group")
+			?.querySelector('input[type="range"]') as HTMLInputElement;
 	const voiceSelect = (container: HTMLElement) =>
 		Array.from(container.querySelectorAll("select")).find((el) =>
 			Array.from(el.options).some((o) => o.textContent === "Default for this language"),

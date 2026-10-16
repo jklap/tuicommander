@@ -17,6 +17,7 @@ import d from "./DictationSettings.module.css";
 import { ExpertSetting } from "./ExpertSetting";
 import { SettingSlider } from "./SettingFields";
 import s from "./Settings.module.css";
+import { SectionCard, SettingPageHeader } from "./SettingsPrimitives";
 
 /**
  * Mirrors `audio.rs`: `meter_level = sqrt(rms * 20)`.
@@ -179,149 +180,155 @@ export const DictationSettings: Component = () => {
 	// h3 heading — see `SpeechRecognition` for why that matters.
 	return (
 		<div class={s.section}>
-			<h3>{t("dictation.heading.dictation", "Dictation")}</h3>
-
-			<Show when={dictationStore.state.ownedElsewhere}>
-				<p class={s.hint}>
-					{t(
-						"dictation.ownedElsewhere",
-						"Dictation is owned by another TUICommander instance on this configuration. Use it there; this instance does not register the global hotkey, watch the Fn key or open the microphone. Restart this instance after the other one quits to take dictation over.",
-					)}
-				</p>
-			</Show>
-
-			<div class={s.group}>
-				<label>{t("dictation.enableLabel", "Enable Dictation")}</label>
-				<div class={s.toggle}>
-					<input
-						type="checkbox"
-						checked={dictationStore.state.enabled}
-						onChange={(e) => dictationStore.setEnabled(e.currentTarget.checked)}
-					/>
-					<span>{t("dictation.enableHint", "Enable voice-to-text dictation")}</span>
-				</div>
-			</div>
-
-			{/* Hotkey — a global hotkey belongs to the machine running
-			    TUICommander, so a browser tab has none to configure. */}
-			<Show when={isTauri()}>
-				<div class={s.group}>
-					<label>{t("dictation.hotkeyLabel", "Hotkey")}</label>
-					<div class={d.hotkeyRow}>
-						<KeyComboCapture
-							value={dictationStore.state.hotkey}
-							onChange={(combo) => dictationStore.setHotkey(combo)}
-							placeholder={t("dictation.hotkeyPlaceholder", "Press a key combination...")}
-							onCapturingChange={(capturing) => dictationStore.setCapturingHotkey(capturing)}
-						/>
-					</div>
+			<SettingPageHeader
+				title="Voice"
+				description="Dictation, speech recognition and spoken conversations on this machine."
+				scope="This machine"
+				breadcrumb="Voice / Voice"
+			/>
+			<SectionCard title={t("dictation.heading.dictation", "Dictation")}>
+				<Show when={dictationStore.state.ownedElsewhere}>
 					<p class={s.hint}>
 						{t(
-							"dictation.hotkeyHint",
-							"Hold the hotkey to start recording, release to stop. Short presses pass through as normal input.",
+							"dictation.ownedElsewhere",
+							"Dictation is owned by another TUICommander instance on this configuration. Use it there; this instance does not register the global hotkey, watch the Fn key or open the microphone. Restart this instance after the other one quits to take dictation over.",
 						)}
 					</p>
-				</div>
+				</Show>
 
-				<ExpertSetting configKey="dictation.long_press_ms" value={dictationStore.state.longPressMs}>
-					<SettingSlider
-						label={t("dictation.longPressLabel", "Long-press threshold")}
-						value={dictationStore.state.longPressMs}
-						onChange={(v) => dictationStore.setLongPressMs(v)}
-						min={0}
-						max={1000}
-						step={50}
-						formatValue={(v) => (v === 0 ? t("dictation.instant", "Instant") : `${v}ms`)}
-						hint={t(
-							"dictation.longPressHint",
-							"How long to hold the key before dictation starts. 0 = instant (no short-press pass-through), higher = fewer accidental triggers.",
-						)}
-					/>
-				</ExpertSetting>
-			</Show>
-
-			<ExpertSetting configKey="dictation.auto_send" value={dictationStore.state.autoSend}>
 				<div class={s.group}>
-					<label>{t("dictation.autoSendLabel", "Auto-send")}</label>
+					<label>{t("dictation.enableLabel", "Enable Dictation")}</label>
 					<div class={s.toggle}>
 						<input
 							type="checkbox"
-							checked={dictationStore.state.autoSend}
-							onChange={(e) => dictationStore.setAutoSend(e.currentTarget.checked)}
+							checked={dictationStore.state.enabled}
+							onChange={(e) => dictationStore.setEnabled(e.currentTarget.checked)}
 						/>
-						<span>{t("dictation.autoSendHint", "Automatically press Enter after inserting transcribed text")}</span>
+						<span>{t("dictation.enableHint", "Enable voice-to-text dictation")}</span>
 					</div>
 				</div>
-			</ExpertSetting>
 
-			<SpeechRecognition />
-
-			<h3>{t("dictation.heading.corrections", "Auto-Corrections")}</h3>
-			<p class={cx(s.hint, d.intro)}>
-				{t("dictation.correctionsHint", "Automatically replace dictation output. Useful for technical terms.")}
-			</p>
-
-			<div class={s.group}>
-				<Show when={Object.keys(dictationStore.state.corrections).length > 0}>
-					<div class={d.correctionsTable}>
-						<div class={d.correctionsHeader}>
-							<span>{t("dictation.correctionsFrom", "From")}</span>
-							<span>{t("dictation.correctionsTo", "To")}</span>
-							<span />
+				{/* Hotkey — a global hotkey belongs to the machine running
+			    TUICommander, so a browser tab has none to configure. */}
+				<Show when={isTauri()}>
+					<div class={s.group}>
+						<label>{t("dictation.hotkeyLabel", "Hotkey")}</label>
+						<div class={d.hotkeyRow}>
+							<KeyComboCapture
+								value={dictationStore.state.hotkey}
+								onChange={(combo) => dictationStore.setHotkey(combo)}
+								placeholder={t("dictation.hotkeyPlaceholder", "Press a key combination...")}
+								onCapturingChange={(capturing) => dictationStore.setCapturingHotkey(capturing)}
+							/>
 						</div>
-						<For each={Object.entries(dictationStore.state.corrections)}>
-							{([from, to]) => (
-								<div class={d.correctionsRow}>
-									<span class={d.correctionText}>{from}</span>
-									<span class={d.correctionText}>{to}</span>
-									<button
-										class={d.correctionDelete}
-										onClick={() => handleRemoveCorrection(from)}
-										title={t("dictation.removeCorrection", "Remove correction")}
-									>
-										&times;
-									</button>
-								</div>
+						<p class={s.hint}>
+							{t(
+								"dictation.hotkeyHint",
+								"Hold the hotkey to start recording, release to stop. Short presses pass through as normal input.",
 							)}
-						</For>
+						</p>
 					</div>
+
+					<ExpertSetting configKey="dictation.long_press_ms" value={dictationStore.state.longPressMs}>
+						<SettingSlider
+							row
+							label={t("dictation.longPressLabel", "Long-press threshold")}
+							value={dictationStore.state.longPressMs}
+							onChange={(v) => dictationStore.setLongPressMs(v)}
+							min={0}
+							max={1000}
+							step={50}
+							formatValue={(v) => (v === 0 ? t("dictation.instant", "Instant") : `${v}ms`)}
+							hint={t(
+								"dictation.longPressHint",
+								"How long to hold the key before dictation starts. 0 = instant (no short-press pass-through), higher = fewer accidental triggers.",
+							)}
+						/>
+					</ExpertSetting>
 				</Show>
 
-				<div class={d.correctionAdd}>
-					<Input
-						type="text"
-						placeholder={t("dictation.correctionFromPlaceholder", "Heard text...")}
-						value={newFrom()}
-						onInput={(e) => setNewFrom(e.currentTarget.value)}
-						onKeyDown={(e) => e.key === "Enter" && handleAddCorrection()}
-					/>
-					<span class={d.correctionArrow}>&rarr;</span>
-					<Input
-						type="text"
-						placeholder={t("dictation.correctionToPlaceholder", "Replace with...")}
-						value={newTo()}
-						onInput={(e) => setNewTo(e.currentTarget.value)}
-						onKeyDown={(e) => e.key === "Enter" && handleAddCorrection()}
-					/>
-					<button
-						class={d.correctionAddBtn}
-						onClick={handleAddCorrection}
-						disabled={!newFrom().trim() || !newTo().trim()}
-					>
-						{t("dictation.addCorrection", "Add")}
-					</button>
-				</div>
+				<ExpertSetting configKey="dictation.auto_send" value={dictationStore.state.autoSend}>
+					<div class={s.group}>
+						<label>{t("dictation.autoSendLabel", "Auto-send")}</label>
+						<div class={s.toggle}>
+							<input
+								type="checkbox"
+								checked={dictationStore.state.autoSend}
+								onChange={(e) => dictationStore.setAutoSend(e.currentTarget.checked)}
+							/>
+							<span>{t("dictation.autoSendHint", "Automatically press Enter after inserting transcribed text")}</span>
+						</div>
+					</div>
+				</ExpertSetting>
+			</SectionCard>
+			<SpeechRecognition />
 
-				<div class={d.controlRow}>
-					<button class={s.testBtn} onClick={handleImportCorrections}>
-						{t("dictation.import", "Import")}
-					</button>
-					<button class={s.testBtn} onClick={handleExportCorrections}>
-						{t("dictation.export", "Export")}
-					</button>
-				</div>
-			</div>
+			<SectionCard title={t("dictation.heading.corrections", "Auto-Corrections")}>
+				<p class={cx(s.hint, d.intro)}>
+					{t("dictation.correctionsHint", "Automatically replace dictation output. Useful for technical terms.")}
+				</p>
 
+				<div class={s.group}>
+					<Show when={Object.keys(dictationStore.state.corrections).length > 0}>
+						<div class={d.correctionsTable}>
+							<div class={d.correctionsHeader}>
+								<span>{t("dictation.correctionsFrom", "From")}</span>
+								<span>{t("dictation.correctionsTo", "To")}</span>
+								<span />
+							</div>
+							<For each={Object.entries(dictationStore.state.corrections)}>
+								{([from, to]) => (
+									<div class={d.correctionsRow}>
+										<span class={d.correctionText}>{from}</span>
+										<span class={d.correctionText}>{to}</span>
+										<button
+											class={d.correctionDelete}
+											onClick={() => handleRemoveCorrection(from)}
+											title={t("dictation.removeCorrection", "Remove correction")}
+										>
+											&times;
+										</button>
+									</div>
+								)}
+							</For>
+						</div>
+					</Show>
+
+					<div class={d.correctionAdd}>
+						<Input
+							type="text"
+							placeholder={t("dictation.correctionFromPlaceholder", "Heard text...")}
+							value={newFrom()}
+							onInput={(e) => setNewFrom(e.currentTarget.value)}
+							onKeyDown={(e) => e.key === "Enter" && handleAddCorrection()}
+						/>
+						<span class={d.correctionArrow}>&rarr;</span>
+						<Input
+							type="text"
+							placeholder={t("dictation.correctionToPlaceholder", "Replace with...")}
+							value={newTo()}
+							onInput={(e) => setNewTo(e.currentTarget.value)}
+							onKeyDown={(e) => e.key === "Enter" && handleAddCorrection()}
+						/>
+						<button
+							class={d.correctionAddBtn}
+							onClick={handleAddCorrection}
+							disabled={!newFrom().trim() || !newTo().trim()}
+						>
+							{t("dictation.addCorrection", "Add")}
+						</button>
+					</div>
+
+					<div class={d.controlRow}>
+						<button class={s.testBtn} onClick={handleImportCorrections}>
+							{t("dictation.import", "Import")}
+						</button>
+						<button class={s.testBtn} onClick={handleExportCorrections}>
+							{t("dictation.export", "Export")}
+						</button>
+					</div>
+				</div>
+			</SectionCard>
 			<HandsFreeControls />
 
 			<SpeechSetup />
@@ -382,9 +389,7 @@ const SpeechRecognition: Component = () => {
 	};
 
 	return (
-		<>
-			<h3>{t("dictation.heading.recognition", "Speech recognition")}</h3>
-
+		<SectionCard title={t("dictation.heading.recognition", "Speech recognition")}>
 			{/* Audio devices — this list is the *server's* hardware. A browser
 			    captures from its own device, chosen by the browser's own
 			    permission prompt, so offering these names there would let a
@@ -509,6 +514,7 @@ const SpeechRecognition: Component = () => {
 
 			<ExpertSetting configKey="dictation.rms_threshold" value={dictationStore.state.rmsThreshold}>
 				<SettingSlider
+					row
 					label={t("dictation.rmsLabel", "Level gate")}
 					value={Math.round(thresholdPercent())}
 					onChange={(v) => dictationStore.setRmsThreshold(meterToRms(v / 100))}
@@ -525,6 +531,7 @@ const SpeechRecognition: Component = () => {
 
 			<ExpertSetting configKey="dictation.no_speech_threshold" value={dictationStore.state.noSpeechThreshold}>
 				<SettingSlider
+					row
 					label={t("dictation.noSpeechLabel", "Speech confidence gate")}
 					value={Math.round(dictationStore.state.noSpeechThreshold * 100)}
 					onChange={(v) => dictationStore.setNoSpeechThreshold(v / 100)}
@@ -538,7 +545,7 @@ const SpeechRecognition: Component = () => {
 					)}
 				/>
 			</ExpertSetting>
-		</>
+		</SectionCard>
 	);
 };
 
@@ -638,8 +645,7 @@ const SpeechSetup: Component = () => {
 	};
 
 	return (
-		<>
-			<h3>{t("dictation.heading.spokenReplies", "Spoken replies")}</h3>
+		<SectionCard title={t("dictation.heading.spokenReplies", "Spoken replies")}>
 			<p class={cx(s.hint, d.intro)}>
 				{isEdge()
 					? t(
@@ -769,6 +775,7 @@ const SpeechSetup: Component = () => {
 
 			<ExpertSetting configKey="dictation.speech_volume_db" value={dictationStore.state.speechVolumeDb}>
 				<SettingSlider
+					row
 					label={t("dictation.voiceVolumeLabel", "Voice volume")}
 					value={volumeDrag() ?? dictationStore.state.speechVolumeDb}
 					onChange={setVolumeDrag}
@@ -789,6 +796,7 @@ const SpeechSetup: Component = () => {
 
 			<ExpertSetting configKey="dictation.speech_levelling" value={dictationStore.state.speechLevelling}>
 				<SettingSlider
+					row
 					label={t("dictation.levellingLabel", "Levelling")}
 					value={levellingDrag() ?? Math.round(dictationStore.state.speechLevelling * 100)}
 					onChange={setLevellingDrag}
@@ -812,7 +820,7 @@ const SpeechSetup: Component = () => {
 					)}
 				/>
 			</ExpertSetting>
-		</>
+		</SectionCard>
 	);
 };
 
@@ -1052,8 +1060,7 @@ const HandsFreeControls: Component = () => {
 	};
 
 	return (
-		<>
-			<h3>{t("dictation.heading.handsFree", "Hands-free conversation")}</h3>
+		<SectionCard title={t("dictation.heading.handsFree", "Hands-free conversation")}>
 			<p class={cx(s.hint, d.intro)}>
 				{t(
 					"dictation.handsFreeHint",
@@ -1161,6 +1168,7 @@ const HandsFreeControls: Component = () => {
 
 			<ExpertSetting configKey="dictation.hands_free_hold_back_ms" value={dictationStore.state.handsFreeHoldBackMs}>
 				<SettingSlider
+					row
 					label={t("dictation.holdBackLabel", "Hold-back before sending")}
 					value={dictationStore.state.handsFreeHoldBackMs}
 					onChange={(v) => dictationStore.setHandsFreeHoldBackMs(v)}
@@ -1277,6 +1285,6 @@ const HandsFreeControls: Component = () => {
 					</div>
 				</ExpertSetting>
 			</Show>
-		</>
+		</SectionCard>
 	);
 };
