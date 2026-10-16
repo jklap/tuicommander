@@ -545,3 +545,21 @@ An empty device list means enumeration succeeded with no devices. If the audio b
 ### Shared layout
 
 Settings uses one bounded, responsive shell across pages, with independently scrolling navigation and content. The panel is at most 1136px wide and retains its size when you select another page. Saved navigation width remains in use. Shared presentation components support consistent cards, label/control rows, source-aware status, empty states and scoped destructive actions as pages adopt the approved restyle. Save behavior and configuration ownership do not change.
+
+### Task-based settings presentation
+
+AI Chat groups new-run defaults into **Agent and model**, **Workspace access**,
+**Network and sandbox**, and closed **Advanced and diagnostics**. The executable,
+profile, and workspace remain owned by TUICommander in General. Model and access
+values remain owned by ego; these controls do not change running conversations.
+
+Voice uses separate task cards for dictation, recognition, corrections,
+hands-free conversations, and spoken replies. Smart Prompts retains categorized
+prompt editors and the existing execution controls. Integration pages use local
+connection, access, and service cards. Remote token regeneration requires a scoped
+confirmation because it disconnects active remote sessions.
+
+The plugin manager retains lazy Installed/Browse views. A loaded plugin's settings
+page identifies its plugin source and uses schema-driven controls; saved credentials
+are not evidence of a live connection. Existing explicit-save and automatic-save
+boundaries still apply to each page.

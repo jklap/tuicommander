@@ -402,3 +402,12 @@
   gap: 8px;
   flex-wrap: wrap;
 }
+
+/* Settings task cards retain wrapping names and named actions at narrow widths. */
+.pluginInfo { min-width: 0; }
+.pluginNameRow, .pluginActionsRow { flex-wrap: wrap; }
+.pluginName, .pluginDescription, .pluginCapabilities { overflow-wrap: anywhere; }
+@media (max-width: 800px) {
+  .pluginHeader, .sectionHeader { flex-direction: column; align-items: stretch; gap: 12px; }
+  .pluginActions { align-items: flex-start; }
+}
