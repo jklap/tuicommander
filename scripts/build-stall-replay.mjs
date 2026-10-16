@@ -63,5 +63,5 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 	if (inputs.reduce((size, path) => size + statSync(path).size, 0) > MAX_BYTES) throw new Error("Journal too large");
 	const chunks = inputs.map((path) => readFileSync(path));
 	if (chunks.reduce((size, chunk) => size + chunk.length, 0) > MAX_BYTES) throw new Error("Journal too large");
-	writeFileSync(output, `${JSON.stringify(buildStallReplay(chunks.join("\n")), null, 2)}\n`);
+	writeFileSync(output, `${JSON.stringify(buildStallReplay(chunks.join("")), null, 2)}\n`);
 }

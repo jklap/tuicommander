@@ -1,4 +1,8 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { buildStallReplay } from "./build-stall-replay.mjs";
 
@@ -35,4 +39,23 @@ test("rotated and current observations retain their supplied chronological order
 	const fixture = buildStallReplay(`${record(counts)}\n${record({}, { timestamp_ms: 1300, kind: "ui_freeze" })}\n`);
 	assert.deepEqual(fixture.events.map((event) => event.timestamp_ms), [1234, 1300]);
 	assert.equal(fixture.refreshes.length, 1);
+});
+
+
+test("the CLI accepts two full-size files without charging a synthetic separator byte", () => {
+	assert.ok(process.env.TMPDIR, "run through scripts/with-test-tmp.sh");
+	const directory = mkdtempSync(join(process.env.TMPDIR, "stall-builder-"));
+	try {
+		const line = `${record(counts)}\n`;
+		const full = line.padEnd(2 * 1024 * 1024 - 1, " ") + "\n";
+		const previous = join(directory, "previous.jsonl");
+		const current = join(directory, "current.jsonl");
+		const output = join(directory, "replay.json");
+		writeFileSync(previous, full);
+		writeFileSync(current, full);
+		execFileSync(process.execPath, [fileURLToPath(new URL("./build-stall-replay.mjs", import.meta.url)), output, previous, current]);
+		assert.equal(JSON.parse(readFileSync(output, "utf8")).refreshes.length, 2);
+	} finally {
+		rmSync(directory, { recursive: true, force: true });
+	}
 });
