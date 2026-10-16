@@ -18,7 +18,7 @@ import { InstallWorkItemPlugin } from "../../Tasks/setup/InstallWorkItemPlugin";
 import { SegmentedControl } from "../../ui/SegmentedControl";
 import { SettingToggle } from "../SettingFields";
 import s from "../Settings.module.css";
-import { SectionCard, SettingPageHeader } from "../SettingsPrimitives";
+import { ListRow, SectionCard, SettingPageHeader } from "../SettingsPrimitives";
 import ps from "./PluginsTab.module.css";
 
 const PLUGIN_DOCS_URL = "https://tuicommander.com/docs/plugins";
@@ -183,33 +183,36 @@ const PluginRow: Component<{ plugin: PluginState; onClose?: () => void; onOpenSe
 								?
 							</button>
 						</Show>
-						<label class={s.toggle}>
-							<input
-								type="checkbox"
-								aria-label={`Enable ${props.plugin.manifest?.name ?? props.plugin.id}`}
-								checked={props.plugin.enabled}
-								disabled={toggling()}
-								onChange={handleToggle}
-							/>
-						</label>
-						<button
-							class={ps.logsBtn}
-							classList={{ [ps.logsActive]: showLogs() }}
-							onClick={() => setShowLogs(!showLogs())}
-							title="View logs"
-						>
-							Logs
-						</button>
-						<Show when={!props.plugin.builtIn}>
+						<details>
+							<summary>Manage plugin</summary>{" "}
+							<label class={s.toggle}>
+								<input
+									type="checkbox"
+									aria-label={`Enable ${props.plugin.manifest?.name ?? props.plugin.id}`}
+									checked={props.plugin.enabled}
+									disabled={toggling()}
+									onChange={handleToggle}
+								/>
+							</label>
 							<button
-								class={ps.uninstallBtn}
-								onClick={handleUninstall}
-								disabled={uninstalling()}
-								title="Uninstall plugin"
+								class={ps.logsBtn}
+								classList={{ [ps.logsActive]: showLogs() }}
+								onClick={() => setShowLogs(!showLogs())}
+								title="View logs"
 							>
-								{uninstalling() ? "..." : "Uninstall"}
+								Logs
 							</button>
-						</Show>
+							<Show when={!props.plugin.builtIn}>
+								<button
+									class={ps.uninstallBtn}
+									onClick={handleUninstall}
+									disabled={uninstalling()}
+									title="Uninstall plugin"
+								>
+									{uninstalling() ? "..." : "Uninstall"}
+								</button>
+							</Show>
+						</details>
 					</div>
 					<Show when={dashboardRegistry.get(props.plugin.id)}>
 						{(entry) => (
@@ -478,7 +481,13 @@ export const PluginsTab: Component<{
 					<For each={WORK_ITEM_PLUGINS.filter((setup) => !pluginStore.getPlugin(setup.pluginId))}>
 						{(setup) => (
 							<div class={ps.installSuggestion}>
-								<InstallWorkItemPlugin setup={setup} note="Install it to list those items in the Tasks tab." />
+								<ListRow
+									name={setup.name ?? setup.pluginId}
+									description="Work-item integration · not installed"
+									actions={
+										<InstallWorkItemPlugin setup={setup} note="Install it to list those items in the Tasks tab." />
+									}
+								/>
 							</div>
 						)}
 					</For>

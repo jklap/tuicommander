@@ -1,5 +1,6 @@
 import { type Component, createEffect, createResource, createSignal, For, onCleanup, Show } from "solid-js";
 import { invoke } from "../../invoke";
+import { pluginStore } from "../../stores/pluginStore";
 import { Input } from "../ui/Input";
 import { Select } from "../ui/Select";
 import { SettingField } from "./fields/SettingField";
@@ -7,6 +8,7 @@ import { type PluginSettingsField, type PluginSettingsPage, pluginFieldLabel } f
 import { SettingList, SettingMultiSelect, SettingStatus } from "./SettingFields";
 import s from "./Settings.module.css";
 import { SectionCard, SettingPageHeader } from "./SettingsPrimitives";
+import layout from "./tabs/PluginsTab.module.css";
 
 interface Snapshot {
 	revision: string;
@@ -61,13 +63,18 @@ export const PluginSettingsTab: Component<{ page: PluginSettingsPage }> = (props
 
 	return (
 		<div class={s.section}>
-			<SettingPageHeader
-				title={props.page.label}
-				description="Settings supplied by this loaded plugin. Changes retain the plugin’s declared scope and save behavior."
-				scope="Plugin"
-				breadcrumb={`Plugin settings / ${props.page.label}`}
-				source={`Source: ${props.page.id}`}
-			/>
+			<div class={layout.pluginPageHeader}>
+				<svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+					<path d="M8 2h2v5h4V2h2v5h3v4a7 7 0 0 1-6 6.93V22h-2v-4.07A7 7 0 0 1 5 11V7h3V2Zm-1 7v2a5 5 0 0 0 10 0V9H7Z" />
+				</svg>
+				<SettingPageHeader
+					title={props.page.label}
+					description="Settings supplied by this loaded plugin. Changes retain the plugin’s declared scope and save behavior."
+					scope="Plugin-owned"
+					breadcrumb={`Plugin settings / ${props.page.label}`}
+					source={`Source: ${pluginStore.getAll().find((plugin) => plugin.id === props.page.id)?.builtIn ? "bundled with TUICommander" : "installed plugin"} · ${props.page.id}`}
+				/>
+			</div>
 			<SectionCard title="Plugin settings">
 				<Show when={snapshot.error}>
 					<p role="alert" class={s.hint}>

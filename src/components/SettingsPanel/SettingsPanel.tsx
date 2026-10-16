@@ -38,7 +38,6 @@ import {
 	SmartPromptsTab,
 	TelegramTab,
 	TerminalTab,
-	UpstreamMcpPanel,
 } from "./tabs";
 
 /** Context for initial selection when opening the panel */
@@ -183,7 +182,16 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 
 	const [query, setQuery] = createSignal("");
 	const pluginPages = createPluginSettingsCatalogue();
-	const pluginTabs = () => pluginPages().map((page) => ({ key: `plugin:${page.id}`, label: page.label }));
+	const pluginTabs = () =>
+		pluginPages().map((page) => ({
+			key: `plugin:${page.id}`,
+			label: page.label,
+			icon: (
+				<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+					<path d="M8 2h2v5h4V2h2v5h3v4a7 7 0 0 1-6 6.93V22h-2v-4.07A7 7 0 0 1 5 11V7h3V2Zm-1 7v2a5 5 0 0 0 10 0V9H7Z" />
+				</svg>
+			),
+		}));
 	const navItems = () => buildNavItems(pluginTabs());
 	const pluginEntries = () =>
 		pluginPages().flatMap((page) =>
@@ -376,7 +384,6 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 				</Show>
 				<Show when={activeTab() === "mcp"}>
 					<LocalMcpPanel />
-					<UpstreamMcpPanel />
 				</Show>
 				<Show when={activeTab() === "remote-access"}>
 					<RemoteAccessPanel />
