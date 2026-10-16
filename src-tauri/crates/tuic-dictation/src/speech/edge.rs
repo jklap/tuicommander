@@ -1002,6 +1002,30 @@ mod tests {
     }
 
     #[test]
+    fn edge_handshake_pins_the_current_endpoint_token_version_and_headers() {
+        // Catches: the retired Bing endpoint or TrustedClientToken query key
+        // surviving the October 2026 service migration.
+        let request = handshake_request().unwrap();
+        let uri = request.uri();
+        assert_eq!(uri.host(), Some("api.msedgeservices.com"));
+        assert_eq!(uri.path(), "/tts/cognitiveservices/websocket/v1");
+        let query = uri.query().unwrap();
+        assert!(query.starts_with("Ocp-Apim-Subscription-Key=6A5AA1D4EAFF4E9FB37E23D68491D6F4&"));
+        assert!(!query.contains("TrustedClientToken"));
+        assert!(query.contains("&Sec-MS-GEC-Version=2-143.0.3650.75"));
+        assert_eq!(request.headers()["origin"], "chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold");
+        assert_eq!(request.headers()["user-agent"], "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36 Edg/143.0.0.0");
+        assert_eq!(request.headers()["accept-language"], "en-US,en;q=0.9");
+        assert_eq!(request.headers()["accept-encoding"], "gzip, deflate, br, zstd");
+        assert_eq!(request.headers()["pragma"], "no-cache");
+        assert_eq!(request.headers()["cache-control"], "no-cache");
+        assert_eq!(request.headers()["sec-websocket-version"], "13");
+        let cookie = request.headers()["cookie"].to_str().unwrap();
+        assert!(cookie.starts_with("muid=") && cookie.ends_with(';'));
+        assert_eq!(cookie.len(), 38);
+    }
+
+    #[test]
     fn the_handshake_token_matches_the_reference_implementation() {
         // Reference value computed with the Python `edge-tts` algorithm for
         // 2026-10-01T19:36:20Z. A wrong rounding or epoch makes the service
