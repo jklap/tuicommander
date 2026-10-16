@@ -1,4 +1,14 @@
-import { type Component, createEffect, createResource, createSignal, For, onCleanup, Show, Suspense } from "solid-js";
+import {
+	type Component,
+	createEffect,
+	createResource,
+	createSignal,
+	For,
+	type JSX,
+	onCleanup,
+	Show,
+	Suspense,
+} from "solid-js";
 import { invoke } from "../../invoke";
 import { pluginStore } from "../../stores/pluginStore";
 import { Input } from "../ui/Input";
@@ -96,24 +106,33 @@ export const PluginSettingsTab: Component<{ page: PluginSettingsPage }> = (props
 						{(current) => (
 							<For each={props.page.fields}>
 								{(field) => (
-									<>
-										<PluginField
-											field={field}
-											value={current().values[field.path]?.effective}
-											disabled={busy() || snapshot.loading}
-											onWrite={(value) => void write(field, value)}
-										/>
-										<Show when={field.operations.includes("reset")}>
-											<div class={s.actions}>
+									<PluginField
+										field={field}
+										value={current().values[field.path]?.effective}
+										disabled={busy() || snapshot.loading}
+										onWrite={(value) => void write(field, value)}
+										actions={
+											<Show
+												when={
+													field.operations.includes("reset") &&
+													(field.sensitivity === "secret"
+														? (current().values[field.path]?.effective as { status?: string })?.status === "set"
+														: field.default !== undefined &&
+															JSON.stringify(current().values[field.path]?.effective) !== JSON.stringify(field.default))
+												}
+											>
 												<button
+													class={s.testBtn}
+													aria-label={`Reset ${pluginFieldLabel(field)}`}
+													title={`Reset ${pluginFieldLabel(field)} to default`}
 													disabled={busy() || snapshot.loading}
 													onClick={() => void write(field, undefined, true)}
 												>
-													Reset {pluginFieldLabel(field)}
+													Reset
 												</button>
-											</div>
-										</Show>
-									</>
+											</Show>
+										}
+									/>
 								)}
 							</For>
 						)}
@@ -129,6 +148,7 @@ const PluginField: Component<{
 	value: unknown;
 	disabled: boolean;
 	onWrite: (value: unknown) => void;
+	actions?: JSX.Element;
 }> = (props) => {
 	const label = () => pluginFieldLabel(props.field);
 	const hint = () => props.field.schema.description;
@@ -173,7 +193,9 @@ const PluginField: Component<{
 			when={writable()}
 			fallback={
 				<SettingStatus
+					row
 					label={label()}
+					actions={props.actions}
 					hint={hint()}
 					value={
 						secret() ? String((props.value as { status?: string })?.status ?? "unset") : JSON.stringify(props.value)
@@ -184,7 +206,7 @@ const PluginField: Component<{
 			<Show
 				when={stringList()}
 				fallback={
-					<SettingField row label={label()} hint={hint()}>
+					<SettingField row label={label()} hint={hint()} actions={props.actions}>
 						{(id, _hintId, descriptionId) => (
 							<>
 								<Show
@@ -264,7 +286,9 @@ const PluginField: Component<{
 							}}
 						>
 							<SettingList
+								row
 								label={label()}
+								actions={props.actions}
 								hint={hint()}
 								disabled={disabled()}
 								rows={(JSON.parse(draft() || "[]") as string[]).map((value, index) => ({
@@ -283,7 +307,9 @@ const PluginField: Component<{
 				>
 					{(values) => (
 						<SettingMultiSelect
+							row
 							label={label()}
+							actions={props.actions}
 							hint={hint()}
 							disabled={disabled()}
 							value={(props.value ?? []) as string[]}

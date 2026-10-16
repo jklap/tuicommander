@@ -284,26 +284,38 @@ it("a failed post-write reload stays local — catches an unhandled refetch reje
 	expect(view.container.textContent).not.toContain("private read failure");
 });
 
-// Catches: Reset rendered outside the shared styled, vertically spaced Settings actions row.
+// Catches: Reset detached from its control or offered again after restoring the default.
 it.each(["string", "integer", "boolean"])(
-	"plugin Reset (%s) uses the shared Settings action row — catches browser-default buttons touching the next label",
+	"plugin Reset (%s) stays inline until default is restored — catches detached actions and redundant resets",
 	async (type) => {
+		const defaultValue = type === "boolean" ? false : type === "integer" ? 15 : "";
+		let reads = 0;
 		mockInvoke.mockImplementation(async (command, args) => {
 			if (command !== "plugin_settings_action") return undefined;
 			if (args.action.action === "describe")
-				return { fields: { endpoint: { ...field, schema: { ...field.schema, type } } } };
+				return { fields: { endpoint: { ...field, default: defaultValue, schema: { ...field.schema, type } } } };
 			if (args.action.action === "get")
 				return {
 					revision: "r1",
 					values: {
-						"/endpoint": { effective: type === "boolean" ? true : type === "integer" ? 30 : "https://example.test" },
+						"/endpoint": {
+							effective:
+								reads++ > 0
+									? defaultValue
+									: type === "boolean"
+										? true
+										: type === "integer"
+											? 30
+											: "https://example.test",
+						},
 					},
 				};
 			return { effects: [], restart: [] };
 		});
 		const view = render(() => <SettingsPanel visible onClose={() => {}} initialTab="plugin:fixture" />);
 		const reset = await view.findByRole("button", { name: "Reset Server endpoint" });
-		expect(reset.parentElement).toHaveClass("actions");
+		expect(reset.parentElement).toHaveClass("settingRowWithActions");
+		expect(reset.closest(".settingRow")?.querySelector("input")).not.toBeNull();
 		fireEvent.click(reset);
 		await waitFor(() =>
 			expect(mockInvoke).toHaveBeenCalledWith("plugin_settings_action", {
@@ -311,6 +323,7 @@ it.each(["string", "integer", "boolean"])(
 				action: { action: "reset", path: "/endpoint", expectedRevision: "r1" },
 			}),
 		);
+		await waitFor(() => expect(view.queryByRole("button", { name: "Reset Server endpoint" })).toBeNull());
 	},
 );
 

@@ -66,6 +66,7 @@ export function SettingRow(props: {
 	hint?: string;
 	error?: string;
 	help?: JSX.Element;
+	actions?: JSX.Element;
 	children: (id: string, descriptionId: () => string | undefined) => JSX.Element;
 }) {
 	return (
@@ -80,6 +81,7 @@ export function SettingRow(props: {
 					</span>
 				)
 			}
+			actions={props.actions}
 			row
 		>
 			{(id, _hintId, descriptionId) => props.children(id, descriptionId)}

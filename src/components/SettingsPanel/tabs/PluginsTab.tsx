@@ -185,7 +185,7 @@ const PluginRow: Component<{ plugin: PluginState; onClose?: () => void; onOpenSe
 							</button>
 						</Show>
 						<details>
-							<summary>Manage plugin</summary>{" "}
+							<summary class={s.testBtn}>Manage plugin</summary>{" "}
 							<label class={s.toggle}>
 								<input
 									type="checkbox"

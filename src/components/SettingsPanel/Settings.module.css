@@ -1551,3 +1551,8 @@
 
 @media (pointer: coarse) { .infoBadge { width: 44px; height: 44px; } }
 .infoBadge:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.settingRowWithActions { display: flex; align-items: center; gap: 8px; }
+.settingRowValue { flex: 1; min-width: 0; }
+.settingRowValue > [data-form-control] { width: 100%; }
+.settingRowWithActions > button { flex-shrink: 0; }

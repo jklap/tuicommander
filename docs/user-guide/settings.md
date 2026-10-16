@@ -592,3 +592,6 @@ Selected settings show a `?` only when the approved explanation adds decision gu
 Loaded plugin pages use the same title-icon slot as other Settings pages. The
 source line identifies bundled or installed ownership without changing the
 page label, catalogue lifecycle, or scoped editor behavior.
+
+Plugin field resets sit next to their controls and appear only for non-default
+values (or a set credential). Plugin management uses compact secondary actions.
