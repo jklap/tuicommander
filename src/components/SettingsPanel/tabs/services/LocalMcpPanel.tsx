@@ -100,7 +100,6 @@ export const LocalMcpPanel: Component = () => {
 					<p class={s.hint}>Native tools exposed via MCP. Disable tools to restrict what AI agents can access.</p>
 				</div>
 
-
 				<div class={s.group}>
 					<button
 						class={s.mcpDisclosure}
