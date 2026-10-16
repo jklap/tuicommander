@@ -2299,3 +2299,5 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] #1928-e282: In MCP Settings, hover the long design_mode help for at least three status polls. Check keyboard focus, changed descriptions, viewport edges, scrolling, and resizing; the tip must remain beside its badge without an unpositioned frame.
 
 - [ ] #1929-b1d9: After Boss restarts make dev (Rust does not hot-reload), connect to a Direct short Tailscale host whose short DNS lookup fails. Check automatic FQDN recovery and the explicit Save resolved address action. Do not change production connections for automated verification.
+
+- [ ] After a manual `make dev` restart or release rebuild, verify a hands-free Italian reply uses Edge speech without HTTP 403 (#1952-bf91). The old Rust process does not hot-reload.

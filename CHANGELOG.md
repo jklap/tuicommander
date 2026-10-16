@@ -21,6 +21,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Add explicit owner-backed settings choice refresh; notification output enumeration reports unavailable separately from an empty device list (#1908-c327).
 ### Fixed
 
+- Restore Edge spoken replies after the service migration with the new endpoint and v2 GEC handshake (#1952-bf91).
+
 - Recover failed mobile views after a server outage through automatic or manual retry, without false empty/setup states, raw network errors or desktop restart advice (#1930-f4c2).
 - Exclude projected suggestion rows from copied terminal selections, including scrollback selections, remove the duplicate blank separator around an omitted suggestion block, and classify the full received viewport (#1935-eedd).
 

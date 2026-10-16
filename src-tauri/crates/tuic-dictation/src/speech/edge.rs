@@ -21,8 +21,8 @@
 //! Nothing here is ours, and all of it was recorded rather than guessed
 //! (`fixtures/edge_stream.json`, recorded from the live service):
 //!
-//! * the handshake wants `Sec-MS-GEC`, a SHA-256 of the clock rounded to five
-//!   minutes and the public client token, plus the browser's `Origin`;
+//! * the handshake wants `Sec-MS-GEC` v2 (CS64 and modified SHA-256 of the
+//!   five-minute clock bucket and public token), plus the browser's `Origin`;
 //! * a request is `speech.config` then `ssml`; the answer is text frames
 //!   (`turn.start`, `response`, `turn.end`) around binary frames;
 //! * a binary frame is a big-endian `u16` header length, the headers, then the
@@ -39,7 +39,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use rodio::Source;
 use serde::Serialize;
-use sha2::{Digest, Sha256};
+#[path = "edge_gec.rs"]
+mod gec;
 use tungstenite::client::IntoClientRequest;
 use tungstenite::http::header;
 use tungstenite::stream::MaybeTlsStream;
@@ -49,12 +50,14 @@ use super::{Speech, SpeechAudio, SpeechCancel, SpeechError, budget_seconds};
 
 type Result<T> = std::result::Result<T, SpeechError>;
 
-const HOST: &str = "speech.platform.bing.com";
+// Protocol sources: edge-tts 7.3.0, commit 6d3fff402a77dd4d43cccf074d042252770e41c2
+// (constants.py, drm.py, communicate.py); endpoint migration: readest/readest#6722.
+const HOST: &str = "api.msedgeservices.com";
 const CLIENT_TOKEN: &str = "6A5AA1D4EAFF4E9FB37E23D68491D6F4";
-const WSS_PATH: &str = "/consumer/speech/synthesize/readaloud/edge/v1";
+const WSS_PATH: &str = "/tts/cognitiveservices/websocket/v1";
 const ORIGIN: &str = "chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold";
-const USER_AGENT: &str = "Mozilla/5.0 (Linux; Android 10; HD1913) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.7499.193 Mobile Safari/537.36 EdgA/143.0.3650.125";
-const GEC_VERSION: &str = "1-130.0.2849.68";
+const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36 Edg/143.0.0.0";
+const GEC_VERSION: &str = "2-143.0.3650.75";
 
 /// Where the voice list lives. Fetched by the caller, which already has an
 /// HTTP client; this module only parses what comes back.
@@ -436,20 +439,15 @@ fn decode_mp3(mp3: Vec<u8>) -> Result<SpeechAudio> {
     })
 }
 
-/// `Sec-MS-GEC`: SHA-256 of the Windows file-time clock rounded down to five
-/// minutes, followed by the client token, upper-case hex.
+/// `Sec-MS-GEC` v2: CS64 and modified SHA-256 over the five-minute Windows
+/// file-time bucket and public client token (edge-tts 7.3.0).
 fn sec_ms_gec(now: SystemTime) -> String {
     const WINDOWS_EPOCH_OFFSET_SECONDS: u64 = 11_644_473_600;
     const FIVE_MINUTES_IN_TICKS: u128 = 3_000_000_000;
     let since_unix = now.duration_since(UNIX_EPOCH).unwrap_or_default();
     let ticks = (since_unix + Duration::from_secs(WINDOWS_EPOCH_OFFSET_SECONDS)).as_nanos() / 100;
     let ticks = ticks - ticks % FIVE_MINUTES_IN_TICKS;
-    let digest = Sha256::digest(format!("{ticks}{CLIENT_TOKEN}"));
-    let mut token = String::with_capacity(64);
-    for byte in digest {
-        write!(token, "{byte:02X}").expect("writing to a String cannot fail");
-    }
-    token
+    gec::token(format!("{ticks}{CLIENT_TOKEN}").as_bytes())
 }
 
 // ---------------------------------------------------------------------------
@@ -514,7 +512,7 @@ fn unreachable_service(reason: &dyn std::fmt::Display) -> SpeechError {
 
 fn handshake_request() -> Result<tungstenite::handshake::client::Request> {
     let url = format!(
-        "wss://{HOST}{WSS_PATH}?TrustedClientToken={CLIENT_TOKEN}&ConnectionId={}&Sec-MS-GEC={}&Sec-MS-GEC-Version={GEC_VERSION}",
+        "wss://{HOST}{WSS_PATH}?Ocp-Apim-Subscription-Key={CLIENT_TOKEN}&ConnectionId={}&Sec-MS-GEC={}&Sec-MS-GEC-Version={GEC_VERSION}",
         request_id(),
         sec_ms_gec(SystemTime::now()),
     );
@@ -532,6 +530,19 @@ fn handshake_request() -> Result<tungstenite::handshake::client::Request> {
         header::HeaderValue::from_static(USER_AGENT),
     );
     headers.insert(header::ORIGIN, header::HeaderValue::from_static(ORIGIN));
+    headers.insert(
+        header::ACCEPT_LANGUAGE,
+        header::HeaderValue::from_static("en-US,en;q=0.9"),
+    );
+    headers.insert(
+        header::ACCEPT_ENCODING,
+        header::HeaderValue::from_static("gzip, deflate, br, zstd"),
+    );
+    headers.insert(
+        header::COOKIE,
+        header::HeaderValue::from_str(&format!("muid={};", request_id().to_uppercase()))
+            .expect("hex cookie is a valid header"),
+    );
     Ok(request)
 }
 
@@ -1013,10 +1024,19 @@ mod tests {
         assert!(query.starts_with("Ocp-Apim-Subscription-Key=6A5AA1D4EAFF4E9FB37E23D68491D6F4&"));
         assert!(!query.contains("TrustedClientToken"));
         assert!(query.contains("&Sec-MS-GEC-Version=2-143.0.3650.75"));
-        assert_eq!(request.headers()["origin"], "chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold");
-        assert_eq!(request.headers()["user-agent"], "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36 Edg/143.0.0.0");
+        assert_eq!(
+            request.headers()["origin"],
+            "chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold"
+        );
+        assert_eq!(
+            request.headers()["user-agent"],
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36 Edg/143.0.0.0"
+        );
         assert_eq!(request.headers()["accept-language"], "en-US,en;q=0.9");
-        assert_eq!(request.headers()["accept-encoding"], "gzip, deflate, br, zstd");
+        assert_eq!(
+            request.headers()["accept-encoding"],
+            "gzip, deflate, br, zstd"
+        );
         assert_eq!(request.headers()["pragma"], "no-cache");
         assert_eq!(request.headers()["cache-control"], "no-cache");
         assert_eq!(request.headers()["sec-websocket-version"], "13");
@@ -1033,7 +1053,24 @@ mod tests {
         let at = UNIX_EPOCH + Duration::from_secs(1_790_883_380);
         assert_eq!(
             sec_ms_gec(at),
-            "A95E984BF41D3C7B98C20460112A5DD785722A04FC99D8110F2ED9703A010F73"
+            "003A5D2E023A7E8F-9F293825E90E5BC793F1D9B30E206ABE0559F3921B892F29A7AC7A3575DFC0B4"
+        );
+    }
+
+    #[test]
+    fn edge_v2_gec_keeps_the_bucket_and_changes_at_five_minutes() {
+        // Catches: v1 hashing or rounding into the next five-minute bucket.
+        assert_eq!(
+            sec_ms_gec(UNIX_EPOCH),
+            "52BC7A17B50DFEC9-28C4394775C8751CD2F6859C030C06DB1489ACAB3B3A7651831FC26895177ED6"
+        );
+        assert_eq!(
+            sec_ms_gec(UNIX_EPOCH + Duration::from_secs(1_790_883_599)),
+            sec_ms_gec(UNIX_EPOCH + Duration::from_secs(1_790_883_380))
+        );
+        assert_eq!(
+            sec_ms_gec(UNIX_EPOCH + Duration::from_secs(1_790_883_600)),
+            "F6E107330EC32B23-EBFD5FBE65C6500ADAA5BF21DB44793AF3C810F3B3252FCEA06EB1511D8390CA"
         );
     }
 
