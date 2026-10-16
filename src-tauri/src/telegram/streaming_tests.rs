@@ -704,3 +704,29 @@ async fn queued_stop_withdraws_without_interrupting_current_turn() {
         .unwrap();
     assert_eq!(finals(&server), ["Late answer"]);
 }
+
+// Catches: mail read in a pre-existing ACP turn never reaches the no-reply deadline after that turn ends.
+#[tokio::test]
+async fn read_in_preexisting_acp_turn_still_gets_no_reply_notice() {
+    let (_dir, paths) = setup();
+    let server = FakeServer::start(vec![]).await;
+    let mut runtime = super::tests::outbound_tests::runtime(paths, server.address).await;
+    let journal = runtime.state.acp.test_peer_journal(PEER);
+    let (turn, _) = start(&journal, false);
+    runtime.deliver(mail(7)).await.unwrap();
+    read(&runtime).await;
+    let seq = append(
+        &journal,
+        turn,
+        Event::TurnSettled {
+            stop_reason: v1::StopReason::EndTurn,
+            usage: None,
+        },
+    );
+    drain(&runtime, seq).await;
+    runtime.requests[0].read = Some(tokio::time::Instant::now() - Duration::from_secs(60));
+    runtime.tick().await;
+    runtime.tick().await;
+    assert_eq!(finals(&server), ["L’agente ha terminato senza rispondere"]);
+    assert!(!reactions(&server).iter().any(|reaction| reaction == "👨‍💻"));
+}

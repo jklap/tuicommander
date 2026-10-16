@@ -813,7 +813,7 @@ impl AcpClientManager {
     }
 
     /// Observe only events accepted after this call for the peer's current connection.
-    pub(crate) fn subscribe_peer_tail(&self, peer: &str) -> Option<AcpEventStream> {
+    pub(crate) fn subscribe_peer_tail(&self, peer: &str) -> Option<(AcpEventStream, bool)> {
         let connections = self.connections.lock();
         let connection = connections
             .values()
@@ -823,7 +823,18 @@ impl AcpClientManager {
             })
             .max_by_key(|connection| connection.snapshot.generation)?;
         let (_, latest) = connection.journal.bounds();
-        connection.journal.subscribe(latest.saturating_add(1)).ok()
+        let idle = connection
+            .snapshot
+            .attachments
+            .iter()
+            .all(|attachment| attachment.active_turn.is_none());
+        Some((
+            connection
+                .journal
+                .subscribe(latest.saturating_add(1))
+                .ok()?,
+            idle,
+        ))
     }
 
     /// Hand one command to a connection's actor and wait for its answer.

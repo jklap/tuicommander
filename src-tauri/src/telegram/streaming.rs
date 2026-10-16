@@ -86,6 +86,7 @@ pub(super) struct AcpObservation {
     pending_prompt: Option<crate::acp::AcpEventEnvelope>,
     failed: bool,
     gone: bool,
+    idle: bool,
     #[cfg(test)]
     sequence: u64,
 }
@@ -118,6 +119,15 @@ impl AcpObservation {
         if matches!(&envelope.event, AcpClientEvent::PromptSent { .. }) {
             self.pending_prompt = Some(envelope);
             return;
+        }
+        if matches!(&envelope.event, AcpClientEvent::TurnStarted) {
+            self.idle = false;
+        }
+        if matches!(
+            &envelope.event,
+            AcpClientEvent::TurnSettled { .. } | AcpClientEvent::TurnFailed { .. }
+        ) {
+            self.idle = true;
         }
         if matches!(&envelope.event, AcpClientEvent::TurnStarted) {
             if self.turns.len() >= 8 {
@@ -197,10 +207,13 @@ impl Recipient {
                 .map_or(0, |s| s.turn_epoch);
             return Self::Pty { pty, epoch };
         }
-        let Some(mut stream) = state.acp.subscribe_peer_tail(peer) else {
+        let Some((mut stream, idle)) = state.acp.subscribe_peer_tail(peer) else {
             return Self::Peer;
         };
-        let observation = Arc::new(parking_lot::Mutex::new(AcpObservation::default()));
+        let observation = Arc::new(parking_lot::Mutex::new(AcpObservation {
+            idle,
+            ..Default::default()
+        }));
         let target = observation.clone();
         // Drain the journal independently of Bot API I/O. A stalled phone never
         // blocks ACP's SDK reader, nor makes its answer fall off a bus buffer.
@@ -387,6 +400,7 @@ impl Runtime {
                 Recipient::Acp { observation, .. } => {
                     let snapshot = observation.lock();
                     request.failed |= snapshot.failed;
+                    ended = read && snapshot.idle;
                     if read && request.turn.is_none() {
                         request.turn = snapshot
                             .turns
