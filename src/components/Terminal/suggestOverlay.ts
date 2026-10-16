@@ -1,3 +1,5 @@
+import intentMarker from "../../../src-tauri/crates/tuic-terminal/src/intent_marker.json";
+
 /** A snapshot of an xterm buffer row — just the parts the overlay cares about. */
 export interface RowSnapshot {
 	text: string;
@@ -13,12 +15,12 @@ export const SUGGEST_ANCHOR_RE = new RegExp(`^[\\s${AGENT_BULLETS}]*suggest:\\s+
 /** Stop condition for the continuation walk: a new `intent:` token at column 0. */
 const INTENT_RE = /^intent:\s+\S/;
 /**
- * Which rows get the intent highlight. Deliberately looser than [`INTENT_RE`]:
- * an agent renders its own intent line behind a bullet (`⏺ intent: …`), and that
- * row must still be tinted. It is NOT a walk stop condition — ending a suggest
+ * Which rows get the intent highlight. The shared Rust/JS anchor grammar also
+ * accepts an agent bullet, horizontal indent or the TUIC ack sentence. It is NOT
+ * a walk stop condition — ending a suggest
  * block on an indented mention would swallow the block's closing bracket.
  */
-export const INTENT_HIGHLIGHT_RE = new RegExp(`^[\\s${AGENT_BULLETS}]*intent:\\s+`);
+export const INTENT_HIGHLIGHT_RE = new RegExp(`${intentMarker.anchor}[\\t ]+`);
 /**
  * The answer marker an agent prefixes to every sentence that directly answers
  * the user (💬). Matched on row text, which carries no escape sequences — bold,
