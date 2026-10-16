@@ -14,7 +14,7 @@ import {
 import { Input } from "../../../ui/Input";
 import { Select } from "../../../ui/Select";
 import s from "../../Settings.module.css";
-import { SectionCard } from "../../SettingsPrimitives";
+import { SectionCard, SettingRow } from "../../SettingsPrimitives";
 
 // ---------------------------------------------------------------------------
 // Remote Machines panel
@@ -346,41 +346,71 @@ export const RemoteMachinesPanel: Component = () => {
 		return (
 			<>
 				<SectionCard title="Name and transport">
-					<Select
-						aria-label="Transport"
-						class={s.input}
-						value={props.formData.transportType}
-						onChange={(e) =>
-							props.setFormData((f) => ({ ...f, transportType: e.currentTarget.value as "Ssh" | "Direct" }))
-						}
-					>
-						<option value="Ssh">SSH</option>
-						<option value="Direct">Direct</option>
-					</Select>
+					<SettingRow label="Name">
+						{(id, descriptionId) => (
+							<Input
+								id={id}
+								aria-describedby={descriptionId()}
+								value={props.formData.name}
+								placeholder="Name (e.g. dev-server, staging)"
+								onInput={(e) => props.setFormData((f) => ({ ...f, name: e.currentTarget.value }))}
+							/>
+						)}
+					</SettingRow>
+					<SettingRow label="Transport">
+						{(id, descriptionId) => (
+							<Select
+								id={id}
+								aria-describedby={descriptionId()}
+								class={s.input}
+								value={props.formData.transportType}
+								onChange={(e) =>
+									props.setFormData((f) => ({ ...f, transportType: e.currentTarget.value as "Ssh" | "Direct" }))
+								}
+							>
+								<option value="Ssh">SSH</option>
+								<option value="Direct">Direct</option>
+							</Select>
+						)}
+					</SettingRow>
 					<Show when={props.formData.transportType === "Ssh"}>
-						<Input
-							type="text"
-							class={s.input}
-							list={props.hostListId}
-							placeholder="Host (e.g. 192.168.1.100)"
-							value={props.formData.sshHost}
-							onInput={(e) => props.setFormData((f) => ({ ...f, sshHost: e.currentTarget.value }))}
-						/>
+						<SettingRow label="Host">
+							{(id, descriptionId) => (
+								<Input
+									id={id}
+									aria-describedby={descriptionId()}
+									type="text"
+									class={s.input}
+									list={props.hostListId}
+									placeholder="Host (e.g. 192.168.1.100)"
+									value={props.formData.sshHost}
+									onInput={(e) => props.setFormData((f) => ({ ...f, sshHost: e.currentTarget.value }))}
+								/>
+							)}
+						</SettingRow>
 						<datalist id={props.hostListId}>
 							<For each={props.sshHosts}>
 								{(host) => <option value={host.host} label={`${host.host} — ${host.auth.replaceAll("_", " ")}`} />}
 							</For>
 						</datalist>
-						<button class={s.textBtn} type="button" onClick={props.onProbeHosts} disabled={props.probingHosts}>
+						<button
+							class={s.textBtn}
+							style={{ "margin-top": "12px", "margin-bottom": "12px" }}
+							type="button"
+							onClick={props.onProbeHosts}
+							disabled={props.probingHosts}
+						>
 							<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
 								<path d="M7.5 1a6.5 6.5 0 1 0 4.05 11.58l2.44 2.43 1.02-1.02-2.43-2.44A6.5 6.5 0 0 0 7.5 1m0 1.5a5 5 0 1 1 0 10 5 5 0 0 1 0-10" />
 							</svg>
 							{props.probingHosts ? " Probing..." : " Probe SSH hosts"}
 						</button>
-						<div style={{ display: "flex", gap: "8px" }}>
-							<div style={{ flex: 1 }}>
-								<label style={{ "font-size": "12px", color: "var(--text-dimmed)" }}>Port</label>
+
+						<SettingRow label="Port">
+							{(id, descriptionId) => (
 								<Input
+									id={id}
+									aria-describedby={descriptionId()}
 									type="number"
 									class={s.input}
 									value={props.formData.sshPort}
@@ -390,50 +420,70 @@ export const RemoteMachinesPanel: Component = () => {
 										props.setFormData((f) => ({ ...f, sshPort: parseInt(e.currentTarget.value, 10) || 22 }))
 									}
 								/>
-							</div>
-							<div style={{ flex: 2 }}>
-								<label style={{ "font-size": "12px", color: "var(--text-dimmed)" }}>User</label>
+							)}
+						</SettingRow>
+
+						<SettingRow label="User">
+							{(id, descriptionId) => (
 								<Input
+									id={id}
+									aria-describedby={descriptionId()}
 									type="text"
 									class={s.input}
 									placeholder="SSH user"
 									value={props.formData.sshUser}
 									onInput={(e) => props.setFormData((f) => ({ ...f, sshUser: e.currentTarget.value }))}
 								/>
-							</div>
-						</div>
-						<Input
-							type="text"
-							class={s.input}
-							placeholder="Identity file (optional, e.g. ~/.ssh/id_rsa)"
-							value={props.formData.identityFile}
-							onInput={(e) => props.setFormData((f) => ({ ...f, identityFile: e.currentTarget.value }))}
-						/>
-						<div style={{ display: "flex", gap: "8px", "align-items": "center" }}>
-							<label style={{ "font-size": "12px", color: "var(--text-dimmed)", "white-space": "nowrap" }}>
-								Remote daemon port
-							</label>
-							<Input
-								type="number"
-								class={s.input}
-								value={props.formData.remoteDaemonPort}
-								min={1}
-								max={65535}
-								style={{ width: "90px" }}
-								onInput={(e) =>
-									props.setFormData((f) => ({ ...f, remoteDaemonPort: parseInt(e.currentTarget.value, 10) || 9876 }))
-								}
-							/>
-						</div>
+							)}
+						</SettingRow>
+
+						<SettingRow label="Identity file">
+							{(id, descriptionId) => (
+								<Input
+									id={id}
+									aria-describedby={descriptionId()}
+									type="text"
+									class={s.input}
+									placeholder="Identity file (optional, e.g. ~/.ssh/id_rsa)"
+									value={props.formData.identityFile}
+									onInput={(e) => props.setFormData((f) => ({ ...f, identityFile: e.currentTarget.value }))}
+								/>
+							)}
+						</SettingRow>
+						<SettingRow label="Remote daemon port">
+							{(id, descriptionId) => (
+								<Input
+									id={id}
+									aria-describedby={descriptionId()}
+									type="number"
+									class={s.input}
+									value={props.formData.remoteDaemonPort}
+									min={1}
+									max={65535}
+									onInput={(e) =>
+										props.setFormData((f) => ({
+											...f,
+											remoteDaemonPort: parseInt(e.currentTarget.value, 10) || 9876,
+										}))
+									}
+								/>
+							)}
+						</SettingRow>
 					</Show>
 					<Show when={props.formData.transportType === "Direct"}>
-						<Input
-							type="text"
-							class={s.input}
-							placeholder="URL (e.g. http://192.168.1.100:9876)"
-							value={props.formData.directUrl}
-							onInput={(e) => props.setFormData((f) => ({ ...f, directUrl: e.currentTarget.value }))}
-						/>
+						<SettingRow label="URL">
+							{(id, descriptionId) => (
+								<Input
+									id={id}
+									aria-describedby={descriptionId()}
+									type="text"
+									class={s.input}
+									placeholder="URL (e.g. http://192.168.1.100:9876)"
+									value={props.formData.directUrl}
+									onInput={(e) => props.setFormData((f) => ({ ...f, directUrl: e.currentTarget.value }))}
+								/>
+							)}
+						</SettingRow>
 					</Show>
 				</SectionCard>
 				<SectionCard title="Deployment and lifetime">
@@ -466,30 +516,45 @@ export const RemoteMachinesPanel: Component = () => {
 							/>
 						</label>
 					</Show>
-					<label style={{ display: "flex", gap: "8px", "align-items": "center" }}>
-						Auto-update remote daemons
-						<input
-							type="checkbox"
-							style={{ order: -1 }}
-							checked={props.formData.autoUpdate}
-							onChange={(e) => props.setFormData((f) => ({ ...f, autoUpdate: e.currentTarget.checked }))}
-						/>
-					</label>
-					<Input
-						type="text"
-						class={s.input}
-						placeholder="Auth username (for TUIC API authentication)"
-						value={props.formData.authUsername}
-						onInput={(e) => props.setFormData((f) => ({ ...f, authUsername: e.currentTarget.value }))}
-					/>
-					<Input
-						type="password"
-						class={s.input}
-						autocomplete="off"
-						placeholder={props.passwordStored ? "Password (stored — leave blank to keep it)" : "Auth password"}
-						value={props.formData.authPassword}
-						onInput={(e) => props.setFormData((f) => ({ ...f, authPassword: e.currentTarget.value }))}
-					/>
+					<SettingRow label="Auto-update remote daemons">
+						{(id, descriptionId) => (
+							<input
+								id={id}
+								aria-describedby={descriptionId()}
+								class={s.rowSwitch}
+								type="checkbox"
+								checked={props.formData.autoUpdate}
+								onChange={(e) => props.setFormData((f) => ({ ...f, autoUpdate: e.currentTarget.checked }))}
+							/>
+						)}
+					</SettingRow>
+					<SettingRow label="Auth username">
+						{(id, descriptionId) => (
+							<Input
+								id={id}
+								aria-describedby={descriptionId()}
+								type="text"
+								class={s.input}
+								placeholder="Auth username (for TUIC API authentication)"
+								value={props.formData.authUsername}
+								onInput={(e) => props.setFormData((f) => ({ ...f, authUsername: e.currentTarget.value }))}
+							/>
+						)}
+					</SettingRow>
+					<SettingRow label="Auth password">
+						{(id, descriptionId) => (
+							<Input
+								id={id}
+								aria-describedby={descriptionId()}
+								type="password"
+								class={s.input}
+								autocomplete="off"
+								placeholder={props.passwordStored ? "Password (stored — leave blank to keep it)" : "Auth password"}
+								value={props.formData.authPassword}
+								onInput={(e) => props.setFormData((f) => ({ ...f, authPassword: e.currentTarget.value }))}
+							/>
+						)}
+					</SettingRow>
 					<p class={s.hint} style={{ margin: 0 }}>
 						The password is kept in the OS credential vault, never in connections.json. It is traded for the daemon's
 						session token on every connect — <code>tuic-remote</code> authenticates every request, so a connection
@@ -603,13 +668,6 @@ export const RemoteMachinesPanel: Component = () => {
 					style={{ background: "var(--bg-secondary, rgba(255,255,255,0.03))", padding: "12px", "border-radius": "6px" }}
 				>
 					<div style={{ display: "grid", gap: "8px" }}>
-						<Input
-							type="text"
-							class={s.input}
-							placeholder="Name (e.g. dev-server, staging)"
-							value={form().name}
-							onInput={(e) => setForm((f) => ({ ...f, name: e.currentTarget.value }))}
-						/>
 						<TransportFields
 							formData={form()}
 							setFormData={setForm}
