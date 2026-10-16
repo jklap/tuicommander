@@ -829,7 +829,13 @@ fn choose_voice(asset: &speech::assets::Asset, configured: &str) -> Result<Strin
     let language = asset.language().unwrap_or_default();
     if speech::assets::downloadable_voices(language).any(|voice| voice.voice() == Some(configured))
     {
-        // The catalogue has it, so the fix is one download away.
+        // A missing optional voice must not disable a ready language. Never
+        // borrow a same-named voice from another language's catalogue.
+        if speech::assets::status(asset) == speech::assets::Status::Ready
+            && let Some(default) = asset.voices().first()
+        {
+            return Ok((*default).to_string());
+        }
         return Err(format!(
             "The {} voice \"{configured}\" is not downloaded; download it in Settings → Voice",
             asset.display_name
