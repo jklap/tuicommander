@@ -946,3 +946,19 @@ The backend checks unattended top-level agent tabs every five seconds. `agents.h
 Hibernation requires an idle agent and a verified resume session in its saved profile. Plain shells and agents without a verifiable resume session stay live. Unread peer mail, pending commands or background work, awaiting input, attached readers, keep-open tabs (whether addressed by their live PTY or durable peer identity) and open automation runs prevent hibernation. Managed children retain their separate idle-close policy. Sleep gaps longer than 30 seconds do not advance the idle clock.
 
 The normal Rust suspension path persists `reason: "idle_hibernate"` before ending the PTY. Opening the tab, submitting input or sending peer mail uses the shared wake path. Storage or resume-verification failures leave the live session intact.
+
+### Desktop visibility and frame timeout recovery
+
+Hidden desktop subscriptions receive no grid frames. The backend retains the authoritative grid and scroll position; showing a viewport requests a full frame. The desktop transport serializes epoch-scoped visibility publications so a delayed hide cannot overwrite a newer show. It requests the show frame only after publishing visibility; the canvas owns that request only for WebSocket transports. Bell events are emitted by the PTY reader through desktop session events and HTTP SSE/WebSocket events, independently of grid serialization. Repeated BEL bytes in one processed chunk coalesce into one session bell. History-base metadata refreshes with the show frame. Browser/PWA grid watchers remain independent, and backend activity/question parsing keeps running.
+
+For a visible desktop, three abandoned frames without real receipt progress pause ordinary delivery until a new receipt or explicit full-frame request. Synthetic abandonment does not count as receipt progress. A frame timeout alone does not prove a frontend heartbeat failure.
+
+Native ego OSC 7770 `ego-recovery` snapshots are validated at the PTY boundary
+and accumulated as `SessionState.provider_recovery`. The existing desktop and
+SSE `session-state-changed` snapshot carries the same object on both transports.
+The parent lifecycle inbox receives entry/exit notices. MCP session `force_retry`,
+desktop `force_retry_provider_recovery_command`, and HTTP `POST /sessions/{id}/force-retry`
+share one backend transaction. It
+requires an ego recovery snapshot and an empty tracked composer, holds the input
+transaction, and uses the normal agent-aware command writer to submit `/retry`
+once (no automatic retry or queue). See output-parser.md for the wire contract.

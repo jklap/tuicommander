@@ -2901,7 +2901,7 @@ OSC 133 event `line` and hook-generated `UserInput.line` are eviction-stable all
 
 ### Telegram Settings
 
-`GET /config/telegram` mirrors `telegram_settings`. `PUT /config/telegram` accepts `{ "change": { "action": "..." } }` and mirrors `telegram_setup`, including token replacement/check, one-use pairing, typed chat IDs and enable/target updates. Both routes require local access or the existing authenticated remote session. The read response contains only `token_set`, never the token. Chat IDs are decimal strings. `polling_owner` is `this_app`, `tuic_remote`, `desktop`, `another_process` (an older owner), or null when disconnected; the name is relative to the process serving the snapshot.
+`GET /config/telegram` mirrors `telegram_settings`. Its `pairing_pending` flag indicates whether the one-use pairing file still exists; the frontend clears its local pairing hint when this is false. `recent_events` is a memory-only newest-first list of at most 20 events in this process: `{id,time,direction,kind,outcome,preview}`. Time is epoch milliseconds; previews are redacted before truncation to 60 Unicode characters. This list is not persisted or shared with another process. `PUT /config/telegram` accepts `{ "change": { "action": "..." } }` and mirrors `telegram_setup`, including token replacement/check, one-use pairing, typed chat IDs and enable/target updates. Both routes require local access or the existing authenticated remote session. The read response contains only `token_set`, never the token. Chat IDs are decimal strings. `polling_owner` is `this_app`, `tuic_remote`, `desktop`, `another_process` (an older owner), or null when disconnected; the name is relative to the process serving the snapshot.
 
 Workflow run snapshots add `eventContractVersion` and default-empty `graphExecutions`. Graph events use the existing paged history shape. Internal graph transition commands are rejected by public `workflow_run_action`; no autonomous-start action is added in slice A. Pre-contract runs can be inspected and cancelled but cannot resume.
 
@@ -3209,3 +3209,33 @@ No live write or desktop-load verification is implied by recorded-fixture tests.
 `POST /sessions/{id}/input-if-empty` accepts `{ "text": "[noop]" }` and returns a boolean. `false` means no input was sent because the agent is not ready, awaits input, has a tracked draft, or has queued commands. The backend serializes checks, split writes, and bookkeeping against raw user input. IPC equivalent: `send_agent_input_if_empty`.
 
 POST `/api/plugins/{plugin_id}/http` accepts optional `requestId` (UUID). POST `/api/plugins/{plugin_id}/http/cancel` accepts `{ "requestId": "<UUID>" }`; both use the shared IPC backend. Cancellation covers headers and body. Early cancellation markers expire after 60 seconds and the shared registry is capped at 4096 entries.
+
+### Audio choice availability (#1908-c327, #1909-0d24)
+
+Existing input/output device enumeration returns the same device objects on success, including a successful empty array. Backend enumeration failure now returns an error rather than an empty array. Internal settings choice refresh reuses those owners; cache-only describe and typed voice asset actions are not new public routes in this change. The settings transport cutover remains separate.
+
+`GET /events` carries `pty-bell` with `{session_id}`. Both session WebSocket formats carry `{type:"bell"}`. Bells originate in the PTY reader, independently of grid frame serialization or desktop visibility.
+
+Terminal ego recovery snapshots appear as `state.provider_recovery` in session
+snapshots and `session-state-changed` events: `{phase, next_attempt_ms, attempt}`.
+`POST /sessions/{id}/force-retry` (IPC `force_retry_provider_recovery_command`)
+returns `null` on success or HTTP 409 `{error}` on refusal. It shares MCP
+force-retry validation and the input lock: non-empty composers are never overwritten.
+The field is omitted when no recovery is active. MCP `session action=force_retry`
+submits `/retry` once to a recovering ego PTY and returns `{submitted:true,
+session_id}` or an error; it follows the existing localhost execution restriction.
+
+### Application log acknowledgements
+
+`POST /logs` accepts `{ level, source, message, data_json?, audience? }` and
+returns HTTP **204 No Content** after adding the entry to the backend log ring.
+`DELETE /logs` also returns 204 after clearing the ring. The matching browser
+RPCs (`push_log`, `clear_logs`) resolve without a JSON value. Data-returning RPCs
+still reject empty bodies. `GET /logs` returns the log entries as JSON.
+
+Mobile lifecycle diagnostics use the existing `POST /logs` route. A prior
+abnormal document's bounded trail uses source `app`, level `warn`, audience
+`diagnostic`, and message `Mobile previous document lifecycle trail`. The client
+keeps that report in per-tab session storage until an acknowledged upload. A
+lost acknowledgement can cause a retry; this route does not provide durable
+exactly-once delivery or persist the backend ring across an app restart.

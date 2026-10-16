@@ -10,6 +10,29 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "Hands-free conversation shortcut",
+		description: `Press ${mod}+Alt+V to start or stop hands-free on the active terminal when dictation is enabled. Customize the chord in Keyboard Shortcuts.`,
+		shortcut: `${mod}+Alt+V`,
+	},
+	{
+		feature: "Tab shortcut hints",
+		description: `Hold ${mod} alone for 450 ms to show shortcuts on the first nine terminal tabs. Release it or use another key, mouse button, or scroll to hide the hints.`,
+		shortcut: null,
+	},
+	{
+		feature: "Delete AI Chat conversations",
+		description:
+			"Open Conversations in AI Chat and use a row’s trash button to permanently delete its history after confirming the name.",
+
+		shortcut: null,
+	},
+	{
+		feature: "ego provider recovery",
+		description:
+			"When terminal ego reports a provider outage, the status bar shows its recovery attempt and next retry. Select Force retry to send /retry once to that terminal.",
+		shortcut: null,
+	},
+	{
 		feature: "Idle agent hibernation",
 		description:
 			"Settings → Agents can hibernate unattended agent tabs after awake idle time. Open a hibernated tab or send it input to resume its saved session.",
@@ -157,6 +180,12 @@ export const TIPS: Tip[] = [
 		feature: "Conversation Launch Options",
 		description:
 			"Use the options button beside AI Chat's + to give one conversation its own ego profile, workspace and executable.",
+		shortcut: null,
+	},
+	{
+		feature: "AI Chat Repository Pin",
+		description:
+			"Use Pin repository beside the AI Chat composer to keep that conversation on one repository while you browse elsewhere. Draft parking stays separate.",
 		shortcut: null,
 	},
 	{

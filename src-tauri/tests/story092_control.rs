@@ -385,3 +385,81 @@ async fn an_agent_without_the_ego_extensions_refuses_every_control_before_the_wi
         .await
         .unwrap();
 }
+
+/// Catches: pre-prompt offers are journaled but never made settable or published.
+#[tokio::test]
+async fn async_config_offer_is_published_and_settable_without_a_prompt() {
+    let fixture = Fixture::with("async-config");
+    let connection = fixture.connect().await;
+    let first = fixture
+        .manager
+        .new_session(connection.connection_id, authority(fixture.root()))
+        .await
+        .unwrap();
+    assert!(first.config_options.is_empty());
+    let mut stream = fixture
+        .manager
+        .subscribe(connection.connection_id, 0)
+        .unwrap();
+    let other = fixture
+        .manager
+        .new_session(connection.connection_id, authority(fixture.root()))
+        .await
+        .unwrap();
+    until(&mut stream, |event| matches!(event, AcpClientEvent::SessionUpdate { update } if matches!(&**update, v1::SessionUpdate::ConfigOptionUpdate(_)))).await;
+    let snapshot = fixture.manager.snapshot(connection.connection_id).unwrap();
+    assert!(
+        snapshot
+            .attachments
+            .iter()
+            .find(|a| a.session_id == other.session_id)
+            .unwrap()
+            .config_options
+            .is_empty()
+    );
+    let offered = snapshot
+        .attachments
+        .iter()
+        .find(|a| a.session_id == first.session_id)
+        .unwrap();
+    assert_eq!(
+        ids(&offered.config_options),
+        ["model", "effort", "mode", "sandbox"]
+    );
+    assert_eq!(
+        current(&offered.config_options, "mode").as_deref(),
+        Some("default")
+    );
+    fixture
+        .manager
+        .set_config_option(
+            connection.connection_id,
+            config(&first.session_id, "model", value("ollama/gemma4:12b-mlx")),
+        )
+        .await
+        .expect("the recorded model is forwarded");
+    fixture
+        .manager
+        .list_sessions(connection.connection_id, v1::ListSessionsRequest::default())
+        .await
+        .unwrap();
+    until(&mut stream, |event| matches!(event, AcpClientEvent::SessionUpdate { update } if matches!(&**update, v1::SessionUpdate::ConfigOptionUpdate(options) if options.config_options.is_empty()))).await;
+    let snapshot = fixture.manager.snapshot(connection.connection_id).unwrap();
+    assert!(
+        snapshot
+            .attachments
+            .iter()
+            .all(|a| a.config_options.is_empty())
+    );
+    assert!(
+        snapshot
+            .attachments
+            .iter()
+            .any(|a| a.session_id == other.session_id)
+    );
+    fixture
+        .manager
+        .disconnect(connection.connection_id)
+        .await
+        .unwrap();
+}

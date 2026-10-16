@@ -1543,6 +1543,7 @@ async fn handle_ws_session(
                                 crate::state::AppEvent::PtyParsed { parsed, .. } => {
                                     serde_json::json!({"type": "parsed", "event": parsed})
                                 }
+                                crate::state::AppEvent::PtyBell { .. } => serde_json::json!({"type": "bell"}),
                                 crate::state::AppEvent::PtyTitle { title, .. } => {
                                     serde_json::json!({"type": "title", "title": title})
                                 }
@@ -1702,6 +1703,12 @@ async fn handle_ws_log_session(
                     // channel was reaped (session gone): exit instead of spinning on
                     // the immediately-ready error arm. Lagged is a transient skip.
                     match event {
+                        Ok(crate::state::AppEvent::PtyBell { .. }) => {
+                            if ws_sender.text(&serde_json::json!({"type": "bell"}).to_string()).await.is_err() {
+                                break;
+                            }
+                            LoopAction::Skip
+                        }
                         Ok(crate::state::AppEvent::PtyTitle { title, .. }) => {
                             if ws_sender.text(&serde_json::json!({"type": "title", "title": title}).to_string()).await.is_err() {
                                 break;
@@ -1823,6 +1830,7 @@ async fn handle_ws_log_session(
 fn grid_ws_frame(event: &crate::state::AppEvent) -> Option<serde_json::Value> {
     // Per-session channel — every event belongs to this session.
     Some(match event {
+        crate::state::AppEvent::PtyBell { .. } => serde_json::json!({"type":"bell"}),
         crate::state::AppEvent::PtyParsed { parsed, .. } => {
             serde_json::json!({"type": "parsed", "event": parsed})
         }
@@ -4138,6 +4146,16 @@ mod tests {
         let mut map = frame.as_object().expect("frame must be an object").clone();
         assert!(map.remove("type").is_some(), "frame must carry a type");
         map
+    }
+
+    /// Catches browser bells disappearing after desktop stops decoding hidden frames.
+    #[test]
+    fn grid_ws_bell_is_independent_of_grid_frames() {
+        let frame = grid_ws_frame(&crate::state::AppEvent::PtyBell {
+            session_id: "s1".into(),
+        })
+        .unwrap();
+        assert_eq!(frame, serde_json::json!({"type":"bell"}));
     }
 
     #[test]

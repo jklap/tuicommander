@@ -447,11 +447,17 @@ enabled choice. Tasks uses it for List, Board and Roadmap.
 
 ### Settings Panel
 
-Full-screen overlay. Inner panel: `--bg-secondary`, 700px max-width, 80vh max-height.
-- Left sidebar with tabs (General, Notifications, Dictation, Terminal, Agents)
-- Right content area with sections
-- Section heading: `<h3>`, `--font-lg`, bold, `margin-bottom: 12px`
-- Settings row: flex space-between, label left, control right, `padding: 8px 0`
+Full-screen overlay. All pages share `width: min(1136px, calc(100vw - 48px))`, `height: 80vh`, independently scrolling navigation and content, and existing theme tokens. This width replaces the previous 700px guide after the 2026-10-16 mock approval. Never resize on tab selection or eagerly mount pages to avoid flashes.
+- Navigation: 232px default; retain saved user width and resize behavior. Content padding: 24px 32px.
+- `SettingPageHeader`: 20px title, one-sentence purpose, scope badge and optional source.
+- `SectionCard`: semantic `<h3>`, 15px heading, 16px padding/gap, 8px radius, `--bg-primary`.
+- `SettingRow`: persistent label/hint left, existing shared control right (up to 260px, 36px high), 12px vertical padding. Reuse `SettingField` IDs; errors go below the field and join `aria-describedby`.
+- `StatusSummary`: visible status words and existing `StatusBadge` semantic tone, source and freshness. Unknown is neutral; saved sign-in is not a live connection.
+- `ListRow`: wrapping name/subtitle, source/version/access badges and named actions. `EmptyState` explains absence and offers one valid action; do not conflate loading, failed or unsupported state.
+- `DangerZone`: explicit scope and consequence for destructive/disconnecting actions only; caller retains confirmation. Ordinary reset is not automatically destructive.
+- Help is 12px `--fg-secondary`, never essential `--fg-muted`. Contextual help is selective and adds information beyond the subtitle; do not add a question mark to every row.
+- Below 800px rows stack; below 600px navigation is compact and controls/actions have 44px targets. Preserve keyboard labels and long translations.
+- Keep existing autosave/explicit-save boundaries and lazy mounting. Shared primitives never probe, save or infer service state.
 
 ## Status Badges Reference
 

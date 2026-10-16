@@ -27,7 +27,7 @@ import { t } from "../../i18n";
  * ## Extraction rule
  *
  * Mechanical, so the drift test can reproduce it exactly:
- * every `<h3>` opens a section; every `label=` prop and every `<label>` element
+ * every `<h3>` or `<SectionCard title=…>` / `<DangerZone title=…>` opens a section; every `label=` prop and every `<label>` element
  * is a setting inside the nearest preceding `<h3>`. Text comes from
  * `t("key", "Default")`, a string literal, or a leading plain-text run.
  *
@@ -76,6 +76,7 @@ export interface SettingsSearchEntry {
 
 export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{ tab: "telegram", section: "Telegram" },
+	{ tab: "telegram", section: "Recent messages" },
 	{ tab: "telegram", section: "Telegram", label: "Bot token", labelKey: "telegram.token" },
 	{ tab: "telegram", section: "Telegram", label: "Authorized chats", labelKey: "telegram.chat" },
 	{ tab: "telegram", section: "Telegram", label: "Enable Telegram", labelKey: "telegram.enabled" },
@@ -211,6 +212,8 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	// tabs/TerminalTab.tsx
 	{ tab: "terminal", section: "Theme", sectionKey: "appearance.heading.theme" },
 	{ tab: "terminal", section: "Terminal", sectionKey: "general.heading.terminal" },
+	{ tab: "terminal", section: "Preview" },
+	{ tab: "terminal", section: "Behavior" },
 	{ tab: "terminal", section: "Theme", label: "Terminal Theme", labelKey: "appearance.label.terminalTheme" },
 	{
 		tab: "terminal",
@@ -231,10 +234,10 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		configKey: "app.font_weight",
 	},
 	{ tab: "terminal", section: "Terminal", label: "Cursor Style", labelKey: "appearance.label.cursorStyle" },
-	{ tab: "terminal", section: "Terminal", label: "Copy on select", labelKey: "general.toggle.copyOnSelect" },
+	{ tab: "terminal", section: "Behavior", label: "Copy on select", labelKey: "general.toggle.copyOnSelect" },
 	{
 		tab: "terminal",
-		section: "Terminal",
+		section: "Behavior",
 		label: "Allow OSC 52 clipboard writes",
 		labelKey: "general.toggle.osc52Clipboard",
 		expert: true,
@@ -242,13 +245,13 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	},
 	{
 		tab: "terminal",
-		section: "Terminal",
+		section: "Behavior",
 		label: "Show block timestamps",
 		labelKey: "general.toggle.showBlockTimestamps",
 	},
 	{
 		tab: "terminal",
-		section: "Terminal",
+		section: "Behavior",
 		label: "Block folding",
 		labelKey: "general.toggle.blockFolding",
 		expert: true,
@@ -256,7 +259,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	},
 	{
 		tab: "terminal",
-		section: "Terminal",
+		section: "Behavior",
 		label: "Show scrollbar marks",
 		labelKey: "general.toggle.showScrollbarMarks",
 		expert: true,
@@ -264,7 +267,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	},
 	{
 		tab: "terminal",
-		section: "Terminal",
+		section: "Behavior",
 		label: "Reflow scrollback on resize",
 		labelKey: "general.toggle.scrollbackReflow",
 		expert: true,
@@ -310,6 +313,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	},
 	// tabs/NotificationsTab.tsx
 	{ tab: "notifications", section: "Notification Settings", sectionKey: "notifications.heading.notificationSettings" },
+	{ tab: "notifications", section: "Visual notifications" },
 	{ tab: "notifications", section: "Tasks", sectionKey: "notifications.heading.tasks" },
 	{
 		tab: "notifications",
@@ -349,20 +353,38 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{
 		tab: "notifications",
 		section: "Notification Settings",
+		label: "Silence completions from MCP sessions",
+		labelKey: "notifications.label.silenceRemoteCompletions",
+	},
+	{
+		tab: "notifications",
+		section: "Visual notifications",
 		label: "Toolbar Bell",
 		labelKey: "notifications.label.toolbarBell",
 	},
 	{
 		tab: "notifications",
-		section: "Notification Settings",
+		section: "Visual notifications",
+		label: "Keep toasts in the bell",
+		labelKey: "notifications.toggle.toastsInBell",
+	},
+	{
+		tab: "notifications",
+		section: "Visual notifications",
 		label: "Show cards from the active terminal",
 		labelKey: "notifications.toggle.autoToastCards",
 	},
 	{
 		tab: "notifications",
-		section: "Notification Settings",
+		section: "Visual notifications",
 		label: "Pull Requests",
 		labelKey: "notifications.label.prNotifications",
+	},
+	{
+		tab: "notifications",
+		section: "Visual notifications",
+		label: "OS notification for PR changes",
+		labelKey: "notifications.toggle.prNative",
 	},
 	{
 		tab: "notifications",
@@ -504,20 +526,16 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		configKey: "dictation.hands_free_start_notice",
 	},
 	// tabs/KeyboardShortcutsTab.tsx
-	{ tab: "keyboard-shortcuts", section: "Keyboard Shortcuts", sectionKey: "settings.keyboardShortcuts" },
+	{ tab: "keyboard-shortcuts", section: "Global Hotkey", platform: "desktop" },
+	{ tab: "keyboard-shortcuts", section: "Actions" },
 	{
 		tab: "keyboard-shortcuts",
-		section: "Keyboard Shortcuts",
+		section: "Global Hotkey",
 		label: "Global Hotkey (Toggle Window)",
 		labelKey: "settings.globalHotkey",
 		platform: "desktop",
 	},
-	{
-		tab: "keyboard-shortcuts",
-		section: "Keyboard Shortcuts",
-		label: "Plugin Commands",
-		labelKey: "helpPanel.pluginCommands",
-	},
+	{ tab: "keyboard-shortcuts", section: "Actions", label: "Plugin Commands", labelKey: "helpPanel.pluginCommands" },
 	// tabs/GitHubTab.tsx
 	{ tab: "github", section: "GitHub Authentication" },
 	{ tab: "github", section: "Pull Requests" },
@@ -701,19 +719,19 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	// tabs/AgentsTab.tsx
 	// The idle-close control is inside collapsed per-agent cards. A search result
 	// cannot choose and expand a card, so it has no stable scroll target here.
-	{ tab: "agents", section: "Agents" },
+	{ tab: "agents", section: "Agent behavior" },
 	{ tab: "agents", section: "ego permissions" },
 	{ tab: "agents", section: "Idle agent hibernation", sectionKey: "settings.agents.hibernateHeading" },
-	{ tab: "agents", section: "Agents", label: "Show agent intent as tab title" },
-	{ tab: "agents", section: "Agents", label: "Show suggested follow-up actions" },
+	{ tab: "agents", section: "Agent behavior", label: "Show agent intent as tab title" },
+	{ tab: "agents", section: "Agent behavior", label: "Show suggested follow-up actions" },
 	{
 		tab: "agents",
-		section: "Agents",
+		section: "Agent behavior",
 		label: "Collect project progress",
 		expert: true,
 		configKey: "app.progress_tracking",
 	},
-	{ tab: "agents", section: "Agents", label: "Launch instructions" },
+	{ tab: "agents", section: "Agent behavior", label: "Launch instructions" },
 	{ tab: "agents", section: "ego permissions", label: "Permissions" },
 	{ tab: "agents", section: "ego permissions", label: "Filesystem sandbox" },
 	{

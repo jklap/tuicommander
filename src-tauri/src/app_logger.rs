@@ -120,6 +120,7 @@ pub(crate) const LOG_RING_CAPACITY: usize = 1000;
 
 /// Fixed-capacity circular buffer for structured log entries.
 pub(crate) struct LogRingBuffer {
+    stall_journal: Option<tracing_appender::non_blocking::NonBlocking>,
     entries: Vec<Option<LogEntry>>,
     capacity: usize,
     /// Write position (wraps around)
@@ -135,6 +136,7 @@ impl LogRingBuffer {
         let mut entries = Vec::with_capacity(capacity);
         entries.resize_with(capacity, || None);
         Self {
+            stall_journal: None,
             entries,
             capacity,
             write_pos: 0,
@@ -169,6 +171,9 @@ impl LogRingBuffer {
         data_json: Option<String>,
         audience: Option<String>,
     ) -> u64 {
+        if let Some(writer) = &mut self.stall_journal {
+            crate::stall_journal::capture(writer, &source, &message, data_json.as_deref());
+        }
         let audience = resolve_audience(audience, &source);
         // Dedup: coalesce with the most recent entry if level+source+message+audience match
         if self.count > 0 {
@@ -456,6 +461,8 @@ fn build_subscriber(
         .with_thread_ids(false)
         .with_writer(console_writer);
 
+    let (journal_writer, journal_guard) = crate::stall_journal::writer(log_dir);
+    buffer.lock().stall_journal = Some(journal_writer);
     let ring_layer = RingBufferLayer { buffer };
 
     let (file_writer, file_guard) = non_blocking_file_writer(log_dir);
@@ -470,7 +477,7 @@ fn build_subscriber(
         .with(fmt_layer)
         .with(ring_layer)
         .with(file_layer);
-    (subscriber, vec![console_guard, file_guard])
+    (subscriber, vec![console_guard, file_guard, journal_guard])
 }
 
 /// Holds the non-blocking writers' flush guards for the process lifetime.
@@ -600,6 +607,67 @@ pub(crate) fn log_via_state(state: &Arc<AppState>, level: &str, source: &str, me
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stall_entries_survive_ring_overflow_and_restart() {
+        // Catches: frontend stall evidence lives only in the wrapping in-memory ring.
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let buffer = Arc::new(Mutex::new(LogRingBuffer::new(2)));
+        let (subscriber, guards) = build_subscriber(
+            tracing_subscriber::EnvFilter::new("info"),
+            std::io::sink(),
+            buffer.clone(),
+            dir.path(),
+        );
+        tracing::subscriber::with_default(subscriber, || {
+            buffer.lock().push("warn".into(), "app".into(),
+                "SLOW git.refreshBatch:/private/repo: 5500ms (body 20ms + flush 5480ms)".into(),
+                Some(r#"{"total_ms":5500,"body_ms":20,"flush_ms":5480,"repo_count":16,"worktree_count":40,"response_bytes":12345}"#.into()));
+            tracing::warn!(
+                source = "diagnostics",
+                silent_secs = 31_u64,
+                last_heartbeat_received_ms = 1234_i64,
+                "Frontend unresponsive: no heartbeat"
+            );
+            for i in 0..10 {
+                buffer.lock().push(
+                    "info".into(),
+                    "noise".into(),
+                    format!("unrelated {i}"),
+                    None,
+                );
+            }
+        });
+        assert!(
+            buffer
+                .lock()
+                .get_entries(0)
+                .iter()
+                .all(|e| e.source == "noise")
+        );
+        drop(guards); // The production graceful-exit flush.
+        // Reopen the real subscriber at the same directory, as the next process does.
+        let (_, guards) = build_subscriber(
+            tracing_subscriber::EnvFilter::new("info"),
+            std::io::sink(),
+            Arc::new(Mutex::new(LogRingBuffer::new(2))),
+            dir.path(),
+        );
+        drop(guards);
+        let journal = std::fs::read_to_string(dir.path().join("stall-journal.jsonl"))
+            .expect("stall evidence must survive ring overflow and app restart");
+        let rows: Vec<serde_json::Value> = journal
+            .lines()
+            .map(|s| serde_json::from_str(s).unwrap())
+            .collect();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["kind"], "git_refresh");
+        assert_eq!(rows[0]["metrics"]["flush_ms"], 5480);
+        assert_eq!(rows[1]["kind"], "heartbeat_gap");
+        assert_eq!(rows[1]["metrics"]["last_heartbeat_received_ms"], 1234);
+        assert!(!journal.contains("/private/repo"));
+        assert!(!journal.contains("unrelated"));
+    }
 
     #[test]
     fn cleanup_old_logs_removes_all_stale_rotated_files() {

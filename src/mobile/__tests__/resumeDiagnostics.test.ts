@@ -36,6 +36,7 @@ function rect(top = 0, height = 800) {
 }
 
 beforeEach(() => {
+	sessionStorage.clear();
 	warn.mockReset();
 	visible("visible");
 	document.body.innerHTML = '<div id="mobile-app"><div data-mobile-shell>Sessions</div></div>';

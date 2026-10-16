@@ -84,9 +84,12 @@ Connects to the Rust HTTP server via WebSocket/REST.
 
 ## Build
 
-When using mbx, `src-tauri/.mbx.toml` disables shared read-only build output
-directories because Tauri's `generate_context!` writes assets into `OUT_DIR`
-during macro expansion. Keep this workspace setting enabled when upgrading mbx.
+When using mbx, `src-tauri/build.rs` emits `MBX_SHARE_OUT_DIR=0` for the
+`tuicommander` crate only, because Tauri's `generate_context!` writes assets into
+`OUT_DIR` during macro expansion and the shared `OUT_DIR` of mbx is read-only.
+Do not move this setting to a workspace `.mbx.toml`: there it also gives every
+dependency with a build script a checkout-specific `OUT_DIR`, and each worktree
+then misses the cache for those crates and all crates that depend on them.
 
 ```bash
 pnpm tauri build

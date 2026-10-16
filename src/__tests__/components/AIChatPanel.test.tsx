@@ -112,6 +112,7 @@ const client = vi.hoisted(() => ({
 	resumeTurn: vi.fn(),
 	compact: vi.fn(),
 	forkSession: vi.fn(),
+	deleteSession: vi.fn(),
 }));
 
 vi.mock("../../services/acpClient", () => ({ acpClient: client }));
@@ -147,6 +148,7 @@ const SECOND_SESSION = "01932d5e-0000-7000-8000-0000000000bb";
 const PNG_1X1 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 let supportsImages = false;
 let supportsFork = false;
+let supportsDelete = false;
 const CHILD_SESSION = "01932d5e-0000-7000-8000-0000000000dd";
 
 function pasteFile(textarea: HTMLTextAreaElement, file: File): Event {
@@ -197,7 +199,7 @@ function snapshot(overrides: Partial<AcpConnectionSnapshot> = {}): AcpConnection
 			list: true,
 			resume: true,
 			fork: supportsFork,
-			delete: false,
+			delete: supportsDelete,
 			close: true,
 			additionalDirectories: true,
 			promptImage: supportsImages,
@@ -283,6 +285,7 @@ beforeEach(() => {
 	sequence = 0;
 	supportsImages = false;
 	supportsFork = false;
+	supportsDelete = false;
 	settings.egoExecutable = "/usr/local/bin/ego";
 	acpStore.reset();
 	acpTranscript.reset();
@@ -1219,6 +1222,53 @@ describe("AIChatPanel: parallel tabs", () => {
 		);
 	});
 
+	// Catches: a recorded pre-prompt offer leaves Session settings hidden.
+	it("reveals settings from the recorded async config offer before sending", async () => {
+		const { container } = await renderPanel();
+		const empty = snapshot({
+			attachments: [attachment({ configOptions: [] }), attachment({ sessionId: SECOND_SESSION })],
+		});
+		acpStore.applySnapshot(empty);
+		expect(container.querySelector('[aria-label="Session settings"]')).toBeNull();
+		const recording = readFileSync(resolve("src-tauri/tests/fixtures/acp/ego-async-config.jsonl"), "utf8")
+			.trim()
+			.split("\n")
+			.map((line) => JSON.parse(line));
+		const offer = JSON.parse(recording.at(-1).raw).params.update;
+		const actual = await vi.importActual<typeof import("../../services/acpClient")>("../../services/acpClient");
+		let receive!: (frame: import("../../types/acp").AcpStreamFrame) => void;
+		const realClient = actual.createAcpClient(async (options) => {
+			receive = options.onFrame;
+			return { close() {} };
+		});
+		vi.mocked(invoke).mockImplementation(async (command) => {
+			if (command === "acp_connect") return empty;
+			if (command === "acp_pending_interactions") return [];
+			if (command === "acp_connection_snapshot")
+				return snapshot({
+					attachments: [attachment({ configOptions: offer.configOptions }), attachment({ sessionId: SECOND_SESSION })],
+				});
+			return undefined;
+		});
+		await realClient.connect(CHAT_ROOT);
+		receive({
+			kind: "event",
+			connectionId: CONNECTION,
+			generation: 1,
+			sequence: ++sequence,
+			sessionId: SESSION,
+			turnId: null,
+			event: { kind: "sessionUpdate", update: offer },
+		});
+		await settle();
+		expect(container.querySelector('[aria-label="Session settings"]')).not.toBeNull();
+		expect(container.textContent).toContain("Mode: default");
+		expect(container.textContent).not.toContain("Model: pending");
+		expect(acpStore.attachment(CONNECTION, SECOND_SESSION)?.configOptions).toEqual([MODEL_OPTION]);
+		expect(client.prompt).not.toHaveBeenCalled();
+		await realClient.disconnect(CONNECTION);
+	});
+
 	// Catches: an attached tab with late config options loses the entire model/mode row.
 	it.each<{ configOptions: AcpSessionConfigOption[] }>([
 		{ configOptions: [] },
@@ -1508,6 +1558,142 @@ describe("AIChatPanel: parallel tabs", () => {
 		await settle();
 		expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SESSION, longPaste, [], ROOT);
 	});
+	it("middle-click closes the chosen tab — catches missing auxclick handling", async () => {
+		client.newSession.mockResolvedValueOnce(SESSION).mockResolvedValueOnce(SECOND_SESSION);
+		const { container } = await renderPanel();
+		(container.querySelector('button[aria-label="New chat tab"]') as HTMLButtonElement).click();
+		await settle();
+		const tab = container.querySelector(`[data-chat-session="${SECOND_SESSION}"]`)!;
+		tab.dispatchEvent(new MouseEvent("auxclick", { button: 2, bubbles: true }));
+		await settle();
+		expect(container.querySelectorAll("[data-chat-session]")).toHaveLength(2);
+		tab.dispatchEvent(new MouseEvent("auxclick", { button: 1, bubbles: true, cancelable: true }));
+		await settle();
+		expect(container.querySelector(`[data-chat-session="${SECOND_SESSION}"]`)).toBeNull();
+		expect(container.querySelector(`[data-chat-session="${SESSION}"]`)?.getAttribute("aria-selected")).toBe("true");
+		const last = container.querySelector(`[data-chat-session="${SESSION}"]`)!;
+		last.dispatchEvent(new MouseEvent("auxclick", { button: 1, bubbles: true }));
+		last.dispatchEvent(new MouseEvent("auxclick", { button: 2, bubbles: true }));
+		await settle();
+		expect(container.querySelectorAll("[data-chat-session]")).toHaveLength(1);
+	});
+
+	it("Escape stops from composer and transcript without clearing drafts — catches missing Escape stop", async () => {
+		const { container } = await renderPanel();
+		await typeAndSend(container, "Start work");
+		acpStore.applySnapshot(
+			snapshot({
+				attachments: [
+					attachment({
+						state: "prompting",
+						activeTurn: { turnId: "turn-1", state: "running", stopReason: null, usage: null },
+					}),
+				],
+			}),
+		);
+		const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+		textarea.value = "Keep this draft";
+		textarea.dispatchEvent(new Event("input", { bubbles: true }));
+		for (const target of [textarea, container.querySelector('[aria-label="Chat transcript"]')!]) {
+			target.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+			await settle();
+		}
+		expect(client.cancel).toHaveBeenCalledTimes(2);
+		expect(textarea.value).toBe("Keep this draft");
+	});
+
+	it("Escape leaves idle drafts intact and closes Find before stopping a busy turn", async () => {
+		const { container } = await renderPanel();
+		const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+		textarea.value = "Keep this draft";
+		textarea.dispatchEvent(new Event("input", { bubbles: true }));
+		textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+		await settle();
+		expect(client.cancel).not.toHaveBeenCalled();
+		acpStore.applySnapshot(
+			snapshot({
+				attachments: [
+					attachment({
+						state: "prompting",
+						activeTurn: { turnId: "turn-1", state: "running", stopReason: null, usage: null },
+					}),
+				],
+			}),
+		);
+		const transcript = container.querySelector('[aria-label="Chat transcript"]')!;
+		transcript.dispatchEvent(new KeyboardEvent("keydown", { key: "f", ctrlKey: true, bubbles: true }));
+		await settle();
+		container
+			.querySelector('[aria-label="Find in chat"]')!
+			.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+		await settle();
+		expect(container.querySelector('[aria-label="Find in chat"]')).toBeNull();
+		expect(client.cancel).not.toHaveBeenCalled();
+		expect(textarea.value).toBe("Keep this draft");
+	});
+
+	it("Escape in the composer dismisses open Find before cancelling work — catches sibling search bypass", async () => {
+		const { container } = await renderPanel();
+		await typeAndSend(container, "Keep working");
+		acpStore.applySnapshot(
+			snapshot({
+				attachments: [
+					attachment({
+						state: "prompting",
+						activeTurn: { turnId: "turn-1", state: "running", stopReason: null, usage: null },
+					}),
+				],
+			}),
+		);
+		const transcript = container.querySelector('[aria-label="Chat transcript"]')!;
+		transcript.dispatchEvent(new KeyboardEvent("keydown", { key: "f", ctrlKey: true, bubbles: true }));
+		await settle();
+		expect(container.querySelector('[aria-label="Find in chat"]')).not.toBeNull();
+		const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+		textarea.value = "Next question";
+		textarea.dispatchEvent(new Event("input", { bubbles: true }));
+		textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+		await settle();
+		expect(client.cancel).not.toHaveBeenCalled();
+		expect(container.querySelector('[aria-label="Find in chat"]')).toBeNull();
+		expect(textarea.value).toBe("Next question");
+	});
+
+	it("middle-click does not reopen an uncertain-effect refusal or close it on the agent", async () => {
+		restoreTabs();
+		client.loadSession.mockRejectedValueOnce(
+			new Error('RPC acp_session_load failed: 502 {"message":"uncertain effect; start a new chat","retryable":false}'),
+		);
+		const { container } = renderIdlePanel();
+		await settle();
+		selectTab(container, SECOND_SESSION);
+		await settle();
+		expect(container.textContent).toContain("uncertain effect");
+		container
+			.querySelector(`[data-chat-session="${SESSION}"]`)!
+			.dispatchEvent(new MouseEvent("auxclick", { button: 1, bubbles: true }));
+		await settle();
+		expect(container.textContent).toContain("uncertain effect");
+		expect(client.closeSession).not.toHaveBeenCalled();
+	});
+
+	it("pins per-conversation repository context without replacing draft parking", async () => {
+		const [repo, setRepo] = createSignal<string | null>(ROOT);
+		const { container } = render(() => <AIChatPanel visible={true} repoPath={repo()} onClose={() => {}} />);
+		await settle();
+		(container.querySelector('button[aria-label="New chat tab"]') as HTMLButtonElement).click();
+		await settle();
+		(container.querySelector('button[aria-label="Pin repository"]') as HTMLButtonElement).click();
+		expect(container.querySelector('button[aria-label="Unpin repository"]')?.getAttribute("aria-pressed")).toBe("true");
+		setRepo("/other/repo");
+		await typeAndSend(container, "Pinned context");
+		expect(client.prompt).toHaveBeenLastCalledWith(CONNECTION, SESSION, "Pinned context", [], ROOT);
+		expect(container.querySelector('button[aria-label="Park draft"]')).not.toBeNull();
+		(container.querySelector('button[aria-label="Unpin repository"]') as HTMLButtonElement).click();
+		await typeAndSend(container, "Follow context");
+		expect(client.prompt).toHaveBeenLastCalledWith(CONNECTION, SESSION, "Follow context", [], "/other/repo");
+	});
+
 	it("routes prompts to the selected session and returns to the neighbor when closing it", async () => {
 		client.newSession.mockResolvedValueOnce(SESSION).mockResolvedValueOnce(SECOND_SESSION);
 		const { container } = await renderPanel();
@@ -4046,6 +4232,23 @@ describe("AI Chat clipboard precedence", () => {
 		return event;
 	}
 
+	it("stages a PNG with an empty text flavor — catches empty text masking an image", async () => {
+		supportsImages = true;
+		const { container } = await renderPanel();
+		const event = mixedPaste(container.querySelector("textarea") as HTMLTextAreaElement, "");
+		expect(event.defaultPrevented).toBe(true);
+		await vi.waitFor(() => expect(container.querySelector('img[alt="Pasted image"]')).not.toBeNull());
+		(container.querySelector('button[aria-label="Send"]') as HTMLButtonElement).click();
+		await settle();
+		expect(client.prompt).toHaveBeenCalledWith(
+			CONNECTION,
+			SESSION,
+			"",
+			[{ type: "image", mimeType: "image/png", data: PNG_1X1 }],
+			ROOT,
+		);
+	});
+
 	it("attaches Finder image copies instead of sending their file-name text", async () => {
 		// Catches: shared text precedence rejects a Finder file-name plus image clipboard.
 		supportsImages = true;
@@ -4246,4 +4449,172 @@ it("mobile Chat updates keyboard correction without changing desktop attributes"
 	expectAttributes(false);
 	view.getByRole("button", { name: "Toggle correction" }).click();
 	expectAttributes(true);
+});
+
+// Catches: a delayed async-offer snapshot rolls back the model after a successful settings change.
+it("does not let a delayed async offer snapshot revert a confirmed model selection", async () => {
+	const { createAcpClient } =
+		await vi.importActual<typeof import("../../services/acpClient")>("../../services/acpClient");
+	let deliver: ((frame: import("../../types/acp").AcpStreamFrame) => void) | undefined;
+	const realClient = createAcpClient(async ({ onFrame }) => {
+		deliver = onFrame;
+		return { close() {} };
+	});
+	const offered = snapshot({ attachments: [attachment()] });
+	const selected = snapshot({
+		attachments: [attachment({ configOptions: [{ ...MODEL_OPTION, currentValue: "sonnet" }] })],
+	});
+	let releaseOffer!: (value: AcpConnectionSnapshot) => void;
+	const delayedOffer = new Promise<AcpConnectionSnapshot>((resolve) => {
+		releaseOffer = resolve;
+	});
+	let selectionConfirmed = false;
+	vi.mocked(invoke).mockImplementation(async (command) => {
+		if (command === "acp_connect") return offered;
+		if (command === "acp_pending_interactions") return [];
+		if (command === "acp_connection_snapshot") return selectionConfirmed ? selected : delayedOffer;
+		if (command === "acp_session_set_config_option") {
+			selectionConfirmed = true;
+			return selected.attachments[0].configOptions;
+		}
+		return undefined;
+	});
+	await realClient.connect(ROOT);
+	deliver?.({
+		kind: "event",
+		connectionId: CONNECTION,
+		generation: 1,
+		sequence: 2,
+		sessionId: SESSION,
+		turnId: null,
+		event: {
+			kind: "sessionUpdate",
+			update: { sessionUpdate: "config_option_update", configOptions: [MODEL_OPTION] },
+		},
+	});
+	await realClient.setConfigOption(CONNECTION, SESSION, "model", { value: "sonnet" });
+	expect(acpStore.attachment(CONNECTION, SESSION)?.configOptions[0].currentValue).toBe("sonnet");
+	releaseOffer(offered);
+	await settle();
+	expect(acpStore.attachment(CONNECTION, SESSION)?.configOptions[0].currentValue).toBe("sonnet");
+});
+
+// Catches: finishing delete cleanup overwrites a newer explicit conversation selection.
+it("does not replace a newer selection while deleted conversation config cleanup is pending", async () => {
+	supportsDelete = true;
+	let dispose = () => {};
+	const chat = createRoot((cleanup) => {
+		dispose = cleanup;
+		return createAcpChat(
+			() => ROOT,
+			() => true,
+			client,
+		);
+	});
+	try {
+		await chat.ensureStarted();
+		aiChatTabs.add("global", SECOND_SESSION);
+		aiChatTabs.add("global", CHILD_SESSION);
+		aiChatTabs.add("global", SESSION);
+		client.deleteSession.mockResolvedValue(undefined);
+		let releaseSave: (() => void) | undefined;
+		const originalInvoke = vi.mocked(invoke).getMockImplementation()!;
+		vi.mocked(invoke).mockImplementation(async (command, args) => {
+			if (command === "save_config" && !releaseSave) {
+				await new Promise<void>((resolve) => {
+					releaseSave = resolve;
+				});
+				return undefined;
+			}
+			return originalInvoke(command, args);
+		});
+		const deleting = chat.deleteSession(SESSION);
+		await settle();
+		expect(releaseSave).toBeDefined();
+		const selecting = chat.selectSession(CHILD_SESSION);
+		await settle();
+		expect(chat.sessionId()).toBe(CHILD_SESSION);
+		releaseSave!();
+		await Promise.all([deleting, selecting]);
+		expect(chat.sessionId()).toBe(CHILD_SESSION);
+		expect(aiChatTabs.active("global")).toBe(CHILD_SESSION);
+	} finally {
+		dispose();
+	}
+});
+
+describe("AIChatPanel: delete conversation", () => {
+	async function listedPanel() {
+		supportsDelete = true;
+		client.listSessions.mockResolvedValue({
+			sessions: [{ sessionId: SESSION, cwd: CHAT_ROOT, title: "Delete this chat" }],
+			nextCursor: null,
+		});
+		client.deleteSession.mockResolvedValue(undefined);
+		return renderPanel();
+	}
+
+	// Catches: deleting the selected last conversation leaves a tab pointing at a missing session.
+	it("deletes the selected last conversation and removes its tab and list entry", async () => {
+		const { container } = await listedPanel();
+		const button = container.querySelector<HTMLButtonElement>('button[aria-label="Delete Delete this chat"]');
+		expect(button).not.toBeNull();
+		button?.click();
+		expect(container.textContent).toContain("Delete “Delete this chat”?");
+		expect(client.deleteSession).not.toHaveBeenCalled();
+		[...container.querySelectorAll<HTMLButtonElement>("button")]
+			.find((button) => button.textContent === "Delete")
+			?.click();
+		await settle();
+		expect(client.deleteSession).toHaveBeenCalledWith(CONNECTION, SESSION);
+		expect(aiChatTabs.ids("global")).toEqual([]);
+		expect(container.querySelector('button[aria-label="Delete Delete this chat"]')).toBeNull();
+	});
+
+	// Catches: deletion of an inactive tab closes the selected live neighbor.
+	it("deletes an inactive conversation without changing the selected tab", async () => {
+		supportsDelete = true;
+		let dispose = () => {};
+		const chat = createRoot((cleanup) => {
+			dispose = cleanup;
+			return createAcpChat(
+				() => ROOT,
+				() => true,
+				client,
+			);
+		});
+		await chat.ensureStarted();
+		aiChatTabs.add("global", SECOND_SESSION);
+		aiChatTabs.add("global", SESSION);
+		client.deleteSession.mockResolvedValue(undefined);
+		await chat.deleteSession(SECOND_SESSION);
+		expect(client.deleteSession).toHaveBeenCalledWith(CONNECTION, SECOND_SESSION);
+		expect(chat.sessionId()).toBe(SESSION);
+		expect(aiChatTabs.ids("global")).toEqual([SESSION]);
+		dispose();
+	});
+
+	// Catches: an ego refusal silently removes a still-running conversation.
+	it("keeps the conversation and tab and shows a refused delete", async () => {
+		const { container } = await listedPanel();
+		client.deleteSession.mockRejectedValueOnce(new Error("conversation is running"));
+		container.querySelector<HTMLButtonElement>('button[aria-label="Delete Delete this chat"]')?.click();
+		[...container.querySelectorAll<HTMLButtonElement>("button")]
+			.find((button) => button.textContent === "Delete")
+			?.click();
+		await settle();
+		expect(container.textContent).toContain("conversation is running");
+		expect(aiChatTabs.ids("global")).toEqual([SESSION]);
+		expect(container.querySelector('button[aria-label="Delete Delete this chat"]')).not.toBeNull();
+	});
+
+	// Catches: a destructive control offered without the advertised ACP capability.
+	it("hides deletion when the agent does not advertise it", async () => {
+		const { container } = await listedPanel();
+		acpStore.applySnapshot(
+			snapshot({ capabilities: { ...snapshot().capabilities!, delete: false }, attachments: [attachment()] }),
+		);
+		await settle();
+		expect(container.querySelector('button[aria-label="Delete Delete this chat"]')).toBeNull();
+	});
 });

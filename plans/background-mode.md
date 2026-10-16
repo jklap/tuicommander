@@ -1,7 +1,8 @@
 ---
-status: approved
+status: in_progress
 approved_at: "2026-10-12T12:07:42.616Z"
-updated: "2026-10-12T12:07:42.617Z"
+updated: "2026-10-12T18:10:21.790Z"
+started_at: "2026-10-12T18:10:21.789Z"
 ---
 # Plan: Background mode (close to tray, unload the WebView, hibernate idle agents)
 

@@ -78,11 +78,10 @@ describe("General tab ego info badge", () => {
 	});
 
 	it("shows the tip while the badge is hovered and hides it otherwise", async () => {
-		// catches: a hidden tip whose hover rule never makes it visible (display only)
-		// happy-dom has no :hover state, so the hover selector is rewritten to an attribute.
+		// Catches: measured hover placement never exposes the tip or leaves it visible after exit.
 		const style = document.createElement("style");
 		style.setAttribute("data-test-css", "");
-		style.textContent = settingsCss.replaceAll(":hover", "[data-hover]");
+		style.textContent = settingsCss;
 		document.head.appendChild(style);
 		const { badge, tip } = await renderEgoBadge();
 		const shown = () => {
@@ -90,7 +89,9 @@ describe("General tab ego info badge", () => {
 			return css.visibility !== "hidden" && css.display !== "none";
 		};
 		expect(shown()).toBe(false);
-		badge.setAttribute("data-hover", "");
+		fireEvent.mouseEnter(badge);
 		expect(shown()).toBe(true);
+		fireEvent.mouseLeave(badge);
+		expect(shown()).toBe(false);
 	});
 });

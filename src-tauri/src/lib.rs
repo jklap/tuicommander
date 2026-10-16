@@ -35,6 +35,7 @@ pub mod work_items;
 pub use tuic_core::app_instance;
 pub(crate) mod app_logger;
 pub(crate) mod changelog;
+mod stall_journal;
 pub(crate) use tuic_terminal::chrome;
 pub(crate) mod circleci;
 pub(crate) mod claude_usage;
@@ -2079,6 +2080,7 @@ pub fn run() {
             pty::create_pty,
             pty::create_pty_with_worktree,
             pty::list_worktrees,
+            pty::force_retry_provider_recovery_command,
             pty::write_pty,
             pty::write_pty_parts,
             attachments::upload_attachment,
@@ -3173,6 +3175,7 @@ mod tests {
                 channel: tauri::ipc::Channel::new(|_| Ok(())),
                 webview_label: webview_label.to_string(),
                 epoch,
+                visible: std::sync::atomic::AtomicBool::new(true),
             },
         );
         epoch

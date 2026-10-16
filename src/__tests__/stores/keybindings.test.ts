@@ -73,8 +73,9 @@ describe("keybindingDefaults", () => {
 			expect(DEFAULT_BINDINGS["edit-command"]).toBe("");
 		});
 
-		it("leaves the hands-free toggle unbound: it is a Command Palette action", () => {
-			expect(DEFAULT_BINDINGS["toggle-hands-free"]).toBe("");
+		it("binds the hands-free toggle to Cmd+Alt+V", () => {
+			// TEST-CHANGE: Boss approved the formerly unbound action default on 2026-10-16.
+			expect(DEFAULT_BINDINGS["toggle-hands-free"]).toBe("Cmd+Alt+V");
 		});
 
 		it("has no duplicate key combos", () => {

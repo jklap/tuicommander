@@ -1,15 +1,18 @@
 import { type Component, For, type JSX, Show } from "solid-js";
 import { cx } from "../../utils";
+import { Select } from "../ui/Select";
 import s from "./Settings.module.css";
 
 const NAV_MIN_WIDTH = 140;
 const NAV_MAX_WIDTH = 280;
-const NAV_DEFAULT_WIDTH = 180;
+const NAV_DEFAULT_WIDTH = 232;
 
 export interface SettingsShellTab {
 	key: string;
 	label: string;
 	color?: string;
+	/** Loaded plugin id, separate from the human-readable page label. */
+	source?: string;
 }
 
 export interface SettingsShellProps {
@@ -95,7 +98,18 @@ export const SettingsShell: Component<SettingsShellProps> = (props) => {
 					{/* Body: nav sidebar + scrollable content */}
 					<div class={s.body}>
 						<nav class={s.nav} style={{ width: `${navWidth()}px` }}>
-							{props.navHeader}
+							<div class={s.compactNav}>
+								<Select
+									aria-label="Settings page"
+									value={props.activeTab}
+									onChange={(event) => props.onTabChange(event.currentTarget.value)}
+								>
+									<For each={props.tabs.filter((tab) => tab.key !== "__sep__" && !tab.key.startsWith("__label__:"))}>
+										{(tab) => <option value={tab.key}>{tab.label}</option>}
+									</For>
+								</Select>
+							</div>
+							<div class={s.navSearch}>{props.navHeader}</div>
 							<For each={props.tabs}>
 								{(tab) =>
 									tab.key === "__sep__" ? (
@@ -106,13 +120,18 @@ export const SettingsShell: Component<SettingsShellProps> = (props) => {
 										<button
 											class={cx(
 												s.navItem,
+												tab.source && s.navItemPlugin,
 												tab.key.startsWith("repo:") && s.navItemRepo,
 												props.activeTab === tab.key && s.active,
 											)}
+											title={tab.source ? `Plugin: ${tab.source}` : undefined}
 											style={tab.color ? { color: tab.color } : undefined}
 											onClick={() => props.onTabChange(tab.key)}
 										>
-											{tab.label}
+											<Show when={tab.source} fallback={tab.label}>
+												<span class={s.pluginLabel}>{tab.label}</span>
+												<span class={s.pluginIdentity}> Plugin</span>
+											</Show>
 										</button>
 									)
 								}

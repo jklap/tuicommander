@@ -36,10 +36,12 @@ const TAB_SOURCES: Record<string, string[]> = {
  * what was added: give it a static heading if it is a real setting, otherwise
  * update the number here. */
 const UNINDEXABLE: Record<string, { dynamic: number; orphans: number }> = {
-	telegram: { dynamic: 0, orphans: 0 },
+	// Recent event labels contain runtime time, direction, kind and outcome.
+	telegram: { dynamic: 1, orphans: 0 },
 	general: { dynamic: 0, orphans: 0 },
 	appearance: { dynamic: 0, orphans: 0 },
-	notifications: { dynamic: 0, orphans: 0 },
+	// Notification sound row labels are runtime entries, not static search targets.
+	notifications: { dynamic: 1, orphans: 0 },
 	terminal: { dynamic: 0, orphans: 0 },
 	// The `<label>{section.title}</label>` over each group of the shortcut list —
 	// the groups and their bindings are built at runtime, so the page is indexed
@@ -66,9 +68,10 @@ const UNINDEXABLE: Record<string, { dynamic: number; orphans: number }> = {
 	// idle-close control sits inside a collapsed, per-agent card: search cannot
 	// identify which card to expand or scroll to its hidden control. Neither has
 	// a stable search target.
+	// Named run editors add six persistent field labels, but search cannot open their runtime forms.
 	// The per-agent "Launch instructions for <agent>" editor names its agent at
 	// runtime, inside a collapsed card; the global editor is indexed.
-	agents: { dynamic: 1, orphans: 12 },
+	agents: { dynamic: 1, orphans: 19 },
 	// The `<optgroup label={provider.name}>` inside the default-model picker. It
 	// groups the options by provider and is not a setting anybody can scroll to.
 	"ai-chat": { dynamic: 1, orphans: 0 },
@@ -159,6 +162,13 @@ describe("settings search index — drift guard", () => {
 	it("keeps per-agent captions and the machine selector out of static search targets", () => {
 		const orphans = extractTab(readPage("agents")).settings.filter((setting) => !setting.section);
 		expect(orphans.map((setting) => setting.text)).toEqual([
+			"Arguments",
+			"Configuration name",
+			"Command (binary)",
+			"Model (optional)",
+			"Configuration name",
+			"Command (binary)",
+			"Model (optional)",
 			"Usage Dashboard",
 			"Close idle managed child after",
 			"Enabled",
@@ -237,6 +247,7 @@ describe("searchSettings", () => {
 
 	it("offers a desktop-only control on the desktop and not in a browser", () => {
 		expect(searchSettings("global hotkey", ALL_TABS, "desktop")).toEqual([
+			expect.objectContaining({ tab: "keyboard-shortcuts", section: "Global Hotkey", platform: "desktop" }),
 			expect.objectContaining({ tab: "keyboard-shortcuts", label: "Global Hotkey (Toggle Window)" }),
 		]);
 		expect(searchSettings("global hotkey", ALL_TABS, "browser")).toEqual([]);

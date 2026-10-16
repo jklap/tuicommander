@@ -5,6 +5,7 @@ import type {
 	AcpConnectionId,
 	AcpConnectionSnapshot,
 	AcpPendingInteraction,
+	AcpSessionConfigOption,
 	AcpSessionId,
 	AcpStreamFrame,
 } from "../types/acp";
@@ -111,6 +112,14 @@ function reduceEvent(entry: AcpConnectionEntry, frame: Extract<AcpStreamFrame, {
 			if (attachment) attachment.queuedPrompts = event.queuedPrompts;
 			break;
 		}
+		case "sessionUpdate": {
+			const update = event.update;
+			if (update.sessionUpdate === "config_option_update" && Array.isArray(update.configOptions)) {
+				const attachment = entry.snapshot.attachments.find((a) => a.sessionId === frame.sessionId);
+				if (attachment) attachment.configOptions = update.configOptions as AcpSessionConfigOption[];
+			}
+			break;
+		}
 		case "permissionRequested":
 			if (!entry.interactions.some((i) => i.requestId === event.requestId)) {
 				entry.interactions.push({
@@ -138,7 +147,7 @@ function reduceEvent(entry: AcpConnectionEntry, frame: Extract<AcpStreamFrame, {
 			entry.interactions = entry.interactions.filter((i) => i.requestId !== event.requestId);
 			break;
 		default:
-			// Session updates belong to the transcript; they still move the cursor.
+			// Unprojected events still move the cursor.
 			break;
 	}
 }

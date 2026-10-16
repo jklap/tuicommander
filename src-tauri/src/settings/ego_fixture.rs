@@ -22,6 +22,11 @@ pub(super) fn fixture() -> Fixture {
         ("models.json", include_str!("fixtures/ego/models.json")),
         ("doctor.json", include_str!("fixtures/ego/doctor.json")),
         ("auth.txt", include_str!("fixtures/ego/auth-empty.txt")),
+        (
+            "capabilities.json",
+            include_str!("fixtures/ego/capabilities.json"),
+        ),
+        ("conflict.json", include_str!("fixtures/ego/conflict.json")),
     ] {
         let bytes = match name {
             "base.json" | "beta.json" => {

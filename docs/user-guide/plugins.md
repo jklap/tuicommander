@@ -39,6 +39,13 @@ A plugin directory contains at minimum `manifest.json` and `main.js`.
 
 Loaded configurable plugins publish individual settings through a scoped settings service. Saved legacy configuration is retained and validated on load. Changes schedule a plugin reload; a stale revision or invalid batch writes nothing. Secret settings show only whether a value is set. Disabling/unloading removes the plugin settings from discovery.
 
+### Work-item provider data
+
+GitHub Work, Jira and GitLab use Tasks-owned `data/work-items.json` for provider accounts. Configure these accounts from Tasks, not from a plugin Settings page. The reserved `data/config.json` requires a settings schema and must not be used for these accounts.
+
+If an older GitHub Work installation reports `Configurable plugin requires a settings schema`, first install the app and plugin versions that use `work-items.json`. With the app stopped, back up the old `data/config.json` and move it to `data/work-items.json` in that plugin's installed directory. Do not overwrite an existing destination or change the file contents. Restart the app and check that the plugin loads. This is a one-time operator action; the app does not read the old file as a fallback.
+
+
 ### Settings → Plugins → Installed
 
 The Installed tab lists all installed plugins:

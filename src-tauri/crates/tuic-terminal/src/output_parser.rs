@@ -14,10 +14,45 @@ fn expand_tilde(path: &str) -> String {
         .unwrap_or_else(|| path.to_string())
 }
 
+/// Native ego recovery snapshot. Bounded before deserialization at the OSC boundary.
+#[derive(Clone, Debug, Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderRecovery {
+    pub phase: String,
+    pub next_attempt_ms: Option<u64>,
+    pub attempt: u32,
+}
+
+pub fn parse_provider_recovery(payload: &str) -> Option<ParsedEvent> {
+    if payload == "clear" {
+        return Some(ParsedEvent::ProviderRecovery { recovery: None });
+    }
+    if payload.len() > 256 {
+        return None;
+    }
+    // Require null explicitly for retrying, rather than accepting a missing field.
+    let value: serde_json::Value = serde_json::from_str(payload).ok()?;
+    value.get("next_attempt_ms")?;
+    let recovery: ProviderRecovery = serde_json::from_value(value).ok()?;
+    let valid = recovery.attempt > 0
+        && match recovery.phase.as_str() {
+            "waiting" => recovery
+                .next_attempt_ms
+                .is_some_and(|time| time <= 8_640_000_000_000_000),
+            "retrying" => recovery.next_attempt_ms.is_none(),
+            _ => false,
+        };
+    valid.then_some(ParsedEvent::ProviderRecovery {
+        recovery: Some(recovery),
+    })
+}
+
 /// Structured events parsed from PTY output
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "type")]
 pub enum ParsedEvent {
+    #[serde(rename = "provider-recovery")]
+    ProviderRecovery { recovery: Option<ProviderRecovery> },
     #[serde(rename = "rate-limit")]
     RateLimit {
         pattern_name: String,
@@ -6895,6 +6930,41 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
                     );
                 }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod provider_recovery_tests {
+    use super::*;
+
+    /// Catches: malformed recovery frames overwriting the last trustworthy snapshot.
+    #[test]
+    fn provider_recovery_rejects_invalid_contract_fields() {
+        for payload in [
+            r#"{"phase":"waiting","next_attempt_ms":null,"attempt":1}"#,
+            r#"{"phase":"retrying","next_attempt_ms":1,"attempt":1}"#,
+            r#"{"phase":"retrying","attempt":1}"#,
+            r#"{"phase":"retrying","next_attempt_ms":null,"attempt":0}"#,
+            r#"{"phase":"unknown","next_attempt_ms":null,"attempt":1}"#,
+            r#"{"phase":"waiting","next_attempt_ms":8640000000000001,"attempt":1}"#,
+            r#"{"phase":"retrying","next_attempt_ms":null,"attempt":1,"extra":true}"#,
+        ] {
+            assert!(parse_provider_recovery(payload).is_none(), "{payload}");
+        }
+        assert!(parse_provider_recovery(&"x".repeat(257)).is_none());
+    }
+
+    /// Catches: valid retrying or clear transitions being rejected at numeric boundaries.
+    #[test]
+    fn provider_recovery_accepts_snapshots_and_explicit_clear() {
+        for payload in [
+            r#"{"phase":"waiting","next_attempt_ms":0,"attempt":1}"#,
+            r#"{"phase":"waiting","next_attempt_ms":8640000000000000,"attempt":4294967295}"#,
+            r#"{"phase":"retrying","next_attempt_ms":null,"attempt":2}"#,
+            "clear",
+        ] {
+            assert!(parse_provider_recovery(payload).is_some(), "{payload}");
         }
     }
 }

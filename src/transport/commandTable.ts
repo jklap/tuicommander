@@ -399,6 +399,12 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			body: { data: args.data },
 		}),
 	},
+	force_retry_provider_recovery_command: {
+		map: (args) => ({
+			method: "POST",
+			path: `/sessions/${encodeURIComponent(String(args.sessionId))}/force-retry`,
+		}),
+	},
 	submit_agent_reply: {
 		map: (args) => ({
 			method: "POST",
@@ -2214,6 +2220,7 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		map: (args) => ({
 			method: "POST",
 			path: "/logs",
+			allowNoContent: true,
 			body: {
 				level: args.level,
 				source: args.source,
@@ -2226,7 +2233,7 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	get_logs: {
 		map: (args) => ({ method: "GET", path: `/logs?limit=${args.limit ?? 0}` }),
 	},
-	clear_logs: { map: () => ({ method: "DELETE", path: "/logs" }) },
+	clear_logs: { map: () => ({ method: "DELETE", path: "/logs", allowNoContent: true }) },
 
 	// --- Story 071: Plugin RPC commands ---
 	plugin_read_file: {

@@ -10,7 +10,10 @@ import { settingsStore } from "../../stores/settings";
 import type { AcpHostRequestId } from "../../types/acp";
 import styles from "./MobileChatScreen.module.css";
 
-export function MobileChatScreen(props: { onOpenFile?: (candidate: string, cwd: string) => void }) {
+export function MobileChatScreen(props: {
+	recoveryRevision?: number;
+	onOpenFile?: (candidate: string, cwd: string) => void;
+}) {
 	const linkedRepository = new URLSearchParams(location.search).get("repo");
 	const linkedSession = new URLSearchParams(location.search).get("session");
 	const [sharedFileError, setSharedFileError] = createSignal<string | null>(null);
@@ -22,6 +25,12 @@ export function MobileChatScreen(props: { onOpenFile?: (candidate: string, cwd: 
 	);
 	const answering = new Set<AcpHostRequestId>();
 	let linkHandled = false;
+	const [settingsReady, setSettingsReady] = createSignal(false);
+	createEffect(() => {
+		props.recoveryRevision;
+		if (!settingsReady())
+			void settingsStore.hydrate({ notifyOnError: false }).then((loaded) => setSettingsReady(loaded !== false));
+	});
 
 	// The chat is global and ego starts on the first message, so a push link
 	// selects its conversation at once; sending is what loads it.
@@ -56,7 +65,6 @@ export function MobileChatScreen(props: { onOpenFile?: (candidate: string, cwd: 
 				}
 			})();
 		}
-		void settingsStore.hydrate();
 	});
 
 	async function answerOnce(requestId: AcpHostRequestId, action: () => Promise<void>): Promise<void> {
@@ -163,9 +171,11 @@ export function MobileChatScreen(props: { onOpenFile?: (candidate: string, cwd: 
 				onOpenFile={openFile}
 				onSuggestion={(text) => void chat.send(text)}
 				emptyMessage={
-					chat.phase() === "unconfigured"
-						? "Configure ego in desktop Settings to start a conversation."
-						: "Ask ego about any repository."
+					!settingsReady()
+						? "Chat settings are unavailable. Waiting for the server…"
+						: chat.phase() === "unconfigured"
+							? "Configure ego in desktop Settings to start a conversation."
+							: "Ask ego about any repository."
 				}
 			>
 				<Interactions

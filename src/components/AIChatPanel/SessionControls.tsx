@@ -23,6 +23,7 @@ import type {
 	AcpSessionConfigSelectOption,
 } from "../../types/acp";
 import { cx } from "../../utils";
+import { ConfirmDialog } from "../ConfirmDialog";
 import d from "../shared/dialog.module.css";
 import s from "./AIChatPanel.module.css";
 import type { AcpChat } from "./useAcpChat";
@@ -143,6 +144,8 @@ const SessionSettingsDialog: Component<{ chat: AcpChat; options: SelectOption[];
 
 export const SessionControls: Component<{ chat: AcpChat }> = (props) => {
 	const [settingsOpen, setSettingsOpen] = createSignal(false);
+	const [deleteTarget, setDeleteTarget] = createSignal<AcpListedSession | null>(null);
+	const [deleting, setDeleting] = createSignal(false);
 	const holdOffered = () => props.chat.capabilities()?.egoHoldVersion != null;
 	const compactOffered = () => props.chat.capabilities()?.egoCompactVersion != null;
 	const forkOffered = () => props.chat.capabilities()?.fork === true;
@@ -215,6 +218,58 @@ export const SessionControls: Component<{ chat: AcpChat }> = (props) => {
 					</For>
 				</Select>
 			</Show>
+
+			<Show when={props.chat.capabilities()?.delete && sessions().length > 0}>
+				<details class={s.conversationList}>
+					<summary class={s.headerBtn}>Conversations</summary>
+					<div class={s.conversationRows}>
+						<For each={sessions()}>
+							{(session) => (
+								<div class={s.conversationRow}>
+									<button
+										type="button"
+										class={s.conversationName}
+										disabled={session._meta?.tuicommander?.deleted === true}
+										onClick={() => void props.chat.selectSession(session.sessionId)}
+									>
+										{conversationLabel(session)}
+									</button>
+									<Show when={!session._meta?.tuicommander?.deleted}>
+										<button
+											type="button"
+											class={s.headerBtn}
+											disabled={deleting()}
+											aria-label={`Delete ${conversationLabel(session)}`}
+											title="Delete conversation"
+											onClick={() => setDeleteTarget(session)}
+										>
+											<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+												<path d="M6 1h4l1 2h3v1H2V3h3l1-2ZM3 5h10l-1 10H4L3 5Zm3 2v6h1V7H6Zm3 0v6h1V7H9Z" />
+											</svg>
+										</button>
+									</Show>
+								</div>
+							)}
+						</For>
+					</div>
+				</details>
+			</Show>
+			<ConfirmDialog
+				visible={deleteTarget() !== null}
+				title="Delete conversation"
+				message={`Delete “${deleteTarget() ? conversationLabel(deleteTarget()!) : ""}”? This cannot be undone.`}
+				confirmLabel="Delete"
+				defaultButton="cancel"
+				kind="warning"
+				onClose={() => setDeleteTarget(null)}
+				onConfirm={() => {
+					const target = deleteTarget();
+					setDeleteTarget(null);
+					if (!target || deleting()) return;
+					setDeleting(true);
+					void props.chat.deleteSession(target.sessionId).finally(() => setDeleting(false));
+				}}
+			/>
 
 			<span class={s.controlSpacer} />
 

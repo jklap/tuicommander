@@ -1,5 +1,6 @@
 import { render, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { VisibleIntersectionObserver } from "../helpers/visibleIntersectionObserver";
 
 /**
  * #1336-7755: a relative path with directory segments, printed by an agent and resolved against
@@ -143,13 +144,7 @@ describe.each([
 				disconnect() {}
 			},
 		);
-		vi.stubGlobal(
-			"IntersectionObserver",
-			class {
-				observe() {}
-				disconnect() {}
-			},
-		);
+		vi.stubGlobal("IntersectionObserver", VisibleIntersectionObserver);
 
 		const terminalId = terminalsStore.add({
 			name: "t",

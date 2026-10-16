@@ -878,7 +878,6 @@ pub(crate) struct AppConfig {
     #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"next_session","effect":"Used when the next session or process starts; existing sessions retain their launch configuration.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) shell: Option<String>,
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"next_session","effect":"Used when the next session or process starts; existing sessions retain their launch configuration.","operations":["get","set"],"confirmationClass":"ordinary"}))]
-    #[schemars(extend("x-choice-resolver" = "system_fonts"))]
     pub(crate) font_family: String,
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates font size for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     #[schemars(range(min = 1))]
@@ -1953,7 +1952,7 @@ pub(crate) struct AgentRunConfig {
     #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"next_session","effect":"Used when the next session or process starts; existing sessions retain their launch configuration.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) args: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates model for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"next_session","effect":"Used when the next session or process starts; existing sessions retain their launch configuration.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     #[schemars(extend("x-choice-resolver" = "agent_models"))]
     pub(crate) model: Option<String>,
     #[serde(default)]
@@ -4472,7 +4471,7 @@ pub(crate) fn repair_stale_temp_repositories(
     Ok(summary)
 }
 
-// Pane layout (schema owned by frontend)
+// Pane layout (typed geometry validated by the shared Rust owner)
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn load_pane_layout() -> serde_json::Value {
     load_json_config(PANE_LAYOUT_FILE)
@@ -4483,8 +4482,7 @@ pub(crate) fn save_pane_layout(
     base: serde_json::Value,
     layout: serde_json::Value,
 ) -> Result<(), String> {
-    let file: ConfigFile<serde_json::Value> = ConfigFile::new(PANE_LAYOUT_FILE);
-    file.save_delta(&base, &layout)
+    crate::settings::ui_owners::save_delta(PANE_LAYOUT_FILE, base, layout, false)
 }
 
 // Prompt library
@@ -4533,7 +4531,7 @@ pub(crate) fn save_activity(
     file.save_delta(&base, &items)
 }
 
-// Keybindings (opaque JSON — schema owned by frontend)
+// Keybindings (typed action/key records validated by the shared Rust owner)
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn load_keybindings() -> serde_json::Value {
     load_json_config(KEYBINDINGS_FILE)
@@ -4544,8 +4542,7 @@ pub(crate) fn save_keybindings(
     base: serde_json::Value,
     config: serde_json::Value,
 ) -> Result<(), String> {
-    let file: ConfigFile<serde_json::Value> = ConfigFile::new(KEYBINDINGS_FILE);
-    file.save_delta(&base, &config)
+    crate::settings::ui_owners::save_delta(KEYBINDINGS_FILE, base, config, true)
 }
 
 // Agents config
@@ -9557,24 +9554,20 @@ mod tests {
     fn stale_pane_layout_saves_preserve_independent_object_keys() {
         let dir = TempDir::new().unwrap();
         let _guard = set_config_dir_override(dir.path().to_path_buf());
-        let base = serde_json::json!({"left": {"width": 30}, "right": {"width": 40}});
-        ConfigFile::<serde_json::Value>::new(PANE_LAYOUT_FILE)
-            .save(&base)
-            .unwrap();
-        save_pane_layout(
-            base.clone(),
-            serde_json::json!({"left": {"width": 35}, "right": {"width": 40}}),
-        )
-        .unwrap();
-        save_pane_layout(
-            base,
-            serde_json::json!({"left": {"width": 30}, "right": {"width": 45}}),
-        )
-        .unwrap();
-        assert_eq!(
-            load_pane_layout(),
-            serde_json::json!({"left": {"width": 35}, "right": {"width": 45}})
-        );
+        let base = serde_json::json!({
+            "root":{"type":"leaf","id":"g1"},
+            "groups":{"g1":{"id":"g1","tabs":[{"id":"t1","type":"terminal"},{"id":"t2","type":"terminal"}],"activeTabId":"t1"}},
+            "activeGroupId":"g1"
+        });
+        save_pane_layout(serde_json::Value::Null, base.clone()).unwrap();
+        let mut desired = base.clone();
+        desired["groups"]["g1"]["activeTabId"] = serde_json::json!("t2");
+        save_pane_layout(base.clone(), desired.clone()).unwrap();
+        let mut other = base.clone();
+        other["activeGroupId"] = serde_json::Value::Null;
+        save_pane_layout(base, other).unwrap();
+        desired.as_object_mut().unwrap().remove("activeGroupId");
+        assert_eq!(load_pane_layout(), desired);
     }
 
     #[test]
@@ -10129,7 +10122,7 @@ mod tests {
     fn keybindings_save_persists_custom_bindings_for_the_next_load() {
         let dir = TempDir::new().unwrap();
         let _guard = set_config_dir_override(dir.path().to_path_buf());
-        let desired = serde_json::json!({"search-files": "Ctrl+Shift+P"});
+        let desired = serde_json::json!([{"action":"command-palette", "key":"Ctrl+Shift+P"}]);
         save_keybindings(serde_json::Value::Null, desired.clone()).unwrap();
         assert_eq!(load_keybindings(), desired);
         assert!(dir.path().join(KEYBINDINGS_FILE).is_file());
