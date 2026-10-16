@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
-- Require authenticated same-owner peers in the relay prototype and atomically enforce room and token capacity, while allowing the second peer at the room limit (#1932-8398).
+- Require authenticated same-owner peers in the relay prototype and atomically enforce room and token capacity, while allowing the second peer at the room limit; terminate expired sockets and prevent stale peers from accessing recreated rooms (#1932-8398).
 
 ### Fixed
 

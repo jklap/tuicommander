@@ -25,6 +25,14 @@ pub struct SessionSlot {
 }
 
 impl SessionSlot {
+    fn contains_peer(&self, peer_id: u64, peer: &mpsc::WeakSender<Message>) -> bool {
+        peer.upgrade().is_some_and(|sender| {
+            self.peers
+                .iter()
+                .any(|(id, tx)| *id == peer_id && tx.same_channel(&sender))
+        })
+    }
+
     fn peer_count(&self) -> usize {
         self.peers.len()
     }
@@ -93,7 +101,7 @@ impl AppState {
         let now = Instant::now();
         let window = std::time::Duration::from_secs(3600);
 
-        let mut entry = self.rate_limits.entry(ip).or_insert_with(Vec::new);
+        let mut entry = self.rate_limits.entry(ip).or_default();
         let timestamps = entry.value_mut();
 
         // Remove expired entries
@@ -116,6 +124,9 @@ async fn resolve_token(state: &AppState, token: &str) -> Option<String> {
         return Some(hash);
     }
 
+    // DEFERRED (2026-10-16) — public-service exhaustion controls (pre-auth WS
+    // quotas and bounded/off-thread Argon2 cache misses) are outside this
+    // trusted-relay admission fix; do not expose the prototype publicly.
     // Slow path: iterate DB hashes and verify with argon2
     let conn = state.db.as_ref()?;
     let all_hashes = match crate::db::list_token_hashes(conn).await {
@@ -197,7 +208,7 @@ pub async fn handle_ws(state: Arc<AppState>, session_id: String, mut socket: Web
                     SessionSlot {
                         peers: vec![(0, tx.clone())],
                         next_peer_id: 1,
-                        token_hash: Some(token_hash),
+                        token_hash: Some(token_hash.clone()),
                         last_activity: Instant::now(),
                     },
                 );
@@ -205,6 +216,7 @@ pub async fn handle_ws(state: Arc<AppState>, session_id: String, mut socket: Web
             }
         }
     };
+    let peer = tx.downgrade();
     let peer_id = match admission {
         Ok(id) => id,
         Err((code, reason)) => {
@@ -218,14 +230,8 @@ pub async fn handle_ws(state: Arc<AppState>, session_id: String, mut socket: Web
 
     // Record session start in DB for stats tracking
     if let Some(conn) = &state.db {
-        let token_hash_for_db = state
-            .sessions
-            .get(&session_id)
-            .and_then(|s| s.token_hash.clone());
-        if let Some(hash) = token_hash_for_db {
-            if let Err(e) = crate::db::start_session(conn, &session_id, &hash).await {
-                warn!(error = %e, "failed to record session start");
-            }
+        if let Err(e) = crate::db::start_session(conn, &session_id, &token_hash).await {
+            warn!(error = %e, "failed to record session start");
         }
     }
 
@@ -233,6 +239,7 @@ pub async fn handle_ws(state: Arc<AppState>, session_id: String, mut socket: Web
     let peer_count = state
         .sessions
         .get(&session_id)
+        .filter(|s| s.contains_peer(peer_id, &peer))
         .map(|s| s.peer_count())
         .unwrap_or(0);
 
@@ -250,31 +257,40 @@ pub async fn handle_ws(state: Arc<AppState>, session_id: String, mut socket: Web
 
     // If we're the second peer, notify the first peer too
     if peer_count == 2 {
-        notify_other_peers(&state, &session_id, peer_id, PeerStatus::Connected).await;
+        notify_other_peers(&state, &session_id, peer_id, &peer, PeerStatus::Connected).await;
     }
 
     // Spawn writer task: reads from channel, writes to WebSocket
-    let writer_handle = tokio::spawn(write_loop(ws_sender, rx));
+    // Only the room owns strong senders after setup. Eviction closes the writer
+    // channel, and writer completion cancels the reader even on a silent socket.
+    drop(tx);
+    let mut writer_handle = tokio::spawn(write_loop(ws_sender, rx));
 
     // Reader loop: reads from WebSocket, forwards to other peer(s)
-    while let Some(Ok(msg)) = ws_receiver.next().await {
-        if matches!(&msg, Message::Close(_)) {
-            break;
+    loop {
+        tokio::select! {
+            _ = &mut writer_handle => break,
+            incoming = ws_receiver.next() => {
+                let Some(Ok(msg)) = incoming else { break };
+                if matches!(&msg, Message::Close(_)) {
+                    break;
+                }
+                process_message(&state, &session_id, peer_id, &peer, msg).await;
+            }
         }
-        process_message(&state, &session_id, peer_id, msg).await;
     }
 
     // Peer disconnected — clean up
     writer_handle.abort();
 
-    // Record session end in DB
-    if let Some(conn) = &state.db {
+    // A stale handler cannot remove or account for a replacement room.
+    let removed = remove_peer(&state, &session_id, peer_id, &peer).await;
+    if let Some(conn) = state.db.as_ref().filter(|_| removed) {
         if let Err(e) = crate::db::end_session(conn, &session_id, 0).await {
             warn!(error = %e, "failed to record session end");
         }
     }
 
-    remove_peer(&state, &session_id, peer_id).await;
     info!(session_id, peer_id, "peer left");
 }
 
@@ -291,37 +307,27 @@ async fn reject(socket: &mut WebSocket, code: u16, reason: &'static str) {
 async fn maybe_send_push(
     state: &Arc<AppState>,
     session_id: &str,
+    peer_id: u64,
+    peer: &mpsc::WeakSender<Message>,
     reason: &str,
     session_name: &str,
 ) {
-    // Check if the other peer is connected (session has 2 peers = both online)
-    let peer_count = state
-        .sessions
-        .get(session_id)
-        .map(|s| s.peer_count())
-        .unwrap_or(0);
-
-    if peer_count >= 2 {
-        // Other peer is connected, no push needed
-        return;
-    }
-
-    let (Some(vapid), Some(conn)) = (state.vapid.clone(), state.db.clone()) else {
-        // Push not configured or no DB
-        return;
-    };
-
-    // Find the token_hash for this session
-    let token_hash = match state
-        .sessions
-        .get(session_id)
-        .and_then(|s| s.token_hash.clone())
-    {
-        Some(h) => h,
-        None => {
-            warn!(session_id, "no token_hash for session, cannot send push");
+    // Resolve ownership and presence together, before any await. A stale handler
+    // must never use a recreated room's token for push delivery.
+    let token_hash = {
+        let Some(slot) = state.sessions.get(session_id) else {
+            return;
+        };
+        if !slot.contains_peer(peer_id, peer) || slot.peer_count() >= 2 {
             return;
         }
+        let Some(hash) = slot.token_hash.clone() else {
+            return;
+        };
+        hash
+    };
+    let (Some(vapid), Some(conn)) = (state.vapid.clone(), state.db.clone()) else {
+        return;
     };
 
     // Get all push subscriptions for this token
@@ -369,16 +375,27 @@ async fn maybe_send_push(
 }
 
 /// Process a single incoming message: update activity, forward to peers, handle push hints.
-async fn process_message(state: &Arc<AppState>, session_id: &str, peer_id: u64, msg: Message) {
+async fn process_message(
+    state: &Arc<AppState>,
+    session_id: &str,
+    peer_id: u64,
+    peer: &mpsc::WeakSender<Message>,
+    msg: Message,
+) {
     // Update activity timestamp
     if let Some(mut slot) = state.sessions.get_mut(session_id) {
+        if !slot.contains_peer(peer_id, peer) {
+            return;
+        }
         slot.last_activity = Instant::now();
+    } else {
+        return;
     }
 
     match &msg {
         Message::Binary(_) => {
             // Opaque E2E data — forward to other peers
-            forward_to_others(state, session_id, peer_id, msg).await;
+            forward_to_others(state, session_id, peer_id, peer, msg).await;
         }
         Message::Text(text) => {
             // Check if this is a relay:push hint
@@ -387,18 +404,34 @@ async fn process_message(state: &Arc<AppState>, session_id: &str, peer_id: u64, 
                 session_name,
             }) = serde_json::from_str::<RelayMessage>(text)
             {
-                maybe_send_push(state, session_id, &reason, &session_name).await;
+                maybe_send_push(state, session_id, peer_id, peer, &reason, &session_name).await;
             }
             // Always forward text to other peers
-            forward_to_others(state, session_id, peer_id, Message::Text(text.clone())).await;
+            forward_to_others(
+                state,
+                session_id,
+                peer_id,
+                peer,
+                Message::Text(text.clone()),
+            )
+            .await;
         }
         Message::Close(_) | Message::Ping(_) | Message::Pong(_) => {}
     }
 }
 
 /// Forward a message to all peers in the session except the sender.
-async fn forward_to_others(state: &AppState, session_id: &str, sender_id: u64, msg: Message) {
+async fn forward_to_others(
+    state: &AppState,
+    session_id: &str,
+    sender_id: u64,
+    peer: &mpsc::WeakSender<Message>,
+    msg: Message,
+) {
     if let Some(slot) = state.sessions.get(session_id) {
+        if !slot.contains_peer(sender_id, peer) {
+            return;
+        }
         for (id, peer_tx) in slot.peers.iter() {
             if *id != sender_id {
                 // Drop message if peer is slow (bounded channel)
@@ -413,12 +446,16 @@ async fn notify_other_peers(
     state: &AppState,
     session_id: &str,
     except_id: u64,
+    peer: &mpsc::WeakSender<Message>,
     status: PeerStatus,
 ) {
     let msg = serde_json::to_string(&RelayMessage::Status { peer: status })
         .expect("status serialization is infallible");
 
     if let Some(slot) = state.sessions.get(session_id) {
+        if !slot.contains_peer(except_id, peer) {
+            return;
+        }
         for (id, peer_tx) in slot.peers.iter() {
             if *id != except_id {
                 let _ = peer_tx.try_send(Message::Text(msg.clone().into()));
@@ -427,40 +464,35 @@ async fn notify_other_peers(
     }
 }
 
-/// Remove a peer from the session and notify remaining peers.
-async fn remove_peer(state: &AppState, session_id: &str, peer_id: u64) {
-    let remaining = {
-        let _guard = state.admission.lock().expect("admission lock poisoned");
-        let mut entry = match state.sessions.get_mut(session_id) {
-            Some(e) => e,
-            None => return,
-        };
-        let slot = entry.value_mut();
-        slot.peers.retain(|(id, _)| *id != peer_id);
-        let remaining = slot.peers.len();
-        drop(entry);
-        if remaining == 0 {
-            state.sessions.remove(session_id);
-        }
-        remaining
+/// Remove only the admitted channel, never a reused numeric ID in another room.
+async fn remove_peer(
+    state: &AppState,
+    session_id: &str,
+    peer_id: u64,
+    peer: &mpsc::WeakSender<Message>,
+) -> bool {
+    let _guard = state.admission.lock().expect("admission lock poisoned");
+    let Some(mut entry) = state.sessions.get_mut(session_id) else {
+        return false;
     };
-
-    if remaining > 0 {
-        // Notify remaining peers
-        notify_all_peers(state, session_id, PeerStatus::Disconnected).await;
+    let slot = entry.value_mut();
+    if !slot.contains_peer(peer_id, peer) {
+        return false;
     }
-}
-
-/// Notify all peers in a session of a status change.
-async fn notify_all_peers(state: &AppState, session_id: &str, status: PeerStatus) {
-    let msg = serde_json::to_string(&RelayMessage::Status { peer: status })
-        .expect("status serialization is infallible");
-
-    if let Some(slot) = state.sessions.get(session_id) {
-        for (_id, peer_tx) in slot.peers.iter() {
-            let _ = peer_tx.try_send(Message::Text(msg.clone().into()));
-        }
+    slot.peers.retain(|(id, _)| *id != peer_id);
+    let remaining = slot.peer_count();
+    let msg = serde_json::to_string(&RelayMessage::Status {
+        peer: PeerStatus::Disconnected,
+    })
+    .expect("status serialization is infallible");
+    for (_, tx) in &slot.peers {
+        let _ = tx.try_send(Message::Text(msg.clone().into()));
     }
+    drop(entry);
+    if remaining == 0 {
+        state.sessions.remove(session_id);
+    }
+    true
 }
 
 /// Writer loop: drains the channel and writes to the WebSocket sink.
@@ -485,24 +517,77 @@ pub fn spawn_session_reaper(
         loop {
             tokio::time::sleep(check_interval).await;
 
-            let mut to_remove = Vec::new();
-            for entry in state.sessions.iter() {
-                if entry.value().last_activity.elapsed() > timeout {
-                    to_remove.push(entry.key().clone());
+            // Check activity and evict under the same locks as admission. No
+            // stale candidate list can remove a refreshed or recreated room.
+            let _guard = state.admission.lock().expect("admission lock poisoned");
+            state.sessions.retain(|session_id, slot| {
+                if slot.last_activity.elapsed() <= timeout {
+                    return true;
                 }
-            }
-
-            for session_id in to_remove {
                 info!(session_id, "reaping idle session");
-
-                // Send timeout status to all connected peers before dropping
-                notify_all_peers(&state, &session_id, PeerStatus::Timeout).await;
-
-                // Remove the session — dropping senders closes the channels,
-                // which terminates the writer tasks and disconnects the peers.
-                let _guard = state.admission.lock().expect("admission lock poisoned");
-                state.sessions.remove(&session_id);
-            }
+                let msg = serde_json::to_string(&RelayMessage::Status {
+                    peer: PeerStatus::Timeout,
+                })
+                .expect("status serialization is infallible");
+                for (_, tx) in &slot.peers {
+                    let _ = tx.try_send(Message::Text(msg.clone().into()));
+                }
+                // Dropping the room's senders drains and closes each writer;
+                // handle_ws then cancels its reader and checks channel identity.
+                false
+            });
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Catches a stale handler acting on reused peer ID 0 while its old channel
+    // is still alive during setup or an in-flight operation.
+    #[tokio::test]
+    async fn stale_channel_cannot_refresh_forward_or_remove_replacement_peer() {
+        let state = AppState::new();
+        let (old_tx, _old_rx) = mpsc::channel(2);
+        let old_peer = old_tx.downgrade();
+        let (new_tx, mut new_rx) = mpsc::channel(2);
+        let previous_activity = Instant::now() - Duration::from_secs(1);
+        state.sessions.insert(
+            "reused".into(),
+            SessionSlot {
+                peers: vec![(0, new_tx)],
+                next_peer_id: 1,
+                token_hash: Some("replacement-owner".into()),
+                last_activity: previous_activity,
+            },
+        );
+        process_message(
+            &state,
+            "reused",
+            0,
+            &old_peer,
+            Message::Binary(vec![1].into()),
+        )
+        .await;
+        // Forwarding also revalidates after an await, independently of the
+        // initial activity check (text push processing can yield in between).
+        forward_to_others(
+            &state,
+            "reused",
+            1,
+            &old_peer,
+            Message::Binary(vec![2].into()),
+        )
+        .await;
+        assert!(!remove_peer(&state, "reused", 0, &old_peer).await);
+        let slot = state.sessions.get("reused").unwrap();
+        assert_eq!(slot.last_activity, previous_activity);
+        assert_eq!(slot.peer_count(), 1);
+        assert_eq!(slot.token_hash.as_deref(), Some("replacement-owner"));
+        assert!(matches!(
+            new_rx.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ));
+    }
 }

@@ -88,7 +88,9 @@ meet the intended service contract. In particular, HTTP token lookup uses an in-
 not accumulate byte statistics correctly. Anonymous peers and peers with a
 different room-owner token are rejected with close code 4003. A full room uses
 4001; creation beyond the token room limit uses 4002. Joining an existing room
-does not consume another room allowance.
+does not consume another room allowance. Idle eviction terminates both socket
+directions. Forwarding and cleanup check the admitted channel identity, so an
+expired socket cannot access or remove peers in a recreated room.
 
 ## Desktop configuration
 

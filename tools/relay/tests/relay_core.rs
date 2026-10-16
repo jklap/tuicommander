@@ -429,6 +429,16 @@ async fn relay_admission_silent_peer_is_rejected_after_auth_timeout() {
 /// An expired socket must not send into a room recreated under a different owner.
 #[tokio::test]
 async fn expired_peer_cannot_forward_into_recreated_room_owned_by_another_token() {
+    expired_peer_cannot_access_recreated_room("other-owner").await;
+}
+
+// Catches stale cleanup deleting a new peer when the same owner reuses a room.
+#[tokio::test]
+async fn expired_peer_cannot_remove_recreated_room_owned_by_same_token() {
+    expired_peer_cannot_access_recreated_room("test-owner").await;
+}
+
+async fn expired_peer_cannot_access_recreated_room(token: &str) {
     let state = AppState::new();
     let addr = start_relay_with_state(state.clone()).await;
     let mut expired = connect_ws(addr, "reused-room").await;
@@ -457,13 +467,13 @@ async fn expired_peer_cannot_forward_into_recreated_room_owned_by_another_token(
     let url = format!("ws://{addr}/ws/reused-room");
     let (mut owner_a, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
     owner_a
-        .send(Message::Text("Bearer other-owner".into()))
+        .send(Message::Text(format!("Bearer {token}").into()))
         .await
         .unwrap();
     assert!(read_text(&mut owner_a).await.contains("waiting"));
     let (mut owner_b, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
     owner_b
-        .send(Message::Text("Bearer other-owner".into()))
+        .send(Message::Text(format!("Bearer {token}").into()))
         .await
         .unwrap();
     assert!(read_text(&mut owner_b).await.contains("connected"));
@@ -481,4 +491,39 @@ async fn expired_peer_cannot_forward_into_recreated_room_owned_by_another_token(
             "expired peer forwarded data into another token's recreated room"
         );
     }
+    // Eviction must terminate the old socket, not just hide its room entry.
+    let closed = tokio::time::timeout(Duration::from_secs(5), expired.next())
+        .await
+        .expect("expired socket reader remained alive");
+    assert!(
+        matches!(closed, None | Some(Err(_)) | Some(Ok(Message::Close(_)))),
+        "expired socket remained open: {closed:?}"
+    );
+
+    // A positive delivery barrier proves both replacement peers survive stale
+    // handler cleanup and that the room remains usable at its two-peer limit.
+    let fresh = b"replacement-owner-data".to_vec();
+    owner_a
+        .send(Message::Binary(fresh.clone().into()))
+        .await
+        .unwrap();
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(5), read_binary(&mut owner_b))
+            .await
+            .expect("replacement room lost a peer"),
+        fresh
+    );
+    assert_eq!(
+        state
+            .sessions
+            .get("reused-room")
+            .unwrap()
+            .token_hash
+            .as_deref(),
+        Some(if token == "test-owner" {
+            "owner-hash"
+        } else {
+            "other-hash"
+        })
+    );
 }
