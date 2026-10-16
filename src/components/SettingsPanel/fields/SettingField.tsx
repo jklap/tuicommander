@@ -5,6 +5,7 @@ export interface SettingFieldProps {
 	label: string;
 	hint?: string;
 	error?: string;
+	help?: JSX.Element;
 	row?: boolean;
 	disabled?: boolean;
 }
@@ -23,6 +24,7 @@ export const SettingField: Component<
 			fallback={
 				<div class={s.group}>
 					<label for={id}>{props.label}</label>
+					{props.help}
 					{props.children(id, descriptionId(), descriptionId)}
 					<Show when={props.hint}>
 						<p id={`${id}-hint`} class={s.hint}>
@@ -40,6 +42,7 @@ export const SettingField: Component<
 			<div class={s.settingRow}>
 				<div class={s.settingRowText}>
 					<label for={id}>{props.label}</label>
+					{props.help}
 					<Show when={props.hint}>
 						<p id={`${id}-hint`} class={s.hint}>
 							{props.hint}

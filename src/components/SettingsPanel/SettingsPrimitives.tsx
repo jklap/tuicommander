@@ -1,20 +1,33 @@
 import { createUniqueId, type JSX, Show } from "solid-js";
 import { StatusBadge } from "../ui/StatusBadge";
 import { SettingField } from "./fields/SettingField";
+import { InfoBadge } from "./InfoBadge";
+import fieldStyles from "./Settings.module.css";
 import s from "./SettingsPrimitives.module.css";
 
-export function SettingPageHeader(props: { title: string; description: string; scope: string; source?: string }) {
+export function SettingPageHeader(props: {
+	title: string;
+	description: string;
+	scope: string;
+	source?: string;
+	breadcrumb?: string;
+}) {
 	return (
-		<header class={s.pageHeader}>
-			<div>
-				<h2>{props.title}</h2>
-				<p>{props.description}</p>
-				<Show when={props.source}>
-					<p class={s.source}>{props.source}</p>
-				</Show>
-			</div>
-			<StatusBadge label={props.scope} />
-		</header>
+		<>
+			<Show when={props.breadcrumb}>
+				<div class={s.breadcrumb}>{props.breadcrumb}</div>
+			</Show>
+			<header class={s.pageHeader}>
+				<div>
+					<h2>{props.title}</h2>
+					<p>{props.description}</p>
+					<Show when={props.source}>
+						<p class={s.source}>{props.source}</p>
+					</Show>
+				</div>
+				<StatusBadge label={props.scope} />
+			</header>
+		</>
 	);
 }
 
@@ -36,10 +49,23 @@ export function SettingRow(props: {
 	label: string;
 	hint?: string;
 	error?: string;
+	help?: JSX.Element;
 	children: (id: string, descriptionId: () => string | undefined) => JSX.Element;
 }) {
 	return (
-		<SettingField label={props.label} hint={props.hint} error={props.error} row>
+		<SettingField
+			label={props.label}
+			hint={props.hint}
+			error={props.error}
+			help={
+				props.help && (
+					<span class={fieldStyles.settingHelp} tabIndex={0}>
+						<InfoBadge>{props.help}</InfoBadge>
+					</span>
+				)
+			}
+			row
+		>
 			{(id, _hintId, descriptionId) => props.children(id, descriptionId)}
 		</SettingField>
 	);

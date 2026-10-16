@@ -3,6 +3,7 @@ import { createSignal } from "solid-js";
 import { describe, expect, it } from "vitest";
 import { Input } from "../../ui/Input";
 import { DangerZone, SectionCard, SettingRow, StatusSummary } from "../SettingsPrimitives";
+import { SettingsShell } from "../SettingsShell";
 
 describe("Settings presentation contract", () => {
 	// Catches: row restyling loses the input label or leaves validation inaccessible.
@@ -57,5 +58,33 @@ describe("Settings presentation contract", () => {
 		expect(calls).toBe(0);
 		fireEvent.click(view.getByRole("button", { name: "Review disconnect" }));
 		expect(calls).toBe(1);
+	});
+	// Catches: compact navigation offers group headings as pages or selects a different page without notifying its owner.
+	it("routes the compact page selector through the existing tab callback", () => {
+		let selected = "";
+		const view = render(() => (
+			<SettingsShell
+				visible
+				title="Settings"
+				onClose={() => {}}
+				activeTab="general"
+				onTabChange={(key) => {
+					selected = key;
+				}}
+				tabs={[
+					{ key: "__label__:app", label: "Application" },
+					{ key: "general", label: "General" },
+					{ key: "__sep__", label: "" },
+					{ key: "appearance", label: "Appearance" },
+				]}
+			>
+				<p>Existing page</p>
+			</SettingsShell>
+		));
+		const select = view.getByRole("combobox", { name: "Settings page" });
+		expect(select).toHaveValue("general");
+		expect(view.queryByRole("option", { name: "Application" })).toBeNull();
+		fireEvent.change(select, { target: { value: "appearance" } });
+		expect(selected).toBe("appearance");
 	});
 });

@@ -164,9 +164,9 @@
 }
 
 .navItem.active {
-  background: color-mix(in srgb, var(--accent) 12%, var(--bg-highlight));
+  background: var(--bg-highlight);
   color: var(--fg-primary);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent);
+  box-shadow: inset 3px 0 0 var(--accent);
   border-radius: var(--radius-sm);
 }
 
@@ -1469,7 +1469,7 @@
 .settingRow { display: flex; justify-content: space-between; align-items: center; gap: 20px; padding: 12px 0; border-bottom: 1px solid var(--border); }
 .settingRow:last-child { border-bottom: 0; }
 .settingRowText { flex: 1; min-width: 0; }
-.settingRowText label { font-size: 13px; color: var(--fg-primary); }
+.settingRowText label { font-size: 13px; font-weight: 600; color: var(--fg-primary); }
 .settingRowText .hint { color: var(--fg-secondary); margin-bottom: 0; }
 .settingRowControl { flex: 0 1 260px; min-width: 0; max-width: 48%; }
 .settingRowControl > [data-form-control] { width: 100%; }
@@ -1486,3 +1486,15 @@
   .navItem, .close, .footerDone, .footerReset, .content button { min-height: 44px; }
   .content { padding: 16px; }
 }
+
+.compactNav { display: none; }
+@media (max-width: 600px) {
+ .nav > :not(.compactNav) { display: none; }
+ .nav { overflow: visible; padding: 8px 16px; max-height: none; }
+ .compactNav { display: block; }
+ .compactNav select { width: 100%; min-height: 44px; }
+}
+
+.settingRowText .infoBadge { width: 14px; height: 14px; border: 1px solid var(--fg-muted); background: transparent; font-size: 10px; line-height: 1; }
+.settingHelp { display: inline-flex; border-radius: 50%; }
+.settingHelp:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }

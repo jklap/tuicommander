@@ -1,5 +1,6 @@
 import { type Component, For, type JSX, Show } from "solid-js";
 import { cx } from "../../utils";
+import { Select } from "../ui/Select";
 import s from "./Settings.module.css";
 
 const NAV_MIN_WIDTH = 140;
@@ -95,6 +96,17 @@ export const SettingsShell: Component<SettingsShellProps> = (props) => {
 					{/* Body: nav sidebar + scrollable content */}
 					<div class={s.body}>
 						<nav class={s.nav} style={{ width: `${navWidth()}px` }}>
+							<div class={s.compactNav}>
+								<Select
+									aria-label="Settings page"
+									value={props.activeTab}
+									onChange={(event) => props.onTabChange(event.currentTarget.value)}
+								>
+									<For each={props.tabs.filter((tab) => tab.key !== "__sep__" && !tab.key.startsWith("__label__:"))}>
+										{(tab) => <option value={tab.key}>{tab.label}</option>}
+									</For>
+								</Select>
+							</div>
 							{props.navHeader}
 							<For each={props.tabs}>
 								{(tab) =>

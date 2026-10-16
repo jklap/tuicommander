@@ -4,6 +4,7 @@ import { render } from "solid-js/web";
 import commander from "../../../../src-tauri/src/themes/commander.json";
 import paper from "../../../../src-tauri/src/themes/vscode-light.json";
 import "../../../global.css";
+import { createMemo } from "solid-js";
 import { Input } from "../../ui/Input";
 import { Select } from "../../ui/Select";
 import { StatusBadge } from "../../ui/StatusBadge";
@@ -37,24 +38,37 @@ for (const [key, value] of Object.entries(theme.appChrome))
 document.body.style.margin = "0";
 function Preview() {
 	const [language, setLanguage] = createSignal("en");
+	const [query, setQuery] = createSignal("");
+	const tabs = createMemo(() =>
+		[
+			{ key: "__label__:app", label: "Application" },
+			{ key: "general", label: "General" },
+			{ key: "appearance", label: "Appearance" },
+			{ key: "notifications", label: "Notifications" },
+			{ key: "__label__:workspace", label: "Workspace" },
+			{ key: "terminal", label: "Terminal" },
+		].filter((tab) => tab.key.startsWith("__label__:") || tab.label.toLowerCase().includes(query().toLowerCase())),
+	);
 	return (
 		<SettingsShell
 			visible
 			onClose={() => {}}
 			title="Settings"
-			tabs={[
-				{ key: "__label__:app", label: "Application" },
-				{ key: "general", label: "General" },
-				{ key: "appearance", label: "Appearance" },
-				{ key: "notifications", label: "Notifications" },
-				{ key: "__label__:workspace", label: "Workspace" },
-				{ key: "terminal", label: "Terminal" },
-			]}
+			tabs={tabs()}
+			navHeader={
+				<Input
+					aria-label="Find a page"
+					placeholder="Find a page..."
+					value={query()}
+					onInput={(event) => setQuery(event.currentTarget.value)}
+				/>
+			}
 			activeTab="general"
 			onTabChange={() => {}}
 		>
 			<SettingPageHeader
 				title="General"
+				breadcrumb="Application / General"
 				description="Make this workspace feel right. Changes keep their existing scope."
 				scope="Application defaults"
 				source="Isolated fixture · not live host state"
@@ -76,6 +90,7 @@ function Preview() {
 				<SettingRow
 					label="Custom launcher"
 					hint="Long paths wrap without hiding the control or its keyboard label."
+					help="Define executable arguments with repository and file placeholders. One argument per line."
 					error="Illustrative validation message; draft is retained."
 				>
 					{(id, hint) => <Input id={id} aria-describedby={hint()} value="/workspace/tools/editor" />}
