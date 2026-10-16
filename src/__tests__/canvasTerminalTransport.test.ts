@@ -165,6 +165,36 @@ describe("canvasTerminalTransport", () => {
 			});
 		});
 
+		// Catches rapid tab hide/show leaving Rust hidden when IPC completes out of order.
+		it("keeps the newest visibility after a delayed hide completes", async () => {
+			const { invoke } = await import("@tauri-apps/api/core");
+			await mockEpochs(42);
+			const transport = new TauriTransport("session-1");
+			await transport.subscribe(vi.fn());
+			let backendVisible = false;
+			let finishHide: (() => void) | undefined;
+			(invoke as ReturnType<typeof vi.fn>).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+				if (cmd !== "ack_terminal_frame" || typeof args?.visible !== "boolean") return Promise.resolve();
+				if (args.visible) {
+					backendVisible = true;
+					return Promise.resolve();
+				}
+				return new Promise<void>((resolve) => {
+					finishHide = () => {
+						backendVisible = false;
+						resolve();
+					};
+				});
+			});
+			transport.setVisible(false);
+			transport.setVisible(true);
+			await Promise.resolve();
+			finishHide?.();
+			await Promise.resolve();
+			await Promise.resolve();
+			expect(backendVisible, "the visible tab must not remain excluded from grid delivery").toBe(true);
+		});
+
 		it("delegates invoke calls to Tauri invoke", async () => {
 			const { invoke } = await import("@tauri-apps/api/core");
 			(invoke as ReturnType<typeof vi.fn>).mockResolvedValue("result");
