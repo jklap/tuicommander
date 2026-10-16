@@ -51,7 +51,7 @@ it("copies all marked answer blocks in one turn without merging the next turn", 
 	const copies = getAllByRole("button", { name: "Copy assistant message" });
 	expect(copies).toHaveLength(2);
 	await fireEvent.click(copies[0]);
-	expect(clipboard).toHaveBeenCalledWith("💬 First answer.\n\n💬 Second answer.\n\n💬 Third paragraph.");
+	expect(clipboard).toHaveBeenCalledWith("First answer.\n\nSecond answer.\n\nThird paragraph.");
 });
 
 // Catches: raw Bash commands obscuring descriptions or non-Claude tools borrowing Claude descriptions.
