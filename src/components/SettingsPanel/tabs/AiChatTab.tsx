@@ -184,7 +184,7 @@ export const AiChatTab: Component<{
 								)}
 							>
 								{(id, descriptionId) => (
-									<div class={s.passwordRow}>
+									<div class={layout.modelControls}>
 										<Select
 											id={id}
 											aria-describedby={descriptionId()}

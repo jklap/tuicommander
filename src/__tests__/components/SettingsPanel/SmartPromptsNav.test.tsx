@@ -121,7 +121,7 @@ describe("SettingsPanel — Smart Prompts navigation", () => {
 
 		// Expand the prompt row to reveal the editor
 		const header = Array.from(container.querySelectorAll("button[aria-expanded]")).find((el) =>
-			el.textContent?.includes("Test Smart Prompt"),
+			el.getAttribute("aria-label")?.includes("Test Smart Prompt"),
 		);
 		expect(header).toBeTruthy();
 		fireEvent.click(header!);

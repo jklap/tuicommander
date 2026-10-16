@@ -182,7 +182,7 @@ describe("DictationSettings – Model Selector", () => {
 	it("shows download button for not-downloaded models", () => {
 		const { container } = render(() => <DictationSettings />);
 		const rows = container.querySelectorAll("[data-whisper-model]");
-		const downloadBtn = rows[0].querySelector(".modelDownload");
+		const downloadBtn = rows[0].querySelector('button[title="Download model"]');
 		expect(downloadBtn).not.toBeNull();
 		expect(downloadBtn!.textContent).toContain("Download");
 	});
@@ -190,7 +190,7 @@ describe("DictationSettings – Model Selector", () => {
 	it("shows delete button for downloaded models", () => {
 		const { container } = render(() => <DictationSettings />);
 		const rows = container.querySelectorAll("[data-whisper-model]");
-		const deleteBtn = rows[1].querySelector(".modelDelete");
+		const deleteBtn = rows[1].querySelector('button[title="Delete model"]');
 		expect(deleteBtn).not.toBeNull();
 	});
 
@@ -216,7 +216,7 @@ describe("DictationSettings – Model Selector", () => {
 
 		const { container } = render(() => <DictationSettings />);
 		const rows = container.querySelectorAll("[data-whisper-model]");
-		const selectBtn = rows[0].querySelector(".modelSelect");
+		const selectBtn = rows[0].querySelector('button[title="Use model"]');
 		expect(selectBtn).not.toBeNull();
 		fireEvent.click(selectBtn!);
 		expect(mockStore.setModel).toHaveBeenCalledWith("small");
@@ -225,7 +225,7 @@ describe("DictationSettings – Model Selector", () => {
 	it("download button calls downloadModel with model name", () => {
 		const { container } = render(() => <DictationSettings />);
 		const rows = container.querySelectorAll("[data-whisper-model]");
-		const downloadBtn = rows[0].querySelector(".modelDownload");
+		const downloadBtn = rows[0].querySelector('button[title="Download model"]');
 		fireEvent.click(downloadBtn!);
 		expect(mockStore.downloadModel).toHaveBeenCalledWith("small");
 	});
@@ -233,7 +233,7 @@ describe("DictationSettings – Model Selector", () => {
 	it("delete button calls deleteModel with model name", () => {
 		const { container } = render(() => <DictationSettings />);
 		const rows = container.querySelectorAll("[data-whisper-model]");
-		const deleteBtn = rows[1].querySelector(".modelDelete");
+		const deleteBtn = rows[1].querySelector('button[title="Delete model"]');
 		fireEvent.click(deleteBtn!);
 		expect(mockStore.deleteModel).toHaveBeenCalledWith("large-v3-turbo");
 	});
@@ -242,7 +242,7 @@ describe("DictationSettings – Model Selector", () => {
 		const { container } = render(() => <DictationSettings />);
 		const rows = container.querySelectorAll("[data-whisper-model]");
 		// Not-downloaded model should not have a select button
-		const selectBtn = rows[0].querySelector(".modelSelect");
+		const selectBtn = rows[0].querySelector('button[title="Use model"]');
 		expect(selectBtn).toBeNull();
 	});
 

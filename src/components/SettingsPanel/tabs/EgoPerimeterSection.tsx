@@ -84,8 +84,8 @@ export const EgoPerimeterSection: Component<{ client?: EgoPerimeterClient }> = (
 								{t("perimeter.target", "Editing ego user configuration:")}{" "}
 								{loaded().profile ?? t("perimeter.userDefaults", "user defaults")}
 							</p>
-							<SettingRow label="Workspace · set in TUICommander" hint={loaded().effective.workspace}>
-								{() => <StatusBadge label="Workspace" />}
+							<SettingRow label="Workspace · set in TUICommander">
+								{() => <span>{loaded().effective.workspace}</span>}
 							</SettingRow>
 							<For each={loaded().effective.roots}>
 								{(root) => (

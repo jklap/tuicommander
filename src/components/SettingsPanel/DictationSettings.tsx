@@ -72,15 +72,17 @@ const ModelRow: Component<{ model: ModelInfo }> = (props) => {
 				actions={
 					<>
 						<Show when={props.model.downloaded && !isSelected()}>
-							<button class={d.modelSelect} onClick={() => dictationStore.setModel(props.model.name)}>
+							<button title="Use model" class={s.testBtn} onClick={() => dictationStore.setModel(props.model.name)}>
 								{t("dictation.use", "Use")}
 							</button>
 						</Show>
-						<Show when={props.model.downloaded && isSelected()}>
-							<span class={d.modelActiveLabel}>{t("dictation.active", "Active")}</span>
-						</Show>
+
 						<Show when={!props.model.downloaded && !isDownloading()}>
-							<button class={d.modelDownload} onClick={() => dictationStore.downloadModel(props.model.name)}>
+							<button
+								title="Download model"
+								class={s.testBtn}
+								onClick={() => dictationStore.downloadModel(props.model.name)}
+							>
 								{t("dictation.download", "Download")}
 							</button>
 						</Show>
@@ -97,11 +99,11 @@ const ModelRow: Component<{ model: ModelInfo }> = (props) => {
 						</Show>
 						<Show when={props.model.downloaded}>
 							<button
-								class={d.modelDelete}
+								class={s.testBtn}
 								onClick={() => dictationStore.deleteModel(props.model.name)}
 								title={t("dictation.deleteModel", "Delete model")}
 							>
-								&times;
+								{t("dictation.removeModel", "Remove")}
 							</button>
 						</Show>
 					</>
@@ -1174,7 +1176,13 @@ const HandsFreeControls: Component = () => {
 				<StatusSummary
 					label={armed() ? t("dictation.handsFreeRunning", "Running") : t("dictation.handsFreeStopped", "Stopped")}
 					tone={status()?.phase === "error" ? "error" : armed() ? "success" : undefined}
-					source={status() ? phaseLabel() : "No conversation is running."}
+					source={
+						status() &&
+						phaseLabel() !==
+							(armed() ? t("dictation.handsFreeRunning", "Running") : t("dictation.handsFreeStopped", "Stopped"))
+							? phaseLabel()
+							: "Hands-free conversation"
+					}
 				/>
 
 				<Show when={status()}>

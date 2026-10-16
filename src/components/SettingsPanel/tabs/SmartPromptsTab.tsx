@@ -621,10 +621,12 @@ const PromptRow: Component<{ prompt: SavedPrompt; onEdit: (id: string) => void; 
 					<>
 						<button
 							class={s.testBtn}
+							aria-label={`Edit ${props.prompt.name}`}
+							title={`Edit ${props.prompt.name}`}
 							aria-expanded={props.selected() === props.prompt.id}
 							onClick={() => props.onEdit(props.prompt.id)}
 						>
-							Edit {props.prompt.name}
+							Edit
 						</button>
 						<input
 							class={s.rowSwitch}
