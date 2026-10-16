@@ -11,6 +11,7 @@ import { comboToDisplay, keyFor } from "../../../utils/hotkey";
 import { keyEventToCombo, validateGlobalHotkeyCombo } from "../../../utils/keyRecorder";
 import { KeyComboCapture } from "../../shared/KeyComboCapture";
 import { Input } from "../../ui/Input";
+import { ContextualHelp } from "../ContextualHelp";
 import s from "../Settings.module.css";
 import { SectionCard, SettingPageHeader, SettingRow } from "../SettingsPrimitives";
 import w from "./WorkspaceTabs.module.css";
@@ -749,6 +750,7 @@ export const KeyboardShortcutsTab: Component = () => {
 			<Show when={pluginCommandRows().length > 0}>
 				<div class={w.shortcutCategory}>
 					<label>{t("helpPanel.pluginCommands", "Plugin Commands")}</label>
+					<ContextualHelp label={t("helpPanel.pluginCommands", "Plugin Commands")} />
 					<table class={w.shortcuts}>
 						<For each={pluginCommandRows()}>
 							{(cmd) => (

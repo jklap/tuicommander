@@ -498,3 +498,5 @@ button.stopConversation {
   background: currentColor;
   flex-shrink: 0;
 }
+
+.hotkeyRow { width: 100%; }

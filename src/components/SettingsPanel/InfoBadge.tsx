@@ -9,12 +9,19 @@ const TIP_GAP = 6;
  * badge rectangle, clamped to the viewport, so a scrolling ancestor
  * (`overflow-y: auto` makes overflow-x clip too) cannot cut it off.
  */
-export const InfoBadge: Component<{ children: JSX.Element }> = (props) => {
+export const InfoBadge: Component<{ children: JSX.Element; label?: string }> = (props) => {
 	let tip!: HTMLSpanElement;
 	let badgeElement!: HTMLSpanElement;
 	const id = createUniqueId();
 	const [hovered, setHovered] = createSignal(false);
 	const [focused, setFocused] = createSignal(false);
+	const [pinned, setPinned] = createSignal(false);
+	const [dismissed, setDismissed] = createSignal(false);
+	const visible = () => !dismissed() && (pinned() || hovered() || focused());
+	const dismiss = () => {
+		setPinned(false);
+		setDismissed(true);
+	};
 	const [positioned, setPositioned] = createSignal(false);
 
 	const place = () => {
@@ -31,14 +38,27 @@ export const InfoBadge: Component<{ children: JSX.Element }> = (props) => {
 
 	onMount(() => {
 		const reposition = () => {
-			if (hovered() || focused()) place();
+			if (visible()) place();
 		};
+		const outside = (event: PointerEvent) => {
+			if (!badgeElement.contains(event.target as Node)) dismiss();
+		};
+		const onEscape = (event: KeyboardEvent) => {
+			if (event.key === "Escape" && visible()) {
+				event.stopPropagation();
+				dismiss();
+			}
+		};
+		document.addEventListener("pointerdown", outside);
+		document.addEventListener("keydown", onEscape, true);
 		const observer = new ResizeObserver(reposition);
 		observer.observe(tip);
 		window.addEventListener("resize", reposition);
 		window.addEventListener("scroll", reposition, true);
 		onCleanup(() => {
 			observer.disconnect();
+			document.removeEventListener("pointerdown", outside);
+			document.removeEventListener("keydown", onEscape, true);
 			window.removeEventListener("resize", reposition);
 			window.removeEventListener("scroll", reposition, true);
 		});
@@ -49,14 +69,33 @@ export const InfoBadge: Component<{ children: JSX.Element }> = (props) => {
 			ref={badgeElement}
 			class={s.infoBadge}
 			tabIndex={0}
+			role="button"
+			aria-label={props.label ?? "Show contextual help"}
+			aria-expanded={positioned() && visible()}
+			onClick={(event) => {
+				event.preventDefault();
+				event.stopPropagation();
+				place();
+				setDismissed(false);
+				setPinned(!pinned());
+				if (!pinned()) setDismissed(true);
+			}}
+			onKeyDown={(event) => {
+				if (event.key === "Enter" || event.key === " ") {
+					event.preventDefault();
+					event.currentTarget.click();
+				}
+			}}
 			aria-describedby={id}
 			onMouseEnter={() => {
 				place();
+				setDismissed(false);
 				setHovered(true);
 			}}
 			onMouseLeave={() => setHovered(false)}
 			onFocus={() => {
 				place();
+				setDismissed(false);
 				setFocused(true);
 			}}
 			onBlur={() => setFocused(false)}
@@ -67,7 +106,7 @@ export const InfoBadge: Component<{ children: JSX.Element }> = (props) => {
 				id={id}
 				class={s.infoBadgeTip}
 				role="tooltip"
-				data-visible={positioned() && (hovered() || focused()) ? "true" : undefined}
+				data-visible={positioned() && visible() ? "true" : undefined}
 			>
 				{props.children}
 			</span>

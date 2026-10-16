@@ -10,6 +10,8 @@ const NAV_DEFAULT_WIDTH = 232;
 export interface SettingsShellTab {
 	key: string;
 	label: string;
+	/** Optional visual identity; accessible name remains the tab label. */
+	icon?: JSX.Element;
 	color?: string;
 }
 
@@ -113,7 +115,12 @@ export const SettingsShell: Component<SettingsShellProps> = (props) => {
 									tab.key === "__sep__" ? (
 										<div class={s.navSeparator} />
 									) : tab.key.startsWith("__label__:") ? (
-										<div class={s.navLabel}>{tab.label}</div>
+										<div class={s.navLabel}>
+											<Show when={tab.icon}>
+												<span aria-hidden="true">{tab.icon}</span>{" "}
+											</Show>
+											{tab.label}
+										</div>
 									) : (
 										<button
 											class={cx(
@@ -124,6 +131,9 @@ export const SettingsShell: Component<SettingsShellProps> = (props) => {
 											style={tab.color ? { color: tab.color } : undefined}
 											onClick={() => props.onTabChange(tab.key)}
 										>
+											<Show when={tab.icon}>
+												<span aria-hidden="true">{tab.icon}</span>{" "}
+											</Show>
 											{tab.label}
 										</button>
 									)

@@ -11,7 +11,9 @@ import { KeyComboCapture } from "../../shared/KeyComboCapture";
 import { Input } from "../../ui/Input";
 import { Select } from "../../ui/Select";
 import { Textarea } from "../../ui/Textarea";
+import { ContextualHelp } from "../ContextualHelp";
 import s from "../Settings.module.css";
+import { SectionCard, SettingPageHeader, SettingRow } from "../SettingsPrimitives";
 import sp from "./SmartPromptsTab.module.css";
 
 // All placements for the checkbox grid
@@ -321,6 +323,7 @@ const PromptEditor: Component<{
 			{/* Content + Variable dropdown */}
 			<div class={sp.editorSection}>
 				<label class={sp.editorLabel}>Content *</label>
+				<ContextualHelp label="Content *" />
 				<Textarea
 					class={sp.editorTextarea}
 					value={props.prompt.content}
@@ -353,6 +356,7 @@ const PromptEditor: Component<{
 			<div class={sp.editorRow}>
 				<div class={sp.editorSection} style={{ flex: "1" }}>
 					<label class={sp.editorLabel}>Execution Mode</label>
+					<ContextualHelp label="Execution Mode" />
 					<Select
 						class={sp.editorInput}
 						value={props.prompt.executionMode ?? "inject"}
@@ -379,6 +383,7 @@ const PromptEditor: Component<{
 				<Show when={(props.prompt.executionMode ?? "inject") === "inject"}>
 					<div class={sp.editorSection} style={{ flex: "1" }}>
 						<label class={sp.editorLabel}>Target</label>
+						<ContextualHelp label="Target" />
 						<Select
 							class={sp.editorInput}
 							value={props.prompt.injectTarget ?? "compose"}
@@ -406,6 +411,7 @@ const PromptEditor: Component<{
 				>
 					<div class={sp.editorSection} style={{ flex: "1" }}>
 						<label class={sp.editorLabel}>Auto-execute</label>
+						<ContextualHelp label="Auto-execute" />
 						<label class={sp.autoExecLabel}>
 							<input type="checkbox" checked={props.prompt.autoExecute ?? false} onChange={handleAutoExecuteToggle} />
 							<span>Send immediately</span>
@@ -419,6 +425,7 @@ const PromptEditor: Component<{
 			<Show when={props.prompt.executionMode === "headless"}>
 				<div class={sp.editorSection}>
 					<label class={sp.editorLabel}>Preferred Agent</label>
+					<ContextualHelp label="Preferred Agent" />
 					<Select
 						class={sp.editorInput}
 						value={props.prompt.preferredAgent ?? ""}
@@ -458,6 +465,7 @@ const PromptEditor: Component<{
 			<Show when={(props.prompt.executionMode ?? "inject") !== "inject"}>
 				<div class={sp.editorSection}>
 					<label class={sp.editorLabel}>Output Target</label>
+					<ContextualHelp label="Output Target" />
 					<Select
 						class={sp.editorInput}
 						value={props.prompt.outputTarget ?? ""}
@@ -565,9 +573,6 @@ const PromptRow: Component<{ prompt: SavedPrompt; headlessAgents: AgentType[] }>
 					<input type="checkbox" checked={isEnabled()} onChange={handleToggle} />
 				</label>
 
-				{/* Icon placeholder */}
-				<span class={sp.promptIcon}>{props.prompt.icon ?? ""}</span>
-
 				{/* Name */}
 				<span class={sp.promptName} style={{ opacity: isEnabled() ? 1 : 0.5 }}>
 					{props.prompt.name}
@@ -585,7 +590,7 @@ const PromptRow: Component<{ prompt: SavedPrompt; headlessAgents: AgentType[] }>
 							</span>
 						)}
 					</For>
-					<Show when={props.prompt.builtIn}>
+					<Show when={props.prompt.builtIn} fallback={<span class={sp.badge}>Custom</span>}>
 						<span class={sp.badge} data-type="builtin">
 							Built-in
 						</span>
@@ -621,7 +626,7 @@ const CategoryGroup: Component<{ category: string; prompts: SavedPrompt[]; headl
 				<span class={sp.categoryChevron} classList={{ [sp.open]: open() }}>
 					&#9654;
 				</span>
-				<span>{props.category}</span>
+				<span>{props.category === "pr" ? "PR" : props.category === "ci" ? "CI" : props.category}</span>
 				<span class={sp.categoryCount}>{props.prompts.length}</span>
 			</div>
 			<Show when={open()}>
@@ -680,56 +685,71 @@ export const SmartPromptsTab: Component = () => {
 
 	return (
 		<div class={s.section}>
-			<h3>Smart Prompts</h3>
-			<p class={s.hint} style={{ "margin-bottom": "16px" }}>
-				AI-powered actions that can be triggered from the toolbar, context menus, and command palette. Enable, disable,
-				or customize the prompt content and placement for each action.
-			</p>
-
-			<div class={s.group}>
-				<label>Headless Agent</label>
-				<Select
-					value={agentConfigsStore.getHeadlessAgent() ?? ""}
-					onChange={(e) => agentConfigsStore.setHeadlessAgent(toHeadlessAgentChoice(e.currentTarget.value))}
-				>
-					<option value="">— Not configured —</option>
-					<For each={headlessAgents()}>
-						{(type) => {
-							const configs = () => agentConfigsStore.getRunConfigs(type);
-							return (
-								<Show when={configs().length > 0} fallback={<option value={type}>{AGENTS[type]?.name ?? type}</option>}>
-									<optgroup label={AGENTS[type]?.name ?? type}>
-										<option value={type}>{AGENTS[type]?.name ?? type} (default)</option>
-										<For each={configs()}>
-											{(cfg) => (
-												<option value={`${type}:${cfg.name}`}>
-													{cfg.name}
-													{cfg.is_default ? " (default)" : ""}
-												</option>
-											)}
-										</For>
-									</optgroup>
-								</Show>
-							);
-						}}
-					</For>
-					<option value="api">API (via ego)</option>
-				</Select>
-				<p class={s.hint}>
-					Default agent for headless prompts. Individual prompts can override this in their settings.
-					{detection.loading() ? " Detecting..." : ""}
+			<SettingPageHeader
+				title="Smart Prompts"
+				description="Configure reusable actions and their execution behavior."
+				scope="Application"
+				breadcrumb="AI / Smart Prompts"
+			/>
+			<SectionCard title="Background agent">
+				<p class={s.hint} style={{ "margin-bottom": "16px" }}>
+					AI-powered actions that can be triggered from the toolbar, context menus, and command palette. Enable,
+					disable, or customize the prompt content and placement for each action.
 				</p>
-			</div>
 
-			<div class={sp.promptList}>
-				<For each={orderedCategories()}>
-					{(cat) => <CategoryGroup category={cat} prompts={groups().get(cat)!} headlessAgents={headlessAgents()} />}
-				</For>
-			</div>
+				<SettingRow
+					label="Headless Agent"
+					hint="Default agent for headless prompts. Individual prompts can override this in their settings."
+				>
+					{(id, descriptionId) => (
+						<Select
+							id={id}
+							aria-describedby={descriptionId()}
+							value={agentConfigsStore.getHeadlessAgent() ?? ""}
+							onChange={(e) => agentConfigsStore.setHeadlessAgent(toHeadlessAgentChoice(e.currentTarget.value))}
+						>
+							<option value="">— Not configured —</option>
+							<For each={headlessAgents()}>
+								{(type) => {
+									const configs = () => agentConfigsStore.getRunConfigs(type);
+									return (
+										<Show
+											when={configs().length > 0}
+											fallback={<option value={type}>{AGENTS[type]?.name ?? type}</option>}
+										>
+											<optgroup label={AGENTS[type]?.name ?? type}>
+												<option value={type}>{AGENTS[type]?.name ?? type} (default)</option>
+												<For each={configs()}>
+													{(cfg) => (
+														<option value={`${type}:${cfg.name}`}>
+															{cfg.name}
+															{cfg.is_default ? " (default)" : ""}
+														</option>
+													)}
+												</For>
+											</optgroup>
+										</Show>
+									);
+								}}
+							</For>
+							<option value="api">API (via ego)</option>
+						</Select>
+					)}
+				</SettingRow>
+				<p class={s.hint}>{detection.loading() ? "Detecting..." : ""}</p>
+			</SectionCard>
 
-			<button class={sp.addBtn} onClick={handleNewPrompt}>
-				+ New Smart Prompt
-			</button>
+			<SectionCard title="Prompt library">
+				<div class={sp.promptList}>
+					<For each={orderedCategories()}>
+						{(cat) => <CategoryGroup category={cat} prompts={groups().get(cat)!} headlessAgents={headlessAgents()} />}
+					</For>
+				</div>
+
+				<button class={sp.addBtn} onClick={handleNewPrompt}>
+					+ New Smart Prompt
+				</button>
+			</SectionCard>
 		</div>
 	);
 };
