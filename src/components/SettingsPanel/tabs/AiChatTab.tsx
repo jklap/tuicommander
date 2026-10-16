@@ -107,7 +107,7 @@ export const AiChatTab: Component<{
 				title="AI Chat"
 				description="Agent defaults and access for new ego runs. Running conversations are unchanged."
 				scope="New ego runs"
-				breadcrumb="Agents / AI Chat"
+				breadcrumb="AI / AI Chat"
 				source="TUICommander owns the executable, profile and workspace in General. ego owns model and access defaults."
 			/>
 			<SectionCard title="Agent and model">
@@ -222,58 +222,59 @@ export const AiChatTab: Component<{
 						"Refresh asks ego to re-enumerate its sources, which is the only call here that reaches a provider over the network. TUICommander never makes one.",
 					)}
 				</p>
-			</SectionCard>
-			<Show when={(data()?.providers.length ?? 0) > 0}>
-				<SectionCard title={t("providers.heading.providers", "Providers")}>
-					<p class={s.hint}>
-						{t(
-							"providers.hint.credentials",
-							"Credential state comes from ego doctor. No key is ever read into TUICommander or stored in its keyring.",
-						)}
-					</p>
-					<Show when={loginError()}>{(message) => <p class={s.warning}>{message()}</p>}</Show>
-					<For each={data()?.providers}>
-						{(provider) => (
-							<div class={s.group}>
-								<div class={layout.providerRow}>
-									<div>
-										<strong>{provider.name}</strong>
-										<CredentialBadge credential={provider.credential} />
+				<Show when={(data()?.providers.length ?? 0) > 0}>
+					<details>
+						<summary>Other providers and available models</summary>
+						<p class={s.hint}>
+							{t(
+								"providers.hint.credentials",
+								"Credential state comes from ego doctor. No key is ever read into TUICommander or stored in its keyring.",
+							)}
+						</p>
+						<Show when={loginError()}>{(message) => <p class={s.warning}>{message()}</p>}</Show>
+						<For each={data()?.providers}>
+							{(provider) => (
+								<div class={s.group}>
+									<div class={layout.providerRow}>
+										<div>
+											<strong>{provider.name}</strong>
+											<CredentialBadge credential={provider.credential} />
+										</div>
+										<button
+											class={s.testBtn}
+											aria-label={`${t("providers.login", "Login")} to ${provider.name}`}
+											onClick={() => login(provider.name)}
+										>
+											{t("providers.login", "Login")}
+										</button>
 									</div>
-									<button
-										class={s.testBtn}
-										aria-label={`${t("providers.login", "Login")} to ${provider.name}`}
-										onClick={() => login(provider.name)}
-									>
-										{t("providers.login", "Login")}
-									</button>
-								</div>
-								<p class={s.availabilityDetail}>
-									<Show
-										when={provider.models.length > 0}
-										fallback={t("providers.noModels", "No models — ego could not enumerate this source.")}
-									>
-										{provider.models.filter((model) => model.available).length}
-										{" / "}
-										{provider.models.length} {t("providers.modelsUsable", "models usable")}
-									</Show>
-								</p>
-								{/* Why a model cannot be picked, in ego's words and only once
+									<p class={s.availabilityDetail}>
+										<Show
+											when={provider.models.length > 0}
+											fallback={t("providers.noModels", "No models — ego could not enumerate this source.")}
+										>
+											{provider.models.filter((model) => model.available).length}
+											{" / "}
+											{provider.models.length} {t("providers.modelsUsable", "models usable")}
+										</Show>
+									</p>
+									{/* Why a model cannot be picked, in ego's words and only once
 								    per distinct reason: a source that is down says the same
 								    sentence about every model it offers. */}
-								<For each={reasons(provider.models)}>{(reason) => <p class={s.availabilityDetail}>{reason}</p>}</For>
-								{/* What doctor said about this provider. The badge is our word
+									<For each={reasons(provider.models)}>{(reason) => <p class={s.availabilityDetail}>{reason}</p>}</For>
+									{/* What doctor said about this provider. The badge is our word
 								    for the state; this is ego's word for the case — which is the
 								    only place the difference between "expired at 12:04" and
 								    "the store is locked" survives. */}
-								<Show when={credentialDetail(provider.credential)}>
-									{(detail) => <p class={s.availabilityDetail}>{detail()}</p>}
-								</Show>
-							</div>
-						)}
-					</For>
-				</SectionCard>
-			</Show>
+									<Show when={credentialDetail(provider.credential)}>
+										{(detail) => <p class={s.availabilityDetail}>{detail()}</p>}
+									</Show>
+								</div>
+							)}
+						</For>
+					</details>
+				</Show>
+			</SectionCard>
 			<EgoPerimeterSection />
 		</div>
 	);

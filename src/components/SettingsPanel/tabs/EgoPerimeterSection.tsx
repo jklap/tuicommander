@@ -1,4 +1,4 @@
-import { type Component, createSignal, onMount, Show } from "solid-js";
+import { type Component, createSignal, For, onMount, Show } from "solid-js";
 import { t } from "../../../i18n";
 import { type EgoPerimeterClient, egoPerimeterCli } from "../../../services/egoCli";
 import { appLogger } from "../../../stores/appLogger";
@@ -20,6 +20,8 @@ export const EgoPerimeterSection: Component<{ client?: EgoPerimeterClient }> = (
 		readAllowlist: "",
 		writableDirs: "",
 	});
+	const [editingRoots, setEditingRoots] = createSignal(false);
+	const [verifyOpen, setVerifyOpen] = createSignal(false);
 	const [busy, setBusy] = createSignal(false);
 	const [error, setError] = createSignal<string | null>(null);
 
@@ -77,115 +79,134 @@ export const EgoPerimeterSection: Component<{ client?: EgoPerimeterClient }> = (
 								{t("perimeter.target", "Editing ego user configuration:")}{" "}
 								{loaded().profile ?? t("perimeter.userDefaults", "user defaults")}
 							</p>
-							<SettingRow
-								label={t("perimeter.label.rootDir", "Root directory")}
-								hint={t(
-									"perimeter.emptyRoot",
-									"Leave all paths empty for workspace-only roots. An absent roots setting defaults to ~/Gits when that directory exists.",
-								)}
-							>
-								{(id, descriptionId) => (
-									<>
-										<Input
-											type="text"
-											id={id}
-											aria-describedby={descriptionId()}
-											value={draft().rootDir}
-											disabled={busy()}
-											onInput={(event) => edit("rootDir", event.currentTarget.value)}
-											placeholder="~/Gits"
-										/>
-									</>
-								)}
+							<SettingRow label="Workspace · set in TUICommander" hint={loaded().effective.workspace}>
+								{() => <StatusBadge label="Workspace" />}
 							</SettingRow>
-							<SettingRow label={t("perimeter.label.rootAccess", "Root access")}>
-								{(id, descriptionId) => (
-									<>
-										<Select
-											id={id}
-											aria-describedby={descriptionId()}
-											value={draft().rootAccess}
-											disabled={busy()}
-											onChange={(event) => {
-												const value = event.currentTarget.value;
-												if (value === "read" || value === "read-write")
-													edit("rootAccess", value satisfies EgoRootAccess);
-											}}
-										>
-											<option value="read-write">{t("perimeter.readWrite", "Read and write")}</option>
-											<option value="read">{t("perimeter.read", "Read only")}</option>
-										</Select>
-									</>
+							<For each={loaded().effective.roots}>
+								{(root) => (
+									<SettingRow label={root.path} hint={root.source}>
+										{() => (
+											<>
+												<StatusBadge label={root.access === "read" ? "Read only" : "Read and write"} />
+												<button onClick={() => setEditingRoots(true)}>Edit</button>
+											</>
+										)}
+									</SettingRow>
 								)}
-							</SettingRow>
-							<SettingRow
-								label={t("perimeter.label.readAllowlist", "Read allowlist")}
-								hint="One absolute path or ~/ path per line. These entries grant read access; they do not revoke a writable parent root."
-							>
-								{(id, descriptionId) => (
-									<>
-										<Textarea
-											id={id}
-											aria-describedby={descriptionId()}
-											rows={2}
-											value={draft().readAllowlist}
-											disabled={busy()}
-											onInput={(event) => edit("readAllowlist", event.currentTarget.value)}
-										/>
-									</>
-								)}
-							</SettingRow>
-							<SettingRow
-								label={t("perimeter.label.writableDirs", "Extra writable directories")}
-								hint={t(
-									"perimeter.paths",
-									"One absolute path or ~/ path per line. Read-only entries do not revoke access granted by a containing writable root. ego validates roots and system ceilings.",
-								)}
-							>
-								{(id, descriptionId) => (
-									<>
-										<Textarea
-											id={id}
-											aria-describedby={descriptionId()}
-											rows={2}
-											value={draft().writableDirs}
-											disabled={busy()}
-											onInput={(event) => edit("writableDirs", event.currentTarget.value)}
-										/>
-									</>
-								)}
-							</SettingRow>
-							<div class={s.actions}>
-								<button
-									disabled={busy()}
-									data-ready={rootsDirty() ? "true" : undefined}
-									onClick={() => void attempt(() => client().setRoots(draft()), true)}
+							</For>
+							<button onClick={() => setEditingRoots(!editingRoots())}>
+								{editingRoots() ? "Hide folder editor" : "Add folder"}
+							</button>
+							<Show when={editingRoots()}>
+								<SettingRow
+									label={t("perimeter.label.rootDir", "Root directory")}
+									hint={t(
+										"perimeter.emptyRoot",
+										"Leave all paths empty for workspace-only roots. An absent roots setting defaults to ~/Gits when that directory exists.",
+									)}
 								>
-									{t("perimeter.saveRoots", "Save roots in ego")}
-								</button>
-							</div>
+									{(id, descriptionId) => (
+										<>
+											<Input
+												type="text"
+												id={id}
+												aria-describedby={descriptionId()}
+												value={draft().rootDir}
+												disabled={busy()}
+												onInput={(event) => edit("rootDir", event.currentTarget.value)}
+												placeholder="~/Gits"
+											/>
+										</>
+									)}
+								</SettingRow>
+								<SettingRow label={t("perimeter.label.rootAccess", "Root access")}>
+									{(id, descriptionId) => (
+										<>
+											<Select
+												id={id}
+												aria-describedby={descriptionId()}
+												value={draft().rootAccess}
+												disabled={busy()}
+												onChange={(event) => {
+													const value = event.currentTarget.value;
+													if (value === "read" || value === "read-write")
+														edit("rootAccess", value satisfies EgoRootAccess);
+												}}
+											>
+												<option value="read-write">{t("perimeter.readWrite", "Read and write")}</option>
+												<option value="read">{t("perimeter.read", "Read only")}</option>
+											</Select>
+										</>
+									)}
+								</SettingRow>
+								<SettingRow
+									label={t("perimeter.label.readAllowlist", "Read allowlist")}
+									hint="One absolute path or ~/ path per line. These entries grant read access; they do not revoke a writable parent root."
+								>
+									{(id, descriptionId) => (
+										<>
+											<Textarea
+												id={id}
+												aria-describedby={descriptionId()}
+												rows={2}
+												value={draft().readAllowlist}
+												disabled={busy()}
+												onInput={(event) => edit("readAllowlist", event.currentTarget.value)}
+											/>
+										</>
+									)}
+								</SettingRow>
+								<SettingRow
+									label={t("perimeter.label.writableDirs", "Extra writable directories")}
+									hint={t(
+										"perimeter.paths",
+										"One absolute path or ~/ path per line. Read-only entries do not revoke access granted by a containing writable root. ego validates roots and system ceilings.",
+									)}
+								>
+									{(id, descriptionId) => (
+										<>
+											<Textarea
+												id={id}
+												aria-describedby={descriptionId()}
+												rows={2}
+												value={draft().writableDirs}
+												disabled={busy()}
+												onInput={(event) => edit("writableDirs", event.currentTarget.value)}
+											/>
+										</>
+									)}
+								</SettingRow>
+								<div class={s.actions}>
+									<button
+										disabled={busy()}
+										data-ready={rootsDirty() ? "true" : undefined}
+										onClick={() => void attempt(() => client().setRoots(draft()), true)}
+									>
+										{t("perimeter.saveRoots", "Save roots in ego")}
+									</button>
+								</div>
+							</Show>
 						</SectionCard>
 						<SectionCard title="Network and sandbox">
-							<SettingRow label={t("perimeter.label.network", "Network enabled")}>
+							<SettingRow label="Network" hint="Network access for new ego runs.">
 								{(id, descriptionId) => (
-									<>
-										<input
-											id={id}
-											aria-describedby={descriptionId()}
-											class={s.rowSwitch}
-											type="checkbox"
-											checked={loaded().networkEnabled}
-											disabled={busy()}
-											onChange={(event) => {
-												const enabled = event.currentTarget.checked;
-												event.currentTarget.checked = loaded().networkEnabled;
-												void attempt(() => client().setNetwork(enabled), false);
-											}}
-										/>
-									</>
+									<Select
+										id={id}
+										aria-describedby={descriptionId()}
+										value={loaded().networkEnabled ? "allowed" : "blocked"}
+										disabled={busy()}
+										onChange={(event) => {
+											const enabled = event.currentTarget.value === "allowed";
+											event.currentTarget.value = loaded().networkEnabled ? "allowed" : "blocked";
+											void attempt(() => client().setNetwork(enabled), false);
+										}}
+									>
+										<option value="allowed">Allowed</option>
+										<option value="blocked">Blocked</option>
+									</Select>
 								)}
 							</SettingRow>
-							<SettingRow label="Exec sandbox">
+							<SettingRow label="Command isolation">
 								{() => (
 									<>
 										<StatusBadge
@@ -194,7 +215,7 @@ export const EgoPerimeterSection: Component<{ client?: EgoPerimeterClient }> = (
 													? t("perimeter.osEnforced", "Enforced by OS")
 													: loaded().execEnforcement === "promptOnly"
 														? t("perimeter.promptOnly", "Prompt only")
-														: t("perimeter.unchecked", "Enforcement not checked")
+														: "Not verified here"
 											}
 											variant={
 												loaded().execEnforcement === "enforcedByOs"
@@ -204,9 +225,16 @@ export const EgoPerimeterSection: Component<{ client?: EgoPerimeterClient }> = (
 														: undefined
 											}
 										/>
+										<button onClick={() => setVerifyOpen(!verifyOpen())}>How to verify</button>
 									</>
 								)}
 							</SettingRow>
+							<Show when={verifyOpen()}>
+								<p class={s.hint}>
+									Run ego doctor in a terminal and inspect its command-isolation report. Reload from ego reads
+									configuration; it does not run an OS enforcement probe.
+								</p>
+							</Show>
 							<Show when={loaded().execEnforcement === "promptOnly"}>
 								<p class={s.hint}>
 									{t(
