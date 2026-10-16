@@ -2363,3 +2363,5 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] #1756-4d42: after Boss restarts `make dev` (Rust does not hot-reload), resolve a Jira URL and cancel while headers/body are pending; confirm no late result and active requests stop. No live restart was performed by w-1756.
 
 - [ ] Telegram ACP replies (#1959-162a): after Boss manually restarts `make dev` or rebuilds release, send two requests and explicitly finish the first before a streaming tick. The first ACP turn must not also answer the second request. The pre-fix loopback regression recorded duplicate finals; post-fix integration and live phone checks remain coordinator-owned. Rust changes do not hot-reload.
+
+- [ ] After Boss rebuilds/restarts TUIC, use an ego executable with local transcript v1 support and verify an exact-bound ego terminal switches to Chat on desktop and mobile, follows completed messages/tool cards, shows goal continuation notices, and resets after compaction (#1969-ac9b). Rust changes do not hot-reload.

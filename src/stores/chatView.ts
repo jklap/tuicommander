@@ -58,8 +58,13 @@ export function chatViewAvailability(
 		| undefined,
 ): { available: true } | { available: false; reason: string } {
 	if (!term?.agentType) return { available: false, reason: "No agent is running in this terminal" };
-	if (term.agentType !== "claude" && term.agentType !== "grok" && term.agentType !== "codex")
-		return { available: false, reason: "The chat view supports Claude, Grok and Codex only" };
+	if (
+		term.agentType !== "claude" &&
+		term.agentType !== "grok" &&
+		term.agentType !== "codex" &&
+		term.agentType !== "ego"
+	)
+		return { available: false, reason: "The chat view supports Claude, Grok, Codex and ego only" };
 	if (term.isRemote) return { available: false, reason: "The chat view is not available for remote terminals" };
 	if (!term.sessionId) return { available: false, reason: "The terminal has no session yet" };
 	const boundId = term.agentType === "codex" ? term.exactAgentSessionId : term.agentSessionId;

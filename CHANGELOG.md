@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Add desktop and mobile terminal Chat view for exact-bound ego sessions through the documented local transcript v1 export, with tool cards, goal continuation notices and compaction resets (#1969-ac9b).
+
 - Stream Telegram status and AI Chat answers with receipt/working reactions, request-scoped final replies, and bounded queue/failure notices (#1959-162a).
 - Add smart AI Chat table columns, conditional horizontal-scroll hints, exact-source Markdown and Copy actions, and read-only document opening on desktop and mobile (#1923-c6fb).
 

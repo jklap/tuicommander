@@ -10,6 +10,12 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "ego terminal Chat view",
+		description:
+			"Switch an ego terminal from CLI to Chat to read completed replies and folded tool calls. Configure an ego executable with local transcript v1 support first; use CLI for interactive prompts.",
+		shortcut: null,
+	},
+	{
 		feature: "AI Chat table actions",
 		description:
 			"Use Markdown to inspect a table's exact source, Copy as Markdown to copy it, or Open as document to read it outside the conversation.",

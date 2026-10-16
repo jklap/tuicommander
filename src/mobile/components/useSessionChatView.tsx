@@ -1,4 +1,5 @@
 import { createEffect, createSignal, Show } from "solid-js";
+import type { AgentType } from "../../agents";
 import { TerminalChatTranscript } from "../../components/Terminal/TerminalChatTranscript";
 import { type ChatViewWake, chatViewStore } from "../../stores/chatView";
 import styles from "./SessionChatView.module.css";
@@ -17,7 +18,7 @@ export function useSessionChatView(props: {
 		modes.set(props.sessionId(), next);
 		setMode(next);
 	};
-	const available = () => props.agentType() === "claude" && props.sessionExists();
+	const available = () => (props.agentType() === "claude" || props.agentType() === "ego") && props.sessionExists();
 	createEffect(() => {
 		if (mode() === "chat" && !available()) {
 			chatViewStore.markUnavailable(props.sessionId(), "No agent is running in this terminal");
@@ -57,7 +58,7 @@ export function useSessionChatView(props: {
 				{(sessionId) => (
 					<TerminalChatTranscript
 						sessionId={sessionId}
-						terminalAgent="claude"
+						terminalAgent={props.agentType() as AgentType}
 						mobile
 						subscribeWake={props.subscribeWake}
 						onUnavailable={() => select("cli")}

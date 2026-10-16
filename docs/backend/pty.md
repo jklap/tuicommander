@@ -974,3 +974,27 @@ share one backend transaction. It
 requires an ego recovery snapshot and an empty tracked composer, holds the input
 transaction, and uses the normal agent-aware command writer to submit `/retry`
 once (no automatic retry or queue). See output-parser.md for the wire contract.
+
+### ego transcript Chat view
+
+The foreground ego PID is matched to `lease.pid` in the process-owned
+`EGO_HOME/sessions`; no newest-file fallback is used. A failed environment read
+fails closed rather than selecting the host's default ego store. The configured
+absolute ego executable reads the bound session through the published local
+transcript v1 command, `ego export SESSION --format transcript --after SEQ`.
+No private event-log layout is consumed. Missing binding or an unreadable export
+is returned as `not_bound` so both frontend hosts retain the reason.
+
+`chat_view::View::advance` invokes this incremental source from the existing
+ticker. It checks the header version/session before accepting records, bounds
+each record to one MiB and each export to ten seconds, and keeps the existing
+2000-entry/four-MiB view log. Session-local sequence gaps are valid. Completed
+messages are authoritative; preview deltas are omitted to avoid duplicate full
+answers. Tool starts/results share their item ID. Goal continuations and
+compaction checkpoints are notices rather than human input. Rebinding after
+compaction resets the shared epoch and adapter cursor. No separate follow
+process, channel, ACP connection or browser event stream is added.
+
+The real CLI loopback recording and provenance are in
+`fixtures/chat_view/ego/README.md`. This requires an ego version with the published
+transcript v1 contract; older executables return an unavailable reason.

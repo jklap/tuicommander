@@ -1096,9 +1096,25 @@ GitHub provides a full normal-comment count, so an increase is detected even bey
 
 Shared wake (B6, #1807-4f1f): `session_wake::ensure_live` serializes durable resume with suspension. Tab open, submit and peer mail use this path; input waits in the existing ready-window queue. Failed creation retains the durable tab. IPC `resume_session` maps to `POST /sessions/wake`; MCP list/status expose retained sessions as `hibernated`.
 
-## Mobile Claude terminal Chat view
+## ego terminal Chat view
 
-Claude PTY sessions offer CLI / Chat in the existing mobile header. The shared
+ego PTY terminals use the existing Chat adapter registry, bounded view log,
+one-second ticker, IPC/HTTP snapshot and SSE wake. Exact binding comes from the
+live foreground PID and ego's lease, with its process-owned `EGO_HOME`; there is
+no newest-session fallback. Content is read only through documented local
+transcript v1: `ego export SESSION --format transcript --after SEQ`.
+The configured absolute ego executable must support this contract. Header version
+and session identity are checked before events are accepted. Completed messages
+render once (preview deltas are omitted); tools retain their start/result identity.
+Goal continuations and compaction checkpoints are notices. Rebinding resets the
+epoch, including compaction successors. Unbound or unreadable sessions explain why
+Chat is unavailable. Desktop and mobile reuse `TerminalChatTranscript`; no ACP
+connection or second event subscription is created. Compose, dictation targeting
+and answer marker rendering remain on the existing terminal paths.
+
+## Mobile Claude and ego terminal Chat view
+
+Claude and ego PTY sessions offer CLI / Chat in the existing mobile header. The shared
 `TerminalChatTranscript` owns rendering, visibility-paused keepalive and backend
 unavailability. Mobile injects wakes from `useSessions`; it opens no additional
 EventSource. Both hosts defer Claude binding to the backend. Mobile retains the

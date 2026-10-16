@@ -858,7 +858,7 @@ the server is back to the filter the connection was opened with.
 |-------|---------|-------------|
 | `session-created` | `{session_id, cwd, agent_type, display_name, parent_session}` | New session started; `display_name` is the optional stable assigned name; `parent_session` is the `$TUIC_SESSION` of the agent that spawned it (null otherwise) |
 | `pty-description-changed` | `{session_id, description}` | Orchestrator updates the short task description shown above a PTY |
-| `chat-view-changed` | `{session_id, seq}` | The chat view of a Claude, Grok or exactly bound Codex terminal has entries past `seq`; read them with `GET /sessions/:id/chat-view` |
+| `chat-view-changed` | `{session_id, seq}` | The chat view of a Claude, Grok, exactly bound Codex or exact PID-bound ego terminal has entries past `seq`; read them with `GET /sessions/:id/chat-view` |
 | `session-renamed` | `{session_id, name, is_custom}` | An MCP `session action=rename` changed a tab's display name |
 | `session-suspended` | `{record}` | Rust persisted a suspended tab before ending its PTY; record fields use snake_case |
 | `term-alias-assigned` | `{session_id, alias}` | A session received its terminal alias (e.g. `tu-3`); published once, after `session-created` |
