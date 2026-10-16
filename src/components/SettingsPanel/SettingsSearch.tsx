@@ -84,7 +84,7 @@ function ownText(el: Element): string {
 }
 
 function findHeading(root: ParentNode, heading: string): HTMLHeadingElement | null {
-	for (const el of root.querySelectorAll("h3")) {
+	for (const el of root.querySelectorAll("h2, h3")) {
 		if (ownText(el) === heading) return el;
 	}
 	return null;
@@ -93,11 +93,11 @@ function findHeading(root: ParentNode, heading: string): HTMLHeadingElement | nu
 /** The element carrying `label`, searched only between `heading` and the next
  * `<h3>` — a label like "Terminal" occurs in more than one section. */
 function findLabelInSection(root: ParentNode, heading: HTMLHeadingElement, label: string): Element | null {
-	const all = [...root.querySelectorAll("h3, label, span")];
+	const all = [...root.querySelectorAll("h2, h3, label, span")];
 	const start = all.indexOf(heading);
 	if (start < 0) return null;
 	for (const el of all.slice(start + 1)) {
-		if (el.tagName === "H3") return null;
+		if (el.tagName === "H2" || el.tagName === "H3") return null;
 		if (ownText(el) === label) return el;
 	}
 	return null;

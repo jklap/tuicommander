@@ -36,8 +36,8 @@ const TAB_SOURCES: Record<string, string[]> = {
  * what was added: give it a static heading if it is a real setting, otherwise
  * update the number here. */
 const UNINDEXABLE: Record<string, { dynamic: number; orphans: number }> = {
-	// Polling summary and recent event labels come from runtime state.
-	telegram: { dynamic: 2, orphans: 0 },
+	// Recent event labels come from runtime state; polling summaries are not controls.
+	telegram: { dynamic: 1, orphans: 0 },
 	general: { dynamic: 0, orphans: 0 },
 	appearance: { dynamic: 0, orphans: 0 },
 	// Notification sound row labels are runtime entries, not static search targets.
@@ -51,7 +51,7 @@ const UNINDEXABLE: Record<string, { dynamic: number; orphans: number }> = {
 	github: { dynamic: 0, orphans: 0 },
 	// UpstreamMcpPanel: the "Discovered tools ({count})" label, whose rendered
 	// text includes a runtime count.
-	mcp: { dynamic: 3, orphans: 0 },
+	mcp: { dynamic: 2, orphans: 0 },
 	"remote-access": { dynamic: 0, orphans: 0 },
 	// RemoteMachinesPanel: the SSH-host `<option label={`${host}…`}>` (a
 	// datalist entry, not a setting), and the "Deployment" and "Keep ephemeral
@@ -71,10 +71,10 @@ const UNINDEXABLE: Record<string, { dynamic: number; orphans: number }> = {
 	// Named run editors add six persistent field labels, but search cannot open their runtime forms.
 	// The per-agent "Launch instructions for <agent>" editor names its agent at
 	// runtime, inside a collapsed card; the global editor is indexed.
-	agents: { dynamic: 1, orphans: 19 },
+	agents: { dynamic: 1, orphans: 18 },
 	// The `<optgroup label={provider.name}>` inside the default-model picker. It
 	// groups the options by provider and is not a setting anybody can scroll to.
-	"ai-chat": { dynamic: 4, orphans: 0 },
+	"ai-chat": { dynamic: 1, orphans: 0 },
 };
 
 const readTab = (file: string) => fs.readFileSync(path.join(__dirname, "..", file), "utf8");
