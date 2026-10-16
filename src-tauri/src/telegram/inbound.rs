@@ -134,7 +134,14 @@ impl<P: MailPort> Inbound<P> {
             if let Some((chat, reply)) =
                 super::settings::pair_update(&self.paths, value, super::settings::now_ms())?
             {
-                self.port.setup_reply(chat, reply).await?;
+                if matches!(reply, super::settings::SetupReply::Linked) {
+                    // Pairing has consumed the credential. Commit it and every earlier
+                    // handoff before feedback can fail and replay it as authorized mail.
+                    offset::write(&self.paths, candidate)?;
+                    let _ = self.port.setup_reply(chat, reply).await;
+                } else {
+                    self.port.setup_reply(chat, reply).await?;
+                }
                 next = candidate;
                 continue;
             }

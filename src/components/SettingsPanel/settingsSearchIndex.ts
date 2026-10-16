@@ -79,6 +79,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{ tab: "telegram", section: "Telegram", label: "Bot token", labelKey: "telegram.token" },
 	{ tab: "telegram", section: "Telegram", label: "Authorized chats", labelKey: "telegram.chat" },
 	{ tab: "telegram", section: "Telegram", label: "Enable Telegram", labelKey: "telegram.enabled" },
+	{ tab: "telegram", section: "Recent messages" },
 	// tabs/GeneralTab.tsx
 	{ tab: "general", section: "General", sectionKey: "general.heading.general" },
 	{ tab: "general", section: "Confirmations", sectionKey: "general.heading.confirmations" },

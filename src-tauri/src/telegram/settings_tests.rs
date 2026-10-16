@@ -330,3 +330,50 @@ fn recent_settings_readback_is_memory_only_1956() {
     let read = serde_json::to_value(snapshot(&paths, &restarted).unwrap()).unwrap();
     assert_eq!(read["recent_events"], json!([]));
 }
+
+// Catches: history grows beyond 20 or reads in oldest-first order.
+#[test]
+fn recent_settings_bounds_order_and_restart_1956() {
+    let (_dir, paths) = crate::telegram::tests::setup();
+    let state = crate::state::tests_support::make_test_app_state();
+    let mut recent = state.telegram_recent.lock();
+    for n in 0..25 {
+        recent.record("in", "message", "delivered", Some(&format!("message {n}")));
+    }
+    drop(recent);
+    let value =
+        serde_json::to_value(snapshot(&paths, &state).unwrap()).unwrap()["recent_events"].clone();
+    assert_eq!(value.as_array().unwrap().len(), 20);
+    assert_eq!(value[0]["preview"], "message 24");
+    assert_eq!(value[19]["preview"], "message 5");
+    let restarted = crate::state::tests_support::make_test_app_state();
+    let read = serde_json::to_value(snapshot(&paths, &restarted).unwrap()).unwrap();
+    assert_eq!(read["recent_events"], json!([]));
+}
+
+// Catches: truncation leaks partial secrets or unauthorized text, or splits UTF-8.
+#[test]
+fn recent_settings_redacts_before_unicode_truncation_1956() {
+    let (_dir, paths) = crate::telegram::tests::setup();
+    let state = crate::state::tests_support::make_test_app_state();
+    let mut recent = state.telegram_recent.lock();
+    let long = "😀".repeat(70);
+    let boundary = format!("{}111:fake-one", "😀".repeat(56));
+    for text in [
+        Some("code A1B2C3 token 111:fake-one"),
+        None,
+        Some(long.as_str()),
+        Some(boundary.as_str()),
+    ] {
+        recent.record("in", "message", "delivered", text);
+    }
+    drop(recent);
+    let value =
+        serde_json::to_value(snapshot(&paths, &state).unwrap()).unwrap()["recent_events"].clone();
+    assert_eq!(value[0]["preview"], format!("{}[red", "😀".repeat(56)));
+    assert_eq!(value[1]["preview"].as_str().unwrap().chars().count(), 60);
+    assert_eq!(value[2]["preview"], "[redacted]");
+    assert_eq!(value[3]["preview"], "code [redacted] token [redacted]");
+    assert!(!value.to_string().contains("fake-one"));
+    assert!(!value.to_string().contains("A1B2C3"));
+}

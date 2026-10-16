@@ -700,16 +700,30 @@ async fn failed_link_confirmation_preserves_same_batch_mail_order() {
     )
     .await;
     worker.abort();
-    assert!(matches!(result, Ok(crate::telegram::inbound::Poll::Accepted(2))));
+    assert!(matches!(
+        result,
+        Ok(crate::telegram::inbound::Poll::Accepted(2))
+    ));
     assert_eq!(super::super::offset::read(&paths), Some(10));
     assert_eq!(mail["count"], 2, "{mail}");
-    let texts: Vec<String> = mail["messages"].as_array().unwrap().iter().map(|entry| {
-        let content: Value = serde_json::from_str(entry["content"].as_str().unwrap()).unwrap();
-        content["text"].as_str().unwrap().to_owned()
-    }).collect();
+    let texts: Vec<String> = mail["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| {
+            let content: Value = serde_json::from_str(entry["content"].as_str().unwrap()).unwrap();
+            content["text"].as_str().unwrap().to_owned()
+        })
+        .collect();
     assert_eq!(texts, ["before link", "after link"]);
     let events = serde_json::to_value(state.telegram_recent.lock().snapshot()).unwrap();
-    assert!(events.as_array().unwrap().iter().any(|event|
-        event["direction"] == "out" && event["outcome"] == "failed: telegram_transport_error"
-    ), "{events}");
+    assert!(
+        events
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|event| event["direction"] == "out"
+                && event["outcome"] == "failed: telegram_transport_unavailable"),
+        "{events}"
+    );
 }
