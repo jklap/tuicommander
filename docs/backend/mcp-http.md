@@ -691,7 +691,9 @@ When intent markers are enabled for the connecting agent, initialize instruction
 
 Initialize instruction prose stays within the existing 1,600-byte classic and
 1,664-byte collapsed empty-state budgets. Compact wording preserves the answer
-marker, urgent mail and progress reporting rules.
+marker, urgent mail and progress reporting rules. The answer marker can start a
+row or the text of a Markdown list item; status, tool and hook/task notices stay
+excluded.
 
 TUIC supplies protocol instructions and tool descriptions on different wire
 surfaces. Client receipt does not prove that the model can read either surface

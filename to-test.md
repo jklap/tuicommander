@@ -1,3 +1,7 @@
+## MCP instruction byte budget (1947-3d17) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, reconnect an MCP client and confirm answer markers still support row starts and Markdown list-item text starts. The remote budget regression and all 563 MCP transport tests passed; no live app was restarted.
+
 ## Async AI Chat options (1918-2ea3) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, open a new AI Chat tab without sending a prompt. Verify Session settings appears with model and mode choices; select an offered model. Repeat with delayed offers and multiple tabs, then verify replacement offers and snapshot refresh/reconnect preserve session isolation. No live app was restarted by this peer.
