@@ -468,8 +468,9 @@ export function useKeyboardShortcuts(handlers: ShortcutHandlers): () => void {
 			return;
 		}
 
-		// When quick switcher is open, skip other shortcuts
-		if (handlers.isQuickSwitcherOpen()) return;
+		// The held chord also prefixes configured letter actions (Ctrl+Alt+V on Win/Linux).
+		// Numeric branch selection keeps priority above; do not suppress those actions.
+		if (handlers.isQuickSwitcherOpen() && !isQuickSwitcherActive(e)) return;
 
 		// Navigate between split panes (Alt+Arrow) — layout-dependent, not configurable
 		// Skip when focus is in an input field (Alt+Arrow = move cursor by word on macOS)
@@ -533,6 +534,19 @@ export function useKeyboardShortcuts(handlers: ShortcutHandlers): () => void {
 		}
 	};
 
-	document.addEventListener("keydown", handleKeydown);
-	return () => document.removeEventListener("keydown", handleKeydown);
+	// Held quick-switcher chords must dispatch before the terminal's target listener.
+	const handleQuickSwitcherKeydown = (e: KeyboardEvent) => {
+		if (!isQuickSwitcherActive(e)) return;
+		handleKeydown(e);
+		if (e.defaultPrevented) e.stopPropagation();
+	};
+	const handleOtherKeydown = (e: KeyboardEvent) => {
+		if (!isQuickSwitcherActive(e)) handleKeydown(e);
+	};
+	document.addEventListener("keydown", handleQuickSwitcherKeydown, true);
+	document.addEventListener("keydown", handleOtherKeydown);
+	return () => {
+		document.removeEventListener("keydown", handleQuickSwitcherKeydown, true);
+		document.removeEventListener("keydown", handleOtherKeydown);
+	};
 }

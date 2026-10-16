@@ -151,12 +151,29 @@ describe("useKeyboardShortcuts", () => {
 				handlers.isQuickSwitcherOpen = visible;
 				return null;
 			});
+			const input = document.createElement("input");
+			const terminalKeydown = vi.fn();
+			input.addEventListener("keydown", terminalKeydown);
+			document.body.append(input);
 			try {
 				fireKeydown("Control", { ctrlKey: true });
 				fireKeydown("Alt", { ctrlKey: true, altKey: true });
-				fireKeydown("v", { ctrlKey: true, altKey: true, code: "KeyV" });
+				const event = new KeyboardEvent("keydown", {
+					key: "v",
+					ctrlKey: true,
+					altKey: true,
+					code: "KeyV",
+					bubbles: true,
+					cancelable: true,
+				});
+				input.dispatchEvent(event);
 				expect(toggle).toHaveBeenCalledOnce();
+				expect(event.defaultPrevented).toBe(true);
+				expect(terminalKeydown).not.toHaveBeenCalled();
+				fireKeydown("2", { ctrlKey: true, altKey: true });
+				expect(handlers.switchToBranchByIndex).toHaveBeenCalledWith(2);
 			} finally {
+				input.remove();
 				view.unmount();
 				toggle.mockRestore();
 			}
