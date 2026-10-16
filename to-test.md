@@ -2267,6 +2267,12 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] After installing the Tasks provider data update and moving the existing GitHub Work `data/config.json` to `data/work-items.json`, confirm GitHub Work loads and Tasks setup saves/reloads its repository. Repeat setup with Jira and GitLab. Backend code is unchanged; the Rust edit adds a regression test only.
 - [ ] #1904-9eef: After Boss restarts `make dev` (or rebuilds release), verify new launch/MCP marker instructions permit 💬 at the start of list-item text. In a Claude session, emit `- 💬 **Answer.**` with an indented continuation and nested item, followed by an unmarked sibling; check the green rule and hidden marker in CLI and Chat, then Answers-only scope. Frontend behavior does not require a Rust restart; updated launch instructions do.
 
+## Settings cutover (#1787-4778)
+
+- [ ] After Boss restarts make dev or rebuilds release, enable settings in trusted MCP UI. Confirm an old config-enabled installation does not auto-enable settings.
+- [ ] After the owner gap branches land, use a throwaway named instance to compare prompt create/get/edit/remove over MCP, HTTP and IPC; stale revisions must conflict and disabled meta calls must fail.
+- [ ] Start GitHub device login, log out before completion, then finish browser authorization. The old flow must expire without restoring credentials. Repeat with disconnect and an additional account.
+- [ ] Confirm an exposure patch displays a redacted backend diff on desktop and phone; approve once, replay exact request, then verify approval cannot be reused.
 ## Settings choice discovery (#1908-c327)
 
 - [ ] After Boss restarts `make dev` or installs a rebuilt release, open Notifications and explicitly refresh output devices. Verify real device names/default markers and selection persistence. Disconnect or deny the audio backend and verify failure is not shown as a supported empty device list. No hardware success is claimed by the isolated owner tests.
@@ -2363,3 +2369,5 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] #1756-4d42: after Boss restarts `make dev` (Rust does not hot-reload), resolve a Jira URL and cancel while headers/body are pending; confirm no late result and active requests stop. No live restart was performed by w-1756.
 
 - [ ] Telegram ACP replies (#1959-162a): after Boss manually restarts `make dev` or rebuilds release, send two requests and explicitly finish the first before a streaming tick. The first ACP turn must not also answer the second request. The pre-fix loopback regression recorded duplicate finals; post-fix integration and live phone checks remain coordinator-owned. Rust changes do not hot-reload.
+
+- [ ] Settings typed-owner cutover (#1787-4778): after Boss restarts make dev or installs a rebuilt release, enable settings through trusted UI and verify MCP/HTTP/IPC readback, owner choice refresh, typed credential presence, one-connection reconnect, and rejected remote/non-owning targets in an isolated instance. No live app restart was performed by the agent.

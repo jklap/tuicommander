@@ -8,7 +8,6 @@ use tauri::Emitter;
 use super::mcp_transport::insert_optional_value;
 use super::mcp_transport::run_blocking_handler;
 use super::mcp_transport::to_json_or_error;
-use super::mcp_transport_catalogue::CONFIG_ACTIONS;
 use super::mcp_transport_catalogue::DEBUG_ACTIONS;
 use super::mcp_transport_catalogue::REMOTE_ACTIONS;
 use super::mcp_transport_catalogue::REPO_ACTIONS;
@@ -507,130 +506,6 @@ async fn handle_worktree_with_caller(
         }
         other => serde_json::json!({"error": format!(
             "Unknown action '{}' for tool 'repo'. Available: {}", other, REPO_ACTIONS
-        )}),
-    }
-}
-
-pub(super) fn handle_config(
-    state: &Arc<AppState>,
-    addr: SocketAddr,
-    args: &serde_json::Value,
-) -> serde_json::Value {
-    let action = match require_action(args, "config", CONFIG_ACTIONS) {
-        Ok(a) => a,
-        Err(e) => return e,
-    };
-    match action {
-        "get" => {
-            let config = state.config.read().clone();
-            let mut json = to_json_or_error(config);
-            if let Some(services) = json.pointer_mut("/services") {
-                if let Some(auth) = services.pointer_mut("/auth")
-                    && let Some(o) = auth.as_object_mut()
-                {
-                    o.remove("password_hash");
-                    o.remove("session_token");
-                }
-                if let Some(push) = services.pointer_mut("/push")
-                    && let Some(o) = push.as_object_mut()
-                {
-                    o.remove("vapid_private_key");
-                }
-                if let Some(relay) = services.pointer_mut("/relay")
-                    && let Some(o) = relay.as_object_mut()
-                {
-                    o.remove("token");
-                }
-            }
-            json
-        }
-        "save" => {
-            if !addr.ip().is_loopback() {
-                return serde_json::json!({"error": "Config save is restricted to localhost connections"});
-            }
-            let request: crate::config::ConfigSaveRequest<crate::config::AppConfig> =
-                match serde_json::from_value(args.clone()) {
-                    Ok(request) => request,
-                    Err(error) => {
-                        return serde_json::json!({"error": format!("Invalid config save request: {error}")});
-                    }
-                };
-            match crate::config::commit_config_save(state, request.base, request.config) {
-                Ok(effects) => {
-                    if effects.tools_changed {
-                        let _ = state.mcp.tools_changed.send(());
-                    }
-                    if effects.server_changed {
-                        super::restart_after_server_settings_change(
-                            state,
-                            "remote-access configuration changed over MCP",
-                        );
-                    }
-                    serde_json::json!({"ok": true})
-                }
-                Err(e) => serde_json::json!({"error": e}),
-            }
-        }
-        "list_prompts" => {
-            let lib = crate::config::load_prompt_library();
-            serde_json::json!({
-                "prompts": lib.prompts.iter().map(|p| serde_json::json!({
-                    "id": p.id, "label": p.label, "pinned": p.pinned,
-                })).collect::<Vec<_>>()
-            })
-        }
-        "load_prompt" => {
-            let id = match require_string(args, "id") {
-                Ok(s) => s,
-                Err(e) => return e,
-            };
-            let lib = crate::config::load_prompt_library();
-            match lib.prompts.iter().find(|p| p.id == id) {
-                Some(p) => to_json_or_error(p.clone()),
-                None => serde_json::json!({"error": format!("Prompt not found: {id}")}),
-            }
-        }
-        "save_prompt" => {
-            if !addr.ip().is_loopback() {
-                return serde_json::json!({"error": "Prompt save is restricted to localhost connections"});
-            }
-            let id = match require_string(args, "id") {
-                Ok(s) => s.to_string(),
-                Err(e) => return e,
-            };
-            let label = match require_string(args, "label") {
-                Ok(s) => s.to_string(),
-                Err(e) => return e,
-            };
-            let text = match require_string(args, "text") {
-                Ok(s) => s.to_string(),
-                Err(e) => return e,
-            };
-            let pinned = args
-                .get("pinned")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            let mut lib = crate::config::load_prompt_library();
-            let base = lib.clone();
-            if let Some(existing) = lib.prompts.iter_mut().find(|p| p.id == id) {
-                existing.label = label;
-                existing.text = text;
-                existing.pinned = pinned;
-            } else {
-                lib.prompts.push(crate::config::PromptEntry {
-                    id,
-                    label,
-                    text,
-                    pinned,
-                });
-            }
-            match crate::config::save_prompt_library(base, lib) {
-                Ok(()) => serde_json::json!({"ok": true}),
-                Err(e) => serde_json::json!({"error": e}),
-            }
-        }
-        other => serde_json::json!({"error": format!(
-            "Unknown action '{}' for tool 'config'. Available: {}", other, CONFIG_ACTIONS
         )}),
     }
 }
@@ -2092,7 +1967,8 @@ pub(super) async fn handle_confirm(
             .read()
             .disabled_native_tools
             .iter()
-            .any(|tool| tool == "settings");
+            .any(|tool| tool == "settings")
+            && state.config.read().settings_mcp_enabled;
         let caller = crate::settings::policy::Caller::mcp(addr, connection.to_owned(), enabled);
         return super::confirm_settings(state, &caller, id, mcp_session_id).await;
     }

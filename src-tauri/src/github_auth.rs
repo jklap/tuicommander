@@ -169,8 +169,21 @@ pub(crate) async fn github_poll_login_impl(
     state: &Arc<AppState>,
     device_code: String,
 ) -> Result<PollResult, String> {
+    let epoch = state.github.login_epoch.load(Ordering::SeqCst);
+    github_poll_login_impl_at_epoch(state, device_code, epoch).await
+}
+
+pub(crate) async fn github_poll_login_impl_at_epoch(
+    state: &Arc<AppState>,
+    device_code: String,
+    epoch: u64,
+) -> Result<PollResult, String> {
     let result = poll_device_flow(&state.http_client, &device_code).await?;
 
+    let _commit = state.github.login_commit.lock().await;
+    if state.github.login_epoch.load(Ordering::SeqCst) != epoch {
+        return Ok(PollResult::Expired);
+    }
     if let PollResult::Success {
         ref access_token, ..
     } = result
@@ -228,8 +241,21 @@ pub(crate) async fn github_poll_add_account_impl(
     state: &Arc<AppState>,
     device_code: String,
 ) -> Result<PollResult, String> {
+    let epoch = state.github.login_epoch.load(Ordering::SeqCst);
+    github_poll_add_account_impl_at_epoch(state, device_code, epoch).await
+}
+
+pub(crate) async fn github_poll_add_account_impl_at_epoch(
+    state: &Arc<AppState>,
+    device_code: String,
+    epoch: u64,
+) -> Result<PollResult, String> {
     let result = poll_device_flow(&state.http_client, &device_code).await?;
 
+    let _commit = state.github.login_commit.lock().await;
+    if state.github.login_epoch.load(Ordering::SeqCst) != epoch {
+        return Ok(PollResult::Expired);
+    }
     if let PollResult::Success {
         ref access_token, ..
     } = result
@@ -270,6 +296,8 @@ pub(crate) async fn github_logout(state: State<'_, Arc<AppState>>) -> Result<(),
 }
 
 pub(crate) async fn github_logout_impl(state: &Arc<AppState>) -> Result<(), String> {
+    let _commit = state.github.login_commit.lock().await;
+    state.github.login_epoch.fetch_add(1, Ordering::SeqCst);
     tokio::task::spawn_blocking(delete_github_oauth_token)
         .await
         .map_err(|e| format!("keyring task panicked: {e}"))??;
@@ -306,6 +334,8 @@ pub(crate) async fn github_disconnect(state: State<'_, Arc<AppState>>) -> Result
 }
 
 pub(crate) async fn github_disconnect_impl(state: &Arc<AppState>) -> Result<(), String> {
+    let _commit = state.github.login_commit.lock().await;
+    state.github.login_epoch.fetch_add(1, Ordering::SeqCst);
     // Delete OAuth token from keyring if present
     if let Err(e) = tokio::task::spawn_blocking(delete_github_oauth_token)
         .await
@@ -823,7 +853,7 @@ mod tests {
     fn a_successful_login_invalidates_the_viewer_login() {
         let src = include_str!("github_auth.rs");
         let body = src
-            .split("pub(crate) async fn github_poll_login_impl(")
+            .split("pub(crate) async fn github_poll_login_impl_at_epoch(")
             .nth(1)
             .and_then(|rest| rest.split("\n}\n").next())
             .expect("github_poll_login_impl must exist");

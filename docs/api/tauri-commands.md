@@ -1015,6 +1015,10 @@ See the HTTP reference for action arguments and typed error prefixes.
 
 `send_agent_input_if_empty { sessionId, text } -> boolean` submits only to a confirmed-idle agent with no awaiting question, tracked draft, or queued command. Checks, split writes, and input bookkeeping share the per-session input transaction with raw UI and HTTP input. HTTP: `POST /sessions/{id}/input-if-empty { text }`.
 
+## Shared settings action (#1787-4778)
+
+`settings_action(request: JSON) -> JSON` uses the same Rust-generated envelope as POST `/settings/action` and MCP settings. Native caller authority is host-issued, never deserialized from the request. Typed owner workflows use the same envelope and explicit machine target. Owner transactions remain inventory-gated.
+
 ### Audio choice availability (#1908-c327, #1909-0d24)
 
 Existing input/output device enumeration returns the same device objects on success, including a successful empty array. Backend enumeration failure now returns an error rather than an empty array. Internal settings choice refresh reuses those owners; cache-only describe and typed voice asset actions are not new public routes in this change. The settings transport cutover remains separate.

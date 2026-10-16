@@ -27,6 +27,7 @@ export const LocalMcpPanel: Component = () => {
 	// The toggles wait for the saved list: the `[]` placeholder would show every
 	// tool as enabled until `load_config` answers.
 	const [nativeToolsLoaded, setNativeToolsLoaded] = createSignal(false);
+	const [settingsEnabled, setSettingsEnabled] = createSignal(false);
 	const [collapseTools, setCollapseTools] = createSignal<boolean>(false);
 	const [bridgeInfo, setBridgeInfo] = createSignal<{ bridge_path: string; config_snippet: string } | null>(null);
 	const [bridgeInfoOpen, setBridgeInfoOpen] = createSignal(false);
@@ -36,6 +37,7 @@ export const LocalMcpPanel: Component = () => {
 		try {
 			const config = await rpc<AppConfig>("load_config");
 			setDisabledNativeTools(config.disabled_native_tools ?? []);
+			setSettingsEnabled(config.settings_mcp_enabled ?? false);
 			setCollapseTools(config.collapse_tools ?? false);
 		} catch (e) {
 			appLogger.warn("config", "Failed to load native tool config, using defaults", e);
@@ -97,6 +99,7 @@ export const LocalMcpPanel: Component = () => {
 				<div class={s.group}>
 					<p class={s.hint}>Native tools exposed via MCP. Disable tools to restrict what AI agents can access.</p>
 				</div>
+
 
 				<div class={s.group}>
 					<button
@@ -180,7 +183,8 @@ export const LocalMcpPanel: Component = () => {
 					</div>
 					<For each={nativeTools}>
 						{(tool) => {
-							const disabled = () => disabledNativeTools().includes(tool.name);
+							const disabled = () =>
+								disabledNativeTools().includes(tool.name) || (tool.name === "settings" && !settingsEnabled());
 							return (
 								<SettingRow label={tool.name} hint={tool.summary} help={tool.description}>
 									{(id, descriptionId) => (
@@ -199,6 +203,10 @@ export const LocalMcpPanel: Component = () => {
 												setDisabledNativeTools(updated);
 												saveConfigField((c) => {
 													c.disabled_native_tools = updated;
+													if (tool.name === "settings") {
+														c.settings_mcp_enabled = enabled;
+														setSettingsEnabled(enabled);
+													}
 												});
 											}}
 										/>

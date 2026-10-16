@@ -21,6 +21,7 @@ pub(crate) mod mcp_transport;
 mod mcp_transport_ancillary;
 #[cfg(test)]
 mod settings_policy_confirm_tests;
+mod settings_routes;
 pub(crate) use mcp_transport_ancillary::confirm_settings;
 mod mcp_transport_catalogue;
 mod mcp_transport_peer;
@@ -1887,6 +1888,7 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             "/config/pane-layout",
             get(config_routes::get_pane_layout).put(config_routes::put_pane_layout),
         )
+        .route("/settings/action", post(settings_routes::settings_action))
         .route("/config/clear-caches", post(config_routes::clear_caches))
         .route(
             "/config/clear-repo-caches",

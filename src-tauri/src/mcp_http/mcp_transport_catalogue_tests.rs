@@ -208,6 +208,7 @@ async fn native_tool_definitions_are_the_one_surviving_family() {
     {
         let mut config = state.config.write();
         config.disabled_native_tools.clear();
+        config.settings_mcp_enabled = true;
         config.collapse_tools = false;
     }
     let listed = tools_list_result(
@@ -236,7 +237,7 @@ async fn native_tool_definitions_are_the_one_surviving_family() {
             "progress",
             "ui",
             "plugin_dev_guide",
-            "config",
+            "settings",
             "debug",
             "voice",
         ],
@@ -867,25 +868,20 @@ async fn call_tool_returns_unknown_tool_error_for_bogus_name() {
 
 #[tokio::test]
 async fn call_tool_propagates_addr_for_localhost_only_tools() {
-    // config save is restricted to loopback addresses. call_tool must propagate
-    // the caller's addr so the restriction still fires through the meta layer.
     let state = test_state();
+    state.config.write().settings_mcp_enabled = true;
+    state.config.write().disabled_native_tools.clear();
     let r = handle_call_tool(
         &state,
         non_loopback_addr(),
         &serde_json::json!({
-            "tool_name": "config",
-            "arguments": { "action": "save", "config": {} }
+            "tool_name":"settings", "arguments":{"action":"refresh","store":"ego"}
         }),
-        None,
+        Some("remote-test"),
         None,
     )
     .await;
-    let err = r["error"].as_str().unwrap();
-    assert!(
-        err.contains("localhost"),
-        "non-loopback config save must be rejected via addr propagation: {err}"
-    );
+    assert_eq!(r["error"]["code"], "forbidden_origin", "{r}");
 }
 
 #[tokio::test]
@@ -1530,13 +1526,12 @@ fn every_documented_action_constant_matches_schema_and_description() {
     // `debug` is the one exemption: its description points at `action=help`,
     // which returns the full usage guide, so duplicating five action bullets
     // into a tool that is disabled by default would buy nothing.
-    let cases: [(&str, &str, bool); 8] = [
+    let cases: [(&str, &str, bool); 7] = [
         ("session", SESSION_ACTIONS, true),
         ("agent", AGENT_ACTIONS, true),
         ("task", TASK_ACTIONS, true),
         ("repo", REPO_ACTIONS, true),
         ("ui", UI_ACTIONS, true),
-        ("config", CONFIG_ACTIONS, true),
         ("voice", VOICE_ACTIONS, true),
         ("debug", DEBUG_ACTIONS, false),
     ];
