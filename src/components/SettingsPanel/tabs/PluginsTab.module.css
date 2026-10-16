@@ -426,6 +426,11 @@
 .pluginActions details { min-width: 130px; }
 .pluginActions details[open] { display: flex; flex-direction: column; gap: 8px; }
 
-.pluginPageHeader { display: flex; align-items: flex-start; gap: 12px; }
-.pluginPageHeader > svg { flex-shrink: 0; margin-top: 28px; color: var(--accent); }
-.pluginPageHeader > header { flex: 1; }
+.pluginPageHeader { position: relative; }
+.pluginPageHeader > svg { position: absolute; top: 28px; left: 0; color: var(--accent); }
+.pluginPageHeader > header > div { padding-left: 40px; }
+
+.installSuggestion > div > div:first-child { flex: 1; min-width: 0; }
+.installSuggestion > div > div:last-child { flex: 0 0 auto; }
+.installSuggestion > div > div:last-child > div { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+@media (max-width: 600px) { .installSuggestion > div > div:last-child > div { align-items: flex-start; } }

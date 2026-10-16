@@ -18,9 +18,9 @@ describe("Plugins settings work-item hints", () => {
 	// Catches: Settings listing no hint that Tasks needs a work-item plugin, so the user never finds where to get one.
 	it("hints at each work-item plugin that is not installed", () => {
 		render(() => <PluginsTab />);
-		expect(screen.getByText(/GitHub Work shows GitHub issues/)).toBeInTheDocument();
-		expect(screen.getByText(/GitLab shows GitLab issues/)).toBeInTheDocument();
-		expect(screen.getByText(/Jira shows Jira issues/)).toBeInTheDocument();
+		expect(screen.getByText(/GitHub issues and pull requests · Not installed/)).toBeInTheDocument();
+		expect(screen.getByText(/GitLab issues · Not installed/)).toBeInTheDocument();
+		expect(screen.getByText(/Jira issues · Not installed/)).toBeInTheDocument();
 	});
 
 	it("opens only a loaded catalogue page through its named Settings action", () => {
@@ -35,7 +35,7 @@ describe("Plugins settings work-item hints", () => {
 	it("drops the hint of an installed work-item plugin", () => {
 		pluginStore.registerPlugin("gitlab", { loaded: true });
 		render(() => <PluginsTab />);
-		expect(screen.queryByText(/GitLab shows GitLab issues/)).not.toBeInTheDocument();
-		expect(screen.getByText(/Jira shows Jira issues/)).toBeInTheDocument();
+		expect(screen.queryByText(/GitLab issues · Not installed/)).not.toBeInTheDocument();
+		expect(screen.getByText(/Jira issues · Not installed/)).toBeInTheDocument();
 	});
 });

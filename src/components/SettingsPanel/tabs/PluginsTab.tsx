@@ -412,7 +412,7 @@ export const PluginsTab: Component<{
 
 	return (
 		<div class={s.section}>
-			<div class={ps.sectionHeader}>
+			<div>
 				<SettingPageHeader
 					title="Manage plugins"
 					description="Manage installed plugins and browse the community registry."
@@ -483,10 +483,8 @@ export const PluginsTab: Component<{
 							<div class={ps.installSuggestion}>
 								<ListRow
 									name={setup.name ?? setup.pluginId}
-									description="Work-item integration · not installed"
-									actions={
-										<InstallWorkItemPlugin setup={setup} note="Install it to list those items in the Tasks tab." />
-									}
+									description={`${setup.purpose} · Not installed`}
+									actions={<InstallWorkItemPlugin setup={setup} compact />}
 								/>
 							</div>
 						)}
