@@ -106,6 +106,9 @@ request-scoped orchestration contract in `mcp_transport.rs`: it reuses the PTY
 injection claim, writer, input FSM, and output ring, then keeps the MCP response
 open for a bounded terminal-movement receipt. Desktop `write_pty` and
 `write_pty_parts` remain raw input primitives and make no acknowledgement claim.
+Raw input returns an uncertain-delivery error after two seconds rather than
+waiting indefinitely on a blocked writer. The write can still complete; do not
+retry automatically. Session close does not wait on the input writer.
 
 ## Design Mode (`design_mode/tauri_commands.rs`)
 

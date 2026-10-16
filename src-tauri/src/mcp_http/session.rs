@@ -164,7 +164,10 @@ pub(super) async fn write_to_session(
     Path(session_id): Path<String>,
     Json(body): Json<WriteRequest>,
 ) -> impl IntoResponse {
-    if let Err(e) = write_pty_input(&state, &session_id, &body.data) {
+    if let Err(e) =
+        crate::pty::run_bounded_pty_input(move || write_pty_input(&state, &session_id, &body.data))
+            .await
+    {
         if e == "Session not found" {
             return session_not_found();
         }
@@ -182,8 +185,12 @@ pub(super) async fn write_parts_to_session(
     Path(session_id): Path<String>,
     Json(body): Json<WritePartsRequest>,
 ) -> impl IntoResponse {
-    let parts: Vec<&str> = body.parts.iter().map(String::as_str).collect();
-    if let Err(e) = write_pty_input_parts(&state, &session_id, &parts) {
+    if let Err(e) = crate::pty::run_bounded_pty_input(move || {
+        let parts: Vec<&str> = body.parts.iter().map(String::as_str).collect();
+        write_pty_input_parts(&state, &session_id, &parts)
+    })
+    .await
+    {
         if e == "Session not found" {
             return session_not_found();
         }
@@ -620,8 +627,6 @@ pub(super) async fn close_session(
     Path(session_id): Path<String>,
 ) -> impl IntoResponse {
     if state.session_maps.sessions.contains_key(&session_id) {
-        // Send Ctrl+C then cleanup
-        let _ = write_pty_input_bytes(&state, &session_id, &[0x03]);
         // Broadcast to SSE/WebSocket consumers BEFORE cleanup: cleanup_session reaps
         // this session's per-session PTY channel, so the closed frame must be emitted
         // while the channel still exists. broadcast keeps the buffered frame available
@@ -646,6 +651,7 @@ pub(super) async fn close_session(
         let cleanup_session_id = session_id.clone();
         let cleanup_state = state.clone();
         if let Err(error) = tokio::task::spawn_blocking(move || {
+            crate::pty::close_pty_core(&cleanup_state, &cleanup_session_id, false);
             crate::pty::cleanup_session(&cleanup_session_id, &cleanup_state);
         })
         .await
@@ -1592,13 +1598,25 @@ async fn handle_ws_session(
     while let Some(Ok(msg)) = ws_receiver.next().await {
         match msg {
             Message::Text(text) => {
-                if let Err(error) = write_pty_input(&state_clone, &sid, &text) {
+                let input_state = state_clone.clone();
+                let input_sid = sid.clone();
+                if let Err(error) = crate::pty::run_bounded_pty_input(move || {
+                    write_pty_input(&input_state, &input_sid, &text)
+                })
+                .await
+                {
                     tracing::error!(session_id = %sid, %error, "PTY write failed");
                     break;
                 }
             }
             Message::Binary(data) => {
-                if let Err(error) = write_pty_input_bytes(&state_clone, &sid, &data) {
+                let input_state = state_clone.clone();
+                let input_sid = sid.clone();
+                if let Err(error) = crate::pty::run_bounded_pty_input(move || {
+                    write_pty_input_bytes(&input_state, &input_sid, &data)
+                })
+                .await
+                {
                     tracing::error!(session_id = %sid, %error, "PTY write failed");
                     break;
                 }
@@ -1795,13 +1813,25 @@ async fn handle_ws_log_session(
     while let Some(Ok(msg)) = ws_receiver.next().await {
         match msg {
             Message::Text(text) => {
-                if let Err(error) = write_pty_input(&state, &session_id, &text) {
+                let input_state = state.clone();
+                let input_sid = session_id.clone();
+                if let Err(error) = crate::pty::run_bounded_pty_input(move || {
+                    write_pty_input(&input_state, &input_sid, &text)
+                })
+                .await
+                {
                     tracing::error!(session_id = %session_id, %error, "PTY write failed");
                     break;
                 }
             }
             Message::Binary(data) => {
-                if let Err(error) = write_pty_input_bytes(&state, &session_id, &data) {
+                let input_state = state.clone();
+                let input_sid = session_id.clone();
+                if let Err(error) = crate::pty::run_bounded_pty_input(move || {
+                    write_pty_input_bytes(&input_state, &input_sid, &data)
+                })
+                .await
+                {
                     tracing::error!(session_id = %session_id, %error, "PTY write failed");
                     break;
                 }
@@ -1994,7 +2024,13 @@ async fn handle_ws_grid_session(
                 // No ACK needed — watch channel handles backpressure naturally.
             }
             Message::Binary(data) => {
-                if let Err(error) = write_pty_input_bytes(&state_clone, &sid, &data) {
+                let input_state = state_clone.clone();
+                let input_sid = sid.clone();
+                if let Err(error) = crate::pty::run_bounded_pty_input(move || {
+                    write_pty_input_bytes(&input_state, &input_sid, &data)
+                })
+                .await
+                {
                     tracing::error!(session_id = %sid, %error, "PTY write failed");
                     break;
                 }
@@ -3362,7 +3398,10 @@ mod tests {
         let fd = writer.as_raw_fd();
         let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
         assert!(flags >= 0);
-        assert_eq!(unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) }, 0);
+        assert_eq!(
+            unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) },
+            0
+        );
         loop {
             match std::io::Write::write(&mut writer, &[0; 4096]) {
                 Ok(n) => assert!(n > 0),
@@ -3394,12 +3433,17 @@ mod tests {
             State(state.clone()),
             Path(sid.to_string()),
             Json(WriteRequest { data: "x".into() }),
-        ).await.into_response();
+        )
+        .await
+        .into_response();
         let elapsed = started.elapsed();
         release.join().unwrap();
         crate::pty::close_pty_core(&state, sid, false);
         assert!(response.status().is_server_error());
-        assert!(elapsed < std::time::Duration::from_secs(3), "blocked write held HTTP for {elapsed:?}");
+        assert!(
+            elapsed < std::time::Duration::from_secs(3),
+            "blocked write held HTTP for {elapsed:?}"
+        );
     }
 
     /// Catches: close waits behind a blocked writer before it can kill the
@@ -3431,7 +3475,10 @@ mod tests {
         release.join().unwrap();
         blocked.join().unwrap();
         assert!(!state.session_maps.sessions.contains_key(sid));
-        assert!(elapsed < std::time::Duration::from_secs(1), "close waited for writer for {elapsed:?}");
+        assert!(
+            elapsed < std::time::Duration::from_secs(1),
+            "close waited for writer for {elapsed:?}"
+        );
     }
 
     #[cfg(unix)]

@@ -13,6 +13,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Restyle Workspace Settings with section cards, aligned terminal and Git fields, and action-first shortcut rows while preserving existing behavior.
 - Bound `tuic bg` completion command labels to one line and 120 characters; keep the full command before job output in the log (#1950-43b7).
 ### Fixed
+- Bound raw PTY input waits to two seconds and keep session close independent of blocked writers (#1957-38c1).
 - Expire abandoned urgent-mail notice reservations after 30 seconds so later urgent sends are not suppressed indefinitely (#1957-38c1).
 - Keep missing Pocket voices visible in Settings with a download action; use the installed same-language default for spoken replies.
 
