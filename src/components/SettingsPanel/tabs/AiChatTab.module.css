@@ -1,0 +1,5 @@
+.page, .perimeter { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.perimeter > section:has(> h3:first-child) { min-width: 0; }
+.page p, .perimeter p { overflow-wrap: anywhere; }
+.perimeter input, .perimeter select, .perimeter textarea { max-width: 100%; }
+.page pre { white-space: pre-wrap; overflow-wrap: anywhere; }
