@@ -12,6 +12,14 @@ describe("KeyboardShortcutsTab", () => {
 		expect(heading!.textContent).toBe("Keyboard Shortcuts");
 	});
 
+	it("keeps each action before its binding controls in reading and focus order", () => {
+		// Catches a visual-only reversal that leaves screen readers hearing keys before the action.
+		const { container } = render(() => <KeyboardShortcutsTab />);
+		const firstRow = container.querySelector("tr");
+		expect(firstRow?.firstElementChild?.textContent).toBe("New terminal tab");
+		expect(firstRow?.lastElementChild?.querySelector("button")?.textContent).toContain("Rebind");
+	});
+
 	it("has a search input", () => {
 		const { container } = render(() => <KeyboardShortcutsTab />);
 		const input = container.querySelector("input[type='text']");

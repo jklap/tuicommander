@@ -211,6 +211,8 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	// tabs/TerminalTab.tsx
 	{ tab: "terminal", section: "Theme", sectionKey: "appearance.heading.theme" },
 	{ tab: "terminal", section: "Terminal", sectionKey: "general.heading.terminal" },
+	{ tab: "terminal", section: "Preview" },
+	{ tab: "terminal", section: "Behavior" },
 	{ tab: "terminal", section: "Theme", label: "Terminal Theme", labelKey: "appearance.label.terminalTheme" },
 	{
 		tab: "terminal",
@@ -231,10 +233,10 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		configKey: "app.font_weight",
 	},
 	{ tab: "terminal", section: "Terminal", label: "Cursor Style", labelKey: "appearance.label.cursorStyle" },
-	{ tab: "terminal", section: "Terminal", label: "Copy on select", labelKey: "general.toggle.copyOnSelect" },
+	{ tab: "terminal", section: "Behavior", label: "Copy on select", labelKey: "general.toggle.copyOnSelect" },
 	{
 		tab: "terminal",
-		section: "Terminal",
+		section: "Behavior",
 		label: "Allow OSC 52 clipboard writes",
 		labelKey: "general.toggle.osc52Clipboard",
 		expert: true,
@@ -242,13 +244,13 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	},
 	{
 		tab: "terminal",
-		section: "Terminal",
+		section: "Behavior",
 		label: "Show block timestamps",
 		labelKey: "general.toggle.showBlockTimestamps",
 	},
 	{
 		tab: "terminal",
-		section: "Terminal",
+		section: "Behavior",
 		label: "Block folding",
 		labelKey: "general.toggle.blockFolding",
 		expert: true,
@@ -256,7 +258,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	},
 	{
 		tab: "terminal",
-		section: "Terminal",
+		section: "Behavior",
 		label: "Show scrollbar marks",
 		labelKey: "general.toggle.showScrollbarMarks",
 		expert: true,
@@ -264,7 +266,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	},
 	{
 		tab: "terminal",
-		section: "Terminal",
+		section: "Behavior",
 		label: "Reflow scrollback on resize",
 		labelKey: "general.toggle.scrollbackReflow",
 		expert: true,

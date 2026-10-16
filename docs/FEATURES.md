@@ -1,5 +1,7 @@
 # TUICommander — Complete Feature Reference
 
+Workspace Settings uses consistent headers, section cards, and aligned fields across Terminal, Keyboard Shortcuts, and Git & GitHub, with the existing preview, bindings, and account flows.
+
 Application Settings pages use shared headers, cards and right-aligned controls. Audio output discovery remains explicit; visual notification and client-local preferences retain their existing scope.
 
 

@@ -12,6 +12,8 @@ import { keyEventToCombo, validateGlobalHotkeyCombo } from "../../../utils/keyRe
 import { KeyComboCapture } from "../../shared/KeyComboCapture";
 import { Input } from "../../ui/Input";
 import s from "../Settings.module.css";
+import { SettingPageHeader, SettingRow } from "../SettingsPrimitives";
+import w from "./WorkspaceTabs.module.css";
 
 /**
  * Guard that remembers the pre-capture global-hotkey value and restores it
@@ -565,45 +567,57 @@ export const KeyboardShortcutsTab: Component = () => {
 	}
 
 	return (
-		<div class={s.section}>
-			<h3>{t("settings.keyboardShortcuts", "Keyboard Shortcuts")}</h3>
+		<div class={`${s.section} ${w.page}`}>
+			<SettingPageHeader
+				title={t("settings.keyboardShortcuts", "Keyboard Shortcuts")}
+				description="Find actions and customize their keyboard bindings."
+				scope="This client"
+				breadcrumb="Workspace / Keyboard Shortcuts"
+			/>
+			<h3 class={w.shortcutHeading}>{t("settings.keyboardShortcuts", "Keyboard Shortcuts")}</h3>
 
 			<Show when={isTauri()}>
-				<div class={s.group}>
-					<label>{t("settings.globalHotkey", "Global Hotkey (Toggle Window)")}</label>
-					<p class={s.hint} style={{ "margin-bottom": "8px" }}>
-						{t("settings.globalHotkeyHint", "Set an OS-level shortcut to show/hide TUICommander from any application.")}
-					</p>
-					<div style={{ display: "flex", "align-items": "center", gap: "8px" }}>
-						<KeyComboCapture
-							value={settingsStore.state.globalHotkey ? tauriToDisplay(settingsStore.state.globalHotkey) : ""}
-							onChange={handleGlobalHotkeyChange}
-							placeholder={t("settings.globalHotkeyPlaceholder", "Click to set hotkey")}
-							onCapturingChange={handleGlobalCapturingChange}
-						/>
-						<Show when={settingsStore.state.globalHotkey}>
-							<button
-								onClick={clearGlobalHotkey}
-								style={{
-									background: "none",
-									border: "1px solid var(--border)",
-									"border-radius": "var(--radius-md)",
-									padding: "4px 8px",
-									color: "var(--fg-secondary)",
-									cursor: "pointer",
-									"font-size": "var(--font-sm)",
-								}}
+				<SettingRow
+					label={t("settings.globalHotkey", "Global Hotkey (Toggle Window)")}
+					hint={t(
+						"settings.globalHotkeyHint",
+						"Set an OS-level shortcut to show/hide TUICommander from any application.",
+					)}
+					error={globalHotkeyError() ?? undefined}
+				>
+					{() => (
+						<>
+							<div
+								role="group"
+								aria-label="Global Hotkey (Toggle Window)"
+								style={{ display: "flex", "align-items": "center", gap: "8px" }}
 							>
-								{t("settings.clear", "Clear")}
-							</button>
-						</Show>
-					</div>
-					<Show when={globalHotkeyError()}>
-						<p style={{ color: "var(--error)", "font-size": "var(--font-sm)", "margin-top": "4px" }}>
-							{globalHotkeyError()}
-						</p>
-					</Show>
-				</div>
+								<KeyComboCapture
+									value={settingsStore.state.globalHotkey ? tauriToDisplay(settingsStore.state.globalHotkey) : ""}
+									onChange={handleGlobalHotkeyChange}
+									placeholder={t("settings.globalHotkeyPlaceholder", "Click to set hotkey")}
+									onCapturingChange={handleGlobalCapturingChange}
+								/>
+								<Show when={settingsStore.state.globalHotkey}>
+									<button
+										onClick={clearGlobalHotkey}
+										style={{
+											background: "none",
+											border: "1px solid var(--border)",
+											"border-radius": "var(--radius-md)",
+											padding: "4px 8px",
+											color: "var(--fg-secondary)",
+											cursor: "pointer",
+											"font-size": "var(--font-sm)",
+										}}
+									>
+										{t("settings.clear", "Clear")}
+									</button>
+								</Show>
+							</div>
+						</>
+					)}
+				</SettingRow>
 			</Show>
 
 			<div class={s.group}>
@@ -622,12 +636,15 @@ export const KeyboardShortcutsTab: Component = () => {
 
 			<For each={filteredSections()}>
 				{(section) => (
-					<div class={s.group}>
+					<div class={w.shortcutCategory}>
 						<label>{section.title}</label>
-						<table style={{ width: "100%", "border-collapse": "collapse" }}>
+						<table class={w.shortcuts}>
 							<For each={section.shortcuts}>
 								{(shortcut) => (
 									<tr style={{ cursor: "default" }}>
+										<td style={{ padding: "4px 8px", "font-size": "var(--font-base)", color: "var(--fg-secondary)" }}>
+											{shortcut.description}
+										</td>
 										<td style={{ width: "140px", padding: "4px 8px", "vertical-align": "middle" }}>
 											<Show
 												when={editingAction() === shortcut.action}
@@ -676,7 +693,7 @@ export const KeyboardShortcutsTab: Component = () => {
 																	e.currentTarget.style.opacity = "0.5";
 																}}
 															>
-																<PencilIcon />
+																<PencilIcon /> Rebind
 															</button>
 															<Show when={keybindingsStore.isOverridden(shortcut.action!)}>
 																<button
@@ -701,7 +718,7 @@ export const KeyboardShortcutsTab: Component = () => {
 																		e.currentTarget.style.opacity = "0.5";
 																	}}
 																>
-																	<ResetIcon />
+																	<ResetIcon /> Reset
 																</button>
 															</Show>
 														</Show>
@@ -716,9 +733,6 @@ export const KeyboardShortcutsTab: Component = () => {
 												/>
 											</Show>
 										</td>
-										<td style={{ padding: "4px 8px", "font-size": "var(--font-base)", color: "var(--fg-secondary)" }}>
-											{shortcut.description}
-										</td>
 									</tr>
 								)}
 							</For>
@@ -728,12 +742,18 @@ export const KeyboardShortcutsTab: Component = () => {
 			</For>
 
 			<Show when={pluginCommandRows().length > 0}>
-				<div class={s.group}>
+				<div class={w.shortcutCategory}>
 					<label>{t("helpPanel.pluginCommands", "Plugin Commands")}</label>
-					<table style={{ width: "100%", "border-collapse": "collapse" }}>
+					<table class={w.shortcuts}>
 						<For each={pluginCommandRows()}>
 							{(cmd) => (
 								<tr style={{ cursor: "default" }}>
+									<td style={{ padding: "4px 8px", "font-size": "var(--font-base)", color: "var(--fg-secondary)" }}>
+										<span style={{ color: "var(--fg-muted)", "font-size": "var(--font-sm)", "margin-right": "6px" }}>
+											[{cmd.pluginId}]
+										</span>
+										{cmd.label}
+									</td>
 									<td style={{ width: "140px", padding: "4px 8px", "vertical-align": "middle" }}>
 										<Show
 											when={editingAction() === cmd.action}
@@ -772,7 +792,7 @@ export const KeyboardShortcutsTab: Component = () => {
 															opacity: "0.5",
 														}}
 													>
-														<PencilIcon />
+														<PencilIcon /> Rebind
 													</button>
 													<Show when={keybindingsStore.isOverridden(cmd.action)}>
 														<button
@@ -790,7 +810,7 @@ export const KeyboardShortcutsTab: Component = () => {
 																opacity: "0.5",
 															}}
 														>
-															<ResetIcon />
+															<ResetIcon /> Reset
 														</button>
 													</Show>
 												</div>
@@ -803,12 +823,6 @@ export const KeyboardShortcutsTab: Component = () => {
 												onConfirmReplace={confirmConflictReplace}
 											/>
 										</Show>
-									</td>
-									<td style={{ padding: "4px 8px", "font-size": "var(--font-base)", color: "var(--fg-secondary)" }}>
-										<span style={{ color: "var(--fg-muted)", "font-size": "var(--font-sm)", "margin-right": "6px" }}>
-											[{cmd.pluginId}]
-										</span>
-										{cmd.label}
 									</td>
 								</tr>
 							)}

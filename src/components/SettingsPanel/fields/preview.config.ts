@@ -9,6 +9,9 @@ export default defineConfig({
 			? [
 					...[
 						"stores/settings",
+						"themes",
+						"stores/github",
+						"stores/repoDefaults",
 						"stores/updater",
 						"stores/repositories",
 						"stores/notifications",

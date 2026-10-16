@@ -1,7 +1,10 @@
+import commander from "../../../../src-tauri/src/themes/commander.json";
+import paper from "../../../../src-tauri/src/themes/vscode-light.json";
 import { createSignal } from "solid-js";
 import { createStore } from "solid-js/store";
 const [state, setState] = createStore({
   language: "en",
+ theme: "commander", font: "JetBrains Mono", defaultFontSize: 13, fontWeight: 400, cursorStyle: "bar", shell: "", copyOnSelect: true, osc52Clipboard: true, showBlockTimestamps: true, blockFoldingEnabled: true, showScrollbarMarks: true, scrollbackReflow: true, globalHotkey: "Super+Shift+Space", issueFilter: "assigned",
   showLastPrompt: true,
   closeBehavior: "ask",
   trayIcon: "background_only",
@@ -38,7 +41,7 @@ export const settingsStore = new Proxy({ state, isAcpConfigured: () => !!state.e
 export const IDE_NAMES = { vscode: "VS Code", cursor: "Cursor", none: "None" };
 export const updaterStore = { state: { checking: false, downloading: false, available: false, version: null, error: null, unsupported: "Illustrative fixture: update status has not been checked." }, checkForUpdate: async () => {
 } };
-const [repoState, setRepoState] = createStore({ groups: { work: { id: "work", name: "Work", color: "#4a9eff", collapsed: false, repoOrder: [] }, personal: { id: "personal", name: "Personal projects with a longer group name", color: "#a578d4", collapsed: false, repoOrder: [] } }, groupOrder: ["work", "personal"] });
+const [repoState, setRepoState] = createStore({ repositories: {}, groups: { work: { id: "work", name: "Work", color: "#4a9eff", collapsed: false, repoOrder: [] }, personal: { id: "personal", name: "Personal projects with a longer group name", color: "#a578d4", collapsed: false, repoOrder: [] } }, groupOrder: ["work", "personal"] });
 export const repositoriesStore = { state: repoState, renameGroup: (id, name) => {
   if (Object.values(repoState.groups).some((g) => g.id !== id && g.name === name)) return false;
   setRepoState("groups", id, "name", name);
@@ -66,7 +69,20 @@ export const openDialog = async () => null;
 export const invoke = async (cmd) => ({ get_home_directory: "/workspace", get_cli_status: { installed: true, path: "/usr/local/bin/tuic", version_match: true, auto_updatable: true }, mdkb_status: { available: true, connected: false, binaryPath: "/usr/local/bin/mdkb", version: "fixture" }, list_audio_output_devices: [{ name: "Illustrative speakers", is_default: true }] })[cmd];
 export const ExpertSetting = (props) => props.children;
 
-export const rpc=async()=>null;
+export const rpc=async(cmd)=>({
+ github_auth_status: {authenticated: true, login: "illustrative-account", avatar_url: null, source: "oauth", scopes: "repo"},
+ github_diagnostics: {circuit_breaker_open: false, circuit_breaker_status: "closed", repos_not_found: [], repos_monitored: 0},
+ github_list_accounts: [], github_resolve_repos: {}, circleci_token_status: {configured: false, source: "none"}
+})[cmd];
+export const FONT_FAMILIES = {"JetBrains Mono": "monospace"};
+export const githubStore = {setPrHideDrafts:()=>{},setIssueFilter:()=>{}};
+const [defaults, setDefaults] = createStore({baseBranch:"automatic",copyIgnoredFiles:false,copyUntrackedFiles:false,setupScript:"npm install",runScript:"npm run dev",archiveScript:"",worktreeStorage:"sibling",promptOnCreate:true,deleteBranchOnRemove:true,autoArchiveMerged:false,orphanCleanup:"ask",orphanCleanupCountdownSeconds:10,prMergeStrategy:"squash",afterMerge:"archive",autoFetchIntervalMinutes:0,autoDeleteOnPrClose:"off"});
+export const repoDefaultsStore = new Proxy({state: defaults}, {get(target,key){ if(key in target)return target[key]; return(value)=>{const field=key.slice(3);setDefaults(field[0].toLowerCase()+field.slice(1),value);}; }});
 export const owningConnectionFor=()=>undefined;
 export const listen=async()=>()=>{};
 export const UiLegend=()=>"Visual reference: busy, idle, attention and error states (isolated fixture).";
+
+export const DEFAULT_THEME = "commander";
+
+export const getThemeNames = () => ({commander:"Commander", "vscode-light":"Paper"});
+export const getTerminalTheme = () => (new URLSearchParams(location.search).get("theme") === "light" ? paper : commander).terminal;
