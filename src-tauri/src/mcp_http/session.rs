@@ -3350,6 +3350,90 @@ mod tests {
         );
     }
 
+    /// A full OS pipe, not a mocked writer: the next byte blocks in the kernel
+    /// until the read end is dropped. The bounded release keeps RED runs finite.
+    #[cfg(unix)]
+    fn full_kernel_pipe() -> (std::fs::File, std::fs::File) {
+        use std::os::fd::{AsRawFd, FromRawFd};
+        let mut fds = [-1; 2];
+        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+        let reader = unsafe { std::fs::File::from_raw_fd(fds[0]) };
+        let mut writer = unsafe { std::fs::File::from_raw_fd(fds[1]) };
+        let fd = writer.as_raw_fd();
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+        assert!(flags >= 0);
+        assert_eq!(unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) }, 0);
+        loop {
+            match std::io::Write::write(&mut writer, &[0; 4096]) {
+                Ok(n) => assert!(n > 0),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(error) => panic!("fill kernel pipe: {error}"),
+            }
+        }
+        assert_eq!(unsafe { libc::fcntl(fd, libc::F_SETFL, flags) }, 0);
+        (reader, writer)
+    }
+
+    /// Catches: a blocked kernel PTY write parks an HTTP runtime worker and
+    /// prevents the request from returning its own bounded uncertainty error.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn blocked_kernel_write_returns_a_bounded_http_error() {
+        let state = super::super::tests::test_state();
+        let sid = "blocked-http-write";
+        crate::state::tests_support::insert_dummy_session(&state, sid);
+        let (reader, writer) = full_kernel_pipe();
+        state.session_maps.sessions.get(sid).unwrap().lock().writer =
+            Arc::new(parking_lot::Mutex::new(Box::new(writer)));
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            drop(reader);
+        });
+        let started = std::time::Instant::now();
+        let response = write_to_session(
+            State(state.clone()),
+            Path(sid.to_string()),
+            Json(WriteRequest { data: "x".into() }),
+        ).await.into_response();
+        let elapsed = started.elapsed();
+        release.join().unwrap();
+        crate::pty::close_pty_core(&state, sid, false);
+        assert!(response.status().is_server_error());
+        assert!(elapsed < std::time::Duration::from_secs(3), "blocked write held HTTP for {elapsed:?}");
+    }
+
+    /// Catches: close waits behind a blocked writer before it can kill the
+    /// session, so its nominal 100ms grace window is never reached.
+    #[cfg(unix)]
+    #[test]
+    fn close_reaches_kill_fallback_while_kernel_writer_is_blocked() {
+        let state = super::super::tests::test_state();
+        let sid = "blocked-writer-close";
+        crate::state::tests_support::insert_dummy_session(&state, sid);
+        let (reader, writer) = full_kernel_pipe();
+        let shared: crate::state::SharedPtyWriter =
+            Arc::new(parking_lot::Mutex::new(Box::new(writer)));
+        state.session_maps.sessions.get(sid).unwrap().lock().writer = shared.clone();
+        let (locked_tx, locked_rx) = std::sync::mpsc::channel();
+        let blocked = std::thread::spawn(move || {
+            let mut writer = shared.lock();
+            locked_tx.send(()).unwrap();
+            let _ = std::io::Write::write_all(writer.as_mut(), b"x");
+        });
+        locked_rx.recv().unwrap();
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            drop(reader);
+        });
+        let started = std::time::Instant::now();
+        crate::pty::close_pty_core(&state, sid, false);
+        let elapsed = started.elapsed();
+        release.join().unwrap();
+        blocked.join().unwrap();
+        assert!(!state.session_maps.sessions.contains_key(sid));
+        assert!(elapsed < std::time::Duration::from_secs(1), "close waited for writer for {elapsed:?}");
+    }
+
     #[cfg(unix)]
     #[test]
     fn n_input_parts_share_one_writer_flush_and_preserve_write_boundaries() {
