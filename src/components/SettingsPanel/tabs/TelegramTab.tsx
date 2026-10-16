@@ -5,8 +5,7 @@ import { HttpRpcError } from "../../../transport";
 import { Input } from "../../ui/Input";
 import { SettingToggle } from "../SettingFields";
 import s from "../Settings.module.css";
-import { SectionCard, SettingPageHeader, SettingRow } from "../SettingsPrimitives";
-import telegram from "./TelegramTab.module.css";
+import { EmptyState, ListRow, SectionCard, SettingPageHeader, SettingRow, StatusSummary } from "../SettingsPrimitives";
 
 interface TelegramSettings {
 	enabled: boolean;
@@ -86,27 +85,58 @@ export const TelegramTab: Component = () => {
 		clearInterval(timer);
 	});
 	return (
-		<div class={`${s.section} ${telegram.panel}`}>
+		<div class={s.section}>
 			<SettingPageHeader
 				title="Telegram"
-				description="Bot setup, authorized chats and the polling owner on this machine."
+				description="Bot setup and authorized chats on this machine."
 				scope="This machine"
 				breadcrumb="Integrations / Telegram"
-			/>
-			<p class={s.hint}>
-				{t(
+				source={t(
 					"telegram.pollingHint",
 					"This app and tuic-remote share one polling owner on this machine. The other process stays on standby.",
 				)}
-			</p>
+			/>
 			<Show when={settings()}>
 				{(data) => (
 					<>
+						<StatusSummary
+							label={connectionLabel(data())}
+							tone={data().last_error || error() ? "error" : data().connected ? "success" : "warning"}
+							source={
+								error() ||
+								data().last_error ||
+								`Polling owner: ${{ this_app: "This app", tuic_remote: "tuic-remote", desktop: "Desktop app", another_process: "Another process", none: "Not connected" }[data().polling_owner ?? "none"] ?? "Not connected"} · Agent: ${data().registered_agent_name ?? "Not registered"}`
+							}
+							freshness={
+								data().last_message_time
+									? `Last message: ${new Date(data().last_message_time!).toLocaleString()}`
+									: undefined
+							}
+						>
+							<button class={s.testBtn} onClick={() => void refresh()} disabled={busy()}>
+								Reload status
+							</button>
+						</StatusSummary>
 						<SectionCard title="Bot setup">
-							<SettingRow label={t("telegram.token", "Bot token")}>
+							<SettingToggle
+								row
+								label={t("telegram.enabled", "Enable Telegram")}
+								checked={data().enabled}
+								onChange={(enabled) => {
+									if (!busy()) void change({ action: "configure", enabled });
+								}}
+							/>
+							<SettingRow
+								label={t("telegram.token", "Bot token")}
+								error={error() || undefined}
+								hint={
+									data().token_set
+										? `Token set${data().bot_alias ? ` (${data().bot_alias})` : ""}. Enter a replacement to change it.`
+										: "Token not set"
+								}
+							>
 								{(id, descriptionId) => (
-									<>
-										<p class={s.hint}>{data().token_set ? "Token set — enter a replacement" : "Token not set"}</p>
+									<div class={s.passwordRow}>
 										<Input
 											id={id}
 											aria-describedby={descriptionId()}
@@ -116,26 +146,51 @@ export const TelegramTab: Component = () => {
 											value={token()}
 											onInput={(e) => setToken(e.currentTarget.value)}
 										/>
-									</>
+										<button
+											class={s.testBtn}
+											disabled={busy() || !token()}
+											onClick={() => {
+												const value = token();
+												setToken("");
+												void change({ action: "token", token: value });
+											}}
+										>
+											Save and check bot
+										</button>
+									</div>
 								)}
 							</SettingRow>
-							<button
-								class={s.testBtn}
-								disabled={busy() || !token()}
-								onClick={() => {
-									const value = token();
-									setToken("");
-									void change({ action: "token", token: value });
-								}}
-							>
-								Save and check bot
-							</button>
-							<p class={s.hint}>{data().bot_alias}</p>
 						</SectionCard>
 						<SectionCard title="Chat access">
-							<SettingRow label={t("telegram.chat", "Authorized chats")}>
+							<Show
+								when={data().chats.length > 0}
+								fallback={
+									<EmptyState
+										title="No authorized chats"
+										description="Add a private chat ID or link a chat to allow messages from it."
+									/>
+								}
+							>
+								<For each={data().chats}>
+									{(id) => (
+										<ListRow
+											name={id}
+											actions={
+												<button
+													class={s.testBtn}
+													disabled={busy()}
+													onClick={() => void change({ action: "remove_chat", chat_id: id })}
+												>
+													Remove
+												</button>
+											}
+										/>
+									)}
+								</For>
+							</Show>
+							<SettingRow label={t("telegram.chat", "Authorized chats")} hint="Private chat ID">
 								{(id, descriptionId) => (
-									<>
+									<div class={s.passwordRow}>
 										<Input
 											id={id}
 											aria-describedby={descriptionId()}
@@ -145,91 +200,61 @@ export const TelegramTab: Component = () => {
 											value={chat()}
 											onInput={(e) => setChat(e.currentTarget.value)}
 										/>
-									</>
-								)}
-							</SettingRow>
-							<button
-								class={s.testBtn}
-								disabled={busy() || !chat()}
-								onClick={() => void change({ action: "add_chat", chat_id: chat() })}
-							>
-								Add chat ID
-							</button>
-							<For each={data().chats}>
-								{(id) => (
-									<p>
-										{id}{" "}
 										<button
 											class={s.testBtn}
-											disabled={busy()}
-											onClick={() => void change({ action: "remove_chat", chat_id: id })}
+											disabled={busy() || !chat()}
+											onClick={() => void change({ action: "add_chat", chat_id: chat() })}
 										>
-											Remove
+											Add chat ID
 										</button>
-									</p>
+									</div>
 								)}
-							</For>
-							<button
-								class={s.testBtn}
-								disabled={busy() || !data().enabled || !data().connected}
-								onClick={() => void change({ action: "pair" })}
-							>
-								Link chat
-							</button>
-							<Show when={code() && data().enabled && data().connected}>
-								<p class={s.hint}>
-									Send {code()} to the bot. One use, valid for 10 minutes. A bare /start does not authorize a chat.
-								</p>
-							</Show>
-							<Show when={!data().connected}>
-								<p class={s.hint}>
-									{t(
-										"telegram.pairingUnavailable",
-										"Connect a poller before linking a chat. Check the connection status below.",
-									)}
-								</p>
-							</Show>
-						</SectionCard>
-						<SectionCard title="Polling status">
-							<SettingRow label="Polling owner">
-								{() => <span>{data().polling_owner ?? "Not connected"}</span>}
 							</SettingRow>
-							<button onClick={() => void refresh()} disabled={busy()}>
-								Reload status
-							</button>
-							<p class={s.hint} aria-live="polite">
-								{data().registered_agent_name
-									? `registered agent: ${data().registered_agent_name}`
-									: t("telegram.noAgent", "No agent registered")}
-							</p>
-							<p class={s.hint}>
-								{t(
-									"telegram.registrationHint",
-									"Ask an agent in the polling app to call the Telegram MCP tool with action register. Registration lasts until the agent or polling app exits.",
+							<SettingRow
+								label="Link a chat"
+								hint={
+									code() && data().enabled && data().connected
+										? `Send ${code()} to the bot. One use, valid for 10 minutes. A bare /start does not authorize a chat.`
+										: !data().connected
+											? t(
+													"telegram.pairingUnavailable",
+													"Connect a poller before linking a chat. Check the connection status below.",
+												)
+											: "Generate a one-use code, then send it to the bot from your chat."
+								}
+							>
+								{() => (
+									<button
+										class={s.testBtn}
+										disabled={busy() || !data().enabled || !data().connected}
+										onClick={() => void change({ action: "pair" })}
+									>
+										Link chat
+									</button>
 								)}
-							</p>
-							<SettingToggle
-								row
-								label={t("telegram.enabled", "Enable Telegram")}
-								checked={data().enabled}
-								onChange={(enabled) => {
-									if (!busy()) void change({ action: "configure", enabled });
-								}}
-							/>
-							<p role="status" class={s.hint}>
-								{connectionLabel(data())}
-							</p>
-							<Show when={data().last_error}>
-								<p class={s.warning}>{data().last_error}</p>
-							</Show>
-							<Show when={data().last_message_time}>
-								<p class={s.hint}>Last message: {new Date(data().last_message_time ?? 0).toLocaleString()}</p>
-							</Show>
+							</SettingRow>
+						</SectionCard>
+						<SectionCard
+							title="Agent registration"
+							description={t(
+								"telegram.registrationHint",
+								"Ask an agent in the polling app to call the Telegram MCP tool with action register. Registration lasts until the agent or polling app exits.",
+							)}
+						>
+							<SettingRow label="Registered agent">
+								{() => (
+									<span aria-live="polite">
+										{data().registered_agent_name
+											? `registered agent: ${data().registered_agent_name}`
+											: t("telegram.noAgent", "No agent registered")}
+									</span>
+								)}
+							</SettingRow>
 						</SectionCard>
 					</>
 				)}
 			</Show>
-			<Show when={error()}>
+			<Show when={error() && !settings()}>
 				<p role="alert" class={s.warning}>
 					{error()}
 				</p>
