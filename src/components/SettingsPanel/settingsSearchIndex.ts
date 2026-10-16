@@ -536,7 +536,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{ tab: "telegram", section: "Recent messages" },
 	{ tab: "telegram", section: "Bot setup", label: "Enable Telegram", labelKey: "telegram.enabled" },
 	{ tab: "telegram", section: "Bot setup", label: "Bot token", labelKey: "telegram.token" },
-	{ tab: "telegram", section: "Chat access", label: "Authorized chats", labelKey: "telegram.chat" },
+	{ tab: "telegram", section: "Chat access", label: "Add chat by ID" },
 	{ tab: "telegram", section: "Chat access", label: "Link a chat" },
 	{ tab: "telegram", section: "Agent registration", label: "Registered agent" },
 	{ tab: "dictation", section: "Dictation", sectionKey: "dictation.heading.dictation" },
