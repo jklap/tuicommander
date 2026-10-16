@@ -5307,6 +5307,56 @@ mod tests {
     }
 
     #[test]
+    fn downloading_the_selected_voice_replaces_the_cached_fallback_for_the_next_reply() {
+        // Catches: downloading the selected voice leaves hands-free on giovanni
+        // indefinitely even though Listen now resolves bill_boerst.
+        let (dictation, gate, _config) = armed_with_a_voice("session-a");
+        let base = get_dictation_config();
+        save_dictation_config(
+            base.clone(),
+            DictationConfig {
+                speech_voice: "bill_boerst".into(),
+                ..base
+            },
+            Some(&dictation),
+        )
+        .unwrap();
+        install_asset(speech::assets::runtime());
+        install_asset(speech::assets::for_language_code("it").unwrap());
+        // The production resolver establishes the queue's initial voice. Only
+        // synthesis and the audio device are substituted; no model is executed.
+        let (_, voice) = build_voice(&get_dictation_config(), &dictation.speech, "it").unwrap();
+        let generation = dictation.hands_free.lock().generation();
+        *dictation.speaker.lock() = Some(speaker::Armed {
+            speaker: Arc::new(speaker::Speaker::new(
+                Arc::new(HeldSpeech {
+                    gate: Arc::clone(&gate),
+                }),
+                Arc::new(QuietOutput),
+                generation,
+            )),
+            voice,
+            language: "it".into(),
+        });
+        let held = gate.lock();
+        let first = speak(&dictation, Caller::Owner, "prima", None).unwrap();
+        assert_eq!(speech_status(&dictation, None).voice, "giovanni");
+        drop(held);
+        wait_for_utterance(&dictation, &first.utterance_id, "finished");
+
+        // This is the same on-disk result as a completed catalogue download.
+        install_asset(speech::assets::find("voice-italian-bill_boerst").unwrap());
+        let held = gate.lock();
+        speak(&dictation, Caller::Owner, "dopo", None).unwrap();
+        assert_eq!(
+            speech_status(&dictation, None).voice,
+            "bill_boerst",
+            "the next reply must use the selected voice once its download is ready"
+        );
+        drop(held);
+    }
+
+    #[test]
     fn choose_voice_accepts_a_user_voice() {
         let (_root, _guard) = speech_root();
         let italian = speech::assets::for_language_code("it").expect("catalogue ships Italian");
