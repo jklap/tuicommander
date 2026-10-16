@@ -261,7 +261,17 @@ export function planSuggestOverlay(
 				blocks.push({ row: contRow, kind: "continuation" });
 				parts.push(`c${contRow}`);
 			}
-			if (hiddenRows.length > 0) row = hiddenRows.at(-1)!;
+			const end = hiddenRows.at(-1) ?? row;
+			// Removing a standalone protocol paragraph must not leave both of
+			// its separators adjacent. Keep the leading separator and omit one
+			// trailing blank only when both were recorded around this block.
+			if (getRow(row - 1)?.text.trim() === "" && getRow(end + 1)?.text.trim() === "") {
+				blocks.push({ row: end + 1, kind: "continuation" });
+				parts.push(`c${end + 1}`);
+				row = end + 1;
+			} else {
+				row = end;
+			}
 		} else if (!snapshot.isWrapped && ANSWER_MARKER_RE.test(text)) {
 			// The whole answer, not only its marker row. A wrapped row is never a
 			// line start, so an emoji the wrap happens to land on is not a marker.

@@ -19,6 +19,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 - Recover failed mobile views after a server outage through automatic or manual retry, without false empty/setup states, raw network errors or desktop restart advice (#1930-f4c2).
+- Exclude projected suggestion rows from copied terminal selections, including scrollback selections, remove the duplicate blank separator around an omitted suggestion block, and classify the full received viewport (#1935-eedd).
 
 - Apply asynchronous AI Chat session option offers before the first prompt so model and mode settings become available, without stale offer snapshots reverting a confirmed selection (#1918-2ea3).
 - Close AI Chat tabs with the middle mouse button through the normal guarded close path (#1922-8027).
