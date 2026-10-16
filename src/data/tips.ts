@@ -10,6 +10,12 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "Delete AI Chat conversations",
+		description:
+			"Open Conversations in AI Chat and use a row’s trash button to permanently delete its history after confirming the name.",
+		shortcut: null,
+	},
+	{
 		feature: "Idle agent hibernation",
 		description:
 			"Settings → Agents can hibernate unattended agent tabs after awake idle time. Open a hibernated tab or send it input to resume its saved session.",
@@ -157,6 +163,12 @@ export const TIPS: Tip[] = [
 		feature: "Conversation Launch Options",
 		description:
 			"Use the options button beside AI Chat's + to give one conversation its own ego profile, workspace and executable.",
+		shortcut: null,
+	},
+	{
+		feature: "AI Chat Repository Pin",
+		description:
+			"Use Pin repository beside the AI Chat composer to keep that conversation on one repository while you browse elsewhere. Draft parking stays separate.",
 		shortcut: null,
 	},
 	{

@@ -1866,3 +1866,9 @@ Linux is not a formality here: patch 3 replaced the pkg-config abseil lookup
 with an unconditional vendored subproject, and Linux is the one platform that
 *has* a system abseil for pkg-config to find. It is therefore the platform
 that patch most plausibly broke, and the only one upstream CI covered.
+
+## Voice settings choice owners (#1909-0d24)
+
+The internal voice settings owner uses cache-only `describe` and explicit `refresh` for input devices, Whisper models, installed Pocket voices and Edge voices. Refresh reads the configured language through the strict voice file owner. Model options include installed/downloadable state; installed voice options retain their source. Input backend failure is unavailable, not a supported empty list. Edge refresh may fetch the service catalogue; describe never fetches or downloads.
+
+`VoiceAction` provides typed assets, model download/delete, speech asset download/cancel/delete and voice import/delete. It delegates to the existing command owners and their allowlisted asset IDs, size validation and runtime locks. These are internal host methods for later transport publication, not an arbitrary command executor. Existing engine/language descriptors and runtime invalidation remain authoritative. Builds without dictation still describe unavailable voice fields.

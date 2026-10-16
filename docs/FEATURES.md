@@ -21,7 +21,9 @@ Published story workflows can start in Plans and Stories through the owning daem
 
 Desktop AI Chat uses the terminal composer’s pin and blue play buttons. The pin highlights a parked draft; tooltips identify Park, Restore, Swap, Send and Queue. Mobile Park and Stop share the input row with Attach and Send.
 
-AI Chat image paste discovers capabilities on first use and shares clipboard precedence with Ideas, terminal Compose, and terminal input: Finder image filenames allow attachments, while substantive text takes priority.
+
+
+AI Chat image paste discovers capabilities on first use and shares clipboard precedence with Ideas, terminal Compose, and terminal input: Finder image filenames allow attachments, while substantive text takes priority. An empty text clipboard flavor does not suppress an available image.
 
 ## Desktop close and quit
 
@@ -974,6 +976,8 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 - **Durable task handles**: `agent action=spawn` returns `task_id` and `poll_interval_ms` alongside `session_id`. The `task` MCP tool polls that handle without blocking — `task action=get` returns `{task_id, status, status_message?, result?, error_detail?, poll_interval_ms}` where status is `working|input_required|completed|failed|cancelled` (the last three final), and `task action=cancel` marks the task cancelled **without** killing the agent (`session action=kill` does that). Use this instead of `agent action=wait` / `session action=wait` when work runs past their 300 s cap or when the client may reconnect: the outcome is recorded by the session exit path whether or not anyone was listening. Tasks live for the TUICommander process only — they are deliberately not persisted, because a restart tears down every PTY
 
 ### 6.14 AI Chat Panel (`Cmd+Alt+A`) — ego over ACP
+
+- **Delete conversations** — the capability-gated Conversations list confirms the named conversation, deletes its ego history and closes its tab; refusals keep the conversation (#1917).
 
 When new content arrives while you read earlier messages, **New text below** appears above the composer. Select it to return to the bottom and resume following. Scrolling to the bottom also clears it; a search jump alone does not show it. Terminal Chat shares this behavior. Disable **New text indicator** in Settings → Appearance → Chat, or mobile Settings. The preference stays on the current client.
 
@@ -3083,3 +3087,27 @@ Hibernation requires an idle agent and a verified resume session in its saved pr
 The normal Rust suspension path persists `reason: "idle_hibernate"` before ending the PTY. Opening the tab, submitting input or sending peer mail uses the shared wake path. Storage or resume-verification failures leave the live session intact.
 
 Mobile outage recovery: one connection banner offers immediate retry, automatic session recovery refreshes failed view loads, and retained mobile views preserve drafts without desktop restart advice (#1930-f4c2).
+
+Settings owner validation covers typed shortcut records and bounded pane geometry. Geometry references existing groups; runtime tab membership and focus are not configurable settings (#1914-cdf6).
+### Internal settings choice discovery
+
+Owner-backed dynamic choices support cache-only describe and explicit refresh. Notification output devices retain their UI option objects and distinguish unavailable discovery from successful empty results (#1908-c327).
+
+
+Agent model settings support typed model edits without starting a CLI. Explicit
+choice refresh probes only the addressed Claude run config with `--help`, using
+its command and environment. Published aliases are suggestions, not account
+entitlement or an exhaustive model list. Other CLIs and failed probes report
+unavailable choices; typed edits remain supported. Describe never probes. Model
+edits preserve sibling configs and the default selection and apply next session
+(#1910-451e).
+
+App settings share bundled font and IDE option metadata between Rust and the UI. Theme/installed-IDE discovery uses explicit owner refresh; describe never launches discovery (#1915-d77f).
+
+### Voice owner discovery (#1909-0d24)
+
+Internal voice settings refresh resolves devices, model state, installed voices and language-filtered Edge voices through existing owners. Describe is cache-only; typed asset actions retain existing owner validation and runtime effects. Public settings transport cutover remains separate.
+
+AI Chat replies use plain chat prose without the terminal answer rail. Literal Markdown blockquotes keep their normal quote style.
+
+AI Chat can pin repository context per conversation. A separate composer control shows Pinned repository or Follow repository and the configured repository name color; draft parking stays independent.

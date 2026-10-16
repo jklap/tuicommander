@@ -1,6 +1,13 @@
 ## Async AI Chat options (1918-2ea3) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, open a new AI Chat tab without sending a prompt. Verify Session settings appears with model and mode choices; select an offered model. Repeat with delayed offers and multiple tabs, then verify replacement offers and snapshot refresh/reconnect preserve session isolation. No live app was restarted by this peer.
+## App setting choices (1915-d77f) — Rust restart required
+
+- [ ] After Boss manually restarts, use an isolated instance. Check bundled font choices and a custom theme agree with Settings UI. Explicitly refresh installed IDE choices and check their labels/availability on macOS, Windows and Linux. Describe must not launch discovery. No desktop instance or real user config was used by the agent.
+
+## Typed UI settings owners (1914-cdf6) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, use an isolated instance: set and disable a keyboard shortcut, reload, and confirm both persist. Split panes, switch focused panes and restore the layout; verify geometry and tab membership remain intact. The settings owner exposes only geometry, not runtime tab/focus identities. No running app was restarted.
 
 ## Urgent ego mail (1901-9b6b) — Rust restart required
 
@@ -2243,6 +2250,11 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] After installing the Tasks provider data update and moving the existing GitHub Work `data/config.json` to `data/work-items.json`, confirm GitHub Work loads and Tasks setup saves/reloads its repository. Repeat setup with Jira and GitLab. Backend code is unchanged; the Rust edit adds a regression test only.
 - [ ] #1904-9eef: After Boss restarts `make dev` (or rebuilds release), verify new launch/MCP marker instructions permit 💬 at the start of list-item text. In a Claude session, emit `- 💬 **Answer.**` with an indented continuation and nested item, followed by an unmarked sibling; check the green rule and hidden marker in CLI and Chat, then Answers-only scope. Frontend behavior does not require a Rust restart; updated launch instructions do.
 
+## Settings choice discovery (#1908-c327)
+
+- [ ] After Boss restarts `make dev` or installs a rebuilt release, open Notifications and explicitly refresh output devices. Verify real device names/default markers and selection persistence. Disconnect or deny the audio backend and verify failure is not shown as a supported empty device list. No hardware success is claimed by the isolated owner tests.
+
+- [ ] After the next scheduled backend rebuild, refresh Claude run-config model choices, save a model and confirm existing sessions remain unchanged (#1910-451e). No live instance was started during implementation.
 - [ ] After the next planned rebuild, verify Telegram token replacement with a real bot, presence-only readback, clear, and add/remove of an isolated private-chat ID. Verify the existing poller wakes without starting a second owner. Do not use production credentials in automated tests.
 
 - [ ] After planned settings cutover/rebuild, set and clear credentials on an isolated saved connection; verify presence-only replies, teardown/reconnect, and that remote-target requests do not mutate local credentials. Automated tests use the in-memory vault, not a real account or Keychain.
@@ -2267,3 +2279,15 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] #1879-05ad (closure handoff 2026-10-15): After loading the rebuilt backend, open Markdown tabs in a desktop repository; on iPhone open its session overflow menu and a Markdown entry, verify the viewer opens, then open/close a desktop Markdown tab and confirm the phone list refreshes without reload and excludes other repositories.
 
 - [ ] #1880-d7ff (closure handoff 2026-10-15): On iPhone check terminal and Chat composers: + / text-with-mic / Send order, + menu outside the textarea, outside-tap dismissal, Attach file and Take photo pickers, Chat Park/Restore, terminal Queue/long-press Send and microphone permission/cancel.
+## Voice settings discovery (#1909-0d24)
+
+- [ ] After Boss manually restarts the Rust app, verify Voice input device refresh, missing-backend errors, Whisper model installed/downloadable state and per-language installed/Edge voices. Edge needs an internet connection only on explicit refresh. Exercise download/cancel/delete/import through the existing UI owners with disposable assets; verify subsequent choice refresh and runtime invalidation. No hardware, network or real download success is claimed by fixture tests.
+
+## Settings owner gaps (#1906-5bf8, #1911-6214, #1912-5c77)
+- [ ] After Boss restarts the Rust build, use an isolated test owner: complete GitHub cloud device login; verify credential presence only, then enterprise token rotation/removal and binding cleanup. Do not use production accounts for destructive checks.
+- [ ] After restart, use an isolated upstream: start OAuth consent, rotate to bearer, rotate/clear a custom header, and confirm only that upstream reconnects; ensure no secret appears in replies/events/errors.
+- [ ] After restart, use an isolated registration file: edit a repository label and group name while workspace/tab state changes; verify owner readback, unchanged workspace identities, and no checkout/worktree deletion.
+
+## #1917 — AI Chat conversation deletion
+
+- [ ] Open AI Chat with installed ego; expand Conversations, capture the trash controls and named confirmation, then cancel. Delete a throwaway inactive conversation and confirm only its tab closes. Delete the selected last conversation, reload, and confirm it does not return. While a throwaway conversation is running, attempt deletion and confirm ego's refusal is shown without removing it. Repeat on browser/mobile Chat. No application restart is required for this frontend-only change.

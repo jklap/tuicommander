@@ -153,3 +153,59 @@ async fn bindings_save_failure_keeps_account_retriable() {
     assert!(GitHubAccountRegistry::load().get(&account.id).is_none());
     assert!(RepoBindingStore::load().entries().is_empty());
 }
+
+// Catches: credential actions missing despite account metadata coverage.
+#[test]
+fn github_credential_actions_are_catalogued() {
+    let catalogue = super::native::native_catalogue().unwrap();
+    let field = &catalogue.fields["github_accounts.accounts.{id}.credential"];
+    assert_eq!(field.path, "/accounts/{id}/credential");
+    assert!(field.default.is_none());
+    for operation in [
+        super::model::Operation::Get,
+        super::model::Operation::SetSecret,
+        super::model::Operation::ClearSecret,
+    ] {
+        assert!(field.annotation.operations.contains(&operation));
+    }
+    let schema = GithubSettings::action_schema().to_string();
+    for action in [
+        "begin_cloud_login",
+        "complete_cloud_login",
+        "add_enterprise",
+        "set_secret",
+        "clear_secret",
+        "remove_account",
+    ] {
+        assert!(schema.contains(action));
+    }
+}
+
+// Catches: provider or vault errors exposing credentials.
+#[tokio::test]
+async fn github_credential_action_failure_is_redacted() {
+    let (_dir, _guard, state) = isolated();
+    let account = GitHubAccount::ghe_pat(GitHubHost::new("vault-failure.example").unwrap(), None);
+    add_account_record(account.clone(), Some("original-token-canary")).unwrap();
+    let settings = GithubSettings::new(state);
+    crate::credentials::MOCK_FAIL_WRITES.store(true, std::sync::atomic::Ordering::SeqCst);
+    let result = settings
+        .perform(GithubAction::ClearSecret {
+            id: account.id.clone(),
+        })
+        .await;
+    crate::credentials::reset_test_faults();
+    let error = result.unwrap_err();
+    assert!(!error.persisted);
+    assert!(
+        !serde_json::to_string(&error)
+            .unwrap()
+            .contains("original-token-canary")
+    );
+    assert_eq!(
+        crate::credentials::get(Credential::AccountToken(&account.id))
+            .unwrap()
+            .as_deref(),
+        Some("original-token-canary")
+    );
+}

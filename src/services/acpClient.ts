@@ -347,6 +347,17 @@ export function createAcpClient(open: AcpStreamOpener = openAcpStream) {
 			return attachment.sessionId;
 		},
 
+		async deleteSession(connectionId: AcpConnectionId, sessionId: AcpSessionId): Promise<void> {
+			await invoke("acp_session_delete", { connectionId, sessionId });
+			// Deletion is already durable. A lost snapshot must not report a refusal
+			// and leave an open tab pointing at history the agent has removed.
+			try {
+				await this.refresh(connectionId);
+			} catch (error) {
+				appLogger.warn("ai-chat", "refresh after conversation deletion failed", error);
+			}
+		},
+
 		async closeSession(connectionId: AcpConnectionId, sessionId: AcpSessionId): Promise<void> {
 			await invoke("acp_session_close", { connectionId, sessionId });
 			await this.refresh(connectionId);
