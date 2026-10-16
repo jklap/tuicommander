@@ -20,7 +20,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Fix cache keepalive draft preservation with guarded backend submissions and complete question-state replay on plugin load.
 
 ### Added
-- Diagnose empty or off-screen mobile resume shells through the backend log ring without reloading the page (#1900-5ff6).
+- Preserve a bounded mobile lifecycle trail across reloads and send prior abnormal-document evidence automatically to the backend log ring; acknowledge HTTP 204 log writes so later mobile warnings are not lost. The reported iPhone grey-screen cause remains under investigation (#1900-5ff6).
 - Bind GitHub Work review threads and PR actions to the selected account through core policy, with desktop and HTTP parity (#1693-a816).
 - Hibernate unattended resumable agent tabs after configurable awake idle time, with background-only scope by default and shared wake on open, input or mail (#1808-389f).
 

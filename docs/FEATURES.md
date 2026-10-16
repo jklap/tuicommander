@@ -2088,6 +2088,11 @@ Agent-scoped plugin (`agentTypes: ["claude"]`) that wakes Claude Code when it st
 
 ## 18. Mobile Companion UI
 
+Mobile resume diagnostics retain a bounded per-tab lifecycle trail and upload
+the prior abnormal document automatically after the next boot. Log writes
+acknowledge HTTP 204 responses. This collects evidence; it does not claim to fix
+the reported iPhone grey screen. See the remote-access guide for storage limits.
+
 The session overflow menu has a **Markdown** section with the file tabs open on
 the desktop for the session repository. Each entry shows its title and relative
 path and opens the existing mobile Markdown viewer. Desktop opens and closes

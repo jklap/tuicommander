@@ -1,6 +1,7 @@
 import { createEffect, createMemo, createSignal, For, type JSX, onCleanup, onMount, Show } from "solid-js";
 import { appLogger } from "../../stores/appLogger";
 import { type PtySubscription, subscribePty } from "../../transport";
+import { recordMobileSocketState } from "../resumeTrail";
 import {
 	groupLineBlocks,
 	type LogLine,
@@ -198,8 +199,14 @@ export function OutputView(props: OutputViewProps) {
 	// pure battery and radio cost. Registered in the component body, not in the
 	// async mount, so the listener has an owner to be released by.
 	createVisibilityGate(
-		() => unsubscribe?.pause(),
-		() => unsubscribe?.resume(),
+		() => {
+			unsubscribe?.pause();
+			if (unsubscribe) recordMobileSocketState(props.sessionId, "paused");
+		},
+		() => {
+			if (unsubscribe) recordMobileSocketState(props.sessionId, "connecting");
+			unsubscribe?.resume();
+		},
 	);
 
 	onMount(async () => {
@@ -210,11 +217,13 @@ export function OutputView(props: OutputViewProps) {
 		const offset = await fetchInitialOutput();
 
 		try {
+			recordMobileSocketState(props.sessionId, "connecting");
 			unsubscribe =
 				(await subscribePty(
 					props.sessionId,
 					() => {}, // unused — onLogLines handles log delivery
 					() => {
+						recordMobileSocketState(props.sessionId, "closed");
 						setLogLines((prev) => [...prev, { spans: [{ text: "--- session exited ---" }] }]);
 						reconcileScreenRows([]);
 					},
@@ -237,14 +246,20 @@ export function OutputView(props: OutputViewProps) {
 						},
 						onStateChange: props.onStateChange,
 						onInputLine: props.onInputLine,
+						onReconnecting: () => recordMobileSocketState(props.sessionId, "reconnecting"),
+						onReconnected: () => recordMobileSocketState(props.sessionId, "open"),
 					},
 				)) ?? null;
 			// The subscription is installed after an awaited fetch. A page hidden
 			// during that window produced no visibilitychange to catch, so without
 			// this the stream would run until the next one — which for a tab
 			// restored in the background may never come.
-			if (document.visibilityState === "hidden") unsubscribe?.pause();
+			if (document.visibilityState === "hidden") {
+				unsubscribe?.pause();
+				recordMobileSocketState(props.sessionId, "paused");
+			} else if (unsubscribe) recordMobileSocketState(props.sessionId, "open");
 		} catch (err) {
+			recordMobileSocketState(props.sessionId, "failed");
 			const msg = err instanceof Error ? err.message : String(err);
 			appLogger.error("terminal", "Failed to subscribe to PTY output", { error: msg });
 			setSubscribeError(msg);
@@ -253,6 +268,7 @@ export function OutputView(props: OutputViewProps) {
 
 	onCleanup(() => {
 		unsubscribe?.();
+		if (unsubscribe) recordMobileSocketState(props.sessionId, "closed");
 		containerEl?.removeEventListener("scroll", handleScroll);
 		containerEl?.removeEventListener("touchstart", handleTouchStart);
 		containerEl?.removeEventListener("touchend", handleTouchEnd);

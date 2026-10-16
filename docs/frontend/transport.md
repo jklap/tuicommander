@@ -78,6 +78,12 @@ their non-empty body is malformed, while non-success HTTP statuses retain their
 status and command context. Binary `application/octet-stream` routes are the
 deliberate exception: an empty buffer can be a valid terminal chunk.
 
+The void log commands `push_log` and `clear_logs` declare `allowNoContent`.
+Their HTTP 204 responses acknowledge a successful write and resolve without
+a value. Other JSON commands still reject an empty response, including 204.
+This acknowledgement lets the mobile logger drain its startup queue instead
+of sending the first warning again on each later log call.
+
 ### PTY Subscription
 
 ```typescript

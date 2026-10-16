@@ -3207,3 +3207,18 @@ No live write or desktop-load verification is implied by recorded-fixture tests.
 ### Guarded automated agent input
 
 `POST /sessions/{id}/input-if-empty` accepts `{ "text": "[noop]" }` and returns a boolean. `false` means no input was sent because the agent is not ready, awaits input, has a tracked draft, or has queued commands. The backend serializes checks, split writes, and bookkeeping against raw user input. IPC equivalent: `send_agent_input_if_empty`.
+
+### Application log acknowledgements
+
+`POST /logs` accepts `{ level, source, message, data_json?, audience? }` and
+returns HTTP **204 No Content** after adding the entry to the backend log ring.
+`DELETE /logs` also returns 204 after clearing the ring. The matching browser
+RPCs (`push_log`, `clear_logs`) resolve without a JSON value. Data-returning RPCs
+still reject empty bodies. `GET /logs` returns the log entries as JSON.
+
+Mobile lifecycle diagnostics use the existing `POST /logs` route. A prior
+abnormal document's bounded trail uses source `app`, level `warn`, audience
+`diagnostic`, and message `Mobile previous document lifecycle trail`. The client
+keeps that report in per-tab session storage until an acknowledged upload. A
+lost acknowledgement can cause a retry; this route does not provide durable
+exactly-once delivery or persist the backend ring across an app restart.
