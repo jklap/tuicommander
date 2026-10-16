@@ -8,7 +8,7 @@ import type { EgoCliError, EgoCredential, EgoProviders } from "../../../types/eg
 import { asEgoCliError } from "../../../types/ego";
 import { Select } from "../../ui/Select";
 import s from "../Settings.module.css";
-import { SectionCard, SettingPageHeader, SettingRow } from "../SettingsPrimitives";
+import { ListRow, SectionCard, SettingPageHeader, SettingRow } from "../SettingsPrimitives";
 import layout from "./AiChatTab.module.css";
 import { EgoPerimeterSection } from "./EgoPerimeterSection";
 
@@ -176,52 +176,71 @@ export const AiChatTab: Component<{
 
 					<Match when={data()}>
 						{(loaded) => (
-							<SettingRow label={t("providers.label.defaultModel", "Default model")}>
+							<SettingRow
+								label={t("providers.label.defaultModel", "Default model")}
+								hint={t(
+									"providers.hint.refresh",
+									"Refresh asks ego to re-enumerate its sources, which is the only call here that reaches a provider over the network. TUICommander never makes one.",
+								)}
+							>
 								{(id, descriptionId) => (
-									<Select
-										id={id}
-										aria-describedby={descriptionId()}
-										disabled={busy()}
-										value={loaded().defaultModel ?? ""}
-										onChange={(event) => choose(event.currentTarget.value)}
-									>
-										{/* Present when ego has no `model` key set, so the picker
+									<div class={s.passwordRow}>
+										<Select
+											id={id}
+											aria-describedby={descriptionId()}
+											disabled={busy()}
+											value={loaded().defaultModel ?? ""}
+											onChange={(event) => choose(event.currentTarget.value)}
+										>
+											{/* Present when ego has no `model` key set, so the picker
 									    shows "nothing chosen" instead of silently claiming the
 									    first model in the list is the default. */}
-										<Show when={loaded().defaultModel === null}>
-											<option value="">{t("providers.noDefault", "None — ego picks its own")}</option>
-										</Show>
-										<For each={offering()}>
-											{(provider) => (
-												<optgroup label={provider.name}>
-													<For each={provider.models}>
-														{(model) => (
-															<option value={model.slug} disabled={!model.available}>
-																{model.name}
-															</option>
-														)}
-													</For>
-												</optgroup>
-											)}
-										</For>
-									</Select>
+											<Show when={loaded().defaultModel === null}>
+												<option value="">{t("providers.noDefault", "None — ego picks its own")}</option>
+											</Show>
+											<For each={offering()}>
+												{(provider) => (
+													<optgroup label={provider.name}>
+														<For each={provider.models}>
+															{(model) => (
+																<option value={model.slug} disabled={!model.available}>
+																	{model.name}
+																</option>
+															)}
+														</For>
+													</optgroup>
+												)}
+											</For>
+										</Select>
+										<button
+											class={s.testBtn}
+											disabled={busy()}
+											onClick={() => void attempt(() => client().providers(true))}
+										>
+											{t("providers.refresh", "Refresh from providers")}
+										</button>
+									</div>
 								)}
 							</SettingRow>
 						)}
 					</Match>
 				</Switch>
 
-				<div class={s.actions}>
-					<button disabled={busy()} onClick={() => void attempt(() => client().providers(true))}>
-						{t("providers.refresh", "Refresh from providers")}
-					</button>
-				</div>
-				<p class={s.hint}>
-					{t(
-						"providers.hint.refresh",
-						"Refresh asks ego to re-enumerate its sources, which is the only call here that reaches a provider over the network. TUICommander never makes one.",
-					)}
-				</p>
+				<Show when={!!error() || !data() || empty()}>
+					<SettingRow
+						label="Provider catalogue"
+						hint={t(
+							"providers.hint.refresh",
+							"Refresh asks ego to re-enumerate its sources, which is the only call here that reaches a provider over the network. TUICommander never makes one.",
+						)}
+					>
+						{() => (
+							<button class={s.testBtn} disabled={busy()} onClick={() => void attempt(() => client().providers(true))}>
+								{t("providers.refresh", "Refresh from providers")}
+							</button>
+						)}
+					</SettingRow>
+				</Show>
 				<Show when={(data()?.providers.length ?? 0) > 0}>
 					<details>
 						<summary>Other providers and available models</summary>
@@ -235,19 +254,19 @@ export const AiChatTab: Component<{
 						<For each={data()?.providers}>
 							{(provider) => (
 								<div class={s.group}>
-									<div class={layout.providerRow}>
-										<div>
-											<strong>{provider.name}</strong>
-											<CredentialBadge credential={provider.credential} />
-										</div>
-										<button
-											class={s.testBtn}
-											aria-label={`${t("providers.login", "Login")} to ${provider.name}`}
-											onClick={() => login(provider.name)}
-										>
-											{t("providers.login", "Login")}
-										</button>
-									</div>
+									<ListRow
+										name={provider.name}
+										badges={<CredentialBadge credential={provider.credential} />}
+										actions={
+											<button
+												class={s.testBtn}
+												aria-label={`${t("providers.login", "Login")} to ${provider.name}`}
+												onClick={() => login(provider.name)}
+											>
+												{t("providers.login", "Login")}
+											</button>
+										}
+									/>
 									<p class={s.availabilityDetail}>
 										<Show
 											when={provider.models.length > 0}

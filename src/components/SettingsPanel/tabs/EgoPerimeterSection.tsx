@@ -7,9 +7,8 @@ import { Input } from "../../ui/Input";
 import { Select } from "../../ui/Select";
 import { StatusBadge } from "../../ui/StatusBadge";
 import { Textarea } from "../../ui/Textarea";
-import { ContextualHelp } from "../ContextualHelp";
 import s from "../Settings.module.css";
-import { SectionCard, SettingRow } from "../SettingsPrimitives";
+import { ListRow, SectionCard, SettingRow, StatusSummary } from "../SettingsPrimitives";
 import layout from "./AiChatTab.module.css";
 
 export const EgoPerimeterSection: Component<{ client?: EgoPerimeterClient }> = (props) => {
@@ -71,6 +70,11 @@ export const EgoPerimeterSection: Component<{ client?: EgoPerimeterClient }> = (
 					<>
 						<SectionCard
 							title="Workspace access"
+							actions={
+								<button class={s.testBtn} onClick={() => setEditingRoots(!editingRoots())}>
+									{editingRoots() ? "Hide folder editor" : "Add folder"}
+								</button>
+							}
 							description={t(
 								"perimeter.hint",
 								"ego roots extend the AI Chat workspace; they do not replace it. These defaults apply to new ego runs. Running conversations keep their admitted perimeter.",
@@ -85,22 +89,18 @@ export const EgoPerimeterSection: Component<{ client?: EgoPerimeterClient }> = (
 							</SettingRow>
 							<For each={loaded().effective.roots}>
 								{(root) => (
-									<SettingRow label={root.path} hint={root.source}>
-										{() => (
-											<>
-												<StatusBadge label={root.access === "read" ? "Read only" : "Read and write"} />
-												<button class={s.testBtn} onClick={() => setEditingRoots(true)}>
-													Edit
-												</button>
-											</>
-										)}
-									</SettingRow>
+									<ListRow
+										name={root.path}
+										description={root.source}
+										badges={<StatusBadge label={root.access === "read" ? "Read only" : "Read and write"} />}
+										actions={
+											<button class={s.testBtn} onClick={() => setEditingRoots(true)}>
+												Edit
+											</button>
+										}
+									/>
 								)}
 							</For>
-							<ContextualHelp label="Add folder" />
-							<button class={s.testBtn} onClick={() => setEditingRoots(!editingRoots())}>
-								{editingRoots() ? "Hide folder editor" : "Add folder"}
-							</button>
 							<Show when={editingRoots()}>
 								<SettingRow
 									label={t("perimeter.label.rootDir", "Root directory")}
@@ -210,31 +210,30 @@ export const EgoPerimeterSection: Component<{ client?: EgoPerimeterClient }> = (
 									</Select>
 								)}
 							</SettingRow>
-							<SettingRow label="Command isolation">
-								{() => (
-									<>
-										<StatusBadge
-											label={
-												loaded().execEnforcement === "enforcedByOs"
-													? t("perimeter.osEnforced", "Enforced by OS")
-													: loaded().execEnforcement === "promptOnly"
-														? t("perimeter.promptOnly", "Prompt only")
-														: "Not verified here"
-											}
-											variant={
-												loaded().execEnforcement === "enforcedByOs"
-													? "success"
-													: loaded().execEnforcement === "promptOnly"
-														? "warning"
-														: undefined
-											}
-										/>
-										<button class={s.testBtn} onClick={() => setVerifyOpen(!verifyOpen())}>
-											How to verify
-										</button>
-									</>
-								)}
-							</SettingRow>
+							<StatusSummary
+								label={
+									loaded().execEnforcement === "enforcedByOs"
+										? t("perimeter.osEnforced", "Enforced by OS")
+										: loaded().execEnforcement === "promptOnly"
+											? t("perimeter.promptOnly", "Prompt only")
+											: "Not verified here"
+								}
+								tone={
+									loaded().execEnforcement === "enforcedByOs"
+										? "success"
+										: loaded().execEnforcement === "promptOnly"
+											? "warning"
+											: undefined
+								}
+								source={
+									loaded().effective.capabilities_reason ||
+									"Command isolation for spawned processes; profile-root tool permissions are separate."
+								}
+							>
+								<button class={s.testBtn} onClick={() => setVerifyOpen(!verifyOpen())}>
+									How to verify
+								</button>
+							</StatusSummary>
 							<Show when={verifyOpen()}>
 								<p class={s.hint}>
 									Run ego doctor in a terminal and inspect its command-isolation report. Reload from ego reads
@@ -249,9 +248,19 @@ export const EgoPerimeterSection: Component<{ client?: EgoPerimeterClient }> = (
 									)}
 								</p>
 							</Show>
-							<Show when={loaded().effective.capabilities_reason}>{(reason) => <p class={s.hint}>{reason()}</p>}</Show>
 						</SectionCard>
-						<SectionCard title="Advanced and diagnostics">
+						<SectionCard
+							title="Advanced and diagnostics"
+							actions={
+								<button
+									class={s.testBtn}
+									disabled={busy()}
+									onClick={() => void attempt(() => client().perimeter(), true)}
+								>
+									{t("perimeter.reload", "Reload from ego")}
+								</button>
+							}
+						>
 							<details>
 								<summary>{t("perimeter.preview", "Last successful effective perimeter from ego")}</summary>
 								<pre class={s.mcpSnippetPre}>{loaded().preview}</pre>
@@ -260,11 +269,11 @@ export const EgoPerimeterSection: Component<{ client?: EgoPerimeterClient }> = (
 					</>
 				)}
 			</Show>
-			<div class={s.actions}>
-				<button disabled={busy()} onClick={() => void attempt(() => client().perimeter(), true)}>
+			<Show when={!view()}>
+				<button class={s.testBtn} disabled={busy()} onClick={() => void attempt(() => client().perimeter(), true)}>
 					{t("perimeter.reload", "Reload from ego")}
 				</button>
-			</div>
+			</Show>
 		</div>
 	);
 };
