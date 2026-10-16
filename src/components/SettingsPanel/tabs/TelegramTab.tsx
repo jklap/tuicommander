@@ -3,9 +3,19 @@ import { t } from "../../../i18n";
 import { invoke } from "../../../invoke";
 import { HttpRpcError } from "../../../transport";
 import { Input } from "../../ui/Input";
-import { SettingToggle } from "../SettingFields";
+import { SettingStatus, SettingToggle } from "../SettingFields";
 import s from "../Settings.module.css";
+import { SectionCard } from "../SettingsPrimitives";
 import telegram from "./TelegramTab.module.css";
+
+interface TelegramEvent {
+	id: number;
+	time: number;
+	direction: "in" | "out";
+	kind: string;
+	outcome: string;
+	preview: string;
+}
 
 interface TelegramSettings {
 	enabled: boolean;
@@ -13,6 +23,8 @@ interface TelegramSettings {
 	bot_alias: string;
 	registered_agent_name: string | null;
 	chats: string[];
+	pairing_pending: boolean;
+	recent_events: TelegramEvent[];
 	connected: boolean;
 	polling_owner: "this_app" | "tuic_remote" | "desktop" | "another_process" | null;
 	last_error: string | null;
@@ -55,7 +67,10 @@ export const TelegramTab: Component = () => {
 	async function refresh() {
 		try {
 			const result = await invoke<TelegramSettings>("telegram_settings");
-			if (!disposed) setSettings(result);
+			if (!disposed) {
+				setSettings(result);
+				if (!result.pairing_pending) setCode("");
+			}
 		} catch {
 			if (!disposed) setError("Telegram settings unavailable");
 		}
@@ -196,6 +211,21 @@ export const TelegramTab: Component = () => {
 						<Show when={data().last_error}>
 							<p class={s.warning}>{data().last_error}</p>
 						</Show>
+						<SectionCard
+							title="Recent messages"
+							description="Last 20 events in this process, newest first. Cleared on restart. Credentials and unauthorized text are redacted."
+						>
+							<Show when={data().recent_events?.length} fallback={<p class={s.hint}>No recent Telegram events.</p>}>
+								<For each={data().recent_events}>
+									{(event) => (
+										<SettingStatus
+											label={`${new Date(event.time).toLocaleString()} · ${event.direction} · ${event.kind} · ${event.outcome}`}
+											value={event.preview}
+										/>
+									)}
+								</For>
+							</Show>
+						</SectionCard>
 						<Show when={data().last_message_time}>
 							<p class={s.hint}>Last message: {new Date(data().last_message_time ?? 0).toLocaleString()}</p>
 						</Show>

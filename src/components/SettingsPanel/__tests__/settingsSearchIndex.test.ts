@@ -36,7 +36,8 @@ const TAB_SOURCES: Record<string, string[]> = {
  * what was added: give it a static heading if it is a real setting, otherwise
  * update the number here. */
 const UNINDEXABLE: Record<string, { dynamic: number; orphans: number }> = {
-	telegram: { dynamic: 0, orphans: 0 },
+	// Recent event labels contain runtime time, direction, kind and outcome.
+	telegram: { dynamic: 1, orphans: 0 },
 	general: { dynamic: 0, orphans: 0 },
 	appearance: { dynamic: 0, orphans: 0 },
 	// Notification sound row labels are runtime entries, not static search targets.

@@ -94,11 +94,40 @@ impl BotApi {
 
     /// The method is host-owned. External errors never retain credential URLs.
     pub(super) async fn request(&self, method: &str, payload: Value) -> Result<Value, Error> {
+        self.request_inner(method, payload, false).await
+    }
+
+    /// No arbitrary pre-authorization text or method can cross this boundary.
+    pub(super) async fn setup_reply(
+        &self,
+        chat: i64,
+        reply: super::settings::SetupReply,
+    ) -> Result<Value, Error> {
+        if chat <= 0 {
+            return Err(Error::Config);
+        }
+        self.request_inner(
+            "sendMessage",
+            serde_json::json!({"chat_id":chat,"text":reply.text()}),
+            true,
+        )
+        .await
+    }
+
+    async fn request_inner(
+        &self,
+        method: &str,
+        payload: Value,
+        setup: bool,
+    ) -> Result<Value, Error> {
         // Reading the allowlist here also revokes pending network work when its
         // source is missing/invalid. The caller checks each incoming chat again.
         match method {
             "getMe" => {}
             "getUpdates" => {
+                self.paths.allowlist_entries()?;
+            }
+            _ if setup => {
                 self.paths.allowlist_entries()?;
             }
             _ => {

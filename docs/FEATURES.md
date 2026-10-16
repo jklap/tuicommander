@@ -2821,7 +2821,7 @@ Any MCP-bound TUIC agent opts in with `telegram register`; one volatile
 registration replaces the previous agent with one native notice. It ends on
 MCP session end, PTY close, foreground-agent exit or daemon restart.
 Allowlisted private text arrives as native peer mail. Without an agent the bot
-replies "Nessun agent registrato" and drops the text; strangers stay silent.
+replies "No agent is listening. Ask an agent in TUICommander to register for Telegram." and drops the text; strangers stay silent.
 The registered agent can stream concise activity, send exact replies and offer
 opaque buttons. Proactive sends use one allowlisted destination. Only the polling
 cursor persists; live mint deployment remains pending. See
@@ -3134,3 +3134,5 @@ Native terminal ego can report provider recovery with phase, attempt and next
 attempt time. Tabs show recovering; the status bar includes a countdown and
 Force retry. Managed parents receive recovery entry/exit notices. MCP session
 `force_retry` submits `/retry` once to the recovering ego terminal.
+
+Telegram Settings includes a newest-first, process-local log of the last 20 inbound/outbound events with safe outcomes and 60-character redacted previews. This memory-only log clears on restart and does not include draft refresh traffic.
