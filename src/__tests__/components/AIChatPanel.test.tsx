@@ -1573,12 +1573,8 @@ describe("AIChatPanel: parallel tabs", () => {
 		tab.dispatchEvent(new MouseEvent("auxclick", { button: 1, bubbles: true, cancelable: true }));
 		await settle();
 		expect(container.querySelector(`[data-chat-session="${SECOND_SESSION}"]`)).toBeNull();
-		expect(container.querySelector(`[data-chat-session="${SESSION}"]`)?.getAttribute("aria-selected")).toBe("true");
-		const last = container.querySelector(`[data-chat-session="${SESSION}"]`)!;
-		last.dispatchEvent(new MouseEvent("auxclick", { button: 1, bubbles: true }));
-		last.dispatchEvent(new MouseEvent("auxclick", { button: 2, bubbles: true }));
-		await settle();
-		expect(container.querySelectorAll("[data-chat-session]")).toHaveLength(1);
+		expect((container.querySelector('select[aria-label="Conversation"]') as HTMLSelectElement).value).toBe(SESSION);
+		expect(container.querySelector('[role="tablist"]')).toBeNull();
 	});
 
 	it("Escape stops from composer and transcript without clearing drafts — catches missing Escape stop", async () => {
@@ -3884,6 +3880,7 @@ it("renders inherited replay above a boundary and child turns below", async () =
 describe("AIChatPanel: lineage picker", () => {
 	// Catches: refreshSessions resorting the backend tree or discarding its indentation/deleted rows.
 	it("keeps two-level ancestry and a disabled deleted parent in the picker", async () => {
+		client.newSession.mockResolvedValueOnce("grandchild");
 		client.listSessions.mockResolvedValue({
 			sessions: [
 				{
@@ -4073,6 +4070,7 @@ describe("AIChatPanel: new chat after saved-tab selection", () => {
 describe("AIChatPanel: new chat during cold saved connection", () => {
 	// Catches New chat waiting for an older saved replay and aborting when that replay fails.
 	it("opens a usable new chat when the saved connection was still pending at the click", async () => {
+		aiChatTabs.add("global", SESSION);
 		aiChatTabs.add("global", SECOND_SESSION);
 		let finishConnect!: () => void;
 		const waiting = new Promise<void>((resolve) => {
