@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Retain bounded, metadata-only slow-refresh, UI-freeze and heartbeat-gap evidence across ring overflow and restart. Add an anonymized count-based replay input builder; original real-stall reproduction remains unproven (#1638-c94c).
+
 - Grant Gemini session attachment trust without a folder prompt or global settings changes. Grant ego PTY attachments read-only access in confined sandbox modes (#1833-aa60).
 
 

@@ -35,6 +35,7 @@ pub mod work_items;
 pub use tuic_core::app_instance;
 pub(crate) mod app_logger;
 pub(crate) mod changelog;
+mod stall_journal;
 pub(crate) use tuic_terminal::chrome;
 pub(crate) mod circleci;
 pub(crate) mod claude_usage;

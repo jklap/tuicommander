@@ -1112,3 +1112,7 @@ that directory, without changing global settings or bypassing workspace trust.
 Ego PTY launches use `--read-only-dir` for the same canonical directory. Shell
 shims apply the grants to typed launches; resumed ego sessions receive fresh
 read roots because discovery does not persist ego argv. ACP uploads still require an existing profile read root.
+
+## Persistent stall evidence (1638-c94c)
+
+The backend retains fixed-kind numeric slow-event metadata in a bounded journal independent of the log ring. Frontend slow structural batches include body/flush time, topology counts and response size while perfDebug is enabled. Backend heartbeat-gap records include receipt and observation timestamps. The count-based fixture builder emits synthetic isolated inputs; it does not satisfy the original captured-workload RED/GREEN criteria. See `docs/backend/stall-journal.md` for retention, privacy, timing semantics and replay limits.

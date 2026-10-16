@@ -2431,6 +2431,8 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
 - Use to diagnose which agent/terminal is driving high CPU or memory
 
 ### 20.11 Runtime Diagnostics (CPU watchdog + diagnostic mode)
+
+- **Persistent stall evidence:** selected slow refresh, UI freeze and heartbeat-gap observations use a bounded two-file metadata-only journal. The replay builder creates anonymized count-based inputs, not a reconstruction of the original stall. See [Stall journal](backend/stall-journal.md).
 - **Always-on CPU watchdog** (zero overhead when idle): polls `getrusage(RUSAGE_SELF)` every 5s and logs a full snapshot when TUIC's own CPU stays above 80% for 10+ consecutive seconds. PTY children (cargo, rustc, …) are separate OS processes and don't count toward the measurement
 - **Sleep/wake aware**: inter-tick gaps over 30s are treated as the machine having been asleep (lid closed) and skipped, so stale tokio-timer ticks after wake don't trigger false spikes or idle cascades
 - **Diagnostic mode** (toggleable at runtime, off by default): emits a health snapshot every 30s and alerts on FD/thread growth trends. Each snapshot includes: `cpu_pct` (TUIC self only, via `RUSAGE_SELF`), `children_cpu` (aggregate %cpu of all PTY child process trees + the hottest individual child — note the CPU watchdog spike trigger intentionally ignores children, so a hot `cargo`/agent only surfaces here), thread count, FD count, PTY session count, content-index build state, semaphore permits, sessions with grid frames outstanding (`session×count`, from the `GridGate` counters), event-bus subscriber count, and `head_emits_suppressed` (repo-watcher `head-changed` emits skipped by the resolved-HEAD-target guard — a climbing value signals a filesystem-event storm)

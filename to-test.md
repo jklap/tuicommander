@@ -1,3 +1,7 @@
+## Persistent stall evidence (1638-c94c) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, retain the journal files after the next real desktop stall and build a metadata-derived replay input with `scripts/build-stall-replay.mjs`. Record independent backend-request timing separately. Targeted tests cover retention, rotation and numeric-only records; original real-stall RED/GREEN remain open. No managed peer restarts or stresses the live app.
+
 ## Urgent ego mail (1901-9b6b) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, send urgent mail to a busy managed ego child. Verify the inbox notice is queued without cancelling its tool, the body stays in the inbox, and a draft or question blocks injection. The targeted backend tests cover notice bytes, coalescing, drafts and confident dialogs; no live app was restarted for this change.

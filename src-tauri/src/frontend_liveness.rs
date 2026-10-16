@@ -18,7 +18,7 @@
 //! Desktop only: this watches the embedded WebView. A browser client that stops
 //! beating has simply been closed, and a second client would mask the first.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::time::{Duration, Instant};
 
 /// How often the frontend is expected to beat. Mirrors `HEARTBEAT_PERIOD_MS` in
@@ -65,12 +65,20 @@ pub(crate) fn verdict(
 pub(crate) struct FrontendLiveness {
     last_beat: parking_lot::Mutex<Option<Instant>>,
     reported: AtomicBool,
+    last_received_ms: AtomicI64,
 }
 
 impl FrontendLiveness {
     /// The frontend just ran. Called by the `frontend_heartbeat` command.
     pub(crate) fn beat(&self) {
         *self.last_beat.lock() = Some(Instant::now());
+        self.last_received_ms
+            .store(chrono::Utc::now().timestamp_millis(), Ordering::Relaxed);
+    }
+
+    /// Backend wall-clock receipt time; zero means no command has arrived.
+    pub(crate) fn last_received_ms(&self) -> i64 {
+        self.last_received_ms.load(Ordering::Relaxed)
     }
 
     /// Restart the clock after a system sleep.
@@ -121,6 +129,25 @@ mod tests {
     use super::*;
 
     const AFTER: Duration = Duration::from_secs(30);
+
+    #[test]
+    fn receipt_timestamp_comes_from_backend_command_not_frontend_payload() {
+        let live = FrontendLiveness::default();
+        assert_eq!(live.last_received_ms(), 0);
+        let before = chrono::Utc::now().timestamp_millis();
+        live.beat();
+        let after = chrono::Utc::now().timestamp_millis();
+        assert!((before..=after).contains(&live.last_received_ms()));
+    }
+
+    #[test]
+    fn sleep_rebaseline_does_not_claim_a_new_received_heartbeat() {
+        let live = FrontendLiveness::default();
+        live.beat();
+        let received = live.last_received_ms();
+        live.rebaseline();
+        assert_eq!(live.last_received_ms(), received);
+    }
 
     #[test]
     fn a_frontend_that_never_beat_is_not_frozen() {
