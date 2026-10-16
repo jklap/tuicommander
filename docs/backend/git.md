@@ -251,6 +251,14 @@ reports no unique patches. `git cherry` and context-free twin comparisons do not
 changes; a virtual no-op merge can cover the final tree instead. The removal
 result names the matching rule.
 
+Default-branch resolution uses only verified local Git refs, without a fetch:
+`origin/HEAD` (local branch when present, otherwise the remote-tracking ref),
+then the main checkout branch's `branch.<name>.tuicommander-base`, then local
+`main` or `master`, then the main checkout's attached HEAD branch. A linked
+checkout never supplies the fallback HEAD. If none resolves to a commit,
+lifecycle inspection blocks removal with an actionable reason; the sidebar
+shows **No base branch**, with the full reason in its tooltip.
+
 The checked-out main worktree branch is another integration target: if it
 contains the candidate tip, removal records `integration_ancestry` even when
 the remote default branch is behind. Otherwise, a merged GitHub PR can prove
