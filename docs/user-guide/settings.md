@@ -588,3 +588,7 @@ placement follows panel scrolling, window resizing, and description size changes
 ### Contextual explanations
 
 Selected settings show a `?` only when the approved explanation adds decision guidance, requirements, consequences or owner-dependent defaults. Hover or focus the badge to read it. Click or press Enter/Space to pin it; click again, press Escape or click outside to dismiss it. Help does not save a setting, contact a service or run a sandbox probe. Long help scrolls inside the viewport and follows panel scroll/resize. Native MCP help retains tool-name identity while descriptions update during status polls (1928-e282).
+
+Loaded plugin pages use the same title-icon slot as other Settings pages. The
+source line identifies bundled or installed ownership without changing the
+page label, catalogue lifecycle, or scoped editor behavior.

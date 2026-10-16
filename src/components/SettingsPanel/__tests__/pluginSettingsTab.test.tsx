@@ -346,7 +346,9 @@ it("plugin_switch_keeps_shell_and_identifies_source — catches whole-shell susp
 		expect(view.getByRole("heading", { name: "Settings" })).toBeVisible();
 		expect(document.activeElement).toBe(other);
 		expect(view.getByRole("status")).toHaveTextContent("Loading plugin settings");
-		expect(view.container.querySelector("[data-settings-content]")?.textContent).toContain("Plugin: other");
+		expect(view.container.querySelector("[data-settings-content]")?.textContent).toContain(
+			"Source: installed plugin · other",
+		);
 		pending.get("other")!({ revision: "r2", values: { "/endpoint": { effective: "second" } } });
 		await view.findByDisplayValue("second");
 		fireEvent.click(view.getByRole("button", { name: "Fixture integration Plugin" }));

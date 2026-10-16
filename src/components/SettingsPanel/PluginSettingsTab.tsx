@@ -8,7 +8,6 @@ import { type PluginSettingsField, type PluginSettingsPage, pluginFieldLabel } f
 import { SettingList, SettingMultiSelect, SettingStatus } from "./SettingFields";
 import s from "./Settings.module.css";
 import { SectionCard, SettingPageHeader } from "./SettingsPrimitives";
-import layout from "./tabs/PluginsTab.module.css";
 
 interface Snapshot {
 	revision: string;
@@ -63,61 +62,63 @@ export const PluginSettingsTab: Component<{ page: PluginSettingsPage }> = (props
 
 	return (
 		<div class={s.section}>
-			<div class={layout.pluginPageHeader}>
-				<svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-					<path d="M8 2h2v5h4V2h2v5h3v4a7 7 0 0 1-6 6.93V22h-2v-4.07A7 7 0 0 1 5 11V7h3V2Zm-1 7v2a5 5 0 0 0 10 0V9H7Z" />
-				</svg>
-				<SettingPageHeader
-					title={props.page.label}
-					description="Settings supplied by this loaded plugin. Changes retain the plugin’s declared scope and save behavior."
-					scope="Plugin-owned"
-					breadcrumb={`Plugin settings / ${props.page.label}`}
-					source={`Source: ${pluginStore.getAll().find((plugin) => plugin.id === props.page.id)?.builtIn ? "bundled with TUICommander" : "installed plugin"} · ${props.page.id}`}
-				/>
-			</div>
-			<SectionCard title="Plugin settings">
-			<Suspense
-				fallback={
-					<p role="status" class={s.hint}>
-						Loading plugin settings…
-					</p>
+			<SettingPageHeader
+				title={props.page.label}
+				icon={
+					<svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+						<path d="M8 2h2v5h4V2h2v5h3v4a7 7 0 0 1-6 6.93V22h-2v-4.07A7 7 0 0 1 5 11V7h3V2Zm-1 7v2a5 5 0 0 0 10 0V9H7Z" />
+					</svg>
 				}
-			>
-
-				<Show when={snapshot.error}>
-					<p role="alert" class={s.hint}>
-						Could not read plugin settings.
-					</p>
-				</Show>
-				<Show when={message()}>
-					<p role="status" class={s.hint}>
-						{message()}
-					</p>
-				</Show>
-				<Show when={!snapshot.error && snapshot()}>
-					{(current) => (
-						<For each={props.page.fields}>
-							{(field) => (
-								<>
-									<PluginField
-										field={field}
-										value={current().values[field.path]?.effective}
-										disabled={busy() || snapshot.loading}
-										onWrite={(value) => void write(field, value)}
-									/>
-									<Show when={field.operations.includes("reset")}>
-										<div class={s.actions}>
-											<button disabled={busy() || snapshot.loading} onClick={() => void write(field, undefined, true)}>
-												Reset {pluginFieldLabel(field)}
-											</button>
-										</div>
-									</Show>
-								</>
-							)}
-						</For>
-					)}
-				</Show>
-			</Suspense>
+				description="Settings supplied by this loaded plugin. Changes retain the plugin’s declared scope and save behavior."
+				scope="Plugin-owned"
+				breadcrumb={`Plugin settings / ${props.page.label}`}
+				source={`Source: ${pluginStore.getPlugin(props.page.id)?.builtIn ? "bundled with TUICommander" : "installed plugin"} · ${props.page.id}`}
+			/>
+			<SectionCard title="Plugin settings">
+				<Suspense
+					fallback={
+						<p role="status" class={s.hint}>
+							Loading plugin settings…
+						</p>
+					}
+				>
+					<Show when={snapshot.error}>
+						<p role="alert" class={s.hint}>
+							Could not read plugin settings.
+						</p>
+					</Show>
+					<Show when={message()}>
+						<p role="status" class={s.hint}>
+							{message()}
+						</p>
+					</Show>
+					<Show when={!snapshot.error && snapshot()}>
+						{(current) => (
+							<For each={props.page.fields}>
+								{(field) => (
+									<>
+										<PluginField
+											field={field}
+											value={current().values[field.path]?.effective}
+											disabled={busy() || snapshot.loading}
+											onWrite={(value) => void write(field, value)}
+										/>
+										<Show when={field.operations.includes("reset")}>
+											<div class={s.actions}>
+												<button
+													disabled={busy() || snapshot.loading}
+													onClick={() => void write(field, undefined, true)}
+												>
+													Reset {pluginFieldLabel(field)}
+												</button>
+											</div>
+										</Show>
+									</>
+								)}
+							</For>
+						)}
+					</Show>
+				</Suspense>
 			</SectionCard>
 		</div>
 	);

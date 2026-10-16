@@ -164,9 +164,7 @@ function buildNavItems(pluginTabs: SettingsShellTab[] = []): SettingsShellTab[] 
 					...pluginTabs,
 				]
 			: []),
-
 	]);
-
 
 	if (repos.length > 0) {
 		items.push({ key: "__label__:Repositories", label: t("settings.repositories", "REPOSITORIES") });

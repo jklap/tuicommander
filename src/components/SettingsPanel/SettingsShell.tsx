@@ -142,7 +142,6 @@ export const SettingsShell: Component<SettingsShellProps> = (props) => {
 												<span class={s.pluginLabel}>{tab.label}</span>
 												<span class={s.pluginIdentity}> Plugin</span>
 											</Show>
-
 										</button>
 									)
 								}
