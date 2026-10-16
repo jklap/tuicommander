@@ -2,6 +2,7 @@ import type { Component } from "solid-js";
 import { t } from "../../../i18n";
 import { Input } from "../../ui/Input";
 import { Textarea } from "../../ui/Textarea";
+import { ContextualHelp } from "../ContextualHelp";
 import s from "../Settings.module.css";
 import type { RepoTabProps } from "./RepoWorktreeTab";
 
@@ -26,6 +27,7 @@ export const RepoScriptsTab: Component<RepoTabProps> = (props) => {
 			<h3>{t("repoScripts.heading.designMode", "Design Mode")}</h3>
 			<div class={s.group}>
 				<label for="repo-dev-server-url">{t("repoScripts.label.devServerUrl", "Dev Server URL")}</label>
+				<ContextualHelp label={t("repoScripts.label.devServerUrl", "Dev Server URL")} />
 				<Input
 					id="repo-dev-server-url"
 					type="url"
@@ -44,6 +46,7 @@ export const RepoScriptsTab: Component<RepoTabProps> = (props) => {
 
 			<div class={s.group}>
 				<label>{t("repoScripts.label.setupScript", "Setup Script")}</label>
+				<ContextualHelp label={t("repoScripts.label.setupScript", "Setup Script")} />
 				<Textarea
 					value={props.settings.setupScript ?? ""}
 					onInput={(e) => {
@@ -63,6 +66,7 @@ export const RepoScriptsTab: Component<RepoTabProps> = (props) => {
 
 			<div class={s.group}>
 				<label>{t("repoScripts.label.runScript", "Run Script")}</label>
+				<ContextualHelp label={t("repoScripts.label.runScript", "Run Script")} />
 				<Textarea
 					value={props.settings.runScript ?? ""}
 					onInput={(e) => {
@@ -82,6 +86,7 @@ export const RepoScriptsTab: Component<RepoTabProps> = (props) => {
 
 			<div class={s.group}>
 				<label>{t("repoScripts.label.archiveScript", "Archive Script")}</label>
+				<ContextualHelp label={t("repoScripts.label.archiveScript", "Archive Script")} />
 				<Textarea
 					value={props.settings.archiveScript ?? ""}
 					onInput={(e) => {

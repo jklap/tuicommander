@@ -13,6 +13,7 @@ import {
 } from "../../../../stores/remoteConnections";
 import { Input } from "../../../ui/Input";
 import { Select } from "../../../ui/Select";
+import { ContextualHelp } from "../../ContextualHelp";
 import s from "../../Settings.module.css";
 import { SectionCard, SettingRow } from "../../SettingsPrimitives";
 
@@ -503,6 +504,7 @@ export const RemoteMachinesPanel: Component = () => {
 					</Show>
 				</SectionCard>
 				<SectionCard title="Deployment and lifetime">
+					<ContextualHelp label="Deployment and lifetime" />
 					<Show when={props.formData.transportType === "Ssh"}>
 						<SettingRow label="Deployment">
 							{(id, descriptionId) => (

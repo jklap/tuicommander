@@ -21,6 +21,7 @@ import { handleOpenUrl } from "../../../utils/openUrl";
 import { Input } from "../../ui/Input";
 import { Select } from "../../ui/Select";
 import { Textarea } from "../../ui/Textarea";
+import { ContextualHelp } from "../ContextualHelp";
 import { ExpertSetting } from "../ExpertSetting";
 import { SettingSelect, SettingToggle } from "../SettingFields";
 import s from "../Settings.module.css";
@@ -700,6 +701,7 @@ export const GitHubTab: Component = () => {
 
 				<div class={s.group}>
 					<label>Default Setup Script</label>
+					<ContextualHelp label="Default Setup Script" />
 					<Textarea
 						value={repoDefaultsStore.state.setupScript}
 						onInput={(e) => repoDefaultsStore.setSetupScript(e.currentTarget.value)}
@@ -711,6 +713,7 @@ export const GitHubTab: Component = () => {
 
 				<div class={s.group}>
 					<label>Default Run Script</label>
+					<ContextualHelp label="Default Run Script" />
 					<Textarea
 						value={repoDefaultsStore.state.runScript}
 						onInput={(e) => repoDefaultsStore.setRunScript(e.currentTarget.value)}
@@ -722,6 +725,7 @@ export const GitHubTab: Component = () => {
 
 				<div class={s.group}>
 					<label>Default Archive Script</label>
+					<ContextualHelp label="Default Archive Script" />
 					<Textarea
 						value={repoDefaultsStore.state.archiveScript}
 						onInput={(e) => repoDefaultsStore.setArchiveScript(e.currentTarget.value)}
@@ -932,6 +936,7 @@ export const GitHubTab: Component = () => {
 
 					<div class={s.group}>
 						<label>Add Enterprise account</label>
+						<ContextualHelp label="Add Enterprise account" />
 						<Input
 							type="text"
 							placeholder="ghe.example.com"
@@ -979,6 +984,7 @@ export const GitHubTab: Component = () => {
 			    Hidden in the single-account setup — there's nothing to choose. */}
 			<Show when={!isSingleAccountSetup()}>
 				<h3>Repository Bindings</h3>
+				<ContextualHelp label="Repository Bindings" />
 				<p class={s.hint} style={{ "margin-bottom": "12px" }}>
 					Each repository is monitored through exactly one account. Ambiguous repositories need you to choose — no
 					remote is picked silently.

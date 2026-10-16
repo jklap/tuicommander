@@ -16,6 +16,7 @@ import { DEFAULT_COLOR_PRESETS } from "../../shared/colorPresets";
 import { type TriState, TriStateToggle } from "../../shared/TriStateToggle";
 import { Input } from "../../ui/Input";
 import { Select } from "../../ui/Select";
+import { ContextualHelp } from "../ContextualHelp";
 import s from "../Settings.module.css";
 
 export interface RepoTabProps {
@@ -85,6 +86,7 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 
 			<div class={s.group}>
 				<label>{t("repoWorktree.label.autoFetchInterval", "Auto-Fetch Interval")}</label>
+				<ContextualHelp label={t("repoWorktree.label.autoFetchInterval", "Auto-Fetch Interval")} />
 				<Select
 					value={
 						props.settings.autoFetchIntervalMinutes != null ? String(props.settings.autoFetchIntervalMinutes) : INHERIT
@@ -130,6 +132,7 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 
 			<div class={s.group}>
 				<label>{t("repoWorktree.label.fileHandling", "File Handling")}</label>
+				<ContextualHelp label={t("repoWorktree.label.fileHandling", "File Handling")} />
 
 				<div class={s.toggle}>
 					<input
@@ -164,6 +167,7 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 
 			<div class={s.group}>
 				<label>{t("repoWorktree.label.worktreeStorage", "Storage Strategy")}</label>
+				<ContextualHelp label={t("repoWorktree.label.worktreeStorage", "Storage Strategy")} />
 				<Select
 					value={props.settings.worktreeStorage ?? INHERIT}
 					onChange={(e) =>
@@ -252,6 +256,7 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 
 			<div class={s.group}>
 				<label>{t("repoWorktree.label.orphanCleanup", "Orphan Worktree Cleanup")}</label>
+				<ContextualHelp label={t("repoWorktree.label.orphanCleanup", "Orphan Worktree Cleanup")} />
 				<Select
 					value={props.settings.orphanCleanup ?? INHERIT}
 					onChange={(e) =>
@@ -274,6 +279,7 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 
 			<div class={s.group}>
 				<label>{t("repoWorktree.label.prMergeStrategy", "PR Merge Strategy")}</label>
+				<ContextualHelp label={t("repoWorktree.label.prMergeStrategy", "PR Merge Strategy")} />
 				<Select
 					value={props.settings.prMergeStrategy ?? INHERIT}
 					onChange={(e) =>
@@ -296,6 +302,7 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 
 			<div class={s.group}>
 				<label>{t("repoWorktree.label.afterMerge", "After Merge Behavior")}</label>
+				<ContextualHelp label={t("repoWorktree.label.afterMerge", "After Merge Behavior")} />
 				<Select
 					value={props.settings.afterMerge ?? INHERIT}
 					onChange={(e) =>
@@ -318,6 +325,7 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 
 			<div class={s.group}>
 				<label>{t("repoWorktree.label.autoDeleteOnPrClose", "Auto-Delete on PR Close")}</label>
+				<ContextualHelp label={t("repoWorktree.label.autoDeleteOnPrClose", "Auto-Delete on PR Close")} />
 				<Select
 					value={props.settings.autoDeleteOnPrClose ?? INHERIT}
 					onChange={(e) =>

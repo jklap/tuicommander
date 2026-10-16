@@ -59,7 +59,7 @@ export function SettingRow(props: {
 			error={props.error}
 			help={
 				props.help && (
-					<span class={fieldStyles.settingHelp} tabIndex={0}>
+					<span class={fieldStyles.settingHelp}>
 						<InfoBadge>{props.help}</InfoBadge>
 					</span>
 				)

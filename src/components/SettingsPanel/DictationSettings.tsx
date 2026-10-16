@@ -13,6 +13,7 @@ import { KeyComboCapture } from "../shared/KeyComboCapture";
 import { Input } from "../ui/Input";
 import { Select } from "../ui/Select";
 import { Textarea } from "../ui/Textarea";
+import { ContextualHelp } from "./ContextualHelp";
 import d from "./DictationSettings.module.css";
 import { ExpertSetting } from "./ExpertSetting";
 import { SettingSlider } from "./SettingFields";
@@ -750,6 +751,7 @@ const SpeechSetup: Component = () => {
 				<ExpertSetting configKey="dictation.speech_command" value={dictationStore.state.speechCommand}>
 					<div class={s.group}>
 						<label>{t("dictation.speechCommandLabel", "Speech command")}</label>
+						<ContextualHelp label={t("dictation.speechCommandLabel", "Speech command")} />
 						<Textarea
 							rows={4}
 							value={dictationStore.state.speechCommand.join("\n")}
@@ -1334,6 +1336,7 @@ const HandsFreeControls: Component = () => {
 				<ExpertSetting configKey="dictation.hands_free_start_notice" value={dictationStore.state.handsFreeStartNotice}>
 					<div class={s.group}>
 						<label>{t("dictation.startNoticeLabel", "Start notice")}</label>
+						<ContextualHelp label={t("dictation.startNoticeLabel", "Start notice")} />
 						<Textarea
 							value={dictationStore.state.handsFreeStartNotice}
 							placeholder={defaultNotice()}

@@ -9,6 +9,7 @@ import { writeClipboard } from "../../../../utils/clipboard";
 import { ConfirmDialog } from "../../../ConfirmDialog";
 import { Input } from "../../../ui/Input";
 import { Select } from "../../../ui/Select";
+import { ContextualHelp } from "../../ContextualHelp";
 import { ExpertSetting } from "../../ExpertSetting";
 import { SettingInput, SettingSelect, SettingToggle } from "../../SettingFields";
 import s from "../../Settings.module.css";
@@ -463,6 +464,7 @@ export const RemoteAccessPanel: Component = () => {
 				</Show>
 			</SectionCard>
 			<SectionCard title="Tailscale HTTPS">
+				<ContextualHelp label="Tailscale HTTPS" />
 				<Show when={!tailscaleState()}>
 					<p class={s.hint}>Tailscale status not checked.</p>
 				</Show>
@@ -523,6 +525,7 @@ export const RemoteAccessPanel: Component = () => {
 					scope="All remote sessions on this machine"
 					consequence="Regenerating the token revokes shared token URLs and disconnects active remote sessions."
 				>
+					<ContextualHelp label="Regenerate remote token" />
 					<button class={s.testBtn} disabled={regenerating()} onClick={regenerateToken}>
 						{regenerating()
 							? t("services.btn.regenerating", "Regenerating...")

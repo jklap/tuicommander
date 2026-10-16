@@ -11,6 +11,7 @@ import { comboToDisplay, keyFor } from "../../../utils/hotkey";
 import { keyEventToCombo, validateGlobalHotkeyCombo } from "../../../utils/keyRecorder";
 import { KeyComboCapture } from "../../shared/KeyComboCapture";
 import { Input } from "../../ui/Input";
+import { ContextualHelp } from "../ContextualHelp";
 import s from "../Settings.module.css";
 
 /**
@@ -571,6 +572,7 @@ export const KeyboardShortcutsTab: Component = () => {
 			<Show when={isTauri()}>
 				<div class={s.group}>
 					<label>{t("settings.globalHotkey", "Global Hotkey (Toggle Window)")}</label>
+					<ContextualHelp label={t("settings.globalHotkey", "Global Hotkey (Toggle Window)")} />
 					<p class={s.hint} style={{ "margin-bottom": "8px" }}>
 						{t("settings.globalHotkeyHint", "Set an OS-level shortcut to show/hide TUICommander from any application.")}
 					</p>
@@ -730,6 +732,7 @@ export const KeyboardShortcutsTab: Component = () => {
 			<Show when={pluginCommandRows().length > 0}>
 				<div class={s.group}>
 					<label>{t("helpPanel.pluginCommands", "Plugin Commands")}</label>
+					<ContextualHelp label={t("helpPanel.pluginCommands", "Plugin Commands")} />
 					<table style={{ width: "100%", "border-collapse": "collapse" }}>
 						<For each={pluginCommandRows()}>
 							{(cmd) => (

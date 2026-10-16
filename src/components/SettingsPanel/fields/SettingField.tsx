@@ -1,4 +1,5 @@
 import { type Component, createUniqueId, type JSX, Show } from "solid-js";
+import { ContextualHelp } from "../ContextualHelp";
 import s from "../Settings.module.css";
 
 export interface SettingFieldProps {
@@ -24,7 +25,7 @@ export const SettingField: Component<
 			fallback={
 				<div class={s.group}>
 					<label for={id}>{props.label}</label>
-					{props.help}
+					{props.help || <ContextualHelp label={props.label} hint={props.hint} />}
 					{props.children(id, descriptionId(), descriptionId)}
 					<Show when={props.hint}>
 						<p id={`${id}-hint`} class={s.hint}>
@@ -42,7 +43,7 @@ export const SettingField: Component<
 			<div class={s.settingRow}>
 				<div class={s.settingRowText}>
 					<label for={id}>{props.label}</label>
-					{props.help}
+					{props.help || <ContextualHelp label={props.label} hint={props.hint} />}
 					<Show when={props.hint}>
 						<p id={`${id}-hint`} class={s.hint}>
 							{props.hint}

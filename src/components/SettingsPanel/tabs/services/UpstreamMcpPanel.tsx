@@ -12,6 +12,7 @@ import { handleOpenUrl } from "../../../../utils/openUrl";
 import { ConfirmDialog } from "../../../ConfirmDialog";
 import { Input } from "../../../ui/Input";
 import { Select } from "../../../ui/Select";
+import { ContextualHelp } from "../../ContextualHelp";
 import { MachineSelector } from "../../MachineSelector";
 import s from "../../Settings.module.css";
 import { SectionCard } from "../../SettingsPrimitives";
@@ -637,6 +638,7 @@ export const UpstreamMcpPanel: Component = () => {
 									<label style={{ "font-size": "12px", color: "var(--text-dimmed)", "min-width": "90px" }}>
 										Authentication
 									</label>
+									<ContextualHelp label="Authentication" />
 									<Select
 										class={s.input}
 										value={form().authMethod}
@@ -715,6 +717,7 @@ export const UpstreamMcpPanel: Component = () => {
 							</Show>
 							<div style={{ display: "flex", gap: "8px", "align-items": "center" }}>
 								<label style={{ "font-size": "12px", color: "var(--text-dimmed)" }}>Timeout (s):</label>
+								<ContextualHelp label="Timeout (s):" />
 								<Input
 									type="number"
 									class={s.input}
@@ -951,6 +954,7 @@ export const UpstreamMcpPanel: Component = () => {
 											<Show when={editForm().transportType === "http"}>
 												<div>
 													<label style={{ "font-size": "12px", color: "var(--text-dimmed)" }}>URL</label>
+													<ContextualHelp label="URL" />
 													<Input
 														type="text"
 														class={s.input}
@@ -960,6 +964,7 @@ export const UpstreamMcpPanel: Component = () => {
 												</div>
 												<div>
 													<label style={{ "font-size": "12px", color: "var(--text-dimmed)" }}>Authentication</label>
+													<ContextualHelp label="Authentication" />
 													<Select
 														class={s.input}
 														value={editForm().authMethod}
@@ -974,6 +979,7 @@ export const UpstreamMcpPanel: Component = () => {
 												<Show when={editForm().authMethod === "bearer"}>
 													<div>
 														<label style={{ "font-size": "12px", color: "var(--text-dimmed)" }}>Bearer token</label>
+														<ContextualHelp label="Bearer token" />
 														<Input
 															type="password"
 															class={s.input}
@@ -1012,6 +1018,7 @@ export const UpstreamMcpPanel: Component = () => {
 													</div>
 													<div>
 														<label style={{ "font-size": "12px", color: "var(--text-dimmed)" }}>Client Secret</label>
+														<ContextualHelp label="Client Secret" />
 														<Input
 															type="password"
 															class={s.input}
@@ -1022,6 +1029,7 @@ export const UpstreamMcpPanel: Component = () => {
 													</div>
 													<div>
 														<label style={{ "font-size": "12px", color: "var(--text-dimmed)" }}>Scopes</label>
+														<ContextualHelp label="Scopes" />
 														<Input
 															type="text"
 															class={s.input}
@@ -1035,6 +1043,7 @@ export const UpstreamMcpPanel: Component = () => {
 											<Show when={editForm().transportType === "stdio"}>
 												<div>
 													<label style={{ "font-size": "12px", color: "var(--text-dimmed)" }}>Command</label>
+													<ContextualHelp label="Command" />
 													<Input
 														type="text"
 														class={s.input}
@@ -1053,6 +1062,7 @@ export const UpstreamMcpPanel: Component = () => {
 												</div>
 												<div>
 													<label style={{ "font-size": "12px", color: "var(--text-dimmed)" }}>Working directory</label>
+													<ContextualHelp label="Working directory" />
 													<Input
 														type="text"
 														class={s.input}
@@ -1064,6 +1074,7 @@ export const UpstreamMcpPanel: Component = () => {
 											</Show>
 											<div style={{ display: "flex", gap: "8px", "align-items": "center" }}>
 												<label style={{ "font-size": "12px", color: "var(--text-dimmed)" }}>Timeout (s):</label>
+												<ContextualHelp label="Timeout (s):" />
 												<Input
 													type="number"
 													class={s.input}

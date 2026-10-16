@@ -5,6 +5,7 @@ import { appLogger } from "../../../../stores/appLogger";
 import { rpc } from "../../../../transport";
 import { writeClipboard } from "../../../../utils/clipboard";
 import { StatusBadge } from "../../../ui/StatusBadge";
+import { ContextualHelp } from "../../ContextualHelp";
 import { ExpertSetting } from "../../ExpertSetting";
 import s from "../../Settings.module.css";
 import { SectionCard, SettingPageHeader, SettingRow } from "../../SettingsPrimitives";
@@ -171,6 +172,7 @@ export const LocalMcpPanel: Component = () => {
 					{/* Static, unlike the per-tool names: the one label search can index for this group. */}
 					<div class={s.group}>
 						<label>Native tools</label>
+						<ContextualHelp label="Native tools" />
 						<p class={s.hint}>
 							Choose which built-in tools MCP clients can call. Disabled tools are hidden from clients.
 						</p>

@@ -16,6 +16,7 @@ import { handleOpenUrl } from "../../../utils/openUrl";
 import { ConfirmDialog } from "../../ConfirmDialog";
 import { InstallWorkItemPlugin } from "../../Tasks/setup/InstallWorkItemPlugin";
 import { SegmentedControl } from "../../ui/SegmentedControl";
+import { ContextualHelp } from "../ContextualHelp";
 import { SettingToggle } from "../SettingFields";
 import s from "../Settings.module.css";
 import { ListRow, SectionCard, SettingPageHeader } from "../SettingsPrimitives";
@@ -492,6 +493,7 @@ export const PluginsTab: Component<{
 
 					<Show when={isTauri()}>
 						<div class={ps.installRow}>
+							<ContextualHelp label="Local install" />
 							<button class={s.testBtn} onClick={handleInstallFromFolder} disabled={installing()}>
 								{installing() ? "Installing..." : "Install from folder..."}
 							</button>

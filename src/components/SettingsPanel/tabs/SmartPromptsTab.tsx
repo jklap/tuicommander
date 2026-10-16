@@ -11,6 +11,7 @@ import { KeyComboCapture } from "../../shared/KeyComboCapture";
 import { Input } from "../../ui/Input";
 import { Select } from "../../ui/Select";
 import { Textarea } from "../../ui/Textarea";
+import { ContextualHelp } from "../ContextualHelp";
 import s from "../Settings.module.css";
 import { SectionCard, SettingPageHeader, SettingRow } from "../SettingsPrimitives";
 import sp from "./SmartPromptsTab.module.css";
@@ -322,6 +323,7 @@ const PromptEditor: Component<{
 			{/* Content + Variable dropdown */}
 			<div class={sp.editorSection}>
 				<label class={sp.editorLabel}>Content *</label>
+				<ContextualHelp label="Content *" />
 				<Textarea
 					class={sp.editorTextarea}
 					value={props.prompt.content}
@@ -354,6 +356,7 @@ const PromptEditor: Component<{
 			<div class={sp.editorRow}>
 				<div class={sp.editorSection} style={{ flex: "1" }}>
 					<label class={sp.editorLabel}>Execution Mode</label>
+					<ContextualHelp label="Execution Mode" />
 					<Select
 						class={sp.editorInput}
 						value={props.prompt.executionMode ?? "inject"}
@@ -380,6 +383,7 @@ const PromptEditor: Component<{
 				<Show when={(props.prompt.executionMode ?? "inject") === "inject"}>
 					<div class={sp.editorSection} style={{ flex: "1" }}>
 						<label class={sp.editorLabel}>Target</label>
+						<ContextualHelp label="Target" />
 						<Select
 							class={sp.editorInput}
 							value={props.prompt.injectTarget ?? "compose"}
@@ -407,6 +411,7 @@ const PromptEditor: Component<{
 				>
 					<div class={sp.editorSection} style={{ flex: "1" }}>
 						<label class={sp.editorLabel}>Auto-execute</label>
+						<ContextualHelp label="Auto-execute" />
 						<label class={sp.autoExecLabel}>
 							<input type="checkbox" checked={props.prompt.autoExecute ?? false} onChange={handleAutoExecuteToggle} />
 							<span>Send immediately</span>
@@ -420,6 +425,7 @@ const PromptEditor: Component<{
 			<Show when={props.prompt.executionMode === "headless"}>
 				<div class={sp.editorSection}>
 					<label class={sp.editorLabel}>Preferred Agent</label>
+					<ContextualHelp label="Preferred Agent" />
 					<Select
 						class={sp.editorInput}
 						value={props.prompt.preferredAgent ?? ""}
@@ -459,6 +465,7 @@ const PromptEditor: Component<{
 			<Show when={(props.prompt.executionMode ?? "inject") !== "inject"}>
 				<div class={sp.editorSection}>
 					<label class={sp.editorLabel}>Output Target</label>
+					<ContextualHelp label="Output Target" />
 					<Select
 						class={sp.editorInput}
 						value={props.prompt.outputTarget ?? ""}

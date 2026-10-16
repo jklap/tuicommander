@@ -7,6 +7,7 @@ import { Input } from "../../ui/Input";
 import { Select } from "../../ui/Select";
 import { StatusBadge } from "../../ui/StatusBadge";
 import { Textarea } from "../../ui/Textarea";
+import { ContextualHelp } from "../ContextualHelp";
 import s from "../Settings.module.css";
 import { SectionCard, SettingRow } from "../SettingsPrimitives";
 import layout from "./AiChatTab.module.css";
@@ -96,6 +97,7 @@ export const EgoPerimeterSection: Component<{ client?: EgoPerimeterClient }> = (
 									</SettingRow>
 								)}
 							</For>
+							<ContextualHelp label="Add folder" />
 							<button class={s.testBtn} onClick={() => setEditingRoots(!editingRoots())}>
 								{editingRoots() ? "Hide folder editor" : "Add folder"}
 							</button>

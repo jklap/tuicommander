@@ -12,6 +12,7 @@ import { uiStore } from "../../stores/ui";
 import { isTauri } from "../../transport";
 import { pathBasename } from "../../utils/pathUtils";
 import { getRepoColor } from "../../utils/repoColor";
+import { SettingsHelpScope } from "./ContextualHelp";
 import { DictationSettings } from "./DictationSettings";
 import { ExpertModeSwitch } from "./ExpertSetting";
 import { PluginSettingsTab } from "./PluginSettingsTab";
@@ -332,7 +333,9 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 						const onUpdate = updateRepoSetting(path);
 						return (
 							<>
-								<RepoWorktreeTab settings={settings} defaults={repoDefaultsStore.state} onUpdate={onUpdate} />
+								<SettingsHelpScope page="repository">
+									<RepoWorktreeTab settings={settings} defaults={repoDefaultsStore.state} onUpdate={onUpdate} />
+								</SettingsHelpScope>
 								<RepoScriptsTab settings={settings} defaults={repoDefaultsStore.state} onUpdate={onUpdate} />
 								<Show when={isTauri()}>
 									<div class={s.section}>
@@ -357,58 +360,92 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 
 				{/* Live scoped plugin pages disappear with the loaded catalogue. */}
 				<For each={pluginPages().filter((page) => activeTab() === `plugin:${page.id}`)}>
-					{(page) => <PluginSettingsTab page={page} />}
+					{(page) => (
+						<SettingsHelpScope page={page.id}>
+							<PluginSettingsTab page={page} />
+						</SettingsHelpScope>
+					)}
 				</For>
 
 				{/* Global sections */}
 				<Show when={activeTab() === "general"}>
-					<GeneralTab />
+					<SettingsHelpScope page="general">
+						<GeneralTab />
+					</SettingsHelpScope>
 				</Show>
 				<Show when={activeTab() === "appearance"}>
-					<AppearanceTab />
+					<SettingsHelpScope page="appearance">
+						<AppearanceTab />
+					</SettingsHelpScope>
 				</Show>
 				<Show when={activeTab() === "notifications"}>
-					<NotificationsTab />
+					<SettingsHelpScope page="notifications">
+						<NotificationsTab />
+					</SettingsHelpScope>
 				</Show>
 				<Show when={activeTab() === "terminal"}>
-					<TerminalTab />
+					<SettingsHelpScope page="terminal">
+						<TerminalTab />
+					</SettingsHelpScope>
 				</Show>
 				<Show when={activeTab() === "keyboard-shortcuts"}>
-					<KeyboardShortcutsTab />
+					<SettingsHelpScope page="keyboard-shortcuts">
+						<KeyboardShortcutsTab />
+					</SettingsHelpScope>
 				</Show>
 				<Show when={activeTab() === "dictation"}>
-					<DictationSettings />
+					<SettingsHelpScope page="voice">
+						<DictationSettings />
+					</SettingsHelpScope>
 				</Show>
 				<Show when={activeTab() === "github"}>
-					<GitHubTab />
+					<SettingsHelpScope page="github">
+						<GitHubTab />
+					</SettingsHelpScope>
 				</Show>
 				<Show when={activeTab() === "mcp"}>
-					<LocalMcpPanel />
+					<SettingsHelpScope page="mcp">
+						<LocalMcpPanel />
+					</SettingsHelpScope>
 				</Show>
 				<Show when={activeTab() === "remote-access"}>
-					<RemoteAccessPanel />
+					<SettingsHelpScope page="remote-access">
+						<RemoteAccessPanel />
+					</SettingsHelpScope>
 				</Show>
 				<Show when={activeTab() === "remote-machines"}>
-					<RemoteMachinesTab />
+					<SettingsHelpScope page="remote-machines">
+						<RemoteMachinesTab />
+					</SettingsHelpScope>
 				</Show>
 				<Show when={activeTab() === "telegram"}>
-					<TelegramTab />
+					<SettingsHelpScope page="telegram">
+						<TelegramTab />
+					</SettingsHelpScope>
 				</Show>
 				<Show when={activeTab() === "plugins"}>
-					<PluginsTab
-						onClose={props.onClose}
-						settingsPluginIds={pluginPages().map((page) => page.id)}
-						onOpenSettings={(id) => setActiveTab(`plugin:${id}`)}
-					/>
+					<SettingsHelpScope page="plugins">
+						<PluginsTab
+							onClose={props.onClose}
+							settingsPluginIds={pluginPages().map((page) => page.id)}
+							onOpenSettings={(id) => setActiveTab(`plugin:${id}`)}
+						/>
+					</SettingsHelpScope>
 				</Show>
 				<Show when={activeTab() === "smart-prompts"}>
-					<SmartPromptsTab />
+					<SettingsHelpScope page="smart-prompts">
+						<SmartPromptsTab />
+					</SettingsHelpScope>
 				</Show>
 				<Show when={activeTab() === "agents"}>
-					<AgentsTab connectionId={activeConnectionId()} />
+					<SettingsHelpScope page="agents">
+						<AgentsTab connectionId={activeConnectionId()} />
+					</SettingsHelpScope>
 				</Show>
 				<Show when={activeTab() === "ai-chat" && settingsStore.isAiChatEnabled()}>
-					<AiChatTab onClose={props.onClose} />
+					<SettingsHelpScope page="ai-chat">
+						<AiChatTab onClose={props.onClose} />
+					</SettingsHelpScope>
 				</Show>
 			</Show>
 		</SettingsShell>
