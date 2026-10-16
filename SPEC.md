@@ -1154,3 +1154,7 @@ Telegram Settings reads a process-local in-memory ring of the last 20 events thr
 ## Persistent stall evidence (1638-c94c)
 
 The backend retains fixed-kind numeric slow-event metadata in a bounded journal independent of the log ring. Frontend slow structural batches include body/flush time, topology counts and response size while perfDebug is enabled. Backend heartbeat-gap records include receipt and observation timestamps. The count-based fixture builder emits synthetic isolated inputs; it does not satisfy the original captured-workload RED/GREEN criteria. See `docs/backend/stall-journal.md` for retention, privacy, timing semantics and replay limits.
+
+### Telegram request streaming (1959-162a)
+
+Telegram replies now use TUIC-driven receipt (👀), working (👨‍💻), waiting (🤔), answered (👍) and failed (👎) reactions. An ephemeral native draft shows Italian status lines or unapproved agent previews; it refreshes while work continues and the final reply replaces it. Acknowledgement of work requires inbox Read and a new recipient turn. PTY intent/activity and AI Chat assistant chunks share request correlation; finish remains authoritative after draft retirement. Telegram-mail-woken AI Chat turns automatically send their settled assistant text if finish has not answered. Queue and no-reply notices occur at ten minutes and sixty seconds after Read respectively. Restart keeps no request history. Phone rendering requires a live check after the backend restart.

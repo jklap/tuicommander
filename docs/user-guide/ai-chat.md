@@ -295,3 +295,23 @@ Use **Pin repository** beside the composer to keep that conversation's repositor
 Middle-click a conversation tab to close it through the same path as its close button. The last conversation tab stays open. Press Escape from the composer or transcript to stop a running turn without clearing your draft. When Find is open, Escape closes Find first, including when focus has moved back to the composer. Desktop Stop, Park and Send align to the input height.
 
 Repository names in linked worktree contexts use the registered parent repository color, including its inherited group color. Pinning a worktree keeps that color while you browse another repository.
+
+## Telegram replies
+
+Ask ego to call `telegram register` from this conversation after Telegram is
+configured in Settings. Registration is voluntary and lasts only while its MCP
+identity remains live. No PTY is needed. Incoming allowlisted phone text arrives
+through the normal peer inbox and TUIC wakes an idle conversation.
+
+The phone shows a receipt reaction, then a working reaction once the mail is
+read and a new turn starts. Assistant message chunks stream into the ephemeral
+Telegram preview; thought chunks and tool arguments do not. Permissions show a
+waiting reaction and ask you to respond in TUICommander. The preview is never
+approval to publish anything.
+
+`telegram begin` is optional. `telegram finish` supplies the exact final phone
+answer and remains valid after the preview ends. If a turn started by TUIC's
+peer-mail wake settles without finish, TUIC sends that turn's assistant text
+once. Turns started from an unrelated conversation prompt do not auto-publish.
+A failed turn sends one safe stopped notice. Stop on the phone targets only the
+captured turn; a queued Stop does not interrupt unrelated work.

@@ -71,10 +71,25 @@ impl FakeServer {
         ) {
             let mut state = state.lock().unwrap();
             state.requests.push((uri.path().into(), body));
-            let (status, value) = state
-                .responses
-                .pop_front()
-                .unwrap_or((StatusCode::OK, json!({"ok":true,"result":[]})));
+            // Reactions are a new independent status operation. Existing fault
+            // queues still describe the draft/final operations under test.
+            let fallback = if uri.path().ends_with("sendMessageDraft")
+                || uri.path().ends_with("setMessageReaction")
+            {
+                json!({"ok":true,"result":true})
+            } else if uri.path().ends_with("sendMessage") {
+                json!({"ok":true,"result":{"message_id":100 + state.requests.len()}})
+            } else {
+                json!({"ok":true,"result":[]})
+            };
+            let (status, value) = if uri.path().ends_with("setMessageReaction") {
+                (StatusCode::OK, fallback)
+            } else {
+                state
+                    .responses
+                    .pop_front()
+                    .unwrap_or((StatusCode::OK, fallback))
+            };
             (
                 status,
                 [(

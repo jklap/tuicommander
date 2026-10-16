@@ -55,7 +55,10 @@ async fn assert_phone_mail_survives_probe(name: &str) {
     assert_eq!(inbox["count"], 1);
     assert!(inbox.to_string().contains("keep my registered agent"));
     assert!(
-        server.requests().is_empty(),
+        server
+            .requests()
+            .iter()
+            .all(|(method, _)| !method.ends_with("sendMessage")),
         "live registration sent no-agent reply"
     );
     assert!(

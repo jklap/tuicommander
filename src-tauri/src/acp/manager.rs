@@ -619,8 +619,27 @@ impl AcpClientManager {
         connection_id: AcpConnectionId,
         session_id: v1::SessionId,
     ) -> Result<(), AcpClientError> {
-        self.dispatch(connection_id, |reply| Command::Cancel { session_id, reply })
-            .await
+        self.dispatch(connection_id, |reply| Command::Cancel {
+            session_id,
+            expected_turn: None,
+            reply,
+        })
+        .await
+    }
+
+    /// A delayed external Stop must never cancel a replacement turn.
+    pub(crate) async fn cancel_turn(
+        &self,
+        connection_id: AcpConnectionId,
+        session_id: v1::SessionId,
+        turn: AcpTurnId,
+    ) -> Result<(), AcpClientError> {
+        self.dispatch(connection_id, |reply| Command::Cancel {
+            session_id,
+            expected_turn: Some(turn),
+            reply,
+        })
+        .await
     }
 
     pub async fn cancel_queued(
@@ -760,6 +779,62 @@ impl AcpClientManager {
             Arc::clone(&connection.journal)
         };
         journal.subscribe(from)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_peer_journal(&self, peer: &str) -> Arc<AcpEventJournal> {
+        let id = AcpConnectionId::new();
+        let journal = Arc::new(AcpEventJournal::new(id, 1, self.notices.clone()));
+        let (commands, _) = mpsc::channel(1);
+        self.connections.lock().insert(
+            id,
+            ConnectionHandle {
+                snapshot: AcpConnectionSnapshot {
+                    connection_id: id,
+                    generation: 1,
+                    state: AcpConnectionState::Ready,
+                    agent_info: None,
+                    capabilities: None,
+                    attachments: vec![],
+                    earliest_sequence: 1,
+                    latest_sequence: 0,
+                    settlement: None,
+                },
+                peer_id: Some(peer.into()),
+                root: crate::test_support::test_temp_root(),
+                attachment_directories: HashMap::new(),
+                commands,
+                journal: journal.clone(),
+                shutdown: None,
+                supervisor: None,
+            },
+        );
+        journal
+    }
+
+    /// Observe only events accepted after this call for the peer's current connection.
+    pub(crate) fn subscribe_peer_tail(&self, peer: &str) -> Option<(AcpEventStream, bool)> {
+        let connections = self.connections.lock();
+        let connection = connections
+            .values()
+            .filter(|connection| {
+                connection.peer_id.as_deref() == Some(peer)
+                    && connection.snapshot.settlement.is_none()
+            })
+            .max_by_key(|connection| connection.snapshot.generation)?;
+        let (_, latest) = connection.journal.bounds();
+        let idle = connection
+            .snapshot
+            .attachments
+            .iter()
+            .all(|attachment| attachment.active_turn.is_none());
+        Some((
+            connection
+                .journal
+                .subscribe(latest.saturating_add(1))
+                .ok()?,
+            idle,
+        ))
     }
 
     /// Hand one command to a connection's actor and wait for its answer.
