@@ -35,6 +35,7 @@ pub(super) struct Managed {
     pub model: Option<String>,
     pub roots: Option<Vec<Root>>,
     pub network: Option<Network>,
+    pub exec_paths: Option<Vec<String>>,
 }
 
 /// Whole managed keys are atomic leaves, including `roots`. The owner accepts one typed
@@ -61,6 +62,17 @@ pub(super) fn register(catalogue: &mut Catalogue) -> Result<(), CatalogueError> 
         catalogue
             .fields
             .insert(id.clone(), descriptor(id, path, schema.clone(), false));
+    }
+    for name in ["headers", "credential_command"] {
+        let mut field = descriptor(
+            format!("ego.auth.{{provider}}.{name}"),
+            format!("/auth/{{provider}}/{name}"),
+            serde_json::json!({"type":["string","null"]}),
+            true,
+        );
+        field.owner = "machine".into();
+        field.annotation.operations = vec![Operation::Get];
+        catalogue.fields.insert(field.id.clone(), field);
     }
     let mut credential = descriptor(
         "ego.credentials.{key}".into(),

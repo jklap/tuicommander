@@ -251,3 +251,99 @@ fn read_succeeds_while_a_token_setup_holds_the_setup_lock() {
         .expect("a read must not wait on the setup lock");
     assert_eq!(value["enabled"], false);
 }
+
+/// Catches: changing a token taking the poller lock instead of waking its existing owner.
+#[tokio::test]
+async fn telegram_token_change_never_starts_second_owner() {
+    use super::telegram::{TelegramAction, TelegramOwnerSettings};
+    let f = fixture(Some(json!({"enabled":false,"bot_alias":"tuic_bot"})), true);
+    let owner = Owner::acquire(&f.paths).unwrap();
+    let settings = TelegramOwnerSettings::at_paths(f.paths.clone());
+    settings.perform(TelegramAction::ClearToken).await.unwrap();
+    assert_eq!(settings.read().unwrap()["token"]["status"], "unset");
+    assert!(Owner::acquire(&f.paths).is_err());
+    drop(owner);
+    assert!(Owner::acquire(&f.paths).is_ok());
+}
+
+/// Catches: clearing a token overwriting config, chats, or another owner's token.
+#[tokio::test]
+async fn telegram_token_change_never_starts_second_owner_preserves_other_owner_state() {
+    use super::telegram::{TelegramAction, TelegramOwnerSettings};
+    let config = json!({"enabled":false,"bot_alias":"tuic_bot"});
+    let f = fixture(Some(config.clone()), true);
+    let sibling = fixture(Some(config.clone()), true);
+    let settings = TelegramOwnerSettings::at_paths(f.paths.clone());
+    settings
+        .perform(TelegramAction::AddChat {
+            chat_id: "73".into(),
+        })
+        .await
+        .unwrap();
+    settings.perform(TelegramAction::ClearToken).await.unwrap();
+    assert_eq!(on_disk(&f), config);
+    assert_eq!(settings.read().unwrap()["chats"], json!(["42", "73"]));
+    assert_eq!(
+        std::fs::read_to_string(sibling.paths.file("bot.token")).unwrap(),
+        TOKEN
+    );
+}
+
+/// Catches: a rejected token leaking through schema, errors, or presence readback.
+#[tokio::test]
+async fn telegram_owner_secret_errors_and_reads_are_redacted() {
+    use super::telegram::{TelegramAction, TelegramOwnerSettings};
+    let f = fixture(Some(json!({"enabled":false,"bot_alias":"tuic_bot"})), true);
+    let settings = TelegramOwnerSettings::at_paths(f.paths.clone());
+    let error = settings
+        .perform(TelegramAction::SetToken {
+            token: "CANARY invalid token".into(),
+        })
+        .await
+        .unwrap_err();
+    assert!(!error.persisted);
+    assert!(!serde_json::to_string(&error).unwrap().contains("CANARY"));
+    assert_eq!(settings.read().unwrap()["token"]["status"], "set");
+    assert_eq!(
+        get(&f, &["/bot.token"]).await.values["/bot.token"].stored,
+        json!({"status":"set"})
+    );
+    let schema = TelegramOwnerSettings::action_schema();
+    assert!(schema.to_string().contains("writeOnly"));
+    for id in ["0", "-1", "0042", "9223372036854775808", "../42"] {
+        assert!(
+            settings
+                .perform(TelegramAction::AddChat { chat_id: id.into() })
+                .await
+                .is_err()
+        );
+    }
+    settings
+        .perform(TelegramAction::RemoveChat {
+            chat_id: "42".into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(settings.read().unwrap()["chats"], json!([]));
+}
+
+#[tokio::test]
+async fn clear_token_readback_failure_reports_committed_deletion() {
+    // Catches: a failed allowlist readback hides a completed token deletion.
+    use super::telegram::{TelegramAction, TelegramOwnerSettings};
+    let f = fixture(None, true);
+    private_write(&f.paths, "allowed_chat_ids", "not-a-chat-id\n");
+    let settings = TelegramOwnerSettings::at_paths(f.paths.clone());
+    let error = settings
+        .perform(TelegramAction::ClearToken)
+        .await
+        .unwrap_err();
+    assert!(
+        !f.paths.file("bot.token").exists(),
+        "token deletion committed"
+    );
+    assert!(
+        error.persisted,
+        "completed token deletion must not be reported as uncommitted: {error:?}"
+    );
+}

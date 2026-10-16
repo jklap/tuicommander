@@ -42,28 +42,10 @@
     "reason": "Review whether active pane selection is a setting or runtime selection, then describe or individually exclude it."
   },
   {
-    "store": "connections",
-    "path": "/{id}/credential",
-    "ownerStep": "Step 4f",
-    "reason": "Connection credentials live outside the RemoteConnection record and require the credential-reference owner schema."
-  },
-  {
     "store": "upstreams",
     "path": "/servers/{id}/credentials",
     "ownerStep": "Step 4e",
     "reason": "Vault-backed bearer/OAuth/header operations need the upstream owner schema; persisted credential references do not cover credential actions."
-  },
-  {
-    "store": "telegram",
-    "path": "/bot.token",
-    "ownerStep": "Step 4h",
-    "reason": "Private bot token is stored separately from Config and requires the setup owner's secret-action DTO."
-  },
-  {
-    "store": "telegram",
-    "path": "/allowed_chat_ids/{chatId}",
-    "ownerStep": "Step 4h",
-    "reason": "Chat allowlist is a separate private text file; use the existing setup owner, not raw file editing."
   },
   {
     "store": "app",
@@ -118,35 +100,5 @@
     "path": "/agents/{key}/run_configs/{name}/model",
     "ownerStep": "Step 4c",
     "reason": "Agent model availability requires the owning CLI capability resolver, without launching on save."
-  },
-  {
-    "store": "ego",
-    "path": "/exec_paths",
-    "ownerStep": "Step 3b",
-    "reason": "DEFERRED (2026-10-13): parent scopes this adapter to managed keys. Installed ego config set exec_paths=[] exits 2: unknown config key; an Ego owner extension must precede support."
-  },
-  {
-    "store": "ego",
-    "path": "/auth/{provider}/headers",
-    "ownerStep": "Step 3b",
-    "reason": "DEFERRED (2026-10-13): auth is base-only and outside ManagedConfigKey. Installed ego config set auth.openrouter.headers={} exits 2: unknown config key. No config-edit or raw-file bypass."
-  },
-  {
-    "store": "ego",
-    "path": "/auth/{provider}/credential_command",
-    "ownerStep": "Step 3b",
-    "reason": "DEFERRED (2026-10-13): installed ego config set auth.openrouter.credential_command exits 2: unknown config key. The program path is non-secret, its stdout secret; an owner extension is required."
-  },
-  {
-    "store": "ego",
-    "path": "/atomic_batch",
-    "ownerStep": "Step 3b",
-    "reason": "DEFERRED (2026-10-13): Ego managed CLI publishes one key per call. The adapter refuses patches changing multiple keys before any write; complete atomic batches require an owner API."
-  },
-  {
-    "store": "ego",
-    "path": "/compare_and_swap",
-    "ownerStep": "Step 3b",
-    "reason": "DEFERRED (2026-10-13): Ego CLI has no conditional revision write. The adapter serializes its own commits and checks latest state; external CLI writers can race between read and mutation. Full cross-process CAS requires an owner API."
   }
 ]

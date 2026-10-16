@@ -2240,6 +2240,30 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 
 - [ ] After a manual Rust rebuild/restart, reload cache-keepalive with a question open, then type a draft near its keepalive deadline. No dialog answer or draft clearing must occur. Guarded input requires the rebuilt backend; Rust does not hot-reload (#1742-13a4).
 
+- [ ] After installing the Tasks provider data update and moving the existing GitHub Work `data/config.json` to `data/work-items.json`, confirm GitHub Work loads and Tasks setup saves/reloads its repository. Repeat setup with Jira and GitLab. Backend code is unchanged; the Rust edit adds a regression test only.
 - [ ] #1904-9eef: After Boss restarts `make dev` (or rebuilds release), verify new launch/MCP marker instructions permit 💬 at the start of list-item text. In a Claude session, emit `- 💬 **Answer.**` with an indented continuation and nested item, followed by an unmarked sibling; check the green rule and hidden marker in CLI and Chat, then Answers-only scope. Frontend behavior does not require a Rust restart; updated launch instructions do.
 
+- [ ] After the next planned rebuild, verify Telegram token replacement with a real bot, presence-only readback, clear, and add/remove of an isolated private-chat ID. Verify the existing poller wakes without starting a second owner. Do not use production credentials in automated tests.
+
+- [ ] After planned settings cutover/rebuild, set and clear credentials on an isolated saved connection; verify presence-only replies, teardown/reconnect, and that remote-target requests do not mutate local credentials. Automated tests use the in-memory vault, not a real account or Keychain.
 - [ ] After Boss restarts the Rust backend, start a direct Gemini session in a trusted workspace, upload a PNG and ask it to read the image. There must be no trust prompt for the session attachment directory. Repeat with ego in ro, workspace and adaptive sandbox modes; the read must succeed without approval. Check a resumed and a typed-by-name launch. ACP extra-directory grants remain unsupported. (#1833-aa60)
+- [ ] After Boss restarts the Rust backend, verify the internal Ego settings owner with an isolated EGO_HOME: exec_paths/profile edits, base-only auth presence, and stale-revision rejection. No live config or credential commands are required (#1907-0f9f).
+- [ ] #1438-79b4 (closure handoff 2026-10-15): After Boss confirms readiness and pe-3 is idle, deploy on mint; register a disposable agent with Telegram, send phone text while idle and busy, observe draft/final replies and blocked/done notices, press a callback button, unregister and confirm the no-agent reply.
+
+- [ ] #1547-2f5c (closure handoff 2026-10-15): After Boss manually rebuilds/restarts the backend, open a newly managed agent Prompt Inspector; expand captured launch/MCP sections and verify source, original UTF-8 bytes, redaction/truncation and historical/unobservable labels. Do not launch a second desktop.
+
+- [ ] #1573-84f8 (closure handoff 2026-10-15): On a real iPhone, open a session, tap push-to-talk, allow microphone access, speak and release; verify one audible reply, then leave during arming and confirm microphone capture stops.
+
+- [ ] #1625-b873 (closure handoff 2026-10-15): On iPhone open a terminal composer, enter a multiline draft, verify Send remains outside the text box with a separate mic target and no overlap; open + and dismiss without sending.
+
+- [ ] #1707-bd40 (closure handoff 2026-10-15): After loading the rebuilt desktop, use editor/custom/settings launchers and Design Mode normally for a day; inspect direct children of that desktop PID and confirm no zombie remains older than one minute.
+
+- [ ] #1804-d44b (closure handoff 2026-10-15): After manual rebuild/restart, verify background tray icon and attention dot in light/dark macOS menu bars, Windows overflow and KDE; hide the window, trigger awaiting, use Show and confirm attention clears and window remains reachable.
+
+- [ ] #1834-f6c4 (closure handoff 2026-10-15): Close only the old TUIC-owned Design Mode browser profile window, then in orchestrator and tuicommander use the tab-bar button or terminal link; confirm the page opens without extension setup, Pick element works and the pick reaches the intended agent.
+
+- [ ] #1878-3a3c (closure handoff 2026-10-15): On iPhone mobile Settings toggle keyboard correction ON, type a misspelled sentence in the terminal composer and verify native suggestions; switch OFF and repeat, then reload and confirm preference persists.
+
+- [ ] #1879-05ad (closure handoff 2026-10-15): After loading the rebuilt backend, open Markdown tabs in a desktop repository; on iPhone open its session overflow menu and a Markdown entry, verify the viewer opens, then open/close a desktop Markdown tab and confirm the phone list refreshes without reload and excludes other repositories.
+
+- [ ] #1880-d7ff (closure handoff 2026-10-15): On iPhone check terminal and Chat composers: + / text-with-mic / Send order, + menu outside the textarea, outside-tap dismissal, Attach file and Take photo pickers, Chat Park/Restore, terminal Queue/long-press Send and microphone permission/cancel.

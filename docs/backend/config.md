@@ -1533,7 +1533,13 @@ See [GitHub settings owner adapter](github.md#github-settings-owner-adapter).
 `ego_executable`, `ego_profile` and `ai_chat_workspace` are `app` store fields owned
 by `AppSettingsStore`; no separate launch adapter exists. Changes apply to later
 ACP or PTY launches. Ego-owned defaults use the separate `ego` profile store and
-the configured CLI; no Ego configuration files are edited.
+the configured CLI; no Ego configuration files are edited. Machine targets select
+the base user document, while profile targets must match the configured launch
+profile. Managed model, roots, network and exec_paths patches use `config snapshot`
+and `config batch --if-revision`; atomicity covers only that owner document.
+Base-only auth headers and credential commands use typed write-only actions and
+the same owner CAS. Owner-redacted values are never written back as secrets.
+Capability inspection fails closed for older owners without conditional batches.
 
 ### Repository start-work brief
 
@@ -1632,3 +1638,7 @@ Hibernation requires an idle agent and a verified resume session in its saved pr
 The normal Rust suspension path persists `reason: "idle_hibernate"` before ending the PTY. Opening the tab, submitting input or sending peer mail uses the shared wake path. Storage or resume-verification failures leave the live session intact.
 
 Tasks notice policy and per-item follow/comment baselines are JSON values in `ui-prefs.json`'s existing `tasks_view_preferences` map. Reserved keys are `tasks:notification-policy` and `tasks:follow:<provider/account/item identity>`. No new configuration file or provider polling is used. Missing policy means disabled. These are host UI preferences, not provider subscriptions.
+
+Telegram settings owner actions support write-only `set_token`/`clear_token` and stable positive `add_chat`/`remove_chat` IDs. Reads return token presence only. These actions use the existing private setup files and setup lock and never acquire the polling-owner lock. Token verification or final owner readback can fail after persistence: `persisted:true` requires owner readback before retry, including after a successful token clear or allowlist action.
+
+Connection settings credential actions set/clear the password or pairing token for an existing immutable connection ID through the vault owner. Inputs are write-only; readback reports separate presence states, and vault read errors remain unavailable rather than unset. Failed writes leave the saved record and old credential reachable. A committed write followed by failed readback returns `persisted:true`; read presence before retrying. Successful writes invoke the runtime reconciliation callback without editing connection metadata.

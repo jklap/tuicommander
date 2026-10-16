@@ -12,6 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Grant Gemini session attachment trust without a folder prompt or global settings changes. Grant ego PTY attachments read-only access in confined sandbox modes (#1833-aa60).
 
+- Add conditional atomic Ego settings batches, executable paths and base-only write-only provider auth actions (#1907-0f9f).
 
 - Refresh expanded file-browser folders after Finder moves, copies, confirmed directory transfers and remote uploads (#1905-c1ed).
 
@@ -30,6 +31,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Opt-in Tasks OS notices for linked GitHub check failures and comments on locally followed items, using existing detail refreshes and native notice delivery.
 
 ### Fixed
+
+- Await async plugin startup, surface rejected startup errors, and cancel obsolete host lifetimes on unload or reload (#1756-4d42).
 
 - GitHub OAuth now requests `read:project` for Projects v2 reads. Existing logins need reauthorization.
 

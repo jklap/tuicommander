@@ -148,8 +148,7 @@ export async function setPluginEnabled(id: string, enabled: boolean): Promise<vo
 	if (enabled) {
 		if (builtIn) {
 			// Re-register built-in plugin
-			pluginRegistry.register(builtIn);
-			pluginStore.updatePlugin(id, { loaded: true, error: null });
+			await pluginRegistry.register(builtIn);
 		} else {
 			// Load external plugin from disk
 			const manifests = await invoke<PluginManifest[]>("list_user_plugins");
@@ -169,7 +168,7 @@ export async function setPluginEnabled(id: string, enabled: boolean): Promise<vo
 		if (builtIn) {
 			await pluginRegistry.unregister(id);
 			pluginStore.updatePlugin(id, { loaded: false });
-		} else if (loadedPluginIds.has(id)) {
+		} else {
 			// pluginRegistry.unregister() already issues the Rust-side unregister.
 			await pluginRegistry.unregister(id);
 			loadedPluginIds.delete(id);
@@ -260,7 +259,7 @@ async function loadPlugin(manifest: PluginManifest): Promise<void> {
 	// Await register() — it performs Rust registration + onload asynchronously.
 	// Without the await we'd log success and add to loadedPluginIds before those
 	// actually complete (race).
-	await pluginRegistry.register(plugin, manifest.capabilities, manifest.agentTypes);
+	if (!(await pluginRegistry.register(plugin, manifest.capabilities, manifest.agentTypes))) return;
 	loadedPluginIds.add(manifest.id);
 	replayActiveAgents(terminalsStore);
 
@@ -288,13 +287,9 @@ async function handlePluginChanged(event: { payload: string[] }): Promise<void> 
 		}
 
 		appLogger.info("plugin", `Plugin "${pluginId}" changed, reloading...`);
-
-		// Unregister if previously loaded
-		if (loadedPluginIds.has(pluginId)) {
-			// pluginRegistry.unregister() already issues the Rust-side unregister.
-			await pluginRegistry.unregister(pluginId);
-			loadedPluginIds.delete(pluginId);
-		}
+		// pluginRegistry.unregister() already issues the Rust-side unregister.
+		await pluginRegistry.unregister(pluginId);
+		loadedPluginIds.delete(pluginId);
 
 		// Re-discover this specific plugin's manifest
 		let manifests: PluginManifest[];

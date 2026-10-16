@@ -4274,6 +4274,96 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "execution_authority"
     },
+    "connections.{id}.credential": {
+      "id": "connections.{id}.credential",
+      "store": "connections",
+      "owner": "machine",
+      "area": "connections",
+      "group": "credential",
+      "order": 0,
+      "path": "/{id}/credential",
+      "labelKey": "settings.catalogue.connections.credential.label",
+      "helpKey": "settings.catalogue.connections.credential.help",
+      "label": "credential",
+      "schema": {
+        "type": "string",
+        "writeOnly": true
+      },
+      "nullable": false,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "secret",
+      "apply": "live",
+      "effect": "Updates the immutable connection credential slot and reconciles its runtime.",
+      "operations": [
+        "get",
+        "set_secret",
+        "clear_secret"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "ego.auth.{provider}.credential_command": {
+      "id": "ego.auth.{provider}.credential_command",
+      "store": "ego",
+      "owner": "machine",
+      "area": "ego",
+      "group": "managed",
+      "order": 0,
+      "path": "/auth/{provider}/credential_command",
+      "labelKey": "settings.catalogue.ego.auth.{provider}.credential_command.label",
+      "helpKey": "settings.catalogue.ego.auth.{provider}.credential_command.help",
+      "label": "auth/{provider}/credential_command",
+      "schema": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "nullable": true,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "secret",
+      "apply": "next_session",
+      "effect": "Used by the next Ego session; existing ACP and PTY sessions keep their configuration.",
+      "operations": [
+        "get"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "ego.auth.{provider}.headers": {
+      "id": "ego.auth.{provider}.headers",
+      "store": "ego",
+      "owner": "machine",
+      "area": "ego",
+      "group": "managed",
+      "order": 0,
+      "path": "/auth/{provider}/headers",
+      "labelKey": "settings.catalogue.ego.auth.{provider}.headers.label",
+      "helpKey": "settings.catalogue.ego.auth.{provider}.headers.help",
+      "label": "auth/{provider}/headers",
+      "schema": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "nullable": true,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "secret",
+      "apply": "next_session",
+      "effect": "Used by the next Ego session; existing ACP and PTY sessions keep their configuration.",
+      "operations": [
+        "get"
+      ],
+      "confirmationClass": "ordinary"
+    },
     "ego.credentials.{key}": {
       "id": "ego.credentials.{key}",
       "store": "ego",
@@ -4301,6 +4391,43 @@ export const settingsCatalogue = {
       "effect": "Used by the next Ego session; existing ACP and PTY sessions keep their configuration.",
       "operations": [
         "get"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "ego.exec_paths": {
+      "id": "ego.exec_paths",
+      "store": "ego",
+      "owner": "profile",
+      "area": "ego",
+      "group": "managed",
+      "order": 0,
+      "path": "/exec_paths",
+      "labelKey": "settings.catalogue.ego.exec_paths.label",
+      "helpKey": "settings.catalogue.ego.exec_paths.help",
+      "label": "exec_paths",
+      "schema": {
+        "type": [
+          "array",
+          "null"
+        ],
+        "items": {
+          "type": "string"
+        },
+        "default": null
+      },
+      "nullable": true,
+      "default": null,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "private",
+      "apply": "next_session",
+      "effect": "Used by the next Ego session; existing ACP and PTY sessions keep their configuration.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
       ],
       "confirmationClass": "ordinary"
     },
@@ -7770,6 +7897,65 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
+    "telegram.allowed_chat_ids.{chatId}": {
+      "id": "telegram.allowed_chat_ids.{chatId}",
+      "store": "telegram",
+      "owner": "machine",
+      "area": "telegram",
+      "group": "allowed_chat_ids",
+      "order": 3,
+      "path": "/allowed_chat_ids/{chatId}",
+      "labelKey": "settings.catalogue.telegram.allowed_chat_ids.{key}.label",
+      "helpKey": "settings.catalogue.telegram.allowed_chat_ids.{key}.help",
+      "label": "{key}",
+      "schema": {
+        "type": "boolean"
+      },
+      "nullable": false,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "private",
+      "apply": "live",
+      "effect": "Updates the Telegram chat allowlist through setup.",
+      "operations": [
+        "get",
+        "create",
+        "remove"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "telegram.bot.token": {
+      "id": "telegram.bot.token",
+      "store": "telegram",
+      "owner": "machine",
+      "area": "telegram",
+      "group": "bot.token",
+      "order": 2,
+      "path": "/bot.token",
+      "labelKey": "settings.catalogue.telegram.bot.token.label",
+      "helpKey": "settings.catalogue.telegram.bot.token.help",
+      "label": "bot.token",
+      "schema": {
+        "type": "string",
+        "writeOnly": true
+      },
+      "nullable": false,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "secret",
+      "apply": "live",
+      "effect": "Wakes the existing Telegram owner.",
+      "operations": [
+        "get",
+        "set_secret",
+        "clear_secret"
+      ],
+      "confirmationClass": "ordinary"
+    },
     "telegram.bot_alias": {
       "id": "telegram.bot_alias",
       "store": "telegram",
@@ -9735,28 +9921,10 @@ export const settingsCatalogue = {
       "reason": "Review whether active pane selection is a setting or runtime selection, then describe or individually exclude it."
     },
     {
-      "store": "connections",
-      "path": "/{id}/credential",
-      "ownerStep": "Step 4f",
-      "reason": "Connection credentials live outside the RemoteConnection record and require the credential-reference owner schema."
-    },
-    {
       "store": "upstreams",
       "path": "/servers/{id}/credentials",
       "ownerStep": "Step 4e",
       "reason": "Vault-backed bearer/OAuth/header operations need the upstream owner schema; persisted credential references do not cover credential actions."
-    },
-    {
-      "store": "telegram",
-      "path": "/bot.token",
-      "ownerStep": "Step 4h",
-      "reason": "Private bot token is stored separately from Config and requires the setup owner's secret-action DTO."
-    },
-    {
-      "store": "telegram",
-      "path": "/allowed_chat_ids/{chatId}",
-      "ownerStep": "Step 4h",
-      "reason": "Chat allowlist is a separate private text file; use the existing setup owner, not raw file editing."
     },
     {
       "store": "app",
@@ -9811,36 +9979,6 @@ export const settingsCatalogue = {
       "path": "/agents/{key}/run_configs/{name}/model",
       "ownerStep": "Step 4c",
       "reason": "Agent model availability requires the owning CLI capability resolver, without launching on save."
-    },
-    {
-      "store": "ego",
-      "path": "/exec_paths",
-      "ownerStep": "Step 3b",
-      "reason": "DEFERRED (2026-10-13): parent scopes this adapter to managed keys. Installed ego config set exec_paths=[] exits 2: unknown config key; an Ego owner extension must precede support."
-    },
-    {
-      "store": "ego",
-      "path": "/auth/{provider}/headers",
-      "ownerStep": "Step 3b",
-      "reason": "DEFERRED (2026-10-13): auth is base-only and outside ManagedConfigKey. Installed ego config set auth.openrouter.headers={} exits 2: unknown config key. No config-edit or raw-file bypass."
-    },
-    {
-      "store": "ego",
-      "path": "/auth/{provider}/credential_command",
-      "ownerStep": "Step 3b",
-      "reason": "DEFERRED (2026-10-13): installed ego config set auth.openrouter.credential_command exits 2: unknown config key. The program path is non-secret, its stdout secret; an owner extension is required."
-    },
-    {
-      "store": "ego",
-      "path": "/atomic_batch",
-      "ownerStep": "Step 3b",
-      "reason": "DEFERRED (2026-10-13): Ego managed CLI publishes one key per call. The adapter refuses patches changing multiple keys before any write; complete atomic batches require an owner API."
-    },
-    {
-      "store": "ego",
-      "path": "/compare_and_swap",
-      "ownerStep": "Step 3b",
-      "reason": "DEFERRED (2026-10-13): Ego CLI has no conditional revision write. The adapter serializes its own commits and checks latest state; external CLI writers can race between read and mutation. Full cross-process CAS requires an owner API."
     }
   ],
   "collections": [

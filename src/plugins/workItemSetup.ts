@@ -1,4 +1,4 @@
-/** Setup descriptors for the work-item plugins, so core can edit their data/config.json without the user writing JSON. */
+/** Setup descriptors for the work-item plugins, so core can edit their data/work-items.json without the user writing JSON. */
 import { invoke } from "../invoke";
 import { reloadPlugin } from "./pluginLoader";
 
@@ -72,7 +72,7 @@ export const WORK_ITEM_PLUGINS: readonly WorkItemPluginSetup[] = [
 
 type Values = Record<string, string>;
 type Account = Record<string, unknown>;
-const CONFIG = "config.json";
+const CONFIG = "work-items.json";
 
 export const setupFor = (pluginId: string) => WORK_ITEM_PLUGINS.find((setup) => setup.pluginId === pluginId);
 export const setupForProvider = (providerId: string) =>

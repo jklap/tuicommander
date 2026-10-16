@@ -1,3 +1,8 @@
+---
+status: in_progress
+started_at: "2026-10-10T23:28:49.859Z"
+updated: "2026-10-10T23:28:49.859Z"
+---
 # Plan: Work-item plugins (GitHub, Jira, GitLab)
 
 **Created:** 2026-10-10 | **Status:** Approved scope, in execution | **Effort:** XL | **Branch:** `docs/work-item-plugins-plan` | **Baseline:** `99302122b`
