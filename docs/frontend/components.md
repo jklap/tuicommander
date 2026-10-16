@@ -1,5 +1,7 @@
 # Components
 
+Agents Settings uses page and section primitives while its machine context still owns agent configuration writes. Per-agent lists and nested run/environment editors use scoped responsive styles; drafts, validation, and save handlers are unchanged.
+
 Workspace Settings pages use `SettingPageHeader`, `SectionCard`, and opt-in row fields. `WorkspaceTabs.module.css` scopes shortcut action-first layout without changing capture handlers or global Settings styles.
 
 Application Settings tabs opt into `SettingFields` row presentation. The default stacked layout remains available to unchanged consumers. Row controls use `SettingRow` for label and hint association; slider input and commit events remain separate.

@@ -110,6 +110,7 @@ describe("AgentsTab expert controls", () => {
 		settingsState.progressTracking = true;
 		uiStore.setSettingsExpertMode(false);
 		mockInvoke.mockImplementation((cmd: string, payload?: { config: AgentsConfig }) => {
+			if (cmd === "list_installed_mcp_integrations") return Promise.resolve([]);
 			if (cmd === "get_config_defaults") return Promise.resolve(DEFAULTS);
 			if (cmd === "save_agents_config" && payload) {
 				agentsConfig = JSON.parse(JSON.stringify(payload.config.agents));

@@ -31,7 +31,7 @@ const [state, setState] = createStore({
   maxTabNameLength: 25,
   chatMuteIntermediateText: true
 });
-export const settingsStore = new Proxy({ state, isAcpConfigured: () => !!state.egoExecutable }, { get(target, key) {
+export const settingsStore = new Proxy({ state, isAgentEnabled: () => true, isAcpConfigured: () => !!state.egoExecutable }, { get(target, key) {
   if (key in target) return target[key];
   return (value) => {
     const field = key.slice(3);
@@ -66,7 +66,8 @@ export const appLogger = { error: () => {
 export const isTauri = () => true;
 export const isMacOS = () => true;
 export const openDialog = async () => null;
-export const invoke = async (cmd) => ({ get_home_directory: "/workspace", get_cli_status: { installed: true, path: "/usr/local/bin/tuic", version_match: true, auto_updatable: true }, mdkb_status: { available: true, connected: false, binaryPath: "/usr/local/bin/mdkb", version: "fixture" }, list_audio_output_devices: [{ name: "Illustrative speakers", is_default: true }] })[cmd];
+export const invoke = async (cmd) => ({ get_home_directory: "/workspace",
+ list_installed_mcp_integrations: [], get_agent_mcp_status: {supported:true,installed:false,config_path:null,shared_settings_file:false}, get_cli_status: { installed: true, path: "/usr/local/bin/tuic", version_match: true, auto_updatable: true }, mdkb_status: { available: true, connected: false, binaryPath: "/usr/local/bin/mdkb", version: "fixture" }, list_audio_output_devices: [{ name: "Illustrative speakers", is_default: true }] })[cmd];
 export const ExpertSetting = (props) => props.children;
 
 export const rpc=async(cmd)=>({

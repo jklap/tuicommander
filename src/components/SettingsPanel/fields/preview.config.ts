@@ -8,6 +8,18 @@ export default defineConfig({
 		alias: process.env.TUIC_APPLICATION_PREVIEW
 			? [
 					...[
+						"stores/agentConfigs",
+						"stores/remoteConnections",
+						"stores/editorTabs",
+						"stores/settingsExpert",
+						"hooks/useAgentDetection",
+						"plugins",
+						"plugins/pluginLoader",
+					].map((module) => ({
+						find: new RegExp(`^(?:\\.\\./)+${module}$`),
+						replacement: path.resolve("src/components/SettingsPanel/fields/agents-preview-state.js"),
+					})),
+					...[
 						"stores/settings",
 						"themes",
 						"stores/github",
