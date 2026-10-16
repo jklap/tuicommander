@@ -731,6 +731,9 @@ Some frontend-only stores persist to localStorage:
 - [x] Inter-Agent Messaging (`messaging` MCP tool: register, list_peers, send, inbox with channel push + polling fallback)
 - [x] Smart Prompts (29 built-in AI prompts with context variable resolution, shell/inject/headless-CLI execution, toolbar dropdown, SmartButtonStrip, Command Palette integration). The `api` execution mode runs one unattended ego turn over ACP (#787-ee50): a session with no MCP server, every question refused, the final text routed to the prompt's output target. Its old executor — a direct provider call from TUICommander — went with the embedded engine (#784-0aec) and did not come back
 - [x] AI Chat panel (`Cmd+Alt+A`) — ego over ACP (#785-58ca), bound to a repository and ACP session rather than a terminal. TUICommander renders the journal, permissions, elicitation forms, plans and session controls while carrying no LLM client or provider API key of its own. The selected session is saved per root and restored after restart; the picker lists ego's durable sessions by title and activity time (#1071-46c9)
+- [x] AI Chat conversation deletion — capability-gated row controls confirm the conversation name, call ACP session/delete, remove successful deletions from tabs and the list, and retain refused conversations with the agent error (#1917).
+
+- [x] AI Chat repository context pin — freeze the per-prompt repository per conversation, with configured repository text color; draft parking stays independent (#1924-12be).
 - [x] AI Chat image paste before connection — discover image capability on first paste, and share Finder/text clipboard selection with Ideas and Compose.
 
 - [x] AI Chat image paste — supported images stage removable previews and become ACP image content blocks when the agent advertises image prompts
@@ -1104,6 +1107,18 @@ The normal Rust suspension path persists `reason: "idle_hibernate"` before endin
 
 GitHub Work B8: registered accounts bind core B6 review threads and B7 actions through account-scoped PluginHost methods. The Rust adapter enforces net:http, on-disk GitHub provider consent and matching account/PR identity, then uses existing core policy. Projects move/clear coverage uses recorded public reads and documented mutation contracts; live writes and desktop verification remain pending.
 
+## Settings choice discovery (#1908-c327)
+
+Internal owner requests now support cached dynamic-choice describe and explicit refresh, scoped by target and revision. Notification output devices reuse the UI enumeration owner and preserve unavailable versus successful empty results. General settings transport publication remains separate.
+
+
+Agent model settings support typed model edits without starting a CLI. Explicit
+choice refresh probes only the addressed Claude run config with `--help`, using
+its command and environment. Published aliases are suggestions, not account
+entitlement or an exhaustive model list. Other CLIs and failed probes report
+unavailable choices; typed edits remain supported. Describe never probes. Model
+edits preserve sibling configs and the default selection and apply next session
+(#1910-451e).
 ### Session attachment launch grants (#1833-aa60)
 
 Gemini receives only the session upload directory through `--include-directories`.
@@ -1112,3 +1127,7 @@ that directory, without changing global settings or bypassing workspace trust.
 Ego PTY launches use `--read-only-dir` for the same canonical directory. Shell
 shims apply the grants to typed launches; resumed ego sessions receive fresh
 read roots because discovery does not persist ego argv. ACP uploads still require an existing profile read root.
+
+### Voice owner discovery (#1909-0d24)
+
+Internal voice settings refresh resolves devices, model state, installed voices and language-filtered Edge voices through existing owners. Describe is cache-only; typed asset actions retain existing owner validation and runtime effects. Public settings transport cutover remains separate.

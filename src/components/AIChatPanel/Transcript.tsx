@@ -232,7 +232,8 @@ function activityRows(
 
 export interface TranscriptSearchRef {
 	open: () => void;
-	close: () => void;
+	/** Close Find and report whether it was open. */
+	close: () => boolean;
 }
 
 export interface TranscriptProps {
@@ -365,7 +366,7 @@ const UserText: Component<{ text: string; onOpenFile?: (href: string) => void }>
 	);
 };
 
-/** Reuse the terminal's answer marker and left rule, after Markdown has rendered.
+/** Reuse the terminal's answer marker ranges after Markdown has rendered.
  * An answer spans the blocks the grid highlights (`answerBlockRanges`); the 💬 glyph is
  * dropped from each marked paragraph, which keeps `data-tuic-answer-start` so a later pass
  * still finds it. Code examples and quotations keep their literal marker; stored/copy text stays intact. */
@@ -512,9 +513,12 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 		});
 	};
 	const closeSearch = () => {
+		const wasOpen = finding();
+		if (!wasOpen) return false;
 		clearSearchSelection();
 		setFinding(false);
 		matchIndex = -1;
+		return wasOpen;
 	};
 	props.onSearchRef?.({ open: openSearch, close: closeSearch });
 	onCleanup(() => {

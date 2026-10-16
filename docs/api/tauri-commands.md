@@ -286,7 +286,7 @@ reached is an error carrying ego's own sentence, never an empty result.
 | `delete_note_assets` | `note_id` | `()` | Remove `note-images/<note_id>/` directory recursively (no-op if missing) |
 | `get_note_images_dir` | -- | `String` | Return `config_dir()/note-images/` absolute path |
 | `load_keybindings` | -- | `JSON` | Load keybinding overrides |
-| `save_keybindings` | `base, config` | `()` | Save keybinding overrides |
+| `save_keybindings` | `base, config` | `()` | Save typed action/key overrides; reject invalid records before persistence |
 | `load_agents_config` | -- | `AgentsConfig` | Load per-agent run configs, including optional model defaults, and `prevent_alt_screen` overrides |
 | `save_agents_config` | `base, config` | `()` | Save per-agent run configs, including optional model defaults, and `prevent_alt_screen` overrides |
 | `get_agent_native_status_signals` | `agent_type` | `bool` | Read the default-on Claude/Codex launch-scoped status setting |
@@ -1011,3 +1011,7 @@ See the HTTP reference for action arguments and typed error prefixes.
 ### Guarded automated agent input
 
 `send_agent_input_if_empty { sessionId, text } -> boolean` submits only to a confirmed-idle agent with no awaiting question, tracked draft, or queued command. Checks, split writes, and input bookkeeping share the per-session input transaction with raw UI and HTTP input. HTTP: `POST /sessions/{id}/input-if-empty { text }`.
+
+### Audio choice availability (#1908-c327, #1909-0d24)
+
+Existing input/output device enumeration returns the same device objects on success, including a successful empty array. Backend enumeration failure now returns an error rather than an empty array. Internal settings choice refresh reuses those owners; cache-only describe and typed voice asset actions are not new public routes in this change. The settings transport cutover remains separate.

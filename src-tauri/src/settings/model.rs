@@ -154,6 +154,8 @@ pub enum Choices {
     Dynamic {
         resolver: String,
         availability: Availability,
+        /// None means discovery is unavailable, never a successful empty list.
+        values: Option<Vec<Value>>,
     },
 }
 

@@ -90,9 +90,25 @@ impl GithubSettings {
         super::catalogue::schema::<GithubAction>()
     }
 
+    /// Credential presence is projected by the owner, never persisted in account metadata.
+    pub fn catalogue_schema() -> Value {
+        let mut schema = super::catalogue::schema::<crate::github_account::GitHubAccountRegistry>();
+        schema["properties"]["accounts"]["items"]["properties"]["credential"] = json!({
+            "type": "string",
+            "enum": ["set", "unset", "unavailable"],
+            "x-setting": {
+                "sensitivity": "secret", "apply": "live",
+                "effect": "Reads credential presence. Use typed account actions for cloud device login, enterprise verification, token rotation and removal.",
+                "operations": ["get", "set_secret", "clear_secret"],
+                "confirmationClass": "ordinary"
+            }
+        });
+        schema
+    }
+
     /// No network refresh and no ambient token resolution: show the runtime owner's provenance.
     pub async fn read(&self) -> Result<Value, Failure> {
-        let accounts = crate::accounts::execute(
+        let mut accounts = crate::accounts::execute(
             &self.state,
             AccountAction::List {
                 provider: Some("github".into()),
@@ -100,6 +116,11 @@ impl GithubSettings {
         )
         .await
         .map_err(|_| Error::new(ID, "store_failed"))?;
+        if let Some(rows) = accounts.as_array_mut() {
+            for row in rows {
+                row["credential"] = row["secret"]["status"].clone();
+            }
+        }
         let bindings = tokio::task::spawn_blocking(bindings::read)
             .await
             .map_err(|_| Error::new(ID, "store_failed"))??;

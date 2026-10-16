@@ -6,9 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Add explicit addressed Claude model-alias discovery and no-launch typed model saves through settings (#1910-451e).
+
+- Share bundled font and IDE choices with Rust settings owners; add explicit theme/IDE discovery without probing during describe (#1915-d77f).
+
+- Validate keybinding records and bounded pane geometry through shared Rust owners before saving; preserve runtime tab membership and focus (#1914-cdf6).
+- Add explicit voice settings choice refresh and typed owner asset actions; input enumeration failure is unavailable rather than an empty list (#1909-0d24).
+
+- Add explicit owner-backed settings choice refresh; notification output enumeration reports unavailable separately from an empty device list (#1908-c327).
 ### Fixed
 
 - Apply asynchronous AI Chat session option offers before the first prompt so model and mode settings become available, without stale offer snapshots reverting a confirmed selection (#1918-2ea3).
+- Close AI Chat tabs with the middle mouse button through the normal guarded close path (#1922-8027).
+- Align AI Chat Stop, Park and Send controls with the input (#1925-9e69).
+- Stop a running AI Chat turn with Escape while preserving drafts and dismissing open Find even from the composer (#1926-458a).
+
+- Remove the green answer rail and its inset from AI Chat replies; retain terminal Chat cards and real blockquotes (#1920-700e).
+
+- Attach AI Chat clipboard images when an empty text flavor accompanies the PNG (#1919-f93d).
 
 - Grant Gemini session attachment trust without a folder prompt or global settings changes. Grant ego PTY attachments read-only access in confined sandbox modes (#1833-aa60).
 
@@ -23,6 +38,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Fix cache keepalive draft preservation with guarded backend submissions and complete question-state replay on plugin load.
 
 ### Added
+- Delete saved AI Chat conversations from the Conversations list with named confirmation and ACP capability gating (#1917).
+
+- Pin AI Chat repository context per conversation and show its configured name color, including parent repository colors for linked worktrees without changing draft parking (#1924-12be).
 - Diagnose empty or off-screen mobile resume shells through the backend log ring without reloading the page (#1900-5ff6).
 - Bind GitHub Work review threads and PR actions to the selected account through core policy, with desktop and HTTP parity (#1693-a816).
 - Hibernate unattended resumable agent tabs after configurable awake idle time, with background-only scope by default and shared wake on open, input or mail (#1808-389f).

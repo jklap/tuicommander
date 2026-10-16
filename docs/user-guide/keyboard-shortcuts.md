@@ -52,6 +52,9 @@ AI Chat's composer handles `Ctrl+S` locally to park or restore its prompt,
 including on macOS. The same action is available from the composer button on a
 phone; it is not a configurable global shortcut.
 
+Press `Escape` in the AI Chat composer or transcript to stop a running turn
+without clearing your draft. When Find is open, Escape closes Find first.
+
 ## Terminal Operations
 
 | Shortcut | Action |

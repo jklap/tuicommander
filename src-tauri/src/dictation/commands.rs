@@ -2169,7 +2169,7 @@ pub async fn list_audio_devices() -> Result<Vec<audio::AudioDevice>, String> {
         crate::audio_enumeration::ENUMERATION_TIMEOUT,
         audio::list_input_devices,
     )
-    .await
+    .await?
 }
 
 /// Shell integration: inject text into active terminal.
