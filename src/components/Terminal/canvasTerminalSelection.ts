@@ -74,7 +74,10 @@ export interface CanvasSelectionController {
 	clear: () => void;
 	hasRange: () => boolean;
 	spansOffscreen: (toViewportRow: (absoluteRow: number) => number | null) => boolean;
-	getLocalText: (getRow: (absoluteRow: number) => DecodedRow | null) => string;
+	getLocalText: (
+		getRow: (absoluteRow: number) => DecodedRow | null,
+		isHidden?: (absoluteRow: number) => boolean,
+	) => string;
 }
 
 export interface CanvasSearchController {
@@ -163,7 +166,7 @@ export function createCanvasSelectionController(): CanvasSelectionController {
 			}
 			return false;
 		},
-		getLocalText(getRow) {
+		getLocalText(getRow, isHidden) {
 			if (!start || !end) return "";
 			const firstRow = Math.min(start.row, end.row);
 			const lastRow = Math.max(start.row, end.row);
@@ -171,6 +174,7 @@ export function createCanvasSelectionController(): CanvasSelectionController {
 			const lines: string[] = [];
 
 			for (let rowIndex = firstRow; rowIndex <= lastRow; rowIndex++) {
+				if (isHidden?.(rowIndex)) continue;
 				const row = getRow(rowIndex);
 				if (!row) {
 					lines.push("");

@@ -1,11 +1,57 @@
-import type { CanvasSelectionController } from "./canvasTerminalSelection";
+import type { CanvasSelectionController, SelectionPoint } from "./canvasTerminalSelection";
 import {
 	cellToTextOffset,
 	type DecodedRow,
+	rowText,
 	rowTextLayout,
 	textSpanToCellRanges,
 	utf16SpanToCellRange,
 } from "./canvasTerminalUtils";
+
+import { hiddenMarkerRows, planSuggestOverlay } from "./suggestOverlay";
+
+/** Copy the same retained row runs that the viewport paints, including off-screen selections.
+ * Backend reads still own soft-wrap normalization and eviction checks.
+ */
+export async function readProjectedSelectionText(
+	start: SelectionPoint,
+	end: SelectionPoint,
+	rows: ReadonlyMap<number, DecodedRow>,
+	read: (start: SelectionPoint, end: SelectionPoint) => Promise<string>,
+): Promise<string> {
+	const [first, last] =
+		start.row < end.row || (start.row === end.row && start.col <= end.col) ? [start, end] : [end, start];
+	let low = first.row;
+	let high = last.row + 1;
+	for (const index of rows.keys()) {
+		low = Math.min(low, index);
+		high = Math.max(high, index + 1);
+	}
+	const plan = planSuggestOverlay(
+		high,
+		(i) => {
+			const row = rows.get(i);
+			return row ? { text: rowText(row), isWrapped: rows.get(i - 1)?.wrapped ?? false } : null;
+		},
+		low,
+	);
+	const hidden = hiddenMarkerRows(plan.blocks);
+	const parts: string[] = [];
+	let run = first.row;
+	for (let row = first.row; row <= last.row + 1; row++) {
+		if (row <= last.row && !hidden.has(row)) continue;
+		if (run < row) {
+			parts.push(
+				await read(
+					{ row: run, col: run === first.row ? first.col : 0 },
+					row - 1 === last.row ? last : { row: row - 1, col: rows.get(row - 1)!.count - 1 },
+				),
+			);
+		}
+		run = row + 1;
+	}
+	return parts.join("\n");
+}
 
 export type HoveredLink = {
 	row: number;
@@ -51,10 +97,22 @@ export function getLocalSelectionText(
 	selectionAbsRowToViewport: (absRow: number) => number | null,
 	rowMap: Map<number, DecodedRow>,
 ): string {
-	return selection.getLocalText((absRi) => {
-		const vpRow = selectionAbsRowToViewport(absRi);
-		return vpRow !== null ? (rowMap.get(vpRow) ?? null) : null;
+	const lastRow = Math.max(0, ...rowMap.keys()) + 1;
+	const plan = planSuggestOverlay(lastRow, (i) => {
+		const row = rowMap.get(i);
+		return row ? { text: rowText(row), isWrapped: rowMap.get(i - 1)?.wrapped ?? false } : null;
 	});
+	const hidden = hiddenMarkerRows(plan.blocks);
+	return selection.getLocalText(
+		(absRi) => {
+			const vpRow = selectionAbsRowToViewport(absRi);
+			return vpRow !== null ? (rowMap.get(vpRow) ?? null) : null;
+		},
+		(absRi) => {
+			const vpRow = selectionAbsRowToViewport(absRi);
+			return vpRow !== null && hidden.has(vpRow);
+		},
+	);
 }
 
 export const rowStringSpanToCells = (
