@@ -19,9 +19,11 @@ it("includes a numeric freeze gap so persistence need not store or parse breadcr
 	vi.stubGlobal("requestAnimationFrame", vi.fn());
 	vi.spyOn(document, "hasFocus").mockReturnValue(true);
 	vi.spyOn(document, "hidden", "get").mockReturnValue(false);
-	vi.spyOn(performance, "now").mockReturnValueOnce(0).mockReturnValue(3000);
 	const { startFreezeDetector } = await import("../../utils/freezeDetector");
+	let now = 0;
+	vi.spyOn(performance, "now").mockImplementation(() => now);
 	startFreezeDetector();
+	now = 3000;
 	vi.advanceTimersByTime(50);
 	expect(mocks.warn).toHaveBeenCalledWith("app", "UI freeze: 3000ms main-thread block", {
 		label: "private/path",
