@@ -1,5 +1,7 @@
 # TUICommander Specification
 
+- [x] AI Chat smart tables (layout A): protected short columns, sticky first column, conditional scroll hints, exact-source Markdown toggle/copy and read-only document action (#1923-c6fb).
+
 - [x] AI Chat Tidy layout: single header, conditional tab strip, labelled overflow actions, compact process rows, latest-answer suggestions and untimed history (#1958-b67e).
 
 Plugin settings (Step 5, #1785-c7a1): loaded plugins register complete scoped schemas and typed private-file owners; patches preserve siblings, redact secrets and schedule reload. Core migrations cover build-cleaner, at-capacity-retry, cache-keepalive, claude-wakeup and the Telegram notifier example. Unload revokes catalogue entries and write authority. General settings MCP cutover remains separate.

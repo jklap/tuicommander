@@ -281,6 +281,7 @@ export interface TranscriptProps {
 	retry?: () => string | null;
 	emptyMessage: string;
 	onOpenFile?: (href: string) => void | Promise<boolean | undefined> | Promise<void>;
+	onOpenTable?: (source: string) => void;
 	onClear?: () => void;
 	canForkAtMessage?: () => boolean;
 	onFork?: (messageId: string) => void;
@@ -787,7 +788,9 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 													when={
 														projected().body.trim() ||
 														(projected().intent && !activity().mergedIntents.has(agent().id)) ||
-														(props.onSuggestion && latestAnswerId() === agent().id && projected().suggestions.length > 0)
+														(props.onSuggestion &&
+															latestAnswerId() === agent().id &&
+															projected().suggestions.length > 0)
 													}
 												>
 													<div
@@ -820,6 +823,17 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 																}}
 																content={projected().body}
 																incremental={true}
+																tableActions={
+																	!props.terminalAgent && props.onOpenTable
+																		? {
+																				copy: (source) =>
+																					void writeClipboard(source).catch((error) =>
+																						appLogger.error("ai-chat", "Copy failed", error),
+																					),
+																				open: props.onOpenTable,
+																			}
+																		: undefined
+																}
 																onLinkClick={props.onOpenFile}
 																autoLinkFiles={true}
 																onCodeCopy={(text) =>

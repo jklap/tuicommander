@@ -17,7 +17,8 @@ const { mockDetachPanel, mockReattachPanel, mockClosePanel } = vi.hoisted(() => 
 	mockClosePanel: vi.fn().mockResolvedValue(undefined),
 }));
 
-const { mockWriteClipboard, mockOpenFile, mockOpenUrl } = vi.hoisted(() => ({
+const { mockWriteClipboard, mockOpenFile, mockOpenUrl, mockAddVirtual } = vi.hoisted(() => ({
+	mockAddVirtual: vi.fn(),
 	mockWriteClipboard: vi.fn().mockResolvedValue(undefined),
 	mockOpenFile: vi.fn(),
 	mockOpenUrl: vi.fn(),
@@ -26,6 +27,8 @@ const { mockSetFolderRoot, mockShowFileBrowser } = vi.hoisted(() => ({
 	mockSetFolderRoot: vi.fn(),
 	mockShowFileBrowser: vi.fn(),
 }));
+
+vi.mock("../../stores/mdTabs", () => ({ mdTabsStore: { addVirtual: mockAddVirtual } }));
 
 vi.mock("../../utils/clipboard", () => ({ writeClipboard: mockWriteClipboard }));
 vi.mock("../../utils/filePreview", () => ({ openTerminalFilePath: mockOpenFile }));
@@ -4620,6 +4623,30 @@ it("shows the tab strip only for multiple open tabs", async () => {
 	container.querySelector<HTMLButtonElement>('button[aria-label="New chat tab"]')!.click();
 	await settle();
 	expect(container.querySelectorAll('[role="tab"]')).toHaveLength(2);
+});
+
+// Catches: table documents opening in the detached WebView instead of the main document area.
+it("routes detached table documents to the main window with exact source", async () => {
+	window.history.replaceState(null, "", "/?mode=panel&panel=ai-chat");
+	const { container } = await renderPanel();
+	const source = "| A | B |\n| --- | --- |\n| first | second |";
+	feed({
+		kind: "sessionUpdate",
+		update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: source } },
+	});
+	await settle();
+	[...container.querySelectorAll<HTMLButtonElement>("button")]
+		.find((button) => button.textContent === "Open as document")!
+		.click();
+	await settle();
+	expect(emitTo).toHaveBeenCalledWith("main", "panel-action", {
+		panelId: "ai-chat",
+		action: "open-table",
+		data: { source },
+	});
+	expect(mockAddVirtual).not.toHaveBeenCalled();
+	aiChatPanelAdapter.handleAction?.("open-table", { source });
+	expect(mockAddVirtual).toHaveBeenCalledWith("AI Chat table", expect.stringContaining("aichat-table:"));
 });
 
 // Catches: tidy header dropping inline close or detached window actions.

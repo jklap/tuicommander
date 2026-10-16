@@ -19,6 +19,7 @@ import { NewConversationDialog } from "./NewConversationDialog";
 import { RemoteInteractions } from "./RemoteInteractions";
 import { conversationLabel, SessionControls } from "./SessionControls";
 import { Transcript, type TranscriptSearchRef } from "./Transcript";
+import { openChatTableDocument } from "./tableDocument";
 import { trackPanelWidth } from "./trackPanelWidth";
 import { createAcpChat } from "./useAcpChat";
 
@@ -249,6 +250,13 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 				emptyMessage={emptyMessage()}
 				onSuggestion={(text) => void chat.send(text)}
 				onOpenFile={(href) => void openFile(href)}
+				onOpenTable={(source) => {
+					if (isPanelMode() && isTauri()) {
+						void emitTo("main", "panel-action", { panelId: "ai-chat", action: "open-table", data: { source } })
+							.then(() => invoke("focus_main_window"))
+							.catch((error) => appLogger.error("ai-chat", "Failed to open table document", error));
+					} else openChatTableDocument(source);
+				}}
 				onNoticeAction={(action) => {
 					if (action.kind === "open_result") void openFile(action.path);
 				}}

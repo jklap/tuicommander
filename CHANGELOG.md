@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Add smart AI Chat table columns, conditional horizontal-scroll hints, exact-source Markdown and Copy actions, and read-only document opening on desktop and mobile (#1923-c6fb).
+
 - Tidy AI Chat into one header row with labelled overflow actions, compact process disclosures, latest-answer suggestions, and no synthetic history timing (#1958-b67e).
 
 - Restyle repository Settings with inherited override rows, script cards, team sharing, and a scoped reset action.

@@ -10,6 +10,12 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "AI Chat table actions",
+		description:
+			"Use Markdown to inspect a table's exact source, Copy as Markdown to copy it, or Open as document to read it outside the conversation.",
+		shortcut: null,
+	},
+	{
 		feature: "Hands-free conversation shortcut",
 		description: `Press ${mod}+Alt+V to start or stop hands-free on the active terminal when dictation is enabled. Customize the chord in Keyboard Shortcuts.`,
 		shortcut: `${mod}+Alt+V`,

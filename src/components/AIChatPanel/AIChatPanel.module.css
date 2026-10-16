@@ -1481,3 +1481,4 @@
 .panel .messageList { padding: 12px; gap: 6px; }
 .panel .assistantMsg { margin-bottom: 4px; }
 .panel .assistantMsg :global(#markdown-content ul), .panel .assistantMsg :global(#markdown-content ol) { padding-left: 20px; margin-bottom: 8px; }
+.assistantMsg :global(#markdown-content .chat-table-source) { white-space: pre; overflow-x: auto; word-break: normal; }

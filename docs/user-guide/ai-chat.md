@@ -44,6 +44,12 @@ The header contains the conversation title picker, **New**, **⋯**, and window 
 
 The model and repository share a small line below the input. Repository pinning stays on that line. Process titles and tool disclosures share one line; failed calls expand automatically. Suggested replies appear only under the latest answer. Loaded history does not show execution durations measured from the view mount.
 
+## Tables
+
+AI Chat keeps short fields and headers on one line. Longer text uses the remaining space. Tables with multiple long columns use the approved wide layout; the first column stays visible while you scroll. A scroll hint appears only when the table is wider than its viewport. Priority values use compact badges.
+
+Each table has **Markdown**, **Copy as Markdown**, and **Open as document** actions. Markdown toggles the original source, including inline formatting and escaped pipes; Copy uses that source in either view. Open creates a read-only TUIC Markdown tab. In a detached AI Chat window, the document opens in the main window. On mobile, it opens a document view with **Back to Chat**. Other Markdown documents and terminal transcripts retain their existing layout.
+
 ## Opening it
 
 `Cmd+Alt+A` (macOS) / `Ctrl+Alt+A` toggles the panel; so do the status-bar

@@ -1,5 +1,7 @@
 # TUICommander — Complete Feature Reference
 
+- AI Chat tables protect short fields, scroll wide content, toggle exact Markdown source, copy Markdown, and open read-only documents (#1923-c6fb).
+
 - AI Chat uses a compact title picker, labelled overflow actions and one-line process disclosures; model and repository sit below the composer (#1958-b67e).
 
 Repository Settings exposes inherited overrides, scripts, team sharing, and a scoped reset card in the shared Settings vocabulary.
