@@ -2808,7 +2808,7 @@ describe("AIChatPanel: tool activity", () => {
 		for (let id = 1; id <= 7; id += 1) tool(id);
 		await settle();
 
-		const summaries = [...container.querySelectorAll("summary")].filter((summary) =>
+		const summaries = [...container.querySelectorAll("summary[class*=toolActivitySummary]")].filter((summary) =>
 			summary.textContent?.includes("7 reads"),
 		);
 		expect(summaries).toHaveLength(1);
@@ -2846,7 +2846,7 @@ describe("AIChatPanel: tool activity", () => {
 		tool(2, "failed");
 		await settle();
 
-		const summary = [...container.querySelectorAll("summary")].find((element) =>
+		const summary = [...container.querySelectorAll("summary[class*=toolActivitySummary]")].find((element) =>
 			element.textContent?.includes("2 reads"),
 		);
 		expect(summary?.textContent).toContain("Failed");
@@ -2906,7 +2906,7 @@ describe("AIChatPanel: tool activity", () => {
 		tool(3);
 		await settle();
 
-		const summaries = [...container.querySelectorAll("summary")].filter((summary) =>
+		const summaries = [...container.querySelectorAll("summary[class*=toolActivitySummary]")].filter((summary) =>
 			summary.textContent?.includes("read"),
 		);
 		expect(summaries).toHaveLength(2);
@@ -2925,7 +2925,7 @@ describe("AIChatPanel: tool activity", () => {
 		});
 		await settle();
 
-		const summary = [...container.querySelectorAll("summary")].find((element) =>
+		const summary = [...container.querySelectorAll("summary[class*=toolActivitySummary]")].find((element) =>
 			element.textContent?.includes("1 read"),
 		);
 		expect(summary?.textContent).toContain("Failed");
@@ -3004,7 +3004,7 @@ describe("AIChatPanel: tool activity", () => {
 			tool(2);
 			await settle();
 
-			const summary = [...container.querySelectorAll("summary")].find((element) =>
+			const summary = [...container.querySelectorAll("summary[class*=toolActivitySummary]")].find((element) =>
 				element.textContent?.includes("2 reads"),
 			);
 			expect(summary?.textContent).not.toMatch(/s observed/);

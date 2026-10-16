@@ -1,3 +1,9 @@
+## AI Chat tidy layout and smart tables (1958-b67e / 1923-c6fb)
+
+- [ ] Run the batch integration GREEN checks for AIChatPanel, Transcript, ContentRenderer, ChatTables, mobile Chat, panel adapters and the paste-ownership consumers. This peer ran only the required history-duration RED test.
+- [ ] Capture native worktree-only Vite screenshots at 380/700 px for Tidy and 390/740 px for tables, dark and light, and compare them with the approved mocks. Chrome DOM measurements pass the compact bounds (35 px chrome, 1296 px conversation at 380 px). Native screenshot capture stalled; browser print-to-PDF raster PNG alternatives are under `~/Gits/.tmp/tuic-1958-png/` and are not native screenshots.
+- [ ] Inspect the mobile read-only table document, return focus to Chat, and verify the existing mobile composer remains usable. Do not use production sessions for verification.
+
 ## MCP instruction byte budget (1947-3d17) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, reconnect an MCP client and confirm answer markers still support row starts and Markdown list-item text starts. The remote budget regression and all 563 MCP transport tests passed; no live app was restarted.
