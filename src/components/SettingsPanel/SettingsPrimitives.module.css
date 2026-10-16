@@ -1,0 +1,22 @@
+.pageHeader { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
+.pageHeader > div, .listText { min-width: 0; }
+.pageHeader h2 { margin: 0 0 8px; font-size: 20px; font-weight: 600; }
+.pageHeader p, .card p, .listRow p, .empty p, .status p { margin: 4px 0 0; color: var(--fg-secondary); line-height: 1.5; overflow-wrap: anywhere; }
+.card { padding: 16px; margin-bottom: 16px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-primary); }
+.card h3 { margin: 0 0 8px; color: var(--fg-primary); font-size: 15px; font-weight: 600; }
+.description, .source, .listRow p, .empty p { font-size: 12px; }
+.card > .description { margin-bottom: 8px; }
+.status { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 12px 16px; margin-bottom: 16px; background: var(--bg-tertiary); border-radius: 6px; }
+.listRow { display: flex; justify-content: space-between; align-items: center; gap: 20px; padding: 12px 0; border-bottom: 1px solid var(--border); }
+.listRow:last-child { border-bottom: 0; }
+.listText { flex: 1; }
+.actions, .badges { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.badges { margin-top: 8px; }
+.empty { padding: 16px; border: 1px dashed var(--border); border-radius: 6px; }
+.empty > :last-child:not(p) { margin-top: 12px; }
+.danger { border-color: var(--error); }
+.danger > .actions { margin-top: 12px; }
+@media (max-width: 800px) { .pageHeader, .listRow, .status { flex-wrap: wrap; } }
+
+.actions button, .status button, .empty button { min-height: 36px; }
+@media (max-width: 600px) { .actions button, .status button, .empty button { min-height: 44px; } }

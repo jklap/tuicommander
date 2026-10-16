@@ -538,3 +538,7 @@ Font options come from the bundled font catalogue. Theme options include custom 
 ### Audio device availability
 
 An empty device list means enumeration succeeded with no devices. If the audio backend cannot enumerate devices, refresh reports an error instead. Voice language and engine changes keep the existing speech runtime invalidation behavior.
+
+### Shared layout
+
+Settings uses one bounded, responsive shell across pages, with independently scrolling navigation and content. The panel is at most 1136px wide and retains its size when you select another page. Saved navigation width remains in use. Shared presentation components support consistent cards, label/control rows, source-aware status, empty states and scoped destructive actions as pages adopt the approved restyle. Save behavior and configuration ownership do not change.

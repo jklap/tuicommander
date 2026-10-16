@@ -819,3 +819,7 @@ GitHub Tasks boards (#1846-55d7): the optional provider `listBoards(signal)` por
 TasksDetail provides Follow task / Unfollow task in its toolbar. Settings → Notifications has a Tasks section with an independent default-off OS notice preference.
 
 FileBrowserPanel subscribes to successful folder-drop completion and routes it through its existing mutation refresh. The subscription is scoped to the filesystem root and owning connection, and is removed when the panel unmounts.
+
+### Settings presentation vocabulary
+
+`SettingsPrimitives.tsx` provides SettingPageHeader, SectionCard, SettingRow, StatusSummary, ListRow, EmptyState and DangerZone. These components render caller-owned content only. SettingRow reuses SettingField label and descriptive IDs, including field errors; controls remain the existing UI Input/Select/Textarea components. SectionCard and DangerZone titles are understood by the static Settings search extractor and render h3 anchors. Existing field consumers retain their stacked layout unless they opt into row presentation.

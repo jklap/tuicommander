@@ -4,7 +4,7 @@ import s from "./Settings.module.css";
 
 const NAV_MIN_WIDTH = 140;
 const NAV_MAX_WIDTH = 280;
-const NAV_DEFAULT_WIDTH = 180;
+const NAV_DEFAULT_WIDTH = 232;
 
 export interface SettingsShellTab {
 	key: string;
