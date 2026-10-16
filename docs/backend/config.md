@@ -1652,6 +1652,8 @@ The internal settings owner service accepts `describe` and `refresh` with an exp
 Notification output choices use the same bounded enumeration and `{name, is_default}` objects as the existing UI command. Discovery never saves notification configuration. This internal contract does not publish the later settings MCP/HTTP cutover.
 
 
-### App setting choices
+## Voice settings choice owners (#1909-0d24)
 
-Font families use the Rust-owned bundled-font option file shared with the UI; these are bundled woff2 families, not arbitrary host fonts. Themes reuse the Rust theme loader and retain custom theme IDs. IDE refresh reuses cross-platform installed-IDE discovery and returns the same value/label options used by the launcher. Catalogue construction and describe never run host probes. Explicit refresh runs discovery off the async executor and caches choices; unavailable discovery is distinct from a successful empty list. Font and IDE edits validate supported choices without launching a probe.
+The internal voice settings owner uses cache-only `describe` and explicit `refresh` for input devices, Whisper models, installed Pocket voices and Edge voices. Refresh reads the configured language through the strict voice file owner. Model options include installed/downloadable state; installed voice options retain their source. Input backend failure is unavailable, not a supported empty list. Edge refresh may fetch the service catalogue; describe never fetches or downloads.
+
+`VoiceAction` provides typed assets, model download/delete, speech asset download/cancel/delete and voice import/delete. It delegates to the existing command owners and their allowlisted asset IDs, size validation and runtime locks. These are internal host methods for later transport publication, not an arbitrary command executor. Existing engine/language descriptors and runtime invalidation remain authoritative. Builds without dictation still describe unavailable voice fields.

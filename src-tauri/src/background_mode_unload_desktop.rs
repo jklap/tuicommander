@@ -15,14 +15,13 @@ use tauri::Manager;
 
 fn interaction(app: &tauri::AppHandle) -> bool {
     #[cfg(feature = "dictation")]
-    if let Some(voice) = app.try_state::<crate::dictation::DictationState>() {
-        if voice.recording.load(Ordering::Acquire)
+    if let Some(voice) = app.try_state::<crate::dictation::DictationState>()
+        && (voice.recording.load(Ordering::Acquire)
             || voice.processing.load(Ordering::Acquire)
             || voice.hands_free_runtime.lock().is_some()
-            || voice.preview.lock().is_some()
-        {
-            return true;
-        }
+            || voice.preview.lock().is_some())
+    {
+        return true;
     }
     let _ = app;
     false

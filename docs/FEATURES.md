@@ -3088,4 +3088,6 @@ Settings owner validation covers typed shortcut records and bounded pane geometr
 Owner-backed dynamic choices support cache-only describe and explicit refresh. Notification output devices retain their UI option objects and distinguish unavailable discovery from successful empty results (#1908-c327).
 
 
-App settings share bundled font and IDE option metadata between Rust and the UI. Theme/installed-IDE discovery uses explicit owner refresh; describe never launches discovery (#1915-d77f).
+### Voice owner discovery (#1909-0d24)
+
+Internal voice settings refresh resolves devices, model state, installed voices and language-filtered Edge voices through existing owners. Describe is cache-only; typed asset actions retain existing owner validation and runtime effects. Public settings transport cutover remains separate.
