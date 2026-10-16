@@ -84,6 +84,7 @@ export function FilesScreen(props: FilesScreenProps) {
 		try {
 			if (props.initialLink) {
 				await openLinkedFile(props.initialLink);
+				initializationFailed = !!error();
 				return;
 			}
 			const worktreePath = props.initialRepo?.worktreePath?.trim();
@@ -182,13 +183,13 @@ export function FilesScreen(props: FilesScreenProps) {
 		setSearchQuery("");
 		setSearchResults([]);
 		setSearching(false);
+		setRepo(repoPath);
+		setDir(subdir);
 		setBusy(true);
 		setError("");
 		try {
 			const result = await rpc<FileEntry[]>("list_directory", { repoPath, subdir });
 			if (currentRequest !== requestId) return;
-			setRepo(repoPath);
-			setDir(subdir);
 			setEntries(result);
 		} catch (err) {
 			appLogger.warn("network", "Could not open mobile directory", err);
