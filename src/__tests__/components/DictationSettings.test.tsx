@@ -826,8 +826,9 @@ describe("DictationSettings – layout", () => {
 
 	it("turns the hands-free earcons off from their own toggle", () => {
 		const { container } = render(() => <DictationSettings />);
-		const group = Array.from(container.querySelectorAll("label")).find((l) => l.textContent === "Earcons")
-			?.parentElement as HTMLElement;
+		const group = Array.from(container.querySelectorAll("label"))
+			.find((l) => l.textContent === "Earcons")
+			?.closest(".settingRow, .group") as HTMLElement;
 		const toggle = group.querySelector('input[type="checkbox"]') as HTMLInputElement;
 		expect(toggle.checked).toBe(true);
 		fireEvent.change(toggle, { target: { checked: false } });
@@ -836,8 +837,9 @@ describe("DictationSettings – layout", () => {
 
 	it("suggests “computer” as the activation phrase", () => {
 		const { container } = render(() => <DictationSettings />);
-		const group = Array.from(container.querySelectorAll("label")).find((l) => l.textContent === "Activation phrase")
-			?.parentElement as HTMLElement;
+		const group = Array.from(container.querySelectorAll("label"))
+			.find((l) => l.textContent === "Activation phrase")
+			?.closest(".settingRow, .group") as HTMLElement;
 		expect((group.querySelector('input[type="text"]') as HTMLInputElement).placeholder).toBe("computer");
 		expect(group.textContent).toContain("Try “computer”");
 	});
@@ -983,7 +985,7 @@ describe("DictationSettings – Edge engine", () => {
 	const labelled = (container: HTMLElement, text: string) =>
 		Array.from(container.querySelectorAll("label")).find((el) => el.textContent === text);
 	const voiceSelect = (container: HTMLElement) =>
-		labelled(container, "Voice")?.parentElement?.querySelector("select") as HTMLSelectElement;
+		labelled(container, "Voice")?.closest(".settingRow, .group")?.querySelector("select") as HTMLSelectElement;
 	const listenButton = (container: HTMLElement) =>
 		Array.from(container.querySelectorAll("button")).find((b) => b.textContent?.trim() === "Listen");
 
@@ -1083,7 +1085,9 @@ describe("DictationSettings – Edge engine", () => {
 	it("switches engine from the Expert selector", () => {
 		uiStore.setSettingsExpertMode(true);
 		const { container } = render(() => <DictationSettings />);
-		const select = labelled(container, "Speech engine")?.parentElement?.querySelector("select") as HTMLSelectElement;
+		const select = labelled(container, "Speech engine")
+			?.closest(".settingRow, .group")
+			?.querySelector("select") as HTMLSelectElement;
 		fireEvent.change(select, { target: { value: "pocket" } });
 		expect(mockStore.setSpeechEngine).toHaveBeenCalledWith("pocket");
 	});
