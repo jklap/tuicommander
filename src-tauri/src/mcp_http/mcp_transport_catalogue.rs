@@ -773,7 +773,7 @@ pub(super) fn meta_tool_definitions(state: &Arc<AppState>) -> serde_json::Value 
          without searching for it again.\n\n\
          Domains available: terminal pane sessions (tmux replacement), AI agent orchestration + \
          messaging, repos/GitHub PRs/worktrees, UI tabs + notifications, plugin authoring \
-         reference, app config, diagnostics{upstream_suffix}."
+         reference, typed settings, diagnostics{upstream_suffix}."
     );
 
     serde_json::json!([

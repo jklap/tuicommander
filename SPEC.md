@@ -1111,9 +1111,9 @@ The normal Rust suspension path persists `reason: "idle_hibernate"` before endin
 
 GitHub Work B8: registered accounts bind core B6 review threads and B7 actions through account-scoped PluginHost methods. The Rust adapter enforces net:http, on-disk GitHub provider consent and matching account/PR identity, then uses existing core policy. Projects move/clear coverage uses recorded public reads and documented mutation contracts; live writes and desktop verification remain pending.
 
-## Settings cutover preparation (#1787-4778)
+## Settings transport cutover (#1787-4778)
 
-MCP settings, POST /settings/action and IPC settings_action share generated Rust requests and owner dispatch. Config has no MCP compatibility alias. Transactions remain blocked by incomplete owner inventory. Live refresh and complete dynamic choice integration remain separate dependent work.
+MCP settings, POST /settings/action and IPC settings_action share generated Rust requests and owner dispatch. Config has no MCP compatibility alias. The complete owner inventory permits transactions. Typed workflows cover GitHub, Ego provider auth, upstream credentials, connection credentials, Telegram and available voice assets. Owner choice refresh uses explicit target/store/paths; describe remains cache-only. Live frontend refresh remains separate dependent work.
 
 ## Settings choice discovery (#1908-c327)
 

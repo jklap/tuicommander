@@ -6,6 +6,11 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::sync::Arc;
 
+#[path = "api_owners.rs"]
+mod owners;
+#[path = "api_reads.rs"]
+mod reads;
+
 #[derive(Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum Action {
@@ -32,11 +37,12 @@ fn page_size() -> usize {
 }
 
 #[derive(Deserialize, JsonSchema)]
-#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+#[serde(tag = "action", rename_all = "snake_case")]
 pub enum Perform {
     Perform {
-        store: String,
-        operation: super::accounts::GithubAction,
+        target: Target,
+        #[serde(flatten)]
+        owner: owners::OwnerAction,
     },
 }
 
@@ -68,6 +74,8 @@ pub struct Settings {
     catalogue: Arc<Catalogue>,
     registry: super::registry::Registry,
     github: super::accounts::GithubSettings,
+    connections: super::remote::ConnectionCredentialSettings,
+    ego: Arc<super::ego::EgoSettingsStore>,
 }
 
 impl Settings {
@@ -91,10 +99,14 @@ impl Settings {
         register!(super::repo_local::RepoLocalSettingsStore::default());
         register!(super::repositories::RepositoriesSettingsStore::default());
         register!(super::telegram::TelegramSettingsStore::default());
-        register!(super::ego::EgoSettingsStore::new(state.clone())?);
+        let ego = Arc::new(super::ego::EgoSettingsStore::new(state.clone())?);
+        registry.register(Service::new(catalogue.clone(), ego.clone()))?;
+        register!(super::registration::RegistrationStore::default());
+        register!(super::ui_owners::UiSettingsStore::keybindings());
+        register!(super::ui_owners::UiSettingsStore::pane_layout());
         register!(super::upstreams::UpstreamsSettingsStore::new(
             state.mcp.upstream_registry.clone(),
-            state.config.read().mcp_port
+            state.config.read().services.server.port
         ));
         register!(super::prompts::PromptsSettingsStore::default());
         let weak = Arc::downgrade(&state);
@@ -125,12 +137,21 @@ impl Settings {
             let speaker = None;
             register!(super::voice::VoiceSettingsStore::new(speaker));
         }
-        // DEFERRED (2026-10-15) — register the additional owner stores and choice resolvers
-        // after their gap branches land; the inventory gate below keeps transactions unavailable.
+        let weak = Arc::downgrade(&state);
+        let connections = super::remote::ConnectionCredentialSettings::new(
+            state.data_dir.clone(),
+            Arc::new(move |id| {
+                if let Some(state) = weak.upgrade() {
+                    crate::remote_runtime::credentials_changed(&state, id);
+                }
+            }),
+        );
         Ok(Self {
             catalogue,
             registry,
             github: super::accounts::GithubSettings::new(state),
+            connections,
+            ego,
         })
     }
 
@@ -143,7 +164,8 @@ impl Settings {
     ) -> Result<Value, Failure> {
         caller.check(!matches!(
             &action,
-            Action::Catalogue(_) | Action::Transaction(Request::Get { .. })
+            Action::Catalogue(_)
+                | Action::Transaction(Request::Get { .. } | Request::Describe { .. })
         ))?;
         match action {
             Action::Catalogue(Describe::Describe {
@@ -180,14 +202,15 @@ impl Settings {
                     .require_complete_inventory()
                     .map_err(|_| Error::new("settings", "unavailable"))?;
                 if let Request::Get {
-                    target: Target::Machine,
+                    target,
                     store,
                     paths,
                 } = &request
-                    && store == "github_accounts"
-                    && paths == &["/accounts".to_owned()]
                 {
-                    return self.github.read().await;
+                    if let Some(snapshot) = self.owner_read(state, target, store, paths).await? {
+                        return serde_json::to_value(snapshot)
+                            .map_err(|_| Error::new("settings", "store_failed"));
+                    }
                 }
                 let reply = if request.store().starts_with("plugins.") {
                     state
@@ -203,19 +226,21 @@ impl Settings {
                 if store != "ego" {
                     return Err(Error::new("settings", "unavailable"));
                 }
-                let providers = crate::ego_cli::providers(state, true)
-                    .await
-                    .map_err(|_| Error::new("ego", "unavailable"))?;
-                serde_json::to_value(providers).map_err(|_| Error::new("ego", "store_failed"))
+                serde_json::to_value(
+                    crate::ego_cli::providers(state, true)
+                        .await
+                        .map_err(|_| Error::new("ego", "unavailable"))?,
+                )
+                .map_err(|_| Error::new("ego", "store_failed"))
             }
-            Action::Perform(Perform::Perform { store, operation }) => {
+            Action::Perform(Perform::Perform { target, owner }) => {
                 self.catalogue
                     .require_complete_inventory()
                     .map_err(|_| Error::new("settings", "unavailable"))?;
-                if store != "github_accounts" {
+                if target != Target::Machine {
                     return Err(Error::new("settings", "not_found"));
                 }
-                self.github.perform(operation).await
+                self.perform(state, owner, caller).await
             }
         }
     }

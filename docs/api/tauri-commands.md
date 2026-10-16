@@ -1014,7 +1014,7 @@ See the HTTP reference for action arguments and typed error prefixes.
 
 ## Shared settings action (#1787-4778)
 
-`settings_action(request: JSON) -> JSON` uses the same Rust-generated envelope as POST `/settings/action` and MCP settings. Native caller authority is host-issued, never deserialized from the request. Owner transactions remain inventory-gated.
+`settings_action(request: JSON) -> JSON` uses the same Rust-generated envelope as POST `/settings/action` and MCP settings. Native caller authority is host-issued, never deserialized from the request. Typed owner workflows use the same envelope and explicit machine target. Owner transactions remain inventory-gated.
 
 ### Audio choice availability (#1908-c327, #1909-0d24)
 

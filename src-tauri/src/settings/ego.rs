@@ -67,8 +67,13 @@ impl EgoSettingsStore {
         action: EgoAuthAction,
     ) -> Result<CommitReply, Failure> {
         let _sequence = self.sequence.lock();
-        let mut context =
-            ConfigContext::configured(&self.state).map_err(|_| Error::new(ID, "unavailable"))?;
+        let mut context = ConfigContext::configured(
+            self.state
+                .upgrade()
+                .ok_or_else(|| Error::new(ID, "unavailable"))?
+                .as_ref(),
+        )
+        .map_err(|_| Error::new(ID, "unavailable"))?;
         context.profile = None;
         let latest = self.snapshot(&context)?;
         if transaction::revision(&latest)? != expected_revision {

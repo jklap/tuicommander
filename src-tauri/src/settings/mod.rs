@@ -122,3 +122,6 @@ mod registration_tests;
 pub mod upstream_credentials;
 #[cfg(test)]
 mod upstream_credentials_tests;
+
+#[cfg(test)]
+mod api_tests;

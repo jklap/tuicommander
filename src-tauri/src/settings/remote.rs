@@ -305,6 +305,7 @@ pub enum ConnectionCredentialAction {
 
 /// One vault slot per immutable connection id, not a caller-selected vault reference.
 /// The callback retires the old authenticated runtime and schedules owner reconciliation.
+#[derive(Clone)]
 pub struct ConnectionCredentialSettings {
     path: PathBuf,
     on_changed: OnRemoved,

@@ -536,7 +536,7 @@ GitHub provides a full normal-comment count, so an increase is detected even bey
 
 ## Settings MCP access (#1787-4778)
 
-Enable the settings native tool under MCP to permit an agent to describe and edit settings. It is disabled by default, even if the removed config tool was enabled. Secrets are write-only. Changes to external access or the trusted executable require the existing confirmation dialog. Until all owner inventory gaps are resolved, describe is available but owner transactions remain unavailable.
+Enable the settings native tool under MCP to permit an agent to describe and edit settings. It is disabled by default, even if the removed config tool was enabled. Secrets are write-only. Changes to external access or the trusted executable require the existing confirmation dialog. The owner inventory is complete. Use explicit target/store/paths for owner reads and dynamic-choice describe/refresh. Typed workflows select their store and operation; credentials remain write-only. Future unresolved owner gaps block edits.
 
 
 Agent model settings support typed model edits without starting a CLI. Explicit

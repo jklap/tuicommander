@@ -5336,3 +5336,68 @@ fn provider_recovery_force_retry_targets_only_recovering_ego() {
     let written = bytes.lock().unwrap();
     assert_eq!(written.as_slice(), b"\x15/retry\r");
 }
+
+// Catches: published settings mutations and readback selecting different owner state by transport.
+#[tokio::test]
+async fn settings_mcp_patch_http_and_native_read_agree() {
+    use axum::{body::Body, http::Request};
+    use tower::ServiceExt;
+    let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+    let state = test_state();
+    state.config.write().settings_mcp_enabled = true;
+    state.config.write().disabled_native_tools.clear();
+    let read = serde_json::json!({"action":"get","target":{"kind":"machine"},"store":"notifications","paths":["/volume"]});
+    let before = crate::settings::api::execute(
+        &state,
+        read.clone(),
+        crate::settings::policy::Caller::native(),
+    )
+    .await;
+    let patch = serde_json::json!({"action":"patch","target":{"kind":"machine"},"store":"notifications",
+        "expectedRevision":before["revision"],"operations":[{"op":"set","path":"/volume","value":0.25}]});
+    let result = handle_mcp_tool_call(
+        &state,
+        "127.0.0.1:12345".parse().unwrap(),
+        "settings",
+        &patch,
+        None,
+    )
+    .await;
+    assert_eq!(result["persisted"], true, "{result}");
+    let native = crate::settings::api::execute(
+        &state,
+        read.clone(),
+        crate::settings::policy::Caller::native(),
+    )
+    .await;
+    assert_eq!(native["values"]["/volume"]["stored"], 0.25, "{native}");
+    let mcp = handle_mcp_tool_call(
+        &state,
+        "127.0.0.1:12345".parse().unwrap(),
+        "settings",
+        &read,
+        None,
+    )
+    .await;
+    assert_eq!(mcp, native);
+    let app = crate::mcp_http::build_router(state, false, true);
+    let response = app
+        .oneshot(
+            Request::post("/settings/action")
+                .header("content-type", "application/json")
+                .extension(axum::extract::ConnectInfo(
+                    "127.0.0.1:12345".parse::<std::net::SocketAddr>().unwrap(),
+                ))
+                .body(Body::from(read.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), 1_000_000)
+        .await
+        .unwrap();
+    let http: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(http, native);
+}
