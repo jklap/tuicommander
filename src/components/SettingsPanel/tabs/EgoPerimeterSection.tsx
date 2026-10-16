@@ -88,13 +88,15 @@ export const EgoPerimeterSection: Component<{ client?: EgoPerimeterClient }> = (
 										{() => (
 											<>
 												<StatusBadge label={root.access === "read" ? "Read only" : "Read and write"} />
-												<button onClick={() => setEditingRoots(true)}>Edit</button>
+												<button class={s.testBtn} onClick={() => setEditingRoots(true)}>
+													Edit
+												</button>
 											</>
 										)}
 									</SettingRow>
 								)}
 							</For>
-							<button onClick={() => setEditingRoots(!editingRoots())}>
+							<button class={s.testBtn} onClick={() => setEditingRoots(!editingRoots())}>
 								{editingRoots() ? "Hide folder editor" : "Add folder"}
 							</button>
 							<Show when={editingRoots()}>
@@ -225,7 +227,9 @@ export const EgoPerimeterSection: Component<{ client?: EgoPerimeterClient }> = (
 														: undefined
 											}
 										/>
-										<button onClick={() => setVerifyOpen(!verifyOpen())}>How to verify</button>
+										<button class={s.testBtn} onClick={() => setVerifyOpen(!verifyOpen())}>
+											How to verify
+										</button>
 									</>
 								)}
 							</SettingRow>
