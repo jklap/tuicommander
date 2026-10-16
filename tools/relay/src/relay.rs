@@ -33,6 +33,8 @@ impl SessionSlot {
 /// Application state shared across all handlers.
 pub struct AppState {
     pub sessions: DashMap<String, SessionSlot>,
+    /// Serializes room admission and removal so cross-room token limits are atomic.
+    pub admission: std::sync::Mutex<()>,
     /// SQLite connection for stats. None in test mode.
     pub db: Option<Connection>,
     /// Registered token hashes (in-memory cache for fast WS auth verification).
@@ -55,6 +57,7 @@ impl AppState {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
             sessions: DashMap::new(),
+            admission: std::sync::Mutex::new(()),
             db: None,
             token_cache: DashMap::new(),
             vapid: None,
@@ -69,6 +72,7 @@ impl AppState {
     pub fn with_db(db: Connection) -> Arc<Self> {
         Arc::new(Self {
             sessions: DashMap::new(),
+            admission: std::sync::Mutex::new(()),
             db: Some(db),
             token_cache: DashMap::new(),
             vapid: None,
@@ -144,105 +148,71 @@ const AUTH_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Handle a new WebSocket connection for the given session.
 pub async fn handle_ws(state: Arc<AppState>, session_id: String, mut socket: WebSocket) {
-    // Check capacity before splitting — allows sending close frame on rejection
-    {
-        let session_full = state
-            .sessions
-            .get(&session_id)
-            .map(|s| s.peer_count() >= MAX_PEERS_PER_SESSION)
-            .unwrap_or(false);
+    // Authentication is mandatory, including when no database is configured.
+    let token = match tokio::time::timeout(AUTH_TIMEOUT, socket.recv()).await {
+        Ok(Some(Ok(Message::Text(text)))) => text
+            .strip_prefix("Bearer ")
+            .filter(|token| !token.is_empty())
+            .map(str::to_owned),
+        _ => None,
+    };
+    let token_hash = match token {
+        Some(token) => resolve_token(&state, &token).await,
+        None => None,
+    };
+    let Some(token_hash) = token_hash else {
+        reject(&mut socket, 4003, "authentication required").await;
+        return;
+    };
 
-        if session_full {
-            warn!(session_id, "session full, rejecting peer");
-            let _ = socket
-                .send(Message::Close(Some(axum::extract::ws::CloseFrame {
-                    code: 4001,
-                    reason: "session full".into(),
-                })))
-                .await;
-            return;
-        }
-    }
-
-    // Try to authenticate: read first message, check if it's a Bearer token
-    let mut token_hash: Option<String> = None;
-    let mut first_msg_to_replay: Option<Message> = None;
-
-    // Wait for first message with timeout — peers that skip auth just get no token_hash
-    let first_msg = tokio::time::timeout(AUTH_TIMEOUT, socket.recv()).await;
-    if let Ok(Some(Ok(msg))) = first_msg {
-        if let Message::Text(ref text) = msg {
-            if let Some(token) = text.strip_prefix("Bearer ") {
-                // Verify token against cache
-                // Check cache first, fall back to DB argon2 verification on miss
-                if let Some(hash) = resolve_token(&state, token).await {
-                    // Check max concurrent sessions per token
-                    if state.max_sessions_per_token > 0 {
-                        let session_count: usize = state
-                            .sessions
-                            .iter()
-                            .filter(|e| e.value().token_hash.as_deref() == Some(hash.as_str()))
-                            .count();
-
-                        if session_count >= state.max_sessions_per_token as usize {
-                            warn!(session_id, "max sessions per token exceeded, rejecting");
-                            let _ = socket
-                                .send(Message::Close(Some(axum::extract::ws::CloseFrame {
-                                    code: 4002,
-                                    reason: "max sessions per token exceeded".into(),
-                                })))
-                                .await;
-                            return;
-                        }
-                    }
-                    token_hash = Some(hash);
-                } else {
-                    warn!(session_id, "invalid bearer token, rejecting");
-                    let _ = socket
-                        .send(Message::Close(Some(axum::extract::ws::CloseFrame {
-                            code: 4003,
-                            reason: "invalid token".into(),
-                        })))
-                        .await;
-                    return;
-                }
+    let (tx, rx) = mpsc::channel::<Message>(PEER_CHANNEL_CAPACITY);
+    // No await under this lock. Ownership, capacity, token room count and
+    // insertion are one transaction; a second peer does not create a room.
+    let admission = {
+        let _guard = state.admission.lock().expect("admission lock poisoned");
+        if let Some(mut slot) = state.sessions.get_mut(&session_id) {
+            if slot.token_hash.as_deref() != Some(token_hash.as_str()) {
+                Err((4003, "room belongs to another token"))
+            } else if slot.peer_count() >= MAX_PEERS_PER_SESSION {
+                Err((4001, "session full"))
             } else {
-                // Not a bearer token — treat as regular message
-                first_msg_to_replay = Some(msg);
+                let id = slot.next_peer_id;
+                slot.next_peer_id += 1;
+                slot.peers.push((id, tx.clone()));
+                Ok(id)
             }
         } else {
-            // Not a text message — treat as regular message
-            first_msg_to_replay = Some(msg);
+            let room_count = state
+                .sessions
+                .iter()
+                .filter(|entry| entry.token_hash.as_deref() == Some(token_hash.as_str()))
+                .count();
+            if state.max_sessions_per_token > 0
+                && room_count >= state.max_sessions_per_token as usize
+            {
+                Err((4002, "max sessions per token exceeded"))
+            } else {
+                state.sessions.insert(
+                    session_id.clone(),
+                    SessionSlot {
+                        peers: vec![(0, tx.clone())],
+                        next_peer_id: 1,
+                        token_hash: Some(token_hash),
+                        last_activity: Instant::now(),
+                    },
+                );
+                Ok(0)
+            }
         }
-    } else if first_msg.is_err() {
-        // Auth timeout — proceed without auth (unauthenticated peer)
-        info!(session_id, "auth timeout, proceeding without authentication");
-    } else {
-        // Connection closed or error before any message
-        return;
-    }
-
-    let (ws_sender, mut ws_receiver) = socket.split();
-
-    // Create bounded channel for this peer
-    let (tx, rx) = mpsc::channel::<Message>(PEER_CHANNEL_CAPACITY);
-
-    // Join the session
-    let peer_id = {
-        let mut entry = state
-            .sessions
-            .entry(session_id.clone())
-            .or_insert_with(|| SessionSlot { peers: Vec::new(), next_peer_id: 0, token_hash: None, last_activity: Instant::now() });
-        // Set token_hash if authenticated
-        if token_hash.is_some() {
-            entry.value_mut().token_hash = token_hash;
-        }
-        let slot = entry.value_mut();
-        let id = slot.next_peer_id;
-        slot.next_peer_id += 1;
-        slot.peers.push((id, tx.clone()));
-        id
     };
+    let peer_id = match admission {
+        Ok(id) => id,
+        Err((code, reason)) => {
+            reject(&mut socket, code, reason).await;
+            return;
+        }
+    };
+    let (ws_sender, mut ws_receiver) = socket.split();
 
     info!(session_id, peer_id, "peer joined");
 
@@ -286,11 +256,6 @@ pub async fn handle_ws(state: Arc<AppState>, session_id: String, mut socket: Web
     // Spawn writer task: reads from channel, writes to WebSocket
     let writer_handle = tokio::spawn(write_loop(ws_sender, rx));
 
-    // If the first message wasn't a bearer token, process it now
-    if let Some(msg) = first_msg_to_replay {
-        process_message(&state, &session_id, peer_id, msg).await;
-    }
-
     // Reader loop: reads from WebSocket, forwards to other peer(s)
     while let Some(Ok(msg)) = ws_receiver.next().await {
         if matches!(&msg, Message::Close(_)) {
@@ -313,8 +278,22 @@ pub async fn handle_ws(state: Arc<AppState>, session_id: String, mut socket: Web
     info!(session_id, peer_id, "peer left");
 }
 
+async fn reject(socket: &mut WebSocket, code: u16, reason: &'static str) {
+    let _ = socket
+        .send(Message::Close(Some(axum::extract::ws::CloseFrame {
+            code,
+            reason: reason.into(),
+        })))
+        .await;
+}
+
 /// If the other peer is offline, send Web Push to all subscriptions for this session's token.
-async fn maybe_send_push(state: &Arc<AppState>, session_id: &str, reason: &str, session_name: &str) {
+async fn maybe_send_push(
+    state: &Arc<AppState>,
+    session_id: &str,
+    reason: &str,
+    session_name: &str,
+) {
     // Check if the other peer is connected (session has 2 peers = both online)
     let peer_count = state
         .sessions
@@ -333,7 +312,11 @@ async fn maybe_send_push(state: &Arc<AppState>, session_id: &str, reason: &str, 
     };
 
     // Find the token_hash for this session
-    let token_hash = match state.sessions.get(session_id).and_then(|s| s.token_hash.clone()) {
+    let token_hash = match state
+        .sessions
+        .get(session_id)
+        .and_then(|s| s.token_hash.clone())
+    {
         Some(h) => h,
         None => {
             warn!(session_id, "no token_hash for session, cannot send push");
@@ -386,12 +369,7 @@ async fn maybe_send_push(state: &Arc<AppState>, session_id: &str, reason: &str, 
 }
 
 /// Process a single incoming message: update activity, forward to peers, handle push hints.
-async fn process_message(
-    state: &Arc<AppState>,
-    session_id: &str,
-    peer_id: u64,
-    msg: Message,
-) {
+async fn process_message(state: &Arc<AppState>, session_id: &str, peer_id: u64, msg: Message) {
     // Update activity timestamp
     if let Some(mut slot) = state.sessions.get_mut(session_id) {
         slot.last_activity = Instant::now();
@@ -404,8 +382,10 @@ async fn process_message(
         }
         Message::Text(text) => {
             // Check if this is a relay:push hint
-            if let Ok(RelayMessage::Push { reason, session_name }) =
-                serde_json::from_str::<RelayMessage>(text)
+            if let Ok(RelayMessage::Push {
+                reason,
+                session_name,
+            }) = serde_json::from_str::<RelayMessage>(text)
             {
                 maybe_send_push(state, session_id, &reason, &session_name).await;
             }
@@ -417,12 +397,7 @@ async fn process_message(
 }
 
 /// Forward a message to all peers in the session except the sender.
-async fn forward_to_others(
-    state: &AppState,
-    session_id: &str,
-    sender_id: u64,
-    msg: Message,
-) {
+async fn forward_to_others(state: &AppState, session_id: &str, sender_id: u64, msg: Message) {
     if let Some(slot) = state.sessions.get(session_id) {
         for (id, peer_tx) in slot.peers.iter() {
             if *id != sender_id {
@@ -455,18 +430,22 @@ async fn notify_other_peers(
 /// Remove a peer from the session and notify remaining peers.
 async fn remove_peer(state: &AppState, session_id: &str, peer_id: u64) {
     let remaining = {
+        let _guard = state.admission.lock().expect("admission lock poisoned");
         let mut entry = match state.sessions.get_mut(session_id) {
             Some(e) => e,
             None => return,
         };
         let slot = entry.value_mut();
         slot.peers.retain(|(id, _)| *id != peer_id);
-        slot.peers.len()
+        let remaining = slot.peers.len();
+        drop(entry);
+        if remaining == 0 {
+            state.sessions.remove(session_id);
+        }
+        remaining
     };
 
-    if remaining == 0 {
-        state.sessions.remove(session_id);
-    } else {
+    if remaining > 0 {
         // Notify remaining peers
         notify_all_peers(state, session_id, PeerStatus::Disconnected).await;
     }
@@ -485,10 +464,7 @@ async fn notify_all_peers(state: &AppState, session_id: &str, status: PeerStatus
 }
 
 /// Writer loop: drains the channel and writes to the WebSocket sink.
-async fn write_loop(
-    mut sender: SplitSink<WebSocket, Message>,
-    mut rx: mpsc::Receiver<Message>,
-) {
+async fn write_loop(mut sender: SplitSink<WebSocket, Message>, mut rx: mpsc::Receiver<Message>) {
     while let Some(msg) = rx.recv().await {
         if sender.send(msg).await.is_err() {
             break;
@@ -524,6 +500,7 @@ pub fn spawn_session_reaper(
 
                 // Remove the session — dropping senders closes the channels,
                 // which terminates the writer tasks and disconnects the peers.
+                let _guard = state.admission.lock().expect("admission lock poisoned");
                 state.sessions.remove(&session_id);
             }
         }

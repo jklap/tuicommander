@@ -37,9 +37,10 @@ but JavaScript served by the page's origin can read it. Protection against an
 actively malicious relay operator also requires an independently trusted client
 distribution origin or signed client. That design is not implemented here.
 
-Do not expose this prototype as a public service: admission, room ownership,
-concurrent capacity enforcement and reliable recovery still need validation and
-completion. Existing test source is not evidence of production readiness.
+Do not expose this prototype as a public service: reliable recovery and the
+complete mobile transport still need validation and completion. Room admission
+requires a valid first-frame bearer, binds both peers to the same token and
+enforces room capacity and per-token room limits atomically. Existing test source is not evidence of production readiness.
 
 ## Local development
 
@@ -83,9 +84,11 @@ provisioning flow and public-key discovery remain part of future onboarding.
 | DELETE | `/push/subscribe` | Bearer-authenticated subscription removal |
 
 These are the implemented surfaces, not a claim that admission and accounting
-meet the intended service contract. In particular, the prototype admission path
-currently permits absent authentication, HTTP token lookup uses an in-memory
-cache, and forwarding does not accumulate byte statistics correctly.
+meet the intended service contract. In particular, HTTP token lookup uses an in-memory cache, and forwarding does
+not accumulate byte statistics correctly. Anonymous peers and peers with a
+different room-owner token are rejected with close code 4003. A full room uses
+4001; creation beyond the token room limit uses 4002. Joining an existing room
+does not consume another room allowance.
 
 ## Desktop configuration
 

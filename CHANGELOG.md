@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Require authenticated same-owner peers in the relay prototype and atomically enforce room and token capacity, while allowing the second peer at the room limit (#1932-8398).
+
+### Fixed
+
 - Apply asynchronous AI Chat session option offers before the first prompt so model and mode settings become available, without stale offer snapshots reverting a confirmed selection (#1918-2ea3).
 
 - Grant Gemini session attachment trust without a folder prompt or global settings changes. Grant ego PTY attachments read-only access in confined sandbox modes (#1833-aa60).
