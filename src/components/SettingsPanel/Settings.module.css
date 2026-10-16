@@ -159,6 +159,24 @@
   flex-shrink: 0;
 }
 
+.navItemPlugin {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.pluginLabel {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pluginIdentity {
+  flex-shrink: 0;
+  font-size: var(--font-xs);
+  color: var(--fg-muted);
+}
+
 .navItem:hover {
   background: var(--bg-highlight);
   color: var(--fg-primary);

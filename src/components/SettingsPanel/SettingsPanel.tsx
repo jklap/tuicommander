@@ -149,8 +149,11 @@ function buildNavItems(pluginTabs: SettingsShellTab[] = []): SettingsShellTab[] 
 	const items: SettingsShellTab[] = GLOBAL_TAB_GROUPS.flatMap((group) => [
 		{ key: `__label__:${group.key}`, label: group.label },
 		...group.tabs.filter((tab) => !hidden.has(tab.key)),
-		...(group.key === "integrations" ? pluginTabs : []),
 	]);
+
+	if (pluginTabs.length > 0) {
+		items.push({ key: "__label__:plugin-settings", label: "Plugin settings" }, ...pluginTabs);
+	}
 
 	if (repos.length > 0) {
 		items.push({ key: "__label__:Repositories", label: t("settings.repositories", "REPOSITORIES") });
@@ -170,7 +173,8 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 
 	const [query, setQuery] = createSignal("");
 	const pluginPages = createPluginSettingsCatalogue();
-	const pluginTabs = () => pluginPages().map((page) => ({ key: `plugin:${page.id}`, label: page.label }));
+	const pluginTabs = () =>
+		pluginPages().map((page) => ({ key: `plugin:${page.id}`, label: page.label, source: page.id }));
 	const navItems = () => buildNavItems(pluginTabs());
 	const pluginEntries = () =>
 		pluginPages().flatMap((page) =>

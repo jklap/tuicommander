@@ -16,10 +16,13 @@ groups the pages by task:
 | **Workspace** | Terminal, Keyboard Shortcuts, Git & GitHub |
 | **AI** | Agents, AI Chat, Voice, Smart Prompts |
 | **Integrations** | MCP, Remote Access, Remote Machines, Plugins |
+| **Plugin settings** | Loaded plugins with registered settings, marked **Plugin** |
 | **Repositories** | One page for each repository in the sidebar |
 
 The **AI Chat** page is shown only while **Experimental Features** is on (see
 [AI Chat](#ai-chat)).
+
+Plugin pages show their source plugin ID below the page title and in the navigation tooltip. The Settings header, navigation and footer stay visible while plugin values load. Loading and read errors appear only inside the native editor; switching pages does not load a plugin iframe. Unloading a plugin removes its page and search entries.
 
 ## Search
 

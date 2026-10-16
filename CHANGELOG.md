@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Keep the Settings shell visible during plugin catalogue and value reads, and identify plugin pages in a separate navigation group with source IDs (#1927-9649).
+
 - Grant Gemini session attachment trust without a folder prompt or global settings changes. Grant ego PTY attachments read-only access in confined sandbox modes (#1833-aa60).
 
 

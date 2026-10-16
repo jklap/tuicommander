@@ -3058,7 +3058,7 @@ shows the last fifty agent actions. Screenshots require the reviewed tab to be v
 
 ## Plugin settings pages
 
-Loaded plugins with registered settings appear under Settings > Integrations. Search includes their catalogue field labels. Unloading removes the page and search entries. Reads, revision-checked edits, resets and secret set/unset status use the scoped Rust settings service; the UI owns no second configuration store.
+Loaded plugins with registered settings appear in a separate Settings > Plugin settings group. Navigation marks each entry as Plugin and exposes its source ID; the native editor shows the same ID. Catalogue loading never hides the Settings shell, and pending value reads use a local loading state. Search includes their catalogue field labels. Unloading removes the page and search entries. Reads, revision-checked edits, resets and secret set/unset status use the scoped Rust settings service; the UI owns no second configuration store.
 
 ### Tasks notifications
 

@@ -10,6 +10,8 @@ export interface SettingsShellTab {
 	key: string;
 	label: string;
 	color?: string;
+	/** Loaded plugin id, separate from the human-readable page label. */
+	source?: string;
 }
 
 export interface SettingsShellProps {
@@ -106,13 +108,18 @@ export const SettingsShell: Component<SettingsShellProps> = (props) => {
 										<button
 											class={cx(
 												s.navItem,
+												tab.source && s.navItemPlugin,
 												tab.key.startsWith("repo:") && s.navItemRepo,
 												props.activeTab === tab.key && s.active,
 											)}
+											title={tab.source ? `Plugin: ${tab.source}` : undefined}
 											style={tab.color ? { color: tab.color } : undefined}
 											onClick={() => props.onTabChange(tab.key)}
 										>
-											{tab.label}
+											<Show when={tab.source} fallback={tab.label}>
+												<span class={s.pluginLabel}>{tab.label}</span>
+												<span class={s.pluginIdentity}> Plugin</span>
+											</Show>
 										</button>
 									)
 								}
