@@ -888,7 +888,7 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 												<div class={s.noticeTitle}>
 													{(notice().action && NOTICE_LABELS[notice().action!.kind].title) || "Notice"}
 												</div>
-												<div>{notice().text}</div>
+												<div class={s.noticeBody}>{notice().text}</div>
 												<Show when={notice().action}>
 													{(action) => (
 														<button type="button" class={s.noticeAction} onClick={() => runNoticeAction(action())}>
