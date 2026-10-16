@@ -47,6 +47,7 @@ fn public_update() -> Value {
 #[derive(Default)]
 struct ServerState {
     responses: VecDeque<(StatusCode, Value)>,
+    send_message_responses: VecDeque<(StatusCode, Value)>,
     requests: Vec<(String, Value)>,
 }
 pub(super) struct FakeServer {
@@ -58,7 +59,7 @@ impl FakeServer {
     pub(super) async fn start(responses: Vec<(StatusCode, Value)>) -> Self {
         let state = Arc::new(Mutex::new(ServerState {
             responses: responses.into(),
-            requests: vec![],
+            ..ServerState::default()
         }));
         async fn respond(
             State(state): State<Arc<Mutex<ServerState>>>,
@@ -82,7 +83,14 @@ impl FakeServer {
             } else {
                 json!({"ok":true,"result":[]})
             };
-            let (status, value) = if uri.path().ends_with("setMessageReaction") {
+            let send_response = uri
+                .path()
+                .ends_with("sendMessage")
+                .then(|| state.send_message_responses.pop_front())
+                .flatten();
+            let (status, value) = if let Some(response) = send_response {
+                response
+            } else if uri.path().ends_with("setMessageReaction") {
                 (StatusCode::OK, fallback)
             } else {
                 state

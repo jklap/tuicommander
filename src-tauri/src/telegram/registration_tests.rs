@@ -685,11 +685,15 @@ async fn failed_link_confirmation_preserves_same_batch_mail_order() {
     let before = inbound::text_update(7, 1111111, "before link");
     let pairing = inbound::text_update(8, 3333333, "A1B2C3");
     let after = inbound::text_update(9, 3333333, "after link");
-    let server = FakeServer::start(vec![
-        inbound::updates(vec![after, pairing, before]),
-        (StatusCode::BAD_GATEWAY, json!({})),
-    ])
-    .await;
+    let server = FakeServer::start(vec![inbound::updates(vec![after, pairing, before])]).await;
+    // The failure belongs to link confirmation, not to the receipt draft that
+    // now precedes it. Keep the fault tied to its HTTP method rather than order.
+    server
+        .state
+        .lock()
+        .unwrap()
+        .send_message_responses
+        .push_back((StatusCode::BAD_GATEWAY, json!({})));
     let runtime = outbound_tests::runtime(paths.clone(), server.address).await;
     let state = runtime.state.clone();
     let (commands, receive) = tokio::sync::mpsc::channel(10);

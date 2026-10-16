@@ -352,17 +352,16 @@ impl Runtime {
                 r.completed.is_none()
                     && r.working
                     && r.peer == self.registered_peer().unwrap_or_default()
-            }) {
-                if let AppEvent::ProgressRecorded { payload, .. } = &event {
-                    if payload["entry"]["type"] == "done" {
-                        let id = request.id.clone();
-                        if let Err(error) = self.finish_request(&id, &text).await {
-                            alert(&self.state, error);
-                        }
+            }) && let AppEvent::ProgressRecorded { payload, .. } = &event
+            {
+                if payload["entry"]["type"] == "done" {
+                    let id = request.id.clone();
+                    if let Err(error) = self.finish_request(&id, &text).await {
+                        alert(&self.state, error);
                     }
-                    // Blocked is a status, not an answer; avoid a second final.
-                    return;
                 }
+                // Blocked is a status, not an answer; avoid a second final.
+                return;
             }
             // A completed request owns its progress outcome as well as finish.
             let epoch = self
