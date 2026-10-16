@@ -3211,3 +3211,12 @@ No live write or desktop-load verification is implied by recorded-fixture tests.
 ### Audio choice availability (#1908-c327, #1909-0d24)
 
 Existing input/output device enumeration returns the same device objects on success, including a successful empty array. Backend enumeration failure now returns an error rather than an empty array. Internal settings choice refresh reuses those owners; cache-only describe and typed voice asset actions are not new public routes in this change. The settings transport cutover remains separate.
+
+Terminal ego recovery snapshots appear as `state.provider_recovery` in session
+snapshots and `session-state-changed` events: `{phase, next_attempt_ms, attempt}`.
+`POST /sessions/{id}/force-retry` (IPC `force_retry_provider_recovery_command`)
+returns `null` on success or HTTP 409 `{error}` on refusal. It shares MCP
+force-retry validation and the input lock: non-empty composers are never overwritten.
+The field is omitted when no recovery is active. MCP `session action=force_retry`
+submits `/retry` once to a recovering ego PTY and returns `{submitted:true,
+session_id}` or an error; it follows the existing localhost execution restriction.

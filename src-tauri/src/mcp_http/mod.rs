@@ -449,6 +449,35 @@ async fn post_progress_report(
     ))
 }
 
+/// Uses the same draft-preserving input transaction as MCP force_retry.
+async fn force_retry_provider_recovery(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<guards::Authenticated>>,
+    AxumPath(session_id): AxumPath<String>,
+    State(state): State<Arc<AppState>>,
+) -> Response {
+    if let Err(resp) = guards::require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    match tokio::task::spawn_blocking(move || {
+        crate::pty::force_retry_provider_recovery(&state, &session_id)
+    })
+    .await
+    {
+        Ok(Ok(())) => Json(serde_json::Value::Null).into_response(),
+        Ok(Err(error)) => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({"error": error})),
+        )
+            .into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": error.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
 #[derive(serde::Deserialize)]
 struct SubmitAgentReplyRequest {
     input: String,
@@ -1042,6 +1071,10 @@ fn shared_routes() -> Router<Arc<AppState>> {
         )
         .route("/sessions/{id}/write", post(session::write_to_session))
         .route("/sessions/{id}/submit", post(submit_agent_reply))
+        .route(
+            "/sessions/{id}/force-retry",
+            post(force_retry_provider_recovery),
+        )
         // The N-ary sibling: one round trip, but the per-input bookkeeping still
         // runs once per part. Concatenating into `/write` is NOT equivalent —
         // `apply_input_bookkeeping` reads the whole payload as one keystroke.

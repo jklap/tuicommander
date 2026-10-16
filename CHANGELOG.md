@@ -19,6 +19,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Add explicit voice settings choice refresh and typed owner asset actions; input enumeration failure is unavailable rather than an empty list (#1909-0d24).
 
 - Add explicit owner-backed settings choice refresh; notification output enumeration reports unavailable separately from an empty device list (#1908-c327).
+### Added
+
+- Show native terminal ego provider recovery with phase, attempt, next-retry countdown and a Force retry control; notify managed parents on recovery entry and exit (#1902-7010).
+
 ### Fixed
 
 - Recover failed mobile views after a server outage through automatic or manual retry, without false empty/setup states, raw network errors or desktop restart advice (#1930-f4c2).

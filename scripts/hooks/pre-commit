@@ -88,7 +88,7 @@ src-tauri/src/mcp_http/session.rs
 
 # The awaiting set/clear sites, the parsers they read, and the OSC that feeds
 # them. 7770 is the TUIC hook's state sequence.
-detection_symbols='awaiting_input|question_confident|question_text|question-cleared|suppress_heuristic_question|rearm_awaiting_for_open_dialog|find_chrome_cutoff|parse_clean_lines|parse_choice_prompt|parse_slash_menu|is_ink_dialog_footer_row|resolve_choice_prompt_input|raw_stream_events|7770'
+detection_symbols='awaiting_input|question_confident|question_text|question-cleared|suppress_heuristic_question|rearm_awaiting_for_open_dialog|find_chrome_cutoff|parse_clean_lines|parse_choice_prompt|parse_slash_menu|is_ink_dialog_footer_row|resolve_choice_prompt_input|raw_stream_events|provider_recovery|ProviderRecovery|7770'
 
 # Only framed captures with provenance satisfy production edits; a handwritten raw
 # fixture or a documentation-only addition is not recorded external evidence.

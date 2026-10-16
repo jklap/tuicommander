@@ -1135,3 +1135,12 @@ Internal voice settings refresh resolves devices, model state, installed voices 
 ### Settings restyle foundation (1936-0caa)
 
 The approved 2026-10-16 Settings restyle starts with a stable 1136px maximum shell and shared presentation-only vocabulary. Existing lazy mounting, persisted navigation width, configuration sources and save boundaries remain unchanged. Individual page adoption is separate work.
+
+### Terminal ego provider recovery
+
+Terminal ego OSC 7770 recovery snapshots expose phase, attempt and next-attempt
+time through the existing session lifecycle snapshot. The tab and status bar
+show recovery and offer `/retry`; MCP session `force_retry` provides the same
+single-command control. Entry/exit notices reach managed parents. Explicit clear,
+busy/idle markers and shell OSC 133 A retract recovery. This is PTY-only and does
+not attach ACP to a terminal process. Wire limits are in docs/backend/output-parser.md.

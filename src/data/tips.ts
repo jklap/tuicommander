@@ -13,6 +13,13 @@ export const TIPS: Tip[] = [
 		feature: "Delete AI Chat conversations",
 		description:
 			"Open Conversations in AI Chat and use a row’s trash button to permanently delete its history after confirming the name.",
+
+		shortcut: null,
+	},
+	{
+		feature: "ego provider recovery",
+		description:
+			"When terminal ego reports a provider outage, the status bar shows its recovery attempt and next retry. Select Force retry to send /retry once to that terminal.",
 		shortcut: null,
 	},
 	{
