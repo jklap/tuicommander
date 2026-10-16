@@ -171,8 +171,9 @@ export const LocalMcpPanel: Component = () => {
 				<Show when={nativeToolsLoaded()}>
 					{/* Static, unlike the per-tool names: the one label search can index for this group. */}
 					<div class={s.group}>
-						<label>Native tools</label>
-						<ContextualHelp label="Native tools" />
+						<label>
+							Native tools <ContextualHelp label="Native tools" />
+						</label>
 						<p class={s.hint}>
 							Choose which built-in tools MCP clients can call. Disabled tools are hidden from clients.
 						</p>
