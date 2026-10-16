@@ -48,6 +48,12 @@ pub(super) fn native_catalogue_for(dictation: bool) -> Result<Catalogue, Catalog
         available.clone(),
     )?;
     catalogue.register(
+        "repositories_registration",
+        "instance",
+        Some(&super::registration::Registration::default()),
+        available.clone(),
+    )?;
+    catalogue.register(
         "prompts",
         "instance",
         Some(&PromptLibraryConfig::default()),
@@ -59,16 +65,18 @@ pub(super) fn native_catalogue_for(dictation: bool) -> Result<Catalogue, Catalog
         Some(&AgentsConfig::default()),
         available.clone(),
     )?;
-    catalogue.register(
+    catalogue.register_schema(
         "upstreams",
         "machine",
-        Some(&crate::mcp_upstream_config::UpstreamMcpConfig::default()),
+        &super::upstream_credentials::catalogue_schema(),
+        None,
         available.clone(),
     )?;
-    catalogue.register(
+    catalogue.register_schema(
         "github_accounts",
         "machine",
-        Some(&crate::github_account::GitHubAccountRegistry::default()),
+        &super::accounts::GithubSettings::catalogue_schema(),
+        None,
         available.clone(),
     )?;
     catalogue.register(
@@ -83,13 +91,37 @@ pub(super) fn native_catalogue_for(dictation: bool) -> Result<Catalogue, Catalog
         None,
         available.clone(),
     )?;
+    let mut credential = Catalogue::default();
+    credential.register_schema(
+        "connections",
+        "machine",
+        &super::remote::credential_schema(),
+        None,
+        available.clone(),
+    )?;
+    for (_, mut field) in credential.fields {
+        field.id = "connections.{id}.credential".into();
+        field.path = "/{id}/credential".into();
+        catalogue.fields.insert(field.id.clone(), field);
+    }
     catalogue.register::<super::remote::TunnelProfiles>(
         "tunnels",
         "machine",
         None,
         available.clone(),
     )?;
-    catalogue.register::<crate::telegram::Config>("telegram", "machine", None, available)?;
+    catalogue.register_schema(
+        "telegram",
+        "machine",
+        &super::telegram::owner_schema(),
+        None,
+        available,
+    )?;
+    if let Some(mut field) = catalogue.fields.remove("telegram.allowed_chat_ids.{key}") {
+        field.id = "telegram.allowed_chat_ids.{chatId}".into();
+        field.path = "/allowed_chat_ids/{chatId}".into();
+        catalogue.fields.insert(field.id.clone(), field);
+    }
     let voice = if dictation {
         Availability::Available
     } else {
@@ -99,6 +131,10 @@ pub(super) fn native_catalogue_for(dictation: bool) -> Result<Catalogue, Catalog
     };
     catalogue.register("voice", "machine", Some(&DictationConfig::default()), voice)?;
     super::ego_schema::register(&mut catalogue)?;
+    super::keybindings::register(&mut catalogue)?;
+    super::layout::register(&mut catalogue);
+    super::app_choices::register(&mut catalogue);
+    super::registration::classify_runtime(&mut catalogue);
     catalogue.gaps.extend(
         serde_json::from_str::<Vec<InventoryGap>>(include_str!("inventory-gaps.json")).map_err(
             |_| CatalogueError {

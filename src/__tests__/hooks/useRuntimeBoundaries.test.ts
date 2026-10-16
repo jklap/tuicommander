@@ -28,6 +28,7 @@ const {
 
 vi.mock("../../invoke", () => ({ invoke: mockInvoke, listen: mockListen }));
 vi.mock("../../platform", () => ({
+	isMacOS: () => true,
 	isQuickSwitcherActive: mockPlatform.active,
 	isQuickSwitcherRelease: mockPlatform.release,
 }));

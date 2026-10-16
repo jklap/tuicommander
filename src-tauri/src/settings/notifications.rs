@@ -39,6 +39,28 @@ impl Store for NotificationSettingsStore {
         self.file.read()
     }
 
+    #[cfg(not(feature = "desktop"))]
+    fn refresh_choices(
+        &self,
+        _resolver: &str,
+        _path: &str,
+    ) -> impl std::future::Future<Output = Result<Vec<Value>, Failure>> + Send {
+        std::future::ready(Err(Error::new(ID, "unavailable")))
+    }
+
+    #[cfg(feature = "desktop")]
+    async fn refresh_choices(&self, resolver: &str, _path: &str) -> Result<Vec<Value>, Failure> {
+        if resolver != "audio_outputs" {
+            return Err(Error::new(ID, "unavailable"));
+        }
+        crate::notification_sound::list_audio_output_devices()
+            .await
+            .map_err(|_| Error::new(ID, "unavailable"))?
+            .into_iter()
+            .map(|device| serde_json::to_value(device).map_err(|_| Error::new(ID, "store_failed")))
+            .collect()
+    }
+
     fn commit(
         &self,
         prepare: &mut dyn FnMut(&Value) -> Result<Prepared, Failure>,

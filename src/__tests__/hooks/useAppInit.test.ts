@@ -23,6 +23,7 @@ import { repositoriesStore } from "../../stores/repositories";
 import { reconcileTerminalOwnership } from "../../stores/terminalOwnership";
 import { terminalsStore } from "../../stores/terminals";
 import { toastsStore } from "../../stores/toasts";
+import * as transport from "../../transport";
 import { makeTerminal } from "../helpers/store";
 import { mockInvoke } from "../mocks/tauri";
 
@@ -74,6 +75,34 @@ function createMockDeps(overrides: Partial<AppInitDeps> = {}): AppInitDeps {
 }
 
 describe("initApp", () => {
+	// Catches: init resolves with a pending progress subscription, leaking its promise and missing early events.
+	it("waits for progress event registration before initialization completes", async () => {
+		vi.useRealTimers();
+		let release!: (unlisten: () => void) => void;
+		const pending = new Promise<() => void>((resolve) => {
+			release = resolve;
+		});
+		const subscribe = transport.subscribeEvents;
+		const subscription = vi.spyOn(transport, "subscribeEvents").mockImplementation((handlers, options) => {
+			if ("progress-recorded" in handlers) return pending;
+			return subscribe(handlers, options);
+		});
+		let finished = false;
+		const initializing = initApp(createMockDeps()).then(() => {
+			finished = true;
+		});
+		try {
+			await vi.waitFor(() =>
+				expect(subscription.mock.calls.some(([handlers]) => "progress-recorded" in handlers)).toBe(true),
+			);
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			expect(finished).toBe(false);
+		} finally {
+			release(vi.fn());
+			await initializing;
+		}
+	});
+
 	// Catches: a backend mail/submit wake creates a duplicate tab and leaves the original suspended.
 	it("reattaches a mail-woken replacement PTY to the suspended tab instead of adding a duplicate", async () => {
 		let created: ((event: { payload: unknown }) => void) | undefined;

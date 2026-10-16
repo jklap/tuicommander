@@ -1,4 +1,4 @@
-import { createMemo, createSignal, For, onMount, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
 import type { ActivityItem as ActivityItemData } from "../../plugins/types";
 import { activityStore } from "../../stores/activityStore";
 import { ActivityItem } from "../components/ActivityItem";
@@ -6,6 +6,7 @@ import { createVisibilityInterval } from "../utils/visibilityInterval";
 import styles from "./ActivityScreen.module.css";
 
 interface ActivityScreenProps {
+	recoveryRevision?: number;
 	onNavigateSession: (sessionId: string) => void;
 }
 
@@ -38,7 +39,8 @@ function groupByTime(items: ActivityItemData[]): TimeGroup[] {
 }
 
 export function ActivityScreen(props: ActivityScreenProps) {
-	onMount(() => {
+	createEffect(() => {
+		props.recoveryRevision;
 		void activityStore.hydrate();
 	});
 	const activeItems = createMemo(() => {

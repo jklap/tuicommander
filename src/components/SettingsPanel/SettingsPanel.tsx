@@ -16,6 +16,7 @@ import { DictationSettings } from "./DictationSettings";
 import { ExpertModeSwitch } from "./ExpertSetting";
 import { PluginSettingsTab } from "./PluginSettingsTab";
 import { createPluginSettingsCatalogue, pluginFieldLabel } from "./pluginSettingsCatalogue";
+import { RepositoryActions } from "./RepositoryActions";
 import s from "./Settings.module.css";
 import { SettingsSearchBox, SettingsSearchResults, scrollToSetting } from "./SettingsSearch";
 import type { SettingsShellTab } from "./SettingsShell";
@@ -149,8 +150,11 @@ function buildNavItems(pluginTabs: SettingsShellTab[] = []): SettingsShellTab[] 
 	const items: SettingsShellTab[] = GLOBAL_TAB_GROUPS.flatMap((group) => [
 		{ key: `__label__:${group.key}`, label: group.label },
 		...group.tabs.filter((tab) => !hidden.has(tab.key)),
-		...(group.key === "integrations" ? pluginTabs : []),
 	]);
+
+	if (pluginTabs.length > 0) {
+		items.push({ key: "__label__:plugin-settings", label: "Plugin settings" }, ...pluginTabs);
+	}
 
 	if (repos.length > 0) {
 		items.push({ key: "__label__:Repositories", label: t("settings.repositories", "REPOSITORIES") });
@@ -170,7 +174,8 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 
 	const [query, setQuery] = createSignal("");
 	const pluginPages = createPluginSettingsCatalogue();
-	const pluginTabs = () => pluginPages().map((page) => ({ key: `plugin:${page.id}`, label: page.label }));
+	const pluginTabs = () =>
+		pluginPages().map((page) => ({ key: `plugin:${page.id}`, label: page.label, source: page.id }));
 	const navItems = () => buildNavItems(pluginTabs());
 	const pluginEntries = () =>
 		pluginPages().flatMap((page) =>
@@ -268,16 +273,9 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 	};
 
 	const footer = () => {
-		const path = activeRepoPath();
 		return (
 			<div class={s.footer}>
-				<Show when={path} fallback={<span />}>
-					{(p) => (
-						<button class={s.footerReset} onClick={() => repoSettingsStore.reset(p())}>
-							{t("settings.resetToDefaults", "Reset to Defaults")}
-						</button>
-					)}
-				</Show>
+				<span />
 				<button class={s.footerDone} onClick={props.onClose}>
 					{t("settings.done", "Done")}
 				</button>
@@ -313,22 +311,12 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 							<>
 								<RepoWorktreeTab settings={settings} defaults={repoDefaultsStore.state} onUpdate={onUpdate} />
 								<RepoScriptsTab settings={settings} defaults={repoDefaultsStore.state} onUpdate={onUpdate} />
-								<Show when={isTauri()}>
-									<div class={s.section}>
-										<h3>{t("settings.copyToProject.heading", "Share with Team")}</h3>
-										<p class={s.hint}>
-											{t(
-												"settings.copyToProject.hint",
-												"Write this repo's worktree/branch settings to a .tuic.json in the project root. Commit it so teammates inherit the same defaults. Scripts are never exported.",
-											)}
-										</p>
-										<div class={s.actions}>
-											<button onClick={() => copyToProject(path)}>
-												{t("settings.copyToProject.button", "Copy settings to .tuic.json")}
-											</button>
-										</div>
-									</div>
-								</Show>
+								<RepositoryActions
+									path={settings.path}
+									canExport={isTauri()}
+									onExport={() => void copyToProject(path)}
+									onReset={() => repoSettingsStore.reset(path)}
+								/>
 							</>
 						);
 					}}

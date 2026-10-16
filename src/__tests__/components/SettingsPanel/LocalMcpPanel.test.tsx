@@ -78,6 +78,37 @@ describe("LocalMcpPanel", () => {
 		view.unmount();
 	});
 
+	// Catches: fresh poll objects replace a hovered tool badge and lose placement.
+	it("native_tool_help_stays_anchored_across_poll", async () => {
+		let tools = [{ name: "design_mode", summary: "Design", description: "Long design help ".repeat(40) }];
+		const base = vi.mocked(rpc).getMockImplementation();
+		vi.mocked(rpc).mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+			const result = await base?.(command, args);
+			return command === "get_mcp_status"
+				? { ...(result as object), native_tools: tools.map((tool) => ({ ...tool })) }
+				: result;
+		});
+		const view = render(() => <LocalMcpPanel />);
+		await vi.advanceTimersByTimeAsync(0);
+		const tip = view.getByText(/Long design help/);
+		const badge = tip.parentElement!;
+		vi.spyOn(badge, "getBoundingClientRect").mockReturnValue({ left: 100, top: 100, bottom: 116 } as DOMRect);
+		vi.spyOn(tip, "getBoundingClientRect").mockReturnValue({ width: 320, height: 200 } as DOMRect);
+		fireEvent.mouseEnter(badge);
+		for (let poll = 0; poll < 3; poll++) {
+			tools = [{ ...tools[0], description: `Updated help ${poll}` }];
+			await vi.advanceTimersByTimeAsync(3000);
+			expect(view.getByText(`Updated help ${poll}`)).toBe(tip);
+			expect(tip.textContent).toBe(`Updated help ${poll}`);
+			expect(tip.style.left).toBe("100px");
+			expect(tip.style.top).toBe("122px");
+		}
+		tools = [];
+		await vi.advanceTimersByTimeAsync(3000);
+		expect(badge.isConnected).toBe(false);
+		view.unmount();
+	});
+
 	// Catches: disabled tools disappear from Settings and can never be re-enabled.
 	it("re-enables a disabled backend tool without dropping other disabled names", async () => {
 		const base = vi.mocked(rpc).getMockImplementation();

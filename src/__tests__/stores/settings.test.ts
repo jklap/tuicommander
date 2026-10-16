@@ -27,6 +27,22 @@ describe("settingsStore", () => {
 		vi.useRealTimers();
 	});
 
+	// Catches: mobile config failures emit desktop-only restart advice instead of remaining retryable.
+	it("can retry a quiet failed hydration without emitting restart advice", async () => {
+		const { toastsStore } = await import("../../stores/toasts");
+		const { appLogger } = await import("../../stores/appLogger");
+		const log = vi.spyOn(appLogger, "error").mockImplementation(() => {});
+		const toast = vi.spyOn(toastsStore, "add");
+		mockInvoke.mockRejectedValueOnce(new TypeError("Load failed"));
+		expect(await store.hydrate({ notifyOnError: false })).toBe(false);
+		expect(toast).not.toHaveBeenCalled();
+		mockInvoke.mockResolvedValueOnce({ ego_executable: "ego" });
+		expect(await store.hydrate({ notifyOnError: false })).toBe(true);
+		expect(store.state.egoExecutable).toBe("ego");
+		log.mockRestore();
+		toast.mockRestore();
+	});
+
 	/** Hydrate the store so save() is unlocked — pre-hydrate saves are refused
 	 *  to avoid clobbering config.json with defaults. */
 	async function hydrateStore(): Promise<void> {

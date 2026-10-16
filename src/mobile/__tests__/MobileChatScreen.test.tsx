@@ -1,4 +1,5 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
+import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { invoke, hydrate, createAcpChat, answerPermission, selectSession } = vi.hoisted(() => ({
@@ -77,6 +78,18 @@ afterEach(() => {
 });
 
 describe("mobile ego chat", () => {
+	// Catches: failed settings reads are presented as an unconfigured ego installation forever.
+	it("waits for settings and retries them on recovery before claiming ego is unconfigured", async () => {
+		hydrate.mockResolvedValueOnce(false as never).mockResolvedValueOnce(true as never);
+		createAcpChat.mockReturnValue({ ...chat(), phase: () => "unconfigured", entries: () => [] });
+		const [revision, setRevision] = createSignal(0);
+		render(() => <MobileChatScreen recoveryRevision={revision()} />);
+		await waitFor(() => expect(screen.getByText(/Chat settings are unavailable/)).toBeTruthy());
+		expect(screen.queryByText(/Configure ego in desktop Settings/)).toBeNull();
+		setRevision(1);
+		await waitFor(() => expect(screen.getByText(/Configure ego in desktop Settings/)).toBeTruthy());
+		expect(hydrate).toHaveBeenCalledWith({ notifyOnError: false });
+	});
 	it("keeps mobile composer actions as labelled icons with the session send glyph", () => {
 		const { container } = render(() => <MobileChatScreen />);
 		const textarea = container.querySelector("textarea");

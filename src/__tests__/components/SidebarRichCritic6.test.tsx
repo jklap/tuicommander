@@ -55,6 +55,7 @@ vi.mock("../../utils/openUrl", () => ({ handleOpenUrl: mockOpenUrl }));
 
 // Mock stores before importing the component
 vi.mock("../../stores/repositories", () => ({
+	resolveRepoPathFor: (path: string) => path,
 	repositoriesStore: {
 		state: {
 			repositories: {} as Record<string, unknown>,

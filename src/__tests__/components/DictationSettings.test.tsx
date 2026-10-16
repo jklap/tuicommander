@@ -615,13 +615,30 @@ describe("DictationSettings – Voice library", () => {
 		expect(await findByText("the voice file is over the 64 MB limit")).toBeDefined();
 	});
 
-	it("offers only voices that can speak now in the voice picker", () => {
+	it("keeps a missing configured catalogue voice selected instead of an empty picker", () => {
+		// Catches: speech_voice not among installed-only options blanks the native select.
+		mockStore.state.speechVoice = "bill_boerst";
+		mockStore.state.speechAssets.push(voiceAsset("bill_boerst", "it", "absent"));
+		mockStore.state.speechVoices = [{ id: "giovanni", source: "default" }];
 		const { container } = render(() => <DictationSettings />);
-		const values = Array.from(voiceSelect(container).options).map((o) => o.value);
-		expect(values).toEqual(["", "giovanni", "jean", "my_voice"]);
+		const select = voiceSelect(container);
+		expect(select.value).toBe("bill_boerst");
+		expect(select.selectedOptions[0].textContent).toContain("Not Downloaded");
+		const values = Array.from(select.options).map((o) => o.value);
+		expect(values).toEqual(["", "giovanni", "jean", "alba", "marco", "bill_boerst"]);
+		expect(values).not.toContain("lola");
+		const row = select.closest(".group")!;
+		fireEvent.click(button(row, "Download")!);
+		expect(mockStore.downloadSpeechAsset).toHaveBeenCalledWith("voice-it-bill_boerst");
 	});
 
-	it("offers no voice in the picker while the language itself is not downloaded", () => {
+	it("offers installed and downloadable voices in the voice picker", () => {
+		const { container } = render(() => <DictationSettings />);
+		const values = Array.from(voiceSelect(container).options).map((o) => o.value);
+		expect(values).toEqual(["", "giovanni", "jean", "my_voice", "alba", "marco"]);
+	});
+
+	it("offers catalogue downloads but no shipped voice while the language is absent", () => {
 		// No voice speaks without the language's model, so the shipped voice
 		// the catalogue names must not stand in for an empty answer.
 		mockStore.state.speechAssets[0] = {
@@ -636,7 +653,7 @@ describe("DictationSettings – Voice library", () => {
 		mockStore.state.speechVoices = [];
 		const { container } = render(() => <DictationSettings />);
 		const values = Array.from(voiceSelect(container).options).map((o) => o.value);
-		expect(values).toEqual([""]);
+		expect(values).toEqual(["", "jean", "alba", "marco"]);
 	});
 
 	it("keeps the Downloadable voices collapsed behind a disclosure that shows how many there are", () => {

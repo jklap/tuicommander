@@ -22,6 +22,38 @@ const VOICE_FIELDS: [&str; 5] = [
     "voice.speech_edge_voice",
 ];
 
+/// Asset operations retain the existing owner's allowlisted IDs and validation.
+/// No caller-provided path, URL or executable is accepted.
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+pub enum VoiceAction {
+    Assets,
+    DownloadModel {
+        model_name: String,
+    },
+    DeleteModel {
+        model_name: String,
+    },
+    DownloadAsset {
+        asset: String,
+    },
+    CancelDownload {
+        asset: String,
+    },
+    DeleteAsset {
+        asset: String,
+    },
+    ImportVoice {
+        language: String,
+        name: String,
+        data_base64: String,
+    },
+    DeleteVoice {
+        language: String,
+        name: String,
+    },
+}
+
 pub struct VoiceSettingsStore {
     path: PathBuf,
     /// The live speaker slot of `DictationState`; `None` before startup has one.
@@ -42,6 +74,54 @@ impl VoiceSettingsStore {
         speaker: Option<Arc<Mutex<Option<speaker::Armed>>>>,
     ) -> Self {
         Self { path, speaker }
+    }
+
+    /// Called by host transport wiring with its authenticated caller context and app state.
+    pub async fn perform(
+        &self,
+        app: &tauri::AppHandle,
+        caller: &super::policy::Caller,
+        action: VoiceAction,
+    ) -> Result<Value, Failure> {
+        use crate::dictation::{DictationState, commands};
+        use tauri::Manager;
+        caller.check(!matches!(action, VoiceAction::Assets))?;
+        // The asset commands own the live runtime and machine asset directory. A
+        // path-scoped fixture must not accidentally operate on that live owner.
+        if self.path != crate::config::config_dir().join(DICTATION_CONFIG_FILE) {
+            return Err(Error::new(ID, "not_found"));
+        }
+        let result = match action {
+            VoiceAction::Assets => {
+                return choice_value(commands::get_speech_assets(app.state::<DictationState>()));
+            }
+            VoiceAction::DownloadModel { model_name } => {
+                commands::download_whisper_model(app.clone(), model_name).await
+            }
+            VoiceAction::DeleteModel { model_name } => {
+                commands::delete_whisper_model(app.state::<DictationState>(), model_name)
+            }
+            VoiceAction::DownloadAsset { asset } => {
+                commands::download_speech_asset(app.clone(), asset).await
+            }
+            VoiceAction::CancelDownload { asset } => {
+                commands::cancel_speech_download(app.state::<DictationState>(), asset)
+            }
+            VoiceAction::DeleteAsset { asset } => {
+                commands::delete_speech_asset(app.state::<DictationState>(), asset)
+            }
+            VoiceAction::ImportVoice {
+                language,
+                name,
+                data_base64,
+            } => commands::import_speech_voice(language, name, data_base64),
+            VoiceAction::DeleteVoice { language, name } => {
+                commands::delete_speech_voice(language, name)
+            }
+        };
+        result
+            .map(Value::String)
+            .map_err(|_| Error::new(ID, "unavailable"))
     }
 
     fn file(&self) -> ConfigFile<DictationConfig> {
@@ -65,6 +145,47 @@ impl Store for VoiceSettingsStore {
 
     fn read(&self) -> Result<Value, Failure> {
         ConfigFileStore::new(ID, self.file()).read()
+    }
+
+    async fn refresh_choices(&self, resolver: &str, _path: &str) -> Result<Vec<Value>, Failure> {
+        use crate::dictation::commands;
+        if resolver == "audio_inputs" {
+            return commands::list_audio_devices()
+                .await
+                .map_err(|_| Error::new(ID, "unavailable"))?
+                .into_iter()
+                .map(choice_value)
+                .collect();
+        }
+        if resolver == "edge_voices" {
+            let file = self.file();
+            let language =
+                tokio::task::spawn_blocking(move || read_strict(&file).map(|c| c.language))
+                    .await
+                    .map_err(|_| Error::new(ID, "store_failed"))??;
+            return commands::get_edge_voices(language)
+                .await
+                .map_err(|_| Error::new(ID, "unavailable"))?
+                .into_iter()
+                .map(choice_value)
+                .collect();
+        }
+        let file = self.file();
+        let resolver = resolver.to_owned();
+        tokio::task::spawn_blocking(move || match resolver.as_str() {
+            "voice_models" => commands::get_model_info()
+                .into_iter()
+                .map(choice_value)
+                .collect(),
+            "installed_voices" => commands::get_speech_voices(read_strict(&file)?.language)
+                .map_err(|_| Error::new(ID, "unavailable"))?
+                .into_iter()
+                .map(choice_value)
+                .collect(),
+            _ => Err(Error::new(ID, "unavailable")),
+        })
+        .await
+        .map_err(|_| Error::new(ID, "store_failed"))?
     }
 
     fn commit(
@@ -97,4 +218,8 @@ impl Store for VoiceSettingsStore {
             .map_err(|_| Error::new(ID, "store_failed"))?
         }
     }
+}
+
+fn choice_value(value: impl serde::Serialize) -> Result<Value, Failure> {
+    serde_json::to_value(value).map_err(|_| Error::new(ID, "store_failed"))
 }

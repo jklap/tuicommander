@@ -101,7 +101,7 @@ function unescapeJsx(s: string): string {
 
 /** Element occurrences (`<h3>`, `<label>`) and `label=` props, in source order. */
 function* occurrences(src: string): Generator<{ kind: "h3" | "label"; inner: string; isProp: boolean; at: number }> {
-	const re = /<(h3|label)\b|(?<![\w-])label=/g;
+	const re = /<(h3|label)\b|<(SectionCard|DangerZone)\b|(?<![\w-])label=/g;
 	let m: RegExpExecArray | null;
 	while ((m = re.exec(src)) !== null) {
 		if (m[1]) {
@@ -111,6 +111,13 @@ function* occurrences(src: string): Generator<{ kind: "h3" | "label"; inner: str
 			if (close < 0) continue;
 			yield { kind: m[1] as "h3" | "label", inner: src.slice(open + 1, close), isProp: false, at: m.index };
 			re.lastIndex = open + 1;
+		} else if (m[2]) {
+			const open = endOfOpenTag(src, m.index);
+			if (open < 0) continue;
+			const tag = src.slice(m.index, open);
+			const title = tag.match(/\btitle=/);
+			if (title?.index !== undefined)
+				yield { kind: "h3", inner: tag.slice(title.index + "title=".length), isProp: true, at: m.index };
 		} else {
 			yield { kind: "label", inner: src.slice(m.index + "label=".length), isProp: true, at: m.index };
 		}

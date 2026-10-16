@@ -12,8 +12,8 @@ vi.mock("../../invoke", () => ({
 	listen: vi.fn().mockResolvedValue(() => {}),
 }));
 
-afterEach(() => {
-	pluginRegistry.clear();
+afterEach(async () => {
+	await pluginRegistry.clear();
 	repositoriesStore._testCancelPendingSave();
 	terminalsStore._testCancelPendingTimers();
 });

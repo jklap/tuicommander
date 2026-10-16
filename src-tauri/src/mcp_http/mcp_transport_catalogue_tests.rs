@@ -56,6 +56,8 @@ fn mcp_instructions_teach_the_answer_marker_regardless_of_other_markers() {
                 "- `💬 ` — prefix every sentence that directly answers the user's question"
             )
         );
+        assert!(instructions.contains("at row start or list-item text start (marker + space)"));
+        assert!(instructions.contains("Exclude status, tool and hook/task notices."));
     }
 }
 

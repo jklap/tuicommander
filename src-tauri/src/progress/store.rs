@@ -895,16 +895,32 @@ mod tests {
     #[test]
     fn progress_list_pty_ids_stay_bounded_with_many_ptys() {
         let (_guard, store, _dir) = isolated_store();
-        for index in 0..1704 {
-            store
-                .record_for_pty(
-                    "/p",
-                    &entry(ProgressKind::Done, &format!("event {index}")),
-                    Some(&format!("{index:08x}-0000-4000-8000-000000000000")),
+        // This tests list bounds, not per-entry durability. Seed the real database
+        // in one transaction instead of reopening, syncing and checkpointing it
+        // for each of the 1,704 terminals on the shared build machine.
+        let mut conn = store.connect().unwrap();
+        let tx = conn.transaction().unwrap();
+        {
+            let mut insert = tx
+                .prepare(
+                    "INSERT INTO entries (project, created_at_ms, kind, text, pty_id)
+                     VALUES ('/p', 1, 'done', ?1, ?2)",
                 )
                 .unwrap();
+            for index in 0..1704 {
+                insert
+                    .execute(params![
+                        format!("event {index}"),
+                        format!("{index:08x}-0000-4000-8000-000000000000"),
+                    ])
+                    .unwrap();
+            }
         }
+        tx.commit().unwrap();
+        drop(conn);
         let page = store.list("/p", &ProgressListInput::default()).unwrap();
+        assert_eq!(page.total, 1704);
+        assert_eq!(page.pty_ids.len(), PTY_IDS_LIMIT as usize);
         let wire = serde_json::to_string(&page).unwrap();
         assert!(
             wire.len() < 16384,

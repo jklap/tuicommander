@@ -54,6 +54,7 @@ import { DiffTabView, EditorTabView, MarkdownTabView, TerminalTabView } from "./
 
 export interface TabBarProps {
 	quickSwitcherActive?: boolean;
+	tabHintsActive?: boolean;
 	onTabSelect: (id: string) => void;
 	onTabClose: (id: string, skipConfirm?: boolean) => void;
 	onCloseOthers: (id: string) => void;
@@ -871,6 +872,7 @@ export const TabBar: Component<TabBarProps> = (props) => {
 									dragOverSide={dragOverSide()}
 									dragInvalid={dragInvalid()}
 									isEditing={editingId() === id}
+									tabHintsActive={Boolean(props.tabHintsActive)}
 									quickSwitcherActive={Boolean(props.quickSwitcherActive)}
 									showWorkspaceMetadata={true}
 									designModeStatus={designModeForTab(id)?.status}
@@ -961,6 +963,7 @@ export const TabBar: Component<TabBarProps> = (props) => {
 												dragOverSide={dragOverSide()}
 												dragInvalid={dragInvalid()}
 												isEditing={editingId() === id}
+												tabHintsActive={Boolean(props.tabHintsActive)}
 												quickSwitcherActive={Boolean(props.quickSwitcherActive)}
 												showWorkspaceMetadata={false}
 												designModeStatus={designModeForTab(id)?.status}

@@ -63,5 +63,8 @@ async fn observed_agent_type_change_does_not_transfer_registration() {
     assert_eq!(inbox["count"], 0);
     let requests = server.requests();
     assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].1["text"], "Nessun agent registrato");
+    assert_eq!(
+        requests[0].1["text"],
+        "No agent is listening. Ask an agent in TUICommander to register for Telegram."
+    );
 }

@@ -117,6 +117,21 @@ describe("appLogger", () => {
 		expect(consoleCall).toHaveBeenCalledExactlyOnceWith("[network]", `${level} message`);
 	});
 
+	it("mirrors repeated stall metadata instead of losing the second event to UI dedup", async () => {
+		vi.spyOn(console, "info").mockImplementation(() => {});
+		vi.spyOn(console, "warn").mockImplementation(() => {});
+		appLogger.info("app", "journal transport ready");
+		await Promise.resolve();
+		mockRpc.mockClear();
+		const message = "SLOW git.refreshBatch:/repo: 500ms (body 20ms + flush 480ms)";
+		appLogger.warn("app", message, { worktree_count: 40 });
+		appLogger.warn("app", message, { worktree_count: 41 });
+		const pushes = mockRpc.mock.calls.filter(([command]) => command === "push_log");
+		expect(pushes).toHaveLength(2);
+		expect(JSON.parse(pushes[1][1].dataJson)).toEqual({ worktree_count: 41 });
+		expect(appLogger.getEntries().filter((entry) => entry.message === message)).toHaveLength(1);
+	});
+
 	// ---- Data field ----
 
 	it("preserves optional data field", () => {

@@ -248,6 +248,7 @@ pub(crate) fn launch_args(
     let flag = match agent_type {
         "claude" => Some("--add-dir"),
         "gemini" => Some("--include-directories"),
+        "ego" => Some("--read-only-dir"),
         _ => None,
     };
     // A custom binary may be a shell or opaque wrapper, not the harness.
@@ -1093,6 +1094,22 @@ mod critic1400_tests;
 
 #[cfg(test)]
 mod attachment_grant_tests {
+    // Catches: a confined ego launch has no read-only upload grant.
+    #[test]
+    fn attachment_launch_grants_ego_read_only_directory() {
+        let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let directory = root.path().join("attachments/pty-ego");
+        let args = super::launch_args(
+            "ego",
+            "ego",
+            &["--sandbox=workspace".into()],
+            root.path(),
+            &directory,
+        );
+        assert!(args.contains(&format!("--read-only-dir={}", directory.display())));
+        assert!(args.contains(&"--sandbox=workspace".into()));
+    }
+
     // Catches: Claude/Gemini launch without the directory grant, or codex/grok get an unknown flag.
     #[test]
     fn attachment_launch_grants_only_harnesses_that_need_them() {
@@ -1102,7 +1119,7 @@ mod attachment_grant_tests {
             ("gemini", Some("--include-directories")),
             ("codex", None),
             ("grok", None),
-            ("ego", None),
+            ("ego", Some("--read-only-dir")),
         ] {
             let args = super::launch_args(
                 agent,

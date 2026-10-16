@@ -67,6 +67,7 @@ pub(super) fn now_ms() -> u64 {
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum Change {
     Token { token: String },
+    ClearToken,
     Pair,
     AddChat { chat_id: String },
     RemoveChat { chat_id: String },
@@ -80,6 +81,8 @@ pub(crate) struct Snapshot {
     bot_alias: String,
     registered_agent_name: Option<String>,
     chats: Vec<String>,
+    pairing_pending: bool,
+    recent_events: Vec<super::recent::Event>,
     connected: bool,
     polling_owner: Option<&'static str>,
     last_error: Option<String>,
@@ -190,7 +193,7 @@ pub(super) fn registration_status(paths: &Paths, name: Option<String>) {
         tracing::warn!(source="telegram", error=%error, "Telegram registration status unavailable");
     }
 }
-fn snapshot(paths: &Paths, _state: &AppState) -> Result<Snapshot, Error> {
+fn snapshot(paths: &Paths, state: &AppState) -> Result<Snapshot, Error> {
     let config = config(paths)?;
     let status: SetupState = if paths.file("status.json").exists() {
         serde_json::from_str(&super::config::private_text(&paths.file("status.json"))?)
@@ -223,6 +226,8 @@ fn snapshot(paths: &Paths, _state: &AppState) -> Result<Snapshot, Error> {
             None
         },
         chats: chats(paths)?.iter().map(ToString::to_string).collect(),
+        pairing_pending: paths.file("pairing.json").exists(),
+        recent_events: state.telegram_recent.lock().snapshot(),
         connected,
         polling_owner,
         last_error: status.last_error.clone(),
@@ -231,9 +236,18 @@ fn snapshot(paths: &Paths, _state: &AppState) -> Result<Snapshot, Error> {
 }
 
 pub(crate) async fn change(state: &Arc<AppState>, change: Change) -> Result<Value, Error> {
-    change_at(state, paths()?, change).await
+    let _ = state;
+    change_owner(paths()?, change).await
 }
-async fn change_at(_state: &Arc<AppState>, paths: Paths, change: Change) -> Result<Value, Error> {
+pub(crate) async fn change_owner(paths: Paths, change: Change) -> Result<Value, Error> {
+    change_owner_with_phase(paths, change, &mut false).await
+}
+
+pub(crate) async fn change_owner_with_phase(
+    paths: Paths,
+    change: Change,
+    persisted: &mut bool,
+) -> Result<Value, Error> {
     // Cross-process serialization prevents a desktop save racing daemon pairing.
     ensure_directory(&paths)?;
     let lock = super::config::private_open(&paths.file("setup.lock"), true)?;
@@ -251,6 +265,7 @@ async fn change_at(_state: &Arc<AppState>, paths: Paths, change: Change) -> Resu
         {
             let _guard = STATE.lock().map_err(|_| Error::State)?;
             write(&paths, "bot.token", token.as_bytes())?;
+            *persisted = true;
         }
         let bot = match super::BotApi::new(paths.clone())?
             .request("getMe", json!({}))
@@ -277,6 +292,18 @@ async fn change_at(_state: &Arc<AppState>, paths: Paths, change: Change) -> Resu
     }
     let setup = STATE.lock().map_err(|_| Error::State)?;
     match change {
+        Change::ClearToken => {
+            // Validate the private file before unlinking; never follow a symlink.
+            match std::fs::symlink_metadata(paths.file("bot.token")) {
+                Ok(_) => {
+                    super::config::private_open(&paths.file("bot.token"), false)?;
+                    std::fs::remove_file(paths.file("bot.token"))
+                        .map_err(|_| Error::PrivateFile)?;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(_) => return Err(Error::PrivateFile),
+            }
+        }
         Change::Pair => {
             let code: String = uuid::Uuid::new_v4().simple().to_string()[..6].to_ascii_uppercase();
             let pairing = Pairing {
@@ -357,27 +384,54 @@ pub(crate) fn update_config<R, E>(
     })
 }
 
-/// Consume the credential before parsing ordinary mail: it never reaches an agent.
-pub(super) fn pair_update(paths: &Paths, value: &Value, now: u64) -> Result<bool, Error> {
+/// Fixed setup replies are the only outbound messages allowed before authorization.
+#[derive(Clone, Copy)]
+pub(crate) enum SetupReply {
+    Linked,
+    Start,
+    InvalidCode,
+}
+impl SetupReply {
+    pub(super) fn text(self) -> &'static str {
+        match self {
+            Self::Linked => "Chat linked.",
+            Self::Start => "Use Link chat in TUICommander Settings, then send the code here.",
+            Self::InvalidCode => {
+                "Invalid or expired code. Use Link chat in TUICommander Settings for a new code."
+            }
+        }
+    }
+}
+
+/// Consume setup inputs before ordinary mail: credentials never reach an agent.
+pub(super) fn pair_update(
+    paths: &Paths,
+    value: &Value,
+    now: u64,
+) -> Result<Option<(i64, SetupReply)>, Error> {
     let message = &value["message"];
     let Some(text) = message["text"].as_str() else {
-        return Ok(false);
+        return Ok(None);
     };
-    if text == "/start" {
-        return Ok(true);
-    }
     let Some(id) = message["chat"]["id"].as_i64().filter(|id| *id > 0) else {
-        return Ok(false);
+        return Ok(None);
     };
     if message["chat"]["type"] != "private" {
-        return Ok(false);
+        return Ok(None);
     }
-    if !paths.file("pairing.json").exists() {
-        return Ok(false);
+    if text == "/start" {
+        return Ok(Some((id, SetupReply::Start)));
+    }
+    if text.len() != 6 || !text.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Ok(None);
     }
     let lock = super::config::private_open(&paths.file("setup.lock"), true)?;
     lock.try_lock().map_err(|_| Error::AlreadyOwned)?;
-    pair(paths, text, id, now)
+    if pair(paths, text, id, now)? {
+        return Ok(Some((id, SetupReply::Linked)));
+    }
+    // Ordinary code-shaped text from an authorized chat remains agent mail.
+    Ok((!chats(paths)?.contains(&id)).then_some((id, SetupReply::InvalidCode)))
 }
 fn pair(paths: &Paths, text: &str, id: i64, now: u64) -> Result<bool, Error> {
     if !paths.file("pairing.json").exists() {
@@ -420,3 +474,24 @@ pub(crate) fn read(state: &AppState) -> Result<Snapshot, Error> {
 #[cfg(test)]
 #[path = "settings_tests.rs"]
 mod tests;
+
+/// Settings readback uses the same private-file readers as setup, without exposing credentials.
+pub(crate) fn owner_read(paths: &Paths) -> Result<Value, Error> {
+    let token_set = match std::fs::symlink_metadata(paths.file("bot.token")) {
+        Ok(_) => {
+            super::config::private_open(&paths.file("bot.token"), false)?;
+            true
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(_) => return Err(Error::PrivateFile),
+    };
+    Ok(
+        json!({"token":{"status":if token_set {"set"} else {"unset"}},
+        "chats":chats(paths)?.iter().map(ToString::to_string).collect::<Vec<_>>()}),
+    )
+}
+
+#[cfg(test)]
+async fn change_at(_state: &Arc<AppState>, paths: Paths, change: Change) -> Result<Value, Error> {
+    change_owner(paths, change).await
+}

@@ -691,7 +691,9 @@ When intent markers are enabled for the connecting agent, initialize instruction
 
 Initialize instruction prose stays within the existing 1,600-byte classic and
 1,664-byte collapsed empty-state budgets. Compact wording preserves the answer
-marker, urgent mail and progress reporting rules.
+marker, urgent mail and progress reporting rules. The answer marker can start a
+row or the text of a Markdown list item; status, tool and hook/task notices stay
+excluded.
 
 TUIC supplies protocol instructions and tool descriptions on different wire
 surfaces. Client receipt does not prove that the model can read either surface
@@ -2104,7 +2106,7 @@ replay horizon, not unbounded or restart-persistent exactly-once delivery.
 
 ## Telegram adapter groundwork
 
-The headless `telegram` tool exposes `register`, `unregister`, `begin`, `activity`, `finish` and `send` through the normal MCP registry and dispatch. Registration uses the caller's MCP-bound TUIC identity, replaces the previous agent with one native mail and is never persisted. MCP session end, PTY close or foreground-agent exit retires it. Other callers must register before outbound actions. Authorized text with no agent gets "Nessun agent registrato" and is dropped; strangers stay silent. Native stable-ID inbox/wake delivery remains authoritative. See [the Telegram design](../design/telegram-channel.md).
+The headless `telegram` tool exposes `register`, `unregister`, `begin`, `activity`, `finish` and `send` through the normal MCP registry and dispatch. Registration uses the caller's MCP-bound TUIC identity, replaces the previous agent with one native mail and is never persisted. MCP session end, PTY close or foreground-agent exit retires it. Other callers must register before outbound actions. Authorized text with no agent gets "No agent is listening. Ask an agent in TUICommander to register for Telegram." and is dropped; strangers stay silent. Native stable-ID inbox/wake delivery remains authoritative. See [the Telegram design](../design/telegram-channel.md).
 
 Native remote health, authentication, session-list, and SSE clients strip request URLs from reqwest errors before publishing them. Token-authenticated native HTTP requests send the existing `tui-session` cookie header rather than a query token; browser WebSocket query authentication is unchanged.
 
@@ -2234,17 +2236,22 @@ HTTP route or IPC command. Its reads and results contain credential presence onl
 `settings::ego::EgoSettingsStore` targets `profile` with the configured profile ID,
 or `machine` for the user base. It captures trusted executable, workspace and
 profile together per operation, clears ambient `EGO_PROFILE`, and invokes only
-`config ls/set/unset`, `models --json` without refresh, and `auth status`.
+`config capabilities/snapshot/batch`, `models --json` without refresh, and `auth status`.
 The model slug selects the provider. Managed DTOs discard unknown owner fields;
 credential type/expiry and process diagnostics never enter settings replies,
 effects or audit data. Credentials are read-only set/unset markers.
 
-Each managed key is one atomic leaf. Null/reset invokes owner `unset`; explicit
-`roots: []` invokes `set roots=[]`. The managed keys are `model`, `roots` and
-`network`; Ego itself enforces its scope rules. A patch changing multiple keys is rejected before any write because
-Ego's CLI has no atomic batch operation. The adapter checks latest revisions and
-serializes its own mutations, but an external CLI writer can race the read/write
-boundary; the owner-gap ledger records the missing conditional-write API. Failed
+Managed keys (`model`, `roots`, `network`, `exec_paths`) are atomic leaves.
+Null/reset sends an owner unset; explicit empty arrays stay explicit. A patch is
+one `config batch --if-revision` against the opaque revision from `config snapshot`.
+This protects against external CLI writers as well as host requests. Atomicity is
+limited to the selected Ego user document, never other settings stores. Owners
+without advertised atomic batch and compare-and-swap support fail closed.
+Base-only provider headers and credential commands have typed write-only auth
+actions (`EgoAuthAction`) and presence-only catalogue fields. Auth actions always
+select the base owner, independent of the launch profile. Profile-target reads
+of these machine-owned auth paths return `not_found`, not a false unset status. No read executes a
+credential command or attempts to recover an owner-redacted value. Failed
 readback after a successful write reports `persisted: true` and `nextAction: get`.
 
 Launch defaults (`ego_executable`, `ego_profile`, `ai_chat_workspace`) stay in the
@@ -2253,10 +2260,6 @@ transport registration and executable confirmation belong to later plan steps.
 The Providers tab shows the base model when the configured profile has none, as
 Ego resolves it, and creates a missing AI Chat workspace like ACP does. Existing Ego IPC/HTTP commands retain
 identical shapes; model reads/writes now honor configured profile/workspace.
-
-`exec_paths`, `auth.PROVIDER.headers` and `credential_command` remain owner gaps:
-isolated installed-Ego probes returned exit 2 (`unknown config key`). No editor or
-raw-file fallback is used. Credentials are never read from `auth.json`.
 
 Tasks brief preparation uses `POST /tasks/start-work-prompt`, the HTTP twin of
 `build_start_work_prompt`. Both accept `repoPath` and `input` with key, nullable
@@ -2335,3 +2338,10 @@ No live write or desktop-load verification is implied by recorded-fixture tests.
 `settings` replaces the removed MCP `config` tool without an alias. Its schema is generated from Rust action DTOs. `settings_action(request)` and `POST /settings/action` use the same envelope and owner services. Describe has optional area/store/id filters and cursor pagination (1–128 fields). Reads and edits use an explicit target; edits require expectedRevision. Prompts remain available through the stable-ID `prompts` store. GitHub typed workflows use perform with store github_accounts. Explicit refresh for ego refreshes the configured owner's provider catalogue; describe never performs a network refresh.
 
 MCP access requires settings_mcp_enabled, enabled only by trusted UI; legacy config enablement grants no settings authority. MCP mutations remain loopback-only. HTTP retains local-or-authenticated access and IPC retains native host trust. Exposure proposals use ui confirm proposalId and an exact replay with approval. Secrets remain write-only. Owner transactions and perform remain unavailable while the native inventory gap ledger is nonempty; describe reports inventoryComplete.
+
+`session action=force_retry` is a blocking, localhost-only terminal control.
+It resolves the normal session address, requires a live ego recovery snapshot
+and an empty tracked composer, serializes input and submits `/retry` once via
+the standard agent writer. It does not queue or attach ACP. Remote-qualified MCP
+session control remains limited to the existing supported remote actions; the
+browser status-bar control uses its owning daemon's normal PTY write transport.

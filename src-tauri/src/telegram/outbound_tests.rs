@@ -151,6 +151,7 @@ pub(in crate::telegram) async fn runtime(
         crate::telegram::runtime::Runtime::new(state, config, paths.clone(), "adapter-mcp".into())
             .unwrap();
     runtime.outbound = Outbound::new(paths.clone(), BotApi::loopback(paths, address));
+    runtime.outbound.recent = runtime.state.telegram_recent.clone();
     runtime
         .tool(
             PEER,

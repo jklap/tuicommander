@@ -604,3 +604,55 @@
   color: var(--error);
   font-size: 13px;
 }
+
+/* Settings restyle: local presentation only; context owns the edited machine. */
+.page { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.machineScope { min-width: 0; }
+.agentHeader { padding: 16px; align-items: center; }
+.agentName { font-size: 13px; }
+.agentExpanded { padding: 16px; }
+.badge, .defaultBadge, .envBadge { font-family: var(--font-ui); font-size: 11px; border: 1px solid var(--border); border-radius: 999px; text-transform: none; letter-spacing: normal; line-height: 18px; }
+.agentVersion { font-family: var(--font-ui); font-size: 11px; color: var(--fg-secondary); border: 1px solid var(--border); border-radius: 999px; padding: 1px 6px; }
+.expandedLabel, .envVarsLabel { font-size: 13px; color: var(--fg-primary); text-transform: none; letter-spacing: normal; }
+.expandedSection { margin-bottom: 16px; }
+.expandedSection > label:not(.toggleRow) { display: block; margin: 8px 0; font-size: 13px; font-weight: 600; }
+.configRow { padding: 12px; flex-wrap: wrap; gap: 8px; }
+.configName { font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+.configCommand { color: var(--fg-secondary); flex-basis: 180px; }
+.addConfigForm, .envEditPanel { padding: 16px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-secondary); }
+.editorTitle { display: block; font-size: 13px; margin-bottom: 12px; }
+.formRow { margin-bottom: 12px; flex-wrap: wrap; }
+.formInput { min-width: 0; }
+.smallBtn, .actionBtn { min-height: 32px; padding: 5px 10px; }
+.envVarsHeader { margin-bottom: 8px; gap: 8px; }
+.envVarsList { gap: 8px; }
+@media (max-width: 600px) {
+ .agentHeader, .agentExpanded, .addConfigForm, .envEditPanel { padding: 12px; }
+ .configActions { width: 100%; flex-wrap: wrap; }
+ .configCommand { flex-basis: 100%; }
+ .envFlagRow { flex-wrap: wrap; }
+ .envFlagDesc { white-space: normal; flex-basis: 100%; }
+ .envVarRow { flex-wrap: wrap; }
+ .envVarKey { flex: 1 1 35%; }
+}
+
+.cleanupCard { border: 1px solid var(--error); border-radius: 8px; padding: 16px; }
+
+.permissionRows { display: grid; grid-template-columns: minmax(0, 1fr) minmax(160px, 260px); align-items: center; gap: 16px; }
+.permissionRows > label { font-size: 13px; font-weight: 600; color: var(--fg-primary); }
+.permissionRows > p { grid-column: 1 / -1; }
+@media (max-width: 600px) { .permissionRows { grid-template-columns: 1fr; gap: 8px; } }
+
+.fieldRow { display: grid; grid-template-columns: minmax(0, 1fr) minmax(160px, 260px); align-items: center; gap: 16px; padding: 12px 0; }
+.fieldRow > label, .editorFieldLabel { font-size: 13px; font-weight: 600; color: var(--fg-primary); }
+.editorFieldLabel { flex-basis: 100%; }
+@media (max-width: 600px) { .fieldRow { grid-template-columns: 1fr; gap: 8px; } }
+
+.agentExpanded textarea { background: var(--bg-tertiary); color: var(--fg-primary); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 8px; font-family: var(--font-mono); }
+.page textarea { background: var(--bg-tertiary); color: var(--fg-primary); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 8px; }
+.minutesControl { display: flex; align-items: center; gap: 8px; }
+.minutesControl input { max-width: 96px; }
+.rowSwitch { appearance: none; width: 32px; height: 18px; border: 1px solid var(--border); border-radius: 999px; background: var(--bg-highlight); position: relative; cursor: pointer; }
+.rowSwitch::after { content: ""; position: absolute; width: 12px; height: 12px; left: 2px; top: 2px; border-radius: 50%; background: var(--fg-secondary); }
+.rowSwitch:checked { background: var(--accent); border-color: var(--accent); }
+.rowSwitch:checked::after { left: 16px; background: var(--text-on-accent); }
