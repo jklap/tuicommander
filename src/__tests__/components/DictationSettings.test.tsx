@@ -774,6 +774,7 @@ describe("DictationSettings – layout", () => {
 		expect(headings).toEqual([
 			"Dictation",
 			"Speech recognition",
+			"Speech assets",
 			"Auto-Corrections",
 			"Hands-free conversation",
 			"Spoken replies",
@@ -796,16 +797,11 @@ describe("DictationSettings – layout", () => {
 			},
 		];
 		const owner = sectionOf(render(() => <DictationSettings />).container);
-		for (const label of [
-			"Input device",
-			"Whisper Model",
-			"Language",
-			"Voice tuning",
-			"Level gate",
-			"Speech confidence gate",
-		]) {
+		for (const label of ["Input device", "Language", "Level gate", "Speech confidence gate"]) {
 			expect(owner[label]).toBe("Speech recognition");
 		}
+		expect(owner["Whisper Model"]).toBe("Speech assets");
+		expect(owner["Voice tuning"]).toBe("Speech assets");
 		expect(owner.Voice).toBe("Spoken replies");
 	});
 

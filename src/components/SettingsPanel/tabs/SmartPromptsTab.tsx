@@ -682,7 +682,7 @@ export const SmartPromptsTab: Component = () => {
 				title="Smart Prompts"
 				description="Configure reusable actions and their execution behavior."
 				scope="Application"
-				breadcrumb="Voice / Smart Prompts"
+				breadcrumb="AI / Smart Prompts"
 			/>
 			<SectionCard title="Background agent">
 				<p class={s.hint} style={{ "margin-bottom": "16px" }}>
