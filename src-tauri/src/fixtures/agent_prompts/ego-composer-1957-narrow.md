@@ -1,7 +1,7 @@
 # Real ego narrow composer capture (1957-38c1)
 
 Source: a second isolated real ego 0.1.0 macOS PTY recording on 2026-10-16.
-Capture SHA-256: `18f3a0c2f743c239cf2d59bbadf287347dccda925e9840e2a1adcc4c8841f3a3`.
+Capture SHA-256: `0773a738b3eeb72f13db0cb4f3e723e395ff8b0dbb9e592eea9991bee9c6bde3`.
 Producer SHA-256: `fcc5ccccd8afe2b4383132c633775f554fddcd5d34cee6fb51a89d3a7432006c`.
 
 The source binary, argv, isolated environment, loopback provider stub, input
