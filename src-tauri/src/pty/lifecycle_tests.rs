@@ -3232,3 +3232,261 @@ fn attachment_natural_exit_cleans_files_before_tombstone_expiry() {
     assert!(!ended.exists());
     assert_eq!(std::fs::read(live.join("fresh.txt")).unwrap(), b"live");
 }
+
+/// An owned interactive shell and its foreground child, not a fabricated pgid.
+#[cfg(unix)]
+struct StandbyJobPty {
+    state: Arc<crate::AppState>,
+    output: std::sync::mpsc::Receiver<String>,
+    shell: i32,
+    job: i32,
+}
+
+#[cfg(unix)]
+impl StandbyJobPty {
+    fn new() -> Self {
+        use std::io::Read;
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let pair = native_pty_system().openpty(probe_size()).unwrap();
+        let mut cmd = CommandBuilder::new("/bin/bash");
+        cmd.args(["--noprofile", "--norc", "-i"]);
+        cmd.env("PS1", "STANDBY_SHELL> ");
+        let child = pair.slave.spawn_command(cmd).unwrap();
+        let shell = child.process_id().unwrap() as i32;
+        let mut reader = pair.master.try_clone_reader().unwrap();
+        let writer = pair.master.take_writer().unwrap();
+        let (tx, output) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut bytes = [0; 4096];
+            while let Ok(n) = reader.read(&mut bytes) {
+                if n == 0
+                    || tx
+                        .send(String::from_utf8_lossy(&bytes[..n]).into_owned())
+                        .is_err()
+                {
+                    break;
+                }
+            }
+        });
+        state.session_maps.sessions.insert(
+            "standby-job".into(),
+            Mutex::new(PtySession {
+                launch_receipt: None,
+                writer: Arc::new(Mutex::new(writer)),
+                master: pair.master,
+                _child: child,
+                paused: Arc::new(AtomicBool::new(false)),
+                worktree: None,
+                initial_cwd: None,
+                cwd: None,
+                display_name: None,
+                display_name_is_custom: false,
+                display_name_from_spawn: false,
+                is_remote: false,
+                shell: "/bin/bash".into(),
+            }),
+        );
+        seed_vt_grid(&state, "standby-job", 24, 80);
+        let mut fixture = Self {
+            state,
+            output,
+            shell,
+            job: 0,
+        };
+        fixture.until("STANDBY_SHELL> ");
+        fixture.state.write_pty_parts("standby-job", &[b"/bin/sh -c 'printf \"JOB_READY:%s\\n\" \"$$\"; read answer; printf \"JOB_ANSWER:%s\\n\" \"$answer\"'\n"]).unwrap();
+        // Read the real child's PID, excluding the echoed command above.
+        let ready = fixture.until("\r\nJOB_READY:");
+        let mut tail = ready.split("\r\nJOB_READY:").last().unwrap().to_string();
+        while !tail.contains('\n') {
+            tail.push_str(
+                &fixture
+                    .output
+                    .recv_timeout(std::time::Duration::from_secs(120))
+                    .unwrap(),
+            );
+        }
+        fixture.job = tail.trim().parse().unwrap();
+        assert_eq!(fixture.foreground(), fixture.job);
+        fixture
+    }
+
+    fn until(&self, marker: &str) -> String {
+        let mut text = String::new();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+        loop {
+            text.push_str(
+                &self
+                    .output
+                    .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+                    .expect("PTY setup/output must arrive"),
+            );
+            if text.contains(marker) {
+                return text;
+            }
+        }
+    }
+
+    fn foreground(&self) -> i32 {
+        self.state
+            .session_maps
+            .sessions
+            .get("standby-job")
+            .unwrap()
+            .lock()
+            .master
+            .process_group_leader()
+            .unwrap()
+    }
+}
+
+#[cfg(unix)]
+impl Drop for StandbyJobPty {
+    fn drop(&mut self) {
+        if self.job > 1 {
+            unsafe {
+                libc::kill(-self.job, libc::SIGKILL);
+            }
+        }
+        let _ = wake_session(&self.state, "standby-job");
+        close_pty_core(&self.state, "standby-job", false);
+    }
+}
+
+// Catches: SIGSTOP hands the terminal to bash and wake SIGCONTs bash, stranding its child.
+#[cfg(unix)]
+#[test]
+fn standby_job_control_wake_keeps_child_runnable_and_foreground() {
+    let fixture = StandbyJobPty::new();
+    let stopped = standby_session(&fixture.state, "standby-job").unwrap();
+    if stopped {
+        // Observe actual shell takeover before waking, rather than racing SIGCHLD.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while fixture.foreground() != fixture.shell {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "shell never reclaimed stopped job's terminal"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+    wake_session(&fixture.state, "standby-job").unwrap();
+    assert_eq!(
+        fixture.foreground(),
+        fixture.job,
+        "wake left the shell foreground and its child stopped"
+    );
+    fixture
+        .state
+        .write_pty_parts("standby-job", &[b"ping\n"])
+        .unwrap();
+    fixture.until("JOB_ANSWER:ping");
+}
+
+// Catches: remote reads/typing leave the idle clock stale after observation ends.
+#[cfg(unix)]
+#[tokio::test]
+async fn standby_job_control_remote_activity_prevents_stop_after_disconnect() {
+    use tower::ServiceExt;
+    let mut results = Vec::new();
+    for viewing in [false, true] {
+        let fixture = StandbyJobPty::new();
+        fixture.state.config.write().standby_timeout_minutes = 5;
+        // Finish the foreground job so this case tests activity, not the job-control guard.
+        fixture
+            .state
+            .write_pty_parts("standby-job", &[b"done\n"])
+            .unwrap();
+        fixture.until("STANDBY_SHELL> ");
+        assert_eq!(fixture.foreground(), fixture.shell);
+        let request = if viewing {
+            axum::http::Request::builder()
+                .uri("/sessions/standby-job/output?format=log")
+                .body(axum::body::Body::empty())
+                .unwrap()
+        } else {
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/sessions/standby-job/write")
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from(r#"{"data":" "}"#))
+                .unwrap()
+        };
+        let response = crate::mcp_http::build_router(fixture.state.clone(), false, true)
+            .oneshot(request)
+            .await
+            .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        drop(response);
+        results.push((viewing, standby_session(&fixture.state, "standby-job")));
+    }
+    assert_eq!(
+        results,
+        vec![(false, Ok(false)), (true, Ok(false))],
+        "recent remote input and output viewing must each block standby"
+    );
+}
+
+// Catches: direct-launch standby loses its exact pgid or cannot restore a usable prompt.
+#[cfg(unix)]
+#[test]
+fn standby_direct_child_records_group_and_wakes_prompt() {
+    let fixture = StandbyJobPty::new();
+    fixture
+        .state
+        .write_pty_parts("standby-job", &[b"done\n"])
+        .unwrap();
+    fixture.until("STANDBY_SHELL> ");
+    assert_eq!(standby_session(&fixture.state, "standby-job"), Ok(true));
+    assert_eq!(
+        *fixture
+            .state
+            .session_maps
+            .standby_sessions
+            .get("standby-job")
+            .unwrap(),
+        fixture.shell
+    );
+    assert_eq!(wake_session(&fixture.state, "standby-job"), Ok(true));
+    assert_eq!(wake_session(&fixture.state, "standby-job"), Ok(false));
+    fixture
+        .state
+        .write_pty_parts("standby-job", &[b"printf 'DIRECT_ALIVE\\n'\n"])
+        .unwrap();
+    let output = fixture.until("STANDBY_SHELL> ");
+    assert!(
+        output.contains("\r\nDIRECT_ALIVE\r\n"),
+        "woken shell did not execute input: {output}"
+    );
+    assert!(
+        !output.contains("Stopped") && !output.contains("suspended"),
+        "wake left job-control suspension output: {output}"
+    );
+}
+
+// Catches: dropping the last remote observer immediately re-enables SIGSTOP.
+#[cfg(unix)]
+#[test]
+fn standby_observer_disconnect_retains_timeout_grace() {
+    let fixture = StandbyJobPty::new();
+    fixture.state.config.write().standby_timeout_minutes = 5;
+    fixture
+        .state
+        .write_pty_parts("standby-job", &[b"done\n"])
+        .unwrap();
+    fixture.until("STANDBY_SHELL> ");
+    for id in [Some("standby-job".to_string()), None] {
+        let watch = crate::background_mode::hidden::RemoteWatch::new(fixture.state.clone(), id);
+        assert_eq!(standby_session(&fixture.state, "standby-job"), Ok(false));
+        drop(watch);
+        assert!(
+            !*fixture
+                .state
+                .session_maps
+                .session_visibility
+                .get("standby-job")
+                .unwrap()
+        );
+        assert_eq!(standby_session(&fixture.state, "standby-job"), Ok(false));
+    }
+}

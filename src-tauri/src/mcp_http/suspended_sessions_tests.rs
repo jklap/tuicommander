@@ -470,7 +470,10 @@ async fn standby_session_wakes_through_the_same_entry_point() {
         .unwrap();
     // SAFETY: the process group belongs exclusively to this test's shell fixture.
     assert_eq!(unsafe { libc::kill(-pgid, libc::SIGSTOP) }, 0);
-    state.session_maps.standby_sessions.insert(sid.clone(), 1);
+    state
+        .session_maps
+        .standby_sessions
+        .insert(sid.clone(), pgid);
     let result = crate::session_wake::ensure_live(&state, &sid);
     let parked = state.session_maps.standby_sessions.contains_key(&sid);
     let count = state.session_maps.sessions.len();

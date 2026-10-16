@@ -930,8 +930,19 @@ The standby final eligibility check shares the visibility lock with observer
 attach: a client either prevents SIGSTOP or wakes the already parked process.
 The final check also reads current session visibility under that lock, so Show
 invalidates a standby tick selected while the desktop was hidden.
-Disconnect releases only that observer. Showing the desktop restores saved
-visibility and SIGCONTs only terminals that are visible again.
+Disconnect releases only that observer and starts a full standby-timeout grace
+window. HTTP output reads and input also reset remote activity and wake a parked
+session under the same visibility lock. Recent user input blocks standby even if
+the parsed shell idle timestamp is older. These activity clocks do not change the
+agent's semantic busy/idle state. Showing the desktop restores saved visibility
+and SIGCONTs only terminals that are visible again.
+
+Standby only stops a foreground group whose pgid equals the PTY child's PID.
+An agent launched as a separate foreground job under an interactive shell stays
+running: SIGSTOP would let the shell reclaim the terminal, and SIGCONT cannot
+restore the job's foreground ownership. Eligible groups are recorded by exact
+pgid in `standby_sessions`; wake never recomputes the current foreground group.
+A failed SIGCONT retains the record for retry.
 
 
 ### Rust-owned suspended tabs
