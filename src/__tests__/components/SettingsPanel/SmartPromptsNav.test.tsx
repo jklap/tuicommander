@@ -104,7 +104,7 @@ describe("SettingsPanel — Smart Prompts navigation", () => {
 		const { container } = render(() => <SettingsPanel visible={true} onClose={() => {}} />);
 		clickNav(container, "Smart Prompts");
 
-		const heading = container.querySelector(".section h3");
+		const heading = container.querySelector(".section h2");
 		expect(heading?.textContent).toBe("Smart Prompts");
 		expect(container.textContent).toContain("Test Smart Prompt");
 	});
@@ -113,7 +113,7 @@ describe("SettingsPanel — Smart Prompts navigation", () => {
 		const { container } = render(() => <SettingsPanel visible={true} onClose={() => {}} initialTab="smart-prompts" />);
 		const active = container.querySelector(".navItem.active");
 		expect(active?.textContent).toBe("Smart Prompts");
-		expect(container.querySelector(".section h3")?.textContent).toBe("Smart Prompts");
+		expect(container.querySelector(".section h2")?.textContent).toBe("Smart Prompts");
 	});
 
 	it("exposes editable Execution Mode and Auto-execute controls in the expanded editor", () => {

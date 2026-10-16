@@ -192,6 +192,8 @@ function platformSpans(src: string): { start: number; end: number; platform: Cli
 }
 
 export function extractTab(src: string): ExtractedTab {
+	// Contextual explanations contain no controls and repeat the row identity only for lookup.
+	src = src.replace(/<ContextualHelp\b[^>]*\/>/g, "");
 	const out: ExtractedTab = { sections: [], settings: [], dynamic: 0 };
 	const spans = expertSpans(src);
 	const expertKeyAt = (at: number) => spans.find((span) => at > span.start && at < span.end)?.configKey;
@@ -242,7 +244,7 @@ export function extractRenderedTabComponents(src: string): Record<string, string
 		const open = endOfOpenTag(src, m.index);
 		if (open < 0) continue;
 		const body = src.slice(open + 1, closeOfShow(src, open));
-		out[m[1]] = [...body.matchAll(/<([A-Z]\w*)\b/g)].map((c) => c[1]);
+		out[m[1]] = [...body.matchAll(/<([A-Z]\w*)\b/g)].map((c) => c[1]).filter((name) => name !== "SettingsHelpScope");
 	}
 	return out;
 }

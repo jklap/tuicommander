@@ -555,6 +555,36 @@ An empty device list means enumeration succeeded with no devices. If the audio b
 
 Settings uses one bounded, responsive shell across pages, with independently scrolling navigation and content. The panel is at most 1136px wide and retains its size when you select another page. Saved navigation width remains in use. Shared presentation components support consistent cards, label/control rows, source-aware status, empty states and scoped destructive actions as pages adopt the approved restyle. Save behavior and configuration ownership do not change.
 
+### Task-based settings presentation
+
+AI Chat groups new-run defaults into **Agent and model**, **Workspace access**,
+**Network and sandbox**, and closed **Advanced and diagnostics**. The executable,
+profile, and workspace remain owned by TUICommander in General. Model and access
+values remain owned by ego; these controls do not change running conversations.
+
+Voice uses separate task cards for dictation, recognition, corrections,
+hands-free conversations, and spoken replies. Smart Prompts retains categorized
+prompt editors and the existing execution controls. Integration pages use local
+connection, access, and service cards. Remote token regeneration requires a scoped
+confirmation because it disconnects active remote sessions.
+
+The plugin manager retains lazy Installed/Browse views. A loaded plugin's settings
+page identifies its plugin source and uses schema-driven controls; saved credentials
+are not evidence of a live connection. Existing explicit-save and automatic-save
+boundaries still apply to each page.
+
+Loaded plugins with described settings appear in a separate **Plugin settings**
+navigation group with a plug icon. The manager offers **Settings** only when the
+loaded catalogue provides a page. That action opens the same scoped page as the
+navigation entry; it does not create a second settings service.
+
+AI Chat groups provider details in **Other providers and available models**. Workspace access shows the effective folders first. **Add folder** and **Edit** reveal the existing ego roots draft; **Save roots in ego** keeps its explicit save boundary. The network selector writes through ego. **How to verify** explains command-isolation evidence without running a probe.
+
+Voice keeps downloadable models and voice management in **Speech assets**. Remote Access separates connection status, Tailscale HTTPS and token revocation. Plugin rows keep secondary controls in **Manage plugin**; plugin pages identify their source and plugin-owned scope.
 Native MCP tool help stays anchored during status refreshes. Focus a `?` badge
 with the keyboard or hover over it to read the full tool description. Help
 placement follows panel scrolling, window resizing, and description size changes.
+
+### Contextual explanations
+
+Selected settings show a `?` only when the approved explanation adds decision guidance, requirements, consequences or owner-dependent defaults. Hover or focus the badge to read it. Click or press Enter/Space to pin it; click again, press Escape or click outside to dismiss it. Help does not save a setting, contact a service or run a sandbox probe. Long help scrolls inside the viewport and follows panel scroll/resize. Native MCP help retains tool-name identity while descriptions update during status polls (1928-e282).

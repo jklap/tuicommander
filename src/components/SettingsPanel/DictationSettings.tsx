@@ -14,10 +14,12 @@ import { KeyComboCapture } from "../shared/KeyComboCapture";
 import { Input } from "../ui/Input";
 import { Select } from "../ui/Select";
 import { Textarea } from "../ui/Textarea";
+import { ContextualHelp } from "./ContextualHelp";
 import d from "./DictationSettings.module.css";
 import { ExpertSetting } from "./ExpertSetting";
 import { SettingSlider } from "./SettingFields";
 import s from "./Settings.module.css";
+import { SectionCard, SettingPageHeader, SettingRow } from "./SettingsPrimitives";
 
 /**
  * Mirrors `audio.rs`: `meter_level = sqrt(rms * 20)`.
@@ -180,149 +182,166 @@ export const DictationSettings: Component = () => {
 	// h3 heading — see `SpeechRecognition` for why that matters.
 	return (
 		<div class={s.section}>
-			<h3>{t("dictation.heading.dictation", "Dictation")}</h3>
-
-			<Show when={dictationStore.state.ownedElsewhere}>
-				<p class={s.hint}>
-					{t(
-						"dictation.ownedElsewhere",
-						"Dictation is owned by another TUICommander instance on this configuration. Use it there; this instance does not register the global hotkey, watch the Fn key or open the microphone. Restart this instance after the other one quits to take dictation over.",
-					)}
-				</p>
-			</Show>
-
-			<div class={s.group}>
-				<label>{t("dictation.enableLabel", "Enable Dictation")}</label>
-				<div class={s.toggle}>
-					<input
-						type="checkbox"
-						checked={dictationStore.state.enabled}
-						onChange={(e) => dictationStore.setEnabled(e.currentTarget.checked)}
-					/>
-					<span>{t("dictation.enableHint", "Enable voice-to-text dictation")}</span>
-				</div>
-			</div>
-
-			{/* Hotkey — a global hotkey belongs to the machine running
-			    TUICommander, so a browser tab has none to configure. */}
-			<Show when={isTauri()}>
-				<div class={s.group}>
-					<label>{t("dictation.hotkeyLabel", "Hotkey")}</label>
-					<div class={d.hotkeyRow}>
-						<KeyComboCapture
-							value={dictationStore.state.hotkey}
-							onChange={(combo) => dictationStore.setHotkey(combo)}
-							placeholder={t("dictation.hotkeyPlaceholder", "Press a key combination...")}
-							onCapturingChange={(capturing) => dictationStore.setCapturingHotkey(capturing)}
-						/>
-					</div>
+			<SettingPageHeader
+				title="Voice"
+				description="Dictation, speech recognition and spoken conversations on this machine."
+				scope="This machine"
+				breadcrumb="AI / Voice"
+			/>
+			<SectionCard title={t("dictation.heading.dictation", "Dictation")}>
+				<Show when={dictationStore.state.ownedElsewhere}>
 					<p class={s.hint}>
 						{t(
+							"dictation.ownedElsewhere",
+							"Dictation is owned by another TUICommander instance on this configuration. Use it there; this instance does not register the global hotkey, watch the Fn key or open the microphone. Restart this instance after the other one quits to take dictation over.",
+						)}
+					</p>
+				</Show>
+
+				<SettingRow
+					label={t("dictation.enableLabel", "Enable Dictation")}
+					hint={t("dictation.enableHint", "Enable voice-to-text dictation")}
+				>
+					{(id, descriptionId) => (
+						<input
+							id={id}
+							aria-describedby={descriptionId()}
+							class={s.rowSwitch}
+							type="checkbox"
+							checked={dictationStore.state.enabled}
+							onChange={(e) => dictationStore.setEnabled(e.currentTarget.checked)}
+						/>
+					)}
+				</SettingRow>
+
+				{/* Hotkey — a global hotkey belongs to the machine running
+			    TUICommander, so a browser tab has none to configure. */}
+				<Show when={isTauri()}>
+					<SettingRow
+						label={t("dictation.hotkeyLabel", "Hotkey")}
+						hint={t(
 							"dictation.hotkeyHint",
 							"Hold the hotkey to start recording, release to stop. Short presses pass through as normal input.",
 						)}
-					</p>
-				</div>
-
-				<ExpertSetting configKey="dictation.long_press_ms" value={dictationStore.state.longPressMs}>
-					<SettingSlider
-						label={t("dictation.longPressLabel", "Long-press threshold")}
-						value={dictationStore.state.longPressMs}
-						onChange={(v) => dictationStore.setLongPressMs(v)}
-						min={0}
-						max={1000}
-						step={50}
-						formatValue={(v) => (v === 0 ? t("dictation.instant", "Instant") : `${v}ms`)}
-						hint={t(
-							"dictation.longPressHint",
-							"How long to hold the key before dictation starts. 0 = instant (no short-press pass-through), higher = fewer accidental triggers.",
-						)}
-					/>
-				</ExpertSetting>
-			</Show>
-
-			<ExpertSetting configKey="dictation.auto_send" value={dictationStore.state.autoSend}>
-				<div class={s.group}>
-					<label>{t("dictation.autoSendLabel", "Auto-send")}</label>
-					<div class={s.toggle}>
-						<input
-							type="checkbox"
-							checked={dictationStore.state.autoSend}
-							onChange={(e) => dictationStore.setAutoSend(e.currentTarget.checked)}
-						/>
-						<span>{t("dictation.autoSendHint", "Automatically press Enter after inserting transcribed text")}</span>
-					</div>
-				</div>
-			</ExpertSetting>
-
-			<SpeechRecognition />
-
-			<h3>{t("dictation.heading.corrections", "Auto-Corrections")}</h3>
-			<p class={cx(s.hint, d.intro)}>
-				{t("dictation.correctionsHint", "Automatically replace dictation output. Useful for technical terms.")}
-			</p>
-
-			<div class={s.group}>
-				<Show when={Object.keys(dictationStore.state.corrections).length > 0}>
-					<div class={d.correctionsTable}>
-						<div class={d.correctionsHeader}>
-							<span>{t("dictation.correctionsFrom", "From")}</span>
-							<span>{t("dictation.correctionsTo", "To")}</span>
-							<span />
-						</div>
-						<For each={Object.entries(dictationStore.state.corrections)}>
-							{([from, to]) => (
-								<div class={d.correctionsRow}>
-									<span class={d.correctionText}>{from}</span>
-									<span class={d.correctionText}>{to}</span>
-									<button
-										class={d.correctionDelete}
-										onClick={() => handleRemoveCorrection(from)}
-										title={t("dictation.removeCorrection", "Remove correction")}
-									>
-										&times;
-									</button>
+					>
+						{(_id, _descriptionId) => (
+							<>
+								<div class={d.hotkeyRow}>
+									<KeyComboCapture
+										value={dictationStore.state.hotkey}
+										onChange={(combo) => dictationStore.setHotkey(combo)}
+										placeholder={t("dictation.hotkeyPlaceholder", "Press a key combination...")}
+										onCapturingChange={(capturing) => dictationStore.setCapturingHotkey(capturing)}
+									/>
 								</div>
+							</>
+						)}
+					</SettingRow>
+
+					<ExpertSetting configKey="dictation.long_press_ms" value={dictationStore.state.longPressMs}>
+						<SettingSlider
+							row
+							label={t("dictation.longPressLabel", "Long-press threshold")}
+							value={dictationStore.state.longPressMs}
+							onChange={(v) => dictationStore.setLongPressMs(v)}
+							min={0}
+							max={1000}
+							step={50}
+							formatValue={(v) => (v === 0 ? t("dictation.instant", "Instant") : `${v}ms`)}
+							hint={t(
+								"dictation.longPressHint",
+								"How long to hold the key before dictation starts. 0 = instant (no short-press pass-through), higher = fewer accidental triggers.",
 							)}
-						</For>
-					</div>
+						/>
+					</ExpertSetting>
 				</Show>
 
-				<div class={d.correctionAdd}>
-					<Input
-						type="text"
-						placeholder={t("dictation.correctionFromPlaceholder", "Heard text...")}
-						value={newFrom()}
-						onInput={(e) => setNewFrom(e.currentTarget.value)}
-						onKeyDown={(e) => e.key === "Enter" && handleAddCorrection()}
-					/>
-					<span class={d.correctionArrow}>&rarr;</span>
-					<Input
-						type="text"
-						placeholder={t("dictation.correctionToPlaceholder", "Replace with...")}
-						value={newTo()}
-						onInput={(e) => setNewTo(e.currentTarget.value)}
-						onKeyDown={(e) => e.key === "Enter" && handleAddCorrection()}
-					/>
-					<button
-						class={d.correctionAddBtn}
-						onClick={handleAddCorrection}
-						disabled={!newFrom().trim() || !newTo().trim()}
+				<ExpertSetting configKey="dictation.auto_send" value={dictationStore.state.autoSend}>
+					<SettingRow
+						label={t("dictation.autoSendLabel", "Auto-send")}
+						hint={t("dictation.autoSendHint", "Automatically press Enter after inserting transcribed text")}
 					>
-						{t("dictation.addCorrection", "Add")}
-					</button>
-				</div>
+						{(id, descriptionId) => (
+							<input
+								id={id}
+								aria-describedby={descriptionId()}
+								class={s.rowSwitch}
+								type="checkbox"
+								checked={dictationStore.state.autoSend}
+								onChange={(e) => dictationStore.setAutoSend(e.currentTarget.checked)}
+							/>
+						)}
+					</SettingRow>
+				</ExpertSetting>
+			</SectionCard>
+			<SpeechRecognition />
 
-				<div class={d.controlRow}>
-					<button class={s.testBtn} onClick={handleImportCorrections}>
-						{t("dictation.import", "Import")}
-					</button>
-					<button class={s.testBtn} onClick={handleExportCorrections}>
-						{t("dictation.export", "Export")}
-					</button>
-				</div>
-			</div>
+			<SectionCard title={t("dictation.heading.corrections", "Auto-Corrections")}>
+				<p class={cx(s.hint, d.intro)}>
+					{t("dictation.correctionsHint", "Automatically replace dictation output. Useful for technical terms.")}
+				</p>
 
+				<div class={s.group}>
+					<Show when={Object.keys(dictationStore.state.corrections).length > 0}>
+						<div class={d.correctionsTable}>
+							<div class={d.correctionsHeader}>
+								<span>{t("dictation.correctionsFrom", "From")}</span>
+								<span>{t("dictation.correctionsTo", "To")}</span>
+								<span />
+							</div>
+							<For each={Object.entries(dictationStore.state.corrections)}>
+								{([from, to]) => (
+									<div class={d.correctionsRow}>
+										<span class={d.correctionText}>{from}</span>
+										<span class={d.correctionText}>{to}</span>
+										<button
+											class={d.correctionDelete}
+											onClick={() => handleRemoveCorrection(from)}
+											title={t("dictation.removeCorrection", "Remove correction")}
+										>
+											&times;
+										</button>
+									</div>
+								)}
+							</For>
+						</div>
+					</Show>
+
+					<div class={d.correctionAdd}>
+						<Input
+							type="text"
+							placeholder={t("dictation.correctionFromPlaceholder", "Heard text...")}
+							value={newFrom()}
+							onInput={(e) => setNewFrom(e.currentTarget.value)}
+							onKeyDown={(e) => e.key === "Enter" && handleAddCorrection()}
+						/>
+						<span class={d.correctionArrow}>&rarr;</span>
+						<Input
+							type="text"
+							placeholder={t("dictation.correctionToPlaceholder", "Replace with...")}
+							value={newTo()}
+							onInput={(e) => setNewTo(e.currentTarget.value)}
+							onKeyDown={(e) => e.key === "Enter" && handleAddCorrection()}
+						/>
+						<button
+							class={d.correctionAddBtn}
+							onClick={handleAddCorrection}
+							disabled={!newFrom().trim() || !newTo().trim()}
+						>
+							{t("dictation.addCorrection", "Add")}
+						</button>
+					</div>
+
+					<div class={d.controlRow}>
+						<button class={s.testBtn} onClick={handleImportCorrections}>
+							{t("dictation.import", "Import")}
+						</button>
+						<button class={s.testBtn} onClick={handleExportCorrections}>
+							{t("dictation.export", "Export")}
+						</button>
+					</div>
+				</div>
+			</SectionCard>
 			<HandsFreeControls />
 
 			<SpeechSetup />
@@ -384,161 +403,193 @@ const SpeechRecognition: Component = () => {
 
 	return (
 		<>
-			<h3>{t("dictation.heading.recognition", "Speech recognition")}</h3>
-
-			{/* Audio devices — this list is the *server's* hardware. A browser
+			<SectionCard title={t("dictation.heading.recognition", "Speech recognition")}>
+				{/* Audio devices — this list is the *server's* hardware. A browser
 			    captures from its own device, chosen by the browser's own
 			    permission prompt, so offering these names there would let a
 			    user pick a microphone in another building. */}
-			<Show when={isTauri()}>
-				<ExpertSetting configKey="dictation.device" value={dictationStore.state.selectedDevice}>
-					<div class={s.group}>
-						<label>{t("dictation.inputDeviceLabel", "Input device")}</label>
-						<Show
-							when={dictationStore.state.devices.length > 0}
-							fallback={
-								<div>
-									<button class={s.testBtn} onClick={() => dictationStore.refreshDevices()}>
-										{t("dictation.detectMicrophones", "Detect Microphones")}
-									</button>
-									<p class={s.hint}>
-										{t("dictation.detectMicrophonesHint", "Triggers macOS microphone permission dialog.")}
-									</p>
-								</div>
+				<Show when={isTauri()}>
+					<ExpertSetting configKey="dictation.device" value={dictationStore.state.selectedDevice}>
+						<SettingRow
+							label={t("dictation.inputDeviceLabel", "Input device")}
+							hint={
+								dictationStore.state.devices.length > 0
+									? t("dictation.microphoneHint", "Select the input device to use for dictation.")
+									: t("dictation.detectMicrophonesHint", "Triggers macOS microphone permission dialog.")
 							}
 						>
+							{(id, descriptionId) => (
+								<>
+									<Show
+										when={dictationStore.state.devices.length > 0}
+										fallback={
+											<div>
+												<button class={s.testBtn} onClick={() => dictationStore.refreshDevices()}>
+													{t("dictation.detectMicrophones", "Detect Microphones")}
+												</button>
+											</div>
+										}
+									>
+										<Select
+											id={id}
+											aria-describedby={descriptionId()}
+											value={dictationStore.state.selectedDevice ?? ""}
+											onChange={(e) => {
+												const val = e.currentTarget.value;
+												dictationStore.setDevice(val === "" ? null : val);
+											}}
+										>
+											<option value="">{t("dictation.systemDefault", "System Default")}</option>
+											<For each={dictationStore.state.devices}>
+												{(device) => <option value={device.name}>{device.name}</option>}
+											</For>
+										</Select>
+									</Show>
+								</>
+							)}
+						</SettingRow>
+					</ExpertSetting>
+				</Show>
+
+				<SettingRow
+					label={t("dictation.languageLabel", "Language")}
+					hint={t("dictation.languageHint", "Auto-detect works well for most languages.")}
+				>
+					{(id, descriptionId) => (
+						<>
 							<Select
-								value={dictationStore.state.selectedDevice ?? ""}
-								onChange={(e) => {
-									const val = e.currentTarget.value;
-									dictationStore.setDevice(val === "" ? null : val);
-								}}
+								id={id}
+								aria-describedby={descriptionId()}
+								value={dictationStore.state.language}
+								onChange={(e) => dictationStore.setLanguage(e.currentTarget.value)}
 							>
-								<option value="">{t("dictation.systemDefault", "System Default")}</option>
-								<For each={dictationStore.state.devices}>
-									{(device) => <option value={device.name}>{device.name}</option>}
+								<For each={Object.entries(WHISPER_LANGUAGES)}>
+									{([value, label]) => (
+										<option value={value}>
+											{isVoiceless(value)
+												? t("dictation.languageNoVoice", "{lang} — no spoken replies").replace("{lang}", label)
+												: label}
+										</option>
+									)}
 								</For>
 							</Select>
-							<p class={s.hint}>{t("dictation.microphoneHint", "Select the input device to use for dictation.")}</p>
-						</Show>
-					</div>
-				</ExpertSetting>
-			</Show>
 
-			<div class={s.group}>
-				<label>{t("dictation.modelLabel", "Whisper Model")}</label>
-				<p class={cx(s.hint, d.intro)}>
-					{t("dictation.modelHint", "Choose a model. Larger models are more accurate but slower.")}
-				</p>
-				<div class={d.modelList}>
-					<For each={dictationStore.state.models}>{(model: ModelInfo) => <ModelRow model={model} />}</For>
-				</div>
-			</div>
+							<Show when={isVoiceless(dictationStore.state.language)}>
+								<p class={s.hint}>
+									{t(
+										"dictation.languageNoVoiceHint",
+										"Replies in this language will not be spoken. Whisper also expects you to speak it — if you talk in another language, choose it or Auto-detect.",
+									)}
+								</p>
+							</Show>
+						</>
+					)}
+				</SettingRow>
 
-			<div class={s.group}>
-				<label>{t("dictation.languageLabel", "Language")}</label>
-				<Select
-					value={dictationStore.state.language}
-					onChange={(e) => dictationStore.setLanguage(e.currentTarget.value)}
-				>
-					<For each={Object.entries(WHISPER_LANGUAGES)}>
-						{([value, label]) => (
-							<option value={value}>
-								{isVoiceless(value)
-									? t("dictation.languageNoVoice", "{lang} — no spoken replies").replace("{lang}", label)
-									: label}
-							</option>
-						)}
-					</For>
-				</Select>
-				<p class={s.hint}>{t("dictation.languageHint", "Auto-detect works well for most languages.")}</p>
-				<Show when={isVoiceless(dictationStore.state.language)}>
-					<p class={s.hint}>
-						{t(
-							"dictation.languageNoVoiceHint",
-							"Replies in this language will not be spoken. Whisper also expects you to speak it — if you talk in another language, choose it or Auto-detect.",
-						)}
-					</p>
-				</Show>
-			</div>
-
-			{/* This section's advanced part: only needed once speech is cut or
+				{/* This section's advanced part: only needed once speech is cut or
 			    noise gets through. */}
-			<div class={s.group}>
-				<label>{t("dictation.tuningLabel", "Voice tuning")}</label>
-				<p class={cx(s.hint, d.intro)}>
-					{t(
-						"dictation.tuningHint",
-						"Record a test phrase and watch where your voice sits against the gates. Text stays in this panel — nothing is sent to a terminal.",
-					)}
-				</p>
-				<div class={d.tuningMeter}>
-					<div class={d.tuningLevel} style={{ transform: `scaleX(${dictationStore.state.audioLevel})` }} />
-					<div
-						class={d.tuningThreshold}
-						style={{ left: `${thresholdPercent()}%` }}
-						title={t("dictation.tuningThresholdMarker", "Level gate")}
+
+				<ExpertSetting configKey="dictation.rms_threshold" value={dictationStore.state.rmsThreshold}>
+					<SettingSlider
+						row
+						label={t("dictation.rmsLabel", "Level gate")}
+						value={Math.round(thresholdPercent())}
+						onChange={(v) => dictationStore.setRmsThreshold(meterToRms(v / 100))}
+						min={0}
+						max={50}
+						step={1}
+						formatValue={(v) => `${v}%`}
+						hint={t(
+							"dictation.rmsHint",
+							"Audio quieter than this never reaches Whisper. Raise it until room noise stays below the marker; lower it if quiet speech is rejected.",
+						)}
 					/>
-				</div>
-				<div class={d.tuningReadout}>
-					<span>
-						{t("dictation.tuningLevelReadout", "Level")}: {Math.round(levelPercent())}%
-					</span>
-					<span>
-						{t("dictation.tuningGateReadout", "Gate")}: {Math.round(thresholdPercent())}%
-					</span>
-				</div>
+				</ExpertSetting>
 
-				<div class={d.controlRow}>
-					<button class={s.testBtn} onClick={toggleTest} disabled={dictationStore.state.processing}>
-						{recording() ? t("dictation.tuningStop", "Stop test") : t("dictation.tuningStart", "Start test recording")}
-					</button>
-				</div>
-
-				<Show when={dictationStore.state.partialText}>
-					<p class={d.tuningPartial}>{dictationStore.state.partialText}</p>
-				</Show>
-				<Show when={testText()}>
-					<p class={d.tuningResult}>{testText()}</p>
-				</Show>
-				<Show when={dictationStore.state.lastSkipReason}>
-					<p class={d.tuningSkip}>
-						{t("dictation.tuningSkipped", "Rejected")}: {dictationStore.state.lastSkipReason}
-					</p>
-				</Show>
-			</div>
-
-			<ExpertSetting configKey="dictation.rms_threshold" value={dictationStore.state.rmsThreshold}>
-				<SettingSlider
-					label={t("dictation.rmsLabel", "Level gate")}
-					value={Math.round(thresholdPercent())}
-					onChange={(v) => dictationStore.setRmsThreshold(meterToRms(v / 100))}
-					min={0}
-					max={50}
-					step={1}
-					formatValue={(v) => `${v}%`}
-					hint={t(
-						"dictation.rmsHint",
-						"Audio quieter than this never reaches Whisper. Raise it until room noise stays below the marker; lower it if quiet speech is rejected.",
+				<ExpertSetting configKey="dictation.no_speech_threshold" value={dictationStore.state.noSpeechThreshold}>
+					<SettingSlider
+						row
+						label={t("dictation.noSpeechLabel", "Speech confidence gate")}
+						value={Math.round(dictationStore.state.noSpeechThreshold * 100)}
+						onChange={(v) => dictationStore.setNoSpeechThreshold(v / 100)}
+						min={10}
+						max={100}
+						step={5}
+						formatValue={(v) => (v === 100 ? t("dictation.off", "Off") : `${v}%`)}
+						hint={t(
+							"dictation.noSpeechHint",
+							"Discards a transcript when Whisper itself reports it probably heard no speech. Lower is stricter; 100% turns the gate off.",
+						)}
+					/>
+				</ExpertSetting>
+			</SectionCard>
+			<SectionCard title="Speech assets">
+				{" "}
+				<SettingRow label={t("dictation.modelLabel", "Whisper Model")}>
+					{() => (
+						<>
+							<p class={cx(s.hint, d.intro)}>
+								{t("dictation.modelHint", "Choose a model. Larger models are more accurate but slower.")}
+							</p>
+							<div class={d.modelList}>
+								<For each={dictationStore.state.models}>{(model: ModelInfo) => <ModelRow model={model} />}</For>
+							</div>
+						</>
 					)}
-				/>
-			</ExpertSetting>
+				</SettingRow>
+				<SettingRow label={t("dictation.tuningLabel", "Voice tuning")}>
+					{() => (
+						<>
+							<p class={cx(s.hint, d.intro)}>
+								{t(
+									"dictation.tuningHint",
+									"Record a test phrase and watch where your voice sits against the gates. Text stays in this panel — nothing is sent to a terminal.",
+								)}
+							</p>
+							<div class={d.tuningMeter}>
+								<div class={d.tuningLevel} style={{ transform: `scaleX(${dictationStore.state.audioLevel})` }} />
+								<div
+									class={d.tuningThreshold}
+									style={{ left: `${thresholdPercent()}%` }}
+									title={t("dictation.tuningThresholdMarker", "Level gate")}
+								/>
+							</div>
+							<div class={d.tuningReadout}>
+								<span>
+									{t("dictation.tuningLevelReadout", "Level")}: {Math.round(levelPercent())}%
+								</span>
+								<span>
+									{t("dictation.tuningGateReadout", "Gate")}: {Math.round(thresholdPercent())}%
+								</span>
+							</div>
 
-			<ExpertSetting configKey="dictation.no_speech_threshold" value={dictationStore.state.noSpeechThreshold}>
-				<SettingSlider
-					label={t("dictation.noSpeechLabel", "Speech confidence gate")}
-					value={Math.round(dictationStore.state.noSpeechThreshold * 100)}
-					onChange={(v) => dictationStore.setNoSpeechThreshold(v / 100)}
-					min={10}
-					max={100}
-					step={5}
-					formatValue={(v) => (v === 100 ? t("dictation.off", "Off") : `${v}%`)}
-					hint={t(
-						"dictation.noSpeechHint",
-						"Discards a transcript when Whisper itself reports it probably heard no speech. Lower is stricter; 100% turns the gate off.",
+							<div class={d.controlRow}>
+								<button class={s.testBtn} onClick={toggleTest} disabled={dictationStore.state.processing}>
+									{recording()
+										? t("dictation.tuningStop", "Stop test")
+										: t("dictation.tuningStart", "Start test recording")}
+								</button>
+							</div>
+
+							<Show when={dictationStore.state.partialText}>
+								<p class={d.tuningPartial}>{dictationStore.state.partialText}</p>
+							</Show>
+							<Show when={testText()}>
+								<p class={d.tuningResult}>{testText()}</p>
+							</Show>
+							<Show when={dictationStore.state.lastSkipReason}>
+								<p class={d.tuningSkip}>
+									{t("dictation.tuningSkipped", "Rejected")}: {dictationStore.state.lastSkipReason}
+								</p>
+							</Show>
+						</>
 					)}
-				/>
-			</ExpertSetting>
+				</SettingRow>
+				<details>
+					<summary>Manage Pocket TTS voices</summary>
+					<VoiceLibrary language={dictationStore.state.language} />
+				</details>
+			</SectionCard>
 		</>
 	);
 };
@@ -654,8 +705,7 @@ const SpeechSetup: Component = () => {
 	};
 
 	return (
-		<>
-			<h3>{t("dictation.heading.spokenReplies", "Spoken replies")}</h3>
+		<SectionCard title={t("dictation.heading.spokenReplies", "Spoken replies")}>
 			<p class={cx(s.hint, d.intro)}>
 				{isEdge()
 					? t(
@@ -689,29 +739,35 @@ const SpeechSetup: Component = () => {
 			</div>
 
 			<ExpertSetting configKey="dictation.speech_engine" value={engine()}>
-				<div class={s.group}>
-					<label>{t("dictation.speechEngineLabel", "Speech engine")}</label>
-					<Select
-						value={engine()}
-						onChange={(e) => void dictationStore.setSpeechEngine(e.currentTarget.value as SpeechEngineId)}
-					>
-						<option value="edge">{t("dictation.engineEdge", "Microsoft Edge voices (online)")}</option>
-						<option value="pocket">{t("dictation.enginePocket", "Pocket TTS (local, downloads a model)")}</option>
-						<option value="external">{t("dictation.engineExternal", "External command")}</option>
-					</Select>
-					<p class={s.hint}>
-						{t(
-							"dictation.speechEngineHint",
-							"Edge is the default. Pocket TTS runs entirely on this machine after a download. An external command is your own engine.",
-						)}
-					</p>
-				</div>
+				<SettingRow
+					label={t("dictation.speechEngineLabel", "Speech engine")}
+					hint={t(
+						"dictation.speechEngineHint",
+						"Edge is the default. Pocket TTS runs entirely on this machine after a download. An external command is your own engine.",
+					)}
+				>
+					{(id, descriptionId) => (
+						<>
+							<Select
+								id={id}
+								aria-describedby={descriptionId()}
+								value={engine()}
+								onChange={(e) => void dictationStore.setSpeechEngine(e.currentTarget.value as SpeechEngineId)}
+							>
+								<option value="edge">{t("dictation.engineEdge", "Microsoft Edge voices (online)")}</option>
+								<option value="pocket">{t("dictation.enginePocket", "Pocket TTS (local, downloads a model)")}</option>
+								<option value="external">{t("dictation.engineExternal", "External command")}</option>
+							</Select>
+						</>
+					)}
+				</SettingRow>
 			</ExpertSetting>
 
 			<Show when={engine() === "external"}>
 				<ExpertSetting configKey="dictation.speech_command" value={dictationStore.state.speechCommand}>
 					<div class={s.group}>
 						<label>{t("dictation.speechCommandLabel", "Speech command")}</label>
+						<ContextualHelp label={t("dictation.speechCommandLabel", "Speech command")} />
 						<Textarea
 							rows={4}
 							value={dictationStore.state.speechCommand.join("\n")}
@@ -735,55 +791,60 @@ const SpeechSetup: Component = () => {
 			</Show>
 
 			<Show when={hasVoicePicker()}>
-				<div class={s.group}>
-					<label>{t("dictation.voiceLabel", "Voice")}</label>
-					<div class={d.controlRow}>
-						<Show
-							when={isEdge()}
-							fallback={
-								<Select
-									value={dictationStore.state.speechVoice}
-									onChange={(e) => dictationStore.setSpeechVoice(e.currentTarget.value)}
+				<SettingRow
+					label={t("dictation.voiceLabel", "Voice")}
+					hint={t(
+						"dictation.voiceHint",
+						"Changing the voice stops any reply already being spoken — a sentence half said in one voice does not finish in another.",
+					)}
+				>
+					{(id, descriptionId) => (
+						<>
+							<div class={d.controlRow}>
+								<Show
+									when={isEdge()}
+									fallback={
+										<Select
+											id={id}
+											aria-describedby={descriptionId()}
+											value={dictationStore.state.speechVoice}
+											onChange={(e) => dictationStore.setSpeechVoice(e.currentTarget.value)}
+										>
+											<option value="">{t("dictation.voiceDefault", "Default for this language")}</option>
+											<For each={voiceChoices()}>
+												{(voice) => (
+													<option value={voice} selected={voice === dictationStore.state.speechVoice}>
+														{voiceLabel(voice)}
+													</option>
+												)}
+											</For>
+										</Select>
+									}
 								>
-									<option value="">{t("dictation.voiceDefault", "Default for this language")}</option>
-									<For each={voiceChoices()}>
-										{(voice) => (
-											<option value={voice} selected={voice === dictationStore.state.speechVoice}>
-												{voiceLabel(voice)}
-											</option>
-										)}
-									</For>
-								</Select>
-							}
-						>
-							<Select
-								value={dictationStore.state.speechEdgeVoice}
-								onChange={(e) => dictationStore.setSpeechEdgeVoice(e.currentTarget.value)}
-							>
-								<option value="">{t("dictation.voiceDefault", "Default for this language")}</option>
-								<For each={dictationStore.state.edgeVoices}>
-									{(voice) => <option value={voice.id}>{voice.label}</option>}
-								</For>
-							</Select>
-						</Show>
-						<button class={d.modelDownload} onClick={listen}>
-							{t("dictation.listen", "Listen")}
-						</button>
-					</div>
-					<Show when={!isEdge() && selectedMissingAsset()}>{(asset) => <SpeechAssetRow asset={asset()} />}</Show>
-					<Show when={isEdge() && dictationStore.state.edgeVoicesError}>
-						<p class={cx(s.hint, d.conversationError)}>{dictationStore.state.edgeVoicesError}</p>
-					</Show>
-					<Show when={previewError()}>
-						<p class={cx(s.hint, d.conversationError)}>{previewError()}</p>
-					</Show>
-					<p class={s.hint}>
-						{t(
-							"dictation.voiceHint",
-							"Changing the voice stops any reply already being spoken — a sentence half said in one voice does not finish in another.",
-						)}
-					</p>
-				</div>
+									<Select
+										value={dictationStore.state.speechEdgeVoice}
+										onChange={(e) => dictationStore.setSpeechEdgeVoice(e.currentTarget.value)}
+									>
+										<option value="">{t("dictation.voiceDefault", "Default for this language")}</option>
+										<For each={dictationStore.state.edgeVoices}>
+											{(voice) => <option value={voice.id}>{voice.label}</option>}
+										</For>
+									</Select>
+								</Show>
+								<button class={d.modelDownload} onClick={listen}>
+									{t("dictation.listen", "Listen")}
+								</button>
+							</div>
+							<Show when={!isEdge() && selectedMissingAsset()}>{(asset) => <SpeechAssetRow asset={asset()} />}</Show>
+							<Show when={isEdge() && dictationStore.state.edgeVoicesError}>
+								<p class={cx(s.hint, d.conversationError)}>{dictationStore.state.edgeVoicesError}</p>
+							</Show>
+							<Show when={previewError()}>
+								<p class={cx(s.hint, d.conversationError)}>{previewError()}</p>
+							</Show>
+						</>
+					)}
+				</SettingRow>
 			</Show>
 
 			<Show when={engine() === "pocket" && (languageAsset()?.voices.length ?? 0) > 0}>
@@ -792,6 +853,7 @@ const SpeechSetup: Component = () => {
 
 			<ExpertSetting configKey="dictation.speech_volume_db" value={dictationStore.state.speechVolumeDb}>
 				<SettingSlider
+					row
 					label={t("dictation.voiceVolumeLabel", "Voice volume")}
 					value={volumeDrag() ?? dictationStore.state.speechVolumeDb}
 					onChange={setVolumeDrag}
@@ -812,6 +874,7 @@ const SpeechSetup: Component = () => {
 
 			<ExpertSetting configKey="dictation.speech_levelling" value={dictationStore.state.speechLevelling}>
 				<SettingSlider
+					row
 					label={t("dictation.levellingLabel", "Levelling")}
 					value={levellingDrag() ?? Math.round(dictationStore.state.speechLevelling * 100)}
 					onChange={setLevellingDrag}
@@ -835,7 +898,7 @@ const SpeechSetup: Component = () => {
 					)}
 				/>
 			</ExpertSetting>
-		</>
+		</SectionCard>
 	);
 };
 
@@ -1075,8 +1138,7 @@ const HandsFreeControls: Component = () => {
 	};
 
 	return (
-		<>
-			<h3>{t("dictation.heading.handsFree", "Hands-free conversation")}</h3>
+		<SectionCard title={t("dictation.heading.handsFree", "Hands-free conversation")}>
 			<p class={cx(s.hint, d.intro)}>
 				{t(
 					"dictation.handsFreeHint",
@@ -1086,26 +1148,35 @@ const HandsFreeControls: Component = () => {
 			</p>
 
 			<div class={s.group}>
-				<div class={d.controlRow}>
-					<Show
-						when={armed()}
-						fallback={
-							<>
-								<Select value={target()} onChange={(e) => setTarget(e.currentTarget.value)}>
-									<option value="">{t("dictation.handsFreeNoTarget", "Choose a terminal…")}</option>
-									<For each={targets()}>{(term) => <option value={term.sessionId ?? ""}>{term.name}</option>}</For>
-								</Select>
-								<button class={cx(s.testBtn, d.startConversation)} onClick={start} disabled={!target()}>
-									{t("dictation.handsFreeStart", "Start conversation")}
+				<SettingRow label="Terminal">
+					{(id, descriptionId) => (
+						<>
+							<Show
+								when={armed()}
+								fallback={
+									<>
+										<Select
+											id={id}
+											aria-describedby={descriptionId()}
+											value={target()}
+											onChange={(e) => setTarget(e.currentTarget.value)}
+										>
+											<option value="">{t("dictation.handsFreeNoTarget", "Choose a terminal…")}</option>
+											<For each={targets()}>{(term) => <option value={term.sessionId ?? ""}>{term.name}</option>}</For>
+										</Select>
+										<button class={cx(s.testBtn, d.startConversation)} onClick={start} disabled={!target()}>
+											{t("dictation.handsFreeStart", "Start conversation")}
+										</button>
+									</>
+								}
+							>
+								<button class={cx(s.testBtn, d.stopConversation)} onClick={() => dictationStore.disarmHandsFree()}>
+									{t("dictation.handsFreeStop", "Stop conversation")}
 								</button>
-							</>
-						}
-					>
-						<button class={cx(s.testBtn, d.stopConversation)} onClick={() => dictationStore.disarmHandsFree()}>
-							{t("dictation.handsFreeStop", "Stop conversation")}
-						</button>
-					</Show>
-				</div>
+							</Show>
+						</>
+					)}
+				</SettingRow>
 
 				<div class={cx(d.conversation, d.conversationState)} role="status">
 					<div class={d.conversationRow}>
@@ -1161,30 +1232,37 @@ const HandsFreeControls: Component = () => {
 				</Show>
 			</div>
 
-			<div class={s.group}>
-				<label>{t("dictation.activationPhraseLabel", "Activation phrase")}</label>
-				<Input
-					type="text"
-					value={dictationStore.state.handsFreeActivationPhrase}
-					placeholder={t("dictation.activationPhrasePlaceholder", "computer")}
-					onChange={(e) => dictationStore.setHandsFreeActivationPhrase(e.currentTarget.value)}
-				/>
-				<p class={s.hint}>
-					{t(
-						"dictation.activationPhraseHint",
-						"When set, only speech that opens with this phrase is sent, and the phrase itself is removed first. The match runs on this machine, so unrelated speech never leaves it.",
-					)}
-				</p>
-				<p class={s.hint}>
-					{t(
-						"dictation.activationPhraseSuggestion",
-						"Try “computer”: it is distinctive, Whisper transcribes it reliably, and ordinary speech rarely contains it. Leave the field empty to send every utterance.",
-					)}
-				</p>
-			</div>
+			<SettingRow
+				label={t("dictation.activationPhraseLabel", "Activation phrase")}
+				hint={t(
+					"dictation.activationPhraseHint",
+					"When set, only speech that opens with this phrase is sent, and the phrase itself is removed first. The match runs on this machine, so unrelated speech never leaves it.",
+				)}
+			>
+				{(id, descriptionId) => (
+					<>
+						<Input
+							id={id}
+							aria-describedby={descriptionId()}
+							type="text"
+							value={dictationStore.state.handsFreeActivationPhrase}
+							placeholder={t("dictation.activationPhrasePlaceholder", "computer")}
+							onChange={(e) => dictationStore.setHandsFreeActivationPhrase(e.currentTarget.value)}
+						/>
+
+						<p class={s.hint}>
+							{t(
+								"dictation.activationPhraseSuggestion",
+								"Try “computer”: it is distinctive, Whisper transcribes it reliably, and ordinary speech rarely contains it. Leave the field empty to send every utterance.",
+							)}
+						</p>
+					</>
+				)}
+			</SettingRow>
 
 			<ExpertSetting configKey="dictation.hands_free_hold_back_ms" value={dictationStore.state.handsFreeHoldBackMs}>
 				<SettingSlider
+					row
 					label={t("dictation.holdBackLabel", "Hold-back before sending")}
 					value={dictationStore.state.handsFreeHoldBackMs}
 					onChange={(v) => dictationStore.setHandsFreeHoldBackMs(v)}
@@ -1199,74 +1277,82 @@ const HandsFreeControls: Component = () => {
 				/>
 			</ExpertSetting>
 
-			<div class={s.group}>
-				<label>{t("dictation.handsFreeListeningLabel", "Hands-free listening")}</label>
-				<div class={s.toggle}>
+			<SettingRow
+				label={t("dictation.handsFreeListeningLabel", "Hands-free listening")}
+				hint={t(
+					"dictation.handsFreeListeningHint",
+					"Keep the microphone open and send each utterance by itself. Turn off to dictate with push-to-talk only; with spoken replies on, the agent still answers out loud. Applies to the next conversation.",
+				)}
+			>
+				{(id, descriptionId) => (
 					<input
+						id={id}
+						aria-describedby={descriptionId()}
+						class={s.rowSwitch}
 						type="checkbox"
 						checked={dictationStore.state.handsFreeListening}
 						onChange={(e) => dictationStore.setHandsFreeListening(e.currentTarget.checked)}
 					/>
-					<span>
-						{t(
-							"dictation.handsFreeListeningHint",
-							"Keep the microphone open and send each utterance by itself. Turn off to dictate with push-to-talk only; with spoken replies on, the agent still answers out loud. Applies to the next conversation.",
-						)}
-					</span>
-				</div>
-			</div>
+				)}
+			</SettingRow>
 
-			<div class={s.group}>
-				<label>{t("dictation.spokenRepliesLabel", "Spoken replies")}</label>
-				<div class={s.toggle}>
+			<SettingRow
+				label={t("dictation.spokenRepliesLabel", "Spoken replies")}
+				hint={t(
+					"dictation.spokenRepliesHint",
+					"Let the agent answer out loud. Turn off to keep dictation and receive text replies.",
+				)}
+			>
+				{(id, descriptionId) => (
 					<input
+						id={id}
+						aria-describedby={descriptionId()}
+						class={s.rowSwitch}
 						type="checkbox"
 						checked={dictationStore.state.spokenReplies}
 						onChange={(e) => dictationStore.setSpokenReplies(e.currentTarget.checked)}
 					/>
-					<span>
-						{t(
-							"dictation.spokenRepliesHint",
-							"Let the agent answer out loud. Turn off to keep dictation and receive text replies.",
-						)}
-					</span>
-				</div>
-			</div>
+				)}
+			</SettingRow>
 
-			<div class={s.group}>
-				<label>{t("dictation.earconsLabel", "Earcons")}</label>
-				<div class={s.toggle}>
+			<SettingRow
+				label={t("dictation.earconsLabel", "Earcons")}
+				hint={t(
+					"dictation.earconsHint",
+					"Play a short sound when a turn is sent to the agent, and a lower one when a turn without the activation phrase is dropped. Only the device you talk into plays them.",
+				)}
+			>
+				{(id, descriptionId) => (
 					<input
+						id={id}
+						aria-describedby={descriptionId()}
+						class={s.rowSwitch}
 						type="checkbox"
 						checked={dictationStore.state.handsFreeEarcons}
 						onChange={(e) => dictationStore.setHandsFreeEarcons(e.currentTarget.checked)}
 					/>
-					<span>
-						{t(
-							"dictation.earconsHint",
-							"Play a short sound when a turn is sent to the agent, and a lower one when a turn without the activation phrase is dropped. Only the device you talk into plays them.",
-						)}
-					</span>
-				</div>
-			</div>
+				)}
+			</SettingRow>
 
 			<ExpertSetting configKey="dictation.hands_free_notify_model" value={dictationStore.state.notifyModelOnHandsFree}>
-				<div class={s.group}>
-					<label>{t("dictation.notifyModelLabel", "Notify model when hands-free changes")}</label>
-					<div class={s.toggle}>
+				<SettingRow
+					label={t("dictation.notifyModelLabel", "Notify model when hands-free changes")}
+					hint={t(
+						"dictation.notifyModelHint",
+						"Tell the agent when a hands-free conversation starts, so it answers out loud, and when it ends, so it goes back to text. Turning this off never leaves speech running: disarming always stops it.",
+					)}
+				>
+					{(id, descriptionId) => (
 						<input
+							id={id}
+							aria-describedby={descriptionId()}
+							class={s.rowSwitch}
 							type="checkbox"
 							checked={dictationStore.state.notifyModelOnHandsFree}
 							onChange={(e) => dictationStore.setNotifyModelOnHandsFree(e.currentTarget.checked)}
 						/>
-						<span>
-							{t(
-								"dictation.notifyModelHint",
-								"Tell the agent when a hands-free conversation starts, so it answers out loud, and when it ends, so it goes back to text. Turning this off never leaves speech running: disarming always stops it.",
-							)}
-						</span>
-					</div>
-				</div>
+					)}
+				</SettingRow>
 			</ExpertSetting>
 
 			{/* The notice is only sent while the toggle above is on. */}
@@ -1274,6 +1360,7 @@ const HandsFreeControls: Component = () => {
 				<ExpertSetting configKey="dictation.hands_free_start_notice" value={dictationStore.state.handsFreeStartNotice}>
 					<div class={s.group}>
 						<label>{t("dictation.startNoticeLabel", "Start notice")}</label>
+						<ContextualHelp label={t("dictation.startNoticeLabel", "Start notice")} />
 						<Textarea
 							value={dictationStore.state.handsFreeStartNotice}
 							placeholder={defaultNotice()}
@@ -1301,6 +1388,6 @@ const HandsFreeControls: Component = () => {
 					</div>
 				</ExpertSetting>
 			</Show>
-		</>
+		</SectionCard>
 	);
 };

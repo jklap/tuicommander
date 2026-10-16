@@ -6,7 +6,7 @@ import { registryStore } from "../../../stores/registryStore";
 import s from "./TasksSetup.module.css";
 
 /** Install button for one work-item plugin, fed by the plugin registry. */
-export function InstallWorkItemPlugin(props: { setup: WorkItemPluginSetup; note?: string }) {
+export function InstallWorkItemPlugin(props: { setup: WorkItemPluginSetup; note?: string; compact?: boolean }) {
 	const [installing, setInstalling] = createSignal(false);
 	const [error, setError] = createSignal<string | null>(null);
 	onMount(() => void registryStore.fetch());
@@ -27,9 +27,11 @@ export function InstallWorkItemPlugin(props: { setup: WorkItemPluginSetup; note?
 	}
 	return (
 		<div class={s.install}>
-			<span>
-				{props.setup.name} shows {props.setup.purpose}.<Show when={props.note}> {props.note}</Show>
-			</span>
+			<Show when={!props.compact}>
+				<span>
+					{props.setup.name} shows {props.setup.purpose}.<Show when={props.note}> {props.note}</Show>
+				</span>
+			</Show>
 			<button type="button" disabled={!entry() || installing()} onClick={() => void install()}>
 				{installing() ? "Installing…" : `Install ${props.setup.name}`}
 			</button>

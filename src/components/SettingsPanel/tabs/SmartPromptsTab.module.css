@@ -343,3 +343,9 @@
   color: var(--accent);
   background: var(--bg-tertiary);
 }
+
+@media (max-width: 800px) {
+  .promptHeader, .editorRow { flex-wrap: wrap; }
+  .promptName { min-width: 0; overflow-wrap: anywhere; }
+  .promptMeta { flex-wrap: wrap; }
+}

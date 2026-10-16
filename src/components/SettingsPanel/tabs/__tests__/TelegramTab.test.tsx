@@ -59,7 +59,7 @@ describe("Telegram setup", () => {
 		render(() => <TelegramTab />);
 		await screen.findByText("registered agent: Writer");
 		expect(screen.queryByRole("combobox")).toBeNull();
-		fireEvent.click(screen.getByRole("checkbox"));
+		fireEvent.click(screen.getByRole("switch", { name: "Enable Telegram" }));
 		await waitFor(() =>
 			expect(invoke).toHaveBeenCalledWith("telegram_setup", { change: { action: "configure", enabled: false } }),
 		);
@@ -79,7 +79,8 @@ describe("Telegram setup", () => {
 	] as const)("identifies owner %s and gates pairing", async (polling_owner, connected, status) => {
 		invoke.mockResolvedValue({ ...initial, polling_owner, connected });
 		render(() => <TelegramTab />);
-		expect((await screen.findByRole("status")).textContent).toBe(status);
+		const summary = await screen.findByRole("status");
+		expect(summary.querySelector('[data-testid="status-badge"]')?.textContent).toBe(status);
 		expect(screen.getByText("Link chat").hasAttribute("disabled")).toBe(!connected);
 		if (!connected) expect(screen.getByText(/Connect a poller before linking/)).toBeTruthy();
 	});
@@ -94,7 +95,8 @@ describe("Telegram setup", () => {
 	])("explains inactive setup %j", async (change, status) => {
 		invoke.mockResolvedValue({ ...initial, connected: false, polling_owner: null, ...change });
 		render(() => <TelegramTab />);
-		expect((await screen.findByRole("status")).textContent).toBe(status);
+		const summary = await screen.findByRole("status");
+		expect(summary.querySelector('[data-testid="status-badge"]')?.textContent).toBe(status);
 		expect(screen.getByText("Link chat").hasAttribute("disabled")).toBe(true);
 	});
 	// Catches: a failed getMe appears successful or drops the safe error category.
