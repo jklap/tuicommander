@@ -41,12 +41,24 @@ export async function readProjectedSelectionText(
 	for (let row = first.row; row <= last.row + 1; row++) {
 		if (row <= last.row && !hidden.has(row)) continue;
 		if (run < row) {
-			parts.push(
-				await read(
-					{ row: run, col: run === first.row ? first.col : 0 },
-					row - 1 === last.row ? last : { row: row - 1, col: rows.get(row - 1)!.count - 1 },
-				),
+			let text = await read(
+				{ row: run, col: run === first.row ? first.col : 0 },
+				row - 1 === last.row ? last : { row: row - 1, col: rows.get(row - 1)!.count - 1 },
 			);
+			if (row <= last.row) {
+				// Backend selection reads trim trailing newlines. Restore only
+				// retained blank rows at a split, not the omitted marker rows.
+				let trailingBlanks = 0;
+				for (let index = row - 1; index >= run; index--) {
+					const retained = rows.get(index);
+					if (!retained || rowText(retained).trim() !== "") break;
+					trailingBlanks++;
+				}
+				const needed = Math.min(trailingBlanks, row - run - 1);
+				const existing = text.length - text.replace(/\n+$/, "").length;
+				text += "\n".repeat(Math.max(0, needed - existing));
+			}
+			parts.push(text);
 		}
 		run = row + 1;
 	}
