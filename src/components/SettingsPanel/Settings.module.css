@@ -1519,3 +1519,7 @@
 .applicationPage .groupDeleteBtn { min-width: 36px; min-height: 36px; }
 
 @media (max-width: 600px) { .navSearch { order: -1; } }
+
+.navSearch { padding: 0 16px 8px; box-sizing: border-box; }
+.navSearch > [data-form-control], .compactNav > [data-form-control] { width: 100%; box-sizing: border-box; }
+@media (max-width: 600px) { .navSearch { padding: 0 0 8px; } }
