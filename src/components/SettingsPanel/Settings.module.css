@@ -1523,3 +1523,8 @@
 .navSearch { padding: 0 16px 8px; box-sizing: border-box; }
 .navSearch > [data-form-control], .compactNav > [data-form-control] { width: 100%; box-sizing: border-box; }
 @media (max-width: 600px) { .navSearch { padding: 0 0 8px; } }
+
+.notificationEventsHeading { margin: 20px 0 6px; font-size: 13px; font-weight: 600; color: var(--fg-primary); }
+.applicationPage .notificationEventsHeading label { margin: 0; font-size: inherit; font-weight: inherit; color: inherit; }
+.soundControls { display: flex; justify-content: flex-end; align-items: center; gap: 12px; }
+.soundPattern { width: 36px; display: inline-flex; justify-content: center; }

@@ -173,7 +173,7 @@ export const NotificationsTab: Component = () => {
 						>
 							<SettingRow
 								label={t("notifications.label.audioDevice", "Audio Output Device")}
-								hint={`${t("notifications.hint.audioDevice", "Choose which speaker or output to use for notification sounds")} ${t("notifications.hint.deviceMicPrompt", "macOS may ask for microphone access — the audio system requires it to enumerate output devices. Notifications never record audio.")}`}
+								hint={`${t("notifications.hint.audioDevice", "Choose which speaker or output to use for notification sounds")}. ${t("notifications.hint.deviceMicPrompt", "macOS may ask for microphone access — the audio system requires it to enumerate output devices. Notifications never record audio.")}`}
 							>
 								{(id, descriptionId) => (
 									<div>
@@ -240,30 +240,39 @@ export const NotificationsTab: Component = () => {
 					</Show>
 
 					<div class={s.group}>
-						<label>{t("notifications.label.notificationEvents", "Notification Events")}</label>
+						<h4 class={s.notificationEventsHeading}>
+							<label>{t("notifications.label.notificationEvents", "Notification Events")}</label>
+						</h4>
 						<p class={s.hint} style={{ "margin-bottom": "12px" }}>
 							{t("notifications.hint.notificationEvents", "Choose which events play a sound")}
 						</p>
 						<For each={sounds}>
 							{(sound) => (
-								<div class={s.soundRow}>
-									<div class={s.toggle}>
-										<input
-											type="checkbox"
-											checked={notificationsStore.state.config.sounds[sound.key]}
-											onChange={(e) => notificationsStore.setSoundEnabled(sound.key, e.currentTarget.checked)}
-										/>
-										<span>{sound.label}</span>
-									</div>
-									<SoundPatternSvg sound={sound.key} />
-									<button
-										class={s.testBtn}
-										aria-label={`Preview ${sound.label}`}
-										onClick={() => notificationsStore.testSound(sound.key)}
-									>
-										{t("notifications.btn.test", "Test")}
-									</button>
-								</div>
+								<SettingRow label={sound.label}>
+									{(id, descriptionId) => (
+										<div class={s.soundControls}>
+											<input
+												id={id}
+												aria-describedby={descriptionId()}
+												type="checkbox"
+												role="switch"
+												class={s.rowSwitch}
+												checked={notificationsStore.state.config.sounds[sound.key]}
+												onChange={(event) => notificationsStore.setSoundEnabled(sound.key, event.currentTarget.checked)}
+											/>
+											<span class={s.soundPattern}>
+												<SoundPatternSvg sound={sound.key} />
+											</span>
+											<button
+												class={s.testBtn}
+												aria-label={`Preview ${sound.label}`}
+												onClick={() => notificationsStore.testSound(sound.key)}
+											>
+												{t("notifications.btn.test", "Test")}
+											</button>
+										</div>
+									)}
+								</SettingRow>
 							)}
 						</For>
 					</div>

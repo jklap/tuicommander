@@ -82,6 +82,8 @@ describe("Application Settings restyle contracts", () => {
 		expect(setAutoToastCards).toHaveBeenCalledWith(false);
 		fireEvent.click(view.getByRole("button", { name: "Preview Question" }));
 		expect(testSound).toHaveBeenLastCalledWith("question");
+		expect(view.getByRole("switch", { name: "Question" })).toBeInTheDocument();
+		expect(view.getByRole("switch", { name: "Completion" })).toBeInTheDocument();
 	});
 
 	// Catches: labelled row controls lose their callback, rejected-input restoration, blur validation or reactive description.
