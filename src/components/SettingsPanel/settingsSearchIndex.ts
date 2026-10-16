@@ -718,19 +718,19 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	// tabs/AgentsTab.tsx
 	// The idle-close control is inside collapsed per-agent cards. A search result
 	// cannot choose and expand a card, so it has no stable scroll target here.
-	{ tab: "agents", section: "Agents" },
+	{ tab: "agents", section: "Agent behavior" },
 	{ tab: "agents", section: "ego permissions" },
 	{ tab: "agents", section: "Idle agent hibernation", sectionKey: "settings.agents.hibernateHeading" },
-	{ tab: "agents", section: "Agents", label: "Show agent intent as tab title" },
-	{ tab: "agents", section: "Agents", label: "Show suggested follow-up actions" },
+	{ tab: "agents", section: "Agent behavior", label: "Show agent intent as tab title" },
+	{ tab: "agents", section: "Agent behavior", label: "Show suggested follow-up actions" },
 	{
 		tab: "agents",
-		section: "Agents",
+		section: "Agent behavior",
 		label: "Collect project progress",
 		expert: true,
 		configKey: "app.progress_tracking",
 	},
-	{ tab: "agents", section: "Agents", label: "Launch instructions" },
+	{ tab: "agents", section: "Agent behavior", label: "Launch instructions" },
 	{ tab: "agents", section: "ego permissions", label: "Permissions" },
 	{ tab: "agents", section: "ego permissions", label: "Filesystem sandbox" },
 	{

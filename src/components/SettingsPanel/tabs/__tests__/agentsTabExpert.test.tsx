@@ -280,7 +280,7 @@ describe("AgentsTab expert controls", () => {
 		const label = [...container.querySelectorAll("label")].find((el) =>
 			el.textContent?.includes("Prevent alternate screen"),
 		);
-		const checkbox = label?.querySelector("input[type=checkbox]") as HTMLInputElement;
+		const checkbox = container.querySelector(`#${label?.htmlFor}`) as HTMLInputElement;
 		expect(checkbox.checked).toBe(true);
 		fireEvent.click(checkbox);
 		expect(agentConfigsStore.getPreventAltScreen("gemini")).toBe(false);
@@ -293,7 +293,7 @@ describe("AgentsTab expert controls", () => {
 		const label = [...container.querySelectorAll("label")].find((el) =>
 			el.textContent?.includes("Accept workspace trust for managed spawns"),
 		);
-		const checkbox = label?.querySelector("input[type=checkbox]") as HTMLInputElement;
+		const checkbox = container.querySelector(`#${label?.htmlFor}`) as HTMLInputElement;
 		expect(checkbox.checked).toBe(true);
 		fireEvent.click(checkbox);
 		await waitFor(() =>
@@ -312,7 +312,10 @@ describe("AgentsTab expert controls", () => {
 		await setup();
 		uiStore.setSettingsExpertMode(true);
 		const { container } = renderExpanded("claude");
-		const input = container.querySelector<HTMLInputElement>("#idle-close-claude");
+		const label = [...container.querySelectorAll("label")].find(
+			(e) => e.textContent === "Close idle managed child after",
+		);
+		const input = container.querySelector<HTMLInputElement>(`#${label?.htmlFor}`);
 		expect(input?.value).toBe("15");
 		fireEvent.change(input!, { target: { value: "0" } });
 		await waitFor(() => expect(agentConfigsStore.getIdleCloseMinutes("claude")).toBe(0));

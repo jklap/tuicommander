@@ -27,7 +27,7 @@ document.body.style.margin = "0";
 
 function Preview() {
 	const [query, setQuery] = createSignal("");
-	const [tab, setTab] = createSignal(new URLSearchParams(location.search).get("tab") ?? "terminal");
+	const [tab, setTab] = createSignal(new URLSearchParams(location.search).get("tab") ?? "agents");
 	return (
 		<SettingsShell
 			visible
