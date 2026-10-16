@@ -143,7 +143,7 @@ describe("SettingsPanel — repo context", () => {
 
 	it("shows repo settings content when repo nav item is active", () => {
 		const { container } = render(() => <SettingsPanel {...defaultProps} />);
-		// RepoWorktreeTab renders h3 "Repository"
+		// Section cards retain the repository headings.
 		const headings = Array.from(container.querySelectorAll(".section h3")).map((h) => h.textContent);
 		expect(headings).toContain("Repository");
 		// RepoScriptsTab renders h3 "Automation Scripts"
@@ -164,6 +164,27 @@ describe("SettingsPanel — repo context", () => {
 		expect(resetBtn).not.toBeNull();
 		fireEvent.click(resetBtn);
 		expect(repoSettingsStore.reset).toHaveBeenCalledWith("/repo");
+	});
+
+	it("keeps explicit disabled fetch distinct from inherited defaults", () => {
+		// Catches coercing the nullable sentinel or explicit zero into the same override.
+		const { container } = render(() => <SettingsPanel {...defaultProps} />);
+		const label = [...container.querySelectorAll("label")].find((e) => e.textContent === "Auto-Fetch Interval")!;
+		const select = container.querySelector(`#${label.htmlFor}`)!;
+		fireEvent.change(select, { target: { value: "0" } });
+		expect(repoSettingsStore.update).toHaveBeenLastCalledWith("/repo", { autoFetchIntervalMinutes: 0 });
+		fireEvent.change(select, { target: { value: "__inherit__" } });
+		expect(repoSettingsStore.update).toHaveBeenLastCalledWith("/repo", { autoFetchIntervalMinutes: null });
+	});
+	it("clears a script override to inheritance without exporting it", () => {
+		// Catches replacing the textarea without preserving its empty-to-null update boundary.
+		const { container } = render(() => <SettingsPanel {...defaultProps} />);
+		const input = container.querySelector("#repo-run-script")!;
+		fireEvent.input(input, { target: { value: "pnpm dev" } });
+		expect(repoSettingsStore.update).toHaveBeenLastCalledWith("/repo", { runScript: "pnpm dev" });
+		fireEvent.input(input, { target: { value: "" } });
+		expect(repoSettingsStore.update).toHaveBeenLastCalledWith("/repo", { runScript: null });
+		expect(container.textContent).toContain("Scripts are never exported.");
 	});
 
 	it("clicking a global nav item switches to global content", () => {

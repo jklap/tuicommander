@@ -3,6 +3,8 @@ import { t } from "../../../i18n";
 import { Input } from "../../ui/Input";
 import { Textarea } from "../../ui/Textarea";
 import s from "../Settings.module.css";
+import { SectionCard } from "../SettingsPrimitives";
+import r from "./RepositoryTabs.module.css";
 import type { RepoTabProps } from "./RepoWorktreeTab";
 
 export const RepoScriptsTab: Component<RepoTabProps> = (props) => {
@@ -22,82 +24,89 @@ export const RepoScriptsTab: Component<RepoTabProps> = (props) => {
 			: "#!/bin/bash\ndocker compose down";
 
 	return (
-		<div class={s.section}>
-			<h3>{t("repoScripts.heading.designMode", "Design Mode")}</h3>
-			<div class={s.group}>
-				<label for="repo-dev-server-url">{t("repoScripts.label.devServerUrl", "Dev Server URL")}</label>
-				<Input
-					id="repo-dev-server-url"
-					type="url"
-					value={props.settings.devServerUrl ?? ""}
-					onInput={(e) => props.onUpdate("devServerUrl", e.currentTarget.value || null)}
-					placeholder="http://localhost:5173"
-				/>
-				<p class={s.hint}>
-					{t(
-						"repoScripts.hint.devServerUrl",
-						"Open this URL in Chrome when Design Mode starts. Leave empty to navigate manually.",
-					)}
-				</p>
-			</div>
-			<h3>{t("repoScripts.heading.automationScripts", "Automation Scripts")}</h3>
+		<div class={`${s.section} ${r.page}`}>
+			<SectionCard title={t("repoScripts.heading.designMode", "Design Mode")}>
+				<div class={s.group}>
+					<label for="repo-dev-server-url">{t("repoScripts.label.devServerUrl", "Dev Server URL")}</label>
+					<Input
+						id="repo-dev-server-url"
+						type="url"
+						value={props.settings.devServerUrl ?? ""}
+						onInput={(e) => props.onUpdate("devServerUrl", e.currentTarget.value || null)}
+						placeholder="http://localhost:5173"
+					/>
+					<p class={s.hint}>
+						{t(
+							"repoScripts.hint.devServerUrl",
+							"Open this URL in Chrome when Design Mode starts. Leave empty to navigate manually.",
+						)}
+					</p>
+				</div>
+			</SectionCard>
+			<SectionCard
+				title={t("repoScripts.heading.automationScripts", "Automation Scripts")}
+				description="Scripts run locally and are never included in team exports. Empty fields inherit the global script."
+			>
+				<div class={s.group}>
+					<label for="repo-setup-script">{t("repoScripts.label.setupScript", "Setup Script")}</label>
+					<Textarea
+						id="repo-setup-script"
+						value={props.settings.setupScript ?? ""}
+						onInput={(e) => {
+							const val = e.currentTarget.value;
+							props.onUpdate("setupScript", val === "" ? null : val);
+						}}
+						placeholder={setupPlaceholder()}
+						rows={6}
+					/>
+					<p class={s.hint}>
+						{t("repoScripts.hint.setupScript", "Shell script run when creating a new worktree.")}
+						{props.settings.setupScript === null
+							? ` ${t("repoScripts.hint.useGlobalDefault", "Using global default.")}`
+							: ""}
+					</p>
+				</div>
 
-			<div class={s.group}>
-				<label>{t("repoScripts.label.setupScript", "Setup Script")}</label>
-				<Textarea
-					value={props.settings.setupScript ?? ""}
-					onInput={(e) => {
-						const val = e.currentTarget.value;
-						props.onUpdate("setupScript", val === "" ? null : val);
-					}}
-					placeholder={setupPlaceholder()}
-					rows={6}
-				/>
-				<p class={s.hint}>
-					{t("repoScripts.hint.setupScript", "Shell script run when creating a new worktree.")}
-					{props.settings.setupScript === null
-						? ` ${t("repoScripts.hint.useGlobalDefault", "Using global default.")}`
-						: ""}
-				</p>
-			</div>
+				<div class={s.group}>
+					<label for="repo-run-script">{t("repoScripts.label.runScript", "Run Script")}</label>
+					<Textarea
+						id="repo-run-script"
+						value={props.settings.runScript ?? ""}
+						onInput={(e) => {
+							const val = e.currentTarget.value;
+							props.onUpdate("runScript", val === "" ? null : val);
+						}}
+						placeholder={runPlaceholder()}
+						rows={6}
+					/>
+					<p class={s.hint}>
+						{t("repoScripts.hint.runScript", "Shell script run when launching the worktree.")}
+						{props.settings.runScript === null
+							? ` ${t("repoScripts.hint.useGlobalDefault", "Using global default.")}`
+							: ""}
+					</p>
+				</div>
 
-			<div class={s.group}>
-				<label>{t("repoScripts.label.runScript", "Run Script")}</label>
-				<Textarea
-					value={props.settings.runScript ?? ""}
-					onInput={(e) => {
-						const val = e.currentTarget.value;
-						props.onUpdate("runScript", val === "" ? null : val);
-					}}
-					placeholder={runPlaceholder()}
-					rows={6}
-				/>
-				<p class={s.hint}>
-					{t("repoScripts.hint.runScript", "Shell script run when launching the worktree.")}
-					{props.settings.runScript === null
-						? ` ${t("repoScripts.hint.useGlobalDefault", "Using global default.")}`
-						: ""}
-				</p>
-			</div>
-
-			<div class={s.group}>
-				<label>{t("repoScripts.label.archiveScript", "Archive Script")}</label>
-				<Textarea
-					value={props.settings.archiveScript ?? ""}
-					onInput={(e) => {
-						const val = e.currentTarget.value;
-						props.onUpdate("archiveScript", val === "" ? null : val);
-					}}
-					placeholder={archivePlaceholder()}
-					rows={6}
-				/>
-				<p class={s.hint}>
-					{t("repoScripts.hint.archiveScript", "Shell script run before archiving or deleting a worktree.")}
-					{props.settings.archiveScript === null
-						? ` ${t("repoScripts.hint.useGlobalDefault", "Using global default.")}`
-						: ""}
-				</p>
-			</div>
+				<div class={s.group}>
+					<label for="repo-archive-script">{t("repoScripts.label.archiveScript", "Archive Script")}</label>
+					<Textarea
+						id="repo-archive-script"
+						value={props.settings.archiveScript ?? ""}
+						onInput={(e) => {
+							const val = e.currentTarget.value;
+							props.onUpdate("archiveScript", val === "" ? null : val);
+						}}
+						placeholder={archivePlaceholder()}
+						rows={6}
+					/>
+					<p class={s.hint}>
+						{t("repoScripts.hint.archiveScript", "Shell script run before archiving or deleting a worktree.")}
+						{props.settings.archiveScript === null
+							? ` ${t("repoScripts.hint.useGlobalDefault", "Using global default.")}`
+							: ""}
+					</p>
+				</div>
+			</SectionCard>
 		</div>
 	);
 };
