@@ -1,3 +1,10 @@
+---
+status: completed
+approved_at: "2026-10-10T19:09:24.683Z"
+updated: "2026-10-11T08:23:22.986Z"
+started_at: "2026-10-10T19:09:36.490Z"
+completed_at: "2026-10-11T08:23:22.986Z"
+---
 # Plan: Complete settings control through MCP
 
 **Created:** 2026-10-10 | **Status:** Draft; two Boss choices open | **Effort:** XL
