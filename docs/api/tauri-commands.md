@@ -631,8 +631,7 @@ JavaScript `String.slice` semantics for ASCII, accented text, and non-BMP emoji.
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
 | `plugin_github_action` | `plugin_id, account, reference, request` | `Value` | Account-scoped B6/B7 bridge; requires net:http, manifest github provider consent and matching PR reference |
-| `plugin_http_fetch` | `url, method?, headers?, body?, account?, plugin_id, request_id?` | `HttpResponse` | Make HTTP request (validated against the on-disk manifest `allowedUrls`; with `account`, Rust injects that account's credential under the account host rule) |
-| `plugin_http_cancel` | `plugin_id, request_id` | `()` | Cancel a plugin-scoped HTTP request, including its response body. |
+| `plugin_http_fetch` | `url, method?, headers?, body?, account?, plugin_id` | `HttpResponse` | Make HTTP request (validated against the on-disk manifest `allowedUrls`; with `account`, Rust injects that account's credential under the account host rule) |
 
 ## Code Intelligence / MDKB (`mdkb_commands.rs`)
 

@@ -718,7 +718,6 @@ pub fn unregister_loaded_plugin(
 }
 
 pub(crate) fn unregister_loaded_plugin_impl(state: &crate::AppState, plugin_id: &str) {
-    state.plugin_http_requests.cancel_plugin(plugin_id);
     state.plugin_settings.unregister(plugin_id);
     state.loaded_plugins.remove(plugin_id);
     crate::accounts::unregister_providers(plugin_id);
