@@ -1,4 +1,5 @@
-import { type Component, createSignal, For, onMount, Show } from "solid-js";
+import { type Component, createEffect, createSignal, For, onMount, Show } from "solid-js";
+import { createStore, reconcile } from "solid-js/store";
 import { t } from "../../../../i18n";
 import { appLogger } from "../../../../stores/appLogger";
 import { rpc } from "../../../../transport";
@@ -8,7 +9,7 @@ import { ExpertSetting } from "../../ExpertSetting";
 import s from "../../Settings.module.css";
 import { SectionCard, SettingPageHeader, SettingRow } from "../../SettingsPrimitives";
 import layout from "./ServiceRestyle.module.css";
-import { type AppConfig, saveConfigField, useMcpStatusPoll } from "./servicesShared";
+import { type AppConfig, type NativeMcpTool, saveConfigField, useMcpStatusPoll } from "./servicesShared";
 import { UpstreamMcpPanel } from "./UpstreamMcpPanel";
 
 /**
@@ -18,6 +19,9 @@ import { UpstreamMcpPanel } from "./UpstreamMcpPanel";
  */
 export const LocalMcpPanel: Component = () => {
 	const { status } = useMcpStatusPoll();
+	const [nativeTools, setNativeTools] = createStore<NativeMcpTool[]>([]);
+	// Poll snapshots contain fresh objects; registry names own the row identity.
+	createEffect(() => setNativeTools(reconcile(status()?.native_tools ?? [], { key: "name" })));
 	const [disabledNativeTools, setDisabledNativeTools] = createSignal<string[]>([]);
 	// The toggles wait for the saved list: the `[]` placeholder would show every
 	// tool as enabled until `load_config` answers.
@@ -171,7 +175,7 @@ export const LocalMcpPanel: Component = () => {
 							Choose which built-in tools MCP clients can call. Disabled tools are hidden from clients.
 						</p>
 					</div>
-					<For each={status()?.native_tools}>
+					<For each={nativeTools}>
 						{(tool) => {
 							const disabled = () => disabledNativeTools().includes(tool.name);
 							return (

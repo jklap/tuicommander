@@ -572,3 +572,6 @@ navigation entry; it does not create a second settings service.
 AI Chat groups provider details in **Other providers and available models**. Workspace access shows the effective folders first. **Add folder** and **Edit** reveal the existing ego roots draft; **Save roots in ego** keeps its explicit save boundary. The network selector writes through ego. **How to verify** explains command-isolation evidence without running a probe.
 
 Voice keeps downloadable models and voice management in **Speech assets**. Remote Access separates connection status, Tailscale HTTPS and token revocation. Plugin rows keep secondary controls in **Manage plugin**; plugin pages identify their source and plugin-owned scope.
+Native MCP tool help stays anchored during status refreshes. Focus a `?` badge
+with the keyboard or hover over it to read the full tool description. Help
+placement follows panel scrolling, window resizing, and description size changes.
