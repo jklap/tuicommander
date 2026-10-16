@@ -1000,7 +1000,7 @@ describe("AIChatPanel: parallel tabs", () => {
 			container.querySelector(`button[data-chat-session="${SECOND_SESSION}"]`)?.getAttribute("aria-selected"),
 		).toBe("true");
 		expect(container.textContent).toContain("Saved second answer");
-		expect(container.textContent).toContain("Model: Opus");
+		expect(container.textContent).toContain("Opus");
 		expect(client.connect).toHaveBeenCalledTimes(1);
 		expect(client.loadSession).toHaveBeenCalledWith(CONNECTION, SECOND_SESSION, CHAT_ROOT);
 		expect(client.newSession).not.toHaveBeenCalled();
@@ -1040,7 +1040,7 @@ describe("AIChatPanel: parallel tabs", () => {
 		acpStore.applySnapshot(snapshot({ attachments: [attachment({ sessionId: SECOND_SESSION })] }));
 		finish();
 		await settle();
-		expect(container.textContent).toContain("Model: Opus");
+		expect(container.textContent).toContain("Opus");
 		expect(container.textContent).not.toContain("Connecting conversation…");
 	});
 
@@ -1088,7 +1088,7 @@ describe("AIChatPanel: parallel tabs", () => {
 		[...container.querySelectorAll("button")].find((button) => button.textContent === "Retry")?.click();
 		await settle();
 		expect(container.textContent).toContain("Recovered second answer");
-		expect(container.textContent).toContain("Model: Opus");
+		expect(container.textContent).toContain("Opus");
 		expect(client.loadSession.mock.calls.map((call) => call[1])).toEqual([SECOND_SESSION, SECOND_SESSION]);
 		expect(client.connect).toHaveBeenCalledTimes(1);
 		expect(client.reconnect).not.toHaveBeenCalled();
@@ -1170,7 +1170,7 @@ describe("AIChatPanel: parallel tabs", () => {
 		selectTab(container, SECOND_SESSION);
 		await settle();
 		expect(container.textContent).toContain("Existing live answer");
-		expect(container.textContent).toContain("Model: Opus");
+		expect(container.textContent).toContain("Opus");
 		expect(client.loadSession).not.toHaveBeenCalled();
 	});
 
@@ -1265,7 +1265,7 @@ describe("AIChatPanel: parallel tabs", () => {
 		});
 		await settle();
 		expect(container.querySelector('[aria-label="Session settings"]')).not.toBeNull();
-		expect(container.textContent).toContain("Mode: default");
+		expect(container.textContent).toContain("default");
 		expect(container.textContent).not.toContain("Model: pending");
 		expect(acpStore.attachment(CONNECTION, SECOND_SESSION)?.configOptions).toEqual([MODEL_OPTION]);
 		expect(client.prompt).not.toHaveBeenCalled();
@@ -1289,9 +1289,9 @@ describe("AIChatPanel: parallel tabs", () => {
 	])("keeps model and mode pending until options arrive, starting with $configOptions", async ({ configOptions }) => {
 		const { container } = await renderPanel();
 		acpStore.applySnapshot(snapshot({ attachments: [attachment({ configOptions })] }));
-		expect(container.textContent).toContain("Model: pending · Mode: pending");
+		expect(container.textContent).toContain(configOptions.length ? "high" : "Model: pending · Mode: pending");
 		acpStore.applySnapshot(snapshot({ attachments: [attachment()] }));
-		expect(container.textContent).toContain("Model: Opus");
+		expect(container.textContent).toContain("Opus");
 		expect(container.textContent).not.toContain("Model: pending");
 		expect(container.querySelector('[aria-label="Session settings"]')).not.toBeNull();
 	});
@@ -1328,7 +1328,7 @@ describe("AIChatPanel: parallel tabs", () => {
 		await settle();
 		refuse();
 		await settle();
-		expect(container.textContent).toContain("Model: Opus");
+		expect(container.textContent).toContain("Opus");
 		expect(container.textContent).not.toContain("Previous custom tab failed");
 	});
 
@@ -3360,7 +3360,7 @@ describe("AIChatPanel: the session's own knobs", () => {
 		await settle();
 		acpStore.applySnapshot(snapshot({ attachments: [attachment({ configOptions: [grouped] })] }));
 		await settle();
-		expect(container.querySelector(".composerMeta")?.textContent).toContain("Mode: Automatic");
+		expect(container.querySelector(".composerMeta")?.textContent).toContain("Automatic");
 		(container.querySelector('button[aria-label="Session settings"]') as HTMLButtonElement).click();
 		const picker = container.querySelector('select[aria-label="Mode"]') as HTMLSelectElement;
 		expect(picker.querySelector("optgroup")?.label).toBe("Behavior");
@@ -3485,6 +3485,9 @@ describe("AIChatPanel: pause, resume and compact", () => {
 		await settle();
 		const menu = container.querySelector<HTMLDetailsElement>(".actionsMenu")!;
 		expect(menu.open).toBe(false);
+		expect(menu.querySelector(":scope > summary svg")).not.toBeNull();
+		expect(container.querySelector('button[aria-label="New chat tab"] svg')).not.toBeNull();
+		expect(container.querySelector(".conversationLabel span + svg")).not.toBeNull();
 		menu.querySelector<HTMLElement>(":scope > summary")!.click();
 		expect(menu.open).toBe(true);
 		for (const label of ["Session settings", "Pause the turn", "Compact the conversation"]) {

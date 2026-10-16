@@ -342,7 +342,6 @@ export const Composer: Component<{
 				</button>
 			</div>
 			<div class={s.composerMeta}>
-				<span class={s.sessionSettingsSummary}>{sessionSummary(props.chat)}</span>{" "}
 				<Show when={props.chat.operatingRepo?.()}>
 					{(repo) => (
 						<div class={s.repoContext}>
@@ -354,11 +353,12 @@ export const Composer: Component<{
 								disabled={!props.chat.sessionId()}
 								onClick={() => props.chat.toggleRepoPin()}
 							>
-								{props.chat.pinnedRepo?.() ? "Pinned repository" : "Follow repository"}
+								· {props.chat.pinnedRepo?.() ? "pinned repository" : "follows the repository on screen"}
 							</button>
 						</div>
 					)}
 				</Show>
+				<span class={s.sessionSettingsSummary}>{sessionSummary(props.chat)}</span>
 			</div>
 		</>
 	);

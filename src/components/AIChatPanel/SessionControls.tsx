@@ -155,36 +155,47 @@ export const SessionControls: Component<{ chat: AcpChat; onNewOptions: () => voi
 
 	return (
 		<div class={s.sessionHeader}>
-			<Select
-				compact
-				class={s.modelPicker}
-				title="Conversation"
-				aria-label="Conversation"
-				value={props.chat.sessionId() ?? ""}
-				onChange={(event) => {
-					const select = event.currentTarget;
-					void props.chat.selectSession(select.value).then(() => {
-						select.value = props.chat.sessionId() ?? "";
-					});
-				}}
-			>
-				<Show when={!sessions().some((session) => session.sessionId === props.chat.sessionId())}>
-					<option value={props.chat.sessionId() ?? ""}>{props.chat.title() || "AI Chat"}</option>
-				</Show>
-				<For each={sessions()}>
-					{(session) => (
-						<option
-							value={session.sessionId}
-							title={session.sessionId}
-							disabled={session._meta?.tuicommander?.deleted === true}
-						>
-							{"  ".repeat(session._meta?.tuicommander?.lineageDepth ?? 0)}
-							{session._meta?.tuicommander?.lineageDepth ? "↳ " : ""}
-							{conversationLabel(session)}
-						</option>
-					)}
-				</For>
-			</Select>
+			<div class={s.conversationSwitcher}>
+				<span class={s.conversationLabel} aria-hidden="true">
+					<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+						<path d="M2 2h12v9H6l-4 3V2Zm1 1v9l2.7-2H13V3H3Z" />
+					</svg>
+					<span>{props.chat.title() || "AI Chat"}</span>
+					<svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor">
+						<path d="m3 5 5 5 5-5H3Z" />
+					</svg>
+				</span>
+				<Select
+					compact
+					class={s.modelPicker}
+					title="Conversation"
+					aria-label="Conversation"
+					value={props.chat.sessionId() ?? ""}
+					onChange={(event) => {
+						const select = event.currentTarget;
+						void props.chat.selectSession(select.value).then(() => {
+							select.value = props.chat.sessionId() ?? "";
+						});
+					}}
+				>
+					<Show when={!sessions().some((session) => session.sessionId === props.chat.sessionId())}>
+						<option value={props.chat.sessionId() ?? ""}>{props.chat.title() || "AI Chat"}</option>
+					</Show>
+					<For each={sessions()}>
+						{(session) => (
+							<option
+								value={session.sessionId}
+								title={session.sessionId}
+								disabled={session._meta?.tuicommander?.deleted === true}
+							>
+								{"  ".repeat(session._meta?.tuicommander?.lineageDepth ?? 0)}
+								{session._meta?.tuicommander?.lineageDepth ? "↳ " : ""}
+								{conversationLabel(session)}
+							</option>
+						)}
+					</For>
+				</Select>
+			</div>
 
 			<button
 				type="button"
@@ -194,6 +205,9 @@ export const SessionControls: Component<{ chat: AcpChat; onNewOptions: () => voi
 				disabled={props.chat.phase() === "unconfigured"}
 				onClick={() => void props.chat.startSession()}
 			>
+				<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+					<path d="M7 2h2v5h5v2H9v5H7V9H2V7h5V2Z" />
+				</svg>
 				New
 			</button>
 			<details
@@ -208,7 +222,11 @@ export const SessionControls: Component<{ chat: AcpChat; onNewOptions: () => voi
 				}}
 			>
 				<summary class={s.headerBtn} aria-label="Conversation actions" title="Conversation actions">
-					⋯
+					<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+						<circle cx="3" cy="8" r="1" />
+						<circle cx="8" cy="8" r="1" />
+						<circle cx="13" cy="8" r="1" />
+					</svg>
 				</summary>
 				<div class={s.actionsMenuItems}>
 					<Show when={props.chat.launch()}>
@@ -374,10 +392,13 @@ export function sessionSummary(chat: AcpChat): string {
 		chat
 			.configOptions()
 			.filter((option): option is SelectOption => option.type === "select")
-			.filter((option) => option.id === "model" || option.id === "mode")
-			.map(
-				(option) =>
-					`${option.name}: ${option.id === "model" ? choiceName(option).split("/").at(-1) : choiceName(option)}`,
+			.filter((option) => option.id === "model" || option.id === "effort" || option.id === "mode")
+			.map((option) =>
+				option.id === "model"
+					? choiceName(option).split("/").at(-1)
+					: option.id === "effort"
+						? option.currentValue
+						: choiceName(option),
 			)
 			.join(" · ") || "Model: pending · Mode: pending"
 	);
