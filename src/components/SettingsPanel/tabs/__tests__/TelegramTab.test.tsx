@@ -154,7 +154,7 @@ it("renders safe recent events and refreshes while open 1956", async () => {
 	updated = true;
 	await vi.advanceTimersByTimeAsync(3000);
 	const replies = await screen.findAllByRole("status");
-	expect(replies.map((node) => node.textContent).filter((text) => text !== "Connected (this app)")).toEqual([
+	expect(replies.map((node) => node.textContent).filter((text) => !text?.includes("Connected (this app)"))).toEqual([
 		"Chat linked.",
 		"[redacted]",
 		"Hello",
