@@ -91,6 +91,7 @@ interface TerminalTabViewProps extends SharedTabViewProps {
 	index: number;
 	designModeStatus?: "armed" | "stopped";
 	quickSwitcherActive: boolean;
+	tabHintsActive?: boolean;
 	isEditing: boolean;
 	showWorkspaceMetadata: boolean;
 	onFocusDetached?: (id: string) => void;
@@ -243,8 +244,10 @@ export const TerminalTabView: Component<TerminalTabViewProps> = (props) => {
 						<GlobeIcon size={11} />
 					</button>
 				</Show>
-				<Show when={props.quickSwitcherActive && props.index < 9}>
-					<span class={s.shortcutBadge}>{keyFor(`switch-branch-${props.index + 1}`)}</span>
+				<Show when={(props.tabHintsActive || props.quickSwitcherActive) && props.index < 9}>
+					<span class={s.shortcutBadge}>
+						{keyFor(`${props.tabHintsActive ? "switch-tab" : "switch-branch"}-${props.index + 1}`)}
+					</span>
 				</Show>
 				<Show when={props.showWorkspaceMetadata && hovered() && globalWorkspaceStore.isActive() && repoName()}>
 					<span class={s.repoOverlay}>{repoName()}</span>
