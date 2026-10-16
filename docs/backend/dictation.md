@@ -908,11 +908,12 @@ speech service** (the settings panel says so under Spoken replies).
 - **Protocol** (recorded, see `speech/fixtures/edge_stream.json`): handshake
   at `wss://api.msedgeservices.com/tts/cognitiveservices/websocket/v1`,
   with the public token in the `Ocp-Apim-Subscription-Key` query parameter.
-  `Sec-MS-GEC` v2 combines CS64 and modified SHA-256 over the five-minute
-  Windows clock bucket and token; version is `2-143.0.3650.75`. The digest
-  and browser headers follow [edge-tts 7.3.0](https://github.com/rany2/edge-tts/tree/6d3fff402a77dd4d43cccf074d042252770e41c2/src/edge_tts)
-  (the LGPLv3 Rust adaptation is in `edge_gec.rs`, with its license beside it).
-  That reference still uses Bing; the endpoint migration follows
+  `Sec-MS-GEC` retains ordinary SHA-256 over the five-minute Windows clock
+  bucket and token, with version `1-130.0.2849.68`. A live Mac probe on
+  2026-10-16 returned HTTP 101 and 22,752 MP3 bytes with this v1 digest;
+  omitting both GEC parameters returned HTTP 403 and no audio. The v2
+  control also returned HTTP 101 and 22,752 bytes, but is not needed.
+  No LGPL digest implementation is included. The endpoint migration follows
   [Readest PR 6722](https://github.com/readest/readest/pull/6722).
   The voice list stays on the original Bing URL (verified HTTP 200 on
   2026-10-16). The handshake also sends the browser's `Origin`, desktop

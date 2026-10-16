@@ -21,8 +21,8 @@
 //! Nothing here is ours, and all of it was recorded rather than guessed
 //! (`fixtures/edge_stream.json`, recorded from the live service):
 //!
-//! * the handshake wants `Sec-MS-GEC` v2 (CS64 and modified SHA-256 of the
-//!   five-minute clock bucket and public token), plus the browser's `Origin`;
+//! * the handshake accepts `Sec-MS-GEC` v1 (SHA-256 of the five-minute clock
+//!   bucket and public token), plus the browser's `Origin`;
 //! * a request is `speech.config` then `ssml`; the answer is text frames
 //!   (`turn.start`, `response`, `turn.end`) around binary frames;
 //! * a binary frame is a big-endian `u16` header length, the headers, then the
@@ -39,8 +39,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use rodio::Source;
 use serde::Serialize;
-#[path = "edge_gec.rs"]
-mod gec;
+use sha2::{Digest, Sha256};
 use tungstenite::client::IntoClientRequest;
 use tungstenite::http::header;
 use tungstenite::stream::MaybeTlsStream;
@@ -50,14 +49,14 @@ use super::{Speech, SpeechAudio, SpeechCancel, SpeechError, budget_seconds};
 
 type Result<T> = std::result::Result<T, SpeechError>;
 
-// Protocol sources: edge-tts 7.3.0, commit 6d3fff402a77dd4d43cccf074d042252770e41c2
-// (constants.py, drm.py, communicate.py); endpoint migration: readest/readest#6722.
+// Endpoint migration: readest/readest#6722. Live Mac probe on 2026-10-16
+// confirmed the existing v1 GEC also returns HTTP 101 and MP3 on this host.
 const HOST: &str = "api.msedgeservices.com";
 const CLIENT_TOKEN: &str = "6A5AA1D4EAFF4E9FB37E23D68491D6F4";
 const WSS_PATH: &str = "/tts/cognitiveservices/websocket/v1";
 const ORIGIN: &str = "chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold";
 const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36 Edg/143.0.0.0";
-const GEC_VERSION: &str = "2-143.0.3650.75";
+const GEC_VERSION: &str = "1-130.0.2849.68";
 
 /// Where the voice list lives. Fetched by the caller, which already has an
 /// HTTP client; this module only parses what comes back.
@@ -439,15 +438,20 @@ fn decode_mp3(mp3: Vec<u8>) -> Result<SpeechAudio> {
     })
 }
 
-/// `Sec-MS-GEC` v2: CS64 and modified SHA-256 over the five-minute Windows
-/// file-time bucket and public client token (edge-tts 7.3.0).
+/// `Sec-MS-GEC`: SHA-256 of the Windows file-time clock rounded down to five
+/// minutes, followed by the client token, upper-case hex.
 fn sec_ms_gec(now: SystemTime) -> String {
     const WINDOWS_EPOCH_OFFSET_SECONDS: u64 = 11_644_473_600;
     const FIVE_MINUTES_IN_TICKS: u128 = 3_000_000_000;
     let since_unix = now.duration_since(UNIX_EPOCH).unwrap_or_default();
     let ticks = (since_unix + Duration::from_secs(WINDOWS_EPOCH_OFFSET_SECONDS)).as_nanos() / 100;
     let ticks = ticks - ticks % FIVE_MINUTES_IN_TICKS;
-    gec::token(format!("{ticks}{CLIENT_TOKEN}").as_bytes())
+    let digest = Sha256::digest(format!("{ticks}{CLIENT_TOKEN}"));
+    let mut token = String::with_capacity(64);
+    for byte in digest {
+        write!(token, "{byte:02X}").expect("writing to a String cannot fail");
+    }
+    token
 }
 
 // ---------------------------------------------------------------------------
