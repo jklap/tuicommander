@@ -566,9 +566,6 @@ const PromptRow: Component<{ prompt: SavedPrompt; headlessAgents: AgentType[] }>
 					<input type="checkbox" checked={isEnabled()} onChange={handleToggle} />
 				</label>
 
-				{/* Icon placeholder */}
-				<span class={sp.promptIcon}>{props.prompt.icon ?? ""}</span>
-
 				{/* Name */}
 				<span class={sp.promptName} style={{ opacity: isEnabled() ? 1 : 0.5 }}>
 					{props.prompt.name}
@@ -622,7 +619,7 @@ const CategoryGroup: Component<{ category: string; prompts: SavedPrompt[]; headl
 				<span class={sp.categoryChevron} classList={{ [sp.open]: open() }}>
 					&#9654;
 				</span>
-				<span>{props.category}</span>
+				<span>{props.category === "pr" ? "PR" : props.category === "ci" ? "CI" : props.category}</span>
 				<span class={sp.categoryCount}>{props.prompts.length}</span>
 			</div>
 			<Show when={open()}>
@@ -732,10 +729,7 @@ export const SmartPromptsTab: Component = () => {
 						</Select>
 					)}
 				</SettingRow>
-				<p class={s.hint}>
-					Default agent for headless prompts. Individual prompts can override this in their settings.
-					{detection.loading() ? " Detecting..." : ""}
-				</p>
+				<p class={s.hint}>{detection.loading() ? "Detecting..." : ""}</p>
 			</SectionCard>
 
 			<SectionCard title="Prompt library">
