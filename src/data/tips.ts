@@ -10,6 +10,11 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "Hands-free conversation shortcut",
+		description: `Press ${mod}+Alt+V to start or stop hands-free on the active terminal when dictation is enabled. Customize the chord in Keyboard Shortcuts.`,
+		shortcut: `${mod}+Alt+V`,
+	},
+	{
 		feature: "Tab shortcut hints",
 		description: `Hold ${mod} alone for 450 ms to show shortcuts on the first nine terminal tabs. Release it or use another key, mouse button, or scroll to hide the hints.`,
 		shortcut: null,

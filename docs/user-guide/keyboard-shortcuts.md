@@ -82,6 +82,8 @@ without clearing your draft. When Find is open, Escape closes Find first.
 | `Cmd+Shift+Down` | Jump to next block |
 | `Cmd+Shift+B` | Toggle block-scoped search |
 
+Hands-free conversation: press `Cmd+Alt+V` (`Ctrl+Alt+V` on Windows/Linux) to start or stop listening on the active terminal. Dictation must be enabled. A custom binding or explicit unbind in Keyboard Shortcuts overrides this default.
+
 ## Tab Navigation
 
 | Shortcut | Action |
@@ -319,4 +321,4 @@ Hold `Cmd` alone (`Ctrl` on Windows/Linux) for 450 ms to show shortcut badges on
 | `block-next` | `Cmd+Shift+Down` | Next command block |
 | `block-search-toggle` | `Cmd+Shift+B` | Search in block |
 | `answers-only` | `Cmd+Alt+R` | Show every prompt of the session with its 💬 answers (turns without an answer are left out); press again to return to the live terminal |
-| `toggle-hands-free` | — | Start/stop hands-free conversation with the active terminal |
+| `toggle-hands-free` | `Cmd+Alt+V` | Start/stop hands-free conversation with the active terminal |

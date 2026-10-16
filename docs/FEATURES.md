@@ -1433,7 +1433,7 @@ The `tuic-dictation` Rust crate implements audio, transcription and speech; the 
 
 ### 9.12 Starting it from the Command Palette
 - **"Start hands-free conversation" / "Stop hands-free conversation"** — one entry (`toggle-hands-free`, category Dictation), labelled for what it will do. Starting binds the **active** terminal; an active tab with no live session starts nothing. Hidden on the desktop while dictation is disabled; available in browser mode, where it uses the tab's own microphone.
-- Unbound by default; a user shortcut for `toggle-hands-free` runs the same action.
+- `Cmd+Alt+V` (`Ctrl+Alt+V` on Windows/Linux) starts or stops hands-free on the active terminal. User keybinding overrides take precedence. With desktop dictation disabled, the shortcut does nothing.
 - One function (`src/actions/handsFreeConversation.ts`) reuses the store's arm/disarm, so the audio owner and earcon priming are the same as in Settings.
 - **Push-to-talk and continuous listening are two mechanisms, not a mode switch.** Push-to-talk is the hotkey; continuous is Start. There is no setting that flips between them.
 - **The dictation hotkey is also the stop control.** Pressed while a conversation is running, it ends the whole thing — capture, the transcript waiting out its hold-back or held by a dialog, and whatever is being spoken. Turns already typed stay in the terminal. Pressed otherwise it records as usual.

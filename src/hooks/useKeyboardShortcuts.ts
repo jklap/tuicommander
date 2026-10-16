@@ -4,6 +4,7 @@ import { normalizeCombo } from "../keybindingDefaults";
 import { lastMenuActionTime } from "../menuDedup";
 import { isMacOS, isQuickSwitcherActive } from "../platform";
 import { pluginRegistry } from "../plugins/pluginRegistry";
+import { dictationStore } from "../stores/dictation";
 import { globalWorkspaceStore } from "../stores/globalWorkspace";
 import { keybindingsStore } from "../stores/keybindings";
 import { paneLayoutStore } from "../stores/paneLayout";
@@ -361,7 +362,7 @@ function dispatchAction(action: ActionName, handlers: ShortcutHandlers): boolean
 			terminalsStore.toggleAnswersOnly();
 			return true;
 		case "toggle-hands-free":
-			void toggleHandsFreeConversation();
+			if (dictationStore.state.enabled) void toggleHandsFreeConversation();
 			return true;
 		case "detach-activity-dashboard":
 			handlers.detachActivityDashboard();

@@ -8,6 +8,7 @@ import { settingsExpertStore } from "../../stores/settingsExpert";
 import { terminalsStore } from "../../stores/terminals";
 import { isTauri } from "../../transport";
 import { cx } from "../../utils";
+import { keyFor } from "../../utils/hotkey";
 import { handsFreePhaseLabel } from "../DictationToast/handsFreePhaseLabel";
 import { KeyComboCapture } from "../shared/KeyComboCapture";
 import { Input } from "../ui/Input";
@@ -1057,7 +1058,8 @@ const HandsFreeControls: Component = () => {
 			<p class={cx(s.hint, d.intro)}>
 				{t(
 					"dictation.handsFreeHint",
-					"Push-to-talk is the hotkey above: hold it, speak, release. Hands-free is the other mode — it binds one terminal, keeps the microphone open and sends each utterance by itself. The hotkey stops it.",
+					"Push-to-talk is the hotkey above: hold it, speak, release. Hands-free binds one terminal, keeps the microphone open and sends each utterance by itself. Use {hotkey} to start or stop hands-free on the active terminal.",
+					{ hotkey: keyFor("toggle-hands-free") || t("dictation.handsFreePaletteFallback", "the Command Palette") },
 				)}
 			</p>
 
