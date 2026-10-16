@@ -64,6 +64,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Retain bounded, metadata-only slow-refresh, UI-freeze and heartbeat-gap evidence across ring overflow and restart. Add an anonymized count-based replay input builder; original real-stall reproduction remains unproven (#1638-c94c).
 
+- Keep ego attachment grants after `run` and `resume` so direct launches accept their prompt (#1833).
+
 - Grant Gemini session attachment trust without a folder prompt or global settings changes. Grant ego PTY attachments read-only access in confined sandbox modes (#1833-aa60).
 
 - Add conditional atomic Ego settings batches, executable paths and base-only write-only provider auth actions (#1907-0f9f).
