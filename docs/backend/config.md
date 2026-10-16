@@ -1533,7 +1533,13 @@ See [GitHub settings owner adapter](github.md#github-settings-owner-adapter).
 `ego_executable`, `ego_profile` and `ai_chat_workspace` are `app` store fields owned
 by `AppSettingsStore`; no separate launch adapter exists. Changes apply to later
 ACP or PTY launches. Ego-owned defaults use the separate `ego` profile store and
-the configured CLI; no Ego configuration files are edited.
+the configured CLI; no Ego configuration files are edited. Machine targets select
+the base user document, while profile targets must match the configured launch
+profile. Managed model, roots, network and exec_paths patches use `config snapshot`
+and `config batch --if-revision`; atomicity covers only that owner document.
+Base-only auth headers and credential commands use typed write-only actions and
+the same owner CAS. Owner-redacted values are never written back as secrets.
+Capability inspection fails closed for older owners without conditional batches.
 
 ### Repository start-work brief
 

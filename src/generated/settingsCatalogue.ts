@@ -4304,6 +4304,66 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
+    "ego.auth.{provider}.credential_command": {
+      "id": "ego.auth.{provider}.credential_command",
+      "store": "ego",
+      "owner": "machine",
+      "area": "ego",
+      "group": "managed",
+      "order": 0,
+      "path": "/auth/{provider}/credential_command",
+      "labelKey": "settings.catalogue.ego.auth.{provider}.credential_command.label",
+      "helpKey": "settings.catalogue.ego.auth.{provider}.credential_command.help",
+      "label": "auth/{provider}/credential_command",
+      "schema": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "nullable": true,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "secret",
+      "apply": "next_session",
+      "effect": "Used by the next Ego session; existing ACP and PTY sessions keep their configuration.",
+      "operations": [
+        "get"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "ego.auth.{provider}.headers": {
+      "id": "ego.auth.{provider}.headers",
+      "store": "ego",
+      "owner": "machine",
+      "area": "ego",
+      "group": "managed",
+      "order": 0,
+      "path": "/auth/{provider}/headers",
+      "labelKey": "settings.catalogue.ego.auth.{provider}.headers.label",
+      "helpKey": "settings.catalogue.ego.auth.{provider}.headers.help",
+      "label": "auth/{provider}/headers",
+      "schema": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "nullable": true,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "secret",
+      "apply": "next_session",
+      "effect": "Used by the next Ego session; existing ACP and PTY sessions keep their configuration.",
+      "operations": [
+        "get"
+      ],
+      "confirmationClass": "ordinary"
+    },
     "ego.credentials.{key}": {
       "id": "ego.credentials.{key}",
       "store": "ego",
@@ -4331,6 +4391,43 @@ export const settingsCatalogue = {
       "effect": "Used by the next Ego session; existing ACP and PTY sessions keep their configuration.",
       "operations": [
         "get"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "ego.exec_paths": {
+      "id": "ego.exec_paths",
+      "store": "ego",
+      "owner": "profile",
+      "area": "ego",
+      "group": "managed",
+      "order": 0,
+      "path": "/exec_paths",
+      "labelKey": "settings.catalogue.ego.exec_paths.label",
+      "helpKey": "settings.catalogue.ego.exec_paths.help",
+      "label": "exec_paths",
+      "schema": {
+        "type": [
+          "array",
+          "null"
+        ],
+        "items": {
+          "type": "string"
+        },
+        "default": null
+      },
+      "nullable": true,
+      "default": null,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "private",
+      "apply": "next_session",
+      "effect": "Used by the next Ego session; existing ACP and PTY sessions keep their configuration.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
       ],
       "confirmationClass": "ordinary"
     },
@@ -9882,36 +9979,6 @@ export const settingsCatalogue = {
       "path": "/agents/{key}/run_configs/{name}/model",
       "ownerStep": "Step 4c",
       "reason": "Agent model availability requires the owning CLI capability resolver, without launching on save."
-    },
-    {
-      "store": "ego",
-      "path": "/exec_paths",
-      "ownerStep": "Step 3b",
-      "reason": "DEFERRED (2026-10-13): parent scopes this adapter to managed keys. Installed ego config set exec_paths=[] exits 2: unknown config key; an Ego owner extension must precede support."
-    },
-    {
-      "store": "ego",
-      "path": "/auth/{provider}/headers",
-      "ownerStep": "Step 3b",
-      "reason": "DEFERRED (2026-10-13): auth is base-only and outside ManagedConfigKey. Installed ego config set auth.openrouter.headers={} exits 2: unknown config key. No config-edit or raw-file bypass."
-    },
-    {
-      "store": "ego",
-      "path": "/auth/{provider}/credential_command",
-      "ownerStep": "Step 3b",
-      "reason": "DEFERRED (2026-10-13): installed ego config set auth.openrouter.credential_command exits 2: unknown config key. The program path is non-secret, its stdout secret; an owner extension is required."
-    },
-    {
-      "store": "ego",
-      "path": "/atomic_batch",
-      "ownerStep": "Step 3b",
-      "reason": "DEFERRED (2026-10-13): Ego managed CLI publishes one key per call. The adapter refuses patches changing multiple keys before any write; complete atomic batches require an owner API."
-    },
-    {
-      "store": "ego",
-      "path": "/compare_and_swap",
-      "ownerStep": "Step 3b",
-      "reason": "DEFERRED (2026-10-13): Ego CLI has no conditional revision write. The adapter serializes its own commits and checks latest state; external CLI writers can race between read and mutation. Full cross-process CAS requires an owner API."
     }
   ],
   "collections": [

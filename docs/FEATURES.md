@@ -3004,7 +3004,10 @@ repository bindings. Shared settings transport publication is a separate step.
 ### Ego settings owner service (#1775-330c)
 
 The internal settings catalogue includes Ego managed model/provider selection,
-roots and network. Configurations remain profile/workspace scoped; absent
+roots, network and executable paths. Conditional atomic batches use Ego owner
+revisions to reject concurrent external edits. Base-only provider headers and
+credential commands use write-only actions; reads expose presence only.
+Configurations remain profile/workspace scoped; absent
 values and explicit empty roots stay distinct. Stored credentials are presence-only.
 Launch profile/workspace stay in the `app` store; trusted executable writes await
 the confirmation step. No new public settings transport is registered
