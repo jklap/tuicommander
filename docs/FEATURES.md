@@ -845,6 +845,7 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 - **Custom scripts**: `$TUIC_SESSION` is available as a stable key for any tab-specific state
 
 ### 6.2 Agent Detection
+- Native ego empty-composer detection can recover an unconfirmed input after a fresh stable repaint, without replaying the earlier payload. Retained text and dialogs remain blocked; later queued BG wakes use the normal idle queue flush.
 - Hand-launched agents are classified and recorded by the backend on desktop and headless hosts; HTTP foreground queries share the desktop detection logic. Plain shells remain ineligible for agent submit and mail wake.
 - Protocol completion survives terminal redraws and decorative idle animation; new input and recognized semantic working signals can reopen activity.
 - Auto-detection from terminal output patterns

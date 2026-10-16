@@ -404,6 +404,11 @@ fn try_timer_idle_transition(
         let protocol_stale =
             screen_activity == AgentScreenActivity::Ready && silence.protocol_busy_is_stale();
         let screen_confirms_idle = match screen_activity {
+            AgentScreenActivity::Ready
+                if agent_type == Some("ego") && silence.injection_delivery_uncertain =>
+            {
+                silence.recover_uncertain_injection_on_empty_composer()
+            }
             AgentScreenActivity::Ready if protocol_stale => {
                 tracing::warn!(
                     session_id = %session_id,
@@ -640,6 +645,11 @@ fn spawn_silence_timer(
                     let now = std::time::Instant::now();
                     sl.last_output_at = now;
                     sl.last_chunk_at = now;
+                    if sl.injection_delivery_uncertain {
+                        // Resetting clocks is not a new composer repaint.
+                        sl.injection_uncertain_since = Some(now);
+                        sl.screen_ready_pending_since = None;
+                    }
                 }
                 continue;
             }

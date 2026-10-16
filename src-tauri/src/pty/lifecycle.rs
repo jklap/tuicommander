@@ -1314,7 +1314,7 @@ pub(crate) struct SilenceState {
     /// Enter. Such sessions remain conservatively BUSY and are surfaced in
     /// status; automatic retry would risk duplicate or corrupted input.
     pub(crate) injection_delivery_uncertain: bool,
-    injection_uncertain_since: Option<std::time::Instant>,
+    pub(super) injection_uncertain_since: Option<std::time::Instant>,
     injection_uncertainty_retryable: bool,
     /// Deadline until which an in-flight API connection-retry holds the agent
     /// BUSY. Armed by `mark_api_retry` when `is_retry_line` matches a changed
@@ -1494,6 +1494,7 @@ impl SilenceState {
             self.injection_delivery_uncertain = true;
             self.injection_uncertain_since = Some(std::time::Instant::now());
             self.injection_uncertainty_retryable = retryable;
+            self.screen_ready_pending_since = None;
         }
     }
 
@@ -1502,6 +1503,34 @@ impl SilenceState {
         self.injection_delivery_uncertain = false;
         self.injection_uncertain_since = None;
         self.injection_uncertainty_retryable = false;
+    }
+
+    /// Only the ego adapter proves both Ready and an empty composer. Require
+    /// a repaint after uncertainty was recorded and the normal stable-screen
+    /// debounce; elapsed silence over a pre-write screen proves nothing.
+    pub(super) fn recover_uncertain_injection_on_empty_composer(&mut self) -> bool {
+        if !self.injection_delivery_uncertain
+            || self.is_api_retry_active()
+            || self
+                .injection_uncertain_since
+                .is_none_or(|since| self.last_chunk_at <= since)
+        {
+            self.screen_ready_pending_since = None;
+            return false;
+        }
+        let since = self
+            .screen_ready_pending_since
+            .get_or_insert_with(std::time::Instant::now);
+        if since.elapsed() < AGENT_READY_CONFIRM {
+            return false;
+        }
+        self.invalidate_injection_claim();
+        self.evidence
+            .force_idle(EvidenceRank::Screen, "injection-ready");
+        self.last_status_line_at = None;
+        self.interrupt_requested_at = None;
+        self.evidence.activity_seen = false;
+        true
     }
 
     pub(super) fn expire_orchestrator_notice_uncertainty(&mut self) -> bool {

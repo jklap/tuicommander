@@ -1015,6 +1015,7 @@ pub(super) fn agent_submit_profile(agent_type: Option<&str>) -> AgentSubmitProfi
     use SubmitConfirmation::{HookOnly, LegacyWrite, PromptGone, WorkingScreen};
     let (enter_gap, confirmation) = match agent_type {
         Some("codex") => (INJECT_ENTER_GAP, WorkingScreen),
+        Some("ego") => (UNVERIFIED_ENTER_GAP, WorkingScreen),
         Some("claude" | "opencode" | "goose" | "grok" | "pi") => (INJECT_ENTER_GAP, WorkingScreen),
         Some("gemini") => (INJECT_ENTER_GAP, PromptGone),
         Some("amp" | "cursor" | "droid") => (INJECT_ENTER_GAP, LegacyWrite),

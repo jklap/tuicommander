@@ -455,6 +455,13 @@ notification is insufficient evidence: it also arrives after normal prose at
 the ready composer. Unambiguous permission notifications remain raw-stream
 signals because the VT parser consumes escape sequences before clean-row parsing.
 
+**Uncertain ego injection recovery** uses the native empty-composer adapter, not
+silence alone. Only a post-uncertainty repaint followed by 1.5 seconds of stable
+Ready may clear the uncertainty flag. Retained or wrapped drafts and modal rows
+fail closed. The foreground probe still gates idle; recovery never requeues the
+uncertain payload, but normal idle flush can deliver the next queued BG wake.
+The adapter shapes are recorded in `ego-composer-1957*.tcap`.
+
 **Every signal that sets awaiting needs a path that clears it.** The badge is
 `SessionState.awaiting_input`, not an event, and it is sticky by construction —
 whatever sets it owns nothing until something retracts it. These paths clear it:
