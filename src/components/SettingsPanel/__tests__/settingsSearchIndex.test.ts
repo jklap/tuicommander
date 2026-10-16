@@ -64,7 +64,7 @@ const UNINDEXABLE: Record<string, { dynamic: number; orphans: number }> = {
 	// cards and have no static scroll target; their static captions are orphans. Workspace trust appears only in the
 	// expanded Claude and Codex cards, so a global search result could not open
 	// the right card or scroll to its control.
-	// The machine selector's "Configure agents on" label scopes the page. The
+	// The machine selector is indexed under the page header. The
 	// idle-close control sits inside a collapsed, per-agent card: search cannot
 	// identify which card to expand or scroll to its hidden control. Neither has
 	// a stable search target.
@@ -159,7 +159,7 @@ describe("settings search index — drift guard", () => {
 		}).toEqual(UNINDEXABLE[tab]);
 	});
 
-	it("keeps per-agent captions and the machine selector out of static search targets", () => {
+	it("keeps per-agent captions out of search and indexes the page-level machine selector", () => {
 		const orphans = extractTab(readPage("agents")).settings.filter((setting) => !setting.section);
 		expect(orphans.map((setting) => setting.text)).toEqual([
 			"Arguments",
@@ -180,8 +180,12 @@ describe("settings search index — drift guard", () => {
 			"Track agent intent",
 			"Collect progress",
 			"Show suggested follow-ups",
-			"Configure agents on",
 		]);
+		expect(SETTINGS_SEARCH_INDEX).toContainEqual({
+			tab: "agents",
+			section: "Terminal agents",
+			label: "Configure agents on",
+		});
 	});
 
 	it("indexes no tab the panel cannot open", () => {

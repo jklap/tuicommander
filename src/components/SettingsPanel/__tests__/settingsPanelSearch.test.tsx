@@ -92,7 +92,7 @@ async function openResult(container: HTMLElement, query: string, tab: string, ro
 	expect(container.querySelector("nav button[class*='active']")?.textContent).toBe(tab);
 
 	const scrolled: Element[] = [];
-	for (const el of container.querySelectorAll("h3, label, span")) {
+	for (const el of container.querySelectorAll("h2, h3, label, span")) {
 		el.scrollIntoView = () => scrolled.push(el);
 	}
 	await waitFor(() => expect(scrolled).toHaveLength(1));

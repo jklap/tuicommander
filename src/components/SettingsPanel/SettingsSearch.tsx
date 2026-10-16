@@ -84,8 +84,12 @@ function ownText(el: Element): string {
 }
 
 function findHeading(root: ParentNode, heading: string): HTMLHeadingElement | null {
-	for (const el of root.querySelectorAll("h2, h3")) {
-		if (ownText(el) === heading) return el;
+	// A page and one of its cards may share a title (for example Terminal).
+	// Controls belong to the card; use the page title only when no card matches.
+	for (const selector of ["h3", "h2"]) {
+		for (const el of root.querySelectorAll<HTMLHeadingElement>(selector)) {
+			if (ownText(el) === heading) return el;
+		}
 	}
 	return null;
 }
