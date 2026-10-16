@@ -120,7 +120,7 @@ describe("SettingsPanel — Smart Prompts navigation", () => {
 		const { container } = render(() => <SettingsPanel visible={true} onClose={() => {}} initialTab="smart-prompts" />);
 
 		// Expand the prompt row to reveal the editor
-		const header = Array.from(container.querySelectorAll('[role="button"]')).find((el) =>
+		const header = Array.from(container.querySelectorAll("button[aria-expanded]")).find((el) =>
 			el.textContent?.includes("Test Smart Prompt"),
 		);
 		expect(header).toBeTruthy();
