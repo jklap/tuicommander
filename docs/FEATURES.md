@@ -2102,6 +2102,11 @@ Agent-scoped plugin (`agentTypes: ["claude"]`) that wakes Claude Code when it st
 
 ## 18. Mobile Companion UI
 
+Mobile resume diagnostics retain a bounded per-tab lifecycle trail and upload
+the prior abnormal document automatically after the next boot. Log writes
+acknowledge HTTP 204 responses. This collects evidence; it does not claim to fix
+the reported iPhone grey screen. See the remote-access guide for storage limits.
+
 The session overflow menu has a **Markdown** section with the file tabs open on
 the desktop for the session repository. Each entry shows its title and relative
 path and opens the existing mobile Markdown viewer. Desktop opens and closes
@@ -2445,6 +2450,8 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
 - Use to diagnose which agent/terminal is driving high CPU or memory
 
 ### 20.11 Runtime Diagnostics (CPU watchdog + diagnostic mode)
+
+- **Persistent stall evidence:** selected slow refresh, UI freeze and heartbeat-gap observations use a bounded two-file metadata-only journal. The replay builder creates anonymized count-based inputs, not a reconstruction of the original stall. See [Stall journal](backend/stall-journal.md).
 - **Always-on CPU watchdog** (zero overhead when idle): polls `getrusage(RUSAGE_SELF)` every 5s and logs a full snapshot when TUIC's own CPU stays above 80% for 10+ consecutive seconds. PTY children (cargo, rustc, …) are separate OS processes and don't count toward the measurement
 - **Sleep/wake aware**: inter-tick gaps over 30s are treated as the machine having been asleep (lid closed) and skipped, so stale tokio-timer ticks after wake don't trigger false spikes or idle cascades
 - **Diagnostic mode** (toggleable at runtime, off by default): emits a health snapshot every 30s and alerts on FD/thread growth trends. Each snapshot includes: `cpu_pct` (TUIC self only, via `RUSAGE_SELF`), `children_cpu` (aggregate %cpu of all PTY child process trees + the hottest individual child — note the CPU watchdog spike trigger intentionally ignores children, so a hot `cargo`/agent only surfaces here), thread count, FD count, PTY session count, content-index build state, semaphore permits, sessions with grid frames outstanding (`session×count`, from the `GridGate` counters), event-bus subscriber count, and `head_emits_suppressed` (repo-watcher `head-changed` emits skipped by the resolved-HEAD-target guard — a climbing value signals a filesystem-event storm)
@@ -2821,7 +2828,7 @@ Any MCP-bound TUIC agent opts in with `telegram register`; one volatile
 registration replaces the previous agent with one native notice. It ends on
 MCP session end, PTY close, foreground-agent exit or daemon restart.
 Allowlisted private text arrives as native peer mail. Without an agent the bot
-replies "Nessun agent registrato" and drops the text; strangers stay silent.
+replies "No agent is listening. Ask an agent in TUICommander to register for Telegram." and drops the text; strangers stay silent.
 The registered agent can stream concise activity, send exact replies and offer
 opaque buttons. Proactive sends use one allowlisted destination. Only the polling
 cursor persists; live mint deployment remains pending. See
@@ -3075,7 +3082,7 @@ shows the last fifty agent actions. Screenshots require the reviewed tab to be v
 
 ## Plugin settings pages
 
-Loaded plugins with registered settings appear under Settings > Integrations. Search includes their catalogue field labels. Unloading removes the page and search entries. Reads, revision-checked edits, resets and secret set/unset status use the scoped Rust settings service; the UI owns no second configuration store.
+Loaded plugins with registered settings appear in a separate Settings > Plugin settings group. Navigation marks each entry as Plugin and exposes its source ID; the native editor shows the same ID. Catalogue loading never hides the Settings shell, and pending value reads use a local loading state. Search includes their catalogue field labels. Unloading removes the page and search entries. Reads, revision-checked edits, resets and secret set/unset status use the scoped Rust settings service; the UI owns no second configuration store.
 
 ### Tasks notifications
 
@@ -3134,3 +3141,5 @@ Native terminal ego can report provider recovery with phase, attempt and next
 attempt time. Tabs show recovering; the status bar includes a countdown and
 Force retry. Managed parents receive recovery entry/exit notices. MCP session
 `force_retry` submits `/retry` once to the recovering ego terminal.
+
+Telegram Settings includes a newest-first, process-local log of the last 20 inbound/outbound events with safe outcomes and 60-character redacted previews. This memory-only log clears on restart and does not include draft refresh traffic.

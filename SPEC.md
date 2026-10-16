@@ -715,6 +715,7 @@ Some frontend-only stores persist to localStorage:
 - [x] Session uploads live under TUIC data, with launch grants and session-end cleanup; startup reclaims only provably dead owners, preserving concurrent instances; ego invocation-scoped binary-file read roots remain unsupported (#1833-aa60).
 - [x] Shared mobile composer + menu: attach file, camera capture, supported queue/commands and Chat draft parking; browser mic inside the text box (#1880-d7ff).
 - [x] Mobile Companion PWA (searchable sessions, live output, question reply including Codex interactive choices, activity feed)
+- [x] Automatic mobile resume evidence: bounded per-tab lifecycle/viewport/root/stream trail, acknowledged backend-log upload after an abnormal prior document; original iPhone grey-screen cause remains unproven (#1900-5ff6)
   - [x] Compact bare attachment icon left of the session composer; smaller mic and Send sit inside its right border (#1719-ff5d)
   - [x] Files tree search, hidden-folder ordering, long-path preview, and full-height wrapped editing
   - [x] Repository-relative Markdown images through an authenticated, repository-confined image route
@@ -841,7 +842,7 @@ excluded from this protocol and local mail survives hub loss.
 
 ## Telegram channel implementation status (#1438-79b4)
 
-The headless daemon provides native Telegram mail, correlated drafts, exact final replies, done/blocked notices and opaque callbacks. Any MCP-bound TUIC agent opts in with `telegram register`; one volatile registration replaces the previous agent with one mail notice. Registration ends on MCP session end, PTY close or agent exit while its shell remains. No configured agent UUID is required. Allowed inbound without an agent replies "Nessun agent registrato" and drops; strangers stay silent. Only the cursor persists, so restart may lose unread mail and requires registration again. Single-destination sends and private token/allowlist authorization remain. See [Telegram channel](docs/design/telegram-channel.md). Live mint deployment remains pending.
+The headless daemon provides native Telegram mail, correlated drafts, exact final replies, done/blocked notices and opaque callbacks. Any MCP-bound TUIC agent opts in with `telegram register`; one volatile registration replaces the previous agent with one mail notice. Registration ends on MCP session end, PTY close or agent exit while its shell remains. No configured agent UUID is required. Allowed inbound without an agent replies "No agent is listening. Ask an agent in TUICommander to register for Telegram." and drops; strangers stay silent. Only the cursor persists, so restart may lose unread mail and requires registration again. Single-destination sends and private token/allowlist authorization remain. See [Telegram channel](docs/design/telegram-channel.md). Live mint deployment remains pending.
 
 Workflow safety: pinned checks own process trees and stop on timeout, run cancellation, and shutdown. Operator decisions and workflow policy mutations require host Human authority (desktop IPC or credential-authenticated HTTP). Workflow plan Done requires current integration evidence for every approved story; stale canonical refs reopen its derived state until recertification.
 
@@ -1147,3 +1148,9 @@ show recovery and offer `/retry`; MCP session `force_retry` provides the same
 single-command control. Entry/exit notices reach managed parents. Explicit clear,
 busy/idle markers and shell OSC 133 A retract recovery. This is PTY-only and does
 not attach ACP to a terminal process. Wire limits are in docs/backend/output-parser.md.
+
+Telegram Settings reads a process-local in-memory ring of the last 20 events through the existing status endpoint. Time, direction, kind, safe outcome and a redacted preview of at most 60 Unicode characters are shown newest first. Pairing input and unauthorized text are never retained. The ring is not persisted and clears on process restart; it is not shared across owner/standby processes.
+
+## Persistent stall evidence (1638-c94c)
+
+The backend retains fixed-kind numeric slow-event metadata in a bounded journal independent of the log ring. Frontend slow structural batches include body/flush time, topology counts and response size while perfDebug is enabled. Backend heartbeat-gap records include receipt and observation timestamps. The count-based fixture builder emits synthetic isolated inputs; it does not satisfy the original captured-workload RED/GREEN criteria. See `docs/backend/stall-journal.md` for retention, privacy, timing semantics and replay limits.

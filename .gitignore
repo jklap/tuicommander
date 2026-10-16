@@ -56,6 +56,8 @@ scripts/fixtures/*
 !scripts/generate-story-types.py
 !scripts/agent_capture/
 !scripts/replay-oracle.sh
+!scripts/build-stall-replay.mjs
+!scripts/build-stall-replay.test.mjs
 !scripts/record-chat-fixtures.py
 !scripts/chat-view-follow-proof.mjs
 !scripts/design-mode-tokens.test.mjs

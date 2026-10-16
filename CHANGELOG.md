@@ -13,6 +13,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Restyle Workspace Settings with section cards, aligned terminal and Git fields, and action-first shortcut rows while preserving existing behavior.
 - Bound `tuic bg` completion command labels to one line and 120 characters; keep the full command before job output in the log (#1950-43b7).
 ### Fixed
+- Confirm Telegram chat linking, explain start and invalid codes, and clear the consumed Settings hint (#1955-2f43).
 - Keep missing Pocket voices visible in Settings with a download action; use the installed same-language default for spoken replies.
 
 - Bind hands-free conversation start/stop to Cmd+Alt+V (Ctrl+Alt+V on Windows/Linux), with user overrides preserved (#1953-3da5).
@@ -33,6 +34,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Add explicit owner-backed settings choice refresh; notification output enumeration reports unavailable separately from an empty device list (#1908-c327).
 ### Added
+- Show a redacted, memory-only log of the last 20 Telegram events in Settings (#1956-c325).
 
 - Show native terminal ego provider recovery with phase, attempt, next-retry countdown and a Force retry control; notify managed parents on recovery entry and exit (#1902-7010).
 
@@ -52,6 +54,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Attach AI Chat clipboard images when an empty text flavor accompanies the PNG (#1919-f93d).
 
+- Keep the Settings shell visible during plugin catalogue and value reads, and identify plugin pages in a separate navigation group with source IDs (#1927-9649).
+
+- Retain bounded, metadata-only slow-refresh, UI-freeze and heartbeat-gap evidence across ring overflow and restart. Add an anonymized count-based replay input builder; original real-stall reproduction remains unproven (#1638-c94c).
+
 - Grant Gemini session attachment trust without a folder prompt or global settings changes. Grant ego PTY attachments read-only access in confined sandbox modes (#1833-aa60).
 
 - Add conditional atomic Ego settings batches, executable paths and base-only write-only provider auth actions (#1907-0f9f).
@@ -69,6 +75,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Pin AI Chat repository context per conversation and show its configured name color, including parent repository colors for linked worktrees without changing draft parking (#1924-12be).
 - Diagnose empty or off-screen mobile resume shells through the backend log ring without reloading the page (#1900-5ff6).
+- Preserve a bounded mobile lifecycle trail across reloads and send prior abnormal-document evidence automatically to the backend log ring; acknowledge HTTP 204 log writes so later mobile warnings are not lost. The reported iPhone grey-screen cause remains under investigation (#1900-5ff6).
 - Bind GitHub Work review threads and PR actions to the selected account through core policy, with desktop and HTTP parity (#1693-a816).
 - Hibernate unattended resumable agent tabs after configurable awake idle time, with background-only scope by default and shared wake on open, input or mail (#1808-389f).
 
