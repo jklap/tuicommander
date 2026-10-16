@@ -442,9 +442,6 @@ const SpeechRecognition: Component = () => {
 												{(device) => <option value={device.name}>{device.name}</option>}
 											</For>
 										</Select>
-										<p class={s.hint}>
-											{t("dictation.microphoneHint", "Select the input device to use for dictation.")}
-										</p>
 									</Show>
 								</>
 							)}
