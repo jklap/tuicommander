@@ -447,7 +447,7 @@ where
 fn session_action_requires_blocking_pool(action: &str) -> bool {
     matches!(
         action,
-        "create" | "input" | "kill" | "close" | "resize" | "declare_worktree"
+        "create" | "input" | "kill" | "close" | "resize" | "declare_worktree" | "force_retry"
     )
 }
 
@@ -579,7 +579,7 @@ async fn dispatch_mcp_tool_call_with_context(
         "session" => {
             let action = args["action"].as_str().unwrap_or("");
             if let Some(remote) = super::remote_mcp_sessions::resolve(state, args) {
-                if action == "submit" && !addr.ip().is_loopback() {
+                if matches!(action, "submit" | "force_retry") && !addr.ip().is_loopback() {
                     return serde_json::json!({"error":"This session action is restricted to localhost connections"});
                 }
                 return match remote {
@@ -614,7 +614,7 @@ async fn dispatch_mcp_tool_call_with_context(
                 // Read-only blocking wait — needs the async runtime for its poll
                 // loop, so it can't live in the sync handle_session.
                 handle_session_wait(state, args).await
-            } else if action == "submit" && !addr.ip().is_loopback() {
+            } else if matches!(action, "submit" | "force_retry") && !addr.ip().is_loopback() {
                 serde_json::json!({
                     "error": "This session action is restricted to localhost connections"
                 })
@@ -625,6 +625,7 @@ async fn dispatch_mcp_tool_call_with_context(
             } else if matches!(
                 action,
                 "create"
+                    | "force_retry"
                     | "input"
                     | "kill"
                     | "close"

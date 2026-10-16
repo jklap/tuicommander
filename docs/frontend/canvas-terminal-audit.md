@@ -328,3 +328,8 @@ Wheel, touch and scrollbar gestures send `terminal_scroll_to_anchor` with `histo
 The marker plan keeps intent text visible with a theme-aware warning tint, including column-zero ego rows and bullet-prefixed Claude/Codex rows. Intent continuation includes soft wraps and adjacent rows with at least two leading spaces (Codex/Ink cursor-move hard wraps). A blank row ends the walk. Complete suggest blocks are projected out of the displayed grid without changing stored backend coordinates. Paint and hit testing share the viewport projection. Copy classifies the same recorded rows and asks the backend for retained runs only, so omitted marker rows cannot leak through a selection spanning them. Backend selection reads still unwrap soft wraps and reject evicted rows. Off-screen selection classification reads styled rows with marker lookback. A blank row ends an indented marker tail. Unwrapped output, answer and prompt rows start separate blocks.
 
 Answer-rule overlay geometry is invalidated on cell-height and projected-row changes, even when the answer markers are unchanged. This keeps font-load and theme remeasurements aligned with the grid.
+
+Native terminal ego provider recovery is carried in the backend session snapshot,
+not inferred from canvas rows. Tab/status-bar presentation uses that snapshot;
+canvas rendering and input routing remain unchanged. Force retry uses the normal
+agent-aware command submission helper.

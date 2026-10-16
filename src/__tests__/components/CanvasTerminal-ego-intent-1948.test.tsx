@@ -1,6 +1,7 @@
 import { render, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import fixture from "../../dev/fixtures/ego-intent-1948.json";
+import wrappedFixture from "../../dev/fixtures/ego-intent-1949.json";
 
 const { transport } = vi.hoisted(() => ({
 	transport: {
@@ -111,6 +112,28 @@ it("styles the recorded column-zero ego intent without hiding its text", async (
 		expect(strips[0].style.top).toBe("0px");
 		expect(
 			[...canvases.values()].some((output) => output.text.join("").replaceAll(" ", "").includes("intent:Recording")),
+		).toBe(true);
+	} finally {
+		view.unmount();
+		terminalsStore.remove(terminalId);
+	}
+});
+
+// Catches: ego's soft-wrapped intent tail receives no tint or spills onto ordinary output.
+it("tints both recorded ego intent rows and stops before ordinary output", async () => {
+	const terminalId = terminalsStore.add(makeTerminal({ sessionId: "ego-intent-1949" }));
+	const view = render(() => <CanvasTerminal sessionId="ego-intent-1949" terminalId={terminalId} />);
+	try {
+		await waitFor(() => expect(transport.sink).not.toBeNull());
+		transport.sink?.(Uint8Array.from(atob(wrappedFixture.frameBase64), (c) => c.charCodeAt(0)).buffer);
+		await waitFor(() => expect(view.container.querySelectorAll('[data-terminal-marker="intent"]')).toHaveLength(2));
+		const strips = [...view.container.querySelectorAll<HTMLElement>('[data-terminal-marker="intent"]')];
+		expect(strips.map((strip) => strip.style.top)).toEqual(["0px", strips[0].style.height]);
+		expect(strips.every((strip) => strip.style.background.includes("--warning"))).toBe(true);
+		expect(
+			[...canvases.values()].some((output) =>
+				output.text.join("").replaceAll(" ", "").includes("Ordinaryoutputstaysoutsidetheintenttint."),
+			),
 		).toBe(true);
 	} finally {
 		view.unmount();

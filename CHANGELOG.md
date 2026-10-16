@@ -9,6 +9,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 - Keep missing Pocket voices visible in Settings with a download action; use the installed same-language default for spoken replies.
 
+- Bind hands-free conversation start/stop to Cmd+Alt+V (Ctrl+Alt+V on Windows/Linux), with user overrides preserved (#1953-3da5).
+
+- Show tab shortcut hints after a 450 ms Cmd-only hold (Ctrl on Windows/Linux), without flashing on normal shortcuts or pointer activity (#1951-8fac).
 
 - Restyle General, Appearance and Notifications with shared Settings cards and labelled control rows, preserving existing actions and audio-device consent (#1937-c2e4).
 
@@ -23,7 +26,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Add explicit voice settings choice refresh and typed owner asset actions; input enumeration failure is unavailable rather than an empty list (#1909-0d24).
 
 - Add explicit owner-backed settings choice refresh; notification output enumeration reports unavailable separately from an empty device list (#1908-c327).
+### Added
+
+- Show native terminal ego provider recovery with phase, attempt, next-retry countdown and a Force retry control; notify managed parents on recovery entry and exit (#1902-7010).
+
 ### Fixed
+
+- Restore Edge spoken replies after the service migration with the new endpoint and the live-verified existing v1 GEC handshake (#1952-bf91).
 
 - Recover failed mobile views after a server outage through automatic or manual retry, without false empty/setup states, raw network errors or desktop restart advice (#1930-f4c2).
 - Exclude projected suggestion rows from copied terminal selections, including scrollback selections, remove the duplicate blank separator around an omitted suggestion block, and classify the full received viewport (#1935-eedd).

@@ -906,8 +906,19 @@ speech service** (the settings panel says so under Spoken replies).
   with a 100 ms read timeout: cancel, the deadline and the budget are checked
   between reads, so a cancelled reply stops within about 100 ms.
 - **Protocol** (recorded, see `speech/fixtures/edge_stream.json`): handshake
-  with `Sec-MS-GEC` (SHA-256 of the clock rounded to five minutes plus the
-  public client token) and the browser's `Origin`; `speech.config` then `ssml`;
+  at `wss://api.msedgeservices.com/tts/cognitiveservices/websocket/v1`,
+  with the public token in the `Ocp-Apim-Subscription-Key` query parameter.
+  `Sec-MS-GEC` retains ordinary SHA-256 over the five-minute Windows clock
+  bucket and token, with version `1-130.0.2849.68`. A live Mac probe on
+  2026-10-16 returned HTTP 101 and 22,752 MP3 bytes with this v1 digest;
+  omitting both GEC parameters returned HTTP 403 and no audio. The v2
+  control also returned HTTP 101 and 22,752 bytes, but is not needed.
+  No LGPL digest implementation is included. The endpoint migration follows
+  [Readest PR 6722](https://github.com/readest/readest/pull/6722).
+  The voice list stays on the original Bing URL (verified HTTP 200 on
+  2026-10-16). The handshake also sends the browser's `Origin`, desktop
+  Edge user agent, language/encoding headers and a random MUID cookie.
+  `speech.config` then `ssml`;
   text frames `turn.start`, `response`, `turn.end` around binary frames made of
   a big-endian `u16` header length, the headers and the MP3 body. Output is
   `audio-24khz-48kbitrate-mono-mp3`, which makes the budget a byte count (6000

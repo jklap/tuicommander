@@ -5,10 +5,29 @@
 import { render } from "solid-js/web";
 import "../global.css";
 import "../styles.css";
+import darkTheme from "../../src-tauri/src/themes/vscode-dark.json";
+import lightTheme from "../../src-tauri/src/themes/vscode-light.json";
 import CanvasTerminal from "../components/Terminal/CanvasTerminal";
 import { terminalsStore } from "../stores/terminals";
-import fixture from "./fixtures/ego-intent-1948.json";
+import originalFixture from "./fixtures/ego-intent-1948.json";
+import wrappedFixture from "./fixtures/ego-intent-1949.json";
 import "./codexIntentHarness.css";
+
+const params = new URLSearchParams(location.search);
+const fixture = params.get("fixture") === "1949" ? wrappedFixture : originalFixture;
+// Use shipped palette values without loading or saving live application settings.
+const theme = params.get("theme") === "light" ? lightTheme : darkTheme;
+for (const [key, value] of Object.entries({
+	"--bg-primary": theme.appChrome.background,
+	"--bg-secondary": theme.appChrome.surface,
+	"--bg-tertiary": theme.appChrome.surfaceElevated,
+	"--fg-primary": theme.appChrome.foreground,
+	"--fg-secondary": theme.appChrome.foregroundSecondary,
+	"--border": theme.appChrome.border,
+	"--warning": theme.appChrome.warning,
+})) {
+	document.documentElement.style.setProperty(key, value);
+}
 
 const frame = Uint8Array.from(atob(fixture.frameBase64), (c) => c.charCodeAt(0)).buffer;
 let deliveryCount = 0;
