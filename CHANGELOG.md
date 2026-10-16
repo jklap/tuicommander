@@ -18,6 +18,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Restyle Workspace Settings with section cards, aligned terminal and Git fields, and action-first shortcut rows while preserving existing behavior.
 - Bound `tuic bg` completion command labels to one line and 120 characters; keep the full command before job output in the log (#1950-43b7).
 ### Fixed
+- Restore contextual help for repository Design Mode and automation scripts in Settings (#1946-5de3).
 - Confirm Telegram chat linking, explain start and invalid codes, and clear the consumed Settings hint (#1955-2f43).
 - Recover unconfirmed ego input only from a fresh, stable empty composer; release later queued commands without replaying the uncertain payload (#1957-38c1).
 - Bound raw PTY input waits to two seconds and keep session close independent of blocked writers (#1957-38c1).
