@@ -1,3 +1,12 @@
+## Managed injection recovery (1957-38c1) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, verify a later urgent send is not permanently suppressed by an abandoned notice reservation. The 30-second reservation lease does not replay the earlier payload. Also verify raw input returns an uncertainty error rather than hanging on a stalled reader, close still terminates that session, and a fresh stable empty ego composer releases a later queued BG wake without replaying earlier input. No live desktop was restarted by this peer.
+## AI Chat tidy layout and smart tables (1958-b67e / 1923-c6fb)
+
+- [ ] Run the batch integration GREEN checks for AIChatPanel, Transcript, ContentRenderer, ChatTables, mobile Chat, panel adapters and the paste-ownership consumers. This peer ran only the required history-duration RED test.
+- [ ] Capture native worktree-only Vite screenshots at 380/700 px for Tidy and 390/740 px for tables, dark and light, and compare them with the approved mocks. Chrome DOM measurements pass the compact bounds (35 px chrome, 1296 px conversation at 380 px). Native screenshot capture stalled; browser print-to-PDF raster PNG alternatives are under `~/Gits/.tmp/tuic-1958-png/` and are not native screenshots.
+- [ ] Inspect the mobile read-only table document, return focus to Chat, and verify the existing mobile composer remains usable. Do not use production sessions for verification.
+
 ## MCP instruction byte budget (1947-3d17) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, reconnect an MCP client and confirm answer markers still support row starts and Markdown list-item text starts. The remote budget regression and all 563 MCP transport tests passed; no live app was restarted.
@@ -2337,3 +2346,19 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] Plugin Settings: confirm Plugin identity, source IDs and the opaque Settings shell while switching pages with slow reads, in dark and light themes (#1927-9649).
 
 - [ ] #1900-5ff6: After loading the updated mobile frontend, use the iPhone PWA normally. If the grey screen returns, do not reload until the visible URL and screenshot are recorded. On the next boot, inspect backend warnings with source `app` for `Mobile previous document lifecycle trail`, and compare root count, shell geometry, visual viewport, CSS app height/top and stream phases. The trail is automatic and per-tab; storage eviction can remove it. The original grey-screen reproduction/fix and three physical app-switch cycles remain unverified. No Rust restart is needed for this frontend-only diagnostic change.
+## Telegram streaming replies (#1959-162a)
+
+- [ ] [HUMAN] After Boss restarts `make dev` (or rebuilds release), verify the native draft and reaction rendering on iOS and Telegram Desktop for a PTY agent and AI Chat. Send allowlisted text, confirm 👀 then 👨‍💻 after Read/new turn, Italian status, live AI Chat assistant text, 🤔 on a permission wait, one final with 👍, and 👎 plus one notice on failure. Verify queued and no-agent cases, queued Stop versus working Stop, multiple phone messages, and expiration after app exit. This requires the real authorized Telegram client; automated tests use only the recorded public example and offline loopback responses, never the Bot API or bot token. Rust does not hot-reload; restart only when Boss is ready to lose live sessions.
+
+## Plugin review follow-up (#1756)
+
+- [ ] After the existing provider configuration migration, reload GitHub Work, GitLab and Jira twice. Verify one registration per account, and verify that rejected startup reports its error. The read-only live snapshot on 2026-10-15 reported GitLab/Jira loaded, but GitHub Work failed with `Configurable plugin requires a settings schema`; no reload was attempted.
+- [ ] Set and use a project ID through the approved plugin settings UI. Tasks setup contains project fields, but the audited Plugins tab does not expose a settings schema form.
+- [ ] After Jira cancellation is implemented, resolve a Jira URL and cancel its in-flight request. The resolver passes a signal, but the audited provider `detail(ref)`, client request and host-fetch adapter do not propagate it.
+- [ ] Install an incompatible plugin in an isolated verification environment and check its refusal message. Catalogue/provider boundary checks passed 38/38 and loader minimum-version checks passed 3/3 (25 filtered) through build-slot on 2026-10-15; these are not native install E2E evidence.
+- [ ] Once GitHub Work loads with an authorized test account, invoke a read-only review action through core and verify it reaches the account-bound provider. No vendor writes are authorized.
+- [ ] Same-version stale-copy detection requires an approved source-content identity contract before its E2E check: the audited catalogue update decision compares versions only.
+
+- [ ] #1756-4d42: after Boss restarts `make dev` (Rust does not hot-reload), resolve a Jira URL and cancel while headers/body are pending; confirm no late result and active requests stop. No live restart was performed by w-1756.
+
+- [ ] Telegram ACP replies (#1959-162a): after Boss manually restarts `make dev` or rebuilds release, send two requests and explicitly finish the first before a streaming tick. The first ACP turn must not also answer the second request. The pre-fix loopback regression recorded duplicate finals; post-fix integration and live phone checks remain coordinator-owned. Rust changes do not hot-reload.

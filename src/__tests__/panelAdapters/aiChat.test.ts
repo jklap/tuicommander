@@ -9,6 +9,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  * so it is worth a test of its own.
  */
 
+const addVirtual = vi.hoisted(() => vi.fn());
+vi.mock("../../stores/mdTabs", () => ({ mdTabsStore: { addVirtual } }));
+
 const ui = vi.hoisted(() => ({
 	toggleAiChatPanel: vi.fn(),
 	setAiChatPanelVisible: vi.fn(),
@@ -68,4 +71,13 @@ describe("the AI Chat panel adapter", () => {
 	it("passes no repository when there is none", () => {
 		expect(aiChatPanelAdapter.detachParams?.()).toEqual({});
 	});
+});
+
+// Catches: detached table actions being dropped, or lossy document content.
+it("opens an addressed table as a read-only Markdown document", () => {
+	const source = "| A | B |\n| --- | --- |\n| **first** | second |";
+	aiChatPanelAdapter.handleAction?.("open-table", { source });
+	const [title, uri] = addVirtual.mock.calls[0];
+	expect(title).toBe("AI Chat table");
+	expect(new URL(uri).searchParams.get("source")).toBe(source);
 });

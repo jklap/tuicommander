@@ -1015,6 +1015,7 @@ pub(super) fn agent_submit_profile(agent_type: Option<&str>) -> AgentSubmitProfi
     use SubmitConfirmation::{HookOnly, LegacyWrite, PromptGone, WorkingScreen};
     let (enter_gap, confirmation) = match agent_type {
         Some("codex") => (INJECT_ENTER_GAP, WorkingScreen),
+        Some("ego") => (UNVERIFIED_ENTER_GAP, WorkingScreen),
         Some("claude" | "opencode" | "goose" | "grok" | "pi") => (INJECT_ENTER_GAP, WorkingScreen),
         Some("gemini") => (INJECT_ENTER_GAP, PromptGone),
         Some("amp" | "cursor" | "droid") => (INJECT_ENTER_GAP, LegacyWrite),
@@ -2471,15 +2472,29 @@ pub(crate) fn clear_queued_commands(state: &AppState, session_id: &str) -> usize
         .unwrap_or(0)
 }
 
+/// Bound the caller's wait, not the kernel operation: a timed-out write may
+/// still complete. Never report this as a safe-to-retry rejection.
+pub(crate) async fn run_bounded_pty_input<T: Send + 'static>(
+    write: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        tokio::task::spawn_blocking(write),
+    )
+    .await
+    {
+        Ok(result) => result.map_err(|error| format!("PTY input task failed: {error}"))?,
+        Err(_) => Err("PTY input timed out; delivery is uncertain and may still complete. Do not resend automatically; inspect the session or close it.".into()),
+    }
+}
+
 #[cfg(feature = "desktop")]
 pub(super) async fn write_pty_parts_off_thread(
     state: Arc<AppState>,
     session_id: String,
     parts: Vec<String>,
 ) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || write_pty_parts_blocking(&state, &session_id, &parts))
-        .await
-        .map_err(|e| format!("Task join error: {e}"))?
+    run_bounded_pty_input(move || write_pty_parts_blocking(&state, &session_id, &parts)).await
 }
 
 #[cfg(feature = "desktop")]

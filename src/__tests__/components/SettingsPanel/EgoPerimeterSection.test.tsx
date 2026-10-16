@@ -21,13 +21,26 @@ function client(over: Partial<EgoPerimeterClient> = {}): EgoPerimeterClient {
 }
 describe("EgoPerimeterSection", () => {
 	afterEach(cleanup);
+	// Catches: revealing verification help accidentally runs a probe or writes configuration.
+	it("explains verification without issuing another ego request", async () => {
+		const perimeter = vi.fn(async () => initial);
+		const setRoots = vi.fn(async () => initial);
+		const setNetwork = vi.fn(async () => initial);
+		render(() => <EgoPerimeterSection client={client({ perimeter, setRoots, setNetwork })} />);
+		fireEvent.click(await screen.findByRole("button", { name: "How to verify" }));
+		expect(screen.getByText(/Reload from ego reads configuration/)).toBeTruthy();
+		expect(perimeter).toHaveBeenCalledTimes(1);
+		expect(setRoots).not.toHaveBeenCalled();
+		expect(setNetwork).not.toHaveBeenCalled();
+	});
 
 	// Catches: a reported Seatbelt backend is falsely presented as measured OS enforcement.
 	it("does not claim OS enforcement when ego reports not_checked", async () => {
 		render(() => <EgoPerimeterSection client={client()} />);
-		expect(await screen.findByText("Enforcement not checked")).toBeTruthy();
+		expect(await screen.findByText("Not verified here")).toBeTruthy();
 		expect(screen.queryByText("Enforced by OS")).toBeNull();
 		expect(screen.getByText(initial.preview)).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: "Add folder" }));
 		expect((screen.getByLabelText("Root directory") as HTMLInputElement).value).toBe("/Users/stefano.straus/Gits");
 	});
 
@@ -35,7 +48,7 @@ describe("EgoPerimeterSection", () => {
 	it.each([
 		["complete ro offline", "enforcedByOs", "Enforced by OS", measured.capabilities, "ro", "offline"],
 		["completed empty measurement", "promptOnly", "Prompt only", [], "ro", "offline"],
-		["unknown evidence", "notChecked", "Enforcement not checked", "future", "ro", "online"],
+		["unknown evidence", "notChecked", "Not verified here", "future", "ro", "online"],
 	] as const)(
 		"renders the backend's exec badge for %s",
 		async (_case, execEnforcement, text, capabilities, sandbox, network) => {
@@ -57,7 +70,7 @@ describe("EgoPerimeterSection", () => {
 				/>
 			));
 			expect(await screen.findByText(text)).toBeTruthy();
-			expect(screen.getByText("Exec sandbox:")).toBeTruthy();
+			expect(screen.getByText(/Command isolation for spawned processes/)).toBeTruthy();
 			if (execEnforcement === "promptOnly") expect(screen.getByText(/not fully OS-enforced/)).toBeTruthy();
 		},
 	);
@@ -77,7 +90,7 @@ describe("EgoPerimeterSection", () => {
 		expect(
 			await screen.findByText("no completed backend measurement is available; inspection does not run probes"),
 		).toBeTruthy();
-		expect(screen.getByText("Enforcement not checked")).toBeTruthy();
+		expect(screen.getByText("Not verified here")).toBeTruthy();
 	});
 
 	// Catches: saving roots silently grants write access or shows the submitted value instead of ego's readback.
@@ -87,6 +100,8 @@ describe("EgoPerimeterSection", () => {
 			roots: { ...initial.roots, rootDir: "/canonical/root", rootAccess: "read" as const },
 		}));
 		render(() => <EgoPerimeterSection client={client({ setRoots })} />);
+		await screen.findByRole("button", { name: "Add folder" });
+		fireEvent.click(screen.getByRole("button", { name: "Add folder" }));
 		const root = await screen.findByLabelText("Root directory");
 		fireEvent.input(root, { target: { value: "/requested/root" } });
 		fireEvent.change(screen.getByLabelText("Root access"), { target: { value: "read" } });
@@ -108,12 +123,14 @@ describe("EgoPerimeterSection", () => {
 	it("changes network without discarding an unsaved root draft", async () => {
 		const setNetwork = vi.fn(async () => ({ ...initial, networkEnabled: false }));
 		render(() => <EgoPerimeterSection client={client({ setNetwork })} />);
+		await screen.findByRole("button", { name: "Add folder" });
+		fireEvent.click(screen.getByRole("button", { name: "Add folder" }));
 		const root = await screen.findByLabelText("Root directory");
 		fireEvent.input(root, { target: { value: "/unsaved/root" } });
-		fireEvent.click(screen.getByLabelText("Network enabled"));
+		fireEvent.change(screen.getByLabelText("Network"), { target: { value: "blocked" } });
 		await vi.waitFor(() => expect(setNetwork).toHaveBeenCalledWith(false));
 		expect((root as HTMLInputElement).value).toBe("/unsaved/root");
-		expect((screen.getByLabelText("Network enabled") as HTMLInputElement).checked).toBe(false);
+		expect((screen.getByLabelText("Network") as HTMLSelectElement).value).toBe("blocked");
 	});
 
 	// Catches: a failed write or readback clears the draft and claims it succeeded.
@@ -134,6 +151,8 @@ describe("EgoPerimeterSection", () => {
 				})}
 			/>
 		));
+		await screen.findByRole("button", { name: "Add folder" });
+		fireEvent.click(screen.getByRole("button", { name: "Add folder" }));
 		const root = await screen.findByLabelText("Root directory");
 		fireEvent.input(root, { target: { value: "/rejected/root" } });
 		fireEvent.click(screen.getByRole("button", { name: "Save roots in ego" }));
@@ -160,9 +179,9 @@ describe("EgoPerimeterSection", () => {
 				})}
 			/>
 		));
-		const network = await screen.findByLabelText("Network enabled");
-		fireEvent.click(network);
+		const network = await screen.findByLabelText("Network");
+		fireEvent.change(network, { target: { value: "blocked" } });
 		expect(await screen.findByText(/system requires offline/)).toBeTruthy();
-		expect((network as HTMLInputElement).checked).toBe(true);
+		expect((network as HTMLSelectElement).value).toBe("allowed");
 	});
 });

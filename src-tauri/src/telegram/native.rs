@@ -12,7 +12,7 @@ pub(super) async fn offer(
     state: &Arc<AppState>,
     sid: &str,
     mail: &PendingMail,
-) -> Result<(), Error> {
+) -> Result<Value, Error> {
     let result = crate::mcp_http::mcp_transport::local_peer_call_with_message_id(
         state,
         &json!({"action":"send","to":mail.recipient,"message":mail.content,"urgency":"normal"}),
@@ -24,7 +24,7 @@ pub(super) async fn offer(
         return Err(Error::State);
     }
     // Inbox-only is a valid handoff; readiness/wake arbitration belongs to TUIC.
-    Ok(())
+    Ok(result)
 }
 pub(super) struct NativeMail {
     commands: mpsc::Sender<Command>,

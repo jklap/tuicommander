@@ -3,6 +3,8 @@ use serde_json::{Value, json};
 use std::time::Duration;
 use tokio::time::Instant;
 
+pub(super) const PREVIEW_LABEL: &str = "Preview — not approved.";
+
 /// Deliberately conservative UTF-16 budget, including astral characters.
 pub(super) fn chunks(text: &str) -> Result<Vec<&str>, Error> {
     if text.is_empty() {
@@ -32,6 +34,7 @@ pub(super) struct Active {
     pub draft: i64,
     pub interrupt: Option<std::sync::Arc<()>>,
     text: String,
+    pub authored: bool,
     sent: Instant,
     dirty: bool,
 }
@@ -146,6 +149,11 @@ impl Outbound {
         result
     }
 
+    pub async fn received_reaction(&mut self, chat: i64, message: i64) -> Result<Value, Error> {
+        self.call(chat, "setMessageReaction", json!({"chat_id":chat,"message_id":message,
+            "reaction":[{"type":"emoji","emoji":super::streaming::RECEIVED_REACTION}],"is_big":false})).await
+    }
+
     pub async fn begin(
         &mut self,
         request: String,
@@ -153,6 +161,18 @@ impl Outbound {
         pty: String,
         epoch: u64,
         chat: i64,
+    ) -> Result<i64, Error> {
+        self.begin_text(request, peer, pty, epoch, chat, "").await
+    }
+
+    pub async fn begin_text(
+        &mut self,
+        request: String,
+        peer: String,
+        pty: String,
+        epoch: u64,
+        chat: i64,
+        text: &str,
     ) -> Result<i64, Error> {
         if self.active.is_some() {
             return Err(Error::State);
@@ -165,7 +185,7 @@ impl Outbound {
             .call(
                 chat,
                 "sendMessageDraft",
-                json!({"chat_id":chat,"draft_id":draft,"text":"","can_stop":true,"keep_on_stop":false}),
+                json!({"chat_id":chat,"draft_id":draft,"text":text,"can_stop":true,"keep_on_stop":false}),
             )
             .await?;
         if accepted != Value::Bool(true) {
@@ -179,7 +199,8 @@ impl Outbound {
             chat,
             draft,
             interrupt: None,
-            text: String::new(),
+            text: text.into(),
+            authored: false,
             sent: Instant::now(),
             dirty: false,
         });
@@ -187,16 +208,43 @@ impl Outbound {
     }
 
     pub fn activity(&mut self, request: &str, text: &str) -> Result<(), Error> {
-        let active = self
-            .active
-            .as_mut()
-            .filter(|a| a.request == request)
-            .ok_or(Error::State)?;
-        // Activity is a bounded unapproved preview, never an approval state.
-        let text = text.chars().take(500).collect::<String>();
-        active.text = format!("Preview — not approved.\n{text}");
-        active.dirty = true;
+        // Agent-authored content remains explicitly unapproved.
+        self.status(
+            request,
+            &format!(
+                "{PREVIEW_LABEL}\n{}",
+                text.chars().take(500).collect::<String>()
+            ),
+            true,
+        );
+        if self.active.as_ref().is_none_or(|a| a.request != request) {
+            return Err(Error::State);
+        }
         Ok(())
+    }
+
+    pub fn status(&mut self, request: &str, text: &str, authored: bool) {
+        if let Some(active) = self.active.as_mut().filter(|a| a.request == request) {
+            let (prefix, body) = text
+                .strip_prefix(PREVIEW_LABEL)
+                .map_or(("", text), |body| (PREVIEW_LABEL, body));
+            let budget = 4096 - prefix.encode_utf16().count();
+            let mut units = 0;
+            let tail: String = body
+                .chars()
+                .rev()
+                .take_while(|ch| {
+                    units += ch.len_utf16();
+                    units <= budget
+                })
+                .collect();
+            let text = format!("{prefix}{}", tail.chars().rev().collect::<String>());
+            if active.text != text {
+                active.text = text;
+                active.dirty = true;
+            }
+            active.authored = authored;
+        }
     }
 
     pub async fn refresh(&mut self) -> Result<(), Error> {

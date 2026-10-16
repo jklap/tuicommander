@@ -1,5 +1,9 @@
 # TUICommander — Complete Feature Reference
 
+- AI Chat tables protect short fields, scroll wide content, toggle exact Markdown source, copy Markdown, and open read-only documents (#1923-c6fb).
+
+- AI Chat uses a compact title picker, labelled overflow actions and one-line process disclosures; model and repository sit below the composer (#1958-b67e).
+
 Repository Settings exposes inherited overrides, scripts, team sharing, and a scoped reset card in the shared Settings vocabulary.
 
 Agents Settings uses machine-scoped headers, section cards, and responsive named run-configuration editors, with separate terminal permissions and hibernation sections.
@@ -845,6 +849,7 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 - **Custom scripts**: `$TUIC_SESSION` is available as a stable key for any tab-specific state
 
 ### 6.2 Agent Detection
+- Native ego empty-composer detection can recover an unconfirmed input after a fresh stable repaint, without replaying the earlier payload. Retained text and dialogs remain blocked; later queued BG wakes use the normal idle queue flush.
 - Hand-launched agents are classified and recorded by the backend on desktop and headless hosts; HTTP foreground queries share the desktop detection logic. Plain shells remain ineligible for agent submit and mail wake.
 - Protocol completion survives terminal redraws and decorative idle animation; new input and recognized semantic working signals can reopen activity.
 - Auto-detection from terminal output patterns
@@ -2236,7 +2241,9 @@ Unsupported actions are hidden. Menus close on outside tap or Escape and use
   A wrapper that calls Claude/Gemini/ego by name uses the inherited shell shim; an
   absolute harness hop must arrange its own read access. Disabling launch marker
   instructions does not disable the Claude directory grant.
-  Typed ego commands receive the same read-only directory grant.
+  Typed ego commands receive the same read-only directory grant. Structured ego
+  `run` and `resume` launches receive the grant after the subcommand so the CLI
+  does not interpret the subcommand as a prompt.
 - ACP binary uploads are scoped to the attached conversation and removed on
   detach or connection settlement (including EOF). Ego over ACP currently rejects
   extra read directories: the composer displays a notice that the stored path
@@ -3143,3 +3150,7 @@ Force retry. Managed parents receive recovery entry/exit notices. MCP session
 `force_retry` submits `/retry` once to the recovering ego terminal.
 
 Telegram Settings includes a newest-first, process-local log of the last 20 inbound/outbound events with safe outcomes and 60-character redacted previews. This memory-only log clears on restart and does not include draft refresh traffic.
+
+### Telegram request streaming (1959-162a)
+
+Telegram replies now use TUIC-driven receipt (👀), working (👨‍💻), waiting (🤔), answered (👍) and failed (👎) reactions. An ephemeral native draft shows Italian status lines or unapproved agent previews; it refreshes while work continues and the final reply replaces it. Acknowledgement of work requires inbox Read and a new recipient turn. PTY intent/activity and AI Chat assistant chunks share request correlation; finish remains authoritative after draft retirement. Telegram-mail-woken AI Chat turns automatically send their settled assistant text if finish has not answered. Queue and no-reply notices occur at ten minutes and sixty seconds after Read respectively. Restart keeps no request history. Phone rendering requires a live check after the backend restart.

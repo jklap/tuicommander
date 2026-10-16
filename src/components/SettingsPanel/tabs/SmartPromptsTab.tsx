@@ -1,4 +1,4 @@
-import { type Component, createMemo, createSignal, For, onMount, Show } from "solid-js";
+import { type Accessor, type Component, createMemo, createSignal, For, onMount, Show } from "solid-js";
 import { AGENT_TYPES, AGENTS, type AgentType, toHeadlessAgentChoice } from "../../../agents";
 import { SMART_PROMPTS_BUILTIN } from "../../../data/smartPromptsBuiltIn";
 import { useAgentDetection } from "../../../hooks/useAgentDetection";
@@ -10,8 +10,10 @@ import { ConfirmDialog } from "../../ConfirmDialog";
 import { KeyComboCapture } from "../../shared/KeyComboCapture";
 import { Input } from "../../ui/Input";
 import { Select } from "../../ui/Select";
+import { StatusBadge } from "../../ui/StatusBadge";
 import { Textarea } from "../../ui/Textarea";
 import s from "../Settings.module.css";
+import { DangerZone, ListRow, SectionCard, SettingPageHeader, SettingRow } from "../SettingsPrimitives";
 import sp from "./SmartPromptsTab.module.css";
 
 // All placements for the checkbox grid
@@ -293,232 +295,286 @@ const PromptEditor: Component<{
 	};
 
 	return (
-		<div class={sp.promptExpanded}>
-			{/* Name */}
-			<div class={sp.editorSection}>
-				<label class={sp.editorLabel}>Name *</label>
-				<Input
-					class={sp.editorInput}
-					type="text"
-					value={props.prompt.name}
-					disabled={isBuiltIn()}
-					onInput={(e) => handleNameChange(e.currentTarget.value)}
-				/>
-			</div>
+		<>
+			<SectionCard title={`Edit ${props.prompt.name}`}>
+				{/* Name */}
+				<SettingRow label="Name *">
+					{(id, descriptionId) => (
+						<div>
+							<Input
+								id={id}
+								aria-describedby={descriptionId()}
+								type="text"
+								value={props.prompt.name}
+								disabled={isBuiltIn()}
+								onInput={(e) => handleNameChange(e.currentTarget.value)}
+							/>
+						</div>
+					)}
+				</SettingRow>
 
-			{/* Description */}
-			<div class={sp.editorSection}>
-				<label class={sp.editorLabel}>Description</label>
-				<Input
-					class={sp.editorInput}
-					type="text"
-					value={props.prompt.description ?? ""}
-					onInput={(e) => handleDescriptionChange(e.currentTarget.value)}
-					placeholder="Short description of what this prompt does"
-				/>
-			</div>
+				{/* Description */}
+				<SettingRow label="Description">
+					{(id, descriptionId) => (
+						<div>
+							<Input
+								id={id}
+								aria-describedby={descriptionId()}
+								type="text"
+								value={props.prompt.description ?? ""}
+								onInput={(e) => handleDescriptionChange(e.currentTarget.value)}
+								placeholder="Short description of what this prompt does"
+							/>
+						</div>
+					)}
+				</SettingRow>
 
-			{/* Content + Variable dropdown */}
-			<div class={sp.editorSection}>
-				<label class={sp.editorLabel}>Content *</label>
-				<Textarea
-					class={sp.editorTextarea}
-					value={props.prompt.content}
-					onInput={(e) => handleContentChange(e.currentTarget.value)}
-					ref={textareaRef}
-				/>
-				<VariableDropdown onInsert={handleInsertVariable} />
-			</div>
+				{/* Content + Variable dropdown */}
+				<SettingRow label="Content *">
+					{(id, descriptionId) => (
+						<div>
+							<Textarea
+								id={id}
+								aria-describedby={descriptionId()}
+								value={props.prompt.content}
+								onInput={(e) => handleContentChange(e.currentTarget.value)}
+								ref={textareaRef}
+							/>
+							<VariableDropdown onInsert={handleInsertVariable} />
+						</div>
+					)}
+				</SettingRow>
 
-			{/* Placement */}
-			<div class={sp.editorSection}>
-				<label class={sp.editorLabel}>Placement</label>
-				<div class={sp.placementGrid}>
-					<For each={ALL_PLACEMENTS}>
-						{(placement) => (
-							<label class={sp.placementCheck}>
-								<input
-									type="checkbox"
-									checked={props.prompt.placement?.includes(placement) ?? false}
-									onChange={() => handlePlacementToggle(placement)}
-								/>
-								<span>{placement}</span>
-							</label>
+				{/* Placement */}
+				<SettingRow label="Placement">
+					{() => (
+						<>
+							<div class={sp.placementGrid}>
+								<For each={ALL_PLACEMENTS}>
+									{(placement) => (
+										<label class={sp.placementCheck}>
+											<input
+												type="checkbox"
+												checked={props.prompt.placement?.includes(placement) ?? false}
+												onChange={() => handlePlacementToggle(placement)}
+											/>
+											<span>{placement}</span>
+										</label>
+									)}
+								</For>
+							</div>
+						</>
+					)}
+				</SettingRow>
+
+				{/* Execution Mode + Auto-execute row */}
+				<div>
+					<SettingRow label="Execution Mode">
+						{(id, descriptionId) => (
+							<div>
+								<Select
+									id={id}
+									aria-describedby={descriptionId()}
+									value={props.prompt.executionMode ?? "inject"}
+									onChange={(e) => {
+										const mode = e.currentTarget.value as "inject" | "headless" | "api" | "shell";
+										const update: Partial<SavedPrompt> = { executionMode: mode };
+										if (mode === "inject") {
+											update.outputTarget = undefined;
+											update.systemPrompt = undefined;
+										}
+										if (mode === "shell") {
+											update.systemPrompt = undefined;
+										}
+										promptLibraryStore.updatePrompt(props.prompt.id, update);
+									}}
+								>
+									<option value="inject">Inject into terminal</option>
+									<option value="shell">Shell script (direct run)</option>
+									<option value="headless">Headless (one-shot CLI)</option>
+									<option value="api">API (via ego)</option>
+								</Select>
+							</div>
 						)}
-					</For>
-				</div>
-			</div>
+					</SettingRow>
 
-			{/* Execution Mode + Auto-execute row */}
-			<div class={sp.editorRow}>
-				<div class={sp.editorSection} style={{ flex: "1" }}>
-					<label class={sp.editorLabel}>Execution Mode</label>
-					<Select
-						class={sp.editorInput}
-						value={props.prompt.executionMode ?? "inject"}
-						onChange={(e) => {
-							const mode = e.currentTarget.value as "inject" | "headless" | "api" | "shell";
-							const update: Partial<SavedPrompt> = { executionMode: mode };
-							if (mode === "inject") {
-								update.outputTarget = undefined;
-								update.systemPrompt = undefined;
-							}
-							if (mode === "shell") {
-								update.systemPrompt = undefined;
-							}
-							promptLibraryStore.updatePrompt(props.prompt.id, update);
-						}}
-					>
-						<option value="inject">Inject into terminal</option>
-						<option value="shell">Shell script (direct run)</option>
-						<option value="headless">Headless (one-shot CLI)</option>
-						<option value="api">API (via ego)</option>
-					</Select>
-				</div>
-
-				<Show when={(props.prompt.executionMode ?? "inject") === "inject"}>
-					<div class={sp.editorSection} style={{ flex: "1" }}>
-						<label class={sp.editorLabel}>Target</label>
-						<Select
-							class={sp.editorInput}
-							value={props.prompt.injectTarget ?? "compose"}
-							onChange={(e) => {
-								const val = e.currentTarget.value;
-								if (val === "terminal" || val === "compose") {
-									promptLibraryStore.updatePrompt(props.prompt.id, { injectTarget: val });
-								}
-							}}
+					<Show when={(props.prompt.executionMode ?? "inject") === "inject"}>
+						<SettingRow
+							label="Target"
+							hint="Compose fills the input for review; Terminal sends to the agent and waits for idle"
 						>
-							<option value="compose">Compose box (review)</option>
-							<option value="terminal">Terminal (send to agent)</option>
-						</Select>
-						<p class={sp.fieldHint}>
-							Compose fills the input for review; Terminal sends to the agent and waits for idle
-						</p>
-					</div>
-				</Show>
+							{(id, descriptionId) => (
+								<div>
+									<Select
+										id={id}
+										aria-describedby={descriptionId()}
+										value={props.prompt.injectTarget ?? "compose"}
+										onChange={(e) => {
+											const val = e.currentTarget.value;
+											if (val === "terminal" || val === "compose") {
+												promptLibraryStore.updatePrompt(props.prompt.id, { injectTarget: val });
+											}
+										}}
+									>
+										<option value="compose">Compose box (review)</option>
+										<option value="terminal">Terminal (send to agent)</option>
+									</Select>
+								</div>
+							)}
+						</SettingRow>
+					</Show>
 
-				<Show
-					when={
-						(props.prompt.executionMode ?? "inject") === "inject" &&
-						(props.prompt.injectTarget ?? "compose") === "terminal"
-					}
-				>
-					<div class={sp.editorSection} style={{ flex: "1" }}>
-						<label class={sp.editorLabel}>Auto-execute</label>
-						<label class={sp.autoExecLabel}>
-							<input type="checkbox" checked={props.prompt.autoExecute ?? false} onChange={handleAutoExecuteToggle} />
-							<span>Send immediately</span>
-						</label>
-						<p class={sp.fieldHint}>Uncheck to review before sending</p>
-					</div>
-				</Show>
-			</div>
-
-			{/* Preferred Agent (headless mode only) */}
-			<Show when={props.prompt.executionMode === "headless"}>
-				<div class={sp.editorSection}>
-					<label class={sp.editorLabel}>Preferred Agent</label>
-					<Select
-						class={sp.editorInput}
-						value={props.prompt.preferredAgent ?? ""}
-						onChange={(e) => {
-							const val = e.currentTarget.value || undefined;
-							promptLibraryStore.updatePrompt(props.prompt.id, {
-								preferredAgent: val && AGENT_TYPES.includes(val as AgentType) ? (val as AgentType) : undefined,
-							});
-						}}
+					<Show
+						when={
+							(props.prompt.executionMode ?? "inject") === "inject" &&
+							(props.prompt.injectTarget ?? "compose") === "terminal"
+						}
 					>
-						<option value="">Use global default</option>
-						<For each={props.headlessAgents}>
-							{(type) => <option value={type}>{AGENTS[type]?.name ?? type}</option>}
-						</For>
-						<option value="api">API (via ego)</option>
-					</Select>
-					<p class={sp.fieldHint}>Override the global headless agent for this prompt</p>
+						<SettingRow label="Auto-execute" hint="Uncheck to review before sending">
+							{(id, descriptionId) => (
+								<div>
+									<label class={sp.autoExecLabel}>
+										<input
+											id={id}
+											aria-describedby={descriptionId()}
+											class={s.rowSwitch}
+											role="switch"
+											type="checkbox"
+											checked={props.prompt.autoExecute ?? false}
+											onChange={handleAutoExecuteToggle}
+										/>
+										<span>Send immediately</span>
+									</label>
+								</div>
+							)}
+						</SettingRow>
+					</Show>
 				</div>
-			</Show>
 
-			{/* Shell-mode warning for repo-controlled variable substitution.
+				{/* Preferred Agent (headless mode only) */}
+				<Show when={props.prompt.executionMode === "headless"}>
+					<SettingRow label="Preferred Agent" hint="Override the global headless agent for this prompt">
+						{(id, descriptionId) => (
+							<div>
+								<Select
+									id={id}
+									aria-describedby={descriptionId()}
+									value={props.prompt.preferredAgent ?? ""}
+									onChange={(e) => {
+										const val = e.currentTarget.value || undefined;
+										promptLibraryStore.updatePrompt(props.prompt.id, {
+											preferredAgent: val && AGENT_TYPES.includes(val as AgentType) ? (val as AgentType) : undefined,
+										});
+									}}
+								>
+									<option value="">Use global default</option>
+									<For each={props.headlessAgents}>
+										{(type) => <option value={type}>{AGENTS[type]?.name ?? type}</option>}
+									</For>
+									<option value="api">API (via ego)</option>
+								</Select>
+							</div>
+						)}
+					</SettingRow>
+				</Show>
+
+				{/* Shell-mode warning for repo-controlled variable substitution.
           Even though values are shell-quoted in the backend, authors should
           know which values come from the repo so they can design the
           template accordingly. */}
-			<Show
-				when={props.prompt.executionMode === "shell" && repoControlledVarsInContent(props.prompt.content).length > 0}
-			>
-				<p class={sp.fieldHint} style={{ color: "var(--color-warning, #c07a00)" }}>
-					⚠ Shell mode substitutes repo-controlled variables (
-					{repoControlledVarsInContent(props.prompt.content).join(", ")}). Values are shell-quoted automatically, but a
-					template that uses them outside argument position (e.g. `eval {"{branch}"}`) can still be abused by crafted
-					branch names / PR titles.
-				</p>
-			</Show>
-
-			{/* Output Target (headless and api modes) */}
-			<Show when={(props.prompt.executionMode ?? "inject") !== "inject"}>
-				<div class={sp.editorSection}>
-					<label class={sp.editorLabel}>Output Target</label>
-					<Select
-						class={sp.editorInput}
-						value={props.prompt.outputTarget ?? ""}
-						onChange={(e) => {
-							const val = e.currentTarget.value || undefined;
-							promptLibraryStore.updatePrompt(props.prompt.id, {
-								outputTarget: val as SavedPrompt["outputTarget"],
-							});
-						}}
-					>
-						<option value="">None (return in result)</option>
-						<option value="commit-message">Commit message</option>
-						<option value="clipboard">Clipboard</option>
-						<option value="toast">Notification</option>
-						<option value="panel">Panel</option>
-					</Select>
-				</div>
-			</Show>
-
-			{/* System Prompt (api mode only) */}
-			<Show when={props.prompt.executionMode === "api"}>
-				<div class={sp.editorSection}>
-					<label class={sp.editorLabel}>System Prompt</label>
-					<Textarea
-						class={sp.editorTextarea}
-						rows={3}
-						value={props.prompt.systemPrompt ?? ""}
-						placeholder="Instructions for the LLM (e.g. 'You are a Git expert. Output only the requested content.')"
-						onInput={(e) => {
-							promptLibraryStore.updatePrompt(props.prompt.id, {
-								systemPrompt: e.currentTarget.value || undefined,
-							});
-						}}
-					/>
-					<p class={sp.fieldHint}>Sent as the system message to the LLM provider</p>
-				</div>
-			</Show>
-
-			{/* Shortcut */}
-			<div class={sp.editorSection}>
-				<label class={sp.editorLabel}>Keyboard Shortcut</label>
-				<KeyComboCapture
-					value={props.prompt.shortcut ?? ""}
-					onChange={handleShortcutChange}
-					placeholder="Click to set shortcut"
-				/>
-			</div>
-
-			{/* Actions */}
-			<div class={sp.editorActions}>
-				<Show when={isBuiltIn() && isOverridden()}>
-					<button class={sp.smallBtn} onClick={handleReset}>
-						Reset to Default
-					</button>
+				<Show
+					when={props.prompt.executionMode === "shell" && repoControlledVarsInContent(props.prompt.content).length > 0}
+				>
+					<p class={sp.fieldHint} style={{ color: "var(--color-warning, #c07a00)" }}>
+						⚠ Shell mode substitutes repo-controlled variables (
+						{repoControlledVarsInContent(props.prompt.content).join(", ")}). Values are shell-quoted automatically, but
+						a template that uses them outside argument position (e.g. `eval {"{branch}"}`) can still be abused by
+						crafted branch names / PR titles.
+					</p>
 				</Show>
-				<Show when={!isBuiltIn()}>
+
+				{/* Output Target (headless and api modes) */}
+				<Show when={(props.prompt.executionMode ?? "inject") !== "inject"}>
+					<SettingRow label="Output Target">
+						{(id, descriptionId) => (
+							<div>
+								<Select
+									id={id}
+									aria-describedby={descriptionId()}
+									value={props.prompt.outputTarget ?? ""}
+									onChange={(e) => {
+										const val = e.currentTarget.value || undefined;
+										promptLibraryStore.updatePrompt(props.prompt.id, {
+											outputTarget: val as SavedPrompt["outputTarget"],
+										});
+									}}
+								>
+									<option value="">None (return in result)</option>
+									<option value="commit-message">Commit message</option>
+									<option value="clipboard">Clipboard</option>
+									<option value="toast">Notification</option>
+									<option value="panel">Panel</option>
+								</Select>
+							</div>
+						)}
+					</SettingRow>
+				</Show>
+
+				{/* System Prompt (api mode only) */}
+				<Show when={props.prompt.executionMode === "api"}>
+					<SettingRow label="System Prompt" hint="Sent as the system message to the LLM provider">
+						{(id, descriptionId) => (
+							<div>
+								<Textarea
+									id={id}
+									aria-describedby={descriptionId()}
+									rows={3}
+									value={props.prompt.systemPrompt ?? ""}
+									placeholder="Instructions for the LLM (e.g. 'You are a Git expert. Output only the requested content.')"
+									onInput={(e) => {
+										promptLibraryStore.updatePrompt(props.prompt.id, {
+											systemPrompt: e.currentTarget.value || undefined,
+										});
+									}}
+								/>
+							</div>
+						)}
+					</SettingRow>
+				</Show>
+
+				{/* Shortcut */}
+				<SettingRow label="Keyboard Shortcut">
+					{() => (
+						<div>
+							<KeyComboCapture
+								value={props.prompt.shortcut ?? ""}
+								onChange={handleShortcutChange}
+								placeholder="Click to set shortcut"
+							/>
+						</div>
+					)}
+				</SettingRow>
+
+				{/* Actions */}
+				<div class={sp.editorActions}>
+					<Show when={isBuiltIn() && isOverridden()}>
+						<button class={sp.smallBtn} onClick={handleReset}>
+							Reset to Default
+						</button>
+					</Show>
+				</div>
+			</SectionCard>
+			<Show when={!isBuiltIn()}>
+				<DangerZone
+					title="Delete prompt"
+					scope={props.prompt.name}
+					consequence="This permanently removes this custom prompt."
+				>
 					<button class={sp.dangerBtn} onClick={handleDelete}>
 						Delete
 					</button>
-				</Show>
-			</div>
+				</DangerZone>
+			</Show>
 
 			<ConfirmDialog
 				visible={dialogs.dialogState() !== null}
@@ -530,14 +586,14 @@ const PromptEditor: Component<{
 				onClose={dialogs.handleClose}
 				onConfirm={dialogs.handleConfirm}
 			/>
-		</div>
+		</>
 	);
 };
 
 /** Single prompt row with toggle, badges, and click-to-expand */
-const PromptRow: Component<{ prompt: SavedPrompt; headlessAgents: AgentType[] }> = (props) => {
-	const [expanded, setExpanded] = createSignal(false);
-
+const PromptRow: Component<{ prompt: SavedPrompt; onEdit: (id: string) => void; selected: Accessor<string | null> }> = (
+	props,
+) => {
 	const isEnabled = () => props.prompt.enabled !== false;
 	const mode = () => props.prompt.executionMode ?? "inject";
 	const builtInDefault = () => BUILTIN_BY_ID.get(props.prompt.id);
@@ -546,67 +602,54 @@ const PromptRow: Component<{ prompt: SavedPrompt; headlessAgents: AgentType[] }>
 		return def ? promptLibraryStore.hasUpdate(props.prompt.id, def.builtInVersion ?? 1) : false;
 	};
 
-	const handleToggle = (e: Event) => {
-		e.stopPropagation();
-		promptLibraryStore.updatePrompt(props.prompt.id, { enabled: !isEnabled() });
-	};
-
 	return (
 		<div class={sp.promptRow}>
-			<div
-				class={sp.promptHeader}
-				role="button"
-				tabIndex={0}
-				onClick={() => setExpanded(!expanded())}
-				onKeyDown={onClickKeyDown(() => setExpanded(!expanded()))}
-			>
-				{/* Enable/disable toggle */}
-				<label class={s.toggle} onClick={(e) => e.stopPropagation()}>
-					<input type="checkbox" checked={isEnabled()} onChange={handleToggle} />
-				</label>
-
-				{/* Icon placeholder */}
-				<span class={sp.promptIcon}>{props.prompt.icon ?? ""}</span>
-
-				{/* Name */}
-				<span class={sp.promptName} style={{ opacity: isEnabled() ? 1 : 0.5 }}>
-					{props.prompt.name}
-				</span>
-
-				{/* Badges */}
-				<div class={sp.promptMeta}>
-					<span class={sp.badge} data-type={mode()}>
-						{mode()}
-					</span>
-					<For each={props.prompt.placement ?? []}>
-						{(p) => (
-							<span class={sp.badge} data-type="placement">
-								{p}
-							</span>
-						)}
-					</For>
-					<Show when={props.prompt.builtIn}>
-						<span class={sp.badge} data-type="builtin">
-							Built-in
-						</span>
-					</Show>
-					<Show when={hasUpdate()}>
-						<span class={sp.badge} data-type="update">
-							Updated
-						</span>
-					</Show>
-				</div>
-			</div>
-
-			<Show when={expanded()}>
-				<PromptEditor prompt={props.prompt} onClose={() => setExpanded(false)} headlessAgents={props.headlessAgents} />
-			</Show>
+			<ListRow
+				name={props.prompt.name}
+				description={props.prompt.description}
+				badges={
+					<>
+						<StatusBadge label={mode()} />
+						<For each={props.prompt.placement ?? []}>{(placement) => <StatusBadge label={placement} />}</For>
+						<StatusBadge label={props.prompt.builtIn ? "Built-in" : "Custom"} />
+						<Show when={hasUpdate()}>
+							<StatusBadge label="Updated" />
+						</Show>
+					</>
+				}
+				actions={
+					<>
+						<button
+							class={s.testBtn}
+							aria-label={`Edit ${props.prompt.name}`}
+							title={`Edit ${props.prompt.name}`}
+							aria-expanded={props.selected() === props.prompt.id}
+							onClick={() => props.onEdit(props.prompt.id)}
+						>
+							Edit
+						</button>
+						<input
+							class={s.rowSwitch}
+							type="checkbox"
+							role="switch"
+							aria-label={`Enable ${props.prompt.name}`}
+							checked={isEnabled()}
+							onChange={() => promptLibraryStore.updatePrompt(props.prompt.id, { enabled: !isEnabled() })}
+						/>
+					</>
+				}
+			/>
 		</div>
 	);
 };
 
 /** Collapsible category group */
-const CategoryGroup: Component<{ category: string; prompts: SavedPrompt[]; headlessAgents: AgentType[] }> = (props) => {
+const CategoryGroup: Component<{
+	category: string;
+	prompts: SavedPrompt[];
+	onEdit: (id: string) => void;
+	selected: Accessor<string | null>;
+}> = (props) => {
 	const [open, setOpen] = createSignal(true);
 
 	return (
@@ -621,12 +664,12 @@ const CategoryGroup: Component<{ category: string; prompts: SavedPrompt[]; headl
 				<span class={sp.categoryChevron} classList={{ [sp.open]: open() }}>
 					&#9654;
 				</span>
-				<span>{props.category}</span>
+				<span>{props.category === "pr" ? "PR" : props.category === "ci" ? "CI" : props.category}</span>
 				<span class={sp.categoryCount}>{props.prompts.length}</span>
 			</div>
 			<Show when={open()}>
 				<For each={props.prompts}>
-					{(prompt) => <PromptRow prompt={prompt} headlessAgents={props.headlessAgents} />}
+					{(prompt) => <PromptRow prompt={prompt} onEdit={props.onEdit} selected={props.selected} />}
 				</For>
 			</Show>
 		</>
@@ -638,6 +681,8 @@ const CategoryGroup: Component<{ category: string; prompts: SavedPrompt[]; headl
 // ---------------------------------------------------------------------------
 
 export const SmartPromptsTab: Component = () => {
+	const [selected, setSelected] = createSignal<string | null>(null);
+	const selectedPrompt = () => getAllSmartPrompts().find((prompt) => prompt.id === selected());
 	const detection = useAgentDetection();
 	const groups = createMemo(() => groupByCategory(getAllSmartPrompts()));
 
@@ -680,56 +725,86 @@ export const SmartPromptsTab: Component = () => {
 
 	return (
 		<div class={s.section}>
-			<h3>Smart Prompts</h3>
-			<p class={s.hint} style={{ "margin-bottom": "16px" }}>
-				AI-powered actions that can be triggered from the toolbar, context menus, and command palette. Enable, disable,
-				or customize the prompt content and placement for each action.
-			</p>
-
-			<div class={s.group}>
-				<label>Headless Agent</label>
-				<Select
-					value={agentConfigsStore.getHeadlessAgent() ?? ""}
-					onChange={(e) => agentConfigsStore.setHeadlessAgent(toHeadlessAgentChoice(e.currentTarget.value))}
+			<SettingPageHeader
+				title="Smart Prompts"
+				description="Configure reusable actions and their execution behavior."
+				scope="Application"
+				breadcrumb="AI / Smart Prompts"
+			/>
+			<SectionCard
+				title="Background agent"
+				description="AI-powered actions from the toolbar, context menus and command palette. Enable, disable or customize each action."
+			>
+				<SettingRow
+					label="Headless Agent"
+					hint="Default agent for headless prompts. Individual prompts can override this in their settings."
 				>
-					<option value="">— Not configured —</option>
-					<For each={headlessAgents()}>
-						{(type) => {
-							const configs = () => agentConfigsStore.getRunConfigs(type);
-							return (
-								<Show when={configs().length > 0} fallback={<option value={type}>{AGENTS[type]?.name ?? type}</option>}>
-									<optgroup label={AGENTS[type]?.name ?? type}>
-										<option value={type}>{AGENTS[type]?.name ?? type} (default)</option>
-										<For each={configs()}>
-											{(cfg) => (
-												<option value={`${type}:${cfg.name}`}>
-													{cfg.name}
-													{cfg.is_default ? " (default)" : ""}
-												</option>
-											)}
-										</For>
-									</optgroup>
-								</Show>
-							);
-						}}
+					{(id, descriptionId) => (
+						<Select
+							id={id}
+							aria-describedby={descriptionId()}
+							value={agentConfigsStore.getHeadlessAgent() ?? ""}
+							onChange={(e) => agentConfigsStore.setHeadlessAgent(toHeadlessAgentChoice(e.currentTarget.value))}
+						>
+							<option value="">— Not configured —</option>
+							<For each={headlessAgents()}>
+								{(type) => {
+									const configs = () => agentConfigsStore.getRunConfigs(type);
+									return (
+										<Show
+											when={configs().length > 0}
+											fallback={<option value={type}>{AGENTS[type]?.name ?? type}</option>}
+										>
+											<optgroup label={AGENTS[type]?.name ?? type}>
+												<option value={type}>{AGENTS[type]?.name ?? type} (default)</option>
+												<For each={configs()}>
+													{(cfg) => (
+														<option value={`${type}:${cfg.name}`}>
+															{cfg.name}
+															{cfg.is_default ? " (default)" : ""}
+														</option>
+													)}
+												</For>
+											</optgroup>
+										</Show>
+									);
+								}}
+							</For>
+							<option value="api">API (via ego)</option>
+						</Select>
+					)}
+				</SettingRow>
+				<p class={s.hint}>{detection.loading() ? "Detecting..." : ""}</p>
+			</SectionCard>
+
+			<SectionCard
+				title="Prompt library"
+				actions={
+					<button class={s.testBtn} onClick={handleNewPrompt}>
+						+ New Smart Prompt
+					</button>
+				}
+			>
+				<div class={sp.promptList}>
+					<For each={orderedCategories()}>
+						{(cat) => (
+							<CategoryGroup
+								category={cat}
+								prompts={groups().get(cat)!}
+								selected={selected}
+								onEdit={(id) => setSelected(selected() === id ? null : id)}
+							/>
+						)}
 					</For>
-					<option value="api">API (via ego)</option>
-				</Select>
-				<p class={s.hint}>
-					Default agent for headless prompts. Individual prompts can override this in their settings.
-					{detection.loading() ? " Detecting..." : ""}
-				</p>
-			</div>
-
-			<div class={sp.promptList}>
-				<For each={orderedCategories()}>
-					{(cat) => <CategoryGroup category={cat} prompts={groups().get(cat)!} headlessAgents={headlessAgents()} />}
-				</For>
-			</div>
-
-			<button class={sp.addBtn} onClick={handleNewPrompt}>
-				+ New Smart Prompt
-			</button>
+				</div>
+			</SectionCard>
+			<Show when={selectedPrompt()}>
+				{(prompt) => (
+					<>
+						<PromptEditor prompt={prompt()} onClose={() => setSelected(null)} headlessAgents={headlessAgents()} />
+					</>
+				)}
+			</Show>
 		</div>
 	);
 };

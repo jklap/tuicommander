@@ -483,7 +483,7 @@ User-specific settings (`promptOnCreate`, `autoFetchIntervalMinutes`, and the De
 
 ### Telegram
 
-Settings → Telegram configures the current machine. Mobile Settings has a **Telegram setup** button with the same controls. Use it on the host running the desktop app or `tuic-remote`. Both share one polling owner on that machine.
+Settings → Telegram configures the current machine. Bot setup, Chat access, Agent registration and Recent messages have separate cards. Authorized chats use named list rows with a Remove action, and Reload status refreshes the polling summary. Mobile Settings has a **Telegram setup** button with the same controls. Use it on the host running the desktop app or `tuic-remote`. Both share one polling owner on that machine.
 
 1. Paste the BotFather token into the password field and select **Save and check bot**. TUIC writes `bot.token` with owner-only permissions and checks `getMe`. Settings shows the bot username and whether a token is set; it never reads the token back.
 2. Enable Telegram. Ask an agent in the polling app to opt in with the Telegram MCP tool (`register`/`unregister`); Settings shows the registered agent read-only, or **No agent registered**. When the status is connected, select **Link chat**, then send the displayed six-character code to the bot within ten minutes. The code works once. Alternatively, type a positive private chat ID and select **Add chat ID**. Remove revokes authorization. The bot confirms a successful link with **Chat linked.**, and the consumed code hint disappears on the next Settings refresh. A bare `/start` explains how to get a code but does not authorize a chat. Wrong or expired six-character hexadecimal codes receive a safe retry instruction; other unauthorized text receives no reply. With no registered agent, an authorized message receives a short English registration instruction. An ordinary message after pairing in the same poll uses the new authorization; the pairing code never reaches the agent. Link confirmation is best-effort: if sending it fails, the chat stays linked and the consumed code is not replayed as agent mail. The failed reply appears in Recent messages.
@@ -555,6 +555,51 @@ An empty device list means enumeration succeeded with no devices. If the audio b
 
 Settings uses one bounded, responsive shell across pages, with independently scrolling navigation and content. The panel is at most 1136px wide and retains its size when you select another page. Saved navigation width remains in use. Shared presentation components support consistent cards, label/control rows, source-aware status, empty states and scoped destructive actions as pages adopt the approved restyle. Save behavior and configuration ownership do not change.
 
+### Task-based settings presentation
+
+AI Chat groups new-run defaults into **Agent and model**, **Workspace access**,
+**Network and sandbox**, and closed **Advanced and diagnostics**. The executable,
+profile, and workspace remain owned by TUICommander in General. Model and access
+values remain owned by ego; these controls do not change running conversations.
+
+Voice uses separate task cards for dictation, recognition, corrections,
+hands-free conversations, and spoken replies. Smart Prompts retains categorized
+prompt editors and the existing execution controls. Integration pages use local
+connection, access, and service cards. Remote token regeneration requires a scoped
+confirmation because it disconnects active remote sessions.
+
+The plugin manager retains lazy Installed/Browse views. A loaded plugin's settings
+page identifies its plugin source and uses schema-driven controls; saved credentials
+are not evidence of a live connection. Existing explicit-save and automatic-save
+boundaries still apply to each page.
+
+Loaded plugins with described settings appear in a separate **Plugin settings**
+navigation group with a plug icon. The manager offers **Settings** only when the
+loaded catalogue provides a page. That action opens the same scoped page as the
+navigation entry; it does not create a second settings service.
+
+AI Chat groups provider details in **Other providers and available models**. Workspace access shows the effective folders first. **Add folder** and **Edit** reveal the existing ego roots draft; **Save roots in ego** keeps its explicit save boundary. The network selector writes through ego. **How to verify** explains command-isolation evidence without running a probe.
+
+Voice keeps downloadable models and voice management in **Speech assets**. Remote Access separates connection status, Tailscale HTTPS and token revocation. Plugin rows keep secondary controls in **Manage plugin**; plugin pages identify their source and plugin-owned scope.
 Native MCP tool help stays anchored during status refreshes. Focus a `?` badge
 with the keyboard or hover over it to read the full tool description. Help
 placement follows panel scrolling, window resizing, and description size changes.
+
+### Contextual explanations
+
+Selected settings show a `?` only when the approved explanation adds decision guidance, requirements, consequences or owner-dependent defaults. Hover or focus the badge to read it. Click or press Enter/Space to pin it; click again, press Escape or click outside to dismiss it. Help does not save a setting, contact a service or run a sandbox probe. Long help scrolls inside the viewport and follows panel scroll/resize. Native MCP help retains tool-name identity while descriptions update during status polls (1928-e282).
+
+AI Chat places provider refresh beside the default model and lists effective roots with their source, access and Edit action. Reload from ego is in Advanced and diagnostics. Voice lists Whisper downloads below the active-model summary and keeps correction import/export in the card actions. Smart Prompts uses Edit to open a separate editor card; the enable switch stays visible on each library row. Custom prompt deletion remains confirmed in the final danger section.
+
+Loaded plugin pages use the same title-icon slot as other Settings pages. The
+source line identifies bundled or installed ownership without changing the
+page label, catalogue lifecycle, or scoped editor behavior.
+
+Plugin field resets sit next to their controls and appear only for non-default
+values (or a set credential). Plugin management uses compact secondary actions.
+
+### Telegram request streaming (1959-162a)
+
+Telegram replies now use TUIC-driven receipt (👀), working (👨‍💻), waiting (🤔), answered (👍) and failed (👎) reactions. An ephemeral native draft shows Italian status lines or unapproved agent previews; it refreshes while work continues and the final reply replaces it. Acknowledgement of work requires inbox Read and a new recipient turn. PTY intent/activity and AI Chat assistant chunks share request correlation; finish remains authoritative after draft retirement. Telegram-mail-woken AI Chat turns automatically send their settled assistant text if finish has not answered. Queue and no-reply notices occur at ten minutes and sixty seconds after Read respectively. Restart keeps no request history. Phone rendering requires a live check after the backend restart.
+
+Settings search includes page titles and shared card controls. Page-title results scroll to the page header; when a page and card share a title, control results use the card. Runtime status badges and summaries are not settings search targets.

@@ -1,4 +1,5 @@
 import { type Component, createUniqueId, type JSX, Show } from "solid-js";
+import { ContextualHelp } from "../ContextualHelp";
 import s from "../Settings.module.css";
 
 export interface SettingFieldProps {
@@ -6,6 +7,7 @@ export interface SettingFieldProps {
 	hint?: string;
 	error?: string;
 	help?: JSX.Element;
+	actions?: JSX.Element;
 	row?: boolean;
 	disabled?: boolean;
 }
@@ -24,7 +26,7 @@ export const SettingField: Component<
 			fallback={
 				<div class={s.group}>
 					<label for={id}>{props.label}</label>
-					{props.help}
+					{props.help || <ContextualHelp label={props.label} hint={props.hint} />}
 					{props.children(id, descriptionId(), descriptionId)}
 					<Show when={props.hint}>
 						<p id={`${id}-hint`} class={s.hint}>
@@ -32,7 +34,7 @@ export const SettingField: Component<
 						</p>
 					</Show>
 					<Show when={props.error}>
-						<p id={`${id}-error`} class={s.fieldError}>
+						<p id={`${id}-error`} class={s.fieldError} role="alert">
 							{props.error}
 						</p>
 					</Show>
@@ -42,17 +44,20 @@ export const SettingField: Component<
 			<div class={s.settingRow}>
 				<div class={s.settingRowText}>
 					<label for={id}>{props.label}</label>
-					{props.help}
+					{props.help || <ContextualHelp label={props.label} hint={props.hint} />}
 					<Show when={props.hint}>
 						<p id={`${id}-hint`} class={s.hint}>
 							{props.hint}
 						</p>
 					</Show>
 				</div>
-				<div class={s.settingRowControl}>
-					{props.children(id, undefined, descriptionId)}
+				<div class={s.settingRowControl} classList={{ [s.settingRowWithActions]: !!props.actions }}>
+					<Show when={props.actions} fallback={props.children(id, undefined, descriptionId)}>
+						<div class={s.settingRowValue}>{props.children(id, undefined, descriptionId)}</div>
+						{props.actions}
+					</Show>
 					<Show when={props.error}>
-						<p id={`${id}-error`} class={s.fieldError}>
+						<p id={`${id}-error`} class={s.fieldError} role="alert">
 							{props.error}
 						</p>
 					</Show>

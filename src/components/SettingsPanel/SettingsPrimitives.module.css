@@ -24,3 +24,7 @@
 .pageHeader [data-testid="status-badge"], .listRow [data-testid="status-badge"], .status [data-testid="status-badge"] { font-family: var(--font-ui); font-size: 11px; border: 1px solid var(--border); border-radius: 999px; padding: 3px 8px; background: var(--bg-tertiary); }
 .listText > span { font-size: 13px; font-weight: 600; }
 .breadcrumb { font-size: 12px; color: var(--fg-secondary); margin-bottom: 12px; }
+
+.pageTitle { display: flex; align-items: center; gap: 8px; }
+.pageTitle > svg { width: 20px; height: 20px; flex-shrink: 0; }
+.cardActions { margin-top: 12px; justify-content: flex-end; }

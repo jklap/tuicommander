@@ -23,6 +23,7 @@ it.each(["switch", "clear", "park", "start"])("keeps startup-delayed paste owner
 		sessionId,
 		busy: () => false,
 		queuedPrompts: () => [],
+		configOptions: () => [],
 		capabilities: () => (connected ? { promptImage: true } : null),
 		ensureStarted: () => starting,
 	} as unknown as AcpChat;

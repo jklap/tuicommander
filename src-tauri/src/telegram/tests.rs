@@ -47,6 +47,7 @@ fn public_update() -> Value {
 #[derive(Default)]
 struct ServerState {
     responses: VecDeque<(StatusCode, Value)>,
+    send_message_responses: VecDeque<(StatusCode, Value)>,
     requests: Vec<(String, Value)>,
 }
 pub(super) struct FakeServer {
@@ -58,7 +59,7 @@ impl FakeServer {
     pub(super) async fn start(responses: Vec<(StatusCode, Value)>) -> Self {
         let state = Arc::new(Mutex::new(ServerState {
             responses: responses.into(),
-            requests: vec![],
+            ..ServerState::default()
         }));
         async fn respond(
             State(state): State<Arc<Mutex<ServerState>>>,
@@ -71,10 +72,32 @@ impl FakeServer {
         ) {
             let mut state = state.lock().unwrap();
             state.requests.push((uri.path().into(), body));
-            let (status, value) = state
-                .responses
-                .pop_front()
-                .unwrap_or((StatusCode::OK, json!({"ok":true,"result":[]})));
+            // Reactions are a new independent status operation. Existing fault
+            // queues still describe the draft/final operations under test.
+            let fallback = if uri.path().ends_with("sendMessageDraft")
+                || uri.path().ends_with("setMessageReaction")
+            {
+                json!({"ok":true,"result":true})
+            } else if uri.path().ends_with("sendMessage") {
+                json!({"ok":true,"result":{"message_id":100 + state.requests.len()}})
+            } else {
+                json!({"ok":true,"result":[]})
+            };
+            let send_response = uri
+                .path()
+                .ends_with("sendMessage")
+                .then(|| state.send_message_responses.pop_front())
+                .flatten();
+            let (status, value) = if let Some(response) = send_response {
+                response
+            } else if uri.path().ends_with("setMessageReaction") {
+                (StatusCode::OK, fallback)
+            } else {
+                state
+                    .responses
+                    .pop_front()
+                    .unwrap_or((StatusCode::OK, fallback))
+            };
             (
                 status,
                 [(

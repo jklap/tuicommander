@@ -96,6 +96,7 @@ pub(super) enum Command {
     },
     Cancel {
         session_id: v1::SessionId,
+        expected_turn: Option<AcpTurnId>,
         reply: Reply<()>,
     },
     CancelQueued {
@@ -550,8 +551,12 @@ impl ConnectionActor {
                     self.handle_prompt(session_id, prompt, meta, reply, connection, in_flight);
                 }
             }
-            Command::Cancel { session_id, reply } => {
-                let _ = reply.send(self.cancel(&session_id, connection));
+            Command::Cancel {
+                session_id,
+                expected_turn,
+                reply,
+            } => {
+                let _ = reply.send(self.cancel(&session_id, expected_turn, connection));
             }
             Command::CancelQueued {
                 session_id,
@@ -1511,6 +1516,7 @@ impl ConnectionActor {
     fn cancel(
         &mut self,
         session_id: &v1::SessionId,
+        expected_turn: Option<AcpTurnId>,
         connection: &ConnectionTo<Agent>,
     ) -> Result<(), AcpClientError> {
         let attachment = self.attachment(session_id)?;
@@ -1520,6 +1526,12 @@ impl ConnectionActor {
                 session_id.clone(),
             ));
         };
+        if expected_turn.is_some_and(|expected| turn.turn_id != expected) {
+            return Err(AcpClientError::no_active_turn(
+                self.connection_id,
+                session_id.clone(),
+            ));
+        }
         if turn.state != AcpTurnState::Running {
             return Ok(());
         }

@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Stream Telegram status and AI Chat answers with receipt/working reactions, request-scoped final replies, and bounded queue/failure notices (#1959-162a).
+- Add smart AI Chat table columns, conditional horizontal-scroll hints, exact-source Markdown and Copy actions, and read-only document opening on desktop and mobile (#1923-c6fb).
+
+- Tidy AI Chat into one header row with labelled overflow actions, compact process disclosures, latest-answer suggestions, and no synthetic history timing (#1958-b67e).
+
 - Restyle repository Settings with inherited override rows, script cards, team sharing, and a scoped reset action.
 
 - Restyle Agents Settings and named run editors while preserving machine ownership, draft saves, terminal permissions, and hibernation policy.
@@ -14,6 +19,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Bound `tuic bg` completion command labels to one line and 120 characters; keep the full command before job output in the log (#1950-43b7).
 ### Fixed
 - Confirm Telegram chat linking, explain start and invalid codes, and clear the consumed Settings hint (#1955-2f43).
+- Recover unconfirmed ego input only from a fresh, stable empty composer; release later queued commands without replaying the uncertain payload (#1957-38c1).
+- Bound raw PTY input waits to two seconds and keep session close independent of blocked writers (#1957-38c1).
+- Expire abandoned urgent-mail notice reservations after 30 seconds so later urgent sends are not suppressed indefinitely (#1957-38c1).
+- Show the ego icon for every ego session, independent of provider, and keep provider text in sidebar tooltips (#1960-51a2).
 - Keep missing Pocket voices visible in Settings with a download action; use the installed same-language default for spoken replies.
 
 - Bind hands-free conversation start/stop to Cmd+Alt+V (Ctrl+Alt+V on Windows/Linux), with user overrides preserved (#1953-3da5).
@@ -57,6 +66,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Keep the Settings shell visible during plugin catalogue and value reads, and identify plugin pages in a separate navigation group with source IDs (#1927-9649).
 
 - Retain bounded, metadata-only slow-refresh, UI-freeze and heartbeat-gap evidence across ring overflow and restart. Add an anonymized count-based replay input builder; original real-stall reproduction remains unproven (#1638-c94c).
+
+- Keep ego attachment grants after `run` and `resume` so direct launches accept their prompt (#1833).
 
 - Grant Gemini session attachment trust without a folder prompt or global settings changes. Grant ego PTY attachments read-only access in confined sandbox modes (#1833-aa60).
 

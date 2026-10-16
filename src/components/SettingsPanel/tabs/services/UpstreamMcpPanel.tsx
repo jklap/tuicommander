@@ -12,9 +12,12 @@ import { handleOpenUrl } from "../../../../utils/openUrl";
 import { ConfirmDialog } from "../../../ConfirmDialog";
 import { Input } from "../../../ui/Input";
 import { Select } from "../../../ui/Select";
+import { ContextualHelp } from "../../ContextualHelp";
 import { MachineSelector } from "../../MachineSelector";
 import s from "../../Settings.module.css";
+import { SectionCard } from "../../SettingsPrimitives";
 import { SETTINGS_SECTION_UPSTREAM_MCP } from "../../sections";
+import layout from "./ServiceRestyle.module.css";
 
 /** Pure helper: should the Authorize button be shown for this server+status? */
 export function shouldShowAuthorize(
@@ -569,570 +572,583 @@ export const UpstreamMcpPanel: Component = () => {
 	}
 
 	return (
-		<div
-			id={SETTINGS_SECTION_UPSTREAM_MCP}
-			class={s.section}
-			style={{ "margin-top": "24px", "border-top": "1px solid var(--border)", "padding-top": "16px" }}
-		>
-			<div class={s.group}>
-				{/* A heading, not a label: it is the section search scrolls to (#860-91a0) */}
-				<div style={{ display: "flex", "align-items": "center", gap: "8px", "justify-content": "space-between" }}>
-					<h3 style={{ margin: 0 }}>Upstream MCP Servers</h3>
-					<button
-						class={s.copyBtn}
-						onClick={() => {
-							setShowAdd((v) => !v);
-							setError("");
-						}}
-						title="Add upstream server"
-						style={{ "font-size": "18px", "line-height": 1 }}
-					>
-						{showAdd() ? "−" : "+"}
-					</button>
-				</div>
-				<p class={s.hint}>
-					Proxy external MCP servers through TUIC. Their tools appear prefixed as <code>{"{name}__{tool}"}</code>.
-				</p>
-			</div>
-
-			<MachineSelector value={machine()} label="Upstreams on" onChange={setMachine} />
-
-			{/* Add upstream form */}
-			<Show when={showAdd()}>
-				<div
-					class={s.group}
-					style={{ background: "var(--bg-secondary, rgba(255,255,255,0.03))", padding: "12px", "border-radius": "6px" }}
-				>
-					<div style={{ display: "grid", gap: "8px" }}>
-						<Input
-							type="text"
-							class={s.input}
-							placeholder="Name (e.g. context7, github)"
-							value={form().name}
-							onInput={(e) => {
-								const normalized = e.currentTarget.value.toLowerCase().replace(/[^a-z0-9_-]/g, "-");
-								e.currentTarget.value = normalized;
-								setForm((f) => ({ ...f, name: normalized }));
+		<div id={SETTINGS_SECTION_UPSTREAM_MCP} class={`${s.section} ${layout.upstreams}`}>
+			<SectionCard title="Upstream MCP Servers">
+				<div class={s.group}>
+					{/* A heading, not a label: it is the section search scrolls to (#860-91a0) */}
+					<div class={layout.cardActions}>
+						<button
+							class={s.copyBtn}
+							onClick={() => {
+								setShowAdd((v) => !v);
+								setError("");
 							}}
-						/>
-						<Select
-							class={s.input}
-							value={form().transportType}
-							onChange={(e) => setForm((f) => ({ ...f, transportType: e.currentTarget.value as "http" | "stdio" }))}
+							title="Add upstream server"
+							style={{ "font-size": "18px", "line-height": 1 }}
 						>
-							<option value="http">HTTP (Streamable MCP)</option>
-							<option value="stdio">stdio (process)</option>
-						</Select>
-						<Show when={form().transportType === "http"}>
+							{showAdd() ? "−" : "+"}
+						</button>
+					</div>
+					<p class={s.hint}>
+						Proxy external MCP servers through TUIC. Their tools appear prefixed as <code>{"{name}__{tool}"}</code>.
+					</p>
+				</div>
+
+				<MachineSelector value={machine()} label="Upstreams on" onChange={setMachine} />
+
+				{/* Add upstream form */}
+				<Show when={showAdd()}>
+					<div
+						class={s.group}
+						style={{
+							background: "var(--bg-secondary, rgba(255,255,255,0.03))",
+							padding: "12px",
+							"border-radius": "6px",
+						}}
+					>
+						<div style={{ display: "grid", gap: "8px" }}>
 							<Input
 								type="text"
 								class={s.input}
-								placeholder="URL (e.g. http://localhost:8080/mcp)"
-								value={form().url}
-								onInput={(e) => setForm((f) => ({ ...f, url: e.currentTarget.value }))}
+								placeholder="Name (e.g. context7, github)"
+								value={form().name}
+								onInput={(e) => {
+									const normalized = e.currentTarget.value.toLowerCase().replace(/[^a-z0-9_-]/g, "-");
+									e.currentTarget.value = normalized;
+									setForm((f) => ({ ...f, name: normalized }));
+								}}
 							/>
+							<Select
+								class={s.input}
+								value={form().transportType}
+								onChange={(e) => setForm((f) => ({ ...f, transportType: e.currentTarget.value as "http" | "stdio" }))}
+							>
+								<option value="http">HTTP (Streamable MCP)</option>
+								<option value="stdio">stdio (process)</option>
+							</Select>
+							<Show when={form().transportType === "http"}>
+								<Input
+									type="text"
+									class={s.input}
+									placeholder="URL (e.g. http://localhost:8080/mcp)"
+									value={form().url}
+									onInput={(e) => setForm((f) => ({ ...f, url: e.currentTarget.value }))}
+								/>
+								<div style={{ display: "flex", gap: "8px", "align-items": "center" }}>
+									<label style={{ "font-size": "12px", color: "var(--text-dimmed)", "min-width": "90px" }}>
+										Authentication
+									</label>
+									<ContextualHelp label="Authentication" />
+									<Select
+										class={s.input}
+										value={form().authMethod}
+										onChange={(e) =>
+											setForm((f) => ({ ...f, authMethod: e.currentTarget.value as "bearer" | "oauth2" }))
+										}
+										style={{ flex: 1 }}
+									>
+										<option value="bearer">Bearer token</option>
+										<option value="oauth2">OAuth 2.1</option>
+									</Select>
+								</div>
+								<Show when={form().authMethod === "bearer"}>
+									<Input
+										type="password"
+										class={s.input}
+										placeholder="API key for remote MCP servers (optional, stored in OS keychain)"
+										value={form().credential}
+										onInput={(e) => setForm((f) => ({ ...f, credential: e.currentTarget.value }))}
+									/>
+								</Show>
+								<HeaderRows
+									onError={setError}
+									rows={form().headers}
+									onChange={(headers) => setForm((f) => ({ ...f, headers }))}
+								/>
+								<Show when={form().authMethod === "oauth2"}>
+									<Input
+										type="text"
+										class={s.input}
+										placeholder="Client ID (leave blank to auto-register)"
+										value={form().oauthClientId}
+										onInput={(e) => setForm((f) => ({ ...f, oauthClientId: e.currentTarget.value }))}
+									/>
+									<Input
+										type="password"
+										class={s.input}
+										placeholder="Client Secret (optional, for confidential clients)"
+										value={form().oauthClientSecret}
+										onInput={(e) => setForm((f) => ({ ...f, oauthClientSecret: e.currentTarget.value }))}
+									/>
+									<Input
+										type="text"
+										class={s.input}
+										placeholder="Scopes (optional, space-separated)"
+										value={form().oauthScopes}
+										onInput={(e) => setForm((f) => ({ ...f, oauthScopes: e.currentTarget.value }))}
+									/>
+									<p class={s.hint} style={{ margin: "2px 0 0" }}>
+										Authorization will begin after saving. The browser opens for sign-in.
+									</p>
+								</Show>
+							</Show>
+							<Show when={form().transportType === "stdio"}>
+								<Input
+									type="text"
+									class={s.input}
+									placeholder="Command (e.g. npx)"
+									value={form().command}
+									onInput={(e) => setForm((f) => ({ ...f, command: e.currentTarget.value }))}
+								/>
+								<Input
+									type="text"
+									class={s.input}
+									placeholder="Args (space-separated, e.g. -y @modelcontextprotocol/server-filesystem /path)"
+									value={form().args}
+									onInput={(e) => setForm((f) => ({ ...f, args: e.currentTarget.value }))}
+								/>
+								<Input
+									type="text"
+									class={s.input}
+									placeholder="Working directory (optional)"
+									value={form().cwd}
+									onInput={(e) => setForm((f) => ({ ...f, cwd: e.currentTarget.value }))}
+								/>
+							</Show>
 							<div style={{ display: "flex", gap: "8px", "align-items": "center" }}>
-								<label style={{ "font-size": "12px", color: "var(--text-dimmed)", "min-width": "90px" }}>
-									Authentication
-								</label>
-								<Select
+								<label style={{ "font-size": "12px", color: "var(--text-dimmed)" }}>Timeout (s):</label>
+								<ContextualHelp label="Timeout (s):" />
+								<Input
+									type="number"
 									class={s.input}
-									value={form().authMethod}
-									onChange={(e) => setForm((f) => ({ ...f, authMethod: e.currentTarget.value as "bearer" | "oauth2" }))}
-									style={{ flex: 1 }}
-								>
-									<option value="bearer">Bearer token</option>
-									<option value="oauth2">OAuth 2.1</option>
-								</Select>
+									value={form().timeout}
+									min={0}
+									max={300}
+									style={{ width: "70px" }}
+									onInput={(e) => setForm((f) => ({ ...f, timeout: parseInt(e.currentTarget.value, 10) || 30 }))}
+								/>
 							</div>
-							<Show when={form().authMethod === "bearer"}>
-								<Input
-									type="password"
-									class={s.input}
-									placeholder="API key for remote MCP servers (optional, stored in OS keychain)"
-									value={form().credential}
-									onInput={(e) => setForm((f) => ({ ...f, credential: e.currentTarget.value }))}
-								/>
-							</Show>
-							<HeaderRows
-								onError={setError}
-								rows={form().headers}
-								onChange={(headers) => setForm((f) => ({ ...f, headers }))}
-							/>
-							<Show when={form().authMethod === "oauth2"}>
-								<Input
-									type="text"
-									class={s.input}
-									placeholder="Client ID (leave blank to auto-register)"
-									value={form().oauthClientId}
-									onInput={(e) => setForm((f) => ({ ...f, oauthClientId: e.currentTarget.value }))}
-								/>
-								<Input
-									type="password"
-									class={s.input}
-									placeholder="Client Secret (optional, for confidential clients)"
-									value={form().oauthClientSecret}
-									onInput={(e) => setForm((f) => ({ ...f, oauthClientSecret: e.currentTarget.value }))}
-								/>
-								<Input
-									type="text"
-									class={s.input}
-									placeholder="Scopes (optional, space-separated)"
-									value={form().oauthScopes}
-									onInput={(e) => setForm((f) => ({ ...f, oauthScopes: e.currentTarget.value }))}
-								/>
-								<p class={s.hint} style={{ margin: "2px 0 0" }}>
-									Authorization will begin after saving. The browser opens for sign-in.
-								</p>
-							</Show>
-						</Show>
-						<Show when={form().transportType === "stdio"}>
-							<Input
-								type="text"
-								class={s.input}
-								placeholder="Command (e.g. npx)"
-								value={form().command}
-								onInput={(e) => setForm((f) => ({ ...f, command: e.currentTarget.value }))}
-							/>
-							<Input
-								type="text"
-								class={s.input}
-								placeholder="Args (space-separated, e.g. -y @modelcontextprotocol/server-filesystem /path)"
-								value={form().args}
-								onInput={(e) => setForm((f) => ({ ...f, args: e.currentTarget.value }))}
-							/>
-							<Input
-								type="text"
-								class={s.input}
-								placeholder="Working directory (optional)"
-								value={form().cwd}
-								onInput={(e) => setForm((f) => ({ ...f, cwd: e.currentTarget.value }))}
-							/>
-						</Show>
-						<div style={{ display: "flex", gap: "8px", "align-items": "center" }}>
-							<label style={{ "font-size": "12px", color: "var(--text-dimmed)" }}>Timeout (s):</label>
-							<Input
-								type="number"
-								class={s.input}
-								value={form().timeout}
-								min={0}
-								max={300}
-								style={{ width: "70px" }}
-								onInput={(e) => setForm((f) => ({ ...f, timeout: parseInt(e.currentTarget.value, 10) || 30 }))}
-							/>
-						</div>
-						{/* Same shape as the edit form below: primary + secondary on their own
+							{/* Same shape as the edit form below: primary + secondary on their own
 						    right-aligned row, so the pair is never squeezed by the timeout field
 						    and both buttons use the shared save/cancel styling. */}
-						<div style={{ display: "flex", gap: "8px", "justify-content": "flex-end" }}>
-							<button class={s.saveBtn} onClick={addUpstream} disabled={saving()}>
-								{saving() ? "Adding…" : "Add"}
-							</button>
-							<button
-								class={s.testBtn}
-								onClick={() => {
-									setShowAdd(false);
-									setForm(emptyForm());
-									setError("");
-								}}
-							>
-								Cancel
-							</button>
+							<div style={{ display: "flex", gap: "8px", "justify-content": "flex-end" }}>
+								<button class={s.saveBtn} onClick={addUpstream} disabled={saving()}>
+									{saving() ? "Adding…" : "Add"}
+								</button>
+								<button
+									class={s.testBtn}
+									onClick={() => {
+										setShowAdd(false);
+										setForm(emptyForm());
+										setError("");
+									}}
+								>
+									Cancel
+								</button>
+							</div>
+							<Show when={error()}>
+								<p class={s.hint} style={{ color: "var(--error, #e06c75)" }}>
+									{error()}
+								</p>
+							</Show>
 						</div>
-						<Show when={error()}>
-							<p class={s.hint} style={{ color: "var(--error, #e06c75)" }}>
-								{error()}
-							</p>
-						</Show>
 					</div>
-				</div>
-			</Show>
+				</Show>
 
-			{/* Upstream list */}
-			<Show when={upstreams().length === 0 && !showAdd()}>
-				<p class={s.hint} style={{ color: "var(--text-dimmed)" }}>
-					No upstream servers configured. Click <strong>+</strong> to add one.
-				</p>
-			</Show>
+				{/* Upstream list */}
+				<Show when={upstreams().length === 0 && !showAdd()}>
+					<p class={s.hint} style={{ color: "var(--text-dimmed)" }}>
+						No upstream servers configured. Click <strong>+</strong> to add one.
+					</p>
+				</Show>
 
-			<For each={upstreams()}>
-				{(server) => {
-					const st = () => getStatus(server.name);
-					const isEditing = () => editingId() === server.id;
-					return (
-						<div style={{ "border-bottom": "1px solid var(--border-subtle, rgba(255,255,255,0.06))" }}>
-							<div class={s.group} style={{ display: "flex", "align-items": "center", gap: "8px", padding: "8px 0" }}>
-								{/* Enable toggle */}
-								<div class={s.toggle} style={{ "margin-right": "4px" }}>
-									<input
-										type="checkbox"
-										checked={server.enabled}
-										onChange={(e) => toggleUpstream(server.id, e.currentTarget.checked)}
-									/>
-								</div>
-								{/* Info */}
-								<div style={{ flex: 1, "min-width": 0 }}>
-									<div style={{ display: "flex", "align-items": "center", gap: "6px", "flex-wrap": "wrap" }}>
-										<span style={{ "font-weight": 500, "font-size": "13px" }}>{server.name}</span>
-										<span
-											style={{
-												"font-size": "10px",
-												padding: "1px 5px",
-												"border-radius": "3px",
-												background:
-													server.transport.type === "http" ? "rgba(97,175,239,0.15)" : "rgba(152,195,121,0.15)",
-												color: server.transport.type === "http" ? "#61afef" : "#98c379",
-											}}
-										>
-											{server.transport.type.toUpperCase()}
-										</span>
-										{/* Status dot + label */}
-										<Show when={st()}>
-											{(entry) => (
-												<>
-													<span
-														style={{
-															display: "inline-block",
-															width: "7px",
-															height: "7px",
-															"border-radius": "50%",
-															background: statusColor(entry().status),
-														}}
-														title={statusLabel(entry().status)}
-													/>
-													<Show when={server.enabled && entry().status !== "disabled"}>
-														<span style={{ "font-size": "11px", color: statusColor(entry().status) }}>
-															{statusLabel(entry().status)}
-														</span>
-													</Show>
-												</>
-											)}
-										</Show>
-										<Show when={!server.enabled}>
+				<For each={upstreams()}>
+					{(server) => {
+						const st = () => getStatus(server.name);
+						const isEditing = () => editingId() === server.id;
+						return (
+							<div style={{ "border-bottom": "1px solid var(--border-subtle, rgba(255,255,255,0.06))" }}>
+								<div class={s.group} style={{ display: "flex", "align-items": "center", gap: "8px", padding: "8px 0" }}>
+									{/* Enable toggle */}
+									<div class={s.toggle} style={{ "margin-right": "4px" }}>
+										<input
+											type="checkbox"
+											checked={server.enabled}
+											onChange={(e) => toggleUpstream(server.id, e.currentTarget.checked)}
+										/>
+									</div>
+									{/* Info */}
+									<div style={{ flex: 1, "min-width": 0 }}>
+										<div style={{ display: "flex", "align-items": "center", gap: "6px", "flex-wrap": "wrap" }}>
+											<span style={{ "font-weight": 500, "font-size": "13px" }}>{server.name}</span>
 											<span
 												style={{
 													"font-size": "10px",
 													padding: "1px 5px",
 													"border-radius": "3px",
-													background: "rgba(255,255,255,0.05)",
-													color: "var(--text-dimmed)",
+													background:
+														server.transport.type === "http" ? "rgba(97,175,239,0.15)" : "rgba(152,195,121,0.15)",
+													color: server.transport.type === "http" ? "#61afef" : "#98c379",
 												}}
 											>
-												Disabled
+												{server.transport.type.toUpperCase()}
 											</span>
+											{/* Status dot + label */}
+											<Show when={st()}>
+												{(entry) => (
+													<>
+														<span
+															style={{
+																display: "inline-block",
+																width: "7px",
+																height: "7px",
+																"border-radius": "50%",
+																background: statusColor(entry().status),
+															}}
+															title={statusLabel(entry().status)}
+														/>
+														<Show when={server.enabled && entry().status !== "disabled"}>
+															<span style={{ "font-size": "11px", color: statusColor(entry().status) }}>
+																{statusLabel(entry().status)}
+															</span>
+														</Show>
+													</>
+												)}
+											</Show>
+											<Show when={!server.enabled}>
+												<span
+													style={{
+														"font-size": "10px",
+														padding: "1px 5px",
+														"border-radius": "3px",
+														background: "rgba(255,255,255,0.05)",
+														color: "var(--text-dimmed)",
+													}}
+												>
+													Disabled
+												</span>
+											</Show>
+										</div>
+										<div
+											class={s.hint}
+											style={{
+												margin: 0,
+												"font-family": "monospace",
+												"font-size": "11px",
+												overflow: "hidden",
+												"text-overflow": "ellipsis",
+												"white-space": "nowrap",
+											}}
+										>
+											{server.transport.type === "http"
+												? server.transport.url
+												: server.transport.command +
+													(server.transport.args?.length ? " " + server.transport.args.join(" ") : "")}
+										</div>
+										{/* Metrics line */}
+										<Show when={st()?.metrics}>
+											{(m) => (
+												<div class={s.hint} style={{ margin: 0, "font-size": "11px" }}>
+													{st()!.tool_count} tools · {m().call_count} calls · {m().error_count} errors
+													{m().last_latency_ms > 0 ? ` · ${m().last_latency_ms}ms` : ""}
+												</div>
+											)}
 										</Show>
 									</div>
-									<div
-										class={s.hint}
-										style={{
-											margin: 0,
-											"font-family": "monospace",
-											"font-size": "11px",
-											overflow: "hidden",
-											"text-overflow": "ellipsis",
-											"white-space": "nowrap",
-										}}
-									>
-										{server.transport.type === "http"
-											? server.transport.url
-											: server.transport.command +
-												(server.transport.args?.length ? " " + server.transport.args.join(" ") : "")}
-									</div>
-									{/* Metrics line */}
-									<Show when={st()?.metrics}>
-										{(m) => (
-											<div class={s.hint} style={{ margin: 0, "font-size": "11px" }}>
-												{st()!.tool_count} tools · {m().call_count} calls · {m().error_count} errors
-												{m().last_latency_ms > 0 ? ` · ${m().last_latency_ms}ms` : ""}
-											</div>
-										)}
-									</Show>
-								</div>
-								{/* Action buttons — never shrink */}
-								{/* Authorize — show for explicit OAuth2 config OR when server auto-detected needs_auth (DCR case).
+									{/* Action buttons — never shrink */}
+									{/* Authorize — show for explicit OAuth2 config OR when server auto-detected needs_auth (DCR case).
 								    Local only: the flow opens a browser and listens on a loopback redirect,
 								    neither of which a headless daemon has. `start_mcp_upstream_oauth` has no
 								    HTTP route for the same reason. */}
-								<Show when={!machine() && shouldShowAuthorize(server.auth?.type, st()?.status, server.enabled)}>
-									<Show
-										when={st()?.status === "authenticating"}
-										fallback={
-											<button
-												class={s.textBtn}
-												style={{
-													color: st()?.status === "needs_auth" ? "var(--warning, #e5c07b)" : "var(--info, #61afef)",
-													"font-weight": st()?.status === "needs_auth" ? "600" : undefined,
-												}}
-												title={
-													st()?.status === "needs_auth"
-														? "Upstream requires authorization — click to open the provider's consent page"
-														: st()?.status === "ready"
-															? "Re-authorize — sign in again to switch account"
-															: "Authorize via OAuth 2.1"
-												}
-												onClick={() => {
-													startAuthorizeFlow(server.name, confirmAuthorization).catch((e) =>
-														appLogger.warn("network", String(e)),
-													);
-												}}
-											>
-												{st()?.status === "ready" ? "Re-authorize" : "Authorize"}
-											</button>
-										}
-									>
-										<button
-											class={s.textBtn}
-											style={{ color: "var(--warning, #e5c07b)" }}
-											title="Cancel authorization"
-											onClick={() =>
-												rpc("cancel_mcp_upstream_oauth", { name: server.name }).catch((e) =>
-													appLogger.warn("network", String(e)),
-												)
-											}
-										>
-											Cancel
-										</button>
-									</Show>
-								</Show>
-								<button
-									class={s.copyBtn}
-									style={{ "flex-shrink": 0 }}
-									title="Edit"
-									onClick={() => (isEditing() ? setEditingId(null) : startEdit(server))}
-								>
-									<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
-										<path d="M12.146.146a.5.5 0 0 1 .708 0l3 3a.5.5 0 0 1 0 .708l-10 10a.5.5 0 0 1-.168.11l-5 2a.5.5 0 0 1-.65-.65l2-5a.5.5 0 0 1 .11-.168zM11.207 2.5 13.5 4.793 14.793 3.5 12.5 1.207zm1.586 3L10.5 3.207 4 9.707V10h.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.5h.293z" />
-									</svg>
-								</button>
-								{/* Reconnect */}
-								<button
-									class={s.copyBtn}
-									style={{ "flex-shrink": 0 }}
-									title="Reconnect"
-									onClick={() =>
-										rpc("reconnect_mcp_upstream", { name: server.name }, machine()).catch((e) =>
-											appLogger.warn("network", String(e)),
-										)
-									}
-								>
-									<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
-										<path d="M8 3a5 5 0 1 0 4.546 2.914.5.5 0 0 1 .908-.417A6 6 0 1 1 8 2z" />
-										<path d="M8 4.466V.534a.25.25 0 0 1 .41-.192l2.36 1.966c.12.1.12.284 0 .384L8.41 4.658A.25.25 0 0 1 8 4.466" />
-									</svg>
-								</button>
-								{/* Remove */}
-								<button
-									class={s.copyBtn}
-									title="Remove"
-									onClick={() => removeUpstream(server.id, server.name)}
-									style={{ color: "var(--error, #e06c75)", "flex-shrink": 0 }}
-								>
-									<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
-										<path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0z" />
-										<path d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4zM2.5 3h11V2h-11z" />
-									</svg>
-								</button>
-							</div>
-							{/* Edit inline panel */}
-							<Show when={isEditing()}>
-								<div
-									style={{
-										background: "var(--bg-secondary, rgba(255,255,255,0.03))",
-										padding: "12px",
-										"border-radius": "6px",
-										"margin-bottom": "8px",
-									}}
-								>
-									<div style={{ display: "grid", gap: "8px" }}>
-										<Show when={editForm().transportType === "http"}>
-											<div>
-												<label style={{ "font-size": "12px", color: "var(--text-dimmed)" }}>URL</label>
-												<Input
-													type="text"
-													class={s.input}
-													value={editForm().url}
-													onInput={(e) => setEditForm((f) => ({ ...f, url: e.currentTarget.value }))}
-												/>
-											</div>
-											<div>
-												<label style={{ "font-size": "12px", color: "var(--text-dimmed)" }}>Authentication</label>
-												<Select
-													class={s.input}
-													value={editForm().authMethod}
-													onChange={(e) =>
-														setEditForm((f) => ({ ...f, authMethod: e.currentTarget.value as "bearer" | "oauth2" }))
-													}
-												>
-													<option value="bearer">Bearer token</option>
-													<option value="oauth2">OAuth 2.1</option>
-												</Select>
-											</div>
-											<Show when={editForm().authMethod === "bearer"}>
-												<div>
-													<label style={{ "font-size": "12px", color: "var(--text-dimmed)" }}>Bearer token</label>
-													<Input
-														type="password"
-														class={s.input}
-														placeholder="Enter new token (leave blank to keep current)"
-														value={editForm().credential}
-														onInput={(e) => setEditForm((f) => ({ ...f, credential: e.currentTarget.value }))}
-													/>
-													<p class={s.hint} style={{ margin: "2px 0 0" }}>
-														Stored in OS keychain. Leave blank to keep current token.
-													</p>
-													<button
-														type="button"
-														class={s.textBtn}
-														style={{ "margin-top": "4px" }}
-														onClick={() => void clearUpstreamCredential(server.name)}
-													>
-														Clear saved token
-													</button>
-												</div>
-											</Show>
-											<HeaderRows
-												onError={setError}
-												rows={editForm().headers}
-												onChange={(headers) => setEditForm((f) => ({ ...f, headers }))}
-											/>
-											<Show when={editForm().authMethod === "oauth2"}>
-												<div>
-													<label style={{ "font-size": "12px", color: "var(--text-dimmed)" }}>OAuth client ID</label>
-													<Input
-														type="text"
-														class={s.input}
-														placeholder="Leave blank to auto-register"
-														value={editForm().oauthClientId}
-														onInput={(e) => setEditForm((f) => ({ ...f, oauthClientId: e.currentTarget.value }))}
-													/>
-												</div>
-												<div>
-													<label style={{ "font-size": "12px", color: "var(--text-dimmed)" }}>Client Secret</label>
-													<Input
-														type="password"
-														class={s.input}
-														placeholder="Optional, for confidential clients"
-														value={editForm().oauthClientSecret}
-														onInput={(e) => setEditForm((f) => ({ ...f, oauthClientSecret: e.currentTarget.value }))}
-													/>
-												</div>
-												<div>
-													<label style={{ "font-size": "12px", color: "var(--text-dimmed)" }}>Scopes</label>
-													<Input
-														type="text"
-														class={s.input}
-														placeholder="Optional, space-separated"
-														value={editForm().oauthScopes}
-														onInput={(e) => setEditForm((f) => ({ ...f, oauthScopes: e.currentTarget.value }))}
-													/>
-												</div>
-											</Show>
-										</Show>
-										<Show when={editForm().transportType === "stdio"}>
-											<div>
-												<label style={{ "font-size": "12px", color: "var(--text-dimmed)" }}>Command</label>
-												<Input
-													type="text"
-													class={s.input}
-													value={editForm().command}
-													onInput={(e) => setEditForm((f) => ({ ...f, command: e.currentTarget.value }))}
-												/>
-											</div>
-											<div>
-												<label style={{ "font-size": "12px", color: "var(--text-dimmed)" }}>Args</label>
-												<Input
-													type="text"
-													class={s.input}
-													value={editForm().args}
-													onInput={(e) => setEditForm((f) => ({ ...f, args: e.currentTarget.value }))}
-												/>
-											</div>
-											<div>
-												<label style={{ "font-size": "12px", color: "var(--text-dimmed)" }}>Working directory</label>
-												<Input
-													type="text"
-													class={s.input}
-													value={editForm().cwd}
-													placeholder="Optional"
-													onInput={(e) => setEditForm((f) => ({ ...f, cwd: e.currentTarget.value }))}
-												/>
-											</div>
-										</Show>
-										<div style={{ display: "flex", gap: "8px", "align-items": "center" }}>
-											<label style={{ "font-size": "12px", color: "var(--text-dimmed)" }}>Timeout (s):</label>
-											<Input
-												type="number"
-												class={s.input}
-												value={editForm().timeout}
-												min={0}
-												max={300}
-												style={{ width: "70px" }}
-												onInput={(e) =>
-													setEditForm((f) => ({ ...f, timeout: parseInt(e.currentTarget.value, 10) || 30 }))
-												}
-											/>
-										</div>
-										{/* Discovered tools */}
-										<Show when={st()?.tools?.length}>
-											<div>
-												<label style={{ "font-size": "12px", color: "var(--text-dimmed)" }}>
-													Discovered tools ({st()!.tools.length})
-												</label>
-												<div
+									<Show when={!machine() && shouldShowAuthorize(server.auth?.type, st()?.status, server.enabled)}>
+										<Show
+											when={st()?.status === "authenticating"}
+											fallback={
+												<button
+													class={s.textBtn}
 													style={{
-														"font-family": "monospace",
-														"font-size": "11px",
-														color: "var(--text-dimmed)",
-														"margin-top": "4px",
-														"line-height": "1.6",
+														color: st()?.status === "needs_auth" ? "var(--warning, #e5c07b)" : "var(--info, #61afef)",
+														"font-weight": st()?.status === "needs_auth" ? "600" : undefined,
+													}}
+													title={
+														st()?.status === "needs_auth"
+															? "Upstream requires authorization — click to open the provider's consent page"
+															: st()?.status === "ready"
+																? "Re-authorize — sign in again to switch account"
+																: "Authorize via OAuth 2.1"
+													}
+													onClick={() => {
+														startAuthorizeFlow(server.name, confirmAuthorization).catch((e) =>
+															appLogger.warn("network", String(e)),
+														);
 													}}
 												>
-													{st()!.tools.join(", ")}
-												</div>
-											</div>
-										</Show>
-										<div style={{ display: "flex", gap: "8px", "justify-content": "flex-end" }}>
-											<button class={s.saveBtn} onClick={() => saveEdit(server)} disabled={saving()}>
-												{saving() ? "Saving…" : "Save"}
-											</button>
+													{st()?.status === "ready" ? "Re-authorize" : "Authorize"}
+												</button>
+											}
+										>
 											<button
-												class={s.testBtn}
-												onClick={() => {
-													setEditingId(null);
-													setEditForm(emptyForm());
-													setError("");
-												}}
+												class={s.textBtn}
+												style={{ color: "var(--warning, #e5c07b)" }}
+												title="Cancel authorization"
+												onClick={() =>
+													rpc("cancel_mcp_upstream_oauth", { name: server.name }).catch((e) =>
+														appLogger.warn("network", String(e)),
+													)
+												}
 											>
 												Cancel
 											</button>
-										</div>
-										<Show when={error()}>
-											<p class={s.hint} style={{ color: "var(--error, #e06c75)", margin: "4px 0 0" }}>
-												{error()}
-											</p>
 										</Show>
-									</div>
+									</Show>
+									<button
+										class={s.copyBtn}
+										style={{ "flex-shrink": 0 }}
+										title="Edit"
+										onClick={() => (isEditing() ? setEditingId(null) : startEdit(server))}
+									>
+										<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+											<path d="M12.146.146a.5.5 0 0 1 .708 0l3 3a.5.5 0 0 1 0 .708l-10 10a.5.5 0 0 1-.168.11l-5 2a.5.5 0 0 1-.65-.65l2-5a.5.5 0 0 1 .11-.168zM11.207 2.5 13.5 4.793 14.793 3.5 12.5 1.207zm1.586 3L10.5 3.207 4 9.707V10h.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.5h.293z" />
+										</svg>
+									</button>
+									{/* Reconnect */}
+									<button
+										class={s.copyBtn}
+										style={{ "flex-shrink": 0 }}
+										title="Reconnect"
+										onClick={() =>
+											rpc("reconnect_mcp_upstream", { name: server.name }, machine()).catch((e) =>
+												appLogger.warn("network", String(e)),
+											)
+										}
+									>
+										<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+											<path d="M8 3a5 5 0 1 0 4.546 2.914.5.5 0 0 1 .908-.417A6 6 0 1 1 8 2z" />
+											<path d="M8 4.466V.534a.25.25 0 0 1 .41-.192l2.36 1.966c.12.1.12.284 0 .384L8.41 4.658A.25.25 0 0 1 8 4.466" />
+										</svg>
+									</button>
+									{/* Remove */}
+									<button
+										class={s.copyBtn}
+										title="Remove"
+										onClick={() => removeUpstream(server.id, server.name)}
+										style={{ color: "var(--error, #e06c75)", "flex-shrink": 0 }}
+									>
+										<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+											<path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0z" />
+											<path d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4zM2.5 3h11V2h-11z" />
+										</svg>
+									</button>
 								</div>
-							</Show>
-						</div>
-					);
-				}}
-			</For>
-			<Show when={oauthDialog.dialogState()}>
-				{(dialog) => (
-					<ConfirmDialog
-						visible={true}
-						title={dialog().title}
-						message={dialog().message}
-						confirmLabel={dialog().confirmLabel}
-						cancelLabel={dialog().cancelLabel}
-						kind={dialog().kind}
-						defaultButton={dialog().defaultButton}
-						onConfirm={oauthDialog.handleConfirm}
-						onClose={oauthDialog.handleClose}
-					/>
-				)}
-			</Show>
+								{/* Edit inline panel */}
+								<Show when={isEditing()}>
+									<div
+										style={{
+											background: "var(--bg-secondary, rgba(255,255,255,0.03))",
+											padding: "12px",
+											"border-radius": "6px",
+											"margin-bottom": "8px",
+										}}
+									>
+										<div style={{ display: "grid", gap: "8px" }}>
+											<Show when={editForm().transportType === "http"}>
+												<div>
+													<label style={{ "font-size": "12px", color: "var(--text-dimmed)" }}>URL</label>
+													<ContextualHelp label="URL" />
+													<Input
+														type="text"
+														class={s.input}
+														value={editForm().url}
+														onInput={(e) => setEditForm((f) => ({ ...f, url: e.currentTarget.value }))}
+													/>
+												</div>
+												<div>
+													<label style={{ "font-size": "12px", color: "var(--text-dimmed)" }}>Authentication</label>
+													<ContextualHelp label="Authentication" />
+													<Select
+														class={s.input}
+														value={editForm().authMethod}
+														onChange={(e) =>
+															setEditForm((f) => ({ ...f, authMethod: e.currentTarget.value as "bearer" | "oauth2" }))
+														}
+													>
+														<option value="bearer">Bearer token</option>
+														<option value="oauth2">OAuth 2.1</option>
+													</Select>
+												</div>
+												<Show when={editForm().authMethod === "bearer"}>
+													<div>
+														<label style={{ "font-size": "12px", color: "var(--text-dimmed)" }}>Bearer token</label>
+														<ContextualHelp label="Bearer token" />
+														<Input
+															type="password"
+															class={s.input}
+															placeholder="Enter new token (leave blank to keep current)"
+															value={editForm().credential}
+															onInput={(e) => setEditForm((f) => ({ ...f, credential: e.currentTarget.value }))}
+														/>
+														<p class={s.hint} style={{ margin: "2px 0 0" }}>
+															Stored in OS keychain. Leave blank to keep current token.
+														</p>
+														<button
+															type="button"
+															class={s.textBtn}
+															style={{ "margin-top": "4px" }}
+															onClick={() => void clearUpstreamCredential(server.name)}
+														>
+															Clear saved token
+														</button>
+													</div>
+												</Show>
+												<HeaderRows
+													onError={setError}
+													rows={editForm().headers}
+													onChange={(headers) => setEditForm((f) => ({ ...f, headers }))}
+												/>
+												<Show when={editForm().authMethod === "oauth2"}>
+													<div>
+														<label style={{ "font-size": "12px", color: "var(--text-dimmed)" }}>OAuth client ID</label>
+														<Input
+															type="text"
+															class={s.input}
+															placeholder="Leave blank to auto-register"
+															value={editForm().oauthClientId}
+															onInput={(e) => setEditForm((f) => ({ ...f, oauthClientId: e.currentTarget.value }))}
+														/>
+													</div>
+													<div>
+														<label style={{ "font-size": "12px", color: "var(--text-dimmed)" }}>Client Secret</label>
+														<ContextualHelp label="Client Secret" />
+														<Input
+															type="password"
+															class={s.input}
+															placeholder="Optional, for confidential clients"
+															value={editForm().oauthClientSecret}
+															onInput={(e) => setEditForm((f) => ({ ...f, oauthClientSecret: e.currentTarget.value }))}
+														/>
+													</div>
+													<div>
+														<label style={{ "font-size": "12px", color: "var(--text-dimmed)" }}>Scopes</label>
+														<ContextualHelp label="Scopes" />
+														<Input
+															type="text"
+															class={s.input}
+															placeholder="Optional, space-separated"
+															value={editForm().oauthScopes}
+															onInput={(e) => setEditForm((f) => ({ ...f, oauthScopes: e.currentTarget.value }))}
+														/>
+													</div>
+												</Show>
+											</Show>
+											<Show when={editForm().transportType === "stdio"}>
+												<div>
+													<label style={{ "font-size": "12px", color: "var(--text-dimmed)" }}>Command</label>
+													<ContextualHelp label="Command" />
+													<Input
+														type="text"
+														class={s.input}
+														value={editForm().command}
+														onInput={(e) => setEditForm((f) => ({ ...f, command: e.currentTarget.value }))}
+													/>
+												</div>
+												<div>
+													<label style={{ "font-size": "12px", color: "var(--text-dimmed)" }}>Args</label>
+													<Input
+														type="text"
+														class={s.input}
+														value={editForm().args}
+														onInput={(e) => setEditForm((f) => ({ ...f, args: e.currentTarget.value }))}
+													/>
+												</div>
+												<div>
+													<label style={{ "font-size": "12px", color: "var(--text-dimmed)" }}>Working directory</label>
+													<ContextualHelp label="Working directory" />
+													<Input
+														type="text"
+														class={s.input}
+														value={editForm().cwd}
+														placeholder="Optional"
+														onInput={(e) => setEditForm((f) => ({ ...f, cwd: e.currentTarget.value }))}
+													/>
+												</div>
+											</Show>
+											<div style={{ display: "flex", gap: "8px", "align-items": "center" }}>
+												<label style={{ "font-size": "12px", color: "var(--text-dimmed)" }}>Timeout (s):</label>
+												<ContextualHelp label="Timeout (s):" />
+												<Input
+													type="number"
+													class={s.input}
+													value={editForm().timeout}
+													min={0}
+													max={300}
+													style={{ width: "70px" }}
+													onInput={(e) =>
+														setEditForm((f) => ({ ...f, timeout: parseInt(e.currentTarget.value, 10) || 30 }))
+													}
+												/>
+											</div>
+											{/* Discovered tools */}
+											<Show when={st()?.tools?.length}>
+												<div>
+													<label style={{ "font-size": "12px", color: "var(--text-dimmed)" }}>
+														Discovered tools ({st()!.tools.length})
+													</label>
+													<div
+														style={{
+															"font-family": "monospace",
+															"font-size": "11px",
+															color: "var(--text-dimmed)",
+															"margin-top": "4px",
+															"line-height": "1.6",
+														}}
+													>
+														{st()!.tools.join(", ")}
+													</div>
+												</div>
+											</Show>
+											<div style={{ display: "flex", gap: "8px", "justify-content": "flex-end" }}>
+												<button class={s.saveBtn} onClick={() => saveEdit(server)} disabled={saving()}>
+													{saving() ? "Saving…" : "Save"}
+												</button>
+												<button
+													class={s.testBtn}
+													onClick={() => {
+														setEditingId(null);
+														setEditForm(emptyForm());
+														setError("");
+													}}
+												>
+													Cancel
+												</button>
+											</div>
+											<Show when={error()}>
+												<p class={s.hint} style={{ color: "var(--error, #e06c75)", margin: "4px 0 0" }}>
+													{error()}
+												</p>
+											</Show>
+										</div>
+									</div>
+								</Show>
+							</div>
+						);
+					}}
+				</For>
+				<Show when={oauthDialog.dialogState()}>
+					{(dialog) => (
+						<ConfirmDialog
+							visible={true}
+							title={dialog().title}
+							message={dialog().message}
+							confirmLabel={dialog().confirmLabel}
+							cancelLabel={dialog().cancelLabel}
+							kind={dialog().kind}
+							defaultButton={dialog().defaultButton}
+							onConfirm={oauthDialog.handleConfirm}
+							onClose={oauthDialog.handleClose}
+						/>
+					)}
+				</Show>
+			</SectionCard>
 		</div>
 	);
 };

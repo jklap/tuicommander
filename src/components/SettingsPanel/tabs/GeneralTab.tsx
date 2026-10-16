@@ -16,6 +16,7 @@ import { isTauri } from "../../../transport";
 import { openDialog } from "../../../utils/nativeDialog";
 import { Input } from "../../ui/Input";
 import { Textarea } from "../../ui/Textarea";
+import { ContextualHelp } from "../ContextualHelp";
 import { ExpertSetting } from "../ExpertSetting";
 import { InfoBadge } from "../InfoBadge";
 import { SettingInput, SettingSelect, SettingSlider, SettingToggle } from "../SettingFields";
@@ -531,6 +532,7 @@ export const GeneralTab: Component = () => {
 				>
 					<div class={s.group}>
 						<label>{t("general.label.egoExecutable", "ego executable")}</label>
+						<ContextualHelp label="ego executable" />
 						<Show
 							when={settingsStore.isAcpConfigured()}
 							fallback={

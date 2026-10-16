@@ -190,14 +190,28 @@ describe("RemoteAccessPanel", () => {
 		});
 	});
 
+	it("does not revoke remote sessions before explicit confirmation", async () => {
+		const view = await renderWith({
+			server: { enabled: true, port: 9876, ipv6_enabled: false },
+			auth: { username: "operator", password_hash: "", session_token_duration_secs: 86400 },
+			relay: { enabled: false, url: "", session_id: "" },
+		});
+		fireEvent.click(view.getByRole("button", { name: "Regenerate Token" }));
+		expect(vi.mocked(rpc).mock.calls.some(([command]) => command === "regenerate_session_token")).toBe(false);
+		expect(view.getByText("Regenerate remote access token?")).toBeDefined();
+		fireEvent.click(view.getByRole("button", { name: "Regenerate token" }));
+		await vi.advanceTimersByTimeAsync(0);
+		expect(vi.mocked(rpc).mock.calls.filter(([command]) => command === "regenerate_session_token")).toHaveLength(1);
+		view.unmount();
+	});
+
 	describe("cloud relay configuration", () => {
 		const relayOff = {
 			server: { enabled: false, port: 9876, ipv6_enabled: false },
 			auth: { username: "", password_hash: "", session_token_duration_secs: 86400, lan_auth_bypass: false },
 			relay: { enabled: false, url: "", session_id: "" },
 		};
-		const input = (view: ReturnType<typeof render>, label: string) =>
-			view.getByText(label).parentElement?.querySelector("input") as HTMLInputElement;
+		const input = (view: ReturnType<typeof render>, label: string) => view.getByLabelText(label) as HTMLInputElement;
 
 		// The relay starts only when it is enabled AND has a URL AND a token
 		// (`relay_client.rs`), so both must be settable before switching it on —
