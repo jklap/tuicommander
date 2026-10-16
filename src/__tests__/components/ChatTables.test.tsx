@@ -48,7 +48,9 @@ it("protects short fields and badges priorities without changing cell text", asy
 	document.head.append(style);
 	const { container } = render(() => (
 		<ContentRenderer
-			content={"| Storia | Priorità | Cosa manca |\n| --- | --- | --- |\n| #1918 | P2 | Aggiornare le opzioni della sessione senza interrompere la chat. |"}
+			content={
+				"| Storia | Priorità | Cosa manca |\n| --- | --- | --- |\n| #1918 | P2 | Aggiornare le opzioni della sessione senza interrompere la chat. |"
+			}
 			tableActions={{ copy: vi.fn(), open: vi.fn() }}
 		/>
 	));
