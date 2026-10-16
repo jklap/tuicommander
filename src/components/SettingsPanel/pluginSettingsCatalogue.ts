@@ -9,6 +9,8 @@ export interface PluginSettingsField extends PluginSettingAnnotation {
 	path: string;
 	label: string;
 	order: number;
+	/** Reset value from the Rust descriptor; omitted for secrets. */
+	default?: unknown;
 	schema: PluginSettingsSchema;
 }
 export interface PluginSettingsPage {

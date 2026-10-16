@@ -7,6 +7,7 @@ export interface SettingFieldProps {
 	hint?: string;
 	error?: string;
 	help?: JSX.Element;
+	actions?: JSX.Element;
 	row?: boolean;
 	disabled?: boolean;
 }
@@ -50,8 +51,11 @@ export const SettingField: Component<
 						</p>
 					</Show>
 				</div>
-				<div class={s.settingRowControl}>
-					{props.children(id, undefined, descriptionId)}
+				<div class={s.settingRowControl} classList={{ [s.settingRowWithActions]: !!props.actions }}>
+					<Show when={props.actions} fallback={props.children(id, undefined, descriptionId)}>
+						<div class={s.settingRowValue}>{props.children(id, undefined, descriptionId)}</div>
+						{props.actions}
+					</Show>
 					<Show when={props.error}>
 						<p id={`${id}-error`} class={s.fieldError} role="alert">
 							{props.error}

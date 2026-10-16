@@ -166,7 +166,6 @@ function buildNavItems(pluginTabs: SettingsShellTab[] = []): SettingsShellTab[] 
 			: []),
 	]);
 
-
 	if (repos.length > 0) {
 		items.push({ key: "__label__:Repositories", label: t("settings.repositories", "REPOSITORIES") });
 		for (const repo of repos) {
@@ -196,6 +195,7 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 				</svg>
 			),
 		}));
+
 	const navItems = () => buildNavItems(pluginTabs());
 	const pluginEntries = () =>
 		pluginPages().flatMap((page) =>

@@ -9,7 +9,14 @@ export interface SettingStatusProps extends SettingFieldProps {
 }
 
 export const SettingStatus: Component<SettingStatusProps> = (props) => (
-	<SettingField label={props.label} hint={props.hint} row={props.row} error={props.error} help={props.help}>
+	<SettingField
+		label={props.label}
+		hint={props.hint}
+		row={props.row}
+		error={props.error}
+		help={props.help}
+		actions={props.actions}
+	>
 		{(id, _hintId, descriptionId) => (
 			<output
 				id={id}

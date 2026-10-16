@@ -423,12 +423,10 @@
 
 .installSuggestion { display: block; padding: 12px 0; border-top: 1px solid var(--border); }
 .installSuggestion > div { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
-.pluginActions details { min-width: 130px; }
+.pluginActions details { min-width: 0; font-size: var(--font-sm); }
+.pluginActions summary { cursor: pointer; }
 .pluginActions details[open] { display: flex; flex-direction: column; gap: 8px; }
 
-.pluginPageHeader { position: relative; }
-.pluginPageHeader > svg { position: absolute; top: 28px; left: 0; color: var(--accent); }
-.pluginPageHeader > header > div { padding-left: 40px; }
 
 .installSuggestion > div > div:first-child { flex: 1; min-width: 0; }
 .installSuggestion > div > div:last-child { flex: 0 0 auto; }

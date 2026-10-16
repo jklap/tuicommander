@@ -9,7 +9,14 @@ export interface SettingMultiSelectProps extends SettingFieldProps {
 }
 
 export const SettingMultiSelect: Component<SettingMultiSelectProps> = (props) => (
-	<SettingField label={props.label} hint={props.hint} row={props.row} error={props.error} help={props.help}>
+	<SettingField
+		label={props.label}
+		hint={props.hint}
+		row={props.row}
+		error={props.error}
+		help={props.help}
+		actions={props.actions}
+	>
 		{(id, _hintId, descriptionId) => (
 			<div id={id} role="group" aria-label={props.label} aria-describedby={descriptionId()} class={s.choices}>
 				<For each={props.options}>
