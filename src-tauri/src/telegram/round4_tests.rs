@@ -45,11 +45,14 @@ async fn final_reply_and_done_notice_retire_previous_button_mail() {
                 .await;
         } else {
             runtime
-                .track(PendingMail {
-                    id: "request".into(),
-                    recipient: PEER.into(),
-                    content: json!({"chat_id":"1111111"}).to_string(),
-                })
+                .track(
+                    PendingMail {
+                        id: "request".into(),
+                        recipient: PEER.into(),
+                        content: json!({"chat_id":"1111111"}).to_string(),
+                    },
+                    super::streaming::Recipient::capture(&runtime.state, PEER),
+                )
                 .unwrap();
             runtime
                 .tool(

@@ -14,11 +14,14 @@ async fn finish_after_draft_retired_still_delivers_reply() {
     .await;
     let mut runtime = super::tests::outbound_tests::runtime(paths, server.address).await;
     runtime
-        .track(PendingMail {
-            id: "request".into(),
-            recipient: PEER.into(),
-            content: json!({"chat_id":"1111111"}).to_string(),
-        })
+        .track(
+            PendingMail {
+                id: "request".into(),
+                recipient: PEER.into(),
+                content: json!({"chat_id":"1111111"}).to_string(),
+            },
+            super::streaming::Recipient::capture(&runtime.state, PEER),
+        )
         .unwrap();
     // No draft remains (the same state after an epoch change or a lag).
     assert!(runtime.outbound.active.is_none());

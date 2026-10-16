@@ -166,7 +166,11 @@ impl Runtime {
             }
         }
     }
-    pub fn track(&mut self, mail: PendingMail) -> Result<Value, Error> {
+    pub fn track(
+        &mut self,
+        mail: PendingMail,
+        recipient: super::streaming::Recipient,
+    ) -> Result<Value, Error> {
         let envelope: Value = serde_json::from_str(&mail.content).map_err(|_| Error::Protocol)?;
         let chat = envelope["chat_id"]
             .as_str()
@@ -197,7 +201,7 @@ impl Runtime {
                 chat,
                 message: envelope["message_id"].as_i64(),
                 peer: mail.recipient.clone(),
-                recipient: super::streaming::Recipient::capture(&self.state, &mail.recipient),
+                recipient,
                 cursor,
                 turn: None,
                 final_error: None,
@@ -276,9 +280,8 @@ impl Runtime {
         );
         let delivery = result?;
         let id = mail.id.clone();
-        let accepted = self.track(mail)?;
+        let accepted = self.track(mail, recipient)?;
         if let Some(request) = self.requests.iter_mut().find(|r| r.id == id) {
-            request.recipient = recipient;
             request.reaction_sent = received.then_some(0);
         }
         self.show_oldest().await;

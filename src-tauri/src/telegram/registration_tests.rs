@@ -70,11 +70,14 @@ async fn second_register_replaces_first_and_notifies_it_once() {
     let old_handle =
         server.requests()[0].1["reply_markup"]["inline_keyboard"][0][0]["callback_data"].clone();
     runtime
-        .track(PendingMail {
-            id: "old".into(),
-            recipient: PEER.into(),
-            content: json!({"chat_id":"1111111"}).to_string(),
-        })
+        .track(
+            PendingMail {
+                id: "old".into(),
+                recipient: PEER.into(),
+                content: json!({"chat_id":"1111111"}).to_string(),
+            },
+            super::streaming::Recipient::capture(&runtime.state, PEER),
+        )
         .unwrap();
     runtime
         .tool(OTHER, "second-mcp", Input::Register {})

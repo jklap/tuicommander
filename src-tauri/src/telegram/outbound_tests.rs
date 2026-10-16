@@ -425,11 +425,14 @@ async fn begin_uses_derived_agent_lifecycle_and_finish_survives_completion() {
     crate::state::tests_support::insert_dummy_session(&runtime.state, PEER);
     crate::test_support::agent_session(&runtime.state, PEER, crate::pty::SHELL_BUSY);
     runtime
-        .track(crate::telegram::mail::PendingMail {
-            id: "request".into(),
-            recipient: PEER.into(),
-            content: json!({"chat_id":"1111111"}).to_string(),
-        })
+        .track(
+            crate::telegram::mail::PendingMail {
+                id: "request".into(),
+                recipient: PEER.into(),
+                content: json!({"chat_id":"1111111"}).to_string(),
+            },
+            super::streaming::Recipient::capture(&runtime.state, PEER),
+        )
         .unwrap();
     let begun = runtime
         .tool(
