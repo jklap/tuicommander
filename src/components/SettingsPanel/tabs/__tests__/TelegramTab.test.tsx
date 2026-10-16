@@ -11,6 +11,7 @@ const initial = {
 	registered_agent_name: "Writer",
 	chats: ["123"],
 	pairing_pending: true,
+	recent_events: [],
 	connected: true,
 	polling_owner: "this_app",
 	last_error: null,
@@ -130,4 +131,33 @@ it("clears the consumed pairing hint after refresh 1955", async () => {
 	await vi.advanceTimersByTimeAsync(3000);
 	await screen.findByText("456");
 	expect(screen.queryByText(/Send ABC123/)).toBeNull();
+});
+
+// Catches: activity is hidden or stale while Settings stays open.
+it("renders safe recent events and refreshes while open 1956", async () => {
+	vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+	let updated = false;
+	invoke.mockImplementation(async () => ({
+		...initial,
+		recent_events: updated
+			? [
+					{ id: 3, time: 1000, direction: "out", kind: "reply", outcome: "sent", preview: "Chat linked." },
+					{ id: 2, time: 999, direction: "in", kind: "pairing", outcome: "delivered", preview: "[redacted]" },
+					{ id: 1, time: 998, direction: "in", kind: "message", outcome: "dropped: no agent", preview: "Hello" },
+				]
+			: [],
+	}));
+	render(() => <TelegramTab />);
+	await screen.findByText("No recent Telegram events.");
+	updated = true;
+	await vi.advanceTimersByTimeAsync(3000);
+	const replies = await screen.findAllByRole("status");
+	expect(replies.map((node) => node.textContent).filter((text) => text !== "Connected (this app)")).toEqual([
+		"Chat linked.",
+		"[redacted]",
+		"Hello",
+	]);
+	expect(screen.getByLabelText(/out · reply · sent/)).toBeTruthy();
+	expect(screen.getByLabelText(/in · message · dropped: no agent/)).toBeTruthy();
+	expect(screen.queryByText("No recent Telegram events.")).toBeNull();
 });

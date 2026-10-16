@@ -309,3 +309,24 @@ async fn registered_agent_snapshot_uses_shared_status_and_retires_stale_names() 
             .is_none()
     );
 }
+
+// Catches: activity is persisted with status or omitted from Settings readback.
+#[test]
+fn recent_settings_readback_is_memory_only_1956() {
+    let (_dir, paths) = crate::telegram::tests::setup();
+    let state = crate::state::tests_support::make_test_app_state();
+    state
+        .telegram_recent
+        .lock()
+        .record("in", "pairing", "delivered", None);
+    status(&paths, true, None, false);
+    let read = serde_json::to_value(snapshot(&paths, &state).unwrap()).unwrap();
+    assert_eq!(read["recent_events"][0]["kind"], "pairing");
+    assert_eq!(read["recent_events"][0]["preview"], "[redacted]");
+    let disk: Value =
+        serde_json::from_str(&std::fs::read_to_string(paths.file("status.json")).unwrap()).unwrap();
+    assert!(disk.get("recent_events").is_none());
+    let restarted = crate::state::tests_support::make_test_app_state();
+    let read = serde_json::to_value(snapshot(&paths, &restarted).unwrap()).unwrap();
+    assert_eq!(read["recent_events"], json!([]));
+}

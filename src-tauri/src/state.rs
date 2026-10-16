@@ -2076,6 +2076,7 @@ pub struct SessionMaps {
 
 /// Global state for managing PTY sessions and worktrees
 pub struct AppState {
+    pub(crate) telegram_recent: Arc<parking_lot::Mutex<crate::telegram::recent::Recent>>,
     pub(crate) workflow_runtime: crate::workflows::WorkflowRuntime,
     pub(crate) automation_runtime: crate::automations::runtime::AutomationRuntime,
     pub(crate) secrets: crate::secrets::SecretStore,
@@ -3549,6 +3550,7 @@ impl AppState {
             tunnel_audit.clone(),
         ));
         Self {
+            telegram_recent: Default::default(),
             workflow_runtime: Default::default(),
             automation_runtime: Default::default(),
             secrets: crate::secrets::SecretStore::default(),

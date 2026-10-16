@@ -41,6 +41,7 @@ pub(super) struct Outbound {
     pub paths: Paths,
     pub api: BotApi,
     pub active: Option<Active>,
+    pub recent: std::sync::Arc<parking_lot::Mutex<super::recent::Recent>>,
     next_send: Instant,
     stopped: Option<Error>,
 }
@@ -50,13 +51,32 @@ impl Outbound {
             paths,
             api,
             active: None,
+            recent: Default::default(),
             next_send: Instant::now(),
             stopped: None,
         }
     }
 
     pub async fn call(&mut self, chat: i64, method: &str, body: Value) -> Result<Value, Error> {
-        self.call_inner(chat, method, body, None).await
+        let preview = body["text"].as_str().unwrap_or("").to_owned();
+        let result = self.call_inner(chat, method, body, None).await;
+        let kind = match method {
+            "sendMessage" => Some("reply"),
+            "answerCallbackQuery" => Some("button"),
+            _ => None,
+        };
+        if let Some(kind) = kind {
+            self.recent.lock().record(
+                "out",
+                kind,
+                result
+                    .as_ref()
+                    .map(|_| "sent".into())
+                    .unwrap_or_else(|error| format!("failed: {error}")),
+                Some(&preview),
+            );
+        }
+        result
     }
 
     pub async fn setup_reply(
@@ -64,13 +84,24 @@ impl Outbound {
         chat: i64,
         reply: super::settings::SetupReply,
     ) -> Result<Value, Error> {
-        self.call_inner(
-            chat,
-            "sendMessage",
-            json!({"chat_id":chat,"text":reply.text()}),
-            Some(reply),
-        )
-        .await
+        let result = self
+            .call_inner(
+                chat,
+                "sendMessage",
+                json!({"chat_id":chat,"text":reply.text()}),
+                Some(reply),
+            )
+            .await;
+        self.recent.lock().record(
+            "out",
+            "reply",
+            result
+                .as_ref()
+                .map(|_| "sent".into())
+                .unwrap_or_else(|error| format!("failed: {error}")),
+            Some(reply.text()),
+        );
+        result
     }
 
     async fn call_inner(

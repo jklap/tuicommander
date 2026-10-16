@@ -34,6 +34,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Add explicit owner-backed settings choice refresh; notification output enumeration reports unavailable separately from an empty device list (#1908-c327).
 ### Added
+- Show a redacted, memory-only log of the last 20 Telegram events in Settings (#1956-c325).
 
 - Show native terminal ego provider recovery with phase, attempt, next-retry countdown and a Force retry control; notify managed parents on recovery entry and exit (#1902-7010).
 

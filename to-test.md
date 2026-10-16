@@ -2326,3 +2326,5 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] After a manual `make dev` restart or release rebuild, verify a hands-free Italian reply uses Edge speech on the migrated endpoint with v1 GEC without HTTP 403 (#1952-bf91). The old Rust process does not hot-reload.
 
 - [ ] After the next manual Rust restart (`make dev` or release rebuild), verify Telegram linking confirms with `Chat linked.`, `/start` explains Link chat, invalid/expired codes explain retry, and the consumed Settings hint clears (#1955-2f43). Automated offline poll-loop and Settings regressions cover these paths; no live Telegram API was called during implementation.
+
+- [ ] After the next manual Rust restart, check Settings > Telegram Recent messages for inbound/outbound outcomes. The log is process-local, last 20, redacted and cleared on restart; a standby cannot show another process's log (#1956-c325). Automated offline boundary tests cover retention, redaction, failure categories, callbacks and status readback.

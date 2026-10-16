@@ -3134,3 +3134,5 @@ Native terminal ego can report provider recovery with phase, attempt and next
 attempt time. Tabs show recovering; the status bar includes a countdown and
 Force retry. Managed parents receive recovery entry/exit notices. MCP session
 `force_retry` submits `/retry` once to the recovering ego terminal.
+
+Telegram Settings includes a newest-first, process-local log of the last 20 inbound/outbound events with safe outcomes and 60-character redacted previews. This memory-only log clears on restart and does not include draft refresh traffic.

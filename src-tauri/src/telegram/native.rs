@@ -66,6 +66,7 @@ impl MailPort for NativeMail {
     }
     async fn update(&mut self, value: &Value) -> Result<(), Error> {
         if value.get("callback_query").is_none()
+            && value.get("message").is_none()
             && value.get("stopped_message_generation").is_none()
         {
             return Ok(());

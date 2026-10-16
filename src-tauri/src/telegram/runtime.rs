@@ -51,10 +51,12 @@ impl Runtime {
         paths: Paths,
         adapter_sid: String,
     ) -> Result<Self, Error> {
+        let mut outbound = Outbound::new(paths.clone(), BotApi::new(paths)?);
+        outbound.recent = state.telegram_recent.clone();
         Ok(Self {
             state,
             config,
-            outbound: Outbound::new(paths.clone(), BotApi::new(paths)?),
+            outbound,
             pending: VecDeque::new(),
             callbacks: Default::default(),
             adapter_sid,
@@ -190,9 +192,20 @@ impl Runtime {
             .and_then(|s| s.parse::<i64>().ok())
             .ok_or(Error::Protocol)?;
         if !self.outbound.paths.allowlist()?.contains(&chat) {
+            self.state.telegram_recent.lock().record(
+                "in",
+                "message",
+                "rejected: not authorized",
+                None,
+            );
             return Ok(json!({"accepted":false}));
         }
+        let text = envelope["text"].as_str();
         let Some(peer) = self.registered_peer() else {
+            self.state
+                .telegram_recent
+                .lock()
+                .record("in", "message", "dropped: no agent", text);
             self.outbound
                 .send(
                     chat,
@@ -203,7 +216,17 @@ impl Runtime {
             return Ok(json!({"accepted":false}));
         };
         mail.recipient = peer.into();
-        super::native::offer(&self.state, &self.adapter_sid, &mail).await?;
+        let result = super::native::offer(&self.state, &self.adapter_sid, &mail).await;
+        self.state.telegram_recent.lock().record(
+            "in",
+            "message",
+            result
+                .as_ref()
+                .map(|_| "delivered".into())
+                .unwrap_or_else(|error| format!("failed: {error}")),
+            text,
+        );
+        result?;
         self.track(mail)
     }
     pub async fn update(&mut self, value: Value) -> Result<Value, Error> {
@@ -211,8 +234,39 @@ impl Runtime {
         if !self.enabled() {
             return Err(Error::Config);
         }
+        if let Some(message) = value.get("message") {
+            let id = message["chat"]["id"].as_i64();
+            if message["chat"]["type"] != "private"
+                || id.is_none_or(|id| {
+                    !self
+                        .outbound
+                        .paths
+                        .allowlist_entries()
+                        .is_ok_and(|ids| ids.contains(&id))
+                })
+            {
+                self.state.telegram_recent.lock().record(
+                    "in",
+                    "message",
+                    "rejected: not authorized",
+                    None,
+                );
+            }
+        }
         self.stop(&value)?;
-        self.callback(&value).await?;
+        let callback = self.callback(&value).await;
+        if value.get("callback_query").is_some() {
+            let outcome = match &callback {
+                Ok(true) => "delivered".into(),
+                Ok(false) => "rejected: not authorized".into(),
+                Err(error) => format!("failed: {error}"),
+            };
+            self.state
+                .telegram_recent
+                .lock()
+                .record("in", "button", outcome, None);
+        }
+        callback?;
         Ok(json!({"accepted":true}))
     }
     pub(super) fn enabled(&self) -> bool {
@@ -298,6 +352,12 @@ impl Runtime {
                         Command::Deliver { mail,reply } => (reply,self.deliver(mail).await),
                         Command::Update { value,reply } => (reply,self.update(value).await),
                         Command::SetupReply { chat,message,reply } => {
+                            let (kind, outcome) = match message {
+                                super::settings::SetupReply::Start => ("/start", "delivered"),
+                                super::settings::SetupReply::Linked => ("pairing", "delivered"),
+                                super::settings::SetupReply::InvalidCode => ("pairing", "rejected: not authorized"),
+                            };
+                            self.state.telegram_recent.lock().record("in", kind, outcome, None);
                             let result = if self.enabled() { self.outbound.setup_reply(chat, message).await } else { Err(Error::Config) };
                             (reply, result)
                         },

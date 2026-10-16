@@ -308,6 +308,11 @@ async fn inbound_without_registration_replies_and_drops_but_strangers_stay_silen
             .iter()
             .all(|entry| entry.value().is_empty())
     );
+    let recent = serde_json::to_value(state.telegram_recent.lock().snapshot()).unwrap();
+    assert_eq!(recent[0]["outcome"], "rejected: not authorized");
+    assert_eq!(recent[1]["direction"], "out");
+    assert_eq!(recent[2]["outcome"], "dropped: no agent");
+
     worker.abort();
 }
 
@@ -480,4 +485,139 @@ async fn pairing_start_with_empty_allowlist_1955() {
         3333333,
         "Use Link chat in TUICommander Settings, then send the code here.",
     );
+}
+
+// Catches: the Settings log is not fed by the actual poll/mail/outbound boundaries,
+// or stores pairing/stranger text before redaction.
+#[tokio::test]
+async fn recent_poll_and_outbound_events_1956() {
+    let (_dir, paths) = setup();
+    write_private(&paths.file("next_offset"), "7\n");
+    write_private(
+        &paths.file("pairing.json"),
+        &json!({"code":"A1B2C3","expires_at":u64::MAX}).to_string(),
+    );
+    let server = FakeServer::start(vec![
+        (StatusCode::OK, json!({"ok":true,"result":{"message_id":8}})),
+        inbound::updates(vec![
+            inbound::text_update(7, 3333333, "A1B2C3"),
+            inbound::text_update(8, 3333333, "Hello from linked chat"),
+            inbound::text_update(9, 4444444, "private stranger text"),
+        ]),
+        (StatusCode::OK, json!({"ok":true,"result":{"message_id":9}})),
+    ])
+    .await;
+    let mut runtime = outbound_tests::runtime(paths.clone(), server.address).await;
+    runtime
+        .tool(
+            PEER,
+            "target-mcp",
+            Input::Send {
+                text: "Outbound probe".into(),
+                buttons: vec![],
+            },
+        )
+        .await
+        .unwrap();
+    let state = runtime.state.clone();
+    let (commands, receive) = tokio::sync::mpsc::channel(10);
+    let worker = tokio::spawn(runtime.run(receive));
+    let mut poller = crate::telegram::inbound::Inbound::with_loopback(
+        paths,
+        server.address,
+        crate::telegram::native::NativeMail::new(commands),
+    )
+    .unwrap();
+    assert!(matches!(poller.poll().await.unwrap(), Poll::Accepted(1)));
+    let value = serde_json::to_value(state.telegram_recent.lock().snapshot()).unwrap();
+    worker.abort();
+    assert_eq!(value.as_array().unwrap().len(), 5);
+    assert_eq!(value[0]["outcome"], "rejected: not authorized");
+    assert_eq!(value[0]["preview"], "[redacted]");
+    assert_eq!(value[1]["kind"], "message");
+    assert_eq!(value[1]["outcome"], "delivered");
+    assert_eq!(value[1]["preview"], "Hello from linked chat");
+    assert_eq!(value[2]["direction"], "out");
+    assert_eq!(value[2]["preview"], "Chat linked.");
+    assert_eq!(value[3]["kind"], "pairing");
+    assert_eq!(value[3]["preview"], "[redacted]");
+    assert_eq!(value[4]["preview"], "Outbound probe");
+    let serialized = value.to_string();
+    assert!(!serialized.contains("A1B2C3"));
+    assert!(!serialized.contains("private stranger text"));
+    assert!(!serialized.contains("fake-one"));
+    assert!(
+        value
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|event| event["time"].as_u64().unwrap() > 0)
+    );
+}
+
+// Catches: rejected outbound operations have no diagnostic or retain raw secrets.
+#[tokio::test]
+async fn recent_outbound_failure_is_safe_1956() {
+    let (_dir, paths) = setup();
+    let server = FakeServer::start(vec![(
+        StatusCode::FORBIDDEN,
+        json!({"ok":false,"description":"111:fake-one"}),
+    )])
+    .await;
+    let mut runtime = outbound_tests::runtime(paths, server.address).await;
+    assert_eq!(
+        runtime
+            .tool(
+                PEER,
+                "target-mcp",
+                Input::Send {
+                    text: "token 111:fake-one and A1B2C3".into(),
+                    buttons: vec![]
+                }
+            )
+            .await,
+        Err(Error::Rejected(403))
+    );
+    let value = serde_json::to_value(runtime.state.telegram_recent.lock().snapshot()).unwrap();
+    assert_eq!(value[0]["outcome"], "failed: telegram_request_rejected");
+    assert_eq!(value[0]["preview"], "token [redacted] and [redacted]");
+}
+
+// Catches: button handling is invisible in the log or retains opaque callback data.
+#[tokio::test]
+async fn recent_button_events_are_redacted_1956() {
+    let (_dir, paths) = setup();
+    let server = FakeServer::start(vec![
+        (StatusCode::OK, json!({"ok":true,"result":{"message_id":7}})),
+        (StatusCode::OK, json!({"ok":true,"result":true})),
+        (StatusCode::OK, json!({"ok":true,"result":true})),
+    ])
+    .await;
+    let mut runtime = outbound_tests::runtime(paths, server.address).await;
+    runtime
+        .tool(
+            PEER,
+            "target-mcp",
+            Input::Send {
+                text: "Choose".into(),
+                buttons: vec![vec![crate::telegram::tool::Button {
+                    label: "Yes".into(),
+                    data: "private callback data".into(),
+                }]],
+            },
+        )
+        .await
+        .unwrap();
+    let handle =
+        server.requests()[0].1["reply_markup"]["inline_keyboard"][0][0]["callback_data"].clone();
+    runtime.update(json!({"callback_query":{"id":"query","from":{"id":1111111},"message":{"message_id":7,"date":1,"chat":{"id":1111111,"type":"private"}},"data":handle}})).await.unwrap();
+    let value = serde_json::to_value(runtime.state.telegram_recent.lock().snapshot()).unwrap();
+    assert_eq!(value[0]["direction"], "in");
+    assert_eq!(value[0]["kind"], "button");
+    assert_eq!(value[0]["outcome"], "delivered");
+    assert_eq!(value[0]["preview"], "[redacted]");
+    assert_eq!(value[1]["direction"], "out");
+    assert_eq!(value[1]["kind"], "button");
+    assert_eq!(value[1]["outcome"], "sent");
+    assert!(!value.to_string().contains("private callback data"));
 }

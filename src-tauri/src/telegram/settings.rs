@@ -82,6 +82,7 @@ pub(crate) struct Snapshot {
     registered_agent_name: Option<String>,
     chats: Vec<String>,
     pairing_pending: bool,
+    recent_events: Vec<super::recent::Event>,
     connected: bool,
     polling_owner: Option<&'static str>,
     last_error: Option<String>,
@@ -192,7 +193,7 @@ pub(super) fn registration_status(paths: &Paths, name: Option<String>) {
         tracing::warn!(source="telegram", error=%error, "Telegram registration status unavailable");
     }
 }
-fn snapshot(paths: &Paths, _state: &AppState) -> Result<Snapshot, Error> {
+fn snapshot(paths: &Paths, state: &AppState) -> Result<Snapshot, Error> {
     let config = config(paths)?;
     let status: SetupState = if paths.file("status.json").exists() {
         serde_json::from_str(&super::config::private_text(&paths.file("status.json"))?)
@@ -226,6 +227,7 @@ fn snapshot(paths: &Paths, _state: &AppState) -> Result<Snapshot, Error> {
         },
         chats: chats(paths)?.iter().map(ToString::to_string).collect(),
         pairing_pending: paths.file("pairing.json").exists(),
+        recent_events: state.telegram_recent.lock().snapshot(),
         connected,
         polling_owner,
         last_error: status.last_error.clone(),

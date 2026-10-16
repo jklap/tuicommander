@@ -1147,3 +1147,5 @@ show recovery and offer `/retry`; MCP session `force_retry` provides the same
 single-command control. Entry/exit notices reach managed parents. Explicit clear,
 busy/idle markers and shell OSC 133 A retract recovery. This is PTY-only and does
 not attach ACP to a terminal process. Wire limits are in docs/backend/output-parser.md.
+
+Telegram Settings reads a process-local in-memory ring of the last 20 events through the existing status endpoint. Time, direction, kind, safe outcome and a redacted preview of at most 60 Unicode characters are shown newest first. Pairing input and unauthorized text are never retained. The ring is not persisted and clears on process restart; it is not shared across owner/standby processes.
