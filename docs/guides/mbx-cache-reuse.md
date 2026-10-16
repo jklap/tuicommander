@@ -78,9 +78,9 @@ Inspection of the restored `tauri` dependency's OUT_DIR established:
   absolute paths.
 
 This is a restored build-output relocation defect, not evidence that the
-application needs another rustc-env value. The observations do not establish
-whether target seeding or build-script action restoration introduced the stale
-payload. They do establish that restoring metadata alone is insufficient:
+application needs another rustc-env value. The first measurements did not isolate target seeding from build-script action
+restoration. The follow-up below excludes target seeding. Restoring metadata
+alone is insufficient:
 files inside OUT_DIR can also contain absolute references to that directory.
 
 Reproduce against the retained worktrees and cache:
@@ -130,3 +130,66 @@ to resolve after restoration.
 No production change was made in this investigation. There is no claimed
 before/after improvement: the after-repeat measurements reproduce the same
 failure. A successful performance comparison remains blocked on the mbx fix.
+
+
+## Follow-up: restoration isolation and supported opt-out
+
+Read-only inspection of the crates.io `mbx-1.24.0` source found that
+`src/target_seed.rs:80` requires Cargo 1.100 or later before target seeding
+runs. The installed Cargo is 1.98.1. A new same-commit worktree C with
+`MBX_TARGET_SEED=0` also reproduced the identical stale permission path:
+
+| Run | Wall seconds | Hits | Misses | Cargo exit |
+| --- | ---: | ---: | ---: | ---: |
+| C1, seeding disabled | 26.72 | 921 | 13 | 101 |
+| C2, seeding disabled | 1.93 | 0 | 0 | 101 |
+
+Thus target seeding is not the origin in this environment; build-script
+execution output restoration carries the stale payload. The new worktree
+reused an archived checkout directory, but mbx selected its target view from
+the new workspace path. No cache entry or target was deleted.
+
+`mbx --help`, `mbx settings --help`, the README, and the workspace-policy
+allowlist in `src/config.rs:1580–1625` expose no per-package or per-build-script
+execution-cache selector. The supported `build_script_execution = false`
+workspace boolean disables execution caching for all build scripts. The
+upstream test `build_script_execution_cache_can_be_turned_off` covers this
+opt-out. No third-party source or global setting was changed.
+
+A temporary `src-tauri/.mbx.toml` containing that boolean was tested in A and B.
+It did not invalidate Cargo-fresh dependency outputs: A's two checks failed
+in 6.46s and 2.06s; B's failed in 2.60s and 2.82s. Each reported 0 hits and
+0 misses, and the same stale JSON filename. Therefore the setting alone does
+not repair a target view that already contains restored stale output.
+
+Two additional same-commit worktrees D and E tested the configuration before
+their first check:
+
+| Run | Wall seconds | Hits | Misses | Bypassed | Cargo exit |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| D1, execution cache disabled | 174.53 | 895 | 3 | 22 | 0 |
+| E1, execution cache disabled | 175.18 | 895 | 3 | 22 | 0 |
+| E2, same-worktree repeat | 30.08 | 0 | 1 | 0 | 0 |
+
+This proves the supported opt-out can avoid the correctness failure in fresh
+views while retaining compiler artifact reuse. It does **not** meet the
+requested performance condition: E1 is not faster than D1 (175.18s versus
+174.53s). Both already used a warm global artifact cache; no truly cold-cache
+baseline was run because cache clearing was forbidden. E2 is faster, but is
+a same-worktree repeat, not cross-worktree improvement.
+
+Compared with the earlier B1 restore run, the opt-out reduced reported hits
+from 921 to 895 and increased bypasses from 6 to 22. These totals include
+compiler probes, not only build-script executions. D1 and E1 also warned that
+the application's compiler input in OUT_DIR changed during compilation, so
+its result was not stored; E2 subsequently stored a 67.3 MiB result. The
+measurements do not isolate the time spent in build scripts from the first
+successful application check. No exact build-script-only time cost is claimed.
+
+Per the acceptance condition, the temporary configuration was removed from
+all four experiment worktrees. No production configuration change is retained.
+The supported workaround needs a fresh-view migration and has no demonstrated
+cross-worktree speedup here. Raw follow-up logs are `no-seed.log`,
+`disabled-ab.log`, `disabled-fresh.log`, and `disabled-fresh-b.log` under
+`~/Gits/.tmp/mbx-tuic/`. An upstream report draft is retained at
+`~/Gits/.tmp/results/mbx-upstream-issue.md`; it was not submitted.
