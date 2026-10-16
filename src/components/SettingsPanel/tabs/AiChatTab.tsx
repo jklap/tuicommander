@@ -222,58 +222,58 @@ export const AiChatTab: Component<{
 						"Refresh asks ego to re-enumerate its sources, which is the only call here that reaches a provider over the network. TUICommander never makes one.",
 					)}
 				</p>
-
-				<Show when={(data()?.providers.length ?? 0) > 0}>
-					<div>
-						<h4>{t("providers.heading.providers", "Providers")}</h4>
-						<p class={s.hint}>
-							{t(
-								"providers.hint.credentials",
-								"Credential state comes from ego doctor. No key is ever read into TUICommander or stored in its keyring.",
-							)}
-						</p>
-						<Show when={loginError()}>{(message) => <p class={s.warning}>{message()}</p>}</Show>
-						<For each={data()?.providers}>
-							{(provider) => (
-								<div class={s.group}>
-									<div class={s.credentialsRow}>
+			</SectionCard>
+			<Show when={(data()?.providers.length ?? 0) > 0}>
+				<SectionCard title={t("providers.heading.providers", "Providers")}>
+					<p class={s.hint}>
+						{t(
+							"providers.hint.credentials",
+							"Credential state comes from ego doctor. No key is ever read into TUICommander or stored in its keyring.",
+						)}
+					</p>
+					<Show when={loginError()}>{(message) => <p class={s.warning}>{message()}</p>}</Show>
+					<For each={data()?.providers}>
+						{(provider) => (
+							<div class={s.group}>
+								<div class={layout.providerRow}>
+									<div>
 										<strong>{provider.name}</strong>
 										<CredentialBadge credential={provider.credential} />
-										<button
-											class={s.testBtn}
-											aria-label={`${t("providers.login", "Login")} to ${provider.name}`}
-											onClick={() => login(provider.name)}
-										>
-											{t("providers.login", "Login")}
-										</button>
 									</div>
-									<p class={s.availabilityDetail}>
-										<Show
-											when={provider.models.length > 0}
-											fallback={t("providers.noModels", "No models — ego could not enumerate this source.")}
-										>
-											{provider.models.filter((model) => model.available).length}
-											{" / "}
-											{provider.models.length} {t("providers.modelsUsable", "models usable")}
-										</Show>
-									</p>
-									{/* Why a model cannot be picked, in ego's words and only once
+									<button
+										class={s.testBtn}
+										aria-label={`${t("providers.login", "Login")} to ${provider.name}`}
+										onClick={() => login(provider.name)}
+									>
+										{t("providers.login", "Login")}
+									</button>
+								</div>
+								<p class={s.availabilityDetail}>
+									<Show
+										when={provider.models.length > 0}
+										fallback={t("providers.noModels", "No models — ego could not enumerate this source.")}
+									>
+										{provider.models.filter((model) => model.available).length}
+										{" / "}
+										{provider.models.length} {t("providers.modelsUsable", "models usable")}
+									</Show>
+								</p>
+								{/* Why a model cannot be picked, in ego's words and only once
 								    per distinct reason: a source that is down says the same
 								    sentence about every model it offers. */}
-									<For each={reasons(provider.models)}>{(reason) => <p class={s.availabilityDetail}>{reason}</p>}</For>
-									{/* What doctor said about this provider. The badge is our word
+								<For each={reasons(provider.models)}>{(reason) => <p class={s.availabilityDetail}>{reason}</p>}</For>
+								{/* What doctor said about this provider. The badge is our word
 								    for the state; this is ego's word for the case — which is the
 								    only place the difference between "expired at 12:04" and
 								    "the store is locked" survives. */}
-									<Show when={credentialDetail(provider.credential)}>
-										{(detail) => <p class={s.availabilityDetail}>{detail()}</p>}
-									</Show>
-								</div>
-							)}
-						</For>
-					</div>
-				</Show>
-			</SectionCard>
+								<Show when={credentialDetail(provider.credential)}>
+									{(detail) => <p class={s.availabilityDetail}>{detail()}</p>}
+								</Show>
+							</div>
+						)}
+					</For>
+				</SectionCard>
+			</Show>
 			<EgoPerimeterSection />
 		</div>
 	);

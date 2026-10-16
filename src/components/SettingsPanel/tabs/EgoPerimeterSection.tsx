@@ -5,6 +5,7 @@ import { appLogger } from "../../../stores/appLogger";
 import { asEgoCliError, type EgoPerimeterView, type EgoRootAccess, type EgoRootsEdit } from "../../../types/ego";
 import { Input } from "../../ui/Input";
 import { Select } from "../../ui/Select";
+import { StatusBadge } from "../../ui/StatusBadge";
 import { Textarea } from "../../ui/Textarea";
 import s from "../Settings.module.css";
 import { SectionCard, SettingRow } from "../SettingsPrimitives";
@@ -49,12 +50,6 @@ export const EgoPerimeterSection: Component<{ client?: EgoPerimeterClient }> = (
 
 	return (
 		<div class={layout.perimeter}>
-			<p class={s.hint}>
-				{t(
-					"perimeter.hint",
-					"ego roots extend the AI Chat workspace; they do not replace it. These defaults apply to new ego runs. Running conversations keep their admitted perimeter.",
-				)}
-			</p>
 			<Show when={error()}>
 				{(message) => (
 					<>
@@ -71,12 +66,24 @@ export const EgoPerimeterSection: Component<{ client?: EgoPerimeterClient }> = (
 			<Show when={view()}>
 				{(loaded) => (
 					<>
-						<SectionCard title="Workspace access">
+						<SectionCard
+							title="Workspace access"
+							description={t(
+								"perimeter.hint",
+								"ego roots extend the AI Chat workspace; they do not replace it. These defaults apply to new ego runs. Running conversations keep their admitted perimeter.",
+							)}
+						>
 							<p class={s.hint}>
 								{t("perimeter.target", "Editing ego user configuration:")}{" "}
 								{loaded().profile ?? t("perimeter.userDefaults", "user defaults")}
 							</p>
-							<SettingRow label={t("perimeter.label.rootDir", "Root directory")}>
+							<SettingRow
+								label={t("perimeter.label.rootDir", "Root directory")}
+								hint={t(
+									"perimeter.emptyRoot",
+									"Leave all paths empty for workspace-only roots. An absent roots setting defaults to ~/Gits when that directory exists.",
+								)}
+							>
 								{(id, descriptionId) => (
 									<>
 										<Input
@@ -88,12 +95,6 @@ export const EgoPerimeterSection: Component<{ client?: EgoPerimeterClient }> = (
 											onInput={(event) => edit("rootDir", event.currentTarget.value)}
 											placeholder="~/Gits"
 										/>
-										<p class={s.hint}>
-											{t(
-												"perimeter.emptyRoot",
-												"Leave all paths empty for workspace-only roots. An absent roots setting defaults to ~/Gits when that directory exists.",
-											)}
-										</p>
 									</>
 								)}
 							</SettingRow>
@@ -117,7 +118,10 @@ export const EgoPerimeterSection: Component<{ client?: EgoPerimeterClient }> = (
 									</>
 								)}
 							</SettingRow>
-							<SettingRow label={t("perimeter.label.readAllowlist", "Read allowlist")}>
+							<SettingRow
+								label={t("perimeter.label.readAllowlist", "Read allowlist")}
+								hint="One absolute path or ~/ path per line. These entries grant read access; they do not revoke a writable parent root."
+							>
 								{(id, descriptionId) => (
 									<>
 										<Textarea
@@ -131,7 +135,13 @@ export const EgoPerimeterSection: Component<{ client?: EgoPerimeterClient }> = (
 									</>
 								)}
 							</SettingRow>
-							<SettingRow label={t("perimeter.label.writableDirs", "Extra writable directories")}>
+							<SettingRow
+								label={t("perimeter.label.writableDirs", "Extra writable directories")}
+								hint={t(
+									"perimeter.paths",
+									"One absolute path or ~/ path per line. Read-only entries do not revoke access granted by a containing writable root. ego validates roots and system ceilings.",
+								)}
+							>
 								{(id, descriptionId) => (
 									<>
 										<Textarea
@@ -142,12 +152,6 @@ export const EgoPerimeterSection: Component<{ client?: EgoPerimeterClient }> = (
 											disabled={busy()}
 											onInput={(event) => edit("writableDirs", event.currentTarget.value)}
 										/>
-										<p class={s.hint}>
-											{t(
-												"perimeter.paths",
-												"One absolute path or ~/ path per line. Read-only entries do not revoke access granted by a containing writable root. ego validates roots and system ceilings.",
-											)}
-										</p>
 									</>
 								)}
 							</SettingRow>
@@ -162,29 +166,47 @@ export const EgoPerimeterSection: Component<{ client?: EgoPerimeterClient }> = (
 							</div>
 						</SectionCard>
 						<SectionCard title="Network and sandbox">
-							<label class={s.toggle}>
-								<input
-									type="checkbox"
-									checked={loaded().networkEnabled}
-									disabled={busy()}
-									onChange={(event) => {
-										const enabled = event.currentTarget.checked;
-										event.currentTarget.checked = loaded().networkEnabled;
-										void attempt(() => client().setNetwork(enabled), false);
-									}}
-								/>
-								<span>{t("perimeter.label.network", "Network enabled")}</span>
-							</label>
-							<p class={s.hint}>
-								{t("perimeter.execSandbox", "Exec sandbox:")}{" "}
-								<span class={loaded().execEnforcement === "enforcedByOs" ? s.availabilityOk : s.availabilityBad}>
-									{loaded().execEnforcement === "enforcedByOs"
-										? t("perimeter.osEnforced", "Enforced by OS")
-										: loaded().execEnforcement === "promptOnly"
-											? t("perimeter.promptOnly", "Prompt only")
-											: t("perimeter.unchecked", "Enforcement not checked")}
-								</span>
-							</p>
+							<SettingRow label={t("perimeter.label.network", "Network enabled")}>
+								{(id, descriptionId) => (
+									<>
+										<input
+											id={id}
+											aria-describedby={descriptionId()}
+											class={s.rowSwitch}
+											type="checkbox"
+											checked={loaded().networkEnabled}
+											disabled={busy()}
+											onChange={(event) => {
+												const enabled = event.currentTarget.checked;
+												event.currentTarget.checked = loaded().networkEnabled;
+												void attempt(() => client().setNetwork(enabled), false);
+											}}
+										/>
+									</>
+								)}
+							</SettingRow>
+							<SettingRow label={t("perimeter.execSandbox", "Exec sandbox:")}>
+								{() => (
+									<>
+										<StatusBadge
+											label={
+												loaded().execEnforcement === "enforcedByOs"
+													? t("perimeter.osEnforced", "Enforced by OS")
+													: loaded().execEnforcement === "promptOnly"
+														? t("perimeter.promptOnly", "Prompt only")
+														: t("perimeter.unchecked", "Enforcement not checked")
+											}
+											variant={
+												loaded().execEnforcement === "enforcedByOs"
+													? "success"
+													: loaded().execEnforcement === "promptOnly"
+														? "warning"
+														: undefined
+											}
+										/>
+									</>
+								)}
+							</SettingRow>
 							<Show when={loaded().execEnforcement === "promptOnly"}>
 								<p class={s.hint}>
 									{t(
