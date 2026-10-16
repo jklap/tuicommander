@@ -2306,3 +2306,7 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
   Verify explicit clear, busy/idle and shell OSC 133 A remove the recovery display.
   Check the visual layout at narrow and normal window widths. No desktop instance
   was launched by the implementation agent.
+
+- [ ] 1902 critic revision: after backend restart, type an ego composer draft during
+  provider recovery and click Force retry. The draft must remain unchanged and the
+  status bar must display the refusal. Clear the draft and verify one retry submits.

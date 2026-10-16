@@ -428,7 +428,8 @@ When terminal ego reports a provider outage, its tab shows **recovering** rather
 than a working animation. The status bar shows the recovery phase, attempt,
 next attempt time and seconds remaining. Zero seconds means the scheduled time
 has arrived, not that the provider has recovered. **Force retry** submits
-`/retry` once to that terminal. Managed parents receive recovery entry and exit
+`/retry` once to that terminal. If the composer contains a draft, the retry is
+refused without changing the draft. The status bar displays the refusal. Managed parents receive recovery entry and exit
 notices; MCP callers can use `session action=force_retry session_id=<id>`.
 Recovery clears when ego explicitly clears it, resumes busy/idle state, or
 returns to the shell prompt. This terminal protocol is separate from ACP retry.

@@ -1,5 +1,33 @@
 use super::*;
 
+/// One guarded retry transaction shared by MCP, HTTP and desktop IPC.
+pub(crate) fn force_retry_provider_recovery(
+    state: &AppState,
+    session_id: &str,
+) -> Result<(), String> {
+    let transaction = state.input_transaction(session_id);
+    let _input = transaction.lock();
+    let recovering = state
+        .session_maps
+        .session_states
+        .get(session_id)
+        .is_some_and(|session| {
+            session.agent_type.as_deref() == Some("ego") && session.provider_recovery.is_some()
+        });
+    if !recovering {
+        return Err("Session is not an ego terminal in provider recovery".into());
+    }
+    if state
+        .session_maps
+        .input_buffers
+        .get(session_id)
+        .is_some_and(|buffer| !buffer.lock().content().is_empty())
+    {
+        return Err("Session composer is not empty".into());
+    }
+    write_agent_command_to_pty(state, session_id, "/retry")
+}
+
 pub(super) struct ParentLifecycleDispatch {
     pub(super) parent_id: String,
     pub(super) message_id: String,

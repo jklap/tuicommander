@@ -314,6 +314,7 @@
 /sessions/worktree
 /sessions/x
 /sessions/x/chat-view
+/sessions/x/force-retry
 /sessions/x/foreground
 /sessions/x/has-foreground
 /sessions/x/input-buffer

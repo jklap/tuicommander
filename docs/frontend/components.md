@@ -828,4 +828,5 @@ Terminal ego provider recovery: the tab replaces its busy animation with a
 recovering label. StatusBar mounts ProviderRecoveryStatus only while a complete
 backend recovery snapshot exists; its one-second display timer stops on unmount.
 The component displays phase, attempt, next-time and a zero-clamped countdown,
-with a single-flight Force retry button using the existing `sendCommand` path.
+with a single-flight Force retry button using the shared backend retry transaction.
+A non-empty composer refuses the retry; the status bar displays the error.

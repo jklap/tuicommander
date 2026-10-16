@@ -950,7 +950,9 @@ The normal Rust suspension path persists `reason: "idle_hibernate"` before endin
 Native ego OSC 7770 `ego-recovery` snapshots are validated at the PTY boundary
 and accumulated as `SessionState.provider_recovery`. The existing desktop and
 SSE `session-state-changed` snapshot carries the same object on both transports.
-The parent lifecycle inbox receives entry/exit notices. MCP session `force_retry`
+The parent lifecycle inbox receives entry/exit notices. MCP session `force_retry`,
+desktop `force_retry_provider_recovery_command`, and HTTP `POST /sessions/{id}/force-retry`
+share one backend transaction. It
 requires an ego recovery snapshot and an empty tracked composer, holds the input
 transaction, and uses the normal agent-aware command writer to submit `/retry`
 once (no automatic retry or queue). See output-parser.md for the wire contract.

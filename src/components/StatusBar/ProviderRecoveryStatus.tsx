@@ -1,8 +1,7 @@
-import { type Component, createSignal, onCleanup } from "solid-js";
+import { type Component, createSignal, onCleanup, Show } from "solid-js";
 import { appLogger } from "../../stores/appLogger";
 import type { ProviderRecovery } from "../../stores/terminals";
 import { rpc } from "../../transport";
-import { sendCommand } from "../../utils/sendCommand";
 import s from "./ProviderRecoveryStatus.module.css";
 
 export function recoveryLabel(recovery: ProviderRecovery, now: number): string {
@@ -13,15 +12,18 @@ export function recoveryLabel(recovery: ProviderRecovery, now: number): string {
 export const ProviderRecoveryStatus: Component<{ recovery: ProviderRecovery; sessionId: string }> = (props) => {
 	const [now, setNow] = createSignal(Date.now());
 	const [sending, setSending] = createSignal(false);
+	const [failure, setFailure] = createSignal<string>();
 	const timer = setInterval(() => setNow(Date.now()), 1000);
 	onCleanup(() => clearInterval(timer));
 	const retry = async () => {
 		if (sending()) return;
 		setSending(true);
+		setFailure(undefined);
 		const sessionId = props.sessionId;
 		try {
-			await sendCommand((data) => rpc("write_pty", { sessionId, data }), "/retry", "ego");
+			await rpc("force_retry_provider_recovery_command", { sessionId });
 		} catch (error) {
+			setFailure(String(error));
 			appLogger.warn("terminal", "Force retry failed", error);
 		} finally {
 			setSending(false);
@@ -35,6 +37,7 @@ export const ProviderRecoveryStatus: Component<{ recovery: ProviderRecovery; ses
 			<button type="button" class={s.retry} disabled={sending()} onClick={retry}>
 				Force retry
 			</button>
+			<Show when={failure()}>{(message) => <span role="alert">{message()}</span>}</Show>
 		</span>
 	);
 };

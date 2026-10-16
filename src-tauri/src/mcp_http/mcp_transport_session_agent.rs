@@ -818,28 +818,7 @@ pub(super) fn handle_session(
                 Ok(id) => id,
                 Err(error) => return error,
             };
-            let transaction = state.input_transaction(&session_id);
-            let _input = transaction.lock();
-            let recovering = state
-                .session_maps
-                .session_states
-                .get(&session_id)
-                .is_some_and(|session| {
-                    session.agent_type.as_deref() == Some("ego")
-                        && session.provider_recovery.is_some()
-                });
-            if !recovering {
-                return serde_json::json!({"error": "Session is not an ego terminal in provider recovery"});
-            }
-            if state
-                .session_maps
-                .input_buffers
-                .get(&session_id)
-                .is_some_and(|buffer| !buffer.lock().content().is_empty())
-            {
-                return serde_json::json!({"error": "Session composer is not empty"});
-            }
-            match crate::pty::write_agent_command_to_pty(state, &session_id, "/retry") {
+            match crate::pty::force_retry_provider_recovery(state, &session_id) {
                 Ok(()) => serde_json::json!({"submitted": true, "session_id": session_id}),
                 Err(error) => serde_json::json!({"error": error}),
             }

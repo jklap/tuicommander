@@ -5218,9 +5218,32 @@ fn provider_recovery_force_retry_targets_only_recovering_ego() {
             attempt: 1,
         });
     }
+    crate::mcp_http::session::write_pty_input(
+        &state,
+        TEST_UUID_A,
+        "Investigate the pending changes",
+    )
+    .unwrap();
+    bytes.lock().unwrap().clear();
+    assert_eq!(
+        handle_session(&state, &args, None)["error"],
+        "Session composer is not empty"
+    );
+    assert!(bytes.lock().unwrap().is_empty());
+    assert_eq!(
+        state
+            .session_maps
+            .input_buffers
+            .get(TEST_UUID_A)
+            .unwrap()
+            .lock()
+            .content(),
+        "Investigate the pending changes"
+    );
+    crate::mcp_http::session::write_pty_input(&state, TEST_UUID_A, "\x15").unwrap();
+    bytes.lock().unwrap().clear();
     let result = handle_session(&state, &args, None);
     assert_eq!(result["submitted"], true, "{result}");
     let written = bytes.lock().unwrap();
-    assert_eq!(written.iter().filter(|byte| **byte == b'\r').count(), 1);
-    assert!(String::from_utf8_lossy(&written).contains("/retry"));
+    assert_eq!(written.as_slice(), b"\x15/retry\r");
 }
