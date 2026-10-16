@@ -1,9 +1,8 @@
-import { createSignal } from "solid-js";
-import { useQuickSwitcherVisibility } from "../../hooks/useQuickSwitcherVisibility";
-import { isMacOS, resetPlatformCache } from "../../platform";
 import { fireEvent, render } from "@solidjs/testing-library";
+import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getModifierSymbol } from "../../platform";
+import { useQuickSwitcherVisibility } from "../../hooks/useQuickSwitcherVisibility";
+import { getModifierSymbol, isMacOS, resetPlatformCache } from "../../platform";
 import type { AwaitingInputType } from "../../stores/terminals";
 
 const mockCopyPathToClipboard = vi.hoisted(() => vi.fn());
