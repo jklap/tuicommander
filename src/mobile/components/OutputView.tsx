@@ -257,7 +257,7 @@ export function OutputView(props: OutputViewProps) {
 			if (document.visibilityState === "hidden") {
 				unsubscribe?.pause();
 				recordMobileSocketState(props.sessionId, "paused");
-			} else if (unsubscribe) recordMobileSocketState(props.sessionId, "open");
+			} else recordMobileSocketState(props.sessionId, "open");
 		} catch (err) {
 			recordMobileSocketState(props.sessionId, "failed");
 			const msg = err instanceof Error ? err.message : String(err);
