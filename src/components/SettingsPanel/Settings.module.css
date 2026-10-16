@@ -12,6 +12,7 @@
 }
 
 .panel {
+  --text-on-accent: var(--settings-on-accent);
   --fg-secondary: var(--settings-foreground);
   --fg-muted: var(--settings-foreground);
   width: min(1136px, calc(100vw - 48px));
@@ -1561,3 +1562,9 @@
 
 /* Shared link copy uses a readable accent without changing action fills. */
 .content a { color: var(--link-foreground); }
+
+/* Keep contextual help with its label in stacked, row and grid fields. */
+.helpLabel { display: flex; align-items: baseline; min-width: 0; }
+.group .helpLabel { margin-bottom: 6px; }
+.helpLabel > label { min-width: 0; margin-bottom: 0; }
+.helpLabel > .infoBadge { flex-shrink: 0; }

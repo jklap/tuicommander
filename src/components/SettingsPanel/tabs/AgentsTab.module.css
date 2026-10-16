@@ -638,12 +638,12 @@
 .cleanupCard { border: 1px solid var(--error); border-radius: 8px; padding: 16px; }
 
 .permissionRows { display: grid; grid-template-columns: minmax(0, 1fr) minmax(160px, 260px); align-items: center; gap: 16px; }
-.permissionRows > label { font-size: 13px; font-weight: 600; color: var(--fg-primary); }
+.permissionRows label { font-size: 13px; font-weight: 600; color: var(--fg-primary); }
 .permissionRows > p { grid-column: 1 / -1; }
 @media (max-width: 600px) { .permissionRows { grid-template-columns: 1fr; gap: 8px; } }
 
 .fieldRow { display: grid; grid-template-columns: minmax(0, 1fr) minmax(160px, 260px); align-items: center; gap: 16px; padding: 12px 0; }
-.fieldRow > label, .editorFieldLabel { font-size: 13px; font-weight: 600; color: var(--fg-primary); }
+.fieldRow label, .editorFieldLabel { font-size: 13px; font-weight: 600; color: var(--fg-primary); }
 .editorFieldLabel { flex-basis: 100%; }
 @media (max-width: 600px) { .fieldRow { grid-template-columns: 1fr; gap: 8px; } }
 

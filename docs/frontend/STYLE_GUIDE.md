@@ -455,9 +455,10 @@ Full-screen overlay. All pages share `width: min(1136px, calc(100vw - 48px))`, `
 - `StatusSummary`: visible status words and existing `StatusBadge` semantic tone, source and freshness. Unknown is neutral; saved sign-in is not a live connection.
 - `ListRow`: wrapping name/subtitle, source/version/access badges and named actions. `EmptyState` explains absence and offers one valid action; do not conflate loading, failed or unsupported state.
 - `DangerZone`: explicit scope and consequence for destructive/disconnecting actions only; caller retains confirmation. Ordinary reset is not automatically destructive.
-- Paper shades the shared attention, changes/review and merged tokens for readable marker text; the legend and sidebar keep the same components and shapes.
+- Label/help pairs use the shared `.helpLabel` layout so stacked and grid fields reserve one cell for the pair; the badge remains beside wrapped label text.
+- Paper shades the shared success, attention, changes/review and merged tokens for readable marker text; the legend and sidebar keep the same components and shapes.
 - Agent color tiles use metadata-selected `--identity-on-light` or `--identity-on-dark`; identity fills do not change with the app theme.
-- Settings maps secondary and muted copy to the shared `--settings-foreground` token, mixed from the theme foregrounds for elevated/highlighted surfaces. Links use `--link-foreground` without changing action fills.
+- Settings maps secondary and muted copy to the shared `--settings-foreground` token, mixed from the theme foregrounds for elevated/highlighted surfaces. Links and link buttons use `--link-foreground` without changing action fills. Commander Settings accent actions use dark `--settings-on-accent` copy.
 - Help is 12px `--fg-secondary`, never essential `--fg-muted`. Contextual help is selective and adds information beyond the subtitle; do not add a question mark to every row.
 - Below 800px rows stack; below 600px navigation is compact and controls/actions have 44px targets. Preserve keyboard labels and long translations.
 - Keep existing autosave/explicit-save boundaries and lazy mounting. Shared primitives never probe, save or infer service state.
