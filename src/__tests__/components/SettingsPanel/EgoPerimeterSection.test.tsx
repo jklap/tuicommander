@@ -70,7 +70,7 @@ describe("EgoPerimeterSection", () => {
 				/>
 			));
 			expect(await screen.findByText(text)).toBeTruthy();
-			expect(screen.getByText("Command isolation")).toBeTruthy();
+			expect(screen.getByText(/Command isolation for spawned processes/)).toBeTruthy();
 			if (execEnforcement === "promptOnly") expect(screen.getByText(/not fully OS-enforced/)).toBeTruthy();
 		},
 	);
