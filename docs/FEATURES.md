@@ -350,10 +350,11 @@ A multi-line editor docked under the terminal for writing a prompt without fight
 
 ### 1.21 Auto-Standby (Unix)
 
-Idle, unfocused terminals are suspended to stop them consuming CPU and battery. A background checker (every 30s) sends `SIGSTOP` to the entire process group of a session — `kill(-pgid, …)`, so children (dev servers, agent processes) are paused too, not just the shell.
+Idle, unfocused terminals can be paused to reduce CPU and battery use. A background checker (every 30s) sends `SIGSTOP` only when the PTY child owns the foreground process group. An agent running as a separate foreground job inside an interactive shell is not stopped: shell job control would reclaim the terminal and leave that job suspended. Processes in the eligible child's group are paused together.
 
 - **Entry conditions (all required)** — timeout enabled (`> 0`), tab not focused, shell state idle, no tracked agent background work, idle for at least the timeout, session startup settled, and not already in standby. Claude/Codex/Gemini/Grok/pi/OpenCode additionally require confirmed idle (explicit lifecycle marker or stable ready screen); silence-only idle cannot suspend them. Grok distinguishes its active Braille-spinner status row from the persistent `❯` composer.
-- **Wake** — `SIGCONT` fires the instant the tab is focused or a message arrives for the agent; the process resumes exactly where it stopped (no session loss, no restart)
+- **Remote activity** — remote input, HTTP output reads, and remote observer disconnects start a full timeout window before standby can resume; connected terminal WebSockets and SSE observers prevent standby. Recent local input also prevents standby.
+- **Wake** — `SIGCONT` targets the exact recorded stopped group when the tab is focused, remote input/output arrives, or a message arrives for the agent; the process resumes where it stopped (no session loss, no restart)
 - **Safety** — the process-group id is validated before signalling; an unsafe pgid is refused rather than risking a stop sent to the wrong group
 - **Pause badge** — suspended tabs show a pause indicator in the tab bar
 - **Event** — `session-standby` (`{ session_id, standby }`) emitted on stop/wake
