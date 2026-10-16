@@ -29,11 +29,14 @@ async fn begin_after_replacement_bytes_cannot_rearm_old_turn_stop() {
         .await
         .unwrap();
     runtime
-        .track(PendingMail {
-            id: "old-request".into(),
-            recipient: PEER.into(),
-            content: json!({"chat_id":"1111111"}).to_string(),
-        })
+        .track(
+            PendingMail {
+                id: "old-request".into(),
+                recipient: PEER.into(),
+                content: json!({"chat_id":"1111111"}).to_string(),
+            },
+            super::streaming::Recipient::capture(&runtime.state, PEER),
+        )
         .unwrap();
 
     // The native HTTP/IPC boundary writes first and books input afterwards.

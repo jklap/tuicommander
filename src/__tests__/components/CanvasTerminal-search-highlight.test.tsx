@@ -1,6 +1,7 @@
 import { fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CanvasTerminalRef } from "../../components/Terminal/CanvasTerminal";
+import { VisibleIntersectionObserver } from "../helpers/visibleIntersectionObserver";
 
 const { transport } = vi.hoisted(() => ({
 	transport: {
@@ -111,13 +112,7 @@ beforeEach(() => {
 			disconnect() {}
 		},
 	);
-	vi.stubGlobal(
-		"IntersectionObserver",
-		class {
-			observe() {}
-			disconnect() {}
-		},
-	);
+	vi.stubGlobal("IntersectionObserver", VisibleIntersectionObserver);
 });
 afterEach(() => {
 	vi.useRealTimers();

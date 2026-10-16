@@ -101,7 +101,7 @@ function unescapeJsx(s: string): string {
 
 /** Element occurrences (`<h3>`, `<label>`) and `label=` props, in source order. */
 function* occurrences(src: string): Generator<{ kind: "h3" | "label"; inner: string; isProp: boolean; at: number }> {
-	const re = /<(h3|label)\b|(?<![\w-])label=/g;
+	const re = /<(h3|label)\b|<(SectionCard|DangerZone|SettingPageHeader|StatusBadge|StatusSummary)\b|(?<![\w-])label=/g;
 	let m: RegExpExecArray | null;
 	while ((m = re.exec(src)) !== null) {
 		if (m[1]) {
@@ -111,6 +111,18 @@ function* occurrences(src: string): Generator<{ kind: "h3" | "label"; inner: str
 			if (close < 0) continue;
 			yield { kind: m[1] as "h3" | "label", inner: src.slice(open + 1, close), isProp: false, at: m.index };
 			re.lastIndex = open + 1;
+		} else if (m[2]) {
+			const open = endOfOpenTag(src, m.index);
+			if (open < 0) continue;
+			// Badges and summaries display runtime status, not searchable controls.
+			if (m[2] === "StatusBadge" || m[2] === "StatusSummary") {
+				re.lastIndex = open + 1;
+				continue;
+			}
+			const tag = src.slice(m.index, open);
+			const title = tag.match(/\btitle=/);
+			if (title?.index !== undefined)
+				yield { kind: "h3", inner: tag.slice(title.index + "title=".length), isProp: true, at: m.index };
 		} else {
 			yield { kind: "label", inner: src.slice(m.index + "label=".length), isProp: true, at: m.index };
 		}
@@ -185,6 +197,8 @@ function platformSpans(src: string): { start: number; end: number; platform: Cli
 }
 
 export function extractTab(src: string): ExtractedTab {
+	// Contextual explanations contain no controls and repeat the row identity only for lookup.
+	src = src.replace(/<ContextualHelp\b[^>]*\/>/g, "");
 	const out: ExtractedTab = { sections: [], settings: [], dynamic: 0 };
 	const spans = expertSpans(src);
 	const expertKeyAt = (at: number) => spans.find((span) => at > span.start && at < span.end)?.configKey;
@@ -235,7 +249,7 @@ export function extractRenderedTabComponents(src: string): Record<string, string
 		const open = endOfOpenTag(src, m.index);
 		if (open < 0) continue;
 		const body = src.slice(open + 1, closeOfShow(src, open));
-		out[m[1]] = [...body.matchAll(/<([A-Z]\w*)\b/g)].map((c) => c[1]);
+		out[m[1]] = [...body.matchAll(/<([A-Z]\w*)\b/g)].map((c) => c[1]).filter((name) => name !== "SettingsHelpScope");
 	}
 	return out;
 }

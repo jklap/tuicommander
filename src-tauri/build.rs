@@ -2,6 +2,10 @@
 mod build_sidecars;
 
 fn main() {
+    // Tauri's generate_context! writes assets into OUT_DIR during macro
+    // expansion, and the OUT_DIR that mbx shares is read-only. Keep Cargo's
+    // OUT_DIR for this crate only; the environment beats .mbx.toml.
+    println!("cargo:rustc-env=MBX_SHARE_OUT_DIR=0");
     if cfg!(feature = "desktop") && std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
         cc::Build::new()
             .file("src/native_notification.m")

@@ -21,10 +21,13 @@ import { handleOpenUrl } from "../../../utils/openUrl";
 import { Input } from "../../ui/Input";
 import { Select } from "../../ui/Select";
 import { Textarea } from "../../ui/Textarea";
+import { ContextualHelp } from "../ContextualHelp";
 import { ExpertSetting } from "../ExpertSetting";
 import { SettingSelect, SettingToggle } from "../SettingFields";
 import s from "../Settings.module.css";
+import { SectionCard, SettingPageHeader } from "../SettingsPrimitives";
 import g from "./GitHubTab.module.css";
+import w from "./WorkspaceTabs.module.css";
 
 interface DeviceCodeResponse {
 	device_code: string;
@@ -439,435 +442,469 @@ export const GitHubTab: Component = () => {
 	}
 
 	return (
-		<div class={s.section}>
-			<h3>GitHub Authentication</h3>
+		<div class={`${s.section} ${w.page}`}>
+			<SettingPageHeader
+				title="Git & GitHub"
+				description="Manage accounts, monitoring, and defaults for your repositories."
+				scope="Application"
+				breadcrumb="Workspace / Git & GitHub"
+			/>
+			<SectionCard title="GitHub Authentication">
+				{/* Error display */}
+				<Show when={error()}>
+					<div class={g.error}>{error()}</div>
+				</Show>
 
-			{/* Error display */}
-			<Show when={error()}>
-				<div class={g.error}>{error()}</div>
-			</Show>
+				{/* Polling state — waiting for user to authorize */}
+				<Show when={polling() && deviceCode()}>
+					<div class={g.codeCard}>
+						<div class={g.codeLabel}>
+							{addMode() ? "Add another account — enter this code on GitHub:" : "Enter this code on GitHub:"}
+						</div>
+						<div class={g.userCode}>{deviceCode()!.user_code}</div>
+						<div class={g.actions} style="justify-content: center">
+							<button class={cx(g.btn)} onClick={copyCode}>
+								{copied() ? "Copied!" : "Copy code"}
+							</button>
+							<button class={cx(g.btn)} onClick={() => handleOpenUrl(deviceCode()!.verification_uri)}>
+								Open GitHub
+							</button>
+						</div>
+						<div class={g.codeHint}>
+							Waiting for authorization<span class={g.pollingDots}>...</span>
+						</div>
+						<div class={g.actions} style="justify-content: center; margin-top: 12px">
+							<button class={cx(g.btn, g.btnDanger)} onClick={cancelPolling}>
+								Cancel
+							</button>
+						</div>
+					</div>
+				</Show>
 
-			{/* Polling state — waiting for user to authorize */}
-			<Show when={polling() && deviceCode()}>
-				<div class={g.codeCard}>
-					<div class={g.codeLabel}>
-						{addMode() ? "Add another account — enter this code on GitHub:" : "Enter this code on GitHub:"}
+				{/* Authenticated state */}
+				<Show when={!polling() && authStatus()?.authenticated}>
+					<div class={g.statusCard}>
+						<Show
+							when={authStatus()?.avatar_url && !avatarBroken()}
+							fallback={
+								<div class={g.avatarPlaceholder}>
+									<svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+										<path
+											d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"
+											fill="currentColor"
+										/>
+									</svg>
+								</div>
+							}
+						>
+							<img class={g.avatar} src={authStatus()!.avatar_url!} alt="" onError={() => setAvatarBroken(true)} />
+						</Show>
+						<div class={g.userInfo}>
+							<div class={g.userName}>{authStatus()?.login ?? "Authenticated"}</div>
+							<div class={g.tokenSource}>{SOURCE_LABELS[authStatus()?.source ?? "none"]}</div>
+							<Show when={authStatus()?.scopes}>
+								<div class={g.tokenScopes}>
+									{authStatus()!
+										.scopes!.split(",")
+										.map((s) => s.trim())
+										.filter(Boolean)
+										.join(", ")}
+								</div>
+							</Show>
+						</div>
 					</div>
-					<div class={g.userCode}>{deviceCode()!.user_code}</div>
-					<div class={g.actions} style="justify-content: center">
-						<button class={cx(g.btn)} onClick={copyCode}>
-							{copied() ? "Copied!" : "Copy code"}
-						</button>
-						<button class={cx(g.btn)} onClick={() => handleOpenUrl(deviceCode()!.verification_uri)}>
-							Open GitHub
-						</button>
-					</div>
-					<div class={g.codeHint}>
-						Waiting for authorization<span class={g.pollingDots}>...</span>
-					</div>
-					<div class={g.actions} style="justify-content: center; margin-top: 12px">
-						<button class={cx(g.btn, g.btnDanger)} onClick={cancelPolling}>
-							Cancel
-						</button>
-					</div>
-				</div>
-			</Show>
 
-			{/* Authenticated state */}
-			<Show when={!polling() && authStatus()?.authenticated}>
-				<div class={g.statusCard}>
-					<Show
-						when={authStatus()?.avatar_url && !avatarBroken()}
-						fallback={
-							<div class={g.avatarPlaceholder}>
-								<svg width="24" height="24" viewBox="0 0 24 24" fill="none">
-									<path
-										d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"
-										fill="currentColor"
-									/>
-								</svg>
-							</div>
-						}
-					>
-						<img class={g.avatar} src={authStatus()!.avatar_url!} alt="" onError={() => setAvatarBroken(true)} />
+					{/* Only show logout for OAuth tokens — env tokens are managed externally */}
+					<Show when={authStatus()?.source === "oauth"}>
+						<div class={g.actions}>
+							<button class={cx(g.btn, g.btnDanger)} onClick={logout} disabled={loading()}>
+								{loading() ? "Logging out..." : "Logout"}
+							</button>
+						</div>
 					</Show>
-					<div class={g.userInfo}>
-						<div class={g.userName}>{authStatus()?.login ?? "Authenticated"}</div>
-						<div class={g.tokenSource}>{SOURCE_LABELS[authStatus()?.source ?? "none"]}</div>
-						<Show when={authStatus()?.scopes}>
-							<div class={g.tokenScopes}>
-								{authStatus()!
-									.scopes!.split(",")
-									.map((s) => s.trim())
-									.filter(Boolean)
-									.join(", ")}
+
+					<Show when={authStatus()?.source === "env"}>
+						<div class={s.hint}>Token provided via environment variable (GH_TOKEN or GITHUB_TOKEN).</div>
+						<div class={g.actions}>
+							<button class={cx(g.btn)} onClick={() => startLogin()} disabled={loading()}>
+								{loading() ? "Starting..." : "Switch to OAuth"}
+							</button>
+							<button class={cx(g.btn, g.btnDanger)} onClick={disconnect} disabled={loading()}>
+								Disconnect
+							</button>
+						</div>
+					</Show>
+				</Show>
+
+				{/* Diagnostics section — shown when authenticated */}
+				<Show when={!polling() && authStatus()?.authenticated && diagnostics()}>
+					<div class={g.diagnosticsSection}>
+						<h4 class={g.diagnosticsTitle}>Status</h4>
+
+						{/* Circuit breaker */}
+						<Show when={diagnostics()?.circuit_breaker_open}>
+							<div class={g.diagWarning}>
+								<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="flex-shrink: 0">
+									<path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z" />
+								</svg>
+								<span>API requests paused: {diagnostics()?.circuit_breaker_status}</span>
+							</div>
+						</Show>
+
+						{/* Repos not found */}
+						<Show when={(diagnostics()?.repos_not_found?.length ?? 0) > 0}>
+							<div class={g.diagWarning}>
+								<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="flex-shrink: 0">
+									<path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z" />
+								</svg>
+								<div>
+									<div>Cannot access {diagnostics()?.repos_not_found?.length} repo(s) with this token:</div>
+									<ul class={g.diagRepoList}>
+										<For each={diagnostics()?.repos_not_found}>{(repo) => <li>{repo}</li>}</For>
+									</ul>
+									<div class={g.diagHint}>
+										The token may lack organization access or SSO authorization for these repos.
+									</div>
+								</div>
+							</div>
+						</Show>
+
+						{/* All good */}
+						<Show when={!diagnostics()?.circuit_breaker_open && diagnostics()?.repos_not_found?.length === 0}>
+							<div class={g.diagOk}>
+								<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="flex-shrink: 0">
+									<path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z" />
+								</svg>
+								<span>PR monitoring active — {diagnostics()?.repos_monitored} repo(s) tracked</span>
+							</div>
+						</Show>
+
+						<Show when={(diagnostics()?.repos_monitored ?? 0) > 0 && (diagnostics()?.repos_not_found?.length ?? 0) > 0}>
+							<div class={g.diagOk}>
+								<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="flex-shrink: 0">
+									<path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z" />
+								</svg>
+								<span>{diagnostics()?.repos_monitored} repo(s) tracked successfully</span>
 							</div>
 						</Show>
 					</div>
-				</div>
-
-				{/* Only show logout for OAuth tokens — env tokens are managed externally */}
-				<Show when={authStatus()?.source === "oauth"}>
-					<div class={g.actions}>
-						<button class={cx(g.btn, g.btnDanger)} onClick={logout} disabled={loading()}>
-							{loading() ? "Logging out..." : "Logout"}
-						</button>
-					</div>
 				</Show>
 
-				<Show when={authStatus()?.source === "env"}>
-					<div class={s.hint}>Token provided via environment variable (GH_TOKEN or GITHUB_TOKEN).</div>
-					<div class={g.actions}>
-						<button class={cx(g.btn)} onClick={() => startLogin()} disabled={loading()}>
-							{loading() ? "Starting..." : "Switch to OAuth"}
-						</button>
-						<button class={cx(g.btn, g.btnDanger)} onClick={disconnect} disabled={loading()}>
-							Disconnect
-						</button>
+				{/* Not authenticated / disconnected state */}
+				<Show when={!polling() && !authStatus()?.authenticated}>
+					<div class={g.disconnected}>
+						<div class={g.disconnectedIcon}>
+							<svg width="48" height="48" viewBox="0 0 24 24" fill="currentColor">
+								<path d="M12 2C6.477 2 2 6.477 2 12c0 4.42 2.87 8.17 6.84 9.5.5.08.66-.23.66-.5v-1.69c-2.77.6-3.36-1.34-3.36-1.34-.46-1.16-1.11-1.47-1.11-1.47-.91-.62.07-.6.07-.6 1 .07 1.53 1.03 1.53 1.03.87 1.52 2.34 1.07 2.91.83.09-.65.35-1.09.63-1.34-2.22-.25-4.55-1.11-4.55-4.92 0-1.11.38-2 1.03-2.71-.1-.25-.45-1.29.1-2.64 0 0 .84-.27 2.75 1.02.79-.22 1.65-.33 2.5-.33.85 0 1.71.11 2.5.33 1.91-1.29 2.75-1.02 2.75-1.02.55 1.35.2 2.39.1 2.64.65.71 1.03 1.6 1.03 2.71 0 3.82-2.34 4.66-4.57 4.91.36.31.69.92.69 1.85V21c0 .27.16.59.67.5C19.14 20.16 22 16.42 22 12A10 10 0 0012 2z" />
+							</svg>
+						</div>
+						<div class={g.disconnectedTitle}>Connect to GitHub</div>
+						<div class={g.disconnectedHint}>
+							Sign in with your GitHub account to view pull requests, CI status, and repository information from private
+							and organization repositories.
+						</div>
+						<div class={g.actions} style="justify-content: center">
+							<button class={cx(g.btn, g.btnPrimary)} onClick={() => startLogin()} disabled={loading()}>
+								{loading() ? "Starting..." : "Login with GitHub"}
+							</button>
+						</div>
+						<div class={g.scopeList} style="margin-top: 16px">
+							Requested permissions: <strong>repo</strong>
+						</div>
 					</div>
 				</Show>
-			</Show>
-
-			{/* Diagnostics section — shown when authenticated */}
-			<Show when={!polling() && authStatus()?.authenticated && diagnostics()}>
-				<div class={g.diagnosticsSection}>
-					<h4 class={g.diagnosticsTitle}>Status</h4>
-
-					{/* Circuit breaker */}
-					<Show when={diagnostics()?.circuit_breaker_open}>
-						<div class={g.diagWarning}>
-							<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="flex-shrink: 0">
-								<path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z" />
-							</svg>
-							<span>API requests paused: {diagnostics()?.circuit_breaker_status}</span>
-						</div>
-					</Show>
-
-					{/* Repos not found */}
-					<Show when={(diagnostics()?.repos_not_found?.length ?? 0) > 0}>
-						<div class={g.diagWarning}>
-							<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="flex-shrink: 0">
-								<path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z" />
-							</svg>
-							<div>
-								<div>Cannot access {diagnostics()?.repos_not_found?.length} repo(s) with this token:</div>
-								<ul class={g.diagRepoList}>
-									<For each={diagnostics()?.repos_not_found}>{(repo) => <li>{repo}</li>}</For>
-								</ul>
-								<div class={g.diagHint}>
-									The token may lack organization access or SSO authorization for these repos.
-								</div>
-							</div>
-						</div>
-					</Show>
-
-					{/* All good */}
-					<Show when={!diagnostics()?.circuit_breaker_open && diagnostics()?.repos_not_found?.length === 0}>
-						<div class={g.diagOk}>
-							<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="flex-shrink: 0">
-								<path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z" />
-							</svg>
-							<span>PR monitoring active — {diagnostics()?.repos_monitored} repo(s) tracked</span>
-						</div>
-					</Show>
-
-					<Show when={(diagnostics()?.repos_monitored ?? 0) > 0 && (diagnostics()?.repos_not_found?.length ?? 0) > 0}>
-						<div class={g.diagOk}>
-							<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="flex-shrink: 0">
-								<path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z" />
-							</svg>
-							<span>{diagnostics()?.repos_monitored} repo(s) tracked successfully</span>
-						</div>
-					</Show>
-				</div>
-			</Show>
+			</SectionCard>
 
 			{/* PR settings — shown when authenticated */}
 			<Show when={!polling() && authStatus()?.authenticated}>
-				<h3>Pull Requests</h3>
+				<SectionCard title="Pull Requests">
+					<SettingToggle
+						row
+						checked={settingsStore.state.autoShowPrPopover}
+						onChange={(v) => settingsStore.setAutoShowPrPopover(v)}
+						label="Auto-show PR popover"
+						hint="Automatically open the PR panel when a branch has an associated pull request"
+					/>
 
-				<SettingToggle
-					checked={settingsStore.state.autoShowPrPopover}
-					onChange={(v) => settingsStore.setAutoShowPrPopover(v)}
-					label="Auto-show PR popover"
-					hint="Automatically open the PR panel when a branch has an associated pull request"
-				/>
+					<SettingToggle
+						row
+						checked={settingsStore.state.prHideDrafts}
+						onChange={(v) => {
+							settingsStore.setPrHideDrafts(v);
+							githubStore.setPrHideDrafts(v);
+						}}
+						label="Hide Draft PRs"
+						hint="Exclude draft pull requests from the Pull Requests list"
+					/>
 
-				<SettingToggle
-					checked={settingsStore.state.prHideDrafts}
-					onChange={(v) => {
-						settingsStore.setPrHideDrafts(v);
-						githubStore.setPrHideDrafts(v);
-					}}
-					label="Hide Draft PRs"
-					hint="Exclude draft pull requests from the Pull Requests list"
-				/>
+					<SettingToggle
+						row
+						checked={settingsStore.state.prHideConflicting}
+						onChange={(v) => settingsStore.setPrHideConflicting(v)}
+						label="Hide Conflicting PRs"
+						hint="Exclude pull requests with merge conflicts from the Pull Requests list"
+					/>
 
-				<SettingToggle
-					checked={settingsStore.state.prHideConflicting}
-					onChange={(v) => settingsStore.setPrHideConflicting(v)}
-					label="Hide Conflicting PRs"
-					hint="Exclude pull requests with merge conflicts from the Pull Requests list"
-				/>
+					<SettingToggle
+						row
+						checked={settingsStore.state.prHideCiFailing}
+						onChange={(v) => settingsStore.setPrHideCiFailing(v)}
+						label="Hide CI Failing PRs"
+						hint="Exclude pull requests with failing CI checks from the Pull Requests list"
+					/>
 
-				<SettingToggle
-					checked={settingsStore.state.prHideCiFailing}
-					onChange={(v) => settingsStore.setPrHideCiFailing(v)}
-					label="Hide CI Failing PRs"
-					hint="Exclude pull requests with failing CI checks from the Pull Requests list"
-				/>
-
-				<ExpertSetting
-					configKey="repo_defaults.auto_delete_on_pr_close"
-					value={repoDefaultsStore.state.autoDeleteOnPrClose}
-				>
-					<SettingSelect
-						label="Auto-Delete on PR Close"
+					<ExpertSetting
+						configKey="repo_defaults.auto_delete_on_pr_close"
 						value={repoDefaultsStore.state.autoDeleteOnPrClose}
-						onChange={(v) => repoDefaultsStore.setAutoDeleteOnPrClose(v as AutoDeleteOnPrClose)}
-						options={[
-							{ value: "off", label: "Off" },
-							{ value: "ask", label: "Ask before deleting" },
-							{ value: "auto", label: "Auto-delete silently" },
-						]}
-						hint="Delete local branch when its PR is merged or closed on GitHub"
+					>
+						<SettingSelect
+							row
+							label="Auto-Delete on PR Close"
+							value={repoDefaultsStore.state.autoDeleteOnPrClose}
+							onChange={(v) => repoDefaultsStore.setAutoDeleteOnPrClose(v as AutoDeleteOnPrClose)}
+							options={[
+								{ value: "off", label: "Off" },
+								{ value: "ask", label: "Ask before deleting" },
+								{ value: "auto", label: "Auto-delete silently" },
+							]}
+							hint="Delete local branch when its PR is merged or closed on GitHub"
+						/>
+					</ExpertSetting>
+				</SectionCard>
+				<SectionCard title="Issues">
+					<SettingToggle
+						row
+						checked={settingsStore.state.issueFilter !== "disabled"}
+						onChange={(v) => githubStore.setIssueFilter(v ? "assigned" : "disabled")}
+						label="Show issues"
+						hint="Display the Issues section in the GitHub panel"
 					/>
-				</ExpertSetting>
 
-				<h3>Issues</h3>
-
-				<SettingToggle
-					checked={settingsStore.state.issueFilter !== "disabled"}
-					onChange={(v) => githubStore.setIssueFilter(v ? "assigned" : "disabled")}
-					label="Show issues"
-					hint="Display the Issues section in the GitHub panel"
-				/>
-
-				<Show when={settingsStore.state.issueFilter !== "disabled"}>
-					<SettingSelect
-						label="Issue Filter"
-						value={settingsStore.state.issueFilter}
-						onChange={(v) => githubStore.setIssueFilter(v as IssueFilterMode)}
-						options={[
-							{ value: "assigned", label: "Assigned to me" },
-							{ value: "created", label: "Created by me" },
-							{ value: "mentioned", label: "Mentioning me" },
-							{ value: "all", label: "All open" },
-						]}
-						hint="Which issues to show in the GitHub panel"
-					/>
-				</Show>
+					<Show when={settingsStore.state.issueFilter !== "disabled"}>
+						<SettingSelect
+							row
+							label="Issue Filter"
+							value={settingsStore.state.issueFilter}
+							onChange={(v) => githubStore.setIssueFilter(v as IssueFilterMode)}
+							options={[
+								{ value: "assigned", label: "Assigned to me" },
+								{ value: "created", label: "Created by me" },
+								{ value: "mentioned", label: "Mentioning me" },
+								{ value: "all", label: "All open" },
+							]}
+							hint="Which issues to show in the GitHub panel"
+						/>
+					</Show>
+				</SectionCard>
 			</Show>
 
 			{/* Repository & Worktree defaults — shown when authenticated */}
 			<Show when={!polling() && authStatus()?.authenticated}>
-				<h3>Repository Defaults</h3>
-				<p class={s.hint} style={{ "margin-bottom": "12px" }}>
-					These defaults apply to all repositories unless overridden per-repo
-				</p>
+				<SectionCard title="Repository Defaults">
+					<p class={s.hint} style={{ "margin-bottom": "12px" }}>
+						These defaults apply to all repositories unless overridden per-repo
+					</p>
 
-				<SettingSelect
-					label="Default Base Branch"
-					value={repoDefaultsStore.state.baseBranch}
-					onChange={(v) => repoDefaultsStore.setBaseBranch(v)}
-					options={[
-						{ value: "automatic", label: "Automatic" },
-						{ value: "main", label: "main" },
-						{ value: "master", label: "master" },
-						{ value: "develop", label: "develop" },
-					]}
-					hint="Default base branch for new worktrees"
-				/>
+					<SettingSelect
+						row
+						label="Default Base Branch"
+						value={repoDefaultsStore.state.baseBranch}
+						onChange={(v) => repoDefaultsStore.setBaseBranch(v)}
+						options={[
+							{ value: "automatic", label: "Automatic" },
+							{ value: "main", label: "main" },
+							{ value: "master", label: "master" },
+							{ value: "develop", label: "develop" },
+						]}
+						hint="Default base branch for new worktrees"
+					/>
 
-				<ExpertSetting configKey="repo_defaults.copy_ignored_files" value={repoDefaultsStore.state.copyIgnoredFiles}>
+					<ExpertSetting configKey="repo_defaults.copy_ignored_files" value={repoDefaultsStore.state.copyIgnoredFiles}>
+						<SettingToggle
+							row
+							checked={repoDefaultsStore.state.copyIgnoredFiles}
+							onChange={(v) => repoDefaultsStore.setCopyIgnoredFiles(v)}
+							label="Copy ignored files"
+						/>
+					</ExpertSetting>
+
+					<ExpertSetting
+						configKey="repo_defaults.copy_untracked_files"
+						value={repoDefaultsStore.state.copyUntrackedFiles}
+					>
+						<SettingToggle
+							row
+							checked={repoDefaultsStore.state.copyUntrackedFiles}
+							onChange={(v) => repoDefaultsStore.setCopyUntrackedFiles(v)}
+							label="Copy untracked files"
+						/>
+					</ExpertSetting>
+
+					<div class={s.group}>
+						<label for="default-setup-script">Default Setup Script</label>
+						<ContextualHelp label="Default Setup Script" />
+						<Textarea
+							id="default-setup-script"
+							value={repoDefaultsStore.state.setupScript}
+							onInput={(e) => repoDefaultsStore.setSetupScript(e.currentTarget.value)}
+							placeholder="#!/bin/bash&#10;npm install"
+							rows={4}
+						/>
+						<p class={s.hint}>Shell script run when creating a new worktree</p>
+					</div>
+
+					<div class={s.group}>
+						<label for="default-run-script">Default Run Script</label>
+						<ContextualHelp label="Default Run Script" />
+						<Textarea
+							id="default-run-script"
+							value={repoDefaultsStore.state.runScript}
+							onInput={(e) => repoDefaultsStore.setRunScript(e.currentTarget.value)}
+							placeholder="#!/bin/bash&#10;npm run dev"
+							rows={4}
+						/>
+						<p class={s.hint}>Shell script run when launching the worktree</p>
+					</div>
+
+					<div class={s.group}>
+						<label for="default-archive-script">Default Archive Script</label>
+						<ContextualHelp label="Default Archive Script" />
+						<Textarea
+							id="default-archive-script"
+							value={repoDefaultsStore.state.archiveScript}
+							onInput={(e) => repoDefaultsStore.setArchiveScript(e.currentTarget.value)}
+							placeholder="#!/bin/bash&#10;docker compose down"
+							rows={4}
+						/>
+						<p class={s.hint}>Shell script run before archiving or deleting a worktree</p>
+					</div>
+				</SectionCard>
+				<SectionCard title="Worktree Defaults">
+					<p class={s.hint} style={{ "margin-bottom": "12px" }}>
+						Default worktree behavior for all repositories
+					</p>
+
+					<ExpertSetting configKey="repo_defaults.worktree_storage" value={repoDefaultsStore.state.worktreeStorage}>
+						<SettingSelect
+							row
+							label="Storage Strategy"
+							value={repoDefaultsStore.state.worktreeStorage}
+							onChange={(v) => repoDefaultsStore.setWorktreeStorage(v as WorktreeStorage)}
+							options={[
+								{ value: "sibling", label: "Sibling directory (__wt)" },
+								{ value: "app-dir", label: "App config directory" },
+								{ value: "inside-repo", label: "Inside repository (.worktrees)" },
+								{ value: "claude-code-default", label: "Claude Code default (.claude/worktrees)" },
+							]}
+							hint="Where to create worktree directories"
+						/>
+					</ExpertSetting>
+
 					<SettingToggle
-						checked={repoDefaultsStore.state.copyIgnoredFiles}
-						onChange={(v) => repoDefaultsStore.setCopyIgnoredFiles(v)}
-						label="Copy ignored files"
+						row
+						checked={repoDefaultsStore.state.promptOnCreate}
+						onChange={(v) => repoDefaultsStore.setPromptOnCreate(v)}
+						label="Prompt for branch name during creation"
+						hint="Show dialog when creating worktrees from '+' button. When off, creates instantly with auto-generated name"
 					/>
-				</ExpertSetting>
 
-				<ExpertSetting
-					configKey="repo_defaults.copy_untracked_files"
-					value={repoDefaultsStore.state.copyUntrackedFiles}
-				>
 					<SettingToggle
-						checked={repoDefaultsStore.state.copyUntrackedFiles}
-						onChange={(v) => repoDefaultsStore.setCopyUntrackedFiles(v)}
-						label="Copy untracked files"
+						row
+						checked={repoDefaultsStore.state.deleteBranchOnRemove}
+						onChange={(v) => repoDefaultsStore.setDeleteBranchOnRemove(v)}
+						label="Delete local branch when removing worktree"
 					/>
-				</ExpertSetting>
 
-				<div class={s.group}>
-					<label>Default Setup Script</label>
-					<Textarea
-						value={repoDefaultsStore.state.setupScript}
-						onInput={(e) => repoDefaultsStore.setSetupScript(e.currentTarget.value)}
-						placeholder="#!/bin/bash&#10;npm install"
-						rows={4}
-					/>
-					<p class={s.hint}>Shell script run when creating a new worktree</p>
-				</div>
+					<ExpertSetting
+						configKey="repo_defaults.auto_archive_merged"
+						value={repoDefaultsStore.state.autoArchiveMerged}
+					>
+						<SettingToggle
+							row
+							checked={repoDefaultsStore.state.autoArchiveMerged}
+							onChange={(v) => repoDefaultsStore.setAutoArchiveMerged(v)}
+							label="Auto-archive merged worktrees"
+							hint="Move worktree to archive directory when its PR is merged"
+						/>
+					</ExpertSetting>
 
-				<div class={s.group}>
-					<label>Default Run Script</label>
-					<Textarea
-						value={repoDefaultsStore.state.runScript}
-						onInput={(e) => repoDefaultsStore.setRunScript(e.currentTarget.value)}
-						placeholder="#!/bin/bash&#10;npm run dev"
-						rows={4}
-					/>
-					<p class={s.hint}>Shell script run when launching the worktree</p>
-				</div>
+					<ExpertSetting configKey="repo_defaults.orphan_cleanup" value={repoDefaultsStore.state.orphanCleanup}>
+						<SettingSelect
+							row
+							label="Orphan Worktree Cleanup"
+							value={repoDefaultsStore.state.orphanCleanup}
+							onChange={(v) => repoDefaultsStore.setOrphanCleanup(v as OrphanCleanup)}
+							options={[
+								{ value: "ask", label: "Ask before removing" },
+								{ value: "on", label: "Auto-remove" },
+								{ value: "off", label: "Keep (mark as detached)" },
+							]}
+							hint="Handle worktrees whose branch was deleted"
+						/>
+					</ExpertSetting>
 
-				<div class={s.group}>
-					<label>Default Archive Script</label>
-					<Textarea
-						value={repoDefaultsStore.state.archiveScript}
-						onInput={(e) => repoDefaultsStore.setArchiveScript(e.currentTarget.value)}
-						placeholder="#!/bin/bash&#10;docker compose down"
-						rows={4}
-					/>
-					<p class={s.hint}>Shell script run before archiving or deleting a worktree</p>
-				</div>
+					<ExpertSetting
+						configKey="repo_defaults.orphan_cleanup_countdown_seconds"
+						value={repoDefaultsStore.state.orphanCleanupCountdownSeconds}
+					>
+						<SettingSelect
+							row
+							label="Safe orphan cleanup countdown"
+							value={String(repoDefaultsStore.state.orphanCleanupCountdownSeconds)}
+							onChange={(v) => repoDefaultsStore.setOrphanCleanupCountdownSeconds(Number(v))}
+							options={[5, 10, 20, 30].map((seconds) => ({ value: String(seconds), label: `${seconds} seconds` }))}
+							hint="Automatically remove clean orphaned worktrees after this countdown"
+						/>
+					</ExpertSetting>
 
-				<h3>Worktree Defaults</h3>
-				<p class={s.hint} style={{ "margin-bottom": "12px" }}>
-					Default worktree behavior for all repositories
-				</p>
-
-				<ExpertSetting configKey="repo_defaults.worktree_storage" value={repoDefaultsStore.state.worktreeStorage}>
 					<SettingSelect
-						label="Storage Strategy"
-						value={repoDefaultsStore.state.worktreeStorage}
-						onChange={(v) => repoDefaultsStore.setWorktreeStorage(v as WorktreeStorage)}
+						row
+						label="PR Merge Strategy"
+						value={repoDefaultsStore.state.prMergeStrategy}
+						onChange={(v) => repoDefaultsStore.setPrMergeStrategy(v as MergeStrategy)}
 						options={[
-							{ value: "sibling", label: "Sibling directory (__wt)" },
-							{ value: "app-dir", label: "App config directory" },
-							{ value: "inside-repo", label: "Inside repository (.worktrees)" },
-							{ value: "claude-code-default", label: "Claude Code default (.claude/worktrees)" },
+							{ value: "merge", label: "Merge" },
+							{ value: "squash", label: "Squash" },
+							{ value: "rebase", label: "Rebase" },
 						]}
-						hint="Where to create worktree directories"
+						hint="Default merge strategy for worktree branches"
 					/>
-				</ExpertSetting>
 
-				<SettingToggle
-					checked={repoDefaultsStore.state.promptOnCreate}
-					onChange={(v) => repoDefaultsStore.setPromptOnCreate(v)}
-					label="Prompt for branch name during creation"
-					hint="Show dialog when creating worktrees from '+' button. When off, creates instantly with auto-generated name"
-				/>
+					<ExpertSetting configKey="repo_defaults.after_merge" value={repoDefaultsStore.state.afterMerge}>
+						<SettingSelect
+							row
+							label="After Merge Behavior"
+							value={repoDefaultsStore.state.afterMerge}
+							onChange={(v) => repoDefaultsStore.setAfterMerge(v as WorktreeAfterMerge)}
+							options={[
+								{ value: "archive", label: "Archive worktree" },
+								{ value: "delete", label: "Delete worktree" },
+								{ value: "ask", label: "Ask each time" },
+							]}
+							hint="What to do with the worktree after merging its branch"
+						/>
+					</ExpertSetting>
 
-				<SettingToggle
-					checked={repoDefaultsStore.state.deleteBranchOnRemove}
-					onChange={(v) => repoDefaultsStore.setDeleteBranchOnRemove(v)}
-					label="Delete local branch when removing worktree"
-				/>
-
-				<ExpertSetting configKey="repo_defaults.auto_archive_merged" value={repoDefaultsStore.state.autoArchiveMerged}>
-					<SettingToggle
-						checked={repoDefaultsStore.state.autoArchiveMerged}
-						onChange={(v) => repoDefaultsStore.setAutoArchiveMerged(v)}
-						label="Auto-archive merged worktrees"
-						hint="Move worktree to archive directory when its PR is merged"
-					/>
-				</ExpertSetting>
-
-				<ExpertSetting configKey="repo_defaults.orphan_cleanup" value={repoDefaultsStore.state.orphanCleanup}>
-					<SettingSelect
-						label="Orphan Worktree Cleanup"
-						value={repoDefaultsStore.state.orphanCleanup}
-						onChange={(v) => repoDefaultsStore.setOrphanCleanup(v as OrphanCleanup)}
-						options={[
-							{ value: "ask", label: "Ask before removing" },
-							{ value: "on", label: "Auto-remove" },
-							{ value: "off", label: "Keep (mark as detached)" },
-						]}
-						hint="Handle worktrees whose branch was deleted"
-					/>
-				</ExpertSetting>
-
-				<ExpertSetting
-					configKey="repo_defaults.orphan_cleanup_countdown_seconds"
-					value={repoDefaultsStore.state.orphanCleanupCountdownSeconds}
-				>
-					<SettingSelect
-						label="Safe orphan cleanup countdown"
-						value={String(repoDefaultsStore.state.orphanCleanupCountdownSeconds)}
-						onChange={(v) => repoDefaultsStore.setOrphanCleanupCountdownSeconds(Number(v))}
-						options={[5, 10, 20, 30].map((seconds) => ({ value: String(seconds), label: `${seconds} seconds` }))}
-						hint="Automatically remove clean orphaned worktrees after this countdown"
-					/>
-				</ExpertSetting>
-
-				<SettingSelect
-					label="PR Merge Strategy"
-					value={repoDefaultsStore.state.prMergeStrategy}
-					onChange={(v) => repoDefaultsStore.setPrMergeStrategy(v as MergeStrategy)}
-					options={[
-						{ value: "merge", label: "Merge" },
-						{ value: "squash", label: "Squash" },
-						{ value: "rebase", label: "Rebase" },
-					]}
-					hint="Default merge strategy for worktree branches"
-				/>
-
-				<ExpertSetting configKey="repo_defaults.after_merge" value={repoDefaultsStore.state.afterMerge}>
-					<SettingSelect
-						label="After Merge Behavior"
-						value={repoDefaultsStore.state.afterMerge}
-						onChange={(v) => repoDefaultsStore.setAfterMerge(v as WorktreeAfterMerge)}
-						options={[
-							{ value: "archive", label: "Archive worktree" },
-							{ value: "delete", label: "Delete worktree" },
-							{ value: "ask", label: "Ask each time" },
-						]}
-						hint="What to do with the worktree after merging its branch"
-					/>
-				</ExpertSetting>
-
-				<ExpertSetting
-					configKey="repo_defaults.auto_fetch_interval_minutes"
-					value={repoDefaultsStore.state.autoFetchIntervalMinutes}
-				>
-					<SettingSelect
-						label="Auto-Fetch Interval"
-						value={String(repoDefaultsStore.state.autoFetchIntervalMinutes)}
-						onChange={(v) => repoDefaultsStore.setAutoFetchIntervalMinutes(Number(v))}
-						options={[
-							{ value: "0", label: "Disabled" },
-							{ value: "5", label: "5 minutes" },
-							{ value: "15", label: "15 minutes" },
-							{ value: "30", label: "30 minutes" },
-							{ value: "60", label: "60 minutes" },
-						]}
-						hint="Periodically fetch from remote to detect upstream changes"
-					/>
-				</ExpertSetting>
-			</Show>
-
-			{/* Not authenticated / disconnected state */}
-			<Show when={!polling() && !authStatus()?.authenticated}>
-				<div class={g.disconnected}>
-					<div class={g.disconnectedIcon}>
-						<svg width="48" height="48" viewBox="0 0 24 24" fill="currentColor">
-							<path d="M12 2C6.477 2 2 6.477 2 12c0 4.42 2.87 8.17 6.84 9.5.5.08.66-.23.66-.5v-1.69c-2.77.6-3.36-1.34-3.36-1.34-.46-1.16-1.11-1.47-1.11-1.47-.91-.62.07-.6.07-.6 1 .07 1.53 1.03 1.53 1.03.87 1.52 2.34 1.07 2.91.83.09-.65.35-1.09.63-1.34-2.22-.25-4.55-1.11-4.55-4.92 0-1.11.38-2 1.03-2.71-.1-.25-.45-1.29.1-2.64 0 0 .84-.27 2.75 1.02.79-.22 1.65-.33 2.5-.33.85 0 1.71.11 2.5.33 1.91-1.29 2.75-1.02 2.75-1.02.55 1.35.2 2.39.1 2.64.65.71 1.03 1.6 1.03 2.71 0 3.82-2.34 4.66-4.57 4.91.36.31.69.92.69 1.85V21c0 .27.16.59.67.5C19.14 20.16 22 16.42 22 12A10 10 0 0012 2z" />
-						</svg>
-					</div>
-					<div class={g.disconnectedTitle}>Connect to GitHub</div>
-					<div class={g.disconnectedHint}>
-						Sign in with your GitHub account to view pull requests, CI status, and repository information from private
-						and organization repositories.
-					</div>
-					<div class={g.actions} style="justify-content: center">
-						<button class={cx(g.btn, g.btnPrimary)} onClick={() => startLogin()} disabled={loading()}>
-							{loading() ? "Starting..." : "Login with GitHub"}
-						</button>
-					</div>
-					<div class={g.scopeList} style="margin-top: 16px">
-						Requested permissions: <strong>repo</strong>
-					</div>
-				</div>
+					<ExpertSetting
+						configKey="repo_defaults.auto_fetch_interval_minutes"
+						value={repoDefaultsStore.state.autoFetchIntervalMinutes}
+					>
+						<SettingSelect
+							row
+							label="Auto-Fetch Interval"
+							value={String(repoDefaultsStore.state.autoFetchIntervalMinutes)}
+							onChange={(v) => repoDefaultsStore.setAutoFetchIntervalMinutes(Number(v))}
+							options={[
+								{ value: "0", label: "Disabled" },
+								{ value: "5", label: "5 minutes" },
+								{ value: "15", label: "15 minutes" },
+								{ value: "30", label: "30 minutes" },
+								{ value: "60", label: "60 minutes" },
+							]}
+							hint="Periodically fetch from remote to detect upstream changes"
+						/>
+					</ExpertSetting>
+				</SectionCard>
 			</Show>
 
 			{/* Additional accounts. The 99% single-account setup (only the ambient
@@ -889,160 +926,165 @@ export const GitHubTab: Component = () => {
 						</ExpertSetting>
 					}
 				>
-					<h3>Additional GitHub Accounts</h3>
-					<p class={s.hint} style={{ "margin-bottom": "12px" }}>
-						Add a second github.com account (device-flow) or a GitHub Enterprise Server account (Personal Access Token).
-						The github.com account you logged in with above is your default.
-					</p>
+					<SectionCard title="Additional GitHub Accounts">
+						<p class={s.hint} style={{ "margin-bottom": "12px" }}>
+							Add a second github.com account (device-flow) or a GitHub Enterprise Server account (Personal Access
+							Token). The github.com account you logged in with above is your default.
+						</p>
 
-					<Show when={accountError()}>
-						<div class={g.error}>{accountError()}</div>
-					</Show>
+						<Show when={accountError()}>
+							<div class={g.error}>{accountError()}</div>
+						</Show>
 
-					<For each={accounts()}>
-						{(acc) => (
-							<div class={g.statusCard}>
-								<div class={g.userInfo}>
-									<div class={g.userName}>{acc.login ?? acc.host.host}</div>
-									<div class={g.tokenSource}>
-										{acc.host.host} · {acc.kind === "ghe_pat" ? SOURCE_LABELS.pat : SOURCE_LABELS.oauth}
+						<For each={accounts()}>
+							{(acc) => (
+								<div class={g.statusCard}>
+									<div class={g.userInfo}>
+										<div class={g.userName}>{acc.login ?? acc.host.host}</div>
+										<div class={g.tokenSource}>
+											{acc.host.host} · {acc.kind === "ghe_pat" ? SOURCE_LABELS.pat : SOURCE_LABELS.oauth}
+										</div>
+									</div>
+									<div class={g.actions}>
+										<button class={cx(g.btn, g.btnDanger)} onClick={() => removeAccount(acc.id)}>
+											Remove
+										</button>
 									</div>
 								</div>
-								<div class={g.actions}>
-									<button class={cx(g.btn, g.btnDanger)} onClick={() => removeAccount(acc.id)}>
-										Remove
-									</button>
-								</div>
+							)}
+						</For>
+
+						<Show when={accounts().length === 0}>
+							<p class={s.hint}>No additional accounts configured.</p>
+						</Show>
+
+						<div class={s.group}>
+							<label>Add another github.com account</label>
+							<div class={g.actions}>
+								<button class={cx(g.btn, g.btnPrimary)} onClick={() => startLogin(true)} disabled={loading()}>
+									{loading() ? "Starting..." : "Add github.com account"}
+								</button>
 							</div>
-						)}
-					</For>
-
-					<Show when={accounts().length === 0}>
-						<p class={s.hint}>No additional accounts configured.</p>
-					</Show>
-
-					<div class={s.group}>
-						<label>Add another github.com account</label>
-						<div class={g.actions}>
-							<button class={cx(g.btn, g.btnPrimary)} onClick={() => startLogin(true)} disabled={loading()}>
-								{loading() ? "Starting..." : "Add github.com account"}
-							</button>
 						</div>
-					</div>
 
-					<div class={s.group}>
-						<label>Add Enterprise account</label>
-						<Input
-							type="text"
-							placeholder="ghe.example.com"
-							value={newHost()}
-							onInput={(e) => setNewHost(e.currentTarget.value)}
-						/>
-						<div class={g.actions}>
-							<button class={cx(g.btn, g.btnPrimary)} onClick={addAccount} disabled={addingAccount()}>
-								{addingAccount() ? "Validating..." : "Add account"}
-							</button>
+						<div class={s.group}>
+							<label for="github-enterprise-host">Add Enterprise account</label>
+							<ContextualHelp label="Add Enterprise account" />
+							<Input
+								type="text"
+								id="github-enterprise-host"
+								placeholder="ghe.example.com"
+								value={newHost()}
+								onInput={(e) => setNewHost(e.currentTarget.value)}
+							/>
+							<div class={g.actions}>
+								<button class={cx(g.btn, g.btnPrimary)} onClick={addAccount} disabled={addingAccount()}>
+									{addingAccount() ? "Validating..." : "Add account"}
+								</button>
+							</div>
 						</div>
-					</div>
+					</SectionCard>
 				</Show>
 			</Show>
 
-			<h3>CircleCI</h3>
-			<p class={s.hint}>
-				{t("github.circleCiHint", "Use a read-only CircleCI token. Stored tokens are never shown again.")}
-			</p>
-			<div class={s.group}>
-				<Input
-					type="password"
-					placeholder={t("github.circleCiPlaceholder", "CircleCI read-only token")}
-					value={circleCiToken()}
-					onInput={(e) => setCircleCiToken(e.currentTarget.value)}
-				/>
-				<div class={g.actions}>
-					<button class={g.btn} data-ready={circleCiToken().trim() ? "true" : undefined} onClick={saveCircleCiToken}>
-						{t("github.circleCiSave", "Save token")}
-					</button>
-					<button class={g.btn} onClick={removeCircleCiToken} disabled={!circleCiStatus()?.configured}>
-						{t("github.circleCiRemove", "Remove token")}
-					</button>
+			<SectionCard title="CircleCI">
+				<p class={s.hint}>
+					{t("github.circleCiHint", "Use a read-only CircleCI token. Stored tokens are never shown again.")}
+				</p>
+				<div class={s.group}>
+					<Input
+						type="password"
+						aria-label="CircleCI read-only token"
+						placeholder={t("github.circleCiPlaceholder", "CircleCI read-only token")}
+						value={circleCiToken()}
+						onInput={(e) => setCircleCiToken(e.currentTarget.value)}
+					/>
+					<div class={g.actions}>
+						<button class={g.btn} data-ready={circleCiToken().trim() ? "true" : undefined} onClick={saveCircleCiToken}>
+							{t("github.circleCiSave", "Save token")}
+						</button>
+						<button class={g.btn} onClick={removeCircleCiToken} disabled={!circleCiStatus()?.configured}>
+							{t("github.circleCiRemove", "Remove token")}
+						</button>
+					</div>
+					<Show when={circleCiError()}>{(message) => <div class={g.error}>{message()}</div>}</Show>
+					<div class={g.tokenSource}>
+						{circleCiStatus()?.configured
+							? t("github.circleCiConfigured", "Configured ({source})", { source: circleCiStatus()?.source ?? "" })
+							: t("github.circleCiNotConfigured", "Not configured")}
+					</div>
 				</div>
-				<Show when={circleCiError()}>{(message) => <div class={g.error}>{message()}</div>}</Show>
-				<div class={g.tokenSource}>
-					{circleCiStatus()?.configured
-						? t("github.circleCiConfigured", "Configured ({source})", { source: circleCiStatus()?.source ?? "" })
-						: t("github.circleCiNotConfigured", "Not configured")}
-				</div>
-			</div>
-
+			</SectionCard>
 			{/* Repository → account bindings. Every repo resolves to one account;
 			    ambiguous repos (multiple GitHub remotes/accounts) are chosen here.
 			    Hidden in the single-account setup — there's nothing to choose. */}
 			<Show when={!isSingleAccountSetup()}>
-				<h3>Repository Bindings</h3>
-				<p class={s.hint} style={{ "margin-bottom": "12px" }}>
-					Each repository is monitored through exactly one account. Ambiguous repositories need you to choose — no
-					remote is picked silently.
-				</p>
+				<SectionCard title="Repository Bindings">
+					<p class={s.hint} style={{ "margin-bottom": "12px" }}>
+						Each repository is monitored through exactly one account. Ambiguous repositories need you to choose — no
+						remote is picked silently.
+					</p>
 
-				<Show when={activeRepos().length > 0} fallback={<p class={s.hint}>No repositories in the workspace yet.</p>}>
-					<For each={activeRepos()}>
-						{(repo) => {
-							const res = () => resolutions()[repo.path];
-							return (
-								<Show when={res() && res().status !== "unmonitored"}>
-									<div class={g.statusCard}>
-										<div class={g.userInfo}>
-											<div class={g.userName}>{repo.name}</div>
-											<Show when={res().status === "bound"}>
-												<div class={g.tokenSource}>
-													→ {res().owner}/{res().repo} via{" "}
-													{res().account?.login ?? res().account?.host.host ?? res().account?.id}
-												</div>
-											</Show>
-											<Show when={res().status === "needs-account"}>
-												<div class={g.tokenSource}>No account for this host — add one above.</div>
-											</Show>
-											<Show when={res().status === "needs-bind"}>
-												<Select
-													class={g.bindSelect}
-													value={chosenRemote()[repo.path] ?? res().candidates?.[0]?.remote_name ?? ""}
-													onChange={(e) => setChosenRemote({ ...chosenRemote(), [repo.path]: e.currentTarget.value })}
-												>
-													<For each={res().candidates}>
-														{(c) => (
-															<option value={c.remote_name}>
-																{c.owner}/{c.repo} via {c.remote_name} ({c.account_id})
-															</option>
-														)}
-													</For>
-												</Select>
-											</Show>
+					<Show when={activeRepos().length > 0} fallback={<p class={s.hint}>No repositories in the workspace yet.</p>}>
+						<For each={activeRepos()}>
+							{(repo) => {
+								const res = () => resolutions()[repo.path];
+								return (
+									<Show when={res() && res().status !== "unmonitored"}>
+										<div class={g.statusCard}>
+											<div class={g.userInfo}>
+												<div class={g.userName}>{repo.name}</div>
+												<Show when={res().status === "bound"}>
+													<div class={g.tokenSource}>
+														→ {res().owner}/{res().repo} via{" "}
+														{res().account?.login ?? res().account?.host.host ?? res().account?.id}
+													</div>
+												</Show>
+												<Show when={res().status === "needs-account"}>
+													<div class={g.tokenSource}>No account for this host — add one above.</div>
+												</Show>
+												<Show when={res().status === "needs-bind"}>
+													<Select
+														class={g.bindSelect}
+														value={chosenRemote()[repo.path] ?? res().candidates?.[0]?.remote_name ?? ""}
+														onChange={(e) => setChosenRemote({ ...chosenRemote(), [repo.path]: e.currentTarget.value })}
+													>
+														<For each={res().candidates}>
+															{(c) => (
+																<option value={c.remote_name}>
+																	{c.owner}/{c.repo} via {c.remote_name} ({c.account_id})
+																</option>
+															)}
+														</For>
+													</Select>
+												</Show>
+											</div>
+											<div class={g.actions}>
+												<Show when={res().status === "bound"}>
+													<button class={cx(g.btn)} onClick={() => unbindRepo(repo.path)}>
+														Unbind
+													</button>
+												</Show>
+												<Show when={res().status === "needs-bind"}>
+													<button
+														class={cx(g.btn, g.btnPrimary)}
+														onClick={() => {
+															const remote = chosenRemote()[repo.path] ?? res().candidates?.[0]?.remote_name ?? "";
+															const cand = res().candidates?.find((c) => c.remote_name === remote);
+															if (cand) bindRepo(repo.path, cand.account_id, cand.remote_name);
+														}}
+													>
+														Bind
+													</button>
+												</Show>
+											</div>
 										</div>
-										<div class={g.actions}>
-											<Show when={res().status === "bound"}>
-												<button class={cx(g.btn)} onClick={() => unbindRepo(repo.path)}>
-													Unbind
-												</button>
-											</Show>
-											<Show when={res().status === "needs-bind"}>
-												<button
-													class={cx(g.btn, g.btnPrimary)}
-													onClick={() => {
-														const remote = chosenRemote()[repo.path] ?? res().candidates?.[0]?.remote_name ?? "";
-														const cand = res().candidates?.find((c) => c.remote_name === remote);
-														if (cand) bindRepo(repo.path, cand.account_id, cand.remote_name);
-													}}
-												>
-													Bind
-												</button>
-											</Show>
-										</div>
-									</div>
-								</Show>
-							);
-						}}
-					</For>
-				</Show>
+									</Show>
+								);
+							}}
+						</For>
+					</Show>
+				</SectionCard>
 			</Show>
 		</div>
 	);

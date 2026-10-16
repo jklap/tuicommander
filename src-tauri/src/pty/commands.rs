@@ -862,6 +862,7 @@ pub(crate) fn subscribe_terminal_grid(
     session_id: String,
     channel: tauri::ipc::Channel<tauri::ipc::Response>,
     webview: tauri::Webview,
+    visible: bool,
 ) -> u64 {
     // A fresh gate, counting from zero — the frontend resets its receipt counter
     // on the same call.
@@ -874,6 +875,7 @@ pub(crate) fn subscribe_terminal_grid(
             channel,
             webview_label: webview.label().to_string(),
             epoch,
+            visible: AtomicBool::new(visible),
         },
     );
     epoch
@@ -899,9 +901,19 @@ pub(crate) fn ack_terminal_frame(
     session_id: String,
     epoch: u64,
     received: u64,
+    visible: Option<bool>,
 ) {
-    if let Some(gate) = state.grid.gates.get(&session_id) {
-        gate.ack(epoch, received);
+    if let Some(visible) = visible
+        && let Some(channel) = state.grid.channels.get(&session_id)
+        && channel.epoch == epoch
+    {
+        channel.visible.store(visible, Ordering::Relaxed);
+    }
+    if let Some(gate) = state.grid.gates.get(&session_id)
+        && gate.ack(epoch, received)
+        && let Some(dirty) = state.grid.frame_dirty.get(&session_id)
+    {
+        dirty.store(true, Ordering::Relaxed);
     }
 }
 
@@ -909,6 +921,12 @@ pub(crate) fn ack_terminal_frame(
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) fn terminal_request_frame(state: State<'_, Arc<AppState>>, session_id: String) {
+    if !grid_has_subscriber(&state, &session_id) {
+        return;
+    }
+    if let Some(gate) = state.grid.gates.get(&session_id) {
+        gate.resume_for_full_frame();
+    }
     if let Some(vt) = state.grid.vt_log_buffers.get(&session_id) {
         let frame = {
             let mut vt = vt.lock();
@@ -1241,4 +1259,16 @@ pub(crate) async fn send_agent_input_if_empty(
     })
     .await
     .map_err(|error| error.to_string())?
+}
+
+/// Retry an ego provider outage without overwriting a tracked composer draft.
+#[tauri::command]
+pub(crate) async fn force_retry_provider_recovery_command(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+) -> Result<(), String> {
+    let state = Arc::clone(&state);
+    tauri::async_runtime::spawn_blocking(move || force_retry_provider_recovery(&state, &session_id))
+        .await
+        .map_err(|error| error.to_string())?
 }

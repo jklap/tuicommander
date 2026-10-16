@@ -1,5 +1,5 @@
 import { fireEvent, render, waitFor } from "@solidjs/testing-library";
-import { ErrorBoundary } from "solid-js";
+import { ErrorBoundary, Suspense } from "solid-js";
 import { beforeEach, expect, it, vi } from "vitest";
 import { mockInvoke } from "../../../__tests__/mocks/tauri";
 import { pluginStore } from "../../../stores/pluginStore";
@@ -90,6 +90,9 @@ it("plugin_tab_is_searchable — catches search index built only from static tab
 	await waitFor(() =>
 		expect(view.container.querySelector("[data-settings-content]")?.textContent).toContain("Server endpoint"),
 	);
+	fireEvent.click(view.container.querySelector("[data-settings-content] button")!);
+	await view.findByDisplayValue("https://example.test");
+	expect(view.container.querySelector("nav button.active")?.textContent).toContain("Fixture integration");
 });
 
 it("plugin_tab_write_goes_through_settings_service — catches a second settings path", async () => {
@@ -281,26 +284,38 @@ it("a failed post-write reload stays local — catches an unhandled refetch reje
 	expect(view.container.textContent).not.toContain("private read failure");
 });
 
-// Catches: Reset rendered outside the shared styled, vertically spaced Settings actions row.
+// Catches: Reset detached from its control or offered again after restoring the default.
 it.each(["string", "integer", "boolean"])(
-	"plugin Reset (%s) uses the shared Settings action row — catches browser-default buttons touching the next label",
+	"plugin Reset (%s) stays inline until default is restored — catches detached actions and redundant resets",
 	async (type) => {
+		const defaultValue = type === "boolean" ? false : type === "integer" ? 15 : "";
+		let reads = 0;
 		mockInvoke.mockImplementation(async (command, args) => {
 			if (command !== "plugin_settings_action") return undefined;
 			if (args.action.action === "describe")
-				return { fields: { endpoint: { ...field, schema: { ...field.schema, type } } } };
+				return { fields: { endpoint: { ...field, default: defaultValue, schema: { ...field.schema, type } } } };
 			if (args.action.action === "get")
 				return {
 					revision: "r1",
 					values: {
-						"/endpoint": { effective: type === "boolean" ? true : type === "integer" ? 30 : "https://example.test" },
+						"/endpoint": {
+							effective:
+								reads++ > 0
+									? defaultValue
+									: type === "boolean"
+										? true
+										: type === "integer"
+											? 30
+											: "https://example.test",
+						},
 					},
 				};
 			return { effects: [], restart: [] };
 		});
 		const view = render(() => <SettingsPanel visible onClose={() => {}} initialTab="plugin:fixture" />);
 		const reset = await view.findByRole("button", { name: "Reset Server endpoint" });
-		expect(reset.parentElement).toHaveClass("actions");
+		expect(reset.parentElement).toHaveClass("settingRowWithActions");
+		expect(reset.closest(".settingRow")?.querySelector("input")).not.toBeNull();
 		fireEvent.click(reset);
 		await waitFor(() =>
 			expect(mockInvoke).toHaveBeenCalledWith("plugin_settings_action", {
@@ -308,5 +323,124 @@ it.each(["string", "integer", "boolean"])(
 				action: { action: "reset", path: "/endpoint", expectedRevision: "r1" },
 			}),
 		);
+		await waitFor(() => expect(view.queryByRole("button", { name: "Reset Server endpoint" })).toBeNull());
 	},
 );
+
+// Catches: a per-page resource bubbles to ApplicationOverlays' empty Suspense fallback.
+it("plugin_switch_keeps_shell_and_identifies_source — catches whole-shell suspension and hidden plugin ownership", async () => {
+	pluginStore.registerPlugin("other", {
+		loaded: true,
+		manifest: { ...pluginStore.getPlugin("fixture")!.manifest!, id: "other", name: "Other integration" },
+	});
+	const pending = new Map<string, (value: unknown) => void>();
+	mockInvoke.mockImplementation(async (command, args) => {
+		if (command !== "plugin_settings_action") return undefined;
+		if (args.action.action === "describe") return catalogue;
+		return new Promise((resolve) => pending.set(args.pluginId, resolve));
+	});
+	const view = render(() => (
+		<Suspense fallback={<p>Outer loading</p>}>
+			<SettingsPanel visible onClose={() => {}} initialTab="plugin:fixture" />
+		</Suspense>
+	));
+	try {
+		await waitFor(() => expect(pending.has("fixture")).toBe(true));
+		expect(view.queryByRole("heading", { name: "Settings" })).not.toBeNull();
+		expect(view.getByRole("button", { name: "Done" })).toBeVisible();
+		expect(view.container.querySelector("nav")?.textContent).toContain("Plugin settings");
+		const other = view.getByRole("button", { name: "Other integration Plugin" });
+		expect(other).toHaveAttribute("title", "Plugin: other");
+		pending.get("fixture")!({ revision: "r1", values: { "/endpoint": { effective: "first" } } });
+		await view.findByDisplayValue("first");
+		other.focus();
+		fireEvent.click(other);
+		await waitFor(() => expect(pending.has("other")).toBe(true));
+		expect(view.getByRole("heading", { name: "Settings" })).toBeVisible();
+		expect(document.activeElement).toBe(other);
+		expect(view.getByRole("status")).toHaveTextContent("Loading plugin settings");
+		expect(view.container.querySelector("[data-settings-content]")?.textContent).toContain(
+			"Source: installed plugin · other",
+		);
+		pending.get("other")!({ revision: "r2", values: { "/endpoint": { effective: "second" } } });
+		await view.findByDisplayValue("second");
+		fireEvent.click(view.getByRole("button", { name: "Fixture integration Plugin" }));
+		await waitFor(() => expect(view.getByRole("status")).toHaveTextContent("Loading plugin settings"));
+		expect(view.getByRole("heading", { name: "Settings" })).toBeVisible();
+		pending.get("fixture")!({ revision: "r3", values: { "/endpoint": { effective: "latest" } } });
+		await view.findByDisplayValue("latest");
+	} finally {
+		for (const finish of pending.values()) finish({ revision: "cleanup", values: {} });
+		await Promise.resolve();
+	}
+});
+
+it("pending catalogue keeps Settings visible — catches describe suspending header and navigation on first visit", async () => {
+	let finish: (value: unknown) => void = () => {};
+	mockInvoke.mockImplementation(
+		() =>
+			new Promise((resolve) => {
+				finish = resolve;
+			}),
+	);
+	const view = render(() => (
+		<Suspense fallback={<p>Outer loading</p>}>
+			<SettingsPanel visible onClose={() => {}} />
+		</Suspense>
+	));
+	try {
+		expect(view.queryByRole("heading", { name: "Settings" })).not.toBeNull();
+	} finally {
+		finish({ fields: {} });
+	}
+	await waitFor(() => expect(view.container.textContent).not.toContain("Outer loading"));
+	expect(view.container.querySelector("nav")?.textContent).not.toContain("Plugin settings");
+});
+
+it("slow read failure stays inside Settings — catches error or loading replacing the shell after a switch", async () => {
+	let rejectRead: (reason: Error) => void = () => {};
+	mockInvoke.mockImplementation(async (command, args) => {
+		if (command !== "plugin_settings_action") return undefined;
+		if (args.action.action === "describe") return catalogue;
+		return new Promise((_resolve, reject) => {
+			rejectRead = reject;
+		});
+	});
+	const view = render(() => (
+		<ErrorBoundary fallback={<p>Settings crashed</p>}>
+			<Suspense fallback={<p>Outer loading</p>}>
+				<SettingsPanel visible onClose={() => {}} initialTab="plugin:fixture" />
+			</Suspense>
+		</ErrorBoundary>
+	));
+	await view.findByText("Loading plugin settings…");
+	rejectRead(new Error("private credential"));
+	await view.findByRole("alert");
+	expect(view.getByRole("heading", { name: "Settings" })).toBeVisible();
+	expect(view.container.textContent).not.toContain("private credential");
+	expect(view.container.textContent).not.toContain("Settings crashed");
+	fireEvent.click(view.getByRole("button", { name: "General" }));
+	expect(view.getByRole("heading", { name: "General" })).toBeVisible();
+});
+
+it("unload during a pending get removes the editor — catches a late value reviving an unloaded plugin", async () => {
+	let finish: (value: unknown) => void = () => {};
+	mockInvoke.mockImplementation(async (command, args) => {
+		if (command !== "plugin_settings_action") return undefined;
+		if (args.action.action === "describe") return catalogue;
+		return new Promise((resolve) => {
+			finish = resolve;
+		});
+	});
+	const view = render(() => (
+		<Suspense fallback={<p>Outer loading</p>}>
+			<SettingsPanel visible onClose={() => {}} initialTab="plugin:fixture" />
+		</Suspense>
+	));
+	await view.findByText("Loading plugin settings…");
+	pluginStore.updatePlugin("fixture", { loaded: false });
+	finish({ revision: "r1", values: { "/endpoint": { effective: "late" } } });
+	await waitFor(() => expect(view.queryByDisplayValue("late")).toBeNull());
+	expect(view.getByRole("heading", { name: "Settings" })).toBeVisible();
+	expect(view.container.textContent).not.toContain("Fixture integration");
+});

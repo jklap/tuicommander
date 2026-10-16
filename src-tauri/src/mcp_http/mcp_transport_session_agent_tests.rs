@@ -2616,7 +2616,11 @@ async fn spawn_name_is_applied_to_peer_session_and_response() {
             "action": "spawn",
             "name": "linux-primary",
             "prompt": "hello",
-            "binary_path": LONG_LIVED_TEST_BINARY,
+            // MCP appends the prompt on argv; cat would treat it as a filename
+            // and exit before the session-list assertions. The shell consumes
+            // the prompt as $0 and execs cat without file arguments.
+            "binary_path": "/bin/sh",
+            "args": ["-c", "exec cat", "{prompt}"],
             "cwd": TEST_SPAWN_CWD,
         }),
         Some("mcp-orch"),

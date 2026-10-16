@@ -1,4 +1,5 @@
 import { createStore } from "solid-js/store";
+import appChoiceOptions from "../../src-tauri/src/settings/app_choice_options.json";
 import { setLocale } from "../i18n";
 import { invoke } from "../invoke";
 import type { IssueFilterMode } from "../types";
@@ -153,41 +154,7 @@ export type FontType =
 	| "Geist Mono";
 
 /** IDE display names */
-export const IDE_NAMES: Record<IdeType, string> = {
-	vscode: "VS Code",
-	cursor: "Cursor",
-	zed: "Zed",
-	windsurf: "Windsurf",
-	neovim: "Neovim",
-	xcode: "Xcode",
-	ghostty: "Ghostty",
-	wezterm: "WezTerm",
-	alacritty: "Alacritty",
-	kitty: "Kitty",
-	warp: "Warp",
-	iterm2: "iTerm2",
-	sourcetree: "Sourcetree",
-	"github-desktop": "GitHub Desktop",
-	fork: "Fork",
-	gitkraken: "GitKraken",
-	smerge: "Sublime Merge",
-	tower: "Tower",
-	intellij: "IntelliJ IDEA",
-	pycharm: "PyCharm",
-	webstorm: "WebStorm",
-	goland: "GoLand",
-	clion: "CLion",
-	phpstorm: "PhpStorm",
-	rubymine: "RubyMine",
-	rider: "Rider",
-	datagrip: "DataGrip",
-	rustrover: "RustRover",
-	"android-studio": "Android Studio",
-	fleet: "Fleet",
-	terminal: "Terminal",
-	finder: "Finder",
-	editor: "$EDITOR",
-};
+export const IDE_NAMES: Record<IdeType, string> = appChoiceOptions.ides;
 
 /** IDE categories */
 export const IDE_CATEGORIES: Record<string, IdeType[]> = {
@@ -212,37 +179,13 @@ export const IDE_CATEGORIES: Record<string, IdeType[]> = {
 };
 
 /** Font family CSS values — system Nerd Font (if installed) → bundled font → bundled symbols → monospace */
-export const FONT_FAMILIES: Record<FontType, string> = {
-	"JetBrains Mono": '"JetBrainsMono Nerd Font", "JetBrains Mono", "Symbols Nerd Font Mono", monospace',
-	"Fira Code": '"FiraCode Nerd Font", "Fira Code", "Symbols Nerd Font Mono", monospace',
-	Hack: '"Hack Nerd Font", "Hack", "Symbols Nerd Font Mono", monospace',
-	"Cascadia Code": '"CaskaydiaCove Nerd Font", "Cascadia Code", "Symbols Nerd Font Mono", monospace',
-	Iosevka: '"Iosevka Nerd Font", "Iosevka", "Symbols Nerd Font Mono", monospace',
-	"Source Code Pro": '"SauceCodePro Nerd Font", "Source Code Pro", "Symbols Nerd Font Mono", monospace',
-	Inconsolata: '"Inconsolata Nerd Font", "Inconsolata", "Symbols Nerd Font Mono", monospace',
-	"IBM Plex Mono": '"BlexMono Nerd Font", "IBM Plex Mono", "Symbols Nerd Font Mono", monospace',
-	"Monaspace Neon": '"Monaspace Neon", "Symbols Nerd Font Mono", monospace',
-	"Commit Mono": '"CommitMono Nerd Font", "Commit Mono", "Symbols Nerd Font Mono", monospace',
-	"Geist Mono": '"GeistMono Nerd Font", "Geist Mono", "Symbols Nerd Font Mono", monospace',
-};
+export const FONT_FAMILIES: Record<FontType, string> = appChoiceOptions.fonts;
 
 /** Valid IDE values */
 const VALID_IDES: readonly string[] = Object.keys(IDE_NAMES);
 
 /** Valid font values */
-const VALID_FONTS: readonly FontType[] = [
-	"JetBrains Mono",
-	"Fira Code",
-	"Hack",
-	"Cascadia Code",
-	"Iosevka",
-	"Source Code Pro",
-	"Inconsolata",
-	"IBM Plex Mono",
-	"Monaspace Neon",
-	"Commit Mono",
-	"Geist Mono",
-];
+const VALID_FONTS = Object.keys(FONT_FAMILIES) as FontType[];
 
 /** Validate and return IDE type or default */
 function validateIde(value: string | null): IdeType {
@@ -527,7 +470,7 @@ function createSettingsStore() {
 
 	const actions = {
 		/** Load settings from Rust config; migrate from localStorage on first run */
-		async hydrate(): Promise<void> {
+		async hydrate(options?: { notifyOnError?: boolean }): Promise<boolean> {
 			try {
 				// One-time migration from localStorage
 				const legacyIde = localStorage.getItem(LEGACY_KEYS.IDE);
@@ -607,13 +550,16 @@ function createSettingsStore() {
 				setState("aiChatWorkspace", config.ai_chat_workspace ?? "");
 				savedFields = snapshotFields(ownedFields());
 				hydrated = true;
+				return true;
 			} catch (err) {
 				appLogger.error("config", "Failed to hydrate settings — persistence disabled for this session", err);
-				toastsStore.add(
-					"Settings failed to load",
-					"Running on defaults; changes will NOT be saved. Check logs and restart.",
-					"error",
-				);
+				if (options?.notifyOnError !== false)
+					toastsStore.add(
+						"Settings failed to load",
+						"Running on defaults; changes will NOT be saved. Check logs and restart.",
+						"error",
+					);
+				return false;
 			}
 		},
 

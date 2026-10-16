@@ -58,6 +58,8 @@ export interface HttpMapping {
 	body?: unknown;
 	/** This route may return raw text as well as JSON (plugin data). */
 	allowText?: boolean;
+	/** This void route acknowledges a successful write with HTTP 204. */
+	allowNoContent?: boolean;
 	/** Transform the HTTP response before returning (e.g. for can_spawn_session) */
 	transform?: (data: unknown) => unknown;
 	/**

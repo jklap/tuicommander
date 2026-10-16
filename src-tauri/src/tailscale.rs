@@ -52,7 +52,7 @@ struct PeerNode {
 }
 
 /// Match an advertised peer, never guess a tailnet suffix.
-fn peer_fqdn_from_status(bytes: &[u8], host: &str) -> Option<String> {
+pub(crate) fn peer_fqdn_from_status(bytes: &[u8], host: &str) -> Option<String> {
     let status: PeerStatusJson = serde_json::from_slice(bytes).ok()?;
     if status.backend_state.as_deref() != Some("Running") || host.contains('.') {
         return None;
@@ -74,7 +74,7 @@ fn peer_fqdn_from_status(bytes: &[u8], host: &str) -> Option<String> {
 }
 
 pub(crate) async fn peer_fqdn(host: &str) -> Option<String> {
-    // The CLI is optional advice: kill a hung lookup instead of holding up errors.
+    // Bound recovery lookup: kill a hung CLI instead of holding up a connection.
     let mut command = tokio::process::Command::from(status_command()?);
     command.kill_on_drop(true);
     let output = tokio::time::timeout(std::time::Duration::from_secs(2), command.output())

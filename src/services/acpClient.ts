@@ -217,6 +217,11 @@ export function createAcpClient(open: AcpStreamOpener = openAcpStream) {
 		return snapshot;
 	}
 
+	/** The backend snapshot owns the complete attachment option set. */
+	async function refresh(connectionId: AcpConnectionId): Promise<void> {
+		acpStore.applySnapshot(await invoke<AcpConnectionSnapshot>("acp_connection_snapshot", { connectionId }));
+	}
+
 	return {
 		async openConversation(request: ChatOpenRequest): Promise<ChatOpened> {
 			const opened = await invoke<ChatOpened>("acp_chat_open", { request });
@@ -255,9 +260,7 @@ export function createAcpClient(open: AcpStreamOpener = openAcpStream) {
 		},
 
 		/** Read the connection's current picture without touching its stream. */
-		async refresh(connectionId: AcpConnectionId): Promise<void> {
-			acpStore.applySnapshot(await invoke<AcpConnectionSnapshot>("acp_connection_snapshot", { connectionId }));
-		},
+		refresh,
 
 		async disconnect(connectionId: AcpConnectionId): Promise<AcpConnectionSettlement> {
 			forget(connectionId);
@@ -342,6 +345,17 @@ export function createAcpClient(open: AcpStreamOpener = openAcpStream) {
 			);
 			await this.refresh(connectionId);
 			return attachment.sessionId;
+		},
+
+		async deleteSession(connectionId: AcpConnectionId, sessionId: AcpSessionId): Promise<void> {
+			await invoke("acp_session_delete", { connectionId, sessionId });
+			// Deletion is already durable. A lost snapshot must not report a refusal
+			// and leave an open tab pointing at history the agent has removed.
+			try {
+				await this.refresh(connectionId);
+			} catch (error) {
+				appLogger.warn("ai-chat", "refresh after conversation deletion failed", error);
+			}
 		},
 
 		async closeSession(connectionId: AcpConnectionId, sessionId: AcpSessionId): Promise<void> {

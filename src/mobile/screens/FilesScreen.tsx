@@ -1,4 +1,4 @@
-import { createSignal, For, onCleanup, onMount, Show } from "solid-js";
+import { createEffect, createSignal, For, on, onCleanup, onMount, Show } from "solid-js";
 import { appLogger } from "../../stores/appLogger";
 import { toastsStore } from "../../stores/toasts";
 import { rpc } from "../../transport";
@@ -18,6 +18,7 @@ interface FileEntry {
 const MAX_MOBILE_FILE_BYTES = 1_048_576;
 
 interface FilesScreenProps {
+	recoveryRevision?: number;
 	initialRepo?: { worktreePath: string | null; cwd: string | null };
 	initialLink?: { candidate: string; line?: number };
 	onExit?: () => void;
@@ -51,6 +52,7 @@ export function FilesScreen(props: FilesScreenProps) {
 	// Refusals of a review write (file changed on disk, write failed). Unlike `error` it keeps the document visible.
 	const [notice, setNotice] = createSignal("");
 	const [writing, setWriting] = createSignal(false);
+	let openedEntry: FileEntry | undefined;
 	let requestId = 0;
 	let searchRequestId = 0;
 	let pathPreviewTimer: ReturnType<typeof setTimeout> | undefined;
@@ -60,15 +62,35 @@ export function FilesScreen(props: FilesScreenProps) {
 		if (pathPreviewTimer) clearTimeout(pathPreviewTimer);
 	});
 
-	onMount(async () => {
+	let initializationFailed = false;
+	let initialLoadFinished = false;
+	createEffect(
+		on(
+			() => props.recoveryRevision,
+			() => {
+				if (!initialLoadFinished) return;
+				if (initializationFailed) void loadInitial();
+				else if (error() && repo() && !editing()) {
+					if (file() && openedEntry) void openFile(openedEntry);
+					else void openDirectory(repo()!, dir());
+				}
+			},
+		),
+	);
+	onMount(() => void loadInitial());
+	async function loadInitial() {
+		setBusy(true);
+		setError("");
 		try {
 			if (props.initialLink) {
 				await openLinkedFile(props.initialLink);
+				initializationFailed = !!error();
 				return;
 			}
 			const worktreePath = props.initialRepo?.worktreePath?.trim();
 			if (worktreePath) {
 				await openDirectory(worktreePath, "");
+				initializationFailed = !!error();
 				return;
 			}
 			const cwd = props.initialRepo?.cwd?.trim();
@@ -87,11 +109,17 @@ export function FilesScreen(props: FilesScreenProps) {
 				await openDirectory(matching[0], "");
 			} else {
 				setRepos(registered);
+				initializationFailed = false;
 			}
 		} catch (err) {
-			setError(`Could not load repositories: ${String(err)}`);
+			initializationFailed = true;
+			appLogger.warn("network", "Could not load mobile repositories", err);
+			setError("Could not load repositories. Retry when the server is available.");
+		} finally {
+			initialLoadFinished = true;
+			setBusy(false);
 		}
-	});
+	}
 
 	async function openLinkedFile(link: { candidate: string; line?: number }) {
 		const cwd = props.initialRepo?.cwd?.trim() || props.initialRepo?.worktreePath?.trim();
@@ -155,17 +183,18 @@ export function FilesScreen(props: FilesScreenProps) {
 		setSearchQuery("");
 		setSearchResults([]);
 		setSearching(false);
+		setRepo(repoPath);
+		setDir(subdir);
 		setBusy(true);
 		setError("");
 		try {
 			const result = await rpc<FileEntry[]>("list_directory", { repoPath, subdir });
 			if (currentRequest !== requestId) return;
-			setRepo(repoPath);
-			setDir(subdir);
 			setEntries(result);
 		} catch (err) {
+			appLogger.warn("network", "Could not open mobile directory", err);
 			if (currentRequest !== requestId) return;
-			setError(`Could not open directory: ${String(err)}`);
+			setError("Could not open directory. Try again.");
 		} finally {
 			if (currentRequest === requestId) setBusy(false);
 		}
@@ -186,13 +215,15 @@ export function FilesScreen(props: FilesScreenProps) {
 			const result = await rpc<FileEntry[]>("search_files", { repoPath: repo(), query: query.trim(), limit: 100 });
 			if (currentRequest === searchRequestId) setSearchResults(result);
 		} catch (err) {
-			if (currentRequest === searchRequestId) setError(`Could not search files: ${String(err)}`);
+			appLogger.warn("network", "Could not search mobile files", err);
+			if (currentRequest === searchRequestId) setError("Could not search files. Try again.");
 		} finally {
 			if (currentRequest === searchRequestId) setSearching(false);
 		}
 	}
 
 	async function openFile(entry: FileEntry, line?: number) {
+		openedEntry = entry;
 		const currentRequest = ++requestId;
 		setFile(entry.path);
 		setContent("");
@@ -227,7 +258,7 @@ export function FilesScreen(props: FilesScreenProps) {
 		} catch (err) {
 			if (currentRequest !== requestId) return;
 			const message = String(err);
-			setError(/valid UTF-8/i.test(message) ? "This is a binary or non-text file." : `Could not open file: ${message}`);
+			setError(/valid UTF-8/i.test(message) ? "This is a binary or non-text file." : "Could not open file. Try again.");
 		} finally {
 			if (currentRequest === requestId) setBusy(false);
 		}
@@ -296,7 +327,7 @@ export function FilesScreen(props: FilesScreenProps) {
 			return false;
 		} catch (err) {
 			appLogger.warn("network", `Failed to save mobile review change: ${String(err)}`);
-			setNotice(`Could not save: ${String(err)}`);
+			setNotice("Could not save. Check the connection and try again.");
 			return false;
 		} finally {
 			setWriting(false);
@@ -321,7 +352,7 @@ export function FilesScreen(props: FilesScreenProps) {
 			}
 		} catch (err) {
 			appLogger.warn("network", `Failed to save mobile file: ${String(err)}`);
-			setError(`Could not save file: ${String(err)}`);
+			setError("Could not save file. Check the connection and try again.");
 		} finally {
 			setBusy(false);
 		}
@@ -421,7 +452,7 @@ export function FilesScreen(props: FilesScreenProps) {
 			<Show when={busy()}>
 				<p class={styles.status}>Loading…</p>
 			</Show>
-			<Show when={repo() === null && !props.initialRepo}>
+			<Show when={repo() === null && !props.initialRepo && !busy() && !error()}>
 				<Show when={repos().length > 0} fallback={<p class={styles.status}>No repositories configured</p>}>
 					<For each={repos()}>
 						{(path) => (

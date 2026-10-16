@@ -190,7 +190,7 @@ describe("session Files navigation", () => {
 		history.replaceState(null, "", "/mobile/session/session-1");
 		const view = render(() => <MobileApp />);
 		await openSessionFiles(view);
-		await waitFor(() => expect(view.getByRole("alert").textContent).toMatch(/permission denied/i));
+		await waitFor(() => expect(view.getByRole("alert").textContent).toBe("Could not open directory. Try again."));
 		expect(view.queryByText("Empty directory")).toBeNull();
 	});
 

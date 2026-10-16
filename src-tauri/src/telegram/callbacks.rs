@@ -51,40 +51,40 @@ impl Runtime {
         Ok(json!({"message_ids":ids}))
     }
 
-    pub async fn callback(&mut self, value: &Value) -> Result<(), Error> {
+    pub async fn callback(&mut self, value: &Value) -> Result<bool, Error> {
         self.retire_registration();
         let Some(peer) = self.registered_peer().map(str::to_owned) else {
-            return Ok(());
+            return Ok(false);
         };
         let Some(query) = value.get("callback_query") else {
-            return Ok(());
+            return Ok(false);
         };
         let message = &query["message"];
         if message["date"].as_i64().is_none_or(|date| date <= 0) {
-            return Ok(());
+            return Ok(false);
         }
         let chat = &message["chat"];
         let Some(chat_id) = chat["id"].as_i64() else {
-            return Ok(());
+            return Ok(false);
         };
         if chat["type"] != "private"
             || !self.outbound.paths.allowlist()?.contains(&chat_id)
             || query["from"]["id"].as_i64() != Some(chat_id)
         {
-            return Ok(());
+            return Ok(false);
         }
         let Some(handle) = query["data"].as_str() else {
-            return Ok(());
+            return Ok(false);
         };
         let Some(query_id) = query["id"].as_str().filter(|s| !s.is_empty()) else {
-            return Ok(());
+            return Ok(false);
         };
         let Some(index) = self.callbacks.entries.iter().position(|c| {
             c.handle == handle
                 && c.chat == chat_id
                 && Some(c.message) == message["message_id"].as_i64()
         }) else {
-            return Ok(());
+            return Ok(false);
         };
         let choice = &self.callbacks.entries[index];
         let message_id = choice.message;
@@ -113,6 +113,6 @@ impl Runtime {
         let edited = self.outbound.call(chat_id,"editMessageReplyMarkup",json!({"chat_id":chat_id,"message_id":message_id,"reply_markup":{"inline_keyboard":[[{"text":label,"disabled":{}}]]}})).await;
         acknowledged?;
         edited?;
-        Ok(())
+        Ok(true)
     }
 }

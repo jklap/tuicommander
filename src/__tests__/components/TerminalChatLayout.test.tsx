@@ -80,7 +80,7 @@ it("keeps the collapsed tool row while using Claude Bash descriptions and non-Cl
 	];
 	const claude = chat(entries);
 	expect(claude.container.querySelector("summary")?.textContent).toContain(
-		"2 tool callsInspect result · Read: report.md",
+		"2 tool calls ›Inspect result · Read: report.md",
 	);
 	expect(claude.container.querySelector("details")?.open).toBe(false);
 	cleanup();

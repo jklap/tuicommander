@@ -68,6 +68,15 @@ When detected:
 
 Binary detection uses `resolve_cli()` — Rust probes well-known directories so agents are found even in release builds where the user's shell PATH isn't available.
 
+### Unconfirmed ego input
+
+If an ego input write is unconfirmed, TUICommander does not send that payload
+again. A new, stable empty ego composer can restore readiness and release later
+queued commands and background completion wakes. Retained draft text still
+blocks injection. A blocked raw write reports uncertainty after two seconds;
+it can still complete, so do not resend it automatically. Session close remains
+available without waiting for that writer.
+
 ## Rate Limit Detection
 
 When an agent hits a rate limit, TUICommander detects it from terminal output:

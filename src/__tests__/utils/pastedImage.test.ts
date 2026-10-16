@@ -6,7 +6,7 @@ vi.mock("../../stores/appLogger", () => ({
 }));
 
 import { invoke } from "../../invoke";
-import { savePastedImage } from "../../utils/pastedImage";
+import { pastedImageFiles, savePastedImage } from "../../utils/pastedImage";
 
 type Item = { kind: string; type: string; getAsFile: () => File | null };
 
@@ -112,4 +112,18 @@ it("saves Finder file-name plus image clipboard data rather than rejecting it as
 	Object.defineProperty(event.clipboardData, "getData", { value: () => "/Users/Boss/Pictures/clip.png" });
 	await expect(savePastedImage(event, () => "finder")).resolves.toBe("/saved/a.png");
 	expect(event.defaultPrevented).toBe(true);
+});
+
+// Catches: an empty text flavor suppressing an otherwise valid image.
+it("accepts PNG bytes beside an empty text flavor", () => {
+	const event = pasteEvent([textItem(), imageItem("image/png")]);
+	Object.defineProperty(event.clipboardData, "getData", { value: () => "" });
+	expect(pastedImageFiles(event)).toHaveLength(1);
+});
+
+// Catches: the empty-flavor fix allowing incidental pictures to swallow real text.
+it("preserves substantive clipboard text over an incidental image", () => {
+	const event = pasteEvent([textItem(), imageItem("image/png")]);
+	Object.defineProperty(event.clipboardData, "getData", { value: () => "spreadsheet cells" });
+	expect(pastedImageFiles(event)).toEqual([]);
 });

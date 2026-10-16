@@ -180,6 +180,16 @@ describe("remoteConnectionsStore renders what the backend reports", () => {
 			expect(store.getConnectionState("c2")).toMatchObject({ connection: added, status: "disconnected" });
 		});
 
+		// Catches: saving a recovered endpoint resets the UI route despite a live backend session.
+		it("keeps the live endpoint and token while saving connection metadata", async () => {
+			push(connected);
+			const connection = store.getConnectionState("c1")!.connection;
+			await store.addConnection({ ...connection, transport: { type: "Direct", url: "http://resolved.ts.net:9876" } });
+			expect(store.getConnectionState("c1")?.status).toBe("connected");
+			expect(store.getBaseUrl("c1")).toBe(connected.base_url);
+			expect(store.getToken("c1")).toBe(connected.token);
+		});
+
 		it("a rejected save leaves the loaded connection unchanged", async () => {
 			const original = store.getConnectionState("c1")!.connection;
 			invokeMock.mockRejectedValueOnce(new Error("save failed"));

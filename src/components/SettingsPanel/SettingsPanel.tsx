@@ -12,10 +12,12 @@ import { uiStore } from "../../stores/ui";
 import { isTauri } from "../../transport";
 import { pathBasename } from "../../utils/pathUtils";
 import { getRepoColor } from "../../utils/repoColor";
+import { SettingsHelpScope } from "./ContextualHelp";
 import { DictationSettings } from "./DictationSettings";
 import { ExpertModeSwitch } from "./ExpertSetting";
 import { PluginSettingsTab } from "./PluginSettingsTab";
 import { createPluginSettingsCatalogue, pluginFieldLabel } from "./pluginSettingsCatalogue";
+import { RepositoryActions } from "./RepositoryActions";
 import s from "./Settings.module.css";
 import { SettingsSearchBox, SettingsSearchResults, scrollToSetting } from "./SettingsSearch";
 import type { SettingsShellTab } from "./SettingsShell";
@@ -38,7 +40,6 @@ import {
 	SmartPromptsTab,
 	TelegramTab,
 	TerminalTab,
-	UpstreamMcpPanel,
 } from "./tabs";
 
 /** Context for initial selection when opening the panel */
@@ -149,7 +150,20 @@ function buildNavItems(pluginTabs: SettingsShellTab[] = []): SettingsShellTab[] 
 	const items: SettingsShellTab[] = GLOBAL_TAB_GROUPS.flatMap((group) => [
 		{ key: `__label__:${group.key}`, label: group.label },
 		...group.tabs.filter((tab) => !hidden.has(tab.key)),
-		...(group.key === "integrations" ? pluginTabs : []),
+		...(group.key === "integrations" && pluginTabs.length
+			? [
+					{
+						key: "__label__:plugin-settings",
+						label: "Plugin settings",
+						icon: (
+							<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+								<path d="M5 1h2v4h2V1h2v4h2v2h-1v2a4 4 0 0 1-3 3.87V16H7v-3.13A4 4 0 0 1 4 9V7H3V5h2V1zm1 6v2a2 2 0 0 0 4 0V7H6z" />
+							</svg>
+						),
+					},
+					...pluginTabs,
+				]
+			: []),
 	]);
 
 	if (repos.length > 0) {
@@ -170,7 +184,18 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 
 	const [query, setQuery] = createSignal("");
 	const pluginPages = createPluginSettingsCatalogue();
-	const pluginTabs = () => pluginPages().map((page) => ({ key: `plugin:${page.id}`, label: page.label }));
+	const pluginTabs = () =>
+		pluginPages().map((page) => ({
+			key: `plugin:${page.id}`,
+			label: page.label,
+			source: page.id,
+			icon: (
+				<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+					<path d="M8 2h2v5h4V2h2v5h3v4a7 7 0 0 1-6 6.93V22h-2v-4.07A7 7 0 0 1 5 11V7h3V2Zm-1 7v2a5 5 0 0 0 10 0V9H7Z" />
+				</svg>
+			),
+		}));
+
 	const navItems = () => buildNavItems(pluginTabs());
 	const pluginEntries = () =>
 		pluginPages().flatMap((page) =>
@@ -268,16 +293,9 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 	};
 
 	const footer = () => {
-		const path = activeRepoPath();
 		return (
 			<div class={s.footer}>
-				<Show when={path} fallback={<span />}>
-					{(p) => (
-						<button class={s.footerReset} onClick={() => repoSettingsStore.reset(p())}>
-							{t("settings.resetToDefaults", "Reset to Defaults")}
-						</button>
-					)}
-				</Show>
+				<span />
 				<button class={s.footerDone} onClick={props.onClose}>
 					{t("settings.done", "Done")}
 				</button>
@@ -311,24 +329,16 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 						const onUpdate = updateRepoSetting(path);
 						return (
 							<>
-								<RepoWorktreeTab settings={settings} defaults={repoDefaultsStore.state} onUpdate={onUpdate} />
+								<SettingsHelpScope page="repository">
+									<RepoWorktreeTab settings={settings} defaults={repoDefaultsStore.state} onUpdate={onUpdate} />
+								</SettingsHelpScope>
 								<RepoScriptsTab settings={settings} defaults={repoDefaultsStore.state} onUpdate={onUpdate} />
-								<Show when={isTauri()}>
-									<div class={s.section}>
-										<h3>{t("settings.copyToProject.heading", "Share with Team")}</h3>
-										<p class={s.hint}>
-											{t(
-												"settings.copyToProject.hint",
-												"Write this repo's worktree/branch settings to a .tuic.json in the project root. Commit it so teammates inherit the same defaults. Scripts are never exported.",
-											)}
-										</p>
-										<div class={s.actions}>
-											<button onClick={() => copyToProject(path)}>
-												{t("settings.copyToProject.button", "Copy settings to .tuic.json")}
-											</button>
-										</div>
-									</div>
-								</Show>
+								<RepositoryActions
+									path={settings.path}
+									canExport={isTauri()}
+									onExport={() => void copyToProject(path)}
+									onReset={() => repoSettingsStore.reset(path)}
+								/>
 							</>
 						);
 					}}
@@ -336,55 +346,92 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 
 				{/* Live scoped plugin pages disappear with the loaded catalogue. */}
 				<For each={pluginPages().filter((page) => activeTab() === `plugin:${page.id}`)}>
-					{(page) => <PluginSettingsTab page={page} />}
+					{(page) => (
+						<SettingsHelpScope page={page.id}>
+							<PluginSettingsTab page={page} />
+						</SettingsHelpScope>
+					)}
 				</For>
 
 				{/* Global sections */}
 				<Show when={activeTab() === "general"}>
-					<GeneralTab />
+					<SettingsHelpScope page="general">
+						<GeneralTab />
+					</SettingsHelpScope>
 				</Show>
 				<Show when={activeTab() === "appearance"}>
-					<AppearanceTab />
+					<SettingsHelpScope page="appearance">
+						<AppearanceTab />
+					</SettingsHelpScope>
 				</Show>
 				<Show when={activeTab() === "notifications"}>
-					<NotificationsTab />
+					<SettingsHelpScope page="notifications">
+						<NotificationsTab />
+					</SettingsHelpScope>
 				</Show>
 				<Show when={activeTab() === "terminal"}>
-					<TerminalTab />
+					<SettingsHelpScope page="terminal">
+						<TerminalTab />
+					</SettingsHelpScope>
 				</Show>
 				<Show when={activeTab() === "keyboard-shortcuts"}>
-					<KeyboardShortcutsTab />
+					<SettingsHelpScope page="keyboard-shortcuts">
+						<KeyboardShortcutsTab />
+					</SettingsHelpScope>
 				</Show>
 				<Show when={activeTab() === "dictation"}>
-					<DictationSettings />
+					<SettingsHelpScope page="voice">
+						<DictationSettings />
+					</SettingsHelpScope>
 				</Show>
 				<Show when={activeTab() === "github"}>
-					<GitHubTab />
+					<SettingsHelpScope page="github">
+						<GitHubTab />
+					</SettingsHelpScope>
 				</Show>
 				<Show when={activeTab() === "mcp"}>
-					<LocalMcpPanel />
-					<UpstreamMcpPanel />
+					<SettingsHelpScope page="mcp">
+						<LocalMcpPanel />
+					</SettingsHelpScope>
 				</Show>
 				<Show when={activeTab() === "remote-access"}>
-					<RemoteAccessPanel />
+					<SettingsHelpScope page="remote-access">
+						<RemoteAccessPanel />
+					</SettingsHelpScope>
 				</Show>
 				<Show when={activeTab() === "remote-machines"}>
-					<RemoteMachinesTab />
+					<SettingsHelpScope page="remote-machines">
+						<RemoteMachinesTab />
+					</SettingsHelpScope>
 				</Show>
 				<Show when={activeTab() === "telegram"}>
-					<TelegramTab />
+					<SettingsHelpScope page="telegram">
+						<TelegramTab />
+					</SettingsHelpScope>
 				</Show>
 				<Show when={activeTab() === "plugins"}>
-					<PluginsTab onClose={props.onClose} />
+					<SettingsHelpScope page="plugins">
+						<PluginsTab
+							onClose={props.onClose}
+							settingsPluginIds={pluginPages().map((page) => page.id)}
+							onOpenSettings={(id) => setActiveTab(`plugin:${id}`)}
+						/>
+					</SettingsHelpScope>
 				</Show>
 				<Show when={activeTab() === "smart-prompts"}>
-					<SmartPromptsTab />
+					<SettingsHelpScope page="smart-prompts">
+						<SmartPromptsTab />
+					</SettingsHelpScope>
 				</Show>
 				<Show when={activeTab() === "agents"}>
-					<AgentsTab connectionId={activeConnectionId()} />
+					<SettingsHelpScope page="agents">
+						<AgentsTab connectionId={activeConnectionId()} />
+					</SettingsHelpScope>
 				</Show>
 				<Show when={activeTab() === "ai-chat" && settingsStore.isAiChatEnabled()}>
-					<AiChatTab onClose={props.onClose} />
+					<SettingsHelpScope page="ai-chat">
+						<AiChatTab onClose={props.onClose} />
+					</SettingsHelpScope>
 				</Show>
 			</Show>
 		</SettingsShell>

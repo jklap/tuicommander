@@ -1,4 +1,5 @@
 import { type Component, lazy, onMount, Suspense } from "solid-js";
+import { openChatTableDocument } from "../components/AIChatPanel/tableDocument";
 import { initPanelWindow } from "../hooks/initPanelWindow";
 import type { PanelAdapter } from "../panelRouter";
 import { repositoriesStore } from "../stores/repositories";
@@ -47,6 +48,16 @@ export const aiChatPanelAdapter: PanelAdapter = {
 	toggle: () => uiStore.toggleAiChatPanel(),
 	onDetach: () => uiStore.setAiChatPanelVisible(false),
 	handleAction: (action, data) => {
+		if (
+			action === "open-table" &&
+			data &&
+			typeof data === "object" &&
+			"source" in data &&
+			typeof data.source === "string"
+		) {
+			openChatTableDocument(data.source);
+			return;
+		}
 		if ((action !== "open-file" && action !== "open-directory") || !data || typeof data !== "object") return;
 		const { path, line, col } = data as { path?: unknown; line?: unknown; col?: unknown };
 		if (typeof path !== "string" || !path) return;

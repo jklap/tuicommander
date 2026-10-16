@@ -9,6 +9,8 @@ export interface PluginSettingsField extends PluginSettingAnnotation {
 	path: string;
 	label: string;
 	order: number;
+	/** Reset value from the Rust descriptor; omitted for secrets. */
+	default?: unknown;
 	schema: PluginSettingsSchema;
 }
 export interface PluginSettingsPage {
@@ -37,9 +39,10 @@ export function createPluginSettingsCatalogue() {
 			}),
 		),
 	);
-	// Resource retains its last value during reload. Never retain an unloaded editor.
+	// Navigation must not subscribe to Suspense, even on the first describe.
+	// Keep the last catalogue during refresh, but never retain an unloaded editor.
 	return () =>
-		(catalogue() ?? []).filter(
+		((catalogue.state === "ready" || catalogue.state === "refreshing" ? catalogue.latest : []) ?? []).filter(
 			(page): page is PluginSettingsPage => page !== null && loaded().some((plugin) => plugin.id === page.id),
 		);
 }

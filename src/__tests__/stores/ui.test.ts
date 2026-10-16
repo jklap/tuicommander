@@ -467,7 +467,7 @@ describe("uiStore", () => {
 	describe("panel widths", () => {
 		it("defaults to expected widths", () => {
 			testInScope(() => {
-				expect(store.state.settingsNavWidth).toBe(180);
+				expect(store.state.settingsNavWidth).toBe(232);
 			});
 		});
 
@@ -511,7 +511,7 @@ describe("uiStore", () => {
 
 			await testInScopeAsync(async () => {
 				await store.hydrate();
-				expect(store.state.settingsNavWidth).toBe(180);
+				expect(store.state.settingsNavWidth).toBe(232);
 			});
 		});
 
@@ -524,7 +524,7 @@ describe("uiStore", () => {
 					config: expect.objectContaining({
 						sidebar_visible: true,
 						sidebar_width: 300,
-						settings_nav_width: 180,
+						settings_nav_width: 232,
 					}),
 				});
 			});

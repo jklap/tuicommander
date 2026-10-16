@@ -1,5 +1,6 @@
 import { render, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { VisibleIntersectionObserver } from "../helpers/visibleIntersectionObserver";
 
 /**
  * Critic round 2 for #1324-015a: the press tracker against a drag-select ending
@@ -140,13 +141,7 @@ describe("CanvasTerminal link press tracker (critic round 2)", () => {
 				disconnect() {}
 			},
 		);
-		vi.stubGlobal(
-			"IntersectionObserver",
-			class {
-				observe() {}
-				disconnect() {}
-			},
-		);
+		vi.stubGlobal("IntersectionObserver", VisibleIntersectionObserver);
 		const view = render(() => (
 			<CanvasTerminal sessionId="link-1324c" terminalId="link-1324c" onOpenFilePath={onOpen} />
 		));

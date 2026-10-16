@@ -62,7 +62,10 @@ function timerTick() {
 		if (now - lastMainLogAt > LOG_COOLDOWN_MS) {
 			lastMainLogAt = now;
 			const crumb = getLastCrumb();
-			appLogger.diag.warn("app", `UI freeze: ${Math.round(gap)}ms main-thread block`, crumb ?? undefined);
+			appLogger.diag.warn("app", `UI freeze: ${Math.round(gap)}ms main-thread block`, {
+				...crumb,
+				gap_ms: Math.round(gap),
+			});
 		}
 	}
 }
