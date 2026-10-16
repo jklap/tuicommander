@@ -4621,3 +4621,23 @@ it("shows the tab strip only for multiple open tabs", async () => {
 	await settle();
 	expect(container.querySelectorAll('[role="tab"]')).toHaveLength(2);
 });
+
+// Catches: tidy header dropping inline close or detached window actions.
+it("closes the inline panel from its header", () => {
+	const close = vi.fn();
+	const { container } = render(() => <AIChatPanel visible repoPath={ROOT} onClose={close} />);
+	container.querySelector<HTMLButtonElement>('button[title="Close"]')!.click();
+	expect(close).toHaveBeenCalledOnce();
+});
+it("reattaches the detached panel from its header", async () => {
+	window.history.replaceState(null, "", "/?mode=panel&panel=ai-chat");
+	const { container } = await renderPanel();
+	container.querySelector<HTMLButtonElement>('button[title="Bring back to main window"]')!.click();
+	expect(mockReattachPanel).toHaveBeenCalledWith("ai-chat");
+});
+it("closes the detached window from its header", async () => {
+	window.history.replaceState(null, "", "/?mode=panel&panel=ai-chat");
+	const { container } = await renderPanel();
+	container.querySelector<HTMLButtonElement>('button[title="Close"]')!.click();
+	expect(mockClosePanel).toHaveBeenCalledWith("ai-chat");
+});

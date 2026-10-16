@@ -1477,3 +1477,7 @@
 .toolActivitySummary { white-space: nowrap; }
 .toolActivitySummary .toolCallDuration { font-size: 10px; }
 .mobileTranscript .toolActivitySummary { flex-wrap: nowrap; }
+
+.panel .messageList { padding: 12px; gap: 6px; }
+.panel .assistantMsg { margin-bottom: 4px; }
+.panel .assistantMsg :global(#markdown-content ul), .panel .assistantMsg :global(#markdown-content ol) { padding-left: 20px; margin-bottom: 8px; }
