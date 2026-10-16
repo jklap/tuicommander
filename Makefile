@@ -67,6 +67,12 @@ hooks:
 # `scripts/check-make-instance-scope.sh` deliberately cannot see it. Say which
 # config directory this is starting on, so the wrong one is the first line of
 # output instead of something inferred from an empty repository list.
+# mbx sets CARGO_INCREMENTAL=0, and its learned incremental never engaged for
+# tuicommander_lib here, so every Rust edit recompiled the lib from scratch, twice
+# (tuic-remote without default features, then the desktop build). Measured
+# 2026-10-10 for `tuic-remote` after a one-line lib.rs change: 80s full compile,
+# 9s incremental.
+dev: export MBX_INCREMENTAL := 1
 dev: hooks
 	@pnpm build:sidecar
 	@pnpm exec vite build
