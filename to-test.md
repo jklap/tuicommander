@@ -2330,3 +2330,5 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] After the next manual Rust restart, check Settings > Telegram Recent messages for inbound/outbound outcomes. The log is process-local, last 20, redacted and cleared on restart; a standby cannot show another process's log (#1956-c325). Automated offline boundary tests cover retention, redaction, failure categories, callbacks and status readback.
 
 - [ ] #1955-2f43 round 1: after Boss manually restarts `make dev` or installs `make build`, confirm Telegram linking still works. A failed link confirmation must leave the chat linked without delivering the pairing code as agent mail; Recent messages shows the safe failed reply. Offline poll-loop tests cover replay and same-batch order. No live Telegram API or desktop instance was used.
+
+- [ ] Plugin Settings: confirm Plugin identity, source IDs and the opaque Settings shell while switching pages with slow reads, in dark and light themes (#1927-9649).
