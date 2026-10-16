@@ -5261,6 +5261,23 @@ mod tests {
     }
 
     #[test]
+    fn missing_catalogue_voice_uses_only_the_installed_language_default_1954() {
+        // Catches: a missing bill_boerst refusing speech despite an installed
+        // Italian default, or borrowing the English voice with the same name.
+        let (_root, _guard) = speech_root();
+        let italian = speech::assets::for_language_code("it").unwrap();
+        let english_voice = speech::assets::find("voice-english-bill_boerst").unwrap();
+        install_asset(english_voice);
+        assert!(choose_voice(italian, "bill_boerst").is_err());
+        install_asset(italian);
+        assert_eq!(choose_voice(italian, "bill_boerst").unwrap(), "giovanni");
+        assert!(choose_voice(italian, "nessuno").is_err());
+        let italian_voice = speech::assets::find("voice-italian-bill_boerst").unwrap();
+        install_asset(italian_voice);
+        assert_eq!(choose_voice(italian, "bill_boerst").unwrap(), "bill_boerst");
+    }
+
+    #[test]
     fn choose_voice_accepts_a_user_voice() {
         let (_root, _guard) = speech_root();
         let italian = speech::assets::for_language_code("it").expect("catalogue ships Italian");
