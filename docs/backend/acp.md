@@ -137,6 +137,12 @@ generation egresses to. Model, effort and mode arrive instead as
 `session/set_config_option` options the session itself publishes, so a host
 picks from what the agent offered rather than from a list this client made up.
 
+A `config_option_update` may arrive after `session/new`, before any prompt.
+It replaces the matching attachment’s complete option set and publishes the
+connection snapshot before the update enters the journal. The frontend refreshes
+that snapshot on the update, using the same path as an explicit set-config reply.
+An empty offer clears the controls; other session attachments keep their options.
+
 The snapshot is also what makes `method_not_found` fatal. Nothing reaches the
 wire that the snapshot did not allow, so a method-not-found coming back is not
 the agent declining — it is the agent disowning what it published, and the one

@@ -217,6 +217,11 @@ export function createAcpClient(open: AcpStreamOpener = openAcpStream) {
 		return snapshot;
 	}
 
+	/** The backend snapshot owns the complete attachment option set. */
+	async function refresh(connectionId: AcpConnectionId): Promise<void> {
+		acpStore.applySnapshot(await invoke<AcpConnectionSnapshot>("acp_connection_snapshot", { connectionId }));
+	}
+
 	return {
 		async openConversation(request: ChatOpenRequest): Promise<ChatOpened> {
 			const opened = await invoke<ChatOpened>("acp_chat_open", { request });
@@ -255,9 +260,7 @@ export function createAcpClient(open: AcpStreamOpener = openAcpStream) {
 		},
 
 		/** Read the connection's current picture without touching its stream. */
-		async refresh(connectionId: AcpConnectionId): Promise<void> {
-			acpStore.applySnapshot(await invoke<AcpConnectionSnapshot>("acp_connection_snapshot", { connectionId }));
-		},
+		refresh,
 
 		async disconnect(connectionId: AcpConnectionId): Promise<AcpConnectionSettlement> {
 			forget(connectionId);

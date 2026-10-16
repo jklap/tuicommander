@@ -1219,6 +1219,53 @@ describe("AIChatPanel: parallel tabs", () => {
 		);
 	});
 
+	// Catches: a recorded pre-prompt offer leaves Session settings hidden.
+	it("reveals settings from the recorded async config offer before sending", async () => {
+		const { container } = await renderPanel();
+		const empty = snapshot({
+			attachments: [attachment({ configOptions: [] }), attachment({ sessionId: SECOND_SESSION })],
+		});
+		acpStore.applySnapshot(empty);
+		expect(container.querySelector('[aria-label="Session settings"]')).toBeNull();
+		const recording = readFileSync(resolve("src-tauri/tests/fixtures/acp/ego-async-config.jsonl"), "utf8")
+			.trim()
+			.split("\n")
+			.map((line) => JSON.parse(line));
+		const offer = JSON.parse(recording.at(-1).raw).params.update;
+		const actual = await vi.importActual<typeof import("../../services/acpClient")>("../../services/acpClient");
+		let receive!: (frame: import("../../types/acp").AcpStreamFrame) => void;
+		const realClient = actual.createAcpClient(async (options) => {
+			receive = options.onFrame;
+			return { close() {} };
+		});
+		vi.mocked(invoke).mockImplementation(async (command) => {
+			if (command === "acp_connect") return empty;
+			if (command === "acp_pending_interactions") return [];
+			if (command === "acp_connection_snapshot")
+				return snapshot({
+					attachments: [attachment({ configOptions: offer.configOptions }), attachment({ sessionId: SECOND_SESSION })],
+				});
+			return undefined;
+		});
+		await realClient.connect(CHAT_ROOT);
+		receive({
+			kind: "event",
+			connectionId: CONNECTION,
+			generation: 1,
+			sequence: ++sequence,
+			sessionId: SESSION,
+			turnId: null,
+			event: { kind: "sessionUpdate", update: offer },
+		});
+		await settle();
+		expect(container.querySelector('[aria-label="Session settings"]')).not.toBeNull();
+		expect(container.textContent).toContain("Mode: default");
+		expect(container.textContent).not.toContain("Model: pending");
+		expect(acpStore.attachment(CONNECTION, SECOND_SESSION)?.configOptions).toEqual([MODEL_OPTION]);
+		expect(client.prompt).not.toHaveBeenCalled();
+		await realClient.disconnect(CONNECTION);
+	});
+
 	// Catches: an attached tab with late config options loses the entire model/mode row.
 	it.each<{ configOptions: AcpSessionConfigOption[] }>([
 		{ configOptions: [] },
@@ -4246,4 +4293,52 @@ it("mobile Chat updates keyboard correction without changing desktop attributes"
 	expectAttributes(false);
 	view.getByRole("button", { name: "Toggle correction" }).click();
 	expectAttributes(true);
+});
+
+// Catches: a delayed async-offer snapshot rolls back the model after a successful settings change.
+it("does not let a delayed async offer snapshot revert a confirmed model selection", async () => {
+	const { createAcpClient } =
+		await vi.importActual<typeof import("../../services/acpClient")>("../../services/acpClient");
+	let deliver: ((frame: import("../../types/acp").AcpStreamFrame) => void) | undefined;
+	const realClient = createAcpClient(async ({ onFrame }) => {
+		deliver = onFrame;
+		return { close() {} };
+	});
+	const offered = snapshot({ attachments: [attachment()] });
+	const selected = snapshot({
+		attachments: [attachment({ configOptions: [{ ...MODEL_OPTION, currentValue: "sonnet" }] })],
+	});
+	let releaseOffer!: (value: AcpConnectionSnapshot) => void;
+	const delayedOffer = new Promise<AcpConnectionSnapshot>((resolve) => {
+		releaseOffer = resolve;
+	});
+	let selectionConfirmed = false;
+	vi.mocked(invoke).mockImplementation(async (command) => {
+		if (command === "acp_connect") return offered;
+		if (command === "acp_pending_interactions") return [];
+		if (command === "acp_connection_snapshot") return selectionConfirmed ? selected : delayedOffer;
+		if (command === "acp_session_set_config_option") {
+			selectionConfirmed = true;
+			return selected.attachments[0].configOptions;
+		}
+		return undefined;
+	});
+	await realClient.connect(ROOT);
+	deliver?.({
+		kind: "event",
+		connectionId: CONNECTION,
+		generation: 1,
+		sequence: 2,
+		sessionId: SESSION,
+		turnId: null,
+		event: {
+			kind: "sessionUpdate",
+			update: { sessionUpdate: "config_option_update", configOptions: [MODEL_OPTION] },
+		},
+	});
+	await realClient.setConfigOption(CONNECTION, SESSION, "model", { value: "sonnet" });
+	expect(acpStore.attachment(CONNECTION, SESSION)?.configOptions[0].currentValue).toBe("sonnet");
+	releaseOffer(offered);
+	await settle();
+	expect(acpStore.attachment(CONNECTION, SESSION)?.configOptions[0].currentValue).toBe("sonnet");
 });

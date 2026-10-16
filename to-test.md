@@ -1,3 +1,7 @@
+## Async AI Chat options (1918-2ea3) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, open a new AI Chat tab without sending a prompt. Verify Session settings appears with model and mode choices; select an offered model. Repeat with delayed offers and multiple tabs, then verify replacement offers and snapshot refresh/reconnect preserve session isolation. No live app was restarted by this peer.
+
 ## Urgent ego mail (1901-9b6b) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, send urgent mail to a busy managed ego child. Verify the inbox notice is queued without cancelling its tool, the body stays in the inbox, and a draft or question blocks injection. The targeted backend tests cover notice bytes, coalescing, drafts and confident dialogs; no live app was restarted for this change.
