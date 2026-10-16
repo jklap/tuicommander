@@ -1,5 +1,8 @@
 # TUICommander — Complete Feature Reference
 
+Application Settings pages use shared headers, cards and right-aligned controls. Audio output discovery remains explicit; visual notification and client-local preferences retain their existing scope.
+
+
 Settings policy foundation (#1786-9cbd): shared owner-service writes enforce
 host-issued caller authority, write-only secrets and one-use, five-minute human
 approval for exposure/execution changes. The existing desktop/browser/mobile

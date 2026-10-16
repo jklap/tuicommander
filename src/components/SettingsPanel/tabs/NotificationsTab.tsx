@@ -10,6 +10,7 @@ import { Select } from "../../ui/Select";
 import { ExpertSetting } from "../ExpertSetting";
 import { SettingSlider, SettingToggle } from "../SettingFields";
 import s from "../Settings.module.css";
+import { SectionCard, SettingPageHeader } from "../SettingsPrimitives";
 
 interface AudioOutputDevice {
 	name: string;
@@ -125,211 +126,221 @@ export const NotificationsTab: Component = () => {
 	}
 
 	return (
-		<div class={s.section}>
-			<h3>{t("notifications.heading.notificationSettings", "Notification Settings")}</h3>
-
-			<Show
-				when={notificationsStore.state.isAvailable}
-				fallback={
-					<p class={s.warning}>
-						{t("notifications.warning.notAvailable", "Audio notifications are not available on this platform")}
-					</p>
-				}
-			>
-				<SettingToggle
-					checked={notificationsStore.state.config.enabled}
-					onChange={(v) => notificationsStore.setEnabled(v)}
-					label={t("notifications.toggle.enableAudio", "Enable audio notifications")}
-				/>
-
-				<ExpertSetting configKey="notifications.volume" value={notificationsStore.state.config.volume}>
-					<SettingSlider
-						label={t("notifications.label.masterVolume", "Master Volume")}
-						value={Math.round(notificationsStore.state.config.volume * 100)}
-						onChange={(v) => notificationsStore.setVolume(v / 100)}
-						onCommit={() => notificationsStore.testSound("info")}
-						min={0}
-						max={100}
-						suffix="%"
-						hint={t(
-							"notifications.hint.masterVolume",
-							"Overall volume for all notification sounds — release the slider to hear a preview",
-						)}
+		<div class={`${s.section} ${s.applicationPage}`}>
+			<SettingPageHeader
+				title="Notifications"
+				breadcrumb="Application / Notifications"
+				description="Audio alerts, visual notices and operating-system notifications."
+				scope="Application"
+			/>
+			<SectionCard title={t("notifications.heading.notificationSettings", "Notification Settings")}>
+				<Show
+					when={notificationsStore.state.isAvailable}
+					fallback={
+						<p class={s.warning}>
+							{t("notifications.warning.notAvailable", "Audio notifications are not available on this platform")}
+						</p>
+					}
+				>
+					<SettingToggle
+						row
+						checked={notificationsStore.state.config.enabled}
+						onChange={(v) => notificationsStore.setEnabled(v)}
+						label={t("notifications.toggle.enableAudio", "Enable audio notifications")}
 					/>
-				</ExpertSetting>
 
-				<Show when={isTauri()}>
-					<ExpertSetting
-						configKey="notifications.audio_device"
-						value={notificationsStore.state.config.audio_device ?? null}
-					>
-						<div class={s.group}>
-							<label>{t("notifications.label.audioDevice", "Audio Output Device")}</label>
-							<p class={s.hint}>
-								{t("notifications.hint.audioDevice", "Choose which speaker or output to use for notification sounds")}
-							</p>
-							<Show
-								when={devices() !== null}
-								fallback={
-									<>
-										<p class={s.hint}>
-											{t("notifications.hint.audioDeviceCurrent", "Currently: {device}", {
-												device:
-													notificationsStore.state.config.audio_device ??
-													t("notifications.option.systemDefault", "System Default"),
-											})}
-										</p>
-										<button class={s.testBtn} disabled={loadingDevices()} onClick={loadDevices}>
-											{loadingDevices()
-												? t("notifications.btn.loadingDevices", "Loading…")
-												: t("notifications.btn.chooseDevice", "Choose output device…")}
-										</button>
-										<p class={s.hint} style={{ "margin-top": "6px" }}>
-											{t(
-												"notifications.hint.deviceMicPrompt",
-												"macOS may ask for microphone access — the audio system requires it to enumerate output devices. Notifications never record audio.",
-											)}
-										</p>
-									</>
-								}
-							>
-								<Select
-									value={notificationsStore.state.config.audio_device ?? ""}
-									onChange={(e) => {
-										const val = e.currentTarget.value;
-										notificationsStore.setAudioDevice(val || null);
-									}}
-								>
-									<option value="">{t("notifications.option.systemDefault", "System Default")}</option>
-									<For each={devices()}>
-										{(device) => (
-											<option value={device.name}>
-												{device.name}
-												{device.is_default ? ` (${t("notifications.option.currentDefault", "current default")})` : ""}
-											</option>
-										)}
-									</For>
-								</Select>
-								<button
-									class={s.testBtn}
-									style={{ "margin-top": "6px" }}
-									disabled={loadingDevices()}
-									onClick={loadDevices}
-								>
-									{t("notifications.btn.refreshDevices", "Refresh")}
-								</button>
-							</Show>
-						</div>
-					</ExpertSetting>
-				</Show>
-
-				<div class={s.group}>
-					<label>{t("notifications.label.notificationEvents", "Notification Events")}</label>
-					<p class={s.hint} style={{ "margin-bottom": "12px" }}>
-						{t("notifications.hint.notificationEvents", "Choose which events play a sound")}
-					</p>
-					<For each={sounds}>
-						{(sound) => (
-							<div class={s.soundRow}>
-								<div class={s.toggle}>
-									<input
-										type="checkbox"
-										checked={notificationsStore.state.config.sounds[sound.key]}
-										onChange={(e) => notificationsStore.setSoundEnabled(sound.key, e.currentTarget.checked)}
-									/>
-									<span>{sound.label}</span>
-								</div>
-								<SoundPatternSvg sound={sound.key} />
-								<button class={s.testBtn} onClick={() => notificationsStore.testSound(sound.key)}>
-									{t("notifications.btn.test", "Test")}
-								</button>
-							</div>
-						)}
-					</For>
-				</div>
-
-				<div class={s.group}>
-					<label>{t("notifications.label.orchestration", "Orchestration")}</label>
-					<div class={s.toggle}>
-						<input
-							type="checkbox"
-							checked={notificationsStore.state.config.silence_remote_completions}
-							onChange={(e) => notificationsStore.setSilenceRemoteCompletions(e.currentTarget.checked)}
+					<ExpertSetting configKey="notifications.volume" value={notificationsStore.state.config.volume}>
+						<SettingSlider
+							row
+							label={t("notifications.label.masterVolume", "Master Volume")}
+							value={Math.round(notificationsStore.state.config.volume * 100)}
+							onChange={(v) => notificationsStore.setVolume(v / 100)}
+							onCommit={() => notificationsStore.testSound("info")}
+							min={0}
+							max={100}
+							suffix="%"
+							hint={t(
+								"notifications.hint.masterVolume",
+								"Overall volume for all notification sounds — release the slider to hear a preview",
+							)}
 						/>
-						<span>{t("notifications.label.silenceRemoteCompletions", "Silence completions from MCP sessions")}</span>
+					</ExpertSetting>
+
+					<Show when={isTauri()}>
+						<ExpertSetting
+							configKey="notifications.audio_device"
+							value={notificationsStore.state.config.audio_device ?? null}
+						>
+							<div class={s.group}>
+								<label>{t("notifications.label.audioDevice", "Audio Output Device")}</label>
+								<p class={s.hint}>
+									{t("notifications.hint.audioDevice", "Choose which speaker or output to use for notification sounds")}
+								</p>
+								<Show
+									when={devices() !== null}
+									fallback={
+										<>
+											<p class={s.hint}>
+												{t("notifications.hint.audioDeviceCurrent", "Currently: {device}", {
+													device:
+														notificationsStore.state.config.audio_device ??
+														t("notifications.option.systemDefault", "System Default"),
+												})}
+											</p>
+											<button class={s.testBtn} disabled={loadingDevices()} onClick={loadDevices}>
+												{loadingDevices()
+													? t("notifications.btn.loadingDevices", "Loading…")
+													: t("notifications.btn.chooseDevice", "Choose output device…")}
+											</button>
+											<p class={s.hint} style={{ "margin-top": "6px" }}>
+												{t(
+													"notifications.hint.deviceMicPrompt",
+													"macOS may ask for microphone access — the audio system requires it to enumerate output devices. Notifications never record audio.",
+												)}
+											</p>
+										</>
+									}
+								>
+									<Select
+										value={notificationsStore.state.config.audio_device ?? ""}
+										onChange={(e) => {
+											const val = e.currentTarget.value;
+											notificationsStore.setAudioDevice(val || null);
+										}}
+									>
+										<option value="">{t("notifications.option.systemDefault", "System Default")}</option>
+										<For each={devices()}>
+											{(device) => (
+												<option value={device.name}>
+													{device.name}
+													{device.is_default ? ` (${t("notifications.option.currentDefault", "current default")})` : ""}
+												</option>
+											)}
+										</For>
+									</Select>
+									<button
+										class={s.testBtn}
+										style={{ "margin-top": "6px" }}
+										disabled={loadingDevices()}
+										onClick={loadDevices}
+									>
+										{t("notifications.btn.refreshDevices", "Refresh")}
+									</button>
+								</Show>
+							</div>
+						</ExpertSetting>
+					</Show>
+
+					<div class={s.group}>
+						<label>{t("notifications.label.notificationEvents", "Notification Events")}</label>
+						<p class={s.hint} style={{ "margin-bottom": "12px" }}>
+							{t("notifications.hint.notificationEvents", "Choose which events play a sound")}
+						</p>
+						<For each={sounds}>
+							{(sound) => (
+								<div class={s.soundRow}>
+									<div class={s.toggle}>
+										<input
+											type="checkbox"
+											checked={notificationsStore.state.config.sounds[sound.key]}
+											onChange={(e) => notificationsStore.setSoundEnabled(sound.key, e.currentTarget.checked)}
+										/>
+										<span>{sound.label}</span>
+									</div>
+									<SoundPatternSvg sound={sound.key} />
+									<button
+										class={s.testBtn}
+										aria-label={`Preview ${sound.label}`}
+										onClick={() => notificationsStore.testSound(sound.key)}
+									>
+										{t("notifications.btn.test", "Test")}
+									</button>
+								</div>
+							)}
+						</For>
 					</div>
+
+					<div class={s.group}>
+						<label>{t("notifications.label.orchestration", "Orchestration")}</label>
+						<SettingToggle
+							row
+							checked={notificationsStore.state.config.silence_remote_completions}
+							onChange={(value) => notificationsStore.setSilenceRemoteCompletions(value)}
+							label={t("notifications.label.silenceRemoteCompletions", "Silence completions from MCP sessions")}
+						/>
+						<p class={s.hint} style={{ "margin-top": "6px" }}>
+							{t(
+								"notifications.hint.silenceRemoteCompletions",
+								"Sessions started by an agent orchestrator (session create, agent spawn) finish without a chime. They still appear in Activity and update the badge.",
+							)}
+						</p>
+					</div>
+
+					<div class={s.actions}>
+						<button onClick={() => notificationsStore.reset()}>
+							{t("notifications.btn.resetDefaults", "Reset Defaults")}
+						</button>
+					</div>
+				</Show>
+			</SectionCard>
+			<SectionCard title="Visual notifications">
+				{/* Outside the audio Show on purpose — the bell is visual, so the setting
+			    must stay reachable on a machine with no audio output. */}
+				<div class={s.group}>
+					<label>{t("notifications.label.toolbarBell", "Toolbar Bell")}</label>
+					<SettingToggle
+						row
+						checked={notificationsStore.state.config.toasts_in_bell}
+						onChange={(value) => notificationsStore.setToastsInBell(value)}
+						label={t("notifications.toggle.toastsInBell", "Keep toasts in the bell")}
+					/>
 					<p class={s.hint} style={{ "margin-top": "6px" }}>
 						{t(
-							"notifications.hint.silenceRemoteCompletions",
-							"Sessions started by an agent orchestrator (session create, agent spawn) finish without a chime. They still appear in Activity and update the badge.",
+							"notifications.hint.toastsInBell",
+							"Toasts fade on their own, often while you look at another window. Mirroring them into the bell keeps them readable afterwards. Turn this off to leave toasts transient.",
 						)}
 					</p>
 				</div>
 
-				<div class={s.actions}>
-					<button onClick={() => notificationsStore.reset()}>
-						{t("notifications.btn.resetDefaults", "Reset Defaults")}
-					</button>
-				</div>
-			</Show>
-
-			{/* Outside the audio Show on purpose — the bell is visual, so the setting
-			    must stay reachable on a machine with no audio output. */}
-			<div class={s.group}>
-				<label>{t("notifications.label.toolbarBell", "Toolbar Bell")}</label>
-				<div class={s.toggle}>
-					<input
-						type="checkbox"
-						checked={notificationsStore.state.config.toasts_in_bell}
-						onChange={(e) => notificationsStore.setToastsInBell(e.currentTarget.checked)}
-					/>
-					<span>{t("notifications.toggle.toastsInBell", "Keep toasts in the bell")}</span>
-				</div>
-				<p class={s.hint} style={{ "margin-top": "6px" }}>
-					{t(
-						"notifications.hint.toastsInBell",
-						"Toasts fade on their own, often while you look at another window. Mirroring them into the bell keeps them readable afterwards. Turn this off to leave toasts transient.",
+				<SettingToggle
+					row
+					checked={notificationsStore.state.autoToastCards}
+					onChange={(enabled) => notificationsStore.setAutoToastCards(enabled)}
+					label={t("notifications.toggle.autoToastCards", "Show cards from the active terminal")}
+					hint={t(
+						"notifications.hint.autoToastCards",
+						"Show normal agent toast cards only on their active origin terminal tab. Other tabs receive bell entries only. Urgent notices always show a card. Saved for this client.",
 					)}
-				</p>
-			</div>
+				/>
 
-			<SettingToggle
-				checked={notificationsStore.state.autoToastCards}
-				onChange={(enabled) => notificationsStore.setAutoToastCards(enabled)}
-				label={t("notifications.toggle.autoToastCards", "Show cards from the active terminal")}
-				hint={t(
-					"notifications.hint.autoToastCards",
-					"Show normal agent toast cards only on their active origin terminal tab. Other tabs receive bell entries only. Urgent notices always show a card. Saved for this client.",
-				)}
-			/>
-
-			<div class={s.group}>
-				<label>{t("notifications.label.prNotifications", "Pull Requests")}</label>
-				<div class={s.toggle}>
-					<input
-						type="checkbox"
+				<div class={s.group}>
+					<label>{t("notifications.label.prNotifications", "Pull Requests")}</label>
+					<SettingToggle
+						row
 						checked={notificationsStore.state.config.pr_native_notifications}
-						onChange={(e) => notificationsStore.setPrNativeNotifications(e.currentTarget.checked)}
+						onChange={(value) => notificationsStore.setPrNativeNotifications(value)}
+						label={t("notifications.toggle.prNative", "OS notification for PR changes")}
 					/>
-					<span>{t("notifications.toggle.prNative", "OS notification for PR changes")}</span>
+					<p class={s.hint} style={{ "margin-top": "6px" }}>
+						{t(
+							"notifications.hint.prNative",
+							"Notify when a PR becomes ready to merge, fails CI, gets changes requested or is merged, while TUICommander is in the background. Clicking the notification opens the PR on GitHub.",
+						)}
+					</p>
 				</div>
-				<p class={s.hint} style={{ "margin-top": "6px" }}>
-					{t(
-						"notifications.hint.prNative",
-						"Notify when a PR becomes ready to merge, fails CI, gets changes requested or is merged, while TUICommander is in the background. Clicking the notification opens the PR on GitHub.",
+			</SectionCard>
+			<SectionCard title={t("notifications.heading.tasks", "Tasks")}>
+				<SettingToggle
+					row
+					checked={tasksNotifications.enabled()}
+					onChange={(enabled) => tasksNotifications.setEnabled(enabled)}
+					label={t("notifications.toggle.tasks", "OS notifications for Tasks")}
+					hint={t(
+						"notifications.hint.tasks",
+						"Off by default. Notify for failed checks on linked GitHub PRs and new comments on followed tasks during existing detail refreshes. No background item polling. Saved with Tasks preferences.",
 					)}
-				</p>
-			</div>
-			<h3>{t("notifications.heading.tasks", "Tasks")}</h3>
-			<SettingToggle
-				checked={tasksNotifications.enabled()}
-				onChange={(enabled) => tasksNotifications.setEnabled(enabled)}
-				label={t("notifications.toggle.tasks", "OS notifications for Tasks")}
-				hint={t(
-					"notifications.hint.tasks",
-					"Off by default. Notify for failed checks on linked GitHub PRs and new comments on followed tasks during existing detail refreshes. No background item polling. Saved with Tasks preferences.",
-				)}
-			/>
+				/>
+			</SectionCard>
 		</div>
 	);
 };
