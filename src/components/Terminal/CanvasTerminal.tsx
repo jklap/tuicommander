@@ -3387,13 +3387,12 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				transport.unsubscribe();
 				return;
 			}
-			// Paint the current grid now. The browser-mode WS subscribe (unlike the
-			// Tauri event channel) does not replay the current frame, so an idle
-			// session with no pending output would render nothing and leave the
-			// canvas black until the first interaction. Forcing a full frame here is
-			// idempotent on desktop and fixes the black-on-load in browser mode.
-			noteFrameRequest();
-			invokeRef?.("terminal_request_frame", { sessionId: props.sessionId }).catch(ipcErr("terminal_request_frame"));
+			// WS needs an initial frame even for an idle session. Desktop visibility
+			// publication already owns its authoritative frame request.
+			if (!transport.setVisible) {
+				noteFrameRequest();
+				invokeRef?.("terminal_request_frame", { sessionId: props.sessionId }).catch(ipcErr("terminal_request_frame"));
+			}
 		} catch (e) {
 			appLogger.error("terminal", "Failed to subscribe to terminal grid channel", {
 				sessionId: props.sessionId,
