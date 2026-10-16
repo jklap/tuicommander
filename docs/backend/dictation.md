@@ -906,8 +906,19 @@ speech service** (the settings panel says so under Spoken replies).
   with a 100 ms read timeout: cancel, the deadline and the budget are checked
   between reads, so a cancelled reply stops within about 100 ms.
 - **Protocol** (recorded, see `speech/fixtures/edge_stream.json`): handshake
-  with `Sec-MS-GEC` (SHA-256 of the clock rounded to five minutes plus the
-  public client token) and the browser's `Origin`; `speech.config` then `ssml`;
+  at `wss://api.msedgeservices.com/tts/cognitiveservices/websocket/v1`,
+  with the public token in the `Ocp-Apim-Subscription-Key` query parameter.
+  `Sec-MS-GEC` retains ordinary SHA-256 over the five-minute Windows clock
+  bucket and token, with version `1-130.0.2849.68`. A live Mac probe on
+  2026-10-16 returned HTTP 101 and 22,752 MP3 bytes with this v1 digest;
+  omitting both GEC parameters returned HTTP 403 and no audio. The v2
+  control also returned HTTP 101 and 22,752 bytes, but is not needed.
+  No LGPL digest implementation is included. The endpoint migration follows
+  [Readest PR 6722](https://github.com/readest/readest/pull/6722).
+  The voice list stays on the original Bing URL (verified HTTP 200 on
+  2026-10-16). The handshake also sends the browser's `Origin`, desktop
+  Edge user agent, language/encoding headers and a random MUID cookie.
+  `speech.config` then `ssml`;
   text frames `turn.start`, `response`, `turn.end` around binary frames made of
   a big-endian `u16` header length, the headers and the MP3 body. Output is
   `audio-24khz-48kbitrate-mono-mp3`, which makes the budget a byte count (6000
@@ -1872,3 +1883,5 @@ that patch most plausibly broke, and the only one upstream CI covered.
 The internal voice settings owner uses cache-only `describe` and explicit `refresh` for input devices, Whisper models, installed Pocket voices and Edge voices. Refresh reads the configured language through the strict voice file owner. Model options include installed/downloadable state; installed voice options retain their source. Input backend failure is unavailable, not a supported empty list. Edge refresh may fetch the service catalogue; describe never fetches or downloads.
 
 `VoiceAction` provides typed assets, model download/delete, speech asset download/cancel/delete and voice import/delete. It delegates to the existing command owners and their allowlisted asset IDs, size validation and runtime locks. These are internal host methods for later transport publication, not an arbitrary command executor. Existing engine/language descriptors and runtime invalidation remain authoritative. Builds without dictation still describe unavailable voice fields.
+
+Pocket voice recovery: a missing configured catalogue voice uses the ready bundle’s default voice in the same language. Each reply resolves the voice again before enqueueing, so a completed download takes effect on the next reply without rebuilding the language model. Unknown voice names remain errors. No voice or model from another language is substituted.

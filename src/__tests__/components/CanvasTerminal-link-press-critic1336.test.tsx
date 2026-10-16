@@ -1,5 +1,6 @@
 import { render, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { VisibleIntersectionObserver } from "../helpers/visibleIntersectionObserver";
 
 /**
  * A left press on an underlined path while the app reports the mouse (Claude
@@ -180,13 +181,7 @@ describe("CanvasTerminal link press, critic 1336", () => {
 				disconnect() {}
 			},
 		);
-		vi.stubGlobal(
-			"IntersectionObserver",
-			class {
-				observe() {}
-				disconnect() {}
-			},
-		);
+		vi.stubGlobal("IntersectionObserver", VisibleIntersectionObserver);
 
 		const view = render(() => <CanvasTerminal sessionId="link-1324" terminalId="link-1324" onOpenFilePath={onOpen} />);
 		unmount = view.unmount;

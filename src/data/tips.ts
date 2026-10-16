@@ -10,9 +10,26 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "Hands-free conversation shortcut",
+		description: `Press ${mod}+Alt+V to start or stop hands-free on the active terminal when dictation is enabled. Customize the chord in Keyboard Shortcuts.`,
+		shortcut: `${mod}+Alt+V`,
+	},
+	{
+		feature: "Tab shortcut hints",
+		description: `Hold ${mod} alone for 450 ms to show shortcuts on the first nine terminal tabs. Release it or use another key, mouse button, or scroll to hide the hints.`,
+		shortcut: null,
+	},
+	{
 		feature: "Delete AI Chat conversations",
 		description:
 			"Open Conversations in AI Chat and use a row’s trash button to permanently delete its history after confirming the name.",
+
+		shortcut: null,
+	},
+	{
+		feature: "ego provider recovery",
+		description:
+			"When terminal ego reports a provider outage, the status bar shows its recovery attempt and next retry. Select Force retry to send /retry once to that terminal.",
 		shortcut: null,
 	},
 	{

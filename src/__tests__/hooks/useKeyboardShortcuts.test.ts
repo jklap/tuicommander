@@ -1,13 +1,21 @@
+import { render } from "@solidjs/testing-library";
+import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useQuickSwitcherVisibility } from "../../hooks/useQuickSwitcherVisibility";
 import "../mocks/tauri";
+import * as handsFree from "../../actions/handsFreeConversation";
 import { type ShortcutHandlers, useKeyboardShortcuts } from "../../hooks/useKeyboardShortcuts";
+import { resetPlatformCache } from "../../platform";
+import { dictationStore } from "../../stores/dictation";
 import { globalWorkspaceStore } from "../../stores/globalWorkspace";
+import { keybindingsStore } from "../../stores/keybindings";
 import { paneLayoutStore, resetGroupCounter } from "../../stores/paneLayout";
 import { progressStore } from "../../stores/progress";
 import { repositoriesStore } from "../../stores/repositories";
 import { settingsStore } from "../../stores/settings";
 import { terminalsStore } from "../../stores/terminals";
 import { makeTerminal } from "../helpers/store";
+import { mockInvoke } from "../mocks/tauri";
 
 function resetStores() {
 	for (const id of terminalsStore.getIds()) {
@@ -112,6 +120,7 @@ describe("useKeyboardShortcuts", () => {
 	beforeEach(() => {
 		vi.useFakeTimers();
 		Object.defineProperty(navigator, "platform", { value: "MacIntel", configurable: true });
+		resetPlatformCache();
 		resetStores();
 		handlers = createMockHandlers();
 		cleanup = useKeyboardShortcuts(handlers);
@@ -121,10 +130,151 @@ describe("useKeyboardShortcuts", () => {
 		vi.useRealTimers();
 		cleanup?.();
 		Object.defineProperty(navigator, "platform", { value: originalPlatform, configurable: true });
+		resetPlatformCache();
 		settingsStore._testCancelPendingSave();
 		paneLayoutStore._testCancelPendingSave();
 	});
 
+	// Catches: Ctrl+Alt+V being swallowed by the real quick-switcher hold on Win/Linux.
+	it.each(["Win32", "Linux x86_64"])(
+		"hands-free chord survives the quick-switcher modifier hold on %s",
+		async (platform) => {
+			Object.defineProperty(navigator, "platform", { configurable: true, value: platform });
+			resetPlatformCache();
+			const toggle = vi.spyOn(handsFree, "toggleHandsFreeConversation").mockResolvedValue(undefined);
+			mockInvoke.mockResolvedValue({ enabled: true, hotkey: "F5", language: "auto" });
+			await dictationStore.refreshConfig();
+			mockInvoke.mockReset().mockResolvedValue(undefined);
+			const view = render(() => {
+				const [visible, setVisible] = createSignal(false);
+				useQuickSwitcherVisibility(setVisible);
+				handlers.isQuickSwitcherOpen = visible;
+				return null;
+			});
+			const input = document.createElement("input");
+			const terminalKeydown = vi.fn();
+			input.addEventListener("keydown", terminalKeydown);
+			document.body.append(input);
+			try {
+				fireKeydown("Control", { ctrlKey: true });
+				fireKeydown("Alt", { ctrlKey: true, altKey: true });
+				const event = new KeyboardEvent("keydown", {
+					key: "v",
+					ctrlKey: true,
+					altKey: true,
+					code: "KeyV",
+					bubbles: true,
+					cancelable: true,
+				});
+				input.dispatchEvent(event);
+				expect(toggle).toHaveBeenCalledOnce();
+				expect(event.defaultPrevented).toBe(true);
+				expect(terminalKeydown).not.toHaveBeenCalled();
+				fireKeydown("2", { ctrlKey: true, altKey: true });
+				expect(handlers.switchToBranchByIndex).toHaveBeenCalledWith(2);
+			} finally {
+				input.remove();
+				view.unmount();
+				toggle.mockRestore();
+			}
+		},
+	);
+
+	describe("hands-free default hotkey", () => {
+		async function configure(enabled: boolean) {
+			mockInvoke.mockImplementation(async (cmd: string) =>
+				cmd === "get_dictation_config" ? { enabled, hotkey: "F5", language: "auto" } : undefined,
+			);
+			await dictationStore.refreshConfig();
+			mockInvoke.mockReset().mockResolvedValue(undefined);
+		}
+
+		it.each(["MacIntel", "Win32", "Linux x86_64"])(
+			"primary+Alt+V dispatches the shared toggle on %s",
+			async (platform) => {
+				Object.defineProperty(navigator, "platform", { configurable: true, value: platform });
+				resetPlatformCache();
+				await configure(true);
+				const toggle = vi.spyOn(handsFree, "toggleHandsFreeConversation").mockResolvedValue(undefined);
+				try {
+					const event = fireKeydown("v", {
+						metaKey: platform === "MacIntel",
+						ctrlKey: platform !== "MacIntel",
+						altKey: true,
+					});
+					expect(event.defaultPrevented).toBe(true);
+					expect(toggle).toHaveBeenCalledOnce();
+				} finally {
+					toggle.mockRestore();
+					resetPlatformCache();
+				}
+			},
+		);
+
+		it("disabled dictation consumes the chord without invoking the toggle or showing an error", async () => {
+			await configure(false);
+			const toggle = vi.spyOn(handsFree, "toggleHandsFreeConversation").mockResolvedValue(undefined);
+			try {
+				const before = dictationStore.state.handsFreeError;
+				const event = fireKeydown("v", { metaKey: true, altKey: true });
+				expect(event.defaultPrevented).toBe(true);
+				expect(toggle).not.toHaveBeenCalled();
+				expect(mockInvoke).not.toHaveBeenCalled();
+				expect(dictationStore.state.handsFreeError).toBe(before);
+			} finally {
+				toggle.mockRestore();
+			}
+		});
+
+		it("the default chord starts the active terminal then stops the same conversation", async () => {
+			await configure(true);
+			terminalsStore.add(makeTerminal({ sessionId: "other-session" }));
+			const active = terminalsStore.add(makeTerminal({ sessionId: "active-session" }));
+			terminalsStore.setActive(active);
+			const status = {
+				armed: true,
+				phase: "waiting",
+				sessionId: "active-session",
+				owner: "desktop",
+				generation: 1,
+				pendingText: null,
+				holdBackMs: 0,
+				error: null,
+				deliveredTurns: 0,
+				droppedTurns: 0,
+			};
+			mockInvoke.mockImplementation(async (cmd: string) => {
+				if (cmd === "arm_hands_free_dictation") return status;
+				if (cmd === "disarm_hands_free_dictation") return { status: { ...status, armed: false, sessionId: null } };
+				return undefined;
+			});
+			fireKeydown("v", { metaKey: true, altKey: true });
+			await vi.waitFor(() => expect(dictationStore.state.handsFree?.armed).toBe(true));
+			expect(mockInvoke.mock.calls.filter(([cmd]) => cmd === "arm_hands_free_dictation")).toEqual([
+				["arm_hands_free_dictation", { sessionId: "active-session", owner: "desktop" }],
+			]);
+			mockInvoke.mockClear();
+			fireKeydown("v", { metaKey: true, altKey: true });
+			await vi.waitFor(() => expect(dictationStore.state.handsFree?.armed).toBe(false));
+			expect(mockInvoke.mock.calls.map(([cmd]) => cmd)).toContain("disarm_hands_free_dictation");
+			expect(mockInvoke.mock.calls.map(([cmd]) => cmd)).not.toContain("arm_hands_free_dictation");
+		});
+
+		it("an explicit unbind overrides the new default", async () => {
+			await configure(true);
+			mockInvoke.mockResolvedValue([]);
+			await keybindingsStore.hydrate();
+			const toggle = vi.spyOn(handsFree, "toggleHandsFreeConversation").mockResolvedValue(undefined);
+			try {
+				await keybindingsStore.unbind("toggle-hands-free");
+				fireKeydown("v", { metaKey: true, altKey: true });
+				expect(toggle).not.toHaveBeenCalled();
+			} finally {
+				await keybindingsStore.resetAction("toggle-hands-free");
+				toggle.mockRestore();
+			}
+		});
+	});
 	describe("zoom shortcuts", () => {
 		it("Cmd+= zooms in", () => {
 			fireKeydown("=", { metaKey: true });

@@ -35,6 +35,12 @@ export type ShellState = "busy" | "idle" | "exited" | null;
 /** Authoritative task lifecycle from the backend; distinct from PTY activity. */
 export type TerminalViewMode = "cli" | "chat";
 
+export interface ProviderRecovery {
+	phase: "waiting" | "retrying";
+	next_attempt_ms: number | null;
+	attempt: number;
+}
+
 export type AgentLifecycleState = "starting" | "working" | "awaiting_input" | "idle" | "completed" | null;
 
 const VALID_SHELL_STATES = new Set<string>(["busy", "idle", "exited"]);
@@ -80,6 +86,7 @@ export interface TerminalData {
 	/** Monotonic local event revision; prevents a stale session snapshot from overwriting PTY state. */
 	shellStateRevision: number;
 	agentState: AgentLifecycleState;
+	providerRecovery?: ProviderRecovery | null;
 	backgroundWork: boolean;
 	queuedCommands: number; // Compose-panel commands waiting for the agent's next idle window
 	completionNotified: boolean; // Current busy cycle already produced its completion notification

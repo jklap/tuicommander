@@ -5195,3 +5195,55 @@ async fn design_mode_meta_discovery_is_scoped_to_the_armed_session() {
     .await;
     assert_eq!(schema["error"], "Design Mode not armed for this session");
 }
+
+/// Catches: force retry writing to a non-ego tab or sending more than one submitting Enter.
+#[cfg(unix)]
+#[test]
+fn provider_recovery_force_retry_targets_only_recovering_ego() {
+    let state = test_state();
+    let bytes = install_atomic_submit_test_session(&state, TEST_UUID_A);
+    let args = serde_json::json!({"action": "force_retry", "session_id": TEST_UUID_A});
+    assert!(handle_session(&state, &args, None)["error"].is_string());
+    assert!(bytes.lock().unwrap().is_empty());
+    {
+        let mut session = state
+            .session_maps
+            .session_states
+            .get_mut(TEST_UUID_A)
+            .unwrap();
+        session.agent_type = Some("ego".into());
+        session.provider_recovery = Some(crate::output_parser::ProviderRecovery {
+            phase: "waiting".into(),
+            next_attempt_ms: Some(1792100000000),
+            attempt: 1,
+        });
+    }
+    crate::mcp_http::session::write_pty_input(
+        &state,
+        TEST_UUID_A,
+        "Investigate the pending changes",
+    )
+    .unwrap();
+    bytes.lock().unwrap().clear();
+    assert_eq!(
+        handle_session(&state, &args, None)["error"],
+        "Session composer is not empty"
+    );
+    assert!(bytes.lock().unwrap().is_empty());
+    assert_eq!(
+        state
+            .session_maps
+            .input_buffers
+            .get(TEST_UUID_A)
+            .unwrap()
+            .lock()
+            .content(),
+        "Investigate the pending changes"
+    );
+    crate::mcp_http::session::write_pty_input(&state, TEST_UUID_A, "\x15").unwrap();
+    bytes.lock().unwrap().clear();
+    let result = handle_session(&state, &args, None);
+    assert_eq!(result["submitted"], true, "{result}");
+    let written = bytes.lock().unwrap();
+    assert_eq!(written.as_slice(), b"\x15/retry\r");
+}

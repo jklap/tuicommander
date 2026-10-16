@@ -1,5 +1,11 @@
 # Components
 
+Repository Settings uses scoped cards and responsive labelled rows. The existing repository update callbacks and export command remain authoritative. Reset is presented with its repository scope and consequences rather than as an unscoped footer action.
+
+Agents Settings uses page and section primitives while its machine context still owns agent configuration writes. Per-agent lists and nested run/environment editors use scoped responsive styles; drafts, validation, and save handlers are unchanged.
+
+Workspace Settings pages use `SettingPageHeader`, `SectionCard`, and opt-in row fields. `WorkspaceTabs.module.css` scopes shortcut action-first layout without changing capture handlers or global Settings styles.
+
 Application Settings tabs opt into `SettingFields` row presentation. The default stacked layout remains available to unchanged consumers. Row controls use `SettingRow` for label and hint association; slider input and commit events remain separate.
 
 
@@ -826,3 +832,12 @@ FileBrowserPanel subscribes to successful folder-drop completion and routes it t
 ### Settings presentation vocabulary
 
 `SettingsPrimitives.tsx` provides SettingPageHeader, SectionCard, SettingRow, StatusSummary, ListRow, EmptyState and DangerZone. These components render caller-owned content only. SettingRow reuses SettingField label and descriptive IDs, including field errors; controls remain the existing UI Input/Select/Textarea components. SectionCard and DangerZone titles are understood by the static Settings search extractor and render h3 anchors. Existing field consumers retain their stacked layout unless they opt into row presentation.
+
+The Pocket Voice picker includes installed and downloadable catalogue voices for the active language. A missing configured voice stays selected with a Not Downloaded label and an adjacent Download row.
+
+Terminal ego provider recovery: the tab replaces its busy animation with a
+recovering label. StatusBar mounts ProviderRecoveryStatus only while a complete
+backend recovery snapshot exists; its one-second display timer stops on unmount.
+The component displays phase, attempt, next-time and a zero-clamped countdown,
+with a single-flight Force retry button using the shared backend retry transaction.
+A non-empty composer refuses the retry; the status bar displays the error.

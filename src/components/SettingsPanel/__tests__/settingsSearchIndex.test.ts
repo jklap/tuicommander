@@ -67,9 +67,10 @@ const UNINDEXABLE: Record<string, { dynamic: number; orphans: number }> = {
 	// idle-close control sits inside a collapsed, per-agent card: search cannot
 	// identify which card to expand or scroll to its hidden control. Neither has
 	// a stable search target.
+	// Named run editors add six persistent field labels, but search cannot open their runtime forms.
 	// The per-agent "Launch instructions for <agent>" editor names its agent at
 	// runtime, inside a collapsed card; the global editor is indexed.
-	agents: { dynamic: 1, orphans: 12 },
+	agents: { dynamic: 1, orphans: 19 },
 	// The `<optgroup label={provider.name}>` inside the default-model picker. It
 	// groups the options by provider and is not a setting anybody can scroll to.
 	"ai-chat": { dynamic: 4, orphans: 0 },
@@ -160,6 +161,13 @@ describe("settings search index — drift guard", () => {
 	it("keeps per-agent captions and the machine selector out of static search targets", () => {
 		const orphans = extractTab(readPage("agents")).settings.filter((setting) => !setting.section);
 		expect(orphans.map((setting) => setting.text)).toEqual([
+			"Arguments",
+			"Configuration name",
+			"Command (binary)",
+			"Model (optional)",
+			"Configuration name",
+			"Command (binary)",
+			"Model (optional)",
 			"Usage Dashboard",
 			"Close idle managed child after",
 			"Enabled",
@@ -238,6 +246,7 @@ describe("searchSettings", () => {
 
 	it("offers a desktop-only control on the desktop and not in a browser", () => {
 		expect(searchSettings("global hotkey", ALL_TABS, "desktop")).toEqual([
+			expect.objectContaining({ tab: "keyboard-shortcuts", section: "Global Hotkey", platform: "desktop" }),
 			expect.objectContaining({ tab: "keyboard-shortcuts", label: "Global Hotkey (Toggle Window)" }),
 		]);
 		expect(searchSettings("global hotkey", ALL_TABS, "browser")).toEqual([]);

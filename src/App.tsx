@@ -211,6 +211,7 @@ const App: Component = () => {
 
 	// Quick switcher state
 	const [quickSwitcherVisible, setQuickSwitcherVisible] = createSignal(false);
+	const [tabHintsVisible, setTabHintsVisible] = createSignal(false);
 
 	// Rename branch dialog state
 	const [renameBranchDialogVisible, setRenameBranchDialogVisible] = createSignal(false);
@@ -625,7 +626,7 @@ const App: Component = () => {
 
 	useTerminalReattachBridge({ reattach: reattachFallback, setStatusInfo });
 
-	useQuickSwitcherVisibility(setQuickSwitcherVisible);
+	useQuickSwitcherVisibility(setQuickSwitcherVisible, setTabHintsVisible);
 	const shortcutHandlers = useAppShortcutHandlers({
 		terminalLifecycle,
 		gitOps,
@@ -826,6 +827,7 @@ const App: Component = () => {
 					{/* Tab bar */}
 					<div id="tab-bar">
 						<TabBar
+							tabHintsActive={tabHintsVisible()}
 							quickSwitcherActive={quickSwitcherHints(quickSwitcherVisible(), globalWorkspaceStore.isActive()).tabBar}
 							onTabSelect={terminalLifecycle.handleTerminalSelect}
 							onTabClose={terminalLifecycle.closeTerminal}

@@ -329,6 +329,13 @@ describe("transport", () => {
 	});
 
 	describe("mapCommandToHttp()", () => {
+		it("maps force retry to the guarded session transaction instead of raw PTY writes", () => {
+			expect(mapCommandToHttp("force_retry_provider_recovery_command", { sessionId: "ego-a" })).toEqual({
+				method: "POST",
+				path: "/sessions/ego-a/force-retry",
+			});
+		});
+
 		it("maps one complete managed reply to the atomic session route", () => {
 			expect(mapCommandToHttp("submit_agent_reply", { sessionId: "s1", input: "answer" })).toEqual({
 				method: "POST",

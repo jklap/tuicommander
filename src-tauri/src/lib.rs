@@ -2079,6 +2079,7 @@ pub fn run() {
             pty::create_pty,
             pty::create_pty_with_worktree,
             pty::list_worktrees,
+            pty::force_retry_provider_recovery_command,
             pty::write_pty,
             pty::write_pty_parts,
             attachments::upload_attachment,
@@ -3172,6 +3173,7 @@ mod tests {
                 channel: tauri::ipc::Channel::new(|_| Ok(())),
                 webview_label: webview_label.to_string(),
                 epoch,
+                visible: std::sync::atomic::AtomicBool::new(true),
             },
         );
         epoch
