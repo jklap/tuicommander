@@ -783,3 +783,5 @@ Only then does the main WebView acknowledge `snapshot-now`. A persistence error
 is logged and leaves the acknowledgement pending for the backend timeout.
 
 Tasks notice preferences use `uiStore.tasksViewPreferences`: a default-off policy and per-provider/account/item follow state with comment baselines. Existing detail refreshes send snapshots to Rust through `compare_work_item_comments`; native delivery reuses the PR notice service. No additional store or provider poller is created.
+
+The settings Voice picker combines `speechVoices` (installed) with the language-scoped voice entries in `speechAssets` (downloads); a configured missing catalogue voice remains visible.

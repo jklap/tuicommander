@@ -598,14 +598,29 @@ const SpeechSetup: Component = () => {
 			? dictationStore.state.language !== "auto"
 			: engine() === "pocket" && (languageAsset()?.voices.length ?? 0) > 0;
 
-	/** Voice ids the picker offers: only voices that can speak now. Before the
-	 * list loads, the language's shipped voices — but only once the language is
-	 * downloaded, because without it no voice speaks. */
+	// Include catalogue choices even before download: a stored missing choice
+	// must remain selected instead of blanking the native select.
+	const voiceAssets = () =>
+		dictationStore.state.speechAssets.filter(
+			(asset) => asset.kind === "voice" && asset.language === dictationStore.state.language,
+		);
+	const selectedMissingAsset = () =>
+		voiceAssets().find((asset) => asset.voice === dictationStore.state.speechVoice && asset.state !== "ready");
 	const voiceChoices = (): string[] => {
-		const loaded = dictationStore.state.speechVoices.map((voice) => voice.id);
-		if (loaded.length > 0) return loaded;
 		const asset = languageAsset();
-		return asset?.state === "ready" ? asset.voices : [];
+		const installed = dictationStore.state.speechVoices.map((voice) => voice.id);
+		return [
+			...new Set([
+				...(asset?.state === "ready" ? asset.voices : []),
+				...installed,
+				...voiceAssets().flatMap((voice) => (voice.voice ? [voice.voice] : [])),
+				...(dictationStore.state.speechVoice ? [dictationStore.state.speechVoice] : []),
+			]),
+		];
+	};
+	const voiceLabel = (voice: string): string => {
+		const asset = voiceAssets().find((asset) => asset.voice === voice);
+		return asset && asset.state !== "ready" ? `${voice} — ${t("dictation.notDownloaded", "Not Downloaded")}` : voice;
 	};
 
 	const [previewError, setPreviewError] = createSignal<string | null>(null);
@@ -730,7 +745,13 @@ const SpeechSetup: Component = () => {
 									onChange={(e) => dictationStore.setSpeechVoice(e.currentTarget.value)}
 								>
 									<option value="">{t("dictation.voiceDefault", "Default for this language")}</option>
-									<For each={voiceChoices()}>{(voice) => <option value={voice}>{voice}</option>}</For>
+									<For each={voiceChoices()}>
+										{(voice) => (
+											<option value={voice} selected={voice === dictationStore.state.speechVoice}>
+												{voiceLabel(voice)}
+											</option>
+										)}
+									</For>
 								</Select>
 							}
 						>
@@ -748,6 +769,7 @@ const SpeechSetup: Component = () => {
 							{t("dictation.listen", "Listen")}
 						</button>
 					</div>
+					<Show when={!isEdge() && selectedMissingAsset()}>{(asset) => <SpeechAssetRow asset={asset()} />}</Show>
 					<Show when={isEdge() && dictationStore.state.edgeVoicesError}>
 						<p class={cx(s.hint, d.conversationError)}>{dictationStore.state.edgeVoicesError}</p>
 					</Show>

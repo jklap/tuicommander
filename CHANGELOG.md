@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+- Keep missing Pocket voices visible in Settings with a download action; use the installed same-language default for spoken replies.
+
+
 - Restyle General, Appearance and Notifications with shared Settings cards and labelled control rows, preserving existing actions and audio-device consent (#1937-c2e4).
 
 - Establish the approved wider Settings shell and reusable theme-aware presentation vocabulary (#1936-0caa).

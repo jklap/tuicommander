@@ -811,15 +811,9 @@ fn build_voice(
 /// untouched configuration says and what every configuration said before the
 /// setting existed.
 ///
-/// A named voice must be one the language holds — the one it ships, a
-/// catalogue voice that is downloaded, or a file the user imported
-/// ([`speech::library::installed_voices`]). Anything else is an error rather
-/// than a silent fall back to the first one. The ways to get here are a voice
-/// that was deleted, a download that is not there yet, and a language the user
-/// changed underneath the setting; all are cases where speaking in a voice
-/// nobody chose is worse than saying why nothing was spoken, and the message
-/// reaches the user through the hands-free status rather than being buried in
-/// a log.
+/// Keep installed choices, and recover a missing catalogue download with the
+/// same language's installed default. The picker retains the configured choice
+/// and offers its download. Unknown names still report an error.
 fn choose_voice(asset: &speech::assets::Asset, configured: &str) -> Result<String, String> {
     if configured.is_empty() {
         return asset
@@ -835,7 +829,13 @@ fn choose_voice(asset: &speech::assets::Asset, configured: &str) -> Result<Strin
     let language = asset.language().unwrap_or_default();
     if speech::assets::downloadable_voices(language).any(|voice| voice.voice() == Some(configured))
     {
-        // The catalogue has it, so the fix is one download away.
+        // A missing optional voice must not disable a ready language. Never
+        // borrow a same-named voice from another language's catalogue.
+        if speech::assets::status(asset) == speech::assets::Status::Ready
+            && let Some(default) = asset.voices().first()
+        {
+            return Ok((*default).to_string());
+        }
         return Err(format!(
             "The {} voice \"{configured}\" is not downloaded; download it in Settings → Voice",
             asset.display_name
