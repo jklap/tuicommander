@@ -239,6 +239,8 @@ pub enum AppEvent {
     /// Terminal title set (or reset to empty) through OSC 0/2.
     #[serde(rename = "pty-title")]
     PtyTitle { session_id: String, title: String },
+    #[serde(rename = "pty-bell")]
+    PtyBell { session_id: String },
     /// "This session produced output." Payload-free on purpose: the only
     /// consumers are a last-seen timestamp and an unread flag, neither of which
     /// needs a byte of the output itself. Throttled at the producer — see
@@ -559,6 +561,7 @@ impl AppEvent {
             | AppEvent::PtyExit { session_id }
             | AppEvent::PtyActivity { session_id }
             | AppEvent::PtyTitle { session_id, .. }
+            | AppEvent::PtyBell { session_id }
             | AppEvent::PtyOsc133 { session_id, .. }
             | AppEvent::PtyCwd { session_id, .. }
             | AppEvent::PtyDescriptionChanged { session_id, .. }
@@ -1883,6 +1886,7 @@ pub(crate) struct DesktopGridChannel {
     pub(crate) channel: tauri::ipc::Channel<tauri::ipc::Response>,
     pub(crate) webview_label: String,
     pub(crate) epoch: u64,
+    pub(crate) visible: AtomicBool,
 }
 
 /// The rendering half of [`AppState`] (#678-9a75): one VT grid per session,
@@ -4837,7 +4841,7 @@ impl AppState {
             // answers the different question "are bytes flowing right now", which
             // is true throughout a `tail -f` that produces no semantic event at
             // all. Folding the two would silently redefine the mobile column.
-            AppEvent::PtyActivity { .. } | AppEvent::PtyTitle { .. } => {}
+            AppEvent::PtyActivity { .. } | AppEvent::PtyTitle { .. } | AppEvent::PtyBell { .. } => {}
             // Shell-integration markers and the OSC 7 cwd are terminal-rendering
             // signals, not session state. The cwd that state cares about is
             // written straight onto the `sessions` entry at the emit site; this

@@ -1,5 +1,11 @@
 # Settings
 
+Repository Settings separates identity, inherited worktree overrides, Design Mode, scripts, team sharing, and reset. Nullable controls retain their global-default choice. Reset clears override fields, including scripts, but retains repository identity and its Design Mode URL. Team exports never include scripts.
+
+Agents Settings shows the selected machine in the header. Run configuration editors keep explicit Save and Cancel actions. Terminal-agent permissions and filesystem sandbox remain separate from AI Chat ACP settings; launch instructions still save on blur.
+
+Workspace pages use the same cards and aligned rows. Terminal retains its live canvas preview and all clipboard and scrollback controls. Keyboard Shortcuts lists actions before their keycaps, with explicit Rebind and Reset actions. Git & GitHub separates authentication, monitoring, repository defaults, worktree defaults, additional accounts, CircleCI, and repository bindings. Existing save boundaries and policy choices are unchanged.
+
 The Application pages use section cards and labelled rows. General keeps its existing update and local-tool actions. Appearance keeps group rename validation and client-local chat preferences. Notifications keeps visual controls available without audio; output-device discovery starts only after **Choose output device**. Changing master volume previews once on release.
 
 

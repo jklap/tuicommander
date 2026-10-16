@@ -1,5 +1,11 @@
 # TUICommander — Complete Feature Reference
 
+Repository Settings exposes inherited overrides, scripts, team sharing, and a scoped reset card in the shared Settings vocabulary.
+
+Agents Settings uses machine-scoped headers, section cards, and responsive named run-configuration editors, with separate terminal permissions and hibernation sections.
+
+Workspace Settings uses consistent headers, section cards, and aligned fields across Terminal, Keyboard Shortcuts, and Git & GitHub, with the existing preview, bindings, and account flows.
+
 Application Settings pages use shared headers, cards and right-aligned controls. Audio output discovery remains explicit; visual notification and client-local preferences retain their existing scope.
 
 

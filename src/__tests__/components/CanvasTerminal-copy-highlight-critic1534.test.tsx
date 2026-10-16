@@ -1,5 +1,6 @@
 import { render, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { VisibleIntersectionObserver } from "../helpers/visibleIntersectionObserver";
 
 /**
  * Copy-on-select keeps the highlight (#1534-66ac).
@@ -113,7 +114,7 @@ describe("CanvasTerminal copy-on-select highlight", () => {
 			y: 0,
 			toJSON: () => ({}),
 		});
-		for (const name of ["ResizeObserver", "IntersectionObserver"]) {
+		for (const name of ["ResizeObserver"]) {
 			vi.stubGlobal(
 				name,
 				class {
@@ -122,6 +123,7 @@ describe("CanvasTerminal copy-on-select highlight", () => {
 				},
 			);
 		}
+		vi.stubGlobal("IntersectionObserver", VisibleIntersectionObserver);
 	});
 
 	afterEach(() => {

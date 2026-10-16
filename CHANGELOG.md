@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Restyle repository Settings with inherited override rows, script cards, team sharing, and a scoped reset action.
+
+- Restyle Agents Settings and named run editors while preserving machine ownership, draft saves, terminal permissions, and hibernation policy.
+
+- Restyle Workspace Settings with section cards, aligned terminal and Git fields, and action-first shortcut rows while preserving existing behavior.
+- Bound `tuic bg` completion command labels to one line and 120 characters; keep the full command before job output in the log (#1950-43b7).
 ### Fixed
 - Keep missing Pocket voices visible in Settings with a download action; use the installed same-language default for spoken replies.
 

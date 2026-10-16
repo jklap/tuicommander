@@ -947,6 +947,12 @@ Hibernation requires an idle agent and a verified resume session in its saved pr
 
 The normal Rust suspension path persists `reason: "idle_hibernate"` before ending the PTY. Opening the tab, submitting input or sending peer mail uses the shared wake path. Storage or resume-verification failures leave the live session intact.
 
+### Desktop visibility and frame timeout recovery
+
+Hidden desktop subscriptions receive no grid frames. The backend retains the authoritative grid and scroll position; showing a viewport requests a full frame. The desktop transport serializes epoch-scoped visibility publications so a delayed hide cannot overwrite a newer show. It requests the show frame only after publishing visibility; the canvas owns that request only for WebSocket transports. Bell events are emitted by the PTY reader through desktop session events and HTTP SSE/WebSocket events, independently of grid serialization. Repeated BEL bytes in one processed chunk coalesce into one session bell. History-base metadata refreshes with the show frame. Browser/PWA grid watchers remain independent, and backend activity/question parsing keeps running.
+
+For a visible desktop, three abandoned frames without real receipt progress pause ordinary delivery until a new receipt or explicit full-frame request. Synthetic abandonment does not count as receipt progress. A frame timeout alone does not prove a frontend heartbeat failure.
+
 Native ego OSC 7770 `ego-recovery` snapshots are validated at the PTY boundary
 and accumulated as `SessionState.provider_recovery`. The existing desktop and
 SSE `session-state-changed` snapshot carries the same object on both transports.

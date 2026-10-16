@@ -110,6 +110,7 @@ describe("AgentsTab expert controls", () => {
 		settingsState.progressTracking = true;
 		uiStore.setSettingsExpertMode(false);
 		mockInvoke.mockImplementation((cmd: string, payload?: { config: AgentsConfig }) => {
+			if (cmd === "list_installed_mcp_integrations") return Promise.resolve([]);
 			if (cmd === "get_config_defaults") return Promise.resolve(DEFAULTS);
 			if (cmd === "save_agents_config" && payload) {
 				agentsConfig = JSON.parse(JSON.stringify(payload.config.agents));
@@ -279,7 +280,7 @@ describe("AgentsTab expert controls", () => {
 		const label = [...container.querySelectorAll("label")].find((el) =>
 			el.textContent?.includes("Prevent alternate screen"),
 		);
-		const checkbox = label?.querySelector("input[type=checkbox]") as HTMLInputElement;
+		const checkbox = container.querySelector(`#${label?.htmlFor}`) as HTMLInputElement;
 		expect(checkbox.checked).toBe(true);
 		fireEvent.click(checkbox);
 		expect(agentConfigsStore.getPreventAltScreen("gemini")).toBe(false);
@@ -292,7 +293,7 @@ describe("AgentsTab expert controls", () => {
 		const label = [...container.querySelectorAll("label")].find((el) =>
 			el.textContent?.includes("Accept workspace trust for managed spawns"),
 		);
-		const checkbox = label?.querySelector("input[type=checkbox]") as HTMLInputElement;
+		const checkbox = container.querySelector(`#${label?.htmlFor}`) as HTMLInputElement;
 		expect(checkbox.checked).toBe(true);
 		fireEvent.click(checkbox);
 		await waitFor(() =>
@@ -311,7 +312,10 @@ describe("AgentsTab expert controls", () => {
 		await setup();
 		uiStore.setSettingsExpertMode(true);
 		const { container } = renderExpanded("claude");
-		const input = container.querySelector<HTMLInputElement>("#idle-close-claude");
+		const label = [...container.querySelectorAll("label")].find(
+			(e) => e.textContent === "Close idle managed child after",
+		);
+		const input = container.querySelector<HTMLInputElement>(`#${label?.htmlFor}`);
 		expect(input?.value).toBe("15");
 		fireEvent.change(input!, { target: { value: "0" } });
 		await waitFor(() => expect(agentConfigsStore.getIdleCloseMinutes("claude")).toBe(0));

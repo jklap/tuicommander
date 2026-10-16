@@ -1,5 +1,6 @@
 import { render, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { VisibleIntersectionObserver } from "../helpers/visibleIntersectionObserver";
 
 /**
  * Copy-on-select keeps the highlight (#1534-66ac).
@@ -127,7 +128,8 @@ describe("recorded Claude suggest projection and copy", () => {
 			y: 0,
 			toJSON: () => ({}),
 		});
-		for (const name of ["ResizeObserver", "IntersectionObserver"]) {
+		vi.stubGlobal("IntersectionObserver", VisibleIntersectionObserver);
+		for (const name of ["ResizeObserver"]) {
 			vi.stubGlobal(
 				name,
 				class {

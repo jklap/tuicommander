@@ -107,6 +107,7 @@ fn palette_color_for_index(index: usize) -> Option<Rgb> {
 pub enum TermEvent {
     Title(String),
     ResetTitle,
+    Bell,
     ClipboardStore(String),
     PtyWrite(String),
     MouseCursorDirty,
@@ -135,6 +136,10 @@ impl EventListener for TermEventCollector {
         match event {
             Event::Bell => {
                 self.bell.store(true, Ordering::Relaxed);
+                let mut events = self.events.lock();
+                if !events.iter().any(|event| matches!(event, TermEvent::Bell)) {
+                    events.push(TermEvent::Bell);
+                }
             }
             Event::Title(t) => {
                 self.events.lock().push(TermEvent::Title(t));
@@ -3159,6 +3164,19 @@ pub struct DamageGeometry {
 
 #[cfg(test)]
 mod tests {
+    /// Catches BEL being held until a grid frame is serialized for a hidden tab.
+    #[test]
+    fn hidden_bell_is_a_session_event_without_frame_serialization() {
+        let mut grid = super::TerminalGrid::new(2, 8, 10);
+        grid.process(b"\x07");
+        assert!(
+            grid.drain_events()
+                .iter()
+                .any(|e| matches!(e, super::TermEvent::Bell))
+        );
+        assert!(grid.drain_events().is_empty());
+    }
+
     use super::*;
 
     // Catches DECALN keeping lost provenance or inheriting the active erase background.
