@@ -9,12 +9,12 @@ import s from "../../Settings.module.css";
 import { SectionCard, SettingPageHeader, SettingRow } from "../../SettingsPrimitives";
 import layout from "./ServiceRestyle.module.css";
 import { type AppConfig, saveConfigField, useMcpStatusPoll } from "./servicesShared";
+import { UpstreamMcpPanel } from "./UpstreamMcpPanel";
 
 /**
  * Local MCP page: HTTP/MCP server status, the manual bridge configuration
  * snippet, and native-tool visibility controls. Upstream (remote) MCP
- * servers are a separate concern — `SettingsPanel` renders `UpstreamMcpPanel`
- * alongside this one under the same "mcp" tab.
+ * servers retain their own editor, mounted once inside Server connections.
  */
 export const LocalMcpPanel: Component = () => {
 	const { status } = useMcpStatusPoll();
@@ -47,7 +47,10 @@ export const LocalMcpPanel: Component = () => {
 				scope="This machine"
 				breadcrumb="Integrations / MCP"
 			/>
-			<SectionCard title={t("services.heading.httpApiServer", "HTTP API Server")}>
+			<SectionCard
+				title="Server connections"
+				description="Local HTTP API and upstream MCP servers share this machine’s integration settings."
+			>
 				<div class={s.group}>
 					<p class={s.hint}>
 						{t(
@@ -82,6 +85,7 @@ export const LocalMcpPanel: Component = () => {
 					{() => <StatusBadge label="tuic-bridge" />}
 				</SettingRow>
 
+				<UpstreamMcpPanel />
 				{/* ── TUIC Tools ── */}
 			</SectionCard>
 			<SectionCard title="TUIC Tools">
@@ -163,6 +167,9 @@ export const LocalMcpPanel: Component = () => {
 					{/* Static, unlike the per-tool names: the one label search can index for this group. */}
 					<div class={s.group}>
 						<label>Native tools</label>
+						<p class={s.hint}>
+							Choose which built-in tools MCP clients can call. Disabled tools are hidden from clients.
+						</p>
 					</div>
 					<For each={status()?.native_tools}>
 						{(tool) => {

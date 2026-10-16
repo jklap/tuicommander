@@ -50,12 +50,12 @@ const UNINDEXABLE: Record<string, { dynamic: number; orphans: number }> = {
 	github: { dynamic: 0, orphans: 0 },
 	// UpstreamMcpPanel: the "Discovered tools ({count})" label, whose rendered
 	// text includes a runtime count.
-	mcp: { dynamic: 1, orphans: 0 },
+	mcp: { dynamic: 3, orphans: 0 },
 	"remote-access": { dynamic: 0, orphans: 0 },
 	// RemoteMachinesPanel: the SSH-host `<option label={`${host}…`}>` (a
 	// datalist entry, not a setting), and the "Deployment" and "Keep ephemeral
 	// daemon alive" labels, whose text sits in a nested `<span>`.
-	"remote-machines": { dynamic: 3, orphans: 0 },
+	"remote-machines": { dynamic: 1, orphans: 0 },
 	plugins: { dynamic: 1, orphans: 0 },
 	"smart-prompts": { dynamic: 3, orphans: 12 },
 	// The per-agent "Native status signals", "Prevent alternate screen", and
@@ -72,7 +72,7 @@ const UNINDEXABLE: Record<string, { dynamic: number; orphans: number }> = {
 	agents: { dynamic: 1, orphans: 12 },
 	// The `<optgroup label={provider.name}>` inside the default-model picker. It
 	// groups the options by provider and is not a setting anybody can scroll to.
-	"ai-chat": { dynamic: 1, orphans: 0 },
+	"ai-chat": { dynamic: 4, orphans: 0 },
 };
 
 const readTab = (file: string) => fs.readFileSync(path.join(__dirname, "..", file), "utf8");

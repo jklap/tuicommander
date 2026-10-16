@@ -12,7 +12,7 @@ import { Select } from "../../../ui/Select";
 import { ExpertSetting } from "../../ExpertSetting";
 import { SettingInput, SettingSelect, SettingToggle } from "../../SettingFields";
 import s from "../../Settings.module.css";
-import { DangerZone, SectionCard, SettingPageHeader } from "../../SettingsPrimitives";
+import { DangerZone, SectionCard, SettingPageHeader, SettingRow } from "../../SettingsPrimitives";
 import layout from "./ServiceRestyle.module.css";
 import type { AppConfig } from "./servicesShared";
 import { saveConfigField, useMcpStatusPoll } from "./servicesShared";
@@ -220,7 +220,7 @@ export const RemoteAccessPanel: Component = () => {
 				scope="This machine"
 				breadcrumb="Integrations / Remote Access"
 			/>
-			<SectionCard title="Connection and access">
+			<SectionCard title="Connection status">
 				<SettingToggle
 					row
 					checked={raEnabled()}
@@ -242,117 +242,144 @@ export const RemoteAccessPanel: Component = () => {
 					<div class={s.raBody}>
 						<div class={s.raFields}>
 							<ExpertSetting configKey="app.services.server.port" value={raPort()}>
-								<div class={s.group}>
-									<label>{t("services.label.port", "Port")}</label>
-									<Input
-										type="number"
-										class={s.input}
-										value={raPort()}
-										min={1024}
-										max={65535}
-										onInput={(e) => setRaPort(parseInt(e.currentTarget.value, 10) || 9876)}
-										onChange={() =>
-											saveConfigField((c) => {
-												c.services.server.port = raPort();
-											})
-										}
-									/>
-									<p class={s.hint}>{t("services.hint.port", "TCP port for the remote access web server")}</p>
-								</div>
+								<SettingRow label={t("services.label.port", "Port")}>
+									{(id, descriptionId) => (
+										<>
+											<Input
+												id={id}
+												aria-describedby={descriptionId()}
+												type="number"
+												class={s.input}
+												value={raPort()}
+												min={1024}
+												max={65535}
+												onInput={(e) => setRaPort(parseInt(e.currentTarget.value, 10) || 9876)}
+												onChange={() =>
+													saveConfigField((c) => {
+														c.services.server.port = raPort();
+													})
+												}
+											/>
+											<p class={s.hint}>{t("services.hint.port", "TCP port for the remote access web server")}</p>
+										</>
+									)}
+								</SettingRow>
 							</ExpertSetting>
 
 							{/* Username + Password side by side */}
-							<div class={s.credentialsRow}>
-								<div class={s.group} style={{ flex: "1", "min-width": 0 }}>
-									<label>{t("services.label.username", "Username")}</label>
-									<Input
-										type="text"
-										class={s.input}
-										value={raUsername()}
-										placeholder={t("services.placeholder.username", "admin")}
-										onInput={(e) => setRaUsername(e.currentTarget.value)}
-										onChange={() => {
-											// Blank it out while a password is set and Basic Auth silently stops working.
-											const username = raHasPassword() ? normalizeAuthUsername(raUsername()) : raUsername().trim();
-											setRaUsername(username);
-											saveConfigField((c) => {
-												c.services.auth.username = username;
-											});
-										}}
-									/>
-								</div>
-								<div class={s.group} style={{ flex: "1", "min-width": 0 }}>
-									<label>{t("services.label.password", "Password")}</label>
-									<div class={s.passwordRow}>
-										<Input
-											type={raShowPassword() ? "text" : "password"}
-											class={s.input}
-											value={raPassword()}
-											placeholder={
-												raHasPassword()
-													? t("services.placeholder.passwordSet", "Password set — enter to change")
-													: t("services.placeholder.passwordEnter", "Enter password")
-											}
-											onInput={(e) => setRaPassword(e.currentTarget.value)}
-											onChange={() => savePassword(raPassword())}
-										/>
-										<button
-											class={s.toggleBtn}
-											onClick={() => setRaShowPassword(!raShowPassword())}
-											title={
-												raShowPassword()
-													? t("services.btn.hidePassword", "Hide password")
-													: t("services.btn.showPassword", "Show password")
-											}
-										>
-											{raShowPassword() ? (
-												/* eye-slash */ <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
-													<path d="M13.359 11.238C15.06 9.72 16 8 16 8s-3-5.5-8-5.5a7.028 7.028 0 0 0-2.79.588l.77.771A5.944 5.944 0 0 1 8 3.5c2.12 0 3.879 1.168 5.168 2.457A13.134 13.134 0 0 1 14.828 8c-.058.087-.122.183-.195.288-.335.48-.83 1.12-1.465 1.755-.165.165-.337.328-.517.486l.708.709z" />
-													<path d="M11.297 9.176a3.5 3.5 0 0 0-4.474-4.474l.823.823a2.5 2.5 0 0 1 2.829 2.829l.822.822zm-2.943 1.299.822.822a3.5 3.5 0 0 1-4.474-4.474l.823.823a2.5 2.5 0 0 0 2.829 2.829z" />
-													<path d="M3.35 5.47c-.18.16-.353.322-.518.487A13.134 13.134 0 0 0 1.172 8l.195.288c.335.48.83 1.12 1.465 1.755C4.121 11.332 5.881 12.5 8 12.5c.716 0 1.39-.133 2.02-.36l.77.772A7.029 7.029 0 0 1 8 13.5C3 13.5 0 8 0 8s.939-1.721 2.641-3.238l.708.709zm10.296 8.884-12-12 .708-.708 12 12-.708.708z" />
-												</svg>
-											) : (
-												/* eye */ <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
-													<path d="M16 8s-3-5.5-8-5.5S0 8 0 8s3 5.5 8 5.5S16 8 16 8zM1.173 8a13.133 13.133 0 0 1 1.66-2.043C4.12 4.668 5.88 3.5 8 3.5c2.12 0 3.879 1.168 5.168 2.457A13.133 13.133 0 0 1 14.828 8c-.058.087-.122.183-.195.288-.335.48-.83 1.12-1.465 1.755C11.879 11.332 10.119 12.5 8 12.5c-2.12 0-3.879-1.168-5.168-2.457A13.134 13.134 0 0 1 1.172 8z" />
-													<path d="M8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5zM4.5 8a3.5 3.5 0 1 1 7 0 3.5 3.5 0 0 1-7 0z" />
-												</svg>
-											)}
-										</button>
-									</div>
-									<p class={s.hint}>
-										{t("services.hint.passwordLeaveBlank", "Leave blank to keep the current password")}
-									</p>
-								</div>
+							<div>
+								<SettingRow label={t("services.label.username", "Username")}>
+									{(id, descriptionId) => (
+										<>
+											<Input
+												id={id}
+												aria-describedby={descriptionId()}
+												type="text"
+												class={s.input}
+												value={raUsername()}
+												placeholder={t("services.placeholder.username", "admin")}
+												onInput={(e) => setRaUsername(e.currentTarget.value)}
+												onChange={() => {
+													// Blank it out while a password is set and Basic Auth silently stops working.
+													const username = raHasPassword() ? normalizeAuthUsername(raUsername()) : raUsername().trim();
+													setRaUsername(username);
+													saveConfigField((c) => {
+														c.services.auth.username = username;
+													});
+												}}
+											/>
+										</>
+									)}
+								</SettingRow>
+								<SettingRow label={t("services.label.password", "Password")}>
+									{(id, descriptionId) => (
+										<>
+											<div class={s.passwordRow}>
+												<Input
+													id={id}
+													aria-describedby={descriptionId()}
+													type={raShowPassword() ? "text" : "password"}
+													class={s.input}
+													value={raPassword()}
+													placeholder={
+														raHasPassword()
+															? t("services.placeholder.passwordSet", "Password set — enter to change")
+															: t("services.placeholder.passwordEnter", "Enter password")
+													}
+													onInput={(e) => setRaPassword(e.currentTarget.value)}
+													onChange={() => savePassword(raPassword())}
+												/>
+												<button
+													class={s.toggleBtn}
+													onClick={() => setRaShowPassword(!raShowPassword())}
+													title={
+														raShowPassword()
+															? t("services.btn.hidePassword", "Hide password")
+															: t("services.btn.showPassword", "Show password")
+													}
+												>
+													{raShowPassword() ? (
+														/* eye-slash */ <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+															<path d="M13.359 11.238C15.06 9.72 16 8 16 8s-3-5.5-8-5.5a7.028 7.028 0 0 0-2.79.588l.77.771A5.944 5.944 0 0 1 8 3.5c2.12 0 3.879 1.168 5.168 2.457A13.134 13.134 0 0 1 14.828 8c-.058.087-.122.183-.195.288-.335.48-.83 1.12-1.465 1.755-.165.165-.337.328-.517.486l.708.709z" />
+															<path d="M11.297 9.176a3.5 3.5 0 0 0-4.474-4.474l.823.823a2.5 2.5 0 0 1 2.829 2.829l.822.822zm-2.943 1.299.822.822a3.5 3.5 0 0 1-4.474-4.474l.823.823a2.5 2.5 0 0 0 2.829 2.829z" />
+															<path d="M3.35 5.47c-.18.16-.353.322-.518.487A13.134 13.134 0 0 0 1.172 8l.195.288c.335.48.83 1.12 1.465 1.755C4.121 11.332 5.881 12.5 8 12.5c.716 0 1.39-.133 2.02-.36l.77.772A7.029 7.029 0 0 1 8 13.5C3 13.5 0 8 0 8s.939-1.721 2.641-3.238l.708.709zm10.296 8.884-12-12 .708-.708 12 12-.708.708z" />
+														</svg>
+													) : (
+														/* eye */ <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+															<path d="M16 8s-3-5.5-8-5.5S0 8 0 8s3 5.5 8 5.5S16 8 16 8zM1.173 8a13.133 13.133 0 0 1 1.66-2.043C4.12 4.668 5.88 3.5 8 3.5c2.12 0 3.879 1.168 5.168 2.457A13.133 13.133 0 0 1 14.828 8c-.058.087-.122.183-.195.288-.335.48-.83 1.12-1.465 1.755C11.879 11.332 10.119 12.5 8 12.5c-2.12 0-3.879-1.168-5.168-2.457A13.134 13.134 0 0 1 1.172 8z" />
+															<path d="M8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5zM4.5 8a3.5 3.5 0 1 1 7 0 3.5 3.5 0 0 1-7 0z" />
+														</svg>
+													)}
+												</button>
+											</div>
+											<p class={s.hint}>
+												{t("services.hint.passwordLeaveBlank", "Leave blank to keep the current password")}
+											</p>
+										</>
+									)}
+								</SettingRow>
 							</div>
 
 							<Show when={raEnabled()}>
-								<div class={s.group}>
-									<label>{t("services.label.networkInterface", "Network Interface")}</label>
-									<Show when={(localIps()?.length ?? 0) > 1} fallback={<code class={s.url}>{activeIp() ?? "…"}</code>}>
-										<Select class={s.input} value={selectedIp()} onChange={(e) => setSelectedIp(e.currentTarget.value)}>
-											<For each={localIps()}>
-												{(entry) => (
-													<option value={entry.ip}>
-														{entry.label} — {entry.ip}
-													</option>
-												)}
-											</For>
-										</Select>
-									</Show>
-									<p class={s.hint} style={{ "margin-top": "4px" }}>
-										{t("services.hint.qrScan", "Scan the QR code to connect from another device")}
-									</p>
-									<Show when={status()?.reachable === false}>
-										<p class={s.hint} style={{ color: "var(--warning, #e5c07b)", "margin-top": "4px" }}>
-											{t("services.hint.firewallWarning", "Port may be blocked by a firewall")}
-										</p>
-									</Show>
-									<Show when={status()?.reachable === true}>
-										<p class={s.hint} style={{ color: "var(--green, #98c379)", "margin-top": "4px" }}>
-											{t("services.hint.serverReachable", "Server is reachable from the network")}
-										</p>
-									</Show>
-								</div>
+								<SettingRow label={t("services.label.networkInterface", "Network Interface")}>
+									{(id, descriptionId) => (
+										<>
+											<Show
+												when={(localIps()?.length ?? 0) > 1}
+												fallback={<code class={s.url}>{activeIp() ?? "Not available"}</code>}
+											>
+												<Select
+													id={id}
+													aria-describedby={descriptionId()}
+													class={s.input}
+													value={selectedIp()}
+													onChange={(e) => setSelectedIp(e.currentTarget.value)}
+												>
+													<For each={localIps()}>
+														{(entry) => (
+															<option value={entry.ip}>
+																{entry.label} — {entry.ip}
+															</option>
+														)}
+													</For>
+												</Select>
+											</Show>
+											<p class={s.hint} style={{ "margin-top": "4px" }}>
+												{t("services.hint.qrScan", "Scan the QR code to connect from another device")}
+											</p>
+											<Show when={status()?.reachable === false}>
+												<p class={s.hint} style={{ color: "var(--warning, #e5c07b)", "margin-top": "4px" }}>
+													{t("services.hint.firewallWarning", "Port may be blocked by a firewall")}
+												</p>
+											</Show>
+											<Show when={status()?.reachable === true}>
+												<p class={s.hint} style={{ color: "var(--green, #98c379)", "margin-top": "4px" }}>
+													{t("services.hint.serverReachable", "Server is reachable from the network")}
+												</p>
+											</Show>
+										</>
+									)}
+								</SettingRow>
 							</Show>
 
 							<ExpertSetting configKey="app.services.auth.session_token_duration_secs" value={tokenDuration()}>
@@ -374,24 +401,6 @@ export const RemoteAccessPanel: Component = () => {
 									)}
 								/>
 							</ExpertSetting>
-
-							<DangerZone
-								title="Revoke remote access"
-								scope="All remote sessions on this machine"
-								consequence="Regenerating the token revokes shared token URLs and disconnects active remote sessions."
-							>
-								<button class={s.testBtn} disabled={regenerating()} onClick={regenerateToken}>
-									{regenerating()
-										? t("services.btn.regenerating", "Regenerating...")
-										: t("services.btn.regenerateToken", "Regenerate Token")}
-								</button>
-								<p class={s.hint}>
-									{t(
-										"services.hint.regenerateToken",
-										"Generates a new token, disconnecting all active remote sessions",
-									)}
-								</p>
-							</DangerZone>
 						</div>
 
 						<Show when={connectUrl()}>
@@ -452,7 +461,11 @@ export const RemoteAccessPanel: Component = () => {
 						/>
 					</ExpertSetting>
 				</Show>
-
+			</SectionCard>
+			<SectionCard title="Tailscale HTTPS">
+				<Show when={!tailscaleState()}>
+					<p class={s.hint}>Tailscale status not checked.</p>
+				</Show>
 				{/* ── Tailscale TLS ── */}
 				<Show when={tailscaleState()}>
 					{(() => {
@@ -468,7 +481,6 @@ export const RemoteAccessPanel: Component = () => {
 						const showHint = ts.state === "Running" && !ts.https_enabled;
 						return (
 							<>
-								<h3>Tailscale HTTPS</h3>
 								<div class={s.group}>
 									<label>{t("services.label.tailscaleStatus", "Status")}</label>
 									<div class={s.mcpStatusRow}>
@@ -504,6 +516,24 @@ export const RemoteAccessPanel: Component = () => {
 
 				{/* ── Cloud Relay ── */}
 			</SectionCard>
+			<Show when={raEnabled()}>
+				{" "}
+				<DangerZone
+					title="Danger zone"
+					scope="All remote sessions on this machine"
+					consequence="Regenerating the token revokes shared token URLs and disconnects active remote sessions."
+				>
+					<button class={s.testBtn} disabled={regenerating()} onClick={regenerateToken}>
+						{regenerating()
+							? t("services.btn.regenerating", "Regenerating...")
+							: t("services.btn.regenerateToken", "Regenerate Token")}
+					</button>
+					<p class={s.hint}>
+						{t("services.hint.regenerateToken", "Generates a new token, disconnecting all active remote sessions")}
+					</p>
+				</DangerZone>
+			</Show>
+
 			<SectionCard title={t("services.heading.cloudRelay", "Cloud Relay")}>
 				<SettingToggle
 					row

@@ -488,33 +488,43 @@ export const RemoteMachinesPanel: Component = () => {
 				</SectionCard>
 				<SectionCard title="Deployment and lifetime">
 					<Show when={props.formData.transportType === "Ssh"}>
-						<label style={{ display: "grid", gap: "4px" }}>
-							<span>Deployment</span>
-							<Select
-								class={s.input}
-								value={props.formData.deploy}
-								onChange={(e) => props.setFormData((f) => ({ ...f, deploy: e.currentTarget.value as DeployMode }))}
-							>
-								<option value="never">Never deploy</option>
-								<option value="on_connect">Deploy on connect</option>
-								<option value="installed">Installed service</option>
-							</Select>
-						</label>
-						<label style={{ display: "grid", gap: "4px" }}>
-							<span>Keep ephemeral daemon alive (minutes)</span>
-							<Input
-								type="number"
-								class={s.input}
-								min={1}
-								value={props.formData.surviveMinutes}
-								onInput={(e) =>
-									props.setFormData((f) => ({
-										...f,
-										surviveMinutes: Math.max(1, parseInt(e.currentTarget.value, 10) || 1),
-									}))
-								}
-							/>
-						</label>
+						<SettingRow label="Deployment">
+							{(id, descriptionId) => (
+								<>
+									<Select
+										class={s.input}
+										id={id}
+										aria-describedby={descriptionId()}
+										value={props.formData.deploy}
+										onChange={(e) => props.setFormData((f) => ({ ...f, deploy: e.currentTarget.value as DeployMode }))}
+									>
+										<option value="never">Never deploy</option>
+										<option value="on_connect">Deploy on connect</option>
+										<option value="installed">Installed service</option>
+									</Select>
+								</>
+							)}
+						</SettingRow>
+						<SettingRow label="Keep ephemeral daemon alive (minutes)">
+							{(id, descriptionId) => (
+								<>
+									<Input
+										type="number"
+										class={s.input}
+										min={1}
+										id={id}
+										aria-describedby={descriptionId()}
+										value={props.formData.surviveMinutes}
+										onInput={(e) =>
+											props.setFormData((f) => ({
+												...f,
+												surviveMinutes: Math.max(1, parseInt(e.currentTarget.value, 10) || 1),
+											}))
+										}
+									/>
+								</>
+							)}
+						</SettingRow>
 					</Show>
 					<SettingRow label="Auto-update remote daemons">
 						{(id, descriptionId) => (
@@ -707,6 +717,7 @@ export const RemoteMachinesPanel: Component = () => {
 				</p>
 			</Show>
 
+			<h3>Your machines</h3>
 			{/* Connection list */}
 			<For each={connectionList()}>
 				{(connState) => {

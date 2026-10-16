@@ -191,6 +191,12 @@ export const TelegramTab: Component = () => {
 							</Show>
 						</SectionCard>
 						<SectionCard title="Polling status">
+							<SettingRow label="Polling owner">
+								{() => <span>{data().polling_owner ?? "Not connected"}</span>}
+							</SettingRow>
+							<button onClick={() => void refresh()} disabled={busy()}>
+								Reload status
+							</button>
 							<p class={s.hint} aria-live="polite">
 								{data().registered_agent_name
 									? `registered agent: ${data().registered_agent_name}`

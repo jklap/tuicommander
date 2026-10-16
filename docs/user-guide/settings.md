@@ -568,3 +568,7 @@ Loaded plugins with described settings appear in a separate **Plugin settings**
 navigation group with a plug icon. The manager offers **Settings** only when the
 loaded catalogue provides a page. That action opens the same scoped page as the
 navigation entry; it does not create a second settings service.
+
+AI Chat groups provider details in **Other providers and available models**. Workspace access shows the effective folders first. **Add folder** and **Edit** reveal the existing ego roots draft; **Save roots in ego** keeps its explicit save boundary. The network selector writes through ego. **How to verify** explains command-isolation evidence without running a probe.
+
+Voice keeps downloadable models and voice management in **Speech assets**. Remote Access separates connection status, Tailscale HTTPS and token revocation. Plugin rows keep secondary controls in **Manage plugin**; plugin pages identify their source and plugin-owned scope.

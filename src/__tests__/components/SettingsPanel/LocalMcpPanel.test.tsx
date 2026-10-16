@@ -119,7 +119,7 @@ describe("LocalMcpPanel", () => {
 		const view = render(() => <LocalMcpPanel />);
 		await vi.advanceTimersByTimeAsync(0);
 
-		expect(view.getByText("HTTP API Server")).toBeDefined();
+		expect(view.getByText("Server connections")).toBeDefined();
 		expect(view.getByText("TUIC Tools")).toBeDefined();
 		expect(view.getByText("Server Status")).toBeDefined();
 
