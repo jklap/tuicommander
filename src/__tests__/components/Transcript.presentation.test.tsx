@@ -174,3 +174,21 @@ it("merges intent into the activity line and opens failed output", () => {
 	expect(activity.querySelector("summary")?.textContent).toContain("1 read");
 	expect(container.querySelector('[aria-label="Agent intent"]')).toBeNull();
 });
+
+// Catches: an ACP message boundary leaving the final suggestion-only chunk invisible.
+it("keeps suggestions in a separate final message actionable without reviving old chips", () => {
+	const { container } = render(() => (
+		<Transcript
+			entries={() => [
+				{ id: "answer", kind: "agent", text: "Answer\n\nsuggest: [ Old A | Old B | Old C ]" },
+				{ id: "suggestions", kind: "agent", text: "suggest: [ Next A | Next B | Next C ]" },
+			]}
+			busy={() => false}
+			emptyMessage=""
+			onSuggestion={() => {}}
+		/>
+	));
+	expect(
+		[...container.querySelectorAll('[aria-label="Suggested replies"] button')].map((button) => button.textContent),
+	).toEqual(["Next A", "Next B", "Next C"]);
+});

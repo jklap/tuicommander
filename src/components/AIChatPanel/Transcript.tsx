@@ -465,8 +465,11 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 	});
 	const latestAnswerId = createMemo(
 		() =>
-			props.entries().findLast((entry) => entry.kind === "agent" && projectChatProtocolText(entry.text).body.trim())
-				?.id,
+			props.entries().findLast((entry) => {
+				if (entry.kind !== "agent") return false;
+				const projected = projectChatProtocolText(entry.text);
+				return !!projected.body.trim() || projected.suggestions.length > 0;
+			})?.id,
 	);
 	const firstLocalId = createMemo(() =>
 		activity().visible.some((entry) => entry.inherited)
@@ -784,7 +787,7 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 													when={
 														projected().body.trim() ||
 														(projected().intent && !activity().mergedIntents.has(agent().id)) ||
-														(props.onSuggestion && projected().suggestions.length > 0)
+														(props.onSuggestion && latestAnswerId() === agent().id && projected().suggestions.length > 0)
 													}
 												>
 													<div
