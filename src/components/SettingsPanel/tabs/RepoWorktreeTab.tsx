@@ -13,11 +13,11 @@ import type { RepoSettings } from "../../../stores/repoSettings";
 import { settingsStore } from "../../../stores/settings";
 import { ColorSwatchPicker } from "../../shared/ColorSwatchPicker";
 import { DEFAULT_COLOR_PRESETS } from "../../shared/colorPresets";
-import { type TriState, TriStateToggle } from "../../shared/TriStateToggle";
+
 import { Input } from "../../ui/Input";
 import { Select } from "../../ui/Select";
 import s from "../Settings.module.css";
-import { SectionCard, SettingPageHeader } from "../SettingsPrimitives";
+import { SectionCard, SettingPageHeader, SettingRow } from "../SettingsPrimitives";
 import r from "./RepositoryTabs.module.css";
 
 export interface RepoTabProps {
@@ -26,24 +26,30 @@ export interface RepoTabProps {
 	onUpdate: <K extends keyof RepoSettings>(key: K, value: RepoSettings[K]) => void;
 }
 
-/** Returns the effective (resolved) value for a nullable boolean field */
-function effectiveBool(override: boolean | null, fallback: boolean): boolean {
-	return override ?? fallback;
-}
-
-/** "inherit" sentinel value for nullable dropdowns */
+/** Nullable controls retain an explicit inherited state instead of flattening it. */
 const INHERIT = "__inherit__";
-
-/** Convert a nullable "hide" boolean to TriState */
-function hideToTriState(value: boolean | null): TriState {
-	if (value === null) return "default";
-	return value ? "hide" : "show";
-}
-
-/** Convert TriState back to nullable "hide" boolean */
-function triStateToHide(state: TriState): boolean | null {
-	if (state === "default") return null;
-	return state === "hide";
+function BooleanOverride(props: {
+	label: string;
+	value: boolean | null;
+	fallback: boolean;
+	onChange: (value: boolean | null) => void;
+}) {
+	return (
+		<SettingRow label={props.label}>
+			{(id, descriptionId) => (
+				<Select
+					id={id}
+					aria-describedby={descriptionId()}
+					value={props.value === null ? INHERIT : String(props.value)}
+					onChange={(e) => props.onChange(e.currentTarget.value === INHERIT ? null : e.currentTarget.value === "true")}
+				>
+					<option value={INHERIT}>Use global default ({props.fallback ? "On" : "Off"})</option>
+					<option value="true">On</option>
+					<option value="false">Off</option>
+				</Select>
+			)}
+		</SettingRow>
+	);
 }
 
 export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
@@ -149,33 +155,19 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 				<div class={r.group}>
 					<label>{t("repoWorktree.label.fileHandling", "File Handling")}</label>
 
-					<div class={r.toggle}>
-						<input
-							type="checkbox"
-							checked={effectiveBool(props.settings.copyIgnoredFiles, props.defaults.copyIgnoredFiles)}
-							onChange={(e) => props.onUpdate("copyIgnoredFiles", e.currentTarget.checked)}
-						/>
-						<span>
-							{t("repoWorktree.toggle.copyIgnoredFiles", "Copy ignored files")}
-							<Show when={props.settings.copyIgnoredFiles === null}>
-								<span class={s.hintInline}> {t("repoWorktree.hint.globalDefault", "(Global Default)")}</span>
-							</Show>
-						</span>
-					</div>
+					<BooleanOverride
+						label="Copy ignored files"
+						value={props.settings.copyIgnoredFiles}
+						fallback={props.defaults.copyIgnoredFiles}
+						onChange={(v) => props.onUpdate("copyIgnoredFiles", v)}
+					/>
 
-					<div class={r.toggle}>
-						<input
-							type="checkbox"
-							checked={effectiveBool(props.settings.copyUntrackedFiles, props.defaults.copyUntrackedFiles)}
-							onChange={(e) => props.onUpdate("copyUntrackedFiles", e.currentTarget.checked)}
-						/>
-						<span>
-							{t("repoWorktree.toggle.copyUntrackedFiles", "Copy untracked files")}
-							<Show when={props.settings.copyUntrackedFiles === null}>
-								<span class={s.hintInline}> {t("repoWorktree.hint.globalDefault", "(Global Default)")}</span>
-							</Show>
-						</span>
-					</div>
+					<BooleanOverride
+						label="Copy untracked files"
+						value={props.settings.copyUntrackedFiles}
+						fallback={props.defaults.copyUntrackedFiles}
+						onChange={(v) => props.onUpdate("copyUntrackedFiles", v)}
+					/>
 				</div>
 			</SectionCard>
 			<SectionCard title={t("repoWorktree.heading.worktreeSettings", "Worktree Settings")}>
@@ -208,64 +200,46 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 				</div>
 
 				<div class={r.group}>
-					<div class={r.toggle}>
-						<input
-							type="checkbox"
-							checked={props.settings.autoConsolidateWorktrees}
-							onChange={(e) => props.onUpdate("autoConsolidateWorktrees", e.currentTarget.checked)}
-						/>
-						<span>
-							{t("repoWorktree.toggle.autoConsolidate", "Show all worktrees of this repo in one consolidated screen")}
-						</span>
-					</div>
+					<SettingRow label="Show all worktrees of this repo in one consolidated screen">
+						{(id, descriptionId) => (
+							<input
+								id={id}
+								aria-describedby={descriptionId()}
+								class={r.rowSwitch}
+								role="switch"
+								type="checkbox"
+								checked={props.settings.autoConsolidateWorktrees}
+								onChange={(e) => props.onUpdate("autoConsolidateWorktrees", e.currentTarget.checked)}
+							/>
+						)}
+					</SettingRow>
 				</div>
 
 				<div class={r.group}>
-					<div class={r.toggle}>
-						<input
-							type="checkbox"
-							checked={effectiveBool(props.settings.promptOnCreate, props.defaults.promptOnCreate)}
-							onChange={(e) => props.onUpdate("promptOnCreate", e.currentTarget.checked)}
-						/>
-						<span>
-							{t("repoWorktree.toggle.promptOnCreate", "Prompt for branch name during creation")}
-							<Show when={props.settings.promptOnCreate === null}>
-								<span class={s.hintInline}> {t("repoWorktree.hint.globalDefault", "(Global Default)")}</span>
-							</Show>
-						</span>
-					</div>
+					<BooleanOverride
+						label="Prompt for branch name during creation"
+						value={props.settings.promptOnCreate}
+						fallback={props.defaults.promptOnCreate}
+						onChange={(v) => props.onUpdate("promptOnCreate", v)}
+					/>
 				</div>
 
 				<div class={r.group}>
-					<div class={r.toggle}>
-						<input
-							type="checkbox"
-							checked={effectiveBool(props.settings.deleteBranchOnRemove, props.defaults.deleteBranchOnRemove)}
-							onChange={(e) => props.onUpdate("deleteBranchOnRemove", e.currentTarget.checked)}
-						/>
-						<span>
-							{t("repoWorktree.toggle.deleteBranchOnRemove", "Delete local branch when removing worktree")}
-							<Show when={props.settings.deleteBranchOnRemove === null}>
-								<span class={s.hintInline}> {t("repoWorktree.hint.globalDefault", "(Global Default)")}</span>
-							</Show>
-						</span>
-					</div>
+					<BooleanOverride
+						label="Delete local branch when removing worktree"
+						value={props.settings.deleteBranchOnRemove}
+						fallback={props.defaults.deleteBranchOnRemove}
+						onChange={(v) => props.onUpdate("deleteBranchOnRemove", v)}
+					/>
 				</div>
 
 				<div class={r.group}>
-					<div class={r.toggle}>
-						<input
-							type="checkbox"
-							checked={effectiveBool(props.settings.autoArchiveMerged, props.defaults.autoArchiveMerged)}
-							onChange={(e) => props.onUpdate("autoArchiveMerged", e.currentTarget.checked)}
-						/>
-						<span>
-							{t("repoWorktree.toggle.autoArchiveMerged", "Auto-archive merged worktrees")}
-							<Show when={props.settings.autoArchiveMerged === null}>
-								<span class={s.hintInline}> {t("repoWorktree.hint.globalDefault", "(Global Default)")}</span>
-							</Show>
-						</span>
-					</div>
+					<BooleanOverride
+						label="Auto-archive merged worktrees"
+						value={props.settings.autoArchiveMerged}
+						fallback={props.defaults.autoArchiveMerged}
+						onChange={(v) => props.onUpdate("autoArchiveMerged", v)}
+					/>
 				</div>
 
 				<div class={r.group}>
@@ -365,43 +339,81 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 
 				<div class={r.group}>
 					<label>PR Visibility</label>
-					<TriStateToggle
-						value={hideToTriState(props.settings.prHideDrafts)}
-						label="Draft PRs"
-						defaultLabel={settingsStore.state.prHideDrafts ? "Hide" : "Show"}
-						onChange={(v) => props.onUpdate("prHideDrafts", triStateToHide(v))}
-					/>
-					<TriStateToggle
-						value={hideToTriState(props.settings.prHideConflicting)}
-						label="Conflicting PRs"
-						defaultLabel={settingsStore.state.prHideConflicting ? "Hide" : "Show"}
-						onChange={(v) => props.onUpdate("prHideConflicting", triStateToHide(v))}
-					/>
-					<TriStateToggle
-						value={hideToTriState(props.settings.prHideCiFailing)}
-						label="CI Failing PRs"
-						defaultLabel={settingsStore.state.prHideCiFailing ? "Hide" : "Show"}
-						onChange={(v) => props.onUpdate("prHideCiFailing", triStateToHide(v))}
-					/>
+					<SettingRow label="Draft PRs">
+						{(id, descriptionId) => (
+							<Select
+								id={id}
+								aria-describedby={descriptionId()}
+								value={props.settings.prHideDrafts === null ? INHERIT : String(props.settings.prHideDrafts)}
+								onChange={(e) =>
+									props.onUpdate(
+										"prHideDrafts",
+										e.currentTarget.value === INHERIT ? null : e.currentTarget.value === "true",
+									)
+								}
+							>
+								<option value={INHERIT}>
+									Use global default ({settingsStore.state.prHideDrafts ? "Hide" : "Show"})
+								</option>
+								<option value="false">Show</option>
+								<option value="true">Hide</option>
+							</Select>
+						)}
+					</SettingRow>
+					<SettingRow label="Conflicting PRs">
+						{(id, descriptionId) => (
+							<Select
+								id={id}
+								aria-describedby={descriptionId()}
+								value={props.settings.prHideConflicting === null ? INHERIT : String(props.settings.prHideConflicting)}
+								onChange={(e) =>
+									props.onUpdate(
+										"prHideConflicting",
+										e.currentTarget.value === INHERIT ? null : e.currentTarget.value === "true",
+									)
+								}
+							>
+								<option value={INHERIT}>
+									Use global default ({settingsStore.state.prHideConflicting ? "Hide" : "Show"})
+								</option>
+								<option value="false">Show</option>
+								<option value="true">Hide</option>
+							</Select>
+						)}
+					</SettingRow>
+					<SettingRow label="CI Failing PRs">
+						{(id, descriptionId) => (
+							<Select
+								id={id}
+								aria-describedby={descriptionId()}
+								value={props.settings.prHideCiFailing === null ? INHERIT : String(props.settings.prHideCiFailing)}
+								onChange={(e) =>
+									props.onUpdate(
+										"prHideCiFailing",
+										e.currentTarget.value === INHERIT ? null : e.currentTarget.value === "true",
+									)
+								}
+							>
+								<option value={INHERIT}>
+									Use global default ({settingsStore.state.prHideCiFailing ? "Hide" : "Show"})
+								</option>
+								<option value="false">Show</option>
+								<option value="true">Hide</option>
+							</Select>
+						)}
+					</SettingRow>
 				</div>
 
 				<Show when={isMacOS()}>
 					<div class={r.group}>
 						<label>{t("repoWorktree.label.terminal", "Terminal")}</label>
 
-						<div class={r.toggle}>
-							<input
-								type="checkbox"
-								checked={effectiveBool(props.settings.terminalMetaHotkeys, true)}
-								onChange={(e) => props.onUpdate("terminalMetaHotkeys", e.currentTarget.checked)}
-							/>
-							<span>
-								{t("repoWorktree.toggle.terminalMetaHotkeys", "Enable Cmd+1-9 terminal hotkeys")}
-								<Show when={props.settings.terminalMetaHotkeys === null}>
-									<span class={s.hintInline}> {t("repoWorktree.hint.terminalMetaDefault", "(Default: On)")}</span>
-								</Show>
-							</span>
-						</div>
+						<BooleanOverride
+							label="Enable Cmd+1-9 terminal hotkeys"
+							value={props.settings.terminalMetaHotkeys}
+							fallback={true}
+							onChange={(v) => props.onUpdate("terminalMetaHotkeys", v)}
+						/>
 					</div>
 				</Show>
 			</SectionCard>

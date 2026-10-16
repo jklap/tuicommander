@@ -187,6 +187,21 @@ describe("SettingsPanel — repo context", () => {
 		expect(container.textContent).toContain("Scripts are never exported.");
 	});
 
+	it("keeps inherited boolean overrides distinct from explicit on and off", () => {
+		// Catches flattening nullable overrides into a two-state checkbox.
+		const { container } = render(() => <SettingsPanel {...defaultProps} />);
+		const label = [...container.querySelectorAll("label")].find((e) => e.textContent === "Copy ignored files")!;
+		const control = container.querySelector<HTMLSelectElement>(`#${label.htmlFor}`)!;
+		for (const [value, expected] of [
+			["true", true],
+			["false", false],
+			["__inherit__", null],
+		] as const) {
+			fireEvent.change(control, { target: { value } });
+			expect(repoSettingsStore.update).toHaveBeenLastCalledWith("/repo", { copyIgnoredFiles: expected });
+		}
+	});
+
 	it("clicking a global nav item switches to global content", () => {
 		const { container } = render(() => <SettingsPanel {...defaultProps} />);
 		const generalItem = Array.from(container.querySelectorAll(".navItem")).find((n) => n.textContent === "General")!;

@@ -28,15 +28,17 @@ export function RepositoryActions(props: {
 					</div>
 				</SectionCard>
 			</Show>
-			<DangerZone
-				title="Reset repository overrides"
-				scope={props.path}
-				consequence="Clear repository overrides, including script overrides, and return to inherited defaults. Repository identity and its Design Mode URL are retained."
-			>
-				<button class={s.footerReset} onClick={props.onReset}>
-					{t("settings.resetToDefaults", "Reset to Defaults")}
-				</button>
-			</DangerZone>
+			<div class={r.resetCard}>
+				<DangerZone
+					title="Reset repository overrides"
+					scope={props.path}
+					consequence="Clear repository overrides, including script overrides, and return to inherited defaults. Repository identity and its Design Mode URL are retained."
+				>
+					<button class={s.footerReset} onClick={props.onReset}>
+						{t("settings.resetToDefaults", "Reset to Defaults")}
+					</button>
+				</DangerZone>
+			</div>
 		</div>
 	);
 }

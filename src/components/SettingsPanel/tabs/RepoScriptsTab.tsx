@@ -9,17 +9,17 @@ import type { RepoTabProps } from "./RepoWorktreeTab";
 
 export const RepoScriptsTab: Component<RepoTabProps> = (props) => {
 	const setupPlaceholder = () =>
-		props.settings.setupScript === null && props.defaults.setupScript
+		props.settings.setupScript === null
 			? `${t("repoScripts.placeholder.inheriting", "Inheriting:")} ${props.defaults.setupScript}`
 			: "#!/bin/bash\nnpm install";
 
 	const runPlaceholder = () =>
-		props.settings.runScript === null && props.defaults.runScript
+		props.settings.runScript === null
 			? `${t("repoScripts.placeholder.inheriting", "Inheriting:")} ${props.defaults.runScript}`
 			: "#!/bin/bash\nnpm run dev";
 
 	const archivePlaceholder = () =>
-		props.settings.archiveScript === null && props.defaults.archiveScript
+		props.settings.archiveScript === null
 			? `${t("repoScripts.placeholder.inheriting", "Inheriting:")} ${props.defaults.archiveScript}`
 			: "#!/bin/bash\ndocker compose down";
 
