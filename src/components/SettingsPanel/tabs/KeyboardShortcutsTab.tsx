@@ -600,6 +600,7 @@ export const KeyboardShortcutsTab: Component = () => {
 									/>
 									<Show when={settingsStore.state.globalHotkey}>
 										<button
+											class={w.secondaryButton}
 											onClick={clearGlobalHotkey}
 											style={{
 												background: "none",
