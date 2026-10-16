@@ -2299,3 +2299,23 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] #1928-e282: In MCP Settings, hover the long design_mode help for at least three status polls. Check keyboard focus, changed descriptions, viewport edges, scrolling, and resizing; the tip must remain beside its badge without an unpositioned frame.
 
 - [ ] #1929-b1d9: After Boss restarts make dev (Rust does not hot-reload), connect to a Direct short Tailscale host whose short DNS lookup fails. Check automatic FQDN recovery and the explicit Save resolved address action. Do not change production connections for automated verification.
+## 1902-7010 — ego terminal provider recovery (requires Boss restart)
+
+- [ ] After Boss restarts `make dev` (Rust does not hot-reload), run a managed
+  terminal ego against a provider double that fails then recovers. Check the tab
+  says recovering, the status bar shows phase/attempt/next-time/countdown, and
+  the parent gets recovery entry and exit notices. Click Force retry once and
+  verify `/retry` reaches only that tab. Repeat via MCP `session force_retry`.
+  Verify explicit clear, busy/idle and shell OSC 133 A remove the recovery display.
+  Check the visual layout at narrow and normal window widths. No desktop instance
+  was launched by the implementation agent.
+
+- [ ] 1902 critic revision: after backend restart, type an ego composer draft during
+  provider recovery and click Force retry. The draft must remain unchanged and the
+  status bar must display the refusal. Clear the draft and verify one retry submits.
+
+- [ ] Tab hints (#1951-8fac): hold Cmd alone (Ctrl on Windows/Linux) for 450 ms and check the first nine terminal-tab badges; release, another key, mouse button, or scrolling must hide them. Automated hook/TabBar coverage and worktree dark/light screenshots passed.
+
+- [ ] Hands-free default shortcut (#1953-3da5): with dictation enabled and a live active terminal, Cmd+Alt+V (Ctrl+Alt+V on Windows/Linux) starts the conversation and a second press stops it. Disabled dictation must stay silent. Dispatcher/store tests pass; microphone/audio confirmation needs real hardware.
+
+- [ ] After a manual `make dev` restart or release rebuild, verify a hands-free Italian reply uses Edge speech on the migrated endpoint with v1 GEC without HTTP 403 (#1952-bf91). The old Rust process does not hot-reload.

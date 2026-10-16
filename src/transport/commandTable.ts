@@ -399,6 +399,12 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			body: { data: args.data },
 		}),
 	},
+	force_retry_provider_recovery_command: {
+		map: (args) => ({
+			method: "POST",
+			path: `/sessions/${encodeURIComponent(String(args.sessionId))}/force-retry`,
+		}),
+	},
 	submit_agent_reply: {
 		map: (args) => ({
 			method: "POST",

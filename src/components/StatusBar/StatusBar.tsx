@@ -39,6 +39,7 @@ import { AgentIcon } from "../ui/AgentIcon";
 import { CountBadge } from "../ui/CountBadge";
 import { CiBadge, PrBadge } from "../ui/StatusBadge";
 import { ZoomIndicator } from "../ui/ZoomIndicator";
+import { ProviderRecoveryStatus } from "./ProviderRecoveryStatus";
 import s from "./StatusBar.module.css";
 import { TickerArea } from "./TickerArea";
 
@@ -309,7 +310,12 @@ export const StatusBar: Component<StatusBarProps> = (props) => {
 					</span>
 				</Show>
 				<TickerArea />
-				<Show when={terminalsStore.getActive()?.agentType}>
+				<Show when={terminalsStore.getActive()?.providerRecovery}>
+					{(recovery) => (
+						<ProviderRecoveryStatus recovery={recovery()} sessionId={terminalsStore.getActive()?.sessionId ?? ""} />
+					)}
+				</Show>
+				<Show when={!terminalsStore.getActive()?.providerRecovery && terminalsStore.getActive()?.agentType}>
 					{(agentType) => {
 						const display = () => AGENT_DISPLAY[agentType()];
 						const ul = () => terminalsStore.getActive()?.usageLimit ?? null;

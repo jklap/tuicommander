@@ -1015,3 +1015,7 @@ See the HTTP reference for action arguments and typed error prefixes.
 ### Audio choice availability (#1908-c327, #1909-0d24)
 
 Existing input/output device enumeration returns the same device objects on success, including a successful empty array. Backend enumeration failure now returns an error rather than an empty array. Internal settings choice refresh reuses those owners; cache-only describe and typed voice asset actions are not new public routes in this change. The settings transport cutover remains separate.
+
+`force_retry_provider_recovery_command(sessionId)` submits `/retry` once through the
+shared ego recovery transaction. It refuses a non-empty tracked composer and returns
+the error to the caller. HTTP equivalent: `POST /sessions/{id}/force-retry`.
