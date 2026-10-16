@@ -643,7 +643,16 @@ async fn dispatch_mcp_tool_call_with_context(
                 let state = state.clone();
                 let args = args.clone();
                 let sid = mcp_session_id.map(str::to_owned);
-                run_blocking_handler(move || handle_session(&state, &args, sid.as_deref())).await
+                if action == "input" {
+                    crate::pty::run_bounded_pty_input(move || {
+                        Ok(handle_session(&state, &args, sid.as_deref()))
+                    })
+                    .await
+                    .unwrap_or_else(|error| serde_json::json!({"error": error}))
+                } else {
+                    run_blocking_handler(move || handle_session(&state, &args, sid.as_deref()))
+                        .await
+                }
             } else {
                 handle_session(state, args, mcp_session_id)
             }

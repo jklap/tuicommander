@@ -1615,7 +1615,12 @@ struct UrgentNotice {
     first_through: u64,
     through: u64,
     written: bool,
+    reserved_at: std::time::Instant,
 }
+
+// Two 6s confirmation windows and split writes fit inside this lease. A stalled
+// writer must not suppress later notices forever; the mailbox remains durable.
+const URGENT_NOTICE_LEASE: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum OrchestratorDeliveryAssignment {
@@ -2846,6 +2851,11 @@ impl AppState {
         {
             return UrgentNoticeReservation::AlreadyRead;
         }
+        if gate.urgent_notices.get(sender).is_some_and(|notice| {
+            !notice.written && notice.reserved_at.elapsed() >= URGENT_NOTICE_LEASE
+        }) {
+            gate.urgent_notices.remove(sender);
+        }
         match gate.urgent_notices.get_mut(sender) {
             Some(notice) => {
                 notice.through = notice.through.max(through);
@@ -2862,6 +2872,7 @@ impl AppState {
                         first_through: through,
                         through,
                         written: false,
+                        reserved_at: std::time::Instant::now(),
                     },
                 );
                 UrgentNoticeReservation::Reserved
@@ -6038,6 +6049,44 @@ mod tests {
         );
         assert!(!state.agent_inbox_evictions.contains_key("peer"));
         assert!(!state.agent_inbox_evictions.contains_key("other"));
+    }
+
+    /// Catches: a lost urgent-notice writer suppresses every later urgent notice forever.
+    #[test]
+    fn urgent_notice_in_flight_expires_without_settling_its_replacement() {
+        let state = tests_support::make_test_app_state();
+        let recipient = "urgent-expiry";
+        let first = state.push_agent_inbox(recipient, make_msg("first"));
+        assert_eq!(
+            state.reserve_urgent_notice(recipient, "sender", first),
+            UrgentNoticeReservation::Reserved
+        );
+        let second = state.push_agent_inbox(recipient, make_msg("second"));
+        assert_eq!(
+            state.reserve_urgent_notice(recipient, "sender", second),
+            UrgentNoticeReservation::InFlight
+        );
+        // The lease is 30s, longer than both 6s submission confirmation windows.
+        // Use the public clock here so the regression also runs on pre-fix code.
+        std::thread::sleep(Duration::from_secs(31));
+        let third = state.push_agent_inbox(recipient, make_msg("third"));
+        assert_eq!(
+            state.reserve_urgent_notice(recipient, "sender", third),
+            UrgentNoticeReservation::Reserved,
+            "an abandoned writer must not suppress future urgent notices"
+        );
+        state.finish_urgent_notice(recipient, "sender", first, true);
+        let fourth = state.push_agent_inbox(recipient, make_msg("fourth"));
+        assert_eq!(
+            state.reserve_urgent_notice(recipient, "sender", fourth),
+            UrgentNoticeReservation::InFlight,
+            "a late old writer must not mark the replacement as written"
+        );
+        state.finish_urgent_notice(recipient, "sender", third, true);
+        assert_eq!(
+            state.reserve_urgent_notice(recipient, "sender", fourth),
+            UrgentNoticeReservation::Written
+        );
     }
 
     #[test]

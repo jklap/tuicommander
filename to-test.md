@@ -1,3 +1,7 @@
+## Managed injection recovery (1957-38c1) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, verify a later urgent send is not permanently suppressed by an abandoned notice reservation. The 30-second reservation lease does not replay the earlier payload. Also verify raw input returns an uncertainty error rather than hanging on a stalled reader, close still terminates that session, and a fresh stable empty ego composer releases a later queued BG wake without replaying earlier input. No live desktop was restarted by this peer.
+
 ## MCP instruction byte budget (1947-3d17) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, reconnect an MCP client and confirm answer markers still support row starts and Markdown list-item text starts. The remote budget regression and all 563 MCP transport tests passed; no live app was restarted.

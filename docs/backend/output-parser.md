@@ -609,6 +609,20 @@ from the authoritative backend `agent_type`, not from a title heuristic.
 
 Viewport scroll requests do not alter parsed output. History-anchored scrolling resolves the requested all-time row after output processing, under the same VT lock; capped history clamps an evicted anchor to the oldest retained row.
 
+### ego empty-composer recovery (1957)
+
+ego PTY sessions have a recorded native screen adapter. An empty column-zero
+`>` composer directly below the model/context/trust status row is Ready. The
+native rotating `Working` row reports activity. Retained or wrapped text,
+modal rows, and unrecognized layouts do not prove readiness.
+
+An ordinary uncertain injection is not replayed. For ego only, a fresh empty
+composer repaint after uncertainty was recorded can clear the latch after the
+normal 1.5-second stable-screen confirmation. A pre-write cached screen cannot
+clear it. The foreground/background-work probe remains a separate idle gate.
+Once idle, the existing queue flush can deliver the next queued command or BG
+wake. Other agents retain their existing uncertain-write recovery contracts.
+
 ### ego terminal questions
 
 The terminal ego CLI reports human-question waits with OSC 7770 awaiting and resumes busy after settlement. TUIC also recognizes its single-choice selector only for ego sessions, anchored to `Up/Down or number selects; Enter answers; Esc cancels.` and a highlighted numbered option. Wrapped question and option rows are joined in Rust into `choice-prompt`, using `navigate-enter` selection. This creates authoritative awaiting state even for older ego builds without the native signal. Multiple-choice and free-text questions keep the native awaiting signal and terminal/composer controls; they are not misrepresented as single-choice dialogs.

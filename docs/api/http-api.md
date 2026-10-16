@@ -390,6 +390,13 @@ Content-Type: application/json
 { "data": "ls -la\n" }
 ```
 
+Raw `/write` and `/write-parts` calls leave the runtime thread free and return
+an error after two seconds if PTY input has not finished. Delivery is uncertain:
+a started kernel write may still complete, so clients must not automatically
+resend the data. WebSocket input uses the same bound and closes the connection
+on a write error. Session close bypasses the writer and can terminate a blocked
+session.
+
 ### Submit One Managed-Agent Reply
 
 ```

@@ -17,6 +17,18 @@ to use the shared named-pipe transport.
 
 Manages pseudo-terminal sessions for all terminal tabs in the application.
 
+## Bounded input and teardown
+
+Raw desktop, HTTP, WebSocket and MCP input runs on the blocking pool. The caller
+waits at most two seconds, then receives an uncertain-delivery error (WebSocket
+input closes its connection). A kernel write already in progress can still
+complete; do not retry it automatically. Closing the session remains available.
+
+Close never takes the PTY writer mutex or writes Ctrl-C into a potentially full
+terminal. On Unix it signals the owned foreground process group with SIGINT,
+then retains the 100ms grace and 100ms force-kill wait. On Windows it terminates
+the owned child because ConPTY has no portable out-of-band Ctrl-C operation.
+
 ## Identity loss during replacement
 
 A restored tab reuses its saved `tuicSession`. If reconnect falls back to a
