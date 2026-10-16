@@ -829,13 +829,7 @@ fn choose_voice(asset: &speech::assets::Asset, configured: &str) -> Result<Strin
     let language = asset.language().unwrap_or_default();
     if speech::assets::downloadable_voices(language).any(|voice| voice.voice() == Some(configured))
     {
-        // A missing optional voice must not disable a ready language. Never
-        // borrow a same-named voice from another language's catalogue.
-        if speech::assets::status(asset) == speech::assets::Status::Ready
-            && let Some(default) = asset.voices().first()
-        {
-            return Ok((*default).to_string());
-        }
+        // The catalogue has it, so the fix is one download away.
         return Err(format!(
             "The {} voice \"{configured}\" is not downloaded; download it in Settings → Voice",
             asset.display_name
@@ -5275,6 +5269,35 @@ mod tests {
         let italian_voice = speech::assets::find("voice-italian-bill_boerst").unwrap();
         install_asset(italian_voice);
         assert_eq!(choose_voice(italian, "bill_boerst").unwrap(), "bill_boerst");
+    }
+
+    #[test]
+    fn italian_missing_voice_never_opens_english_or_external_fallback_1954() {
+        // Catches: missing Pocket voice switching engines to Edge or an OS
+        // command, or resolving the English asset with the same voice name.
+        let (_root, _guard) = speech_root();
+        let italian = speech::assets::for_language_code("it").unwrap();
+        let english = speech::assets::for_language_code("en").unwrap();
+        install_asset(speech::assets::runtime());
+        install_asset(english);
+        install_asset(speech::assets::find("voice-english-bill_boerst").unwrap());
+        let config = DictationConfig {
+            language: "it".into(),
+            speech_engine: "pocket".into(),
+            speech_voice: "bill_boerst".into(),
+            // A stale external command is not a fallback for Pocket.
+            speech_command: vec!["say".into()],
+            ..Default::default()
+        };
+        let library = speech::library::SpeechLibrary::new();
+        assert!(build_voice(&config, &library, "it").is_err());
+        install_asset(italian);
+        let (engine, voice) = build_voice(&config, &library, "it").unwrap();
+        assert_eq!(voice, "giovanni");
+        let expected: Arc<dyn speech::Speech> = library.engine("italian");
+        assert!(Arc::ptr_eq(&engine, &expected), "only Italian Pocket opens");
+        let english_engine: Arc<dyn speech::Speech> = library.engine("english");
+        assert!(!Arc::ptr_eq(&engine, &english_engine));
     }
 
     #[test]
