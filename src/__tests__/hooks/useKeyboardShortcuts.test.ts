@@ -1,4 +1,7 @@
+import { render } from "@solidjs/testing-library";
+import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useQuickSwitcherVisibility } from "../../hooks/useQuickSwitcherVisibility";
 import "../mocks/tauri";
 import * as handsFree from "../../actions/handsFreeConversation";
 import { type ShortcutHandlers, useKeyboardShortcuts } from "../../hooks/useKeyboardShortcuts";
@@ -131,6 +134,34 @@ describe("useKeyboardShortcuts", () => {
 		settingsStore._testCancelPendingSave();
 		paneLayoutStore._testCancelPendingSave();
 	});
+
+	// Catches: Ctrl+Alt+V being swallowed by the real quick-switcher hold on Win/Linux.
+	it.each(["Win32", "Linux x86_64"])(
+		"hands-free chord survives the quick-switcher modifier hold on %s",
+		async (platform) => {
+			Object.defineProperty(navigator, "platform", { configurable: true, value: platform });
+			resetPlatformCache();
+			const toggle = vi.spyOn(handsFree, "toggleHandsFreeConversation").mockResolvedValue(undefined);
+			mockInvoke.mockResolvedValue({ enabled: true, hotkey: "F5", language: "auto" });
+			await dictationStore.refreshConfig();
+			mockInvoke.mockReset().mockResolvedValue(undefined);
+			const view = render(() => {
+				const [visible, setVisible] = createSignal(false);
+				useQuickSwitcherVisibility(setVisible);
+				handlers.isQuickSwitcherOpen = visible;
+				return null;
+			});
+			try {
+				fireKeydown("Control", { ctrlKey: true });
+				fireKeydown("Alt", { ctrlKey: true, altKey: true });
+				fireKeydown("v", { ctrlKey: true, altKey: true, code: "KeyV" });
+				expect(toggle).toHaveBeenCalledOnce();
+			} finally {
+				view.unmount();
+				toggle.mockRestore();
+			}
+		},
+	);
 
 	describe("hands-free default hotkey", () => {
 		async function configure(enabled: boolean) {
