@@ -75,11 +75,11 @@ describe("extractTab — text read from source", () => {
 
 // Catches: migrating a heading to shared card props silently drops its search section.
 describe("shared Settings vocabulary extraction", () => {
-	it("indexes card titles and row labels without treating page headers as sections", () => {
+	it("indexes page and card anchors without treating status badges as controls", () => {
 		const result = extractTab(
-			`<SettingPageHeader title="General" /><SectionCard title={t("x.card", "Behavior")}><SettingRow label="Language" /></SectionCard><DangerZone title="Disconnect"><SettingRow label="Remove access" /></DangerZone>`,
+			`<SettingPageHeader title="General" /><StatusSummary label="Connected" source="Runtime" /><StatusBadge label="Updated" /><SectionCard title={t("x.card", "Behavior")}><SettingRow label="Language" /></SectionCard><DangerZone title="Disconnect"><SettingRow label="Remove access" /></DangerZone>`,
 		);
-		expect(result.sections).toEqual([{ key: "x.card", text: "Behavior" }, { text: "Disconnect" }]);
+		expect(result.sections).toEqual([{ text: "General" }, { key: "x.card", text: "Behavior" }, { text: "Disconnect" }]);
 		expect(result.settings).toEqual([
 			{ text: "Language", section: "Behavior" },
 			{ text: "Remove access", section: "Disconnect" },
