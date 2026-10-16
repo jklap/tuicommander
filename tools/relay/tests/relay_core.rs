@@ -425,3 +425,60 @@ async fn relay_admission_silent_peer_is_rejected_after_auth_timeout() {
     assert_close(&mut peer, 4003).await;
     assert!(state.sessions.is_empty());
 }
+
+/// An expired socket must not send into a room recreated under a different owner.
+#[tokio::test]
+async fn expired_peer_cannot_forward_into_recreated_room_owned_by_another_token() {
+    let state = AppState::new();
+    let addr = start_relay_with_state(state.clone()).await;
+    let mut expired = connect_ws(addr, "reused-room").await;
+    assert!(read_text(&mut expired).await.contains("waiting"));
+    state.sessions.get_mut("reused-room").unwrap().last_activity =
+        std::time::Instant::now() - Duration::from_secs(60);
+    tuic_relay::relay::spawn_session_reaper(
+        state.clone(),
+        Duration::from_secs(30),
+        Duration::from_millis(10),
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_secs(5), read_text(&mut expired))
+            .await
+            .unwrap()
+            .contains("timeout")
+    );
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !state.sessions.is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("reaper did not remove expired room");
+
+    let url = format!("ws://{addr}/ws/reused-room");
+    let (mut owner_a, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+    owner_a
+        .send(Message::Text("Bearer other-owner".into()))
+        .await
+        .unwrap();
+    assert!(read_text(&mut owner_a).await.contains("waiting"));
+    let (mut owner_b, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+    owner_b
+        .send(Message::Text("Bearer other-owner".into()))
+        .await
+        .unwrap();
+    assert!(read_text(&mut owner_b).await.contains("connected"));
+    assert!(read_text(&mut owner_a).await.contains("connected"));
+
+    // The old owner's socket is no longer authorized for this room incarnation.
+    let payload = b"old-owner-data".to_vec();
+    let _ = expired.send(Message::Binary(payload.clone().into())).await;
+    if let Ok(Some(Ok(Message::Binary(received)))) =
+        tokio::time::timeout(Duration::from_millis(200), owner_b.next()).await
+    {
+        assert_ne!(
+            received.as_ref(),
+            payload.as_slice(),
+            "expired peer forwarded data into another token's recreated room"
+        );
+    }
+}
