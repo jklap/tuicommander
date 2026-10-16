@@ -64,6 +64,16 @@ export const aiChatTabs = {
 		save(root, { ids, active });
 		return active;
 	},
+	/** A deleted conversation cannot remain as the last open tab. */
+	remove(root: string, session: string): string | null {
+		const current = byRoot()[root];
+		if (!current) return null;
+		const ids = current.ids.filter((id) => id !== session);
+		const active =
+			current.active === session ? (ids[Math.max(0, current.ids.indexOf(session) - 1)] ?? "") : current.active;
+		save(root, { ids, active });
+		return active || null;
+	},
 	/** Recreate a fresh document in tests; the persisted store remains. */
 	resetMemory(): void {
 		setByRoot({});

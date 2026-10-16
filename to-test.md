@@ -2287,3 +2287,7 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] After Boss restarts the Rust build, use an isolated test owner: complete GitHub cloud device login; verify credential presence only, then enterprise token rotation/removal and binding cleanup. Do not use production accounts for destructive checks.
 - [ ] After restart, use an isolated upstream: start OAuth consent, rotate to bearer, rotate/clear a custom header, and confirm only that upstream reconnects; ensure no secret appears in replies/events/errors.
 - [ ] After restart, use an isolated registration file: edit a repository label and group name while workspace/tab state changes; verify owner readback, unchanged workspace identities, and no checkout/worktree deletion.
+
+## #1917 — AI Chat conversation deletion
+
+- [ ] Open AI Chat with installed ego; expand Conversations, capture the trash controls and named confirmation, then cancel. Delete a throwaway inactive conversation and confirm only its tab closes. Delete the selected last conversation, reload, and confirm it does not return. While a throwaway conversation is running, attempt deletion and confirm ego's refusal is shown without removing it. Repeat on browser/mobile Chat. No application restart is required for this frontend-only change.

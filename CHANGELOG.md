@@ -31,6 +31,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Fix cache keepalive draft preservation with guarded backend submissions and complete question-state replay on plugin load.
 
 ### Added
+- Delete saved AI Chat conversations from the Conversations list with named confirmation and ACP capability gating (#1917).
 - Diagnose empty or off-screen mobile resume shells through the backend log ring without reloading the page (#1900-5ff6).
 - Bind GitHub Work review threads and PR actions to the selected account through core policy, with desktop and HTTP parity (#1693-a816).
 - Hibernate unattended resumable agent tabs after configurable awake idle time, with background-only scope by default and shared wake on open, input or mail (#1808-389f).
