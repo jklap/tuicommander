@@ -2302,6 +2302,8 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] After a manual backend restart, verify that a stalled desktop pauses after three abandoned frames, sends no hidden grid frames, still delivers background bells, and restores full content on show; browser watchers must continue independently (story 1934-3c67).
 
 - [ ] After the next CLI rebuild, run `tuic bg` with a long multiline command: verify a single-line completion label of at most 120 characters and the full command before output in the log (#1950-43b7). The installed CLI is unchanged until rebuilt; no desktop restart is needed for this CLI-only change.
+
+- [ ] After a manual backend restart, verify Pocket Italian replies with a missing catalogue voice use giovanni; Settings must retain the selected missing voice and offer Download. Download the selected voice while hands-free stays armed and verify the next reply uses it. Rust changes do not hot-reload (#1954-bab7).
 ## 1902-7010 — ego terminal provider recovery (requires Boss restart)
 
 - [ ] After Boss restarts `make dev` (Rust does not hot-reload), run a managed

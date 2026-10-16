@@ -12,6 +12,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Restyle Workspace Settings with section cards, aligned terminal and Git fields, and action-first shortcut rows while preserving existing behavior.
 - Bound `tuic bg` completion command labels to one line and 120 characters; keep the full command before job output in the log (#1950-43b7).
+### Fixed
+- Keep missing Pocket voices visible in Settings with a download action; use the installed same-language default for spoken replies.
+
 - Bind hands-free conversation start/stop to Cmd+Alt+V (Ctrl+Alt+V on Windows/Linux), with user overrides preserved (#1953-3da5).
 
 - Show tab shortcut hints after a 450 ms Cmd-only hold (Ctrl on Windows/Linux), without flashing on normal shortcuts or pointer activity (#1951-8fac).
