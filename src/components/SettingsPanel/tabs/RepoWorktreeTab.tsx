@@ -199,7 +199,7 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 					</Select>
 				</div>
 
-				<div class={r.group}>
+				<div class={r.switchGroup}>
 					<SettingRow label="Show all worktrees of this repo in one consolidated screen">
 						{(id, descriptionId) => (
 							<input

@@ -852,6 +852,7 @@
 	"repoScripts.label.runScript": "Run Script",
 	"repoScripts.label.setupScript": "Setup Script",
 	"repoScripts.placeholder.inheriting": "Inheriting:",
+ "repoScripts.placeholder.noGlobalScript": "no global script",
 	"repoWorktree.afterMerge.archive": "Archive worktree",
 	"repoWorktree.afterMerge.ask": "Ask each time",
 	"repoWorktree.afterMerge.delete": "Delete worktree",

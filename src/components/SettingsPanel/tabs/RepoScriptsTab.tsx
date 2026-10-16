@@ -10,17 +10,17 @@ import type { RepoTabProps } from "./RepoWorktreeTab";
 export const RepoScriptsTab: Component<RepoTabProps> = (props) => {
 	const setupPlaceholder = () =>
 		props.settings.setupScript === null
-			? `${t("repoScripts.placeholder.inheriting", "Inheriting:")} ${props.defaults.setupScript}`
+			? `${t("repoScripts.placeholder.inheriting", "Inheriting:")} ${props.defaults.setupScript || t("repoScripts.placeholder.noGlobalScript", "no global script")}`
 			: "#!/bin/bash\nnpm install";
 
 	const runPlaceholder = () =>
 		props.settings.runScript === null
-			? `${t("repoScripts.placeholder.inheriting", "Inheriting:")} ${props.defaults.runScript}`
+			? `${t("repoScripts.placeholder.inheriting", "Inheriting:")} ${props.defaults.runScript || t("repoScripts.placeholder.noGlobalScript", "no global script")}`
 			: "#!/bin/bash\nnpm run dev";
 
 	const archivePlaceholder = () =>
 		props.settings.archiveScript === null
-			? `${t("repoScripts.placeholder.inheriting", "Inheriting:")} ${props.defaults.archiveScript}`
+			? `${t("repoScripts.placeholder.inheriting", "Inheriting:")} ${props.defaults.archiveScript || t("repoScripts.placeholder.noGlobalScript", "no global script")}`
 			: "#!/bin/bash\ndocker compose down";
 
 	return (
