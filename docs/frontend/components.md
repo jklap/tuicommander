@@ -202,6 +202,8 @@ events, so another window or a phone sees the same order and cancellations.
 
 ## Mobile Screens (`src/mobile/`)
 
+Mobile connection presentation follows `useSessions`, not the independent version poll. Recovery increments a root revision consumed by Files, Chat settings, Activity, Settings and Progress discovery. Failed Files reads retry without replacing unsaved edits. During an outage, tab views stay mounted but hidden so contradictory empty/setup errors do not replace the shared connection banner. Mobile Chat hydrates settings quietly and does not infer missing ego configuration from an unsuccessful read.
+
 `OpenMarkdownMenu` adds a scrollable Markdown section to session overflow.
 It reads repository-scoped desktop file metadata and refetches on tab changes,
 repository changes and SSE resynchronization. Selecting an entry keeps the

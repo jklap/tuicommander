@@ -83,10 +83,12 @@ export default function MobileApp() {
 
 	const [activeTab, setActiveTab] = createSignal<TabId>("sessions");
 	const [chatFileLink, setChatFileLink] = createSignal<{ candidate: string; cwd: string } | null>(null);
+	const [recoveryRevision, setRecoveryRevision] = createSignal(0);
 	const [progressProjects, setProgressProjects] = createSignal<string[] | undefined>();
 	const [progressProjectsError, setProgressProjectsError] = createSignal<string | null>(null);
 	createEffect(() => {
 		if (activeTab() !== "progress") return;
+		recoveryRevision();
 		let cancelled = false;
 		setProgressProjects(undefined);
 		setProgressProjectsError(null);
@@ -111,8 +113,8 @@ export default function MobileApp() {
 		root?: string;
 	} | null>(null);
 	const { sessions, loading, refreshing, error, authError, refresh, questionCount, markSeen, subscribeChatWake } =
-		useSessions();
-	const { updateAvailable, serverDown, applyUpdate } = useVersionCheck();
+		useSessions(() => setRecoveryRevision((revision) => revision + 1));
+	const { updateAvailable, applyUpdate } = useVersionCheck();
 	ideasStore.hydrate();
 
 	// Keep the last known session data so the detail screen stays mounted
@@ -169,7 +171,7 @@ export default function MobileApp() {
 
 	return (
 		<div class={styles.shell} data-mobile-shell>
-			<ConnectionBanner offline={serverDown() || error() !== null} authError={authError()} onRetry={refresh} />
+			<ConnectionBanner offline={error() !== null} authError={authError()} onRetry={refresh} />
 			<Show
 				when={showDetail()}
 				fallback={
@@ -186,53 +188,57 @@ export default function MobileApp() {
 						{updateBanner()}
 						<QuestionBanner sessions={sessions()} onNavigate={navigateToSession} />
 						<main class={styles.content}>
-							<Switch>
-								<Match when={activeTab() === "chat"}>
-									<MobileChatScreen
-										onOpenFile={(candidate, cwd) => {
-											setChatFileLink({ candidate, cwd });
-											setActiveTab("files");
-										}}
-									/>
-								</Match>
-								<Match when={activeTab() === "sessions"}>
-									<SessionsScreen
-										sessions={sessions()}
-										loading={loading()}
-										refreshing={refreshing()}
-										error={error()}
-										onRefresh={refresh}
-										onSelectSession={navigateToSession}
-									/>
-								</Match>
-								<Match when={activeTab() === "activity"}>
-									<ActivityScreen onNavigateSession={navigateToSession} />
-								</Match>
-								<Match when={activeTab() === "files"}>
-									<Show when={chatFileLink()} fallback={<FilesScreen />}>
-										{(link) => (
-											<FilesScreen
-												initialRepo={{ cwd: link().cwd, worktreePath: link().cwd }}
-												initialLink={{ candidate: link().candidate }}
-												onExit={() => {
-													setChatFileLink(null);
-													setActiveTab("chat");
-												}}
-											/>
-										)}
-									</Show>
-								</Match>
-								<Match when={activeTab() === "progress"}>
-									<ProgressDialog
-										embedded
-										projects={progressProjects()}
-										projectsError={progressProjectsError() ?? undefined}
-									/>
-								</Match>
-								<Match when={activeTab() === "settings"}>
-									<SettingsScreen isConnected={error() === null} />
-								</Match>
-							</Switch>
+							<div hidden={error() !== null || loading()} class={styles.views}>
+								<Switch>
+									<Match when={activeTab() === "chat"}>
+										<MobileChatScreen
+											recoveryRevision={recoveryRevision()}
+											onOpenFile={(candidate, cwd) => {
+												setChatFileLink({ candidate, cwd });
+												setActiveTab("files");
+											}}
+										/>
+									</Match>
+									<Match when={activeTab() === "sessions"}>
+										<SessionsScreen
+											sessions={sessions()}
+											loading={loading()}
+											refreshing={refreshing()}
+											error={error()}
+											onRefresh={refresh}
+											onSelectSession={navigateToSession}
+										/>
+									</Match>
+									<Match when={activeTab() === "activity"}>
+										<ActivityScreen recoveryRevision={recoveryRevision()} onNavigateSession={navigateToSession} />
+									</Match>
+									<Match when={activeTab() === "files"}>
+										<Show when={chatFileLink()} fallback={<FilesScreen recoveryRevision={recoveryRevision()} />}>
+											{(link) => (
+												<FilesScreen
+													recoveryRevision={recoveryRevision()}
+													initialRepo={{ cwd: link().cwd, worktreePath: link().cwd }}
+													initialLink={{ candidate: link().candidate }}
+													onExit={() => {
+														setChatFileLink(null);
+														setActiveTab("chat");
+													}}
+												/>
+											)}
+										</Show>
+									</Match>
+									<Match when={activeTab() === "progress"}>
+										<ProgressDialog
+											embedded
+											projects={progressProjects()}
+											projectsError={progressProjectsError() ?? undefined}
+										/>
+									</Match>
+									<Match when={activeTab() === "settings"}>
+										<SettingsScreen recoveryRevision={recoveryRevision()} isConnected={error() === null} />
+									</Match>
+								</Switch>
+							</div>
 						</main>
 						<BottomTabs
 							active={activeTab()}
@@ -263,6 +269,7 @@ export default function MobileApp() {
 				<Show when={sessionFilesOpen()}>
 					<main class={styles.content}>
 						<FilesScreen
+							recoveryRevision={recoveryRevision()}
 							initialLink={sessionFileLink() ?? undefined}
 							initialRepo={{
 								worktreePath: sessionFileLink()?.root ?? lastKnownSession()!.worktree_path,

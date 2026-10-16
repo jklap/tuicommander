@@ -145,6 +145,10 @@ notification opens that session.
 
 Mobile **Settings → Input → Autocorrect and spellcheck** is on by default. It enables autocorrect, spellcheck and sentence capitalization in the terminal prompt composer. Turn it off for literal command entry. The choice stays in this browser or installed PWA across reloads. File and code editors keep spellcheck off. Keyboard suggestions still depend on your phone keyboard settings.
 
+### Connection loss and recovery
+
+If the server cannot be reached, the mobile app shows one connection banner with **Retry now**. Tabs remain available, but their content stays hidden until the connection returns; mounted views and unsent drafts are retained. A successful automatic session poll or manual retry reloads failed view reads without restarting the app. Failed reads do not mean that repositories or ego are unconfigured. Files retains the repository and subdirectory you tried to open if the first read fails. After a linked file opens successfully, later recoveries do not reload it over an unsaved edit. An authentication refusal shows **Sign in** instead of repeating network retries.
+
 ### Mobile Features
 Tap the attachment icon to the left of the session input to choose a photo or file. The
 file name appears while uploading, then its path is added to the draft. Queue

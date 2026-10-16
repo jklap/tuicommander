@@ -470,7 +470,7 @@ function createSettingsStore() {
 
 	const actions = {
 		/** Load settings from Rust config; migrate from localStorage on first run */
-		async hydrate(): Promise<void> {
+		async hydrate(options?: { notifyOnError?: boolean }): Promise<boolean> {
 			try {
 				// One-time migration from localStorage
 				const legacyIde = localStorage.getItem(LEGACY_KEYS.IDE);
@@ -550,13 +550,16 @@ function createSettingsStore() {
 				setState("aiChatWorkspace", config.ai_chat_workspace ?? "");
 				savedFields = snapshotFields(ownedFields());
 				hydrated = true;
+				return true;
 			} catch (err) {
 				appLogger.error("config", "Failed to hydrate settings — persistence disabled for this session", err);
-				toastsStore.add(
-					"Settings failed to load",
-					"Running on defaults; changes will NOT be saved. Check logs and restart.",
-					"error",
-				);
+				if (options?.notifyOnError !== false)
+					toastsStore.add(
+						"Settings failed to load",
+						"Running on defaults; changes will NOT be saved. Check logs and restart.",
+						"error",
+					);
+				return false;
 			}
 		},
 

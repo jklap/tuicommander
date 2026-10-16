@@ -294,7 +294,7 @@ describe("useSessions — refreshing signal", () => {
 		await failD.promise.catch(() => {});
 		await Promise.resolve();
 
-		expect(error()).toBe("server error");
+		expect(error()).toBe("Could not connect to the server.");
 
 		// Trigger a successful refresh — should clear the error
 		const successD = deferred<SessionInfo[]>();

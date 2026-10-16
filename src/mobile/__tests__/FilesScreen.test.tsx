@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
+import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { rpc } from "../../transport";
 import { FilesScreen } from "../screens/FilesScreen";
 
 vi.mock("../../stores/appLogger", () => ({ appLogger: { warn: vi.fn(), error: vi.fn() } }));
@@ -82,6 +84,40 @@ afterEach(() => {
 });
 
 describe("FilesScreen", () => {
+	it("retries a repository opened from the picker when its first directory read failed", async () => {
+		const [revision, setRevision] = createSignal(0);
+		const view = render(() => <FilesScreen recoveryRevision={revision()} />);
+		const repository = await waitFor(() => view.getByRole("button", { name: /repo-one/ }));
+		vi.mocked(rpc).mockRejectedValueOnce(new Error("Failed to fetch"));
+		await fireEvent.click(repository);
+		await waitFor(() => expect(view.getByRole("alert").textContent).toContain("Could not open directory"));
+		setRevision(1);
+		await waitFor(() => expect(view.getByRole("searchbox", { name: "Search files" })).toBeTruthy());
+		expect(view.queryByRole("alert")).toBeNull();
+	});
+
+	it("does not discard a linked file draft on a second recovery after initialization failed", async () => {
+		const [revision, setRevision] = createSignal(0);
+		vi.mocked(rpc).mockRejectedValueOnce(new Error("Failed to fetch"));
+		const view = render(() => (
+			<FilesScreen
+				recoveryRevision={revision()}
+				initialRepo={{ cwd: "/repo-one", worktreePath: "/repo-one" }}
+				initialLink={{ candidate: "src/deep/guide.md" }}
+			/>
+		));
+		await waitFor(() => expect(view.getByRole("alert").textContent).toContain("Could not load repositories"));
+		setRevision(1);
+		await fireEvent.click(await waitFor(() => view.getByRole("button", { name: "Edit" })));
+		await fireEvent.input(view.getByRole("textbox", { name: "File content" }), {
+			target: { value: "My unsaved review" },
+		});
+		setRevision(2);
+		// Drain the successful retry's promise chain before checking the retained editor.
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(view.getByRole("textbox", { name: "File content" })).toHaveValue("My unsaved review");
+	});
+
 	it("opens a backend-resolved chat directory without treating it as a file", async () => {
 		linkedTarget.value = { absolute_path: "/home/boss/Gits/project/docs", is_directory: true };
 		const view = render(() => (
