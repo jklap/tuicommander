@@ -575,6 +575,55 @@ async fn awaiting_input_sets_waiting_status() {
     );
 }
 
+// Catches: explicit finish before a tick lets a second request publish the first turn's answer.
+#[tokio::test]
+async fn explicit_finish_before_tick_reserves_acp_turn_for_first_request() {
+    let (_dir, paths) = setup();
+    let server = FakeServer::start(vec![]).await;
+    let mut runtime = super::tests::outbound_tests::runtime(paths, server.address).await;
+    let journal = runtime.state.acp.test_peer_journal(PEER);
+    runtime.deliver(mail(7)).await.unwrap();
+    runtime.deliver(mail(8)).await.unwrap();
+    read(&runtime).await;
+    let (turn, _) = start(&journal, true);
+    let seq = append(&journal, turn, chunk("First turn text"));
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while runtime
+            .requests
+            .iter()
+            .any(|request| request.recipient.observed_sequence() < seq)
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("Both ACP readers must observe the answer before explicit finish");
+    finish(&mut runtime, "tg:test-bot:7", "Explicit first final")
+        .await
+        .unwrap();
+    let seq = append(
+        &journal,
+        turn,
+        Event::TurnSettled {
+            stop_reason: v1::StopReason::EndTurn,
+            usage: None,
+        },
+    );
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while runtime.requests[1].recipient.observed_sequence() < seq {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("Second ACP reader must observe settlement");
+    runtime.tick().await;
+    assert_eq!(finals(&server), ["Explicit first final"]);
+    assert!(
+        runtime.requests[1].completed.is_none(),
+        "Second request must remain unanswered"
+    );
+}
+
 // Catches: successive Telegram requests publish the same ACP turn twice.
 #[tokio::test]
 async fn several_messages_claim_distinct_acp_turns_and_keep_one_draft() {

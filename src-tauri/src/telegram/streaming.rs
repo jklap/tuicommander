@@ -91,6 +91,13 @@ pub(super) struct AcpObservation {
     sequence: u64,
 }
 impl AcpObservation {
+    fn unclaimed_turn(&self, claimed: &[crate::acp::AcpTurnId]) -> Option<crate::acp::AcpTurnId> {
+        self.turns
+            .iter()
+            .find(|turn| turn.turn.is_some_and(|id| !claimed.contains(&id)))
+            .and_then(|turn| turn.turn)
+    }
+
     fn event(&mut self, envelope: crate::acp::AcpEventEnvelope) {
         #[cfg(test)]
         {
@@ -319,6 +326,20 @@ impl Runtime {
         self.outbound.active = None;
         self.callbacks.clear();
         if let Some(index) = index {
+            let claimed: Vec<_> = self.requests.iter().filter_map(|r| r.turn).collect();
+            let request = &mut self.requests[index];
+            let read = self
+                .state
+                .agent_read_cursor
+                .get(&request.peer)
+                .is_some_and(|cursor| *cursor >= request.cursor);
+            if read
+                && request.turn.is_none()
+                && let Recipient::Acp { observation, .. } = &request.recipient
+            {
+                // Keep this answered turn reserved when completion drops its reader.
+                request.turn = observation.lock().unclaimed_turn(&claimed);
+            }
             // Claim before network I/O: an uncertain send must not be blindly retried.
             self.requests[index].completed = Some(vec![]);
             self.requests[index].final_epoch = self
@@ -402,11 +423,7 @@ impl Runtime {
                     request.failed |= snapshot.failed;
                     ended = read && snapshot.idle;
                     if read && request.turn.is_none() {
-                        request.turn = snapshot
-                            .turns
-                            .iter()
-                            .find(|turn| turn.turn.is_some_and(|id| !claimed.contains(&id)))
-                            .and_then(|turn| turn.turn);
+                        request.turn = snapshot.unclaimed_turn(&claimed);
                     }
                     if let Some(observation) =
                         snapshot.turns.iter().find(|turn| turn.turn == request.turn)
