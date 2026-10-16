@@ -1500,3 +1500,83 @@ fn stale_foreground_snapshot_cannot_revoke_newer_agent_or_rearm_returned_shell()
     assert_eq!(session.agent_type, None);
     assert_eq!(session.foreground_probe_generation, 3);
 }
+
+/// Catches: ego has no ready adapter, or retained draft text is mistaken for an
+/// empty composer and becomes eligible for destructive command injection.
+#[test]
+fn ego_recorded_composer_distinguishes_empty_draft_and_accepted_enter() {
+    use crate::pty_capture::CaptureDirection::{Input, Output};
+    let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture("ego-composer-1957.tcap")).unwrap();
+    let (rows, cols) = capture.geometry.unwrap();
+    let mut vt = VtLogBuffer::new(rows, cols, 2000);
+    let mut phase = 0;
+    let mut empty = false;
+    let mut retained = false;
+    let mut working = false;
+    let mut final_ready = false;
+    for record in capture.records {
+        if record.direction == Input {
+            if record.data == b"captured draft" { phase = 1; }
+            if record.data == b"\r" { phase = 2; }
+        } else if record.direction == Output {
+            vt.process(&record.data);
+            let screen = vt.screen_rows();
+            let activity = detect_agent_screen_activity(Some("ego"), &screen);
+            match phase {
+                0 => empty |= activity == AgentScreenActivity::Ready,
+                1 => retained |= screen.iter().any(|row| row.contains("captured draft")) && activity == AgentScreenActivity::Unknown,
+                _ => {
+                    working |= activity == AgentScreenActivity::Working;
+                    final_ready = activity == AgentScreenActivity::Ready;
+                }
+            }
+        }
+    }
+    assert!(empty, "the recorded empty ego composer must be ready");
+    assert!(retained, "a retained draft is not an empty composer");
+    assert!(working, "accepted Enter must expose the recorded working row");
+    assert!(final_ready, "the completed turn returns to the empty composer");
+    assert!(has_ready_screen_adapter(Some("ego")));
+}
+
+/// Catches: a fully written but unconfirmed queued command permanently blocks
+/// later commands even after a fresh, stable empty ego composer is observed.
+#[cfg(unix)]
+#[test]
+fn injection_uncertain_recovers_after_fresh_empty_ego_composer_without_replay() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let sid = "ego-uncertain-recovery";
+    agent_session(&state, sid, SHELL_IDLE);
+    state.session_maps.session_states.get_mut(sid).unwrap().agent_type = Some("ego".into());
+    let bytes = insert_recording_session(&state, sid);
+    let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture("ego-composer-1957.tcap")).unwrap();
+    let (rows, cols) = capture.geometry.unwrap();
+    let mut vt = VtLogBuffer::new(rows, cols, 2000);
+    let mut final_chunk = Vec::new();
+    for record in capture.records {
+        if record.direction == crate::pty_capture::CaptureDirection::Output {
+            vt.process(&record.data);
+            final_chunk = record.data;
+        }
+    }
+    state.grid.vt_log_buffers.insert(sid.into(), Mutex::new(vt));
+    state.session_maps.output_buffers.insert(sid.into(), Mutex::new(OutputRingBuffer::new(4096)));
+    enqueue_user_command(&state, sid, "first wake", None).unwrap();
+    let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
+    assert!(silence.lock().injection_delivery_uncertain);
+    // A delayed empty-composer repaint supplies new output, not a timer-only
+    // expiry of an old screen. It carries no busy/idle protocol marker.
+    assert!(!final_chunk.windows(5).any(|bytes| bytes == b"7770;"));
+    state.grid.vt_log_buffers.get(sid).unwrap().lock().process(&final_chunk);
+    silence.lock().on_chunk(false, None, false, false, false);
+    let screen = state.grid.vt_log_buffers.get(sid).unwrap().lock().screen_rows();
+    let activity = detect_agent_screen_activity(Some("ego"), &screen);
+    assert_eq!(activity, AgentScreenActivity::Ready);
+    assert!(!try_timer_idle_transition(&state, &silence, sid, activity, Some("ego"), None).transitioned);
+    std::thread::sleep(AGENT_READY_CONFIRM + std::time::Duration::from_millis(100));
+    assert!(try_timer_idle_transition(&state, &silence, sid, activity, Some("ego"), None).transitioned);
+    assert!(!silence.lock().injection_delivery_uncertain);
+    assert!(should_inject_now(&state, sid));
+    assert_eq!(String::from_utf8_lossy(&bytes.lock().unwrap()).matches("first wake").count(), 1);
+    crate::pty::close_pty_core(&state, sid, false);
+}
