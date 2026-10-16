@@ -5,7 +5,7 @@ import { HttpRpcError } from "../../../transport";
 import { Input } from "../../ui/Input";
 import { SettingToggle } from "../SettingFields";
 import s from "../Settings.module.css";
-import { SectionCard, SettingPageHeader } from "../SettingsPrimitives";
+import { SectionCard, SettingPageHeader, SettingRow } from "../SettingsPrimitives";
 import telegram from "./TelegramTab.module.css";
 
 interface TelegramSettings {
@@ -103,16 +103,22 @@ export const TelegramTab: Component = () => {
 				{(data) => (
 					<>
 						<SectionCard title="Bot setup">
-							<label for="telegram-token">{t("telegram.token", "Bot token")}</label>
-							<p class={s.hint}>{data().token_set ? "Token set — enter a replacement" : "Token not set"}</p>
-							<Input
-								id="telegram-token"
-								class={s.input}
-								type="password"
-								autocomplete="new-password"
-								value={token()}
-								onInput={(e) => setToken(e.currentTarget.value)}
-							/>
+							<SettingRow label={t("telegram.token", "Bot token")}>
+								{(id, descriptionId) => (
+									<>
+										<p class={s.hint}>{data().token_set ? "Token set — enter a replacement" : "Token not set"}</p>
+										<Input
+											id={id}
+											aria-describedby={descriptionId()}
+											class={s.input}
+											type="password"
+											autocomplete="new-password"
+											value={token()}
+											onInput={(e) => setToken(e.currentTarget.value)}
+										/>
+									</>
+								)}
+							</SettingRow>
 							<button
 								class={s.testBtn}
 								disabled={busy() || !token()}
@@ -127,15 +133,21 @@ export const TelegramTab: Component = () => {
 							<p class={s.hint}>{data().bot_alias}</p>
 						</SectionCard>
 						<SectionCard title="Chat access">
-							<label for="telegram-chat">{t("telegram.chat", "Authorized chats")}</label>
-							<Input
-								id="telegram-chat"
-								class={s.input}
-								inputmode="numeric"
-								placeholder="Private chat ID"
-								value={chat()}
-								onInput={(e) => setChat(e.currentTarget.value)}
-							/>
+							<SettingRow label={t("telegram.chat", "Authorized chats")}>
+								{(id, descriptionId) => (
+									<>
+										<Input
+											id={id}
+											aria-describedby={descriptionId()}
+											class={s.input}
+											inputmode="numeric"
+											placeholder="Private chat ID"
+											value={chat()}
+											onInput={(e) => setChat(e.currentTarget.value)}
+										/>
+									</>
+								)}
+							</SettingRow>
 							<button
 								class={s.testBtn}
 								disabled={busy() || !chat()}

@@ -2,12 +2,11 @@ import { type Component, createSignal, For, onMount, Show } from "solid-js";
 import { t } from "../../../../i18n";
 import { appLogger } from "../../../../stores/appLogger";
 import { rpc } from "../../../../transport";
-import { cx } from "../../../../utils";
 import { writeClipboard } from "../../../../utils/clipboard";
+import { StatusBadge } from "../../../ui/StatusBadge";
 import { ExpertSetting } from "../../ExpertSetting";
-import { InfoBadge } from "../../InfoBadge";
 import s from "../../Settings.module.css";
-import { SectionCard, SettingPageHeader } from "../../SettingsPrimitives";
+import { SectionCard, SettingPageHeader, SettingRow } from "../../SettingsPrimitives";
 import layout from "./ServiceRestyle.module.css";
 import { type AppConfig, saveConfigField, useMcpStatusPoll } from "./servicesShared";
 
@@ -58,30 +57,30 @@ export const LocalMcpPanel: Component = () => {
 					</p>
 				</div>
 
-				<div class={s.group}>
-					<label>{t("services.label.serverStatus", "Server Status")}</label>
-					<div class={s.mcpStatusRow}>
-						<span class={cx(s.mcpStatusDot, status()?.running && s.running)} />
-						<span class={s.mcpStatusText}>
-							{status()?.running
-								? t("services.status.running", "Running")
-								: t("services.status.starting", "Starting...")}
-						</span>
-						<Show when={status()?.running}>
-							<span class={s.mcpStatusPort}>{t("services.label.socket", "Socket")}</span>
-						</Show>
-					</div>
-				</div>
+				<SettingRow label={t("services.label.serverStatus", "Server Status")}>
+					{() => (
+						<>
+							<StatusBadge
+								label={
+									status()?.running
+										? t("services.status.running", "Running")
+										: t("services.status.starting", "Starting...")
+								}
+								variant={status()?.running ? "success" : undefined}
+							/>
+						</>
+					)}
+				</SettingRow>
 
-				<div class={s.group}>
-					<label>{t("services.label.mcpConnection", "MCP Connection")}</label>
-					<p class={s.hint}>
-						{t(
-							"services.hint.mcpConnection",
-							"AI agents connect via the tuic-bridge sidecar. MCP configs are auto-installed in supported agents (Claude Code, Cursor, etc.).",
-						)}
-					</p>
-				</div>
+				<SettingRow
+					label={t("services.label.mcpConnection", "MCP Connection")}
+					hint={t(
+						"services.hint.mcpConnection",
+						"AI agents connect via the tuic-bridge sidecar. MCP configs are auto-installed in supported agents (Claude Code, Cursor, etc.).",
+					)}
+				>
+					{() => <StatusBadge label="tuic-bridge" />}
+				</SettingRow>
 
 				{/* ── TUIC Tools ── */}
 			</SectionCard>
@@ -138,9 +137,15 @@ export const LocalMcpPanel: Component = () => {
 				</div>
 
 				<ExpertSetting configKey="app.collapse_tools" value={collapseTools()}>
-					<div class={s.group} style={{ display: "flex", "align-items": "center", gap: "8px", padding: "4px 0" }}>
-						<div class={s.toggle} style={{ "margin-right": "4px" }}>
+					<SettingRow
+						label="Collapse tools — Speakeasy MCP (reduces AI context ~98%)"
+						hint="Discover tools on demand through search_tools, get_tool_schema and call_tool."
+					>
+						{(id, descriptionId) => (
 							<input
+								id={id}
+								aria-describedby={descriptionId()}
+								class={s.rowSwitch}
 								type="checkbox"
 								checked={collapseTools()}
 								onChange={(e) => {
@@ -151,20 +156,8 @@ export const LocalMcpPanel: Component = () => {
 									});
 								}}
 							/>
-						</div>
-						<div style={{ display: "flex", "align-items": "center", gap: "6px" }}>
-							{/* A label element, not a span: search indexes and scrolls to labels. The
-						    inline color and margin undo the stacked `.group label` look. */}
-							<label style={{ "font-weight": 500, "font-size": "13px", color: "inherit", margin: 0 }}>
-								Collapse tools — Speakeasy MCP (reduces AI context ~98%)
-							</label>
-							<InfoBadge>
-								When enabled, MCP clients only see three meta-tools (search_tools, get_tool_schema, call_tool) and
-								discover the full tool set on demand. Drastically reduces token usage for clients that don't need every
-								tool upfront.
-							</InfoBadge>
-						</div>
-					</div>
+						)}
+					</SettingRow>
 				</ExpertSetting>
 				<Show when={nativeToolsLoaded()}>
 					{/* Static, unlike the per-tool names: the one label search can index for this group. */}
@@ -175,9 +168,12 @@ export const LocalMcpPanel: Component = () => {
 						{(tool) => {
 							const disabled = () => disabledNativeTools().includes(tool.name);
 							return (
-								<div class={s.group} style={{ display: "flex", "align-items": "center", gap: "8px", padding: "4px 0" }}>
-									<div class={s.toggle} style={{ "margin-right": "4px" }}>
+								<SettingRow label={tool.name} hint={tool.summary} help={tool.description}>
+									{(id, descriptionId) => (
 										<input
+											id={id}
+											aria-describedby={descriptionId()}
+											class={s.rowSwitch}
 											type="checkbox"
 											aria-label={tool.name}
 											checked={!disabled()}
@@ -192,17 +188,8 @@ export const LocalMcpPanel: Component = () => {
 												});
 											}}
 										/>
-									</div>
-									<div style={{ display: "flex", "align-items": "center", gap: "6px" }}>
-										<span style={{ "font-weight": 500, "font-size": "13px", "font-family": "monospace" }}>
-											{tool.name}
-										</span>
-										<span class={s.hint} style={{ margin: 0 }}>
-											{tool.summary}
-										</span>
-										<InfoBadge>{tool.description}</InfoBadge>
-									</div>
-								</div>
+									)}
+								</SettingRow>
 							);
 						}}
 					</For>

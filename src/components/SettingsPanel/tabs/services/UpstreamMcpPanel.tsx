@@ -16,6 +16,7 @@ import { MachineSelector } from "../../MachineSelector";
 import s from "../../Settings.module.css";
 import { SectionCard } from "../../SettingsPrimitives";
 import { SETTINGS_SECTION_UPSTREAM_MCP } from "../../sections";
+import layout from "./ServiceRestyle.module.css";
 
 /** Pure helper: should the Authorize button be shown for this server+status? */
 export function shouldShowAuthorize(
@@ -570,15 +571,11 @@ export const UpstreamMcpPanel: Component = () => {
 	}
 
 	return (
-		<div
-			id={SETTINGS_SECTION_UPSTREAM_MCP}
-			class={s.section}
-			style={{ "margin-top": "24px", "border-top": "1px solid var(--border)", "padding-top": "16px" }}
-		>
+		<div id={SETTINGS_SECTION_UPSTREAM_MCP} class={`${s.section} ${layout.upstreams}`}>
 			<SectionCard title="Upstream MCP Servers">
 				<div class={s.group}>
 					{/* A heading, not a label: it is the section search scrolls to (#860-91a0) */}
-					<div style={{ display: "flex", "align-items": "center", gap: "8px", "justify-content": "space-between" }}>
+					<div class={layout.cardActions}>
 						<button
 							class={s.copyBtn}
 							onClick={() => {
