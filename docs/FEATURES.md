@@ -3111,3 +3111,7 @@ Internal voice settings refresh resolves devices, model state, installed voices 
 AI Chat replies use plain chat prose without the terminal answer rail. Literal Markdown blockquotes keep their normal quote style.
 
 AI Chat can pin repository context per conversation. A separate composer control shows Pinned repository or Follow repository and the configured repository name color; draft parking stays independent.
+
+### Settings layout foundation
+
+Settings shares a responsive shell (1136px maximum, 80vh height) and reusable theme-aware cards, rows, status summaries and scoped action presentation. Existing settings behavior is unchanged; page-by-page adoption follows separately.

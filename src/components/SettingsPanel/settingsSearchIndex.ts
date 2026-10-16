@@ -27,7 +27,7 @@ import { t } from "../../i18n";
  * ## Extraction rule
  *
  * Mechanical, so the drift test can reproduce it exactly:
- * every `<h3>` opens a section; every `label=` prop and every `<label>` element
+ * every `<h3>` or `<SectionCard title=…>` / `<DangerZone title=…>` opens a section; every `label=` prop and every `<label>` element
  * is a setting inside the nearest preceding `<h3>`. Text comes from
  * `t("key", "Default")`, a string literal, or a leading plain-text run.
  *

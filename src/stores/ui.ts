@@ -31,7 +31,7 @@ export const SIDEBAR_DEFAULT_WIDTH = 300;
 /** The default is also the floor: the sidebar never gets narrower than it opens. */
 export const SIDEBAR_MIN_WIDTH = SIDEBAR_DEFAULT_WIDTH;
 
-const SETTINGS_NAV_DEFAULT_WIDTH = 180;
+const SETTINGS_NAV_DEFAULT_WIDTH = 232;
 
 /** Debounce window for persisting UI prefs, matching settingsStore. */
 const SAVE_DEBOUNCE_MS = 500;

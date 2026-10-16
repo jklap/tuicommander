@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Establish the approved wider Settings shell and reusable theme-aware presentation vocabulary (#1936-0caa).
+
 - Add explicit addressed Claude model-alias discovery and no-launch typed model saves through settings (#1910-451e).
 
 - Share bundled font and IDE choices with Rust settings owners; add explicit theme/IDE discovery without probing during describe (#1915-d77f).

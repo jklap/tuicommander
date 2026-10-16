@@ -1131,3 +1131,7 @@ read roots because discovery does not persist ego argv. ACP uploads still requir
 ### Voice owner discovery (#1909-0d24)
 
 Internal voice settings refresh resolves devices, model state, installed voices and language-filtered Edge voices through existing owners. Describe is cache-only; typed asset actions retain existing owner validation and runtime effects. Public settings transport cutover remains separate.
+
+### Settings restyle foundation (1936-0caa)
+
+The approved 2026-10-16 Settings restyle starts with a stable 1136px maximum shell and shared presentation-only vocabulary. Existing lazy mounting, persisted navigation width, configuration sources and save boundaries remain unchanged. Individual page adoption is separate work.
