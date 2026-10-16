@@ -83,3 +83,6 @@ mod tests;
 mod critic_setup_tests;
 
 pub(crate) use notifications::automation_notice;
+
+#[cfg(test)]
+mod streaming_tests;
