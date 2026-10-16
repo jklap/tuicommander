@@ -341,7 +341,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	const pendingDirtyRows = new Set<number>();
 	// When true, next paint must redraw everything (scroll, resize, clear)
 	let fullRepaintNeeded = true;
-	let hidden = false;
+	let hidden = true;
 	let lastHistorySize = -1;
 	let lastHistoryBase = -1;
 	let awaitingFullFrame = false;
@@ -1546,13 +1546,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		// on decode/paint), then decode (cheap) which keeps rowMap + currentFrame alive
 		// for the overlay (cursor/selection/links/search/scrollbar) and input semantics.
 		//
-		// A hidden terminal acks late instead of per frame. That is the whole of the
-		// flow control this observer promises: a background tab is display:none and
-		// never unmounted, so Rust keeps a producer running for it, and acking at
-		// once reopens the gate at full rate for a frame nobody can see. The trailing
-		// ack drops it to ~2 frames/s while still clearing the gate itself — staying
-		// silent would leave that to the ticker's stuck-frontend path, which is a
-		// warning per output burst for a tab that is merely in the background.
+		// Desktop visibility admission stops grid delivery while hidden. A frame
+		// already queued before hide can still arrive; acknowledge it on the
+		// trailing timer. Browser sockets keep their independent frame stream.
 		framesReceived++;
 		if (hidden) hiddenAck.schedule();
 		else ackFrame();
@@ -1583,9 +1579,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			return;
 		}
 
-		// Decoded even while hidden: the bell rides in the frame header and a
-		// background tab is exactly where it needs to reach the user.
-		if (frame.bell) props.onBell?.();
+		// Bells are delivered by the backend session event, independently of frames.
 		// Everything below paints, scans links or fills the scroll cache for a
 		// viewport that is not on screen.
 		if (hidden) return;
@@ -2394,6 +2388,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			transport.onStreamExhausted?.((maxAttempts) => {
 				showStreamError(new Error(`Reconnect failed after ${maxAttempts} attempts`));
 			});
+			await transport.onEvent("bell", () => props.onBell?.());
 			await transport.onEvent("cwd", (payload) => {
 				const { cwd } = payload as { cwd: string };
 				terminalsStore.update(props.terminalId, { cwd });
@@ -2456,6 +2451,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				const isVisible = latestIntersectionVisibility(entries);
 				if (isVisible && hidden) {
 					hidden = false;
+					transport?.setVisible?.(true);
 					awaitingFullFrame = false;
 					// Back to full rate: clear the gate now instead of waiting out the
 					// hidden interval, so the frame requested below is not queued behind it.
@@ -2492,6 +2488,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 					}
 				} else if (!isVisible && !hidden) {
 					hidden = true;
+					transport?.setVisible?.(false);
 					stopBlink();
 					// Shrink to free the backing store while hidden.
 					canvasRef.width = 1;

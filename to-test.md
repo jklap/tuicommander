@@ -2295,3 +2295,5 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 ## #1917 — AI Chat conversation deletion
 
 - [ ] Open AI Chat with installed ego; expand Conversations, capture the trash controls and named confirmation, then cancel. Delete a throwaway inactive conversation and confirm only its tab closes. Delete the selected last conversation, reload, and confirm it does not return. While a throwaway conversation is running, attempt deletion and confirm ego's refusal is shown without removing it. Repeat on browser/mobile Chat. No application restart is required for this frontend-only change.
+
+- [ ] After a manual backend restart, verify that a stalled desktop pauses after three abandoned frames, sends no hidden grid frames, still delivers background bells, and restores full content on show; browser watchers must continue independently (story 1934-3c67).

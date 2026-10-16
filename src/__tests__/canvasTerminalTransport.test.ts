@@ -139,12 +139,30 @@ describe("canvasTerminalTransport", () => {
 			);
 		});
 
-		it("requests initial frame after subscribe", async () => {
+		it("requests initial frame after a visible subscribe", async () => {
 			const { invoke } = await import("@tauri-apps/api/core");
 			const transport = new TauriTransport("session-1");
+			transport.setVisible(true);
 			await transport.subscribe(vi.fn());
 
 			expect(invoke).toHaveBeenCalledWith("terminal_request_frame", { sessionId: "session-1" });
+		});
+
+		// Catches hidden terminals requesting frames before their visibility is known.
+		it("subscribes hidden without requesting grid bytes and publishes epoch-scoped show", async () => {
+			const { invoke } = await import("@tauri-apps/api/core");
+			await mockEpochs(42);
+			const transport = new TauriTransport("session-1");
+			await transport.subscribe(vi.fn());
+			expect(invoke).toHaveBeenCalledWith("subscribe_terminal_grid", expect.objectContaining({ visible: false }));
+			expect(invoke).not.toHaveBeenCalledWith("terminal_request_frame", expect.anything());
+			transport.setVisible(true);
+			expect(invoke).toHaveBeenLastCalledWith("ack_terminal_frame", {
+				sessionId: "session-1",
+				epoch: 42,
+				received: 0,
+				visible: true,
+			});
 		});
 
 		it("delegates invoke calls to Tauri invoke", async () => {
@@ -165,7 +183,11 @@ describe("canvasTerminalTransport", () => {
 			await transport.subscribe(vi.fn());
 
 			transport.ackFrame(7);
-			expect(invoke).toHaveBeenCalledWith("ack_terminal_frame", { sessionId: "session-1", epoch: 42, received: 7 });
+			expect(invoke).toHaveBeenCalledWith("ack_terminal_frame", {
+				sessionId: "session-1",
+				epoch: 42,
+				received: 7,
+			});
 		});
 
 		// A remount subscribes before the outgoing instance tears down, so the
@@ -181,7 +203,11 @@ describe("canvasTerminalTransport", () => {
 			await transport.resubscribe();
 
 			transport.ackFrame(3);
-			expect(invoke).toHaveBeenCalledWith("ack_terminal_frame", { sessionId: "session-1", epoch: 43, received: 3 });
+			expect(invoke).toHaveBeenCalledWith("ack_terminal_frame", {
+				sessionId: "session-1",
+				epoch: 43,
+				received: 3,
+			});
 		});
 
 		it("does not ack before it knows its epoch", async () => {

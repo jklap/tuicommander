@@ -328,3 +328,5 @@ Wheel, touch and scrollbar gestures send `terminal_scroll_to_anchor` with `histo
 The marker plan blanks intent and suggest rows without changing grid coordinates. Intent continuation includes soft wraps and adjacent rows with at least two leading spaces (Codex/Ink cursor-move hard wraps). A blank row ends the walk. Unwrapped output, answer, prompt, suggest and intent rows start separate blocks.
 
 Answer-rule overlay geometry is invalidated on cell-height and projected-row changes, even when the answer markers are unchanged. This keeps font-load and theme remeasurements aligned with the grid.
+
+Hidden desktop canvases retain their session event listeners but receive no grid frames. The intersection observer publishes epoch-scoped visibility; showing requests a full authoritative grid, including its display offset and history base. Bell callbacks use the backend session bell event rather than frame decoding. Browser grid sockets keep their independent stream.

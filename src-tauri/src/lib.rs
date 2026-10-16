@@ -3172,6 +3172,7 @@ mod tests {
                 channel: tauri::ipc::Channel::new(|_| Ok(())),
                 webview_label: webview_label.to_string(),
                 epoch,
+                visible: std::sync::atomic::AtomicBool::new(true),
             },
         );
         epoch

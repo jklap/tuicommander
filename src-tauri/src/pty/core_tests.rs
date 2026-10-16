@@ -13077,6 +13077,7 @@ mod grid_delivery_tests {
                 }),
                 webview_label: "main".to_string(),
                 epoch: gate.epoch(),
+                visible: AtomicBool::new(true),
             },
         );
         (gate, received)
@@ -13099,6 +13100,112 @@ mod grid_delivery_tests {
     /// the gap, not for the expected value, so a machine five times slower than
     /// this one still passes.
     const BROWSER_FRAMES_EXPECTED: u64 = 6;
+
+    /// Catches a paused desktop suppressing the independent WS stream.
+    #[cfg(feature = "desktop")]
+    #[test]
+    fn paused_desktop_keeps_browser_damage() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let mut rx = grid_session(&state, "paused-desktop");
+        let (gate, received) = subscribe_a_frozen_webview(&state, "paused-desktop");
+        for _ in 0..3 {
+            gate.mark_sent();
+            gate.abandon();
+        }
+        let frame = cut_frame(&state, "paused-desktop", "browser text");
+        send_grid_frame(&state, "paused-desktop", frame);
+        assert!(row_count(&rx.borrow_and_update().frame) > 0);
+        assert!(received.lock().is_empty());
+    }
+
+    /// Catches a hidden terminal's bell being trapped in the grid frame stream.
+    #[cfg(feature = "desktop")]
+    #[test]
+    fn hidden_desktop_bell_reaches_session_event_bus_without_frames() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let _rx = grid_session(&state, "hidden-bell");
+        let (_gate, received) = subscribe_a_frozen_webview(&state, "hidden-bell");
+        state
+            .grid
+            .channels
+            .get("hidden-bell")
+            .unwrap()
+            .visible
+            .store(false, Ordering::Relaxed);
+        let mut events = state.event_bus.subscribe();
+        let silence = Arc::new(Mutex::new(SilenceState::new()));
+        let mut processor = ChunkProcessor::new(None, None);
+        processor.process_chunk("\x07", &silence, "hidden-bell", &state);
+        let mut bell = false;
+        while let Ok(event) = events.try_recv() {
+            if matches!(event, crate::state::AppEvent::PtyBell { session_id } if session_id == "hidden-bell")
+            {
+                bell = true;
+            }
+        }
+        assert!(
+            bell,
+            "background bell was not emitted without frame serialization"
+        );
+        assert!(received.lock().is_empty());
+    }
+
+    /// Catches desktop channel admission ignoring hidden viewport state.
+    #[cfg(feature = "desktop")]
+    #[test]
+    fn hidden_desktop_emits_no_frames_and_show_restores_grid_and_scroll() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let mut rx = grid_session(&state, "hidden-desktop");
+        let (_gate, received) = subscribe_a_frozen_webview(&state, "hidden-desktop");
+        state
+            .grid
+            .channels
+            .get("hidden-desktop")
+            .unwrap()
+            .visible
+            .store(false, Ordering::Relaxed);
+        assert!(!desktop_grid_visible(&state, "hidden-desktop"));
+        let frame = cut_frame(
+            &state,
+            "hidden-desktop",
+            &(0..40).map(|i| format!("line {i}\r\n")).collect::<String>(),
+        );
+        send_grid_frame(&state, "hidden-desktop", frame);
+        assert!(
+            received.lock().is_empty(),
+            "hidden desktop received grid bytes"
+        );
+        assert!(
+            row_count(&rx.borrow_and_update().frame) > 0,
+            "browser must remain live"
+        );
+        let expected = {
+            let vt = state.grid.vt_log_buffers.get("hidden-desktop").unwrap();
+            let mut vt = vt.lock();
+            vt.grid_scroll_to_offset(5);
+            vt.serialize_full_frame()
+        };
+        state
+            .grid
+            .channels
+            .get("hidden-desktop")
+            .unwrap()
+            .visible
+            .store(true, Ordering::Relaxed);
+        let full = {
+            let vt = state.grid.vt_log_buffers.get("hidden-desktop").unwrap();
+            let mut vt = vt.lock();
+            vt.grid_force_full_damage();
+            vt.serialize_dirty_rows()
+        };
+        send_grid_frame(&state, "hidden-desktop", full);
+        assert_eq!(
+            received.lock().last().unwrap(),
+            &expected,
+            "show changed grid or scroll position"
+        );
+        assert_eq!(u32::from_le_bytes(expected[7..11].try_into().unwrap()), 5);
+    }
 
     #[cfg(feature = "desktop")]
     #[tokio::test(flavor = "current_thread", start_paused = false)]
