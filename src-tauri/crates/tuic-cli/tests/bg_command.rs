@@ -707,3 +707,95 @@ fn bg_exhausted_lost_queue_replies_remain_uncertain_instead_of_failed() {
     assert!(bodies.iter().all(|body| body == &bodies[0]));
     std::fs::remove_file(socket).unwrap();
 }
+
+// Runs the real detached producer; the socket captures only its outbound queue request.
+fn bounded_completion_job(script: &str) -> (String, String) {
+    let log = test_path("bounded.log");
+    let socket = socket_path("bounded.sock");
+    let listener = UnixListener::bind(&socket).unwrap();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        assert_eq!(read_request(&mut stream).0, "GET /sessions HTTP/1.1");
+        reply(
+            &mut stream,
+            r#"[{"session_id":"pty-1","tuic_session":"caller-1"}]"#,
+        );
+        let (mut stream, _) = listener.accept().unwrap();
+        let request = read_request(&mut stream);
+        reply(&mut stream, r#"{"accepted":true}"#);
+        request.1["text"].as_str().unwrap().to_string()
+    });
+    let output = bg_command(&log)
+        .args(["bg", log.to_str().unwrap(), "--", "sh", "-c", script])
+        .env("TUIC_SESSION", "caller-1")
+        .env("TUIC_SOCKET", &socket)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let wake_file = std::path::PathBuf::from(format!("{}.wake", log.display()));
+    assert_eq!(wait_for_terminal_wake(&wake_file)["status"], "queued");
+    let wake = server.join().unwrap();
+    let prefix = format!("BG DONE exit=0 log={} cmd=", log.display());
+    let label = wake
+        .strip_prefix(&prefix)
+        .expect("unchanged completion fields")
+        .to_string();
+    let contents = std::fs::read_to_string(&log).unwrap();
+    std::fs::remove_file(format!("{}.exit", log.display())).unwrap();
+    std::fs::remove_file(wake_file).unwrap();
+    std::fs::remove_file(&log).unwrap();
+    std::fs::remove_file(socket).unwrap();
+    std::fs::remove_dir_all(format!("{}.markers", log.display())).unwrap();
+    (label, contents)
+}
+
+// Catches: multi-kilobyte argv floods the agent composer instead of a bounded label.
+#[test]
+fn bg_bounded_wake_with_10kb_command() {
+    let script = format!("# {}", "A".repeat(10_240));
+    let (label, _) = bounded_completion_job(&script);
+    assert_eq!(
+        label.chars().count(),
+        120,
+        "command label must include its ellipsis in the bound"
+    );
+    assert_eq!(label, format!("sh -c # {}…", "A".repeat(111)));
+}
+
+// Catches: truncating the wake loses the full command or writes it after command output.
+#[test]
+fn bg_bounded_log_header_preserves_full_multiline_command() {
+    let script = format!("echo body\n# {}", "payload".repeat(1500));
+    let (_, contents) = bounded_completion_job(&script);
+    assert!(
+        contents.starts_with(&format!("tuic bg: command=sh -c {script}\n")),
+        "full command must head the job log"
+    );
+    assert!(
+        contents.ends_with("body\n"),
+        "command output must follow the header"
+    );
+}
+
+// Catches: byte slicing breaks Unicode, boundary labels truncate early, or later lines leak.
+#[test]
+fn bg_bounded_wake_handles_unicode_boundaries_and_multiline_commands() {
+    for length in [119, 120, 121] {
+        let script = format!("# {}", "é".repeat(length - 8));
+        let (label, _) = bounded_completion_job(&script);
+        let expected = if length <= 120 {
+            format!("sh -c {script}")
+        } else {
+            format!("sh -c # {}…", "é".repeat(111))
+        };
+        assert_eq!(label, expected);
+    }
+    for script in ["# first\n# second", "# first\r\n# second"] {
+        let (label, _) = bounded_completion_job(script);
+        assert_eq!(label, "sh -c # first…");
+    }
+}

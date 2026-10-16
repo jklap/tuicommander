@@ -152,9 +152,11 @@ to `repo action=add`.
 
 Run `tuic bg <log> -- <cmd> [args...]` from a managed terminal to return at
 once while the command runs in a separate process group. The command's stdout
-and stderr append to `<log>`, and its exit code is written to `<log>.exit`.
-When it finishes, `tuic` requests a `BG DONE exit=<code> log=<log> cmd=…`
-wake for the originating session. If that session is busy, the wake is queued
+and stderr append to `<log>`, after a header with the full command, and its exit
+code is written to `<log>.exit`. When it finishes, `tuic` requests a
+`BG DONE exit=<code> log=<log> cmd=…` wake for the originating session.
+The `cmd` label contains only the first line and at most 120 Unicode characters,
+including a final `…` when text is omitted. Read the log header for the full command. If that session is busy, the wake is queued
 until it becomes idle. `<log>.wake` records the request outcome as JSON:
 `queued`, `mailed`, `retrying`, or `failed`, with `tuic_session` and the number
 of queue attempts. A queue lookup or request failure falls
