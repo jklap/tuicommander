@@ -76,6 +76,7 @@ export interface SettingsSearchEntry {
 
 export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{ tab: "telegram", section: "Telegram" },
+	{ tab: "telegram", section: "Recent messages" },
 	{ tab: "telegram", section: "Telegram", label: "Bot token", labelKey: "telegram.token" },
 	{ tab: "telegram", section: "Telegram", label: "Authorized chats", labelKey: "telegram.chat" },
 	{ tab: "telegram", section: "Telegram", label: "Enable Telegram", labelKey: "telegram.enabled" },

@@ -2324,3 +2324,9 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] Hands-free default shortcut (#1953-3da5): with dictation enabled and a live active terminal, Cmd+Alt+V (Ctrl+Alt+V on Windows/Linux) starts the conversation and a second press stops it. Disabled dictation must stay silent. Dispatcher/store tests pass; microphone/audio confirmation needs real hardware.
 
 - [ ] After a manual `make dev` restart or release rebuild, verify a hands-free Italian reply uses Edge speech on the migrated endpoint with v1 GEC without HTTP 403 (#1952-bf91). The old Rust process does not hot-reload.
+
+- [ ] After the next manual Rust restart (`make dev` or release rebuild), verify Telegram linking confirms with `Chat linked.`, `/start` explains Link chat, invalid/expired codes explain retry, and the consumed Settings hint clears (#1955-2f43). Automated offline poll-loop and Settings regressions cover these paths; no live Telegram API was called during implementation.
+
+- [ ] After the next manual Rust restart, check Settings > Telegram Recent messages for inbound/outbound outcomes. The log is process-local, last 20, redacted and cleared on restart; a standby cannot show another process's log (#1956-c325). Automated offline boundary tests cover retention, redaction, failure categories, callbacks and status readback.
+
+- [ ] #1955-2f43 round 1: after Boss manually restarts `make dev` or installs `make build`, confirm Telegram linking still works. A failed link confirmation must leave the chat linked without delivering the pairing code as agent mail; Recent messages shows the safe failed reply. Offline poll-loop tests cover replay and same-batch order. No live Telegram API or desktop instance was used.
