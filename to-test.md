@@ -2299,6 +2299,8 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] #1928-e282: In MCP Settings, hover the long design_mode help for at least three status polls. Check keyboard focus, changed descriptions, viewport edges, scrolling, and resizing; the tip must remain beside its badge without an unpositioned frame.
 
 - [ ] #1929-b1d9: After Boss restarts make dev (Rust does not hot-reload), connect to a Direct short Tailscale host whose short DNS lookup fails. Check automatic FQDN recovery and the explicit Save resolved address action. Do not change production connections for automated verification.
+
+- [ ] After a manual backend restart, verify Pocket Italian replies with a missing catalogue voice use giovanni; Settings must retain the selected missing voice and offer Download. Download the selected voice while hands-free stays armed and verify the next reply uses it. Rust changes do not hot-reload (#1954-bab7).
 ## 1902-7010 — ego terminal provider recovery (requires Boss restart)
 
 - [ ] After Boss restarts `make dev` (Rust does not hot-reload), run a managed

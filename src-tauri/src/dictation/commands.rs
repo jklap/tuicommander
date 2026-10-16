@@ -811,15 +811,9 @@ fn build_voice(
 /// untouched configuration says and what every configuration said before the
 /// setting existed.
 ///
-/// A named voice must be one the language holds — the one it ships, a
-/// catalogue voice that is downloaded, or a file the user imported
-/// ([`speech::library::installed_voices`]). Anything else is an error rather
-/// than a silent fall back to the first one. The ways to get here are a voice
-/// that was deleted, a download that is not there yet, and a language the user
-/// changed underneath the setting; all are cases where speaking in a voice
-/// nobody chose is worse than saying why nothing was spoken, and the message
-/// reaches the user through the hands-free status rather than being buried in
-/// a log.
+/// Keep installed choices, and recover a missing catalogue download with the
+/// same language's installed default. The picker retains the configured choice
+/// and offers its download. Unknown names still report an error.
 fn choose_voice(asset: &speech::assets::Asset, configured: &str) -> Result<String, String> {
     if configured.is_empty() {
         return asset
@@ -835,7 +829,13 @@ fn choose_voice(asset: &speech::assets::Asset, configured: &str) -> Result<Strin
     let language = asset.language().unwrap_or_default();
     if speech::assets::downloadable_voices(language).any(|voice| voice.voice() == Some(configured))
     {
-        // The catalogue has it, so the fix is one download away.
+        // A missing optional voice must not disable a ready language. Never
+        // borrow a same-named voice from another language's catalogue.
+        if speech::assets::status(asset) == speech::assets::Status::Ready
+            && let Some(default) = asset.voices().first()
+        {
+            return Ok((*default).to_string());
+        }
         return Err(format!(
             "The {} voice \"{configured}\" is not downloaded; download it in Settings → Voice",
             asset.display_name
@@ -1309,7 +1309,14 @@ pub(crate) fn speak(
     if let Some(preview) = dictation.preview.lock().take() {
         preview.stop();
     }
-    let armed = slot.as_ref().expect("a queue was just built or kept");
+    let armed = slot.as_mut().expect("a queue was just built or kept");
+    if speech_engine(&config) == SpeechEngine::Pocket {
+        // Downloads can change the selected voice's readiness without changing
+        // the configuration or the language model held by this queue.
+        let asset = speech::assets::for_language_code(&language)
+            .ok_or_else(|| format!("No speech bundle ships for language \"{language}\""))?;
+        armed.voice = choose_voice(asset, &config.speech_voice)?;
+    }
     // The speaker's own counter, not the caller's guess: it is what `say`
     // compares against, and reading it here makes an interruption landing in
     // between refuse the reply rather than race it.
@@ -5258,6 +5265,102 @@ mod tests {
         let error = choose_voice(italian, "jean").expect_err("not downloaded");
         assert!(error.contains("jean"), "{error}");
         assert!(error.to_lowercase().contains("download"), "{error}");
+    }
+
+    #[test]
+    fn missing_catalogue_voice_uses_only_the_installed_language_default_1954() {
+        // Catches: a missing bill_boerst refusing speech despite an installed
+        // Italian default, or borrowing the English voice with the same name.
+        let (_root, _guard) = speech_root();
+        let italian = speech::assets::for_language_code("it").unwrap();
+        let english_voice = speech::assets::find("voice-english-bill_boerst").unwrap();
+        install_asset(english_voice);
+        assert!(choose_voice(italian, "bill_boerst").is_err());
+        install_asset(italian);
+        assert_eq!(choose_voice(italian, "bill_boerst").unwrap(), "giovanni");
+        assert!(choose_voice(italian, "nessuno").is_err());
+        let italian_voice = speech::assets::find("voice-italian-bill_boerst").unwrap();
+        install_asset(italian_voice);
+        assert_eq!(choose_voice(italian, "bill_boerst").unwrap(), "bill_boerst");
+    }
+
+    #[test]
+    fn italian_missing_voice_never_opens_english_or_external_fallback_1954() {
+        // Catches: missing Pocket voice switching engines to Edge or an OS
+        // command, or resolving the English asset with the same voice name.
+        let (_root, _guard) = speech_root();
+        let italian = speech::assets::for_language_code("it").unwrap();
+        let english = speech::assets::for_language_code("en").unwrap();
+        install_asset(speech::assets::runtime());
+        install_asset(english);
+        install_asset(speech::assets::find("voice-english-bill_boerst").unwrap());
+        let config = DictationConfig {
+            language: "it".into(),
+            speech_engine: "pocket".into(),
+            speech_voice: "bill_boerst".into(),
+            // A stale external command is not a fallback for Pocket.
+            speech_command: vec!["say".into()],
+            ..Default::default()
+        };
+        let library = speech::library::SpeechLibrary::new();
+        assert!(build_voice(&config, &library, "it").is_err());
+        install_asset(italian);
+        let (engine, voice) = build_voice(&config, &library, "it").unwrap();
+        assert_eq!(voice, "giovanni");
+        let expected: Arc<dyn speech::Speech> = library.engine("italian");
+        assert!(Arc::ptr_eq(&engine, &expected), "only Italian Pocket opens");
+        let english_engine: Arc<dyn speech::Speech> = library.engine("english");
+        assert!(!Arc::ptr_eq(&engine, &english_engine));
+    }
+
+    #[test]
+    fn downloading_the_selected_voice_replaces_the_cached_fallback_for_the_next_reply() {
+        // Catches: downloading the selected voice leaves hands-free on giovanni
+        // indefinitely even though Listen now resolves bill_boerst.
+        let (dictation, gate, _config) = armed_with_a_voice("session-a");
+        let base = get_dictation_config();
+        save_dictation_config(
+            base.clone(),
+            DictationConfig {
+                speech_voice: "bill_boerst".into(),
+                ..base
+            },
+            Some(&dictation),
+        )
+        .unwrap();
+        install_asset(speech::assets::runtime());
+        install_asset(speech::assets::for_language_code("it").unwrap());
+        // The production resolver establishes the queue's initial voice. Only
+        // synthesis and the audio device are substituted; no model is executed.
+        let (_, voice) = build_voice(&get_dictation_config(), &dictation.speech, "it").unwrap();
+        let generation = dictation.hands_free.lock().generation();
+        *dictation.speaker.lock() = Some(speaker::Armed {
+            speaker: Arc::new(speaker::Speaker::new(
+                Arc::new(HeldSpeech {
+                    gate: Arc::clone(&gate),
+                }),
+                Arc::new(QuietOutput),
+                generation,
+            )),
+            voice,
+            language: "it".into(),
+        });
+        let held = gate.lock();
+        let first = speak(&dictation, Caller::Owner, "prima", None).unwrap();
+        assert_eq!(speech_status(&dictation, None).voice, "giovanni");
+        drop(held);
+        wait_for_utterance(&dictation, &first.utterance_id, "finished");
+
+        // This is the same on-disk result as a completed catalogue download.
+        install_asset(speech::assets::find("voice-italian-bill_boerst").unwrap());
+        let held = gate.lock();
+        speak(&dictation, Caller::Owner, "dopo", None).unwrap();
+        assert_eq!(
+            speech_status(&dictation, None).voice,
+            "bill_boerst",
+            "the next reply must use the selected voice once its download is ready"
+        );
+        drop(held);
     }
 
     #[test]

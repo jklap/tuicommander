@@ -3120,6 +3120,8 @@ AI Chat can pin repository context per conversation. A separate composer control
 
 Settings shares a responsive shell (1136px maximum, 80vh height) and reusable theme-aware cards, rows, status summaries and scoped action presentation. Existing settings behavior is unchanged; page-by-page adoption follows separately.
 
+Pocket spoken replies keep a missing selected voice visible and downloadable; while its download is absent, a ready bundle speaks with its own language default.
+
 ### Terminal ego provider recovery
 
 Native terminal ego can report provider recovery with phase, attempt and next
