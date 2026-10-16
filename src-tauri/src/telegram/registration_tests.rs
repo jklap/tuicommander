@@ -661,3 +661,55 @@ async fn failed_link_confirmation_never_replays_pairing_code_into_agent_inbox() 
         "pairing credential became agent mail: {mail}"
     );
 }
+
+// Catches: committing a pairing cursor skips earlier mail, or failed feedback
+// prevents later mail in the same sorted batch from reaching the native inbox.
+#[tokio::test]
+async fn failed_link_confirmation_preserves_same_batch_mail_order() {
+    let (_dir, paths) = setup();
+    write_private(&paths.file("next_offset"), "7\n");
+    write_private(
+        &paths.file("pairing.json"),
+        &json!({"code":"A1B2C3","expires_at":super::super::settings::now_ms() + 60_000})
+            .to_string(),
+    );
+    let before = inbound::text_update(7, 1111111, "before link");
+    let pairing = inbound::text_update(8, 3333333, "A1B2C3");
+    let after = inbound::text_update(9, 3333333, "after link");
+    let server = FakeServer::start(vec![
+        inbound::updates(vec![after, pairing, before]),
+        (StatusCode::BAD_GATEWAY, json!({})),
+    ])
+    .await;
+    let runtime = outbound_tests::runtime(paths.clone(), server.address).await;
+    let state = runtime.state.clone();
+    let (commands, receive) = tokio::sync::mpsc::channel(10);
+    let worker = tokio::spawn(runtime.run(receive));
+    let mut poller = crate::telegram::inbound::Inbound::with_loopback(
+        paths.clone(),
+        server.address,
+        crate::telegram::native::NativeMail::new(commands),
+    )
+    .unwrap();
+    let result = poller.poll().await;
+    let mail = crate::mcp_http::mcp_transport::local_peer_call_with_message_id(
+        &state,
+        &json!({"action":"inbox","since":0}),
+        Some("target-mcp"),
+        None,
+    )
+    .await;
+    worker.abort();
+    assert!(matches!(result, Ok(crate::telegram::inbound::Poll::Accepted(2))));
+    assert_eq!(super::super::offset::read(&paths), Some(10));
+    assert_eq!(mail["count"], 2, "{mail}");
+    let texts: Vec<String> = mail["messages"].as_array().unwrap().iter().map(|entry| {
+        let content: Value = serde_json::from_str(entry["content"].as_str().unwrap()).unwrap();
+        content["text"].as_str().unwrap().to_owned()
+    }).collect();
+    assert_eq!(texts, ["before link", "after link"]);
+    let events = serde_json::to_value(state.telegram_recent.lock().snapshot()).unwrap();
+    assert!(events.as_array().unwrap().iter().any(|event|
+        event["direction"] == "out" && event["outcome"] == "failed: telegram_transport_error"
+    ), "{events}");
+}
