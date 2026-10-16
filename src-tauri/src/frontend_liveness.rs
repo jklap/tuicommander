@@ -7,9 +7,9 @@
 //! is the one case it can never report — by construction.
 //!
 //! `grid frame gate stuck` is NOT that signal either, however much it looks like
-//! one. A hidden terminal deliberately never acks its frames (see
-//! `CanvasTerminal.onFrame`), so the gate is stuck for every session whose tab
-//! is not visible and the warning is routine background noise.
+//! one. Hidden desktop terminals do not receive grid frames. Visible terminal
+//! receipt or IPC delays can still exceed the frame deadline;
+//! a gate timeout alone does not prove that the whole frontend stopped beating.
 //!
 //! So the frontend beats, once every `HEARTBEAT_PERIOD_SECS`, from the main thread —
 //! the absence of a beat is the whole signal, which is why it cannot be derived

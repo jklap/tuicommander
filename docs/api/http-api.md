@@ -3211,3 +3211,5 @@ No live write or desktop-load verification is implied by recorded-fixture tests.
 ### Audio choice availability (#1908-c327, #1909-0d24)
 
 Existing input/output device enumeration returns the same device objects on success, including a successful empty array. Backend enumeration failure now returns an error rather than an empty array. Internal settings choice refresh reuses those owners; cache-only describe and typed voice asset actions are not new public routes in this change. The settings transport cutover remains separate.
+
+`GET /events` carries `pty-bell` with `{session_id}`. Both session WebSocket formats carry `{type:"bell"}`. Bells originate in the PTY reader, independently of grid frame serialization or desktop visibility.
