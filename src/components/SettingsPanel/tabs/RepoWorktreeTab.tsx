@@ -13,10 +13,12 @@ import type { RepoSettings } from "../../../stores/repoSettings";
 import { settingsStore } from "../../../stores/settings";
 import { ColorSwatchPicker } from "../../shared/ColorSwatchPicker";
 import { DEFAULT_COLOR_PRESETS } from "../../shared/colorPresets";
-import { type TriState, TriStateToggle } from "../../shared/TriStateToggle";
+
 import { Input } from "../../ui/Input";
 import { Select } from "../../ui/Select";
 import s from "../Settings.module.css";
+import { SectionCard, SettingPageHeader, SettingRow } from "../SettingsPrimitives";
+import r from "./RepositoryTabs.module.css";
 
 export interface RepoTabProps {
 	settings: RepoSettings;
@@ -24,24 +26,30 @@ export interface RepoTabProps {
 	onUpdate: <K extends keyof RepoSettings>(key: K, value: RepoSettings[K]) => void;
 }
 
-/** Returns the effective (resolved) value for a nullable boolean field */
-function effectiveBool(override: boolean | null, fallback: boolean): boolean {
-	return override ?? fallback;
-}
-
-/** "inherit" sentinel value for nullable dropdowns */
+/** Nullable controls retain an explicit inherited state instead of flattening it. */
 const INHERIT = "__inherit__";
-
-/** Convert a nullable "hide" boolean to TriState */
-function hideToTriState(value: boolean | null): TriState {
-	if (value === null) return "default";
-	return value ? "hide" : "show";
-}
-
-/** Convert TriState back to nullable "hide" boolean */
-function triStateToHide(state: TriState): boolean | null {
-	if (state === "default") return null;
-	return state === "hide";
+function BooleanOverride(props: {
+	label: string;
+	value: boolean | null;
+	fallback: boolean;
+	onChange: (value: boolean | null) => void;
+}) {
+	return (
+		<SettingRow label={props.label}>
+			{(id, descriptionId) => (
+				<Select
+					id={id}
+					aria-describedby={descriptionId()}
+					value={props.value === null ? INHERIT : String(props.value)}
+					onChange={(e) => props.onChange(e.currentTarget.value === INHERIT ? null : e.currentTarget.value === "true")}
+				>
+					<option value={INHERIT}>Use global default ({props.fallback ? "On" : "Off"})</option>
+					<option value="true">On</option>
+					<option value="false">Off</option>
+				</Select>
+			)}
+		</SettingRow>
+	);
 }
 
 export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
@@ -59,327 +67,356 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 	};
 
 	return (
-		<div class={s.section}>
-			<h3>{t("repoWorktree.heading.repository", "Repository")}</h3>
-
-			<div class={s.group}>
-				<label>{t("repoWorktree.label.displayName", "Display Name")}</label>
-				<Input
-					type="text"
-					value={props.settings.displayName ?? ""}
-					onInput={(e) => props.onUpdate("displayName", e.currentTarget.value)}
-					placeholder={t("repoWorktree.placeholder.displayName", "Custom name...")}
-				/>
-				<p class={s.hint}>{t("repoWorktree.hint.displayName", "Shown in sidebar instead of folder name")}</p>
-			</div>
-
-			<div class={s.group}>
-				<label>{t("repoWorktree.label.sidebarColor", "Sidebar Color")}</label>
-				<ColorSwatchPicker
-					color={props.settings.color ?? ""}
-					presets={DEFAULT_COLOR_PRESETS}
-					onChange={(c) => props.onUpdate("color", c)}
-				/>
-				<p class={s.hint}>{t("repoWorktree.hint.sidebarColor", "Color-code this repo in the sidebar")}</p>
-			</div>
-
-			<div class={s.group}>
-				<label>{t("repoWorktree.label.autoFetchInterval", "Auto-Fetch Interval")}</label>
-				<Select
-					value={
-						props.settings.autoFetchIntervalMinutes != null ? String(props.settings.autoFetchIntervalMinutes) : INHERIT
-					}
-					onChange={(e) => {
-						const v = e.currentTarget.value;
-						props.onUpdate("autoFetchIntervalMinutes", v === INHERIT ? null : Number(v));
-					}}
-				>
-					<option value={INHERIT}>
-						{t("repoWorktree.autoFetch.useDefault", "Use global default ({default})", {
-							default:
-								props.defaults.autoFetchIntervalMinutes === 0
-									? t("repoWorktree.autoFetch.disabled", "Disabled")
-									: `${props.defaults.autoFetchIntervalMinutes} min`,
-						})}
-					</option>
-					<option value="0">{t("repoWorktree.autoFetch.disabled", "Disabled")}</option>
-					<option value="5">5 min</option>
-					<option value="15">15 min</option>
-					<option value="30">30 min</option>
-					<option value="60">60 min</option>
-				</Select>
-				<p class={s.hint}>
-					{t("repoWorktree.hint.autoFetch", "Periodically fetch from remote to keep branch stats fresh")}
-				</p>
-			</div>
-
-			<h3>{t("repoWorktree.heading.worktreeConfiguration", "Worktree Configuration")}</h3>
-
-			<div class={s.group}>
-				<label>{t("repoWorktree.label.branchFrom", "Branch From")}</label>
-				<Select value={baseBranchValue()} onChange={(e) => handleBaseBranchChange(e.currentTarget.value)}>
-					<option value={INHERIT}>
-						{t("repoWorktree.baseBranch.useGlobalDefault", "Use global default ({default})", {
-							default: props.defaults.baseBranch,
-						})}
-					</option>
-					<For each={branchOptions}>{(opt) => <option value={opt.value}>{opt.label}</option>}</For>
-				</Select>
-				<p class={s.hint}>{t("repoWorktree.hint.branchFrom", "Base branch for new worktrees")}</p>
-			</div>
-
-			<div class={s.group}>
-				<label>{t("repoWorktree.label.fileHandling", "File Handling")}</label>
-
-				<div class={s.toggle}>
-					<input
-						type="checkbox"
-						checked={effectiveBool(props.settings.copyIgnoredFiles, props.defaults.copyIgnoredFiles)}
-						onChange={(e) => props.onUpdate("copyIgnoredFiles", e.currentTarget.checked)}
+		<div class={`${s.section} ${r.page}`}>
+			<SettingPageHeader
+				title={props.settings.displayName || "Repository"}
+				description="Configure repository identity and inherited worktree defaults."
+				scope="Repository"
+				source={props.settings.path}
+				breadcrumb="Repositories / Settings"
+			/>
+			<SectionCard title={t("repoWorktree.heading.repository", "Repository")}>
+				<div class={r.group}>
+					<label for="repo-field-1">{t("repoWorktree.label.displayName", "Display Name")}</label>
+					<Input
+						id="repo-field-1"
+						type="text"
+						value={props.settings.displayName ?? ""}
+						onInput={(e) => props.onUpdate("displayName", e.currentTarget.value)}
+						placeholder={t("repoWorktree.placeholder.displayName", "Custom name...")}
 					/>
-					<span>
-						{t("repoWorktree.toggle.copyIgnoredFiles", "Copy ignored files")}
-						<Show when={props.settings.copyIgnoredFiles === null}>
-							<span class={s.hintInline}> {t("repoWorktree.hint.globalDefault", "(Global Default)")}</span>
-						</Show>
-					</span>
+					<p class={s.hint}>{t("repoWorktree.hint.displayName", "Shown in sidebar instead of folder name")}</p>
 				</div>
 
-				<div class={s.toggle}>
-					<input
-						type="checkbox"
-						checked={effectiveBool(props.settings.copyUntrackedFiles, props.defaults.copyUntrackedFiles)}
-						onChange={(e) => props.onUpdate("copyUntrackedFiles", e.currentTarget.checked)}
+				<div class={r.group}>
+					<label>{t("repoWorktree.label.sidebarColor", "Sidebar Color")}</label>
+					<ColorSwatchPicker
+						color={props.settings.color ?? ""}
+						presets={DEFAULT_COLOR_PRESETS}
+						onChange={(c) => props.onUpdate("color", c)}
 					/>
-					<span>
-						{t("repoWorktree.toggle.copyUntrackedFiles", "Copy untracked files")}
-						<Show when={props.settings.copyUntrackedFiles === null}>
-							<span class={s.hintInline}> {t("repoWorktree.hint.globalDefault", "(Global Default)")}</span>
-						</Show>
-					</span>
+					<p class={s.hint}>{t("repoWorktree.hint.sidebarColor", "Color-code this repo in the sidebar")}</p>
 				</div>
-			</div>
 
-			<h3>{t("repoWorktree.heading.worktreeSettings", "Worktree Settings")}</h3>
+				<div class={r.group}>
+					<label for="repo-field-2">{t("repoWorktree.label.autoFetchInterval", "Auto-Fetch Interval")}</label>
+					<Select
+						id="repo-field-2"
+						value={
+							props.settings.autoFetchIntervalMinutes != null
+								? String(props.settings.autoFetchIntervalMinutes)
+								: INHERIT
+						}
+						onChange={(e) => {
+							const v = e.currentTarget.value;
+							props.onUpdate("autoFetchIntervalMinutes", v === INHERIT ? null : Number(v));
+						}}
+					>
+						<option value={INHERIT}>
+							{t("repoWorktree.autoFetch.useDefault", "Use global default ({default})", {
+								default:
+									props.defaults.autoFetchIntervalMinutes === 0
+										? t("repoWorktree.autoFetch.disabled", "Disabled")
+										: `${props.defaults.autoFetchIntervalMinutes} min`,
+							})}
+						</option>
+						<option value="0">{t("repoWorktree.autoFetch.disabled", "Disabled")}</option>
+						<option value="5">5 min</option>
+						<option value="15">15 min</option>
+						<option value="30">30 min</option>
+						<option value="60">60 min</option>
+					</Select>
+					<p class={s.hint}>
+						{t("repoWorktree.hint.autoFetch", "Periodically fetch from remote to keep branch stats fresh")}
+					</p>
+				</div>
+			</SectionCard>
+			<SectionCard
+				title={t("repoWorktree.heading.worktreeConfiguration", "Worktree Configuration")}
+				description="Use global default keeps the value inherited. Choosing an option creates a repository override."
+			>
+				<div class={r.group}>
+					<label for="repo-field-3">{t("repoWorktree.label.branchFrom", "Branch From")}</label>
+					<Select
+						id="repo-field-3"
+						value={baseBranchValue()}
+						onChange={(e) => handleBaseBranchChange(e.currentTarget.value)}
+					>
+						<option value={INHERIT}>
+							{t("repoWorktree.baseBranch.useGlobalDefault", "Use global default ({default})", {
+								default: props.defaults.baseBranch,
+							})}
+						</option>
+						<For each={branchOptions}>{(opt) => <option value={opt.value}>{opt.label}</option>}</For>
+					</Select>
+					<p class={s.hint}>{t("repoWorktree.hint.branchFrom", "Base branch for new worktrees")}</p>
+				</div>
 
-			<div class={s.group}>
-				<label>{t("repoWorktree.label.worktreeStorage", "Storage Strategy")}</label>
-				<Select
-					value={props.settings.worktreeStorage ?? INHERIT}
-					onChange={(e) =>
-						props.onUpdate(
-							"worktreeStorage",
-							e.currentTarget.value === INHERIT ? null : (e.currentTarget.value as WorktreeStorage),
-						)
-					}
-				>
-					<option value={INHERIT}>
-						{t("repoWorktree.worktreeStorage.useDefault", "Use global default ({default})", {
-							default: props.defaults.worktreeStorage,
-						})}
-					</option>
-					<option value="sibling">{t("repoWorktree.worktreeStorage.sibling", "Sibling directory (__wt)")}</option>
-					<option value="app-dir">{t("repoWorktree.worktreeStorage.appDir", "App config directory")}</option>
-					<option value="inside-repo">
-						{t("repoWorktree.worktreeStorage.insideRepo", "Inside repository (.worktrees)")}
-					</option>
-					<option value="claude-code-default">
-						{t("repoWorktree.worktreeStorage.claudeCodeDefault", "Claude Code default (.claude/worktrees)")}
-					</option>
-				</Select>
-			</div>
+				<div class={r.group}>
+					<label>{t("repoWorktree.label.fileHandling", "File Handling")}</label>
 
-			<div class={s.group}>
-				<div class={s.toggle}>
-					<input
-						type="checkbox"
-						checked={props.settings.autoConsolidateWorktrees}
-						onChange={(e) => props.onUpdate("autoConsolidateWorktrees", e.currentTarget.checked)}
+					<BooleanOverride
+						label="Copy ignored files"
+						value={props.settings.copyIgnoredFiles}
+						fallback={props.defaults.copyIgnoredFiles}
+						onChange={(v) => props.onUpdate("copyIgnoredFiles", v)}
 					/>
-					<span>
-						{t("repoWorktree.toggle.autoConsolidate", "Show all worktrees of this repo in one consolidated screen")}
-					</span>
-				</div>
-			</div>
 
-			<div class={s.group}>
-				<div class={s.toggle}>
-					<input
-						type="checkbox"
-						checked={effectiveBool(props.settings.promptOnCreate, props.defaults.promptOnCreate)}
-						onChange={(e) => props.onUpdate("promptOnCreate", e.currentTarget.checked)}
+					<BooleanOverride
+						label="Copy untracked files"
+						value={props.settings.copyUntrackedFiles}
+						fallback={props.defaults.copyUntrackedFiles}
+						onChange={(v) => props.onUpdate("copyUntrackedFiles", v)}
 					/>
-					<span>
-						{t("repoWorktree.toggle.promptOnCreate", "Prompt for branch name during creation")}
-						<Show when={props.settings.promptOnCreate === null}>
-							<span class={s.hintInline}> {t("repoWorktree.hint.globalDefault", "(Global Default)")}</span>
-						</Show>
-					</span>
 				</div>
-			</div>
+			</SectionCard>
+			<SectionCard title={t("repoWorktree.heading.worktreeSettings", "Worktree Settings")}>
+				<div class={r.group}>
+					<label for="repo-field-4">{t("repoWorktree.label.worktreeStorage", "Storage Strategy")}</label>
+					<Select
+						id="repo-field-4"
+						value={props.settings.worktreeStorage ?? INHERIT}
+						onChange={(e) =>
+							props.onUpdate(
+								"worktreeStorage",
+								e.currentTarget.value === INHERIT ? null : (e.currentTarget.value as WorktreeStorage),
+							)
+						}
+					>
+						<option value={INHERIT}>
+							{t("repoWorktree.worktreeStorage.useDefault", "Use global default ({default})", {
+								default: props.defaults.worktreeStorage,
+							})}
+						</option>
+						<option value="sibling">{t("repoWorktree.worktreeStorage.sibling", "Sibling directory (__wt)")}</option>
+						<option value="app-dir">{t("repoWorktree.worktreeStorage.appDir", "App config directory")}</option>
+						<option value="inside-repo">
+							{t("repoWorktree.worktreeStorage.insideRepo", "Inside repository (.worktrees)")}
+						</option>
+						<option value="claude-code-default">
+							{t("repoWorktree.worktreeStorage.claudeCodeDefault", "Claude Code default (.claude/worktrees)")}
+						</option>
+					</Select>
+				</div>
 
-			<div class={s.group}>
-				<div class={s.toggle}>
-					<input
-						type="checkbox"
-						checked={effectiveBool(props.settings.deleteBranchOnRemove, props.defaults.deleteBranchOnRemove)}
-						onChange={(e) => props.onUpdate("deleteBranchOnRemove", e.currentTarget.checked)}
+				<div class={r.switchGroup}>
+					<SettingRow label="Show all worktrees of this repo in one consolidated screen">
+						{(id, descriptionId) => (
+							<input
+								id={id}
+								aria-describedby={descriptionId()}
+								class={r.rowSwitch}
+								role="switch"
+								type="checkbox"
+								checked={props.settings.autoConsolidateWorktrees}
+								onChange={(e) => props.onUpdate("autoConsolidateWorktrees", e.currentTarget.checked)}
+							/>
+						)}
+					</SettingRow>
+				</div>
+
+				<div class={r.group}>
+					<BooleanOverride
+						label="Prompt for branch name during creation"
+						value={props.settings.promptOnCreate}
+						fallback={props.defaults.promptOnCreate}
+						onChange={(v) => props.onUpdate("promptOnCreate", v)}
 					/>
-					<span>
-						{t("repoWorktree.toggle.deleteBranchOnRemove", "Delete local branch when removing worktree")}
-						<Show when={props.settings.deleteBranchOnRemove === null}>
-							<span class={s.hintInline}> {t("repoWorktree.hint.globalDefault", "(Global Default)")}</span>
-						</Show>
-					</span>
 				</div>
-			</div>
 
-			<div class={s.group}>
-				<div class={s.toggle}>
-					<input
-						type="checkbox"
-						checked={effectiveBool(props.settings.autoArchiveMerged, props.defaults.autoArchiveMerged)}
-						onChange={(e) => props.onUpdate("autoArchiveMerged", e.currentTarget.checked)}
+				<div class={r.group}>
+					<BooleanOverride
+						label="Delete local branch when removing worktree"
+						value={props.settings.deleteBranchOnRemove}
+						fallback={props.defaults.deleteBranchOnRemove}
+						onChange={(v) => props.onUpdate("deleteBranchOnRemove", v)}
 					/>
-					<span>
-						{t("repoWorktree.toggle.autoArchiveMerged", "Auto-archive merged worktrees")}
-						<Show when={props.settings.autoArchiveMerged === null}>
-							<span class={s.hintInline}> {t("repoWorktree.hint.globalDefault", "(Global Default)")}</span>
-						</Show>
-					</span>
 				</div>
-			</div>
 
-			<div class={s.group}>
-				<label>{t("repoWorktree.label.orphanCleanup", "Orphan Worktree Cleanup")}</label>
-				<Select
-					value={props.settings.orphanCleanup ?? INHERIT}
-					onChange={(e) =>
-						props.onUpdate(
-							"orphanCleanup",
-							e.currentTarget.value === INHERIT ? null : (e.currentTarget.value as OrphanCleanup),
-						)
-					}
-				>
-					<option value={INHERIT}>
-						{t("repoWorktree.orphanCleanup.useDefault", "Use global default ({default})", {
-							default: props.defaults.orphanCleanup,
-						})}
-					</option>
-					<option value="ask">{t("repoWorktree.orphanCleanup.ask", "Ask before removing")}</option>
-					<option value="on">{t("repoWorktree.orphanCleanup.on", "Auto-remove")}</option>
-					<option value="off">{t("repoWorktree.orphanCleanup.off", "Keep (mark as detached)")}</option>
-				</Select>
-			</div>
+				<div class={r.group}>
+					<BooleanOverride
+						label="Auto-archive merged worktrees"
+						value={props.settings.autoArchiveMerged}
+						fallback={props.defaults.autoArchiveMerged}
+						onChange={(v) => props.onUpdate("autoArchiveMerged", v)}
+					/>
+				</div>
 
-			<div class={s.group}>
-				<label>{t("repoWorktree.label.prMergeStrategy", "PR Merge Strategy")}</label>
-				<Select
-					value={props.settings.prMergeStrategy ?? INHERIT}
-					onChange={(e) =>
-						props.onUpdate(
-							"prMergeStrategy",
-							e.currentTarget.value === INHERIT ? null : (e.currentTarget.value as MergeStrategy),
-						)
-					}
-				>
-					<option value={INHERIT}>
-						{t("repoWorktree.mergeStrategy.useDefault", "Use global default ({default})", {
-							default: props.defaults.prMergeStrategy,
-						})}
-					</option>
-					<option value="merge">{t("repoWorktree.mergeStrategy.merge", "Merge")}</option>
-					<option value="squash">{t("repoWorktree.mergeStrategy.squash", "Squash")}</option>
-					<option value="rebase">{t("repoWorktree.mergeStrategy.rebase", "Rebase")}</option>
-				</Select>
-			</div>
+				<div class={r.group}>
+					<label for="repo-field-5">{t("repoWorktree.label.orphanCleanup", "Orphan Worktree Cleanup")}</label>
+					<Select
+						id="repo-field-5"
+						value={props.settings.orphanCleanup ?? INHERIT}
+						onChange={(e) =>
+							props.onUpdate(
+								"orphanCleanup",
+								e.currentTarget.value === INHERIT ? null : (e.currentTarget.value as OrphanCleanup),
+							)
+						}
+					>
+						<option value={INHERIT}>
+							{t("repoWorktree.orphanCleanup.useDefault", "Use global default ({default})", {
+								default: props.defaults.orphanCleanup,
+							})}
+						</option>
+						<option value="ask">{t("repoWorktree.orphanCleanup.ask", "Ask before removing")}</option>
+						<option value="on">{t("repoWorktree.orphanCleanup.on", "Auto-remove")}</option>
+						<option value="off">{t("repoWorktree.orphanCleanup.off", "Keep (mark as detached)")}</option>
+					</Select>
+				</div>
 
-			<div class={s.group}>
-				<label>{t("repoWorktree.label.afterMerge", "After Merge Behavior")}</label>
-				<Select
-					value={props.settings.afterMerge ?? INHERIT}
-					onChange={(e) =>
-						props.onUpdate(
-							"afterMerge",
-							e.currentTarget.value === INHERIT ? null : (e.currentTarget.value as WorktreeAfterMerge),
-						)
-					}
-				>
-					<option value={INHERIT}>
-						{t("repoWorktree.afterMerge.useDefault", "Use global default ({default})", {
-							default: props.defaults.afterMerge,
-						})}
-					</option>
-					<option value="archive">{t("repoWorktree.afterMerge.archive", "Archive worktree")}</option>
-					<option value="delete">{t("repoWorktree.afterMerge.delete", "Delete worktree")}</option>
-					<option value="ask">{t("repoWorktree.afterMerge.ask", "Ask each time")}</option>
-				</Select>
-			</div>
+				<div class={r.group}>
+					<label for="repo-field-6">{t("repoWorktree.label.prMergeStrategy", "PR Merge Strategy")}</label>
+					<Select
+						id="repo-field-6"
+						value={props.settings.prMergeStrategy ?? INHERIT}
+						onChange={(e) =>
+							props.onUpdate(
+								"prMergeStrategy",
+								e.currentTarget.value === INHERIT ? null : (e.currentTarget.value as MergeStrategy),
+							)
+						}
+					>
+						<option value={INHERIT}>
+							{t("repoWorktree.mergeStrategy.useDefault", "Use global default ({default})", {
+								default: props.defaults.prMergeStrategy,
+							})}
+						</option>
+						<option value="merge">{t("repoWorktree.mergeStrategy.merge", "Merge")}</option>
+						<option value="squash">{t("repoWorktree.mergeStrategy.squash", "Squash")}</option>
+						<option value="rebase">{t("repoWorktree.mergeStrategy.rebase", "Rebase")}</option>
+					</Select>
+				</div>
 
-			<div class={s.group}>
-				<label>{t("repoWorktree.label.autoDeleteOnPrClose", "Auto-Delete on PR Close")}</label>
-				<Select
-					value={props.settings.autoDeleteOnPrClose ?? INHERIT}
-					onChange={(e) =>
-						props.onUpdate(
-							"autoDeleteOnPrClose",
-							e.currentTarget.value === INHERIT ? null : (e.currentTarget.value as AutoDeleteOnPrClose),
-						)
-					}
-				>
-					<option value={INHERIT}>
-						{t("repoWorktree.autoDelete.useDefault", "Use global default ({default})", {
-							default: props.defaults.autoDeleteOnPrClose,
-						})}
-					</option>
-					<option value="off">{t("repoWorktree.autoDelete.off", "Off")}</option>
-					<option value="ask">{t("repoWorktree.autoDelete.ask", "Ask before deleting")}</option>
-					<option value="auto">{t("repoWorktree.autoDelete.auto", "Auto-delete silently")}</option>
-				</Select>
-				<p class={s.hint}>{t("repoWorktree.hint.autoDelete", "Delete local branch when its PR is merged or closed")}</p>
-			</div>
+				<div class={r.group}>
+					<label for="repo-field-7">{t("repoWorktree.label.afterMerge", "After Merge Behavior")}</label>
+					<Select
+						id="repo-field-7"
+						value={props.settings.afterMerge ?? INHERIT}
+						onChange={(e) =>
+							props.onUpdate(
+								"afterMerge",
+								e.currentTarget.value === INHERIT ? null : (e.currentTarget.value as WorktreeAfterMerge),
+							)
+						}
+					>
+						<option value={INHERIT}>
+							{t("repoWorktree.afterMerge.useDefault", "Use global default ({default})", {
+								default: props.defaults.afterMerge,
+							})}
+						</option>
+						<option value="archive">{t("repoWorktree.afterMerge.archive", "Archive worktree")}</option>
+						<option value="delete">{t("repoWorktree.afterMerge.delete", "Delete worktree")}</option>
+						<option value="ask">{t("repoWorktree.afterMerge.ask", "Ask each time")}</option>
+					</Select>
+				</div>
 
-			<div class={s.group}>
-				<label>PR Visibility</label>
-				<TriStateToggle
-					value={hideToTriState(props.settings.prHideDrafts)}
-					label="Draft PRs"
-					defaultLabel={settingsStore.state.prHideDrafts ? "Hide" : "Show"}
-					onChange={(v) => props.onUpdate("prHideDrafts", triStateToHide(v))}
-				/>
-				<TriStateToggle
-					value={hideToTriState(props.settings.prHideConflicting)}
-					label="Conflicting PRs"
-					defaultLabel={settingsStore.state.prHideConflicting ? "Hide" : "Show"}
-					onChange={(v) => props.onUpdate("prHideConflicting", triStateToHide(v))}
-				/>
-				<TriStateToggle
-					value={hideToTriState(props.settings.prHideCiFailing)}
-					label="CI Failing PRs"
-					defaultLabel={settingsStore.state.prHideCiFailing ? "Hide" : "Show"}
-					onChange={(v) => props.onUpdate("prHideCiFailing", triStateToHide(v))}
-				/>
-			</div>
+				<div class={r.group}>
+					<label for="repo-field-8">{t("repoWorktree.label.autoDeleteOnPrClose", "Auto-Delete on PR Close")}</label>
+					<Select
+						id="repo-field-8"
+						value={props.settings.autoDeleteOnPrClose ?? INHERIT}
+						onChange={(e) =>
+							props.onUpdate(
+								"autoDeleteOnPrClose",
+								e.currentTarget.value === INHERIT ? null : (e.currentTarget.value as AutoDeleteOnPrClose),
+							)
+						}
+					>
+						<option value={INHERIT}>
+							{t("repoWorktree.autoDelete.useDefault", "Use global default ({default})", {
+								default: props.defaults.autoDeleteOnPrClose,
+							})}
+						</option>
+						<option value="off">{t("repoWorktree.autoDelete.off", "Off")}</option>
+						<option value="ask">{t("repoWorktree.autoDelete.ask", "Ask before deleting")}</option>
+						<option value="auto">{t("repoWorktree.autoDelete.auto", "Auto-delete silently")}</option>
+					</Select>
+					<p class={s.hint}>
+						{t("repoWorktree.hint.autoDelete", "Delete local branch when its PR is merged or closed")}
+					</p>
+				</div>
 
-			<Show when={isMacOS()}>
-				<div class={s.group}>
-					<label>{t("repoWorktree.label.terminal", "Terminal")}</label>
+				<div class={r.group}>
+					<label>PR Visibility</label>
+					<SettingRow label="Draft PRs">
+						{(id, descriptionId) => (
+							<Select
+								id={id}
+								aria-describedby={descriptionId()}
+								value={props.settings.prHideDrafts === null ? INHERIT : String(props.settings.prHideDrafts)}
+								onChange={(e) =>
+									props.onUpdate(
+										"prHideDrafts",
+										e.currentTarget.value === INHERIT ? null : e.currentTarget.value === "true",
+									)
+								}
+							>
+								<option value={INHERIT}>
+									Use global default ({settingsStore.state.prHideDrafts ? "Hide" : "Show"})
+								</option>
+								<option value="false">Show</option>
+								<option value="true">Hide</option>
+							</Select>
+						)}
+					</SettingRow>
+					<SettingRow label="Conflicting PRs">
+						{(id, descriptionId) => (
+							<Select
+								id={id}
+								aria-describedby={descriptionId()}
+								value={props.settings.prHideConflicting === null ? INHERIT : String(props.settings.prHideConflicting)}
+								onChange={(e) =>
+									props.onUpdate(
+										"prHideConflicting",
+										e.currentTarget.value === INHERIT ? null : e.currentTarget.value === "true",
+									)
+								}
+							>
+								<option value={INHERIT}>
+									Use global default ({settingsStore.state.prHideConflicting ? "Hide" : "Show"})
+								</option>
+								<option value="false">Show</option>
+								<option value="true">Hide</option>
+							</Select>
+						)}
+					</SettingRow>
+					<SettingRow label="CI Failing PRs">
+						{(id, descriptionId) => (
+							<Select
+								id={id}
+								aria-describedby={descriptionId()}
+								value={props.settings.prHideCiFailing === null ? INHERIT : String(props.settings.prHideCiFailing)}
+								onChange={(e) =>
+									props.onUpdate(
+										"prHideCiFailing",
+										e.currentTarget.value === INHERIT ? null : e.currentTarget.value === "true",
+									)
+								}
+							>
+								<option value={INHERIT}>
+									Use global default ({settingsStore.state.prHideCiFailing ? "Hide" : "Show"})
+								</option>
+								<option value="false">Show</option>
+								<option value="true">Hide</option>
+							</Select>
+						)}
+					</SettingRow>
+				</div>
 
-					<div class={s.toggle}>
-						<input
-							type="checkbox"
-							checked={effectiveBool(props.settings.terminalMetaHotkeys, true)}
-							onChange={(e) => props.onUpdate("terminalMetaHotkeys", e.currentTarget.checked)}
+				<Show when={isMacOS()}>
+					<div class={r.group}>
+						<label>{t("repoWorktree.label.terminal", "Terminal")}</label>
+
+						<BooleanOverride
+							label="Enable Cmd+1-9 terminal hotkeys"
+							value={props.settings.terminalMetaHotkeys}
+							fallback={true}
+							onChange={(v) => props.onUpdate("terminalMetaHotkeys", v)}
 						/>
-						<span>
-							{t("repoWorktree.toggle.terminalMetaHotkeys", "Enable Cmd+1-9 terminal hotkeys")}
-							<Show when={props.settings.terminalMetaHotkeys === null}>
-								<span class={s.hintInline}> {t("repoWorktree.hint.terminalMetaDefault", "(Default: On)")}</span>
-							</Show>
-						</span>
 					</div>
-				</div>
-			</Show>
+				</Show>
+			</SectionCard>
 		</div>
 	);
 };

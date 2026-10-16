@@ -209,7 +209,12 @@ describe("SettingsPanel search", () => {
 
 		it("a keyboard shortcut opens Keyboard Shortcuts at that control", async () => {
 			const { container } = open();
-			const target = await openResult(container, "global hotkey", "Keyboard Shortcuts", "Global Hotkey");
+			const target = await openResult(
+				container,
+				"toggle window",
+				"Keyboard Shortcuts",
+				"Global Hotkey (Toggle Window)",
+			);
 			expect(ownText(target)).toBe("Global Hotkey (Toggle Window)");
 		});
 

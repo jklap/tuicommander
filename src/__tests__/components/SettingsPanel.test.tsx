@@ -168,7 +168,7 @@ describe("SettingsPanel", () => {
 		const item = Array.from(navItems).find((n) => n.textContent === "Keyboard Shortcuts")!;
 		fireEvent.click(item);
 
-		const heading = container.querySelector(".section h3");
+		const heading = container.querySelector(".section h2");
 		expect(heading!.textContent).toBe("Keyboard Shortcuts");
 		// Reused from HelpPanel's KeyboardShortcutsTab — same shortcut rows render here.
 		expect(container.querySelectorAll("kbd").length).toBeGreaterThan(0);

@@ -268,3 +268,6 @@
   color: var(--fg-muted);
   margin-top: 4px;
 }
+
+/* Keep account actions at the shared secondary-button height on narrow screens. */
+.actions .btn { min-height: 36px; padding: 6px 14px; line-height: 20px; }
