@@ -207,7 +207,7 @@ pub(super) fn render_mcp_instructions(
     // A spawned child's suggestion buttons are never shown to anyone.
     let show_suggest = show_suggest && !ctx.spawned_child;
     out.push_str("## TUIC Protocol — Required Output Markers\n\n");
-    out.push_str("Required even under concision rules; omission breaks the UI.\n\n");
+    out.push_str("Mandatory even when concise; omission breaks UI.\n\n");
     out.push_str(&format!(
         "- `ack` — exactly once per MCP connection or reconnect, the first assistant message MUST start: `TUICommander v{ver} is connected.` Never repeat it on each conversational turn.\n"
     ));
@@ -220,7 +220,7 @@ pub(super) fn render_mcp_instructions(
     // Always on: the answers-only view is a per-terminal toggle with no setting
     // to switch the marker off, and `answersTurn.ts` anchors on a row that
     // starts with the marker followed by a space.
-    out.push_str("- `💬 ` — prefix every sentence that directly answers the user's question with `💬 ` at row start or at the start of a list item’s text (marker + space). Exclude status, tool and hook/task notices.\n");
+    out.push_str("- `💬 ` — prefix every sentence that directly answers the user's question at row start or list-item text start (marker + space). Exclude status, tool and hook/task notices.\n");
     out.push('\n');
 
     // ── Capability map ───────────────────────────────────────────────
