@@ -1023,7 +1023,7 @@ mod tests {
         let query = uri.query().unwrap();
         assert!(query.starts_with("Ocp-Apim-Subscription-Key=6A5AA1D4EAFF4E9FB37E23D68491D6F4&"));
         assert!(!query.contains("TrustedClientToken"));
-        assert!(query.contains("&Sec-MS-GEC-Version=2-143.0.3650.75"));
+        assert!(query.contains("&Sec-MS-GEC-Version=1-130.0.2849.68"));
         assert_eq!(
             request.headers()["origin"],
             "chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold"
@@ -1053,16 +1053,16 @@ mod tests {
         let at = UNIX_EPOCH + Duration::from_secs(1_790_883_380);
         assert_eq!(
             sec_ms_gec(at),
-            "003A5D2E023A7E8F-9F293825E90E5BC793F1D9B30E206ABE0559F3921B892F29A7AC7A3575DFC0B4"
+            "A95E984BF41D3C7B98C20460112A5DD785722A04FC99D8110F2ED9703A010F73"
         );
     }
 
     #[test]
-    fn edge_v2_gec_keeps_the_bucket_and_changes_at_five_minutes() {
-        // Catches: v1 hashing or rounding into the next five-minute bucket.
+    fn edge_v1_gec_keeps_the_bucket_and_changes_at_five_minutes() {
+        // Catches: incompatible v2 hashing or rounding into the next five-minute bucket.
         assert_eq!(
             sec_ms_gec(UNIX_EPOCH),
-            "52BC7A17B50DFEC9-28C4394775C8751CD2F6859C030C06DB1489ACAB3B3A7651831FC26895177ED6"
+            "7ECB79D14E3AA576D2D79E6D487A1388156D91E614B1BE11C64226A29BC8DD8C"
         );
         assert_eq!(
             sec_ms_gec(UNIX_EPOCH + Duration::from_secs(1_790_883_599)),
@@ -1070,7 +1070,7 @@ mod tests {
         );
         assert_eq!(
             sec_ms_gec(UNIX_EPOCH + Duration::from_secs(1_790_883_600)),
-            "F6E107330EC32B23-EBFD5FBE65C6500ADAA5BF21DB44793AF3C810F3B3252FCEA06EB1511D8390CA"
+            "84F5F8BF6835CEF219FF5547564321E62F442758FFCFFC389DD69A477E70DD50"
         );
     }
 
