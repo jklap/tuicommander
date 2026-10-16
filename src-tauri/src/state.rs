@@ -592,6 +592,8 @@ fn is_zero(v: &u32) -> bool {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct SessionState {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_recovery: Option<crate::output_parser::ProviderRecovery>,
     /// Validated native hook identity; never a discovery heuristic.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub codex_binding: Option<crate::codex_binding::CodexBinding>,
@@ -864,7 +866,8 @@ impl SessionState {
 /// Used by WS dedup to avoid sending identical state frames.
 impl PartialEq for SessionState {
     fn eq(&self, other: &Self) -> bool {
-        self.awaiting_input == other.awaiting_input
+        self.provider_recovery == other.provider_recovery
+            && self.awaiting_input == other.awaiting_input
             && self.question_text == other.question_text
             && self.question_confident == other.question_confident
             && self.rate_limited == other.rate_limited
@@ -4856,6 +4859,7 @@ impl AppState {
                 // Wait metadata for a session that just parked, routed to the
                 // spawning orchestrator's inbox outside the lock below.
                 let mut parked_wait: Option<(String, bool, &'static str)> = None;
+                let mut recovery_notice = None;
 
                 // Ranked awaiting evidence (#744-138c): resolved through the
                 // session's SilenceState BEFORE the session_states entry is
@@ -4951,6 +4955,20 @@ impl AppState {
                     });
                 s.last_activity_ms = now_ms;
                 match event_type {
+                    "provider-recovery" => {
+                        let recovery = parsed.get("recovery").filter(|v| !v.is_null())
+                            .and_then(|v| serde_json::from_value(v.clone()).ok());
+                        if s.provider_recovery != recovery {
+                            if s.provider_recovery.is_none() || recovery.is_none() {
+                                recovery_notice = Some(serde_json::json!({
+                                    "type": "state_change", "session_id": session_id,
+                                    "state": if recovery.is_some() { "recovering" } else { "recovery-ended" },
+                                    "provider_recovery": recovery,
+                                }));
+                            }
+                            s.provider_recovery = recovery;
+                        }
+                    }
                     "question" if epoch_matches => {
                         let new_confident = parsed
                             .get("confident")
@@ -5209,6 +5227,9 @@ impl AppState {
                 // Route the parked prompt to the spawning orchestrator, outside the
                 // session_states entry lock: delivery reaches into the PARENT's
                 // SilenceState and re-entering this shard would deadlock.
+                if let Some(notice) = recovery_notice {
+                    crate::pty::push_state_change_to_parent(state, session_id, notice);
+                }
                 if let Some((prompt, confident, source)) = parked_wait {
                     crate::pty::push_state_change_to_parent(
                         state,
@@ -5240,6 +5261,9 @@ impl AppState {
                 }
             }
             AppEvent::PtyExit { session_id } => {
+                if let Some(mut session) = state.session_maps.session_states.get_mut(session_id) {
+                    session.provider_recovery = None;
+                }
                 crate::codex_binding::revoke(state, session_id);
                 let push_ready = {
                     let config = state.config.read();
@@ -8644,6 +8668,42 @@ mod tests {
             "slow path should return Cow::Owned"
         );
         assert_eq!(&*out, "beforeafter");
+    }
+
+    /// Catches: recovery entry/exit being invisible to the parent, or duplicate snapshots flooding it.
+    #[test]
+    fn provider_recovery_accumulates_and_notifies_parent_on_edges() {
+        let state = fresh_state();
+        state
+            .session_maps
+            .session_parent
+            .insert("s1".into(), "recovery-parent".into());
+        state
+            .agent_inbox
+            .entry("recovery-parent".into())
+            .or_default();
+        let event = make_parsed(
+            "provider-recovery",
+            serde_json::json!({"recovery": {
+                "phase": "waiting", "next_attempt_ms": 1792100000000_u64, "attempt": 3
+            }}),
+        );
+        let snapshot = apply(&state, &event);
+        assert_eq!(snapshot.provider_recovery.as_ref().unwrap().attempt, 3);
+        assert!(!snapshot.awaiting_input);
+        apply(&state, &event);
+        let notices = parent_state_changes(&state, "recovery-parent");
+        assert_eq!(notices.len(), 1);
+        assert_eq!(notices[0]["state"], "recovering");
+        assert_eq!(notices[0]["provider_recovery"]["attempt"], 3);
+        let cleared = apply(
+            &state,
+            &make_parsed("provider-recovery", serde_json::json!({"recovery": null})),
+        );
+        assert!(cleared.provider_recovery.is_none());
+        assert_ne!(snapshot, cleared);
+        let notices = parent_state_changes(&state, "recovery-parent");
+        assert_eq!(notices.last().unwrap()["state"], "recovery-ended");
     }
 
     // Helpers for session-state accumulator tests

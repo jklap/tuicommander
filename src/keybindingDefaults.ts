@@ -178,7 +178,7 @@ export const DEFAULT_BINDINGS: Record<ActionName, string> = {
 	"block-next": "Cmd+Shift+ArrowDown",
 	"block-search-toggle": "Cmd+Shift+B",
 	"answers-only": "Cmd+Alt+R",
-	"toggle-hands-free": "",
+	"toggle-hands-free": "Cmd+Alt+V",
 	// Numbered tabs
 	...Object.fromEntries(Array.from({ length: 9 }, (_, i) => [`switch-tab-${i + 1}`, `Cmd+${i + 1}`])),
 	// Numbered branches (Cmd+Ctrl on macOS, Ctrl+Alt on Win/Linux — we use Cmd+Ctrl here)

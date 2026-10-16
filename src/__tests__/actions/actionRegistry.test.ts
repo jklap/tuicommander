@@ -3,6 +3,7 @@ import { type ActionEntry, getActionEntries } from "../../actions/actionRegistry
 import * as handsFree from "../../actions/handsFreeConversation";
 import { listDemo } from "../../components/Tasks/list/demo";
 import type { ShortcutHandlers } from "../../hooks/useKeyboardShortcuts";
+import { isMacOS } from "../../platform";
 import { workItemProviderRegistry } from "../../plugins/workItemProviderRegistry";
 import { automationsUi } from "../../stores/automations";
 import { dictationStore } from "../../stores/dictation";
@@ -221,14 +222,15 @@ describe("actionRegistry", () => {
 			expect(entry).toBeUndefined();
 		});
 
-		it("registers the hands-free toggle, unbound and labelled for what it will do", async () => {
+		it("registers the hands-free toggle with its default chord and current action label", async () => {
 			await enableDictation();
 			const entry = getActionEntries(createMockHandlers()).find((e) => e.id === "toggle-hands-free");
 			expect(entry).toBeDefined();
 			// Nothing is armed in a fresh store, so the palette offers to start.
 			expect(entry?.label).toBe("Start hands-free conversation");
 			expect(entry?.category).toBe("Dictation");
-			expect(entry?.keybinding).toBe("");
+			// TEST-CHANGE: the approved default replaces the previously empty binding.
+			expect(entry?.keybinding).toBe(isMacOS() ? "⌘⌥V" : "Ctrl+Alt+V");
 		});
 
 		it("routes the hands-free palette entry through the shared toggle", async () => {

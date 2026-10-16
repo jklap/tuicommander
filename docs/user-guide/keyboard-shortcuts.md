@@ -82,6 +82,8 @@ without clearing your draft. When Find is open, Escape closes Find first.
 | `Cmd+Shift+Down` | Jump to next block |
 | `Cmd+Shift+B` | Toggle block-scoped search |
 
+Hands-free conversation: press `Cmd+Alt+V` (`Ctrl+Alt+V` on Windows/Linux) to start or stop listening on the active terminal. Dictation must be enabled. A custom binding or explicit unbind in Keyboard Shortcuts overrides this default.
+
 ## Tab Navigation
 
 | Shortcut | Action |
@@ -89,6 +91,8 @@ without clearing your draft. When Find is open, Escape closes Find first.
 | `Cmd+1` through `Cmd+9` | Switch to tab by number |
 | `Ctrl+Tab` | Next tab |
 | `Ctrl+Shift+Tab` | Previous tab |
+
+Hold `Cmd` alone (`Ctrl` on Windows/Linux) for 450 ms to show shortcut badges on the first nine terminal tabs. Release the modifier to hide them. Any other key, mouse button, wheel event, window blur, or visibility change cancels the hints. Tab shortcuts work immediately, even without badges. The existing quick-switcher chord is unchanged.
 
 ## Zoom
 
@@ -260,6 +264,8 @@ While a context menu is open, pressing a menu item's shortcut chord (modifier + 
 | `split-vertical` | `Cmd+\` | Split vertically |
 | `split-horizontal` | `Cmd+Alt+\` | Split horizontally |
 | `prev-tab` | `Ctrl+Shift+Tab` | Previous tab |
+
+Hold `Cmd` alone (`Ctrl` on Windows/Linux) for 450 ms to show shortcut badges on the first nine terminal tabs. Release the modifier to hide them. Any other key, mouse button, wheel event, window blur, or visibility change cancels the hints. Tab shortcuts work immediately, even without badges. The existing quick-switcher chord is unchanged.
 | `next-tab` | `Ctrl+Tab` | Next tab |
 | `focus-last-terminal` | `Cmd+Ctrl+Backspace` | Return to last terminal (toggle, across repos) |
 | `history-back` | `Cmd+Alt+ArrowLeft` | Back to the previous terminal in the activation history (last 10, across repos) |
@@ -315,4 +321,4 @@ While a context menu is open, pressing a menu item's shortcut chord (modifier + 
 | `block-next` | `Cmd+Shift+Down` | Next command block |
 | `block-search-toggle` | `Cmd+Shift+B` | Search in block |
 | `answers-only` | `Cmd+Alt+R` | Show every prompt of the session with its 💬 answers (turns without an answer are left out); press again to return to the live terminal |
-| `toggle-hands-free` | — | Start/stop hands-free conversation with the active terminal |
+| `toggle-hands-free` | `Cmd+Alt+V` | Start/stop hands-free conversation with the active terminal |

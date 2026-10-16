@@ -404,6 +404,8 @@ Features:
 | Cmd+Shift+T | Reopen closed tab |
 | Cmd+P | Command palette |
 | Cmd+Shift+A | Activity dashboard |
+
+Hold the primary modifier alone for 450 ms to show the first nine terminal-tab shortcut badges. Other keys, mouse buttons, wheel events, release, blur, and visibility changes cancel these hints. The Cmd+Ctrl quick switcher remains independent.
 | Cmd+, | Settings |
 
 ### Prompt Library
@@ -771,6 +773,7 @@ Some frontend-only stores persist to localStorage:
 - [x] Floating toast for partial transcription results
 - [x] Prompt token carry-forward across windows
 - [x] Hands-free conversation — one bound terminal, continuous VAD segmentation, optional activation phrase with a timed window, cancellable hold-back before sending. Disarms itself on target closure, owner disconnect or capture failure
+- [x] `Cmd+Alt+V` (`Ctrl+Alt+V` on Windows/Linux) toggles hands-free on the active terminal; user overrides win and disabled dictation is a silent no-op.
 - [x] Custom start notice: `hands_free_start_notice` replaces the built-in `MODE_ENTRY_HINT` (empty = built-in, folded to one line); `get_hands_free_default_notice` serves the default for a reset control
 - [x] Earcons: an 80 ms Web Audio blip on a delivered turn and a softer one on a gate drop, keyed on the monotonic `deliveredTurns`/`droppedTurns` status counters and played only by the audio owner
 - [x] Speech is typed straight into the bound agent's composer through the framed injection write (`pty::write_voice_turn`), even while the agent is busy, and never enters the Compose queue. A confident question/permission dialog or a draft in the composer holds the turn in the hands-free mode, which retries it every tick; there is no other delivery path
@@ -1135,3 +1138,12 @@ Internal voice settings refresh resolves devices, model state, installed voices 
 ### Settings restyle foundation (1936-0caa)
 
 The approved 2026-10-16 Settings restyle starts with a stable 1136px maximum shell and shared presentation-only vocabulary. Existing lazy mounting, persisted navigation width, configuration sources and save boundaries remain unchanged. Individual page adoption is separate work.
+
+### Terminal ego provider recovery
+
+Terminal ego OSC 7770 recovery snapshots expose phase, attempt and next-attempt
+time through the existing session lifecycle snapshot. The tab and status bar
+show recovery and offer `/retry`; MCP session `force_retry` provides the same
+single-command control. Entry/exit notices reach managed parents. Explicit clear,
+busy/idle markers and shell OSC 133 A retract recovery. This is PTY-only and does
+not attach ACP to a terminal process. Wire limits are in docs/backend/output-parser.md.

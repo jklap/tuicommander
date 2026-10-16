@@ -2332,3 +2332,10 @@ merge queue policy and shared request budgets apply unchanged. The desktop comma
 `{account, reference, request}` payloads (IPC also supplies `pluginId`).
 The GitHub Work runtime binds both ports when it registers each configured account.
 No live write or desktop-load verification is implied by recorded-fixture tests.
+
+`session action=force_retry` is a blocking, localhost-only terminal control.
+It resolves the normal session address, requires a live ego recovery snapshot
+and an empty tracked composer, serializes input and submits `/retry` once via
+the standard agent writer. It does not queue or attach ACP. Remote-qualified MCP
+session control remains limited to the existing supported remote actions; the
+browser status-bar control uses its owning daemon's normal PTY write transport.

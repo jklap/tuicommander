@@ -1260,3 +1260,15 @@ pub(crate) async fn send_agent_input_if_empty(
     .await
     .map_err(|error| error.to_string())?
 }
+
+/// Retry an ego provider outage without overwriting a tracked composer draft.
+#[tauri::command]
+pub(crate) async fn force_retry_provider_recovery_command(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+) -> Result<(), String> {
+    let state = Arc::clone(&state);
+    tauri::async_runtime::spawn_blocking(move || force_retry_provider_recovery(&state, &session_id))
+        .await
+        .map_err(|error| error.to_string())?
+}
