@@ -5,6 +5,7 @@ import { HttpRpcError } from "../../../transport";
 import { Input } from "../../ui/Input";
 import { SettingToggle } from "../SettingFields";
 import s from "../Settings.module.css";
+import { SectionCard, SettingPageHeader } from "../SettingsPrimitives";
 import telegram from "./TelegramTab.module.css";
 
 interface TelegramSettings {
@@ -86,7 +87,12 @@ export const TelegramTab: Component = () => {
 	});
 	return (
 		<div class={`${s.section} ${telegram.panel}`}>
-			<h3>Telegram</h3>
+			<SettingPageHeader
+				title="Telegram"
+				description="Bot setup, authorized chats and the polling owner on this machine."
+				scope="This machine"
+				breadcrumb="Integrations / Telegram"
+			/>
 			<p class={s.hint}>
 				{t(
 					"telegram.pollingHint",
@@ -96,7 +102,7 @@ export const TelegramTab: Component = () => {
 			<Show when={settings()}>
 				{(data) => (
 					<>
-						<div class={s.group}>
+						<SectionCard title="Bot setup">
 							<label for="telegram-token">{t("telegram.token", "Bot token")}</label>
 							<p class={s.hint}>{data().token_set ? "Token set — enter a replacement" : "Token not set"}</p>
 							<Input
@@ -119,8 +125,8 @@ export const TelegramTab: Component = () => {
 								Save and check bot
 							</button>
 							<p class={s.hint}>{data().bot_alias}</p>
-						</div>
-						<div class={s.group}>
+						</SectionCard>
+						<SectionCard title="Chat access">
 							<label for="telegram-chat">{t("telegram.chat", "Authorized chats")}</label>
 							<Input
 								id="telegram-chat"
@@ -171,34 +177,37 @@ export const TelegramTab: Component = () => {
 									)}
 								</p>
 							</Show>
-						</div>
-						<p class={s.hint} aria-live="polite">
-							{data().registered_agent_name
-								? `registered agent: ${data().registered_agent_name}`
-								: t("telegram.noAgent", "No agent registered")}
-						</p>
-						<p class={s.hint}>
-							{t(
-								"telegram.registrationHint",
-								"Ask an agent in the polling app to call the Telegram MCP tool with action register. Registration lasts until the agent or polling app exits.",
-							)}
-						</p>
-						<SettingToggle
-							label={t("telegram.enabled", "Enable Telegram")}
-							checked={data().enabled}
-							onChange={(enabled) => {
-								if (!busy()) void change({ action: "configure", enabled });
-							}}
-						/>
-						<p role="status" class={s.hint}>
-							{connectionLabel(data())}
-						</p>
-						<Show when={data().last_error}>
-							<p class={s.warning}>{data().last_error}</p>
-						</Show>
-						<Show when={data().last_message_time}>
-							<p class={s.hint}>Last message: {new Date(data().last_message_time ?? 0).toLocaleString()}</p>
-						</Show>
+						</SectionCard>
+						<SectionCard title="Polling status">
+							<p class={s.hint} aria-live="polite">
+								{data().registered_agent_name
+									? `registered agent: ${data().registered_agent_name}`
+									: t("telegram.noAgent", "No agent registered")}
+							</p>
+							<p class={s.hint}>
+								{t(
+									"telegram.registrationHint",
+									"Ask an agent in the polling app to call the Telegram MCP tool with action register. Registration lasts until the agent or polling app exits.",
+								)}
+							</p>
+							<SettingToggle
+								row
+								label={t("telegram.enabled", "Enable Telegram")}
+								checked={data().enabled}
+								onChange={(enabled) => {
+									if (!busy()) void change({ action: "configure", enabled });
+								}}
+							/>
+							<p role="status" class={s.hint}>
+								{connectionLabel(data())}
+							</p>
+							<Show when={data().last_error}>
+								<p class={s.warning}>{data().last_error}</p>
+							</Show>
+							<Show when={data().last_message_time}>
+								<p class={s.hint}>Last message: {new Date(data().last_message_time ?? 0).toLocaleString()}</p>
+							</Show>
+						</SectionCard>
 					</>
 				)}
 			</Show>

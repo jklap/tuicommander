@@ -59,7 +59,7 @@ describe("Telegram setup", () => {
 		render(() => <TelegramTab />);
 		await screen.findByText("registered agent: Writer");
 		expect(screen.queryByRole("combobox")).toBeNull();
-		fireEvent.click(screen.getByRole("checkbox"));
+		fireEvent.click(screen.getByRole("switch", { name: "Enable Telegram" }));
 		await waitFor(() =>
 			expect(invoke).toHaveBeenCalledWith("telegram_setup", { change: { action: "configure", enabled: false } }),
 		);
