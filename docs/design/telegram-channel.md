@@ -26,7 +26,7 @@ another register call. No agent dropdown or target UUID belongs in configuration
 An allowlisted private chat delivers text as JSON in native TUIC mail to the
 registered agent. Text never becomes shell input. Native inbox and wake arbitration
 remain authoritative: busy agents receive mail at a safe boundary. Without a live
-registration, the bot replies exactly "Nessun agent registrato", drops the text
+registration, the bot replies exactly "No agent is listening. Ask an agent in TUICommander to register for Telegram.", drops the text
 and advances the cursor. Non-allowlisted chats stay silently dropped.
 
 ## Placement and native state
@@ -173,3 +173,7 @@ instance, token store or real Telegram account is used for offline validation.
 ### Settings setup (1515-cb81)
 
 Settings now writes the same private token/config/allowlist files. Both a one-use six-character ten-minute code and an explicitly typed private-chat ID can authorize a chat. The code lives in private `pairing.json` so desktop and daemon share it; bare `/start` stays ignored. An explicitly empty allowlist supports initial pairing without permitting outbound work. The adapter supervisor responds to local setup changes without taking a second poller lock; desktop and `tuic-remote` both start the same supervisor at boot. The first process to acquire the existing polling lock owns the adapter; the standby leaves shared status and registration untouched and retries the lock once per second, so it can take over after the owner exits. Disabled or stopped supervisors reject MCP requests instead of leaving them queued. Status includes the polling process identity and expires after sixty seconds. Settings identifies the owner relative to the serving process and enables pairing only while connected. Status exposes safe categories, timestamps and the registered agent name, never token or message text. The volatile MCP registration is published through the same private status file; enablement writes no target UUID. This section supersedes hand-written setup and multi-destination selection language in §5; 1438 uses one outbound destination and no phone Stop.
+
+### Pairing feedback
+
+The poller consumes private-chat `/start` and six-character hexadecimal setup inputs before agent mail. Successful linking replies `Chat linked.`; `/start` explains Link chat; wrong or expired codes from unauthorized chats receive a generic retry instruction. Fixed setup replies use the existing serialized outbound worker and throttle. Only these fixed replies can reach an unauthorized private chat; agent sends still require current allowlist membership. Replies never include a code, token or another chat ID. Settings reads `pairing_pending` on its existing status refresh and clears a consumed local hint.

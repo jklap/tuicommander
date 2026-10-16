@@ -81,6 +81,7 @@ pub(crate) struct Snapshot {
     bot_alias: String,
     registered_agent_name: Option<String>,
     chats: Vec<String>,
+    pairing_pending: bool,
     connected: bool,
     polling_owner: Option<&'static str>,
     last_error: Option<String>,
@@ -224,6 +225,7 @@ fn snapshot(paths: &Paths, _state: &AppState) -> Result<Snapshot, Error> {
             None
         },
         chats: chats(paths)?.iter().map(ToString::to_string).collect(),
+        pairing_pending: paths.file("pairing.json").exists(),
         connected,
         polling_owner,
         last_error: status.last_error.clone(),
@@ -380,27 +382,54 @@ pub(crate) fn update_config<R, E>(
     })
 }
 
-/// Consume the credential before parsing ordinary mail: it never reaches an agent.
-pub(super) fn pair_update(paths: &Paths, value: &Value, now: u64) -> Result<bool, Error> {
+/// Fixed setup replies are the only outbound messages allowed before authorization.
+#[derive(Clone, Copy)]
+pub(crate) enum SetupReply {
+    Linked,
+    Start,
+    InvalidCode,
+}
+impl SetupReply {
+    pub(super) fn text(self) -> &'static str {
+        match self {
+            Self::Linked => "Chat linked.",
+            Self::Start => "Use Link chat in TUICommander Settings, then send the code here.",
+            Self::InvalidCode => {
+                "Invalid or expired code. Use Link chat in TUICommander Settings for a new code."
+            }
+        }
+    }
+}
+
+/// Consume setup inputs before ordinary mail: credentials never reach an agent.
+pub(super) fn pair_update(
+    paths: &Paths,
+    value: &Value,
+    now: u64,
+) -> Result<Option<(i64, SetupReply)>, Error> {
     let message = &value["message"];
     let Some(text) = message["text"].as_str() else {
-        return Ok(false);
+        return Ok(None);
     };
-    if text == "/start" {
-        return Ok(true);
-    }
     let Some(id) = message["chat"]["id"].as_i64().filter(|id| *id > 0) else {
-        return Ok(false);
+        return Ok(None);
     };
     if message["chat"]["type"] != "private" {
-        return Ok(false);
+        return Ok(None);
     }
-    if !paths.file("pairing.json").exists() {
-        return Ok(false);
+    if text == "/start" {
+        return Ok(Some((id, SetupReply::Start)));
+    }
+    if text.len() != 6 || !text.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Ok(None);
     }
     let lock = super::config::private_open(&paths.file("setup.lock"), true)?;
     lock.try_lock().map_err(|_| Error::AlreadyOwned)?;
-    pair(paths, text, id, now)
+    if pair(paths, text, id, now)? {
+        return Ok(Some((id, SetupReply::Linked)));
+    }
+    // Ordinary code-shaped text from an authorized chat remains agent mail.
+    Ok((!chats(paths)?.contains(&id)).then_some((id, SetupReply::InvalidCode)))
 }
 fn pair(paths: &Paths, text: &str, id: i64, now: u64) -> Result<bool, Error> {
     if !paths.file("pairing.json").exists() {

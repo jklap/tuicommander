@@ -10,6 +10,7 @@ const initial = {
 	bot_alias: "test_bot",
 	registered_agent_name: "Writer",
 	chats: ["123"],
+	pairing_pending: true,
 	connected: true,
 	polling_owner: "this_app",
 	last_error: null,
@@ -21,7 +22,10 @@ beforeEach(() => {
 		command === "telegram_settings" ? initial : { code: "ABC123" },
 	);
 });
-afterEach(cleanup);
+afterEach(() => {
+	cleanup();
+	vi.useRealTimers();
+});
 describe("Telegram setup", () => {
 	// Catches: password is shown as plain text or retained in the form after sending.
 	it("clears the password and sends only the replacement action", async () => {
@@ -108,4 +112,22 @@ describe("Telegram setup", () => {
 		fireEvent.click(screen.getByText("Save and check bot"));
 		expect((await screen.findByRole("alert")).textContent).toContain("telegram_unauthorized");
 	});
+});
+
+// Catches: a consumed code stays visible after the existing status refresh reports linking.
+it("clears the consumed pairing hint after refresh 1955", async () => {
+	vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+	let linked = false;
+	invoke.mockImplementation(async (command: string) =>
+		command === "telegram_settings"
+			? { ...initial, chats: linked ? ["123", "456"] : ["123"], pairing_pending: !linked }
+			: { code: "ABC123" },
+	);
+	render(() => <TelegramTab />);
+	fireEvent.click(await screen.findByText("Link chat"));
+	await screen.findByText(/Send ABC123/);
+	linked = true;
+	await vi.advanceTimersByTimeAsync(3000);
+	await screen.findByText("456");
+	expect(screen.queryByText(/Send ABC123/)).toBeNull();
 });

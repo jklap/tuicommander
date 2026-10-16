@@ -56,6 +56,30 @@ impl Outbound {
     }
 
     pub async fn call(&mut self, chat: i64, method: &str, body: Value) -> Result<Value, Error> {
+        self.call_inner(chat, method, body, None).await
+    }
+
+    pub async fn setup_reply(
+        &mut self,
+        chat: i64,
+        reply: super::settings::SetupReply,
+    ) -> Result<Value, Error> {
+        self.call_inner(
+            chat,
+            "sendMessage",
+            json!({"chat_id":chat,"text":reply.text()}),
+            Some(reply),
+        )
+        .await
+    }
+
+    async fn call_inner(
+        &mut self,
+        chat: i64,
+        method: &str,
+        body: Value,
+        setup: Option<super::settings::SetupReply>,
+    ) -> Result<Value, Error> {
         if let Some(error) = self.stopped {
             return Err(error);
         }
@@ -67,11 +91,18 @@ impl Outbound {
         }
         tokio::time::sleep_until(self.next_send).await;
         // Revocation is checked immediately before every operation, after waiting.
-        if !self.paths.allowlist()?.contains(&chat) {
+        let ids = self.paths.allowlist_entries()?;
+        if chat <= 0
+            || (setup.is_none() && !ids.contains(&chat))
+            || (matches!(setup, Some(super::settings::SetupReply::Linked)) && !ids.contains(&chat))
+        {
             return Err(Error::Config);
         }
         self.next_send = Instant::now() + Duration::from_secs(1);
-        let result = self.api.request(method, body).await;
+        let result = match setup {
+            Some(reply) => self.api.setup_reply(chat, reply).await,
+            None => self.api.request(method, body).await,
+        };
         if let Err(Error::RateLimited(seconds)) = result {
             self.next_send = Instant::now() + Duration::from_secs(seconds.clamp(1, 3600));
         }

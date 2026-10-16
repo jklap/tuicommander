@@ -53,6 +53,7 @@ async fn pairing_code_expired_or_wrong_authorizes_nothing() {
             .await
             .unwrap();
         let code = pairing["code"].as_str().unwrap();
+        assert!(snapshot(&paths, &state).unwrap().pairing_pending);
         if scenario == "expired" {
             write(
                 &paths,
@@ -98,6 +99,10 @@ async fn pairing_code_expired_or_wrong_authorizes_nothing() {
             "{scenario}"
         );
         assert!(!paths.allowlist_entries().unwrap().contains(&333));
+        assert_eq!(
+            snapshot(&paths, &state).unwrap().pairing_pending,
+            !authorized
+        );
         let pending = inbound.pending().unwrap();
         assert_eq!(pending.len(), expected, "{scenario}");
         for mail in pending {

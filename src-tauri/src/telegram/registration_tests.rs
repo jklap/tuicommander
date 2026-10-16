@@ -27,7 +27,10 @@ async fn assert_no_agent_reply(runtime: &mut Runtime, server: &FakeServer) {
     let requests = server.requests();
     assert_eq!(requests.len(), 1);
     assert!(requests[0].0.ends_with("sendMessage"));
-    assert_eq!(requests[0].1["text"], "Nessun agent registrato");
+    assert_eq!(
+        requests[0].1["text"],
+        "No agent is listening. Ask an agent in TUICommander to register for Telegram."
+    );
     assert_eq!(requests[0].1["chat_id"], 1111111);
 }
 
@@ -295,7 +298,10 @@ async fn inbound_without_registration_replies_and_drops_but_strangers_stay_silen
     assert_eq!(requests.len(), 2);
     assert!(requests[1].0.ends_with("sendMessage"));
     assert_eq!(requests[1].1["chat_id"], 1111111);
-    assert_eq!(requests[1].1["text"], "Nessun agent registrato");
+    assert_eq!(
+        requests[1].1["text"],
+        "No agent is listening. Ask an agent in TUICommander to register for Telegram."
+    );
     assert!(
         state
             .agent_inbox
@@ -340,4 +346,138 @@ async fn inbound_registered_agent_receives_native_mail_without_phone_error() {
     assert_eq!(envelope["request_id"], "tg:test-bot:7");
     assert_eq!(server.requests().len(), 1);
     worker.abort();
+}
+
+// Recorded public-update replay through the poller, native command channel and outbound fake.
+async fn pairing_reply_1955(
+    text: &str,
+    expiry: u64,
+    allowed: bool,
+) -> (Vec<(String, Value)>, bool) {
+    let (_dir, paths) = setup();
+    write_private(&paths.file("next_offset"), "7\n");
+    write_private(
+        &paths.file("pairing.json"),
+        &json!({"code":"A1B2C3","expires_at":expiry}).to_string(),
+    );
+    let chat = if allowed { 1111111 } else { 3333333 };
+    let server = FakeServer::start(vec![
+        inbound::updates(vec![inbound::text_update(7, chat, text)]),
+        (StatusCode::OK, json!({"ok":true,"result":{"message_id":9}})),
+    ])
+    .await;
+    let mut runtime = outbound_tests::runtime(paths.clone(), server.address).await;
+    runtime
+        .tool(PEER, "target-mcp", Input::Unregister {})
+        .await
+        .unwrap();
+    let (commands, receive) = tokio::sync::mpsc::channel(10);
+    let worker = tokio::spawn(runtime.run(receive));
+    let mut poller = crate::telegram::inbound::Inbound::with_loopback(
+        paths.clone(),
+        server.address,
+        crate::telegram::native::NativeMail::new(commands),
+    )
+    .unwrap();
+    assert!(matches!(poller.poll().await.unwrap(), Poll::Accepted(0)));
+    let linked = paths.allowlist_entries().unwrap().contains(&chat);
+    worker.abort();
+    (server.requests(), linked)
+}
+
+fn assert_pairing_reply_1955(requests: &[(String, Value)], chat: i64, text: &str) {
+    assert_eq!(requests.len(), 2, "poll must send exactly one reply");
+    assert!(requests[1].0.ends_with("sendMessage"));
+    assert_eq!(requests[1].1, json!({"chat_id":chat,"text":text}));
+    assert!(!requests[1].1.to_string().contains("A1B2C3"));
+    assert!(!requests[1].1.to_string().contains("fake-one"));
+}
+
+// Catches: authorization succeeds but the phone receives no confirmation.
+#[tokio::test]
+async fn pairing_confirms_link_1955() {
+    let (requests, linked) = pairing_reply_1955("A1B2C3", u64::MAX, false).await;
+    assert!(linked);
+    assert_pairing_reply_1955(&requests, 3333333, "Chat linked.");
+}
+
+// Catches: bare /start is swallowed rather than explaining the link code.
+#[tokio::test]
+async fn pairing_start_instructs_1955() {
+    let (requests, linked) = pairing_reply_1955("/start", u64::MAX, false).await;
+    assert!(!linked);
+    assert_pairing_reply_1955(
+        &requests,
+        3333333,
+        "Use Link chat in TUICommander Settings, then send the code here.",
+    );
+}
+
+// Catches: wrong, expired or consumed codes fail silently or authorize strangers.
+#[tokio::test]
+async fn pairing_bad_code_explains_1955() {
+    for (text, expiry) in [("FFFFFF", u64::MAX), ("A1B2C3", 1)] {
+        let (requests, linked) = pairing_reply_1955(text, expiry, false).await;
+        assert!(!linked);
+        assert_pairing_reply_1955(
+            &requests,
+            3333333,
+            "Invalid or expired code. Use Link chat in TUICommander Settings for a new code.",
+        );
+    }
+}
+
+// Catches: authorized no-agent input is silent or replies in the wrong language.
+#[tokio::test]
+async fn pairing_no_agent_english_1955() {
+    let (requests, linked) = pairing_reply_1955("hello", u64::MAX, true).await;
+    assert!(linked);
+    assert_pairing_reply_1955(
+        &requests,
+        1111111,
+        "No agent is listening. Ask an agent in TUICommander to register for Telegram.",
+    );
+}
+
+// Catches: arbitrary unauthorized text becomes a reply oracle.
+#[tokio::test]
+async fn pairing_random_strangers_stay_silent_1955() {
+    for text in ["hello", "not-a-code", "ABCDE", "/start other", "GHIJKL"] {
+        let (requests, linked) = pairing_reply_1955(text, u64::MAX, false).await;
+        assert!(!linked);
+        assert_eq!(requests.len(), 1, "{text}");
+    }
+}
+
+// Catches: setup replies require a nonempty allowlist, making first-time setup silent.
+#[tokio::test]
+async fn pairing_start_with_empty_allowlist_1955() {
+    let (_dir, paths) = setup();
+    write_private(&paths.file("allowed_chat_ids"), "");
+    write_private(&paths.file("next_offset"), "7\n");
+    let server = FakeServer::start(vec![
+        inbound::updates(vec![inbound::text_update(7, 3333333, "/start")]),
+        (StatusCode::OK, json!({"ok":true,"result":{"message_id":9}})),
+    ])
+    .await;
+    let mut runtime = outbound_tests::runtime(paths.clone(), server.address).await;
+    runtime
+        .tool(PEER, "target-mcp", Input::Unregister {})
+        .await
+        .unwrap();
+    let (commands, receive) = tokio::sync::mpsc::channel(10);
+    let worker = tokio::spawn(runtime.run(receive));
+    let mut poller = crate::telegram::inbound::Inbound::with_loopback(
+        paths,
+        server.address,
+        crate::telegram::native::NativeMail::new(commands),
+    )
+    .unwrap();
+    assert!(matches!(poller.poll().await.unwrap(), Poll::Accepted(0)));
+    worker.abort();
+    assert_pairing_reply_1955(
+        &server.requests(),
+        3333333,
+        "Use Link chat in TUICommander Settings, then send the code here.",
+    );
 }

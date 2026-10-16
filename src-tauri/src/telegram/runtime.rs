@@ -9,6 +9,11 @@ use tokio::sync::{mpsc, oneshot};
 
 pub(super) static HANDLE: OnceLock<mpsc::Sender<Command>> = OnceLock::new();
 pub(super) enum Command {
+    SetupReply {
+        chat: i64,
+        message: super::settings::SetupReply,
+        reply: oneshot::Sender<Result<Value, Error>>,
+    },
     Automation {
         store: crate::automations::store::RunStore,
         run: Box<crate::automations::run::AutomationRun>,
@@ -189,7 +194,11 @@ impl Runtime {
         }
         let Some(peer) = self.registered_peer() else {
             self.outbound
-                .send(chat, "Nessun agent registrato", None)
+                .send(
+                    chat,
+                    "No agent is listening. Ask an agent in TUICommander to register for Telegram.",
+                    None,
+                )
                 .await?;
             return Ok(json!({"accepted":false}));
         };
@@ -288,6 +297,10 @@ impl Runtime {
                         Command::Tool { caller,sid,input,reply } => (reply,self.tool(&caller,&sid,input).await),
                         Command::Deliver { mail,reply } => (reply,self.deliver(mail).await),
                         Command::Update { value,reply } => (reply,self.update(value).await),
+                        Command::SetupReply { chat,message,reply } => {
+                            let result = if self.enabled() { self.outbound.setup_reply(chat, message).await } else { Err(Error::Config) };
+                            (reply, result)
+                        },
                     };
                     let _ = reply.send(result);
                 },

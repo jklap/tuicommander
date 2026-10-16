@@ -2821,7 +2821,7 @@ Any MCP-bound TUIC agent opts in with `telegram register`; one volatile
 registration replaces the previous agent with one native notice. It ends on
 MCP session end, PTY close, foreground-agent exit or daemon restart.
 Allowlisted private text arrives as native peer mail. Without an agent the bot
-replies "Nessun agent registrato" and drops the text; strangers stay silent.
+replies "No agent is listening. Ask an agent in TUICommander to register for Telegram." and drops the text; strangers stay silent.
 The registered agent can stream concise activity, send exact replies and offer
 opaque buttons. Proactive sends use one allowlisted destination. Only the polling
 cursor persists; live mint deployment remains pending. See

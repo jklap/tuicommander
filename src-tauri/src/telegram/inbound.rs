@@ -131,7 +131,10 @@ impl<P: MailPort> Inbound<P> {
                 continue;
             }
             let candidate = update.id.checked_add(1).ok_or(Error::Protocol)?;
-            if super::settings::pair_update(&self.paths, value, super::settings::now_ms())? {
+            if let Some((chat, reply)) =
+                super::settings::pair_update(&self.paths, value, super::settings::now_ms())?
+            {
+                self.port.setup_reply(chat, reply).await?;
                 next = candidate;
                 continue;
             }

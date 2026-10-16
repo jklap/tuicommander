@@ -2324,3 +2324,5 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] Hands-free default shortcut (#1953-3da5): with dictation enabled and a live active terminal, Cmd+Alt+V (Ctrl+Alt+V on Windows/Linux) starts the conversation and a second press stops it. Disabled dictation must stay silent. Dispatcher/store tests pass; microphone/audio confirmation needs real hardware.
 
 - [ ] After a manual `make dev` restart or release rebuild, verify a hands-free Italian reply uses Edge speech on the migrated endpoint with v1 GEC without HTTP 403 (#1952-bf91). The old Rust process does not hot-reload.
+
+- [ ] After the next manual Rust restart (`make dev` or release rebuild), verify Telegram linking confirms with `Chat linked.`, `/start` explains Link chat, invalid/expired codes explain retry, and the consumed Settings hint clears (#1955-2f43). Automated offline poll-loop and Settings regressions cover these paths; no live Telegram API was called during implementation.
