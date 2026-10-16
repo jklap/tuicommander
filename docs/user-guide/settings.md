@@ -563,3 +563,8 @@ The plugin manager retains lazy Installed/Browse views. A loaded plugin's settin
 page identifies its plugin source and uses schema-driven controls; saved credentials
 are not evidence of a live connection. Existing explicit-save and automatic-save
 boundaries still apply to each page.
+
+Loaded plugins with described settings appear in a separate **Plugin settings**
+navigation group with a plug icon. The manager offers **Settings** only when the
+loaded catalogue provides a page. That action opens the same scoped page as the
+navigation entry; it does not create a second settings service.

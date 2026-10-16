@@ -51,7 +51,7 @@ const PluginLogViewer: Component<{ plugin: PluginState }> = (props) => {
 };
 
 /** Single plugin row in the installed list */
-const PluginRow: Component<{ plugin: PluginState; onClose?: () => void }> = (props) => {
+const PluginRow: Component<{ plugin: PluginState; onClose?: () => void; onOpenSettings?: () => void }> = (props) => {
 	const [showLogs, setShowLogs] = createSignal(false);
 	const [toggling, setToggling] = createSignal(false);
 	const [uninstalling, setUninstalling] = createSignal(false);
@@ -168,6 +168,11 @@ const PluginRow: Component<{ plugin: PluginState; onClose?: () => void }> = (pro
 
 				<div class={ps.pluginActions}>
 					<div class={ps.pluginActionsRow}>
+						<Show when={props.onOpenSettings}>
+							<button class={s.testBtn} onClick={() => props.onOpenSettings?.()}>
+								Settings
+							</button>
+						</Show>
 						<Show when={updateEntry()}>
 							<button class={ps.installBtn} onClick={handleUpdate} disabled={updating()}>
 								{updating() ? "..." : "Update"}
@@ -333,7 +338,11 @@ export function sortPlugins(plugins: readonly PluginState[]): PluginState[] {
 	});
 }
 
-export const PluginsTab: Component<{ onClose?: () => void }> = (props) => {
+export const PluginsTab: Component<{
+	onClose?: () => void;
+	settingsPluginIds?: string[];
+	onOpenSettings?: (id: string) => void;
+}> = (props) => {
 	const plugins = () => sortPlugins(pluginStore.getAll());
 	const [installing, setInstalling] = createSignal(false);
 	const [fileInstallError, setFileInstallError] = createSignal<string | null>(null);
@@ -451,14 +460,24 @@ export const PluginsTab: Component<{ onClose?: () => void }> = (props) => {
 					>
 						<div class={ps.pluginList}>
 							<For each={plugins() as PluginState[]}>
-								{(plugin) => <PluginRow plugin={plugin} onClose={props.onClose} />}
+								{(plugin) => (
+									<PluginRow
+										plugin={plugin}
+										onClose={props.onClose}
+										onOpenSettings={
+											props.settingsPluginIds?.includes(plugin.id) && props.onOpenSettings
+												? () => props.onOpenSettings?.(plugin.id)
+												: undefined
+										}
+									/>
+								)}
 							</For>
 						</div>
 					</Show>
 
 					<For each={WORK_ITEM_PLUGINS.filter((setup) => !pluginStore.getPlugin(setup.pluginId))}>
 						{(setup) => (
-							<div class={s.hint}>
+							<div class={ps.installSuggestion}>
 								<InstallWorkItemPlugin setup={setup} note="Install it to list those items in the Tasks tab." />
 							</div>
 						)}

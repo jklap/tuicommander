@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen } from "@solidjs/testing-library";
+import { cleanup, fireEvent, render, screen } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../../invoke", () => ({
@@ -21,6 +21,14 @@ describe("Plugins settings work-item hints", () => {
 		expect(screen.getByText(/GitHub Work shows GitHub issues/)).toBeInTheDocument();
 		expect(screen.getByText(/GitLab shows GitLab issues/)).toBeInTheDocument();
 		expect(screen.getByText(/Jira shows Jira issues/)).toBeInTheDocument();
+	});
+
+	it("opens only a loaded catalogue page through its named Settings action", () => {
+		pluginStore.registerPlugin("fixture", { loaded: true });
+		const open = vi.fn();
+		render(() => <PluginsTab settingsPluginIds={["fixture"]} onOpenSettings={open} />);
+		fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+		expect(open).toHaveBeenCalledWith("fixture");
 	});
 
 	// Catches: a hint staying on screen for a plugin that is already installed.

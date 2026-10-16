@@ -149,7 +149,20 @@ function buildNavItems(pluginTabs: SettingsShellTab[] = []): SettingsShellTab[] 
 	const items: SettingsShellTab[] = GLOBAL_TAB_GROUPS.flatMap((group) => [
 		{ key: `__label__:${group.key}`, label: group.label },
 		...group.tabs.filter((tab) => !hidden.has(tab.key)),
-		...(group.key === "integrations" ? pluginTabs : []),
+		...(group.key === "integrations" && pluginTabs.length
+			? [
+					{
+						key: "__label__:plugin-settings",
+						label: "Plugin settings",
+						icon: (
+							<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+								<path d="M5 1h2v4h2V1h2v4h2v2h-1v2a4 4 0 0 1-3 3.87V16H7v-3.13A4 4 0 0 1 4 9V7H3V5h2V1zm1 6v2a2 2 0 0 0 4 0V7H6z" />
+							</svg>
+						),
+					},
+					...pluginTabs,
+				]
+			: []),
 	]);
 
 	if (repos.length > 0) {
@@ -375,7 +388,11 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 					<TelegramTab />
 				</Show>
 				<Show when={activeTab() === "plugins"}>
-					<PluginsTab onClose={props.onClose} />
+					<PluginsTab
+						onClose={props.onClose}
+						settingsPluginIds={pluginPages().map((page) => page.id)}
+						onOpenSettings={(id) => setActiveTab(`plugin:${id}`)}
+					/>
 				</Show>
 				<Show when={activeTab() === "smart-prompts"}>
 					<SmartPromptsTab />
