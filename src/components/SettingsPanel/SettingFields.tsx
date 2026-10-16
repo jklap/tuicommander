@@ -1,6 +1,7 @@
 import { type Component, For, type JSX, Show } from "solid-js";
 import { Input } from "../ui/Input";
 import { Select } from "../ui/Select";
+import { ContextualHelp } from "./ContextualHelp";
 import s from "./Settings.module.css";
 import { SettingRow } from "./SettingsPrimitives";
 
@@ -25,6 +26,7 @@ export const SettingToggle: Component<{
 				<div class={s.toggle}>
 					<input type="checkbox" checked={props.checked} onChange={(e) => props.onChange(e.currentTarget.checked)} />
 					<span>{props.label}</span>
+					<ContextualHelp label={props.label} hint={props.hint} />
 				</div>
 				<Show when={props.hint}>
 					<p class={s.hint} style={props.hintStyle}>
@@ -64,6 +66,7 @@ export const SettingSelect: Component<{
 		fallback={
 			<div class={s.group}>
 				<label>{props.label}</label>
+				<ContextualHelp label={props.label} hint={props.hint} />
 				<Select value={props.value} onChange={(e) => props.onChange(e.currentTarget.value)}>
 					<For each={props.options}>{(opt) => <option value={opt.value}>{opt.label}</option>}</For>
 				</Select>
@@ -109,6 +112,7 @@ export const SettingSlider: Component<{
 		fallback={
 			<div class={s.group}>
 				<label>{props.label}</label>
+				<ContextualHelp label={props.label} hint={props.hint} />
 				<div class={s.slider}>
 					<input
 						type="range"
@@ -164,6 +168,7 @@ export const SettingInput: Component<{
 		fallback={
 			<div class={s.group}>
 				<label>{props.label}</label>
+				<ContextualHelp label={props.label} hint={props.hint} />
 				<Input
 					type={props.type ?? "text"}
 					value={props.value}

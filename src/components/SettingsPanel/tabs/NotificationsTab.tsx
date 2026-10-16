@@ -7,6 +7,7 @@ import { appLogger } from "../../../stores/appLogger";
 import { notificationsStore } from "../../../stores/notifications";
 import { isTauri } from "../../../transport";
 import { Select } from "../../ui/Select";
+import { ContextualHelp } from "../ContextualHelp";
 import { ExpertSetting } from "../ExpertSetting";
 import { SettingSlider, SettingToggle } from "../SettingFields";
 import s from "../Settings.module.css";
@@ -279,6 +280,7 @@ export const NotificationsTab: Component = () => {
 
 					<div class={s.group}>
 						<label>{t("notifications.label.orchestration", "Orchestration")}</label>
+						<ContextualHelp label={t("notifications.label.orchestration", "Orchestration")} />
 						<SettingToggle
 							row
 							checked={notificationsStore.state.config.silence_remote_completions}
@@ -305,6 +307,7 @@ export const NotificationsTab: Component = () => {
 			    must stay reachable on a machine with no audio output. */}
 				<div class={s.group}>
 					<label>{t("notifications.label.toolbarBell", "Toolbar Bell")}</label>
+					<ContextualHelp label={t("notifications.label.toolbarBell", "Toolbar Bell")} />
 					<SettingToggle
 						row
 						checked={notificationsStore.state.config.toasts_in_bell}

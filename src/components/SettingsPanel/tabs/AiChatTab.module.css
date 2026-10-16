@@ -1,0 +1,8 @@
+.page, .perimeter { min-width: 0; }
+.page p, .perimeter p { overflow-wrap: anywhere; }
+.perimeter input, .perimeter select, .perimeter textarea { max-width: 100%; }
+.page pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.page details { margin-top: 12px; }
+
+.modelControls { display: flex; flex-wrap: wrap; gap: 8px; }
+.modelControls > select { width: 100%; min-width: 0; }

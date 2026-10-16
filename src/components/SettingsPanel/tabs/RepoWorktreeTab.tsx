@@ -13,9 +13,9 @@ import type { RepoSettings } from "../../../stores/repoSettings";
 import { settingsStore } from "../../../stores/settings";
 import { ColorSwatchPicker } from "../../shared/ColorSwatchPicker";
 import { DEFAULT_COLOR_PRESETS } from "../../shared/colorPresets";
-
 import { Input } from "../../ui/Input";
 import { Select } from "../../ui/Select";
+import { ContextualHelp } from "../ContextualHelp";
 import s from "../Settings.module.css";
 import { SectionCard, SettingPageHeader, SettingRow } from "../SettingsPrimitives";
 import r from "./RepositoryTabs.module.css";
@@ -100,6 +100,7 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 
 				<div class={r.group}>
 					<label for="repo-field-2">{t("repoWorktree.label.autoFetchInterval", "Auto-Fetch Interval")}</label>
+					<ContextualHelp label={t("repoWorktree.label.autoFetchInterval", "Auto-Fetch Interval")} />
 					<Select
 						id="repo-field-2"
 						value={
@@ -154,6 +155,7 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 
 				<div class={r.group}>
 					<label>{t("repoWorktree.label.fileHandling", "File Handling")}</label>
+					<ContextualHelp label={t("repoWorktree.label.fileHandling", "File Handling")} />
 
 					<BooleanOverride
 						label="Copy ignored files"
@@ -173,6 +175,7 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 			<SectionCard title={t("repoWorktree.heading.worktreeSettings", "Worktree Settings")}>
 				<div class={r.group}>
 					<label for="repo-field-4">{t("repoWorktree.label.worktreeStorage", "Storage Strategy")}</label>
+					<ContextualHelp label={t("repoWorktree.label.worktreeStorage", "Storage Strategy")} />
 					<Select
 						id="repo-field-4"
 						value={props.settings.worktreeStorage ?? INHERIT}
@@ -244,6 +247,7 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 
 				<div class={r.group}>
 					<label for="repo-field-5">{t("repoWorktree.label.orphanCleanup", "Orphan Worktree Cleanup")}</label>
+					<ContextualHelp label={t("repoWorktree.label.orphanCleanup", "Orphan Worktree Cleanup")} />
 					<Select
 						id="repo-field-5"
 						value={props.settings.orphanCleanup ?? INHERIT}
@@ -267,6 +271,7 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 
 				<div class={r.group}>
 					<label for="repo-field-6">{t("repoWorktree.label.prMergeStrategy", "PR Merge Strategy")}</label>
+					<ContextualHelp label={t("repoWorktree.label.prMergeStrategy", "PR Merge Strategy")} />
 					<Select
 						id="repo-field-6"
 						value={props.settings.prMergeStrategy ?? INHERIT}
@@ -290,6 +295,7 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 
 				<div class={r.group}>
 					<label for="repo-field-7">{t("repoWorktree.label.afterMerge", "After Merge Behavior")}</label>
+					<ContextualHelp label={t("repoWorktree.label.afterMerge", "After Merge Behavior")} />
 					<Select
 						id="repo-field-7"
 						value={props.settings.afterMerge ?? INHERIT}
@@ -313,6 +319,7 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 
 				<div class={r.group}>
 					<label for="repo-field-8">{t("repoWorktree.label.autoDeleteOnPrClose", "Auto-Delete on PR Close")}</label>
+					<ContextualHelp label={t("repoWorktree.label.autoDeleteOnPrClose", "Auto-Delete on PR Close")} />
 					<Select
 						id="repo-field-8"
 						value={props.settings.autoDeleteOnPrClose ?? INHERIT}

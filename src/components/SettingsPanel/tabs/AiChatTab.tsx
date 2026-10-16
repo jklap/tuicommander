@@ -8,6 +8,8 @@ import type { EgoCliError, EgoCredential, EgoProviders } from "../../../types/eg
 import { asEgoCliError } from "../../../types/ego";
 import { Select } from "../../ui/Select";
 import s from "../Settings.module.css";
+import { ListRow, SectionCard, SettingPageHeader, SettingRow } from "../SettingsPrimitives";
+import layout from "./AiChatTab.module.css";
 import { EgoPerimeterSection } from "./EgoPerimeterSection";
 
 /**
@@ -100,10 +102,15 @@ export const AiChatTab: Component<{
 	const empty = () => data() !== null && (data()?.providers.length ?? 0) === 0;
 
 	return (
-		<>
-			<EgoPerimeterSection />
-			<div class={s.section}>
-				<h3>{t("providers.heading.defaultModel", "Default Model")}</h3>
+		<div class={`${s.section} ${layout.page}`}>
+			<SettingPageHeader
+				title="AI Chat"
+				description="Agent defaults and access for new ego runs. Running conversations are unchanged."
+				scope="New ego runs"
+				breadcrumb="AI / AI Chat"
+				source="TUICommander owns the executable, profile and workspace in General. ego owns model and access defaults."
+			/>
+			<SectionCard title="Agent and model">
 				<p class={s.hint}>
 					{t(
 						"providers.hint.defaultModel",
@@ -169,102 +176,126 @@ export const AiChatTab: Component<{
 
 					<Match when={data()}>
 						{(loaded) => (
-							<div class={s.group}>
-								<label>{t("providers.label.defaultModel", "Default model")}</label>
-								<Select
-									disabled={busy()}
-									value={loaded().defaultModel ?? ""}
-									onChange={(event) => choose(event.currentTarget.value)}
-								>
-									{/* Present when ego has no `model` key set, so the picker
+							<SettingRow
+								label={t("providers.label.defaultModel", "Default model")}
+								hint={t(
+									"providers.hint.refresh",
+									"Refresh asks ego to re-enumerate its sources, which is the only call here that reaches a provider over the network. TUICommander never makes one.",
+								)}
+							>
+								{(id, descriptionId) => (
+									<div class={layout.modelControls}>
+										<Select
+											id={id}
+											aria-describedby={descriptionId()}
+											disabled={busy()}
+											value={loaded().defaultModel ?? ""}
+											onChange={(event) => choose(event.currentTarget.value)}
+										>
+											{/* Present when ego has no `model` key set, so the picker
 									    shows "nothing chosen" instead of silently claiming the
 									    first model in the list is the default. */}
-									<Show when={loaded().defaultModel === null}>
-										<option value="">{t("providers.noDefault", "None — ego picks its own")}</option>
-									</Show>
-									<For each={offering()}>
-										{(provider) => (
-											<optgroup label={provider.name}>
-												<For each={provider.models}>
-													{(model) => (
-														<option value={model.slug} disabled={!model.available}>
-															{model.name}
-														</option>
-													)}
-												</For>
-											</optgroup>
-										)}
-									</For>
-								</Select>
-							</div>
+											<Show when={loaded().defaultModel === null}>
+												<option value="">{t("providers.noDefault", "None — ego picks its own")}</option>
+											</Show>
+											<For each={offering()}>
+												{(provider) => (
+													<optgroup label={provider.name}>
+														<For each={provider.models}>
+															{(model) => (
+																<option value={model.slug} disabled={!model.available}>
+																	{model.name}
+																</option>
+															)}
+														</For>
+													</optgroup>
+												)}
+											</For>
+										</Select>
+										<button
+											class={s.testBtn}
+											disabled={busy()}
+											onClick={() => void attempt(() => client().providers(true))}
+										>
+											{t("providers.refresh", "Refresh from providers")}
+										</button>
+									</div>
+								)}
+							</SettingRow>
 						)}
 					</Match>
 				</Switch>
 
-				<div class={s.actions}>
-					<button disabled={busy()} onClick={() => void attempt(() => client().providers(true))}>
-						{t("providers.refresh", "Refresh from providers")}
-					</button>
-				</div>
-				<p class={s.hint}>
-					{t(
-						"providers.hint.refresh",
-						"Refresh asks ego to re-enumerate its sources, which is the only call here that reaches a provider over the network. TUICommander never makes one.",
-					)}
-				</p>
-			</div>
-
-			<Show when={(data()?.providers.length ?? 0) > 0}>
-				<div class={s.section}>
-					<h3>{t("providers.heading.providers", "Providers")}</h3>
-					<p class={s.hint}>
-						{t(
-							"providers.hint.credentials",
-							"Credential state comes from ego doctor. No key is ever read into TUICommander or stored in its keyring.",
+				<Show when={!!error() || !data() || empty()}>
+					<SettingRow
+						label="Provider catalogue"
+						hint={t(
+							"providers.hint.refresh",
+							"Refresh asks ego to re-enumerate its sources, which is the only call here that reaches a provider over the network. TUICommander never makes one.",
 						)}
-					</p>
-					<Show when={loginError()}>{(message) => <p class={s.warning}>{message()}</p>}</Show>
-					<For each={data()?.providers}>
-						{(provider) => (
-							<div class={s.group}>
-								<div class={s.credentialsRow}>
-									<strong>{provider.name}</strong>
-									<CredentialBadge credential={provider.credential} />
-									<button
-										class={s.testBtn}
-										aria-label={`${t("providers.login", "Login")} to ${provider.name}`}
-										onClick={() => login(provider.name)}
-									>
-										{t("providers.login", "Login")}
-									</button>
-								</div>
-								<p class={s.availabilityDetail}>
-									<Show
-										when={provider.models.length > 0}
-										fallback={t("providers.noModels", "No models — ego could not enumerate this source.")}
-									>
-										{provider.models.filter((model) => model.available).length}
-										{" / "}
-										{provider.models.length} {t("providers.modelsUsable", "models usable")}
-									</Show>
-								</p>
-								{/* Why a model cannot be picked, in ego's words and only once
+					>
+						{() => (
+							<button class={s.testBtn} disabled={busy()} onClick={() => void attempt(() => client().providers(true))}>
+								{t("providers.refresh", "Refresh from providers")}
+							</button>
+						)}
+					</SettingRow>
+				</Show>
+				<Show when={(data()?.providers.length ?? 0) > 0}>
+					<details>
+						<summary>Other providers and available models</summary>
+						<p class={s.hint}>
+							{t(
+								"providers.hint.credentials",
+								"Credential state comes from ego doctor. No key is ever read into TUICommander or stored in its keyring.",
+							)}
+						</p>
+						<Show when={loginError()}>{(message) => <p class={s.warning}>{message()}</p>}</Show>
+						<For each={data()?.providers}>
+							{(provider) => (
+								<div class={s.group}>
+									<ListRow
+										name={provider.name}
+										badges={<CredentialBadge credential={provider.credential} />}
+										actions={
+											<button
+												class={s.testBtn}
+												aria-label={`${t("providers.login", "Login")} to ${provider.name}`}
+												onClick={() => login(provider.name)}
+											>
+												{t("providers.login", "Login")}
+											</button>
+										}
+									/>
+									<p class={s.availabilityDetail}>
+										<Show
+											when={provider.models.length > 0}
+											fallback={t("providers.noModels", "No models — ego could not enumerate this source.")}
+										>
+											{provider.models.filter((model) => model.available).length}
+											{" / "}
+											{provider.models.length} {t("providers.modelsUsable", "models usable")}
+										</Show>
+									</p>
+									{/* Why a model cannot be picked, in ego's words and only once
 								    per distinct reason: a source that is down says the same
 								    sentence about every model it offers. */}
-								<For each={reasons(provider.models)}>{(reason) => <p class={s.availabilityDetail}>{reason}</p>}</For>
-								{/* What doctor said about this provider. The badge is our word
+									<For each={reasons(provider.models)}>{(reason) => <p class={s.availabilityDetail}>{reason}</p>}</For>
+									{/* What doctor said about this provider. The badge is our word
 								    for the state; this is ego's word for the case — which is the
 								    only place the difference between "expired at 12:04" and
 								    "the store is locked" survives. */}
-								<Show when={credentialDetail(provider.credential)}>
-									{(detail) => <p class={s.availabilityDetail}>{detail()}</p>}
-								</Show>
-							</div>
-						)}
-					</For>
-				</div>
-			</Show>
-		</>
+									<Show when={credentialDetail(provider.credential)}>
+										{(detail) => <p class={s.availabilityDetail}>{detail()}</p>}
+									</Show>
+								</div>
+							)}
+						</For>
+					</details>
+				</Show>
+			</SectionCard>
+			<EgoPerimeterSection />
+		</div>
 	);
 };
 
