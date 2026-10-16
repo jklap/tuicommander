@@ -80,7 +80,8 @@ function fullFrame(): ArrayBuffer {
 describe("recorded Claude suggest projection and copy", () => {
 	beforeEach(() => {
 		invoke.mockReset();
-		invoke.mockImplementation(async (cmd: string, args: Record<string, number>) => {
+		invoke.mockImplementation(async (cmd: string, args: Record<string, number> & { candidates?: string[] }) => {
+			if (cmd === "resolve_terminal_paths") return args.candidates!.map(() => false);
 			if (cmd === "terminal_styled_rows") return Uint8Array.from(atob(capture.base64), (c) => c.charCodeAt(0)).buffer;
 			if (cmd === "terminal_get_selection_text") {
 				return range.rows
