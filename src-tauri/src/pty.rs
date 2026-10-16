@@ -2153,6 +2153,13 @@ impl ChunkProcessor {
 
         // Handle terminal events from alacritty (title, clipboard, PTY writes, OSC 133, TUIC)
         let mut tuic_events: Vec<ParsedEvent> = Vec::new();
+        // Lifecycle markers retract recovery; they do not announce it. Track the
+        // pending snapshot too, since these events are published after this loop.
+        let mut recovery_active = state
+            .session_maps
+            .session_states
+            .get(session_id)
+            .is_some_and(|session| session.provider_recovery.is_some());
         let mut explicit_idle_in_chunk = false;
         if !term_events.is_empty() {
             use crate::terminal_grid::{Osc133Event, TermEvent};
@@ -2232,7 +2239,8 @@ impl ChunkProcessor {
                         line,
                     } => {
                         explicit_idle_in_chunk |= command == 'A';
-                        if command == 'A' {
+                        if command == 'A' && recovery_active {
+                            recovery_active = false;
                             tuic_events.push(ParsedEvent::ProviderRecovery { recovery: None });
                         }
                         state
@@ -2297,6 +2305,9 @@ impl ChunkProcessor {
                             if let Some(event) =
                                 crate::output_parser::parse_provider_recovery(&payload)
                             {
+                                if let ParsedEvent::ProviderRecovery { recovery } = &event {
+                                    recovery_active = recovery.is_some();
+                                }
                                 tuic_events.push(event);
                             }
                         }
@@ -2312,7 +2323,8 @@ impl ChunkProcessor {
                             // field is driven by Question/UserInput events instead.
                             explicit_idle_in_chunk |= payload == "idle";
                             self.handle_tuic_state(&payload, session_id, state);
-                            if matches!(payload.as_str(), "busy" | "idle") {
+                            if matches!(payload.as_str(), "busy" | "idle") && recovery_active {
+                                recovery_active = false;
                                 tuic_events.push(ParsedEvent::ProviderRecovery { recovery: None });
                             }
                             if let Some(evt) = tuic_state_awaiting_event(&payload, line as i64) {

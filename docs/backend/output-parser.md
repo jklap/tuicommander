@@ -634,7 +634,10 @@ and oversized payloads are ignored without changing the previous snapshot.
 The producer sends a complete snapshot whenever its recovery phase, attempt,
 or next attempt changes. `clear` explicitly removes recovery. Busy/idle
 OSC 7770 state markers and shell OSC 133 A also remove recovery, so a stale
-provider outage cannot survive resumed work or return to the shell.
+provider outage cannot survive resumed work or return to the shell. These
+lifecycle markers emit a clear only while recovery is active, including a
+snapshot earlier in the same chunk. A stream without a recovery frame emits no
+recovery events merely because its shell or agent changes state.
 
 Recovery is a presentation overlay on the running turn, not an idle/awaiting
 signal. Consumers show the phase, attempt, next attempt time and a countdown;

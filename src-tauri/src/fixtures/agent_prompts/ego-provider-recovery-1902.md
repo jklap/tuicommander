@@ -1,5 +1,13 @@
 # Real ego provider-recovery capture
 
+The recovery-clear regression also uses the unchanged recordings
+`claude-quoted-ink-footer.tcap` and `claude-askuser-esc-20260929.tcap` through
+`chunk_trace_matches_recorded_baseline` and
+`replay_oracle_all_committed_tcap_preserves_chunk_decisions`. They contain no ego
+recovery frame: their lifecycle markers must not emit recovery-clear events.
+The real ego replay and `ego_recovery_rejects_foreign_agents_and_preserves_wire_order`
+cover actual recovery, foreign-agent rejection and same-chunk lifecycle clears.
+
 - Producer: ego branch `feat/1902-recovery-osc`, source commit `3c1bbfb3` (emitter `74d15271` plus interactive flush fix). Binary built on Linux rb from the same source bytes immediately before the flush-fix commit.
 - Build evidence: `~/Gits/.tmp/feat-1902-ego-flush-green.log`, rb result `20261015T220537Z-27215`. Command: `cargo nextest run -p ego-cli -E "test(recovery_443) or test(surface_output) or test(live_output_pump)" && cargo clippy -p ego-cli --all-targets -- -D warnings && cargo build -p ego-cli --bin ego`, through `build-slot.sh --remote`.
 - Recorder: companion `record.py`. Actual command on rb: `python3 /home/rb/Gits/.tmp/1902-record.py /home/rb/Gits/.tmp/1902-ego-capture-final /home/rb/src/ego-76ec1c81-slot0/target/debug/ego`.

@@ -14849,6 +14849,53 @@ fn ego_recovery_rejects_foreign_agents_and_preserves_wire_order() {
     }
 }
 
+/// Catches: a normal ego turn inventing recovery clears without a recovery frame.
+#[test]
+fn ego_recovery_clean_lifecycle_emits_no_recovery_events() {
+    let capture =
+        crate::pty_capture::decode_capture(&agent_prompt_fixture("ego-clean-lifecycle-1902.tcap"))
+            .expect("real clean producer capture");
+    let (rows, cols) = capture.geometry.unwrap();
+    let state = crate::state::tests_support::make_test_app_state();
+    let sid = "clean-ego-lifecycle";
+    agent_session(&state, sid, SHELL_BUSY);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("ego".into());
+    state
+        .grid
+        .vt_log_buffers
+        .insert(sid.into(), Mutex::new(VtLogBuffer::new(rows, cols, 2000)));
+    let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
+    let mut processor = ChunkProcessor::new(None, None);
+    let mut events = state.event_bus.subscribe();
+    for record in capture.records {
+        if record.direction == crate::pty_capture::CaptureDirection::Output {
+            processor.process_chunk(
+                &String::from_utf8_lossy(&record.data),
+                &silence,
+                sid,
+                &state,
+            );
+        }
+    }
+    let parsed: Vec<_> = std::iter::from_fn(|| events.try_recv().ok())
+        .filter_map(|event| match event {
+            crate::state::AppEvent::PtyParsed { parsed, .. } => Some(parsed),
+            _ => None,
+        })
+        .collect();
+    assert!(parsed.iter().any(|event| event["type"] == "shell-state"));
+    assert!(
+        !parsed
+            .iter()
+            .any(|event| event["type"] == "provider-recovery")
+    );
+}
+
 /// Catches: real ego output framing or interleaved input losing recovery transitions.
 #[test]
 fn ego_recovery_recorded_producer_replays_wait_retry_clear() {
