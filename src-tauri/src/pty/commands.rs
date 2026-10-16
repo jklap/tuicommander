@@ -909,12 +909,11 @@ pub(crate) fn ack_terminal_frame(
     {
         channel.visible.store(visible, Ordering::Relaxed);
     }
-    if let Some(gate) = state.grid.gates.get(&session_id) {
-        if gate.ack(epoch, received)
-            && let Some(dirty) = state.grid.frame_dirty.get(&session_id)
-        {
-            dirty.store(true, Ordering::Relaxed);
-        }
+    if let Some(gate) = state.grid.gates.get(&session_id)
+        && gate.ack(epoch, received)
+        && let Some(dirty) = state.grid.frame_dirty.get(&session_id)
+    {
+        dirty.store(true, Ordering::Relaxed);
     }
 }
 

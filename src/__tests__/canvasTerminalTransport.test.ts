@@ -157,6 +157,7 @@ describe("canvasTerminalTransport", () => {
 			expect(invoke).toHaveBeenCalledWith("subscribe_terminal_grid", expect.objectContaining({ visible: false }));
 			expect(invoke).not.toHaveBeenCalledWith("terminal_request_frame", expect.anything());
 			transport.setVisible(true);
+			await Promise.resolve();
 			expect(invoke).toHaveBeenLastCalledWith("ack_terminal_frame", {
 				sessionId: "session-1",
 				epoch: 42,
@@ -190,9 +191,9 @@ describe("canvasTerminalTransport", () => {
 			transport.setVisible(true);
 			await Promise.resolve();
 			finishHide?.();
-			await Promise.resolve();
-			await Promise.resolve();
-			expect(backendVisible, "the visible tab must not remain excluded from grid delivery").toBe(true);
+			await vi.waitFor(() => {
+				expect(backendVisible, "the visible tab must not remain excluded from grid delivery").toBe(true);
+			});
 		});
 
 		it("delegates invoke calls to Tauri invoke", async () => {

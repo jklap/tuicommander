@@ -1,5 +1,6 @@
 import { render, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { VisibleIntersectionObserver } from "../helpers/visibleIntersectionObserver";
 
 /**
  * Round 6: one monotonic pressSeq bumped by every mousedown and contextmenu.
@@ -134,13 +135,7 @@ describe("CanvasTerminal link context menu, critic 1336 round 6", () => {
 				disconnect() {}
 			},
 		);
-		vi.stubGlobal(
-			"IntersectionObserver",
-			class {
-				observe() {}
-				disconnect() {}
-			},
-		);
+		vi.stubGlobal("IntersectionObserver", VisibleIntersectionObserver);
 		const view = render(() => (
 			<CanvasTerminal sessionId="link-1336r6" terminalId="link-1336r6" onOpenFilePath={onOpen} />
 		));

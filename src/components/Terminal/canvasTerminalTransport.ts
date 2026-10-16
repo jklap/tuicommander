@@ -77,6 +77,7 @@ export class TauriTransport implements TerminalTransport {
 	 */
 	private epoch: number | null = null;
 	private visible = false;
+	private visibilityPublication: Promise<unknown> = Promise.resolve();
 	private received = 0;
 
 	constructor(sessionId: string) {
@@ -123,6 +124,7 @@ export class TauriTransport implements TerminalTransport {
 			visible: this.visible,
 		})) as number;
 		this.setVisible(this.visible);
+		await this.visibilityPublication;
 	}
 
 	unsubscribe(): void {
@@ -151,14 +153,21 @@ export class TauriTransport implements TerminalTransport {
 	setVisible(visible: boolean): void {
 		this.visible = visible;
 		if (this.epoch === null) return;
-		this.invokeRef?.("ack_terminal_frame", {
-			sessionId: this.sessionId,
-			epoch: this.epoch,
-			received: this.received,
-			visible,
-		})
-			.then(() => {
-				if (visible && this.visible) return this.invokeRef?.("terminal_request_frame", { sessionId: this.sessionId });
+		const epoch = this.epoch;
+		// Keep hide/show ordered within an epoch: an older hide must finish before
+		// a newer show can publish. Epoch checks also discard queued teardown work.
+		this.visibilityPublication = this.visibilityPublication
+			.then(async () => {
+				if (this.epoch !== epoch) return;
+				await this.invokeRef?.("ack_terminal_frame", {
+					sessionId: this.sessionId,
+					epoch,
+					received: this.received,
+					visible,
+				});
+				if (this.epoch === epoch && visible && this.visible) {
+					return this.invokeRef?.("terminal_request_frame", { sessionId: this.sessionId });
+				}
 			})
 			.catch(() => {});
 	}

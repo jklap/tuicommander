@@ -13165,11 +13165,12 @@ mod grid_delivery_tests {
             .visible
             .store(false, Ordering::Relaxed);
         assert!(!desktop_grid_visible(&state, "hidden-desktop"));
-        let frame = cut_frame(
-            &state,
-            "hidden-desktop",
-            &(0..40).map(|i| format!("line {i}\r\n")).collect::<String>(),
-        );
+        use std::fmt::Write;
+        let mut output = String::new();
+        for i in 0..40 {
+            write!(output, "line {i}\r\n").unwrap();
+        }
+        let frame = cut_frame(&state, "hidden-desktop", &output);
         send_grid_frame(&state, "hidden-desktop", frame);
         assert!(
             received.lock().is_empty(),

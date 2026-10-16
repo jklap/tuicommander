@@ -2469,22 +2469,25 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 					// naturally discarded without a blank flash.
 					remeasure();
 					if (focused()) startBlink();
-					// If remeasure saw 0x0 (layout not yet computed after
-					// display:none → display:block), retry after a frame.
-					const rect = containerRef.getBoundingClientRect();
-					if (rect.width <= 0 || rect.height <= 0) {
-						requestAnimationFrame(() => {
-							remeasure();
-							noteFrameRequest();
-							invokeRef?.("terminal_request_frame", { sessionId: props.sessionId }).catch(
-								ipcErr("terminal_request_frame"),
-							);
-						});
-					} else {
+					// Tauri publishes visibility before requesting its authoritative frame.
+					// WS has no visibility publication, so this component owns its request.
+					const requestShowFrame = () => {
+						if (transport?.setVisible) return;
 						noteFrameRequest();
 						invokeRef?.("terminal_request_frame", { sessionId: props.sessionId }).catch(
 							ipcErr("terminal_request_frame"),
 						);
+					};
+					// Retry layout after display:none → display:block even when the
+					// transport owns the frame request.
+					const rect = containerRef.getBoundingClientRect();
+					if (rect.width <= 0 || rect.height <= 0) {
+						requestAnimationFrame(() => {
+							remeasure();
+							requestShowFrame();
+						});
+					} else {
+						requestShowFrame();
 					}
 				} else if (!isVisible && !hidden) {
 					hidden = true;
