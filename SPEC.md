@@ -1149,3 +1149,7 @@ busy/idle markers and shell OSC 133 A retract recovery. This is PTY-only and doe
 not attach ACP to a terminal process. Wire limits are in docs/backend/output-parser.md.
 
 Telegram Settings reads a process-local in-memory ring of the last 20 events through the existing status endpoint. Time, direction, kind, safe outcome and a redacted preview of at most 60 Unicode characters are shown newest first. Pairing input and unauthorized text are never retained. The ring is not persisted and clears on process restart; it is not shared across owner/standby processes.
+
+### Telegram request streaming (1959-162a)
+
+Telegram replies now use TUIC-driven receipt (👀), working (👨‍💻), waiting (🤔), answered (👍) and failed (👎) reactions. An ephemeral native draft shows Italian status lines or unapproved agent previews; it refreshes while work continues and the final reply replaces it. Acknowledgement of work requires inbox Read and a new recipient turn. PTY intent/activity and AI Chat assistant chunks share request correlation; finish remains authoritative after draft retirement. Telegram-mail-woken AI Chat turns automatically send their settled assistant text if finish has not answered. Queue and no-reply notices occur at ten minutes and sixty seconds after Read respectively. Restart keeps no request history. Phone rendering requires a live check after the backend restart.

@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Stream Telegram status and AI Chat answers with receipt/working reactions, request-scoped final replies, and bounded queue/failure notices (#1959-162a).
+
 - Restyle repository Settings with inherited override rows, script cards, team sharing, and a scoped reset action.
 
 - Restyle Agents Settings and named run editors while preserving machine ownership, draft saves, terminal permissions, and hibernation policy.
