@@ -1,3 +1,8 @@
+## Mobile Claude pickers (1971-5834 / 1972-128e) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, open a throwaway Claude terminal in the mobile CLI view. Verify `/resume` shows its session rows and search results, then use key-bar Up/Down and Enter to resume one. The awaiting AskUserQuestion arrows must move selection without changing a local answer draft. The isolated headless regression and capture evidence do not load the Rust fix into the running desktop app.
+- [ ] Capture mobile screenshots of the populated `/resume` list and a moved AskUserQuestion selection after macOS is unlocked. The coordinator authorized skipping these captures while the screen was locked; no screenshot was claimed.
+
 ## Settings restyle integration (1945-a78d)
 
 - [ ] [VISUAL] After the Mac unlocks, capture isolated worktree Settings against the approved 2026-10-16 mock, not Boss's desktop. Capture Commander dark and Paper light at 1400×900 for all available pages across Application, Workspace, AI, Integrations, Plugin settings and Repositories. Include the selected machine/repository/plugin source, search results and a revealed expert field. Capture each theme at 780×900 and 390×844 with long repository/plugin names, paths, validation text and contextual help. Check stacked rows, compact page selection, wrapping, 44px touch targets, independent scrolling and stable shell size. Capture delayed plugin loading, empty search/catalogue, failed read and rejected-write recovery without fabricated live-service status. Screen locked during S10; no screenshots or live desktop mutation claimed.
