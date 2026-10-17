@@ -872,14 +872,33 @@ fn handle_session_unpaged(
             }
         }
         "list" => {
+            // Resolve ownership, but keep inventory on the merged mirror snapshot;
+            // the remote command proxy only implements output and submit.
+            let mut inventory_args = args.clone();
             let scoped_session = if args.get("session_id").is_some() {
-                match require_session_id(state, args, "list") {
-                    Ok(id) => Some(id),
-                    Err(error) => return error,
+                match super::remote_mcp_sessions::resolve(state, args) {
+                    Some(Ok((host, reference))) => {
+                        inventory_args["connection_id"] = serde_json::json!(host);
+                        Some(reference)
+                    }
+                    Some(Err(error)) => return error,
+                    None => {
+                        if let Some(reference) = args["session_id"]
+                            .as_str()
+                            .and_then(|id| id.strip_prefix("local/"))
+                        {
+                            inventory_args["session_id"] = serde_json::json!(reference);
+                        }
+                        match require_session_id(state, &inventory_args, "list") {
+                            Ok(id) => Some(id),
+                            Err(error) => return error,
+                        }
+                    }
                 }
             } else {
                 None
             };
+            let args = &inventory_args;
             let caller_tuic = mcp_session_id
                 .and_then(|sid| state.mcp.to_session.get(sid))
                 .map(|entry| entry.value().clone());

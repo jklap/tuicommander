@@ -5534,19 +5534,26 @@ async fn scoped_remote_session_inventory_does_not_use_the_control_proxy() {
             ..Default::default()
         }],
     );
-    let rows = handle_mcp_tool_call(
-        &state,
-        "127.0.0.1:12345".parse().unwrap(),
-        "session",
-        &serde_json::json!({"action":"list", "session_id":format!("mint/{id}"), "compact":true}),
-        None,
-    )
-    .await;
-    assert!(
-        rows.is_array(),
-        "scoped inventory must return the advertised remote session: {rows}"
-    );
-    assert_eq!(rows.as_array().unwrap().len(), 1);
-    assert_eq!(rows[0]["session_id"], id);
-    assert_eq!(rows[0]["connection_id"], "mint");
+    for reference in [
+        format!("mint/{id}"),
+        "mint/pe-3".into(),
+        "pe-3".into(),
+        format!("mint/{}", &id[..8]),
+    ] {
+        let rows = handle_mcp_tool_call(
+            &state,
+            "127.0.0.1:12345".parse().unwrap(),
+            "session",
+            &serde_json::json!({"action":"list", "session_id":reference, "compact":true}),
+            None,
+        )
+        .await;
+        assert!(
+            rows.is_array(),
+            "scoped inventory must return the advertised remote session: {rows}"
+        );
+        assert_eq!(rows.as_array().unwrap().len(), 1);
+        assert_eq!(rows[0]["session_id"], id);
+        assert_eq!(rows[0]["connection_id"], "mint");
+    }
 }

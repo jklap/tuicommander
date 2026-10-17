@@ -2477,8 +2477,9 @@ name is resolved before interpreting a slash as a connection qualifier. With
 an explicit connection selected, a daemon-local slash-containing name remains
 a name unless it carries that same connection prefix.
 
-Inbox tokens are scoped to the bound peer identity. Native MCP output tokens
-are scoped to their MCP session and target. HTTP MCP-compatible output and the
+Inbox tokens are scoped to the bound peer identity. Local native MCP output tokens
+are scoped to their MCP session and target; proxied remote output uses the
+owning daemon's HTTP scope. HTTP MCP-compatible output and the
 IPC MCP passthrough intentionally share the local `ipc` continuation scope for
 the same target: either local-user transport can resume a token issued by the
 other. Tokens are opaque snapshot references, **not authorization credentials**;
