@@ -218,8 +218,16 @@
     ],
     "date": "2026-09-02"
   },
-  "1.7.7": {
+  "2.0.0": {
     "highlights": [
+      "Suspend an idle terminal tab to free memory and CPU, then resume its agent later, even after a restart.",
+      "Hands-free voice conversations work on desktop and in the browser, with spoken replies in six languages.",
+      "Native plans, stories and workflow runs let you track, review and integrate agent work inside the app.",
+      "AI Chat keeps one conversation across repositories, with image paste, draft parking and conversation recovery.",
+      "Remote machines deploy and update themselves over SSH, stream compressed output and accept dropped files.",
+      "On mobile you can answer Claude and Codex questions, get push alerts, browse files and search sessions.",
+      "Desktop alerts, a Progress Flow view and reorganized Settings with an expert mode make work easier to follow.",
+      "The HTTP API now requires credentials even locally, and several MCP tool actions were renamed or removed.",
       "Project Progress records what agents actually accomplished, in a per-project panel you can read after being away.",
       "Progress exports a deterministic progress.md, previewed before it is written and never overwriting a hand edit.",
       "Workspace creation is now linked Git worktrees only, still arriving warm through copy-on-write of ignored directories.",
@@ -229,20 +237,6 @@
       "The MCP session and peer payloads dropped the fields that restated each other, and is_caller marks the caller's own tab.",
       "Windows is exercised by the suite now, fixing tilde expansion, plugin ZIP installs, child environment inheritance and the progress store there.",
       "The TLS stack takes rustls 0.23.45 for RUSTSEC-2026-0285, covering remote access, the relay and tunnel HTTPS calls."
-    ],
-    "date": "2026-09-16"
-  },
-  "1.8.0": {
-    "highlights": [
-      "Suspend an idle terminal tab to free memory and CPU, then resume its agent later, even after a restart.",
-      "Hands-free voice conversations work on desktop and in the browser, with spoken replies in six languages.",
-      "Native plans, stories and workflow runs let you track, review and integrate agent work inside the app.",
-      "AI Chat keeps one conversation across repositories, with image paste, draft parking and conversation recovery.",
-      "Remote machines deploy and update themselves over SSH, stream compressed output and accept dropped files.",
-      "On mobile you can answer Claude and Codex questions, get push alerts, browse files and search sessions.",
-      "Desktop alerts, a Progress Flow view and reorganized Settings with an expert mode make work easier to follow.",
-      "The HTTP API now requires credentials even locally, and several MCP tool actions were renamed or removed."
-    ],
-    "date": "2026-10-04"
+    ]
   }
 }

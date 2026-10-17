@@ -15,7 +15,7 @@ Agent capture tooling: `scripts/agent_capture/run.py` records real installed CLI
 
 Published story workflows can start in Plans and Stories through the owning daemon. Run history renders graph positions, decisions, evidence and paged event payloads, with explicit graph recovery and cancellation. IPC/HTTP and the generated `workflow_run` MCP schema share the native run service. Plan start remains visibly unavailable pending plan dispatch.
 
-**Version:** 1.8.0
+**Version:** 2.0.0
 **Last Updated:** 2026-09-16
 
 ## Shared form controls — Implemented (#1815-01c9)
