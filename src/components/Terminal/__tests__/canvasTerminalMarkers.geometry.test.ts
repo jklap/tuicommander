@@ -1,7 +1,13 @@
 import ts from "@typescript/typescript6";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import source from "../CanvasTerminal.tsx?raw";
-import { markerPromptStart, planCanvasMarkers, readMarkerPromptBoundary } from "../canvasTerminalMarkers";
+import {
+	createCanvasMarkerPlanner,
+	MARKER_PREFIX_BUDGET,
+	markerPromptStart,
+	type planCanvasMarkers,
+	readMarkerPromptBoundary,
+} from "../canvasTerminalMarkers";
 
 // Exercise the production planner and geometry-acceptance block together without
 // mounting the canvas, transport subscriptions, or unrelated DOM interactions.
@@ -32,7 +38,8 @@ function harness(read: typeof readMarkerPromptBoundary = readMarkerPromptBoundar
 		terminalsStore: { get: () => ({ userPromptLines: [0] }) },
 		props: { terminalId: "test" },
 		markerPromptStart,
-		planCanvasMarkers,
+		cachedPlanCanvasMarkers: createCanvasMarkerPlanner(),
+		MARKER_PREFIX_BUDGET,
 		readMarkerPromptBoundary: read,
 		readTurnRows: (_fetch: unknown, from: number, to: number) =>
 			Promise.resolve(
@@ -44,7 +51,7 @@ function harness(read: typeof readMarkerPromptBoundary = readMarkerPromptBoundar
 		fetchStyledRange: () => {},
 		alive: true,
 		scheduleSmoothRender: () => {},
-		scheduleRepaint: () => {},
+		scheduleRepaint: vi.fn(),
 		selection: { clear: () => {} },
 		stopSelectionScroll: () => {},
 		rowMap: new Map(),
@@ -57,7 +64,7 @@ function harness(read: typeof readMarkerPromptBoundary = readMarkerPromptBoundar
 		let markerPromptGeneration = -1;
 		let fullRepaintNeeded = false;
 		${planner}
-		return { plan: planMarkers, acceptGeometry: () => { const geomChanged = true; ${geometry} } };
+		return { plan: planMarkers, repaint: scheduleRepaint, acceptGeometry: () => { const geomChanged = true; ${geometry} } };
 	`,
 		{ target: ts.ScriptTarget.ES2022 },
 	);
@@ -68,6 +75,7 @@ function harness(read: typeof readMarkerPromptBoundary = readMarkerPromptBoundar
 			getRow: (row: number) => { text: string; isWrapped: boolean } | null,
 		) => ReturnType<typeof planCanvasMarkers>;
 		acceptGeometry: () => void;
+		repaint: () => void;
 	};
 }
 
@@ -78,6 +86,22 @@ const resizedRows = (row: number) => ({
 });
 
 describe("accepted geometry prompt ownership", () => {
+	// Catches: splitting ownership reads trades one history walk for a full-canvas repaint per chunk.
+	it("continues bounded prefix reads without repainting every intermediate chunk", async () => {
+		const read = vi.fn(async (start: number, end: number) => ({ end: Math.min(start + 128, end), resolved: false }));
+		const state = harness(read);
+		state.plan(12, 400, () => null);
+		// Four bounded reads settle over four promise jobs; no wall-clock timing is under test.
+		for (let i = 0; i < 5; i++) await Promise.resolve();
+		expect(read.mock.calls.map(([start, end]) => [start, end])).toEqual([
+			[0, 413],
+			[127, 413],
+			[254, 413],
+			[381, 413],
+		]);
+		expect(state.repaint).toHaveBeenCalledTimes(1);
+	});
+
 	// Catches: interim old-frame paints repopulate a boundary that survives resize acceptance.
 	it("drops resolved old-coordinate boundaries when accepting resized geometry", () => {
 		const state = harness();

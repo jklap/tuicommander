@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 - Keep marker-projected terminal frames incremental: repaint dirty display rows and changed projection slots instead of clearing the whole canvas (#2003-f218).
+- Bound CLI marker planning to 128 rows above the viewport, reuse unchanged row generations, and resolve cold prompt ownership in bounded background steps (#2002-2239).
 
 - Keep quoted answer markers in Claude and Codex prompt echoes out of the answer gutter and Answers view, including long prompts above the viewport lookback, while preserving blank-separated indented answers (#1389-3a47).
 

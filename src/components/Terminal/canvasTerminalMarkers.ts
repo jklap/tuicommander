@@ -17,12 +17,16 @@ export interface PromptBoundary {
 }
 
 /** Ordinary marker continuation lookback; prompt ownership is independent of this bound. */
-export const MARKER_LOOKBACK_ROWS = 32;
+export const MARKER_LOOKBACK_ROWS = 128;
+/** Older prompt anchors need independently cached ownership, even within lookback. */
+const PROMPT_INLINE_ROWS = 32;
+/** Maximum synchronous ownership prefix and rows fetched by one background read. */
+export const MARKER_PREFIX_BUDGET = 128;
 
 export function markerPromptStart(promptRows: readonly number[], base = 0): number | undefined {
 	let latest: number | undefined;
 	for (const row of promptRows)
-		if (row < base - MARKER_LOOKBACK_ROWS && (latest === undefined || row > latest)) latest = row;
+		if (row < base - PROMPT_INLINE_ROWS && (latest === undefined || row > latest)) latest = row;
 	return latest;
 }
 
@@ -37,17 +41,21 @@ export function planCanvasMarkers(
 	const start = markerPromptStart(promptRows);
 	let promptBoundary: PromptBoundary | undefined;
 	if (start !== undefined) {
+		if (boundary && !boundary.resolved && boundary.end < rows + 1)
+			return { hidden: new Set(), answerMarkers: new Set(), key: "", blocks: [], pendingPrompt: start };
 		let end = boundary?.end;
 		if (end === undefined) {
 			let missing = !getRow(start);
-			end = promptEnd(start, rows + 1, (i) => {
+			const limit = Math.min(rows + 1, start + MARKER_PREFIX_BUDGET);
+			end = promptEnd(start, limit, (i) => {
 				const row = getRow(i);
 				if (!row) missing = true;
 				return row;
 			});
 			// A cache miss is not evidence that the prompt ended. Fetch its prefix
 			// rather than guessing from the indentation of the visible marker.
-			if (missing) return { hidden: new Set(), answerMarkers: new Set(), key: "", blocks: [], pendingPrompt: start };
+			if (missing || (end === limit && limit < rows + 1))
+				return { hidden: new Set(), answerMarkers: new Set(), key: "", blocks: [], pendingPrompt: start };
 		}
 		promptBoundary = { end, resolved: boundary?.resolved ?? end < rows + 1 };
 		firstRow = Math.max(firstRow, end);
@@ -67,15 +75,67 @@ export async function readMarkerPromptBoundary(
 	start: number,
 	end: number,
 	readRows: (start: number, end: number) => Promise<RowSnapshot[] | null>,
+	budget = Number.POSITIVE_INFINITY,
 ): Promise<PromptBoundary | null> {
-	for (let from = start; from < end; from += 256) {
+	const stop = Math.min(end, start + budget);
+	for (let from = start; from < stop; from += 256) {
 		// Include the previous row so the wire wrap flag at a chunk boundary is preserved.
 		const overlap = from > start ? 1 : 0;
-		const chunk = await readRows(from - overlap, Math.min(from + 256, end));
+		const chunk = await readRows(from - overlap, Math.min(from + 256, stop));
 		if (!chunk) return null;
 		// The preceding row supplies blank separation; only the new rows are classified.
 		const next = promptEnd(0, chunk.length, (i) => chunk[i] ?? null);
 		if (next < chunk.length) return { end: from - overlap + next, resolved: true };
 	}
-	return { end, resolved: false };
+	return { end: stop, resolved: false };
+}
+
+/** Reuse a plan while every row generation it inspected is unchanged. */
+export function createCanvasMarkerPlanner(): typeof planCanvasMarkers {
+	let previous: MarkerPlan | undefined;
+	let previousRows = -1;
+	let previousPrompt: number | undefined;
+	let previousBoundary: PromptBoundary | undefined;
+	let dependencies = new Map<number, RowSnapshot | null>();
+	return (rows, getRow, prompts = [], boundary) => {
+		const prompt = markerPromptStart(prompts);
+		if (
+			previous &&
+			rows === previousRows &&
+			prompt === previousPrompt &&
+			boundary?.end === previousBoundary?.end &&
+			boundary?.resolved === previousBoundary?.resolved &&
+			[...dependencies].every(([index, snapshot]) => getRow(index) === snapshot)
+		)
+			return previous;
+		dependencies = new Map();
+		previous = planCanvasMarkers(
+			rows,
+			(index) => {
+				if (!dependencies.has(index)) dependencies.set(index, getRow(index));
+				return dependencies.get(index)!;
+			},
+			prompts,
+			boundary,
+		);
+		previousRows = rows;
+		previousPrompt = prompt;
+		previousBoundary = boundary;
+		return previous;
+	};
+}
+
+/** Cache text and wrap interpretation separately; the preceding row may change alone. */
+export function cachedMarkerSnapshot<T extends object>(
+	read: (row: T) => string,
+): (row: T, wrapped: boolean) => RowSnapshot {
+	const snapshots = new WeakMap<T, RowSnapshot>();
+	return (row, wrapped) => {
+		let snapshot = snapshots.get(row);
+		if (!snapshot || snapshot.isWrapped !== wrapped) {
+			snapshot = { text: snapshot?.text ?? read(row), isWrapped: wrapped };
+			snapshots.set(row, snapshot);
+		}
+		return snapshot;
+	};
 }
